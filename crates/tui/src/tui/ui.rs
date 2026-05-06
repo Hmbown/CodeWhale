@@ -2028,7 +2028,8 @@ async fn run_event_loop(
                                 blocked_network,
                                 blocked_write,
                             );
-                            app.view_stack.push(ElevationView::new(request));
+                            app.view_stack
+                                .push(ElevationView::new(request, app.ui_locale));
                             app.status_message =
                                 Some(format!("Sandbox blocked {tool_name}: {denial_reason}"));
                         }

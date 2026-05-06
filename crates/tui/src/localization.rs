@@ -476,6 +476,52 @@ pub enum MessageId {
     ConfigSectionDisplay,
     ConfigSectionComposer,
     ConfigSectionSidebar,
+    ConfigSectionHistory,
+    ConfigSectionMcp,
+    // Phase 2: Approval & Sandbox Elevation
+    ApprovalRiskReview,
+    ApprovalRiskDestructive,
+    ApprovalCategorySafe,
+    ApprovalCategoryFileWrite,
+    ApprovalCategoryShell,
+    ApprovalCategoryNetwork,
+    ApprovalCategoryMcpRead,
+    ApprovalCategoryMcpAction,
+    ApprovalCategoryUnknown,
+    ApprovalFieldType,
+    ApprovalFieldAbout,
+    ApprovalFieldImpact,
+    ApprovalFieldParams,
+    ApprovalOptionApproveOnce,
+    ApprovalOptionApproveAlways,
+    ApprovalOptionDeny,
+    ApprovalOptionAbortTurn,
+    ApprovalStaged,
+    ApprovalBlockTitle,
+    ApprovalFooterBenignPrefix,
+    ApprovalFooterBenignSuffix,
+    ApprovalFooterDestructiveConfirmPrefix,
+    ApprovalFooterDestructiveConfirmSuffix,
+    ApprovalFooterDestructivePrefix,
+    ApprovalFooterDestructiveSuffix,
+    ElevationTitleSandboxDenied,
+    ElevationTitleRequired,
+    ElevationFieldTool,
+    ElevationFieldCmd,
+    ElevationFieldReason,
+    ElevationImpactHeader,
+    ElevationImpactNetwork,
+    ElevationImpactWrite,
+    ElevationImpactFullAccess,
+    ElevationPromptProceed,
+    ElevationOptionNetwork,
+    ElevationOptionWrite,
+    ElevationOptionFullAccess,
+    ElevationOptionAbort,
+    ElevationOptionNetworkDesc,
+    ElevationOptionWriteDesc,
+    ElevationOptionFullAccessDesc,
+    ElevationOptionAbortDesc,
 }
 
 #[allow(dead_code)]
@@ -734,6 +780,49 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::ConfigSectionSidebar,
     MessageId::ConfigSectionHistory,
     MessageId::ConfigSectionMcp,
+    MessageId::ApprovalRiskReview,
+    MessageId::ApprovalRiskDestructive,
+    MessageId::ApprovalCategorySafe,
+    MessageId::ApprovalCategoryFileWrite,
+    MessageId::ApprovalCategoryShell,
+    MessageId::ApprovalCategoryNetwork,
+    MessageId::ApprovalCategoryMcpRead,
+    MessageId::ApprovalCategoryMcpAction,
+    MessageId::ApprovalCategoryUnknown,
+    MessageId::ApprovalFieldType,
+    MessageId::ApprovalFieldAbout,
+    MessageId::ApprovalFieldImpact,
+    MessageId::ApprovalFieldParams,
+    MessageId::ApprovalOptionApproveOnce,
+    MessageId::ApprovalOptionApproveAlways,
+    MessageId::ApprovalOptionDeny,
+    MessageId::ApprovalOptionAbortTurn,
+    MessageId::ApprovalStaged,
+    MessageId::ApprovalBlockTitle,
+    MessageId::ApprovalFooterBenignPrefix,
+    MessageId::ApprovalFooterBenignSuffix,
+    MessageId::ApprovalFooterDestructiveConfirmPrefix,
+    MessageId::ApprovalFooterDestructiveConfirmSuffix,
+    MessageId::ApprovalFooterDestructivePrefix,
+    MessageId::ApprovalFooterDestructiveSuffix,
+    MessageId::ElevationTitleSandboxDenied,
+    MessageId::ElevationTitleRequired,
+    MessageId::ElevationFieldTool,
+    MessageId::ElevationFieldCmd,
+    MessageId::ElevationFieldReason,
+    MessageId::ElevationImpactHeader,
+    MessageId::ElevationImpactNetwork,
+    MessageId::ElevationImpactWrite,
+    MessageId::ElevationImpactFullAccess,
+    MessageId::ElevationPromptProceed,
+    MessageId::ElevationOptionNetwork,
+    MessageId::ElevationOptionWrite,
+    MessageId::ElevationOptionFullAccess,
+    MessageId::ElevationOptionAbort,
+    MessageId::ElevationOptionNetworkDesc,
+    MessageId::ElevationOptionWriteDesc,
+    MessageId::ElevationOptionFullAccessDesc,
+    MessageId::ElevationOptionAbortDesc,
 ];
 
 pub fn tr(locale: Locale, id: MessageId) -> &'static str {
@@ -1285,6 +1374,64 @@ fn english(id: MessageId) -> &'static str {
         }
         MessageId::OnboardTipsFooterEnter => "Press Enter",
         MessageId::OnboardTipsFooterAction => " to open the workspace",
+        // Phase 2: Approval & Sandbox Elevation
+        MessageId::ApprovalRiskReview => "REVIEW",
+        MessageId::ApprovalRiskDestructive => "DESTRUCTIVE",
+        MessageId::ApprovalCategorySafe => "Safe",
+        MessageId::ApprovalCategoryFileWrite => "File Write",
+        MessageId::ApprovalCategoryShell => "Shell Command",
+        MessageId::ApprovalCategoryNetwork => "Network",
+        MessageId::ApprovalCategoryMcpRead => "MCP Read",
+        MessageId::ApprovalCategoryMcpAction => "MCP Action",
+        MessageId::ApprovalCategoryUnknown => "Unknown",
+        MessageId::ApprovalFieldType => "Type:",
+        MessageId::ApprovalFieldAbout => "About:",
+        MessageId::ApprovalFieldImpact => "Impact:",
+        MessageId::ApprovalFieldParams => "Params:",
+        MessageId::ApprovalOptionApproveOnce => "Approve once",
+        MessageId::ApprovalOptionApproveAlways => "Approve always for this kind",
+        MessageId::ApprovalOptionDeny => "Deny this call",
+        MessageId::ApprovalOptionAbortTurn => "Abort the turn",
+        MessageId::ApprovalStaged => "(staged)",
+        MessageId::ApprovalBlockTitle => "approval",
+        MessageId::ApprovalFooterBenignPrefix => "Single key approves: ",
+        MessageId::ApprovalFooterBenignSuffix => "  ·  v: full params  ·  Esc: abort",
+        MessageId::ApprovalFooterDestructiveConfirmPrefix => "Confirm destructive action — press ",
+        MessageId::ApprovalFooterDestructiveConfirmSuffix => {
+            " again to commit, anything else cancels."
+        }
+        MessageId::ApprovalFooterDestructivePrefix => "Two keys to approve: ",
+        MessageId::ApprovalFooterDestructiveSuffix => "  ·  v: full params  ·  Esc: abort",
+        MessageId::ElevationTitleSandboxDenied => "  ⚠ Sandbox Denied ",
+        MessageId::ElevationTitleRequired => " Sandbox Elevation Required ",
+        MessageId::ElevationFieldTool => "Tool:",
+        MessageId::ElevationFieldCmd => "Cmd:",
+        MessageId::ElevationFieldReason => "Reason:",
+        MessageId::ElevationImpactHeader => "Impact if approved:",
+        MessageId::ElevationImpactNetwork => {
+            "network retry enables outbound downloads and HTTP requests"
+        }
+        MessageId::ElevationImpactWrite => {
+            "write retry expands writable filesystem scope for this tool call"
+        }
+        MessageId::ElevationImpactFullAccess => {
+            "full access removes sandbox restrictions entirely for this retry"
+        }
+        MessageId::ElevationPromptProceed => "Choose how to proceed:",
+        MessageId::ElevationOptionNetwork => "Allow outbound network",
+        MessageId::ElevationOptionWrite => "Allow extra write access",
+        MessageId::ElevationOptionFullAccess => "Full access (filesystem + network)",
+        MessageId::ElevationOptionAbort => "Abort",
+        MessageId::ElevationOptionNetworkDesc => {
+            "Retry this tool call with outbound network access for downloads and HTTP requests"
+        }
+        MessageId::ElevationOptionWriteDesc => {
+            "Retry this tool call with additional writable filesystem scope"
+        }
+        MessageId::ElevationOptionFullAccessDesc => {
+            "Retry without sandbox limits; grants unrestricted filesystem and network access"
+        }
+        MessageId::ElevationOptionAbortDesc => "Cancel this tool execution",
     }
 }
 
@@ -1696,6 +1843,58 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         }
         MessageId::OnboardTipsFooterEnter => "Enter を押す",
         MessageId::OnboardTipsFooterAction => " とワークスペースが開きます",
+        // Phase 2: Approval & Sandbox Elevation
+        MessageId::ApprovalRiskReview => "確認",
+        MessageId::ApprovalRiskDestructive => "破壊的操作",
+        MessageId::ApprovalCategorySafe => "安全",
+        MessageId::ApprovalCategoryFileWrite => "ファイル書き込み",
+        MessageId::ApprovalCategoryShell => "シェルコマンド",
+        MessageId::ApprovalCategoryNetwork => "ネットワーク",
+        MessageId::ApprovalCategoryMcpRead => "MCP読み取り",
+        MessageId::ApprovalCategoryMcpAction => "MCPアクション",
+        MessageId::ApprovalCategoryUnknown => "未分類",
+        MessageId::ApprovalFieldType => "種類：",
+        MessageId::ApprovalFieldAbout => "詳細：",
+        MessageId::ApprovalFieldImpact => "影響：",
+        MessageId::ApprovalFieldParams => "パラメータ：",
+        MessageId::ApprovalOptionApproveOnce => "1回だけ承認",
+        MessageId::ApprovalOptionApproveAlways => "常に承認（この種類）",
+        MessageId::ApprovalOptionDeny => "拒否",
+        MessageId::ApprovalOptionAbortTurn => "中断",
+        MessageId::ApprovalStaged => "(ステージング中)",
+        MessageId::ApprovalBlockTitle => "承認",
+        MessageId::ApprovalFooterBenignPrefix => "ワンキー承認：",
+        MessageId::ApprovalFooterBenignSuffix => "  ·  v: パラメータ表示  ·  Esc: 中止",
+        MessageId::ApprovalFooterDestructiveConfirmPrefix => "破壊的操作の確認 — ",
+        MessageId::ApprovalFooterDestructiveConfirmSuffix => {
+            " をもう一度押して確定、他のキーでキャンセル"
+        }
+        MessageId::ApprovalFooterDestructivePrefix => "2キー承認が必要：",
+        MessageId::ApprovalFooterDestructiveSuffix => "  ·  v: パラメータ表示  ·  Esc: 中止",
+        MessageId::ElevationTitleSandboxDenied => "  ⚠ サンドボックス拒否 ",
+        MessageId::ElevationTitleRequired => " サンドボックス昇格 ",
+        MessageId::ElevationFieldTool => "ツール：",
+        MessageId::ElevationFieldCmd => "コマンド：",
+        MessageId::ElevationFieldReason => "理由：",
+        MessageId::ElevationImpactHeader => "承認された場合の影響：",
+        MessageId::ElevationImpactNetwork => {
+            "ネットワーク再試行で外部ダウンロード・HTTPリクエストが可能"
+        }
+        MessageId::ElevationImpactWrite => "書き込み再試行でファイルシステムの書き込み範囲が拡大",
+        MessageId::ElevationImpactFullAccess => "フルアクセスでサンドボックス制限を完全に解除",
+        MessageId::ElevationPromptProceed => "方法を選択：",
+        MessageId::ElevationOptionNetwork => "外部ネットワークを許可",
+        MessageId::ElevationOptionWrite => "追加の書き込みアクセスを許可",
+        MessageId::ElevationOptionFullAccess => "フルアクセス（ファイルシステム + ネットワーク）",
+        MessageId::ElevationOptionAbort => "中止",
+        MessageId::ElevationOptionNetworkDesc => {
+            "ダウンロードとHTTPリクエストのため外部ネットワークアクセスを許可して再試行"
+        }
+        MessageId::ElevationOptionWriteDesc => "追加の書き込み可能ファイルシステム範囲で再試行",
+        MessageId::ElevationOptionFullAccessDesc => {
+            "サンドボックス制限なしで再試行：制限なしのファイルシステム・ネットワークアクセス"
+        }
+        MessageId::ElevationOptionAbortDesc => "このツール実行をキャンセル",
     })
 }
 
@@ -2027,6 +2226,54 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::OnboardTipsLine4 => "Ctrl+R 恢复历史会话，Esc 退出当前输入或弹层。",
         MessageId::OnboardTipsFooterEnter => "按 Enter",
         MessageId::OnboardTipsFooterAction => " 进入工作区",
+        // Phase 2: 审批与沙箱弹窗
+        MessageId::ApprovalRiskReview => "审核",
+        MessageId::ApprovalRiskDestructive => "危险操作",
+        MessageId::ApprovalCategorySafe => "安全操作",
+        MessageId::ApprovalCategoryFileWrite => "文件写入",
+        MessageId::ApprovalCategoryShell => "Shell 命令",
+        MessageId::ApprovalCategoryNetwork => "网络",
+        MessageId::ApprovalCategoryMcpRead => "MCP 读取",
+        MessageId::ApprovalCategoryMcpAction => "MCP 操作",
+        MessageId::ApprovalCategoryUnknown => "未分类",
+        MessageId::ApprovalFieldType => "类型：",
+        MessageId::ApprovalFieldAbout => "说明：",
+        MessageId::ApprovalFieldImpact => "影响：",
+        MessageId::ApprovalFieldParams => "参数：",
+        MessageId::ApprovalOptionApproveOnce => "仅批准一次",
+        MessageId::ApprovalOptionApproveAlways => "同类操作始终批准",
+        MessageId::ApprovalOptionDeny => "拒绝此次调用",
+        MessageId::ApprovalOptionAbortTurn => "中断本轮",
+        MessageId::ApprovalStaged => "（待确认）",
+        MessageId::ApprovalBlockTitle => "审批",
+        MessageId::ApprovalFooterBenignPrefix => "一键批准：",
+        MessageId::ApprovalFooterBenignSuffix => "  ·  v: 查看参数  ·  Esc: 中止",
+        MessageId::ApprovalFooterDestructiveConfirmPrefix => "确认危险操作 — 再次按下 ",
+        MessageId::ApprovalFooterDestructiveConfirmSuffix => " 以提交，其他按键取消",
+        MessageId::ApprovalFooterDestructivePrefix => "需要二次确认：",
+        MessageId::ApprovalFooterDestructiveSuffix => "  ·  v: 查看参数  ·  Esc: 中止",
+        MessageId::ElevationTitleSandboxDenied => "  ⚠ 沙箱拒绝 ",
+        MessageId::ElevationTitleRequired => " 沙箱提权 ",
+        MessageId::ElevationFieldTool => "工具：",
+        MessageId::ElevationFieldCmd => "命令：",
+        MessageId::ElevationFieldReason => "原因：",
+        MessageId::ElevationImpactHeader => "批准后的影响：",
+        MessageId::ElevationImpactNetwork => "网络重试 - 允许外部下载和 HTTP 请求",
+        MessageId::ElevationImpactWrite => "写入重试 - 扩大此工具调用的文件系统写入范围",
+        MessageId::ElevationImpactFullAccess => "完全访问 - 解除沙箱限制",
+        MessageId::ElevationPromptProceed => "请选择处理方式：",
+        MessageId::ElevationOptionNetwork => "允许外部网络访问",
+        MessageId::ElevationOptionWrite => "允许额外写入权限",
+        MessageId::ElevationOptionFullAccess => "完全访问（文件系统 + 网络）",
+        MessageId::ElevationOptionAbort => "中止",
+        MessageId::ElevationOptionNetworkDesc => {
+            "重试此工具调用，允许外部网络访问进行下载和 HTTP 请求"
+        }
+        MessageId::ElevationOptionWriteDesc => "重试此工具调用，扩大可写入的文件系统范围",
+        MessageId::ElevationOptionFullAccessDesc => {
+            "无沙箱限制重试，授予不受限的文件系统和网络访问权限"
+        }
+        MessageId::ElevationOptionAbortDesc => "取消此工具调用",
     })
 }
 
@@ -2438,6 +2685,66 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         }
         MessageId::OnboardTipsFooterEnter => "Pressione Enter",
         MessageId::OnboardTipsFooterAction => " para abrir o workspace",
+        // Phase 2: Approval & Sandbox Elevation
+        MessageId::ApprovalRiskReview => "REVISÃO",
+        MessageId::ApprovalRiskDestructive => "DESTRUTIVO",
+        MessageId::ApprovalCategorySafe => "Seguro",
+        MessageId::ApprovalCategoryFileWrite => "Escrita de Arquivo",
+        MessageId::ApprovalCategoryShell => "Comando Shell",
+        MessageId::ApprovalCategoryNetwork => "Rede",
+        MessageId::ApprovalCategoryMcpRead => "Leitura MCP",
+        MessageId::ApprovalCategoryMcpAction => "Ação MCP",
+        MessageId::ApprovalCategoryUnknown => "Desconhecido",
+        MessageId::ApprovalFieldType => "Tipo:",
+        MessageId::ApprovalFieldAbout => "Sobre:",
+        MessageId::ApprovalFieldImpact => "Impacto:",
+        MessageId::ApprovalFieldParams => "Parâmetros:",
+        MessageId::ApprovalOptionApproveOnce => "Aprovar uma vez",
+        MessageId::ApprovalOptionApproveAlways => "Aprovar sempre para este tipo",
+        MessageId::ApprovalOptionDeny => "Negar esta chamada",
+        MessageId::ApprovalOptionAbortTurn => "Abortar turno",
+        MessageId::ApprovalStaged => "(em espera)",
+        MessageId::ApprovalBlockTitle => "aprovação",
+        MessageId::ApprovalFooterBenignPrefix => "Tecla única aprova: ",
+        MessageId::ApprovalFooterBenignSuffix => "  ·  v: parâmetros  ·  Esc: abortar",
+        MessageId::ApprovalFooterDestructiveConfirmPrefix => {
+            "Confirme ação destrutiva — pressione "
+        }
+        MessageId::ApprovalFooterDestructiveConfirmSuffix => {
+            " novamente para confirmar, qualquer outra tecla cancela."
+        }
+        MessageId::ApprovalFooterDestructivePrefix => "Duas teclas para aprovar: ",
+        MessageId::ApprovalFooterDestructiveSuffix => "  ·  v: parâmetros  ·  Esc: abortar",
+        MessageId::ElevationTitleSandboxDenied => "  ⚠ Sandbox Negado ",
+        MessageId::ElevationTitleRequired => " Elevação de Sandbox Necessária ",
+        MessageId::ElevationFieldTool => "Ferramenta:",
+        MessageId::ElevationFieldCmd => "Comando:",
+        MessageId::ElevationFieldReason => "Motivo:",
+        MessageId::ElevationImpactHeader => "Impacto se aprovado:",
+        MessageId::ElevationImpactNetwork => {
+            "retentativa de rede permite downloads externos e requisições HTTP"
+        }
+        MessageId::ElevationImpactWrite => {
+            "retentativa de escrita expande escopo gravável do sistema de arquivos"
+        }
+        MessageId::ElevationImpactFullAccess => {
+            "acesso total remove restrições de sandbox completamente"
+        }
+        MessageId::ElevationPromptProceed => "Escolha como prosseguir:",
+        MessageId::ElevationOptionNetwork => "Permitir rede externa",
+        MessageId::ElevationOptionWrite => "Permitir acesso extra de escrita",
+        MessageId::ElevationOptionFullAccess => "Acesso total (sistema de arquivos + rede)",
+        MessageId::ElevationOptionAbort => "Abortar",
+        MessageId::ElevationOptionNetworkDesc => {
+            "Tentar novamente com acesso de rede externa para downloads e requisições HTTP"
+        }
+        MessageId::ElevationOptionWriteDesc => {
+            "Tentar novamente com escopo adicional gravável no sistema de arquivos"
+        }
+        MessageId::ElevationOptionFullAccessDesc => {
+            "Tentar sem limites de sandbox; concede acesso irrestrito ao sistema de arquivos e rede"
+        }
+        MessageId::ElevationOptionAbortDesc => "Cancelar esta execução de ferramenta",
     })
 }
 
