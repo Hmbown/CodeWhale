@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::fs;
 
@@ -10,10 +10,12 @@ use crate::types::{RepoGraph, ProjectImportConfig, PathAliasRule};
 pub struct ImportResolver {
     pub project_root: PathBuf,
     pub import_configs: Vec<ProjectImportConfig>,
-    /// File stem (filename without extension) -> candidate file paths.
+    /// File stem -> candidate file paths.
     pub file_map: HashMap<String, Vec<String>>,
-    /// Symbol name -> symbol IDs that share that name.
+    /// Symbol name -> symbol IDs.
     pub name_index: HashMap<String, Vec<String>>,
+    /// All known relative file paths for O(1) existence check.
+    known_paths: std::collections::HashSet<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -29,6 +31,7 @@ impl ImportResolver {
             import_configs: Vec::new(),
             file_map: HashMap::new(),
             name_index: HashMap::new(),
+            known_paths: std::collections::HashSet::new(),
         };
         this.build_indices(graph);
         this.discover_import_configs();
@@ -70,6 +73,11 @@ impl ImportResolver {
                 .entry(symbol.name.clone())
                 .or_default()
                 .push(sym_id.clone());
+        }
+
+        // Pre-compute set of all known file paths for O(1) existence check.
+        for file in graph.file_symbols.keys().chain(graph.file_imports.keys()) {
+            self.known_paths.insert(file.clone());
         }
     }
 
@@ -230,12 +238,20 @@ impl ImportResolver {
                 continue; // no replacement character
             }
 
+            // Trailing comma before } or ] — skip (string-safe: we're not inside a string here).
+            if chars[i] == ',' {
+                let mut j = i + 1;
+                while j < len && chars[j].is_whitespace() { j += 1; }
+                if j < len && (chars[j] == '}' || chars[j] == ']') {
+                    i += 1; // skip comma
+                    continue;
+                }
+            }
+
             out.push(chars[i]);
             i += 1;
         }
 
-        // remove trailing commas before } or ]
-        remove_trailing_commas(&mut out);
         out
     }
 }
@@ -298,33 +314,28 @@ impl ImportResolver {
     /// Probe `base_path` (exact, +extensions, +/index.ext) against the
     /// known file set.
     fn resolve_path_candidates(&self, base_path: &Path) -> Vec<String> {
-        // collect the set of known file paths for O(1) lookup
-        let known: HashSet<&str> = self
-            .file_map
-            .values()
-            .flat_map(|paths| paths.iter().map(|p| p.as_str()))
-            .collect();
-
         let base = base_path.to_string_lossy().to_string();
         let mut out = Vec::new();
 
-        if known.contains(base.as_str()) {
+        if self.known_paths.contains(&base) {
             out.push(base);
             return out;
         }
 
-        const EXTENSIONS: &[&str] = &[".ts", ".tsx", ".js", ".jsx", ".py", ".rs", ".go"];
+        const EXTENSIONS: &[&str] = &[
+            ".ts", ".tsx", ".js", ".jsx", ".py", ".rs", ".go", ".json", ".html", ".css",
+        ];
 
         for ext in EXTENSIONS {
             let candidate = format!("{}{}", base, ext);
-            if known.contains(candidate.as_str()) {
+            if self.known_paths.contains(&candidate) {
                 out.push(candidate);
             }
         }
 
         for ext in EXTENSIONS {
             let candidate = format!("{}/index{}", base, ext);
-            if known.contains(candidate.as_str()) {
+            if self.known_paths.contains(&candidate) {
                 out.push(candidate);
             }
         }
@@ -458,31 +469,6 @@ fn match_alias_pattern(import_path: &str, pattern: &str) -> Option<String> {
         }
     }
     None
-}
-
-/// Remove trailing commas before `}` or `]` (skipping whitespace).
-fn remove_trailing_commas(text: &mut String) {
-    let bytes = text.as_bytes().to_vec();
-    let len = bytes.len();
-    let mut buf = Vec::with_capacity(len);
-    let mut i = 0;
-
-    while i < len {
-        if bytes[i] == b',' {
-            let mut j = i + 1;
-            while j < len && matches!(bytes[j], b' ' | b'\t' | b'\n' | b'\r') {
-                j += 1;
-            }
-            if j < len && (bytes[j] == b'}' || bytes[j] == b']') {
-                i += 1; // skip the comma
-                continue;
-            }
-        }
-        buf.push(bytes[i]);
-        i += 1;
-    }
-
-    *text = String::from_utf8(buf).unwrap_or_else(|_| text.clone());
 }
 
 // ===========================================================================
