@@ -7,8 +7,10 @@ use std::time::Instant;
 use super::CommandResult;
 use crate::client::{PromptInspection, inspect_prompt_for_request};
 use crate::compaction::estimate_input_tokens_conservative;
+use crate::config::ApiProvider;
 use crate::localization::{Locale, MessageId, tr};
 use crate::models::{ContentBlock, MessageRequest, SystemPrompt, context_window_for_model};
+use crate::pricing::CostCurrency;
 use crate::tui::app::{App, AppAction, TurnCacheRecord};
 use crate::tui::history::HistoryCell;
 
@@ -450,9 +452,9 @@ mod tests {
             initial_input: None,
         };
         let mut app = App::new(options, &Config::default());
-        app.ui_locale = crate::localization::Locale::En;
-        app.cost_currency = crate::pricing::CostCurrency::Usd;
-        app.api_provider = crate::config::ApiProvider::Deepseek;
+        app.ui_locale = Locale::En;
+        app.cost_currency = CostCurrency::Usd;
+        app.api_provider = ApiProvider::Deepseek;
         app
     }
 

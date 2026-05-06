@@ -3,8 +3,8 @@
 use std::fmt::Write;
 use std::path::PathBuf;
 
-use crate::config::{COMMON_DEEPSEEK_MODELS, normalize_model_name_for_provider};
-use crate::localization::{MessageId, tr};
+use crate::config::{ApiProvider, COMMON_DEEPSEEK_MODELS, normalize_model_name_for_provider};
+use crate::localization::{Locale, MessageId, tr};
 use crate::tui::app::{App, AppAction, AppMode, ReasoningEffort};
 use crate::tui::views::{HelpView, ModalKind, SubAgentsView, subagent_view_agents};
 
@@ -380,6 +380,7 @@ mod tests {
     use super::*;
     use crate::client::PromptInspection;
     use crate::config::Config;
+    use crate::localization::Locale;
     use crate::models::Message;
     use crate::tui::app::{App, AppMode, TuiOptions, TurnCacheRecord};
     use crate::tui::history::HistoryCell;
@@ -410,8 +411,8 @@ mod tests {
             initial_input: None,
         };
         let mut app = App::new(options, &Config::default());
-        app.ui_locale = crate::localization::Locale::En;
-        app.api_provider = crate::config::ApiProvider::Deepseek;
+        app.ui_locale = Locale::En;
+        app.api_provider = ApiProvider::Deepseek;
         app
     }
 

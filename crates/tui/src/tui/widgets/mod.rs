@@ -594,23 +594,35 @@ impl Renderable for ComposerWidget<'_> {
                     }
                     SubmitDisposition::Queue => {
                         if self.app.offline_mode {
-                            (Some("↵ offline queue".to_string()), palette::STATUS_WARNING)
+                            (Some(self.app.tr(crate::localization::MessageId::ComposerOfflineQueueHint).to_string()), palette::STATUS_WARNING)
                         } else {
                             let label = if queue_count > 0 {
-                                format!("↵ queue ({} waiting)", queue_count.saturating_add(1))
+                                self.app
+                                    .tr(crate::localization::MessageId::ComposerQueueCount)
+                                    .replace("{}", &(queue_count.saturating_add(1).to_string()))
                             } else {
-                                "↵ queue for next turn".to_string()
+                                self.app
+                                    .tr(crate::localization::MessageId::ComposerQueueForNextTurn)
+                                    .to_string()
                             };
                             (Some(label), palette::TEXT_MUTED)
                         }
                     }
                     // Steer and QueueFollowUp are now only reached via Ctrl+Enter override.
                     SubmitDisposition::Steer => (
-                        Some("↵ steering (Ctrl+Enter)".to_string()),
+                        Some(
+                            self.app
+                                .tr(crate::localization::MessageId::ComposerSteerHint)
+                                .to_string(),
+                        ),
                         palette::DEEPSEEK_SKY,
                     ),
                     SubmitDisposition::QueueFollowUp => (
-                        Some("↵ queued (Ctrl+Enter to steer)".to_string()),
+                        Some(
+                            self.app
+                                .tr(crate::localization::MessageId::ComposerQueuedHint)
+                                .to_string(),
+                        ),
                         palette::TEXT_MUTED,
                     ),
                 };
@@ -630,9 +642,10 @@ impl Renderable for ComposerWidget<'_> {
                         self.app
                             .tr(crate::localization::MessageId::HistorySearchTitle)
                     } else if is_draft_mode {
-                        "Draft"
+                        self.app
+                            .tr(crate::localization::MessageId::ComposerDraftTitle)
                     } else {
-                        "Composer"
+                        self.app.tr(crate::localization::MessageId::ComposerTitle)
                     },
                     Style::default().fg(palette::TEXT_MUTED),
                 )))

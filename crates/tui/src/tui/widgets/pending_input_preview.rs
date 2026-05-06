@@ -19,6 +19,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 use unicode_width::UnicodeWidthChar;
 
+use crate::localization::{self, Locale};
 use crate::palette;
 use crate::tui::widgets::Renderable;
 
@@ -44,6 +45,7 @@ pub struct PendingInputPreview {
     pub rejected_steers: Vec<String>,
     pub queued_messages: Vec<String>,
     pub edit_binding: EditBinding,
+    pub locale: Locale,
 }
 
 /// Compact pre-send context row shown above the composer. `included=false`
@@ -67,6 +69,18 @@ impl PendingInputPreview {
             rejected_steers: Vec::new(),
             queued_messages: Vec::new(),
             edit_binding: EditBinding::UP,
+            locale: Locale::En,
+        }
+    }
+
+    pub fn with_locale(locale: Locale) -> Self {
+        Self {
+            context_items: Vec::new(),
+            pending_steers: Vec::new(),
+            rejected_steers: Vec::new(),
+            queued_messages: Vec::new(),
+            edit_binding: EditBinding::UP,
+            locale,
         }
     }
 
@@ -94,7 +108,13 @@ impl PendingInputPreview {
         if !self.context_items.is_empty() {
             push_section_header(
                 &mut lines,
-                Line::from(vec![Span::raw("• "), Span::raw("Context for next send")]),
+                Line::from(vec![
+                    Span::raw("• "),
+                    Span::raw(localization::tr(
+                        self.locale,
+                        localization::MessageId::PendingInputsContextHeader,
+                    )),
+                ]),
             );
             for item in &self.context_items {
                 push_context_item(&mut lines, item, width);
@@ -107,7 +127,13 @@ impl PendingInputPreview {
             }
             push_section_header(
                 &mut lines,
-                Line::from(vec![Span::raw("• "), Span::raw("Pending inputs")]),
+                Line::from(vec![
+                    Span::raw("• "),
+                    Span::raw(localization::tr(
+                        self.locale,
+                        localization::MessageId::PendingInputsHeader,
+                    )),
+                ]),
             );
             for steer in &self.pending_steers {
                 push_truncated_item(&mut lines, steer, width, dim, "  ↳ ", "    ");
@@ -119,8 +145,10 @@ impl PendingInputPreview {
                 push_truncated_item(&mut lines, message, width, dim_italic, "  ↳ ", "    ");
             }
             if !self.queued_messages.is_empty() {
+                let hint =
+                    localization::tr(self.locale, localization::MessageId::PendingInputsEditHint);
                 lines.push(Line::from(vec![Span::styled(
-                    format!("    {} edit last queued message", self.edit_binding.label),
+                    hint.replace("{}", self.edit_binding.label),
                     dim,
                 )]));
             }

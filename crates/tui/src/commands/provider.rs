@@ -4,7 +4,8 @@
 //! `/provider` with no args opens the picker modal (#52). `/provider <name>`
 //! keeps the v0.6.6 CLI form for muscle-memory + scripted use.
 
-use crate::config::{ApiProvider, normalize_model_name, provider_passes_model_through};
+use crate::config::{ApiProvider, Config, normalize_model_name, provider_passes_model_through};
+use crate::localization::Locale;
 use crate::tui::app::{App, AppAction};
 
 use super::CommandResult;
@@ -66,6 +67,7 @@ fn expand_model_alias(name: &str) -> String {
 mod tests {
     use super::*;
     use crate::config::Config;
+    use crate::localization::Locale;
     use crate::tui::app::TuiOptions;
     use std::path::PathBuf;
 
@@ -91,9 +93,12 @@ mod tests {
             resume_session_id: None,
             initial_input: None,
         };
-        let mut app = App::new(options, &Config::default());
-        app.ui_locale = crate::localization::Locale::En;
-        app.api_provider = crate::config::ApiProvider::Deepseek;
+        let cfg = Config {
+            provider: Some("deepseek".to_string()),
+            ..Default::default()
+        };
+        let mut app = App::new(options, &cfg);
+        app.ui_locale = Locale::En;
         app
     }
 
