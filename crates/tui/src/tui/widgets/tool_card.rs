@@ -23,6 +23,8 @@
 //! module is the vocabulary, not the layout engine. Keeping it small means
 //! a future visual refresh only has to touch the constants here.
 
+use crate::localization::{Locale, MessageId, tr};
+
 /// Tool family — the verb the agent is performing. Used to pick a glyph
 /// and label for the card header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -165,6 +167,24 @@ pub fn family_label(family: ToolFamily) -> &'static str {
         ToolFamily::Think => "think",
         ToolFamily::Generic => "tool",
     }
+}
+
+/// Locale-aware version of [`family_label`]. Returns an owned string so the
+/// caller can use it directly in a `Span` without extra `.to_string()`.
+#[must_use]
+pub fn family_label_locale(family: ToolFamily, locale: Locale) -> String {
+    let id = match family {
+        ToolFamily::Read => MessageId::ToolFamilyRead,
+        ToolFamily::Patch => MessageId::ToolFamilyPatch,
+        ToolFamily::Run => MessageId::ToolFamilyRun,
+        ToolFamily::Find => MessageId::ToolFamilyFind,
+        ToolFamily::Delegate => MessageId::ToolFamilyDelegate,
+        ToolFamily::Fanout => MessageId::ToolFamilyFanout,
+        ToolFamily::Rlm => MessageId::ToolFamilyRlm,
+        ToolFamily::Think => MessageId::ToolFamilyThink,
+        ToolFamily::Generic => MessageId::ToolFamilyGeneric,
+    };
+    tr(locale, id).to_string()
 }
 
 /// Position of a line within a multi-line card — drives the left-rail

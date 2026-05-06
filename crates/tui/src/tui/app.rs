@@ -3108,6 +3108,7 @@ impl App {
             calm_mode: self.calm_mode,
             low_motion: self.low_motion,
             spacing: self.transcript_spacing,
+            locale: self.ui_locale,
         }
     }
 

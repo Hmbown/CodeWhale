@@ -1543,6 +1543,7 @@ pub use help::HelpView;
 pub struct SubAgentsView {
     agents: Vec<SubAgentResult>,
     scroll: usize,
+    locale: Locale,
 }
 
 /// Build the agent rows shown by `/subagents`.
@@ -1652,8 +1653,12 @@ fn live_subagent_result(
 }
 
 impl SubAgentsView {
-    pub fn new(agents: Vec<SubAgentResult>) -> Self {
-        Self { agents, scroll: 0 }
+    pub fn new(agents: Vec<SubAgentResult>, locale: Locale) -> Self {
+        Self {
+            agents,
+            scroll: 0,
+            locale,
+        }
     }
 }
 
@@ -1716,7 +1721,7 @@ impl ModalView for SubAgentsView {
 
         if self.agents.is_empty() {
             lines.push(Line::from(Span::styled(
-                "No agents running.",
+                tr(self.locale, MessageId::SubAgentsNoAgents),
                 Style::default().fg(palette::TEXT_MUTED),
             )));
         } else {
@@ -1737,15 +1742,35 @@ impl ModalView for SubAgentsView {
             }
 
             let status_summary = [
-                ("Running", running.len(), palette::STATUS_WARNING),
-                ("Completed", completed.len(), palette::STATUS_SUCCESS),
-                ("Interrupted", interrupted.len(), palette::STATUS_WARNING),
-                ("Failed", failed.len(), palette::DEEPSEEK_RED),
-                ("Cancelled", cancelled.len(), palette::TEXT_MUTED),
+                (
+                    tr(self.locale, MessageId::SubAgentsRunning),
+                    running.len(),
+                    palette::STATUS_WARNING,
+                ),
+                (
+                    tr(self.locale, MessageId::SubAgentsCompleted),
+                    completed.len(),
+                    palette::STATUS_SUCCESS,
+                ),
+                (
+                    tr(self.locale, MessageId::SubAgentsInterrupted),
+                    interrupted.len(),
+                    palette::STATUS_WARNING,
+                ),
+                (
+                    tr(self.locale, MessageId::SubAgentsFailed),
+                    failed.len(),
+                    palette::DEEPSEEK_RED,
+                ),
+                (
+                    tr(self.locale, MessageId::SubAgentsCancelled),
+                    cancelled.len(),
+                    palette::TEXT_MUTED,
+                ),
             ];
 
             lines.push(Line::from(Span::styled(
-                "Sub-agents",
+                tr(self.locale, MessageId::SubAgentsTitle),
                 Style::default().fg(palette::DEEPSEEK_SKY).bold(),
             )));
 
@@ -1793,38 +1818,43 @@ impl ModalView for SubAgentsView {
 
             append_subagent_group(
                 &mut lines,
-                "Running",
+                tr(self.locale, MessageId::SubAgentsRunning),
                 palette::STATUS_WARNING.into(),
                 &running,
                 content_width,
+                self.locale,
             );
             append_subagent_group(
                 &mut lines,
-                "Completed",
+                tr(self.locale, MessageId::SubAgentsCompleted),
                 palette::STATUS_SUCCESS.into(),
                 &completed,
                 content_width,
+                self.locale,
             );
             append_subagent_group(
                 &mut lines,
-                "Interrupted",
+                tr(self.locale, MessageId::SubAgentsInterrupted),
                 palette::STATUS_WARNING.into(),
                 &interrupted,
                 content_width,
+                self.locale,
             );
             append_subagent_group(
                 &mut lines,
-                "Failed",
+                tr(self.locale, MessageId::SubAgentsFailed),
                 palette::DEEPSEEK_RED.into(),
                 &failed,
                 content_width,
+                self.locale,
             );
             append_subagent_group(
                 &mut lines,
-                "Cancelled",
+                tr(self.locale, MessageId::SubAgentsCancelled),
                 palette::TEXT_MUTED.into(),
                 &cancelled,
                 content_width,
+                self.locale,
             );
         }
 
@@ -1843,11 +1873,11 @@ impl ModalView for SubAgentsView {
             .block(
                 Block::default()
                     .title(Line::from(vec![Span::styled(
-                        " Sub-agents ",
+                        format!(" {} ", tr(self.locale, MessageId::SubAgentsTitle)),
                         Style::default().fg(palette::DEEPSEEK_BLUE).bold(),
                     )]))
                     .title_bottom(Line::from(vec![
-                        Span::styled(" Esc to close ", Style::default().fg(palette::TEXT_MUTED)),
+                        Span::styled(" Esc/q to close ", Style::default().fg(palette::TEXT_MUTED)),
                         Span::styled(" R to refresh ", Style::default().fg(palette::TEXT_MUTED)),
                         Span::styled(scroll_indicator, Style::default().fg(palette::DEEPSEEK_SKY)),
                     ]))
@@ -1868,6 +1898,7 @@ fn append_subagent_group(
     section_style: ratatui::style::Style,
     agents: &[&SubAgentResult],
     content_width: usize,
+    locale: Locale,
 ) {
     use ratatui::{
         style::Style,
@@ -1890,7 +1921,7 @@ fn append_subagent_group(
             .map(|nick| format!("{nick:<12}"))
             .unwrap_or_else(|| format!("{id:<12}"));
         let kind = format_agent_type(&agent.agent_type);
-        let (status, status_style, status_detail) = format_agent_status(&agent.status);
+        let (status, status_style, status_detail) = format_agent_status(&agent.status, locale);
 
         lines.push(Line::from(vec![
             Span::raw("  "),
@@ -1917,7 +1948,7 @@ fn append_subagent_group(
 
         if let Some(detail) = status_detail {
             let max_len = content_width.saturating_sub(10);
-            let detail = truncate_view_text(detail, max_len);
+            let detail = truncate_view_text(&detail, max_len);
             lines.push(Line::from(vec![
                 Span::styled("    reason: ", Style::default().fg(palette::TEXT_MUTED)),
                 Span::styled(detail, Style::default().fg(palette::DEEPSEEK_RED)),
@@ -1974,28 +2005,38 @@ fn format_agent_type(agent_type: &SubAgentType) -> &'static str {
 
 fn format_agent_status(
     status: &SubAgentStatus,
-) -> (&'static str, ratatui::style::Style, Option<&str>) {
+    locale: Locale,
+) -> (String, ratatui::style::Style, Option<String>) {
     use ratatui::style::Style;
 
-    match status {
-        SubAgentStatus::Running => ("running", Style::default().fg(palette::DEEPSEEK_SKY), None),
+    let (id, style, detail) = match status {
+        SubAgentStatus::Running => (
+            MessageId::AgentStatusRunning,
+            Style::default().fg(palette::DEEPSEEK_SKY),
+            None,
+        ),
         SubAgentStatus::Completed => (
-            "completed",
+            MessageId::AgentStatusCompleted,
             Style::default().fg(palette::DEEPSEEK_BLUE),
             None,
         ),
         SubAgentStatus::Interrupted(reason) => (
-            "interrupted",
+            MessageId::AgentStatusInterrupted,
             Style::default().fg(palette::STATUS_WARNING),
-            Some(reason.as_str()),
+            Some(reason.clone()),
         ),
-        SubAgentStatus::Cancelled => ("cancelled", Style::default().fg(palette::TEXT_MUTED), None),
+        SubAgentStatus::Cancelled => (
+            MessageId::AgentStatusCancelled,
+            Style::default().fg(palette::TEXT_MUTED),
+            None,
+        ),
         SubAgentStatus::Failed(reason) => (
-            "failed",
+            MessageId::AgentStatusFailed,
             Style::default().fg(palette::DEEPSEEK_RED),
-            Some(reason.as_str()),
+            Some(reason.clone()),
         ),
-    }
+    };
+    (tr(locale, id).to_string(), style, detail)
 }
 
 fn truncate_view_text(text: &str, max_chars: usize) -> String {

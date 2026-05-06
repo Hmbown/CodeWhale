@@ -550,6 +550,44 @@ pub enum MessageId {
     CmdLogoutSuccess,
     CmdLogoutFailed,
     CmdEditingQueuedDraft,
+
+    // ── Tool family labels (card headers) ────────────────
+    ToolFamilyRead,
+    ToolFamilyPatch,
+    ToolFamilyRun,
+    ToolFamilyFind,
+    ToolFamilyDelegate,
+    ToolFamilyFanout,
+    ToolFamilyRlm,
+    ToolFamilyThink,
+    ToolFamilyGeneric,
+
+    // ── Agent lifecycle labels (status badges) ──────────
+    AgentLifecyclePending,
+    AgentLifecycleRunning,
+    AgentLifecycleDone,
+    AgentLifecycleFailed,
+    AgentLifecycleCancelled,
+
+    // ── Fanout summary counts ────────────────────────────
+    FanoutCounts,
+
+    // ── Sub-agents modal ─────────────────────────────────
+    SubAgentsTitle,
+    SubAgentsNoAgents,
+    SubAgentsRunning,
+    SubAgentsCompleted,
+    SubAgentsInterrupted,
+    SubAgentsFailed,
+    SubAgentsCancelled,
+    AgentStatusRunning,
+    AgentStatusCompleted,
+    AgentStatusInterrupted,
+    AgentStatusCancelled,
+    AgentStatusFailed,
+
+    // ── Sidebar ──────────────────────────────────────────
+    SidebarNoAgents,
 }
 
 #[allow(dead_code)]
@@ -878,6 +916,34 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CmdLogoutSuccess,
     MessageId::CmdLogoutFailed,
     MessageId::CmdEditingQueuedDraft,
+    MessageId::ToolFamilyRead,
+    MessageId::ToolFamilyPatch,
+    MessageId::ToolFamilyRun,
+    MessageId::ToolFamilyFind,
+    MessageId::ToolFamilyDelegate,
+    MessageId::ToolFamilyFanout,
+    MessageId::ToolFamilyRlm,
+    MessageId::ToolFamilyThink,
+    MessageId::ToolFamilyGeneric,
+    MessageId::AgentLifecyclePending,
+    MessageId::AgentLifecycleRunning,
+    MessageId::AgentLifecycleDone,
+    MessageId::AgentLifecycleFailed,
+    MessageId::AgentLifecycleCancelled,
+    MessageId::FanoutCounts,
+    MessageId::SubAgentsTitle,
+    MessageId::SubAgentsNoAgents,
+    MessageId::SubAgentsRunning,
+    MessageId::SubAgentsCompleted,
+    MessageId::SubAgentsInterrupted,
+    MessageId::SubAgentsFailed,
+    MessageId::SubAgentsCancelled,
+    MessageId::AgentStatusRunning,
+    MessageId::AgentStatusCompleted,
+    MessageId::AgentStatusInterrupted,
+    MessageId::AgentStatusCancelled,
+    MessageId::AgentStatusFailed,
+    MessageId::SidebarNoAgents,
 ];
 
 pub fn tr(locale: Locale, id: MessageId) -> &'static str {
@@ -1538,6 +1604,36 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CmdEditingQueuedDraft => {
             "Editing queued message {n} (press Enter to re-queue/send)"
         }
+        MessageId::ToolFamilyRead => "read",
+        MessageId::ToolFamilyPatch => "patch",
+        MessageId::ToolFamilyRun => "run",
+        MessageId::ToolFamilyFind => "find",
+        MessageId::ToolFamilyDelegate => "delegate",
+        MessageId::ToolFamilyFanout => "fanout",
+        MessageId::ToolFamilyRlm => "rlm",
+        MessageId::ToolFamilyThink => "think",
+        MessageId::ToolFamilyGeneric => "tool",
+        MessageId::AgentLifecyclePending => "pending",
+        MessageId::AgentLifecycleRunning => "running",
+        MessageId::AgentLifecycleDone => "done",
+        MessageId::AgentLifecycleFailed => "failed",
+        MessageId::AgentLifecycleCancelled => "cancelled",
+        MessageId::FanoutCounts => {
+            "{done} done · {running} running · {failed} failed · {pending} pending"
+        }
+        MessageId::SubAgentsTitle => "Sub-agents",
+        MessageId::SubAgentsNoAgents => "No agents running.",
+        MessageId::SubAgentsRunning => "Running",
+        MessageId::SubAgentsCompleted => "Completed",
+        MessageId::SubAgentsInterrupted => "Interrupted",
+        MessageId::SubAgentsFailed => "Failed",
+        MessageId::SubAgentsCancelled => "Cancelled",
+        MessageId::AgentStatusRunning => "running",
+        MessageId::AgentStatusCompleted => "completed",
+        MessageId::AgentStatusInterrupted => "interrupted",
+        MessageId::AgentStatusCancelled => "cancelled",
+        MessageId::AgentStatusFailed => "failed",
+        MessageId::SidebarNoAgents => "No agents",
     }
 }
 
@@ -2054,6 +2150,36 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::CmdEditingQueuedDraft => {
             "キューされたメッセージ {n} を編集中 (Enter で再キュー/送信)"
         }
+        MessageId::ToolFamilyRead => "読み取り",
+        MessageId::ToolFamilyPatch => "パッチ",
+        MessageId::ToolFamilyRun => "実行",
+        MessageId::ToolFamilyFind => "検索",
+        MessageId::ToolFamilyDelegate => "委任",
+        MessageId::ToolFamilyFanout => "ファンアウト",
+        MessageId::ToolFamilyRlm => "rlm",
+        MessageId::ToolFamilyThink => "思考",
+        MessageId::ToolFamilyGeneric => "ツール",
+        MessageId::AgentLifecyclePending => "待機中",
+        MessageId::AgentLifecycleRunning => "実行中",
+        MessageId::AgentLifecycleDone => "完了",
+        MessageId::AgentLifecycleFailed => "失敗",
+        MessageId::AgentLifecycleCancelled => "キャンセル済み",
+        MessageId::FanoutCounts => {
+            "{done} 完了 · {running} 実行中 · {failed} 失敗 · {pending} 待機"
+        }
+        MessageId::SubAgentsTitle => "サブエージェント",
+        MessageId::SubAgentsNoAgents => "実行中のエージェントはありません。",
+        MessageId::SubAgentsRunning => "実行中",
+        MessageId::SubAgentsCompleted => "完了",
+        MessageId::SubAgentsInterrupted => "中断",
+        MessageId::SubAgentsFailed => "失敗",
+        MessageId::SubAgentsCancelled => "キャンセル済み",
+        MessageId::AgentStatusRunning => "実行中",
+        MessageId::AgentStatusCompleted => "完了",
+        MessageId::AgentStatusInterrupted => "中断",
+        MessageId::AgentStatusCancelled => "キャンセル済み",
+        MessageId::AgentStatusFailed => "失敗",
+        MessageId::SidebarNoAgents => "エージェントなし",
     })
 }
 
@@ -2474,6 +2600,36 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CmdLogoutSuccess => "已登出。请输入新的 API 密钥以继续。",
         MessageId::CmdLogoutFailed => "清除 API 密钥失败：{reason}",
         MessageId::CmdEditingQueuedDraft => "正在编辑已排队的消息 {n}（按 Enter 重新排队/发送）",
+        MessageId::ToolFamilyRead => "读取",
+        MessageId::ToolFamilyPatch => "补丁",
+        MessageId::ToolFamilyRun => "运行",
+        MessageId::ToolFamilyFind => "查找",
+        MessageId::ToolFamilyDelegate => "委托",
+        MessageId::ToolFamilyFanout => "扇出",
+        MessageId::ToolFamilyRlm => "rlm",
+        MessageId::ToolFamilyThink => "思考",
+        MessageId::ToolFamilyGeneric => "工具",
+        MessageId::AgentLifecyclePending => "等待中",
+        MessageId::AgentLifecycleRunning => "运行中",
+        MessageId::AgentLifecycleDone => "完成",
+        MessageId::AgentLifecycleFailed => "失败",
+        MessageId::AgentLifecycleCancelled => "已取消",
+        MessageId::FanoutCounts => {
+            "{done} 完成 · {running} 运行中 · {failed} 失败 · {pending} 等待中"
+        }
+        MessageId::SubAgentsTitle => "子 Agent",
+        MessageId::SubAgentsNoAgents => "没有运行中的 Agent。",
+        MessageId::SubAgentsRunning => "运行中",
+        MessageId::SubAgentsCompleted => "已完成",
+        MessageId::SubAgentsInterrupted => "已中断",
+        MessageId::SubAgentsFailed => "失败",
+        MessageId::SubAgentsCancelled => "已取消",
+        MessageId::AgentStatusRunning => "运行中",
+        MessageId::AgentStatusCompleted => "已完成",
+        MessageId::AgentStatusInterrupted => "已中断",
+        MessageId::AgentStatusCancelled => "已取消",
+        MessageId::AgentStatusFailed => "失败",
+        MessageId::SidebarNoAgents => "无 Agent",
     })
 }
 
@@ -2998,6 +3154,36 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::CmdEditingQueuedDraft => {
             "Editando mensagem enfileirada {n} (pressione Enter para re-enfileirar/enviar)"
         }
+        MessageId::ToolFamilyRead => "ler",
+        MessageId::ToolFamilyPatch => "patch",
+        MessageId::ToolFamilyRun => "executar",
+        MessageId::ToolFamilyFind => "buscar",
+        MessageId::ToolFamilyDelegate => "delegar",
+        MessageId::ToolFamilyFanout => "fanout",
+        MessageId::ToolFamilyRlm => "rlm",
+        MessageId::ToolFamilyThink => "pensar",
+        MessageId::ToolFamilyGeneric => "ferramenta",
+        MessageId::AgentLifecyclePending => "pendente",
+        MessageId::AgentLifecycleRunning => "executando",
+        MessageId::AgentLifecycleDone => "concluído",
+        MessageId::AgentLifecycleFailed => "falhou",
+        MessageId::AgentLifecycleCancelled => "cancelado",
+        MessageId::FanoutCounts => {
+            "{done} concluído · {running} executando · {failed} falhou · {pending} pendente"
+        }
+        MessageId::SubAgentsTitle => "Sub-agentes",
+        MessageId::SubAgentsNoAgents => "Nenhum agente em execução.",
+        MessageId::SubAgentsRunning => "Executando",
+        MessageId::SubAgentsCompleted => "Concluído",
+        MessageId::SubAgentsInterrupted => "Interrompido",
+        MessageId::SubAgentsFailed => "Falhou",
+        MessageId::SubAgentsCancelled => "Cancelado",
+        MessageId::AgentStatusRunning => "executando",
+        MessageId::AgentStatusCompleted => "concluído",
+        MessageId::AgentStatusInterrupted => "interrompido",
+        MessageId::AgentStatusCancelled => "cancelado",
+        MessageId::AgentStatusFailed => "falhou",
+        MessageId::SidebarNoAgents => "Sem agentes",
     })
 }
 

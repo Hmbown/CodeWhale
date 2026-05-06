@@ -17,6 +17,7 @@ use ratatui::{
 };
 
 use crate::deepseek_theme::Theme;
+use crate::localization::{Locale, MessageId, tr};
 use crate::palette;
 use crate::tools::plan::StepStatus;
 use crate::tools::subagent::SubAgentStatus;
