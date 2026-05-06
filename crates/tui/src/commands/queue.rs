@@ -20,7 +20,7 @@ pub fn queue(app: &mut App, args: Option<&str>) -> CommandResult {
         "edit" => edit_queue(app, parts.next()),
         "drop" | "remove" | "rm" => drop_queue(app, parts.next()),
         "clear" => clear_queue(app),
-        _ => CommandResult::error_locale(
+        _ => CommandResult::error(
             localization::tr(app.ui_locale, MessageId::CmdQueueUsage),
             app.ui_locale,
         ),
@@ -63,15 +63,15 @@ fn edit_queue(app: &mut App, index: Option<&str>) -> CommandResult {
     let locale = app.ui_locale;
     let t = |id| localization::tr(locale, id);
     if app.queued_draft.is_some() {
-        return CommandResult::error_locale(t(MessageId::CmdQueueAlreadyEditing), locale);
+        return CommandResult::error(t(MessageId::CmdQueueAlreadyEditing), locale);
     }
     let index = match parse_index(index, locale) {
         Ok(index) => index,
-        Err(err) => return CommandResult::error_locale(err, locale),
+        Err(err) => return CommandResult::error(err, locale),
     };
 
     let Some(message) = app.remove_queued_message(index) else {
-        return CommandResult::error_locale(t(MessageId::CmdQueueNotFound), locale);
+        return CommandResult::error(t(MessageId::CmdQueueNotFound), locale);
     };
 
     app.input = message.display.clone();
@@ -90,11 +90,11 @@ fn drop_queue(app: &mut App, index: Option<&str>) -> CommandResult {
     let t = |id| localization::tr(locale, id);
     let index = match parse_index(index, locale) {
         Ok(index) => index,
-        Err(err) => return CommandResult::error_locale(err, locale),
+        Err(err) => return CommandResult::error(err, locale),
     };
 
     if app.remove_queued_message(index).is_none() {
-        return CommandResult::error_locale(t(MessageId::CmdQueueNotFound), locale);
+        return CommandResult::error(t(MessageId::CmdQueueNotFound), locale);
     }
 
     CommandResult::message(t(MessageId::CmdQueueDropped).replace("{n}", &(index + 1).to_string()))

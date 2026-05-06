@@ -6,6 +6,7 @@
 //! point.
 
 use crate::composer_stash;
+use crate::localization::Locale;
 use crate::tui::app::App;
 
 use super::CommandResult;
@@ -23,10 +24,13 @@ pub fn stash(app: &mut App, arg: Option<&str>) -> CommandResult {
     match sub.as_str() {
         "" | "list" | "ls" | "show" => list(),
         "pop" | "restore" => pop(app),
-        "clear" | "wipe" | "drop" => clear(),
-        other => CommandResult::error(format!(
-            "unknown subcommand `{other}`. Try `/stash list`, `/stash pop`, or `/stash clear`."
-        )),
+        "clear" | "wipe" | "drop" => clear(app.ui_locale),
+        other => CommandResult::error(
+            format!(
+                "unknown subcommand `{other}`. Try `/stash list`, `/stash pop`, or `/stash clear`."
+            ),
+            app.ui_locale,
+        ),
     }
 }
 
@@ -52,11 +56,11 @@ fn list() -> CommandResult {
     CommandResult::message(out)
 }
 
-fn clear() -> CommandResult {
+fn clear(locale: Locale) -> CommandResult {
     match composer_stash::clear_stash() {
         Ok(0) => CommandResult::message("Stash already empty — nothing to clear."),
         Ok(n) => CommandResult::message(format!("Cleared {n} parked draft(s) from the stash.")),
-        Err(err) => CommandResult::error(format!("Failed to clear stash: {err}")),
+        Err(err) => CommandResult::error(format!("Failed to clear stash: {err}"), locale),
     }
 }
 

@@ -1545,17 +1545,17 @@ pub fn patch_undo(app: &mut App) -> CommandResult {
     let repo = match crate::snapshot::SnapshotRepo::open_or_init(&workspace) {
         Ok(r) => r,
         Err(e) => {
-            return CommandResult::error(format!(
-                "Snapshot repo unavailable for {}: {e}",
-                workspace.display(),
-            ));
+            return CommandResult::error(
+                format!("Snapshot repo unavailable for {}: {e}", workspace.display(),),
+                app.ui_locale,
+            );
         }
     };
 
     let snapshots = match repo.list(20) {
         Ok(s) => s,
         Err(e) => {
-            return CommandResult::error(format!("Failed to list snapshots: {e}"));
+            return CommandResult::error(format!("Failed to list snapshots: {e}"), app.ui_locale);
         }
     };
 
@@ -1582,7 +1582,7 @@ pub fn patch_undo(app: &mut App) -> CommandResult {
     };
 
     if let Err(e) = repo.restore(&target.id) {
-        return CommandResult::error(format!("Restore failed: {e}"));
+        return CommandResult::error(format!("Restore failed: {e}"), app.ui_locale);
     }
 
     if let Some(tool_id) = target.label.strip_prefix("tool:") {
@@ -1742,6 +1742,6 @@ pub fn retry(app: &mut App) -> CommandResult {
                 AppAction::SendMessage(input),
             )
         }
-        None => CommandResult::error("No previous request to retry"),
+        None => CommandResult::error("No previous request to retry", app.ui_locale),
     }
 }

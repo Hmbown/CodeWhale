@@ -31,9 +31,12 @@ pub fn share(app: &mut App, arg: Option<&str>) -> CommandResult {
              so you can paste it into Slack, GitHub, Twitter, etc."
                 .to_string(),
         ),
-        _ => CommandResult::error(format!(
-            "Unknown /share argument `{raw}`. Use `/share` with no arguments or `/share help`."
-        )),
+        _ => CommandResult::error(
+            format!(
+                "Unknown /share argument `{raw}`. Use `/share` with no arguments or `/share help`."
+            ),
+            app.ui_locale,
+        ),
     }
 }
 
@@ -41,7 +44,10 @@ pub fn share(app: &mut App, arg: Option<&str>) -> CommandResult {
 fn do_share(app: &mut App) -> CommandResult {
     // Check if there's any session content to share
     if app.history.is_empty() {
-        return CommandResult::error("Nothing to share. The current session is empty.");
+        return CommandResult::error(
+            "Nothing to share. The current session is empty.",
+            app.ui_locale,
+        );
     }
 
     // Sanity-check: the extra info block is optional; the session itself

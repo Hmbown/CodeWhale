@@ -52,7 +52,12 @@ pub fn save(app: &mut App, path: Option<&str>) -> CommandResult {
             crate::session_manager::compact_session_tool_outputs(&mut persisted);
             let json = match serde_json::to_string_pretty(&persisted) {
                 Ok(j) => j,
-                Err(e) => return CommandResult::error(format!("Failed to serialize session: {e}")),
+                Err(e) => {
+                    return CommandResult::error(
+                        format!("Failed to serialize session: {e}"),
+                        app.ui_locale,
+                    );
+                }
             };
             match std::fs::write(&save_path, json) {
                 Ok(()) => {
@@ -63,10 +68,12 @@ pub fn save(app: &mut App, path: Option<&str>) -> CommandResult {
                         crate::session_manager::truncate_id(&session.metadata.id)
                     ))
                 }
-                Err(e) => CommandResult::error(format!("Failed to save session: {e}")),
+                Err(e) => {
+                    CommandResult::error(format!("Failed to save session: {e}"), app.ui_locale)
+                }
             }
         }
-        Err(e) => CommandResult::error(format!("Failed to create directory: {e}")),
+        Err(e) => CommandResult::error(format!("Failed to create directory: {e}"), app.ui_locale),
     }
 }
 
@@ -144,20 +151,26 @@ pub fn load(app: &mut App, path: Option<&str>) -> CommandResult {
             app.workspace.join(p)
         }
     } else {
-        return CommandResult::error("Usage: /load <path>");
+        return CommandResult::error("Usage: /load <path>", app.ui_locale);
     };
 
     let content = match std::fs::read_to_string(&load_path) {
         Ok(c) => c,
         Err(e) => {
-            return CommandResult::error(format!("Failed to read session file: {e}"));
+            return CommandResult::error(
+                format!("Failed to read session file: {e}"),
+                app.ui_locale,
+            );
         }
     };
 
     let mut session: crate::session_manager::SavedSession = match serde_json::from_str(&content) {
         Ok(s) => s,
         Err(e) => {
-            return CommandResult::error(format!("Failed to parse session file: {e}"));
+            return CommandResult::error(
+                format!("Failed to parse session file: {e}"),
+                app.ui_locale,
+            );
         }
     };
     crate::session_manager::compact_session_tool_outputs(&mut session);
@@ -274,7 +287,7 @@ pub fn export(app: &mut App, path: Option<&str>) -> CommandResult {
 
     match std::fs::write(&export_path, content) {
         Ok(()) => CommandResult::message(format!("Exported to {}", export_path.display())),
-        Err(e) => CommandResult::error(format!("Failed to export: {e}")),
+        Err(e) => CommandResult::error(format!("Failed to export: {e}"), app.ui_locale),
     }
 }
 
@@ -295,9 +308,10 @@ pub fn sessions(app: &mut App, arg: Option<&str>) -> CommandResult {
             app.view_stack.push(SessionPickerView::new(&app.workspace));
             CommandResult::ok()
         }
-        _ => CommandResult::error(format!(
-            "unknown subcommand `{action}`. usage: /sessions [show|prune <days>]"
-        )),
+        _ => CommandResult::error(
+            format!("unknown subcommand `{action}`. usage: /sessions [show|prune <days>]"),
+            app.ui_locale,
+        ),
     }
 }
 
@@ -306,28 +320,33 @@ pub fn sessions(app: &mut App, arg: Option<&str>) -> CommandResult {
 /// [`crate::session_manager::SessionManager::prune_sessions_older_than`]
 /// so users can run a safe cleanup without leaving the TUI. Skips
 /// the checkpoint subdirectory (the helper guarantees that already).
-fn prune(_app: &mut App, days_arg: Option<&str>) -> CommandResult {
+fn prune(app: &mut App, days_arg: Option<&str>) -> CommandResult {
     let days_str = match days_arg {
         Some(s) => s,
         None => {
             return CommandResult::error(
                 "usage: /sessions prune <days>   (e.g. `/sessions prune 30` to drop sessions older than 30 days)",
+                app.ui_locale,
             );
         }
     };
     let days: u64 = match days_str.parse() {
         Ok(n) if n > 0 => n,
         _ => {
-            return CommandResult::error(format!(
-                "expected a positive integer number of days, got `{days_str}`"
-            ));
+            return CommandResult::error(
+                format!("expected a positive integer number of days, got `{days_str}`"),
+                app.ui_locale,
+            );
         }
     };
 
     let manager = match crate::session_manager::SessionManager::default_location() {
         Ok(m) => m,
         Err(err) => {
-            return CommandResult::error(format!("could not open sessions directory: {err}"));
+            return CommandResult::error(
+                format!("could not open sessions directory: {err}"),
+                app.ui_locale,
+            );
         }
     };
 
@@ -338,7 +357,7 @@ fn prune(_app: &mut App, days_arg: Option<&str>) -> CommandResult {
             "pruned {n} session{} older than {days}d",
             if n == 1 { "" } else { "s" }
         )),
-        Err(err) => CommandResult::error(format!("prune failed: {err}")),
+        Err(err) => CommandResult::error(format!("prune failed: {err}"), app.ui_locale),
     }
 }
 

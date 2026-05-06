@@ -19,16 +19,18 @@ pub fn restore(app: &mut App, arg: Option<&str>) -> CommandResult {
     let repo = match SnapshotRepo::open_or_init(&workspace) {
         Ok(r) => r,
         Err(e) => {
-            return CommandResult::error(format!(
-                "Snapshot repo unavailable for {}: {e}",
-                workspace.display(),
-            ));
+            return CommandResult::error(
+                format!("Snapshot repo unavailable for {}: {e}", workspace.display(),),
+                app.ui_locale,
+            );
         }
     };
 
     let snapshots = match repo.list(LIST_LIMIT) {
         Ok(s) => s,
-        Err(e) => return CommandResult::error(format!("Failed to list snapshots: {e}")),
+        Err(e) => {
+            return CommandResult::error(format!("Failed to list snapshots: {e}"), app.ui_locale);
+        }
     };
 
     if snapshots.is_empty() {
@@ -44,17 +46,21 @@ pub fn restore(app: &mut App, arg: Option<&str>) -> CommandResult {
     let n: usize = match arg.parse() {
         Ok(n) if n >= 1 => n,
         _ => {
-            return CommandResult::error(format!(
-                "Usage: /restore <N>  (N is 1-based; got '{arg}')",
-            ));
+            return CommandResult::error(
+                format!("Usage: /restore <N>  (N is 1-based; got '{arg}')",),
+                app.ui_locale,
+            );
         }
     };
 
     if n > snapshots.len() {
-        return CommandResult::error(format!(
-            "Only {} snapshot(s) available; asked for #{n}.",
-            snapshots.len(),
-        ));
+        return CommandResult::error(
+            format!(
+                "Only {} snapshot(s) available; asked for #{n}.",
+                snapshots.len(),
+            ),
+            app.ui_locale,
+        );
     }
 
     // Non-YOLO sessions get a confirmation gate. We don't have a true
@@ -71,7 +77,7 @@ pub fn restore(app: &mut App, arg: Option<&str>) -> CommandResult {
 
     let target = &snapshots[n - 1];
     if let Err(e) = repo.restore(&target.id) {
-        return CommandResult::error(format!("Restore failed: {e}"));
+        return CommandResult::error(format!("Restore failed: {e}"), app.ui_locale);
     }
 
     CommandResult::message(format!(

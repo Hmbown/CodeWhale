@@ -19,7 +19,7 @@ pub fn task(app: &mut App, args: Option<&str>) -> CommandResult {
     match action.as_str() {
         "add" => {
             let Some(prompt) = remainder else {
-                return CommandResult::error_locale(t(MessageId::CmdTaskUsageAdd), app.ui_locale);
+                return CommandResult::error(t(MessageId::CmdTaskUsageAdd), app.ui_locale);
             };
             CommandResult::action(AppAction::TaskAdd {
                 prompt: prompt.to_string(),
@@ -28,20 +28,17 @@ pub fn task(app: &mut App, args: Option<&str>) -> CommandResult {
         "list" => CommandResult::action(AppAction::TaskList),
         "show" => {
             let Some(id) = remainder else {
-                return CommandResult::error_locale(t(MessageId::CmdTaskUsageShow), app.ui_locale);
+                return CommandResult::error(t(MessageId::CmdTaskUsageShow), app.ui_locale);
             };
             CommandResult::action(AppAction::TaskShow { id: id.to_string() })
         }
         "cancel" | "stop" => {
             let Some(id) = remainder else {
-                return CommandResult::error_locale(
-                    t(MessageId::CmdTaskUsageCancel),
-                    app.ui_locale,
-                );
+                return CommandResult::error(t(MessageId::CmdTaskUsageCancel), app.ui_locale);
             };
             CommandResult::action(AppAction::TaskCancel { id: id.to_string() })
         }
-        _ => CommandResult::error_locale(t(MessageId::CmdTaskUsageGeneral), app.ui_locale),
+        _ => CommandResult::error(t(MessageId::CmdTaskUsageGeneral), app.ui_locale),
     }
 }
 

@@ -47,6 +47,7 @@ pub fn memory(app: &mut App, arg: Option<&str>) -> CommandResult {
     if !app.use_memory {
         return CommandResult::error(
             "user memory is disabled. Enable with `[memory] enabled = true` in `~/.deepseek/config.toml` or `DEEPSEEK_MEMORY=on` in your environment, then restart the TUI.",
+            app.ui_locale,
         );
     }
 
@@ -71,17 +72,23 @@ pub fn memory(app: &mut App, arg: Option<&str>) -> CommandResult {
         "path" => CommandResult::message(path.display().to_string()),
         "clear" => match fs::write(&path, "") {
             Ok(()) => CommandResult::message(format!("memory cleared: {}", path.display())),
-            Err(err) => CommandResult::error(format!("failed to clear {}: {err}", path.display())),
+            Err(err) => CommandResult::error(
+                format!("failed to clear {}: {err}", path.display()),
+                app.ui_locale,
+            ),
         },
         "edit" => CommandResult::message(format!(
             "to edit your memory file, run:\n\n  ${{VISUAL:-${{EDITOR:-vi}}}} {}",
             path.display()
         )),
         "help" => CommandResult::message(memory_help(&path)),
-        _ => CommandResult::error(format!(
-            "unknown subcommand `{sub}`. Try `/memory help`.\n\n{}",
-            memory_help(&path)
-        )),
+        _ => CommandResult::error(
+            format!(
+                "unknown subcommand `{sub}`. Try `/memory help`.\n\n{}",
+                memory_help(&path)
+            ),
+            app.ui_locale,
+        ),
     }
 }
 

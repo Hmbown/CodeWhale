@@ -3,8 +3,9 @@
 use crate::tui::app::{App, AppAction, McpUiAction};
 
 use super::CommandResult;
+use crate::localization::Locale;
 
-pub fn mcp(_app: &mut App, args: Option<&str>) -> CommandResult {
+pub fn mcp(app: &mut App, args: Option<&str>) -> CommandResult {
     let raw = args.unwrap_or("").trim();
     if raw.is_empty() || raw.eq_ignore_ascii_case("status") || raw.eq_ignore_ascii_case("list") {
         return CommandResult::action(AppAction::Mcp(McpUiAction::Show));
@@ -16,23 +17,24 @@ pub fn mcp(_app: &mut App, args: Option<&str>) -> CommandResult {
         "init" => CommandResult::action(AppAction::Mcp(McpUiAction::Init {
             force: parts.any(|part| part == "--force" || part == "-f"),
         })),
-        "add" => parse_add(parts.collect()),
+        "add" => parse_add(parts.collect(), app.ui_locale),
         "enable" => match parse_name(parts.next(), "Usage: /mcp enable <name>") {
             Ok(name) => CommandResult::action(AppAction::Mcp(McpUiAction::Enable { name })),
-            Err(msg) => CommandResult::error(msg),
+            Err(msg) => CommandResult::error(msg, app.ui_locale),
         },
         "disable" => match parse_name(parts.next(), "Usage: /mcp disable <name>") {
             Ok(name) => CommandResult::action(AppAction::Mcp(McpUiAction::Disable { name })),
-            Err(msg) => CommandResult::error(msg),
+            Err(msg) => CommandResult::error(msg, app.ui_locale),
         },
         "remove" | "rm" => match parse_name(parts.next(), "Usage: /mcp remove <name>") {
             Ok(name) => CommandResult::action(AppAction::Mcp(McpUiAction::Remove { name })),
-            Err(msg) => CommandResult::error(msg),
+            Err(msg) => CommandResult::error(msg, app.ui_locale),
         },
         "validate" => CommandResult::action(AppAction::Mcp(McpUiAction::Validate)),
         "reload" | "reconnect" => CommandResult::action(AppAction::Mcp(McpUiAction::Reload)),
         _ => CommandResult::error(
             "Usage: /mcp [init|add stdio <name> <command> [args...]|add http <name> <url>|enable <name>|disable <name>|remove <name>|validate|reload]",
+            app.ui_locale,
         ),
     }
 }
@@ -44,10 +46,11 @@ fn parse_name(name: Option<&str>, usage: &str) -> Result<String, String> {
     }
 }
 
-fn parse_add(parts: Vec<&str>) -> CommandResult {
+fn parse_add(parts: Vec<&str>, locale: Locale) -> CommandResult {
     if parts.len() < 3 {
         return CommandResult::error(
             "Usage: /mcp add stdio <name> <command> [args...] OR /mcp add http <name> <url>",
+            locale,
         );
     }
     match parts[0].to_ascii_lowercase().as_str() {
@@ -62,6 +65,7 @@ fn parse_add(parts: Vec<&str>) -> CommandResult {
         })),
         _ => CommandResult::error(
             "Usage: /mcp add stdio <name> <command> [args...] OR /mcp add http <name> <url>",
+            locale,
         ),
     }
 }
