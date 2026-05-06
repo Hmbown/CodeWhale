@@ -522,6 +522,34 @@ pub enum MessageId {
     ElevationOptionWriteDesc,
     ElevationOptionFullAccessDesc,
     ElevationOptionAbortDesc,
+    // Phase 3: Common command output
+    CmdErrorPrefix,
+    CmdQueueUsage,
+    CmdQueueNoMessages,
+    CmdQueueListHeader,
+    CmdQueueListTip,
+    CmdQueueAlreadyEditing,
+    CmdQueueMissingIndex,
+    CmdQueueIndexPositive,
+    CmdQueueIndexMin,
+    CmdQueueNotFound,
+    CmdQueueDropped,
+    CmdQueueAlreadyEmpty,
+    CmdQueueCleared,
+    CmdTaskUsageAdd,
+    CmdTaskUsageShow,
+    CmdTaskUsageCancel,
+    CmdTaskUsageGeneral,
+    CmdTrustEnabled,
+    CmdTrustDisabled,
+    CmdTrustUnknownAction,
+    CmdLspStatus,
+    CmdLspEnabled,
+    CmdLspDisabled,
+    CmdLspUnknownArg,
+    CmdLogoutSuccess,
+    CmdLogoutFailed,
+    CmdEditingQueuedDraft,
 }
 
 #[allow(dead_code)]
@@ -823,6 +851,33 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::ElevationOptionWriteDesc,
     MessageId::ElevationOptionFullAccessDesc,
     MessageId::ElevationOptionAbortDesc,
+    MessageId::CmdErrorPrefix,
+    MessageId::CmdQueueUsage,
+    MessageId::CmdQueueNoMessages,
+    MessageId::CmdQueueListHeader,
+    MessageId::CmdQueueListTip,
+    MessageId::CmdQueueAlreadyEditing,
+    MessageId::CmdQueueMissingIndex,
+    MessageId::CmdQueueIndexPositive,
+    MessageId::CmdQueueIndexMin,
+    MessageId::CmdQueueNotFound,
+    MessageId::CmdQueueDropped,
+    MessageId::CmdQueueAlreadyEmpty,
+    MessageId::CmdQueueCleared,
+    MessageId::CmdTaskUsageAdd,
+    MessageId::CmdTaskUsageShow,
+    MessageId::CmdTaskUsageCancel,
+    MessageId::CmdTaskUsageGeneral,
+    MessageId::CmdTrustEnabled,
+    MessageId::CmdTrustDisabled,
+    MessageId::CmdTrustUnknownAction,
+    MessageId::CmdLspStatus,
+    MessageId::CmdLspEnabled,
+    MessageId::CmdLspDisabled,
+    MessageId::CmdLspUnknownArg,
+    MessageId::CmdLogoutSuccess,
+    MessageId::CmdLogoutFailed,
+    MessageId::CmdEditingQueuedDraft,
 ];
 
 pub fn tr(locale: Locale, id: MessageId) -> &'static str {
@@ -1432,6 +1487,57 @@ fn english(id: MessageId) -> &'static str {
             "Retry without sandbox limits; grants unrestricted filesystem and network access"
         }
         MessageId::ElevationOptionAbortDesc => "Cancel this tool execution",
+        // ── Phase 3: common command output ──
+        MessageId::CmdErrorPrefix => "Error:",
+        MessageId::CmdQueueUsage => "Usage: /queue [list|edit <n>|drop <n>|clear]",
+        MessageId::CmdQueueNoMessages => "No queued messages",
+        MessageId::CmdQueueListHeader => "Queued messages ({queued}):",
+        MessageId::CmdQueueListTip => "Tip: /queue edit <n> to edit, /queue drop <n> to remove",
+        MessageId::CmdQueueAlreadyEditing => {
+            "Already editing a queued message. Send it or /queue clear to discard."
+        }
+        MessageId::CmdQueueMissingIndex => {
+            "Missing index. Usage: /queue edit <n> or /queue drop <n>"
+        }
+        MessageId::CmdQueueIndexPositive => "Index must be a positive number",
+        MessageId::CmdQueueIndexMin => "Index must be >= {min}",
+        MessageId::CmdQueueNotFound => "Queued message not found",
+        MessageId::CmdQueueDropped => "Dropped queued message {n}",
+        MessageId::CmdQueueAlreadyEmpty => "Queue already empty",
+        MessageId::CmdQueueCleared => "Queue cleared",
+        MessageId::CmdTaskUsageAdd => "Usage: /task add <prompt>",
+        MessageId::CmdTaskUsageShow => "Usage: /task show <id>",
+        MessageId::CmdTaskUsageCancel => "Usage: /task cancel <id>",
+        MessageId::CmdTaskUsageGeneral => "Usage: /task [add <prompt>|list|show <id>|cancel <id>]",
+        MessageId::CmdTrustEnabled => {
+            "Workspace trust mode enabled — agent file tools can now read/write \
+             any path. Use `/trust off` to revert; prefer `/trust add <path>` \
+             for a narrower opt-in."
+        }
+        MessageId::CmdTrustDisabled => "Workspace trust mode disabled.",
+        MessageId::CmdTrustUnknownAction => {
+            "Unknown /trust action `{action}`. Use `/trust`, `/trust on|off`, \
+             `/trust add <path>`, or `/trust remove <path>`."
+        }
+        MessageId::CmdLspStatus => {
+            "LSP diagnostics are currently **{status}**.\n\n\
+             Use `/lsp on` to enable or `/lsp off` to disable inline \
+             diagnostics after file edits."
+        }
+        MessageId::CmdLspEnabled => {
+            "LSP diagnostics enabled — file edit results will include compiler \
+             errors and warnings when available."
+        }
+        MessageId::CmdLspDisabled => "LSP diagnostics disabled.",
+        MessageId::CmdLspUnknownArg => {
+            "Unknown /lsp argument `{arg}`. Use `/lsp on`, `/lsp off`, or \
+             `/lsp status`."
+        }
+        MessageId::CmdLogoutSuccess => "Logged out. Enter a new API key to continue.",
+        MessageId::CmdLogoutFailed => "Failed to clear API key: {reason}",
+        MessageId::CmdEditingQueuedDraft => {
+            "Editing queued message {n} (press Enter to re-queue/send)"
+        }
     }
 }
 
@@ -1895,6 +2001,59 @@ fn japanese(id: MessageId) -> Option<&'static str> {
             "サンドボックス制限なしで再試行：制限なしのファイルシステム・ネットワークアクセス"
         }
         MessageId::ElevationOptionAbortDesc => "このツール実行をキャンセル",
+        // ── Phase 3: common command output ──
+        MessageId::CmdErrorPrefix => "エラー:",
+        MessageId::CmdQueueUsage => "使用法: /queue [list|edit <n>|drop <n>|clear]",
+        MessageId::CmdQueueNoMessages => "キューされたメッセージはありません",
+        MessageId::CmdQueueListHeader => "キューされたメッセージ ({queued}):",
+        MessageId::CmdQueueListTip => "ヒント: /queue edit <n> で編集、/queue drop <n> で削除",
+        MessageId::CmdQueueAlreadyEditing => {
+            "既にキューされたメッセージを編集中です。送信するか /queue clear で破棄してください。"
+        }
+        MessageId::CmdQueueMissingIndex => {
+            "インデックスがありません。使用法: /queue edit <n> または /queue drop <n>"
+        }
+        MessageId::CmdQueueIndexPositive => "インデックスは正の数である必要があります",
+        MessageId::CmdQueueIndexMin => "インデックスは {min} 以上である必要があります",
+        MessageId::CmdQueueNotFound => "キューされたメッセージが見つかりません",
+        MessageId::CmdQueueDropped => "キューされたメッセージ {n} を削除しました",
+        MessageId::CmdQueueAlreadyEmpty => "キューは既に空です",
+        MessageId::CmdQueueCleared => "キューをクリアしました",
+        MessageId::CmdTaskUsageAdd => "使用法: /task add <prompt>",
+        MessageId::CmdTaskUsageShow => "使用法: /task show <id>",
+        MessageId::CmdTaskUsageCancel => "使用法: /task cancel <id>",
+        MessageId::CmdTaskUsageGeneral => "使用法: /task [add <prompt>|list|show <id>|cancel <id>]",
+        MessageId::CmdTrustEnabled => {
+            "ワークスペース信頼モードが有効になりました — エージェントのファイルツールは \
+             任意のパスを読み書きできます。`/trust off` で戻すか、`/trust add <path>` で \
+             より狭い範囲の許可を推奨します。"
+        }
+        MessageId::CmdTrustDisabled => "ワークスペース信頼モードが無効になりました。",
+        MessageId::CmdTrustUnknownAction => {
+            "不明な /trust アクション `{action}` です。`/trust`、`/trust on|off`、\
+             `/trust add <path>`、または `/trust remove <path>` を使用してください。"
+        }
+        MessageId::CmdLspStatus => {
+            "LSP 診断は現在 **{status}** です。\n\n\
+             `/lsp on` で有効、`/lsp off` で無効にできます。ファイル編集後に \
+             インライン診断を表示します。"
+        }
+        MessageId::CmdLspEnabled => {
+            "LSP 診断が有効になりました — ファイル編集結果にコンパイラのエラーや \
+             警告が含まれるようになります。"
+        }
+        MessageId::CmdLspDisabled => "LSP 診断が無効になりました。",
+        MessageId::CmdLspUnknownArg => {
+            "不明な /lsp 引数 `{arg}` です。`/lsp on`、`/lsp off`、または `/lsp status` \
+             を使用してください。"
+        }
+        MessageId::CmdLogoutSuccess => {
+            "ログアウトしました。新しい API キーを入力して続行してください。"
+        }
+        MessageId::CmdLogoutFailed => "API キーの消去に失敗しました: {reason}",
+        MessageId::CmdEditingQueuedDraft => {
+            "キューされたメッセージ {n} を編集中 (Enter で再キュー/送信)"
+        }
     })
 }
 
@@ -2274,6 +2433,47 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
             "无沙箱限制重试，授予不受限的文件系统和网络访问权限"
         }
         MessageId::ElevationOptionAbortDesc => "取消此工具调用",
+        // ── Phase 3: common command output ──
+        MessageId::CmdErrorPrefix => "错误：",
+        MessageId::CmdQueueUsage => "用法：/queue [list|edit <n>|drop <n>|clear]",
+        MessageId::CmdQueueNoMessages => "没有已排队的消息",
+        MessageId::CmdQueueListHeader => "已排队的消息 ({queued})：",
+        MessageId::CmdQueueListTip => "提示：用 /queue edit <n> 编辑，用 /queue drop <n> 删除",
+        MessageId::CmdQueueAlreadyEditing => {
+            "已在编辑一条已排队的消息。请发送或用 /queue clear 放弃。"
+        }
+        MessageId::CmdQueueMissingIndex => "缺少索引。用法：/queue edit <n> 或 /queue drop <n>",
+        MessageId::CmdQueueIndexPositive => "索引必须为正数",
+        MessageId::CmdQueueIndexMin => "索引必须 ≥ {min}",
+        MessageId::CmdQueueNotFound => "未找到已排队的消息",
+        MessageId::CmdQueueDropped => "已从队列中删除消息 {n}",
+        MessageId::CmdQueueAlreadyEmpty => "队列已为空",
+        MessageId::CmdQueueCleared => "队列已清空",
+        MessageId::CmdTaskUsageAdd => "用法：/task add <prompt>",
+        MessageId::CmdTaskUsageShow => "用法：/task show <id>",
+        MessageId::CmdTaskUsageCancel => "用法：/task cancel <id>",
+        MessageId::CmdTaskUsageGeneral => "用法：/task [add <prompt>|list|show <id>|cancel <id>]",
+        MessageId::CmdTrustEnabled => {
+            "工作区信任模式已启用 — 代理文件工具现在可以读写任何路径。\n\
+             使用 `/trust off` 恢复；建议用 `/trust add <path>` 进行更精确的授权。"
+        }
+        MessageId::CmdTrustDisabled => "工作区信任模式已禁用。",
+        MessageId::CmdTrustUnknownAction => {
+            "未知的 /trust 操作 `{action}`。请使用 `/trust`、`/trust on|off`、\
+             `/trust add <path>` 或 `/trust remove <path>`。"
+        }
+        MessageId::CmdLspStatus => {
+            "LSP 诊断当前为 **{status}**。\n\n\
+             使用 `/lsp on` 启用或 `/lsp off` 禁用文件编辑后的内联诊断。"
+        }
+        MessageId::CmdLspEnabled => "LSP 诊断已启用 — 文件编辑结果将包含编译器错误和警告（如有）。",
+        MessageId::CmdLspDisabled => "LSP 诊断已禁用。",
+        MessageId::CmdLspUnknownArg => {
+            "未知的 /lsp 参数 `{arg}`。请使用 `/lsp on`、`/lsp off` 或 `/lsp status`。"
+        }
+        MessageId::CmdLogoutSuccess => "已登出。请输入新的 API 密钥以继续。",
+        MessageId::CmdLogoutFailed => "清除 API 密钥失败：{reason}",
+        MessageId::CmdEditingQueuedDraft => "正在编辑已排队的消息 {n}（按 Enter 重新排队/发送）",
     })
 }
 
@@ -2745,6 +2945,59 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
             "Tentar sem limites de sandbox; concede acesso irrestrito ao sistema de arquivos e rede"
         }
         MessageId::ElevationOptionAbortDesc => "Cancelar esta execução de ferramenta",
+        // ── Phase 3: common command output ──
+        MessageId::CmdErrorPrefix => "Erro:",
+        MessageId::CmdQueueUsage => "Uso: /queue [list|edit <n>|drop <n>|clear]",
+        MessageId::CmdQueueNoMessages => "Nenhuma mensagem enfileirada",
+        MessageId::CmdQueueListHeader => "Mensagens enfileiradas ({queued}):",
+        MessageId::CmdQueueListTip => {
+            "Dica: use /queue edit <n> para editar, /queue drop <n> para remover"
+        }
+        MessageId::CmdQueueAlreadyEditing => {
+            "Já está editando uma mensagem enfileirada. Envie-a ou use /queue clear para descartá-la."
+        }
+        MessageId::CmdQueueMissingIndex => {
+            "Índice ausente. Uso: /queue edit <n> ou /queue drop <n>"
+        }
+        MessageId::CmdQueueIndexPositive => "O índice deve ser um número positivo",
+        MessageId::CmdQueueIndexMin => "O índice deve ser >= {min}",
+        MessageId::CmdQueueNotFound => "Mensagem enfileirada não encontrada",
+        MessageId::CmdQueueDropped => "Mensagem enfileirada {n} removida",
+        MessageId::CmdQueueAlreadyEmpty => "A fila já está vazia",
+        MessageId::CmdQueueCleared => "Fila limpa",
+        MessageId::CmdTaskUsageAdd => "Uso: /task add <prompt>",
+        MessageId::CmdTaskUsageShow => "Uso: /task show <id>",
+        MessageId::CmdTaskUsageCancel => "Uso: /task cancel <id>",
+        MessageId::CmdTaskUsageGeneral => "Uso: /task [add <prompt>|list|show <id>|cancel <id>]",
+        MessageId::CmdTrustEnabled => {
+            "Modo de confiança do workspace ativado — as ferramentas de arquivo do \
+             agente podem agora ler/escrever qualquer caminho. Use `/trust off` para \
+             reverter; prefira `/trust add <path>` para uma permissão mais restrita."
+        }
+        MessageId::CmdTrustDisabled => "Modo de confiança do workspace desativado.",
+        MessageId::CmdTrustUnknownAction => {
+            "Ação /trust desconhecida `{action}`. Use `/trust`, `/trust on|off`, \
+             `/trust add <path>`, ou `/trust remove <path>`."
+        }
+        MessageId::CmdLspStatus => {
+            "O diagnóstico LSP está atualmente **{status}**.\n\n\
+             Use `/lsp on` para ativar ou `/lsp off` para desativar o diagnóstico \
+             inline após edições de arquivo."
+        }
+        MessageId::CmdLspEnabled => {
+            "Diagnóstico LSP ativado — os resultados de edição de arquivo incluirão \
+             erros e avisos do compilador quando disponíveis."
+        }
+        MessageId::CmdLspDisabled => "Diagnóstico LSP desativado.",
+        MessageId::CmdLspUnknownArg => {
+            "Argumento /lsp desconhecido `{arg}`. Use `/lsp on`, `/lsp off`, ou \
+             `/lsp status`."
+        }
+        MessageId::CmdLogoutSuccess => "Desconectado. Insira uma nova chave de API para continuar.",
+        MessageId::CmdLogoutFailed => "Falha ao limpar a chave de API: {reason}",
+        MessageId::CmdEditingQueuedDraft => {
+            "Editando mensagem enfileirada {n} (pressione Enter para re-enfileirar/enviar)"
+        }
     })
 }
 

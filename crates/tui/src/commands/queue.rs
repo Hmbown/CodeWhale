@@ -1,5 +1,6 @@
 //! Queue commands: queue list/edit/drop/clear
 
+use crate::localization::{self, Locale, MessageId};
 use crate::tui::app::App;
 
 use super::CommandResult;
@@ -19,27 +20,32 @@ pub fn queue(app: &mut App, args: Option<&str>) -> CommandResult {
         "edit" => edit_queue(app, parts.next()),
         "drop" | "remove" | "rm" => drop_queue(app, parts.next()),
         "clear" => clear_queue(app),
-        _ => CommandResult::error("Usage: /queue [list|edit <n>|drop <n>|clear]"),
+        _ => CommandResult::error_locale(
+            localization::tr(app.ui_locale, MessageId::CmdQueueUsage),
+            app.ui_locale,
+        ),
     }
 }
 
 fn list_queue(app: &mut App) -> CommandResult {
+    let locale = app.ui_locale;
+    let t = |id| localization::tr(locale, id);
     let mut lines = Vec::new();
     let queued = app.queued_message_count();
 
     if let Some(draft) = app.queued_draft.as_ref() {
-        lines.push("Editing queued message:".to_string());
+        lines.push(format!("{}:", t(MessageId::CmdEditingQueuedDraft)));
         lines.push(format!("- {}", truncate_preview(&draft.display)));
     }
 
     if queued == 0 {
         if lines.is_empty() {
-            return CommandResult::message("No queued messages");
+            return CommandResult::message(t(MessageId::CmdQueueNoMessages));
         }
         return CommandResult::message(lines.join("\n"));
     }
 
-    lines.push(format!("Queued messages ({queued}):"));
+    lines.push(t(MessageId::CmdQueueListHeader).replace("{queued}", &queued.to_string()));
     for (idx, message) in app.queued_messages.iter().enumerate() {
         lines.push(format!(
             "{}. {}",
@@ -48,70 +54,75 @@ fn list_queue(app: &mut App) -> CommandResult {
         ));
     }
 
-    lines.push("Tip: /queue edit <n> to edit, /queue drop <n> to remove".to_string());
+    lines.push(t(MessageId::CmdQueueListTip).to_string());
 
     CommandResult::message(lines.join("\n"))
 }
 
 fn edit_queue(app: &mut App, index: Option<&str>) -> CommandResult {
+    let locale = app.ui_locale;
+    let t = |id| localization::tr(locale, id);
     if app.queued_draft.is_some() {
-        return CommandResult::error(
-            "Already editing a queued message. Send it or /queue clear to discard.",
-        );
+        return CommandResult::error_locale(t(MessageId::CmdQueueAlreadyEditing), locale);
     }
-    let index = match parse_index(index) {
+    let index = match parse_index(index, locale) {
         Ok(index) => index,
-        Err(err) => return CommandResult::error(err),
+        Err(err) => return CommandResult::error_locale(err, locale),
     };
 
     let Some(message) = app.remove_queued_message(index) else {
-        return CommandResult::error("Queued message not found");
+        return CommandResult::error_locale(t(MessageId::CmdQueueNotFound), locale);
     };
 
     app.input = message.display.clone();
     app.cursor_position = app.input.len();
     app.queued_draft = Some(message);
-    app.status_message = Some(format!("Editing queued message {}", index + 1));
+    app.status_message =
+        Some(t(MessageId::CmdEditingQueuedDraft).replace("{n}", &(index + 1).to_string()));
 
-    CommandResult::message(format!(
-        "Editing queued message {} (press Enter to re-queue/send)",
-        index + 1
-    ))
+    CommandResult::message(
+        t(MessageId::CmdEditingQueuedDraft).replace("{n}", &(index + 1).to_string()),
+    )
 }
 
 fn drop_queue(app: &mut App, index: Option<&str>) -> CommandResult {
-    let index = match parse_index(index) {
+    let locale = app.ui_locale;
+    let t = |id| localization::tr(locale, id);
+    let index = match parse_index(index, locale) {
         Ok(index) => index,
-        Err(err) => return CommandResult::error(err),
+        Err(err) => return CommandResult::error_locale(err, locale),
     };
 
     if app.remove_queued_message(index).is_none() {
-        return CommandResult::error("Queued message not found");
+        return CommandResult::error_locale(t(MessageId::CmdQueueNotFound), locale);
     }
 
-    CommandResult::message(format!("Dropped queued message {}", index + 1))
+    CommandResult::message(t(MessageId::CmdQueueDropped).replace("{n}", &(index + 1).to_string()))
 }
 
 fn clear_queue(app: &mut App) -> CommandResult {
+    let locale = app.ui_locale;
+    let t = |id| localization::tr(locale, id);
     let queued = app.queued_message_count();
     let had_draft = app.queued_draft.take().is_some();
     app.queued_messages.clear();
     if queued == 0 && !had_draft {
-        return CommandResult::message("Queue already empty");
+        return CommandResult::message(t(MessageId::CmdQueueAlreadyEmpty));
     }
 
-    CommandResult::message("Queue cleared")
+    CommandResult::message(t(MessageId::CmdQueueCleared))
 }
 
-fn parse_index(input: Option<&str>) -> Result<usize, &'static str> {
+fn parse_index(input: Option<&str>, locale: Locale) -> Result<usize, String> {
+    let t = |id| localization::tr(locale, id);
     let Some(input) = input else {
-        return Err("Missing index. Usage: /queue edit <n> or /queue drop <n>");
+        return Err(t(MessageId::CmdQueueMissingIndex).to_string());
     };
     let raw = input
         .parse::<usize>()
-        .map_err(|_| "Index must be a positive number")?;
+        .map_err(|_| t(MessageId::CmdQueueIndexPositive).to_string())?;
     if raw == 0 {
-        return Err("Index must be >= 1");
+        return Err(t(MessageId::CmdQueueIndexMin).replace("{min}", "1"));
     }
     Ok(raw - 1)
 }
@@ -132,6 +143,7 @@ fn truncate_preview(text: &str) -> String {
 mod tests {
     use super::*;
     use crate::config::Config;
+    use crate::localization::Locale;
     use crate::tui::app::{App, QueuedMessage, TuiOptions};
     use tempfile::TempDir;
 
@@ -157,7 +169,9 @@ mod tests {
             resume_session_id: None,
             initial_input: None,
         };
-        App::new(options, &Config::default())
+        let mut app = App::new(options, &Config::default());
+        app.ui_locale = Locale::En;
+        app
     }
 
     #[test]

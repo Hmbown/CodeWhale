@@ -10,7 +10,7 @@ use crate::config::{
 };
 use crate::config_ui::{ConfigUiMode, parse_mode};
 use crate::llm_client::LlmClient;
-use crate::localization::resolve_locale;
+use crate::localization::{self, MessageId, resolve_locale};
 use crate::models::{ContentBlock, Message, MessageRequest, MessageResponse, SystemPrompt};
 use crate::settings::Settings;
 use crate::tui::app::{
@@ -759,24 +759,23 @@ pub fn trust(app: &mut App, arg: Option<&str>) -> CommandResult {
     let rest = parts.next().map(str::trim).unwrap_or("");
     let workspace = app.workspace.clone();
 
+    let t = |id| localization::tr(app.ui_locale, id);
     match sub.as_str() {
         "" | "status" | "list" => trust_status(&workspace, app, sub == "list"),
         "on" | "enable" | "yes" | "y" => {
             app.trust_mode = true;
-            CommandResult::message(
-                "Workspace trust mode enabled — agent file tools can now read/write any path. \
-                 Use `/trust off` to revert; prefer `/trust add <path>` for a narrower opt-in.",
-            )
+            CommandResult::message(t(MessageId::CmdTrustEnabled))
         }
         "off" | "disable" | "no" | "n" => {
             app.trust_mode = false;
-            CommandResult::message("Workspace trust mode disabled.")
+            CommandResult::message(t(MessageId::CmdTrustDisabled))
         }
         "add" => trust_add(&workspace, rest),
         "remove" | "rm" | "del" | "delete" => trust_remove(&workspace, rest),
-        other => CommandResult::error(format!(
-            "Unknown /trust action `{other}`. Use `/trust`, `/trust on|off`, `/trust add <path>`, or `/trust remove <path>`."
-        )),
+        other => CommandResult::error_locale(
+            t(MessageId::CmdTrustUnknownAction).replace("{action}", other),
+            app.ui_locale,
+        ),
     }
 }
 
@@ -1249,6 +1248,7 @@ fn truncate_for_auto_router(text: &str, max_chars: usize) -> String {
 /// - `/lsp off` — disable inline LSP diagnostics
 /// - `/lsp status` — show whether diagnostics are currently enabled
 pub fn lsp_command(app: &mut App, arg: Option<&str>) -> CommandResult {
+    let t = |id| localization::tr(app.ui_locale, id);
     let raw = arg.map(str::trim).unwrap_or("");
     // Access lsp_manager config through the App's engine handle
     let current_enabled = app.lsp_enabled;
@@ -1256,38 +1256,38 @@ pub fn lsp_command(app: &mut App, arg: Option<&str>) -> CommandResult {
     match raw {
         "" | "status" => {
             let status = if current_enabled { "on" } else { "off" };
-            CommandResult::message(format!(
-                "LSP diagnostics are currently **{status}**.\n\n\
-                 Use `/lsp on` to enable or `/lsp off` to disable inline diagnostics after file edits."
-            ))
+            CommandResult::message(t(MessageId::CmdLspStatus).replace("{status}", status))
         }
         "on" | "enable" | "1" | "true" => {
             app.lsp_enabled = true;
-            CommandResult::message(
-                "LSP diagnostics enabled — file edit results will include compiler errors and warnings when available.",
-            )
+            CommandResult::message(t(MessageId::CmdLspEnabled))
         }
         "off" | "disable" | "0" | "false" => {
             app.lsp_enabled = false;
-            CommandResult::message("LSP diagnostics disabled.")
+            CommandResult::message(t(MessageId::CmdLspDisabled))
         }
-        other => CommandResult::error(format!(
-            "Unknown /lsp argument `{other}`. Use `/lsp on`, `/lsp off`, or `/lsp status`."
-        )),
+        other => CommandResult::error_locale(
+            t(MessageId::CmdLspUnknownArg).replace("{arg}", other),
+            app.ui_locale,
+        ),
     }
 }
 
 /// Logout - clear API key and return to onboarding
 pub fn logout(app: &mut App) -> CommandResult {
+    let t = |id| localization::tr(app.ui_locale, id);
     match clear_api_key() {
         Ok(()) => {
             app.onboarding = OnboardingState::ApiKey;
             app.onboarding_needs_api_key = true;
             app.api_key_input.clear();
             app.api_key_cursor = 0;
-            CommandResult::message("Logged out. Enter a new API key to continue.")
+            CommandResult::message(t(MessageId::CmdLogoutSuccess))
         }
-        Err(e) => CommandResult::error(format!("Failed to clear API key: {e}")),
+        Err(e) => CommandResult::error_locale(
+            t(MessageId::CmdLogoutFailed).replace("{reason}", &e.to_string()),
+            app.ui_locale,
+        ),
     }
 }
 
@@ -1295,6 +1295,7 @@ pub fn logout(app: &mut App) -> CommandResult {
 mod tests {
     use super::*;
     use crate::config::Config;
+    use crate::localization::Locale;
     use crate::test_support::lock_test_env;
     use crate::tui::app::{App, TuiOptions};
     use crate::tui::approval::ApprovalMode;
@@ -1400,7 +1401,9 @@ mod tests {
             resume_session_id: None,
             initial_input: None,
         };
-        App::new(options, &Config::default())
+        let mut app = App::new(options, &Config::default());
+        app.ui_locale = Locale::En;
+        app
     }
 
     #[test]
