@@ -16,7 +16,7 @@
 # `/provider sglang`, `/provider vllm`, `/provider ollama`) toggle without having to
 # re-enter keys. Top-level `api_key` / `base_url` are still read as DeepSeek
 # defaults when `[providers.deepseek]` is absent (backward compatibility).
-provider = "deepseek" # deepseek | deepseek-cn | nvidia-nim | openai | openrouter | novita | fireworks | sglang | vllm | ollama
+provider = "deepseek" # deepseek | deepseek-cn | nvidia-nim | openai | openrouter | novita | fireworks | sglang | vllm | ollama | opencode-go
 api_key = "YOUR_DEEPSEEK_API_KEY" # must be non-empty
 base_url = "https://api.deepseek.com/beta"
 # provider = "deepseek-cn"                       # mainland China preset (official https://api.deepseek.com)
@@ -163,6 +163,7 @@ max_subagents = 10 # optional (1-20)
 #   SGLang:    SGLANG_BASE_URL, SGLANG_MODEL, optional SGLANG_API_KEY
 #   vLLM:      VLLM_BASE_URL, VLLM_MODEL, optional VLLM_API_KEY
 #   Ollama:    OLLAMA_BASE_URL, OLLAMA_MODEL, optional OLLAMA_API_KEY
+#   OpenCode Go: OPENCODE_GO_API_KEY, OPENCODE_GO_BASE_URL, OPENCODE_GO_MODEL
 
 # DeepSeek Platform (https://platform.deepseek.com)
 [providers.deepseek]
@@ -206,6 +207,12 @@ max_subagents = 10 # optional (1-20)
 # api_key = "OPTIONAL_OLLAMA_TOKEN"
 # base_url = "http://localhost:11434/v1"
 # model = "deepseek-coder:1.3b"             # or any local Ollama tag
+
+# OpenCode Go (https://opencode.ai/go)
+[providers.opencode_go]
+# api_key = "YOUR_OPENCODE_GO_API_KEY"
+# base_url = "https://opencode.ai/zen/go/v1"
+# model = "deepseek-v4-pro"                 # or deepseek-v4-flash
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Network Policy (#135)

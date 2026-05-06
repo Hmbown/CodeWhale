@@ -32,6 +32,7 @@ enum ProviderArg {
     Sglang,
     Vllm,
     Ollama,
+    OpencodeGo,
 }
 
 impl From<ProviderArg> for ProviderKind {
@@ -46,6 +47,7 @@ impl From<ProviderArg> for ProviderKind {
             ProviderArg::Sglang => ProviderKind::Sglang,
             ProviderArg::Vllm => ProviderKind::Vllm,
             ProviderArg::Ollama => ProviderKind::Ollama,
+            ProviderArg::OpencodeGo => ProviderKind::OpencodeGo,
         }
     }
 }
@@ -675,11 +677,12 @@ fn provider_slot(provider: ProviderKind) -> &'static str {
         ProviderKind::Sglang => "sglang",
         ProviderKind::Vllm => "vllm",
         ProviderKind::Ollama => "ollama",
+        ProviderKind::OpencodeGo => "opencode-go",
     }
 }
 
 /// Provider order used by the `auth list` and `auth status` outputs.
-const PROVIDER_LIST: [ProviderKind; 9] = [
+const PROVIDER_LIST: [ProviderKind; 10] = [
     ProviderKind::Deepseek,
     ProviderKind::NvidiaNim,
     ProviderKind::Openrouter,
@@ -688,6 +691,7 @@ const PROVIDER_LIST: [ProviderKind; 9] = [
     ProviderKind::Sglang,
     ProviderKind::Vllm,
     ProviderKind::Ollama,
+    ProviderKind::OpencodeGo,
     ProviderKind::Openai,
 ];
 
@@ -743,6 +747,7 @@ fn provider_env_vars(provider: ProviderKind) -> &'static [&'static str] {
         ProviderKind::Sglang => &["SGLANG_API_KEY"],
         ProviderKind::Vllm => &["VLLM_API_KEY"],
         ProviderKind::Ollama => &["OLLAMA_API_KEY"],
+        ProviderKind::OpencodeGo => &["OPENCODE_GO_API_KEY"],
         ProviderKind::Openai => &["OPENAI_API_KEY"],
     }
 }
@@ -1390,9 +1395,10 @@ fn build_tui_command(
             | ProviderKind::Sglang
             | ProviderKind::Vllm
             | ProviderKind::Ollama
+            | ProviderKind::OpencodeGo
     ) {
         bail!(
-            "The interactive TUI supports DeepSeek, NVIDIA NIM, OpenAI-compatible, OpenRouter, Novita, Fireworks, SGLang, vLLM, and Ollama providers. Remove --provider {} or use `deepseek model ...` for provider registry inspection.",
+            "The interactive TUI supports DeepSeek, NVIDIA NIM, OpenAI-compatible, OpenRouter, Novita, Fireworks, SGLang, vLLM, Ollama, and OpenCode Go providers. Remove --provider {} or use `deepseek model ...` for provider registry inspection.",
             resolved_runtime.provider.as_str()
         );
     }
