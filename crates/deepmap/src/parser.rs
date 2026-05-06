@@ -70,6 +70,7 @@ impl TreeSitterAdapter {
         try_load!("python", tree_sitter_python::LANGUAGE);
         try_load!("javascript", tree_sitter_javascript::LANGUAGE);
         try_load!("typescript", tree_sitter_typescript::LANGUAGE_TYPESCRIPT);
+        try_load!("tsx", tree_sitter_typescript::LANGUAGE_TSX);
         try_load!("go", tree_sitter_go::LANGUAGE);
         try_load!("html", tree_sitter_html::LANGUAGE);
         try_load!("css", tree_sitter_css::LANGUAGE);
@@ -185,6 +186,11 @@ impl TreeSitterAdapter {
 
     pub fn symbols(&self) -> Vec<Symbol> {
         self.current_symbols.clone()
+    }
+
+    /// Returns true if a parser for the given language name is loaded.
+    pub fn has_parser(&self, lang: &str) -> bool {
+        self.parsers.contains_key(lang)
     }
 
     pub fn imports(&self) -> Vec<String> {
@@ -510,8 +516,15 @@ impl TreeSitterAdapter {
         lines.sort(); lines.dedup();
         let mut results = Vec::new();
         for l in lines {
-            if let Some(p) = paths.get(&l) { results.push(p.clone()); }
-            else if let Some(ns) = names.get(&l) { for n in ns { results.push(n.clone()); } }
+            match (paths.get(&l), names.get(&l)) {
+                (Some(p), Some(ns)) => {
+                    // Concatenate path and name for scoped identifiers (e.g. std::collections)
+                    for n in ns { results.push(format!("{}::{}", p, n)); }
+                }
+                (Some(p), None) => { results.push(p.clone()); }
+                (None, Some(ns)) => { for n in ns { results.push(n.clone()); } }
+                (None, None) => {}
+            }
         }
         results
     }
