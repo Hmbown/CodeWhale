@@ -255,13 +255,37 @@ impl RepoMapEngine {
                 break;
             }
 
-            // MTime check — skip unchanged files.
+            // MTime check — restore unchanged files from old graph.
             let mtime = match path.metadata().and_then(|m| m.modified()) {
                 Ok(t) => t,
                 Err(_) => continue,
             };
+            let file_str = path.to_string_lossy().to_string();
             if let Some(cached_mtime) = self.mtime_cache.get(path) {
                 if *cached_mtime == mtime {
+                    // Restore symbols and metadata from the previous scan.
+                    if let Some(sym_ids) = self.graph.file_symbols.get(&file_str) {
+                        for sid in sym_ids {
+                            if let Some(sym) = self.graph.symbols.get(sid) {
+                                graph.symbols.insert(sid.clone(), sym.clone());
+                            }
+                        }
+                        graph.file_symbols.insert(file_str.clone(), sym_ids.clone());
+                    }
+                    if let Some(imports) = self.graph.file_imports.get(&file_str) {
+                        graph.file_imports.insert(file_str.clone(), imports.clone());
+                    }
+                    if let Some(calls) = self.graph.file_calls.get(&file_str) {
+                        graph.file_calls.insert(file_str.clone(), calls.clone());
+                    }
+                    if let Some(bindings) = self.graph.file_import_bindings.get(&file_str) {
+                        graph.file_import_bindings.insert(file_str.clone(), bindings.clone());
+                    }
+                    if let Some(exports) = self.graph.file_exports.get(&file_str) {
+                        graph.file_exports.insert(file_str.clone(), exports.clone());
+                    }
+                    self.mtime_cache.insert(path.clone(), mtime);
+                    processed_count += 1;
                     continue;
                 }
             }
@@ -472,17 +496,19 @@ impl RepoMapEngine {
                         Some(ids) => ids,
                         None => continue,
                     };
-                    for source_id in &source_sym_ids {
-                        for target_id in target_sym_ids {
-                            let key = (source_id.clone(), target_id.clone());
-                            if dedup.insert(key) {
-                                pending.push(Edge {
-                                    source: source_id.clone(),
-                                    target: target_id.clone(),
-                                    weight: IMPORT_WEIGHT,
-                                    kind: "import".to_string(),
-                                });
-                            }
+                    // Use one representative per file to avoid O(N×M) Cartesian explosion.
+                    // Import edges are a weak signal (weight 0.35); one edge per
+                    // import path preserves the dependency relationship without
+                    // flooding the graph with N×M edges.
+                    if let (Some(src), Some(tgt)) = (source_sym_ids.first(), target_sym_ids.first()) {
+                        let key = (src.clone(), tgt.clone());
+                        if dedup.insert(key) {
+                            pending.push(Edge {
+                                source: src.clone(),
+                                target: tgt.clone(),
+                                weight: IMPORT_WEIGHT,
+                                kind: "import".to_string(),
+                            });
                         }
                     }
                 }

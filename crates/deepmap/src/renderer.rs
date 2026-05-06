@@ -57,10 +57,9 @@ pub fn render_overview_report(engine: &RepoMapEngine, max_chars: usize) -> Strin
     } else {
         for (i, entry) in reading_order.iter().enumerate() {
             sections.push(format!(
-                "{}. `{}` (score: {:.2})  {}\n",
+                "{}. `{}` (score: {:.2})\n",
                 i + 1,
                 entry.file,
-                entry.score,
                 entry.score
             ));
         }
@@ -620,6 +619,7 @@ fn assess_risk(files: &[String]) -> (&'static str, Vec<String>) {
         }
     }
 
+    reasons.sort();
     reasons.dedup();
 
     let level = match score {
