@@ -12,6 +12,7 @@ members = [
     "crates/secrets",
     "crates/state",
     "crates/tools",
+    "crates/deepmap",
     "crates/tui",
     "crates/tui-core",
 ]

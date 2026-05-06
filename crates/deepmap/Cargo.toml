@@ -1,0 +1,26 @@
+[package]
+name = "deepmap"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Codebase analysis engine with tree-sitter + PageRank for DeepSeek-TUI"
+
+[dependencies]
+tree-sitter = "0.25"
+tree-sitter-language = "0.1"
+tree-sitter-rust = "0.24"
+tree-sitter-python = "0.23"
+tree-sitter-javascript = "0.23"
+tree-sitter-typescript = "0.23"
+tree-sitter-go = "0.23"
+tree-sitter-html = "0.23"
+tree-sitter-css = "0.23"
+tree-sitter-json = "0.23"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+ignore = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "6.0"
+log = "0.4"
+sha2 = "0.10"
