@@ -99,7 +99,7 @@ pub fn load_last_k_capacity_records(
     load_last_k_capacity_records_from_candidates(&candidates, k)
 }
 
-pub fn load_last_k_capacity_records_from_path(
+pub(super) fn load_last_k_capacity_records_from_path(
     path: &Path,
     k: usize,
 ) -> Result<Vec<CapacityMemoryRecord>> {
@@ -206,6 +206,53 @@ pub fn new_record_id() -> String {
 #[must_use]
 pub fn now_rfc3339() -> String {
     Utc::now().to_rfc3339()
+}
+
+/// Scan all memory directories for the newest record across ALL sessions.
+/// Returns (session_id, record) if any records exist.
+pub fn find_latest_cross_session() -> Option<(String, CapacityMemoryRecord)> {
+    let dirs = capacity_memory_dirs();
+    let mut newest: Option<(SystemTime, String, CapacityMemoryRecord)> = None;
+
+    for dir in &dirs {
+        if !dir.exists() {
+            continue;
+        }
+        let Ok(entries) = fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                continue;
+            }
+            let Some(session_id) = path.file_stem().and_then(|s| s.to_str()).map(String::from)
+            else {
+                continue;
+            };
+            let Ok(records) = load_last_k_capacity_records_from_path(&path, 1) else {
+                continue;
+            };
+            let Some(record) = records.into_iter().last() else {
+                continue;
+            };
+            let Ok(meta) = fs::metadata(&path) else {
+                continue;
+            };
+            let Ok(modified) = meta.modified() else {
+                continue;
+            };
+            if newest
+                .as_ref()
+                .map(|(m, _, _)| modified >= *m)
+                .unwrap_or(true)
+            {
+                newest = Some((modified, session_id, record));
+            }
+        }
+    }
+
+    newest.map(|(_, sid, rec)| (sid, rec))
 }
 
 #[cfg(test)]

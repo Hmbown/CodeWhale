@@ -62,7 +62,7 @@ use super::capacity::{
 };
 use super::capacity_memory::{
     CanonicalState, CapacityMemoryRecord, ReplayInfo, append_capacity_record,
-    load_last_k_capacity_records, new_record_id, now_rfc3339,
+    find_latest_cross_session, load_last_k_capacity_records, new_record_id, now_rfc3339,
 };
 use super::coherence::{CoherenceSignal, CoherenceState, next_coherence_state};
 use super::events::{Event, TurnOutcomeStatus};
@@ -798,6 +798,7 @@ impl Engine {
                     .await;
                 }
                 Op::Shutdown => {
+                    self.write_shutdown_checkpoint().await;
                     break;
                 }
             }
@@ -811,6 +812,29 @@ impl Engine {
         if let Some(pool) = self.mcp_pool.as_ref() {
             let mut guard = pool.lock().await;
             guard.shutdown_all().await;
+        }
+    }
+
+    async fn write_shutdown_checkpoint(&mut self) {
+        let record = CapacityMemoryRecord {
+            id: new_record_id(),
+            ts: now_rfc3339(),
+            turn_index: self.turn_counter,
+            action_trigger: "engine_shutdown".to_string(),
+            h_hat: 0.0,
+            c_hat: 0.0,
+            slack: 0.0,
+            risk_band: "low".to_string(),
+            canonical_state: CanonicalState {
+                goal: String::new(),
+                ..CanonicalState::default()
+            },
+            source_message_ids: Vec::new(),
+            replay_info: None,
+        };
+
+        if let Err(e) = append_capacity_record(&self.session.id, &record) {
+            tracing::warn!("Failed to write shutdown checkpoint: {e}");
         }
     }
 
