@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.16] - 2026-05-07
+
+A focused hotfix for v0.8.15 regressions in RLM, sub-agent visibility, and
+terminal ownership. This release keeps the v0.8.15 feature set intact while
+making long-running delegated work easier to inspect and safer to run.
+
+### Changed
+- **RLM has no fixed 180s wall-clock timeout** (#955) — RLM turns can continue
+  past the old hard limit when the long-input REPL is still making progress.
+- **RLM output is easier to audit** (#955) — final reports now include compact
+  execution metadata: input size, iteration count, elapsed time, sub-LLM RPC
+  count, and termination state.
+- **RLM chunking guidance is stricter for exact work** (#955) — prompts now
+  tell the sub-agent to use deterministic Python over the full `context` for
+  counts/aggregation and to report chunk coverage when splitting a whole input.
+- **Tool guidance is less defensive** (#955) — the system prompt now explains
+  when to use tools instead of discouraging the model from using capabilities
+  that are actually available.
+
+### Fixed
+- **Active RLM work stays visible** (#955) — foreground RLM calls surface in the
+  active task/right-rail state instead of leaving the Tasks panel saying
+  `No active tasks`.
+- **`/subagents` no longer reports false emptiness** (#955) — the sub-agent
+  overlay now includes live progress-only agents and transcript fanout workers
+  when the manager cache has not refreshed yet.
+- **Sub-agent cards are quieter and more useful** (#955) — low-signal scheduler
+  lines such as `step 1/100: requesting model response` are hidden, while
+  compact tool activity remains visible.
+- **Sub-agent completion protocol stays internal** (#955) — completion
+  sentinels are routed as internal runtime events instead of user messages, so
+  the parent agent does not explain raw protocol XML back to the user.
+- **Sub-agents cannot take over the parent terminal** (#955) — background
+  agents reject `exec_shell` with `interactive=true`; they can still use
+  non-interactive shell, background shell, `tty=true`, and task-shell tools.
+- **Terminal scrollback ownership is restored** (#955) — the TUI re-enters
+  alternate-screen mode after foreground/sub-agent work drains, preventing the
+  host terminal scrollbar from taking over the live interface.
+
 ## [0.8.15] - 2026-05-06
 
 An auth, Windows, editor-integration, and setup stabilization release. This

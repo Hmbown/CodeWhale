@@ -144,6 +144,7 @@ pub struct PythonRuntime {
     stdout_limit: usize,
     round_count: u64,
     started: Instant,
+    round_timeout: Option<Duration>,
 }
 
 impl PythonRuntime {
@@ -151,7 +152,7 @@ impl PythonRuntime {
     /// Used by the agent loop for inline `repl` blocks the model emits in
     /// regular conversation.
     pub async fn new() -> Result<Self, String> {
-        Self::spawn_inner(None).await
+        Self::spawn_inner(None, Some(ROUND_TIMEOUT)).await
     }
 
     /// Compatibility shim — older RLM code path used to pass a state file.
@@ -172,10 +173,13 @@ impl PythonRuntime {
     /// Spawn a REPL with `context` (and `ctx`) preloaded from a file. Used
     /// by the RLM turn loop.
     pub async fn spawn_with_context(context_path: &Path) -> Result<Self, String> {
-        Self::spawn_inner(Some(context_path)).await
+        Self::spawn_inner(Some(context_path), None).await
     }
 
-    async fn spawn_inner(context_path: Option<&Path>) -> Result<Self, String> {
+    async fn spawn_inner(
+        context_path: Option<&Path>,
+        round_timeout: Option<Duration>,
+    ) -> Result<Self, String> {
         let session_id = Uuid::new_v4().simple().to_string();
         let bootstrap = render_bootstrap(&session_id);
 
@@ -215,6 +219,7 @@ impl PythonRuntime {
             stdout_limit: DEFAULT_STDOUT_LIMIT,
             round_count: 0,
             started: Instant::now(),
+            round_timeout,
         };
 
         // Wait for `__RLM_READY_<sid>__` before handing control back. If
@@ -298,6 +303,7 @@ impl PythonRuntime {
         let mut final_value: Option<String> = None;
         let mut had_error = false;
         let mut rpc_count: u32 = 0;
+        let round_timeout = self.round_timeout;
 
         let read_loop = async {
             loop {
@@ -360,15 +366,19 @@ impl PythonRuntime {
             Ok::<_, String>(())
         };
 
-        match tokio::time::timeout(ROUND_TIMEOUT, read_loop).await {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => return Err(e),
-            Err(_) => {
-                return Err(format!(
-                    "REPL round timed out after {}s",
-                    ROUND_TIMEOUT.as_secs()
-                ));
+        if let Some(round_timeout) = round_timeout {
+            match tokio::time::timeout(round_timeout, read_loop).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => return Err(e),
+                Err(_) => {
+                    return Err(format!(
+                        "REPL round timed out after {}s",
+                        round_timeout.as_secs()
+                    ));
+                }
             }
+        } else {
+            read_loop.await?;
         }
 
         let stderr = self.drain_stderr().await;
@@ -427,6 +437,12 @@ impl PythonRuntime {
     /// Total rounds executed.
     pub fn round_count(&self) -> u64 {
         self.round_count
+    }
+
+    /// Current per-round timeout policy. RLM context runs intentionally return
+    /// `None` so long map-reduce jobs are not killed by the old 180s cap.
+    pub fn round_timeout(&self) -> Option<Duration> {
+        self.round_timeout
     }
 
     /// Wall-clock uptime since spawn.
@@ -578,6 +594,55 @@ def repl_get(name, default=None):
 def repl_set(name, value):
     globals()[str(name)] = value
 
+def chunk_context(max_chars=20000, overlap=0):
+    """Return full-coverage context chunks with index/start/end/text fields."""
+    max_chars = int(max_chars)
+    overlap = max(0, int(overlap))
+    if max_chars <= 0:
+        raise ValueError("max_chars must be > 0")
+    if overlap >= max_chars:
+        raise ValueError("overlap must be smaller than max_chars")
+    chunks = []
+    start = 0
+    idx = 0
+    total = len(context)
+    while start < total:
+        end = min(total, start + max_chars)
+        chunks.append({"index": idx, "start": start, "end": end, "text": context[start:end]})
+        idx += 1
+        if end >= total:
+            break
+        start = end - overlap
+    return chunks
+
+def chunk_coverage(chunks):
+    """Summarize coverage for chunks produced by chunk_context()."""
+    spans = []
+    for c in chunks:
+        try:
+            spans.append((int(c["start"]), int(c["end"])))
+        except Exception:
+            continue
+    spans.sort()
+    covered = 0
+    cursor = 0
+    gaps = []
+    for start, end in spans:
+        if start > cursor:
+            gaps.append((cursor, start))
+        if end > cursor:
+            covered += end - max(start, cursor)
+            cursor = end
+    if cursor < len(context):
+        gaps.append((cursor, len(context)))
+    return {
+        "chunks": len(chunks),
+        "context_chars": len(context),
+        "covered_chars": covered,
+        "gaps": gaps,
+        "complete": covered >= len(context) and not gaps,
+    }
+
 # Load the long input as `context` (and `ctx`) from a file. This keeps the
 # big string out of the process command-line and out of the LLM's window.
 _ctx_file = _os.environ.get("RLM_CONTEXT_FILE","")
@@ -595,6 +660,7 @@ _BOOTSTRAP_NAMES = {
     "_rpc","_ctx_file","_BOOTSTRAP_NAMES","_main_loop",
     "llm_query","llm_query_batched","rlm_query","rlm_query_batched",
     "FINAL","FINAL_VAR","SHOW_VARS","repl_get","repl_set",
+    "chunk_context","chunk_coverage",
     "context","ctx",
     "_json","_os","_sys","_traceback",
 }
@@ -770,6 +836,44 @@ mod tests {
             .expect("spawn");
         let round = rt.execute("print(ctx)").await.expect("execute");
         assert!(round.stdout.contains("aleph-style"));
+        rt.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn context_chunk_helpers_report_full_coverage() {
+        let path = write_temp_context("abcdefghijklmnopqrstuvwxyz");
+        let mut rt = PythonRuntime::spawn_with_context(&path)
+            .await
+            .expect("spawn");
+        let round = rt
+            .execute(
+                "chunks = chunk_context(max_chars=10)\n\
+                 coverage = chunk_coverage(chunks)\n\
+                 print(len(chunks), coverage['covered_chars'], coverage['complete'])",
+            )
+            .await
+            .expect("execute");
+        assert!(round.stdout.contains("3 26 True"), "{}", round.stdout);
+        rt.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn rlm_context_runtime_has_no_fixed_round_timeout() {
+        let path = write_temp_context("long input");
+        let rt = PythonRuntime::spawn_with_context(&path)
+            .await
+            .expect("spawn");
+        assert!(
+            rt.round_timeout().is_none(),
+            "RLM context runs must not inherit the old 180s REPL round timeout"
+        );
+        rt.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn inline_runtime_keeps_bounded_round_timeout() {
+        let rt = PythonRuntime::new().await.expect("spawn");
+        assert_eq!(rt.round_timeout(), Some(ROUND_TIMEOUT));
         rt.shutdown().await;
     }
 

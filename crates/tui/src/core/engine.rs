@@ -47,8 +47,8 @@ use crate::tools::shell::{SharedShellManager, new_shared_shell_manager};
 use crate::tools::spec::RuntimeToolServices;
 use crate::tools::spec::{ApprovalRequirement, ToolError, ToolResult};
 use crate::tools::subagent::{
-    Mailbox, SharedSubAgentManager, SubAgentCompletion, SubAgentRuntime, SubAgentType,
-    new_shared_subagent_manager, resolve_subagent_assignment_route,
+    Mailbox, SharedSubAgentManager, SubAgentCompletion, SubAgentForkContext, SubAgentRuntime,
+    SubAgentType, new_shared_subagent_manager, resolve_subagent_assignment_route,
 };
 use crate::tools::todo::{SharedTodoList, new_shared_todo_list};
 use crate::tools::user_input::{UserInputRequest, UserInputResponse};
@@ -148,8 +148,8 @@ pub struct EngineConfig {
     /// caller resolves this from `Settings` once at engine
     /// construction; the engine never touches disk for it.
     pub locale_tag: String,
-    /// When true, force `tool_choice: "required"` so the model always calls
-    /// a tool on every turn step (V4 strict tool-following mode).
+    /// When true, force `tool_choice: "required"` and opt compatible function
+    /// schemas into DeepSeek beta strict mode.
     pub strict_tool_mode: bool,
     /// Workshop / large-tool-output routing (#548). `None` disables routing.
     pub workshop: Option<crate::tools::large_output_router::WorkshopConfig>,
@@ -370,6 +370,7 @@ impl Engine {
         let env_var = match provider {
             ApiProvider::Deepseek | ApiProvider::DeepseekCN => "DEEPSEEK_API_KEY",
             ApiProvider::NvidiaNim => "NVIDIA_API_KEY/NVIDIA_NIM_API_KEY",
+            ApiProvider::Openai => "OPENAI_API_KEY",
             ApiProvider::Openrouter => "OPENROUTER_API_KEY",
             ApiProvider::Novita => "NOVITA_API_KEY",
             ApiProvider::Fireworks => "FIREWORKS_API_KEY",
@@ -380,7 +381,8 @@ impl Engine {
 
         Some(format!(
             "The rejected key came from {env_var}; no saved config key is present.\n\
-             Run `deepseek auth set --provider {provider}` to save a valid key in ~/.deepseek/config.toml, \
+             Run `deepseek auth status` to inspect credential sources, then \
+             `deepseek auth set --provider {provider}` to save a valid key in ~/.deepseek/config.toml, \
              or remove the stale export and open a fresh shell.",
             provider = provider.as_str()
         ))
@@ -829,6 +831,40 @@ impl Engine {
         self.emit_session_updated().await;
     }
 
+    fn turn_metadata_block(&self) -> ContentBlock {
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let working_set_summary = self
+            .session
+            .working_set
+            .summary_block(&self.config.workspace)
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        let summary = if let Some(working_set_summary) = working_set_summary {
+            format!("Current local date: {today}\n{working_set_summary}")
+        } else {
+            format!("Current local date: {today}")
+        };
+
+        ContentBlock::Text {
+            text: format!("<turn_meta>\n{summary}\n</turn_meta>"),
+            cache_control: None,
+        }
+    }
+
+    fn user_text_message_with_turn_metadata(&self, text: String) -> Message {
+        Message {
+            role: "user".to_string(),
+            content: vec![
+                self.turn_metadata_block(),
+                ContentBlock::Text {
+                    text,
+                    cache_control: None,
+                },
+            ],
+        }
+    }
+
     /// Handle a send message operation
     #[allow(clippy::too_many_arguments)]
     async fn handle_send_message(
@@ -908,13 +944,7 @@ impl Engine {
         let force_update_plan_first = should_force_update_plan_first(mode, &content);
 
         // Add user message to session
-        let user_msg = Message {
-            role: "user".to_string(),
-            content: vec![ContentBlock::Text {
-                text: content,
-                cache_control: None,
-            }],
-        };
+        let user_msg = self.user_text_message_with_turn_metadata(content);
         self.session.add_message(user_msg);
 
         self.session.model = model;
@@ -944,6 +974,26 @@ impl Engine {
 
         let tool_context = self.build_tool_context(mode, auto_approve);
         let builder = self.build_turn_tool_registry_builder(mode, todo_list, plan_state);
+
+        let fork_context_for_runtime = if self.config.features.enabled(Feature::Subagents) {
+            let state = StructuredState::capture(
+                mode.label(),
+                self.config.workspace.clone(),
+                std::env::current_dir().ok(),
+                &self.session.working_set,
+                &self.config.todos,
+                &self.config.plan_state,
+                Some(&self.subagent_manager),
+            )
+            .await;
+            Some(SubAgentForkContext {
+                system: self.session.system_prompt.clone(),
+                messages: self.messages_with_turn_metadata(),
+                structured_state_block: state.to_system_block(),
+            })
+        } else {
+            None
+        };
 
         // Mailbox for structured sub-agent envelopes (#128/#130). One per
         // turn: the receiver is drained by a short-lived task that converts
@@ -997,6 +1047,9 @@ impl Engine {
                         )
                         .with_max_spawn_depth(self.config.max_spawn_depth)
                         .with_parent_completion_tx(self.tx_subagent_completion.clone());
+                        if let Some(context) = fork_context_for_runtime.clone() {
+                            rt = rt.with_fork_context(context);
+                        }
                         if let Some((mailbox, cancel_token)) = mailbox_for_runtime.as_ref() {
                             rt = rt
                                 .with_mailbox(mailbox.clone())
@@ -1448,10 +1501,20 @@ impl Engine {
         }
 
         match mode {
-            // Plan mode is read-only investigation; the shell tool is not
-            // registered, so leaving the sandbox policy at the seatbelt-strict
-            // default is fine.
-            AppMode::Plan => ctx,
+            // Plan mode is read-only investigation. Shell tools can still be
+            // available for read-only local inspection, but outbound network
+            // remains sandbox-blocked; attach an explicit hint so network
+            // command failures do not look like DNS/proxy problems.
+            AppMode::Plan => ctx
+                .with_elevated_sandbox_policy(crate::sandbox::SandboxPolicy::WorkspaceWrite {
+                    writable_roots: vec![self.session.workspace.clone()],
+                    network_access: false,
+                    exclude_tmpdir: false,
+                    exclude_slash_tmp: false,
+                })
+                .with_shell_network_denied_hint(
+                    "Shell command blocked: Plan mode runs shell commands in a network-restricted sandbox. Use fetch_url or code_execution for network access, or switch to Agent mode (`/agent`) before retrying shell network commands.",
+                ),
             // Agent registers the shell tool and runs each command through
             // the per-mode sandbox + per-tool approval flow. The sandbox
             // default would deny all outbound network — including DNS —
@@ -1999,9 +2062,9 @@ use self::lsp_hooks::{edited_paths_for_tool, parse_patch_paths};
 use self::streaming::TOOL_CALL_START_MARKERS;
 use self::streaming::{
     ContentBlockKind, FAKE_WRAPPER_NOTICE, MAX_STREAM_ERRORS_BEFORE_FAIL,
-    MAX_TRANSPARENT_STREAM_RETRIES, STREAM_CHUNK_TIMEOUT_SECS, STREAM_MAX_CONTENT_BYTES,
-    STREAM_MAX_DURATION_SECS, ToolUseState, contains_fake_tool_wrapper, filter_tool_call_delta,
-    should_transparently_retry_stream,
+    MAX_TRANSPARENT_STREAM_RETRIES, STREAM_MAX_CONTENT_BYTES, STREAM_MAX_DURATION_SECS,
+    ToolUseState, contains_fake_tool_wrapper, filter_tool_call_delta,
+    should_transparently_retry_stream, stream_chunk_timeout_secs,
 };
 use self::tool_catalog::{
     CODE_EXECUTION_TOOL_NAME, MULTI_TOOL_PARALLEL_NAME, REQUEST_USER_INPUT_NAME,

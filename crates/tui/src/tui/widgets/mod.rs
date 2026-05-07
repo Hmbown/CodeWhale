@@ -37,8 +37,8 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{
-        Block, Borders, Clear, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
-        StatefulWidget, Widget, Wrap,
+        Block, BorderType, Borders, Clear, Padding, Paragraph, Scrollbar, ScrollbarOrientation,
+        ScrollbarState, StatefulWidget, Widget, Wrap,
     },
 };
 use unicode_segmentation::UnicodeSegmentation;
@@ -46,11 +46,15 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const SEND_FLASH_DURATION: Duration = Duration::from_millis(500);
 const COMPOSER_PANEL_HEIGHT: u16 = 2;
+const JUMP_TO_LATEST_BUTTON_WIDTH: u16 = 3;
+const JUMP_TO_LATEST_BUTTON_HEIGHT: u16 = 3;
 
 pub struct ChatWidget {
     content_area: Rect,
     lines: Vec<Line<'static>>,
     scrollbar: Option<TranscriptScrollbar>,
+    jump_to_latest_button: Option<Rect>,
+    background: Color,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -63,6 +67,7 @@ struct TranscriptScrollbar {
 impl ChatWidget {
     pub fn new(app: &mut App, area: Rect) -> Self {
         let content_area = area;
+        let background = app.ui_theme.surface_bg;
         let visible_lines = content_area.height as usize;
         let render_options = app.transcript_render_options();
 
@@ -73,10 +78,13 @@ impl ChatWidget {
             app.viewport.last_transcript_visible = visible_lines;
             app.viewport.last_transcript_total = 0;
             app.viewport.last_transcript_padding_top = 0;
+            app.viewport.jump_to_latest_button_area = None;
             return Self {
                 content_area,
                 lines,
                 scrollbar: None,
+                jump_to_latest_button: None,
+                background,
             };
         }
 
@@ -272,11 +280,20 @@ impl ChatWidget {
                 total: total_lines,
             },
         );
+        let jump_to_latest_button =
+            if app.use_mouse_capture && !app.viewport.transcript_scroll.is_at_tail() {
+                jump_to_latest_button_rect(content_area, scrollbar.is_some())
+            } else {
+                None
+            };
+        app.viewport.jump_to_latest_button_area = jump_to_latest_button;
 
         Self {
             content_area,
             lines,
             scrollbar,
+            jump_to_latest_button,
+            background,
         }
     }
 }
@@ -306,11 +323,11 @@ impl Renderable for ChatWidget {
         // gray on most user setups; an explicit ink fill keeps the chat
         // area on-brand.
         Block::default()
-            .style(Style::default().bg(palette::DEEPSEEK_INK))
+            .style(Style::default().bg(self.background))
             .render(area, buf);
 
         let paragraph =
-            Paragraph::new(self.lines.clone()).style(Style::default().bg(palette::DEEPSEEK_INK));
+            Paragraph::new(self.lines.clone()).style(Style::default().bg(self.background));
         paragraph.render(area, buf);
 
         if let Some(scrollbar) = self.scrollbar {
@@ -327,11 +344,55 @@ impl Renderable for ChatWidget {
                 .thumb_style(Style::default().fg(palette::DEEPSEEK_SKY))
                 .render(area, buf, &mut state);
         }
+
+        if let Some(button_area) = self.jump_to_latest_button {
+            render_jump_to_latest_button(button_area, buf, self.background);
+        }
     }
 
     fn desired_height(&self, _width: u16) -> u16 {
         1
     }
+}
+
+fn jump_to_latest_button_rect(area: Rect, has_scrollbar: bool) -> Option<Rect> {
+    if area.width < JUMP_TO_LATEST_BUTTON_WIDTH + u16::from(has_scrollbar)
+        || area.height < JUMP_TO_LATEST_BUTTON_HEIGHT
+    {
+        return None;
+    }
+
+    let scrollbar_gutter = u16::from(has_scrollbar);
+    Some(Rect {
+        x: area
+            .x
+            .saturating_add(area.width)
+            .saturating_sub(scrollbar_gutter)
+            .saturating_sub(JUMP_TO_LATEST_BUTTON_WIDTH),
+        y: area
+            .y
+            .saturating_add(area.height)
+            .saturating_sub(JUMP_TO_LATEST_BUTTON_HEIGHT),
+        width: JUMP_TO_LATEST_BUTTON_WIDTH,
+        height: JUMP_TO_LATEST_BUTTON_HEIGHT,
+    })
+}
+
+fn render_jump_to_latest_button(area: Rect, buf: &mut Buffer, background: Color) {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(palette::BORDER_COLOR))
+        .style(Style::default().bg(background))
+        .render(area, buf);
+
+    let arrow_x = area.x.saturating_add(1);
+    let arrow_y = area.y.saturating_add(1);
+    buf[(arrow_x, arrow_y)].set_symbol("↓").set_style(
+        Style::default()
+            .fg(palette::DEEPSEEK_SKY)
+            .add_modifier(Modifier::BOLD),
+    );
 }
 
 pub struct ComposerWidget<'a> {
@@ -934,11 +995,21 @@ const APPROVAL_CARD_VERTICAL_PAD: u16 = 2;
 /// Minimum card height — anything tighter and the destructive variant's
 /// confirmation banner overlaps the option list.
 const APPROVAL_CARD_MIN_HEIGHT: u16 = 18;
+/// Minimum card width — anything tighter makes approval copy wrap too
+/// aggressively on small terminals.
+const APPROVAL_CARD_MIN_WIDTH: u16 = 40;
+/// Maximum card height — taller cards stop reading like a focused
+/// takeover and waste vertical space on large terminals.
+const APPROVAL_CARD_MAX_HEIGHT: u16 = 28;
 /// Maximum card width — readability craters past this on wide terminals.
 const APPROVAL_CARD_MAX_WIDTH: u16 = 96;
 
 impl Renderable for ApprovalWidget<'_> {
     fn render(&self, area: Rect, buf: &mut Buffer) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+
         let card_area = compute_takeover_area(area);
         Clear.render(card_area, buf);
 
@@ -1160,12 +1231,18 @@ impl Renderable for ApprovalWidget<'_> {
 
 /// Compute the card rect inside `area`. Always centered; pad on every
 /// side so the takeover reads as a takeover but a small terminal still
-/// renders the full card without truncation.
+/// stays inside the buffer. Very small terminals may truncate the card
+/// content, but rendering must never address cells outside `area`.
 fn compute_takeover_area(area: Rect) -> Rect {
     let avail_width = area.width.saturating_sub(APPROVAL_CARD_HORIZONTAL_PAD * 2);
     let avail_height = area.height.saturating_sub(APPROVAL_CARD_VERTICAL_PAD * 2);
-    let card_width = APPROVAL_CARD_MAX_WIDTH.min(avail_width).max(40);
-    let card_height = APPROVAL_CARD_MIN_HEIGHT.max(avail_height.min(28));
+    let card_width = APPROVAL_CARD_MAX_WIDTH
+        .min(avail_width)
+        .max(APPROVAL_CARD_MIN_WIDTH)
+        .min(area.width);
+    let card_height = APPROVAL_CARD_MIN_HEIGHT
+        .max(avail_height.min(APPROVAL_CARD_MAX_HEIGHT))
+        .min(area.height);
     let x = area.x + (area.width.saturating_sub(card_width)) / 2;
     let y = area.y + (area.height.saturating_sub(card_height)) / 2;
     Rect {
@@ -1936,17 +2013,18 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        COMPOSER_PANEL_HEIGHT, ChatWidget, ComposerWidget, Renderable, SlashMenuEntry,
-        apply_selection_to_line, composer_height, composer_max_height, composer_min_input_rows,
-        composer_top_padding, cursor_row_col, layout_input, pad_lines_to_bottom,
-        placeholder_visual_lines, should_render_empty_state, slash_completion_hints,
-        wrap_input_lines, wrap_text,
+        ApprovalWidget, COMPOSER_PANEL_HEIGHT, ChatWidget, ComposerWidget, Renderable,
+        SlashMenuEntry, apply_selection_to_line, composer_height, composer_max_height,
+        composer_min_input_rows, composer_top_padding, compute_takeover_area, cursor_row_col,
+        layout_input, pad_lines_to_bottom, placeholder_visual_lines, should_render_empty_state,
+        slash_completion_hints, wrap_input_lines, wrap_text,
     };
     use crate::config::Config;
     use crate::localization::Locale;
     use crate::palette;
     use crate::tui::app::{App, ComposerDensity, TuiOptions};
     use crate::tui::history::{GenericToolCell, HistoryCell, ToolCell, ToolStatus};
+    use crate::tui::scrolling::TranscriptScroll;
     use ratatui::{
         buffer::Buffer,
         layout::Rect,
@@ -2539,6 +2617,33 @@ mod tests {
         }
     }
 
+    #[test]
+    fn chat_widget_uses_configured_surface_background() {
+        let mut app = create_test_app();
+        let custom = ratatui::style::Color::Rgb(26, 27, 38);
+        app.ui_theme = app.ui_theme.with_background_color(custom);
+        app.add_message(HistoryCell::Assistant {
+            content: "ready".to_string(),
+            streaming: false,
+        });
+
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 30,
+            height: 5,
+        };
+        let mut buf = Buffer::empty(area);
+        let widget = ChatWidget::new(&mut app, area);
+        widget.render(area, &mut buf);
+
+        assert_eq!(buf[(area.x, area.y)].bg, custom);
+        assert_eq!(
+            buf[(area.x + area.width - 1, area.y + area.height - 1)].bg,
+            custom
+        );
+    }
+
     /// Regression: when the transcript scrollbar is visible, the rightmost
     /// content column must remain readable (the scrollbar gets its own
     /// 1-column gutter rather than overdrawing chat content).
@@ -2585,6 +2690,61 @@ mod tests {
             scrollbar_seen,
             "scrollbar should be visible for a long history"
         );
+    }
+
+    #[test]
+    fn chat_widget_shows_jump_to_latest_button_when_scrolled_up() {
+        let mut app = create_test_app();
+        app.use_mouse_capture = true;
+        for i in 0..80 {
+            app.add_message(HistoryCell::User {
+                content: format!("user message {i}"),
+            });
+        }
+        app.viewport.transcript_scroll = TranscriptScroll::at_line(0);
+
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 8,
+        };
+        let mut buf = Buffer::empty(area);
+        let widget = ChatWidget::new(&mut app, area);
+        widget.render(area, &mut buf);
+
+        let button = app
+            .viewport
+            .jump_to_latest_button_area
+            .expect("button appears when transcript is not at tail");
+        assert_eq!(button.width, 3);
+        assert_eq!(button.height, 3);
+        assert_eq!(buf[(button.x + 1, button.y + 1)].symbol(), "↓");
+    }
+
+    #[test]
+    fn chat_widget_hides_jump_to_latest_button_at_tail() {
+        let mut app = create_test_app();
+        app.use_mouse_capture = true;
+        for i in 0..80 {
+            app.add_message(HistoryCell::User {
+                content: format!("user message {i}"),
+            });
+        }
+        app.viewport.transcript_scroll = TranscriptScroll::to_bottom();
+
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 8,
+        };
+        let _widget = ChatWidget::new(&mut app, area);
+        assert!(
+            app.viewport.jump_to_latest_button_area.is_none(),
+            "button should hide while following the live tail"
+        );
+        assert!(app.viewport.transcript_scroll.is_at_tail());
     }
 
     /// Regression for issue #582: a resize event arriving while the
@@ -2653,6 +2813,30 @@ mod tests {
             CoherenceState::RefreshingContext,
             "resize must not mutate engine-owned coherence_state"
         );
+    }
+
+    #[test]
+    fn approval_takeover_clamps_to_short_terminal_height() {
+        let request = crate::tui::approval::ApprovalRequest::new(
+            "approval-1",
+            "exec_shell",
+            "Run git commit",
+            &serde_json::json!({ "command": "git commit -m fix" }),
+            "exec_shell:git commit",
+        );
+        let view = crate::tui::approval::ApprovalView::new(request.clone());
+        let widget = ApprovalWidget::new(&request, &view);
+
+        for area in [Rect::new(0, 0, 162, 17), Rect::new(0, 0, 39, 17)] {
+            let card_area = compute_takeover_area(area);
+            assert!(card_area.x >= area.x);
+            assert!(card_area.y >= area.y);
+            assert!(card_area.right() <= area.right());
+            assert!(card_area.bottom() <= area.bottom());
+
+            let mut buf = Buffer::empty(area);
+            widget.render(area, &mut buf);
+        }
     }
 
     /// Regression for issue #65: after `App::handle_resize`, the chat widget

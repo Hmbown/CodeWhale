@@ -425,6 +425,9 @@ impl ToolRegistryBuilder {
         use super::file::{ListDirTool, ReadFileTool};
         self.with_tool(Arc::new(ReadFileTool))
             .with_tool(Arc::new(ListDirTool))
+            .with_tool(Arc::new(
+                super::tool_result_retrieval::RetrieveToolResultTool,
+            ))
     }
 
     /// Include shell execution tool.
@@ -501,6 +504,13 @@ impl ToolRegistryBuilder {
     pub fn with_validation_tools(self) -> Self {
         use super::validate_data::ValidateDataTool;
         self.with_tool(Arc::new(ValidateDataTool))
+    }
+
+    /// Include retrieval for spilled historical tool results.
+    #[must_use]
+    pub fn with_tool_result_retrieval_tool(self) -> Self {
+        use super::tool_result_retrieval::RetrieveToolResultTool;
+        self.with_tool(Arc::new(RetrieveToolResultTool))
     }
 
     /// Include durable task, gate, PR-attempt, GitHub, and automation tools.
@@ -689,6 +699,7 @@ impl ToolRegistryBuilder {
             .with_skill_tools()
             .with_test_runner_tool()
             .with_validation_tools()
+            .with_tool_result_retrieval_tool()
             .with_runtime_task_tools()
             .with_revert_turn_tool();
 

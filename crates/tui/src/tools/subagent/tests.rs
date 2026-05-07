@@ -20,6 +20,13 @@ fn make_snapshot(status: SubAgentStatus) -> SubAgentResult {
     }
 }
 
+fn message_text(message: &Message) -> &str {
+    match message.content.first() {
+        Some(ContentBlock::Text { text, .. }) => text.as_str(),
+        other => panic!("expected text content block, got {other:?}"),
+    }
+}
+
 #[test]
 fn test_agent_type_from_str() {
     assert_eq!(
@@ -205,6 +212,88 @@ fn test_parse_spawn_request_accepts_items_payload() {
     assert!(parsed.prompt.contains("Analyze module"));
     assert!(parsed.prompt.contains("[mention:$drive](app://drive)"));
     assert_eq!(parsed.agent_type, SubAgentType::Explore);
+}
+
+#[test]
+fn test_parse_spawn_request_accepts_fork_context() {
+    let input = json!({
+        "prompt": "continue from here",
+        "fork_context": true
+    });
+    let parsed = parse_spawn_request(&input).expect("spawn request should parse");
+    assert!(parsed.fork_context);
+
+    let input = json!({
+        "prompt": "continue from here",
+        "inherit_context": true
+    });
+    let parsed = parse_spawn_request(&input).expect("spawn request should parse");
+    assert!(parsed.fork_context);
+}
+
+#[test]
+fn test_delegate_defaults_to_fork_context() {
+    let input = with_default_fork_context(json!({ "prompt": "review current work" }), true);
+    let parsed = parse_spawn_request(&input).expect("delegate request should parse");
+    assert!(parsed.fork_context);
+
+    let input = with_default_fork_context(
+        json!({ "prompt": "fresh exploration", "fork_context": false }),
+        true,
+    );
+    let parsed = parse_spawn_request(&input).expect("delegate override should parse");
+    assert!(!parsed.fork_context);
+}
+
+#[test]
+fn forked_subagent_messages_preserve_parent_prefix_then_append_task() {
+    let parent_system = SystemPrompt::Text("parent system".to_string());
+    let parent_message = Message {
+        role: "user".to_string(),
+        content: vec![ContentBlock::Text {
+            text: "parent turn".to_string(),
+            cache_control: None,
+        }],
+    };
+    let fork_context = SubAgentForkContext {
+        system: Some(parent_system.clone()),
+        messages: vec![parent_message.clone()],
+        structured_state_block: Some(
+            "## Cycle State (Auto-Preserved)\n- Mode: `AGENT`".to_string(),
+        ),
+    };
+
+    let assignment = SubAgentAssignment::new("inspect parser".to_string(), Some("worker".into()));
+    let messages = build_initial_subagent_messages(
+        "inspect parser",
+        &assignment,
+        &SubAgentType::General,
+        Some(&fork_context),
+    );
+
+    assert_eq!(
+        subagent_request_system_prompt("child system", Some(&fork_context)),
+        parent_system
+    );
+    assert_eq!(messages.first(), Some(&parent_message));
+    assert_eq!(messages.len(), 4);
+    assert_eq!(messages[1].role, "system");
+    assert!(message_text(&messages[1]).contains("<deepseek:fork_state>"));
+    assert_eq!(messages[2].role, "system");
+    assert!(message_text(&messages[2]).contains("<deepseek:subagent_context>"));
+    assert_eq!(messages[3].role, "user");
+    assert!(message_text(&messages[3]).contains("inspect parser"));
+}
+
+#[test]
+fn fresh_subagent_messages_keep_existing_single_turn_shape() {
+    let assignment = SubAgentAssignment::new("list files".to_string(), None);
+    let messages =
+        build_initial_subagent_messages("list files", &assignment, &SubAgentType::Explore, None);
+
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].role, "user");
+    assert!(message_text(&messages[0]).contains("list files"));
 }
 
 #[test]
@@ -439,6 +528,26 @@ fn subagent_auto_reasoning_resolves_to_distinct_v4_tiers() {
         fallback_subagent_assignment_route(&runtime, None, "debug this release failure")
             .reasoning_effort,
         Some("max".to_string())
+    );
+}
+
+#[test]
+fn fixed_model_subagent_auto_reasoning_skips_flash_router() {
+    let runtime = stub_runtime().with_reasoning_effort(Some("high".to_string()), true);
+
+    assert!(
+        !should_use_subagent_flash_router(&runtime),
+        "fixed-model auto thinking should resolve locally without a hidden router request"
+    );
+}
+
+#[test]
+fn auto_model_subagent_assignments_still_use_flash_router() {
+    let runtime = stub_runtime().with_auto_model(true);
+
+    assert!(
+        should_use_subagent_flash_router(&runtime),
+        "auto-model sub-agent assignments still need router guidance"
     );
 }
 
@@ -1003,6 +1112,39 @@ fn mailbox_propagates_through_child_runtime_chain() {
     );
 }
 
+#[test]
+fn subagent_rejects_interactive_shell_terminal_takeover() {
+    let err = reject_subagent_terminal_takeover(
+        "exec_shell",
+        &serde_json::json!({
+            "command": "python3 -i",
+            "interactive": true
+        }),
+    )
+    .expect_err("sub-agents must not inherit the parent terminal");
+
+    let msg = err.to_string();
+    assert!(msg.contains("cannot use exec_shell with interactive=true"));
+    assert!(msg.contains("parent TUI terminal"));
+
+    reject_subagent_terminal_takeover(
+        "exec_shell",
+        &serde_json::json!({
+            "command": "cargo check",
+            "interactive": false
+        }),
+    )
+    .expect("non-interactive shell remains allowed");
+    reject_subagent_terminal_takeover(
+        "exec_shell",
+        &serde_json::json!({
+            "command": "cargo test",
+            "background": true
+        }),
+    )
+    .expect("background shell remains allowed");
+}
+
 #[tokio::test]
 async fn mailbox_close_as_cancel_propagates_to_grandchild_runtime() {
     use crate::tools::subagent::mailbox::Mailbox;
@@ -1171,6 +1313,7 @@ fn stub_runtime() -> SubAgentRuntime {
         cancel_token: CancellationToken::new(),
         mailbox: None,
         parent_completion_tx: None,
+        fork_context: None,
     }
 }
 

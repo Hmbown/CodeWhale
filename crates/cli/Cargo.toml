@@ -14,13 +14,13 @@ path = "src/main.rs"
 anyhow.workspace = true
 clap.workspace = true
 clap_complete.workspace = true
-deepseek-agent = { path = "../agent", version = "0.8.15" }
-deepseek-app-server = { path = "../app-server", version = "0.8.15" }
-deepseek-config = { path = "../config", version = "0.8.15" }
-deepseek-execpolicy = { path = "../execpolicy", version = "0.8.15" }
-deepseek-mcp = { path = "../mcp", version = "0.8.15" }
-deepseek-secrets = { path = "../secrets", version = "0.8.15" }
-deepseek-state = { path = "../state", version = "0.8.15" }
+deepseek-agent = { path = "../agent", version = "0.8.16" }
+deepseek-app-server = { path = "../app-server", version = "0.8.16" }
+deepseek-config = { path = "../config", version = "0.8.16" }
+deepseek-execpolicy = { path = "../execpolicy", version = "0.8.16" }
+deepseek-mcp = { path = "../mcp", version = "0.8.16" }
+deepseek-secrets = { path = "../secrets", version = "0.8.16" }
+deepseek-state = { path = "../state", version = "0.8.16" }
 chrono.workspace = true
 dirs.workspace = true
 serde.workspace = true

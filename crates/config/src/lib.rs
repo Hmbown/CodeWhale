@@ -1247,10 +1247,20 @@ fn serialize_http_headers(headers: &BTreeMap<String, String>) -> Option<String> 
 }
 
 fn redact_secret(secret: &str) -> String {
-    if secret.len() <= 16 {
+    let chars: Vec<char> = secret.chars().collect();
+    if chars.len() <= 16 {
         return "********".to_string();
     }
-    format!("{}***{}", &secret[..4], &secret[secret.len() - 4..])
+    let prefix: String = chars.iter().take(4).collect();
+    let suffix: String = chars
+        .iter()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("{prefix}***{suffix}")
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1727,6 +1737,21 @@ mod tests {
         let values = config.list_values();
 
         assert_eq!(values.get("api_key").map(String::as_str), Some("********"));
+    }
+
+    #[test]
+    fn list_values_redacts_unicode_api_key_without_byte_slicing() {
+        let config = ConfigToml {
+            api_key: Some("密钥密钥密钥密钥123456789".to_string()),
+            ..ConfigToml::default()
+        };
+
+        let values = config.list_values();
+
+        assert_eq!(
+            values.get("api_key").map(String::as_str),
+            Some("密钥密钥***6789")
+        );
     }
 
     #[cfg(unix)]

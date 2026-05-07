@@ -139,6 +139,10 @@ jobs:
   docker:
     needs: build
     if: ${{ !cancelled() && needs.build.result == 'success' }}
+    # Docker/GHCR is experimental and not a supported release channel yet.
+    # Keep binary GitHub Releases publishable while the arm64 image build path
+    # is hardened separately.
+    continue-on-error: true
     runs-on: ubuntu-latest
     permissions:
       contents: read

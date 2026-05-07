@@ -39,7 +39,7 @@ pub const HANDOFF_RELATIVE_PATH: &str = ".deepseek/handoff.md";
 const INSTRUCTIONS_FILE_MAX_BYTES: usize = 100 * 1024;
 
 /// Render a `## Environment` block listing the resolved locale tag,
-/// host platform, login shell, and current working directory.
+/// runtime version, host platform, login shell, and current working directory.
 ///
 /// The block is appended to the workspace-static portion of the
 /// system prompt (after mode prompt + project context, before
@@ -48,6 +48,7 @@ const INSTRUCTIONS_FILE_MAX_BYTES: usize = 100 * 1024;
 /// guess from the user's first message. `locale_tag` is resolved by
 /// the caller from `Settings` so this function stays I/O-free.
 fn render_environment_block(workspace: &Path, locale_tag: &str) -> String {
+    let deepseek_version = env!("CARGO_PKG_VERSION");
     let platform = std::env::consts::OS;
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "unknown".to_string());
     let pwd = workspace.display();
@@ -56,6 +57,7 @@ fn render_environment_block(workspace: &Path, locale_tag: &str) -> String {
         "## Environment\n\
          \n\
          - lang: {locale_tag}\n\
+         - deepseek_version: {deepseek_version}\n\
          - platform: {platform}\n\
          - shell: {shell}\n\
          - pwd: {pwd}"
@@ -448,7 +450,7 @@ pub fn system_prompt_for_mode_with_context_skills_session_and_approval(
              If you notice context is getting long (>80%), proactively suggest using `/compact` to the user.\n\n\
              ### Prompt-cache awareness\n\n\
              DeepSeek caches the longest *byte-stable prefix* of every request and charges roughly 100× less for cache-hit tokens than miss tokens. The system prompt above is layered most-static-first specifically so the prefix stays stable turn-over-turn. To keep cache hits high:\n\
-             - **Working set location:** the current repo working set is injected into the latest user message inside a `<turn_meta>` block. Treat it as high-priority turn metadata, not as a stable system-prompt section.\n\
+             - **Working set location:** the current repo working set is stored on new user messages inside a `<turn_meta>` block. Treat it as high-priority turn metadata, not as a stable system-prompt section.\n\
              - **Append, don't reorder.** New context goes at the end (latest user / tool messages). Reshuffling earlier messages or rewriting their content invalidates the cache for everything after the change.\n\
              - **Don't paraphrase quoted content.** If you've already read a file, refer to it by path or line range instead of re-quoting it with different formatting.\n\
              - **Use `/compact` as a hard reset, not a tweak.** Compaction is meant for when the cache is already losing — it intentionally rewrites the prefix to a shorter summary. Don't trigger it for small wins.\n\
@@ -523,6 +525,10 @@ mod tests {
         let block = render_environment_block(tmp.path(), "zh-Hans");
         assert!(block.starts_with("## Environment"));
         assert!(block.contains("- lang: zh-Hans"));
+        assert!(block.contains(&format!(
+            "- deepseek_version: {}",
+            env!("CARGO_PKG_VERSION")
+        )));
         assert!(block.contains(&format!("- pwd: {}", tmp.path().display())));
         assert!(block.contains("- platform:"));
         assert!(block.contains("- shell:"));
@@ -548,6 +554,7 @@ mod tests {
         };
         assert!(prompt.contains("## Environment"));
         assert!(prompt.contains("- lang: ja"));
+        assert!(prompt.contains("- deepseek_version:"));
     }
 
     #[test]
@@ -606,6 +613,15 @@ mod tests {
         assert!(prompt.contains("Mode: Agent"));
         // Approval layer
         assert!(prompt.contains("Approval Policy: Suggest"));
+    }
+
+    #[test]
+    fn package_version_is_current_hotfix_release() {
+        assert_eq!(
+            env!("CARGO_PKG_VERSION"),
+            "0.8.16",
+            "0.8.16 hotfix branch must report the release version before publishing"
+        );
     }
 
     #[test]
@@ -721,14 +737,18 @@ mod tests {
     }
 
     #[test]
-    fn when_not_to_use_sections_present() {
+    fn tool_selection_guide_avoids_defensive_tool_suppression() {
         let prompt = compose_prompt(AppMode::Agent, Personality::Calm);
-        assert!(prompt.contains("When NOT to use certain tools"));
-        assert!(prompt.contains("### `apply_patch`"));
-        assert!(prompt.contains("### `edit_file`"));
-        assert!(prompt.contains("### `exec_shell`"));
-        assert!(prompt.contains("### `agent_spawn`"));
-        assert!(prompt.contains("### `rlm`"));
+        assert!(prompt.contains("Tool Selection Guide"));
+        assert!(prompt.contains("Use `agent_result`"));
+        assert!(
+            !prompt.contains("When NOT to use certain tools"),
+            "the system prompt should steer tool choice without training the model to avoid available tools"
+        );
+        assert!(
+            !prompt.contains("Don't reach for"),
+            "avoid defensive anti-tool wording in the base prompt"
+        );
     }
 
     /// #588: language-mirroring directive must ship in every mode so
@@ -766,7 +786,7 @@ mod tests {
     fn rlm_specialty_tool_guidance_present() {
         let prompt = compose_prompt(AppMode::Agent, Personality::Calm);
         // Structural: the RLM heading must exist as a section anchor.
-        assert!(prompt.contains("RLM — When to Use It"));
+        assert!(prompt.contains("RLM — How to Use It"));
         // Structural: the word "rlm" must appear multiple times (tool
         // name, section heading, toolbox reference). Just verify the
         // lowercase form — exact wording is NOT a test concern.
@@ -775,14 +795,20 @@ mod tests {
             rlm_count >= 5,
             "RLM guidance present: expected >= 5 mentions of 'rlm', got {rlm_count}"
         );
+        assert!(
+            !prompt.contains("When NOT to use RLM"),
+            "RLM guidance should explain fit and verification without telling the model to avoid the tool"
+        );
     }
 
     #[test]
     fn subagent_done_sentinel_section_present() {
         let prompt = compose_prompt(AppMode::Agent, Personality::Calm);
-        assert!(prompt.contains("Sub-agent completion sentinel"));
+        assert!(prompt.contains("Internal Sub-agent Completion Events"));
         assert!(prompt.contains("<deepseek:subagent.done>"));
+        assert!(prompt.contains("not user input"));
         assert!(prompt.contains("Integration protocol"));
+        assert!(prompt.contains("Do not tell the user they pasted sentinels"));
     }
 
     #[test]

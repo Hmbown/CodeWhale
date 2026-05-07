@@ -35,6 +35,21 @@ Each role's full system prompt lives in
 child agent boots; the parent's spawn prompt becomes the first
 turn's user message.
 
+## Context forking
+
+`agent_spawn` starts fresh by default: the child gets its role prompt
+plus the task you pass. Use `fork_context: true` when the child should
+continue from the parent's current request prefix instead. In fork
+mode the child request keeps the parent's system prompt and message
+history byte-identical, appends a structured state snapshot, then
+adds the sub-agent role instructions and task at the tail. That keeps
+DeepSeek prefix-cache reuse high while giving the child the context
+needed for continuation, review, summarization, or compaction work.
+
+Use fresh spawns for independent exploration. Use forked spawns when
+the task depends on decisions, files, todos, or plan state already in
+the parent transcript.
+
 ### When to pick which role
 
 - **`general`** — when the task is "do this whole thing", not "go

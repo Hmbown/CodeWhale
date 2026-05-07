@@ -389,23 +389,15 @@ pub fn apply_to_delegate(card: &mut DelegateCard, msg: &MailboxMessage) -> bool 
         }
         MailboxMessage::Progress { status, .. } => {
             card.status = AgentLifecycle::Running;
-            card.push_action(status);
+            if !is_low_signal_progress(status) {
+                card.push_action(status);
+            }
         }
-        MailboxMessage::ToolCallStarted {
-            tool_name, step, ..
-        } => {
-            card.push_action(format!("[{step}] {tool_name} started"));
+        MailboxMessage::ToolCallStarted { tool_name, .. } => {
+            card.push_action(format!("{tool_name} running"));
         }
-        MailboxMessage::ToolCallCompleted {
-            tool_name,
-            step,
-            ok,
-            ..
-        } => {
-            card.push_action(format!(
-                "[{step}] {tool_name} {}",
-                if *ok { "ok" } else { "failed" }
-            ));
+        MailboxMessage::ToolCallCompleted { tool_name, ok, .. } => {
+            card.push_action(format!("{tool_name} {}", if *ok { "ok" } else { "failed" }));
         }
         MailboxMessage::Completed { summary, .. } => {
             card.status = AgentLifecycle::Completed;
@@ -431,6 +423,13 @@ pub fn apply_to_delegate(card: &mut DelegateCard, msg: &MailboxMessage) -> bool 
         }
     }
     true
+}
+
+fn is_low_signal_progress(status: &str) -> bool {
+    let status = status.trim().to_ascii_lowercase();
+    status.contains("requesting model response")
+        || status.starts_with("started (")
+        || (status.starts_with("step ") && status.contains(": complete"))
 }
 
 /// Apply a mailbox envelope to a `FanoutCard`. Updates per-worker state
@@ -547,6 +546,57 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("scanned 42 files")),
             "summary row renders on terminal status: got {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn delegate_card_ignores_low_signal_scheduler_progress() {
+        let mut card = DelegateCard::new("agent_003", "general");
+        let msg = MailboxMessage::progress("agent_003", "step 1/100: requesting model response");
+
+        assert!(apply_to_delegate(&mut card, &msg));
+        assert_eq!(card.status, AgentLifecycle::Running);
+        assert_eq!(
+            card.action_count(),
+            0,
+            "scheduler progress should not become a stale transcript row"
+        );
+
+        let rendered = render_to_strings(&card.render_lines(80)).join("\n");
+        assert!(!rendered.contains("step 1/100"), "{rendered}");
+        assert!(
+            !rendered.contains("requesting model response"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn delegate_tool_rows_omit_internal_step_numbers() {
+        let mut card = DelegateCard::new("agent_004", "general");
+
+        assert!(apply_to_delegate(
+            &mut card,
+            &MailboxMessage::ToolCallStarted {
+                agent_id: "agent_004".into(),
+                tool_name: "read_file".into(),
+                step: 7,
+            }
+        ));
+        assert!(apply_to_delegate(
+            &mut card,
+            &MailboxMessage::ToolCallCompleted {
+                agent_id: "agent_004".into(),
+                tool_name: "read_file".into(),
+                step: 7,
+                ok: true,
+            }
+        ));
+
+        let rendered = render_to_strings(&card.render_lines(80)).join("\n");
+        assert!(rendered.contains("read_file"), "{rendered}");
+        assert!(
+            !rendered.contains("[7]"),
+            "internal loop step numbers are not useful in the live card: {rendered}"
         );
     }
 

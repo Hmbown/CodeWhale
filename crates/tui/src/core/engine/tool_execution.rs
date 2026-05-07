@@ -25,11 +25,11 @@ use super::*;
 /// over, mouse wheel scrolled the host terminal instead of the transcript,
 /// and the TUI rendered as if into a regular cooked-mode buffer.
 ///
-/// `Drop` runs synchronously and can't await, so we use `try_send` on a
-/// **clone of the event channel** to push `ResumeEvents` non-blockingly. The
-/// engine event channel is the same one we sent `PauseEvents` on, so by the
-/// time we drop there is by construction at least one consumed slot, which
-/// keeps `try_send` reliable in practice.
+/// `Drop` runs synchronously and can't await, so we first use `try_send` on a
+/// **clone of the event channel** to push `ResumeEvents` non-blockingly. If the
+/// channel is full we enqueue the resume on the active Tokio runtime instead of
+/// dropping it; otherwise a burst of engine events can strand the UI in the
+/// paused terminal state.
 pub(super) struct InteractiveTerminalGuard {
     tx: Option<mpsc::Sender<Event>>,
 }
@@ -52,18 +52,40 @@ impl InteractiveTerminalGuard {
 impl Drop for InteractiveTerminalGuard {
     fn drop(&mut self) {
         if let Some(tx) = self.tx.take() {
-            // Synchronous, non-blocking. If the channel is full we still want
-            // the resume to land — log so a cancellation that loses the
-            // resume is visible in traces, but don't panic. The TUI also
-            // re-sends a resume on its own teardown path as a backstop.
-            if let Err(err) = tx.try_send(Event::ResumeEvents) {
-                tracing::warn!(
-                    target: "engine.tool_execution",
-                    ?err,
-                    "InteractiveTerminalGuard: try_send(ResumeEvents) failed; \
-                     terminal may stay in paused state until the next \
-                     pause/resume cycle"
-                );
+            match tx.try_send(Event::ResumeEvents) {
+                Ok(()) => {}
+                Err(tokio::sync::mpsc::error::TrySendError::Full(event)) => {
+                    match tokio::runtime::Handle::try_current() {
+                        Ok(handle) => {
+                            handle.spawn(async move {
+                                if let Err(err) = tx.send(event).await {
+                                    tracing::warn!(
+                                        target: "engine.tool_execution",
+                                        ?err,
+                                        "InteractiveTerminalGuard: async send(ResumeEvents) failed; \
+                                         terminal may stay in paused state until the next \
+                                         pause/resume cycle"
+                                    );
+                                }
+                            });
+                        }
+                        Err(err) => {
+                            tracing::warn!(
+                                target: "engine.tool_execution",
+                                ?err,
+                                "InteractiveTerminalGuard: event channel full and no Tokio runtime \
+                                 available to queue ResumeEvents; terminal may stay paused until \
+                                 the next pause/resume cycle"
+                            );
+                        }
+                    }
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                    tracing::debug!(
+                        target: "engine.tool_execution",
+                        "InteractiveTerminalGuard: event channel closed before ResumeEvents"
+                    );
+                }
             }
         }
     }
@@ -258,7 +280,7 @@ impl Engine {
 mod tests {
     use super::*;
     use serde_json::json;
-    use std::sync::Mutex;
+    use std::{sync::Mutex, time::Duration};
 
     /// Tests in this module mutate `DEEPSEEK_TOOL_AUDIT_LOG` which is
     /// process-global; serialise through this guard so the parallel
@@ -267,6 +289,21 @@ mod tests {
 
     fn audit_test_guard() -> std::sync::MutexGuard<'static, ()> {
         AUDIT_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    #[tokio::test]
+    async fn terminal_guard_queues_resume_when_event_channel_is_full() {
+        let (tx, mut rx) = mpsc::channel(1);
+        tx.try_send(Event::status("filler")).expect("fill channel");
+
+        drop(InteractiveTerminalGuard { tx: Some(tx) });
+
+        assert!(matches!(rx.recv().await, Some(Event::Status { .. })));
+        let resumed = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("queued resume event")
+            .expect("event channel still open");
+        assert!(matches!(resumed, Event::ResumeEvents));
     }
 
     #[test]

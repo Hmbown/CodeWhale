@@ -5,7 +5,7 @@ use std::fmt::Write;
 use crate::config::{COMMON_DEEPSEEK_MODELS, normalize_model_name};
 use crate::localization::{MessageId, tr};
 use crate::tui::app::{App, AppAction, AppMode, ReasoningEffort};
-use crate::tui::views::{HelpView, ModalKind, SubAgentsView};
+use crate::tui::views::{HelpView, ModalKind, SubAgentsView, subagent_view_agents};
 
 use super::CommandResult;
 
@@ -52,7 +52,10 @@ pub fn clear(app: &mut App) -> CommandResult {
     app.viewport.transcript_selection.clear();
     app.queued_messages.clear();
     app.queued_draft = None;
+    app.session.total_tokens = 0;
     app.session.total_conversation_tokens = 0;
+    app.session.session_cost = 0.0;
+    app.session.session_cost_cny = 0.0;
     let todos_cleared = app.clear_todos();
     app.tool_log.clear();
     app.tool_cells.clear();
@@ -63,6 +66,9 @@ pub fn clear(app: &mut App) -> CommandResult {
     app.last_exec_wait_command = None;
     app.session.last_prompt_tokens = None;
     app.session.last_completion_tokens = None;
+    app.session.last_prompt_cache_hit_tokens = None;
+    app.session.last_prompt_cache_miss_tokens = None;
+    app.session.turn_cache_history.clear();
     app.current_session_id = None;
     let locale = app.ui_locale;
     let message = if todos_cleared {
@@ -93,14 +99,19 @@ pub fn model(app: &mut App, model_name: Option<&str>) -> CommandResult {
     if let Some(name) = model_name {
         if name.trim().eq_ignore_ascii_case("auto") {
             let old_model = app.model_display_label();
+            let model_changed = !app.auto_model || app.model != "auto";
             app.auto_model = true;
             app.model = "auto".to_string();
             app.last_effective_model = None;
             app.reasoning_effort = ReasoningEffort::Auto;
             app.last_effective_reasoning_effort = None;
             app.update_model_compaction_budget();
-            app.session.last_prompt_tokens = None;
-            app.session.last_completion_tokens = None;
+            if model_changed {
+                app.clear_model_scoped_telemetry();
+            } else {
+                app.session.last_prompt_tokens = None;
+                app.session.last_completion_tokens = None;
+            }
             return CommandResult::with_message_and_action(
                 tr(app.ui_locale, MessageId::ModelChanged)
                     .replace("{old}", &old_model)
@@ -115,12 +126,17 @@ pub fn model(app: &mut App, model_name: Option<&str>) -> CommandResult {
             ));
         };
         let old_model = app.model_display_label();
+        let model_changed = app.auto_model || app.model != model_id;
         app.auto_model = false;
         app.model = model_id.clone();
         app.last_effective_model = None;
         app.update_model_compaction_budget();
-        app.session.last_prompt_tokens = None;
-        app.session.last_completion_tokens = None;
+        if model_changed {
+            app.clear_model_scoped_telemetry();
+        } else {
+            app.session.last_prompt_tokens = None;
+            app.session.last_completion_tokens = None;
+        }
         CommandResult::with_message_and_action(
             tr(app.ui_locale, MessageId::ModelChanged)
                 .replace("{old}", &old_model)
@@ -140,8 +156,8 @@ pub fn models(_app: &mut App) -> CommandResult {
 /// List sub-agent status from the engine
 pub fn subagents(app: &mut App) -> CommandResult {
     if app.view_stack.top_kind() != Some(ModalKind::SubAgents) {
-        app.view_stack
-            .push(SubAgentsView::new(app.subagent_cache.clone()));
+        let agents = subagent_view_agents(app, &app.subagent_cache);
+        app.view_stack.push(SubAgentsView::new(agents));
     }
     app.status_message = Some(tr(app.ui_locale, MessageId::SubagentsFetching).to_string());
     CommandResult::action(AppAction::ListSubAgents)
@@ -296,9 +312,10 @@ mod tests {
     use crate::config::Config;
     use crate::localization::Locale;
     use crate::models::Message;
-    use crate::tui::app::{App, AppMode, TuiOptions};
+    use crate::tui::app::{App, AppMode, TuiOptions, TurnCacheRecord};
     use crate::tui::history::HistoryCell;
     use std::path::PathBuf;
+    use std::time::Instant;
 
     fn create_test_app() -> App {
         let options = TuiOptions {
@@ -426,6 +443,35 @@ mod tests {
     }
 
     #[test]
+    fn clear_resets_session_telemetry() {
+        let mut app = create_test_app();
+        app.session.total_tokens = 234;
+        app.session.total_conversation_tokens = 123;
+        app.session.session_cost = 0.42;
+        app.session.session_cost_cny = 3.05;
+        app.session.last_prompt_cache_hit_tokens = Some(70);
+        app.session.last_prompt_cache_miss_tokens = Some(30);
+        app.push_turn_cache_record(TurnCacheRecord {
+            input_tokens: 100,
+            output_tokens: 25,
+            cache_hit_tokens: Some(70),
+            cache_miss_tokens: Some(30),
+            reasoning_replay_tokens: Some(12),
+            recorded_at: Instant::now(),
+        });
+
+        clear(&mut app);
+
+        assert_eq!(app.session.total_tokens, 0);
+        assert_eq!(app.session.total_conversation_tokens, 0);
+        assert_eq!(app.session.session_cost, 0.0);
+        assert_eq!(app.session.session_cost_cny, 0.0);
+        assert_eq!(app.session.last_prompt_cache_hit_tokens, None);
+        assert_eq!(app.session.last_prompt_cache_miss_tokens, None);
+        assert!(app.session.turn_cache_history.is_empty());
+    }
+
+    #[test]
     fn test_exit_returns_quit_action() {
         let result = exit();
         assert!(result.message.is_none());
@@ -448,6 +494,42 @@ mod tests {
         assert_eq!(app.model, "deepseek-v4-flash");
         assert_eq!(app.session.last_prompt_tokens, None);
         assert_eq!(app.session.last_completion_tokens, None);
+    }
+
+    #[test]
+    fn model_switch_clears_turn_cache_history() {
+        let mut app = create_test_app();
+        app.push_turn_cache_record(TurnCacheRecord {
+            input_tokens: 100,
+            output_tokens: 25,
+            cache_hit_tokens: Some(70),
+            cache_miss_tokens: Some(30),
+            reasoning_replay_tokens: Some(12),
+            recorded_at: Instant::now(),
+        });
+
+        let result = model(&mut app, Some("deepseek-v4-flash"));
+
+        assert!(result.message.is_some());
+        assert!(app.session.turn_cache_history.is_empty());
+    }
+
+    #[test]
+    fn model_reset_same_model_keeps_turn_cache_history() {
+        let mut app = create_test_app();
+        app.push_turn_cache_record(TurnCacheRecord {
+            input_tokens: 100,
+            output_tokens: 25,
+            cache_hit_tokens: Some(70),
+            cache_miss_tokens: Some(30),
+            reasoning_replay_tokens: Some(12),
+            recorded_at: Instant::now(),
+        });
+
+        let result = model(&mut app, Some("deepseek-v4-pro"));
+
+        assert!(result.message.is_some());
+        assert_eq!(app.session.turn_cache_history.len(), 1);
     }
 
     #[test]

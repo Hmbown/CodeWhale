@@ -49,6 +49,39 @@ fn echo_stdin_command() -> String {
     }
 }
 
+fn network_restricted_context(tmp: &std::path::Path) -> ToolContext {
+    ToolContext::new(tmp)
+        .with_elevated_sandbox_policy(ExecutionSandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![tmp.to_path_buf()],
+            network_access: false,
+            exclude_tmpdir: false,
+            exclude_slash_tmp: false,
+        })
+        .with_shell_network_denied_hint(
+            "Shell command blocked: Plan mode runs shell commands in a network-restricted sandbox.",
+        )
+}
+
+fn failed_network_shell_result(stdout: &str, stderr: &str) -> ShellResult {
+    ShellResult {
+        task_id: None,
+        status: ShellStatus::Failed,
+        exit_code: Some(6),
+        stdout: stdout.to_string(),
+        stderr: stderr.to_string(),
+        duration_ms: 25,
+        stdout_len: stdout.len(),
+        stderr_len: stderr.len(),
+        stdout_omitted: 0,
+        stderr_omitted: 0,
+        stdout_truncated: false,
+        stderr_truncated: false,
+        sandboxed: true,
+        sandbox_type: Some("seatbelt".to_string()),
+        sandbox_denied: false,
+    }
+}
+
 #[test]
 fn test_sync_execution() {
     let tmp = tempdir().expect("tempdir");
@@ -230,6 +263,58 @@ fn test_truncate_with_meta_reports_omission_counts() {
     assert!(meta.original_len >= long_output.len());
     assert!(meta.omitted > 0);
     assert!(truncated.contains("bytes omitted"));
+}
+
+#[test]
+fn network_restricted_hint_detects_silent_curl_failure() {
+    let tmp = tempdir().expect("tempdir");
+    let ctx = network_restricted_context(tmp.path());
+    let result = failed_network_shell_result("000", "");
+
+    let hint = shell_network_restricted_hint(
+        &ctx,
+        "curl -s -o /dev/null -w '%{http_code}' https://api.github.com",
+        &result,
+    )
+    .expect("network-restricted hint");
+
+    assert!(hint.contains("Plan mode"));
+}
+
+#[test]
+fn network_restricted_hint_ignores_local_failures() {
+    let tmp = tempdir().expect("tempdir");
+    let ctx = network_restricted_context(tmp.path());
+    let result = failed_network_shell_result("", "No such file or directory");
+
+    assert!(shell_network_restricted_hint(&ctx, "cat missing.txt", &result).is_none());
+}
+
+#[test]
+fn shell_delta_result_surfaces_network_restricted_hint() {
+    let tmp = tempdir().expect("tempdir");
+    let ctx = network_restricted_context(tmp.path());
+    let result = failed_network_shell_result("000", "");
+
+    let tool_result = build_shell_delta_tool_result(
+        ShellDeltaResult {
+            command: "gh issue list".to_string(),
+            result,
+            stdout_total_len: 3,
+            stderr_total_len: 0,
+        },
+        &ctx,
+    );
+
+    assert!(!tool_result.success);
+    assert!(tool_result.content.starts_with("Shell command blocked"));
+    let metadata = tool_result.metadata.expect("metadata");
+    assert_eq!(
+        metadata
+            .get("sandbox_network_restricted")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
 }
 
 #[test]

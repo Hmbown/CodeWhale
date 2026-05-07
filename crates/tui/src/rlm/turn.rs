@@ -34,8 +34,6 @@ const STDOUT_METADATA_PREVIEW_LEN: usize = 800;
 const PROMPT_PREVIEW_LEN: usize = 500;
 /// Temperature for root LLM calls.
 const ROOT_TEMPERATURE: f32 = 0.3;
-/// Hard wall-clock cap on a whole RLM turn.
-const TURN_TIMEOUT: Duration = Duration::from_secs(180);
 /// Bound on conversation history we keep across iterations.
 const MAX_HISTORY_MESSAGES: usize = 20;
 
@@ -156,6 +154,13 @@ pub(crate) fn run_rlm_turn_inner(
     ))
 }
 
+/// RLM turns are long-running background-style work. Do not kill the whole
+/// turn with the old fixed 180s wall-clock cap; per-request cancellation still
+/// comes from the parent turn token and the user can cancel from the TUI.
+fn turn_timeout() -> Option<Duration> {
+    None
+}
+
 // ---------------------------------------------------------------------------
 // Implementation
 // ---------------------------------------------------------------------------
@@ -237,15 +242,14 @@ async fn run_rlm_turn_impl(
 
     let result = 'turn: {
         for iteration in 0..MAX_RLM_ITERATIONS {
-            if start.elapsed() > TURN_TIMEOUT {
+            if let Some(timeout) = turn_timeout()
+                && start.elapsed() > timeout
+            {
                 break 'turn RlmTurnResult {
                     answer: String::new(),
                     iterations: iteration,
                     duration: start.elapsed(),
-                    error: Some(format!(
-                        "RLM turn timed out after {}s",
-                        TURN_TIMEOUT.as_secs()
-                    )),
+                    error: Some(format!("RLM turn timed out after {}s", timeout.as_secs())),
                     usage: total_usage,
                     termination: RlmTermination::Error,
                     trace: trace.clone(),
@@ -588,6 +592,14 @@ fn build_metadata_message(
     parts.push("**REPL helpers** (use inside ```repl blocks)".to_string());
     parts.push("- `context` / `ctx`                       — the full input string".to_string());
     parts.push("- `len(context)` / `context[a:b]` / `context.splitlines()` — slice it".to_string());
+    parts.push(
+        "- `chunk_context(max_chars=20000, overlap=0)` — full-coverage chunks with index/start/end/text"
+            .to_string(),
+    );
+    parts.push(
+        "- `chunk_coverage(chunks)`              — coverage report for chunk_context output"
+            .to_string(),
+    );
     parts.push(
         "- `llm_query(prompt, model=None)`        — one-shot child LLM; `model` is ignored and child calls stay pinned to Flash"
             .to_string(),
@@ -970,5 +982,13 @@ mod tests {
         assert!(s.contains("line0"));
         assert!(s.contains("line19"));
         assert!(s.contains("…"));
+    }
+
+    #[test]
+    fn rlm_turn_has_no_fixed_wall_clock_timeout() {
+        assert!(
+            turn_timeout().is_none(),
+            "RLM turns should not be killed by the old fixed 180s wall-clock cap"
+        );
     }
 }

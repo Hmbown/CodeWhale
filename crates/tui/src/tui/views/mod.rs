@@ -7,9 +7,11 @@ use crate::localization::{Locale, MessageId, tr};
 use crate::palette;
 use crate::settings::Settings;
 use crate::tools::UserInputResponse;
-use crate::tools::subagent::{SubAgentResult, SubAgentStatus, SubAgentType};
+use crate::tools::subagent::{SubAgentAssignment, SubAgentResult, SubAgentStatus, SubAgentType};
 use crate::tui::app::App;
 use crate::tui::approval::{ElevationOption, ReviewDecision};
+use crate::tui::history::{HistoryCell, SubAgentCell, summarize_tool_output};
+use crate::tui::widgets::agent_card::AgentLifecycle;
 
 pub mod status_picker;
 
@@ -599,6 +601,16 @@ impl ConfigView {
             },
             ConfigRow {
                 section: ConfigSection::Display,
+                key: "background_color".to_string(),
+                value: settings
+                    .background_color
+                    .clone()
+                    .unwrap_or_else(|| "(default)".to_string()),
+                editable: true,
+                scope: ConfigScope::Saved,
+            },
+            ConfigRow {
+                section: ConfigSection::Display,
                 key: "calm_mode".to_string(),
                 value: settings.calm_mode.to_string(),
                 editable: true,
@@ -1003,6 +1015,7 @@ fn config_hint_for_key(key: &str) -> &'static str {
         | "paste_burst_detection" => "on/off, true/false, yes/no, 1/0",
         "composer_density" | "transcript_spacing" => "compact | comfortable | spacious",
         "locale" => "auto | en | ja | zh-Hans | zh-Hant | pt-BR",
+        "background_color" => "#RRGGBB | default",
         "default_mode" => "agent | plan | yolo",
         "sidebar_width" => "10..=50",
         "sidebar_focus" => "auto | plan | todos | tasks | agents",
@@ -1384,6 +1397,105 @@ pub struct SubAgentsView {
     scroll: usize,
 }
 
+/// Build the agent rows shown by `/subagents`.
+///
+/// The engine manager is the durable source of truth, but live UI cards can
+/// briefly be ahead of the manager-list refresh. Include those live rows so
+/// the command does not say "no agents" while the footer/sidebar already show
+/// active delegated work.
+pub(crate) fn subagent_view_agents(
+    app: &App,
+    manager_agents: &[SubAgentResult],
+) -> Vec<SubAgentResult> {
+    let mut agents = manager_agents.to_vec();
+    let mut seen: std::collections::HashSet<String> =
+        agents.iter().map(|agent| agent.agent_id.clone()).collect();
+
+    for (agent_id, progress) in &app.agent_progress {
+        if seen.insert(agent_id.clone()) {
+            agents.push(live_subagent_result(
+                agent_id,
+                SubAgentType::General,
+                SubAgentStatus::Running,
+                progress,
+                Some("live"),
+            ));
+        }
+    }
+
+    for cell in &app.history {
+        match cell {
+            HistoryCell::SubAgent(SubAgentCell::Delegate(card))
+                if seen.insert(card.agent_id.clone()) =>
+            {
+                let agent_type =
+                    SubAgentType::from_str(&card.agent_type).unwrap_or(SubAgentType::General);
+                agents.push(live_subagent_result(
+                    &card.agent_id,
+                    agent_type,
+                    lifecycle_to_subagent_status(card.status),
+                    card.summary.as_deref().unwrap_or(card.agent_type.as_str()),
+                    Some("transcript"),
+                ));
+            }
+            HistoryCell::SubAgent(SubAgentCell::Fanout(card)) => {
+                for worker in &card.workers {
+                    if seen.insert(worker.agent_id.clone()) {
+                        let objective = format!(
+                            "{} worker {}",
+                            summarize_tool_output(&card.kind),
+                            summarize_tool_output(&worker.worker_id)
+                        );
+                        agents.push(live_subagent_result(
+                            &worker.agent_id,
+                            SubAgentType::General,
+                            lifecycle_to_subagent_status(worker.status),
+                            &objective,
+                            Some(card.kind.as_str()),
+                        ));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    agents
+}
+
+fn lifecycle_to_subagent_status(status: AgentLifecycle) -> SubAgentStatus {
+    match status {
+        AgentLifecycle::Pending | AgentLifecycle::Running => SubAgentStatus::Running,
+        AgentLifecycle::Completed => SubAgentStatus::Completed,
+        AgentLifecycle::Failed => SubAgentStatus::Failed("failed in transcript".to_string()),
+        AgentLifecycle::Cancelled => SubAgentStatus::Cancelled,
+    }
+}
+
+fn live_subagent_result(
+    agent_id: &str,
+    agent_type: SubAgentType,
+    status: SubAgentStatus,
+    objective: &str,
+    role: Option<&str>,
+) -> SubAgentResult {
+    SubAgentResult {
+        agent_id: agent_id.to_string(),
+        agent_type,
+        assignment: SubAgentAssignment {
+            objective: summarize_tool_output(objective),
+            role: role.map(str::to_string),
+        },
+        model: String::new(),
+        nickname: None,
+        status,
+        result: None,
+        steps_taken: 0,
+        duration_ms: 0,
+        from_prior_session: false,
+    }
+}
+
 impl SubAgentsView {
     pub fn new(agents: Vec<SubAgentResult>) -> Self {
         Self { agents, scroll: 0 }
@@ -1742,11 +1854,16 @@ fn truncate_view_text(text: &str, max_chars: usize) -> String {
 mod tests {
     use super::{
         ConfigListItem, ConfigSection, ConfigView, ModalKind, ModalView, ShellControlView,
-        ViewAction, ViewEvent, ViewStack, truncate_view_text,
+        ViewAction, ViewEvent, ViewStack, subagent_view_agents, truncate_view_text,
     };
     use crate::config::Config;
     use crate::localization::Locale;
+    use crate::tools::subagent::{
+        SubAgentAssignment, SubAgentResult, SubAgentStatus, SubAgentType,
+    };
     use crate::tui::app::{App, TuiOptions};
+    use crate::tui::history::{HistoryCell, SubAgentCell};
+    use crate::tui::widgets::agent_card::{AgentLifecycle, FanoutCard};
     use crossterm::event::{
         KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
     };
@@ -1783,6 +1900,72 @@ mod tests {
             let action = view.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
             assert!(matches!(action, ViewAction::None));
         }
+    }
+
+    fn manager_agent(id: &str, status: SubAgentStatus) -> SubAgentResult {
+        SubAgentResult {
+            agent_id: id.to_string(),
+            agent_type: SubAgentType::Explore,
+            assignment: SubAgentAssignment {
+                objective: "read the docs".to_string(),
+                role: None,
+            },
+            model: "deepseek-v4-flash".to_string(),
+            nickname: None,
+            status,
+            result: None,
+            steps_taken: 1,
+            duration_ms: 10,
+            from_prior_session: false,
+        }
+    }
+
+    #[test]
+    fn subagent_view_agents_includes_progress_only_running_agent() {
+        let mut app = create_test_app();
+        app.agent_progress
+            .insert("agent_live".to_string(), "reading code".to_string());
+
+        let agents = subagent_view_agents(&app, &[]);
+
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].agent_id, "agent_live");
+        assert!(matches!(agents[0].status, SubAgentStatus::Running));
+        assert_eq!(agents[0].assignment.role.as_deref(), Some("live"));
+        assert!(agents[0].assignment.objective.contains("reading code"));
+    }
+
+    #[test]
+    fn subagent_view_agents_includes_live_fanout_workers_when_cache_is_empty() {
+        let mut app = create_test_app();
+        let mut card = FanoutCard::new("rlm").with_workers(["chunk_1", "chunk_2"]);
+        card.upsert_worker("chunk_1", AgentLifecycle::Completed);
+        card.upsert_worker("chunk_2", AgentLifecycle::Running);
+        app.add_message(HistoryCell::SubAgent(SubAgentCell::Fanout(card)));
+        app.last_fanout_card_index = Some(app.history.len().saturating_sub(1));
+
+        let agents = subagent_view_agents(&app, &[]);
+
+        assert_eq!(agents.len(), 2);
+        assert_eq!(agents[0].agent_id, "chunk_1");
+        assert!(matches!(agents[0].status, SubAgentStatus::Completed));
+        assert_eq!(agents[1].agent_id, "chunk_2");
+        assert!(matches!(agents[1].status, SubAgentStatus::Running));
+        assert_eq!(agents[1].assignment.role.as_deref(), Some("rlm"));
+    }
+
+    #[test]
+    fn subagent_view_agents_deduplicates_manager_rows_over_live_rows() {
+        let mut app = create_test_app();
+        app.agent_progress
+            .insert("agent_cached".to_string(), "live duplicate".to_string());
+        let manager = vec![manager_agent("agent_cached", SubAgentStatus::Running)];
+
+        let agents = subagent_view_agents(&app, &manager);
+
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].agent_type, SubAgentType::Explore);
+        assert_eq!(agents[0].assignment.objective, "read the docs");
     }
 
     fn visible_section_labels(view: &ConfigView) -> Vec<&'static str> {
@@ -1845,6 +2028,7 @@ mod tests {
         assert!(keys.contains(&"model"));
         assert!(keys.contains(&"approval_mode"));
         assert!(keys.contains(&"locale"));
+        assert!(keys.contains(&"background_color"));
         assert!(keys.contains(&"auto_compact"));
         assert!(keys.contains(&"composer_border"));
         assert!(keys.contains(&"mcp_config_path"));

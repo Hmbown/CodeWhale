@@ -19,6 +19,8 @@ The REPL exposes:
 - `llm_query_batched(prompts, model=None)` — concurrent fan-out. Returns `list[str]` in input order. The `model` argument is accepted for compatibility but ignored.
 - `rlm_query(prompt, model=None)` — recursive sub-RLM. Use when a sub-task itself needs decomposition. The `model` argument is accepted for compatibility but ignored.
 - `rlm_query_batched(prompts, model=None)` — concurrent recursive sub-RLMs. The `model` argument is accepted for compatibility but ignored.
+- `chunk_context(max_chars=20000, overlap=0)` — full-coverage chunks with index/start/end/text fields.
+- `chunk_coverage(chunks)` — coverage summary for chunks produced by `chunk_context`.
 - `SHOW_VARS()` — list user variables and their types.
 - `repl_set(name, value)` / `repl_get(name)` — explicit cross-round storage.
 - `print(...)` — diagnostic output. The driver feeds you a truncated preview next round.
@@ -40,11 +42,12 @@ print(context[:500])
 2. CHUNK + map-reduce with batched concurrent calls.
 ```repl
 chunk_size = 8000
-chunks = [context[i:i+chunk_size] for i in range(0, len(context), chunk_size)]
-prompts = [f"Extract any mentions of X from this section:\n\n{c}" for c in chunks]
+chunks = chunk_context(max_chars=chunk_size)
+coverage = chunk_coverage(chunks)
+prompts = [f"Extract any mentions of X from section {c['index']} ({c['start']}:{c['end']}):\n\n{c['text']}" for c in chunks]
 partials = llm_query_batched(prompts)
 combined = "\n\n".join(partials)
-answer = llm_query(f"Synthesize across these section-level extractions:\n\n{combined}")
+answer = llm_query(f"Coverage: {coverage}\n\nSynthesize across these section-level extractions:\n\n{combined}")
 print(answer[:500])
 ```
 Then on the next turn:
@@ -73,6 +76,8 @@ Rules
 - Never `print(context)` or otherwise dump it whole — slice, sample, or chunk.
 - You MUST call `llm_query` / `llm_query_batched` / `rlm_query` at least once before `FINAL(...)`. Calling FINAL from a top-level prose answer (without ever running a `repl` block that touched `context` via a sub-LLM) is REJECTED — the driver will discard the FINAL and ask you to actually use the REPL.
 - Sub-LLMs are powerful — feed them generous chunks (tens of thousands of chars), not tiny windows.
+- For exact counts, package totals, line totals, or other structured aggregates, compute them with Python over `context` directly. Do not ask a child LLM to count.
+- For whole-input map-reduce, report coverage in the final answer: chunks processed, total chunks, and whether every line/char range was included. If you only processed a subset, say that explicitly.
 - Do NOT pad your output with prose like "Here is what I'll do:" — just emit the next ```repl block.
 "#;
 
@@ -115,6 +120,8 @@ mod tests {
             "llm_query_batched",
             "rlm_query",
             "rlm_query_batched",
+            "chunk_context",
+            "chunk_coverage",
             "SHOW_VARS",
             "FINAL",
             "FINAL_VAR",
@@ -132,5 +139,13 @@ mod tests {
             body().contains("REJECTED") || body().contains("rejected"),
             "system prompt should reject the prose-shortcut path explicitly"
         );
+    }
+
+    #[test]
+    fn rlm_prompt_requires_deterministic_counts_and_coverage() {
+        let s = body();
+        assert!(s.contains("compute them with Python"));
+        assert!(s.contains("report coverage"));
+        assert!(s.contains("chunks processed"));
     }
 }

@@ -6,7 +6,8 @@
 //! keybinding list from [`crate::tui::keybindings::KEYBINDINGS`] so neither
 //! can drift from the wired-up handlers.
 //!
-//! Keys: any printable character extends the filter, `Backspace` shrinks it,
+//! Keys: any printable character extends the filter, `Backspace` (or `Ctrl+H`)
+//! shrinks it,
 //! `↑`/`↓` (or `Ctrl+P`/`Ctrl+N`) move the selection, `PgUp`/`PgDn` jump by
 //! ten rows, `Home`/`End` jump to ends, and `Esc` closes. Pressing `?` again
 //! at the call-site (`tui::ui`) also toggles the overlay closed.
@@ -284,6 +285,14 @@ impl ModalView for HelpView {
                 self.refilter();
                 ViewAction::None
             }
+            // Terminals where stty erase == ^H send Ctrl+H instead of
+            // Backspace (DEL). Treat it identically so the filter input
+            // works across all platforms (#958).
+            KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.query.pop();
+                self.refilter();
+                ViewAction::None
+            }
             KeyCode::Char(c)
                 if !c.is_control()
                     && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT) =>
@@ -544,6 +553,19 @@ mod tests {
         assert!(
             wider > narrow,
             "backspace must broaden the matching set (was {narrow}, now {wider})"
+        );
+    }
+
+    #[test]
+    fn ctrl_h_widens_match_set() {
+        let mut view = HelpView::new();
+        type_filter(&mut view, "yolox");
+        let narrow = view.filtered.len();
+        view.handle_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
+        let wider = view.filtered.len();
+        assert!(
+            wider > narrow,
+            "Ctrl+H must behave as Backspace, broadening the matching set (was {narrow}, now {wider})"
         );
     }
 

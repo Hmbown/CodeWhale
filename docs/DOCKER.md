@@ -1,20 +1,28 @@
 # Docker
 
-DeepSeek TUI ships an official multi-arch Docker image (amd64 + arm64) on
-[GitHub Container Registry](https://github.com/Hmbown/DeepSeek-TUI/pkgs/container/deepseek-tui).
+Docker support is currently a local-build/devcontainer path, not a supported
+release channel. The release workflow may try an experimental GHCR publish, but
+no public `ghcr.io/hmbown/deepseek-tui` image should be treated as available
+until this page says so.
 
-## Quick start
+## Local quick start
+
+Build the image locally from a checkout:
+
+```bash
+docker build -t deepseek-tui .
+```
+
+Then run it with your existing config directory mounted:
 
 ```bash
 docker run --rm -it \
   -e DEEPSEEK_API_KEY="$DEEPSEEK_API_KEY" \
   -v ~/.deepseek:/home/deepseek/.deepseek \
-  ghcr.io/hmbown/deepseek-tui:latest
+  deepseek-tui
 ```
 
-Images are published to GitHub Container Registry (GHCR) only. Docker Hub
-publishing is not currently configured — add a `docker/login-action` step
-with Hub credentials to the release workflow if needed.
+Docker Hub publishing is not configured.
 
 ## Environment variables
 
@@ -42,7 +50,7 @@ When stdin is not a TTY, `deepseek` drops to the dispatcher's one-shot mode
 
 ```bash
 echo "Explain the Cargo.toml in structured English." | \
-  docker run --rm -i -e DEEPSEEK_API_KEY ghcr.io/hmbown/deepseek-tui:latest
+  docker run --rm -i -e DEEPSEEK_API_KEY deepseek-tui
 ```
 
 ## Building locally
@@ -63,13 +71,8 @@ configuration for VS Code / GitHub Codespaces. It pre-installs the Rust toolchai
 rust-analyzer, and the `deepseek` binary. Open the repo in a devcontainer to get a
 ready-to-use development environment.
 
-## Tags
+## Release status
 
-| Tag        | Meaning                  |
-|------------|--------------------------|
-| `latest`   | Latest stable release    |
-| `v0`       | Latest v0.x release      |
-| `0.8.9`    | Specific release version |
-
-Docker images are built and pushed automatically when a release tag is pushed
-(see [release.yml](../.github/workflows/release.yml)).
+Docker image publishing is experimental and non-blocking for releases. The
+supported distribution channels are npm, Cargo, Homebrew, GitHub Release
+assets, and Scoop's independently maintained main-bucket manifest.

@@ -1,5 +1,5 @@
 use super::*;
-use crate::config::Config;
+use crate::config::{ApiProvider, Config};
 use crate::config_ui::{self, WebConfigSession, WebConfigSessionEvent};
 use crate::core::engine::mock_engine_handle;
 use crate::tui::file_mention::{
@@ -274,6 +274,35 @@ fn mouse_selection_autocopies_on_release_without_ctrl_c() {
 }
 
 #[test]
+fn jump_to_latest_button_click_scrolls_to_tail() {
+    let mut app = create_test_app();
+    app.viewport.transcript_scroll = TranscriptScroll::at_line(7);
+    app.viewport.jump_to_latest_button_area = Some(Rect {
+        x: 10,
+        y: 5,
+        width: 3,
+        height: 3,
+    });
+    app.user_scrolled_during_stream = true;
+
+    let events = handle_mouse_event(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 11,
+            row: 6,
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+
+    assert!(events.is_empty());
+    assert!(app.viewport.transcript_scroll.is_at_tail());
+    assert!(app.viewport.jump_to_latest_button_area.is_none());
+    assert!(!app.user_scrolled_during_stream);
+    assert!(!app.viewport.transcript_selection.dragging);
+}
+
+#[test]
 fn right_click_opens_context_menu() {
     let mut app = create_test_app();
 
@@ -519,6 +548,115 @@ fn create_test_app() -> App {
     App::new(options, &Config::default())
 }
 
+fn text_message(role: &str, text: &str) -> Message {
+    Message {
+        role: role.to_string(),
+        content: vec![ContentBlock::Text {
+            text: text.to_string(),
+            cache_control: None,
+        }],
+    }
+}
+
+fn saved_session_with_messages(messages: Vec<Message>) -> SavedSession {
+    SavedSession {
+        schema_version: 1,
+        metadata: crate::session_manager::SessionMetadata {
+            id: "resume-recovery-session".to_string(),
+            title: "resume recovery".to_string(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            message_count: messages.len(),
+            total_tokens: 0,
+            model: "deepseek-v4-pro".to_string(),
+            workspace: PathBuf::from("/tmp/resume-recovery"),
+            mode: Some("yolo".to_string()),
+        },
+        messages,
+        system_prompt: None,
+        context_references: Vec::new(),
+    }
+}
+
+#[test]
+fn apply_loaded_session_restores_dangling_user_tail_as_retry_draft() {
+    let mut app = create_test_app();
+    let session = saved_session_with_messages(vec![text_message(
+        "user",
+        "finish the Qthresh proof bundle",
+    )]);
+
+    let recovered = apply_loaded_session(&mut app, &session);
+
+    assert!(recovered);
+    assert!(app.api_messages.is_empty());
+    assert_eq!(app.input, "finish the Qthresh proof bundle");
+    assert_eq!(
+        app.queued_draft
+            .as_ref()
+            .map(|draft| draft.display.as_str()),
+        Some("finish the Qthresh proof bundle")
+    );
+    assert!(
+        app.history
+            .iter()
+            .all(|cell| !matches!(cell, HistoryCell::User { .. }))
+    );
+    assert!(
+        app.status_message
+            .as_deref()
+            .is_some_and(|msg| msg.contains("Recovered interrupted prompt")),
+        "status was {:?}",
+        app.status_message
+    );
+}
+
+#[test]
+fn apply_loaded_session_resets_unpersisted_telemetry() {
+    let mut app = create_test_app();
+    app.session.session_cost = 1.25;
+    app.session.session_cost_cny = 9.13;
+    app.session.subagent_cost = 0.75;
+    app.session.subagent_cost_cny = 5.48;
+    app.session.subagent_cost_event_seqs.insert(42);
+    app.session.displayed_cost_high_water = 2.0;
+    app.session.displayed_cost_high_water_cny = 14.61;
+    app.session.last_prompt_tokens = Some(120);
+    app.session.last_completion_tokens = Some(35);
+    app.session.last_prompt_cache_hit_tokens = Some(80);
+    app.session.last_prompt_cache_miss_tokens = Some(40);
+    app.session.last_reasoning_replay_tokens = Some(12);
+    app.push_turn_cache_record(crate::tui::app::TurnCacheRecord {
+        input_tokens: 120,
+        output_tokens: 35,
+        cache_hit_tokens: Some(80),
+        cache_miss_tokens: Some(40),
+        reasoning_replay_tokens: Some(12),
+        recorded_at: Instant::now(),
+    });
+    let mut session = saved_session_with_messages(vec![text_message("assistant", "ready")]);
+    session.metadata.total_tokens = 500;
+
+    let recovered = apply_loaded_session(&mut app, &session);
+
+    assert!(!recovered);
+    assert_eq!(app.session.total_tokens, 500);
+    assert_eq!(app.session.total_conversation_tokens, 500);
+    assert_eq!(app.session.session_cost, 0.0);
+    assert_eq!(app.session.session_cost_cny, 0.0);
+    assert_eq!(app.session.subagent_cost, 0.0);
+    assert_eq!(app.session.subagent_cost_cny, 0.0);
+    assert!(app.session.subagent_cost_event_seqs.is_empty());
+    assert_eq!(app.session.displayed_cost_high_water, 0.0);
+    assert_eq!(app.session.displayed_cost_high_water_cny, 0.0);
+    assert_eq!(app.session.last_prompt_tokens, None);
+    assert_eq!(app.session.last_completion_tokens, None);
+    assert_eq!(app.session.last_prompt_cache_hit_tokens, None);
+    assert_eq!(app.session.last_prompt_cache_miss_tokens, None);
+    assert_eq!(app.session.last_reasoning_replay_tokens, None);
+    assert!(app.session.turn_cache_history.is_empty());
+}
+
 #[tokio::test]
 async fn drain_web_config_events_applies_draft_without_closing_session() {
     let mut app = create_test_app();
@@ -762,6 +900,33 @@ async fn model_change_update_syncs_engine_model_before_compaction() {
 }
 
 #[tokio::test]
+async fn provider_switch_clears_turn_cache_history() {
+    let mut app = create_test_app();
+    app.push_turn_cache_record(crate::tui::app::TurnCacheRecord {
+        input_tokens: 100,
+        output_tokens: 25,
+        cache_hit_tokens: Some(70),
+        cache_miss_tokens: Some(30),
+        reasoning_replay_tokens: Some(12),
+        recorded_at: Instant::now(),
+    });
+    let mut engine = mock_engine_handle();
+    let mut config = Config::default();
+
+    switch_provider(
+        &mut app,
+        &mut engine.handle,
+        &mut config,
+        ApiProvider::Ollama,
+        None,
+    )
+    .await;
+
+    assert_eq!(app.api_provider, ApiProvider::Ollama);
+    assert!(app.session.turn_cache_history.is_empty());
+}
+
+#[tokio::test]
 async fn dispatch_user_message_failed_send_clears_loading_state() {
     let mut app = create_test_app();
     let engine = mock_engine_handle();
@@ -785,6 +950,31 @@ async fn dispatch_user_message_failed_send_clears_loading_state() {
         "failed dispatch must not leave the composer in a permanent busy state"
     );
     assert!(app.last_send_at.is_none());
+}
+
+#[test]
+fn fixed_model_auto_thinking_skips_auto_model_router() {
+    let mut app = create_test_app();
+    app.auto_model = false;
+    app.model = "deepseek-v4-pro".to_string();
+    app.reasoning_effort = ReasoningEffort::Auto;
+
+    assert!(
+        !should_resolve_auto_model_selection(&app),
+        "fixed-model auto thinking must stay local instead of starting a hidden router request"
+    );
+}
+
+#[test]
+fn auto_model_still_uses_auto_model_router() {
+    let mut app = create_test_app();
+    app.auto_model = true;
+    app.reasoning_effort = ReasoningEffort::Auto;
+
+    assert!(
+        should_resolve_auto_model_selection(&app),
+        "auto model still needs the router to choose the concrete model"
+    );
 }
 
 fn init_git_repo() -> TempDir {
@@ -1935,6 +2125,72 @@ fn spillover_pager_section_returns_notice_when_file_missing() {
 
     let section = spillover_pager_section(&app, 0).expect("still emits a notice section");
     assert!(section.contains("could not read spillover file"));
+}
+
+#[test]
+fn terminal_pause_has_live_owner_only_for_running_exec_cells() {
+    let mut app = create_test_app();
+    assert!(!terminal_pause_has_live_owner(&app));
+
+    let mut active = ActiveCell::new();
+    active.push_tool(
+        "tool-1",
+        HistoryCell::Tool(ToolCell::Exec(ExecCell {
+            command: "python3 -i".to_string(),
+            status: ToolStatus::Running,
+            output: None,
+            started_at: Some(Instant::now()),
+            duration_ms: None,
+            source: ExecSource::Assistant,
+            interaction: Some("interactive".to_string()),
+        })),
+    );
+    app.active_cell = Some(active);
+    assert!(terminal_pause_has_live_owner(&app));
+
+    let mut active = ActiveCell::new();
+    active.push_tool(
+        "tool-2",
+        HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
+            name: "rlm".to_string(),
+            status: ToolStatus::Running,
+            input_summary: Some("file_path: Cargo.lock".to_string()),
+            output: None,
+            prompts: None,
+            spillover_path: None,
+        })),
+    );
+    app.active_cell = Some(active);
+    assert!(
+        !terminal_pause_has_live_owner(&app),
+        "non-interactive RLM work must not keep the terminal in host-scrollback mode"
+    );
+}
+
+#[test]
+fn active_rlm_task_entries_surface_foreground_rlm_work() {
+    let mut app = create_test_app();
+    app.turn_started_at = Some(Instant::now() - Duration::from_secs(3));
+    let mut active = ActiveCell::new();
+    active.push_tool(
+        "tool-rlm",
+        HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
+            name: "rlm".to_string(),
+            status: ToolStatus::Running,
+            input_summary: Some("file_path: Cargo.lock".to_string()),
+            output: None,
+            prompts: None,
+            spillover_path: None,
+        })),
+    );
+    app.active_cell = Some(active);
+
+    let entries = active_rlm_task_entries(&app);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].id, "rlm-1");
+    assert_eq!(entries[0].status, "running");
+    assert_eq!(entries[0].prompt_summary, "RLM: file_path: Cargo.lock");
+    assert!(entries[0].duration_ms.unwrap_or_default() >= 3000);
 }
 
 #[test]
@@ -3510,4 +3766,30 @@ fn completed_turn_notification_truncates_long_text() {
     assert!(msg.ends_with("..."));
     // 360-char body + 3-char ellipsis
     assert_eq!(msg.chars().count(), 363);
+}
+
+#[test]
+fn subagent_completion_notification_uses_summary_line_not_sentinel() {
+    let msg = super::subagent_completion_notification_message(
+        "agent_live",
+        "Finished the docs audit.\n<deepseek:subagent.done>{}</deepseek:subagent.done>",
+        false,
+        Duration::from_secs(42),
+    );
+
+    assert_eq!(msg, "sub-agent agent_live: Finished the docs audit.");
+    assert!(!msg.contains("deepseek:subagent.done"));
+}
+
+#[test]
+fn subagent_completion_notification_can_include_elapsed_summary() {
+    let msg = super::subagent_completion_notification_message(
+        "agent_live",
+        "",
+        true,
+        Duration::from_secs(65),
+    );
+
+    assert!(msg.contains("deepseek: sub-agent agent_live complete"));
+    assert!(msg.contains("deepseek: sub-agent complete (1m 5s)"));
 }

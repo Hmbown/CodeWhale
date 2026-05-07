@@ -156,6 +156,20 @@ curl -L -o /tmp/deepseek-artifacts-sha256.txt \
 
 (Use `shasum -a 256 -c` instead of `sha256sum` on macOS.)
 
+### Windows Scoop
+
+DeepSeek TUI is listed in Scoop's main bucket:
+
+```powershell
+scoop update
+scoop install deepseek-tui
+deepseek --version
+```
+
+Scoop manifests are maintained outside this repository's release workflow and
+can lag GitHub/npm/Cargo releases. Use npm or manual GitHub release downloads
+when you need the newest version immediately.
+
 ---
 
 ## 5. Build from source

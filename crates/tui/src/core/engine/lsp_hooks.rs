@@ -116,13 +116,7 @@ impl Engine {
         if rendered.is_empty() {
             return;
         }
-        self.add_session_message(Message {
-            role: "user".to_string(),
-            content: vec![ContentBlock::Text {
-                text: rendered,
-                cache_control: None,
-            }],
-        })
-        .await;
+        self.add_session_message(self.user_text_message_with_turn_metadata(rendered))
+            .await;
     }
 }

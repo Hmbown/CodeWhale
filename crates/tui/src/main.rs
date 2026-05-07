@@ -96,7 +96,7 @@ fn configure_windows_console_utf8() {}
 #[command(
     name = "deepseek",
     author,
-    version,
+    version = env!("DEEPSEEK_BUILD_VERSION"),
     about = "DeepSeek TUI/CLI for DeepSeek models",
     long_about = "Terminal-native TUI and CLI for DeepSeek models.\n\nRun 'deepseek' to start.\n\nNot affiliated with DeepSeek Inc."
 )]
@@ -776,7 +776,8 @@ async fn main() -> Result<()> {
         Some(id)
     } else if !cli.fresh {
         // Check for crash-recovery checkpoint (unless --fresh was passed).
-        try_recover_checkpoint()
+        let workspace = resolve_workspace(&cli);
+        try_recover_checkpoint(&workspace)
     } else {
         None
     };
@@ -1335,6 +1336,10 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
                     "NVIDIA_API_KEY",
                     "deepseek auth set --provider nvidia-nim --api-key \"...\"",
                 ),
+                crate::config::ApiProvider::Openai => (
+                    "OPENAI_API_KEY",
+                    "deepseek auth set --provider openai --api-key \"...\"",
+                ),
                 crate::config::ApiProvider::Openrouter => (
                     "OPENROUTER_API_KEY",
                     "deepseek auth set --provider openrouter --api-key \"...\"",
@@ -1367,6 +1372,7 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
                 "✗".truecolor(red_r, red_g, red_b),
                 match config.api_provider() {
                     crate::config::ApiProvider::NvidiaNim => "nvidia_nim",
+                    crate::config::ApiProvider::Openai => "openai",
                     crate::config::ApiProvider::Openrouter => "openrouter",
                     crate::config::ApiProvider::Novita => "novita",
                     crate::config::ApiProvider::Fireworks => "fireworks",
@@ -1451,7 +1457,7 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
     println!("  {} {}", "·".dimmed(), dotenv_status_line(workspace));
 
     println!();
-    println!("Run `deepseek-tui doctor --json` for a machine-readable check.");
+    println!("Run `deepseek doctor --json` for a machine-readable check.");
     Ok(())
 }
 
@@ -1528,7 +1534,7 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
 
     // Version info
     println!("{}", "Version Information:".bold());
-    println!("  deepseek-tui: {}", env!("CARGO_PKG_VERSION"));
+    println!("  deepseek-tui: {}", env!("DEEPSEEK_BUILD_VERSION"));
     println!("  rust: {}", rustc_version());
     println!();
 
@@ -1684,6 +1690,26 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
     println!("  · provider: {}", api_target.provider);
     println!("  · base_url: {}", api_target.base_url);
     println!("  · model: {}", api_target.model);
+    let strict_tool_mode = doctor_strict_tool_mode_status(config);
+    let strict_icon = match strict_tool_mode.status {
+        "ready" => "✓".truecolor(aqua_r, aqua_g, aqua_b),
+        "fallback_non_beta" | "custom_endpoint" => "!".truecolor(sky_r, sky_g, sky_b),
+        _ => "·".dimmed(),
+    };
+    println!(
+        "  {} strict_tool_mode: {}",
+        strict_icon, strict_tool_mode.message
+    );
+    if let Some(recommended) = strict_tool_mode.recommended_base_url.as_ref() {
+        println!("    Use `base_url = \"{recommended}\"` for DeepSeek strict schemas.");
+    }
+    let capability = crate::config::provider_capability(config.api_provider(), &api_target.model);
+    if let Some(alias) = capability.alias_deprecation.as_ref() {
+        println!(
+            "  ! model alias {} retires {}; switch to {}",
+            alias.alias, alias.retirement_date, alias.replacement
+        );
+    }
     if has_api_key {
         print!("  {} Testing connection...", "·".dimmed());
         use std::io::Write;
@@ -1972,7 +1998,7 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
             "·".dimmed(),
             crate::utils::display_path(&tools_dir)
         );
-        println!("    Run `deepseek-tui setup --tools` to scaffold a starter dir.");
+        println!("    Run `deepseek setup --tools` to scaffold a starter dir.");
     }
 
     // Plugins directory
@@ -1993,7 +2019,7 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
             "·".dimmed(),
             crate::utils::display_path(&plugins_dir)
         );
-        println!("    Run `deepseek-tui setup --plugins` to scaffold a starter dir.");
+        println!("    Run `deepseek setup --plugins` to scaffold a starter dir.");
     }
 
     // Storage surfaces (#422 / #440 / #500)
@@ -2200,6 +2226,7 @@ fn run_doctor_json(
         "file_present": memory_path.exists(),
     });
     let api_target = doctor_api_target(config);
+    let strict_tool_mode = doctor_strict_tool_mode_status(config);
 
     let report = json!({
         "version": env!("CARGO_PKG_VERSION"),
@@ -2211,6 +2238,13 @@ fn run_doctor_json(
         },
         "base_url": api_target.base_url,
         "default_text_model": api_target.model,
+        "strict_tool_mode": {
+            "enabled": strict_tool_mode.enabled,
+            "status": strict_tool_mode.status,
+            "function_strict_sent": strict_tool_mode.function_strict_sent,
+            "message": strict_tool_mode.message,
+            "recommended_base_url": strict_tool_mode.recommended_base_url,
+        },
         "memory": memory_summary,
         "mcp": mcp_summary,
         "skills": {
@@ -2284,7 +2318,7 @@ fn run_doctor_json(
         },
         "api_connectivity": {
             "checked": false,
-            "note": "Skipped in --json mode; run `deepseek-tui doctor` for a live check.",
+            "note": "Skipped in --json mode; run `deepseek doctor` for a live check.",
         },
         "capability": provider_capability_report(config),
     });
@@ -2314,6 +2348,7 @@ fn provider_capability_report(config: &Config) -> serde_json::Value {
         "thinking_supported": cap.thinking_supported,
         "cache_telemetry_supported": cap.cache_telemetry_supported,
         "request_payload_mode": serde_json::to_value(cap.request_payload_mode).unwrap_or_default(),
+        "alias_deprecation": cap.alias_deprecation,
     })
 }
 
@@ -2324,12 +2359,94 @@ struct DoctorApiTarget {
     model: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DoctorStrictToolModeStatus {
+    enabled: bool,
+    status: &'static str,
+    function_strict_sent: bool,
+    message: String,
+    recommended_base_url: Option<String>,
+}
+
 fn doctor_api_target(config: &Config) -> DoctorApiTarget {
     let provider = config.api_provider();
     DoctorApiTarget {
         provider: provider.as_str(),
         base_url: config.deepseek_base_url(),
         model: config.default_model(),
+    }
+}
+
+fn doctor_strict_tool_mode_status(config: &Config) -> DoctorStrictToolModeStatus {
+    if !config.strict_tool_mode.unwrap_or(false) {
+        return DoctorStrictToolModeStatus {
+            enabled: false,
+            status: "disabled",
+            function_strict_sent: false,
+            message: "disabled".to_string(),
+            recommended_base_url: None,
+        };
+    }
+
+    let target = doctor_api_target(config);
+    match known_deepseek_base_url_kind(&target.base_url) {
+        Some(DeepSeekBaseUrlKind::Beta) => DoctorStrictToolModeStatus {
+            enabled: true,
+            status: "ready",
+            function_strict_sent: true,
+            message: "enabled; DeepSeek strict schemas use the beta endpoint".to_string(),
+            recommended_base_url: None,
+        },
+        Some(DeepSeekBaseUrlKind::NonBeta) => {
+            let recommended = recommended_strict_base_url(config, &target.base_url);
+            DoctorStrictToolModeStatus {
+                enabled: true,
+                status: "fallback_non_beta",
+                function_strict_sent: false,
+                message:
+                    "enabled, but function.strict is stripped for this non-beta DeepSeek endpoint"
+                        .to_string(),
+                recommended_base_url: Some(recommended.to_string()),
+            }
+        }
+        None => DoctorStrictToolModeStatus {
+            enabled: true,
+            status: "custom_endpoint",
+            function_strict_sent: true,
+            message: "enabled; function.strict will be sent to this custom endpoint".to_string(),
+            recommended_base_url: None,
+        },
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeepSeekBaseUrlKind {
+    Beta,
+    NonBeta,
+}
+
+fn known_deepseek_base_url_kind(base_url: &str) -> Option<DeepSeekBaseUrlKind> {
+    match base_url.trim_end_matches('/').to_ascii_lowercase().as_str() {
+        "https://api.deepseek.com/beta" | "https://api.deepseeki.com/beta" => {
+            Some(DeepSeekBaseUrlKind::Beta)
+        }
+        "https://api.deepseek.com"
+        | "https://api.deepseek.com/v1"
+        | "https://api.deepseeki.com"
+        | "https://api.deepseeki.com/v1" => Some(DeepSeekBaseUrlKind::NonBeta),
+        _ => None,
+    }
+}
+
+fn recommended_strict_base_url(config: &Config, base_url: &str) -> &'static str {
+    if matches!(
+        config.api_provider(),
+        crate::config::ApiProvider::DeepseekCN
+    ) || base_url.to_ascii_lowercase().contains("api.deepseeki.com")
+    {
+        "https://api.deepseeki.com/beta"
+    } else {
+        crate::config::DEFAULT_DEEPSEEK_BASE_URL
     }
 }
 
@@ -3526,7 +3643,7 @@ fn should_use_alt_screen(cli: &Cli, config: &Config) -> bool {
     match mode.as_str() {
         "always" => true,
         "never" => false,
-        _ => !is_zellij(),
+        _ => true,
     }
 }
 
@@ -3573,16 +3690,12 @@ fn default_mouse_capture_enabled(terminal_emulator: Option<&str>) -> bool {
     true
 }
 
-fn is_zellij() -> bool {
-    std::env::var_os("ZELLIJ").is_some()
-}
-
 /// Check for a crash-recovery checkpoint and return the session ID if
 /// recovery is possible *and* the checkpoint belongs to the current
 /// workspace.
 ///
 /// The checkpoint must exist and its file mtime must be within 24 hours.
-/// **The checkpoint's workspace must also match `std::env::current_dir()`
+/// **The checkpoint's workspace must also match the resolved launch workspace
 /// after canonicalisation.** If the workspace doesn't match, the
 /// checkpoint is persisted as a regular session (so the user can find it
 /// via `deepseek sessions` / `deepseek resume <id>`) and cleared, and the
@@ -3593,7 +3706,7 @@ fn is_zellij() -> bool {
 /// On a successful match the checkpoint is persisted as a regular session,
 /// cleared, and a notice is printed to stderr. Returns `None` if there is
 /// nothing to recover or the workspace doesn't match.
-fn try_recover_checkpoint() -> Option<String> {
+fn try_recover_checkpoint(launch_workspace: &Path) -> Option<String> {
     let manager = session_manager::SessionManager::default_location().ok()?;
     let session = manager.load_checkpoint().ok().flatten()?;
 
@@ -3613,21 +3726,13 @@ fn try_recover_checkpoint() -> Option<String> {
         return None;
     }
 
-    // Refuse to silently restore a session from another workspace. We compare
-    // canonicalised paths so that `~/foo` vs `/Users/x/foo` and symlink
-    // variants resolve consistently. If either side fails to canonicalise
-    // (e.g. the saved workspace was deleted), fall back to a strict equality
-    // check on the raw paths.
+    // Refuse to silently restore a session from another workspace. Compare
+    // against the resolved launch workspace, not the shell cwd, so callers
+    // using `--workspace` cannot accidentally recover a checkpoint from the
+    // directory their shell happened to be in.
     let session_workspace = session.metadata.workspace.clone();
-    let current_workspace = std::env::current_dir().ok()?;
-    let workspace_matches = {
-        let lhs = std::fs::canonicalize(&session_workspace).ok();
-        let rhs = std::fs::canonicalize(&current_workspace).ok();
-        match (lhs, rhs) {
-            (Some(a), Some(b)) => a == b,
-            _ => session_workspace == current_workspace,
-        }
-    };
+    let workspace_matches =
+        session_manager::workspace_scope_matches(&session_workspace, launch_workspace);
 
     if !workspace_matches {
         // Persist the checkpoint so the user can find it via `deepseek
@@ -3641,10 +3746,11 @@ fn try_recover_checkpoint() -> Option<String> {
             "Note: an interrupted session ({}…) from another workspace ({}) is \
              available. Run `deepseek resume {}` from there to recover it, or \
              use `deepseek sessions` to list all saved sessions. Starting fresh \
-             here.",
+             in {}.",
             &session_id_for_notice.chars().take(8).collect::<String>(),
             session_workspace.display(),
             session_id_for_notice,
+            launch_workspace.display(),
         );
         return None;
     }
@@ -4291,6 +4397,120 @@ mod doctor_endpoint_tests {
     }
 
     #[test]
+    fn strict_tool_mode_doctor_reports_disabled_by_default() {
+        let config = Config::default();
+
+        let status = doctor_strict_tool_mode_status(&config);
+
+        assert!(!status.enabled);
+        assert_eq!(status.status, "disabled");
+        assert!(!status.function_strict_sent);
+        assert!(status.recommended_base_url.is_none());
+    }
+
+    #[test]
+    fn strict_tool_mode_doctor_accepts_default_beta_endpoint() {
+        let config = Config {
+            strict_tool_mode: Some(true),
+            ..Default::default()
+        };
+
+        let status = doctor_strict_tool_mode_status(&config);
+
+        assert!(status.enabled);
+        assert_eq!(status.status, "ready");
+        assert!(status.function_strict_sent);
+        assert!(status.message.contains("beta endpoint"));
+        assert!(status.recommended_base_url.is_none());
+    }
+
+    #[test]
+    fn strict_tool_mode_doctor_warns_for_non_beta_deepseek_endpoint() {
+        let config = Config {
+            strict_tool_mode: Some(true),
+            base_url: Some("https://api.deepseek.com".to_string()),
+            ..Default::default()
+        };
+
+        let status = doctor_strict_tool_mode_status(&config);
+
+        assert_eq!(status.status, "fallback_non_beta");
+        assert!(!status.function_strict_sent);
+        assert_eq!(
+            status.recommended_base_url.as_deref(),
+            Some(crate::config::DEFAULT_DEEPSEEK_BASE_URL)
+        );
+    }
+
+    #[test]
+    fn strict_tool_mode_doctor_warns_for_deepseek_cn_default_endpoint() {
+        let config = Config {
+            provider: Some("deepseek-cn".to_string()),
+            strict_tool_mode: Some(true),
+            ..Default::default()
+        };
+
+        let status = doctor_strict_tool_mode_status(&config);
+
+        assert_eq!(status.status, "fallback_non_beta");
+        assert!(!status.function_strict_sent);
+        assert_eq!(
+            status.recommended_base_url.as_deref(),
+            Some("https://api.deepseeki.com/beta")
+        );
+    }
+
+    #[test]
+    fn strict_tool_mode_doctor_marks_custom_endpoint_as_forwarded() {
+        let config = Config {
+            provider: Some("vllm".to_string()),
+            strict_tool_mode: Some(true),
+            ..Default::default()
+        };
+
+        let status = doctor_strict_tool_mode_status(&config);
+
+        assert_eq!(status.status, "custom_endpoint");
+        assert!(status.function_strict_sent);
+        assert!(status.message.contains("custom endpoint"));
+    }
+
+    #[test]
+    fn provider_capability_report_exposes_alias_deprecation_for_deepseek_chat() {
+        let config = Config {
+            default_text_model: Some("deepseek-chat".to_string()),
+            ..Default::default()
+        };
+
+        let report = provider_capability_report(&config);
+
+        assert_eq!(report["resolved_model"], "deepseek-chat");
+        assert_eq!(report["context_window"], 1_000_000);
+        assert_eq!(report["thinking_supported"], true);
+        assert_eq!(
+            report["alias_deprecation"]["replacement"],
+            "deepseek-v4-flash"
+        );
+        assert_eq!(
+            report["alias_deprecation"]["retirement_utc"],
+            "2026-07-24T15:59:00Z"
+        );
+    }
+
+    #[test]
+    fn provider_capability_report_leaves_canonical_flash_alias_metadata_null() {
+        let config = Config {
+            default_text_model: Some("deepseek-v4-flash".to_string()),
+            ..Default::default()
+        };
+
+        let report = provider_capability_report(&config);
+
+        assert_eq!(report["resolved_model"], "deepseek-v4-flash");
+        assert!(report["alias_deprecation"].is_null());
+    }
+
+    #[test]
     fn timeout_recovery_points_global_deepseek_users_to_cn_endpoint() {
         let config = Config::default();
 
@@ -4323,6 +4543,40 @@ mod terminal_mode_tests {
 
     fn parse_cli(args: &[&str]) -> Cli {
         Cli::try_parse_from(args).expect("CLI args should parse")
+    }
+
+    #[test]
+    fn alternate_screen_defaults_on_in_auto_mode() {
+        let cli = parse_cli(&["deepseek"]);
+        let config = Config::default();
+
+        assert!(should_use_alt_screen(&cli, &config));
+    }
+
+    #[test]
+    fn no_alt_screen_flag_disables_alternate_screen() {
+        let cli = parse_cli(&["deepseek", "--no-alt-screen"]);
+        let config = Config::default();
+
+        assert!(!should_use_alt_screen(&cli, &config));
+    }
+
+    #[test]
+    fn config_can_disable_alternate_screen() {
+        let cli = parse_cli(&["deepseek"]);
+        let config = Config {
+            tui: Some(crate::config::TuiConfig {
+                alternate_screen: Some("never".to_string()),
+                mouse_capture: None,
+                terminal_probe_timeout_ms: None,
+                status_items: None,
+                osc8_links: None,
+                notification_condition: None,
+            }),
+            ..Config::default()
+        };
+
+        assert!(!should_use_alt_screen(&cli, &config));
     }
 
     #[test]

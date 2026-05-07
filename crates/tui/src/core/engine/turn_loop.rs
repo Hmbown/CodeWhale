@@ -55,14 +55,8 @@ impl Engine {
                 self.session
                     .working_set
                     .observe_user_message(&steer, &self.session.workspace);
-                self.add_session_message(Message {
-                    role: "user".to_string(),
-                    content: vec![ContentBlock::Text {
-                        text: steer.clone(),
-                        cache_control: None,
-                    }],
-                })
-                .await;
+                self.add_session_message(self.user_text_message_with_turn_metadata(steer.clone()))
+                    .await;
                 let _ = self
                     .tx_event
                     .send(Event::status(format!(
@@ -220,7 +214,7 @@ impl Engine {
 
             // Build the request
             let force_update_plan_this_step = force_update_plan_first && turn.tool_calls.is_empty();
-            let active_tools = if tool_catalog.is_empty() {
+            let mut active_tools = if tool_catalog.is_empty() {
                 None
             } else {
                 Some(active_tools_for_step(
@@ -229,6 +223,11 @@ impl Engine {
                     force_update_plan_this_step,
                 ))
             };
+            if self.config.strict_tool_mode
+                && let Some(tools) = active_tools.as_mut()
+            {
+                crate::tools::schema_sanitize::prepare_tools_for_strict_mode(tools);
+            }
 
             // Resolve `auto` reasoning_effort to a concrete tier (#663).
             let effective_reasoning_effort = resolve_auto_effort(
@@ -328,7 +327,8 @@ impl Engine {
             // budget restarts with the fresh stream.
             let mut stream_start = Instant::now();
             let mut stream_content_bytes: usize = 0;
-            let chunk_timeout = Duration::from_secs(STREAM_CHUNK_TIMEOUT_SECS);
+            let chunk_timeout_secs = stream_chunk_timeout_secs();
+            let chunk_timeout = Duration::from_secs(chunk_timeout_secs);
             let max_duration = Duration::from_secs(STREAM_MAX_DURATION_SECS);
 
             // Process stream events
@@ -341,7 +341,7 @@ impl Engine {
                             Ok(None) => None, // stream ended normally
                             Err(_) => {
                                 let envelope = StreamError::Stall {
-                                    timeout_secs: STREAM_CHUNK_TIMEOUT_SECS,
+                                    timeout_secs: chunk_timeout_secs,
                                 }
                                 .into_envelope();
                                 crate::logging::warn(&envelope.message);
@@ -821,14 +821,8 @@ impl Engine {
                         self.session
                             .working_set
                             .observe_user_message(&steer, &self.session.workspace);
-                        self.add_session_message(Message {
-                            role: "user".to_string(),
-                            content: vec![ContentBlock::Text {
-                                text: steer,
-                                cache_control: None,
-                            }],
-                        })
-                        .await;
+                        self.add_session_message(self.user_text_message_with_turn_metadata(steer))
+                            .await;
                     }
                     turn.next_step();
                     continue;
@@ -881,13 +875,9 @@ impl Engine {
                                     self.session
                                         .working_set
                                         .observe_user_message(&trimmed, &self.session.workspace);
-                                    self.add_session_message(Message {
-                                        role: "user".to_string(),
-                                        content: vec![ContentBlock::Text {
-                                            text: trimmed.clone(),
-                                            cache_control: None,
-                                        }],
-                                    })
+                                    self.add_session_message(
+                                        self.user_text_message_with_turn_metadata(trimmed.clone()),
+                                    )
                                     .await;
                                     let _ = self
                                         .tx_event
@@ -906,17 +896,8 @@ impl Engine {
                 if !completions.is_empty() {
                     let count = completions.len();
                     for c in completions {
-                        self.session
-                            .working_set
-                            .observe_user_message(&c.payload, &self.session.workspace);
-                        self.add_session_message(Message {
-                            role: "user".to_string(),
-                            content: vec![ContentBlock::Text {
-                                text: c.payload,
-                                cache_control: None,
-                            }],
-                        })
-                        .await;
+                        self.add_session_message(subagent_completion_runtime_message(&c.payload))
+                            .await;
                     }
                     let _ = self
                         .tx_event
@@ -977,13 +958,9 @@ impl Engine {
                                 } else {
                                     format!("[REPL round {round_num} output]\n{}", round.stdout)
                                 };
-                                self.add_session_message(Message {
-                                    role: "user".to_string(),
-                                    content: vec![ContentBlock::Text {
-                                        text: feedback,
-                                        cache_control: None,
-                                    }],
-                                })
+                                self.add_session_message(
+                                    self.user_text_message_with_turn_metadata(feedback),
+                                )
                                 .await;
                             }
                             Err(e) => {
@@ -993,15 +970,11 @@ impl Engine {
                                         "REPL round {round_num} failed: {e}"
                                     )))
                                     .await;
-                                self.add_session_message(Message {
-                                    role: "user".to_string(),
-                                    content: vec![ContentBlock::Text {
-                                        text: format!(
-                                            "[REPL round {round_num} execution failed]\n{e}"
-                                        ),
-                                        cache_control: None,
-                                    }],
-                                })
+                                self.add_session_message(
+                                    self.user_text_message_with_turn_metadata(format!(
+                                        "[REPL round {round_num} execution failed]\n{e}"
+                                    )),
+                                )
                                 .await;
                             }
                         }
@@ -1765,14 +1738,8 @@ impl Engine {
                     self.session
                         .working_set
                         .observe_user_message(&steer, &self.session.workspace);
-                    self.add_session_message(Message {
-                        role: "user".to_string(),
-                        content: vec![ContentBlock::Text {
-                            text: steer,
-                            cache_control: None,
-                        }],
-                    })
-                    .await;
+                    self.add_session_message(self.user_text_message_with_turn_metadata(steer))
+                        .await;
                 }
             }
 
@@ -1809,54 +1776,29 @@ impl Engine {
     }
 
     pub(super) fn messages_with_turn_metadata(&self) -> Vec<Message> {
-        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-        let working_set_summary = self
-            .session
-            .working_set
-            .summary_block(&self.config.workspace)
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
+        // `<turn_meta>` is stored on user-text messages when the message is
+        // appended. Do not rewrite historical messages at request time: doing
+        // so makes the API prefix differ from the bytes sent in earlier turns
+        // and destroys DeepSeek's KV prefix cache reuse.
+        self.session.messages.clone()
+    }
+}
 
-        let summary = if let Some(working_set_summary) = working_set_summary {
-            format!("Current local date: {today}\n{working_set_summary}")
-        } else {
-            format!("Current local date: {today}")
-        };
-
-        let mut messages = self.session.messages.clone();
-        // v0.8.11 hotfix: tool-result messages are stored as role="user" in
-        // our internal representation but serialize to role="tool" on the
-        // wire. Prepending a Text block onto a tool-result message breaks
-        // the assistant→tool_result invariant — the API rejects the request
-        // with `"insufficient tool messages following tool_calls"`. Inject
-        // only into actual user-typed messages, recognizable by having at
-        // least one Text content block (and no ToolResult blocks).
-        let Some(last_user) = messages.iter_mut().rev().find(|message| {
-            message.role == "user"
-                && message
-                    .content
-                    .iter()
-                    .all(|block| !matches!(block, ContentBlock::ToolResult { .. }))
-                && message
-                    .content
-                    .iter()
-                    .any(|block| matches!(block, ContentBlock::Text { .. }))
-        }) else {
-            // No real user message in the trailing slice (e.g. mid-turn
-            // after a tool call). Skip injection — the working_set will
-            // surface again on the next genuine user prompt.
-            return messages;
-        };
-
-        let turn_meta = format!("<turn_meta>\n{summary}\n</turn_meta>");
-        last_user.content.insert(
-            0,
-            ContentBlock::Text {
-                text: turn_meta,
-                cache_control: None,
-            },
-        );
-        messages
+fn subagent_completion_runtime_message(payload: &str) -> Message {
+    Message {
+        role: "system".to_string(),
+        content: vec![ContentBlock::Text {
+            text: format!(
+                "<deepseek:runtime_event kind=\"subagent_completion\" visibility=\"internal\">\n\
+This is an internal runtime event, not user input. Use the sub-agent completion \
+data below to continue coordinating the current task. Do not tell the user they \
+pasted sentinels, do not explain the sentinel protocol, and do not quote the raw \
+XML unless the user explicitly asks to debug sub-agent internals.\n\n\
+{payload}\n\
+</deepseek:runtime_event>"
+            ),
+            cache_control: None,
+        }],
     }
 }
 
@@ -1878,7 +1820,11 @@ fn resolve_auto_effort(reasoning_effort: Option<&str>, messages: &[Message]) -> 
                         .iter()
                         .filter_map(|block| {
                             if let ContentBlock::Text { text, .. } = block {
-                                Some(text.as_str())
+                                if is_turn_metadata_text(text) {
+                                    None
+                                } else {
+                                    Some(text.as_str())
+                                }
                             } else {
                                 None
                             }
@@ -1903,5 +1849,54 @@ fn resolve_auto_effort(reasoning_effort: Option<&str>, messages: &[Message]) -> 
         }
         Some(other) => Some(other.to_string()),
         None => None,
+    }
+}
+
+fn is_turn_metadata_text(text: &str) -> bool {
+    text.trim_start().starts_with("<turn_meta>")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn subagent_completion_handoff_is_internal_system_message() {
+        let message = subagent_completion_runtime_message(
+            "Build passed\n<deepseek:subagent.done>{\"agent_id\":\"agent_a\"}</deepseek:subagent.done>",
+        );
+
+        assert_eq!(message.role, "system");
+        let text = match &message.content[0] {
+            ContentBlock::Text { text, .. } => text,
+            other => panic!("expected text block, got {other:?}"),
+        };
+        assert!(text.contains("internal runtime event, not user input"));
+        assert!(text.contains("Do not tell the user they pasted sentinels"));
+        assert!(text.contains("<deepseek:subagent.done>"));
+        assert!(text.contains("Build passed"));
+    }
+
+    #[test]
+    fn resolve_auto_effort_ignores_stored_turn_metadata() {
+        let messages = vec![Message {
+            role: "user".to_string(),
+            content: vec![
+                ContentBlock::Text {
+                    text: "<turn_meta>\nRecent errors: src/failing.rs\n</turn_meta>".to_string(),
+                    cache_control: None,
+                },
+                ContentBlock::Text {
+                    text: "hello".to_string(),
+                    cache_control: None,
+                },
+            ],
+        }];
+
+        assert_eq!(
+            resolve_auto_effort(Some("auto"), &messages),
+            Some("high".to_string()),
+            "auto thinking should classify the user request, not stored metadata"
+        );
     }
 }

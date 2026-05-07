@@ -56,7 +56,8 @@ pub fn as_system_block(content: &str, source: &Path) -> Option<String> {
 
     let display = source.display();
     let payload = if content.len() > MAX_MEMORY_SIZE {
-        let mut head = content[..MAX_MEMORY_SIZE].to_string();
+        let cutoff = previous_char_boundary(content, MAX_MEMORY_SIZE);
+        let mut head = content[..cutoff].to_string();
         head.push_str("\n…(truncated, raise [memory].max_size or trim memory.md)");
         head
     } else {
@@ -66,6 +67,13 @@ pub fn as_system_block(content: &str, source: &Path) -> Option<String> {
     Some(format!(
         "<user_memory source=\"{display}\">\n{payload}\n</user_memory>"
     ))
+}
+
+fn previous_char_boundary(value: &str, mut index: usize) -> usize {
+    while !value.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
 }
 
 /// Compose the `<user_memory>` block for the system prompt, honouring the
@@ -159,6 +167,50 @@ mod tests {
         let big = "x".repeat(MAX_MEMORY_SIZE + 100);
         let block = as_system_block(&big, Path::new("/tmp/m.md")).unwrap();
         assert!(block.contains("(truncated"));
+    }
+
+    #[test]
+    fn as_system_block_truncates_non_ascii_at_char_boundary() {
+        let mut content = "x".repeat(MAX_MEMORY_SIZE - 1);
+        content.push('é');
+        content.push_str("tail");
+
+        let block = as_system_block(&content, Path::new("/tmp/m.md")).unwrap();
+        let payload = block
+            .strip_prefix("<user_memory source=\"/tmp/m.md\">\n")
+            .unwrap()
+            .strip_suffix("\n</user_memory>")
+            .unwrap();
+        let (head, marker) = payload
+            .split_once("\n…(truncated, raise [memory].max_size or trim memory.md)")
+            .unwrap();
+
+        assert_eq!(head.len(), MAX_MEMORY_SIZE - 1);
+        assert!(head.bytes().all(|byte| byte == b'x'));
+        assert_eq!(marker, "");
+    }
+
+    #[test]
+    fn as_system_block_truncates_emoji_at_char_boundary() {
+        let mut content = "x".repeat(MAX_MEMORY_SIZE - 1);
+        content.push('😀');
+        content.push_str("tail");
+
+        let block = as_system_block(&content, Path::new("/tmp/m.md")).unwrap();
+        assert!(block.contains("…(truncated, raise [memory].max_size or trim memory.md)"));
+
+        let payload = block
+            .strip_prefix("<user_memory source=\"/tmp/m.md\">\n")
+            .unwrap()
+            .strip_suffix("\n</user_memory>")
+            .unwrap();
+        let head = payload
+            .strip_suffix("\n…(truncated, raise [memory].max_size or trim memory.md)")
+            .unwrap();
+
+        assert!(head.len() <= MAX_MEMORY_SIZE);
+        assert_eq!(head.len(), MAX_MEMORY_SIZE - 1);
+        assert!(head.bytes().all(|byte| byte == b'x'));
     }
 
     #[test]

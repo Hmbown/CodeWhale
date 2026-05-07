@@ -86,6 +86,9 @@ pub struct ToolContext {
     /// Elevated sandbox policy override (used when retrying after sandbox denial).
     /// This overrides the default sandbox behavior for shell commands.
     pub elevated_sandbox_policy: Option<crate::sandbox::SandboxPolicy>,
+    /// Optional user-facing hint for shell commands that fail because the
+    /// active sandbox policy intentionally denies outbound network access.
+    pub shell_network_denied_hint: Option<String>,
     /// Whether tools should auto-approve without safety checks (YOLO mode).
     /// When true, command safety analysis is skipped for shell execution.
     pub auto_approve: bool,
@@ -153,6 +156,7 @@ impl ToolContext {
             notes_path,
             mcp_config_path,
             elevated_sandbox_policy: None,
+            shell_network_denied_hint: None,
             auto_approve: false,
             features: Features::with_defaults(),
             state_namespace: "workspace".to_string(),
@@ -186,6 +190,7 @@ impl ToolContext {
             notes_path: notes_path.into(),
             mcp_config_path: mcp_config_path.into(),
             elevated_sandbox_policy: None,
+            shell_network_denied_hint: None,
             auto_approve: false,
             features: Features::with_defaults(),
             state_namespace: "workspace".to_string(),
@@ -219,6 +224,7 @@ impl ToolContext {
             notes_path: notes_path.into(),
             mcp_config_path: mcp_config_path.into(),
             elevated_sandbox_policy: None,
+            shell_network_denied_hint: None,
             auto_approve,
             features: Features::with_defaults(),
             state_namespace: "workspace".to_string(),
@@ -445,6 +451,12 @@ impl ToolContext {
     /// with elevated permissions.
     pub fn with_elevated_sandbox_policy(mut self, policy: crate::sandbox::SandboxPolicy) -> Self {
         self.elevated_sandbox_policy = Some(policy);
+        self
+    }
+
+    /// Set the shell network-denial hint used by network-restricted modes.
+    pub fn with_shell_network_denied_hint(mut self, hint: impl Into<String>) -> Self {
+        self.shell_network_denied_hint = Some(hint.into());
         self
     }
 

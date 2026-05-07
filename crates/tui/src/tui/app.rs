@@ -580,6 +580,7 @@ pub struct ViewportState {
     pub last_transcript_visible: usize,
     pub last_transcript_total: usize,
     pub last_transcript_padding_top: usize,
+    pub jump_to_latest_button_area: Option<Rect>,
 }
 
 impl Default for ViewportState {
@@ -595,6 +596,7 @@ impl Default for ViewportState {
             last_transcript_visible: 0,
             last_transcript_total: 0,
             last_transcript_padding_top: 0,
+            jump_to_latest_button_area: None,
         }
     }
 }
@@ -1079,6 +1081,15 @@ impl App {
         }
     }
 
+    pub(crate) fn clear_model_scoped_telemetry(&mut self) {
+        self.session.last_prompt_tokens = None;
+        self.session.last_completion_tokens = None;
+        self.session.last_prompt_cache_hit_tokens = None;
+        self.session.last_prompt_cache_miss_tokens = None;
+        self.session.last_reasoning_replay_tokens = None;
+        self.session.turn_cache_history.clear();
+    }
+
     pub fn tr(&self, id: MessageId) -> &'static str {
         tr(self.ui_locale, id)
     }
@@ -1146,7 +1157,14 @@ impl App {
         let sidebar_focus = SidebarFocus::from_setting(&settings.sidebar_focus);
         let max_input_history = settings.max_input_history;
         let use_paste_burst_detection = settings.paste_burst_detection;
-        let ui_theme = palette::UiTheme::detect();
+        let mut ui_theme = palette::UiTheme::detect();
+        if let Some(background) = settings
+            .background_color
+            .as_deref()
+            .and_then(palette::parse_hex_rgb_color)
+        {
+            ui_theme = ui_theme.with_background_color(background);
+        }
         let model = settings.default_model.clone().unwrap_or(model);
         let auto_model = model.trim().eq_ignore_ascii_case("auto");
         let threshold_model = if auto_model {
@@ -2453,6 +2471,7 @@ impl App {
         self.viewport.last_transcript_visible = 0;
         self.viewport.last_transcript_total = 0;
         self.viewport.last_transcript_padding_top = 0;
+        self.viewport.jump_to_latest_button_area = None;
 
         self.mark_history_updated();
     }
@@ -2711,6 +2730,7 @@ impl App {
     pub fn scroll_to_bottom(&mut self) {
         self.viewport.transcript_scroll = TranscriptScroll::to_bottom();
         self.viewport.pending_scroll_delta = 0;
+        self.viewport.jump_to_latest_button_area = None;
         self.user_scrolled_during_stream = false;
         self.needs_redraw = true;
     }
@@ -4293,6 +4313,7 @@ mod tests {
     #[test]
     fn recoverable_clear_stashes_nonempty_draft() {
         let mut app = App::new(test_options(false), &Config::default());
+        app.input_history.clear();
         app.input = "recover this".to_string();
         app.cursor_position = app.input.chars().count();
 

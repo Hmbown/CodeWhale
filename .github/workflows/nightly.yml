@@ -1,0 +1,111 @@
+name: Nightly
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -Dwarnings
+  DEEPSEEK_BUILD_SHA: ${{ github.sha }}
+
+jobs:
+  build:
+    name: Build ${{ matrix.artifact_name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary: deepseek
+            artifact_name: deepseek-linux-x64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            binary: deepseek
+            artifact_name: deepseek-linux-arm64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            binary: deepseek
+            artifact_name: deepseek-macos-x64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            binary: deepseek
+            artifact_name: deepseek-macos-arm64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: deepseek.exe
+            artifact_name: deepseek-windows-x64.exe
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary: deepseek-tui
+            artifact_name: deepseek-tui-linux-x64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            binary: deepseek-tui
+            artifact_name: deepseek-tui-linux-arm64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            binary: deepseek-tui
+            artifact_name: deepseek-tui-macos-x64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            binary: deepseek-tui
+            artifact_name: deepseek-tui-macos-arm64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: deepseek-tui.exe
+            artifact_name: deepseek-tui-windows-x64.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          for i in 1 2 3 4 5; do
+            sudo apt-get update && break
+            echo "apt-get update failed (attempt $i); retrying in 15s"
+            sleep 15
+          done
+          sudo apt-get install -y libdbus-1-dev pkg-config
+      - name: Build
+        shell: bash
+        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Stage artifact
+        id: stage
+        shell: bash
+        run: |
+          short_sha="${GITHUB_SHA::12}"
+          bin_path="target/${{ matrix.target }}/release/${{ matrix.binary }}"
+          if [ ! -f "${bin_path}" ]; then
+            echo "Binary not at ${bin_path}; searching target/ for ${{ matrix.binary }}:"
+            find target -name "${{ matrix.binary }}" -type f
+            exit 1
+          fi
+
+          mkdir -p nightly
+          cp "${bin_path}" "nightly/${{ matrix.artifact_name }}"
+          cat > nightly/nightly-build-info.txt <<INFO
+          repository=${GITHUB_REPOSITORY}
+          ref=${GITHUB_REF_NAME}
+          commit=${GITHUB_SHA}
+          artifact=${{ matrix.artifact_name }}
+          INFO
+          echo "name=${{ matrix.artifact_name }}-${short_sha}" >> "${GITHUB_OUTPUT}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.stage.outputs.name }}
+          path: nightly/*
+          retention-days: 14

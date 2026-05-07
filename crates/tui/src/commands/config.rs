@@ -44,7 +44,7 @@ pub fn show_config(_app: &mut App, arg: Option<&str>) -> CommandResult {
 /// - `/config tui` / `/config web` / `/config native` — open a specific
 ///   editor mode (web requires the `web` build feature).
 /// - `/config <key>` — shows the current value of a setting.
-/// - `/config <key> <value>` — sets a runtime value (session only, no --save).
+/// - `/config <key> <value>` — sets a runtime value (session only, add --save to persist).
 pub fn config_command(app: &mut App, arg: Option<&str>) -> CommandResult {
     let raw = arg.map(str::trim).unwrap_or("");
     if raw.is_empty() {
@@ -63,8 +63,18 @@ pub fn config_command(app: &mut App, arg: Option<&str>) -> CommandResult {
         // `/config <key>` — show current value
         show_single_setting(app, token)
     } else {
-        // `/config <key> <value>` — set value
-        set_config_value(app, parts[0], parts[1], false)
+        // `/config <key> <value> [--save|-s]` — set value, optionally persist
+        let raw_value = parts[1];
+        let persist = raw_value.ends_with(" --save") || raw_value.ends_with(" -s");
+        let value = if persist {
+            raw_value
+                .strip_suffix(" --save")
+                .or_else(|| raw_value.strip_suffix(" -s"))
+                .unwrap_or(raw_value)
+        } else {
+            raw_value
+        };
+        set_config_value(app, parts[0], value, persist)
     }
 }
 
@@ -110,6 +120,10 @@ fn show_single_setting(app: &App, key: &str) -> CommandResult {
         }
         "approval_mode" | "approval" => Some(app.approval_mode.label().to_string()),
         "locale" | "language" => Some(locale_display(app.ui_locale).to_string()),
+        "background_color" | "background" | "bg" => {
+            crate::palette::hex_rgb_string(app.ui_theme.surface_bg)
+                .or_else(|| Some("(default)".to_string()))
+        }
         "auto_compact" | "compact" => {
             Some(if app.auto_compact { "true" } else { "false" }.to_string())
         }
@@ -128,6 +142,13 @@ fn show_single_setting(app: &App, key: &str) -> CommandResult {
         "transcript_spacing" | "spacing" => {
             Some(spacing_display(app.transcript_spacing).to_string())
         }
+        "cost_currency" | "currency" => Some(
+            match app.cost_currency {
+                crate::pricing::CostCurrency::Usd => "usd",
+                crate::pricing::CostCurrency::Cny => "cny",
+            }
+            .to_string(),
+        ),
         _ => {
             let known = Settings::available_settings()
                 .iter()
@@ -367,6 +388,15 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
             app.ui_locale = resolve_locale(&settings.locale);
             app.needs_redraw = true;
         }
+        "background_color" | "background" | "bg" => {
+            let base_theme = crate::palette::UiTheme::detect();
+            app.ui_theme = settings
+                .background_color
+                .as_deref()
+                .and_then(crate::palette::parse_hex_rgb_color)
+                .map_or(base_theme, |color| base_theme.with_background_color(color));
+            app.needs_redraw = true;
+        }
         "cost_currency" | "currency" => {
             app.cost_currency = crate::pricing::CostCurrency::from_setting(&settings.cost_currency)
                 .unwrap_or(crate::pricing::CostCurrency::Usd);
@@ -427,6 +457,10 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
     let display_value = match key.as_str() {
         "default_mode" | "mode" => settings.default_mode.clone(),
         "cost_currency" | "currency" => settings.cost_currency.clone(),
+        "background_color" | "background" | "bg" => settings
+            .background_color
+            .clone()
+            .unwrap_or_else(|| "default".to_string()),
         _ => value.to_string(),
     };
 
@@ -1215,6 +1249,33 @@ mod tests {
         let settings_path = Settings::path().unwrap();
         let saved = fs::read_to_string(settings_path).unwrap();
         assert!(saved.contains("default_mode = \"agent\""));
+    }
+
+    #[test]
+    fn config_command_cost_currency_save_persists_value() {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "deepseek-tui-cost-currency-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root).unwrap();
+        let _guard = EnvGuard::new(&temp_root);
+
+        let mut app = create_test_app();
+        let result = config_command(&mut app, Some("cost_currency cny --save"));
+        let msg = result.message.unwrap();
+
+        assert_eq!(msg, "cost_currency = cny (saved)");
+        assert_eq!(app.cost_currency, crate::pricing::CostCurrency::Cny);
+
+        let settings_path = Settings::path().unwrap();
+        let saved = fs::read_to_string(settings_path).unwrap();
+        assert!(saved.contains("cost_currency = \"cny\""));
     }
 
     #[test]

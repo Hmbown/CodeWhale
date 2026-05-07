@@ -128,8 +128,17 @@ deepseek --version
 
 ### Windows (Scoop)
 
-Scoop manifest 还没有正式发布。现在请先使用 npm、Cargo，或者从
-[GitHub Releases](https://github.com/Hmbown/DeepSeek-TUI/releases) 下载 Windows 预编译二进制。
+[Scoop](https://scoop.sh) 是一个 Windows 软件包管理器。DeepSeek TUI 已进入
+Scoop main bucket，但该 manifest 独立更新，可能滞后于 GitHub/npm/Cargo
+release。先运行 `scoop update`，安装后用 `deepseek --version` 核对版本：
+
+```bash
+scoop update
+scoop install deepseek-tui
+deepseek --version
+```
+
+如果需要最新版本，请优先使用 npm 或直接下载 GitHub Release 资产。
 
 
 <details id="install-from-source">

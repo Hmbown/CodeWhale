@@ -26,6 +26,7 @@ chosen over the available shell equivalent. Companion to `crates/tui/src/prompts
 | `write_file` | Create or overwrite a file. |
 | `edit_file` | Search-and-replace inside a single file. Cheaper than a full rewrite. |
 | `apply_patch` | Apply a unified diff. The right tool for multi-hunk edits. |
+| `retrieve_tool_result` | Read summaries or slices of prior large tool outputs spilled to `~/.deepseek/tool_outputs/`; use `summary`, `head`, `tail`, `lines`, or `query` instead of replaying the whole result. |
 
 ### Search
 
@@ -142,6 +143,12 @@ See `agent.txt` for the delegation protocol and
 [`SUBAGENTS.md`](SUBAGENTS.md) for the role taxonomy
 (`general` / `explore` / `plan` / `review` / `implementer` /
 `verifier` / `custom`).
+
+`agent_spawn` defaults to a fresh child conversation. Pass
+`fork_context: true` for continuation-style work that should inherit the
+parent's system prompt and message prefix for DeepSeek prefix-cache reuse.
+The deprecated `delegate_to_agent` compatibility wrapper routes through
+`agent_spawn` and defaults `fork_context` to true.
 
 ### Parallel fan-out: cost-class caps
 

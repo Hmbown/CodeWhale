@@ -95,6 +95,7 @@ You can also set it ahead of time:
 
 ```bash
 deepseek auth set --provider deepseek   # saves to ~/.deepseek/config.toml
+deepseek auth status                    # shows the active credential source
 
 export DEEPSEEK_API_KEY="YOUR_KEY"      # env var alternative; use ~/.zshenv for non-interactive shells
 deepseek
@@ -103,9 +104,10 @@ deepseek doctor                         # verify setup
 ```
 
 If `deepseek doctor` says the rejected key came from `DEEPSEEK_API_KEY`, remove
-the stale export from your shell startup file, open a fresh shell, then run
-`deepseek auth set --provider deepseek`. Saved config keys take precedence over
-the environment and are easier to rotate.
+the stale export from your shell startup file, open a fresh shell, or run
+`deepseek auth set --provider deepseek`. Use `deepseek auth status` to see the
+config, keyring, and env-var source state without printing the key. Saved config
+keys take precedence over the keyring and environment and are easier to rotate.
 
 > To rotate or remove a saved key: `deepseek auth clear --provider deepseek`.
 
@@ -153,8 +155,19 @@ Prebuilt binaries can also be downloaded from [GitHub Releases](https://github.c
 
 ### Windows (Scoop)
 
-A Scoop manifest has not been published yet. For now, use npm, Cargo, or the
-prebuilt Windows binaries from [GitHub Releases](https://github.com/Hmbown/DeepSeek-TUI/releases).
+[Scoop](https://scoop.sh) is a Windows package manager. DeepSeek TUI is listed
+in Scoop's main bucket, but that manifest updates independently and can lag the
+GitHub/npm/Cargo release. Run `scoop update` first, then verify the installed
+version with `deepseek --version`:
+
+```bash
+scoop update
+scoop install deepseek-tui
+deepseek --version
+```
+
+Use npm or direct GitHub release downloads when you need the newest release
+before Scoop's manifest catches up.
 
 
 <details id="install-from-source">
@@ -189,6 +202,10 @@ deepseek --provider nvidia-nim
 deepseek auth set --provider fireworks --api-key "YOUR_FIREWORKS_API_KEY"
 deepseek --provider fireworks --model deepseek-v4-pro
 
+# Generic OpenAI-compatible endpoint
+deepseek auth set --provider openai --api-key "YOUR_OPENAI_COMPATIBLE_API_KEY"
+OPENAI_BASE_URL="https://openai-compatible.example/v4" deepseek --provider openai --model glm-5
+
 # Self-hosted SGLang
 SGLANG_BASE_URL="http://localhost:30000/v1" deepseek --provider sglang --model deepseek-v4-flash
 
@@ -202,18 +219,28 @@ deepseek --provider ollama --model deepseek-coder:1.3b
 
 ---
 
-## What's New In v0.8.15
+## What's New In v0.8.16
 
-A community-driven stabilization release focused on auth recovery, Windows
-terminals, Zed/ACP compatibility, setup friction, and clearer cost display.
+A focused hotfix for RLM, sub-agent visibility, and terminal ownership on top
+of v0.8.15.
 [Full changelog](CHANGELOG.md).
 
-- **Friendlier auth recovery** — runtime API-key failures now explain when the active key came only from `DEEPSEEK_API_KEY` and no saved config key is present
-- **Zed / ACP adapter** — `deepseek serve --acp` exposes a local stdio Agent Client Protocol server for Zed and other compatible editors
-- **Windows terminal fixes** — UTF-8 console setup, dispatcher resume handling, clipboard fallback, Ctrl+E composer behavior, and safer Windows mouse defaults
-- **Yuan cost display** — set `cost_currency = "cny"` (or `yuan` / `rmb`) to show footer, `/cost`, `/tokens`, and notification summaries in CNY
-- **Setup and skill polish** — workspace trust persists globally, plain Markdown `SKILL.md` files load correctly, global Agents/Cursor skill paths are discovered, and the TUI shows skills in slash autocomplete
-- **Reliability fixes** — workspace-scoped `resume --last`, capped API `max_tokens`, endpoint diagnostics in `deepseek doctor`, npm `--version` fallback, and current-date turn metadata
+- **RLM no longer has the old 180s wall-clock timeout** — long-input REPL work
+  can keep running while it is still making progress.
+- **RLM reports what happened** — output now includes input size, iteration
+  count, elapsed time, sub-LLM RPC count, and termination state.
+- **RLM chunking is safer for exact answers** — prompts require deterministic
+  Python for counts/aggregation and coverage reporting for whole-input chunks.
+- **Sub-agent visibility is more truthful** — `/subagents`, the transcript, and
+  the right rail include live progress and fanout workers instead of showing
+  false `No agents` or `No active tasks` states.
+- **Sub-agent cards are quieter** — internal scheduler lines are hidden while
+  useful tool activity remains visible.
+- **Sub-agent completion events stay internal** — the parent agent integrates
+  child results without explaining raw sentinel XML back to the user.
+- **Terminal ownership is hardened** — background sub-agents cannot take over
+  the parent terminal, and the TUI restores alternate-screen mode after
+  delegated work drains.
 
 ---
 
@@ -307,10 +334,12 @@ Key environment variables:
 | `DEEPSEEK_BASE_URL` | API base URL |
 | `DEEPSEEK_HTTP_HEADERS` | Optional custom model request headers, e.g. `X-Model-Provider-Id=your-model-provider` |
 | `DEEPSEEK_MODEL` | Default model |
-| `DEEPSEEK_PROVIDER` | `deepseek` (default), `nvidia-nim`, `fireworks`, `sglang`, `vllm`, `ollama` |
+| `DEEPSEEK_STREAM_IDLE_TIMEOUT_SECS` | Stream idle timeout in seconds, default `300`, clamped to `1..=3600` |
+| `DEEPSEEK_PROVIDER` | `deepseek` (default), `deepseek-cn`, `nvidia-nim`, `openai`, `openrouter`, `novita`, `fireworks`, `sglang`, `vllm`, `ollama` |
 | `DEEPSEEK_PROFILE` | Config profile name |
 | `DEEPSEEK_MEMORY` | Set to `on` to enable user memory |
-| `NVIDIA_API_KEY` / `FIREWORKS_API_KEY` / `SGLANG_API_KEY` / `VLLM_API_KEY` / `OLLAMA_API_KEY` | Provider auth |
+| `NVIDIA_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY` / `NOVITA_API_KEY` / `FIREWORKS_API_KEY` / `SGLANG_API_KEY` / `VLLM_API_KEY` / `OLLAMA_API_KEY` | Provider auth |
+| `OPENAI_BASE_URL` / `OPENAI_MODEL` | Generic OpenAI-compatible endpoint and model ID |
 | `SGLANG_BASE_URL` | Self-hosted SGLang endpoint |
 | `VLLM_BASE_URL` | Self-hosted vLLM endpoint |
 | `OLLAMA_BASE_URL` | Self-hosted Ollama endpoint |
@@ -318,7 +347,7 @@ Key environment variables:
 | `NO_ANIMATIONS=1` | Force accessibility mode at startup |
 | `SSL_CERT_FILE` | Custom CA bundle for corporate proxies |
 
-UI locale is separate from model language — set `locale` in `settings.toml`, use `/config locale zh-Hans`, or rely on `LC_ALL`/`LANG`. See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) and [docs/MCP.md](docs/MCP.md).
+Set `locale` in `settings.toml`, use `/config locale zh-Hans`, or rely on `LC_ALL`/`LANG` to choose UI chrome and the default natural language sent to V4 models. See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) and [docs/MCP.md](docs/MCP.md).
 
 ---
 

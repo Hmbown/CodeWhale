@@ -442,9 +442,10 @@ impl SessionManager {
         workspace: &Path,
     ) -> std::io::Result<Option<SessionMetadata>> {
         let sessions = self.list_sessions()?;
-        Ok(sessions
-            .into_iter()
-            .find(|session| workspace_scope_matches(&session.workspace, workspace)))
+        Ok(sessions.into_iter().find(|session| {
+            workspace_scope_matches(&session.workspace, workspace)
+                && !is_empty_auto_created_session(session)
+        }))
     }
 
     /// Search sessions by title
@@ -459,7 +460,7 @@ impl SessionManager {
     }
 }
 
-fn workspace_scope_matches(saved_workspace: &Path, current_workspace: &Path) -> bool {
+pub(crate) fn workspace_scope_matches(saved_workspace: &Path, current_workspace: &Path) -> bool {
     if paths_equivalent(saved_workspace, current_workspace) {
         return true;
     }
@@ -471,6 +472,10 @@ fn workspace_scope_matches(saved_workspace: &Path, current_workspace: &Path) -> 
         (Some(saved_root), Some(current_root)) => paths_equivalent(&saved_root, &current_root),
         _ => false,
     }
+}
+
+fn is_empty_auto_created_session(session: &SessionMetadata) -> bool {
+    session.message_count == 0 && session.title.trim().eq_ignore_ascii_case("New Session")
 }
 
 fn paths_equivalent(lhs: &Path, rhs: &Path) -> bool {
@@ -849,6 +854,32 @@ mod tests {
         manager.save_session(&session).expect("save");
     }
 
+    fn write_empty_session_record(
+        manager: &SessionManager,
+        id: &str,
+        workspace: &Path,
+        updated_at: DateTime<Utc>,
+    ) {
+        let session = SavedSession {
+            schema_version: CURRENT_SESSION_SCHEMA_VERSION,
+            messages: Vec::new(),
+            metadata: SessionMetadata {
+                id: id.to_string(),
+                title: "New Session".to_string(),
+                created_at: updated_at,
+                updated_at,
+                message_count: 0,
+                total_tokens: 0,
+                model: "deepseek-v4-pro".to_string(),
+                workspace: workspace.to_path_buf(),
+                mode: Some("yolo".to_string()),
+            },
+            system_prompt: None,
+            context_references: Vec::new(),
+        };
+        manager.save_session(&session).expect("save empty");
+    }
+
     #[test]
     fn test_session_manager_new() {
         let tmp = tempdir().expect("tempdir");
@@ -951,6 +982,36 @@ mod tests {
             .expect("latest for workspace")
             .expect("same repo latest");
         assert_eq!(scoped.id, "same-repo");
+    }
+
+    #[test]
+    fn latest_session_for_workspace_skips_empty_auto_created_session() {
+        let tmp = tempdir().expect("tempdir");
+        let manager = SessionManager::new(tmp.path().join("sessions")).expect("new");
+        let workspace = tmp.path().join("repo");
+        fs::create_dir_all(&workspace).expect("mkdir workspace");
+
+        write_session_record(
+            &manager,
+            "interrupted-user-turn",
+            &workspace,
+            Utc::now() - chrono::Duration::minutes(5),
+        );
+        write_empty_session_record(&manager, "empty-auto-shell", &workspace, Utc::now());
+
+        let global = manager
+            .list_sessions()
+            .expect("list")
+            .into_iter()
+            .next()
+            .expect("global latest");
+        assert_eq!(global.id, "empty-auto-shell");
+
+        let scoped = manager
+            .get_latest_session_for_workspace(&workspace)
+            .expect("latest for workspace")
+            .expect("scoped latest");
+        assert_eq!(scoped.id, "interrupted-user-turn");
     }
 
     #[test]
@@ -1059,6 +1120,30 @@ mod tests {
                 .expect("load checkpoint")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn workspace_scope_matches_subdirectories_in_same_git_checkout() {
+        let tmp = tempdir().expect("tempdir");
+        let repo = tmp.path().join("repo");
+        let nested = repo.join("crates").join("tui");
+        fs::create_dir_all(&nested).expect("mkdir nested");
+        fs::write(repo.join(".git"), "gitdir: .git/worktrees/repo").expect("write git marker");
+
+        assert!(workspace_scope_matches(&repo, &nested));
+    }
+
+    #[test]
+    fn workspace_scope_rejects_sibling_git_checkouts() {
+        let tmp = tempdir().expect("tempdir");
+        let first = tmp.path().join("repo-a");
+        let second = tmp.path().join("repo-b");
+        fs::create_dir_all(&first).expect("mkdir first");
+        fs::create_dir_all(&second).expect("mkdir second");
+        fs::write(first.join(".git"), "gitdir: .git/worktrees/a").expect("write first marker");
+        fs::write(second.join(".git"), "gitdir: .git/worktrees/b").expect("write second marker");
+
+        assert!(!workspace_scope_matches(&first, &second));
     }
 
     #[test]

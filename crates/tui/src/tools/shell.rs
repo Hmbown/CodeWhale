@@ -109,6 +109,7 @@ pub struct ShellJobDetail {
 }
 
 pub struct ShellDeltaResult {
+    pub command: String,
     pub result: ShellResult,
     pub stdout_total_len: usize,
     pub stderr_total_len: usize,
@@ -1206,6 +1207,7 @@ impl ShellManager {
         let (stderr, stderr_meta) = truncate_with_meta(&stderr_delta);
         let sandboxed = !matches!(shell.sandbox_type, SandboxType::None);
 
+        let command = shell.command.clone();
         let result = ShellResult {
             task_id: Some(shell.id.clone()),
             status: shell.status.clone(),
@@ -1229,6 +1231,7 @@ impl ShellManager {
         };
 
         Ok(ShellDeltaResult {
+            command,
             result,
             stdout_total_len: stdout_total,
             stderr_total_len: stderr_total,
@@ -1409,7 +1412,7 @@ pub fn new_shared_shell_manager(workspace: PathBuf) -> SharedShellManager {
 
 // === ToolSpec Implementations ===
 
-use crate::command_safety::{SafetyLevel, analyze_command};
+use crate::command_safety::{SafetyLevel, analyze_command, extract_primary_command};
 use crate::execpolicy::{ExecPolicyDecision, load_default_policy};
 use crate::features::Feature;
 use crate::tools::spec::{
@@ -1422,6 +1425,99 @@ use serde_json::json;
 const FOREGROUND_TIMEOUT_RECOVERY_HINT: &str = "Foreground exec_shell is for bounded commands. \
 The timed-out process was killed; rerun long work with task_shell_start or exec_shell with \
 background: true, then poll with task_shell_wait or exec_shell_wait.";
+
+fn command_likely_needs_network(command: &str) -> bool {
+    let normalized = command.to_ascii_lowercase();
+    let Some(primary) = extract_primary_command(&normalized) else {
+        return false;
+    };
+    let primary = primary.rsplit(['/', '\\']).next().unwrap_or(primary);
+
+    match primary {
+        "curl" | "wget" | "fetch" | "nc" | "netcat" | "ncat" | "ssh" | "scp" | "sftp" | "rsync"
+        | "ftp" | "ping" | "traceroute" | "nslookup" | "dig" | "host" | "nmap" | "gh" | "hub" => {
+            true
+        }
+        "git" => [
+            " fetch",
+            " pull",
+            " clone",
+            " ls-remote",
+            " submodule",
+            " push",
+        ]
+        .iter()
+        .any(|needle| normalized.contains(needle)),
+        "cargo" => [" install", " fetch", " update", " publish", " search"]
+            .iter()
+            .any(|needle| normalized.contains(needle)),
+        "npm" | "pnpm" | "yarn" => [" install", " i", " add", " update", " publish"]
+            .iter()
+            .any(|needle| normalized.contains(needle)),
+        "pip" | "pip3" | "uv" | "poetry" => [" install", " add", " sync", " update"]
+            .iter()
+            .any(|needle| normalized.contains(needle)),
+        "brew" | "apt" | "apt-get" | "yum" | "dnf" | "pacman" => true,
+        "go" => [" get", " install", " mod download"]
+            .iter()
+            .any(|needle| normalized.contains(needle)),
+        _ => false,
+    }
+}
+
+fn looks_like_network_blocked_failure(result: &ShellResult) -> bool {
+    if matches!(result.status, ShellStatus::Completed | ShellStatus::Running)
+        || result.exit_code == Some(0)
+    {
+        return false;
+    }
+
+    if result.stdout.trim() == "000" {
+        return true;
+    }
+    if result.sandboxed && result.stdout.is_empty() && result.stderr.is_empty() {
+        return true;
+    }
+
+    let output = format!("{}\n{}", result.stdout, result.stderr).to_ascii_lowercase();
+    [
+        "operation not permitted",
+        "network is unreachable",
+        "could not resolve host",
+        "couldn't resolve host",
+        "failed to resolve",
+        "temporary failure in name resolution",
+        "name or service not known",
+        "nodename nor servname provided",
+        "no address associated",
+        "failed to connect",
+        "couldn't connect",
+        "connection timed out",
+        "connection reset",
+    ]
+    .iter()
+    .any(|pattern| output.contains(pattern))
+}
+
+fn shell_network_restricted_hint<'a>(
+    context: &'a ToolContext,
+    command: &str,
+    result: &ShellResult,
+) -> Option<&'a str> {
+    let hint = context.shell_network_denied_hint.as_deref()?;
+    let policy_blocks_network = context
+        .elevated_sandbox_policy
+        .as_ref()
+        .is_some_and(|policy| !policy.has_network_access());
+    if !policy_blocks_network || !command_likely_needs_network(command) {
+        return None;
+    }
+    if result.sandbox_denied || looks_like_network_blocked_failure(result) {
+        Some(hint)
+    } else {
+        None
+    }
+}
 
 async fn execute_foreground_via_background(
     context: &ToolContext,
@@ -1843,7 +1939,9 @@ impl ToolSpec for ExecShellTool {
                 } else {
                     stdout_summary.clone()
                 };
-                let output = if interactive {
+                let network_restricted_hint =
+                    shell_network_restricted_hint(context, command, &result).map(str::to_string);
+                let mut output = if interactive {
                     format!(
                         "Interactive command completed (exit code: {:?})",
                         result.exit_code
@@ -1880,6 +1978,9 @@ impl ToolSpec for ExecShellTool {
                         result.exit_code, result.stdout, result.stderr
                     )
                 };
+                if let Some(hint) = network_restricted_hint.as_deref() {
+                    output = format!("{hint}\n\n{output}");
+                }
 
                 let mut metadata = json!({
                     "exit_code": result.exit_code,
@@ -1930,6 +2031,10 @@ impl ToolSpec for ExecShellTool {
                         "poll_with": ["task_shell_wait", "exec_shell_wait"]
                     });
                 }
+                if let Some(hint) = network_restricted_hint {
+                    metadata["sandbox_network_restricted"] = json!(true);
+                    metadata["sandbox_network_denied_hint"] = json!(hint);
+                }
 
                 Ok(ToolResult {
                     content: output,
@@ -1971,8 +2076,10 @@ fn required_task_id(input: &serde_json::Value) -> Result<&str, ToolError> {
         .ok_or_else(|| ToolError::missing_field("task_id"))
 }
 
-fn build_shell_delta_tool_result(delta: ShellDeltaResult) -> ToolResult {
+fn build_shell_delta_tool_result(delta: ShellDeltaResult, context: &ToolContext) -> ToolResult {
     let result = delta.result;
+    let network_restricted_hint =
+        shell_network_restricted_hint(context, &delta.command, &result).map(str::to_string);
     let stdout_summary = summarize_output(&result.stdout);
     let stderr_summary = summarize_output(&result.stderr);
     let summary = if !stderr_summary.is_empty() {
@@ -1981,7 +2088,7 @@ fn build_shell_delta_tool_result(delta: ShellDeltaResult) -> ToolResult {
         stdout_summary.clone()
     };
 
-    let output = if result.stdout.is_empty() && result.stderr.is_empty() {
+    let mut output = if result.stdout.is_empty() && result.stderr.is_empty() {
         match result.status {
             ShellStatus::Running => "Background task running (no new output).".to_string(),
             ShellStatus::Completed => "(no new output)".to_string(),
@@ -1994,8 +2101,11 @@ fn build_shell_delta_tool_result(delta: ShellDeltaResult) -> ToolResult {
     } else {
         format!("{}\n\nSTDERR:\n{}", result.stdout, result.stderr)
     };
+    if let Some(hint) = network_restricted_hint.as_deref() {
+        output = format!("{hint}\n\n{output}");
+    }
 
-    ToolResult {
+    let mut tool_result = ToolResult {
         content: output,
         success: matches!(result.status, ShellStatus::Completed | ShellStatus::Running),
         metadata: Some(json!({
@@ -2019,7 +2129,15 @@ fn build_shell_delta_tool_result(delta: ShellDeltaResult) -> ToolResult {
             "stderr_summary": stderr_summary,
             "stream_delta": true,
         })),
+    };
+    if let Some(hint) = network_restricted_hint
+        && let Some(metadata) = tool_result.metadata.as_mut()
+        && let Some(object) = metadata.as_object_mut()
+    {
+        object.insert("sandbox_network_restricted".to_string(), json!(true));
+        object.insert("sandbox_network_denied_hint".to_string(), json!(hint));
     }
+    tool_result
 }
 
 async fn wait_for_shell_delta_cancellable(
@@ -2032,7 +2150,7 @@ async fn wait_for_shell_delta_cancellable(
     let mut stdout_accum = String::new();
     let mut stderr_accum = String::new();
 
-    let (result, stdout_total_len, stderr_total_len) = loop {
+    let (command, result, stdout_total_len, stderr_total_len) = loop {
         if context
             .cancel_token
             .as_ref()
@@ -2048,6 +2166,7 @@ async fn wait_for_shell_delta_cancellable(
             append_shell_delta_output(&mut stdout_accum, &mut stderr_accum, &delta.result);
             return Ok((
                 shell_delta_with_accumulated_output(
+                    delta.command,
                     delta.result,
                     &stdout_accum,
                     &stderr_accum,
@@ -2070,11 +2189,12 @@ async fn wait_for_shell_delta_cancellable(
 
         let stdout_total_len = delta.stdout_total_len;
         let stderr_total_len = delta.stderr_total_len;
+        let command = delta.command.clone();
         append_shell_delta_output(&mut stdout_accum, &mut stderr_accum, &delta.result);
 
         let status = delta.result.status.clone();
         if status != ShellStatus::Running || Instant::now() >= deadline {
-            break (delta.result, stdout_total_len, stderr_total_len);
+            break (command, delta.result, stdout_total_len, stderr_total_len);
         }
 
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -2082,6 +2202,7 @@ async fn wait_for_shell_delta_cancellable(
 
     Ok((
         shell_delta_with_accumulated_output(
+            command,
             result,
             &stdout_accum,
             &stderr_accum,
@@ -2106,6 +2227,7 @@ fn append_shell_delta_output(
 }
 
 fn shell_delta_with_accumulated_output(
+    command: String,
     mut result: ShellResult,
     stdout_accum: &str,
     stderr_accum: &str,
@@ -2124,6 +2246,7 @@ fn shell_delta_with_accumulated_output(
     result.stderr_truncated = stderr_meta.truncated;
 
     ShellDeltaResult {
+        command,
         result,
         stdout_total_len,
         stderr_total_len,
@@ -2300,7 +2423,7 @@ impl ToolSpec for ShellWaitTool {
         };
 
         let status = delta.result.status.clone();
-        let mut result = build_shell_delta_tool_result(delta);
+        let mut result = build_shell_delta_tool_result(delta, context);
         if wait_canceled {
             if matches!(status, ShellStatus::Running) {
                 result.content = format!(
@@ -2411,7 +2534,7 @@ impl ToolSpec for ShellInteractTool {
                 let delta = manager
                     .get_output_delta(task_id, false, 0)
                     .map_err(|err| ToolError::execution_failed(err.to_string()))?;
-                let mut result = build_shell_delta_tool_result(delta);
+                let mut result = build_shell_delta_tool_result(delta, context);
                 if let Some(metadata) = result.metadata.as_mut()
                     && let Some(object) = metadata.as_object_mut()
                 {
@@ -2435,7 +2558,7 @@ impl ToolSpec for ShellInteractTool {
                 || delta.result.status != ShellStatus::Running
                 || elapsed >= timeout_ms
             {
-                return Ok(build_shell_delta_tool_result(delta));
+                return Ok(build_shell_delta_tool_result(delta, context));
             }
 
             tokio::time::sleep(Duration::from_millis(50)).await;

@@ -12,6 +12,8 @@
 
 use serde_json::{Map, Value};
 
+use crate::models::Tool;
+
 /// Sanitize a JSON Schema in-place for DeepSeek strict-tool compatibility.
 ///
 /// Applies a sequence of normalisations chosen to be semantics-preserving:
@@ -35,6 +37,66 @@ pub fn sanitize(schema: &mut Value) {
             sanitize(v);
         }
     }
+}
+
+/// Prepare a complete active tool set for DeepSeek strict function-calling.
+///
+/// Returns `false` and leaves the tools in non-strict mode when any root schema
+/// uses conditional alternatives (`anyOf`, `oneOf`, or `allOf`). DeepSeek's
+/// strict object rules make every property required, so forcing strict mode on
+/// root-alternative tools such as `apply_patch` or `finance` would either 400 or
+/// change their semantics. In that case callers should keep the normal
+/// best-effort schema and may still use `tool_choice = "required"`.
+pub fn prepare_tools_for_strict_mode(tools: &mut [Tool]) -> bool {
+    if tools
+        .iter()
+        .any(|tool| !strict_schema_supported(&tool.input_schema))
+    {
+        for tool in tools {
+            tool.strict = None;
+        }
+        return false;
+    }
+
+    for tool in tools {
+        sanitize_for_strict(&mut tool.input_schema);
+        tool.strict = Some(true);
+    }
+    true
+}
+
+/// Sanitize a schema for DeepSeek strict function-calling.
+///
+/// This extends the general sanitizer with the official strict-mode object
+/// rules: every object must set `additionalProperties: false`, and every
+/// property must be listed in `required`.
+pub fn sanitize_for_strict(schema: &mut Value) {
+    sanitize(schema);
+    enforce_strict_subset(schema);
+}
+
+fn strict_schema_supported(schema: &Value) -> bool {
+    let mut normalized = schema.clone();
+    sanitize(&mut normalized);
+    !has_strict_incompatible_composition(&normalized, true)
+}
+
+fn has_strict_incompatible_composition(schema: &Value, is_root: bool) -> bool {
+    if let Some(obj) = schema.as_object() {
+        if obj.contains_key("oneOf") || obj.contains_key("allOf") {
+            return true;
+        }
+        if is_root && obj.contains_key("anyOf") {
+            return true;
+        }
+        return obj
+            .values()
+            .any(|value| has_strict_incompatible_composition(value, false));
+    }
+    schema.as_array().is_some_and(|arr| {
+        arr.iter()
+            .any(|value| has_strict_incompatible_composition(value, false))
+    })
 }
 
 /// Collapse `{"anyOf":[X, {"type":"null"}]}` → `X ∪ {"nullable": true}`.
@@ -133,6 +195,59 @@ fn collapse_single_element_unions(schema: &mut Value) {
             }
         }
     }
+}
+
+fn enforce_strict_subset(schema: &mut Value) {
+    if let Some(obj) = schema.as_object_mut() {
+        strip_unsupported_strict_keywords(obj);
+        if is_object_schema(obj) {
+            let mut property_names: Vec<Value> = ensure_properties_object(obj)
+                .keys()
+                .cloned()
+                .map(Value::String)
+                .collect();
+            property_names.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
+            obj.insert("required".into(), Value::Array(property_names));
+            obj.insert("additionalProperties".into(), Value::Bool(false));
+        }
+
+        for value in obj.values_mut() {
+            enforce_strict_subset(value);
+        }
+    } else if let Some(arr) = schema.as_array_mut() {
+        for value in arr {
+            enforce_strict_subset(value);
+        }
+    }
+}
+
+fn strip_unsupported_strict_keywords(obj: &mut Map<String, Value>) {
+    obj.remove("patternProperties");
+    match obj.get("type").and_then(Value::as_str) {
+        Some("string") => {
+            obj.remove("minLength");
+            obj.remove("maxLength");
+        }
+        Some("array") => {
+            obj.remove("minItems");
+            obj.remove("maxItems");
+        }
+        _ => {}
+    }
+}
+
+fn is_object_schema(obj: &Map<String, Value>) -> bool {
+    obj.get("type").and_then(Value::as_str) == Some("object") || obj.contains_key("properties")
+}
+
+fn ensure_properties_object(obj: &mut Map<String, Value>) -> &mut Map<String, Value> {
+    let needs_replacement = !matches!(obj.get("properties"), Some(Value::Object(_)));
+    if needs_replacement {
+        obj.insert("properties".into(), Value::Object(Map::new()));
+    }
+    obj.get_mut("properties")
+        .and_then(Value::as_object_mut)
+        .expect("properties was just ensured as object")
 }
 
 #[cfg(test)]
@@ -321,5 +436,171 @@ mod tests {
         let after_first = schema.clone();
         sanitize(&mut schema);
         assert_eq!(schema, after_first, "sanitize must be idempotent");
+    }
+
+    #[test]
+    fn strict_sanitize_requires_all_object_properties_and_closes_extra_keys() {
+        let mut schema = json!({
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "count": {"type": "integer"}
+            },
+            "required": ["name"],
+            "additionalProperties": {"type": "string"}
+        });
+
+        sanitize_for_strict(&mut schema);
+
+        assert_eq!(schema["additionalProperties"], false);
+        assert_eq!(schema["required"], json!(["count", "name"]));
+    }
+
+    #[test]
+    fn strict_sanitize_applies_object_rules_recursively() {
+        let mut schema = json!({
+            "type": "object",
+            "properties": {
+                "outer": {
+                    "type": "object",
+                    "properties": {
+                        "inner": {"type": "string"}
+                    },
+                    "required": []
+                }
+            },
+            "required": []
+        });
+
+        sanitize_for_strict(&mut schema);
+
+        assert_eq!(schema["required"], json!(["outer"]));
+        assert_eq!(schema["additionalProperties"], false);
+        assert_eq!(schema["properties"]["outer"]["required"], json!(["inner"]));
+        assert_eq!(schema["properties"]["outer"]["additionalProperties"], false);
+    }
+
+    #[test]
+    fn strict_sanitize_removes_unsupported_string_and_array_bounds() {
+        let mut schema = json!({
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64,
+                    "pattern": "^[a-z]+$"
+                },
+                "items": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 5,
+                    "items": {"type": "string"}
+                },
+                "score": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 5
+                }
+            }
+        });
+
+        sanitize_for_strict(&mut schema);
+
+        let name = &schema["properties"]["name"];
+        assert!(name.get("minLength").is_none());
+        assert!(name.get("maxLength").is_none());
+        assert_eq!(name["pattern"], "^[a-z]+$");
+
+        let items = &schema["properties"]["items"];
+        assert!(items.get("minItems").is_none());
+        assert!(items.get("maxItems").is_none());
+
+        let score = &schema["properties"]["score"];
+        assert_eq!(score["minimum"], 1);
+        assert_eq!(score["maximum"], 5);
+    }
+
+    #[test]
+    fn strict_mode_rejects_root_composition_for_whole_tool_set() {
+        let mut tools = vec![Tool {
+            tool_type: None,
+            name: "either".to_string(),
+            description: "Either input shape".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "a": {"type": "string"},
+                    "b": {"type": "string"}
+                },
+                "anyOf": [
+                    {"required": ["a"]},
+                    {"required": ["b"]}
+                ]
+            }),
+            allowed_callers: None,
+            defer_loading: None,
+            input_examples: None,
+            strict: Some(true),
+            cache_control: None,
+        }];
+
+        assert!(!prepare_tools_for_strict_mode(&mut tools));
+        assert_eq!(tools[0].strict, None);
+        assert!(tools[0].input_schema.get("anyOf").is_some());
+    }
+
+    #[test]
+    fn strict_mode_rejects_nested_unsupported_composition() {
+        let mut tools = vec![Tool {
+            tool_type: None,
+            name: "nested".to_string(),
+            description: "Nested oneOf".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "value": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {"type": "integer"}
+                        ]
+                    }
+                }
+            }),
+            allowed_callers: None,
+            defer_loading: None,
+            input_examples: None,
+            strict: None,
+            cache_control: None,
+        }];
+
+        assert!(!prepare_tools_for_strict_mode(&mut tools));
+        assert_eq!(tools[0].strict, None);
+    }
+
+    #[test]
+    fn strict_mode_marks_compatible_tools_strict() {
+        let mut tools = vec![Tool {
+            tool_type: None,
+            name: "lookup".to_string(),
+            description: "Lookup".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"}
+                },
+                "required": []
+            }),
+            allowed_callers: None,
+            defer_loading: None,
+            input_examples: None,
+            strict: None,
+            cache_control: None,
+        }];
+
+        assert!(prepare_tools_for_strict_mode(&mut tools));
+        assert_eq!(tools[0].strict, Some(true));
+        assert_eq!(tools[0].input_schema["required"], json!(["query"]));
+        assert_eq!(tools[0].input_schema["additionalProperties"], false);
     }
 }

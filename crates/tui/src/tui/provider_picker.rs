@@ -88,6 +88,7 @@ impl ProviderPickerView {
         match provider {
             ApiProvider::Deepseek | ApiProvider::DeepseekCN => "DEEPSEEK_API_KEY",
             ApiProvider::NvidiaNim => "NVIDIA_API_KEY",
+            ApiProvider::Openai => "OPENAI_API_KEY",
             ApiProvider::Openrouter => "OPENROUTER_API_KEY",
             ApiProvider::Novita => "NOVITA_API_KEY",
             ApiProvider::Fireworks => "FIREWORKS_API_KEY",
@@ -366,6 +367,17 @@ mod tests {
         KeyEvent::new(code, KeyModifiers::NONE)
     }
 
+    fn move_to_provider(picker: &mut ProviderPickerView, provider: ApiProvider) {
+        let max_steps = picker.providers.len();
+        for _ in 0..max_steps {
+            if picker.selected_provider() == provider {
+                return;
+            }
+            picker.handle_key(key(KeyCode::Down));
+        }
+        panic!("provider {provider:?} not found in picker");
+    }
+
     #[test]
     fn picker_lists_all_providers() {
         let config = Config::default();
@@ -381,6 +393,7 @@ mod tests {
                 "DeepSeek",
                 "DeepSeek (中国)",
                 "NVIDIA NIM",
+                "OpenAI-compatible",
                 "OpenRouter",
                 "Novita AI",
                 "Fireworks AI",
@@ -395,9 +408,7 @@ mod tests {
     fn ollama_is_selectable_without_key() {
         let config = Config::default();
         let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
-        for _ in 0..8 {
-            picker.handle_key(key(KeyCode::Down));
-        }
+        move_to_provider(&mut picker, ApiProvider::Ollama);
         assert_eq!(picker.selected_provider(), ApiProvider::Ollama);
         assert!(picker.selected_has_key());
         let action = picker.handle_key(key(KeyCode::Enter));
@@ -421,10 +432,8 @@ mod tests {
     fn enter_with_no_key_transitions_to_key_entry_stage() {
         let config = Config::default();
         let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
-        // Move to OpenRouter (index 3), which has no key in default config.
-        picker.handle_key(key(KeyCode::Down));
-        picker.handle_key(key(KeyCode::Down));
-        picker.handle_key(key(KeyCode::Down));
+        // Move to OpenRouter, which has no key in default config.
+        move_to_provider(&mut picker, ApiProvider::Openrouter);
         assert_eq!(picker.selected_provider(), ApiProvider::Openrouter);
         let action = picker.handle_key(key(KeyCode::Enter));
         assert!(matches!(action, ViewAction::None));
@@ -454,10 +463,8 @@ mod tests {
     fn key_entry_enter_submits_after_typing() {
         let config = Config::default();
         let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
-        // Navigate to Novita (index 4) and trigger key entry.
-        for _ in 0..4 {
-            picker.handle_key(key(KeyCode::Down));
-        }
+        // Navigate to Novita and trigger key entry.
+        move_to_provider(&mut picker, ApiProvider::Novita);
         picker.handle_key(key(KeyCode::Enter));
         assert_eq!(picker.stage, Stage::KeyEntry);
         for c in "novita-key".chars() {
@@ -480,9 +487,7 @@ mod tests {
     fn key_entry_esc_returns_to_list_without_emitting() {
         let config = Config::default();
         let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
-        picker.handle_key(key(KeyCode::Down));
-        picker.handle_key(key(KeyCode::Down));
-        picker.handle_key(key(KeyCode::Down));
+        move_to_provider(&mut picker, ApiProvider::Openrouter);
         picker.handle_key(key(KeyCode::Enter));
         assert_eq!(picker.stage, Stage::KeyEntry);
         picker.handle_key(key(KeyCode::Char('a')));
@@ -504,9 +509,7 @@ mod tests {
     fn key_entry_strips_whitespace_chars() {
         let config = Config::default();
         let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
-        picker.handle_key(key(KeyCode::Down));
-        picker.handle_key(key(KeyCode::Down));
-        picker.handle_key(key(KeyCode::Down));
+        move_to_provider(&mut picker, ApiProvider::Openrouter);
         picker.handle_key(key(KeyCode::Enter));
         assert_eq!(picker.stage, Stage::KeyEntry);
         for c in "abc def".chars() {

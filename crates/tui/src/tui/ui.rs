@@ -20,7 +20,7 @@ use ratatui::{
     Frame, Terminal,
     layout::{Constraint, Direction, Layout, Rect},
     prelude::Widget,
-    style::{Color, Style},
+    style::Style,
     text::Span,
     widgets::Block,
 };
@@ -82,6 +82,7 @@ use crate::tui::tool_routing::{
 };
 use crate::tui::ui_text::{history_cell_to_text, line_to_plain, slice_text, text_display_width};
 use crate::tui::user_input::UserInputView;
+use crate::tui::views::subagent_view_agents;
 
 use super::active_cell::ActiveCell;
 use super::app::{
@@ -269,40 +270,13 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
 
         match load_result {
             Ok(Some(saved)) => {
-                app.api_messages.clone_from(&saved.messages);
-                app.model.clone_from(&saved.metadata.model);
-                app.update_model_compaction_budget();
-                app.workspace.clone_from(&saved.metadata.workspace);
-                app.current_session_id = Some(saved.metadata.id.clone());
-                app.session.total_tokens =
-                    u32::try_from(saved.metadata.total_tokens).unwrap_or(u32::MAX);
-                app.session.total_conversation_tokens = app.session.total_tokens;
-                app.session.last_prompt_tokens = None;
-                app.session.last_completion_tokens = None;
-                app.session.last_prompt_cache_hit_tokens = None;
-                app.session.last_prompt_cache_miss_tokens = None;
-                app.session.last_reasoning_replay_tokens = None;
-                if let Some(prompt) = saved.system_prompt {
-                    app.system_prompt = Some(SystemPrompt::Text(prompt));
+                let recovered = apply_loaded_session(&mut app, &saved);
+                if !recovered {
+                    app.status_message = Some(format!(
+                        "Resumed session: {}",
+                        crate::session_manager::truncate_id(&saved.metadata.id)
+                    ));
                 }
-                // Convert saved messages to HistoryCell format for display
-                app.clear_history();
-                app.push_history_cell(HistoryCell::System {
-                    content: format!(
-                        "Resumed session: {} ({})",
-                        saved.metadata.title,
-                        crate::session_manager::truncate_id(&saved.metadata.id),
-                    ),
-                });
-
-                for msg in &saved.messages {
-                    app.extend_history(history_cells_from_message(msg));
-                }
-                app.mark_history_updated();
-                app.status_message = Some(format!(
-                    "Resumed session: {}",
-                    crate::session_manager::truncate_id(&saved.metadata.id)
-                ));
             }
             Ok(None) => {
                 app.status_message = Some("No sessions found to resume".to_string());
@@ -329,7 +303,10 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
                         .into_iter()
                         .map(queued_session_to_ui)
                         .collect();
-                    app.queued_draft = state.draft.map(queued_session_to_ui);
+                    let restored_draft = state.draft.map(queued_session_to_ui);
+                    if restored_draft.is_some() || app.queued_draft.is_none() {
+                        app.queued_draft = restored_draft;
+                    }
                     if app.status_message.is_none() && app.queued_message_count() > 0 {
                         app.status_message = Some(format!(
                             "Restored {} queued message(s) from previous session — ↑ to edit, Ctrl+X to discard",
@@ -582,6 +559,8 @@ async fn refresh_active_task_panel(app: &mut App, task_manager: &SharedTaskManag
         .map(task_summary_to_panel_entry)
         .collect();
 
+    entries.extend(active_rlm_task_entries(app));
+
     if let Some(shell_mgr) = app.runtime_services.shell_manager.as_ref()
         && let Ok(mut mgr) = shell_mgr.lock()
     {
@@ -599,6 +578,39 @@ async fn refresh_active_task_panel(app: &mut App, task_manager: &SharedTaskManag
     }
 
     app.task_panel = entries;
+}
+
+fn active_rlm_task_entries(app: &App) -> Vec<TaskPanelEntry> {
+    let Some(active) = app.active_cell.as_ref() else {
+        return Vec::new();
+    };
+    let duration_ms = app
+        .turn_started_at
+        .map(|started| u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX));
+    active
+        .entries()
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, entry)| {
+            let HistoryCell::Tool(ToolCell::Generic(generic)) = entry else {
+                return None;
+            };
+            if generic.name != "rlm" || generic.status != ToolStatus::Running {
+                return None;
+            }
+            let summary = generic
+                .input_summary
+                .as_deref()
+                .filter(|summary| !summary.trim().is_empty())
+                .unwrap_or("running chunked analysis");
+            Some(TaskPanelEntry {
+                id: format!("rlm-{}", idx + 1),
+                status: "running".to_string(),
+                prompt_summary: format!("RLM: {summary}"),
+                duration_ms,
+            })
+        })
+        .collect()
 }
 
 #[allow(clippy::too_many_lines)]
@@ -628,6 +640,7 @@ async fn run_event_loop(
     // #376: native-copy escape — hold Shift to bypass alt-screen mouse capture
     // for terminal-native text selection.
     let mut shift_bypass_active = false;
+    let mut terminal_paused_at: Option<Instant> = None;
 
     loop {
         if !drain_web_config_events(&mut web_config_session, app, config, &engine_handle).await {
@@ -1123,6 +1136,7 @@ async fn run_event_loop(
                                 app.use_bracketed_paste,
                             )?;
                             event_broker.pause_events();
+                            terminal_paused_at = Some(Instant::now());
                         }
                     }
                     EngineEvent::ResumeEvents => {
@@ -1134,6 +1148,7 @@ async fn run_event_loop(
                                 app.use_bracketed_paste,
                             )?;
                             event_broker.resume_events();
+                            terminal_paused_at = None;
                         }
                     }
                     EngineEvent::AgentSpawned { id, prompt } => {
@@ -1162,11 +1177,54 @@ async fn run_event_loop(
                         app.status_message = Some(format!("Sub-agent {id}: {display}"));
                     }
                     EngineEvent::AgentComplete { id, result } => {
+                        let subagent_elapsed = app
+                            .agent_activity_started_at
+                            .or(app.turn_started_at)
+                            .map(|started| started.elapsed())
+                            .unwrap_or_default();
+                        let has_other_running_subagents =
+                            app.agent_progress.keys().any(|agent_id| agent_id != &id)
+                                || app.subagent_cache.iter().any(|agent| {
+                                    agent.agent_id != id
+                                        && matches!(agent.status, SubAgentStatus::Running)
+                                });
                         app.agent_progress.remove(&id);
                         app.status_message = Some(format!(
                             "Sub-agent {id} completed: {}",
                             summarize_tool_output(&result)
                         ));
+                        let should_recapture_terminal =
+                            !has_other_running_subagents && app.use_alt_screen;
+                        if !has_other_running_subagents
+                            && let Some((method, threshold, include_summary)) =
+                                notification_settings(config)
+                        {
+                            let in_tmux = std::env::var("TMUX").is_ok_and(|v| !v.is_empty());
+                            let msg = subagent_completion_notification_message(
+                                &id,
+                                &result,
+                                include_summary,
+                                subagent_elapsed,
+                            );
+                            crate::tui::notifications::notify_done(
+                                method,
+                                in_tmux,
+                                &msg,
+                                threshold,
+                                subagent_elapsed,
+                            );
+                        }
+                        if should_recapture_terminal {
+                            resume_terminal(
+                                terminal,
+                                app.use_alt_screen,
+                                app.use_mouse_capture,
+                                app.use_bracketed_paste,
+                            )?;
+                            event_broker.resume_events();
+                            terminal_paused_at = None;
+                            app.needs_redraw = true;
+                        }
                         let _ = engine_handle.send(Op::ListSubAgents).await;
                     }
                     EngineEvent::AgentList { agents } => {
@@ -1175,9 +1233,10 @@ async fn run_event_loop(
                         sorted.retain(|a| !a.from_prior_session);
                         app.subagent_cache = sorted.clone();
                         reconcile_subagent_activity_state(app);
-                        if app.view_stack.update_subagents(&sorted) {
+                        let view_agents = subagent_view_agents(app, &sorted);
+                        if app.view_stack.update_subagents(&view_agents) {
                             app.status_message =
-                                Some(format!("Sub-agents: {} total", sorted.len()));
+                                Some(format!("Sub-agents: {} total", view_agents.len()));
                         }
                         // Individual spawn/complete events already log to history;
                         // full list available via /agents command.
@@ -1406,8 +1465,23 @@ async fn run_event_loop(
         }
 
         if event_broker.is_paused() {
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            continue;
+            let grace_active = terminal_paused_at
+                .map(|paused_at| paused_at.elapsed() < Duration::from_millis(500))
+                .unwrap_or(false);
+            if terminal_pause_has_live_owner(app) || grace_active {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                continue;
+            }
+            resume_terminal(
+                terminal,
+                app.use_alt_screen,
+                app.use_mouse_capture,
+                app.use_bracketed_paste,
+            )?;
+            event_broker.resume_events();
+            terminal_paused_at = None;
+            app.status_message = Some("Terminal controls restored".to_string());
+            app.needs_redraw = true;
         }
 
         let now = Instant::now();
@@ -3095,6 +3169,30 @@ fn completed_turn_notification_message(
     msg
 }
 
+fn subagent_completion_notification_message(
+    id: &str,
+    result: &str,
+    include_summary: bool,
+    elapsed: Duration,
+) -> String {
+    let result_line = result
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.starts_with("<deepseek:subagent.done>"));
+    let mut msg = result_line
+        .and_then(notification_text_summary)
+        .map(|summary| format!("sub-agent {id}: {summary}"))
+        .unwrap_or_else(|| format!("deepseek: sub-agent {id} complete"));
+
+    if include_summary {
+        let human = crate::tui::notifications::humanize_duration(elapsed);
+        msg.push('\n');
+        msg.push_str(&format!("deepseek: sub-agent complete ({human})"));
+    }
+
+    msg
+}
+
 fn latest_assistant_notification_text(messages: &[Message]) -> Option<String> {
     messages
         .iter()
@@ -3506,7 +3604,7 @@ async fn dispatch_user_message(
         persistence_actor::persist(PersistRequest::Checkpoint(session));
     }
 
-    let auto_selection = if app.auto_model || app.reasoning_effort == ReasoningEffort::Auto {
+    let auto_selection = if should_resolve_auto_model_selection(app) {
         Some(resolve_auto_model_selection(app, config, &message, &content).await)
     } else {
         None
@@ -3574,6 +3672,10 @@ async fn dispatch_user_message(
     }
 
     Ok(())
+}
+
+fn should_resolve_auto_model_selection(app: &App) -> bool {
+    app.auto_model
 }
 
 async fn resolve_auto_model_selection(
@@ -3782,11 +3884,7 @@ async fn apply_model_picker_choice(
         app.last_effective_model = None;
         app.model = model.clone();
         app.update_model_compaction_budget();
-        app.session.last_prompt_tokens = None;
-        app.session.last_completion_tokens = None;
-        app.session.last_prompt_cache_hit_tokens = None;
-        app.session.last_prompt_cache_miss_tokens = None;
-        app.session.last_reasoning_replay_tokens = None;
+        app.clear_model_scoped_telemetry();
     }
     if effort_changed {
         app.reasoning_effort = effort;
@@ -3904,11 +4002,16 @@ async fn switch_provider(
     }
 
     let new_model = config.default_model();
+    let cache_scope_changed = previous_provider != target || previous_model != new_model;
     app.api_provider = target;
     app.model = new_model.clone();
     app.update_model_compaction_budget();
-    app.session.last_prompt_tokens = None;
-    app.session.last_completion_tokens = None;
+    if cache_scope_changed {
+        app.clear_model_scoped_telemetry();
+    } else {
+        app.session.last_prompt_tokens = None;
+        app.session.last_completion_tokens = None;
+    }
 
     let _ = engine_handle.send(Op::Shutdown).await;
     let engine_config = build_engine_config(app, config);
@@ -5005,8 +5108,8 @@ fn build_pending_input_preview(app: &App) -> PendingInputPreview {
 fn render(f: &mut Frame, app: &mut App) {
     let size = f.area();
 
-    // Clear entire area with terminal default background
-    let background = Block::default().style(Style::default().bg(Color::Reset));
+    // Clear entire area with the configured app background.
+    let background = Block::default().style(Style::default().bg(app.ui_theme.surface_bg));
     f.render_widget(background, size);
 
     // Show onboarding screen if needed
@@ -5077,6 +5180,7 @@ fn render(f: &mut Frame, app: &mut App) {
             crate::config::ApiProvider::Deepseek => None,
             crate::config::ApiProvider::DeepseekCN => None,
             crate::config::ApiProvider::NvidiaNim => Some("NIM"),
+            crate::config::ApiProvider::Openai => Some("OpenAI"),
             crate::config::ApiProvider::Openrouter => Some("OR"),
             crate::config::ApiProvider::Novita => Some("Novita"),
             crate::config::ApiProvider::Fireworks => Some("Fireworks"),
@@ -5110,7 +5214,9 @@ fn render(f: &mut Frame, app: &mut App) {
         // background before any sub-widgets render, so cells that end up
         // uncovered by layout splits (e.g. after file-tree toggle or
         // resize) don't retain stale content from a previous frame.
-        Block::default().render(chunks[1], f.buffer_mut());
+        Block::default()
+            .style(Style::default().bg(app.ui_theme.surface_bg))
+            .render(chunks[1], f.buffer_mut());
 
         let mut sidebar_area = None;
 
@@ -5400,7 +5506,7 @@ async fn handle_view_events(
 
                 match manager.load_session(&session_id) {
                     Ok(session) => {
-                        apply_loaded_session(app, &session);
+                        let recovered = apply_loaded_session(app, &session);
                         let _ = engine_handle
                             .send(Op::SyncSession {
                                 messages: app.api_messages.clone(),
@@ -5414,10 +5520,12 @@ async fn handle_view_events(
                                 config: app.compaction_config(),
                             })
                             .await;
-                        app.status_message = Some(format!(
-                            "Session loaded (ID: {})",
-                            &session_id[..8.min(session_id.len())]
-                        ));
+                        if !recovered {
+                            app.status_message = Some(format!(
+                                "Session loaded (ID: {})",
+                                &session_id[..8.min(session_id.len())]
+                            ));
+                        }
                     }
                     Err(err) => {
                         app.status_message =
@@ -5708,6 +5816,7 @@ async fn apply_provider_picker_api_key(
                 return;
             }
             ApiProvider::NvidiaNim => &mut providers.nvidia_nim,
+            ApiProvider::Openai => &mut providers.openai,
             ApiProvider::Openrouter => &mut providers.openrouter,
             ApiProvider::Novita => &mut providers.novita,
             ApiProvider::Fireworks => &mut providers.fireworks,
@@ -5721,8 +5830,9 @@ async fn apply_provider_picker_api_key(
     switch_provider(app, engine_handle, config, provider, None).await;
 }
 
-fn apply_loaded_session(app: &mut App, session: &SavedSession) {
-    app.api_messages.clone_from(&session.messages);
+fn apply_loaded_session(app: &mut App, session: &SavedSession) -> bool {
+    let (messages, recovered_draft) = recover_interrupted_user_tail(&session.messages);
+    app.api_messages = messages;
     app.clear_history();
     app.tool_cells.clear();
     app.tool_details_by_cell.clear();
@@ -5769,10 +5879,19 @@ fn apply_loaded_session(app: &mut App, session: &SavedSession) {
     app.workspace.clone_from(&session.metadata.workspace);
     app.session.total_tokens = u32::try_from(session.metadata.total_tokens).unwrap_or(u32::MAX);
     app.session.total_conversation_tokens = app.session.total_tokens;
+    app.session.session_cost = 0.0;
+    app.session.session_cost_cny = 0.0;
+    app.session.subagent_cost = 0.0;
+    app.session.subagent_cost_cny = 0.0;
+    app.session.subagent_cost_event_seqs.clear();
+    app.session.displayed_cost_high_water = 0.0;
+    app.session.displayed_cost_high_water_cny = 0.0;
     app.session.last_prompt_tokens = None;
     app.session.last_completion_tokens = None;
     app.session.last_prompt_cache_hit_tokens = None;
     app.session.last_prompt_cache_miss_tokens = None;
+    app.session.last_reasoning_replay_tokens = None;
+    app.session.turn_cache_history.clear();
     app.current_session_id = Some(session.metadata.id.clone());
     app.workspace_context = None;
     app.workspace_context_refreshed_at = None;
@@ -5781,7 +5900,57 @@ fn apply_loaded_session(app: &mut App, session: &SavedSession) {
     } else {
         app.system_prompt = None;
     }
+    let recovered = if let Some(draft) = recovered_draft {
+        restore_recovered_retry_draft(app, draft);
+        true
+    } else {
+        false
+    };
     app.scroll_to_bottom();
+    recovered
+}
+
+fn recover_interrupted_user_tail(messages: &[Message]) -> (Vec<Message>, Option<QueuedMessage>) {
+    let mut recovered = messages.to_vec();
+    let Some(last) = recovered.last() else {
+        return (recovered, None);
+    };
+    if last.role != "user" {
+        return (recovered, None);
+    }
+    let Some(display) = retry_display_from_user_message(last) else {
+        return (recovered, None);
+    };
+    recovered.pop();
+    (recovered, Some(QueuedMessage::new(display, None)))
+}
+
+fn retry_display_from_user_message(message: &Message) -> Option<String> {
+    let text = message
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let display = compact_user_context_display(&text).trim().to_string();
+    if display.is_empty() {
+        None
+    } else {
+        Some(display)
+    }
+}
+
+fn restore_recovered_retry_draft(app: &mut App, draft: QueuedMessage) {
+    app.input.clone_from(&draft.display);
+    app.cursor_position = app.input.chars().count();
+    app.queued_draft = Some(draft);
+    app.status_message = Some(
+        "Recovered interrupted prompt as an editable draft; press Enter to retry.".to_string(),
+    );
+    app.needs_redraw = true;
 }
 
 fn compact_user_context_display(content: &str) -> String {
@@ -6320,6 +6489,17 @@ fn active_foreground_shell_running(app: &App) -> bool {
                 cell,
                 HistoryCell::Tool(ToolCell::Exec(exec))
                     if exec.status == ToolStatus::Running && exec.interaction.is_none()
+            )
+        })
+    })
+}
+
+fn terminal_pause_has_live_owner(app: &App) -> bool {
+    app.active_cell.as_ref().is_some_and(|active| {
+        active.entries().iter().any(|cell| {
+            matches!(
+                cell,
+                HistoryCell::Tool(ToolCell::Exec(exec)) if exec.status == ToolStatus::Running
             )
         })
     })
@@ -7083,6 +7263,11 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEvent> {
             }
         }
         MouseEventKind::Down(MouseButton::Left) => {
+            if mouse_hits_rect(mouse, app.viewport.jump_to_latest_button_area) {
+                app.scroll_to_bottom();
+                return Vec::new();
+            }
+
             if let Some(point) = selection_point_from_mouse(app, mouse) {
                 app.viewport.transcript_selection.anchor = Some(point);
                 app.viewport.transcript_selection.head = Some(point);
@@ -7121,6 +7306,17 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEvent> {
     }
 
     Vec::new()
+}
+
+fn mouse_hits_rect(mouse: MouseEvent, area: Option<Rect>) -> bool {
+    let Some(area) = area else {
+        return false;
+    };
+
+    mouse.column >= area.x
+        && mouse.column < area.x.saturating_add(area.width)
+        && mouse.row >= area.y
+        && mouse.row < area.y.saturating_add(area.height)
 }
 
 fn open_context_menu(app: &mut App, mouse: MouseEvent) {

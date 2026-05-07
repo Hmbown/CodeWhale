@@ -5,13 +5,10 @@
 //! a file-based fallback for headless Linux (`FileKeyringStore`), and
 //! an in-memory store for tests (`InMemoryKeyringStore`).
 //!
-//! Higher-level lookup goes through [`Secrets::resolve`], which checks
-//! the keyring first and falls back to environment variables. The
-//! caller (typically the config crate) then falls back to plaintext
-//! TOML if both are empty — that final layer lives outside this crate
-//! so the precedence is explicit at the call site.
-//!
-//! Hard rule: **keyring → env → config-file**. Never swap.
+//! Higher-level lookup through [`Secrets::resolve`] checks the keyring first
+//! and falls back to environment variables. Config-file precedence lives in the
+//! config crate so user-facing commands can keep `config -> keyring -> env`
+//! explicit at the call site.
 #![deny(missing_docs)]
 
 use std::collections::HashMap;

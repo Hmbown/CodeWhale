@@ -3,9 +3,8 @@ const { getBinaryPath } = require("./install");
 
 const pkg = require("../package.json");
 
-function isVersionFlag() {
-  const args = process.argv.slice(2);
-  return args.includes("--version") || args.includes("-v") || args.includes("-V");
+function isVersionFlag(args = process.argv.slice(2)) {
+  return args.includes("--version") || args.includes("-V");
 }
 
 function handleVersionFallback(binaryName) {
@@ -46,6 +45,7 @@ module.exports = {
   run,
   runDeepseek,
   runDeepseekTui,
+  _internal: { isVersionFlag },
 };
 
 if (require.main === module) {
