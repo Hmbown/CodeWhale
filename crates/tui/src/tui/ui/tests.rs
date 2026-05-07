@@ -3079,6 +3079,36 @@ fn flush_active_cell_finalizes_unclosed_thinking_block() {
 }
 
 #[test]
+fn engine_error_finalizes_active_thinking_block() {
+    use crate::error_taxonomy::StreamError;
+
+    let mut app = create_test_app();
+    let entry_idx = ensure_streaming_thinking_active_entry(&mut app);
+    app.thinking_started_at = Some(Instant::now());
+    app.streaming_state.start_thinking(0, None);
+    app.streaming_state.push_content(0, "partial reasoning");
+
+    apply_engine_error_to_app(
+        &mut app,
+        StreamError::Stall { timeout_secs: 60 }.into_envelope(),
+    );
+
+    let active = app.active_cell.as_ref().expect("active thinking remains");
+    let HistoryCell::Thinking {
+        content, streaming, ..
+    } = &active.entries()[entry_idx]
+    else {
+        panic!("expected active thinking cell");
+    };
+    assert!(!*streaming, "error path must stop the thinking spinner");
+    assert!(
+        content.contains("partial reasoning"),
+        "error path must drain pending thinking tail"
+    );
+    assert!(app.streaming_thinking_active_entry.is_none());
+}
+
+#[test]
 fn second_thinking_block_appends_new_entry_in_same_active_cell() {
     // Real V4 turns can emit Thinking → Tool → Thinking → Tool before any
     // prose; the second thinking block should land as a fresh entry inside
@@ -3116,6 +3146,47 @@ fn second_thinking_block_appends_new_entry_in_same_active_cell() {
         app.history.is_empty(),
         "the group still hasn't flushed — no prose yet"
     );
+}
+
+#[test]
+fn new_thinking_block_drains_pending_tail_from_previous_block() {
+    let mut app = create_test_app();
+
+    assert!(!start_streaming_thinking_block(&mut app));
+    let first_idx = app
+        .streaming_thinking_active_entry
+        .expect("first thinking entry active");
+    app.reasoning_buffer.push_str("first tail");
+    app.streaming_state.push_content(0, "first tail");
+
+    assert!(start_streaming_thinking_block(&mut app));
+    let second_idx = app
+        .streaming_thinking_active_entry
+        .expect("second thinking entry active");
+
+    let active = app.active_cell.as_ref().expect("active cell exists");
+    assert_ne!(first_idx, second_idx);
+
+    let HistoryCell::Thinking {
+        content, streaming, ..
+    } = &active.entries()[first_idx]
+    else {
+        panic!("expected first thinking cell");
+    };
+    assert!(!*streaming, "previous thinking block should be finalized");
+    assert!(
+        content.contains("first tail"),
+        "pending text must survive a new ThinkingStarted event"
+    );
+
+    assert!(matches!(
+        active.entries()[second_idx],
+        HistoryCell::Thinking {
+            streaming: true,
+            ..
+        }
+    ));
+    assert_eq!(app.last_reasoning.as_deref(), Some("first tail"));
 }
 
 // ---- per-child prompt wiring ----

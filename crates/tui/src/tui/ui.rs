@@ -753,12 +753,9 @@ async fn run_event_loop(
                         // P2.3: thinking lives in the active cell so it groups
                         // visually with the tool calls that follow until the
                         // next assistant prose chunk flushes the group.
-                        app.reasoning_buffer.clear();
-                        app.reasoning_header = None;
-                        app.thinking_started_at = Some(Instant::now());
-                        app.streaming_state.reset();
-                        app.streaming_state.start_thinking(0, None);
-                        let _ = ensure_streaming_thinking_active_entry(app);
+                        if start_streaming_thinking_block(app) {
+                            transcript_batch_updated = true;
+                        }
                     }
                     EngineEvent::ThinkingDelta { content, .. } => {
                         let sanitized = sanitize_stream_chunk(&content);
@@ -779,19 +776,10 @@ async fn run_event_loop(
                         }
                     }
                     EngineEvent::ThinkingComplete { .. } => {
-                        let duration = app
-                            .thinking_started_at
-                            .take()
-                            .map(|t| t.elapsed().as_secs_f32());
-                        let remaining = app.streaming_state.finalize_block_text(0);
-                        if finalize_streaming_thinking_active_entry(app, duration, &remaining) {
+                        if finalize_current_streaming_thinking(app) {
                             transcript_batch_updated = true;
                         }
-
-                        if !app.reasoning_buffer.is_empty() {
-                            app.last_reasoning = Some(app.reasoning_buffer.clone());
-                        }
-                        app.reasoning_buffer.clear();
+                        stash_reasoning_buffer_into_last_reasoning(app);
                     }
                     EngineEvent::ToolCallStarted { id, name, input } => {
                         app.pending_tool_uses
@@ -3022,6 +3010,7 @@ pub(crate) fn apply_engine_error_to_app(
     let recoverable = envelope.recoverable;
     let message = envelope.message.clone();
     let severity = envelope.severity;
+    finalize_current_streaming_thinking(app);
     app.streaming_state.reset();
     app.streaming_message_index = None;
     app.streaming_thinking_active_entry = None;
@@ -3312,6 +3301,54 @@ fn append_streaming_thinking(app: &mut App, entry_idx: usize, text: &str) {
     if mutated {
         app.bump_active_cell_revision();
     }
+}
+
+/// Start a new streaming thinking block. If another thinking block is still
+/// active, first drain its pending UI tail so a late block boundary cannot
+/// discard content buffered inside `StreamingState`.
+fn start_streaming_thinking_block(app: &mut App) -> bool {
+    let finalized_previous = if app.streaming_thinking_active_entry.is_some() {
+        let finalized = finalize_current_streaming_thinking(app);
+        stash_reasoning_buffer_into_last_reasoning(app);
+        finalized
+    } else {
+        false
+    };
+
+    app.reasoning_buffer.clear();
+    app.reasoning_header = None;
+    app.thinking_started_at = Some(Instant::now());
+    app.streaming_state.reset();
+    app.streaming_state.start_thinking(0, None);
+    let _ = ensure_streaming_thinking_active_entry(app);
+    finalized_previous
+}
+
+fn finalize_current_streaming_thinking(app: &mut App) -> bool {
+    let duration = app
+        .thinking_started_at
+        .take()
+        .map(|t| t.elapsed().as_secs_f32());
+    let remaining = app.streaming_state.finalize_block_text(0);
+    finalize_streaming_thinking_active_entry(app, duration, &remaining)
+}
+
+fn stash_reasoning_buffer_into_last_reasoning(app: &mut App) {
+    if app.reasoning_buffer.is_empty() {
+        return;
+    }
+
+    if let Some(existing) = app.last_reasoning.as_mut()
+        && !existing.is_empty()
+    {
+        if !existing.ends_with('\n') {
+            existing.push('\n');
+        }
+        existing.push_str(&app.reasoning_buffer);
+    } else {
+        app.last_reasoning = Some(app.reasoning_buffer.clone());
+    }
+    app.reasoning_buffer.clear();
 }
 
 /// Finalize the in-flight thinking entry in `active_cell`: append the
