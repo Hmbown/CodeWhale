@@ -183,25 +183,25 @@ tags = ["rust", "project-config"]
 
 | 事件 | 触发时机 | Payload | 用途示例 |
 |------|----------|---------|----------|
-| `PreToolUse` | 工具执行前 | tool_name, params | "编辑 .rs 前先 fmt" |
-| `PostToolUse` | 工具执行后 | tool_name, result, duration | "写文件后自动 git add" |
-| `PermissionRequest` | 权限请求时 | tool, justification | "记录所有审批日志" |
+| `ToolCallBefore` | 工具执行前 | tool_name, params | "编辑 .rs 前先 fmt" |
+| `ToolCallAfter` | 工具执行后 | tool_name, result, duration | "写文件后自动 git add" |
 | `SessionStart` | 新会话开始 | session_id, cwd | "激活虚拟环境" |
-| `UserPromptSubmit` | 用户发送消息 | prompt_text | "日志记录用户输入" |
-| `Stop` | 会话结束 | reason | "清理临时文件" |
-| `PreCompaction` | compaction 前 | token_count | "备份当前会话" |
+| `MessageSubmit` | 用户发送消息 | prompt_text | "日志记录用户输入" |
+| `SessionEnd` | 会话结束 | reason | "清理临时文件" |
+| `PermissionRequest`（规划中） | 权限请求时 | tool, justification | "记录所有审批日志" |
+| `PreCompaction`（规划中） | compaction 前 | token_count | "备份当前会话" |
 
 **配置格式**:
 ```toml
 # ~/.deepseek/hooks.toml
 [[hooks]]
-event = "PostToolUse"
+event = "ToolCallAfter"
 matcher = { tool = "edit_file", path_pattern = "*.rs" }
 command = "cargo fmt"
 timeout_sec = 10
 
 [[hooks]]
-event = "PreToolUse"
+event = "ToolCallBefore"
 matcher = { tool = "exec_shell", command_pattern = "rm *" }
 command = "echo 'WARNING: destructive command' >&2"
 action = "warn"  # 不阻止，只警告
