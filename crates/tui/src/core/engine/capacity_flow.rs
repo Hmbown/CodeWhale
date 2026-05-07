@@ -956,21 +956,70 @@ impl Engine {
         }
         pointer
     }
+    /// Write a lightweight shutdown checkpoint to persist session state.
+    /// This is called on engine shutdown regardless of capacity.enabled.
+    pub(super) fn write_shutdown_checkpoint(&mut self) {
+        let canonical = self.extract_current_canonical_state();
+        let record = self.build_capacity_record(
+            &TurnContext::default(),
+            GuardrailAction::NoIntervention,
+            None, // no snapshot
+            canonical,
+            vec![], // no specific source messages
+            None,
+        );
+        if let Err(err) = append_capacity_record(&self.session.id, &record) {
+            tracing::warn!("Failed to write shutdown checkpoint: {err}");
+        }
+    }
+    
+    /// Extract current canonical state from session messages.
+    fn extract_current_canonical_state(&self) -> CanonicalState {
+        let mut state = CanonicalState::default();
+        
+        // Extract goal from recent messages
+        for msg in self.session.messages.iter().rev().take(10) {
+            if let Some(content) = msg.content_as_text() {
+                if content.contains("goal") || content.contains("objective") {
+                    state.goal = content.chars().take(200).collect();
+                    break;
+                }
+            }
+        }
+        
+        state
+    }
 
     pub(super) fn rehydrate_latest_canonical_state(&mut self) {
+        // Try current session first
         let Ok(records) = load_last_k_capacity_records(&self.session.id, 1) else {
             return;
         };
-        let Some(last) = records.last() else {
+        
+        if let Some(last) = records.last() {
+            let pointer = format!("memory://{}/{}", self.session.id, last.id);
+            let prompt = self.canonical_prompt(
+                &last.canonical_state,
+                &pointer,
+                GuardrailAction::NoIntervention,
+                Some("Rehydrated canonical state from memory."),
+            );
+            self.merge_compaction_summary(Some(prompt));
             return;
-        };
-        let pointer = format!("memory://{}/{}", self.session.id, last.id);
-        let prompt = self.canonical_prompt(
-            &last.canonical_state,
-            &pointer,
-            GuardrailAction::NoIntervention,
-            Some("Rehydrated canonical state from memory."),
-        );
-        self.merge_compaction_summary(Some(prompt));
+        }
+        
+        // Fallback: scan cross-session if enabled
+        if self.config.capacity.cross_session_enabled {
+            if let Ok(Some(record)) = load_latest_cross_session_record(&self.session.workspace) {
+                let pointer = format!("memory://cross-session/{}", record.id);
+                let prompt = self.canonical_prompt(
+                    &record.canonical_state,
+                    &pointer,
+                    GuardrailAction::NoIntervention,
+                    Some("Rehydrated canonical state from previous session."),
+                );
+                self.merge_compaction_summary(Some(prompt));
+            }
+        }
     }
 }

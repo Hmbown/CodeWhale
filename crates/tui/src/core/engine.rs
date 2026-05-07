@@ -798,6 +798,8 @@ impl Engine {
                     .await;
                 }
                 Op::Shutdown => {
+                    // Write a lightweight shutdown checkpoint to persist session state
+                    self.write_shutdown_checkpoint();
                     break;
                 }
             }

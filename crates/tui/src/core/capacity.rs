@@ -17,6 +17,10 @@ pub struct CapacityControllerConfig {
     pub profile_window: usize,
     pub model_priors: HashMap<String, f64>,
     pub fallback_default: f64,
+    /// Enable cross-session state recovery. When true, the engine will
+    /// scan memory records from previous sessions to rehydrate canonical
+    /// state on startup. Default: false (opt-in to prevent memory bleed).
+    pub cross_session_enabled: bool,
 }
 
 impl Default for CapacityControllerConfig {
@@ -52,6 +56,7 @@ impl Default for CapacityControllerConfig {
             profile_window: 8,
             model_priors,
             fallback_default: 3.8,
+            cross_session_enabled: false,
         }
     }
 }
@@ -111,6 +116,9 @@ impl CapacityControllerConfig {
         }
         if let Some(v) = capacity.fallback_default_prior {
             out.fallback_default = v;
+        }
+        if let Some(v) = capacity.cross_session_enabled {
+            out.cross_session_enabled = v;
         }
 
         out

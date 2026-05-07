@@ -662,6 +662,10 @@ pub struct CapacityConfig {
     pub deepseek_v4_pro_prior: Option<f64>,
     pub deepseek_v4_flash_prior: Option<f64>,
     pub fallback_default_prior: Option<f64>,
+    /// Enable cross-session state recovery. When true, the engine will
+    /// scan memory records from previous sessions to rehydrate canonical
+    /// state on startup. Default: false (opt-in to prevent memory bleed).
+    pub cross_session_enabled: Option<bool>,
 }
 
 impl RetryPolicy {
