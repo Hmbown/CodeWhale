@@ -27,6 +27,7 @@
 //! happen *before* the view is constructed (see `tui/ui.rs`); this
 //! module always assumes the user is being asked.
 
+use crate::localization::Locale;
 use crate::sandbox::SandboxPolicy;
 use crate::tui::views::{ModalKind, ModalView, ViewAction, ViewEvent};
 use crate::tui::widgets::{ApprovalWidget, ElevationWidget, Renderable};
@@ -160,6 +161,22 @@ impl ApprovalRequest {
     pub fn params_display(&self) -> String {
         let truncated = truncate_params_value(&self.params, 200);
         serde_json::to_string(&truncated).unwrap_or_else(|_| truncated.to_string())
+    }
+
+    pub fn description_for_locale(&self, locale: Locale) -> String {
+        match locale {
+            Locale::ZhHans => localized_description_zh_hans(self.category),
+            _ => self.description.clone(),
+        }
+    }
+
+    pub fn impacts_for_locale(&self, locale: Locale) -> Vec<String> {
+        match locale {
+            Locale::ZhHans => {
+                build_impact_summary_zh_hans(&self.tool_name, self.category, &self.params)
+            }
+            _ => self.impacts.clone(),
+        }
     }
 }
 
@@ -346,6 +363,85 @@ fn build_impact_summary(tool_name: &str, category: ToolCategory, params: &Value)
     }
 }
 
+fn localized_description_zh_hans(category: ToolCategory) -> String {
+    match category {
+        ToolCategory::Safe => "请求执行只读操作。".to_string(),
+        ToolCategory::FileWrite => "请求修改文件。请确认路径和内容符合预期。".to_string(),
+        ToolCategory::Shell => "请求执行 shell 命令。请先检查命令和工作目录。".to_string(),
+        ToolCategory::Network => "请求访问网络或远程内容。请确认目标可信。".to_string(),
+        ToolCategory::McpRead => "请求从 MCP 服务器读取信息。".to_string(),
+        ToolCategory::McpAction => "请求调用 MCP 服务器操作，可能产生副作用。".to_string(),
+        ToolCategory::Unknown => "请求运行未分类工具。批准前请仔细检查参数。".to_string(),
+    }
+}
+
+fn build_impact_summary_zh_hans(
+    tool_name: &str,
+    category: ToolCategory,
+    params: &Value,
+) -> Vec<String> {
+    match category {
+        ToolCategory::Safe => {
+            let mut impacts = vec!["只读操作。".to_string()];
+            if let Some(path) = param_preview(params, &["path", "ref_id", "uri"], 72) {
+                impacts.push(format!("读取：{path}"));
+            }
+            impacts
+        }
+        ToolCategory::FileWrite => {
+            let mut impacts = vec!["会写入工作区或已批准写入范围内的文件。".to_string()];
+            if let Some(path) = param_preview(params, &["path", "target", "destination"], 72) {
+                impacts.push(format!("写入：{path}"));
+            }
+            impacts
+        }
+        ToolCategory::Shell => {
+            let mut impacts = vec!["执行 shell 命令。".to_string()];
+            if let Some(command) = param_preview(params, &["cmd", "command"], 96) {
+                impacts.push(format!("命令：{command}"));
+            }
+            if let Some(workdir) = param_preview(params, &["workdir", "cwd"], 72) {
+                impacts.push(format!("工作目录：{workdir}"));
+            }
+            impacts
+        }
+        ToolCategory::Network => {
+            let mut impacts = vec!["可能访问网络服务或远程内容。".to_string()];
+            if let Some(target) =
+                param_preview(params, &["url", "q", "query", "location", "repo"], 96)
+            {
+                impacts.push(format!("目标：{target}"));
+            }
+            impacts
+        }
+        ToolCategory::McpRead => {
+            let mut impacts = vec!["从 MCP 服务器读取信息，不应产生本地写入。".to_string()];
+            if let Some(server) = mcp_server_hint(tool_name) {
+                impacts.push(format!("服务器：{server}"));
+            }
+            impacts
+        }
+        ToolCategory::McpAction => {
+            let mut impacts = vec!["调用可能产生副作用的 MCP 服务器操作。".to_string()];
+            if let Some(server) = mcp_server_hint(tool_name) {
+                impacts.push(format!("服务器：{server}"));
+            }
+            impacts
+        }
+        ToolCategory::Unknown => {
+            let mut impacts = vec!["工具未分类。批准前请仔细检查参数。".to_string()];
+            if let Some(target) = param_preview(
+                params,
+                &["path", "cmd", "command", "url", "q", "query", "ref_id"],
+                96,
+            ) {
+                impacts.push(format!("主要输入：{target}"));
+            }
+            impacts
+        }
+    }
+}
+
 /// Indices into the option list shared by both variants. Visible to
 /// the widget module so it can render the staged-confirmation banner
 /// without re-deriving the variant from the request.
@@ -401,6 +497,7 @@ impl ApprovalOption {
 pub struct ApprovalView {
     request: ApprovalRequest,
     selected: usize,
+    locale: Locale,
     /// When `Some`, the destructive variant has staged this approval and
     /// is waiting for the user to press the same key (or `Enter`) again.
     /// Any other key clears the staging.
@@ -410,10 +507,16 @@ pub struct ApprovalView {
 }
 
 impl ApprovalView {
+    #[cfg(test)]
     pub fn new(request: ApprovalRequest) -> Self {
+        Self::new_for_locale(request, Locale::En)
+    }
+
+    pub fn new_for_locale(request: ApprovalRequest, locale: Locale) -> Self {
         Self {
             request,
             selected: 0,
+            locale,
             pending_confirm: None,
             timeout: None,
             requested_at: Instant::now(),
@@ -458,6 +561,10 @@ impl ApprovalView {
     /// no approve key has been pressed yet.
     pub(crate) fn pending_confirm(&self) -> Option<ApprovalOption> {
         self.pending_confirm
+    }
+
+    pub(crate) fn locale(&self) -> Locale {
+        self.locale
     }
 
     /// Try to commit (or stage) the given option respecting the
@@ -1381,6 +1488,10 @@ mod tests {
             .collect()
     }
 
+    fn compact_rendered_text(lines: &[String]) -> String {
+        lines.join("\n").replace(' ', "")
+    }
+
     #[test]
     fn render_benign_includes_review_badge_and_one_step_hint() {
         let view = ApprovalView::new(benign_request());
@@ -1423,6 +1534,53 @@ mod tests {
         assert!(
             joined.contains("(staged)"),
             "stage marker missing:\n{joined}"
+        );
+    }
+
+    #[test]
+    fn render_destructive_zh_hans_localizes_security_copy() {
+        let mut view = ApprovalView::new_for_locale(destructive_request(), Locale::ZhHans);
+        let lines = render_lines(&view, 100, 40);
+        let joined = compact_rendered_text(&lines);
+        assert!(
+            joined.contains("破坏性"),
+            "missing zh risk badge:\n{joined}"
+        );
+        assert!(
+            joined.contains("两次按键确认"),
+            "missing zh two-step hint:\n{joined}"
+        );
+        assert!(
+            joined.contains("文件写入"),
+            "missing zh category:\n{joined}"
+        );
+        assert!(
+            joined.contains("影响："),
+            "missing zh impact label:\n{joined}"
+        );
+        assert!(
+            joined.contains("写入：src/main.rs"),
+            "missing zh impact path:\n{joined}"
+        );
+        assert!(
+            joined.contains("仅本次批准"),
+            "missing zh approve option:\n{joined}"
+        );
+
+        view.handle_key(create_key_event(KeyCode::Char('y')));
+        let lines = render_lines(&view, 100, 40);
+        let joined = compact_rendered_text(&lines);
+        assert!(
+            joined.contains("确认破坏性操作"),
+            "missing zh confirm banner:\n{joined}"
+        );
+        assert!(
+            joined.contains("(待确认)"),
+            "missing zh staged marker:\n{joined}"
+        );
+        assert!(
+            joined.contains("Enter或y"),
+            "missing zh confirm key:\n{joined}"
         );
     }
 

@@ -22,6 +22,7 @@ pub use renderable::Renderable;
 
 use std::time::Duration;
 
+use crate::localization::Locale;
 use crate::palette;
 use crate::tui::app::{App, AppMode, ComposerDensity, VimMode};
 use crate::tui::approval::{
@@ -1014,6 +1015,7 @@ impl Renderable for ApprovalWidget<'_> {
         Clear.render(card_area, buf);
 
         let risk = self.request.risk;
+        let locale = self.view.locale();
         let palette_colors = approval_palette(risk);
         let mut lines: Vec<Line<'static>> = Vec::with_capacity(20);
 
@@ -1023,7 +1025,7 @@ impl Renderable for ApprovalWidget<'_> {
         lines.push(Line::from(vec![
             Span::raw("  "),
             Span::styled(
-                format!(" {} ", risk_badge_text(risk)),
+                format!(" {} ", risk_badge_text(risk, locale)),
                 Style::default()
                     .fg(palette::DEEPSEEK_INK)
                     .bg(palette_colors.accent)
@@ -1038,12 +1040,12 @@ impl Renderable for ApprovalWidget<'_> {
             ),
         ]));
 
-        // Category line — unchanged vocabulary so existing tests still
-        // recognise the rendering.
-        let (cat_label, cat_color) = category_label_for(self.request.category);
+        // Category line — English remains the baseline while localized
+        // sessions get the same risk category in their UI language.
+        let (cat_label, cat_color) = category_label_for(self.request.category, locale);
         lines.push(Line::from(vec![
             Span::raw("  "),
-            Span::styled("Type: ", Style::default().fg(palette::TEXT_HINT)),
+            Span::styled(label_type(locale), Style::default().fg(palette::TEXT_HINT)),
             Span::styled(
                 cat_label,
                 Style::default().fg(cat_color).add_modifier(Modifier::BOLD),
@@ -1055,17 +1057,20 @@ impl Renderable for ApprovalWidget<'_> {
         // they tell the user what will happen.
         lines.push(Line::from(vec![
             Span::raw("  "),
-            Span::styled("About:  ", Style::default().fg(palette::TEXT_HINT)),
+            Span::styled(label_about(locale), Style::default().fg(palette::TEXT_HINT)),
             Span::styled(
-                self.request.description.clone(),
+                self.request.description_for_locale(locale),
                 Style::default().fg(palette::TEXT_BODY),
             ),
         ]));
-        for impact in self.request.impacts.iter().take(4) {
+        for impact in self.request.impacts_for_locale(locale).into_iter().take(4) {
             lines.push(Line::from(vec![
                 Span::raw("  "),
-                Span::styled("Impact: ", Style::default().fg(palette::TEXT_HINT)),
-                Span::styled(impact.clone(), Style::default().fg(palette::TEXT_BODY)),
+                Span::styled(
+                    label_impact(locale),
+                    Style::default().fg(palette::TEXT_HINT),
+                ),
+                Span::styled(impact, Style::default().fg(palette::TEXT_BODY)),
             ]));
         }
 
@@ -1076,7 +1081,10 @@ impl Renderable for ApprovalWidget<'_> {
             crate::utils::truncate_with_ellipsis(&params_str, params_width.max(20), "...");
         lines.push(Line::from(vec![
             Span::raw("  "),
-            Span::styled("Params: ", Style::default().fg(palette::TEXT_HINT)),
+            Span::styled(
+                label_params(locale),
+                Style::default().fg(palette::TEXT_HINT),
+            ),
             Span::styled(
                 params_truncated,
                 Style::default().fg(palette::TEXT_SECONDARY),
@@ -1085,7 +1093,7 @@ impl Renderable for ApprovalWidget<'_> {
 
         lines.push(Line::from(""));
 
-        let options = approval_options_for(risk);
+        let options = approval_options_for(risk, locale);
         let pending = self.view.pending_confirm();
 
         for (i, opt) in options.iter().enumerate() {
@@ -1118,7 +1126,7 @@ impl Renderable for ApprovalWidget<'_> {
             if staged {
                 spans.push(Span::raw("  "));
                 spans.push(Span::styled(
-                    "(staged)",
+                    staged_marker(locale),
                     Style::default()
                         .fg(palette_colors.accent)
                         .add_modifier(Modifier::BOLD),
@@ -1136,31 +1144,33 @@ impl Renderable for ApprovalWidget<'_> {
                 lines.push(Line::from(vec![
                     Span::raw("  "),
                     Span::styled(
-                        "Single key approves: ",
+                        single_key_prefix(locale),
                         Style::default().fg(palette::TEXT_HINT),
                     ),
                     Span::styled(
-                        "Enter / 1 / y",
+                        single_key_value(locale),
                         Style::default()
                             .fg(palette_colors.accent)
                             .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
-                        "  ·  v: full params  ·  Esc: abort",
+                        footer_controls(locale),
                         Style::default().fg(palette::TEXT_HINT),
                     ),
                 ]));
             }
             (RiskLevel::Destructive, Some(opt)) => {
                 let again_key = match opt {
-                    crate::tui::approval::ApprovalOption::ApproveOnce => "Enter or y",
-                    crate::tui::approval::ApprovalOption::ApproveAlways => "Enter or a",
+                    crate::tui::approval::ApprovalOption::ApproveOnce => confirm_key_once(locale),
+                    crate::tui::approval::ApprovalOption::ApproveAlways => {
+                        confirm_key_always(locale)
+                    }
                     _ => "Enter",
                 };
                 lines.push(Line::from(vec![
                     Span::raw("  "),
                     Span::styled(
-                        "Confirm destructive action — press ",
+                        destructive_confirm_prefix(locale),
                         Style::default()
                             .fg(palette_colors.accent)
                             .add_modifier(Modifier::BOLD),
@@ -1173,7 +1183,7 @@ impl Renderable for ApprovalWidget<'_> {
                             .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
-                        " again to commit, anything else cancels.",
+                        destructive_confirm_suffix(locale),
                         Style::default().fg(palette::TEXT_HINT),
                     ),
                 ]));
@@ -1182,17 +1192,17 @@ impl Renderable for ApprovalWidget<'_> {
                 lines.push(Line::from(vec![
                     Span::raw("  "),
                     Span::styled(
-                        "Two keys to approve: ",
+                        two_key_prefix(locale),
                         Style::default().fg(palette::TEXT_HINT),
                     ),
                     Span::styled(
-                        "y/a then y/a again",
+                        two_key_value(locale),
                         Style::default()
                             .fg(palette_colors.accent)
                             .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
-                        "  ·  v: full params  ·  Esc: abort",
+                        footer_controls(locale),
                         Style::default().fg(palette::TEXT_HINT),
                     ),
                 ]));
@@ -1200,8 +1210,9 @@ impl Renderable for ApprovalWidget<'_> {
         }
 
         let title = format!(
-            " {} approval — {} ",
-            risk_badge_text(risk),
+            " {} {} — {} ",
+            risk_badge_text(risk, locale),
+            approval_word(locale),
             self.request.tool_name
         );
         let block = Block::default()
@@ -1294,22 +1305,133 @@ fn approval_palette(risk: RiskLevel) -> ApprovalColors {
     }
 }
 
-fn risk_badge_text(risk: RiskLevel) -> &'static str {
-    match risk {
-        RiskLevel::Benign => "REVIEW",
-        RiskLevel::Destructive => "DESTRUCTIVE",
+fn risk_badge_text(risk: RiskLevel, locale: Locale) -> &'static str {
+    match (locale, risk) {
+        (Locale::ZhHans, RiskLevel::Benign) => "审查",
+        (Locale::ZhHans, RiskLevel::Destructive) => "破坏性",
+        (_, RiskLevel::Benign) => "REVIEW",
+        (_, RiskLevel::Destructive) => "DESTRUCTIVE",
     }
 }
 
-fn category_label_for(category: ToolCategory) -> (&'static str, Color) {
-    match category {
-        ToolCategory::Safe => ("Safe", palette::STATUS_SUCCESS),
-        ToolCategory::FileWrite => ("File Write", palette::STATUS_WARNING),
-        ToolCategory::Shell => ("Shell Command", palette::STATUS_ERROR),
-        ToolCategory::Network => ("Network", palette::STATUS_WARNING),
-        ToolCategory::McpRead => ("MCP Read", palette::DEEPSEEK_SKY),
-        ToolCategory::McpAction => ("MCP Action", palette::STATUS_WARNING),
-        ToolCategory::Unknown => ("Unknown", palette::STATUS_ERROR),
+fn category_label_for(category: ToolCategory, locale: Locale) -> (&'static str, Color) {
+    match (locale, category) {
+        (Locale::ZhHans, ToolCategory::Safe) => ("安全", palette::STATUS_SUCCESS),
+        (Locale::ZhHans, ToolCategory::FileWrite) => ("文件写入", palette::STATUS_WARNING),
+        (Locale::ZhHans, ToolCategory::Shell) => ("Shell 命令", palette::STATUS_ERROR),
+        (Locale::ZhHans, ToolCategory::Network) => ("网络", palette::STATUS_WARNING),
+        (Locale::ZhHans, ToolCategory::McpRead) => ("MCP 读取", palette::DEEPSEEK_SKY),
+        (Locale::ZhHans, ToolCategory::McpAction) => ("MCP 操作", palette::STATUS_WARNING),
+        (Locale::ZhHans, ToolCategory::Unknown) => ("未知", palette::STATUS_ERROR),
+        (_, ToolCategory::Safe) => ("Safe", palette::STATUS_SUCCESS),
+        (_, ToolCategory::FileWrite) => ("File Write", palette::STATUS_WARNING),
+        (_, ToolCategory::Shell) => ("Shell Command", palette::STATUS_ERROR),
+        (_, ToolCategory::Network) => ("Network", palette::STATUS_WARNING),
+        (_, ToolCategory::McpRead) => ("MCP Read", palette::DEEPSEEK_SKY),
+        (_, ToolCategory::McpAction) => ("MCP Action", palette::STATUS_WARNING),
+        (_, ToolCategory::Unknown) => ("Unknown", palette::STATUS_ERROR),
+    }
+}
+
+fn approval_word(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "审批",
+        _ => "approval",
+    }
+}
+
+fn label_type(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "类型：",
+        _ => "Type: ",
+    }
+}
+
+fn label_about(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "说明：",
+        _ => "About:  ",
+    }
+}
+
+fn label_impact(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "影响：",
+        _ => "Impact: ",
+    }
+}
+
+fn label_params(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "参数：",
+        _ => "Params: ",
+    }
+}
+
+fn staged_marker(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "(待确认)",
+        _ => "(staged)",
+    }
+}
+
+fn single_key_prefix(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "单键批准：",
+        _ => "Single key approves: ",
+    }
+}
+
+fn single_key_value(_locale: Locale) -> &'static str {
+    "Enter / 1 / y"
+}
+
+fn footer_controls(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "  ·  v：完整参数  ·  Esc：中止",
+        _ => "  ·  v: full params  ·  Esc: abort",
+    }
+}
+
+fn destructive_confirm_prefix(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "确认破坏性操作：再次按 ",
+        _ => "Confirm destructive action — press ",
+    }
+}
+
+fn destructive_confirm_suffix(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => " 执行；按其他键取消。",
+        _ => " again to commit, anything else cancels.",
+    }
+}
+
+fn confirm_key_once(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "Enter 或 y",
+        _ => "Enter or y",
+    }
+}
+
+fn confirm_key_always(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "Enter 或 a",
+        _ => "Enter or a",
+    }
+}
+
+fn two_key_prefix(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "两次按键确认：",
+        _ => "Two keys to approve: ",
+    }
+}
+
+fn two_key_value(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "先按 y/a，再按一次 y/a",
+        _ => "y/a then y/a again",
     }
 }
 
@@ -1320,35 +1442,63 @@ struct ApprovalOptionRow {
     dangerous: bool,
 }
 
-fn approval_options_for(risk: RiskLevel) -> [ApprovalOptionRow; 4] {
+fn approval_options_for(risk: RiskLevel, locale: Locale) -> [ApprovalOptionRow; 4] {
     use crate::tui::approval::ApprovalOption as O;
     let dangerous = matches!(risk, RiskLevel::Destructive);
     [
         ApprovalOptionRow {
             option: O::ApproveOnce,
-            label: "Approve once",
+            label: option_approve_once(locale),
             key_hint: "1 / y",
             dangerous,
         },
         ApprovalOptionRow {
             option: O::ApproveAlways,
-            label: "Approve always for this kind",
+            label: option_approve_always(locale),
             key_hint: "2 / a",
             dangerous,
         },
         ApprovalOptionRow {
             option: O::Deny,
-            label: "Deny this call",
+            label: option_deny(locale),
             key_hint: "3 / d / n",
             dangerous: false,
         },
         ApprovalOptionRow {
             option: O::Abort,
-            label: "Abort the turn",
+            label: option_abort(locale),
             key_hint: "Esc",
             dangerous: false,
         },
     ]
+}
+
+fn option_approve_once(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "仅本次批准",
+        _ => "Approve once",
+    }
+}
+
+fn option_approve_always(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "本会话同类自动批准",
+        _ => "Approve always for this kind",
+    }
+}
+
+fn option_deny(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "拒绝本次调用",
+        _ => "Deny this call",
+    }
+}
+
+fn option_abort(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "中止本轮",
+        _ => "Abort the turn",
+    }
 }
 
 pub struct ElevationWidget<'a> {

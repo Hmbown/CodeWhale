@@ -1310,7 +1310,8 @@ async fn run_event_loop(
                                     "mode": app.mode.label(),
                                 }),
                             );
-                            app.view_stack.push(ApprovalView::new(request));
+                            app.view_stack
+                                .push(ApprovalView::new_for_locale(request, app.ui_locale));
                             app.status_message = Some(format!(
                                 "Approval required for '{tool_name}': {description}"
                             ));
