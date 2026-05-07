@@ -8,6 +8,8 @@
 use super::*;
 
 use crate::models::context_window_for_model;
+use crate::session_manager::{SavedSession, SessionManager};
+use std::path::Path;
 
 impl Engine {
     pub(super) async fn run_capacity_pre_request_checkpoint(
@@ -974,7 +976,14 @@ impl Engine {
             }
         }
 
-        // Cross-session recovery: opt-in only, workspace-scoped
+        // Second try: build canonical state from previous session JSON.
+        // Richer than memory records and works even when shutdown checkpoint
+        // wrote an empty state.
+        if self.try_rehydrate_from_previous_session() {
+            return;
+        }
+
+        // Third try: cross-session memory (legacy fallback, opt-in only).
         if !self.capacity_controller.cross_session_enabled() {
             return;
         }
@@ -989,5 +998,141 @@ impl Engine {
             );
             self.merge_compaction_summary(Some(prompt));
         }
+    }
+
+    /// Build a `CanonicalState` from the most recent previous session in
+    /// the same workspace and merge it via the canonical prompt pipeline.
+    /// Only activates on fresh sessions (no messages yet) to avoid
+    /// double-injection after a session resume or mid-turn compaction.
+    fn try_rehydrate_from_previous_session(&mut self) -> bool {
+        if !self.session.messages.is_empty() {
+            return false;
+        }
+
+        let manager = match SessionManager::default_location() {
+            Ok(m) => m,
+            Err(_) => return false,
+        };
+
+        let latest = match manager.get_latest_session_for_workspace(&self.session.workspace) {
+            Ok(Some(m)) => m,
+            _ => return false,
+        };
+
+        if latest.id == self.session.id {
+            return false;
+        }
+
+        let saved = match manager.load_session(&latest.id) {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+
+        let canonical =
+            build_canonical_state_from_session(&saved, &self.session.workspace);
+        let pointer = format!("session://{}", latest.id);
+        let prompt = self.canonical_prompt(
+            &canonical,
+            &pointer,
+            GuardrailAction::NoIntervention,
+            Some("Rehydrated canonical state from previous session."),
+        );
+        self.merge_compaction_summary(Some(prompt));
+        true
+    }
+}
+
+/// Build a `CanonicalState` from a saved session's messages for cross-session
+/// recovery. Extracts goal, confirmed_facts, open_loops, and pending_actions
+/// from the last 12 messages, mirroring `Engine::build_canonical_state()` but
+/// operating on persisted (offline) data without a turn context.
+fn build_canonical_state_from_session(
+    saved: &SavedSession,
+    workspace: &Path,
+) -> CanonicalState {
+    let total = saved.messages.len();
+    let start = total.saturating_sub(12);
+
+    // Goal: last user text message (skip <turn_meta> metadata blocks)
+    let goal = saved
+        .messages
+        .iter()
+        .rev()
+        .find_map(|msg| {
+            if msg.role != "user" {
+                return None;
+            }
+            msg.content.iter().rev().find_map(|block| match block {
+                ContentBlock::Text { text, .. } if !text.contains("<turn_meta>") => {
+                    Some(summarize_text(text, 220))
+                }
+                _ => None,
+            })
+        })
+        .unwrap_or_else(|| "Continue current task".to_string());
+
+    // Constraints
+    let constraints = vec![
+        format!("model={}", saved.metadata.model),
+        format!("workspace={}", workspace.display()),
+    ];
+
+    // Confirmed facts: text and non-error tool results from last N messages.
+    // Skip <turn_meta> metadata blocks and thinking blocks.
+    let mut confirmed_facts = Vec::new();
+    for msg in saved.messages[start..].iter() {
+        for block in &msg.content {
+            match block {
+                ContentBlock::Text { text, .. } if !text.contains("<turn_meta>") => {
+                    let tag = if msg.role == "user" { "User" } else { "Assistant" };
+                    confirmed_facts
+                        .push(format!("{tag}: {}", summarize_text(text, 180)));
+                }
+                ContentBlock::ToolResult { content, .. } => {
+                    if !content.starts_with("Error:") {
+                        confirmed_facts
+                            .push(format!("Result: {}", summarize_text(content, 180)));
+                    }
+                }
+                _ => {}
+            }
+        }
+        if confirmed_facts.len() >= 8 {
+            break;
+        }
+    }
+
+    // Open loops: error tool results
+    let mut open_loops = Vec::new();
+    for msg in saved.messages[start..].iter().rev() {
+        for block in &msg.content {
+            if let ContentBlock::ToolResult { content, .. } = block {
+                if content.starts_with("Error:") {
+                    open_loops.push(summarize_text(content, 180));
+                }
+            }
+        }
+        if open_loops.len() >= 4 {
+            break;
+        }
+    }
+
+    // Pending actions
+    let pending_actions: Vec<String> = if open_loops.is_empty() {
+        vec!["Continue with next smallest verifiable step".to_string()]
+    } else {
+        vec![
+            "Re-evaluate failed tool steps with narrower scope".to_string(),
+            "Recover from previous errors".to_string(),
+        ]
+    };
+
+    CanonicalState {
+        goal,
+        constraints,
+        confirmed_facts,
+        open_loops,
+        pending_actions,
+        critical_refs: Vec::new(),
     }
 }

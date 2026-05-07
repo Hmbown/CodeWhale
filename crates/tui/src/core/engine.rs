@@ -816,6 +816,49 @@ impl Engine {
     }
 
     async fn write_shutdown_checkpoint(&mut self) {
+        let canonical = if self.session.messages.is_empty() {
+            CanonicalState::default()
+        } else {
+            let goal = self
+                .session
+                .messages
+                .iter()
+                .rev()
+                .find_map(|msg| {
+                    if msg.role != "user" {
+                        return None;
+                    }
+                    msg.content.iter().find_map(|block| match block {
+                        ContentBlock::Text { text, .. } => Some(summarize_text(text, 220)),
+                        _ => None,
+                    })
+                })
+                .unwrap_or_default();
+
+            let mut confirmed_facts = Vec::new();
+            for msg in self.session.messages.iter().rev().take(6) {
+                for block in &msg.content {
+                    if let ContentBlock::ToolResult { content, .. } = block {
+                        if !content.starts_with("Error:") {
+                            confirmed_facts.push(summarize_text(content, 180));
+                            if confirmed_facts.len() >= 4 {
+                                break;
+                            }
+                        }
+                    }
+                }
+                if confirmed_facts.len() >= 4 {
+                    break;
+                }
+            }
+
+            CanonicalState {
+                goal,
+                confirmed_facts,
+                ..CanonicalState::default()
+            }
+        };
+
         let record = CapacityMemoryRecord {
             id: new_record_id(),
             ts: now_rfc3339(),
@@ -825,10 +868,7 @@ impl Engine {
             c_hat: 0.0,
             slack: 0.0,
             risk_band: "low".to_string(),
-            canonical_state: CanonicalState {
-                goal: String::new(),
-                ..CanonicalState::default()
-            },
+            canonical_state: canonical,
             source_message_ids: Vec::new(),
             replay_info: None,
             workspace: self.session.workspace.to_string_lossy().to_string(),
