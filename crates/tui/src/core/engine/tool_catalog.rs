@@ -10,8 +10,10 @@ use std::path::Path;
 use std::time::Duration;
 
 use serde_json::json;
+use tokio::process::Command;
 
 use crate::models::Tool;
+use crate::repl::runtime::{PythonCommandSpec, python_command_candidates};
 use crate::tools::spec::{ToolError, ToolResult, required_str};
 use crate::tui::app::AppMode;
 
@@ -446,10 +448,12 @@ pub(super) async fn execute_code_execution_tool(
     workspace: &Path,
 ) -> Result<ToolResult, ToolError> {
     let code = required_str(input, "code")?;
-    let mut cmd = tokio::process::Command::new("python3");
-    cmd.arg("-c");
-    cmd.arg(code);
-    cmd.current_dir(workspace);
+    let candidate = resolve_python_for_code_execution(workspace).await?;
+    let mut cmd = Command::new(&candidate.program);
+    cmd.args(&candidate.prefix_args)
+        .arg("-c")
+        .arg(code)
+        .current_dir(workspace);
 
     let output = tokio::time::timeout(Duration::from_secs(120), cmd.output())
         .await
@@ -473,4 +477,44 @@ pub(super) async fn execute_code_execution_tool(
         success,
         metadata: Some(payload),
     })
+}
+
+async fn resolve_python_for_code_execution(
+    workspace: &Path,
+) -> Result<PythonCommandSpec, ToolError> {
+    let mut errors = Vec::new();
+    for candidate in python_command_candidates() {
+        let mut cmd = Command::new(&candidate.program);
+        cmd.args(&candidate.prefix_args)
+            .arg("-c")
+            .arg("import sys; print('__DEEPSEEK_PYTHON_OK__')")
+            .current_dir(workspace);
+
+        match tokio::time::timeout(Duration::from_secs(10), cmd.output()).await {
+            Ok(Ok(output))
+                if output.status.success()
+                    && String::from_utf8_lossy(&output.stdout)
+                        .contains("__DEEPSEEK_PYTHON_OK__") =>
+            {
+                return Ok(candidate);
+            }
+            Ok(Ok(output)) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                errors.push(format!(
+                    "{} failed probe (code {:?}, stdout {:?}, stderr {:?})",
+                    candidate.label,
+                    output.status.code(),
+                    stdout.trim(),
+                    stderr.trim()
+                ));
+            }
+            Ok(Err(err)) => errors.push(format!("{} failed to spawn: {err}", candidate.label)),
+            Err(_) => errors.push(format!("{} probe timed out", candidate.label)),
+        }
+    }
+    Err(ToolError::execution_failed(format!(
+        "no usable Python interpreter found; tried {}",
+        errors.join("; ")
+    )))
 }

@@ -1,6 +1,6 @@
 //! Long-lived Python REPL runtime.
 //!
-//! One `python3 -u` subprocess lives for the duration of an RLM turn (or an
+//! One `python -u` subprocess lives for the duration of an RLM turn (or an
 //! inline `repl` block sequence in the agent loop). Code blocks are sent
 //! over stdin framed by `__RLM_RUN__`/`__RLM_END__` sentinels; the bootstrap
 //! `exec()`s them into the same global namespace so variables, imports,
@@ -16,6 +16,8 @@
 //! that happens to contain "REQ" or "FINAL" can't be confused with control
 //! messages.
 
+use std::env;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -147,6 +149,55 @@ pub struct PythonRuntime {
     round_timeout: Option<Duration>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct PythonCommandSpec {
+    pub(crate) program: OsString,
+    pub(crate) prefix_args: Vec<OsString>,
+    pub(crate) label: String,
+}
+
+impl PythonCommandSpec {
+    fn new(program: impl Into<OsString>, prefix_args: impl IntoIterator<Item = OsString>) -> Self {
+        let program = program.into();
+        let prefix_args: Vec<OsString> = prefix_args.into_iter().collect();
+        let label = if prefix_args.is_empty() {
+            program.to_string_lossy().into_owned()
+        } else {
+            format!(
+                "{} {}",
+                program.to_string_lossy(),
+                prefix_args
+                    .iter()
+                    .map(|arg| arg.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            )
+        };
+        Self {
+            program,
+            prefix_args,
+            label,
+        }
+    }
+}
+
+pub(crate) fn python_command_candidates() -> Vec<PythonCommandSpec> {
+    let mut candidates = Vec::new();
+    for var in ["DEEPSEEK_PYTHON", "PYTHON"] {
+        if let Some(value) = env::var_os(var)
+            && !value.is_empty()
+        {
+            candidates.push(PythonCommandSpec::new(value, Vec::<OsString>::new()));
+        }
+    }
+    candidates.push(PythonCommandSpec::new("python3", Vec::<OsString>::new()));
+    candidates.push(PythonCommandSpec::new("python", Vec::<OsString>::new()));
+    if cfg!(windows) {
+        candidates.push(PythonCommandSpec::new("py", [OsString::from("-3")]));
+    }
+    candidates
+}
+
 impl PythonRuntime {
     /// Spawn a REPL with no `context` variable and no LLM helpers wired up.
     /// Used by the agent loop for inline `repl` blocks the model emits in
@@ -183,10 +234,40 @@ impl PythonRuntime {
         let session_id = Uuid::new_v4().simple().to_string();
         let bootstrap = render_bootstrap(&session_id);
 
-        let mut cmd = Command::new("python3");
-        cmd.arg("-u")
+        let mut errors = Vec::new();
+        for candidate in python_command_candidates() {
+            match Self::spawn_with_candidate(
+                &candidate,
+                context_path,
+                round_timeout,
+                &session_id,
+                &bootstrap,
+            )
+            .await
+            {
+                Ok(rt) => return Ok(rt),
+                Err(err) => errors.push(format!("{}: {err}", candidate.label)),
+            }
+        }
+
+        Err(format!(
+            "failed to spawn Python runtime; tried {}",
+            errors.join("; ")
+        ))
+    }
+
+    async fn spawn_with_candidate(
+        candidate: &PythonCommandSpec,
+        context_path: Option<&Path>,
+        round_timeout: Option<Duration>,
+        session_id: &str,
+        bootstrap: &str,
+    ) -> Result<Self, String> {
+        let mut cmd = Command::new(&candidate.program);
+        cmd.args(&candidate.prefix_args)
+            .arg("-u")
             .arg("-c")
-            .arg(&bootstrap)
+            .arg(bootstrap)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -196,26 +277,24 @@ impl PythonRuntime {
             cmd.env("RLM_CONTEXT_FILE", path);
         }
 
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| format!("failed to spawn python3: {e}"))?;
+        let mut child = cmd.spawn().map_err(|e| format!("failed to spawn: {e}"))?;
 
         let stdin = child
             .stdin
             .take()
-            .ok_or_else(|| "python3 stdin pipe missing".to_string())?;
+            .ok_or_else(|| "stdin pipe missing".to_string())?;
         let raw_stdout = child
             .stdout
             .take()
-            .ok_or_else(|| "python3 stdout pipe missing".to_string())?;
+            .ok_or_else(|| "stdout pipe missing".to_string())?;
         let stdout = BufReader::new(raw_stdout);
 
         let mut rt = Self {
             child,
             stdin,
             stdout,
-            session_id: session_id.clone(),
-            context_path: context_path.map(Path::to_path_buf),
+            session_id: session_id.to_string(),
+            context_path: None,
             stdout_limit: DEFAULT_STDOUT_LIMIT,
             round_count: 0,
             started: Instant::now(),
@@ -228,10 +307,13 @@ impl PythonRuntime {
         let ready_sentinel = format!("__RLM_READY_{session_id}__");
         match tokio::time::timeout(SPAWN_READY_TIMEOUT, rt.read_until_ready(&ready_sentinel)).await
         {
-            Ok(Ok(())) => Ok(rt),
+            Ok(Ok(())) => {
+                rt.context_path = context_path.map(Path::to_path_buf);
+                Ok(rt)
+            }
             Ok(Err(e)) => {
                 let _ = rt.child.kill().await;
-                Err(format!("python3 bootstrap failed: {e}"))
+                Err(format!("bootstrap failed: {e}"))
             }
             Err(_) => {
                 let _ = rt.child.kill().await;

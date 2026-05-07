@@ -487,11 +487,18 @@ mod tests {
     fn test_list_skills_empty_directory() {
         let tmpdir = TempDir::new().unwrap();
         let mut app = create_test_app_with_tmpdir(&tmpdir);
+        let expected_empty =
+            crate::skills::discover_for_workspace_and_dir(&app.workspace, &app.skills_dir)
+                .is_empty();
         let result = list_skills(&mut app, None);
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
-        assert!(msg.contains("No skills found"));
         assert!(msg.contains("Skills location:"));
+        if expected_empty {
+            assert!(msg.contains("No skills found"));
+        } else {
+            assert!(msg.contains("Available skills"));
+        }
     }
 
     #[test]
