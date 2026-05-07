@@ -55,6 +55,7 @@ fn stream_idle_timeout() -> Duration {
     Duration::from_secs(secs)
 }
 
+use crate::config::ApiProvider;
 use crate::llm_client::StreamEventBox;
 use crate::logging;
 use crate::models::{
@@ -74,37 +75,7 @@ impl DeepSeekClient {
         &self,
         request: &MessageRequest,
     ) -> Result<MessageResponse> {
-        let messages = build_chat_messages_for_request(request);
-        let mut body = json!({
-            "model": request.model,
-            "messages": messages,
-            "max_tokens": request.max_tokens,
-        });
-
-        if let Some(temperature) = request.temperature {
-            body["temperature"] = json!(temperature);
-        }
-        if let Some(top_p) = request.top_p {
-            body["top_p"] = json!(top_p);
-        }
-        if let Some(tools) = request.tools.as_ref() {
-            body["tools"] = json!(
-                tools
-                    .iter()
-                    .map(|tool| tool_to_chat_for_base_url(tool, &self.base_url))
-                    .collect::<Vec<_>>()
-            );
-        }
-        if let Some(choice) = request.tool_choice.as_ref()
-            && let Some(mapped) = map_tool_choice_for_chat(choice)
-        {
-            body["tool_choice"] = mapped;
-        }
-        apply_reasoning_effort(
-            &mut body,
-            request.reasoning_effort.as_deref(),
-            self.api_provider,
-        );
+        let body = build_chat_completion_body(request, self.api_provider, &self.base_url, false);
 
         let url = api_url(&self.base_url, "chat/completions");
         let open_timeout = stream_open_timeout();
@@ -144,41 +115,8 @@ impl DeepSeekClient {
         request: MessageRequest,
     ) -> Result<StreamEventBox> {
         // Try true SSE streaming via chat completions (widely supported)
-        let messages = build_chat_messages_for_request(&request);
-        let mut body = json!({
-            "model": request.model,
-            "messages": messages,
-            "max_tokens": request.max_tokens,
-            "stream": true,
-            "stream_options": {
-                "include_usage": true
-            },
-        });
-
-        if let Some(temperature) = request.temperature {
-            body["temperature"] = json!(temperature);
-        }
-        if let Some(top_p) = request.top_p {
-            body["top_p"] = json!(top_p);
-        }
-        if let Some(tools) = request.tools.as_ref() {
-            body["tools"] = json!(
-                tools
-                    .iter()
-                    .map(|tool| tool_to_chat_for_base_url(tool, &self.base_url))
-                    .collect::<Vec<_>>()
-            );
-        }
-        if let Some(choice) = request.tool_choice.as_ref()
-            && let Some(mapped) = map_tool_choice_for_chat(choice)
-        {
-            body["tool_choice"] = mapped;
-        }
-        apply_reasoning_effort(
-            &mut body,
-            request.reasoning_effort.as_deref(),
-            self.api_provider,
-        );
+        let mut body =
+            build_chat_completion_body(&request, self.api_provider, &self.base_url, true);
 
         // Bulletproof final sanitizer: walk the wire payload and force
         // `reasoning_content` onto any assistant message that has tool_calls
@@ -392,6 +330,67 @@ impl DeepSeekClient {
                 dyn futures_util::Stream<Item = Result<StreamEvent>> + Send,
             >))
     }
+}
+
+pub(crate) fn build_chat_completion_body(
+    request: &MessageRequest,
+    api_provider: ApiProvider,
+    base_url: &str,
+    stream: bool,
+) -> Value {
+    let messages = build_chat_messages_for_request(request);
+    let mut body = json!({
+        "model": request.model,
+        "messages": messages,
+        "max_tokens": request.max_tokens,
+    });
+
+    if stream {
+        body["stream"] = json!(true);
+        body["stream_options"] = json!({
+            "include_usage": true
+        });
+    }
+    if let Some(temperature) = request.temperature {
+        body["temperature"] = json!(temperature);
+    }
+    if let Some(top_p) = request.top_p {
+        body["top_p"] = json!(top_p);
+    }
+    if let Some(tools) = request.tools.as_ref() {
+        body["tools"] = json!(
+            tools
+                .iter()
+                .map(|tool| tool_to_chat_for_base_url(tool, base_url))
+                .collect::<Vec<_>>()
+        );
+    }
+    if let Some(choice) = request.tool_choice.as_ref()
+        && let Some(mapped) = map_tool_choice_for_chat(choice)
+    {
+        body["tool_choice"] = mapped;
+    }
+    apply_reasoning_effort(&mut body, request.reasoning_effort.as_deref(), api_provider);
+    body
+}
+
+pub(crate) fn build_sanitized_chat_completion_body(
+    request: &MessageRequest,
+    api_provider: ApiProvider,
+    base_url: &str,
+    stream: bool,
+) -> (Value, Option<u32>) {
+    let mut body = build_chat_completion_body(request, api_provider, base_url, stream);
+    let replay_input_tokens = if stream {
+        sanitize_thinking_mode_messages(
+            &mut body,
+            &request.model,
+            request.reasoning_effort.as_deref(),
+        )
+    } else {
+        None
+    };
+    (body, replay_input_tokens)
 }
 
 // === Chat Completions Helpers ===

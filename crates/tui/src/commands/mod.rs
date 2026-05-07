@@ -9,6 +9,7 @@ mod config;
 mod core;
 mod cycle;
 mod debug;
+mod dryrun;
 mod goal;
 mod hooks;
 mod init;
@@ -385,6 +386,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         description_id: MessageId::CmdDiffDescription,
     },
     CommandInfo {
+        name: "dryrun",
+        aliases: &["preview-request"],
+        usage: "/dryrun [--full]",
+        description_id: MessageId::CmdDryrunDescription,
+    },
+    CommandInfo {
         name: "undo",
         aliases: &[],
         usage: "/undo",
@@ -553,6 +560,7 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "context" | "ctx" => debug::context(app),
         "edit" => debug::edit(app),
         "diff" => debug::diff(app),
+        "dryrun" | "preview-request" => dryrun::dryrun(app, arg),
         "undo" => {
             // Try surgical patch-undo first; fall back to conversation undo
             // if no snapshots are available or if the snapshot undo couldn't

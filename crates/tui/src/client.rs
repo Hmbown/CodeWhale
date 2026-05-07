@@ -20,6 +20,8 @@ use crate::llm_client::{
 use crate::logging;
 use crate::models::{MessageRequest, MessageResponse, ServerToolUsage, SystemPrompt, Usage};
 
+pub(crate) use chat::build_sanitized_chat_completion_body;
+
 pub(super) fn to_api_tool_name(name: &str) -> String {
     let mut out = String::new();
     for ch in name.chars() {
@@ -389,7 +391,7 @@ fn is_version_segment(segment: &str) -> bool {
             .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|ch| ch.is_ascii_digit()))
 }
 
-pub(super) fn api_url(base_url: &str, path: &str) -> String {
+pub(crate) fn api_url(base_url: &str, path: &str) -> String {
     let path = path.trim_start_matches('/');
     if path.starts_with("beta/") {
         return format!("{}/{}", unversioned_base_url(base_url), path);

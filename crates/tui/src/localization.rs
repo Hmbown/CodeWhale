@@ -226,6 +226,7 @@ pub enum MessageId {
     CmdCycleDescription,
     CmdCyclesDescription,
     CmdDiffDescription,
+    CmdDryrunDescription,
     CmdEditDescription,
     CmdExitDescription,
     CmdExportDescription,
@@ -284,6 +285,7 @@ pub enum MessageId {
     CmdTokensContextWithWindow,
     CmdTokensNotReported,
     CmdTokensReport,
+    DryrunFooterApprox,
     FooterAgentSingular,
     FooterAgentsPlural,
     FooterPressCtrlCAgain,
@@ -418,6 +420,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CmdCycleDescription,
     MessageId::CmdCyclesDescription,
     MessageId::CmdDiffDescription,
+    MessageId::CmdDryrunDescription,
     MessageId::CmdEditDescription,
     MessageId::CmdExitDescription,
     MessageId::CmdExportDescription,
@@ -474,6 +477,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CmdTokensContextWithWindow,
     MessageId::CmdTokensNotReported,
     MessageId::CmdTokensReport,
+    MessageId::DryrunFooterApprox,
     MessageId::FooterAgentSingular,
     MessageId::FooterAgentsPlural,
     MessageId::FooterPressCtrlCAgain,
@@ -736,6 +740,9 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CmdCycleDescription => "Show the carry-forward briefing for a specific cycle",
         MessageId::CmdCyclesDescription => "List checkpoint-restart cycle handoffs in this session",
         MessageId::CmdDiffDescription => "Show file changes since session start",
+        MessageId::CmdDryrunDescription => {
+            "Preview the next Chat Completions request without sending it"
+        }
         MessageId::CmdEditDescription => "Revise and resubmit the last message",
         MessageId::CmdExitDescription => "Exit the application",
         MessageId::CmdExportDescription => "Export conversation to markdown",
@@ -834,6 +841,9 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CmdTokensCacheMissOnly => "hit not reported / {miss} miss",
         MessageId::CmdTokensContextUnknownWindow => "~{estimated} / unknown window",
         MessageId::CmdTokensContextWithWindow => "~{used} / {window} ({percent}%)",
+        MessageId::DryrunFooterApprox => {
+            "Token counts are approximate; /dryrun is read-only and does not send or record a turn."
+        }
         MessageId::FooterAgentSingular => "1 agent",
         MessageId::FooterAgentsPlural => "{count} agents",
         MessageId::FooterPressCtrlCAgain => "Press Ctrl+C again to quit",
@@ -1022,6 +1032,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
             "セッション内のチェックポイント再起動サイクルの引き継ぎを一覧表示"
         }
         MessageId::CmdDiffDescription => "セッション開始以降のファイル変更を表示",
+        MessageId::CmdDryrunDescription => "次の Chat Completions リクエストを送信せずにプレビュー",
         MessageId::CmdEditDescription => "最後のメッセージを編集して再送信",
         MessageId::CmdExitDescription => "アプリを終了",
         MessageId::CmdExportDescription => "会話を Markdown にエクスポート",
@@ -1119,6 +1130,9 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::CmdTokensCacheMissOnly => "ヒットは未報告 / ミス {miss}",
         MessageId::CmdTokensContextUnknownWindow => "~{estimated} / コンテキスト窓不明",
         MessageId::CmdTokensContextWithWindow => "~{used} / {window} ({percent}%)",
+        MessageId::DryrunFooterApprox => {
+            "トークン数は概算です。/dryrun は読み取り専用で、リクエスト送信やターン記録は行いません。"
+        }
         MessageId::FooterAgentSingular => "1 エージェント",
         MessageId::FooterAgentsPlural => "{count} エージェント",
         MessageId::FooterPressCtrlCAgain => "もう一度 Ctrl+C で終了",
@@ -1290,6 +1304,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CmdCycleDescription => "显示指定循环的延续简报",
         MessageId::CmdCyclesDescription => "列出本次会话中的检查点重启循环交接",
         MessageId::CmdDiffDescription => "显示会话开始以来的文件变更",
+        MessageId::CmdDryrunDescription => "预览下一次 Chat Completions 请求但不发送",
         MessageId::CmdEditDescription => "修改并重新提交最后一条消息",
         MessageId::CmdExitDescription => "退出应用",
         MessageId::CmdExportDescription => "将对话导出为 Markdown",
@@ -1373,6 +1388,9 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CmdTokensCacheMissOnly => "命中未上报 / 未命中 {miss}",
         MessageId::CmdTokensContextUnknownWindow => "~{estimated} / 窗口未知",
         MessageId::CmdTokensContextWithWindow => "~{used} / {window}（{percent}%）",
+        MessageId::DryrunFooterApprox => {
+            "Token 数为近似值；/dryrun 只读，不会发送请求或记录新轮次。"
+        }
         MessageId::FooterAgentSingular => "1 个子代理",
         MessageId::FooterAgentsPlural => "{count} 个子代理",
         MessageId::FooterPressCtrlCAgain => "再次按 Ctrl+C 退出",
@@ -1544,6 +1562,9 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
             "Listar as transferências dos ciclos checkpoint-restart desta sessão"
         }
         MessageId::CmdDiffDescription => "Mostrar alterações em arquivos desde o início da sessão",
+        MessageId::CmdDryrunDescription => {
+            "Pré-visualizar a próxima solicitação Chat Completions sem enviá-la"
+        }
         MessageId::CmdEditDescription => "Revisar e reenviar a última mensagem",
         MessageId::CmdExitDescription => "Sair do aplicativo",
         MessageId::CmdExportDescription => "Exportar a conversa para markdown",
@@ -1653,6 +1674,9 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::CmdTokensCacheMissOnly => "hit não reportado / {miss} miss",
         MessageId::CmdTokensContextUnknownWindow => "~{estimated} / janela desconhecida",
         MessageId::CmdTokensContextWithWindow => "~{used} / {window} ({percent}%)",
+        MessageId::DryrunFooterApprox => {
+            "As contagens de tokens são aproximadas; /dryrun é somente leitura e não envia nem registra uma rodada."
+        }
         MessageId::FooterAgentSingular => "1 sub-agente",
         MessageId::FooterAgentsPlural => "{count} sub-agentes",
         MessageId::FooterPressCtrlCAgain => "Pressione Ctrl+C novamente para sair",
