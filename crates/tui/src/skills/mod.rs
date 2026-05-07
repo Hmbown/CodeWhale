@@ -248,7 +248,17 @@ impl SkillRegistry {
                     continue;
                 }
                 if let Some((key, value)) = line.split_once(':') {
-                    metadata.insert(key.trim().to_ascii_lowercase(), value.trim().to_string());
+                    let value = value.trim();
+                    let unquoted = if (value.starts_with('"')
+                        && value.ends_with('"')
+                        && value.len() >= 2)
+                        || (value.starts_with('\'') && value.ends_with('\'') && value.len() >= 2)
+                    {
+                        &value[1..value.len() - 1]
+                    } else {
+                        value
+                    };
+                    metadata.insert(key.trim().to_ascii_lowercase(), unquoted.to_string());
                 }
             }
 
