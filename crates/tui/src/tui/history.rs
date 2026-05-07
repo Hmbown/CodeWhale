@@ -699,25 +699,12 @@ impl ExecCell {
 
         if self.interaction.is_none() {
             if let Some(output) = self.output.as_ref() {
-                if matches!(mode, RenderMode::Live) {
-                    let fallback = summarize_tool_output(output);
-                    let summary = self
-                        .output_summary
-                        .as_deref()
-                        .unwrap_or(&fallback);
-                    lines.push(render_tool_output_summary_line(&summary, width));
-                    lines.push(details_affordance_line(
-                        "Enter to expand tool output",
-                        Style::default().fg(palette::TEXT_MUTED),
-                    ));
-                } else {
-                    lines.extend(render_exec_output_mode(
-                        output,
-                        width,
-                        TOOL_OUTPUT_LINE_LIMIT,
-                        mode,
-                    ));
-                }
+                lines.extend(render_exec_output_mode(
+                    output,
+                    width,
+                    TOOL_OUTPUT_LINE_LIMIT,
+                    mode,
+                ));
             } else if self.status == ToolStatus::Running && self.source == ExecSource::Assistant {
                 lines.extend(wrap_plain_line(
                     "  Ctrl+B opens shell controls.",
@@ -742,7 +729,7 @@ impl ExecCell {
             ));
         }
 
-        lines
+        wrap_card_rail(lines)
     }
 }
 
@@ -1308,7 +1295,6 @@ impl GenericToolCell {
         }
 
         if let Some(output) = self.output.as_ref() {
-            // Use cached diff detection instead of scanning every frame.
             if self.is_diff {
                 let diff_summary = diff_render::diff_summary_label(output);
                 lines.push(render_tool_header_with_summary(
@@ -1320,20 +1306,7 @@ impl GenericToolCell {
                     low_motion,
                 ));
                 lines.extend(diff_render::render_diff(output, width));
-            } else if matches!(mode, RenderMode::Live) {
-                // Live mode: one-line summary + expand affordance.
-                let fallback = summarize_tool_output(output);
-                let summary = self
-                    .output_summary
-                    .as_deref()
-                    .unwrap_or(&fallback);
-                lines.push(render_tool_output_summary_line(&summary, width));
-                lines.push(details_affordance_line(
-                    "Enter to expand tool output",
-                    Style::default().fg(palette::TEXT_MUTED),
-                ));
             } else {
-                // Transcript mode: full output.
                 lines.extend(render_tool_output_mode(
                     output,
                     width,
@@ -1348,7 +1321,7 @@ impl GenericToolCell {
                 lines.push(render_spillover_annotation(path, width));
             }
         }
-        lines
+        wrap_card_rail(lines)
     }
 
     /// Render `agent_spawn` as a single compact summary line for live
@@ -2246,15 +2219,29 @@ fn render_compact_kv(label: &str, value: &str, style: Style, width: u16) -> Vec<
     render_card_detail_line(Some(label.trim_end_matches(':')), value, style, width)
 }
 
-/// Render a single-line tool output summary for the collapsed (Live) view.
-/// Truncates to fit within `width` columns.
-fn render_tool_output_summary_line(summary: &str, width: u16) -> Line<'static> {
-    let max_chars = usize::from(width).saturating_sub(2);
-    let text = truncate_text(summary.trim(), max_chars.min(TOOL_TEXT_LIMIT));
-    Line::from(vec![
-        Span::raw("  "),
-        Span::styled(text, Style::default().fg(palette::TEXT_MUTED)),
-    ])
+/// Wrap rendered tool-card lines with card-rail glyphs (╭ │ ╰).
+/// First non-empty line gets `╭`, middle lines get `│`, last line gets `╰`.
+/// Single-line cards get a single `─` prefix.
+fn wrap_card_rail(mut lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
+    let n = lines.len();
+    if n == 0 {
+        return lines;
+    }
+    if n == 1 {
+        lines[0].spans.insert(0, Span::raw("─ "));
+        return lines;
+    }
+    for (i, line) in lines.iter_mut().enumerate() {
+        let rail = if i == 0 {
+            "\u{256D} "  // ╭
+        } else if i == n - 1 {
+            "\u{2570} "  // ╰
+        } else {
+            "\u{2502} "  // │
+        };
+        line.spans.insert(0, Span::raw(rail));
+    }
+    lines
 }
 
 fn render_tool_output_mode(
@@ -3636,8 +3623,9 @@ mod tests {
             },
         );
 
-        let animated_symbol = animated[0].spans[0].content.trim();
-        let low_motion_symbol = low_motion[0].spans[0].content.trim();
+        // Index 0 is card-rail glyph (╭); the animated symbol is at index 1.
+        let animated_symbol = animated[0].spans[1].content.trim();
+        let low_motion_symbol = low_motion[0].spans[1].content.trim();
 
         // low_motion always pins to the first (static) frame.
         assert_eq!(low_motion_symbol, TOOL_RUNNING_SYMBOLS[0]);
@@ -3963,6 +3951,7 @@ mod tests {
         // Generic bullet glyph + "tool" verb. The shape and colour wiring
         // is what matters for the theme parity; the verb text moves with
         // the redesign.
+        // PlanUpdate does NOT use card-rail wrapping (separate render path).
         let header = &lines[0];
         let symbol_span = &header.spans[0];
         let glyph_span = &header.spans[1];
@@ -4043,10 +4032,10 @@ mod tests {
         let lines = cell.lines_with_motion(80, true);
 
         let header = &lines[0];
-        let symbol_span = &header.spans[0];
-        let glyph_span = &header.spans[1];
-        let title_span = &header.spans[2];
-        let state_span = &header.spans[4];
+        let symbol_span = &header.spans[1];
+        let glyph_span = &header.spans[2];
+        let title_span = &header.spans[3];
+        let state_span = &header.spans[5];
 
         assert_eq!(
             symbol_span.style.fg,
@@ -4186,7 +4175,7 @@ mod tests {
 
     #[test]
     fn tool_exec_live_caps_output_transcript_does_not() {
-        // Live mode shows a one-line summary + "Enter to expand" affordance.
+        // Live mode renders head+tail with card-rail wrapping and "Alt+V" affordance.
         // Transcript mode emits the full output uncapped.
         let total_output_lines = 30usize;
         let output = (0..total_output_lines)
@@ -4224,11 +4213,11 @@ mod tests {
             transcript.len()
         );
         assert!(
-            live_text.contains("Enter to expand tool output"),
+            live_text.contains("Alt+V for details"),
             "live exec output must surface the expand affordance: {live_text}"
         );
         assert!(
-            !transcript_text.contains("Enter to expand tool output"),
+            !transcript_text.contains("Alt+V for details"),
             "transcript exec output must not include the expand affordance"
         );
         assert!(transcript_text.contains("output line 00"));
@@ -4379,15 +4368,15 @@ mod tests {
         );
         let live_text = lines_text(&live);
         assert!(
-            live_text.contains("Enter to expand"),
-            "live view must show expand affordance: {live_text}"
+            live_text.contains("Alt+V for details"),
+            "live view must show pager affordance: {live_text}"
         );
         let transcript_text = lines_text(&transcript);
         assert!(transcript_text.contains("row 29"));
     }
 
     #[test]
-    fn generic_tool_output_live_shows_one_line_summary_with_expand_affordance() {
+    fn generic_tool_output_live_renders_card_rail() {
         let output = (0..24usize)
             .map(|i| format!("line {i:02}"))
             .collect::<Vec<_>>()
@@ -4399,24 +4388,25 @@ mod tests {
             output: Some(output),
             prompts: None,
             spillover_path: None,
-            output_summary: Some("24 lines of shell output".to_string()),
+            output_summary: None,
             is_diff: false,
         }));
 
         let live_text =
             lines_text(&cell.lines_with_options(80, TranscriptRenderOptions::default()));
 
-        // Live mode: one-line summary + expand affordance, NOT full multi-line output.
-        assert!(live_text.contains("Enter to expand tool output"),
-            "live view must show expand affordance: {live_text}");
+        // Card-rail wrapping: first line starts with ╭, last with ╰.
         assert!(
-            live_text.contains("24 lines of shell output"),
-            "live summary must show the pre-computed output summary: {live_text}"
+            live_text.starts_with('\u{256D}'),
+            "live view must start with card-rail top glyph ╭: {live_text}"
         );
+        assert!(live_text.contains("Alt+V for details"));
+        assert!(live_text.contains("line 00"));
+        assert!(live_text.contains("line 23"));
     }
 
     #[test]
-    fn tool_output_live_preserves_summary_with_expand_affordance() {
+    fn tool_output_live_preserves_error_card_rail() {
         let output = [
             "start",
             "still starting",
@@ -4444,7 +4434,7 @@ mod tests {
             lines_text(&cell.lines_with_options(80, TranscriptRenderOptions::default()));
 
         // Live mode: one-line summary + expand affordance.
-        assert!(live_text.contains("Enter to expand tool output"),
+        assert!(live_text.contains("Alt+V for details"),
             "live view must show expand affordance: {live_text}");
         // The pre-computed summary captures the first meaningful content.
         assert!(

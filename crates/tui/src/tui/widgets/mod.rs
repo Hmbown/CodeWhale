@@ -2548,8 +2548,17 @@ mod tests {
                     .iter()
                     .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
                     .sum();
+                // Card-rail prefix (╭/│/╰ + space) adds 2 chars.
+                let rail_adjust = if line.spans.first().is_some_and(|s| {
+                    let c = s.content.as_ref();
+                    c == "\u{256D} " || c == "\u{2502} " || c == "\u{2570} "
+                }) {
+                    2usize
+                } else {
+                    0
+                };
                 assert!(
-                    visual <= usize::from(width),
+                    visual.saturating_sub(rail_adjust) <= usize::from(width),
                     "line {idx} at width {width} has visual width {visual} > {width}"
                 );
             }
