@@ -1106,6 +1106,7 @@ impl Config {
         if let Some(model) = self.default_text_model.as_deref()
             && !model.trim().eq_ignore_ascii_case("auto")
             && !provider_passes_model_through(self.api_provider())
+            && !self.active_provider_preserves_custom_base_url_model()
             && normalize_model_name(model).is_none()
         {
             anyhow::bail!(
@@ -1237,7 +1238,9 @@ impl Config {
             .provider_config()
             .and_then(|provider| provider.model.as_deref())
         {
-            if provider_passes_model_through(provider) {
+            if provider_passes_model_through(provider)
+                || self.active_provider_preserves_custom_base_url_model()
+            {
                 return model.trim().to_string();
             }
             if let Some(normalized) = normalize_model_for_provider(provider, model) {
@@ -1245,7 +1248,8 @@ impl Config {
             }
         }
         if let Some(model) = self.default_text_model.as_deref()
-            && provider_passes_model_through(provider)
+            && (provider_passes_model_through(provider)
+                || self.active_provider_preserves_custom_base_url_model())
         {
             return model.trim().to_string();
         }
@@ -1316,6 +1320,11 @@ impl Config {
             .to_string()
         });
         normalize_base_url(&base)
+    }
+
+    fn active_provider_preserves_custom_base_url_model(&self) -> bool {
+        let provider = self.api_provider();
+        provider_preserves_custom_base_url_model(provider, &self.deepseek_base_url())
     }
 
     /// Read the API key.
@@ -2192,6 +2201,7 @@ fn apply_env_overrides(config: &mut Config) {
 fn normalize_model_config(config: &mut Config) {
     if let Some(model) = config.default_text_model.as_deref()
         && !provider_passes_model_through(config.api_provider())
+        && !config.active_provider_preserves_custom_base_url_model()
         && let Some(normalized) = normalize_model_for_provider(config.api_provider(), model)
     {
         config.default_text_model = Some(normalized);
@@ -2199,41 +2209,49 @@ fn normalize_model_config(config: &mut Config) {
 
     if let Some(providers) = config.providers.as_mut() {
         if let Some(model) = providers.deepseek.model.as_deref()
+            && !provider_entry_uses_custom_base_url(ApiProvider::Deepseek, &providers.deepseek)
             && let Some(normalized) = normalize_model_for_provider(ApiProvider::Deepseek, model)
         {
             providers.deepseek.model = Some(normalized);
         }
         if let Some(model) = providers.deepseek_cn.model.as_deref()
+            && !provider_entry_uses_custom_base_url(ApiProvider::DeepseekCN, &providers.deepseek_cn)
             && let Some(normalized) = normalize_model_for_provider(ApiProvider::DeepseekCN, model)
         {
             providers.deepseek_cn.model = Some(normalized);
         }
         if let Some(model) = providers.nvidia_nim.model.as_deref()
+            && !provider_entry_uses_custom_base_url(ApiProvider::NvidiaNim, &providers.nvidia_nim)
             && let Some(normalized) = normalize_model_for_provider(ApiProvider::NvidiaNim, model)
         {
             providers.nvidia_nim.model = Some(normalized);
         }
         if let Some(model) = providers.openrouter.model.as_deref()
+            && !provider_entry_uses_custom_base_url(ApiProvider::Openrouter, &providers.openrouter)
             && let Some(normalized) = normalize_model_for_provider(ApiProvider::Openrouter, model)
         {
             providers.openrouter.model = Some(normalized);
         }
         if let Some(model) = providers.novita.model.as_deref()
+            && !provider_entry_uses_custom_base_url(ApiProvider::Novita, &providers.novita)
             && let Some(normalized) = normalize_model_for_provider(ApiProvider::Novita, model)
         {
             providers.novita.model = Some(normalized);
         }
         if let Some(model) = providers.fireworks.model.as_deref()
+            && !provider_entry_uses_custom_base_url(ApiProvider::Fireworks, &providers.fireworks)
             && let Some(normalized) = normalize_model_for_provider(ApiProvider::Fireworks, model)
         {
             providers.fireworks.model = Some(normalized);
         }
         if let Some(model) = providers.sglang.model.as_deref()
+            && !provider_entry_uses_custom_base_url(ApiProvider::Sglang, &providers.sglang)
             && let Some(normalized) = normalize_model_for_provider(ApiProvider::Sglang, model)
         {
             providers.sglang.model = Some(normalized);
         }
         if let Some(model) = providers.vllm.model.as_deref()
+            && !provider_entry_uses_custom_base_url(ApiProvider::Vllm, &providers.vllm)
             && let Some(normalized) = normalize_model_for_provider(ApiProvider::Vllm, model)
         {
             providers.vllm.model = Some(normalized);
@@ -2250,6 +2268,37 @@ fn normalize_model_for_provider(provider: ApiProvider, model: &str) -> Option<St
 
 fn provider_passes_model_through(provider: ApiProvider) -> bool {
     matches!(provider, ApiProvider::Openai | ApiProvider::Ollama)
+}
+
+fn provider_entry_uses_custom_base_url(provider: ApiProvider, entry: &ProviderConfig) -> bool {
+    entry
+        .base_url
+        .as_deref()
+        .is_some_and(|base_url| provider_preserves_custom_base_url_model(provider, base_url))
+}
+
+fn default_base_url_for_provider(provider: ApiProvider) -> &'static str {
+    match provider {
+        ApiProvider::Deepseek => DEFAULT_DEEPSEEK_BASE_URL,
+        ApiProvider::DeepseekCN => DEFAULT_DEEPSEEKCN_BASE_URL,
+        ApiProvider::NvidiaNim => DEFAULT_NVIDIA_NIM_BASE_URL,
+        ApiProvider::Openai => DEFAULT_OPENAI_BASE_URL,
+        ApiProvider::Openrouter => DEFAULT_OPENROUTER_BASE_URL,
+        ApiProvider::Novita => DEFAULT_NOVITA_BASE_URL,
+        ApiProvider::Fireworks => DEFAULT_FIREWORKS_BASE_URL,
+        ApiProvider::Sglang => DEFAULT_SGLANG_BASE_URL,
+        ApiProvider::Vllm => DEFAULT_VLLM_BASE_URL,
+        ApiProvider::Ollama => DEFAULT_OLLAMA_BASE_URL,
+    }
+}
+
+fn base_url_is_custom_for_provider(provider: ApiProvider, base_url: &str) -> bool {
+    normalize_base_url(base_url) != normalize_base_url(default_base_url_for_provider(provider))
+}
+
+fn provider_preserves_custom_base_url_model(provider: ApiProvider, base_url: &str) -> bool {
+    matches!(provider, ApiProvider::Openrouter)
+        && base_url_is_custom_for_provider(provider, base_url)
 }
 
 fn model_for_provider(provider: ApiProvider, normalized: String) -> String {
@@ -4772,6 +4821,42 @@ base_url = "https://or-table.example/v1"
         assert_eq!(config.api_provider(), ApiProvider::Openrouter);
         assert_eq!(config.deepseek_api_key()?, "or-table-key");
         assert_eq!(config.deepseek_base_url(), "https://or-table.example/v1");
+        Ok(())
+    }
+
+    #[test]
+    fn openrouter_custom_base_url_preserves_provider_model() -> Result<()> {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "deepseek-tui-or-custom-model-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
+
+        let config_path = temp_root.join(".deepseek").join("config.toml");
+        ensure_parent_dir(&config_path)?;
+        fs::write(
+            &config_path,
+            r#"provider = "openrouter"
+
+[providers.openrouter]
+api_key = "or-table-key"
+base_url = "https://gateway.example.com/v1"
+model = "DeepSeek-V4-Pro"
+"#,
+        )?;
+
+        let config = Config::load(None, None)?;
+        assert_eq!(config.api_provider(), ApiProvider::Openrouter);
+        assert_eq!(config.deepseek_api_key()?, "or-table-key");
+        assert_eq!(config.deepseek_base_url(), "https://gateway.example.com/v1");
+        assert_eq!(config.default_model(), "DeepSeek-V4-Pro");
         Ok(())
     }
 

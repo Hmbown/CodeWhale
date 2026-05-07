@@ -888,6 +888,11 @@ impl ConfigToml {
                 ProviderKind::Ollama => DEFAULT_OLLAMA_BASE_URL.to_string(),
             });
 
+        let explicit_model = cli.model.is_some()
+            || env.model.is_some()
+            || provider_cfg.model.is_some()
+            || root_deepseek_model.is_some()
+            || self.model.is_some();
         let model = cli
             .model
             .clone()
@@ -895,18 +900,13 @@ impl ConfigToml {
             .or_else(|| provider_cfg.model.clone())
             .or(root_deepseek_model)
             .or_else(|| self.model.clone())
-            .unwrap_or_else(|| match provider {
-                ProviderKind::Deepseek => DEFAULT_DEEPSEEK_MODEL.to_string(),
-                ProviderKind::NvidiaNim => DEFAULT_NVIDIA_NIM_MODEL.to_string(),
-                ProviderKind::Openai => DEFAULT_OPENAI_MODEL.to_string(),
-                ProviderKind::Openrouter => DEFAULT_OPENROUTER_MODEL.to_string(),
-                ProviderKind::Novita => DEFAULT_NOVITA_MODEL.to_string(),
-                ProviderKind::Fireworks => DEFAULT_FIREWORKS_MODEL.to_string(),
-                ProviderKind::Sglang => DEFAULT_SGLANG_MODEL.to_string(),
-                ProviderKind::Vllm => DEFAULT_VLLM_MODEL.to_string(),
-                ProviderKind::Ollama => DEFAULT_OLLAMA_MODEL.to_string(),
-            });
-        let model = normalize_model_for_provider(provider, &model);
+            .unwrap_or_else(|| default_model_for_provider(provider).to_string());
+        let model =
+            if explicit_model && provider_preserves_custom_base_url_model(provider, &base_url) {
+                model.trim().to_string()
+            } else {
+                normalize_model_for_provider(provider, &model)
+            };
 
         let mut http_headers = self.http_headers.clone();
         http_headers.extend(provider_cfg.http_headers.clone());
@@ -1041,6 +1041,45 @@ fn normalize_model_for_provider(provider: ProviderKind, model: &str) -> String {
         ) => DEFAULT_VLLM_FLASH_MODEL.to_string(),
         _ => model.to_string(),
     }
+}
+
+fn default_model_for_provider(provider: ProviderKind) -> &'static str {
+    match provider {
+        ProviderKind::Deepseek => DEFAULT_DEEPSEEK_MODEL,
+        ProviderKind::NvidiaNim => DEFAULT_NVIDIA_NIM_MODEL,
+        ProviderKind::Openai => DEFAULT_OPENAI_MODEL,
+        ProviderKind::Openrouter => DEFAULT_OPENROUTER_MODEL,
+        ProviderKind::Novita => DEFAULT_NOVITA_MODEL,
+        ProviderKind::Fireworks => DEFAULT_FIREWORKS_MODEL,
+        ProviderKind::Sglang => DEFAULT_SGLANG_MODEL,
+        ProviderKind::Vllm => DEFAULT_VLLM_MODEL,
+        ProviderKind::Ollama => DEFAULT_OLLAMA_MODEL,
+    }
+}
+
+fn default_base_url_for_provider(provider: ProviderKind) -> &'static str {
+    match provider {
+        ProviderKind::Deepseek => DEFAULT_DEEPSEEK_BASE_URL,
+        ProviderKind::NvidiaNim => DEFAULT_NVIDIA_NIM_BASE_URL,
+        ProviderKind::Openai => DEFAULT_OPENAI_BASE_URL,
+        ProviderKind::Openrouter => DEFAULT_OPENROUTER_BASE_URL,
+        ProviderKind::Novita => DEFAULT_NOVITA_BASE_URL,
+        ProviderKind::Fireworks => DEFAULT_FIREWORKS_BASE_URL,
+        ProviderKind::Sglang => DEFAULT_SGLANG_BASE_URL,
+        ProviderKind::Vllm => DEFAULT_VLLM_BASE_URL,
+        ProviderKind::Ollama => DEFAULT_OLLAMA_BASE_URL,
+    }
+}
+
+fn base_url_is_custom_for_provider(provider: ProviderKind, base_url: &str) -> bool {
+    let actual = base_url.trim_end_matches('/');
+    let default = default_base_url_for_provider(provider).trim_end_matches('/');
+    actual != default
+}
+
+fn provider_preserves_custom_base_url_model(provider: ProviderKind, base_url: &str) -> bool {
+    matches!(provider, ProviderKind::Openrouter)
+        && base_url_is_custom_for_provider(provider, base_url)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -2078,6 +2117,24 @@ mod tests {
 
         assert_eq!(resolved.api_key.as_deref(), Some("file-key"));
         assert_eq!(resolved.base_url, "https://or-mirror.example/v1");
+    }
+
+    #[test]
+    fn openrouter_custom_base_url_preserves_provider_model() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        let mut config = ConfigToml {
+            provider: ProviderKind::Openrouter,
+            ..ConfigToml::default()
+        };
+        config.providers.openrouter.base_url = Some("https://gateway.example.com/v1".to_string());
+        config.providers.openrouter.model = Some("DeepSeek-V4-Pro".to_string());
+
+        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::Openrouter);
+        assert_eq!(resolved.base_url, "https://gateway.example.com/v1");
+        assert_eq!(resolved.model, "DeepSeek-V4-Pro");
     }
 
     #[test]
