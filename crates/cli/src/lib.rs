@@ -19,6 +19,7 @@ use deepseek_config::{
 use deepmap::engine::RepoMapEngine;
 use deepmap::renderer;
 use deepseek_execpolicy::{AskForApproval, ExecPolicyContext, ExecPolicyEngine};
+use deepseek_mcp::{McpServerDefinition, run_stdio_server};
 use deepseek_secrets::Secrets;
 use deepseek_state::{StateStore, ThreadListFilters};
 
