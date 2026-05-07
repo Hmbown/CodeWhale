@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{expand_path, normalize_model_name};
 use crate::localization::normalize_configured_locale;
+use crate::palette::normalize_hex_rgb_color;
 
 // ============================================================================
 // TuiPrefs — ~/.deepseek/tui.toml
@@ -185,6 +186,8 @@ pub struct Settings {
     pub show_tool_details: bool,
     /// UI locale: auto, en, ja, zh-Hans, pt-BR
     pub locale: String,
+    /// Optional main TUI background color as a 6-digit hex RGB value.
+    pub background_color: Option<String>,
     /// Composer layout density: compact, comfortable, spacious
     pub composer_density: String,
     /// Show a border around the composer input area
@@ -233,6 +236,7 @@ impl Default for Settings {
             show_thinking: true,
             show_tool_details: true,
             locale: "auto".to_string(),
+            background_color: None,
             composer_density: "comfortable".to_string(),
             composer_border: true,
             composer_vim_mode: "normal".to_string(),
@@ -287,6 +291,7 @@ impl Settings {
             s.locale = normalize_configured_locale(&s.locale)
                 .unwrap_or("en")
                 .to_string();
+            s.background_color = normalize_optional_background_color(s.background_color.as_deref());
             s.default_model = s.default_model.as_deref().and_then(normalize_default_model);
             s
         };
@@ -357,6 +362,9 @@ impl Settings {
                     );
                 };
                 self.locale = locale.to_string();
+            }
+            "background_color" | "background" | "bg" => {
+                self.background_color = normalize_background_color_setting(value)?;
             }
             "composer_density" | "composer" => {
                 let normalized = normalize_composer_density(value);
@@ -491,6 +499,10 @@ impl Settings {
         lines.push(format!("  show_thinking:      {}", self.show_thinking));
         lines.push(format!("  show_tool_details:  {}", self.show_tool_details));
         lines.push(format!("  locale:            {}", self.locale));
+        lines.push(format!(
+            "  background_color:   {}",
+            self.background_color.as_deref().unwrap_or("(default)")
+        ));
         lines.push(format!("  composer_density:   {}", self.composer_density));
         lines.push(format!("  composer_border:    {}", self.composer_border));
         lines.push(format!("  composer_vim_mode:  {}", self.composer_vim_mode));
@@ -542,7 +554,11 @@ impl Settings {
             ("show_tool_details", "Show detailed tool output: on/off"),
             (
                 "locale",
-                "UI locale: auto, en, ja, zh-Hans, pt-BR (model output is unchanged)",
+                "UI locale and default model language: auto, en, ja, zh-Hans, pt-BR",
+            ),
+            (
+                "background_color",
+                "Main TUI background color: #RRGGBB or default",
             ),
             (
                 "composer_density",
@@ -619,6 +635,28 @@ fn normalize_transcript_spacing(value: &str) -> &str {
         "spacious" | "loose" => "spacious",
         _ => value,
     }
+}
+
+fn normalize_optional_background_color(value: Option<&str>) -> Option<String> {
+    value.and_then(|raw| normalize_background_color_setting(raw).ok().flatten())
+}
+
+fn normalize_background_color_setting(value: &str) -> Result<Option<String>> {
+    let trimmed = value.trim();
+    if trimmed.is_empty()
+        || matches!(
+            trimmed.to_ascii_lowercase().as_str(),
+            "default" | "none" | "reset" | "off"
+        )
+    {
+        return Ok(None);
+    }
+
+    normalize_hex_rgb_color(trimmed).map(Some).ok_or_else(|| {
+        anyhow::anyhow!(
+            "Failed to update setting: invalid background_color '{value}'. Expected #RRGGBB, RRGGBB, or default."
+        )
+    })
 }
 
 fn normalize_sidebar_focus(value: &str) -> &str {
@@ -703,6 +741,29 @@ mod tests {
             .set("locale", "ar")
             .expect_err("Arabic is planned, not shipped");
         assert!(err.to_string().contains("invalid locale"));
+    }
+
+    #[test]
+    fn background_color_normalizes_hex_and_accepts_default() {
+        let mut settings = Settings::default();
+        settings
+            .set("background_color", "#1A1b26")
+            .expect("set custom background");
+        assert_eq!(settings.background_color.as_deref(), Some("#1a1b26"));
+
+        settings
+            .set("background", "default")
+            .expect("reset custom background");
+        assert_eq!(settings.background_color, None);
+    }
+
+    #[test]
+    fn background_color_rejects_invalid_hex() {
+        let mut settings = Settings::default();
+        let err = settings
+            .set("background_color", "#123")
+            .expect_err("short hex should fail");
+        assert!(err.to_string().contains("invalid background_color"));
     }
 
     #[test]

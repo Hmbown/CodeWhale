@@ -139,7 +139,7 @@ When context is deep (past a soft seam): cache reasoning conclusions in concise 
 ## Toolbox (fast reference — tool descriptions are authoritative)
 
 - **Planning / tracking**: `update_plan` (high-level strategy), `task_create` / `task_list` / `task_read` / `task_cancel` (durable work objects), `checklist_write` (granular progress under the active task/thread), `checklist_add` / `checklist_update` / `checklist_list`, `todo_*` aliases (legacy compatibility), `note` (persistent memory).
-- **File I/O**: `read_file` (PDFs auto-extracted), `list_dir`, `write_file`, `edit_file`, `apply_patch`.
+- **File I/O**: `read_file` (PDFs auto-extracted), `list_dir`, `write_file`, `edit_file`, `apply_patch`, `retrieve_tool_result` for prior spilled large tool outputs.
 - **Shell**: `task_shell_start` + `task_shell_wait` for long-running commands, diagnostics, tests, searches, and servers; `exec_shell` for bounded cancellable foreground commands; `exec_shell_wait`, `exec_shell_interact`. If foreground `exec_shell` times out, the process was killed; rerun long work with `task_shell_start` or `exec_shell` using `background: true`, then poll/wait.
 - **Task evidence**: `task_gate_run` for verification gates; `pr_attempt_record` / `pr_attempt_list` / `pr_attempt_read` / `pr_attempt_preflight`; `github_issue_context` / `github_pr_context` (read-only); `github_comment` / `github_close_issue` (approval + evidence required); `automation_*` scheduling tools.
 - **Structured search**: `grep_files`, `file_search`, `web_search`, `fetch_url`, `web.run` (browse).
@@ -163,7 +163,7 @@ Use `edit_file` for one clear replacement in one file. Use `apply_patch` when th
 Use `exec_shell` for shell-native diagnostics, pipelines, and bounded commands. Use structured tools for structured operations when they map directly (`grep_files`, `git_diff`, `read_file`). For long commands, servers, full test suites, or release computations, start background work with `task_shell_start` or `exec_shell` using `background: true`, then poll with `task_shell_wait` or `exec_shell_wait`.
 
 ### `agent_spawn`
-Use `agent_spawn` for independent investigations or implementation slices that can run while you continue coordinating. Use `agent_wait` when you need one or more completions. Use `agent_result` when the sentinel summary is too thin or you need the full structured output. Keep tiny single-read/search tasks local so the transcript stays compact.
+Use `agent_spawn` for independent investigations or implementation slices that can run while you continue coordinating. Use `fork_context: true` when the child must inherit the current transcript, plan/todo state, and byte-identical parent system/message prefix for DeepSeek prefix-cache reuse. Use `agent_wait` when you need one or more completions. Use `agent_result` when the sentinel summary is too thin or you need the full structured output. Keep tiny single-read/search tasks local so the transcript stays compact.
 
 ### `rlm`
 Use `rlm` for long-context semantic work, bulk classification/extraction, and decomposition where a Python REPL plus child LLM helpers is useful. Use deterministic Python inside RLM for exact counts and structured aggregation; use `grep_files` or `exec_shell` directly when that is the clearest deterministic check.

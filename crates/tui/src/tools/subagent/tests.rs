@@ -20,6 +20,13 @@ fn make_snapshot(status: SubAgentStatus) -> SubAgentResult {
     }
 }
 
+fn message_text(message: &Message) -> &str {
+    match message.content.first() {
+        Some(ContentBlock::Text { text, .. }) => text.as_str(),
+        other => panic!("expected text content block, got {other:?}"),
+    }
+}
+
 #[test]
 fn test_agent_type_from_str() {
     assert_eq!(
@@ -205,6 +212,88 @@ fn test_parse_spawn_request_accepts_items_payload() {
     assert!(parsed.prompt.contains("Analyze module"));
     assert!(parsed.prompt.contains("[mention:$drive](app://drive)"));
     assert_eq!(parsed.agent_type, SubAgentType::Explore);
+}
+
+#[test]
+fn test_parse_spawn_request_accepts_fork_context() {
+    let input = json!({
+        "prompt": "continue from here",
+        "fork_context": true
+    });
+    let parsed = parse_spawn_request(&input).expect("spawn request should parse");
+    assert!(parsed.fork_context);
+
+    let input = json!({
+        "prompt": "continue from here",
+        "inherit_context": true
+    });
+    let parsed = parse_spawn_request(&input).expect("spawn request should parse");
+    assert!(parsed.fork_context);
+}
+
+#[test]
+fn test_delegate_defaults_to_fork_context() {
+    let input = with_default_fork_context(json!({ "prompt": "review current work" }), true);
+    let parsed = parse_spawn_request(&input).expect("delegate request should parse");
+    assert!(parsed.fork_context);
+
+    let input = with_default_fork_context(
+        json!({ "prompt": "fresh exploration", "fork_context": false }),
+        true,
+    );
+    let parsed = parse_spawn_request(&input).expect("delegate override should parse");
+    assert!(!parsed.fork_context);
+}
+
+#[test]
+fn forked_subagent_messages_preserve_parent_prefix_then_append_task() {
+    let parent_system = SystemPrompt::Text("parent system".to_string());
+    let parent_message = Message {
+        role: "user".to_string(),
+        content: vec![ContentBlock::Text {
+            text: "parent turn".to_string(),
+            cache_control: None,
+        }],
+    };
+    let fork_context = SubAgentForkContext {
+        system: Some(parent_system.clone()),
+        messages: vec![parent_message.clone()],
+        structured_state_block: Some(
+            "## Cycle State (Auto-Preserved)\n- Mode: `AGENT`".to_string(),
+        ),
+    };
+
+    let assignment = SubAgentAssignment::new("inspect parser".to_string(), Some("worker".into()));
+    let messages = build_initial_subagent_messages(
+        "inspect parser",
+        &assignment,
+        &SubAgentType::General,
+        Some(&fork_context),
+    );
+
+    assert_eq!(
+        subagent_request_system_prompt("child system", Some(&fork_context)),
+        parent_system
+    );
+    assert_eq!(messages.first(), Some(&parent_message));
+    assert_eq!(messages.len(), 4);
+    assert_eq!(messages[1].role, "system");
+    assert!(message_text(&messages[1]).contains("<deepseek:fork_state>"));
+    assert_eq!(messages[2].role, "system");
+    assert!(message_text(&messages[2]).contains("<deepseek:subagent_context>"));
+    assert_eq!(messages[3].role, "user");
+    assert!(message_text(&messages[3]).contains("inspect parser"));
+}
+
+#[test]
+fn fresh_subagent_messages_keep_existing_single_turn_shape() {
+    let assignment = SubAgentAssignment::new("list files".to_string(), None);
+    let messages =
+        build_initial_subagent_messages("list files", &assignment, &SubAgentType::Explore, None);
+
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].role, "user");
+    assert!(message_text(&messages[0]).contains("list files"));
 }
 
 #[test]
@@ -1224,6 +1313,7 @@ fn stub_runtime() -> SubAgentRuntime {
         cancel_token: CancellationToken::new(),
         mailbox: None,
         parent_completion_tx: None,
+        fork_context: None,
     }
 }
 

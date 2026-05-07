@@ -58,6 +58,11 @@ pub struct SettingsSection {
     pub show_thinking: bool,
     pub show_tool_details: bool,
     pub locale: UiLocale,
+    #[schemars(
+        title = "Background color",
+        description = "Main TUI background color as #RRGGBB"
+    )]
+    pub background_color: Option<String>,
     pub composer_density: ComposerDensityValue,
     pub composer_border: bool,
     pub transcript_spacing: TranscriptSpacingValue,
@@ -268,6 +273,7 @@ pub fn build_document(app: &App, config: &Config) -> Result<ConfigUiDocument> {
             show_thinking: settings.show_thinking,
             show_tool_details: settings.show_tool_details,
             locale: UiLocale::from_setting(&settings.locale)?,
+            background_color: settings.background_color.clone(),
             composer_density: settings.composer_density.as_str().into(),
             composer_border: settings.composer_border,
             transcript_spacing: settings.transcript_spacing.as_str().into(),
@@ -424,6 +430,13 @@ pub fn apply_document(
             bool_str(doc.settings.show_tool_details),
         ),
         ("locale", doc.settings.locale.as_setting()),
+        (
+            "background_color",
+            doc.settings
+                .background_color
+                .as_deref()
+                .unwrap_or("default"),
+        ),
         (
             "composer_density",
             doc.settings.composer_density.as_setting(),
@@ -923,6 +936,48 @@ cost_currency = "cny"
 
         assert_eq!(doc.settings.cost_currency, CostCurrencyValue::Cny);
         // Safety: restore the guarded test-only environment mutation above.
+        unsafe {
+            if let Some(value) = old_config_path {
+                std::env::set_var("DEEPSEEK_CONFIG_PATH", value);
+            } else {
+                std::env::remove_var("DEEPSEEK_CONFIG_PATH");
+            }
+        }
+    }
+
+    #[test]
+    fn build_document_reflects_background_color_from_settings() {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let temp_root = std::env::temp_dir().join(format!(
+            "deepseek-config-ui-background-color-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(temp_root.join(".deepseek")).expect("config dir");
+        let config_path = temp_root.join(".deepseek").join("config.toml");
+        fs::write(&config_path, "").expect("seed config");
+        fs::write(
+            temp_root.join(".deepseek").join("settings.toml"),
+            r##"
+background_color = "#1A1B26"
+"##,
+        )
+        .expect("seed settings");
+
+        let old_config_path = std::env::var_os("DEEPSEEK_CONFIG_PATH");
+        unsafe {
+            std::env::set_var("DEEPSEEK_CONFIG_PATH", &config_path);
+        }
+
+        let app = app();
+        let config = Config::default();
+        let doc = build_document(&app, &config).expect("document");
+
+        assert_eq!(doc.settings.background_color.as_deref(), Some("#1a1b26"));
         unsafe {
             if let Some(value) = old_config_path {
                 std::env::set_var("DEEPSEEK_CONFIG_PATH", value);

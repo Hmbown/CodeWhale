@@ -1081,6 +1081,15 @@ impl App {
         }
     }
 
+    pub(crate) fn clear_model_scoped_telemetry(&mut self) {
+        self.session.last_prompt_tokens = None;
+        self.session.last_completion_tokens = None;
+        self.session.last_prompt_cache_hit_tokens = None;
+        self.session.last_prompt_cache_miss_tokens = None;
+        self.session.last_reasoning_replay_tokens = None;
+        self.session.turn_cache_history.clear();
+    }
+
     pub fn tr(&self, id: MessageId) -> &'static str {
         tr(self.ui_locale, id)
     }
@@ -1148,7 +1157,14 @@ impl App {
         let sidebar_focus = SidebarFocus::from_setting(&settings.sidebar_focus);
         let max_input_history = settings.max_input_history;
         let use_paste_burst_detection = settings.paste_burst_detection;
-        let ui_theme = palette::UiTheme::detect();
+        let mut ui_theme = palette::UiTheme::detect();
+        if let Some(background) = settings
+            .background_color
+            .as_deref()
+            .and_then(palette::parse_hex_rgb_color)
+        {
+            ui_theme = ui_theme.with_background_color(background);
+        }
         let model = settings.default_model.clone().unwrap_or(model);
         let auto_model = model.trim().eq_ignore_ascii_case("auto");
         let threshold_model = if auto_model {

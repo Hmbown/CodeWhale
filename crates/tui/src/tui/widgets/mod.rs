@@ -54,6 +54,7 @@ pub struct ChatWidget {
     lines: Vec<Line<'static>>,
     scrollbar: Option<TranscriptScrollbar>,
     jump_to_latest_button: Option<Rect>,
+    background: Color,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -66,6 +67,7 @@ struct TranscriptScrollbar {
 impl ChatWidget {
     pub fn new(app: &mut App, area: Rect) -> Self {
         let content_area = area;
+        let background = app.ui_theme.surface_bg;
         let visible_lines = content_area.height as usize;
         let render_options = app.transcript_render_options();
 
@@ -82,6 +84,7 @@ impl ChatWidget {
                 lines,
                 scrollbar: None,
                 jump_to_latest_button: None,
+                background,
             };
         }
 
@@ -290,6 +293,7 @@ impl ChatWidget {
             lines,
             scrollbar,
             jump_to_latest_button,
+            background,
         }
     }
 }
@@ -319,11 +323,11 @@ impl Renderable for ChatWidget {
         // gray on most user setups; an explicit ink fill keeps the chat
         // area on-brand.
         Block::default()
-            .style(Style::default().bg(palette::DEEPSEEK_INK))
+            .style(Style::default().bg(self.background))
             .render(area, buf);
 
         let paragraph =
-            Paragraph::new(self.lines.clone()).style(Style::default().bg(palette::DEEPSEEK_INK));
+            Paragraph::new(self.lines.clone()).style(Style::default().bg(self.background));
         paragraph.render(area, buf);
 
         if let Some(scrollbar) = self.scrollbar {
@@ -342,7 +346,7 @@ impl Renderable for ChatWidget {
         }
 
         if let Some(button_area) = self.jump_to_latest_button {
-            render_jump_to_latest_button(button_area, buf);
+            render_jump_to_latest_button(button_area, buf, self.background);
         }
     }
 
@@ -374,12 +378,12 @@ fn jump_to_latest_button_rect(area: Rect, has_scrollbar: bool) -> Option<Rect> {
     })
 }
 
-fn render_jump_to_latest_button(area: Rect, buf: &mut Buffer) {
+fn render_jump_to_latest_button(area: Rect, buf: &mut Buffer, background: Color) {
     Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(palette::BORDER_COLOR))
-        .style(Style::default().bg(palette::DEEPSEEK_INK))
+        .style(Style::default().bg(background))
         .render(area, buf);
 
     let arrow_x = area.x.saturating_add(1);
@@ -2611,6 +2615,33 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn chat_widget_uses_configured_surface_background() {
+        let mut app = create_test_app();
+        let custom = ratatui::style::Color::Rgb(26, 27, 38);
+        app.ui_theme = app.ui_theme.with_background_color(custom);
+        app.add_message(HistoryCell::Assistant {
+            content: "ready".to_string(),
+            streaming: false,
+        });
+
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 30,
+            height: 5,
+        };
+        let mut buf = Buffer::empty(area);
+        let widget = ChatWidget::new(&mut app, area);
+        widget.render(area, &mut buf);
+
+        assert_eq!(buf[(area.x, area.y)].bg, custom);
+        assert_eq!(
+            buf[(area.x + area.width - 1, area.y + area.height - 1)].bg,
+            custom
+        );
     }
 
     /// Regression: when the transcript scrollbar is visible, the rightmost

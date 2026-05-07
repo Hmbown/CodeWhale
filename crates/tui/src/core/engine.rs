@@ -47,8 +47,8 @@ use crate::tools::shell::{SharedShellManager, new_shared_shell_manager};
 use crate::tools::spec::RuntimeToolServices;
 use crate::tools::spec::{ApprovalRequirement, ToolError, ToolResult};
 use crate::tools::subagent::{
-    Mailbox, SharedSubAgentManager, SubAgentCompletion, SubAgentRuntime, SubAgentType,
-    new_shared_subagent_manager, resolve_subagent_assignment_route,
+    Mailbox, SharedSubAgentManager, SubAgentCompletion, SubAgentForkContext, SubAgentRuntime,
+    SubAgentType, new_shared_subagent_manager, resolve_subagent_assignment_route,
 };
 use crate::tools::todo::{SharedTodoList, new_shared_todo_list};
 use crate::tools::user_input::{UserInputRequest, UserInputResponse};
@@ -370,6 +370,7 @@ impl Engine {
         let env_var = match provider {
             ApiProvider::Deepseek | ApiProvider::DeepseekCN => "DEEPSEEK_API_KEY",
             ApiProvider::NvidiaNim => "NVIDIA_API_KEY/NVIDIA_NIM_API_KEY",
+            ApiProvider::Openai => "OPENAI_API_KEY",
             ApiProvider::Openrouter => "OPENROUTER_API_KEY",
             ApiProvider::Novita => "NOVITA_API_KEY",
             ApiProvider::Fireworks => "FIREWORKS_API_KEY",
@@ -974,6 +975,26 @@ impl Engine {
         let tool_context = self.build_tool_context(mode, auto_approve);
         let builder = self.build_turn_tool_registry_builder(mode, todo_list, plan_state);
 
+        let fork_context_for_runtime = if self.config.features.enabled(Feature::Subagents) {
+            let state = StructuredState::capture(
+                mode.label(),
+                self.config.workspace.clone(),
+                std::env::current_dir().ok(),
+                &self.session.working_set,
+                &self.config.todos,
+                &self.config.plan_state,
+                Some(&self.subagent_manager),
+            )
+            .await;
+            Some(SubAgentForkContext {
+                system: self.session.system_prompt.clone(),
+                messages: self.messages_with_turn_metadata(),
+                structured_state_block: state.to_system_block(),
+            })
+        } else {
+            None
+        };
+
         // Mailbox for structured sub-agent envelopes (#128/#130). One per
         // turn: the receiver is drained by a short-lived task that converts
         // envelopes into `Event::SubAgentMailbox` so the UI can route them
@@ -1026,6 +1047,9 @@ impl Engine {
                         )
                         .with_max_spawn_depth(self.config.max_spawn_depth)
                         .with_parent_completion_tx(self.tx_subagent_completion.clone());
+                        if let Some(context) = fork_context_for_runtime.clone() {
+                            rt = rt.with_fork_context(context);
+                        }
                         if let Some((mailbox, cancel_token)) = mailbox_for_runtime.as_ref() {
                             rt = rt
                                 .with_mailbox(mailbox.clone())
@@ -2038,9 +2062,9 @@ use self::lsp_hooks::{edited_paths_for_tool, parse_patch_paths};
 use self::streaming::TOOL_CALL_START_MARKERS;
 use self::streaming::{
     ContentBlockKind, FAKE_WRAPPER_NOTICE, MAX_STREAM_ERRORS_BEFORE_FAIL,
-    MAX_TRANSPARENT_STREAM_RETRIES, STREAM_CHUNK_TIMEOUT_SECS, STREAM_MAX_CONTENT_BYTES,
-    STREAM_MAX_DURATION_SECS, ToolUseState, contains_fake_tool_wrapper, filter_tool_call_delta,
-    should_transparently_retry_stream,
+    MAX_TRANSPARENT_STREAM_RETRIES, STREAM_MAX_CONTENT_BYTES, STREAM_MAX_DURATION_SECS,
+    ToolUseState, contains_fake_tool_wrapper, filter_tool_call_delta,
+    should_transparently_retry_stream, stream_chunk_timeout_secs,
 };
 use self::tool_catalog::{
     CODE_EXECUTION_TOOL_NAME, MULTI_TOOL_PARALLEL_NAME, REQUEST_USER_INPUT_NAME,

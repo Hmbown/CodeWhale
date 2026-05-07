@@ -327,7 +327,8 @@ impl Engine {
             // budget restarts with the fresh stream.
             let mut stream_start = Instant::now();
             let mut stream_content_bytes: usize = 0;
-            let chunk_timeout = Duration::from_secs(STREAM_CHUNK_TIMEOUT_SECS);
+            let chunk_timeout_secs = stream_chunk_timeout_secs();
+            let chunk_timeout = Duration::from_secs(chunk_timeout_secs);
             let max_duration = Duration::from_secs(STREAM_MAX_DURATION_SECS);
 
             // Process stream events
@@ -340,7 +341,7 @@ impl Engine {
                             Ok(None) => None, // stream ended normally
                             Err(_) => {
                                 let envelope = StreamError::Stall {
-                                    timeout_secs: STREAM_CHUNK_TIMEOUT_SECS,
+                                    timeout_secs: chunk_timeout_secs,
                                 }
                                 .into_envelope();
                                 crate::logging::warn(&envelope.message);

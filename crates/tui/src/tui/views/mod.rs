@@ -601,6 +601,16 @@ impl ConfigView {
             },
             ConfigRow {
                 section: ConfigSection::Display,
+                key: "background_color".to_string(),
+                value: settings
+                    .background_color
+                    .clone()
+                    .unwrap_or_else(|| "(default)".to_string()),
+                editable: true,
+                scope: ConfigScope::Saved,
+            },
+            ConfigRow {
+                section: ConfigSection::Display,
                 key: "calm_mode".to_string(),
                 value: settings.calm_mode.to_string(),
                 editable: true,
@@ -1005,6 +1015,7 @@ fn config_hint_for_key(key: &str) -> &'static str {
         | "paste_burst_detection" => "on/off, true/false, yes/no, 1/0",
         "composer_density" | "transcript_spacing" => "compact | comfortable | spacious",
         "locale" => "auto | en | ja | zh-Hans | pt-BR",
+        "background_color" => "#RRGGBB | default",
         "default_mode" => "agent | plan | yolo",
         "sidebar_width" => "10..=50",
         "sidebar_focus" => "auto | plan | todos | tasks | agents",
@@ -2017,6 +2028,7 @@ mod tests {
         assert!(keys.contains(&"model"));
         assert!(keys.contains(&"approval_mode"));
         assert!(keys.contains(&"locale"));
+        assert!(keys.contains(&"background_color"));
         assert!(keys.contains(&"auto_compact"));
         assert!(keys.contains(&"composer_border"));
         assert!(keys.contains(&"mcp_config_path"));

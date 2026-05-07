@@ -360,7 +360,7 @@ fn validate_base_url_security(base_url: &str) -> Result<()> {
 
 pub(super) fn versioned_base_url(base_url: &str) -> String {
     let trimmed = base_url.trim_end_matches('/');
-    if trimmed.ends_with("/v1") || trimmed.ends_with("/beta") {
+    if base_url_has_version_suffix(trimmed) {
         trimmed.to_string()
     } else {
         format!("{trimmed}/v1")
@@ -370,10 +370,23 @@ pub(super) fn versioned_base_url(base_url: &str) -> String {
 fn unversioned_base_url(base_url: &str) -> String {
     let trimmed = base_url.trim_end_matches('/');
     trimmed
-        .strip_suffix("/v1")
-        .or_else(|| trimmed.strip_suffix("/beta"))
+        .rsplit_once('/')
+        .filter(|(_, segment)| is_version_segment(segment))
+        .map(|(base, _)| base)
         .unwrap_or(trimmed)
         .to_string()
+}
+
+fn base_url_has_version_suffix(trimmed: &str) -> bool {
+    trimmed.rsplit('/').next().is_some_and(is_version_segment)
+}
+
+fn is_version_segment(segment: &str) -> bool {
+    segment.eq_ignore_ascii_case("beta")
+        || segment
+            .strip_prefix('v')
+            .or_else(|| segment.strip_prefix('V'))
+            .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|ch| ch.is_ascii_digit()))
 }
 
 pub(super) fn api_url(base_url: &str, path: &str) -> String {
@@ -812,7 +825,7 @@ pub(super) fn apply_reasoning_effort(
             | ApiProvider::Vllm => {
                 body["thinking"] = json!({ "type": "disabled" });
             }
-            ApiProvider::Ollama => {}
+            ApiProvider::Openai | ApiProvider::Ollama => {}
             ApiProvider::NvidiaNim => {
                 body["chat_template_kwargs"] = json!({
                     "thinking": false,
@@ -830,7 +843,7 @@ pub(super) fn apply_reasoning_effort(
                 body["reasoning_effort"] = json!("high");
                 body["thinking"] = json!({ "type": "enabled" });
             }
-            ApiProvider::Ollama => {}
+            ApiProvider::Openai | ApiProvider::Ollama => {}
             ApiProvider::NvidiaNim => {
                 body["chat_template_kwargs"] = json!({
                     "thinking": true,
@@ -849,7 +862,7 @@ pub(super) fn apply_reasoning_effort(
                 body["reasoning_effort"] = json!("max");
                 body["thinking"] = json!({ "type": "enabled" });
             }
-            ApiProvider::Ollama => {}
+            ApiProvider::Openai | ApiProvider::Ollama => {}
             ApiProvider::NvidiaNim => {
                 body["chat_template_kwargs"] = json!({
                     "thinking": true,
@@ -1032,6 +1045,13 @@ mod tests {
         assert_eq!(
             api_url("https://api.deepseek.com/beta", "chat/completions"),
             "https://api.deepseek.com/beta/chat/completions"
+        );
+        assert_eq!(
+            api_url(
+                "https://openai-compatible.example/api/coding/paas/v4",
+                "chat/completions"
+            ),
+            "https://openai-compatible.example/api/coding/paas/v4/chat/completions"
         );
     }
 

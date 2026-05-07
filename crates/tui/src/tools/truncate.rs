@@ -60,13 +60,37 @@ pub const SPILLOVER_THRESHOLD_BYTES: usize = 100 * 1024; // 100 KiB
 /// bound. Mirrors the workspace-snapshot 7-day default.
 pub const SPILLOVER_MAX_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
+#[cfg(test)]
+static TEST_SPILLOVER_ROOT: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+
+#[cfg(test)]
+pub(crate) static TEST_SPILLOVER_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Resolve `~/.deepseek/tool_outputs/`. Returns `None` if the home
 /// directory can't be determined (CI containers occasionally hit
 /// this). Callers should treat `None` as "spillover unavailable" and
 /// degrade gracefully rather than fail the tool call.
 #[must_use]
 pub fn spillover_root() -> Option<PathBuf> {
+    #[cfg(test)]
+    if let Some(root) = TEST_SPILLOVER_ROOT
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .clone()
+    {
+        return Some(root);
+    }
+
     Some(dirs::home_dir()?.join(".deepseek").join(SPILLOVER_DIR_NAME))
+}
+
+/// Override the spillover root for tests without mutating `$HOME`.
+#[cfg(test)]
+pub(crate) fn set_test_spillover_root(root: Option<PathBuf>) -> Option<PathBuf> {
+    let mut guard = TEST_SPILLOVER_ROOT
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    std::mem::replace(&mut *guard, root)
 }
 
 /// Resolve the spillover-file path for a tool call id. Sanitises the
@@ -231,8 +255,10 @@ pub fn apply_spillover(result: &mut ToolResult, tool_id: &str) -> Option<PathBuf
     let path_str = path.display().to_string();
     let footer = format!(
         "\n\n[Output truncated: {head_kib} KiB of {total_kib} KiB shown. \
-         Full output saved to {path_str}. Use `read_file path={path_str}` \
-         if you need the elided tail.]",
+         Full output saved to {path_str}. Use \
+         `retrieve_tool_result ref={tool_id} mode=tail` or \
+         `retrieve_tool_result ref={tool_id} mode=query query=<text>` \
+         if you need the elided output.]",
         head_kib = head.len() / 1024,
         total_kib = total / 1024,
     );
@@ -304,16 +330,15 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
     use tempfile::tempdir;
 
     /// Tests in this module serialize through this guard because
     /// they mutate process-global `$HOME`. Without it, cargo's
     /// parallel runner would observe interleaved overrides.
-    static TEST_GUARD: Mutex<()> = Mutex::new(());
-
     fn setup() -> std::sync::MutexGuard<'static, ()> {
-        TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner())
+        super::TEST_SPILLOVER_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
     }
 
     #[test]
@@ -530,7 +555,7 @@ mod tests {
                 "footer missing: {}",
                 &result.content[result.content.len().saturating_sub(200)..]
             );
-            assert!(result.content.contains("read_file path="));
+            assert!(result.content.contains("retrieve_tool_result ref=call-big"));
 
             // Full bytes are on disk at the returned path.
             assert!(path.exists(), "spillover file missing: {path:?}");

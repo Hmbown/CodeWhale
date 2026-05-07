@@ -119,6 +119,10 @@ fn show_single_setting(app: &App, key: &str) -> CommandResult {
         }
         "approval_mode" | "approval" => Some(app.approval_mode.label().to_string()),
         "locale" | "language" => Some(locale_display(app.ui_locale).to_string()),
+        "background_color" | "background" | "bg" => {
+            crate::palette::hex_rgb_string(app.ui_theme.surface_bg)
+                .or_else(|| Some("(default)".to_string()))
+        }
         "auto_compact" | "compact" => {
             Some(if app.auto_compact { "true" } else { "false" }.to_string())
         }
@@ -383,6 +387,15 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
             app.ui_locale = resolve_locale(&settings.locale);
             app.needs_redraw = true;
         }
+        "background_color" | "background" | "bg" => {
+            let base_theme = crate::palette::UiTheme::detect();
+            app.ui_theme = settings
+                .background_color
+                .as_deref()
+                .and_then(crate::palette::parse_hex_rgb_color)
+                .map_or(base_theme, |color| base_theme.with_background_color(color));
+            app.needs_redraw = true;
+        }
         "cost_currency" | "currency" => {
             app.cost_currency = crate::pricing::CostCurrency::from_setting(&settings.cost_currency)
                 .unwrap_or(crate::pricing::CostCurrency::Usd);
@@ -443,6 +456,10 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
     let display_value = match key.as_str() {
         "default_mode" | "mode" => settings.default_mode.clone(),
         "cost_currency" | "currency" => settings.cost_currency.clone(),
+        "background_color" | "background" | "bg" => settings
+            .background_color
+            .clone()
+            .unwrap_or_else(|| "default".to_string()),
         _ => value.to_string(),
     };
 

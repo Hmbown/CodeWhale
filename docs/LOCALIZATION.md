@@ -37,7 +37,9 @@ Fallback:
 
 - Missing or unsupported configured locales fall back to English.
 - `auto` falls back to English when no supported environment locale is detected.
-- UI locale is separate from model prompt language. Users still ask the model for a response language in the prompt.
+- The resolved locale is included in the system prompt and used as the default
+  natural language for V4 reasoning and replies. Users can still switch
+  languages mid-session by writing in a different language.
 
 ## Planned Global South QA Matrix
 

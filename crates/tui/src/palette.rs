@@ -287,6 +287,40 @@ impl UiTheme {
     pub fn detect() -> Self {
         Self::for_mode(PaletteMode::detect())
     }
+
+    #[must_use]
+    pub fn with_background_color(mut self, color: Color) -> Self {
+        self.surface_bg = color;
+        self.header_bg = color;
+        self.footer_bg = color;
+        self
+    }
+}
+
+#[must_use]
+pub fn parse_hex_rgb_color(value: &str) -> Option<Color> {
+    let hex = value.trim().strip_prefix('#').unwrap_or(value.trim());
+    if hex.len() != 6 || !hex.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return None;
+    }
+
+    let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+    let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+    let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+    Some(Color::Rgb(r, g, b))
+}
+
+#[must_use]
+pub fn normalize_hex_rgb_color(value: &str) -> Option<String> {
+    hex_rgb_string(parse_hex_rgb_color(value)?)
+}
+
+#[must_use]
+pub fn hex_rgb_string(color: Color) -> Option<String> {
+    let Color::Rgb(r, g, b) = color else {
+        return None;
+    };
+    Some(format!("#{r:02x}{g:02x}{b:02x}"))
 }
 
 #[must_use]
@@ -612,9 +646,10 @@ mod tests {
     use super::{
         ACCENT_REASONING_LIVE, ColorDepth, DEEPSEEK_INK, DEEPSEEK_RED, DEEPSEEK_SKY,
         DEEPSEEK_SLATE, LIGHT_PANEL, LIGHT_SURFACE, LIGHT_TEXT_BODY, LIGHT_TEXT_HINT,
-        LIGHT_UI_THEME, PaletteMode, SURFACE_REASONING, TEXT_HINT, adapt_bg,
+        LIGHT_UI_THEME, PaletteMode, SURFACE_REASONING, TEXT_HINT, UI_THEME, adapt_bg,
         adapt_bg_for_palette_mode, adapt_color, adapt_fg_for_palette_mode, blend, nearest_ansi16,
-        pulse_brightness, reasoning_surface_tint, rgb_to_ansi256,
+        normalize_hex_rgb_color, parse_hex_rgb_color, pulse_brightness, reasoning_surface_tint,
+        rgb_to_ansi256,
     };
     use ratatui::style::Color;
 
@@ -638,6 +673,32 @@ mod tests {
         assert_eq!(theme, LIGHT_UI_THEME);
         assert_eq!(theme.surface_bg, LIGHT_SURFACE);
         assert_eq!(theme.text_body, LIGHT_TEXT_BODY);
+    }
+
+    #[test]
+    fn ui_theme_applies_custom_background_to_base_surfaces() {
+        let custom = Color::Rgb(26, 27, 38);
+        let theme = super::UiTheme::for_mode(PaletteMode::Dark).with_background_color(custom);
+
+        assert_eq!(theme.surface_bg, custom);
+        assert_eq!(theme.header_bg, custom);
+        assert_eq!(theme.footer_bg, custom);
+        assert_eq!(
+            theme.composer_bg, UI_THEME.composer_bg,
+            "custom background must not erase panel contrast"
+        );
+    }
+
+    #[test]
+    fn hex_rgb_color_parser_accepts_hashless_and_normalizes() {
+        assert_eq!(parse_hex_rgb_color("#1a1B26"), Some(Color::Rgb(26, 27, 38)));
+        assert_eq!(parse_hex_rgb_color("1a1b26"), Some(Color::Rgb(26, 27, 38)));
+        assert_eq!(
+            normalize_hex_rgb_color("#1A1B26").as_deref(),
+            Some("#1a1b26")
+        );
+        assert_eq!(parse_hex_rgb_color("#123"), None);
+        assert_eq!(parse_hex_rgb_color("#zzzzzz"), None);
     }
 
     #[test]

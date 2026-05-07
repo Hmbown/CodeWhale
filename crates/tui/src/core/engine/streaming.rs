@@ -22,15 +22,30 @@ pub(super) struct ToolUseState {
     pub(super) input_buffer: String,
 }
 
-/// Maximum time to wait for a single stream chunk before assuming a stall.
+/// Default maximum time to wait for a single stream chunk before assuming a stall.
 /// **This is the idle timeout** — it resets on every SSE chunk, so long
 /// thinking turns that ARE producing reasoning_content stay alive. Only a
 /// genuine `chunk_timeout` window of silence kills the stream.
-pub(super) const STREAM_CHUNK_TIMEOUT_SECS: u64 = 90;
+const DEFAULT_STREAM_CHUNK_TIMEOUT_SECS: u64 = 300;
+const MIN_STREAM_CHUNK_TIMEOUT_SECS: u64 = 1;
+const MAX_STREAM_CHUNK_TIMEOUT_SECS: u64 = 3600;
+const STREAM_IDLE_TIMEOUT_ENV: &str = "DEEPSEEK_STREAM_IDLE_TIMEOUT_SECS";
+
+/// Reads the shared stream idle-timeout override used by the SSE client.
+pub(super) fn stream_chunk_timeout_secs() -> u64 {
+    stream_chunk_timeout_secs_from_env(std::env::var(STREAM_IDLE_TIMEOUT_ENV).ok().as_deref())
+}
+
+fn stream_chunk_timeout_secs_from_env(value: Option<&str>) -> u64 {
+    value
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_STREAM_CHUNK_TIMEOUT_SECS)
+        .clamp(MIN_STREAM_CHUNK_TIMEOUT_SECS, MAX_STREAM_CHUNK_TIMEOUT_SECS)
+}
 /// Maximum total bytes of text/thinking content before aborting the stream.
 pub(super) const STREAM_MAX_CONTENT_BYTES: usize = 10 * 1024 * 1024; // 10 MB
 /// Sanity backstop for total stream wall-clock duration. **Not** a routine
-/// kill switch — `STREAM_CHUNK_TIMEOUT_SECS` (idle) is the primary stall
+/// kill switch — the stream chunk idle timeout is the primary stall
 /// detector. The wall-clock cap is here only to bound pathological cases
 /// (e.g. a server that keeps sending heartbeats forever without progress).
 ///
@@ -134,4 +149,21 @@ pub(crate) fn filter_tool_call_delta(delta: &str, in_tool_call: &mut bool) -> St
     }
 
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stream_chunk_timeout_defaults_and_clamps_env_values() {
+        assert_eq!(stream_chunk_timeout_secs_from_env(None), 300);
+        assert_eq!(
+            stream_chunk_timeout_secs_from_env(Some("not-a-number")),
+            300
+        );
+        assert_eq!(stream_chunk_timeout_secs_from_env(Some("0")), 1);
+        assert_eq!(stream_chunk_timeout_secs_from_env(Some("90")), 90);
+        assert_eq!(stream_chunk_timeout_secs_from_env(Some("99999")), 3600);
+    }
 }

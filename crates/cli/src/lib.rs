@@ -53,7 +53,7 @@ impl From<ProviderArg> for ProviderKind {
 #[derive(Debug, Parser)]
 #[command(
     name = "deepseek",
-    version,
+    version = env!("DEEPSEEK_BUILD_VERSION"),
     bin_name = "deepseek",
     override_usage = "deepseek [OPTIONS] [PROMPT]\n       deepseek [OPTIONS] <COMMAND> [ARGS]"
 )]
@@ -1374,6 +1374,7 @@ fn build_tui_command(
         resolved_runtime.provider,
         ProviderKind::Deepseek
             | ProviderKind::NvidiaNim
+            | ProviderKind::Openai
             | ProviderKind::Openrouter
             | ProviderKind::Novita
             | ProviderKind::Fireworks
@@ -1382,7 +1383,7 @@ fn build_tui_command(
             | ProviderKind::Ollama
     ) {
         bail!(
-            "The interactive TUI supports DeepSeek, NVIDIA NIM, OpenRouter, Novita, Fireworks, SGLang, vLLM, and Ollama providers. Remove --provider {} or use `deepseek model ...` for provider registry inspection.",
+            "The interactive TUI supports DeepSeek, NVIDIA NIM, OpenAI-compatible, OpenRouter, Novita, Fireworks, SGLang, vLLM, and Ollama providers. Remove --provider {} or use `deepseek model ...` for provider registry inspection.",
             resolved_runtime.provider.as_str()
         );
     }
@@ -1401,6 +1402,9 @@ fn build_tui_command(
     }
     if let Some(api_key) = resolved_runtime.api_key.as_ref() {
         cmd.env("DEEPSEEK_API_KEY", api_key);
+        if resolved_runtime.provider == ProviderKind::Openai {
+            cmd.env("OPENAI_API_KEY", api_key);
+        }
         let source = resolved_runtime
             .api_key_source
             .unwrap_or(RuntimeApiKeySource::Env)
@@ -1428,6 +1432,9 @@ fn build_tui_command(
     }
     if let Some(api_key) = cli.api_key.as_ref() {
         cmd.env("DEEPSEEK_API_KEY", api_key);
+        if resolved_runtime.provider == ProviderKind::Openai {
+            cmd.env("OPENAI_API_KEY", api_key);
+        }
         cmd.env("DEEPSEEK_API_KEY_SOURCE", "cli");
     }
     if let Some(base_url) = cli.base_url.as_ref() {
@@ -1580,6 +1587,17 @@ mod tests {
         let err = Cli::try_parse_from(argv).expect_err("expected --help to short-circuit parsing");
         assert_eq!(err.kind(), ErrorKind::DisplayHelp);
         err.to_string()
+    }
+
+    fn command_env(cmd: &Command, name: &str) -> Option<String> {
+        let name = std::ffi::OsStr::new(name);
+        cmd.get_envs().find_map(|(key, value)| {
+            if key == name {
+                value.map(|v| v.to_string_lossy().into_owned())
+            } else {
+                None
+            }
+        })
     }
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
@@ -2457,6 +2475,60 @@ mod tests {
     }
 
     #[test]
+    fn build_tui_command_allows_openai_and_forwards_provider_key() {
+        let _lock = env_lock();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let custom = dir
+            .path()
+            .join(format!("custom-tui{}", std::env::consts::EXE_SUFFIX));
+        std::fs::write(&custom, b"").unwrap();
+        let custom_str = custom.to_string_lossy().into_owned();
+        let _bin = ScopedEnvVar::set("DEEPSEEK_TUI_BIN", &custom_str);
+
+        let cli = parse_ok(&["deepseek", "--provider", "openai"]);
+        let resolved = ResolvedRuntimeOptions {
+            provider: ProviderKind::Openai,
+            model: "glm-5".to_string(),
+            api_key: Some("resolved-openai-key".to_string()),
+            api_key_source: Some(RuntimeApiKeySource::Keyring),
+            base_url: "https://openai-compatible.example/v4".to_string(),
+            auth_mode: Some("api_key".to_string()),
+            output_mode: None,
+            log_level: None,
+            telemetry: false,
+            approval_policy: None,
+            sandbox_mode: None,
+            http_headers: std::collections::BTreeMap::new(),
+        };
+
+        let cmd = build_tui_command(&cli, &resolved, Vec::new()).expect("command");
+        assert_eq!(
+            command_env(&cmd, "DEEPSEEK_PROVIDER").as_deref(),
+            Some("openai")
+        );
+        assert_eq!(
+            command_env(&cmd, "DEEPSEEK_MODEL").as_deref(),
+            Some("glm-5")
+        );
+        assert_eq!(
+            command_env(&cmd, "DEEPSEEK_BASE_URL").as_deref(),
+            Some("https://openai-compatible.example/v4")
+        );
+        assert_eq!(
+            command_env(&cmd, "DEEPSEEK_API_KEY").as_deref(),
+            Some("resolved-openai-key")
+        );
+        assert_eq!(
+            command_env(&cmd, "OPENAI_API_KEY").as_deref(),
+            Some("resolved-openai-key")
+        );
+        assert_eq!(
+            command_env(&cmd, "DEEPSEEK_API_KEY_SOURCE").as_deref(),
+            Some("keyring")
+        );
+    }
+
+    #[test]
     fn parses_top_level_prompt_flag_for_canonical_one_shot() {
         let cli = parse_ok(&["deepseek", "-p", "Reply with exactly OK."]);
 
@@ -2620,25 +2692,14 @@ mod tests {
     /// custom Windows install layouts and CI test rigs.
     #[test]
     fn locate_sibling_tui_binary_honours_env_override() {
+        let _lock = env_lock();
         let dir = tempfile::TempDir::new().expect("tempdir");
         let custom = dir
             .path()
             .join(format!("custom-tui{}", std::env::consts::EXE_SUFFIX));
         std::fs::write(&custom, b"").unwrap();
-
-        // Use a guard so even on test failure the env var clears.
-        struct EnvGuard;
-        impl Drop for EnvGuard {
-            fn drop(&mut self) {
-                // SAFETY: tests own this env key for the duration of the
-                // guard; clearing on drop matches the documented teardown
-                // pattern for `std::env::set_var` in single-threaded tests.
-                unsafe { std::env::remove_var("DEEPSEEK_TUI_BIN") };
-            }
-        }
-        let _g = EnvGuard;
-        // SAFETY: same single-threaded scope contract as the guard above.
-        unsafe { std::env::set_var("DEEPSEEK_TUI_BIN", &custom) };
+        let custom_str = custom.to_string_lossy().into_owned();
+        let _bin = ScopedEnvVar::set("DEEPSEEK_TUI_BIN", &custom_str);
 
         let resolved = locate_sibling_tui_binary().expect("override must resolve");
         assert_eq!(resolved, custom);

@@ -433,6 +433,7 @@ fn is_false(b: &bool) -> bool {
 pub(crate) struct SubAgentSpawnOptions {
     pub model: Option<String>,
     pub nickname: Option<String>,
+    pub fork_context: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -492,6 +493,9 @@ struct SpawnRequest {
     /// locality. A global ownership table prevents two agents from holding
     /// a resident lease on the same file simultaneously.
     resident_file: Option<String>,
+    /// When true, seed the child with the parent's system prompt and message
+    /// prefix before appending the child task.
+    fork_context: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -564,6 +568,16 @@ pub struct SubAgentCompletion {
     pub payload: String,
 }
 
+/// Parent transcript snapshot available to sub-agents that opt into context
+/// forking. The system prompt and leading messages are kept byte-identical to
+/// the parent request so DeepSeek's prefix cache can reuse the warmed prefix.
+#[derive(Clone, Debug)]
+pub struct SubAgentForkContext {
+    pub system: Option<SystemPrompt>,
+    pub messages: Vec<Message>,
+    pub structured_state_block: Option<String>,
+}
+
 /// Runtime configuration for spawning sub-agents.
 ///
 /// Carries everything a child needs to (a) build its own tool registry —
@@ -603,6 +617,8 @@ pub struct SubAgentRuntime {
     /// parent isn't flooded with grandchild completions it didn't directly
     /// orchestrate. `None` when no consumer is wired (tests / legacy paths).
     pub parent_completion_tx: Option<mpsc::UnboundedSender<SubAgentCompletion>>,
+    /// Snapshot of the request prefix visible to an opt-in forked child.
+    pub fork_context: Option<SubAgentForkContext>,
 }
 
 impl SubAgentRuntime {
@@ -635,6 +651,7 @@ impl SubAgentRuntime {
             cancel_token: CancellationToken::new(),
             mailbox: None,
             parent_completion_tx: None,
+            fork_context: None,
         }
     }
 
@@ -648,6 +665,13 @@ impl SubAgentRuntime {
         tx: mpsc::UnboundedSender<SubAgentCompletion>,
     ) -> Self {
         self.parent_completion_tx = Some(tx);
+        self
+    }
+
+    /// Attach the current parent request prefix for `fork_context` spawns.
+    #[must_use]
+    pub fn with_fork_context(mut self, context: SubAgentForkContext) -> Self {
+        self.fork_context = Some(context);
         self
     }
 
@@ -751,6 +775,7 @@ impl SubAgentRuntime {
             cancel_token: self.cancel_token.child_token(),
             mailbox: self.mailbox.clone(),
             parent_completion_tx: self.parent_completion_tx.clone(),
+            fork_context: self.fork_context.clone(),
         }
     }
 
@@ -1115,6 +1140,7 @@ impl SubAgentManager {
             prompt,
             assignment,
             allowed_tools: tools,
+            fork_context: options.fork_context,
             started_at,
             max_steps,
             input_rx,
@@ -1220,6 +1246,7 @@ impl SubAgentManager {
                 prompt: agent.prompt.clone(),
                 assignment: agent.assignment.clone(),
                 allowed_tools: agent.allowed_tools.clone(),
+                fork_context: false,
                 started_at: restarted_at,
                 max_steps: self.max_steps,
                 input_rx,
@@ -1620,6 +1647,10 @@ impl ToolSpec for AgentSpawnTool {
                 "resident_file": {
                     "type": "string",
                     "description": "Optional file path for cache-aware resident mode. When set, the child's system prefix is augmented with the full contents of this file so DeepSeek's prefix cache stays warm across follow-up send_input calls. Only one agent may hold a resident lease on a given file at a time — a second spawn with the same path receives a conflict warning in the result."
+                },
+                "fork_context": {
+                    "type": "boolean",
+                    "description": "When true, inherit the parent's system prompt and conversation prefix before appending this task. This preserves DeepSeek prefix-cache reuse and gives the child full parent context. Defaults to false for independent exploration."
                 }
             }
         })
@@ -1752,6 +1783,7 @@ impl ToolSpec for AgentSpawnTool {
                 SubAgentSpawnOptions {
                     model: Some(effective_model),
                     nickname: None,
+                    fork_context: spawn_request.fork_context,
                 },
             )
             .map_err(|e| ToolError::execution_failed(format!("Failed to spawn sub-agent: {e}")))?;
@@ -2474,7 +2506,8 @@ impl ToolSpec for AgentWaitTool {
     }
 }
 
-/// Tool to delegate a task to a specialized agent (alias for agent_spawn).
+/// Compatibility delegate tool. It routes through `agent_spawn`, but defaults
+/// to `fork_context=true` because delegation is usually continuation work.
 pub struct DelegateToAgentTool {
     manager: SharedSubAgentManager,
     runtime: SubAgentRuntime,
@@ -2495,8 +2528,9 @@ impl ToolSpec for DelegateToAgentTool {
     }
 
     fn description(&self) -> &'static str {
-        "Delegate a task to a specialized sub-agent. This is an alias for agent_spawn — same schema, \
-         same behavior. Use `type` (or `agent_name`, `agent_type`) to pick the agent flavor."
+        "Delegate a task to a specialized sub-agent. Compatibility wrapper around agent_spawn; \
+         defaults fork_context=true so the child inherits the parent transcript. Use `type` \
+         (or `agent_name`, `agent_type`) to pick the agent flavor."
     }
 
     fn input_schema(&self) -> Value {
@@ -2546,6 +2580,10 @@ impl ToolSpec for DelegateToAgentTool {
                     "type": "array",
                     "items": { "type": "string" },
                     "description": "Explicit tool allowlist (required for custom type)"
+                },
+                "fork_context": {
+                    "type": "boolean",
+                    "description": "When true, inherit the parent's system prompt and conversation prefix before appending this task. delegate_to_agent defaults this to true."
                 }
             }
         })
@@ -2564,6 +2602,7 @@ impl ToolSpec for DelegateToAgentTool {
 
     async fn execute(&self, input: Value, context: &ToolContext) -> Result<ToolResult, ToolError> {
         let spawn_tool = AgentSpawnTool::new(self.manager.clone(), self.runtime.clone());
+        let input = with_default_fork_context(input, true);
         let result = spawn_tool.execute(input, context).await?;
         Ok(wrap_with_deprecation_notice(
             result,
@@ -2600,6 +2639,64 @@ fn build_subagent_system_prompt(
     }
 }
 
+fn subagent_request_system_prompt(
+    subagent_system_prompt: &str,
+    fork_context: Option<&SubAgentForkContext>,
+) -> SystemPrompt {
+    fork_context
+        .and_then(|context| context.system.clone())
+        .unwrap_or_else(|| SystemPrompt::Text(subagent_system_prompt.to_string()))
+}
+
+fn build_initial_subagent_messages(
+    prompt: &str,
+    assignment: &SubAgentAssignment,
+    agent_type: &SubAgentType,
+    fork_context: Option<&SubAgentForkContext>,
+) -> Vec<Message> {
+    let mut messages = fork_context
+        .map(|context| context.messages.clone())
+        .unwrap_or_default();
+
+    if let Some(context) = fork_context {
+        if let Some(state) = context
+            .structured_state_block
+            .as_deref()
+            .map(str::trim)
+            .filter(|state| !state.is_empty())
+        {
+            messages.push(system_text_message(format!(
+                "<deepseek:fork_state>\n{state}\n</deepseek:fork_state>"
+            )));
+        }
+
+        messages.push(system_text_message(format!(
+            "<deepseek:subagent_context>\n{}\n</deepseek:subagent_context>",
+            build_subagent_system_prompt(agent_type, assignment)
+        )));
+    }
+
+    messages.push(Message {
+        role: "user".to_string(),
+        content: vec![ContentBlock::Text {
+            text: build_assignment_prompt(prompt, assignment, agent_type),
+            cache_control: None,
+        }],
+    });
+
+    messages
+}
+
+fn system_text_message(text: String) -> Message {
+    Message {
+        role: "system".to_string(),
+        content: vec![ContentBlock::Text {
+            text,
+            cache_control: None,
+        }],
+    }
+}
+
 struct SubAgentTask {
     manager_handle: SharedSubAgentManager,
     runtime: SubAgentRuntime,
@@ -2609,6 +2706,7 @@ struct SubAgentTask {
     assignment: SubAgentAssignment,
     /// `None` = full registry inheritance. `Some(list)` = explicit narrow.
     allowed_tools: Option<Vec<String>>,
+    fork_context: bool,
     started_at: Instant,
     max_steps: u32,
     input_rx: mpsc::UnboundedReceiver<SubAgentInput>,
@@ -2623,6 +2721,7 @@ async fn run_subagent_task(task: SubAgentTask) {
         task.prompt,
         task.assignment,
         task.allowed_tools,
+        task.fork_context,
         task.started_at,
         task.max_steps,
         task.input_rx,
@@ -2740,13 +2839,25 @@ async fn run_subagent(
     prompt: String,
     assignment: SubAgentAssignment,
     allowed_tools: Option<Vec<String>>,
+    fork_context: bool,
     started_at: Instant,
     max_steps: u32,
     mut input_rx: mpsc::UnboundedReceiver<SubAgentInput>,
 ) -> Result<SubAgentResult> {
     let system_prompt = build_subagent_system_prompt(&agent_type, &assignment);
+    let fork_context = fork_context
+        .then_some(runtime.fork_context.as_ref())
+        .flatten();
+    let request_system = subagent_request_system_prompt(&system_prompt, fork_context);
+    let mut messages =
+        build_initial_subagent_messages(&prompt, &assignment, &agent_type, fork_context);
+    let runtime_for_tools = runtime.clone().with_fork_context(SubAgentForkContext {
+        system: Some(request_system.clone()),
+        messages: messages.clone(),
+        structured_state_block: None,
+    });
     let tool_registry = SubAgentToolRegistry::new(
-        runtime.clone(),
+        runtime_for_tools,
         allowed_tools.clone(),
         Arc::new(Mutex::new(TodoList::new())),
         Arc::new(Mutex::new(PlanState::default())),
@@ -2768,14 +2879,6 @@ async fn run_subagent(
         &agent_id,
         format!("started ({})", agent_type.as_str()),
     );
-
-    let mut messages = vec![Message {
-        role: "user".to_string(),
-        content: vec![ContentBlock::Text {
-            text: build_assignment_prompt(&prompt, &assignment, &agent_type),
-            cache_control: None,
-        }],
-    }];
 
     let mut steps = 0;
     let mut final_result: Option<String> = None;
@@ -2842,7 +2945,7 @@ async fn run_subagent(
             model: runtime.model.clone(),
             messages: messages.clone(),
             max_tokens: 4096,
-            system: Some(SystemPrompt::Text(system_prompt.clone())),
+            system: Some(request_system.clone()),
             tools: Some(tools.clone()),
             tool_choice: Some(json!({ "type": "auto" })),
             metadata: None,
@@ -3328,6 +3431,9 @@ fn parse_spawn_request(input: &Value) -> Result<SpawnRequest, ToolError> {
         .and_then(|v| v.as_str())
         .map(str::to_string)
         .filter(|s| !s.trim().is_empty());
+    let fork_context =
+        parse_optional_bool(input, &["fork_context", "forkContext", "inherit_context"])
+            .unwrap_or(false);
 
     Ok(SpawnRequest {
         prompt: prompt.clone(),
@@ -3337,7 +3443,28 @@ fn parse_spawn_request(input: &Value) -> Result<SpawnRequest, ToolError> {
         model,
         cwd,
         resident_file,
+        fork_context,
     })
+}
+
+fn parse_optional_bool(input: &Value, names: &[&str]) -> Option<bool> {
+    names
+        .iter()
+        .find_map(|name| input.get(*name))
+        .and_then(Value::as_bool)
+}
+
+fn with_default_fork_context(mut input: Value, default: bool) -> Value {
+    let Some(object) = input.as_object_mut() else {
+        return input;
+    };
+    if !object.contains_key("fork_context")
+        && !object.contains_key("forkContext")
+        && !object.contains_key("inherit_context")
+    {
+        object.insert("fork_context".to_string(), Value::Bool(default));
+    }
+    input
 }
 
 pub(crate) fn normalize_requested_subagent_model(
