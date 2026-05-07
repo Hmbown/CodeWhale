@@ -1246,7 +1246,7 @@ impl App {
         } else {
             global_skills_dir
         };
-        let cached_skills = Self::discover_cached_skills(&skills_dir);
+        let cached_skills = Self::discover_cached_skills(&workspace);
 
         let input_history = crate::composer_history::load_history();
         let (initial_input_text, initial_input_cursor) = match initial_input {
@@ -1440,8 +1440,8 @@ impl App {
         }
     }
 
-    fn discover_cached_skills(skills_dir: &std::path::Path) -> Vec<(String, String)> {
-        crate::skills::SkillRegistry::discover(skills_dir)
+    fn discover_cached_skills(workspace: &std::path::Path) -> Vec<(String, String)> {
+        crate::skills::discover_in_workspace(workspace)
             .list()
             .iter()
             .map(|s| (s.name.clone(), s.description.clone()))
@@ -1449,7 +1449,7 @@ impl App {
     }
 
     pub fn refresh_skill_cache(&mut self) {
-        self.cached_skills = Self::discover_cached_skills(&self.skills_dir);
+        self.cached_skills = Self::discover_cached_skills(&self.workspace);
     }
 
     pub fn submit_api_key(&mut self) -> Result<SavedCredential, ApiKeyError> {
@@ -3916,6 +3916,40 @@ mod tests {
         assert!(app.cached_skills.iter().any(|(name, description)| {
             name == "local-skill" && description == "Local workspace skill"
         }));
+    }
+
+    #[test]
+    fn cached_skills_merges_across_candidate_directories() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let workspace = tmp.path().join("workspace");
+
+        // Higher-precedence directory contains a stale empty dir for `foo`
+        // (no SKILL.md). This used to shadow the real definition further
+        // down the candidate list when the cache only scanned a single dir.
+        std::fs::create_dir_all(workspace.join(".agents").join("skills").join("foo"))
+            .expect("stale empty dir");
+
+        // Lower-precedence directory has the real skill.
+        let real_dir = workspace.join(".claude").join("skills").join("foo");
+        std::fs::create_dir_all(&real_dir).expect("real skill dir");
+        std::fs::write(
+            real_dir.join("SKILL.md"),
+            "---\nname: foo\ndescription: Real foo skill\n---\nbody\n",
+        )
+        .expect("skill file");
+
+        let mut options = test_options(false);
+        options.workspace = workspace.clone();
+        options.skills_dir = tmp.path().join("global-skills");
+        let app = App::new(options, &Config::default());
+
+        assert!(
+            app.cached_skills
+                .iter()
+                .any(|(name, description)| name == "foo" && description == "Real foo skill"),
+            "cached_skills should fall through to lower-precedence dir when higher-precedence one has an empty stub: {:?}",
+            app.cached_skills,
+        );
     }
 
     #[test]
