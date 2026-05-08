@@ -51,6 +51,7 @@ use crate::tools::subagent::{
 };
 use crate::tools::todo::{SharedTodoList, new_shared_todo_list};
 use crate::tools::user_input::{UserInputRequest, UserInputResponse};
+use crate::localization::{Locale, tr, MessageId};
 use crate::tools::{ToolContext, ToolRegistryBuilder};
 use crate::tui::app::AppMode;
 use crate::utils::spawn_supervised;
@@ -147,6 +148,9 @@ pub struct EngineConfig {
     pub strict_tool_mode: bool,
     /// Workshop / large-tool-output routing (#548). `None` disables routing.
     pub workshop: Option<crate::tools::large_output_router::WorkshopConfig>,
+    /// UI locale used to inject language instructions into the system prompt
+    /// so the model responds and reasons in the appropriate language.
+    pub ui_locale: Locale,
 }
 
 impl Default for EngineConfig {
@@ -179,6 +183,7 @@ impl Default for EngineConfig {
             strict_tool_mode: false,
             goal_objective: None,
             workshop: None,
+            ui_locale: Locale::En,
         }
     }
 }
@@ -1739,8 +1744,30 @@ impl Engine {
                 goal_objective: self.config.goal_objective.as_deref(),
             },
         );
-        let stable_prompt =
+        let mut stable_prompt =
             merge_system_prompts(Some(&base), self.session.compaction_summary_prompt.clone());
+
+        // Inject locale language instruction into system prompt if non-empty.
+        // Prepend to the beginning for higher model attention (primacy effect).
+        let lang_instr = tr(self.config.ui_locale, MessageId::LocaleLanguageInstruction);
+        if !lang_instr.is_empty() {
+            stable_prompt = match stable_prompt {
+                Some(SystemPrompt::Text(text)) => Some(SystemPrompt::Text(format!(
+                    "{}\n\n{}",
+                    lang_instr, text
+                ))),
+                Some(SystemPrompt::Blocks(mut blocks)) => {
+                    blocks.insert(0, crate::models::SystemBlock {
+                        block_type: "text".to_string(),
+                        text: lang_instr.to_string(),
+                        cache_control: None,
+                    });
+                    Some(SystemPrompt::Blocks(blocks))
+                }
+                None => Some(SystemPrompt::Text(lang_instr.to_string())),
+            };
+        }
+
         let stable_hash = system_prompt_hash(stable_prompt.as_ref());
         if self.session.last_system_prompt_hash != Some(stable_hash) {
             self.session.system_prompt = stable_prompt;

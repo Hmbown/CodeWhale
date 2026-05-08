@@ -1810,6 +1810,9 @@ impl RuntimeThreadManager {
             strict_tool_mode: self.config.strict_tool_mode.unwrap_or(false),
             goal_objective: None,
             workshop: self.config.workshop.clone(),
+            ui_locale: crate::localization::resolve_locale(
+                &crate::settings::Settings::load().unwrap_or_default().locale,
+            ),
         };
 
         let engine = spawn_engine(engine_cfg, &self.config);

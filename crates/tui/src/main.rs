@@ -3758,6 +3758,7 @@ async fn run_exec_agent(
     use crate::core::engine::{EngineConfig, spawn_engine};
     use crate::core::events::Event;
     use crate::core::ops::Op;
+    use crate::localization::resolve_locale;
     use crate::models::compaction_threshold_for_model;
     use crate::tools::plan::new_shared_plan_state;
     use crate::tools::todo::new_shared_todo_list;
@@ -3812,6 +3813,9 @@ async fn run_exec_agent(
         strict_tool_mode: config.strict_tool_mode.unwrap_or(false),
         goal_objective: None,
         workshop: config.workshop.clone(),
+        ui_locale: resolve_locale(
+            &crate::settings::Settings::load().unwrap_or_default().locale,
+        ),
     };
 
     let engine_handle = spawn_engine(engine_config, config);

@@ -544,6 +544,7 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         strict_tool_mode: config.strict_tool_mode.unwrap_or(false),
         goal_objective: app.goal.goal_objective.clone(),
         workshop: config.workshop.clone(),
+        ui_locale: app.ui_locale,
     }
 }
 
@@ -6899,6 +6900,7 @@ fn handle_context_menu_action(app: &mut App, action: ContextMenuAction) {
                         content: String::new(),
                     }),
                 width,
+                app.ui_locale,
             );
             if crate::tui::history::try_open_file_at_line(&text, &app.workspace) {
                 app.status_message = Some("Opened file in editor".to_string());
@@ -7044,7 +7046,7 @@ fn open_pager_for_last_message(app: &mut App) -> bool {
         .last_transcript_area
         .map(|area| area.width)
         .unwrap_or(80);
-    let text = history_cell_to_text(cell, width);
+    let text = history_cell_to_text(cell, width, app.ui_locale);
     let pager = PagerView::from_text("Message", &text, width.saturating_sub(2));
     app.view_stack.push(pager);
     true
@@ -7099,7 +7101,7 @@ fn open_thinking_pager(app: &mut App) -> bool {
         .last_transcript_area
         .map(|area| area.width)
         .unwrap_or(80);
-    let text = history_cell_to_text(cell, width);
+    let text = history_cell_to_text(cell, width, app.ui_locale);
     app.view_stack.push(PagerView::from_text(
         "Thinking",
         &text,
@@ -7204,7 +7206,7 @@ fn open_details_pager_for_cell(app: &mut App, cell_index: usize) -> bool {
         .last_transcript_area
         .map(|area| area.width)
         .unwrap_or(80);
-    let content = history_cell_to_text(cell, width);
+    let content = history_cell_to_text(cell, width, app.ui_locale);
     app.view_stack.push(PagerView::from_text(
         title,
         &content,
@@ -7235,7 +7237,7 @@ fn copy_cell_to_clipboard(app: &mut App, cell_index: usize) -> bool {
         .last_transcript_area
         .map(|area| area.width)
         .unwrap_or(80);
-    let text = history_cell_to_text(cell, width);
+    let text = history_cell_to_text(cell, width, app.ui_locale);
     if text.trim().is_empty() {
         app.status_message = Some("Message is empty".to_string());
         return false;

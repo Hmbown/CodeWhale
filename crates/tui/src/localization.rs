@@ -371,6 +371,13 @@ pub enum MessageId {
     HomeYoloModeCaution,
     HomePlanModeTip,
     HomePlanModeChecklistTip,
+    ThinkingTitle,
+    ThinkingReasoningInProgress,
+    ThinkingStatusLive,
+    ThinkingStatusDone,
+    ThinkingStatusIdle,
+    ThinkingCollapsedHint,
+    LocaleLanguageInstruction,
 }
 
 #[allow(dead_code)]
@@ -558,6 +565,13 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::HomeYoloModeCaution,
     MessageId::HomePlanModeTip,
     MessageId::HomePlanModeChecklistTip,
+    MessageId::ThinkingTitle,
+    MessageId::ThinkingReasoningInProgress,
+    MessageId::ThinkingStatusLive,
+    MessageId::ThinkingStatusDone,
+    MessageId::ThinkingStatusIdle,
+    MessageId::ThinkingCollapsedHint,
+    MessageId::LocaleLanguageInstruction,
 ];
 
 pub fn tr(locale: Locale, id: MessageId) -> &'static str {
@@ -585,6 +599,125 @@ pub fn resolve_locale(setting: &str) -> Locale {
     resolve_locale_with_env(setting, |key| std::env::var(key).ok())
 }
 
+/// Get system locale using platform-specific detection.
+/// Falls back to None if detection fails or is not supported.
+#[cfg(target_os = "windows")]
+fn get_system_locale() -> Option<Locale> {
+    // Try the Windows API first (fast, no subprocess)
+    if let Some(locale) = get_windows_locale_api() {
+        return Some(locale);
+    }
+
+    // Fallback: PowerShell (slower, ~200-500ms subprocess spawn)
+    use std::process::Command;
+
+    let output = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            "(Get-WinSystemLocale).Name",
+        ])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let locale_str = stdout.trim();
+
+    if locale_str.is_empty() {
+        return None;
+    }
+
+    map_windows_locale_name(locale_str)
+}
+
+/// Use Windows API (GetUserDefaultLocaleName) to detect locale without spawning
+/// a subprocess. Returns None if the API call fails or the locale is unknown.
+#[cfg(target_os = "windows")]
+fn get_windows_locale_api() -> Option<Locale> {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+
+    unsafe extern "system" {
+        fn GetUserDefaultLocaleName(lpLocaleName: *mut u16, cchLocaleName: i32) -> i32;
+    }
+
+    let mut buf = [0u16; 85]; // LOCALE_NAME_MAX_LENGTH
+    let len = unsafe { GetUserDefaultLocaleName(buf.as_mut_ptr(), buf.len() as i32) };
+    if len <= 0 {
+        return None;
+    }
+
+    let os_str = OsString::from_wide(&buf[..((len - 1) as usize)]);
+    let locale_str = os_str.to_string_lossy();
+    map_windows_locale_name(&locale_str)
+}
+
+/// Map a Windows locale name (e.g., "zh-CN", "ja-JP") to our Locale enum.
+#[cfg(target_os = "windows")]
+fn map_windows_locale_name(locale_str: &str) -> Option<Locale> {
+    let mapped = match locale_str.split('-').next().unwrap_or("") {
+        "zh" => {
+            if locale_str.contains("CN") || locale_str.contains("SG") {
+                "zh-Hans"
+            } else {
+                // Traditional Chinese variants mapped to Simplified as fallback
+                "zh-Hans"
+            }
+        }
+        "ja" => "ja",
+        "pt" => "pt-BR",
+        "en" => "en",
+        _ => return None,
+    };
+
+    parse_locale(mapped)
+}
+
+/// Get macOS system locale using Foundation framework.
+#[cfg(target_os = "macos")]
+fn get_system_locale() -> Option<Locale> {
+    use std::process::Command;
+
+    let output = Command::new("defaults")
+        .args(["read", "-g", "AppleLanguages"])
+        .output()
+        .ok()?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Output is like: ("en-US", "zh-Hans-CN", "ja", "fr", "de")
+    // Extract first language code from the array
+    if let Some(start) = stdout.find('"') {
+        if let Some(end) = stdout[start + 1..].find('"') {
+            let lang = &stdout[start + 1..start + 1 + end];
+            return parse_locale(&normalize_locale_input(lang));
+        }
+    }
+    None
+}
+
+/// Get Linux system locale using environment variables.
+#[cfg(target_os = "linux")]
+fn get_system_locale() -> Option<Locale> {
+    for key in ["LC_ALL", "LC_MESSAGES", "LANG"] {
+        if let Ok(value) = std::env::var(key) {
+            if let Some(locale) = parse_locale(&normalize_locale_input(&value)) {
+                return Some(locale);
+            }
+        }
+    }
+    None
+}
+
+/// Stub for unsupported platforms.
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+fn get_system_locale() -> Option<Locale> {
+    None
+}
+
 pub fn resolve_locale_with_env<F>(setting: &str, env: F) -> Locale
 where
     F: Fn(&str) -> Option<String>,
@@ -594,12 +727,18 @@ where
         return parse_locale(&normalized).unwrap_or(Locale::En);
     }
 
+    // First try Unix-style environment variables (for compatibility)
     for key in ["LC_ALL", "LC_MESSAGES", "LANG"] {
         if let Some(value) = env(key)
             && let Some(locale) = parse_locale(&normalize_locale_input(&value))
         {
             return locale;
         }
+    }
+
+    // Then try platform-specific system locale detection (Windows, macOS, Linux)
+    if let Some(locale) = get_system_locale() {
+        return locale;
     }
 
     Locale::En
@@ -940,6 +1079,13 @@ fn english(id: MessageId) -> &'static str {
         MessageId::HomeYoloModeCaution => "  Be careful with destructive operations!",
         MessageId::HomePlanModeTip => "Plan mode - Design before implementing",
         MessageId::HomePlanModeChecklistTip => "  Use /plan to create structured checklists",
+        MessageId::ThinkingTitle => "thinking",
+        MessageId::ThinkingReasoningInProgress => "reasoning in progress...",
+        MessageId::ThinkingStatusLive => "live",
+        MessageId::ThinkingStatusDone => "done",
+        MessageId::ThinkingStatusIdle => "idle",
+        MessageId::ThinkingCollapsedHint => "thinking collapsed; press Ctrl+O for full text",
+        MessageId::LocaleLanguageInstruction => "",
     }
 }
 
@@ -1221,6 +1367,13 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::HomeYoloModeCaution => "  破壊的な操作には注意してください！",
         MessageId::HomePlanModeTip => "Plan モード - 実装前に設計",
         MessageId::HomePlanModeChecklistTip => "  /plan を使って構造化されたチェックリストを作成",
+        MessageId::ThinkingTitle => "思考中",
+        MessageId::ThinkingReasoningInProgress => "推論中...",
+        MessageId::ThinkingStatusLive => "実行中",
+        MessageId::ThinkingStatusDone => "完了",
+        MessageId::ThinkingStatusIdle => "待機中",
+        MessageId::ThinkingCollapsedHint => "思考を折りたたみ中。Ctrl+O で全文表示",
+        MessageId::LocaleLanguageInstruction => "[システム言語：日本語] デフォルトではすべての内部推論（reasoning_content）と回答を日本語で行ってください。ユーザーが明示的に他の言語を要求した場合のみ、その言語に切り替えてください。",
     })
 }
 
@@ -1457,6 +1610,13 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::HomeYoloModeCaution => "  请小心破坏性操作！",
         MessageId::HomePlanModeTip => "Plan 模式 - 先设计再实现",
         MessageId::HomePlanModeChecklistTip => "  使用 /plan 创建结构化检查清单",
+        MessageId::ThinkingTitle => "思考中",
+        MessageId::ThinkingReasoningInProgress => "推理进行中...",
+        MessageId::ThinkingStatusLive => "进行中",
+        MessageId::ThinkingStatusDone => "完成",
+        MessageId::ThinkingStatusIdle => "等待中",
+        MessageId::ThinkingCollapsedHint => "思考已折叠，按 Ctrl+O 查看全文",
+        MessageId::LocaleLanguageInstruction => "[系统语言：简体中文] 默认使用简体中文进行所有内部推理（reasoning_content）和回复。仅当用户明确要求使用其他语言时，才切换到用户指定的语言。",
     })
 }
 
@@ -1751,6 +1911,13 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::HomeYoloModeCaution => "  Tenha cuidado com operações destrutivas!",
         MessageId::HomePlanModeTip => "Modo Plan - Planeje antes de implementar",
         MessageId::HomePlanModeChecklistTip => "  Use /plan para criar checklists estruturados",
+        MessageId::ThinkingTitle => "pensando",
+        MessageId::ThinkingReasoningInProgress => "raciocinando...",
+        MessageId::ThinkingStatusLive => "ativo",
+        MessageId::ThinkingStatusDone => "concluído",
+        MessageId::ThinkingStatusIdle => "inativo",
+        MessageId::ThinkingCollapsedHint => "pensamento recolhido; pressione Ctrl+O para texto completo",
+        MessageId::LocaleLanguageInstruction => "[Idioma do sistema: Português Brasileiro] Por padrão, use português brasileiro para todo raciocínio interno (reasoning_content) e respostas. Mude para outro idioma somente se o usuário solicitar explicitamente.",
     })
 }
 

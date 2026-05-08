@@ -9,6 +9,7 @@ use serde_json::Value;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::deepseek_theme::active_theme;
+use crate::localization::{tr, Locale, MessageId};
 use crate::models::{ContentBlock, Message};
 use crate::palette;
 use crate::tools::review::ReviewOutput;
@@ -148,6 +149,7 @@ pub struct TranscriptRenderOptions {
     pub calm_mode: bool,
     pub low_motion: bool,
     pub spacing: TranscriptSpacing,
+    pub locale: Locale,
 }
 
 impl Default for TranscriptRenderOptions {
@@ -158,6 +160,7 @@ impl Default for TranscriptRenderOptions {
             calm_mode: false,
             low_motion: false,
             spacing: TranscriptSpacing::Comfortable,
+            locale: Locale::En,
         }
     }
 }
@@ -211,7 +214,7 @@ impl HistoryCell {
                 content,
                 streaming,
                 duration_secs,
-            } => render_thinking(content, width, *streaming, *duration_secs, false, false),
+            } => render_thinking(content, width, *streaming, *duration_secs, false, false, Locale::En),
             HistoryCell::Tool(cell) => cell.lines_with_motion(width, false),
             HistoryCell::SubAgent(cell) => cell.lines(width),
             HistoryCell::ArchivedContext { .. } => render_archived_context(self, width, false),
@@ -236,6 +239,7 @@ impl HistoryCell {
                 *duration_secs,
                 !*streaming,
                 options.low_motion,
+                options.locale,
             ),
             HistoryCell::Tool(cell) if !options.show_tool_details => {
                 let mut lines = cell.lines_with_motion(width, options.low_motion);
@@ -290,7 +294,13 @@ impl HistoryCell {
     /// For most variants (User / Assistant / System) this matches `lines()`;
     /// `Thinking` and `Tool` are where the live and transcript surfaces
     /// diverge.
+    #[allow(dead_code)]
     pub fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
+        self.transcript_lines_with_locale(width, Locale::En)
+    }
+
+    /// Render in transcript mode with locale-aware labels.
+    pub fn transcript_lines_with_locale(&self, width: u16, locale: Locale) -> Vec<Line<'static>> {
         match self {
             HistoryCell::User { content } => render_message(
                 USER_GLYPH,
@@ -320,6 +330,7 @@ impl HistoryCell {
                 *duration_secs,
                 /*collapsed*/ false,
                 /*low_motion*/ false,
+                locale,
             ),
             HistoryCell::Tool(cell) => cell.transcript_lines(width),
             HistoryCell::SubAgent(cell) => cell.lines(width),
@@ -2038,6 +2049,7 @@ fn render_thinking(
     duration_secs: Option<f32>,
     collapsed: bool,
     low_motion: bool,
+    locale: Locale,
 ) -> Vec<Line<'static>> {
     let state = thinking_visual_state(streaming, duration_secs);
     let style = thinking_style();
@@ -2059,11 +2071,11 @@ fn render_thinking(
             format!("{REASONING_OPENER} "),
             Style::default().fg(thinking_state_accent(state)),
         ),
-        Span::styled("thinking", thinking_title_style()),
+        Span::styled(tr(locale, MessageId::ThinkingTitle), thinking_title_style()),
     ];
     header_spans.push(Span::styled(" ", Style::default()));
     header_spans.push(Span::styled(
-        thinking_status_label(state),
+        thinking_status_label(state, locale),
         thinking_status_style(state),
     ));
     if let Some(dur) = duration_secs {
@@ -2091,7 +2103,7 @@ fn render_thinking(
     if rendered.is_empty() && streaming {
         let mut spans = vec![Span::styled(REASONING_RAIL.to_string(), rail_style)];
         spans.push(Span::styled(
-            "reasoning in progress...",
+            tr(locale, MessageId::ThinkingReasoningInProgress),
             body_style.italic(),
         ));
         if !low_motion {
@@ -2116,7 +2128,7 @@ fn render_thinking(
         lines.push(Line::from(vec![
             Span::styled(REASONING_RAIL.to_string(), rail_style),
             Span::styled(
-                "thinking collapsed; press Ctrl+O for full text",
+                tr(locale, MessageId::ThinkingCollapsedHint),
                 Style::default().fg(palette::TEXT_MUTED).italic(),
             ),
         ]));
@@ -2892,11 +2904,11 @@ fn thinking_visual_state(streaming: bool, duration_secs: Option<f32>) -> Thinkin
     }
 }
 
-fn thinking_status_label(state: ThinkingVisualState) -> &'static str {
+fn thinking_status_label(state: ThinkingVisualState, locale: Locale) -> &'static str {
     match state {
-        ThinkingVisualState::Live => "live",
-        ThinkingVisualState::Done => "done",
-        ThinkingVisualState::Idle => "idle",
+        ThinkingVisualState::Live => tr(locale, MessageId::ThinkingStatusLive),
+        ThinkingVisualState::Done => tr(locale, MessageId::ThinkingStatusDone),
+        ThinkingVisualState::Idle => tr(locale, MessageId::ThinkingStatusIdle),
     }
 }
 
@@ -3523,6 +3535,7 @@ mod tests {
             Some(2.0),
             true,
             false,
+            Locale::En,
         );
         let text = lines
             .iter()
@@ -3765,7 +3778,7 @@ mod tests {
 
     #[test]
     fn render_thinking_uses_dotted_opener_in_header() {
-        let lines = render_thinking("Step one\nStep two", 80, false, Some(2.0), false, true);
+        let lines = render_thinking("Step one\nStep two", 80, false, Some(2.0), false, true, Locale::En);
         let header = &lines[0];
         // First span carries `…` followed by a space.
         assert!(
@@ -3784,6 +3797,7 @@ mod tests {
             Some(1.0),
             /*collapsed*/ false,
             /*low_motion*/ true,
+            Locale::En,
         );
         // Header is index 0; first body line is index 1.
         assert!(lines.len() >= 2, "expected at least one body line");
@@ -3811,6 +3825,7 @@ mod tests {
             None,
             /*collapsed*/ false,
             /*low_motion*/ false,
+            Locale::En,
         );
         // Last line is the most recent body line — cursor lives there.
         let last = lines.last().expect("body line present");
@@ -3831,6 +3846,7 @@ mod tests {
             None,
             /*collapsed*/ false,
             /*low_motion*/ true,
+            Locale::En,
         );
         let last = lines.last().expect("body line present");
         let visible: String = last

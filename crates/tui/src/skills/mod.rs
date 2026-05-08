@@ -36,6 +36,15 @@ pub fn default_skills_dir() -> PathBuf {
     )
 }
 
+/// Returns `~/.agents/skills` for agentskills.io compatibility (#741).
+#[must_use]
+pub fn agents_skills_dir() -> PathBuf {
+    dirs::home_dir().map_or_else(
+        || PathBuf::from("/tmp/agents/skills"),
+        |p| p.join(".agents").join("skills"),
+    )
+}
+
 // === Types ===
 
 /// Parsed representation of a SKILL.md definition.
@@ -184,7 +193,7 @@ impl SkillRegistry {
 /// The full `SKILL.md` body is intentionally not included here. This mirrors
 /// Resolve the active skills directory given a workspace, mirroring the
 /// hierarchy `App::new` walks: `<workspace>/.agents/skills` →
-/// `<workspace>/skills` → [`default_skills_dir`] (`~/.deepseek/skills`).
+/// `<workspace>/skills` → `~/.agents/skills` → [`default_skills_dir`] (`~/.deepseek/skills`).
 /// Returns the first directory that exists, or the global default
 /// (which itself falls back to `/tmp/deepseek/skills` if the user
 /// has no home directory).
@@ -204,6 +213,10 @@ pub fn resolve_skills_dir(workspace: &Path) -> PathBuf {
     if local.exists() {
         return local;
     }
+    let home_agents = agents_skills_dir();
+    if home_agents.exists() {
+        return home_agents;
+    }
     default_skills_dir()
 }
 
@@ -219,7 +232,8 @@ pub fn resolve_skills_dir(workspace: &Path) -> PathBuf {
 /// 2. `<workspace>/skills` — flat, project-local.
 /// 3. `<workspace>/.opencode/skills` — OpenCode interop.
 /// 4. `<workspace>/.claude/skills` — Claude Code interop.
-/// 5. [`default_skills_dir`] — global, user-installed.
+/// 5. `~/.agents/skills` — agentskills.io / open AI agents convention (#741).
+/// 6. [`default_skills_dir`] — global, user-installed.
 ///
 /// Only directories that exist on disk are returned — callers don't
 /// need to filter further. Returns an empty vec when nothing is
@@ -231,6 +245,7 @@ pub fn skills_directories(workspace: &Path) -> Vec<PathBuf> {
         workspace.join("skills"),
         workspace.join(".opencode").join("skills"),
         workspace.join(".claude").join("skills"),
+        agents_skills_dir(),
         default_skills_dir(),
     ];
     let mut out = Vec::new();
