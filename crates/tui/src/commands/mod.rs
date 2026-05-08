@@ -11,6 +11,7 @@ mod cycle;
 mod debug;
 mod goal;
 mod hooks;
+mod recap;
 mod init;
 mod jobs;
 mod mcp;
@@ -421,6 +422,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         description_id: MessageId::CmdGoalDescription,
     },
     CommandInfo {
+        name: "recap",
+        aliases: &[],
+        usage: "/recap",
+        description_id: MessageId::CmdRecapDescription,
+    },
+    CommandInfo {
         name: "settings",
         aliases: &[],
         usage: "/settings",
@@ -575,6 +582,7 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "lsp" => config::lsp_command(app, arg),
         "share" => share::share(app, arg),
         "goal" => goal::goal(app, arg),
+        "recap" => recap::recap(app, arg),
 
         // Skills commands
         "skills" => skills::list_skills(app, arg),

@@ -233,6 +233,7 @@ pub enum MessageId {
     CmdHomeDescription,
     CmdHooksDescription,
     CmdGoalDescription,
+    CmdRecapDescription,
     CmdInitDescription,
     CmdJobsDescription,
     CmdLinksDescription,
@@ -743,6 +744,7 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CmdHomeDescription => "Show home dashboard with stats and quick actions",
         MessageId::CmdHooksDescription => "List configured lifecycle hooks (read-only)",
         MessageId::CmdGoalDescription => "Set a session goal with optional token budget",
+        MessageId::CmdRecapDescription => "Print a structured session state summary",
         MessageId::CmdInitDescription => "Generate AGENTS.md for project",
         MessageId::CmdLspDescription => "Toggle LSP diagnostics on or off",
         MessageId::CmdShareDescription => "Export current session as a shareable web URL",
@@ -1031,6 +1033,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
             "設定済みのライフサイクルフックを一覧表示（読み取り専用）"
         }
         MessageId::CmdGoalDescription => "トークンバジェット付きのセッション目標を設定",
+        MessageId::CmdRecapDescription => "構造化されたセッション状態のサマリーを表示",
         MessageId::CmdInitDescription => "プロジェクト用に AGENTS.md を生成",
         MessageId::CmdLspDescription => "LSP 診断のオン・オフを切り替え",
         MessageId::CmdShareDescription => "現在のセッションを共有可能な Web URL としてエクスポート",
@@ -1297,6 +1300,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CmdHomeDescription => "显示主页面板，含统计与快捷操作",
         MessageId::CmdHooksDescription => "列出已配置的生命周期钩子（只读）",
         MessageId::CmdGoalDescription => "设置带有可选令牌预算的会话目标",
+        MessageId::CmdRecapDescription => "输出结构化的会话状态摘要",
         MessageId::CmdInitDescription => "为项目生成 AGENTS.md",
         MessageId::CmdLspDescription => "切换 LSP 诊断的开启或关闭",
         MessageId::CmdShareDescription => "将当前会话导出为可共享的 Web URL",
@@ -1554,6 +1558,9 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         }
         MessageId::CmdGoalDescription => {
             "Definir uma meta de sessão com orçamento de tokens opcional"
+        }
+        MessageId::CmdRecapDescription => {
+            "Exibir um resumo estruturado do estado da sessão"
         }
         MessageId::CmdInitDescription => "Gerar AGENTS.md para o projeto",
         MessageId::CmdLspDescription => "Alternar diagnóstico LSP ligado ou desligado",

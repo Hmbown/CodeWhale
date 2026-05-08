@@ -1027,48 +1027,24 @@ async fn run_event_loop(
                                         .to_string(),
                                 );
                             } else {
-                                let pending_items: Vec<String> = app
-                                .todos
-                                .try_lock()
-                                .map(|todos| {
-                                    let snap = todos.snapshot();
-                                    snap.items
-                                        .iter()
-                                        .filter(|item| {
-                                            !matches!(
-                                                item.status,
-                                                crate::tools::todo::TodoStatus::Completed
-                                            )
-                                        })
-                                        .map(|item| item.content.clone())
-                                        .collect()
-                                })
-                                .unwrap_or_default();
+                                // Use recap_text to give the model full
+                                // session context: goal, todos with status,
+                                // last assistant response summary, and
+                                // active sub-agents. This is the same
+                                // structured output as /recap.
+                                let recap = app.recap_text();
+                                let incomplete = app.pending_todo_count();
 
-                            let incomplete = pending_items.len();
-
-                            if incomplete > 0 {
-                                let goal_hint = app
-                                    .goal
-                                    .goal_objective
-                                    .as_deref()
-                                    .map(|obj| format!("Goal: \"{obj}\". "))
-                                    .unwrap_or_default();
-                                let todo_list = pending_items
-                                    .iter()
-                                    .enumerate()
-                                    .map(|(i, item)| format!("  {}. {item}", i + 1))
-                                    .collect::<Vec<_>>()
-                                    .join("\n");
-                                let msg = format!(
-                                    "{goal_hint}Continue working on the {incomplete} remaining todo item(s):\n\n{todo_list}\n\nUse checklist_write to update progress as you complete each item."
-                                );
-                                app.queued_messages.push_back(QueuedMessage::new(msg, None));
-                                app.goal.auto_continue_turn_count += 1;
-                                app.status_message = Some(format!(
-                                    "Auto-continue turn #{} ({incomplete} todo(s) remaining)",
-                                    app.goal.auto_continue_turn_count
-                                ));
+                                if incomplete > 0 {
+                                    let msg = format!(
+                                        "Continue working on the remaining todo items.\n\n{recap}"
+                                    );
+                                    app.queued_messages.push_back(QueuedMessage::new(msg, None));
+                                    app.goal.auto_continue_turn_count += 1;
+                                    app.status_message = Some(format!(
+                                        "Auto-continue turn #{} ({incomplete} todo(s) remaining)",
+                                        app.goal.auto_continue_turn_count
+                                    ));
                             } else {
                                 app.status_message = Some(
                                     "All todos completed — auto-continue finished."
