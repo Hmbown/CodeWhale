@@ -339,8 +339,19 @@ fn jump_to_latest_button_click_scrolls_to_tail() {
 }
 
 #[test]
-fn transcript_scrollbar_drag_maps_mouse_row_to_scroll_position() {
+fn transcript_scrollbar_gutter_is_not_draggable() {
     let mut app = create_test_app();
+    app.history = vec![HistoryCell::Assistant {
+        content: "alpha beta".to_string(),
+        streaming: false,
+    }];
+    app.resync_history_revisions();
+    app.viewport.transcript_cache.ensure(
+        &app.history,
+        &app.history_revisions,
+        80,
+        app.transcript_render_options(),
+    );
     app.viewport.last_transcript_area = Some(Rect {
         x: 2,
         y: 5,
@@ -350,6 +361,7 @@ fn transcript_scrollbar_drag_maps_mouse_row_to_scroll_position() {
     app.viewport.last_transcript_visible = 10;
     app.viewport.last_transcript_total = 110;
     app.viewport.transcript_scroll = TranscriptScroll::to_bottom();
+    app.user_scrolled_during_stream = false;
 
     let events = handle_mouse_event(
         &mut app,
@@ -362,12 +374,9 @@ fn transcript_scrollbar_drag_maps_mouse_row_to_scroll_position() {
     );
 
     assert!(events.is_empty());
-    assert!(app.viewport.transcript_scrollbar_dragging);
-    assert!(!app.viewport.transcript_selection.dragging);
-    assert!(!app.viewport.transcript_scroll.is_at_tail());
-    let (_, top) = app.viewport.transcript_scroll.resolve_top(&[], 100);
-    assert_eq!(top, 0);
-    assert!(app.user_scrolled_during_stream);
+    assert!(app.viewport.transcript_selection.dragging);
+    assert!(app.viewport.transcript_scroll.is_at_tail());
+    assert!(!app.user_scrolled_during_stream);
 
     handle_mouse_event(
         &mut app,
@@ -381,6 +390,7 @@ fn transcript_scrollbar_drag_maps_mouse_row_to_scroll_position() {
 
     assert!(app.viewport.transcript_scroll.is_at_tail());
     assert!(!app.user_scrolled_during_stream);
+    assert!(app.viewport.transcript_selection.dragging);
 
     handle_mouse_event(
         &mut app,
@@ -392,11 +402,11 @@ fn transcript_scrollbar_drag_maps_mouse_row_to_scroll_position() {
         },
     );
 
-    assert!(!app.viewport.transcript_scrollbar_dragging);
+    assert!(!app.viewport.transcript_selection.dragging);
 }
 
 #[test]
-fn new_left_down_clears_stale_transcript_scrollbar_drag() {
+fn left_down_inside_transcript_starts_selection() {
     let mut app = create_test_app();
     app.history = vec![HistoryCell::Assistant {
         content: "alpha beta".to_string(),
@@ -411,7 +421,6 @@ fn new_left_down_clears_stale_transcript_scrollbar_drag() {
     });
     app.viewport.last_transcript_visible = 10;
     app.viewport.last_transcript_total = 110;
-    app.viewport.transcript_scrollbar_dragging = true;
 
     let events = handle_mouse_event(
         &mut app,
@@ -424,7 +433,7 @@ fn new_left_down_clears_stale_transcript_scrollbar_drag() {
     );
 
     assert!(events.is_empty());
-    assert!(!app.viewport.transcript_scrollbar_dragging);
+    assert!(app.viewport.transcript_selection.dragging);
 }
 
 #[test]
@@ -886,7 +895,7 @@ fn active_tool_status_label_summarizes_live_tool_group() {
     assert!(label.contains("run cargo test"));
     assert!(label.contains("1 active"));
     assert!(label.contains("1 done"));
-    assert!(label.contains("Alt+V"));
+    assert!(label.contains(tool_details_shortcut_label()));
 }
 
 #[test]
@@ -2266,10 +2275,24 @@ fn detail_target_prefers_visible_tool_card() {
     app.viewport.last_transcript_visible = 6;
 
     assert_eq!(detail_target_cell_index(&app), Some(1));
+    let expected = format!("{} details: file_search", tool_details_shortcut_label());
     assert_eq!(
         selected_detail_footer_label(&app).as_deref(),
-        Some("Alt+V details: file_search")
+        Some(expected.as_str())
     );
+}
+
+#[test]
+fn macos_option_v_glyph_is_treated_as_details_shortcut_only_on_macos() {
+    let option_v = KeyEvent::new(KeyCode::Char('\u{221A}'), KeyModifiers::NONE);
+    assert!(is_macos_option_v_legacy_key_for_platform(&option_v, true));
+    assert!(!is_macos_option_v_legacy_key_for_platform(&option_v, false));
+
+    let modified = KeyEvent::new(KeyCode::Char('\u{221A}'), KeyModifiers::SHIFT);
+    assert!(!is_macos_option_v_legacy_key_for_platform(&modified, true));
+
+    let plain_v = KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE);
+    assert!(!is_macos_option_v_legacy_key_for_platform(&plain_v, true));
 }
 
 #[test]
@@ -3820,6 +3843,27 @@ fn render_footer_from_drops_only_unselected_clusters() {
         props.cost.is_empty(),
         "cost cluster should be empty when Cost is disabled"
     );
+}
+
+#[test]
+fn render_footer_from_git_branch_item_renders_workspace_branch() {
+    let repo = init_git_repo();
+    let checkout = Command::new("git")
+        .args(["checkout", "-b", "feature/statusline"])
+        .current_dir(repo.path())
+        .output()
+        .expect("git checkout should run");
+    assert!(
+        checkout.status.success(),
+        "git checkout failed: {}",
+        String::from_utf8_lossy(&checkout.stderr)
+    );
+
+    let mut app = create_test_app();
+    app.workspace = repo.path().to_path_buf();
+
+    let props = render_footer_from(&app, &[crate::config::StatusItem::GitBranch], None);
+    assert_eq!(spans_text(&props.cache), "feature/statusline");
 }
 
 /// Regression for issue #244: visible session spend must not decrease.

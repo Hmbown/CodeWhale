@@ -29,8 +29,8 @@ use crate::tui::views::{ModalKind, ModalView, ViewAction};
 
 /// Footer hint shown along the bottom border of the pager. Kept short so it
 /// fits on narrow terminals; full reference lives in the module docs.
-const FOOTER_HINT: &str =
-    " j/k scroll  Space/b page  Ctrl+D/U half  g/G top/bottom  / search  q quit ";
+const FOOTER_HINT_NAV: &str = " j/k scroll  Space page  Ctrl+D/U half  g/G top/bottom  / search";
+const FOOTER_HINT_EXIT: &str = " q/Esc close ";
 
 pub struct PagerView {
     title: String,
@@ -416,10 +416,15 @@ impl ModalView for PagerView {
             )));
         }
 
-        let footer = Line::from(Span::styled(
-            FOOTER_HINT,
-            Style::default().fg(palette::TEXT_HINT),
-        ));
+        let footer = Line::from(vec![
+            Span::styled(
+                FOOTER_HINT_EXIT,
+                Style::default()
+                    .fg(palette::DEEPSEEK_SKY)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(FOOTER_HINT_NAV, Style::default().fg(palette::TEXT_HINT)),
+        ]);
         let block = Block::default()
             .title(self.title.clone())
             .title_bottom(footer)
@@ -657,11 +662,12 @@ mod tests {
     #[test]
     fn footer_hint_includes_new_bindings() {
         // The rendered pager must surface the new vim-style bindings to
-        // the user; check the footer string covers the headline keys.
-        for needle in &["j/k", "g/G", "Space", "Ctrl+D", "/ search", "q quit"] {
+        // the user; check the footer hint covers the headline keys.
+        for needle in &["j/k", "g/G", "Space", "Ctrl+D", "/ search", "q/Esc close"] {
+            let full_hint = format!("{FOOTER_HINT_EXIT}{FOOTER_HINT_NAV}");
             assert!(
-                FOOTER_HINT.contains(needle),
-                "footer hint missing {needle:?}: {FOOTER_HINT}"
+                full_hint.contains(needle),
+                "footer hint missing {needle:?}: {full_hint}"
             );
         }
     }
@@ -681,7 +687,7 @@ mod tests {
             bottom.push_str(buf[(x, popup_bottom_y as u16)].symbol());
         }
         assert!(
-            bottom.contains("j/k") || bottom.contains("scroll"),
+            bottom.contains("close") || bottom.contains("scroll"),
             "expected footer hint on bottom border row {popup_bottom_y}, got: {bottom:?}"
         );
     }

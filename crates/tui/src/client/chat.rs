@@ -1000,11 +1000,11 @@ pub(super) fn parse_chat_message(payload: &Value) -> Result<MessageResponse> {
                 .unwrap_or("tool_call")
                 .to_string();
             let function = call.get("function");
-            let name = function
-                .and_then(|f| f.get("name"))
-                .and_then(Value::as_str)
-                .unwrap_or("tool")
-                .to_string();
+            let name = tool_name_or_fallback(
+                function.and_then(|f| f.get("name")).and_then(Value::as_str),
+                &id,
+                "Non-streaming response",
+            );
             let arguments = function
                 .and_then(|f| f.get("arguments"))
                 .and_then(Value::as_str)
@@ -1282,9 +1282,8 @@ pub(super) fn parse_sse_chunk(
                             let name = tc
                                 .get("function")
                                 .and_then(|f| f.get("name"))
-                                .and_then(Value::as_str)
-                                .unwrap_or("")
-                                .to_string();
+                                .and_then(Value::as_str);
+                            let name = tool_name_or_fallback(name, &id, "Streaming response chunk");
                             let caller = tc.get("caller").and_then(|v| {
                                 v.get("type").and_then(Value::as_str).map(|caller_type| {
                                     ToolCaller {
@@ -1368,6 +1367,18 @@ pub(super) fn parse_sse_chunk(
     }
 
     events
+}
+
+fn tool_name_or_fallback(name: Option<&str>, id: &str, source: &str) -> String {
+    let trimmed = name.unwrap_or("").trim();
+    if trimmed.is_empty() {
+        logging::warn(format!(
+            "{source} returned an empty tool name for call {id}; using unknown_tool"
+        ));
+        "unknown_tool".to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 // === #103 Phase 1: stream-decode diagnostics ===================================
@@ -1586,6 +1597,53 @@ mod stream_decoder_tests {
             )),
             "should yield InputJsonDelta carrying the tool args; got {events:?}"
         );
+    }
+
+    #[test]
+    fn decoder_uses_fallback_name_for_empty_streaming_tool_name() {
+        let events = decode_chunk(
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_empty","function":{"name":"","arguments":"{}"}}]}}]}"#,
+        );
+
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                StreamEvent::ContentBlockStart {
+                    content_block: ContentBlockStart::ToolUse { name, .. },
+                    ..
+                } if name == "unknown_tool"
+            )),
+            "empty upstream tool names should render as unknown_tool; got {events:?}"
+        );
+    }
+
+    #[test]
+    fn non_streaming_response_uses_fallback_name_for_missing_tool_name() {
+        let payload: Value = serde_json::from_str(
+            r#"{
+                "id": "chatcmpl_1",
+                "model": "deepseek-v4-pro",
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "tool_calls": [{
+                            "id": "call_missing",
+                            "function": { "arguments": "{}" }
+                        }]
+                    },
+                    "finish_reason": "tool_calls"
+                }]
+            }"#,
+        )
+        .expect("valid response");
+
+        let parsed = parse_chat_message(&payload).expect("message parses");
+        let tool_name = parsed.content.iter().find_map(|block| match block {
+            ContentBlock::ToolUse { name, .. } => Some(name.as_str()),
+            _ => None,
+        });
+
+        assert_eq!(tool_name, Some("unknown_tool"));
     }
 
     /// Regression for the parallel-tool-calls-without-id collision (audit

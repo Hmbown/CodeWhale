@@ -7,8 +7,12 @@
 //! # Mental model
 //!
 //! Two gears:
-//! - [`ChunkingMode::Smooth`]: drain one display chunk per commit tick (steady pacing).
-//! - [`ChunkingMode::CatchUp`]: drain a bounded burst while pressure exists.
+//! - [`ChunkingMode::Smooth`]: normal pressure.
+//! - [`ChunkingMode::CatchUp`]: elevated pressure.
+//!
+//! Normal-motion callers drain all currently available chunks so the display
+//! follows the upstream SSE delta cadence. Low-motion callers stay in Smooth
+//! and drain one chunk per tick to reduce visual churn.
 //!
 //! # Hysteresis
 //!
@@ -67,10 +71,10 @@ pub struct QueueSnapshot {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DrainPlan {
+    /// Emit all queued chunks available at this tick.
+    Available,
     /// Emit exactly one queued line.
     Single,
-    /// Emit up to `usize` queued lines.
-    Batch(usize),
 }
 
 /// Represents one policy decision for a specific queue snapshot.
@@ -145,7 +149,7 @@ impl AdaptiveChunkingPolicy {
             return ChunkingDecision {
                 mode: self.mode,
                 entered_catch_up: false,
-                drain_plan: DrainPlan::Single,
+                drain_plan: DrainPlan::Available,
             };
         }
 
@@ -157,15 +161,10 @@ impl AdaptiveChunkingPolicy {
             }
         };
 
-        let drain_plan = match self.mode {
-            ChunkingMode::Smooth => DrainPlan::Single,
-            ChunkingMode::CatchUp => DrainPlan::Batch(snapshot.queued_lines.max(1)),
-        };
-
         ChunkingDecision {
             mode: self.mode,
             entered_catch_up,
-            drain_plan,
+            drain_plan: DrainPlan::Available,
         }
     }
 
@@ -256,9 +255,10 @@ mod tests {
     }
 
     #[test]
-    fn smooth_only_burst_emits_one_per_tick() {
+    fn smooth_only_burst_drains_available_chunks_in_normal_motion() {
         // Five slowly-arriving lines, each well below enter thresholds, never
-        // flip the policy out of `Smooth`. Each decision should plan a single drain.
+        // flip the policy out of `Smooth`. Normal motion still drains what is
+        // already available so display pacing follows upstream deltas.
         let mut policy = AdaptiveChunkingPolicy::new();
         let t0 = Instant::now();
 
@@ -267,7 +267,7 @@ mod tests {
             let decision = policy.decide(snap(1, 10), t0 + Duration::from_millis(50 * i));
             assert_eq!(decision.mode, ChunkingMode::Smooth);
             assert!(!decision.entered_catch_up);
-            assert_eq!(decision.drain_plan, DrainPlan::Single);
+            assert_eq!(decision.drain_plan, DrainPlan::Available);
         }
     }
 
@@ -276,25 +276,22 @@ mod tests {
         // A burst crossing ENTER_QUEUE_DEPTH_LINES enters CatchUp. With
         // single-grapheme chunks, the threshold stays high enough that
         // ordinary prose still drips in visibly before catch-up engages.
-        // The policy should enter `CatchUp` and request a Batch drain matching
-        // the queue depth.
+        // The policy should enter `CatchUp`, while normal-motion draining still
+        // preserves the already-arrived upstream burst.
         let mut policy = AdaptiveChunkingPolicy::new();
         let now = Instant::now();
 
         let decision = policy.decide(snap(ENTER_QUEUE_DEPTH_LINES, 10), now);
         assert_eq!(decision.mode, ChunkingMode::CatchUp);
         assert!(decision.entered_catch_up);
-        assert_eq!(
-            decision.drain_plan,
-            DrainPlan::Batch(ENTER_QUEUE_DEPTH_LINES)
-        );
+        assert_eq!(decision.drain_plan, DrainPlan::Available);
 
         // Larger backlog requested next tick: still CatchUp, batch grows to match.
         let larger_backlog = ENTER_QUEUE_DEPTH_LINES + 80;
         let decision = policy.decide(snap(larger_backlog, 30), now + Duration::from_millis(10));
         assert_eq!(decision.mode, ChunkingMode::CatchUp);
         assert!(!decision.entered_catch_up, "no second transition signal");
-        assert_eq!(decision.drain_plan, DrainPlan::Batch(larger_backlog));
+        assert_eq!(decision.drain_plan, DrainPlan::Available);
     }
 
     #[test]
@@ -307,7 +304,7 @@ mod tests {
         let decision = policy.decide(snap(2, ENTER_OLDEST_AGE.as_millis() as u64), now);
         assert_eq!(decision.mode, ChunkingMode::CatchUp);
         assert!(decision.entered_catch_up);
-        assert_eq!(decision.drain_plan, DrainPlan::Batch(2));
+        assert_eq!(decision.drain_plan, DrainPlan::Available);
     }
 
     #[test]
@@ -341,7 +338,7 @@ mod tests {
             t0 + Duration::from_millis(320),
         );
         assert_eq!(post_hold.mode, ChunkingMode::Smooth);
-        assert_eq!(post_hold.drain_plan, DrainPlan::Single);
+        assert_eq!(post_hold.drain_plan, DrainPlan::Available);
     }
 
     #[test]
@@ -355,7 +352,7 @@ mod tests {
 
         let decision = policy.decide(empty_snap(), now + Duration::from_millis(10));
         assert_eq!(decision.mode, ChunkingMode::Smooth);
-        assert_eq!(decision.drain_plan, DrainPlan::Single);
+        assert_eq!(decision.drain_plan, DrainPlan::Available);
     }
 
     #[test]
@@ -374,7 +371,7 @@ mod tests {
             t0 + Duration::from_millis(100),
         );
         assert_eq!(held.mode, ChunkingMode::Smooth);
-        assert_eq!(held.drain_plan, DrainPlan::Single);
+        assert_eq!(held.drain_plan, DrainPlan::Available);
 
         // Past the hold: re-entry permitted.
         let reentered = policy.decide(
@@ -382,10 +379,7 @@ mod tests {
             t0 + Duration::from_millis(400),
         );
         assert_eq!(reentered.mode, ChunkingMode::CatchUp);
-        assert_eq!(
-            reentered.drain_plan,
-            DrainPlan::Batch(ENTER_QUEUE_DEPTH_LINES)
-        );
+        assert_eq!(reentered.drain_plan, DrainPlan::Available);
     }
 
     #[test]
@@ -403,10 +397,7 @@ mod tests {
             t0 + Duration::from_millis(100),
         );
         assert_eq!(severe.mode, ChunkingMode::CatchUp);
-        assert_eq!(
-            severe.drain_plan,
-            DrainPlan::Batch(SEVERE_QUEUE_DEPTH_LINES)
-        );
+        assert_eq!(severe.drain_plan, DrainPlan::Available);
     }
 
     #[test]
@@ -460,9 +451,6 @@ mod tests {
         );
         assert_eq!(d2.mode, ChunkingMode::CatchUp);
         assert!(d2.entered_catch_up);
-        assert_eq!(
-            d2.drain_plan,
-            DrainPlan::Batch(ENTER_QUEUE_DEPTH_LINES + 80)
-        );
+        assert_eq!(d2.drain_plan, DrainPlan::Available);
     }
 }

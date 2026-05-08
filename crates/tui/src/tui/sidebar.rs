@@ -71,7 +71,7 @@ fn render_sidebar_auto(f: &mut Frame, area: Rect, app: &App) {
     if !tasks_empty {
         visible.push(Panel::Tasks);
     }
-    // Todos are now shown as a banner above the chat dialog; omitted from
+    // Todos are now shown as a list panel above the composer; omitted from
     // the sidebar to avoid duplication.
     if !agents_empty {
         visible.push(Panel::Agents);
@@ -734,101 +734,111 @@ fn render_context_panel(f: &mut Frame, area: Rect, app: &App) {
     render_sidebar_section(f, area, "Session", lines, app);
 }
 
-/// Render a compact horizontal todos banner above the chat dialog.
-///
-/// Shows checklist progress as a single line with completion percentage
-/// and item status markers. Returns the number of rows rendered (0 or 1).
-/// When empty, renders nothing and returns 0 so the caller can skip the
-/// layout slot entirely.
-///
-/// Design follows Claude Code's pattern of placing the checklist above
-/// the conversation pane so the user can see task progress at a glance
-/// without needing the sidebar visible.
-pub fn render_todos_banner(f: &mut Frame, area: Rect, app: &App) -> u16 {
-    if area.width < 30 || area.height == 0 {
-        return 0;
-    }
+/// Maximum visible items in the todos area above the composer.
+const TODOS_PANEL_MAX_ITEMS: usize = 6;
 
+/// Compute the height needed for the todos area above the composer.
+/// Returns 0 when the checklist is empty.
+pub fn todos_panel_height(app: &App) -> u16 {
     let snapshot = match app.todos.try_lock() {
         Ok(todos) => todos.snapshot(),
         Err(_) => return 0,
     };
-
     if snapshot.items.is_empty() {
         return 0;
     }
+    // 1 header line + N items (capped) + 2 border rows
+    let items = snapshot.items.len().min(TODOS_PANEL_MAX_ITEMS);
+    1 + items as u16 + 2
+}
 
+/// Render the todos area as a bordered list panel above the composer.
+///
+/// Shows checklist progress with a bordered box: completion summary header
+/// followed by each item on its own line with status markers. Width below
+/// 24 columns silently renders nothing. Items beyond the cap show a
+/// "+N more" footer.
+///
+/// Design follows Claude Code's pattern of placing the checklist above
+/// the composer/input area so the user can see task progress at a glance
+/// without needing the sidebar visible.
+pub fn render_todos_panel(f: &mut Frame, area: Rect, app: &App) {
+    if area.width < 24 || area.height < 3 {
+        return;
+    }
+
+    let snapshot = match app.todos.try_lock() {
+        Ok(todos) => todos.snapshot(),
+        Err(_) => return,
+    };
+
+    if snapshot.items.is_empty() {
+        return;
+    }
+
+    let theme = Theme::for_palette_mode(app.ui_theme.mode);
     let content_width = area.width.saturating_sub(4) as usize;
-    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut lines: Vec<Line<'static>> = Vec::with_capacity(TODOS_PANEL_MAX_ITEMS + 2);
 
-    // Progress header: "Todos 33% (2/6)"
     let total = snapshot.items.len();
     let completed = snapshot
         .items
         .iter()
         .filter(|item| item.status == TodoStatus::Completed)
         .count();
-    spans.push(Span::styled(
-        "Todos ",
-        Style::default()
-            .fg(palette::TEXT_DIM)
-            .add_modifier(ratatui::style::Modifier::BOLD),
-    ));
-    spans.push(Span::styled(
-        format!("{:.0}%", snapshot.completion_pct),
-        Style::default()
-            .fg(palette::STATUS_SUCCESS)
-            .add_modifier(ratatui::style::Modifier::BOLD),
-    ));
-    spans.push(Span::styled(
-        format!(" ({completed}/{total})  "),
-        Style::default().fg(palette::TEXT_MUTED),
-    ));
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!("{}%", snapshot.completion_pct),
+            Style::default().fg(palette::STATUS_SUCCESS).bold(),
+        ),
+        Span::styled(
+            format!(" complete ({completed}/{total})"),
+            Style::default().fg(palette::TEXT_MUTED),
+        ),
+    ]));
 
-    // Item markers - compact horizontal layout.
-    // Budget remaining space for item tokens, each ~"[x] name  ".
-    let header_chars: usize = spans
-        .iter()
-        .map(|s| s.content.chars().count())
-        .sum();
-    let remaining_chars = content_width.saturating_sub(header_chars);
-    // Each item needs roughly "[x] name  " = 3 + name.len() + 2 separator
-    let max_items = if remaining_chars < 10 { 0 } else { snapshot.items.len().min(8) };
-
-    for item in snapshot.items.iter().take(max_items) {
-        let (marker, color) = match item.status {
+    for item in snapshot.items.iter().take(TODOS_PANEL_MAX_ITEMS) {
+        let (prefix, color) = match item.status {
             TodoStatus::Pending => ("[ ]", palette::TEXT_MUTED),
             TodoStatus::InProgress => ("[~]", palette::STATUS_WARNING),
             TodoStatus::Completed => ("[x]", palette::STATUS_SUCCESS),
         };
-        let label = truncate_line_to_width(
-            &format!("{marker} {}", item.content),
-            remaining_chars.saturating_div(max_items.max(1)).max(6),
-        );
-        spans.push(Span::styled(
-            format!("{label}  "),
+        let text = format!("{prefix} #{} {}", item.id, item.content);
+        lines.push(Line::from(Span::styled(
+            truncate_line_to_width(&text, content_width.max(1)),
             Style::default().fg(color),
-        ));
+        )));
     }
 
-    let remaining = snapshot.items.len().saturating_sub(max_items);
+    let remaining = snapshot.items.len().saturating_sub(TODOS_PANEL_MAX_ITEMS);
     if remaining > 0 {
-        spans.push(Span::styled(
+        lines.push(Line::from(Span::styled(
             format!("+{remaining} more"),
             Style::default().fg(palette::TEXT_MUTED),
-        ));
+        )));
     }
 
-    let line = Line::from(spans);
-    let paragraph = Paragraph::new(line)
-        .block(
-            Block::default()
-                .style(Style::default().bg(app.ui_theme.surface_bg))
-                .padding(ratatui::widgets::Padding::horizontal(2)),
-        );
+    let visible_rows = area.height.saturating_sub(2) as usize;
+    let lines: Vec<Line<'static>> = if lines.len() > visible_rows && visible_rows > 0 {
+        lines.into_iter().take(visible_rows).collect()
+    } else {
+        lines
+    };
 
-    f.render_widget(paragraph, area);
-    1
+    let section = Paragraph::new(lines).wrap(Wrap { trim: true }).block(
+        Block::default()
+            .title(Line::from(vec![Span::styled(
+                " Todos ",
+                Style::default().fg(theme.section_title_color).bold(),
+            )]))
+            .borders(theme.section_borders)
+            .border_type(theme.section_border_type)
+            .border_style(Style::default().fg(theme.section_border_color))
+            .style(Style::default().bg(app.ui_theme.surface_bg))
+            .padding(theme.section_padding),
+    );
+
+    f.render_widget(section, area);
 }
 
 fn render_sidebar_section(

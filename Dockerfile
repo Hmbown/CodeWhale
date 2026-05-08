@@ -2,7 +2,7 @@
 # DeepSeek-TUI multi-arch Docker image (#501)
 #
 # Build:  docker buildx build --platform linux/amd64,linux/arm64 -t deepseek-tui:latest .
-# Run:    docker run --rm -it -e DEEPSEEK_API_KEY -v ~/.deepseek:/home/deepseek/.deepseek deepseek-tui
+# Run:    docker run --rm -it -e DEEPSEEK_API_KEY -v deepseek-tui-home:/home/deepseek/.deepseek deepseek-tui
 #
 # The image ships both binaries (deepseek dispatcher + deepseek-tui runtime)
 # in a minimal runtime layer. No MCP servers or heavy toolchains are included

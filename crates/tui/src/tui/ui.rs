@@ -529,6 +529,8 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         todos: app.todos.clone(),
         plan_state: app.plan_state.clone(),
         max_spawn_depth: crate::tools::subagent::DEFAULT_MAX_SPAWN_DEPTH,
+        soft_max_subagents: config.soft_max_subagents(),
+        auto_scale: config.auto_scale(),
         network_policy: config.network.clone().map(|toml_cfg| {
             crate::network_policy::NetworkPolicyDecider::with_default_audit(toml_cfg.into_runtime())
         }),
@@ -2086,6 +2088,11 @@ async fn run_event_loop(
                 || key.modifiers.contains(KeyModifiers::SUPER);
             let is_plain_char = matches!(key.code, KeyCode::Char(_)) && !has_ctrl_alt_or_super;
             let is_enter = matches!(key.code, KeyCode::Enter);
+
+            if is_macos_option_v_legacy_key(&key) {
+                open_tool_details_pager(app);
+                continue;
+            }
 
             if !is_plain_char
                 && !is_enter
@@ -6696,7 +6703,7 @@ fn active_tool_status_label(app: &App) -> Option<String> {
     if active_foreground_shell_running(app) {
         parts.push("Ctrl+B shell".to_string());
     }
-    parts.push("Alt+V".to_string());
+    parts.push(tool_details_shortcut_label().to_string());
     Some(parts.join(" \u{00B7} "))
 }
 
@@ -6902,7 +6909,8 @@ fn render_footer_from(
     for item in items {
         let chip = match *item {
             S::ContextPercent => footer_context_percent_spans(app),
-            S::GitBranch | S::LastToolElapsed | S::RateLimit => Vec::new(),
+            S::GitBranch => footer_git_branch_spans(app),
+            S::LastToolElapsed | S::RateLimit => Vec::new(),
             _ => continue,
         };
         if chip.is_empty() {
@@ -6925,6 +6933,16 @@ fn render_footer_from(
     }
 
     props
+}
+
+fn footer_git_branch_spans(app: &App) -> Vec<Span<'static>> {
+    let Some(branch) = workspace_git_branch(&app.workspace) else {
+        return Vec::new();
+    };
+    vec![Span::styled(
+        branch,
+        Style::default().fg(app.ui_theme.text_muted),
+    )]
 }
 
 /// Spans for the "context %" footer chip. Mirrors the header colour ramp so
@@ -7513,17 +7531,8 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEvent> {
             }
         }
         MouseEventKind::Down(MouseButton::Left) => {
-            app.viewport.transcript_scrollbar_dragging = false;
-
             if mouse_hits_rect(mouse, app.viewport.jump_to_latest_button_area) {
                 app.scroll_to_bottom();
-                return Vec::new();
-            }
-
-            if mouse_hits_transcript_scrollbar(app, mouse) {
-                app.viewport.transcript_scrollbar_dragging = true;
-                app.viewport.transcript_selection.clear();
-                scroll_transcript_to_mouse_row(app, mouse.row);
                 return Vec::new();
             }
 
@@ -7546,20 +7555,11 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEvent> {
             }
         }
         MouseEventKind::Drag(MouseButton::Left) => {
-            if app.viewport.transcript_scrollbar_dragging {
-                scroll_transcript_to_mouse_row(app, mouse.row);
-                return Vec::new();
-            }
-
             if app.viewport.transcript_selection.dragging
                 && let Some(point) = selection_point_from_mouse(app, mouse)
             {
                 app.viewport.transcript_selection.head = Some(point);
             }
-        }
-        MouseEventKind::Up(MouseButton::Left) if app.viewport.transcript_scrollbar_dragging => {
-            app.viewport.transcript_scrollbar_dragging = false;
-            app.needs_redraw = true;
         }
         MouseEventKind::Up(MouseButton::Left) if app.viewport.transcript_selection.dragging => {
             app.viewport.transcript_selection.dragging = false;
@@ -7574,57 +7574,6 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEvent> {
     }
 
     Vec::new()
-}
-
-fn mouse_hits_transcript_scrollbar(app: &App, mouse: MouseEvent) -> bool {
-    let Some(area) = app.viewport.last_transcript_area else {
-        return false;
-    };
-    if area.width <= 1 || app.viewport.last_transcript_total <= app.viewport.last_transcript_visible
-    {
-        return false;
-    }
-
-    let scrollbar_col = area.x.saturating_add(area.width.saturating_sub(1));
-    mouse.column == scrollbar_col
-        && mouse.row >= area.y
-        && mouse.row < area.y.saturating_add(area.height)
-}
-
-fn scroll_transcript_to_mouse_row(app: &mut App, row: u16) -> bool {
-    let Some(area) = app.viewport.last_transcript_area else {
-        return false;
-    };
-    let total = app.viewport.last_transcript_total;
-    let visible = app.viewport.last_transcript_visible;
-    if area.height == 0 || total <= visible {
-        return false;
-    }
-
-    let max_start = total.saturating_sub(visible);
-    if max_start == 0 {
-        app.scroll_to_bottom();
-        return true;
-    }
-
-    let max_row = usize::from(area.height.saturating_sub(1));
-    let relative_row = usize::from(row.saturating_sub(area.y)).min(max_row);
-    let numerator = relative_row
-        .saturating_mul(max_start)
-        .saturating_add(max_row / 2);
-    // Round to the nearest transcript offset so short thumbs still feel
-    // responsive on compact terminals.
-    let top = numerator.checked_div(max_row).unwrap_or(0);
-
-    app.viewport.transcript_scroll = if top >= max_start {
-        TranscriptScroll::to_bottom()
-    } else {
-        TranscriptScroll::at_line(top)
-    };
-    app.viewport.pending_scroll_delta = 0;
-    app.user_scrolled_during_stream = !app.viewport.transcript_scroll.is_at_tail();
-    app.needs_redraw = true;
-    true
 }
 
 fn mouse_hits_rect(mouse: MouseEvent, area: Option<Rect>) -> bool {
@@ -8190,7 +8139,8 @@ fn selected_detail_footer_label(app: &App) -> Option<String> {
     )?;
     let label = detail_target_label(app, cell_index)?;
     Some(format!(
-        "Alt+V details: {}",
+        "{} details: {}",
+        tool_details_shortcut_label(),
         truncate_line_to_width(&label, 34)
     ))
 }
@@ -8263,12 +8213,28 @@ fn is_file_tree_toggle_shortcut(key: &KeyEvent) -> bool {
     ctrl_shift_e || cmd_shift_e
 }
 
+fn tool_details_shortcut_label() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "\u{2325}+V"
+    } else {
+        "Alt+V"
+    }
+}
+
 fn details_shortcut_modifiers(modifiers: KeyModifiers) -> bool {
     modifiers.is_empty()
         || modifiers == KeyModifiers::SHIFT
         || (modifiers.contains(KeyModifiers::ALT)
             && !modifiers.contains(KeyModifiers::CONTROL)
             && !modifiers.contains(KeyModifiers::SUPER))
+}
+
+fn is_macos_option_v_legacy_key(key: &KeyEvent) -> bool {
+    is_macos_option_v_legacy_key_for_platform(key, cfg!(target_os = "macos"))
+}
+
+fn is_macos_option_v_legacy_key_for_platform(key: &KeyEvent, is_macos: bool) -> bool {
+    is_macos && key.modifiers.is_empty() && matches!(key.code, KeyCode::Char('\u{221A}'))
 }
 
 fn is_paste_shortcut(key: &KeyEvent) -> bool {

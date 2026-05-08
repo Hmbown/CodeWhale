@@ -255,13 +255,13 @@ fn forked_subagent_messages_preserve_parent_prefix_then_append_task() {
             cache_control: None,
         }],
     };
-    let fork_context = SubAgentForkContext {
+    let fork_context = Arc::new(SubAgentForkContext {
         system: Some(parent_system.clone()),
         messages: vec![parent_message.clone()],
         structured_state_block: Some(
             "## Cycle State (Auto-Preserved)\n- Mode: `AGENT`".to_string(),
         ),
-    };
+    });
 
     let assignment = SubAgentAssignment::new("inspect parser".to_string(), Some("worker".into()));
     let messages = build_initial_subagent_messages(
@@ -1310,6 +1310,8 @@ fn stub_runtime() -> SubAgentRuntime {
         manager: new_shared_subagent_manager(workspace, 5),
         spawn_depth: 0,
         max_spawn_depth: DEFAULT_MAX_SPAWN_DEPTH,
+        soft_max_subagents: crate::config::MAX_SUBAGENTS,
+        auto_scale: false,
         cancel_token: CancellationToken::new(),
         mailbox: None,
         parent_completion_tx: None,

@@ -204,7 +204,8 @@ pub(super) fn format_task_list(tasks: &[TaskSummary]) -> String {
 
     let mut lines = vec![
         format!("Tasks ({})", tasks.len()),
-        "----------------------------------------".to_string(),
+        "ID             Status        Time  Title".to_string(),
+        "------------------------------------------------------------".to_string(),
     ];
     for task in tasks {
         let duration = task
@@ -212,7 +213,7 @@ pub(super) fn format_task_list(tasks: &[TaskSummary]) -> String {
             .map(|ms| format!("{:.2}s", ms as f64 / 1000.0))
             .unwrap_or_else(|| "-".to_string());
         lines.push(format!(
-            "{}  {:9}  {}  {}",
+            "{:<13}  {:<9}  {:>8}  {}",
             task.id,
             task_status_label(task.status),
             duration,
@@ -331,4 +332,40 @@ fn format_task_detail(task: &TaskRecord) -> String {
     }
 
     lines.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::task_manager::{TaskStatus, TaskSummary};
+    use chrono::Utc;
+
+    fn task_summary(id: &str, status: TaskStatus, duration_ms: Option<u64>) -> TaskSummary {
+        TaskSummary {
+            id: id.to_string(),
+            status,
+            prompt_summary: "Fix task list output".to_string(),
+            model: "deepseek-v4-pro".to_string(),
+            mode: "agent".to_string(),
+            created_at: Utc::now(),
+            started_at: None,
+            ended_at: None,
+            duration_ms,
+            error: None,
+            thread_id: None,
+            turn_id: None,
+        }
+    }
+
+    #[test]
+    fn task_list_includes_title_header_and_time_column() {
+        let output = format_task_list(&[
+            task_summary("task_12345678", TaskStatus::Running, None),
+            task_summary("task_abcdef12", TaskStatus::Completed, Some(1234)),
+        ]);
+
+        assert!(output.contains("ID             Status        Time  Title"));
+        assert!(output.contains("task_12345678  running           -  Fix task list output"));
+        assert!(output.contains("task_abcdef12  completed     1.23s  Fix task list output"));
+    }
 }

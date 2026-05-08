@@ -574,7 +574,6 @@ pub struct ViewportState {
     pub mouse_scroll: MouseScrollState,
     pub transcript_cache: TranscriptViewCache,
     pub transcript_selection: TranscriptSelection,
-    pub transcript_scrollbar_dragging: bool,
     pub last_transcript_area: Option<Rect>,
     pub last_transcript_top: usize,
     pub last_transcript_visible: usize,
@@ -591,7 +590,6 @@ impl Default for ViewportState {
             mouse_scroll: MouseScrollState::new(),
             transcript_cache: TranscriptViewCache::new(),
             transcript_selection: TranscriptSelection::default(),
-            transcript_scrollbar_dragging: false,
             last_transcript_area: None,
             last_transcript_top: 0,
             last_transcript_visible: 0,
@@ -2457,7 +2455,6 @@ impl App {
 
         self.viewport.pending_scroll_delta = 0;
         self.viewport.transcript_selection.clear();
-        self.viewport.transcript_scrollbar_dragging = false;
 
         self.viewport.last_transcript_area = None;
         self.viewport.last_transcript_top = 0;
