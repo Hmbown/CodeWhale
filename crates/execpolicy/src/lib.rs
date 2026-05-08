@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use anyhow::Result;
 use bash_arity::BashArityDict;
 use codewhale_protocol::{NetworkPolicyAmendment, NetworkPolicyRuleAction};
+use globset::GlobBuilder;
 use serde::{Deserialize, Serialize};
 
 /// Priority layer for a permission ruleset. Higher ordinal = higher priority.
@@ -565,35 +566,11 @@ fn path_pattern_matches(pattern: &str, path: &str) -> bool {
     if !pattern.contains('*') && !pattern.contains('?') {
         return pattern == path;
     }
-    glob_match(pattern.as_bytes(), path.as_bytes())
-}
-
-fn glob_match(pattern: &[u8], path: &[u8]) -> bool {
-    if pattern.is_empty() {
-        return path.is_empty();
-    }
-
-    match pattern[0] {
-        b'*' if pattern.get(1) == Some(&b'*') => {
-            let rest = &pattern[2..];
-            (0..=path.len()).any(|idx| glob_match(rest, &path[idx..]))
-        }
-        b'*' => {
-            if glob_match(&pattern[1..], path) {
-                return true;
-            }
-            let mut idx = 0;
-            while idx < path.len() && path[idx] != b'/' {
-                idx += 1;
-                if glob_match(&pattern[1..], &path[idx..]) {
-                    return true;
-                }
-            }
-            false
-        }
-        b'?' => !path.is_empty() && path[0] != b'/' && glob_match(&pattern[1..], &path[1..]),
-        literal => !path.is_empty() && path[0] == literal && glob_match(&pattern[1..], &path[1..]),
-    }
+    GlobBuilder::new(&pattern)
+        .literal_separator(true)
+        .build()
+        .map(|glob| glob.compile_matcher().is_match(path))
+        .unwrap_or(false)
 }
 
 fn rule_specificity(rule: &ToolPermissionRule) -> usize {
@@ -629,7 +606,9 @@ fn normalize_path_pattern(value: &str) -> String {
         match segment {
             "" | "." => {}
             ".." => {
-                if segments.is_empty() || segments.last() == Some(&"..") {
+                if absolute {
+                    segments.pop();
+                } else if segments.is_empty() || segments.last() == Some(&"..") {
                     segments.push(segment);
                 } else {
                     segments.pop();
@@ -916,6 +895,8 @@ mod tests {
         assert!(path_pattern_matches("src/**", "src/./lib.rs"));
         assert!(!path_pattern_matches("src/**", "src/../secret.txt"));
         assert!(!path_pattern_matches("src/**", "../src/lib.rs"));
+        assert!(path_pattern_matches("/foo", "/../foo"));
+        assert!(!path_pattern_matches("/src/**", "/src/../secret.txt"));
     }
 
     #[test]
