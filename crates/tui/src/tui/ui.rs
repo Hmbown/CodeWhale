@@ -132,7 +132,7 @@ const DISPATCH_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(30);
 // motion (~12 fps) instead of teleport-frames.
 const UI_STATUS_ANIMATION_MS: u64 = 80;
 const WORKSPACE_CONTEXT_REFRESH_SECS: u64 = 15;
-const SIDEBAR_VISIBLE_MIN_WIDTH: u16 = 100;
+const SIDEBAR_VISIBLE_MIN_WIDTH: u16 = 240;
 const DEFAULT_TERMINAL_PROBE_TIMEOUT_MS: u64 = 500;
 
 type AppTerminal = Terminal<ColorCompatBackend<Stdout>>;
@@ -529,6 +529,8 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         todos: app.todos.clone(),
         plan_state: app.plan_state.clone(),
         max_spawn_depth: crate::tools::subagent::DEFAULT_MAX_SPAWN_DEPTH,
+        soft_max_subagents: config.soft_max_subagents(),
+        auto_scale: config.auto_scale(),
         network_policy: config.network.clone().map(|toml_cfg| {
             crate::network_policy::NetworkPolicyDecider::with_default_audit(toml_cfg.into_runtime())
         }),
@@ -1009,6 +1011,73 @@ async fn run_event_loop(
                             }
                         }
                         app.plan_tool_used_in_turn = false;
+
+                        // Auto-continue (#goals): when enabled and todos are
+                        // not all completed, queue a continuation so the
+                        // agent autonomously pushes forward.
+                        if app.goal.auto_continue && !app.is_loading {
+                            // If the user interrupted the previous turn,
+                            // stop auto-continue so they can take control.
+                            if status
+                                == crate::core::events::TurnOutcomeStatus::Interrupted
+                            {
+                                app.goal.auto_continue = false;
+                                app.status_message = Some(
+                                    "Auto-continue stopped (turn interrupted). Use /goal auto to re-enable."
+                                        .to_string(),
+                                );
+                            } else {
+                                let pending_items: Vec<String> = app
+                                .todos
+                                .try_lock()
+                                .map(|todos| {
+                                    let snap = todos.snapshot();
+                                    snap.items
+                                        .iter()
+                                        .filter(|item| {
+                                            !matches!(
+                                                item.status,
+                                                crate::tools::todo::TodoStatus::Completed
+                                            )
+                                        })
+                                        .map(|item| item.content.clone())
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+
+                            let incomplete = pending_items.len();
+
+                            if incomplete > 0 {
+                                let goal_hint = app
+                                    .goal
+                                    .goal_objective
+                                    .as_deref()
+                                    .map(|obj| format!("Goal: \"{obj}\". "))
+                                    .unwrap_or_default();
+                                let todo_list = pending_items
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(i, item)| format!("  {}. {item}", i + 1))
+                                    .collect::<Vec<_>>()
+                                    .join("\n");
+                                let msg = format!(
+                                    "{goal_hint}Continue working on the {incomplete} remaining todo item(s):\n\n{todo_list}\n\nUse checklist_write to update progress as you complete each item."
+                                );
+                                app.queued_messages.push_back(QueuedMessage::new(msg, None));
+                                app.goal.auto_continue_turn_count += 1;
+                                app.status_message = Some(format!(
+                                    "Auto-continue turn #{} ({incomplete} todo(s) remaining)",
+                                    app.goal.auto_continue_turn_count
+                                ));
+                            } else {
+                                app.status_message = Some(
+                                    "All todos completed — auto-continue finished."
+                                        .to_string(),
+                                );
+                                app.goal.auto_continue = false;
+                            }
+                            }
+                        }
 
                         // Legacy pending-steer recovery. Current keyboard
                         // handling keeps Esc as cancel-only, but older saved
@@ -3006,6 +3075,10 @@ fn build_session_snapshot(app: &App, manager: &SessionManager) -> SavedSession {
             app.system_prompt.as_ref(),
         );
         updated.metadata.mode = Some(app.mode.as_setting().to_string());
+        updated.metadata.session_cost_usd = app.session.session_cost;
+        updated.metadata.session_cost_cny = app.session.session_cost_cny;
+        updated.metadata.subagent_cost_usd = app.session.subagent_cost;
+        updated.metadata.subagent_cost_cny = app.session.subagent_cost_cny;
         updated.context_references = app.session_context_references.clone();
         updated
     } else {
@@ -3017,6 +3090,10 @@ fn build_session_snapshot(app: &App, manager: &SessionManager) -> SavedSession {
             app.system_prompt.as_ref(),
             Some(app.mode.as_setting()),
         );
+        session.metadata.session_cost_usd = app.session.session_cost;
+        session.metadata.session_cost_cny = app.session.session_cost_cny;
+        session.metadata.subagent_cost_usd = app.session.subagent_cost;
+        session.metadata.subagent_cost_cny = app.session.subagent_cost_cny;
         session.context_references = app.session_context_references.clone();
         session
     }
@@ -3363,6 +3440,7 @@ fn ensure_streaming_thinking_active_entry(app: &mut App) -> usize {
         content: String::new(),
         streaming: true,
         duration_secs: None,
+        expanded: false,
     });
     app.streaming_thinking_active_entry = Some(entry_idx);
     app.bump_active_cell_revision();
@@ -3518,13 +3596,27 @@ fn handle_composer_history_arrow(
         return false;
     }
 
+    // When the composer is empty, plain Up/Down scroll the transcript so
+    // terminals that map trackpad gestures to arrow keys can still scroll
+    // the history area.  When the composer has text, they navigate input
+    // history so the user can recall previous prompts.
+    let composer_empty = app.input.trim().is_empty();
+
     match key.code {
         KeyCode::Up => {
-            app.history_up();
+            if composer_empty {
+                app.scroll_up(1);
+            } else {
+                app.history_up();
+            }
             true
         }
         KeyCode::Down => {
-            app.history_down();
+            if composer_empty {
+                app.scroll_down(1);
+            } else {
+                app.history_down();
+            }
             true
         }
         _ => false,
@@ -5320,14 +5412,17 @@ fn render(f: &mut Frame, app: &mut App) {
     let pending_preview = build_pending_input_preview(app);
     let preview_height = pending_preview.desired_height(size.width);
 
+    let todos_panel_height = super::sidebar::todos_panel_height(app);
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(header_height),   // Header
-            Constraint::Min(1),                  // Chat area
-            Constraint::Length(preview_height),  // Pending input preview (0 if empty)
-            Constraint::Length(composer_height), // Composer
-            Constraint::Length(footer_height),   // Footer
+            Constraint::Length(header_height),         // Header
+            Constraint::Min(1),                        // Chat area
+            Constraint::Length(preview_height),        // Pending input preview (0 if empty)
+            Constraint::Length(todos_panel_height),     // Todos panel (0 when empty)
+            Constraint::Length(composer_height),       // Composer
+            Constraint::Length(footer_height),         // Footer
         ])
         .split(size);
 
@@ -5370,7 +5465,7 @@ fn render(f: &mut Frame, app: &mut App) {
         .with_usage(
             app.session.total_conversation_tokens,
             sanitized_context_window,
-            app.session.session_cost,
+            app.displayed_session_cost_for_currency(app.cost_currency),
             sanitized_prompt_tokens,
         )
         .with_reasoning_effort(Some(&effort_label))
@@ -5445,6 +5540,11 @@ fn render(f: &mut Frame, app: &mut App) {
         pending_preview.render(chunks[2], buf);
     }
 
+    // Render todos panel above the composer
+    if todos_panel_height > 0 {
+        super::sidebar::render_todos_panel(f, chunks[3], app);
+    }
+
     // Render composer
     let cursor_pos = {
         let composer_widget = ComposerWidget::new(
@@ -5454,19 +5554,19 @@ fn render(f: &mut Frame, app: &mut App) {
             &mention_menu_entries,
         );
         let buf = f.buffer_mut();
-        composer_widget.render(chunks[3], buf);
-        composer_widget.cursor_pos(chunks[3])
+        composer_widget.render(chunks[4], buf);
+        composer_widget.cursor_pos(chunks[4])
     };
     if let Some(cursor_pos) = cursor_pos {
         f.set_cursor_position(cursor_pos);
     }
 
     // Render footer
-    render_footer(f, chunks[4], app);
+    render_footer(f, chunks[5], app);
     // Toast stack overlay (#439): when multiple status toasts are queued,
     // surface the older ones as a 1-2 line strip above the footer so a
     // burst of events isn't collapsed to a single visible message.
-    render_toast_stack_overlay(f, size, chunks[4], app);
+    render_toast_stack_overlay(f, size, chunks[5], app);
 
     if !app.view_stack.is_empty() {
         // The live transcript overlay snapshots the app's history + active
@@ -6066,13 +6166,17 @@ fn apply_loaded_session(app: &mut App, session: &SavedSession) -> bool {
     app.workspace.clone_from(&session.metadata.workspace);
     app.session.total_tokens = u32::try_from(session.metadata.total_tokens).unwrap_or(u32::MAX);
     app.session.total_conversation_tokens = app.session.total_tokens;
-    app.session.session_cost = 0.0;
-    app.session.session_cost_cny = 0.0;
-    app.session.subagent_cost = 0.0;
-    app.session.subagent_cost_cny = 0.0;
+    app.session.session_cost = session.metadata.session_cost_usd;
+    app.session.session_cost_cny = session.metadata.session_cost_cny;
+    app.session.subagent_cost = session.metadata.subagent_cost_usd;
+    app.session.subagent_cost_cny = session.metadata.subagent_cost_cny;
     app.session.subagent_cost_event_seqs.clear();
-    app.session.displayed_cost_high_water = 0.0;
-    app.session.displayed_cost_high_water_cny = 0.0;
+    // Set high-water marks to the restored totals so the footer never
+    // reverses when reconciliation events fire on a resumed session.
+    let total_restored_usd = app.session.session_cost + app.session.subagent_cost;
+    let total_restored_cny = app.session.session_cost_cny + app.session.subagent_cost_cny;
+    app.session.displayed_cost_high_water = total_restored_usd;
+    app.session.displayed_cost_high_water_cny = total_restored_cny;
     app.session.last_prompt_tokens = None;
     app.session.last_completion_tokens = None;
     app.session.last_prompt_cache_hit_tokens = None;

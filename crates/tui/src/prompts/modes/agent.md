@@ -28,3 +28,4 @@ Long sessions accumulate context. To stay fast:
 - Suggest `/compact` when context nears 80% — the compaction handoff preserves open blockers
 - Use `note` for decisions you'll need across compaction boundaries
 - A 3-turn session that fans out to sub-agents finishes faster AND stays responsive longer than a 15-turn sequential grind
+- **Prefer Flash sub-agents for execution work**: when decomposing a task into checklist items, spawn `deepseek-v4-flash` workers for independent implementation steps. Pack all necessary context into each todo item's content so the Flash worker can work autonomously.

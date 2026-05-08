@@ -11,7 +11,29 @@ pub fn goal(app: &mut App, arg: Option<&str>) -> CommandResult {
             app.goal.goal_objective = None;
             app.goal.goal_token_budget = None;
             app.goal.goal_started_at = None;
+            app.goal.auto_continue = false;
             CommandResult::message("Goal cleared.")
+        }
+        Some("auto") => {
+            app.goal.auto_continue = true;
+            app.goal.auto_continue_turn_count = 0;
+            let objective_hint = app
+                .goal
+                .goal_objective
+                .as_deref()
+                .map(|o| format!(" for \"{o}\""))
+                .unwrap_or_default();
+            CommandResult::message(format!(
+                "Auto-continue enabled{objective_hint}. The agent will keep pushing turns \
+                 until all checklist items are completed. Use /goal stop to disable."
+            ))
+        }
+        Some("stop") => {
+            app.goal.auto_continue = false;
+            let turn_count = app.goal.auto_continue_turn_count;
+            CommandResult::message(format!(
+                "Auto-continue disabled after {turn_count} turn(s)."
+            ))
         }
         Some(text) if !text.is_empty() => {
             // Parse optional budget: "/goal Implement login | budget: 50000"
@@ -19,11 +41,16 @@ pub fn goal(app: &mut App, arg: Option<&str>) -> CommandResult {
             app.goal.goal_objective = Some(objective.clone());
             app.goal.goal_token_budget = budget;
             app.goal.goal_started_at = Some(std::time::Instant::now());
+            // Auto-continue is on by default when a goal is set.
+            // The agent will keep pushing turns until all todos complete
+            // or the user interrupts. Use /goal stop to disable.
+            app.goal.auto_continue = true;
+            app.goal.auto_continue_turn_count = 0;
             let budget_str = budget
                 .map(|b| format!(" (budget: {b} tokens)"))
                 .unwrap_or_default();
             CommandResult::message(format!(
-                "Goal set: \"{}\"{} — tracking progress.",
+                "Goal set: \"{}\"{} — auto-continuing until todos complete. /goal stop to disable.",
                 objective, budget_str
             ))
         }
@@ -51,7 +78,17 @@ pub fn goal(app: &mut App, arg: Option<&str>) -> CommandResult {
                         format!(" | tokens: {used}/{b} ({pct:.0}%)")
                     })
                     .unwrap_or_default();
-                CommandResult::message(format!("Goal: \"{obj}\" — elapsed: {elapsed}{budget_str}"))
+                let auto_str = if app.goal.auto_continue {
+                    format!(
+                        " | auto-continue: on (turn #{})",
+                        app.goal.auto_continue_turn_count
+                    )
+                } else {
+                    String::new()
+                };
+                CommandResult::message(format!(
+                    "Goal: \"{obj}\" — elapsed: {elapsed}{budget_str}{auto_str}"
+                ))
             } else {
                 CommandResult::message(
                     "No goal set. Use /goal <objective> [budget: N] to set one.\n\

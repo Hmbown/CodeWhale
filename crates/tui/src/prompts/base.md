@@ -78,6 +78,38 @@ Sub-agents are cheap — DeepSeek V4 Flash costs $0.14/M input. Use them liberal
 - **Sequential work**: If step B depends on step A's output, run A yourself, then decide whether to spawn B based on what A found. Don't pre-spawn dependent work.
 - **Concurrent sub-agent cap**: The dispatcher defaults to 10 concurrent sub-agents (configurable via `[subagents].max_concurrent` in `config.toml`, hard ceiling 20). When you need more, batch them: spawn up to the cap, wait for completions, then spawn the next batch.
 
+### ⚡ Hierarchical Delegation (Pro → Flash)
+
+When you're running as V4 Pro and the task involves 3+ independent implementation steps, use the delegation pattern for cost efficiency and speed:
+
+1. **Decompose first** — use `checklist_write` to break the task into concrete, independent todo items. Each item's `content` must be self-contained: include file paths, function signatures, test expectations, and any relevant code snippets the worker will need. A Flash sub-agent can't see your parent conversation — pack its context into the todo text.
+
+2. **Spawn Flash workers** — for independent leaf tasks, spawn one sub-agent per task with `model: "deepseek-v4-flash"`. Flash is ~75% cheaper than Pro and fast enough for focused implementation, search, and file operations.
+
+3. **Coordinate, don't micromanage** — batch spawns in one turn, wait for completions, then integrate results. Don't spawn-and-poll one at a time.
+
+4. **Sequential tasks stay with Pro** — if step B depends on step A's output, run A yourself or spawn a single sub-agent for the chain. Don't pre-spawn dependent work.
+
+5. **Break ties by task weight**:
+   - 1-2 steps → do it yourself or spawn one Flash worker
+   - 3-6 independent steps → checklist_write + parallel Flash sub-agents
+   - 7+ steps with dependencies → checklist_write + auto-continue mode; process sequentially with Flash workers per step, updating checklist as you go
+
+Example checklist item with self-contained context:
+```json
+{ "content": "Add rate limiting middleware in src/middleware/rate_limit.rs. \
+  The existing auth middleware at src/middleware/auth.rs (lines 34-67) shows \
+  the pattern: impl Middleware for Auth { fn handle(&self, req: Request) -> Result<Response> }. \
+  Copy that structure. Use std::time::Instant for timing, limit to 100 req/s per IP. \
+  Add unit tests in src/middleware/rate_limit_test.rs covering: normal rate, burst, and IP tracking.",
+  "status": "pending" }
+```
+
+**Cost comparison** (10-step task, 20K tokens per step):
+- All-Pro sequential: ~$22.00
+- Pro decompose + Flash workers: ~$7.00
+- Savings: ~68%
+
 ## Parallel-First Heuristic
 
 Before you fire any tool, scan your checklist: is there another tool you could run concurrently? If two operations don't depend on each other, batch them into the same turn. Examples:

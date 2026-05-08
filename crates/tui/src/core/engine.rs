@@ -122,6 +122,13 @@ pub struct EngineConfig {
     /// `SubAgentRuntime::max_spawn_depth`. Override via
     /// `[runtime] max_spawn_depth = N` in `~/.deepseek/config.toml`.
     pub max_spawn_depth: u32,
+    /// Soft cap on concurrent sub-agents. The model can request more
+    /// sub-agents than this, but each spawn above the soft cap must
+    /// pass an explicit `force` flag.
+    pub soft_max_subagents: usize,
+    /// When true, the model is allowed to exceed `soft_max_subagents`
+    /// by setting `force=true` in the spawn request.
+    pub auto_scale: bool,
     /// Per-domain network policy decider (#135). Shared across the session so
     /// session-scoped approvals (`/network allow <host>`) persist for the
     /// remainder of the run.
@@ -175,6 +182,8 @@ impl Default for EngineConfig {
             todos: new_shared_todo_list(),
             plan_state: new_shared_plan_state(),
             max_spawn_depth: crate::tools::subagent::DEFAULT_MAX_SPAWN_DEPTH,
+            soft_max_subagents: DEFAULT_MAX_SUBAGENTS,
+            auto_scale: false,
             network_policy: None,
             snapshots_enabled: true,
             lsp_config: None,
@@ -648,6 +657,8 @@ impl Engine {
                         self.session.reasoning_effort_auto,
                     )
                     .with_max_spawn_depth(self.config.max_spawn_depth)
+                    .with_soft_max_subagents(self.config.soft_max_subagents)
+                    .with_auto_scale(self.config.auto_scale)
                     .background_runtime();
                     let route = resolve_subagent_assignment_route(&runtime, None, &prompt).await;
                     runtime.model = route.model;
@@ -1046,9 +1057,11 @@ impl Engine {
                             self.session.reasoning_effort_auto,
                         )
                         .with_max_spawn_depth(self.config.max_spawn_depth)
+                        .with_soft_max_subagents(self.config.soft_max_subagents)
+                        .with_auto_scale(self.config.auto_scale)
                         .with_parent_completion_tx(self.tx_subagent_completion.clone());
                         if let Some(context) = fork_context_for_runtime.clone() {
-                            rt = rt.with_fork_context(context);
+                            rt = rt.with_fork_context(Arc::new(context));
                         }
                         if let Some((mailbox, cancel_token)) = mailbox_for_runtime.as_ref() {
                             rt = rt

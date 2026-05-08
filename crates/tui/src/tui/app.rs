@@ -600,12 +600,22 @@ impl Default for ViewportState {
     }
 }
 
-/// Goal mode state (#397).
+/// Goal mode state (#397). Also hosts auto-continue (#goals):
+/// when enabled, the agent autonomously keeps pushing turns until
+/// all todos are completed or the user interrupts.
 #[derive(Debug, Clone, Default)]
 pub struct GoalState {
     pub goal_objective: Option<String>,
     pub goal_token_budget: Option<u32>,
     pub goal_started_at: Option<Instant>,
+    /// When true, after each turn completes the TUI automatically dispatches
+    /// a continuation turn if any checklist items remain incomplete.
+    /// Stops when all todos are completed, the token budget is exhausted,
+    /// or the user presses Esc.
+    pub auto_continue: bool,
+    /// How many auto-continue turns have been dispatched in the current
+    /// session. Reset when auto_continue is toggled off.
+    pub auto_continue_turn_count: u32,
 }
 
 /// Session cost and token telemetry state.
