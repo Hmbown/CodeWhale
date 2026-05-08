@@ -1117,9 +1117,7 @@ fn config_enum_values(key: &str) -> Option<&[&str]> {
         "approval_mode" => Some(&["auto", "suggest", "never"]),
         "default_mode" => Some(&["agent", "plan", "yolo"]),
         "locale" => Some(&["auto", "en", "ja", "zh-Hans", "pt-BR"]),
-        "composer_density" | "transcript_spacing" => {
-            Some(&["compact", "comfortable", "spacious"])
-        }
+        "composer_density" | "transcript_spacing" => Some(&["compact", "comfortable", "spacious"]),
         "sidebar_focus" => Some(&["auto", "plan", "todos", "tasks", "agents", "context"]),
         "auto_compact"
         | "calm_mode"
@@ -1256,10 +1254,8 @@ impl ModalView for ConfigView {
                             (pos + 1) % values.len()
                         };
                         let new_value = values[next].to_string();
-                        self.status = Some(format!(
-                            "{}: {} \u{2192} {}",
-                            row.key, current, new_value
-                        ));
+                        self.status =
+                            Some(format!("{}: {} \u{2192} {}", row.key, current, new_value));
                         return ViewAction::Emit(ViewEvent::ConfigUpdated {
                             key: row.key.clone(),
                             value: new_value,
@@ -1516,7 +1512,9 @@ impl ModalView for ConfigView {
                         if i == wrapped.len() - 1 && !suffix.is_empty() {
                             spans.push(Span::styled(
                                 suffix,
-                                Style::default().fg(palette::DEEPSEEK_SKY).add_modifier(ratatui::style::Modifier::BOLD),
+                                Style::default()
+                                    .fg(palette::DEEPSEEK_SKY)
+                                    .add_modifier(ratatui::style::Modifier::BOLD),
                             ));
                         }
                         lines.push(Line::from(spans));
@@ -1529,7 +1527,9 @@ impl ModalView for ConfigView {
                     if !suffix.is_empty() {
                         spans.push(Span::styled(
                             suffix,
-                            Style::default().fg(palette::DEEPSEEK_SKY).add_modifier(ratatui::style::Modifier::BOLD),
+                            Style::default()
+                                .fg(palette::DEEPSEEK_SKY)
+                                .add_modifier(ratatui::style::Modifier::BOLD),
                         ));
                     }
                     lines.push(Line::from(spans));

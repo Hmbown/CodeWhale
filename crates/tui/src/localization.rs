@@ -1400,7 +1400,9 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::ConfigNoMatchesPrefix => "  没有匹配设置: ",
         MessageId::ConfigFilteredSettings => "  已筛选设置",
         MessageId::ConfigShowing => "  显示",
-        MessageId::ConfigFooterDefault => " 输入=筛选, Up/Down=选择, -/+=切换, Enter/e=编辑, Esc/q=关闭 ",
+        MessageId::ConfigFooterDefault => {
+            " 输入=筛选, Up/Down=选择, -/+=切换, Enter/e=编辑, Esc/q=关闭 "
+        }
         MessageId::ConfigFooterScrollable => {
             " 输入=筛选, Up/Down=选择, -/+=切换, Enter/e=编辑, PgUp/PgDn=滚动, Esc/q=关闭 "
         }

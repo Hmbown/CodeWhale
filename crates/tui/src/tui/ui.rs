@@ -5637,9 +5637,7 @@ async fn handle_view_events(
                     // Refresh rows in-place instead of rebuilding the view,
                     // so the selected index stays put.
                     if let Some(mut boxed) = app.view_stack.pop() {
-                        if let Some(config_view) =
-                            boxed.as_any_mut().downcast_mut::<ConfigView>()
-                        {
+                        if let Some(config_view) = boxed.as_any_mut().downcast_mut::<ConfigView>() {
                             config_view.refresh_rows(app);
                         }
                         app.view_stack.push_boxed(boxed);
