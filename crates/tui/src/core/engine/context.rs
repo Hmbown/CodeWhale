@@ -214,6 +214,9 @@ fn compact_subagent_tool_result_for_context(tool_name: &str, raw: &str) -> Optio
     };
 
     let mut out = String::from("[sub-agent result summarized for parent context]\n");
+    out.push_str(
+        "Child results are self-reports; verify side effects with tools like read_file or list_dir before claiming success.\n",
+    );
     out.push_str("Use `agent_result` again only if you need the full raw payload.\n");
     for (idx, snapshot) in snapshots.iter().enumerate() {
         if idx >= 8 {

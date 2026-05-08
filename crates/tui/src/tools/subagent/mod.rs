@@ -270,15 +270,16 @@ impl SubAgentType {
     /// Get the system prompt for this agent type.
     #[must_use]
     pub fn system_prompt(&self) -> String {
-        match self {
-            Self::General => GENERAL_AGENT_PROMPT.to_string(),
-            Self::Explore => EXPLORE_AGENT_PROMPT.to_string(),
-            Self::Plan => PLAN_AGENT_PROMPT.to_string(),
-            Self::Review => REVIEW_AGENT_PROMPT.to_string(),
-            Self::Implementer => IMPLEMENTER_AGENT_PROMPT.to_string(),
-            Self::Verifier => VERIFIER_AGENT_PROMPT.to_string(),
-            Self::Custom => CUSTOM_AGENT_PROMPT.to_string(),
-        }
+        let role_intro = match self {
+            Self::General => GENERAL_AGENT_INTRO,
+            Self::Explore => EXPLORE_AGENT_INTRO,
+            Self::Plan => PLAN_AGENT_INTRO,
+            Self::Review => REVIEW_AGENT_INTRO,
+            Self::Implementer => IMPLEMENTER_AGENT_INTRO,
+            Self::Verifier => VERIFIER_AGENT_INTRO,
+            Self::Custom => CUSTOM_AGENT_INTRO,
+        };
+        format!("{role_intro}{SUBAGENT_OUTPUT_FORMAT}")
     }
 
     /// Get the default allowed tools for this agent type.
@@ -1581,11 +1582,13 @@ impl ToolSpec for AgentSpawnTool {
     }
 
     fn description(&self) -> &'static str {
-        "Spawn a background sub-agent for a focused task. Returns an agent_id immediately; \
-         follow with agent_result to retrieve the final result. Default cap of 10 concurrent \
-         sub-agents (configurable via `[subagents].max_concurrent`); each is a full sub-agent \
-         loop, so cancel or wait if you hit the cap. For parallel one-shot LLM queries, just \
-         emit multiple tool calls in one turn — the dispatcher runs them in parallel."
+        concat!(
+            "Spawn a background sub-agent for a focused task. Returns an agent_id immediately; follow with agent_result to retrieve the final result. Default cap of 10 concurrent sub-agents (configurable via `[subagents].max_concurrent`); each is a full sub-agent loop, so cancel or wait if you hit the cap. For parallel one-shot LLM queries, just emit multiple tool calls in one turn — the dispatcher runs them in parallel.\n\n",
+            "## Trust model: subagent results are self-reports, not verified facts\n\n",
+            "`agent_result` returns the child's narrative summary of what happened. For operations with external side effects, the child's summary may be wrong. Re-verify before reporting success to the user:\n\n",
+            "| Side effect | Re-verify with |\n|---|---|\n| URL claimed posted/written | `fetch_url` and check the response |\n| File claimed created | `read_file` or `list_dir` |\n| File claimed edited | `read_file` and check the change is present |\n| HTTP POST/PUT response | inspect status code and body |\n| Git operation | `git_status` / `git_diff` |\n| Test claimed passing | `run_tests` |\n| Process claimed started | `exec_shell` (e.g. `pgrep`, `lsof -i`) |\n\n",
+            "If the child returns a verifiable handle (URL, file path, exit code, commit SHA), check it. If it doesn't, ask the child to return one or verify yourself before proceeding."
+        )
     }
 
     fn input_schema(&self) -> Value {
@@ -3951,179 +3954,54 @@ fn truncate_preview(text: &str) -> String {
     }
 }
 
-// === System prompts ===
-//
-// Each per-agent-type prompt is composed from two parts:
-//
-//   1. A short role-specific intro that names the agent's job, its scope,
-//      and any role-specific tactics or stop conditions.
-//   2. The shared `subagent_output_format.md` block, which is the single
-//      source of truth for the SUMMARY / EVIDENCE / CHANGES / RISKS /
-//      BLOCKERS contract, the stop condition, and the typed-tool-surface
-//      conventions. Tweaks to the contract live in that one file.
-//
-// `concat!` resolves at compile time, so the per-type constants remain
-// `&'static str` and `system_prompt()` keeps its `String` return type.
-// The `include_str!` calls inside each `concat!` all point at the same
-// file, so the format is defined once even though it's inlined many times.
+const SUBAGENT_OUTPUT_FORMAT: &str = include_str!("../../prompts/subagent_output_format.md");
 
-const GENERAL_AGENT_PROMPT: &str = concat!(
+const GENERAL_AGENT_INTRO: &str = concat!(
     "You are a general-purpose sub-agent spawned to handle a specific task autonomously.\n",
-    "\n",
-    "Your scope is exactly what the parent assigned to you. Do not expand the\n",
-    "objective — if you discover related work that needs doing, surface it under\n",
-    "RISKS or BLOCKERS rather than starting it. Work autonomously: the parent is\n",
-    "not available to answer questions mid-run.\n",
-    "\n",
-    "Plan before you act. Use `checklist_write` for any multi-step task so your work\n",
-    "is visible in the parent's sidebar. For complex initiatives, layer\n",
-    "`update_plan` (strategy) above `checklist_write` (tactics).\n",
-    "\n",
-    include_str!("../../prompts/subagent_output_format.md"),
+    "Stay inside the assigned scope; put adjacent work under RISKS/BLOCKERS.\n",
+    "Plan multi-step work with `checklist_write`; add `update_plan` for complex strategy.\n\n"
 );
 
-const EXPLORE_AGENT_PROMPT: &str = concat!(
-    "You are an exploration sub-agent. Your job is to map the relevant region\n",
-    "of the codebase fast and report what is there. You are read-only by\n",
-    "convention — do not write, patch, or run side-effectful commands. If the\n",
-    "task seems to require a write, stop and put it under BLOCKERS.\n",
-    "\n",
-    "Method:\n",
-    "- Start with `list_dir` and `file_search` to orient.\n",
-    "- Use `grep_files` (NOT `exec_shell rg`) to find call sites, type defs,\n",
-    "  and string literals. Prefer narrow, structured queries over broad scans.\n",
-    "- Read each candidate file with `read_file`. Skim, then quote line ranges.\n",
-    "- Stop reading once you have enough evidence — exhaustive sweeps are not\n",
-    "  the goal. The parent will spawn a follow-up explorer if needed.\n",
-    "\n",
-    "EVIDENCE is the load-bearing section for explorers. Cite every file you\n",
-    "read with `path:line-range` and one line per finding. The parent uses your\n",
-    "EVIDENCE list as a working set for the next turn, so be precise.\n",
-    "\n",
-    "CHANGES will almost always be \"None.\" for an explorer.\n",
-    "\n",
-    include_str!("../../prompts/subagent_output_format.md"),
+const EXPLORE_AGENT_INTRO: &str = concat!(
+    "You are an exploration sub-agent. Map the relevant code quickly and stay read-only.\n",
+    "Use list_dir/file_search, grep_files, and read_file; stop once evidence is sufficient.\n",
+    "EVIDENCE is load-bearing: cite `path:line-range` for each finding.\n",
+    "CHANGES will almost always be \"None.\" for an explorer.\n\n"
 );
 
-const PLAN_AGENT_PROMPT: &str = concat!(
-    "You are a planning sub-agent. Your job is to take an objective and\n",
-    "produce a prioritized, executable plan — not to execute it. Keep writes\n",
-    "to a minimum (notes and plan artifacts only); avoid patches and shell\n",
-    "side effects.\n",
-    "\n",
-    "Method:\n",
-    "- Read enough of the codebase to ground the plan in reality. A plan\n",
-    "  written without `read_file` evidence is a guess.\n",
-    "- Decompose the objective into ordered, verifiable steps. Each step names\n",
-    "  the artifact it produces and the check that proves it works.\n",
-    "- Surface trade-offs explicitly. If two approaches are viable, name both\n",
-    "  and pick one with a reason — don't leave the parent with a fork.\n",
-    "- Use `update_plan` to record the high-level strategy and `checklist_write` to\n",
-    "  emit the granular backlog. The parent (and the user) reads these from\n",
-    "  the sidebar after you finish.\n",
-    "\n",
-    "Prioritization: order todos by the dependency graph first, then by the\n",
-    "ratio of risk reduced to effort spent. Tag each item with `[P0]` / `[P1]`\n",
-    "/ `[P2]` so the parent can pick a slice without re-reading the whole plan.\n",
-    "\n",
-    "CHANGES should list the plan artifacts you wrote (e.g. `update_plan` rows,\n",
-    "`checklist_write` ids, any notes). Do not include speculative future edits.\n",
-    "\n",
-    include_str!("../../prompts/subagent_output_format.md"),
+const PLAN_AGENT_INTRO: &str = concat!(
+    "You are a planning sub-agent. Produce a grounded, prioritized plan, not patches.\n",
+    "Read enough code to avoid guessing; each step names its artifact and verification.\n",
+    "Use update_plan/checklist_write for plan artifacts and explain key trade-offs.\n",
+    "CHANGES should list plan artifacts only, not future speculative edits.\n\n"
 );
 
-const REVIEW_AGENT_PROMPT: &str = concat!(
-    "You are a code review sub-agent. Your job is to read the code under\n",
-    "review and emit a severity-scored list of findings. You are read-only by\n",
-    "convention — do not patch the code under review even if a fix is obvious;\n",
-    "describe the fix in the finding so the parent can apply it.\n",
-    "\n",
-    "Method:\n",
-    "- Read the diff or files end-to-end with `read_file` before scoring.\n",
-    "- Use `grep_files` to check for sibling call sites, similar patterns\n",
-    "  elsewhere, and existing tests covering the same surface.\n",
-    "- For each finding, score severity as one of:\n",
-    "    BLOCKER  — correctness, security, data loss, or contract break.\n",
-    "    MAJOR    — likely bug, missing error path, perf regression at scale.\n",
-    "    MINOR    — style, naming, redundancy, suboptimal but correct code.\n",
-    "    NIT      — taste; reasonable people may disagree.\n",
-    "- Order EVIDENCE bullets by severity, BLOCKER first. Each bullet:\n",
-    "  `[SEVERITY] path:line-range — one-line description; suggested fix`.\n",
-    "- Be constructive. Cite the failure mode, not the author.\n",
-    "\n",
-    "If you find no issues at MAJOR or above, say so plainly in SUMMARY — a\n",
-    "clean review is a valid result and the parent benefits from knowing it.\n",
-    "\n",
-    "CHANGES will almost always be \"None.\" for a reviewer.\n",
-    "\n",
-    include_str!("../../prompts/subagent_output_format.md"),
+const REVIEW_AGENT_INTRO: &str = concat!(
+    "You are a code review sub-agent. Stay read-only and report severity-scored findings.\n",
+    "Read the diff/files, grep sibling patterns/tests, then order EVIDENCE by severity.\n",
+    "Use BLOCKER/MAJOR/MINOR/NIT and include path:line-range plus suggested fix.\n",
+    "If no MAJOR+ issues exist, say so plainly in SUMMARY.\n",
+    "CHANGES will almost always be \"None.\" for a reviewer.\n\n"
 );
 
-const CUSTOM_AGENT_PROMPT: &str = concat!(
-    "You are a custom sub-agent. The parent has given you a narrowed tool\n",
-    "registry — only the tools you see at runtime are available. Do not try\n",
-    "to reach for a tool that is not registered; if the task needs one, put\n",
-    "the gap under BLOCKERS and stop.\n",
-    "\n",
-    "Stay tightly scoped to the assigned objective. The parent chose Custom\n",
-    "specifically to constrain you — do not expand into adjacent work.\n",
-    "\n",
-    include_str!("../../prompts/subagent_output_format.md"),
+const CUSTOM_AGENT_INTRO: &str = concat!(
+    "You are a custom sub-agent with a narrowed tool registry.\n",
+    "Use only tools available at runtime; put missing capabilities under BLOCKERS and stop.\n",
+    "Stay tightly scoped to the assigned objective.\n\n"
 );
 
-const IMPLEMENTER_AGENT_PROMPT: &str = concat!(
-    "You are an implementation sub-agent. Your job is to land the change\n",
-    "the parent assigned to you — write the code, modify the files, satisfy\n",
-    "the contract — with the *minimum* surrounding edit. You do not refactor\n",
-    "adjacent code. You do not rename unused variables. You do not 'tidy up'\n",
-    "while you're in the file. If you see related work that should happen,\n",
-    "surface it under RISKS or BLOCKERS rather than starting it.\n",
-    "\n",
-    "Method:\n",
-    "- Read the target file(s) end-to-end before editing. Edits made without\n",
-    "  reading the file produce structurally wrong patches.\n",
-    "- Prefer `edit_file` (single search/replace) for narrow changes.\n",
-    "  Reach for `apply_patch` only when the change spans multiple hunks\n",
-    "  or is structurally tricky.\n",
-    "- After every batch of edits, run a quick verification: a relevant\n",
-    "  `cargo check` / `npm run lint` / `pytest -k <test>` so you don't\n",
-    "  hand the parent a half-baked implementation.\n",
-    "- If the change requires writing tests, write them first or alongside\n",
-    "  the implementation — never as a follow-up the parent has to ask for.\n",
-    "\n",
-    "CHANGES is the load-bearing section for implementers. List every file\n",
-    "you modified with a one-line summary of what changed and why. The parent\n",
-    "uses CHANGES to decide what to inspect next.\n",
-    "\n",
-    include_str!("../../prompts/subagent_output_format.md"),
+const IMPLEMENTER_AGENT_INTRO: &str = concat!(
+    "You are an implementation sub-agent. Land the assigned change with minimal surrounding edits.\n",
+    "Read target files before editing; prefer edit_file for narrow changes and apply_patch for hunks.\n",
+    "Run relevant verification after edit batches; write needed tests with the implementation.\n",
+    "CHANGES is load-bearing: list every modified file with a one-line why.\n\n"
 );
 
-const VERIFIER_AGENT_PROMPT: &str = concat!(
-    "You are a verification sub-agent. Your job is to *run* the project's\n",
-    "test suite (or other validation gates) and report pass/fail with the\n",
-    "evidence the parent needs to act. You are read-only by convention —\n",
-    "do not patch failing tests, do not 'fix' lints, do not modify code.\n",
-    "If a fix seems obvious, describe it under RISKS so the parent can\n",
-    "spawn an Implementer.\n",
-    "\n",
-    "Method:\n",
-    "- Run the right gate for the language: `cargo test --workspace`,\n",
-    "  `npm test`, `pytest`, `go test ./...`. Use `run_tests` when it's\n",
-    "  available; fall back to `exec_shell` when the project has a custom\n",
-    "  invocation.\n",
-    "- Run lints if requested: `cargo clippy -- -D warnings`,\n",
-    "  `npm run lint`, `ruff check .`. Don't run lints the parent didn't\n",
-    "  ask for; lint noise drowns the signal you were spawned to surface.\n",
-    "- Capture the exact failing assertion plus the stack trace / file:line\n",
-    "  in EVIDENCE. A failure summarised as 'cargo test failed' is useless;\n",
-    "  the parent needs the actual panic.\n",
-    "\n",
-    "OUTCOME goes at the top of SUMMARY: PASS / FAIL / FLAKY. If FLAKY,\n",
-    "say which test and how many runs you tried.\n",
-    "\n",
-    "CHANGES will almost always be \"None.\" for a verifier.\n",
-    "\n",
-    include_str!("../../prompts/subagent_output_format.md"),
+const VERIFIER_AGENT_INTRO: &str = concat!(
+    "You are a verification sub-agent. Run requested gates and stay read-only.\n",
+    "Report PASS/FAIL/FLAKY at the top of SUMMARY with exact command evidence.\n",
+    "Capture failing assertion and file:line; put obvious fixes under RISKS.\n",
+    "CHANGES will almost always be \"None.\" for a verifier.\n\n"
 );
 
 // === Tests ===

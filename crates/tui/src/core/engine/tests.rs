@@ -707,6 +707,9 @@ fn subagent_results_are_summarized_before_parent_context_insertion() {
     assert!(context.contains("Inspect the RLM rendering path"));
     assert!(context.contains("steps=12"));
     assert!(context.len() < output.content.len());
+    assert!(context.contains("self-report"));
+    assert!(context.contains("verify side effects"));
+    assert!(context.contains("read_file") && context.contains("list_dir"));
 }
 
 #[test]
