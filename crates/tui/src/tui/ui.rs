@@ -1012,6 +1012,64 @@ async fn run_event_loop(
                         }
                         app.plan_tool_used_in_turn = false;
 
+                        // Auto-continue (#goals): when enabled and todos are
+                        // not all completed, queue a continuation so the
+                        // agent autonomously pushes forward.
+                        if app.goal.auto_continue && !app.is_loading {
+                            // If the user interrupted the previous turn,
+                            // stop auto-continue so they can take control.
+                            if status
+                                == crate::core::events::TurnOutcomeStatus::Interrupted
+                            {
+                                app.goal.auto_continue = false;
+                                app.status_message = Some(
+                                    "Auto-continue stopped (turn interrupted). Use /goal auto to re-enable."
+                                        .to_string(),
+                                );
+                            } else {
+                                let incomplete = app
+                                .todos
+                                .try_lock()
+                                .map(|todos| {
+                                    let snap = todos.snapshot();
+                                    snap.items
+                                        .iter()
+                                        .filter(|item| {
+                                            !matches!(
+                                                item.status,
+                                                crate::tools::todo::TodoStatus::Completed
+                                            )
+                                        })
+                                        .count()
+                                })
+                                .unwrap_or(0);
+
+                            if incomplete > 0 {
+                                let goal_hint = app
+                                    .goal
+                                    .goal_objective
+                                    .as_deref()
+                                    .map(|obj| format!(" Goal: {obj}."))
+                                    .unwrap_or_default();
+                                let msg = format!(
+                                    "Continue working on {incomplete} remaining todo item(s).{goal_hint} Use checklist_write to update progress."
+                                );
+                                app.queued_messages.push_back(QueuedMessage::new(msg, None));
+                                app.goal.auto_continue_turn_count += 1;
+                                app.status_message = Some(format!(
+                                    "Auto-continue turn #{} ({incomplete} todo(s) remaining)",
+                                    app.goal.auto_continue_turn_count
+                                ));
+                            } else {
+                                app.status_message = Some(
+                                    "All todos completed — auto-continue finished."
+                                        .to_string(),
+                                );
+                                app.goal.auto_continue = false;
+                            }
+                            }
+                        }
+
                         // Legacy pending-steer recovery. Current keyboard
                         // handling keeps Esc as cancel-only, but older saved
                         // state may still carry pending steers.

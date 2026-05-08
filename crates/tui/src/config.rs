@@ -526,7 +526,7 @@ pub enum StatusItem {
     Cache,
     /// Context-window utilisation percent ("48%").
     ContextPercent,
-    /// Current git branch name (placeholder until wired).
+    /// Current git branch name.
     GitBranch,
     /// Elapsed time of the most recent tool call (placeholder until wired).
     LastToolElapsed,
@@ -604,7 +604,7 @@ impl StatusItem {
             StatusItem::ReasoningReplay => "thinking tokens replayed each turn",
             StatusItem::Cache => "% of prompt served from cache",
             StatusItem::ContextPercent => "tokens used / model context window",
-            StatusItem::GitBranch => "current branch (placeholder)",
+            StatusItem::GitBranch => "current workspace branch",
             StatusItem::LastToolElapsed => "ms of the most recent tool call (placeholder)",
             StatusItem::RateLimit => "remaining requests in the budget (placeholder)",
         }
@@ -793,6 +793,14 @@ pub struct Config {
     pub managed_config_path: Option<String>,
     pub requirements_path: Option<String>,
     pub max_subagents: Option<usize>,
+    /// Soft cap on concurrent sub-agents. The model can request more
+    /// sub-agents than this, but each spawn above the soft cap must
+    /// pass an explicit `force` flag. Defaults to the same value as
+    /// `max_subagents` (no distinction).
+    pub soft_max_subagents: Option<usize>,
+    /// When true, the model is allowed to exceed `soft_max_subagents`
+    /// by setting `force=true` in the spawn request.
+    pub auto_scale: Option<bool>,
     pub retry: Option<RetryConfig>,
     pub capacity: Option<CapacityConfig>,
     pub features: Option<FeaturesToml>,
@@ -1520,6 +1528,22 @@ impl Config {
         self.max_subagents
             .unwrap_or(DEFAULT_MAX_SUBAGENTS)
             .clamp(1, MAX_SUBAGENTS)
+    }
+
+    /// Return the soft cap on concurrent sub-agents.
+    /// Defaults to `max_subagents()` when not explicitly configured.
+    #[must_use]
+    pub fn soft_max_subagents(&self) -> usize {
+        self.soft_max_subagents
+            .unwrap_or_else(|| self.max_subagents())
+            .clamp(1, MAX_SUBAGENTS)
+    }
+
+    /// Whether auto-scaling above the soft cap is enabled.
+    /// Defaults to `false` (no distinction from hard cap).
+    #[must_use]
+    pub fn auto_scale(&self) -> bool {
+        self.auto_scale.unwrap_or(false)
     }
 
     /// Raw sub-agent model override map. Values are validated at spawn time
@@ -2430,6 +2454,10 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
             .or(base.managed_config_path),
         requirements_path: override_cfg.requirements_path.or(base.requirements_path),
         max_subagents: override_cfg.max_subagents.or(base.max_subagents),
+        soft_max_subagents: override_cfg
+            .soft_max_subagents
+            .or(base.soft_max_subagents),
+        auto_scale: override_cfg.auto_scale.or(base.auto_scale),
         retry: override_cfg.retry.or(base.retry),
         capacity: override_cfg.capacity.or(base.capacity),
         tui: override_cfg.tui.or(base.tui),
