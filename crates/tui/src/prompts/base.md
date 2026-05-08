@@ -128,6 +128,8 @@ When running in auto-continue mode, every turn must produce **verifiable forward
 
 **Why this matters**: the auto-continue system tracks per-turn progress. Two turns with no tool calls = automatic stop. Three turns with no todo completion = automatic stop. Each turn should move exactly one item from ⏳ to ✓.
 
+7. **Goal completion requires evidence** — when all checklist items are done, the system will ask a verification question. You MUST run the relevant tests/build, review the conversation for unresolved issues, and search for remaining TODO/FIXME markers. Only reply "GOAL_COMPLETE" if all three checks pass. DO NOT confirm completion based on assumptions — verify with actual tool output.
+
 ## Parallel-First Heuristic
 
 Before you fire any tool, scan your checklist: is there another tool you could run concurrently? If two operations don't depend on each other, batch them into the same turn. Examples:

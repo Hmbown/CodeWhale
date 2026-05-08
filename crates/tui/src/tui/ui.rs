@@ -1149,19 +1149,27 @@ async fn run_event_loop(
                                     app.goal.auto_continue = false;
                                     app.goal.completion_confirmation_pending = false;
                                 } else if app.goal.completion_confirmation_pending {
-                                    // All todos done but goal may not
-                                    // be achieved. Ask the model:
-                                    // "Are we done? Add more items
-                                    // if not."
+                                    // All todos done but the model may
+                                    // have marked items done prematurely.
+                                    // Require a 3-point verification:
+                                    //   1. Tests/build pass?
+                                    //   2. All referenced issues resolved?
+                                    //   3. Any remaining TODO/FIXME?
+                                    // Only reply GOAL_COMPLETE if all three
+                                    // pass. Otherwise add checklist items.
                                     let msg = format!(
-                                        "All checklist items are completed. Review the goal and recent work below.\n\
-                                         If the goal is achieved, confirm completion. If more work is needed, \
-                                         add new items with checklist_add.\n\n{recap}"
+                                        "You've marked all checklist items as completed. \
+                                         Before confirming, verify with objective evidence:\n\n\
+                                         1. Run relevant tests/build — do they pass?\n\
+                                         2. Review the conversation — are ALL issues resolved?\n\
+                                         3. Search for remaining TODO/FIXME/hack markers.\n\n\
+                                         If ALL three pass, reply \"GOAL_COMPLETE\". \
+                                         If ANY issue remains, add new items with checklist_add.\n\n{recap}"
                                     );
                                     app.queued_messages.push_back(QueuedMessage::new(msg, None));
                                     app.goal.auto_continue_turn_count += 1;
                                     app.status_message = Some(format!(
-                                        "Auto-continue turn #{} — confirming goal completion",
+                                        "Auto-continue turn #{} — verifying goal completion",
                                         app.goal.auto_continue_turn_count
                                     ));
                                 } else {
