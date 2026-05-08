@@ -3634,9 +3634,10 @@ impl App {
             .find(|cell| matches!(cell, HistoryCell::Assistant { .. }))
         {
             if let HistoryCell::Assistant { content, .. } = last_assistant {
-                // Truncate to ~500 chars for the recap
-                let summary = if content.len() > 500 {
-                    format!("{}…", &content[..500])
+                // Truncate to ~500 chars, safe on UTF-8 boundaries.
+                let summary = if content.chars().count() > 500 {
+                    let truncated: String = content.chars().take(500).collect();
+                    format!("{truncated}…")
                 } else {
                     content.clone()
                 };
