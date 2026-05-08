@@ -9,7 +9,6 @@ use axum::{Json, Router};
 use deepseek_agent::ModelRegistry;
 use deepseek_config::{CliRuntimeOverrides, ConfigStore};
 use deepseek_core::Runtime;
-use deepseek_execpolicy::ExecPolicyEngine;
 use deepseek_hooks::{HookDispatcher, JsonlHookSink, StdoutHookSink};
 use deepseek_mcp::McpManager;
 use deepseek_protocol::{
@@ -285,7 +284,7 @@ fn build_state(config_path: Option<PathBuf>) -> Result<AppState> {
         state_store,
         Arc::new(ToolRegistry::default()),
         Arc::new(McpManager::default()),
-        ExecPolicyEngine::new(Vec::new(), Vec::new()),
+        config.exec_policy_engine(),
         hooks,
     );
 

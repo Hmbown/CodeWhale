@@ -1193,6 +1193,7 @@ name = "deepseek-config"
 version = "0.8.40"
 dependencies = [
  "anyhow",
+ "deepseek-execpolicy",
  "deepseek-secrets",
  "dirs",
  "serde",

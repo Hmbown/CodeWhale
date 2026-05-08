@@ -6,6 +6,8 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
 
 use anyhow::{Context, Result, bail};
+use deepseek_execpolicy::{ExecPolicyEngine, Ruleset};
+pub use deepseek_execpolicy::{PermissionDecision, ToolPermissionRule};
 use deepseek_secrets::SecretSource;
 pub use deepseek_secrets::Secrets;
 use serde::{Deserialize, Serialize};
@@ -182,6 +184,19 @@ impl ProvidersToml {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct PermissionsToml {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rules: Vec<ToolPermissionRule>,
+}
+
+impl PermissionsToml {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.rules.is_empty()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ConfigToml {
     /// TUI-compatible DeepSeek API key. Kept at the root so both `deepseek`
@@ -205,6 +220,16 @@ pub struct ConfigToml {
     pub telemetry: Option<bool>,
     pub approval_policy: Option<String>,
     pub sandbox_mode: Option<String>,
+    /// Legacy command allow-list. Entries become `exec_shell` allow rules.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub auto_allow: Vec<String>,
+    /// Legacy command deny-list. Entries become `exec_shell` deny rules.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub auto_deny: Vec<String>,
+    /// Typed tool permission rules. First version supports tool name, command
+    /// prefix, and workspace-relative path glob matching.
+    #[serde(default, skip_serializing_if = "PermissionsToml::is_empty")]
+    pub permissions: PermissionsToml,
     #[serde(default)]
     pub providers: ProvidersToml,
     /// Per-domain network policy (#135). When absent, network tools fall back
@@ -371,6 +396,15 @@ impl ConfigToml {
         if project.sandbox_mode.is_some() {
             self.sandbox_mode = project.sandbox_mode;
         }
+        if !project.auto_allow.is_empty() {
+            self.auto_allow = project.auto_allow;
+        }
+        if !project.auto_deny.is_empty() {
+            self.auto_deny = project.auto_deny;
+        }
+        if !project.permissions.is_empty() {
+            self.permissions = project.permissions;
+        }
         // Provider is only overridden if explicitly set (non-default).
         if project.provider != ProviderKind::Deepseek || has_api_key {
             self.provider = project.provider;
@@ -419,6 +453,17 @@ impl ConfigToml {
     }
 
     #[must_use]
+    pub fn permission_ruleset(&self) -> Ruleset {
+        Ruleset::user(self.auto_allow.clone(), self.auto_deny.clone())
+            .with_rules(self.permissions.rules.clone())
+    }
+
+    #[must_use]
+    pub fn exec_policy_engine(&self) -> ExecPolicyEngine {
+        ExecPolicyEngine::with_rulesets(vec![self.permission_ruleset()])
+    }
+
+    #[must_use]
     pub fn get_value(&self, key: &str) -> Option<String> {
         match key {
             "provider" => Some(self.provider.as_str().to_string()),
@@ -435,6 +480,8 @@ impl ConfigToml {
             "telemetry" => self.telemetry.map(|v| v.to_string()),
             "approval_policy" => self.approval_policy.clone(),
             "sandbox_mode" => self.sandbox_mode.clone(),
+            "auto_allow" => serialize_string_list(&self.auto_allow),
+            "auto_deny" => serialize_string_list(&self.auto_deny),
             "providers.deepseek.api_key" => self.providers.deepseek.api_key.clone(),
             "providers.deepseek.base_url" => self.providers.deepseek.base_url.clone(),
             "providers.deepseek.model" => self.providers.deepseek.model.clone(),
@@ -1507,6 +1554,13 @@ fn serialize_http_headers(headers: &BTreeMap<String, String>) -> Option<String> 
     )
 }
 
+fn serialize_string_list(values: &[String]) -> Option<String> {
+    if values.is_empty() {
+        return None;
+    }
+    Some(values.join(","))
+}
+
 fn redact_secret(secret: &str) -> String {
     let chars: Vec<char> = secret.chars().collect();
     if chars.len() <= 16 {
@@ -1698,6 +1752,77 @@ mod tests {
         assert_eq!(policy.default, "allow");
         assert_eq!(policy.proxy, ["github.com", ".githubusercontent.com"]);
         assert!(policy.audit);
+    }
+
+    #[test]
+    fn permissions_toml_deserializes_typed_rules_and_legacy_lists() {
+        let config: ConfigToml = toml::from_str(
+            r#"
+            auto_allow = ["git status"]
+            auto_deny = ["rm -rf"]
+
+            [[permissions.rules]]
+            tool = "exec_shell"
+            decision = "allow"
+            command = "cargo test"
+
+            [[permissions.rules]]
+            tool = "file_edit"
+            decision = "ask"
+            path = "src/**"
+            "#,
+        )
+        .expect("permissions toml");
+
+        assert_eq!(config.auto_allow, ["git status"]);
+        assert_eq!(config.auto_deny, ["rm -rf"]);
+        assert_eq!(config.permissions.rules.len(), 2);
+        assert_eq!(
+            config.permissions.rules[0],
+            ToolPermissionRule::exec_shell(PermissionDecision::Allow, "cargo test")
+        );
+        assert_eq!(
+            config.permissions.rules[1],
+            ToolPermissionRule::file_path("file_edit", PermissionDecision::Ask, "src/**")
+        );
+    }
+
+    #[test]
+    fn config_builds_exec_policy_engine_with_legacy_and_typed_rules() {
+        let config: ConfigToml = toml::from_str(
+            r#"
+            auto_allow = ["git status"]
+
+            [[permissions.rules]]
+            tool = "exec_shell"
+            decision = "deny"
+            command = "git status --dangerous"
+            "#,
+        )
+        .expect("permissions toml");
+        let engine = config.exec_policy_engine();
+
+        let allowed = engine
+            .check(deepseek_execpolicy::ExecPolicyContext {
+                command: "git status --porcelain",
+                cwd: ".",
+                ask_for_approval: deepseek_execpolicy::AskForApproval::UnlessTrusted,
+                sandbox_mode: Some("workspace-write"),
+            })
+            .expect("policy decision");
+        assert!(allowed.allow);
+        assert!(!allowed.requires_approval);
+
+        let denied = engine
+            .check(deepseek_execpolicy::ExecPolicyContext {
+                command: "git status --dangerous",
+                cwd: ".",
+                ask_for_approval: deepseek_execpolicy::AskForApproval::UnlessTrusted,
+                sandbox_mode: Some("workspace-write"),
+            })
+            .expect("policy decision");
+        assert!(!denied.allow);
+        assert_eq!(denied.requirement.phase(), "forbidden");
     }
 
     struct EnvGuard {
