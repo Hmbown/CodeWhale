@@ -294,6 +294,24 @@ impl SnapshotRepo {
         Ok(())
     }
 
+    /// Return whether the current workspace matches the given snapshot's
+    /// tracked file content.
+    ///
+    /// This is intentionally narrower than a full "workspace identical"
+    /// claim: it compares the current working tree against the snapshot's
+    /// tracked paths via git's diff machinery. That is sufficient for
+    /// `/undo` cursoring — if the diff is empty, restoring this snapshot
+    /// again would be a no-op, so the caller should continue scanning
+    /// older snapshots.
+    pub fn work_tree_matches_snapshot(&self, id: &SnapshotId) -> io::Result<bool> {
+        let diff = run_git(
+            &self.git_dir,
+            &self.work_tree,
+            &["diff", "--quiet", id.as_str(), "--", ":/"],
+        )?;
+        Ok(diff.status.success())
+    }
+
     fn tree_paths(&self, treeish: &str) -> io::Result<HashSet<PathBuf>> {
         let ls = run_git(
             &self.git_dir,

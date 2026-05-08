@@ -15,7 +15,7 @@ Analysis of capabilities across three AI coding agents: OpenCode (`/Volumes/VIXi
 | Web fetch | ✅ WebFetch | ✅ | ✅ fetch_url |
 | Web search | ✅ WebSearch | ✅ WebSearchRequest | ✅ web_search |
 | Web browse | ❌ | ❌ | ✅ web_run |
-| LSP | ✅ Lsp (experimental) | ❌ | ❌ |
+| LSP | ✅ Lsp (experimental) | ❌ | ✅ Post-edit diagnostics (auto) |
 | Task/todo tracking | ✅ TodoWrite | ✅ | ✅ todo_write |
 | Subagent spawn | ✅ Task | ✅ Collab/SpawnCsv | ✅ agent_spawn |
 | Skill system | ✅ Skill (multi-location discovery) | ✅ core-skills | ⚠️ Partial (.deepseek/skills/) |
@@ -43,28 +43,29 @@ Analysis of capabilities across three AI coding agents: OpenCode (`/Volumes/VIXi
 
 These are capabilities that would most directly improve DeepSeek TUI's effectiveness as a coding agent.
 
-### 1. LSP Integration
+### 1. LSP Integration — ✅ IMPLEMENTED (Post-Edit Diagnostics)
 
-**What it is:** A model-callable tool that queries Language Server Protocol servers for code intelligence — go-to-definition, find references, hover (type info), document symbols, workspace symbols, call hierarchy, and implementations.
+**Status:** Implemented in `crates/tui/src/lsp/` + `crates/tui/src/core/engine/lsp_hooks.rs`. Shipped as automatic post-edit diagnostics injection.
 
-**Why it matters:** The single biggest capability gap. Every codebase exploration currently costs shell `rg` calls and sequential file reads. With LSP, the agent can jump to definitions, find all callers of a function, and inspect types in a single tool call. Estimated 30–50% reduction in exploration turns for structured codebases.
+**What DeepSeek TUI has:**
 
-**OpenCode implementation:** `packages/opencode/src/tool/lsp.ts` exposes nine operations with file/line/character parameters. The tool prompts are in `tool/lsp.txt`. LSP servers must be configured per file type.
+- **Post-edit diagnostics hook:** After every successful `edit_file`, `write_file`, or `apply_patch`, the engine automatically requests diagnostics from the appropriate LSP server and injects compiler errors into the model's context as a synthetic message.
+- **Custom JSON-RPC stdio client** (`client.rs`): Implements the LSP wire protocol without `tower-lsp` dependency. Spawns LSP servers as child processes, handles `Content-Length` framing, routes `publishDiagnostics` notifications.
+- **Language registry** (`registry.rs`): Detects language from file extensions and maps to built-in defaults:
+  - Rust → `rust-analyzer`
+  - Go → `gopls serve`
+  - Python → `pyright-langserver --stdio`
+  - TypeScript/JavaScript → `typescript-language-server --stdio`
+  - C/C++ → `clangd`
+- **Configurable** via `[lsp]` table in `~/.deepseek/config.toml`: `enabled`, `poll_after_edit_ms` (default 5000), `max_diagnostics_per_file` (default 20), `include_warnings` (default false), and per-language `[lsp.servers]` overrides.
+- **Non-blocking by design:** Missing LSP binary, server crashes, or timeouts degrade silently to "no diagnostics this turn." Servers spawn lazily on first edit per language.
+- **Test infrastructure:** `FakeTransport` seam for CI testing without real LSP servers.
 
-```
-Supported operations:
-- goToDefinition
-- findReferences  
-- hover
-- documentSymbol
-- workspaceSymbol
-- goToImplementation
-- prepareCallHierarchy
-- incomingCalls
-- outgoingCalls
-```
+**Remaining gap vs OpenCode:** OpenCode exposes LSP as a **model-callable tool** with 9 operations (goToDefinition, findReferences, hover, documentSymbol, workspaceSymbol, goToImplementation, prepareCallHierarchy, incomingCalls, outgoingCalls). DeepSeek TUI's LSP is currently passive (auto-fires after edits) rather than active (model can query on demand for navigation).
 
-**What DeepSeek TUI would need:** A new `lsp.rs` tool in `crates/tui/src/tools/`, integration with tower-lsp or lsp-server crate, and per-language server configuration.
+**What DeepSeek TUI could still add:**
+
+A model-callable `lsp` tool in `crates/tui/src/tools/` that exposes the interactive LSP operations (goToDefinition, findReferences, hover, documentSymbol, workspaceSymbol). The transport infrastructure already exists — the gap is only the tool wrapper and the request/response cycle for LSP methods beyond `didOpen`/`didChange`/`publishDiagnostics`.
 
 ### 2. Granular Permission System
 
@@ -292,6 +293,7 @@ Specialized features that are valuable but less critical for core coding workflo
 
 ## What DeepSeek TUI Already Excels At
 
+- **LSP diagnostics** — automatic post-edit compiler/linter feedback injected into model context; neither competitor has passive LSP integration (OpenCode's is model-callable only)
 - **RLM** — batch/bulk LLM processing in a Python sandbox; no equivalent in either competitor
 - **Finance** — live stock/crypto quotes; unique in this space
 - **Automations** — scheduled recurring tasks with cron rules
@@ -307,11 +309,12 @@ Specialized features that are valuable but less critical for core coding workflo
 
 ## Recommended Implementation Order
 
-1. **LSP tool** — single biggest capability gap. Estimated 30–50% reduction in codebase exploration turns.
+1. ~~**LSP tool**~~ — ✅ **DONE** (post-edit diagnostics). Remaining: model-callable navigation tool.
 2. **Path-pattern permissions** — reduces approval fatigue by 60–80% over long sessions.
 3. **Persistent memory** — compounds value across sessions; foundational for long-running projects.
 4. **Pre/Post-tool-use hooks** — escape hatch for user-defined guardrails without system prompt bloat.
 5. **Skill auto-discovery** — enables community skill ecosystem and Claude Code compatibility.
-6. **Agent profiles** — named agent types with model/permission inheritance.
-7. **Tool search for MCP** — keeps context window manageable when connecting to MCP servers with many tools.
-8. **Shell sandboxing** — security improvement, starting with macOS Seatbelt.
+6. **LSP navigation tool** — expose goToDefinition/findReferences/hover as model-callable tool. Infrastructure exists; add request/response methods + tool wrapper.
+7. **Agent profiles** — named agent types with model/permission inheritance.
+8. **Tool search for MCP** — keeps context window manageable when connecting to MCP servers with many tools.
+9. **Shell sandboxing** — security improvement, starting with macOS Seatbelt.

@@ -61,6 +61,7 @@ fn allow_all_policy() -> NetworkPolicy {
         default: DecisionToml::Allow,
         allow: Vec::new(),
         deny: Vec::new(),
+        proxy: Vec::new(),
         audit: false,
     }
 }
@@ -70,6 +71,7 @@ fn deny_all_policy() -> NetworkPolicy {
         default: DecisionToml::Deny,
         allow: Vec::new(),
         deny: Vec::new(),
+        proxy: Vec::new(),
         audit: false,
     }
 }
@@ -79,6 +81,7 @@ fn prompt_all_policy() -> NetworkPolicy {
         default: DecisionToml::Prompt,
         allow: Vec::new(),
         deny: Vec::new(),
+        proxy: Vec::new(),
         audit: false,
     }
 }
@@ -280,6 +283,118 @@ async fn install_rejects_missing_skill_md() {
     .await
     .expect_err("missing SKILL.md must be rejected");
     assert!(format!("{err:#}").contains("missing SKILL.md"), "{err:#}");
+
+    shutdown(tx, handle);
+}
+
+#[tokio::test]
+async fn install_accepts_claude_compatible_skill_directory_archive() {
+    let tarball = make_tarball(&[
+        (
+            "repo-main/.claude/skills/workflow-pack/SKILL.md",
+            &skill_md("workflow-pack", "Workflow pack"),
+        ),
+        (
+            "repo-main/.claude/skills/workflow-pack/scripts/check.sh",
+            b"echo ok",
+        ),
+        ("repo-main/README.md", b"outside the selected skill subtree"),
+    ]);
+    let (url, tx, handle) = spawn_tarball_server(tarball);
+
+    let tmp = TempDir::new().unwrap();
+    let policy = allow_all_policy();
+    let outcome = install::install(
+        InstallSource::DirectUrl(url),
+        tmp.path(),
+        install::DEFAULT_MAX_SIZE_BYTES,
+        &policy,
+        false,
+    )
+    .await
+    .expect("claude-compatible skill dir should install");
+    let installed = match outcome {
+        InstallOutcome::Installed(installed) => installed,
+        other => panic!("expected Installed, got {other:?}"),
+    };
+
+    assert_eq!(installed.name, "workflow-pack");
+    assert!(installed.path.join("SKILL.md").is_file());
+    assert!(installed.path.join("scripts/check.sh").is_file());
+    assert!(!installed.path.join("README.md").exists());
+
+    shutdown(tx, handle);
+}
+
+#[tokio::test]
+async fn install_accepts_nested_workflow_pack_skill_directory() {
+    let tarball = make_tarball(&[
+        (
+            "repo-main/packages/superpowers/5.1.0/skills/using-superpowers/SKILL.md",
+            &skill_md("using-superpowers", "Use Superpowers workflow"),
+        ),
+        (
+            "repo-main/packages/superpowers/5.1.0/skills/using-superpowers/references/guide.md",
+            b"guide",
+        ),
+    ]);
+    let (url, tx, handle) = spawn_tarball_server(tarball);
+
+    let tmp = TempDir::new().unwrap();
+    let policy = allow_all_policy();
+    let outcome = install::install(
+        InstallSource::DirectUrl(url),
+        tmp.path(),
+        install::DEFAULT_MAX_SIZE_BYTES,
+        &policy,
+        false,
+    )
+    .await
+    .expect("nested workflow-pack skill dir should install");
+    let installed = match outcome {
+        InstallOutcome::Installed(installed) => installed,
+        other => panic!("expected Installed, got {other:?}"),
+    };
+
+    assert_eq!(installed.name, "using-superpowers");
+    assert!(installed.path.join("SKILL.md").is_file());
+    assert!(installed.path.join("references/guide.md").is_file());
+
+    shutdown(tx, handle);
+}
+
+#[tokio::test]
+async fn install_accepts_single_skill_subdirectory_archive() {
+    let tarball = make_tarball(&[
+        (
+            "repo-main/my-workflow/SKILL.md",
+            &skill_md("my-workflow", "Nested workflow"),
+        ),
+        ("repo-main/my-workflow/examples/example.md", b"example"),
+        ("repo-main/README.md", b"outside the selected skill subtree"),
+    ]);
+    let (url, tx, handle) = spawn_tarball_server(tarball);
+
+    let tmp = TempDir::new().unwrap();
+    let policy = allow_all_policy();
+    let outcome = install::install(
+        InstallSource::DirectUrl(url),
+        tmp.path(),
+        install::DEFAULT_MAX_SIZE_BYTES,
+        &policy,
+        false,
+    )
+    .await
+    .expect("single nested skill dir should install");
+    let installed = match outcome {
+        InstallOutcome::Installed(installed) => installed,
+        other => panic!("expected Installed, got {other:?}"),
+    };
+
+    assert_eq!(installed.name, "my-workflow");
+    assert!(installed.path.join("SKILL.md").is_file());
+    assert!(installed.path.join("examples/example.md").is_file());
+    assert!(!installed.path.join("README.md").exists());
 
     shutdown(tx, handle);
 }

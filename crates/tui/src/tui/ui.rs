@@ -125,6 +125,7 @@ const CONTEXT_CRITICAL_THRESHOLD_PERCENT: f64 = 95.0;
 const UI_IDLE_POLL_MS: u64 = 48;
 const UI_ACTIVE_POLL_MS: u64 = 24;
 const WEB_CONFIG_POLL_MS: u64 = 16;
+const DISPATCH_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(30);
 // Forced repaint cadence while a turn is live (model loading, compacting,
 // sub-agents running). Drives the footer water-spout animation as well as
 // the per-tool spinner pulse — keep this fast enough that the spout reads as
@@ -135,7 +136,7 @@ const SIDEBAR_VISIBLE_MIN_WIDTH: u16 = 240;
 const DEFAULT_TERMINAL_PROBE_TIMEOUT_MS: u64 = 500;
 
 type AppTerminal = Terminal<ColorCompatBackend<Stdout>>;
-const TERMINAL_ORIGIN_RESET: &[u8] = b"\x1b[r\x1b[?6l\x1b[H\x1b[2J";
+const TERMINAL_ORIGIN_RESET: &[u8] = b"\x1b[r\x1b[?6l\x1b[H\x1b[2J\x1b[3J";
 
 /// Run the interactive TUI event loop.
 ///
@@ -848,6 +849,7 @@ async fn run_event_loop(
                     EngineEvent::TurnStarted { turn_id } => {
                         app.is_loading = true;
                         app.offline_mode = false;
+                        app.dispatch_started_at = None;
                         current_streaming_text.clear();
                         app.streaming_state.reset();
                         app.streaming_message_index = None;
@@ -887,6 +889,7 @@ async fn run_event_loop(
                             app.flush_active_cell();
                         }
                         app.is_loading = false;
+                        app.dispatch_started_at = None;
                         app.offline_mode = false;
                         app.streaming_state.reset();
                         // Capture elapsed before clearing turn_started_at so
@@ -1443,6 +1446,9 @@ async fn run_event_loop(
         }
 
         let has_running_agents = running_agent_count(app) > 0;
+        if reconcile_turn_liveness(app, Instant::now(), has_running_agents) {
+            app.needs_redraw = true;
+        }
         if (app.is_loading || has_running_agents || app.is_compacting)
             && last_status_frame.elapsed()
                 >= Duration::from_millis(status_animation_interval_ms(app))
@@ -2239,6 +2245,7 @@ async fn run_event_loop(
                     if app.is_loading {
                         engine_handle.cancel();
                         app.is_loading = false;
+                        app.dispatch_started_at = None;
                         app.streaming_state.reset();
                         // Optimistically clear the turn-in-progress flag so
                         // the footer wave animation halts immediately —
@@ -2291,6 +2298,7 @@ async fn run_event_loop(
                         app.backtrack.reset();
                         engine_handle.cancel();
                         app.is_loading = false;
+                        app.dispatch_started_at = None;
                         app.streaming_state.reset();
                         // Optimistically halt the wave + working label —
                         // engine's TurnComplete will resync with the real
@@ -2361,12 +2369,8 @@ async fn run_event_loop(
                 {
                     app.mention_menu_selected = app.mention_menu_selected.saturating_sub(1);
                 }
-                KeyCode::Up
-                    if key.modifiers.is_empty()
-                        && slash_menu_open
-                        && app.slash_menu_selected > 0 =>
-                {
-                    app.slash_menu_selected = app.slash_menu_selected.saturating_sub(1);
+                KeyCode::Up if key.modifiers.is_empty() && slash_menu_open => {
+                    select_previous_slash_menu_entry(app, slash_menu_entries.len());
                 }
                 KeyCode::Up
                     if key.modifiers.is_empty()
@@ -2409,8 +2413,7 @@ async fn run_event_loop(
                         .min(mention_menu_entries.len().saturating_sub(1));
                 }
                 KeyCode::Down if key.modifiers.is_empty() && slash_menu_open => {
-                    app.slash_menu_selected = (app.slash_menu_selected + 1)
-                        .min(slash_menu_entries.len().saturating_sub(1));
+                    select_next_slash_menu_entry(app, slash_menu_entries.len());
                 }
                 KeyCode::Down
                     if key.modifiers.is_empty()
@@ -2677,8 +2680,14 @@ async fn run_event_loop(
                     app.delete_char_forward();
                 }
                 KeyCode::Delete => {}
+                KeyCode::Left if is_word_cursor_modifier(key.modifiers) => {
+                    app.move_cursor_word_backward();
+                }
                 KeyCode::Left => {
                     app.move_cursor_left();
+                }
+                KeyCode::Right if is_word_cursor_modifier(key.modifiers) => {
+                    app.move_cursor_word_forward();
                 }
                 KeyCode::Right => {
                     app.move_cursor_right();
@@ -2746,22 +2755,12 @@ async fn run_event_loop(
                     app.needs_redraw = true;
                 }
                 KeyCode::Up => {
-                    if key.modifiers.contains(KeyModifiers::CONTROL) {
-                        app.history_up();
-                    } else if should_scroll_with_arrows(app) {
-                        app.scroll_up(1);
-                    } else {
-                        app.history_up();
-                    }
+                    let _ =
+                        handle_composer_history_arrow(app, key, slash_menu_open, mention_menu_open);
                 }
                 KeyCode::Down => {
-                    if key.modifiers.contains(KeyModifiers::CONTROL) {
-                        app.history_down();
-                    } else if should_scroll_with_arrows(app) {
-                        app.scroll_down(1);
-                    } else {
-                        app.history_down();
-                    }
+                    let _ =
+                        handle_composer_history_arrow(app, key, slash_menu_open, mention_menu_open);
                 }
                 KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     app.clear_input_recoverable();
@@ -3002,6 +3001,10 @@ fn build_session_snapshot(app: &App, manager: &SessionManager) -> SavedSession {
             app.system_prompt.as_ref(),
         );
         updated.metadata.mode = Some(app.mode.as_setting().to_string());
+        updated.metadata.session_cost_usd = app.session.session_cost;
+        updated.metadata.session_cost_cny = app.session.session_cost_cny;
+        updated.metadata.subagent_cost_usd = app.session.subagent_cost;
+        updated.metadata.subagent_cost_cny = app.session.subagent_cost_cny;
         updated.context_references = app.session_context_references.clone();
         updated
     } else {
@@ -3013,6 +3016,10 @@ fn build_session_snapshot(app: &App, manager: &SessionManager) -> SavedSession {
             app.system_prompt.as_ref(),
             Some(app.mode.as_setting()),
         );
+        session.metadata.session_cost_usd = app.session.session_cost;
+        session.metadata.session_cost_cny = app.session.session_cost_cny;
+        session.metadata.subagent_cost_usd = app.session.subagent_cost;
+        session.metadata.subagent_cost_cny = app.session.subagent_cost_cny;
         session.context_references = app.session_context_references.clone();
         session
     }
@@ -3030,6 +3037,46 @@ fn queued_session_to_ui(msg: QueuedSessionMessage) -> QueuedMessage {
         display: msg.display,
         skill_instruction: msg.skill_instruction,
     }
+}
+
+fn reconcile_turn_liveness(app: &mut App, now: Instant, has_running_agents: bool) -> bool {
+    if app.is_loading
+        && app.runtime_turn_status.is_none()
+        && !has_running_agents
+        && !app.is_compacting
+        && app.dispatch_started_at.is_some_and(|started| {
+            now.saturating_duration_since(started) > DISPATCH_WATCHDOG_TIMEOUT
+        })
+    {
+        app.is_loading = false;
+        app.dispatch_started_at = None;
+        app.push_status_toast(
+            "Turn dispatch timed out; the engine may have stopped. Please try again.",
+            StatusToastLevel::Error,
+            None,
+        );
+        return true;
+    }
+
+    if app.is_loading
+        && matches!(
+            app.runtime_turn_status.as_deref(),
+            Some("completed" | "interrupted" | "failed")
+        )
+        && !has_running_agents
+        && !app.is_compacting
+    {
+        app.is_loading = false;
+        app.dispatch_started_at = None;
+        app.push_status_toast(
+            "Recovered from an inconsistent busy state.",
+            StatusToastLevel::Warning,
+            None,
+        );
+        return true;
+    }
+
+    false
 }
 
 /// Translate an `EngineEvent::Error` into UI state updates.
@@ -3073,6 +3120,7 @@ pub(crate) fn apply_engine_error_to_app(
         severity,
     });
     app.is_loading = false;
+    app.dispatch_started_at = None;
     if matches!(
         envelope.category,
         crate::error_taxonomy::ErrorCategory::Authentication
@@ -3445,6 +3493,52 @@ fn next_escape_action(app: &App, slash_menu_open: bool) -> EscapeAction {
     }
 }
 
+fn select_previous_slash_menu_entry(app: &mut App, entry_count: usize) {
+    if entry_count == 0 {
+        return;
+    }
+    let selected = app.slash_menu_selected.min(entry_count.saturating_sub(1));
+    app.slash_menu_selected = (selected + entry_count - 1) % entry_count;
+}
+
+fn select_next_slash_menu_entry(app: &mut App, entry_count: usize) {
+    if entry_count == 0 {
+        return;
+    }
+    let selected = app.slash_menu_selected.min(entry_count.saturating_sub(1));
+    app.slash_menu_selected = (selected + 1) % entry_count;
+}
+
+fn handle_composer_history_arrow(
+    app: &mut App,
+    key: KeyEvent,
+    slash_menu_open: bool,
+    mention_menu_open: bool,
+) -> bool {
+    if slash_menu_open || mention_menu_open {
+        return false;
+    }
+    if key.modifiers.contains(KeyModifiers::ALT) || key.modifiers.contains(KeyModifiers::SUPER) {
+        return false;
+    }
+
+    match key.code {
+        KeyCode::Up => {
+            app.history_up();
+            true
+        }
+        KeyCode::Down => {
+            app.history_down();
+            true
+        }
+        _ => false,
+    }
+}
+
+fn is_word_cursor_modifier(modifiers: KeyModifiers) -> bool {
+    modifiers.contains(KeyModifiers::CONTROL) || modifiers.contains(KeyModifiers::ALT)
+}
+
 fn is_composer_newline_key(key: KeyEvent) -> bool {
     match key.code {
         KeyCode::Char('j') => key.modifiers.contains(KeyModifiers::CONTROL),
@@ -3627,8 +3721,11 @@ async fn dispatch_user_message(
     }
 
     // Set immediately to prevent double-dispatch before TurnStarted event arrives.
+    let dispatch_started_at = Instant::now();
     app.is_loading = true;
-    app.last_send_at = Some(Instant::now());
+    app.dispatch_started_at = Some(dispatch_started_at);
+    app.runtime_turn_status = None;
+    app.last_send_at = Some(dispatch_started_at);
 
     let cwd = std::env::current_dir().ok();
     let references = crate::tui::file_mention::context_references_from_input(
@@ -3745,6 +3842,7 @@ async fn dispatch_user_message(
         .await
     {
         app.is_loading = false;
+        app.dispatch_started_at = None;
         app.last_send_at = None;
         return Err(err);
     }
@@ -5139,6 +5237,15 @@ async fn handle_plan_choice(
 ///   abort lands and gets resubmitted as a fresh merged turn.
 /// - `rejected_steers` — engine declined a mid-turn steer (scaffolding;
 ///   no engine path produces these yet but the bucket renders identically).
+/// Return true when the app has non-empty todo/checklist items to display.
+#[must_use]
+fn has_todos(app: &App) -> bool {
+    app.todos
+        .try_lock()
+        .map(|todos| !todos.snapshot().items.is_empty())
+        .unwrap_or(false)
+}
+
 /// - `queued_messages` — Enter while busy (offline-mode FIFO); drained at
 ///   end-of-turn.
 fn build_pending_input_preview(app: &App) -> PendingInputPreview {
@@ -5226,14 +5333,17 @@ fn render(f: &mut Frame, app: &mut App) {
     let pending_preview = build_pending_input_preview(app);
     let preview_height = pending_preview.desired_height(size.width);
 
+    let todos_banner_height = if has_todos(app) { 1 } else { 0 };
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(header_height),   // Header
-            Constraint::Min(1),                  // Chat area
-            Constraint::Length(preview_height),  // Pending input preview (0 if empty)
-            Constraint::Length(composer_height), // Composer
-            Constraint::Length(footer_height),   // Footer
+            Constraint::Length(header_height),         // Header
+            Constraint::Min(1),                        // Chat area
+            Constraint::Length(preview_height),        // Pending input preview (0 if empty)
+            Constraint::Length(todos_banner_height),   // Todos banner (0 when empty)
+            Constraint::Length(composer_height),       // Composer
+            Constraint::Length(footer_height),         // Footer
         ])
         .split(size);
 
@@ -5276,7 +5386,7 @@ fn render(f: &mut Frame, app: &mut App) {
         .with_usage(
             app.session.total_conversation_tokens,
             sanitized_context_window,
-            app.session.session_cost,
+            app.displayed_session_cost_for_currency(app.cost_currency),
             sanitized_prompt_tokens,
         )
         .with_reasoning_effort(Some(&effort_label))
@@ -5351,6 +5461,11 @@ fn render(f: &mut Frame, app: &mut App) {
         pending_preview.render(chunks[2], buf);
     }
 
+    // Render todos banner above the composer
+    if todos_banner_height > 0 {
+        super::sidebar::render_todos_banner(f, chunks[3], app);
+    }
+
     // Render composer
     let cursor_pos = {
         let composer_widget = ComposerWidget::new(
@@ -5360,19 +5475,19 @@ fn render(f: &mut Frame, app: &mut App) {
             &mention_menu_entries,
         );
         let buf = f.buffer_mut();
-        composer_widget.render(chunks[3], buf);
-        composer_widget.cursor_pos(chunks[3])
+        composer_widget.render(chunks[4], buf);
+        composer_widget.cursor_pos(chunks[4])
     };
     if let Some(cursor_pos) = cursor_pos {
         f.set_cursor_position(cursor_pos);
     }
 
     // Render footer
-    render_footer(f, chunks[4], app);
+    render_footer(f, chunks[5], app);
     // Toast stack overlay (#439): when multiple status toasts are queued,
     // surface the older ones as a 1-2 line strip above the footer so a
     // burst of events isn't collapsed to a single visible message.
-    render_toast_stack_overlay(f, size, chunks[4], app);
+    render_toast_stack_overlay(f, size, chunks[5], app);
 
     if !app.view_stack.is_empty() {
         // The live transcript overlay snapshots the app's history + active
@@ -5723,6 +5838,14 @@ async fn handle_view_events(
             ViewEvent::BacktrackConfirm => {
                 if let Some(depth) = app.backtrack.confirm() {
                     apply_backtrack(app, depth);
+                    let _ = engine_handle
+                        .send(Op::SyncSession {
+                            messages: app.api_messages.clone(),
+                            system_prompt: app.system_prompt.clone(),
+                            model: app.model.clone(),
+                            workspace: app.workspace.clone(),
+                        })
+                        .await;
                 }
             }
             ViewEvent::BacktrackCancel => {
@@ -5740,6 +5863,7 @@ async fn handle_view_events(
                 app.backtrack.reset();
                 engine_handle.cancel();
                 app.is_loading = false;
+                app.dispatch_started_at = None;
                 app.streaming_state.reset();
                 app.runtime_turn_status = None;
                 app.finalize_active_cell_as_interrupted();
@@ -5963,13 +6087,17 @@ fn apply_loaded_session(app: &mut App, session: &SavedSession) -> bool {
     app.workspace.clone_from(&session.metadata.workspace);
     app.session.total_tokens = u32::try_from(session.metadata.total_tokens).unwrap_or(u32::MAX);
     app.session.total_conversation_tokens = app.session.total_tokens;
-    app.session.session_cost = 0.0;
-    app.session.session_cost_cny = 0.0;
-    app.session.subagent_cost = 0.0;
-    app.session.subagent_cost_cny = 0.0;
+    app.session.session_cost = session.metadata.session_cost_usd;
+    app.session.session_cost_cny = session.metadata.session_cost_cny;
+    app.session.subagent_cost = session.metadata.subagent_cost_usd;
+    app.session.subagent_cost_cny = session.metadata.subagent_cost_cny;
     app.session.subagent_cost_event_seqs.clear();
-    app.session.displayed_cost_high_water = 0.0;
-    app.session.displayed_cost_high_water_cny = 0.0;
+    // Set high-water marks to the restored totals so the footer never
+    // reverses when reconciliation events fire on a resumed session.
+    let total_restored_usd = app.session.session_cost + app.session.subagent_cost;
+    let total_restored_cny = app.session.session_cost_cny + app.session.subagent_cost_cny;
+    app.session.displayed_cost_high_water = total_restored_usd;
+    app.session.displayed_cost_high_water_cny = total_restored_cny;
     app.session.last_prompt_tokens = None;
     app.session.last_completion_tokens = None;
     app.session.last_prompt_cache_hit_tokens = None;
@@ -6247,7 +6375,9 @@ fn reset_terminal_viewport(terminal: &mut AppTerminal) -> Result<()> {
     // Reset scroll margins and origin mode before clearing. Some interactive
     // child processes leave DECSTBM/DECOM behind; if ratatui's diff renderer
     // then writes "row 0", terminals can place it relative to the leaked
-    // scroll region and the whole viewport appears shifted down.
+    // scroll region and the whole viewport appears shifted down. CSI 3J also
+    // erases saved scrollback so a focus/resize recapture cannot leave the
+    // host terminal's scrollbar above the live TUI.
     terminal.backend_mut().write_all(TERMINAL_ORIGIN_RESET)?;
     terminal.backend_mut().flush()?;
     terminal.clear()?;
@@ -8171,14 +8301,6 @@ fn is_ctrl_h_backspace(key: &KeyEvent) -> bool {
         && key.modifiers.contains(KeyModifiers::CONTROL)
         && !key.modifiers.contains(KeyModifiers::ALT)
         && !key.modifiers.contains(KeyModifiers::SUPER)
-}
-
-fn should_scroll_with_arrows(app: &App) -> bool {
-    // When the composer is empty (or only whitespace), Up/Down arrows
-    // scroll the transcript. When the composer has text, they navigate
-    // composer history so the user can recall previous prompts.
-    // Cmd+Up / Alt+Up always scroll regardless, handled upstream.
-    app.input.trim().is_empty()
 }
 
 fn extract_reasoning_header(text: &str) -> Option<String> {

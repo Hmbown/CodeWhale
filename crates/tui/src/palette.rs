@@ -94,6 +94,8 @@ pub const TEXT_REASONING: Color = Color::Rgb(210, 170, 110);
 pub const TEXT_PRIMARY: Color = TEXT_BODY;
 pub const TEXT_MUTED: Color = TEXT_SECONDARY;
 pub const TEXT_DIM: Color = TEXT_HINT;
+pub const USER_BODY: Color = Color::Rgb(74, 222, 128); // #4ADE80 green
+pub const LIGHT_USER_BODY: Color = Color::Rgb(21, 128, 61); // #15803D green
 
 // === Surfaces ===
 pub const SURFACE_ELEVATED: Color = ELEVATED;
@@ -260,7 +262,103 @@ impl UiTheme {
     }
 }
 
-// === Color depth ===
+#[must_use]
+pub fn parse_hex_rgb_color(value: &str) -> Option<Color> {
+    let hex = value.trim().strip_prefix('#').unwrap_or(value.trim());
+    if hex.len() != 6 || !hex.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return None;
+    }
+
+    let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+    let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+    let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+    Some(Color::Rgb(r, g, b))
+}
+
+#[must_use]
+pub fn normalize_hex_rgb_color(value: &str) -> Option<String> {
+    hex_rgb_string(parse_hex_rgb_color(value)?)
+}
+
+#[must_use]
+pub fn hex_rgb_string(color: Color) -> Option<String> {
+    let Color::Rgb(r, g, b) = color else {
+        return None;
+    };
+    Some(format!("#{r:02x}{g:02x}{b:02x}"))
+}
+
+#[must_use]
+pub fn adapt_fg_for_palette_mode(color: Color, _bg: Color, mode: PaletteMode) -> Color {
+    if mode == PaletteMode::Dark {
+        return color;
+    }
+
+    if color == TEXT_BODY || color == SELECTION_TEXT || color == Color::White {
+        LIGHT_TEXT_BODY
+    } else if color == TEXT_SECONDARY || color == TEXT_MUTED {
+        LIGHT_TEXT_MUTED
+    } else if color == TEXT_HINT || color == TEXT_DIM {
+        LIGHT_TEXT_HINT
+    } else if color == TEXT_SOFT || color == TEXT_TOOL_OUTPUT {
+        LIGHT_TEXT_SOFT
+    } else if color == BORDER_COLOR {
+        LIGHT_BORDER
+    } else if color == TEXT_ACCENT || color == DEEPSEEK_SKY || color == ACCENT_TOOL_LIVE {
+        DEEPSEEK_BLUE
+    } else if color == TEXT_REASONING || color == ACCENT_REASONING_LIVE {
+        Color::Rgb(146, 64, 14)
+    } else if color == ACCENT_TOOL_ISSUE {
+        Color::Rgb(159, 18, 57)
+    } else if color == DIFF_ADDED {
+        Color::Rgb(22, 101, 52)
+    } else if color == USER_BODY {
+        LIGHT_USER_BODY
+    } else {
+        color
+    }
+}
+
+#[must_use]
+pub fn adapt_bg_for_palette_mode(color: Color, mode: PaletteMode) -> Color {
+    if mode == PaletteMode::Dark {
+        return color;
+    }
+
+    if color == DEEPSEEK_INK || color == BACKGROUND_DARK {
+        LIGHT_SURFACE
+    } else if color == DEEPSEEK_SLATE
+        || color == COMPOSER_BG
+        || color == SURFACE_PANEL
+        || color == SURFACE_TOOL
+    {
+        LIGHT_PANEL
+    } else if color == SURFACE_ELEVATED || color == SURFACE_TOOL_ACTIVE {
+        LIGHT_ELEVATED
+    } else if color == SURFACE_REASONING
+        || color == SURFACE_REASONING_TINT
+        || color == SURFACE_REASONING_ACTIVE
+    {
+        LIGHT_REASONING
+    } else if color == SURFACE_SUCCESS {
+        LIGHT_SUCCESS
+    } else if color == SURFACE_ERROR {
+        LIGHT_ERROR
+    } else if color == DIFF_ADDED_BG {
+        LIGHT_SUCCESS
+    } else if color == DIFF_DELETED_BG {
+        LIGHT_ERROR
+    } else if color == SELECTION_BG {
+        LIGHT_SELECTION_BG
+    } else {
+        color
+    }
+}
+
+// === Color depth + brightness helpers (v0.6.6 UI redesign) ===
+
+/// Terminal color depth, used to gate truecolor surfaces (e.g. reasoning bg
+/// tints) on terminals that can't render them faithfully.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColorDepth { Ansi16, Ansi256, TrueColor }
 
@@ -339,54 +437,6 @@ pub fn pulse_brightness(color: Color, now_ms: u64) -> Color {
 }
 
 #[must_use]
-pub fn parse_hex_rgb_color(value: &str) -> Option<Color> {
-    let hex = value.trim().strip_prefix('#').unwrap_or(value.trim());
-    if hex.len() != 6 || !hex.chars().all(|ch| ch.is_ascii_hexdigit()) { return None; }
-    let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-    let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-    let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-    Some(Color::Rgb(r, g, b))
-}
-
-#[must_use]
-pub fn normalize_hex_rgb_color(value: &str) -> Option<String> { hex_rgb_string(parse_hex_rgb_color(value)?) }
-
-#[must_use]
-pub fn hex_rgb_string(color: Color) -> Option<String> {
-    let Color::Rgb(r, g, b) = color else { return None; };
-    Some(format!("#{r:02x}{g:02x}{b:02x}"))
-}
-
-#[must_use]
-pub fn adapt_fg_for_palette_mode(color: Color, _bg: Color, mode: PaletteMode) -> Color {
-    if mode == PaletteMode::Dark { return color; }
-    if color == TEXT_BODY || color == SELECTION_TEXT || color == Color::White { LIGHT_TEXT_BODY }
-    else if color == TEXT_SECONDARY || color == TEXT_MUTED { LIGHT_TEXT_MUTED }
-    else if color == TEXT_HINT || color == TEXT_DIM { LIGHT_TEXT_HINT }
-    else if color == TEXT_SOFT || color == TEXT_TOOL_OUTPUT { LIGHT_TEXT_SOFT }
-    else if color == BORDER_COLOR { LIGHT_BORDER }
-    else if color == TEXT_ACCENT || color == SKY || color == ACCENT_TOOL_LIVE { BLUE }
-    else if color == TEXT_REASONING || color == ACCENT_REASONING_LIVE { Color::Rgb(146, 64, 14) }
-    else if color == ACCENT_TOOL_ISSUE { Color::Rgb(159, 18, 57) }
-    else if color == DIFF_ADDED { Color::Rgb(22, 101, 52) }
-    else { color }
-}
-
-#[must_use]
-pub fn adapt_bg_for_palette_mode(color: Color, mode: PaletteMode) -> Color {
-    if mode == PaletteMode::Dark { return color; }
-    if color == INK || color == BACKGROUND_DARK { LIGHT_SURFACE }
-    else if color == SLATE || color == COMPOSER_BG || color == SURFACE_PANEL || color == SURFACE_TOOL { LIGHT_PANEL }
-    else if color == ELEVATED || color == SURFACE_TOOL_ACTIVE { LIGHT_ELEVATED }
-    else if color == SURFACE_REASONING || color == SURFACE_REASONING_TINT || color == SURFACE_REASONING_ACTIVE { LIGHT_REASONING }
-    else if color == SURFACE_SUCCESS { LIGHT_SUCCESS }
-    else if color == SURFACE_ERROR { LIGHT_ERROR }
-    else if color == DIFF_ADDED_BG { LIGHT_SUCCESS }
-    else if color == DIFF_DELETED_BG { LIGHT_ERROR }
-    else if color == SELECTION_BG { LIGHT_SELECTION_BG }
-    else { color }
-}
-
 #[allow(dead_code)]
 fn nearest_ansi16(r: u8, g: u8, b: u8) -> Color {
     let lum = (u16::from(r) + u16::from(g) + u16::from(b)) / 3;

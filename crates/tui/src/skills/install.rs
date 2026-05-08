@@ -1066,7 +1066,7 @@ fn scan_tarball(bytes: &[u8], max_size: u64) -> Result<TarballScan> {
 
     let mut total_size: u64 = 0;
     let mut prefix: Option<String> = None;
-    let mut skill_md_relative: Option<(String, Vec<u8>)> = None;
+    let mut skill_md_relative: Option<(SkillMdCandidate, Vec<u8>)> = None;
     let mut link_paths: Vec<String> = Vec::new();
 
     for entry in archive
@@ -1122,46 +1122,38 @@ fn scan_tarball(bytes: &[u8], max_size: u64) -> Result<TarballScan> {
             continue;
         }
 
-        // SKILL.md detection. Match either:
+        // SKILL.md detection. Match the same workflow layouts that runtime
+        // discovery understands:
         //   * `<prefix>/SKILL.md`
-        //   * `<prefix>/skills/<name>/SKILL.md`
+        //   * `<prefix>/*/skills/<name>/SKILL.md`
+        //   * `<prefix>/<name>/SKILL.md`
         if entry_type.is_file() {
             let stripped = strip_prefix(&path_str, prefix.as_deref().unwrap_or(""));
-            if stripped.eq_ignore_ascii_case("SKILL.md")
-                || stripped.starts_with("skills/")
-                    && stripped.ends_with("/SKILL.md")
-                    && stripped.matches('/').count() == 2
-            {
+            if let Some(candidate) = skill_md_candidate(&stripped) {
                 let mut buf = Vec::new();
                 entry
                     .read_to_end(&mut buf)
                     .context("failed to read SKILL.md from archive")?;
-                // Prefer the first match — we don't support multi-skill
-                // archives where a tarball ships several SKILL.mds at once.
-                if skill_md_relative.is_none() {
-                    skill_md_relative = Some((stripped.to_string(), buf));
+                // Prefer the most explicit match: repo-root SKILL.md first,
+                // then known skill-directory layouts, then a single nested
+                // `<name>/SKILL.md` repository.
+                let replace = skill_md_relative
+                    .as_ref()
+                    .is_none_or(|(current, _)| candidate.rank < current.rank);
+                if replace {
+                    skill_md_relative = Some((candidate, buf));
                 }
             }
         }
     }
 
     let prefix = prefix.unwrap_or_default();
-    let (skill_md_path, skill_md_bytes) = skill_md_relative
+    let (skill_md, skill_md_bytes) = skill_md_relative
         .ok_or(InstallError::MissingSkillMd)
         .map_err(anyhow::Error::from)?;
 
-    let skill_root = if skill_md_path == "SKILL.md" {
-        String::new()
-    } else {
-        // strip trailing /SKILL.md
-        skill_md_path
-            .strip_suffix("/SKILL.md")
-            .unwrap_or("")
-            .to_string()
-    };
-
     for link_path in link_paths {
-        if is_within_selected_root(&link_path, &prefix, &skill_root) {
+        if is_within_selected_root(&link_path, &prefix, &skill_md.skill_root) {
             return Err(InstallError::SymlinkRejected.into());
         }
     }
@@ -1174,8 +1166,56 @@ fn scan_tarball(bytes: &[u8], max_size: u64) -> Result<TarballScan> {
     Ok(TarballScan {
         skill_name: name,
         prefix,
-        skill_root,
+        skill_root: skill_md.skill_root,
     })
+}
+
+struct SkillMdCandidate {
+    rank: u8,
+    skill_root: String,
+}
+
+fn skill_md_candidate(stripped_path: &str) -> Option<SkillMdCandidate> {
+    if stripped_path.eq_ignore_ascii_case("SKILL.md") {
+        return Some(SkillMdCandidate {
+            rank: 0,
+            skill_root: String::new(),
+        });
+    }
+
+    let parts: Vec<&str> = stripped_path.split('/').collect();
+    if parts
+        .last()
+        .is_none_or(|last| !last.eq_ignore_ascii_case("SKILL.md"))
+    {
+        return None;
+    }
+
+    // Common workflow-pack layouts:
+    // `skills/<name>/SKILL.md`, `.agents/skills/<name>/SKILL.md`,
+    // `.claude/skills/<name>/SKILL.md`, and nested package layouts such as
+    // `packages/foo/skills/<name>/SKILL.md`.
+    if parts.len() >= 3 {
+        let container = parts[parts.len() - 3];
+        let name = parts[parts.len() - 2];
+        if container.eq_ignore_ascii_case("skills") && !name.is_empty() {
+            return Some(SkillMdCandidate {
+                rank: 1,
+                skill_root: parts[..parts.len() - 1].join("/"),
+            });
+        }
+    }
+
+    // Single-skill repos sometimes keep their root tidy with
+    // `<skill-name>/SKILL.md` plus sibling docs at repo root.
+    if parts.len() == 2 && !parts[0].is_empty() {
+        return Some(SkillMdCandidate {
+            rank: 2,
+            skill_root: parts[0].to_string(),
+        });
+    }
+
+    None
 }
 
 fn extract_into(scan: &TarballScan, bytes: &[u8], dest: &Path, max_size: u64) -> Result<()> {

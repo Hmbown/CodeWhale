@@ -10,7 +10,7 @@
 use super::spec::{
     ApprovalRequirement, ToolCapability, ToolContext, ToolError, ToolResult, ToolSpec, optional_u64,
 };
-use crate::network_policy::{Decision, host_from_url};
+use crate::network_policy::{Decision, NetworkPolicyDecider, host_from_url};
 use async_trait::async_trait;
 use regex::Regex;
 use serde::Serialize;
@@ -187,12 +187,7 @@ impl ToolSpec for FetchUrlTool {
             } else if let Ok(addrs) = tokio::net::lookup_host((&**host, 0u16)).await {
                 let mut first_valid: Option<std::net::IpAddr> = None;
                 for addr in addrs {
-                    if is_restricted_ip(&addr.ip()) {
-                        return Err(ToolError::permission_denied(format!(
-                            "resolved IP {} is a restricted address (private/loopback/link-local)",
-                            addr.ip()
-                        )));
-                    }
+                    validate_dns_resolved_ip(host, &addr.ip(), context.network_policy.as_ref())?;
                     if first_valid.is_none() {
                         first_valid = Some(addr.ip());
                     }
@@ -330,6 +325,27 @@ fn is_restricted_ip(ip: &std::net::IpAddr) -> bool {
                 || matches!(v6.segments(), [0xfe80..=0xfebf, ..]) // Link-local fe80::/10
         }
     }
+}
+
+fn validate_dns_resolved_ip(
+    host: &str,
+    ip: &std::net::IpAddr,
+    decider: Option<&NetworkPolicyDecider>,
+) -> Result<(), ToolError> {
+    if !is_restricted_ip(ip) {
+        return Ok(());
+    }
+
+    if let Some(decider) = decider
+        && decider.trusts_proxy_fakeip_host(host)
+    {
+        decider.record_trusted_proxy_fakeip_allow(host, "fetch_url");
+        return Ok(());
+    }
+
+    Err(ToolError::permission_denied(format!(
+        "resolved IP {ip} is a restricted address (private/loopback/link-local)"
+    )))
 }
 
 /// Strip `<script>` / `<style>` blocks, drop remaining tags, and collapse
@@ -495,6 +511,7 @@ mod tests {
             default: Decision::Deny.into(),
             allow: vec!["api.deepseek.com".to_string()],
             deny: vec![],
+            proxy: Vec::new(),
             audit: false,
         };
         let decider = NetworkPolicyDecider::new(policy, None);
@@ -505,5 +522,102 @@ mod tests {
             .await;
         let err = res.expect_err("blocked host should fail");
         assert!(format!("{err}").contains("blocked"));
+    }
+
+    #[test]
+    fn restricted_dns_result_is_denied_without_proxy_opt_in() {
+        let ip = "198.18.0.1".parse().unwrap();
+
+        let err = validate_dns_resolved_ip("github.com", &ip, None)
+            .expect_err("fake-IP DNS result must be denied by default");
+
+        assert!(format!("{err}").contains("resolved IP 198.18.0.1 is a restricted address"));
+    }
+
+    #[test]
+    fn proxy_opt_in_allows_restricted_dns_for_matching_host() {
+        use crate::network_policy::{Decision, NetworkPolicy, NetworkPolicyDecider};
+
+        let policy = NetworkPolicy {
+            default: Decision::Allow.into(),
+            allow: Vec::new(),
+            deny: Vec::new(),
+            proxy: vec!["github.com".to_string()],
+            audit: false,
+        };
+        let decider = NetworkPolicyDecider::new(policy, None);
+        let ip = "198.18.0.1".parse().unwrap();
+
+        validate_dns_resolved_ip("github.com", &ip, Some(&decider))
+            .expect("proxy opt-in should allow fake-IP DNS for matching host");
+    }
+
+    #[test]
+    fn proxy_opt_in_does_not_allow_unlisted_host() {
+        use crate::network_policy::{Decision, NetworkPolicy, NetworkPolicyDecider};
+
+        let policy = NetworkPolicy {
+            default: Decision::Allow.into(),
+            allow: Vec::new(),
+            deny: Vec::new(),
+            proxy: vec!["github.com".to_string()],
+            audit: false,
+        };
+        let decider = NetworkPolicyDecider::new(policy, None);
+        let ip = "198.18.0.1".parse().unwrap();
+
+        let err = validate_dns_resolved_ip("example.com", &ip, Some(&decider))
+            .expect_err("proxy opt-in must be scoped to configured hosts");
+
+        assert!(format!("{err}").contains("resolved IP 198.18.0.1 is a restricted address"));
+    }
+
+    #[tokio::test]
+    async fn proxy_opt_in_does_not_allow_restricted_ip_literal() {
+        use crate::network_policy::{Decision, NetworkPolicy, NetworkPolicyDecider};
+
+        let policy = NetworkPolicy {
+            default: Decision::Allow.into(),
+            allow: Vec::new(),
+            deny: Vec::new(),
+            proxy: vec!["198.18.0.1".to_string()],
+            audit: false,
+        };
+        let decider = NetworkPolicyDecider::new(policy, None);
+        let ctx = ToolContext::new(PathBuf::from(".")).with_network_policy(decider);
+        let tool = FetchUrlTool;
+
+        let err = tool
+            .execute(json!({"url": "http://198.18.0.1/status"}), &ctx)
+            .await
+            .expect_err("literal restricted IP URLs must stay blocked");
+
+        assert!(format!("{err}").contains("IP 198.18.0.1 is a restricted address"));
+    }
+
+    #[test]
+    fn proxy_dns_allow_is_audited() {
+        use crate::network_policy::{
+            Decision, NetworkAuditor, NetworkPolicy, NetworkPolicyDecider,
+        };
+        use tempfile::tempdir;
+
+        let dir = tempdir().expect("tempdir");
+        let auditor = NetworkAuditor::new(dir.path().join("audit.log"), true);
+        let policy = NetworkPolicy {
+            default: Decision::Allow.into(),
+            allow: Vec::new(),
+            deny: Vec::new(),
+            proxy: vec!["github.com".to_string()],
+            audit: true,
+        };
+        let decider = NetworkPolicyDecider::new(policy, Some(auditor));
+        let ip = "198.18.0.1".parse().unwrap();
+
+        validate_dns_resolved_ip("github.com", &ip, Some(&decider)).expect("proxy DNS allow");
+
+        let body = std::fs::read_to_string(dir.path().join("audit.log")).expect("audit log");
+        assert!(body.contains("github.com"));
+        assert!(body.contains("TrustedProxyFakeIp-Allow"));
     }
 }

@@ -71,9 +71,12 @@ impl Engine {
         if self.config.features.enabled(Feature::WebSearch) {
             builder = builder.with_web_tools();
         }
-        // Plan mode keeps shell available when the session allows it; command
-        // safety and approval checks still gate risky commands.
-        if self.config.features.enabled(Feature::ShellTool) && self.session.allow_shell {
+        // Plan mode is strictly read-only: do not expose shell execution at
+        // all, even if the session would otherwise allow it.
+        if mode != AppMode::Plan
+            && self.config.features.enabled(Feature::ShellTool)
+            && self.session.allow_shell
+        {
             builder = builder.with_shell_tools();
         }
 

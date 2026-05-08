@@ -83,7 +83,6 @@ Run `deepseek --help` for the canonical list. Common flags:
 - `-r, --resume <ID|PREFIX|latest>`: resume a saved session
 - `-c, --continue`: resume the most recent session in this workspace
 - `--max-subagents <N>`: clamp to `1..=20`
-- `--no-alt-screen`: run inline without the alternate screen buffer
 - `--mouse-capture` / `--no-mouse-capture`: opt in or out of internal mouse scrolling, transcript selection, and right-click context actions. Mouse capture is enabled by default on non-Windows terminals so drag selection copies only user/assistant transcript text; hold Shift while dragging or use `--no-mouse-capture` for raw terminal selection. It defaults off on Windows (CMD/terminal mouse-escape spam in the prompt) and inside JetBrains JediTerm — PyCharm/IDEA/CLion/etc. — where the terminal advertises mouse support but forwards SGR mouse events as raw text (#878, #898). Use `--mouse-capture` to opt in anywhere it's defaulted off.
 - `--profile <NAME>`: select config profile
 - `--config <PATH>`: config file path

@@ -1814,6 +1814,7 @@ mod tests {
             default: Decision::Deny.into(),
             allow: vec!["api.deepseek.com".to_string()],
             deny: vec![],
+            proxy: Vec::new(),
             audit: false,
         };
         let decider = NetworkPolicyDecider::new(policy, None);

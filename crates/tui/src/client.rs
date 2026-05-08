@@ -394,11 +394,16 @@ pub(super) fn api_url(base_url: &str, path: &str) -> String {
     if path.starts_with("beta/") {
         return format!("{}/{}", unversioned_base_url(base_url), path);
     }
-    format!(
-        "{}/{}",
-        versioned_base_url(base_url).trim_end_matches('/'),
-        path
-    )
+    let mut versioned = versioned_base_url(base_url);
+    // The /beta suffix is not a real API version — it is an
+    // opt-in surface for beta features.  Only paths with an
+    // explicit `beta/` prefix should hit the beta surface;
+    // everything else (models, chat/completions, health, …)
+    // must go to the standard /v1 surface.
+    if versioned.ends_with("beta") {
+        versioned = format!("{}/v1", unversioned_base_url(base_url));
+    }
+    format!("{}/{}", versioned.trim_end_matches('/'), path)
 }
 
 // === DeepSeekClient ===
@@ -1042,9 +1047,11 @@ mod tests {
             api_url("https://api.deepseek.com/v1", "chat/completions"),
             "https://api.deepseek.com/v1/chat/completions"
         );
+        // Non-beta paths from a /beta base URL route to /v1.
+        // Only paths with an explicit beta/ prefix use the beta surface.
         assert_eq!(
             api_url("https://api.deepseek.com/beta", "chat/completions"),
-            "https://api.deepseek.com/beta/chat/completions"
+            "https://api.deepseek.com/v1/chat/completions"
         );
         assert_eq!(
             api_url(
@@ -1068,6 +1075,33 @@ mod tests {
         assert_eq!(
             api_url("https://api.deepseek.com/beta", "beta/completions"),
             "https://api.deepseek.com/beta/completions"
+        );
+    }
+
+    #[test]
+    fn api_url_routes_models_and_non_beta_paths_to_v1() {
+        // The /models endpoint only exists at /v1/models, never at
+        // /beta/models. Non-beta paths from a /beta base URL must
+        // still route to /v1.
+        assert_eq!(
+            api_url("https://api.deepseek.com", "models"),
+            "https://api.deepseek.com/v1/models"
+        );
+        assert_eq!(
+            api_url("https://api.deepseek.com/v1", "models"),
+            "https://api.deepseek.com/v1/models"
+        );
+        assert_eq!(
+            api_url("https://api.deepseek.com/beta", "models"),
+            "https://api.deepseek.com/v1/models"
+        );
+        // explicit v<N> versions other than /v1 should be preserved
+        assert_eq!(
+            api_url(
+                "https://openai-compatible.example/api/coding/paas/v4",
+                "models"
+            ),
+            "https://openai-compatible.example/api/coding/paas/v4/models"
         );
     }
 

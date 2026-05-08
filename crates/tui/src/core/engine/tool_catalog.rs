@@ -118,8 +118,8 @@ pub(super) fn build_model_tool_catalog(
     native_tools
 }
 
-pub(super) fn ensure_advanced_tooling(catalog: &mut Vec<Tool>) {
-    if !catalog.iter().any(|t| t.name == CODE_EXECUTION_TOOL_NAME) {
+pub(super) fn ensure_advanced_tooling(catalog: &mut Vec<Tool>, mode: AppMode) {
+    if mode != AppMode::Plan && !catalog.iter().any(|t| t.name == CODE_EXECUTION_TOOL_NAME) {
         catalog.push(Tool {
             tool_type: Some(CODE_EXECUTION_TOOL_TYPE.to_string()),
             name: CODE_EXECUTION_TOOL_NAME.to_string(),

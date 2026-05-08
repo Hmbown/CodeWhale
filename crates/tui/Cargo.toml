@@ -75,10 +75,7 @@ wiremock = "0.6"
 pretty_assertions = "1.4"
 vt100 = "0.15"
 
-[target.'cfg(target_os = "macos")'.dependencies]
-libc = "0.2"
-
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]

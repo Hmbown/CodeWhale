@@ -28,8 +28,9 @@ use std::path::Path;
 use chrono::Utc;
 
 /// Maximum size of the user memory file. Larger files are loaded but the
-/// `<user_memory>` block carries a "(truncated)" marker so the user knows
-/// the model only saw a slice. Mirrors `project_context::MAX_CONTEXT_SIZE`.
+/// `<user_memory>` block carries a `<truncated bytes=N source="...">`
+/// marker so the user knows the model only saw a slice. Mirrors
+/// `project_context::MAX_CONTEXT_SIZE`.
 const MAX_MEMORY_SIZE: usize = 100 * 1024;
 
 /// Read the user memory file at `path`, returning `None` when the file
@@ -54,11 +55,12 @@ pub fn as_system_block(content: &str, source: &Path) -> Option<String> {
         return None;
     }
 
-    let display = source.display();
+    let display = source.display().to_string();
     let payload = if content.len() > MAX_MEMORY_SIZE {
-        let cutoff = previous_char_boundary(content, MAX_MEMORY_SIZE);
+        let cutoff = truncation_cutoff(content, &display);
+        let omitted_bytes = content.len() - cutoff;
         let mut head = content[..cutoff].to_string();
-        head.push_str("\n…(truncated, raise [memory].max_size or trim memory.md)");
+        head.push_str(&truncation_marker(omitted_bytes, &display));
         head
     } else {
         trimmed.to_string()
@@ -67,6 +69,24 @@ pub fn as_system_block(content: &str, source: &Path) -> Option<String> {
     Some(format!(
         "<user_memory source=\"{display}\">\n{payload}\n</user_memory>"
     ))
+}
+
+fn truncation_cutoff(content: &str, source: &str) -> usize {
+    let mut cutoff = previous_char_boundary(content, MAX_MEMORY_SIZE);
+    loop {
+        let omitted_bytes = content.len() - cutoff;
+        let max_head_len =
+            MAX_MEMORY_SIZE.saturating_sub(truncation_marker(omitted_bytes, source).len());
+        let next_cutoff = previous_char_boundary(content, cutoff.min(max_head_len));
+        if next_cutoff == cutoff {
+            return cutoff;
+        }
+        cutoff = next_cutoff;
+    }
+}
+
+fn truncation_marker(omitted_bytes: usize, source: &str) -> String {
+    format!("\n<truncated bytes={omitted_bytes} source=\"{source}\">")
 }
 
 fn previous_char_boundary(value: &str, mut index: usize) -> usize {
@@ -166,7 +186,9 @@ mod tests {
     fn as_system_block_truncates_oversize_input() {
         let big = "x".repeat(MAX_MEMORY_SIZE + 100);
         let block = as_system_block(&big, Path::new("/tmp/m.md")).unwrap();
-        assert!(block.contains("(truncated"));
+        let payload = user_memory_payload(&block);
+        assert_eq!(payload.len(), MAX_MEMORY_SIZE);
+        assert!(payload.ends_with("<truncated bytes=141 source=\"/tmp/m.md\">"));
     }
 
     #[test]
@@ -182,10 +204,11 @@ mod tests {
             .strip_suffix("\n</user_memory>")
             .unwrap();
         let (head, marker) = payload
-            .split_once("\n…(truncated, raise [memory].max_size or trim memory.md)")
+            .split_once("\n<truncated bytes=45 source=\"/tmp/m.md\">")
             .unwrap();
 
-        assert_eq!(head.len(), MAX_MEMORY_SIZE - 1);
+        assert_eq!(payload.len(), MAX_MEMORY_SIZE);
+        assert_eq!(head.len(), MAX_MEMORY_SIZE - 40);
         assert!(head.bytes().all(|byte| byte == b'x'));
         assert_eq!(marker, "");
     }
@@ -197,7 +220,7 @@ mod tests {
         content.push_str("tail");
 
         let block = as_system_block(&content, Path::new("/tmp/m.md")).unwrap();
-        assert!(block.contains("…(truncated, raise [memory].max_size or trim memory.md)"));
+        assert!(block.contains("<truncated bytes=47 source=\"/tmp/m.md\">"));
 
         let payload = block
             .strip_prefix("<user_memory source=\"/tmp/m.md\">\n")
@@ -205,12 +228,21 @@ mod tests {
             .strip_suffix("\n</user_memory>")
             .unwrap();
         let head = payload
-            .strip_suffix("\n…(truncated, raise [memory].max_size or trim memory.md)")
+            .strip_suffix("\n<truncated bytes=47 source=\"/tmp/m.md\">")
             .unwrap();
 
+        assert_eq!(payload.len(), MAX_MEMORY_SIZE);
         assert!(head.len() <= MAX_MEMORY_SIZE);
-        assert_eq!(head.len(), MAX_MEMORY_SIZE - 1);
+        assert_eq!(head.len(), MAX_MEMORY_SIZE - 40);
         assert!(head.bytes().all(|byte| byte == b'x'));
+    }
+
+    fn user_memory_payload(block: &str) -> &str {
+        block
+            .strip_prefix("<user_memory source=\"/tmp/m.md\">\n")
+            .unwrap()
+            .strip_suffix("\n</user_memory>")
+            .unwrap()
     }
 
     #[test]

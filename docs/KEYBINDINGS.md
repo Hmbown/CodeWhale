@@ -8,7 +8,7 @@ Bindings are not (yet) user-configurable — tracked for a future release (#436,
 
 | Chord                | Action                                                        |
 |----------------------|---------------------------------------------------------------|
-| `F1` or `Ctrl-?`     | Toggle the help overlay                                       |
+| `F1` or `Ctrl-/`     | Toggle the help overlay                                       |
 | `Ctrl-K`             | Open the command palette (slash-command finder)                |
 | `Ctrl-C`             | Cancel current turn / dismiss modal / arm-then-confirm quit    |
 | `Ctrl-D`             | Quit (only when the composer is empty)                         |

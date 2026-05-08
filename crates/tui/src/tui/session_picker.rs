@@ -611,6 +611,10 @@ mod tests {
             model: "deepseek-v4-pro".to_string(),
             workspace: std::path::PathBuf::from("/tmp"),
             mode: Some("agent".to_string()),
+            session_cost_usd: 0.0,
+            session_cost_cny: 0.0,
+            subagent_cost_usd: 0.0,
+            subagent_cost_cny: 0.0,
         }
     }
 

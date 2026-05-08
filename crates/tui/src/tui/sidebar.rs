@@ -55,17 +55,11 @@ fn render_sidebar_auto(f: &mut Frame, area: Rect, app: &App) {
     #[derive(Clone, Copy)]
     enum Panel {
         Plan,
-        Todos,
         Tasks,
         Agents,
         Context,
     }
 
-    let todos_empty = app
-        .todos
-        .try_lock()
-        .map(|todos| todos.snapshot().items.is_empty())
-        .unwrap_or(false); // assume non-empty when locked so we don't hide updating data
     let tasks_empty = app.runtime_turn_id.is_none() && app.task_panel.is_empty();
     let agents_empty = app.subagent_cache.is_empty()
         && app.agent_progress.is_empty()
@@ -74,12 +68,11 @@ fn render_sidebar_auto(f: &mut Frame, area: Rect, app: &App) {
 
     let mut visible: Vec<Panel> = Vec::with_capacity(5);
     visible.push(Panel::Plan);
-    if !todos_empty {
-        visible.push(Panel::Todos);
-    }
     if !tasks_empty {
         visible.push(Panel::Tasks);
     }
+    // Todos are now shown as a banner above the chat dialog; omitted from
+    // the sidebar to avoid duplication.
     if !agents_empty {
         visible.push(Panel::Agents);
     }
@@ -118,7 +111,6 @@ fn render_sidebar_auto(f: &mut Frame, area: Rect, app: &App) {
     for (panel, rect) in visible.iter().zip(sections.iter()) {
         match panel {
             Panel::Plan => render_sidebar_plan(f, *rect, app),
-            Panel::Todos => render_sidebar_todos(f, *rect, app),
             Panel::Tasks => render_sidebar_tasks(f, *rect, app),
             Panel::Agents => render_sidebar_subagents(f, *rect, app),
             Panel::Context => render_context_panel(f, *rect, app),
@@ -740,6 +732,103 @@ fn render_context_panel(f: &mut Frame, area: Rect, app: &App) {
     }
 
     render_sidebar_section(f, area, "Session", lines, app);
+}
+
+/// Render a compact horizontal todos banner above the chat dialog.
+///
+/// Shows checklist progress as a single line with completion percentage
+/// and item status markers. Returns the number of rows rendered (0 or 1).
+/// When empty, renders nothing and returns 0 so the caller can skip the
+/// layout slot entirely.
+///
+/// Design follows Claude Code's pattern of placing the checklist above
+/// the conversation pane so the user can see task progress at a glance
+/// without needing the sidebar visible.
+pub fn render_todos_banner(f: &mut Frame, area: Rect, app: &App) -> u16 {
+    if area.width < 30 || area.height == 0 {
+        return 0;
+    }
+
+    let snapshot = match app.todos.try_lock() {
+        Ok(todos) => todos.snapshot(),
+        Err(_) => return 0,
+    };
+
+    if snapshot.items.is_empty() {
+        return 0;
+    }
+
+    let content_width = area.width.saturating_sub(4) as usize;
+    let mut spans: Vec<Span<'static>> = Vec::new();
+
+    // Progress header: "Todos 33% (2/6)"
+    let total = snapshot.items.len();
+    let completed = snapshot
+        .items
+        .iter()
+        .filter(|item| item.status == TodoStatus::Completed)
+        .count();
+    spans.push(Span::styled(
+        "Todos ",
+        Style::default()
+            .fg(palette::TEXT_DIM)
+            .add_modifier(ratatui::style::Modifier::BOLD),
+    ));
+    spans.push(Span::styled(
+        format!("{:.0}%", snapshot.completion_pct),
+        Style::default()
+            .fg(palette::STATUS_SUCCESS)
+            .add_modifier(ratatui::style::Modifier::BOLD),
+    ));
+    spans.push(Span::styled(
+        format!(" ({completed}/{total})  "),
+        Style::default().fg(palette::TEXT_MUTED),
+    ));
+
+    // Item markers - compact horizontal layout.
+    // Budget remaining space for item tokens, each ~"[x] name  ".
+    let header_chars: usize = spans
+        .iter()
+        .map(|s| s.content.chars().count())
+        .sum();
+    let remaining_chars = content_width.saturating_sub(header_chars);
+    // Each item needs roughly "[x] name  " = 3 + name.len() + 2 separator
+    let max_items = if remaining_chars < 10 { 0 } else { snapshot.items.len().min(8) };
+
+    for item in snapshot.items.iter().take(max_items) {
+        let (marker, color) = match item.status {
+            TodoStatus::Pending => ("[ ]", palette::TEXT_MUTED),
+            TodoStatus::InProgress => ("[~]", palette::STATUS_WARNING),
+            TodoStatus::Completed => ("[x]", palette::STATUS_SUCCESS),
+        };
+        let label = truncate_line_to_width(
+            &format!("{marker} {}", item.content),
+            remaining_chars.saturating_div(max_items.max(1)).max(6),
+        );
+        spans.push(Span::styled(
+            format!("{label}  "),
+            Style::default().fg(color),
+        ));
+    }
+
+    let remaining = snapshot.items.len().saturating_sub(max_items);
+    if remaining > 0 {
+        spans.push(Span::styled(
+            format!("+{remaining} more"),
+            Style::default().fg(palette::TEXT_MUTED),
+        ));
+    }
+
+    let line = Line::from(spans);
+    let paragraph = Paragraph::new(line)
+        .block(
+            Block::default()
+                .style(Style::default().bg(app.ui_theme.surface_bg))
+                .padding(ratatui::widgets::Padding::horizontal(2)),
+        );
+
+    f.render_widget(paragraph, area);
+    1
 }
 
 fn render_sidebar_section(

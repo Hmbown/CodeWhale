@@ -14,7 +14,10 @@ pub fn init(app: &mut App) -> CommandResult {
     // Check if AGENTS.md already exists
     let agents_path = workspace.join("AGENTS.md");
     if agents_path.exists() {
-        return CommandResult::error("AGENTS.md already exists. Delete it first to reinitialize.");
+        return CommandResult::message(format!(
+            "AGENTS.md already exists at {}. Delete it first to reinitialize.",
+            agents_path.display()
+        ));
     }
 
     // Detect project type and generate appropriate content
@@ -197,12 +200,16 @@ mod tests {
     }
 
     #[test]
-    fn test_init_fails_if_exists() {
+    fn test_init_is_noop_if_exists() {
         let tmpdir = TempDir::new().unwrap();
         let mut app = create_test_app_with_tmpdir(&tmpdir);
         // Create file first
         std::fs::write(tmpdir.path().join("AGENTS.md"), "existing").unwrap();
         let result = init(&mut app);
+        assert!(
+            !result.is_error,
+            "existing AGENTS.md is an idempotent no-op, not an error"
+        );
         assert!(result.message.is_some());
         assert!(result.message.unwrap().contains("already exists"));
     }

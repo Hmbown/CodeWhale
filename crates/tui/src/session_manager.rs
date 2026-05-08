@@ -96,6 +96,18 @@ pub struct SessionMetadata {
     /// Optional mode label (agent/plan/etc.)
     #[serde(default)]
     pub mode: Option<String>,
+    /// Accumulated parent-turn session cost in USD (for persisted billing).
+    #[serde(default)]
+    pub session_cost_usd: f64,
+    /// Accumulated parent-turn session cost in CNY (for persisted billing).
+    #[serde(default)]
+    pub session_cost_cny: f64,
+    /// Accumulated sub-agent/background LLM cost in USD (for persisted billing).
+    #[serde(default)]
+    pub subagent_cost_usd: f64,
+    /// Accumulated sub-agent/background LLM cost in CNY (for persisted billing).
+    #[serde(default)]
+    pub subagent_cost_cny: f64,
 }
 
 /// A saved session containing full conversation history
@@ -580,6 +592,10 @@ pub fn create_saved_session_with_mode(
             model: model.to_string(),
             workspace: workspace.to_path_buf(),
             mode: mode.map(str::to_string),
+            session_cost_usd: 0.0,
+            session_cost_cny: 0.0,
+            subagent_cost_usd: 0.0,
+            subagent_cost_cny: 0.0,
         },
         messages: capped_messages,
         system_prompt: merge_truncation_note(
@@ -847,6 +863,10 @@ mod tests {
                 model: "deepseek-v4-flash".to_string(),
                 workspace: workspace.to_path_buf(),
                 mode: None,
+                session_cost_usd: 0.0,
+                session_cost_cny: 0.0,
+                subagent_cost_usd: 0.0,
+                subagent_cost_cny: 0.0,
             },
             system_prompt: None,
             context_references: Vec::new(),
@@ -873,6 +893,10 @@ mod tests {
                 model: "deepseek-v4-pro".to_string(),
                 workspace: workspace.to_path_buf(),
                 mode: Some("yolo".to_string()),
+                session_cost_usd: 0.0,
+                session_cost_cny: 0.0,
+                subagent_cost_usd: 0.0,
+                subagent_cost_cny: 0.0,
             },
             system_prompt: None,
             context_references: Vec::new(),

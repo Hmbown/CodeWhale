@@ -922,6 +922,10 @@ pub struct NetworkPolicyToml {
     /// Hosts that are always denied. Deny entries win over allow entries.
     #[serde(default)]
     pub deny: Vec<String>,
+    /// Hostnames whose DNS may resolve to fake-IP/private proxy ranges in an
+    /// explicitly trusted proxy setup. Literal IP URLs remain blocked.
+    #[serde(default)]
+    pub proxy: Vec<String>,
     /// Whether to record one audit-log line per outbound network call.
     #[serde(default = "default_network_audit")]
     pub audit: bool,
@@ -941,6 +945,7 @@ impl Default for NetworkPolicyToml {
             default: default_network_decision(),
             allow: Vec::new(),
             deny: Vec::new(),
+            proxy: Vec::new(),
             audit: default_network_audit(),
         }
     }
@@ -955,6 +960,7 @@ impl NetworkPolicyToml {
             default: crate::network_policy::Decision::parse(&self.default).into(),
             allow: self.allow,
             deny: self.deny,
+            proxy: self.proxy,
             audit: self.audit,
         }
     }
@@ -3132,6 +3138,23 @@ mod tests {
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn network_policy_toml_maps_proxy_hosts_to_runtime_policy() {
+        let policy: NetworkPolicyToml = toml::from_str(
+            r#"
+            default = "allow"
+            proxy = ["github.com", ".githubusercontent.com"]
+            "#,
+        )
+        .expect("network policy toml");
+
+        let runtime = policy.into_runtime();
+
+        assert_eq!(runtime.proxy, ["github.com", ".githubusercontent.com"]);
+        assert!(runtime.trusts_proxy_fakeip_host("github.com"));
+        assert!(runtime.trusts_proxy_fakeip_host("raw.githubusercontent.com"));
+    }
 
     struct EnvGuard {
         home: Option<OsString>,

@@ -26,7 +26,7 @@ impl Engine {
         let mut context_recovery_attempts = 0u8;
         let mut tool_catalog = tools.unwrap_or_default();
         if !tool_catalog.is_empty() {
-            ensure_advanced_tooling(&mut tool_catalog);
+            ensure_advanced_tooling(&mut tool_catalog, mode);
         }
         let mut active_tool_names = initial_active_tools(&tool_catalog);
         let mut loop_guard = LoopGuard::default();
@@ -1045,6 +1045,23 @@ impl Engine {
                 let mut read_only = false;
                 let mut blocked_error: Option<ToolError> = None;
                 let mut guard_result: Option<ToolResult> = None;
+
+                if mode == AppMode::Plan
+                    && matches!(
+                        tool_name.as_str(),
+                        "exec_shell"
+                            | "exec_shell_wait"
+                            | "exec_shell_interact"
+                            | "exec_wait"
+                            | "exec_interact"
+                            | CODE_EXECUTION_TOOL_NAME
+                    )
+                {
+                    blocked_error = Some(ToolError::permission_denied(format!(
+                        "Tool '{tool_name}' is unavailable in Plan mode"
+                    )));
+                }
+
                 if maybe_activate_requested_deferred_tool(
                     &tool_name,
                     &tool_catalog,

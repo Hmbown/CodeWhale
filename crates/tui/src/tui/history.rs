@@ -172,7 +172,7 @@ impl HistoryCell {
             HistoryCell::User { content } => render_message(
                 USER_GLYPH,
                 user_label_style(),
-                message_body_style(),
+                user_body_style(),
                 content,
                 width,
             ),
@@ -263,7 +263,7 @@ impl HistoryCell {
             HistoryCell::User { content } => render_message(
                 USER_GLYPH,
                 user_label_style(),
-                message_body_style(),
+                user_body_style(),
                 content,
                 width,
             ),
@@ -295,7 +295,7 @@ impl HistoryCell {
             HistoryCell::User { content } => render_message(
                 USER_GLYPH,
                 user_label_style(),
-                message_body_style(),
+                user_body_style(),
                 content,
                 width,
             ),
@@ -2644,6 +2644,10 @@ fn truncate_text(text: &str, max_len: usize) -> String {
 
 fn user_label_style() -> Style {
     Style::default().fg(palette::TEXT_MUTED)
+}
+
+fn user_body_style() -> Style {
+    Style::default().fg(palette::USER_BODY)
 }
 
 /// Style for the assistant glyph (`●`). When the cell is streaming and

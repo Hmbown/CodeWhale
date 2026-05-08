@@ -145,8 +145,7 @@ impl RlmBridge {
 
         {
             let mut u = self.usage.lock().await;
-            u.input_tokens = u.input_tokens.saturating_add(response.usage.input_tokens);
-            u.output_tokens = u.output_tokens.saturating_add(response.usage.output_tokens);
+            super::add_usage_with_prompt_cache(&mut u, &response.usage);
         }
 
         SingleResp { text, error: None }
@@ -209,8 +208,7 @@ impl RlmBridge {
 
         {
             let mut u = self.usage.lock().await;
-            u.input_tokens = u.input_tokens.saturating_add(result.usage.input_tokens);
-            u.output_tokens = u.output_tokens.saturating_add(result.usage.output_tokens);
+            super::add_usage_with_prompt_cache(&mut u, &result.usage);
         }
 
         SingleResp {
@@ -284,7 +282,7 @@ mod tests {
     use super::*;
     use crate::llm_client::mock::MockLlmClient;
 
-    fn mock_response(text: &str, input_tokens: u32, output_tokens: u32) -> MessageResponse {
+    fn mock_response_with_usage(text: &str, usage: Usage) -> MessageResponse {
         MessageResponse {
             id: "mock_msg".to_string(),
             r#type: "message".to_string(),
@@ -297,12 +295,19 @@ mod tests {
             stop_reason: Some("end_turn".to_string()),
             stop_sequence: None,
             container: None,
-            usage: Usage {
+            usage,
+        }
+    }
+
+    fn mock_response(text: &str, input_tokens: u32, output_tokens: u32) -> MessageResponse {
+        mock_response_with_usage(
+            text,
+            Usage {
                 input_tokens,
                 output_tokens,
                 ..Usage::default()
             },
-        }
+        )
     }
 
     fn bridge_for(mock: Arc<MockLlmClient>, depth_remaining: u32) -> RlmBridge {
@@ -369,6 +374,45 @@ mod tests {
         let usage = bridge.usage.lock().await;
         assert_eq!(usage.input_tokens, 7);
         assert_eq!(usage.output_tokens, 11);
+    }
+
+    #[tokio::test]
+    async fn llm_dispatch_preserves_prompt_cache_usage() {
+        let mock = Arc::new(MockLlmClient::new(Vec::new()));
+        mock.push_message_response(mock_response_with_usage(
+            "cached child answer",
+            Usage {
+                input_tokens: 1000,
+                output_tokens: 100,
+                prompt_cache_hit_tokens: Some(800),
+                prompt_cache_miss_tokens: Some(200),
+                ..Usage::default()
+            },
+        ));
+        let bridge = bridge_for(Arc::clone(&mock), 1);
+
+        let response = bridge
+            .dispatch(RpcRequest::Llm {
+                prompt: "child prompt".to_string(),
+                model: None,
+                max_tokens: None,
+                system: None,
+            })
+            .await;
+
+        match response {
+            RpcResponse::Single(single) => {
+                assert_eq!(single.text, "cached child answer");
+                assert!(single.error.is_none());
+            }
+            other => panic!("expected single response, got {other:?}"),
+        }
+
+        let usage = bridge.usage.lock().await;
+        assert_eq!(usage.input_tokens, 1000);
+        assert_eq!(usage.output_tokens, 100);
+        assert_eq!(usage.prompt_cache_hit_tokens, Some(800));
+        assert_eq!(usage.prompt_cache_miss_tokens, Some(200));
     }
 
     #[tokio::test]

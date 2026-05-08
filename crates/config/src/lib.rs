@@ -250,6 +250,10 @@ pub struct NetworkPolicyToml {
     /// Hosts that are always denied. Deny entries win over allow entries.
     #[serde(default)]
     pub deny: Vec<String>,
+    /// Hostnames whose DNS may resolve to fake-IP/private proxy ranges in an
+    /// explicitly trusted proxy setup. Literal IP URLs remain blocked.
+    #[serde(default)]
+    pub proxy: Vec<String>,
     /// Whether to record one audit-log line per outbound network call.
     #[serde(default = "default_network_audit")]
     pub audit: bool,
@@ -269,6 +273,7 @@ impl Default for NetworkPolicyToml {
             default: default_network_decision(),
             allow: Vec::new(),
             deny: Vec::new(),
+            proxy: Vec::new(),
             audit: default_network_audit(),
         }
     }
@@ -1402,6 +1407,21 @@ mod tests {
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
+
+    #[test]
+    fn network_policy_toml_deserializes_proxy_hosts() {
+        let policy: NetworkPolicyToml = toml::from_str(
+            r#"
+            default = "allow"
+            proxy = ["github.com", ".githubusercontent.com"]
+            "#,
+        )
+        .expect("network policy toml");
+
+        assert_eq!(policy.default, "allow");
+        assert_eq!(policy.proxy, ["github.com", ".githubusercontent.com"]);
+        assert!(policy.audit);
     }
 
     struct EnvGuard {

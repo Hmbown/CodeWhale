@@ -448,6 +448,9 @@ fn turn_tool_registry_builder_keeps_plan_mode_read_only_for_files() {
     assert!(registry.contains("list_dir"));
     assert!(!registry.contains("write_file"));
     assert!(!registry.contains("edit_file"));
+    assert!(!registry.contains("exec_shell"));
+    assert!(!registry.contains("exec_shell_wait"));
+    assert!(!registry.contains("exec_shell_interact"));
     assert!(registry.contains("update_plan"));
     assert!(registry.contains("task_create"));
 }
@@ -1350,7 +1353,7 @@ fn tool_search_activates_discovered_deferred_tools() {
             cache_control: None,
         },
     ];
-    ensure_advanced_tooling(&mut catalog);
+    ensure_advanced_tooling(&mut catalog, AppMode::Agent);
     let mut active = initial_active_tools(&catalog);
     let result = execute_tool_search(
         TOOL_SEARCH_BM25_NAME,
@@ -1372,6 +1375,27 @@ async fn code_execution_runs_python_and_returns_result_payload() {
             .expect("code execution should run");
     assert!(result.content.contains("hello from code exec"));
     assert!(result.content.contains("return_code"));
+}
+
+#[test]
+fn plan_mode_catalog_skips_code_execution_tool() {
+    let mut plan_catalog = vec![api_tool("read_file")];
+    ensure_advanced_tooling(&mut plan_catalog, AppMode::Plan);
+    assert!(
+        !plan_catalog
+            .iter()
+            .any(|tool| tool.name == CODE_EXECUTION_TOOL_NAME),
+        "Plan mode must not expose code_execution"
+    );
+
+    let mut agent_catalog = vec![api_tool("read_file")];
+    ensure_advanced_tooling(&mut agent_catalog, AppMode::Agent);
+    assert!(
+        agent_catalog
+            .iter()
+            .any(|tool| tool.name == CODE_EXECUTION_TOOL_NAME),
+        "Agent mode should still expose code_execution"
+    );
 }
 
 #[test]
