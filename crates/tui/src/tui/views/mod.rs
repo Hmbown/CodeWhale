@@ -542,6 +542,10 @@ struct ConfigEdit {
     cursor: usize,
     select_all: bool,
     scope: ConfigScope,
+    /// Set to true once the user manually edits the buffer; -/+/= cycling
+    /// is disabled when dirty so values containing hyphens (e.g. zh-Hans)
+    /// can be typed normally.
+    dirty: bool,
 }
 
 pub struct ConfigView {
@@ -864,7 +868,7 @@ impl ConfigView {
                 if self
                     .editing
                     .as_ref()
-                    .is_some_and(|e| config_enum_values(&e.key).is_some()) =>
+                    .is_some_and(|e| config_enum_values(&e.key).is_some() && !e.dirty) =>
             {
                 if let Some(edit) = self.editing.as_mut() {
                     if let Some(values) = config_enum_values(&edit.key) {
@@ -899,6 +903,7 @@ impl ConfigView {
             }
             KeyCode::Backspace => {
                 if let Some(edit) = self.editing.as_mut() {
+                    edit.dirty = true;
                     if edit.select_all {
                         edit.buffer.clear();
                         edit.cursor = 0;
@@ -912,6 +917,7 @@ impl ConfigView {
             }
             KeyCode::Delete => {
                 if let Some(edit) = self.editing.as_mut() {
+                    edit.dirty = true;
                     if edit.select_all {
                         edit.buffer.clear();
                         edit.cursor = 0;
@@ -924,6 +930,7 @@ impl ConfigView {
             }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if let Some(edit) = self.editing.as_mut() {
+                    edit.dirty = true;
                     edit.buffer.clear();
                     edit.cursor = 0;
                     edit.select_all = false;
@@ -977,6 +984,7 @@ impl ConfigView {
                 if !key.modifiers.contains(KeyModifiers::CONTROL) && !ch.is_control() =>
             {
                 if let Some(edit) = self.editing.as_mut() {
+                    edit.dirty = true;
                     if edit.select_all {
                         edit.buffer.clear();
                         edit.cursor = 0;
@@ -1014,6 +1022,7 @@ impl ConfigView {
             buffer,
             select_all: true,
             scope: row.scope,
+            dirty: false,
         });
         self.status = None;
     }
