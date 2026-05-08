@@ -171,6 +171,15 @@ impl ToolSpec for FetchUrlTool {
         // localhost services, and internal networks.
         // Pin the validated IP via ClientBuilder::resolve() to close the DNS rebinding
         // TOCTOU window — reqwest will use the pinned IP instead of re-resolving.
+        //
+        // Exception: when `network.allow_private_ip_hosts = true`, the DNS-resolved
+        // IP check is skipped. This accommodates transparent-proxy setups where
+        // DNS returns virtual private-range IPs for external domains.
+        // Direct private-IP literals in URLs are always blocked.
+        let allow_private_ip_hosts = context
+            .network_policy
+            .as_ref()
+            .map_or(false, |p| p.allows_private_ip_hosts());
         let mut dns_pinning = None; // (hostname, validated_ip)
         if let Some(host) = &url_host {
             if host == "localhost" || host == "localhost.localdomain" {
@@ -179,6 +188,7 @@ impl ToolSpec for FetchUrlTool {
                 ));
             }
             if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+                // Always block literal private-IP URLs regardless of proxy config.
                 if is_restricted_ip(&ip) {
                     return Err(ToolError::permission_denied(format!(
                         "IP {ip} is a restricted address (private/loopback/link-local)"
@@ -187,9 +197,11 @@ impl ToolSpec for FetchUrlTool {
             } else if let Ok(addrs) = tokio::net::lookup_host((&**host, 0u16)).await {
                 let mut first_valid: Option<std::net::IpAddr> = None;
                 for addr in addrs {
-                    if is_restricted_ip(&addr.ip()) {
+                    if !allow_private_ip_hosts && is_restricted_ip(&addr.ip()) {
                         return Err(ToolError::permission_denied(format!(
-                            "resolved IP {} is a restricted address (private/loopback/link-local)",
+                            "resolved IP {} is a restricted address (private/loopback/link-local); \
+                             if your DNS is managed by a transparent proxy, set \
+                             allow_private_ip_hosts = true under [network] in config.toml",
                             addr.ip()
                         )));
                     }
@@ -496,6 +508,7 @@ mod tests {
             allow: vec!["api.deepseek.com".to_string()],
             deny: vec![],
             audit: false,
+            allow_private_ip_hosts: false,
         };
         let decider = NetworkPolicyDecider::new(policy, None);
         let ctx = ToolContext::new(PathBuf::from(".")).with_network_policy(decider);

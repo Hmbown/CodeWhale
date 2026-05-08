@@ -62,6 +62,7 @@ fn allow_all_policy() -> NetworkPolicy {
         allow: Vec::new(),
         deny: Vec::new(),
         audit: false,
+        allow_private_ip_hosts: false,
     }
 }
 
@@ -71,6 +72,7 @@ fn deny_all_policy() -> NetworkPolicy {
         allow: Vec::new(),
         deny: Vec::new(),
         audit: false,
+        allow_private_ip_hosts: false,
     }
 }
 
@@ -80,6 +82,7 @@ fn prompt_all_policy() -> NetworkPolicy {
         allow: Vec::new(),
         deny: Vec::new(),
         audit: false,
+        allow_private_ip_hosts: false,
     }
 }
 

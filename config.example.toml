@@ -230,6 +230,9 @@ max_subagents = 10 # optional (1-20)
 # allow = ["api.deepseek.com", "github.com", ".githubusercontent.com"]
 # deny = []
 # audit = true            # one line per call to ~/.deepseek/audit.log
+# allow_private_ip_hosts = false  # set true when a trusted transparent proxy controls DNS
+#                                 # and returns virtual private-range IPs for external domains.
+#                                 # Direct private-IP literals in URLs remain blocked regardless.
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Skills (#140)

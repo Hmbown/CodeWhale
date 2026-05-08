@@ -1815,6 +1815,7 @@ mod tests {
             allow: vec!["api.deepseek.com".to_string()],
             deny: vec![],
             audit: false,
+            allow_private_ip_hosts: false,
         };
         let decider = NetworkPolicyDecider::new(policy, None);
         let ctx = ToolContext::new(PathBuf::from(".")).with_network_policy(decider);

@@ -925,6 +925,12 @@ pub struct NetworkPolicyToml {
     /// Whether to record one audit-log line per outbound network call.
     #[serde(default = "default_network_audit")]
     pub audit: bool,
+    /// Allow `fetch_url` to proceed when a hostname resolves to a private/reserved
+    /// IP address. Off by default. Enable when a trusted transparent proxy
+    /// controls DNS and returns virtual private-range IPs for external domains.
+    /// Direct private-IP literals in URLs remain blocked regardless.
+    #[serde(default)]
+    pub allow_private_ip_hosts: bool,
 }
 
 fn default_network_decision() -> String {
@@ -942,6 +948,7 @@ impl Default for NetworkPolicyToml {
             allow: Vec::new(),
             deny: Vec::new(),
             audit: default_network_audit(),
+            allow_private_ip_hosts: false,
         }
     }
 }
@@ -956,6 +963,7 @@ impl NetworkPolicyToml {
             allow: self.allow,
             deny: self.deny,
             audit: self.audit,
+            allow_private_ip_hosts: self.allow_private_ip_hosts,
         }
     }
 }

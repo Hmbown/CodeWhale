@@ -101,6 +101,13 @@ pub struct NetworkPolicy {
     /// Whether to record one audit-log line per network call. Defaults to true.
     #[serde(default = "default_audit")]
     pub audit: bool,
+    /// Allow `fetch_url` to proceed when a hostname resolves to a private/reserved
+    /// IP address. Off by default (SSRF protection). Enable only when DNS is
+    /// handled by a trusted transparent proxy that returns virtual private-range
+    /// IPs for external domains. Direct private-IP literals in URLs are always
+    /// blocked regardless of this setting.
+    #[serde(default)]
+    pub allow_private_ip_hosts: bool,
 }
 
 fn default_decision() -> DecisionToml {
@@ -118,6 +125,7 @@ impl Default for NetworkPolicy {
             allow: Vec::new(),
             deny: Vec::new(),
             audit: true,
+            allow_private_ip_hosts: false,
         }
     }
 }
@@ -448,6 +456,13 @@ impl NetworkPolicyDecider {
         decision
     }
 
+    /// Whether DNS-resolved private IPs are allowed by this policy.
+    /// See [`NetworkPolicy::allow_private_ip_hosts`].
+    #[must_use]
+    pub fn allows_private_ip_hosts(&self) -> bool {
+        self.policy.allow_private_ip_hosts
+    }
+
     /// Approve `host` for the rest of the session (one-shot). Audit log gets
     /// `Prompt-Approved`.
     pub fn approve_session(&self, host: &str, tool: &str) {
@@ -497,6 +512,7 @@ mod tests {
             allow: allow.iter().map(|s| (*s).to_string()).collect(),
             deny: deny.iter().map(|s| (*s).to_string()).collect(),
             audit: false,
+            allow_private_ip_hosts: false,
         }
     }
 
