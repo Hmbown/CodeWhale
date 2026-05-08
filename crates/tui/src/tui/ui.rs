@@ -3522,13 +3522,27 @@ fn handle_composer_history_arrow(
         return false;
     }
 
+    // When the composer is empty, plain Up/Down scroll the transcript so
+    // terminals that map trackpad gestures to arrow keys can still scroll
+    // the history area.  When the composer has text, they navigate input
+    // history so the user can recall previous prompts.
+    let composer_empty = app.input.trim().is_empty();
+
     match key.code {
         KeyCode::Up => {
-            app.history_up();
+            if composer_empty {
+                app.scroll_up(1);
+            } else {
+                app.history_up();
+            }
             true
         }
         KeyCode::Down => {
-            app.history_down();
+            if composer_empty {
+                app.scroll_down(1);
+            } else {
+                app.history_down();
+            }
             true
         }
         _ => false,
@@ -5237,15 +5251,6 @@ async fn handle_plan_choice(
 ///   abort lands and gets resubmitted as a fresh merged turn.
 /// - `rejected_steers` — engine declined a mid-turn steer (scaffolding;
 ///   no engine path produces these yet but the bucket renders identically).
-/// Return true when the app has non-empty todo/checklist items to display.
-#[must_use]
-fn has_todos(app: &App) -> bool {
-    app.todos
-        .try_lock()
-        .map(|todos| !todos.snapshot().items.is_empty())
-        .unwrap_or(false)
-}
-
 /// - `queued_messages` — Enter while busy (offline-mode FIFO); drained at
 ///   end-of-turn.
 fn build_pending_input_preview(app: &App) -> PendingInputPreview {
@@ -5333,7 +5338,7 @@ fn render(f: &mut Frame, app: &mut App) {
     let pending_preview = build_pending_input_preview(app);
     let preview_height = pending_preview.desired_height(size.width);
 
-    let todos_banner_height = if has_todos(app) { 1 } else { 0 };
+    let todos_panel_height = super::sidebar::todos_panel_height(app);
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -5341,7 +5346,7 @@ fn render(f: &mut Frame, app: &mut App) {
             Constraint::Length(header_height),         // Header
             Constraint::Min(1),                        // Chat area
             Constraint::Length(preview_height),        // Pending input preview (0 if empty)
-            Constraint::Length(todos_banner_height),   // Todos banner (0 when empty)
+            Constraint::Length(todos_panel_height),     // Todos panel (0 when empty)
             Constraint::Length(composer_height),       // Composer
             Constraint::Length(footer_height),         // Footer
         ])
@@ -5461,9 +5466,9 @@ fn render(f: &mut Frame, app: &mut App) {
         pending_preview.render(chunks[2], buf);
     }
 
-    // Render todos banner above the composer
-    if todos_banner_height > 0 {
-        super::sidebar::render_todos_banner(f, chunks[3], app);
+    // Render todos panel above the composer
+    if todos_panel_height > 0 {
+        super::sidebar::render_todos_panel(f, chunks[3], app);
     }
 
     // Render composer
