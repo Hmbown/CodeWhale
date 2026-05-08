@@ -493,6 +493,7 @@ impl ToolRegistryBuilder {
     }
 
     /// Include DeepMap codebase analysis tools.
+    #[cfg(feature = "deepmap")]
     #[must_use]
     pub fn with_deepmap_tools(self) -> Self {
         use super::deepmap::{DeepMapCallChainTool, DeepMapFileDetailTool, DeepMapOverviewTool};

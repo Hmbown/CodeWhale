@@ -16,7 +16,9 @@ use deepseek_app_server::{
 use deepseek_config::{
     CliRuntimeOverrides, ConfigStore, ProviderKind, ResolvedRuntimeOptions, RuntimeApiKeySource,
 };
+#[cfg(feature = "deepmap")]
 use deepmap::engine::RepoMapEngine;
+#[cfg(feature = "deepmap")]
 use deepmap::renderer;
 use deepseek_execpolicy::{AskForApproval, ExecPolicyContext, ExecPolicyEngine};
 use deepseek_mcp::{McpServerDefinition, run_stdio_server};
@@ -193,15 +195,18 @@ The command prints the completion script to stdout; redirect it to a path your s
     /// Check for and apply updates to the `deepseek` binary.
     Update,
     /// Analyze a codebase with DeepMap (symbols, dependency graph, PageRank).
+    #[cfg(feature = "deepmap")]
     Deepmap(DeepmapArgs),
 }
 
+#[cfg(feature = "deepmap")]
 #[derive(Debug, Args)]
 struct DeepmapArgs {
     #[command(subcommand)]
     command: DeepmapCommand,
 }
 
+#[cfg(feature = "deepmap")]
 #[derive(Debug, Subcommand)]
 enum DeepmapCommand {
     /// Generate a project map overview (entry points, hotspots, reading order).
@@ -562,6 +567,7 @@ fn run() -> Result<()> {
         }
         Some(Commands::Metrics(args)) => run_metrics_command(args),
         Some(Commands::Update) => update::run_update(),
+        #[cfg(feature = "deepmap")]
         Some(Commands::Deepmap(ref args)) => run_deepmap_command(args),
         None => {
             let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
@@ -1600,6 +1606,7 @@ fn sibling_tui_candidate(dispatcher: &Path) -> Option<PathBuf> {
     None
 }
 
+#[cfg(feature = "deepmap")]
 fn run_deepmap_command(args: &DeepmapArgs) -> Result<()> {
     match &args.command {
         DeepmapCommand::Overview { project, max_files, max_chars } => {
@@ -1638,6 +1645,7 @@ fn run_deepmap_command(args: &DeepmapArgs) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "deepmap")]
 fn get_git_changed_files(project: &Path) -> Vec<String> {
     std::process::Command::new("git")
         .args(["status", "--porcelain"])

@@ -17,7 +17,7 @@ clap_complete.workspace = true
 deepseek-agent = { path = "../agent", version = "0.8.18" }
 deepseek-app-server = { path = "../app-server", version = "0.8.18" }
 deepseek-config = { path = "../config", version = "0.8.18" }
-deepmap = { path = "../deepmap", version = "0.8.18" }
+deepmap = { path = "../deepmap", version = "0.8.18", optional = true }
 deepseek-execpolicy = { path = "../execpolicy", version = "0.8.18" }
 deepseek-mcp = { path = "../mcp", version = "0.8.18" }
 deepseek-secrets = { path = "../secrets", version = "0.8.18" }
@@ -30,5 +30,8 @@ tokio.workspace = true
 sha2.workspace = true
 tempfile = "3.16"
 tracing.workspace = true
+
+[features]
+deepmap = ["dep:deepmap"]
 
 [dev-dependencies]

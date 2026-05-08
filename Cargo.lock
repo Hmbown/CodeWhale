@@ -1152,7 +1152,7 @@ dependencies = [
 
 [[package]]
 name = "deepmap"
-version = "0.8.15"
+version = "0.8.18"
 dependencies = [
  "chrono",
  "dirs",

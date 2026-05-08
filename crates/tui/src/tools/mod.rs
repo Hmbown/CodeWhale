@@ -4,6 +4,7 @@ pub mod apply_patch;
 pub mod approval_cache;
 pub mod arg_repair;
 pub mod automation;
+#[cfg(feature = "deepmap")]
 pub mod deepmap;
 pub mod diagnostics;
 pub mod diff_format;

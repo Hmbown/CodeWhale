@@ -31,8 +31,9 @@ standalone Python CLI tool, DeepMap lives inside the same process as the
 coding agent -- no subprocess, no serialization overhead, no separate
 deployment.
 
-Both repomap and DeepMap share a common origin story: they were built by a
-non-professional developer with the help of AI coding assistants. The entire
+Both repomap and DeepMap share a common origin story: they were built by
+@gjczone, a non-programmer, using DeepSeek-V4-Pro, with GLM-5.1 and
+MIMO-V2.5-Pro for cross-validation and review. The entire
 project is evidence that the tools we are building -- AI-native code assistants
 with repository awareness -- can also help their own creators build meaningful
 infrastructure. The dogfooding is not accidental; it is the point.
@@ -148,6 +149,88 @@ DeepMap uses a two-level caching strategy to make repeated calls fast:
 
 This design means that an agent working in a project for the first time pays
 the scan cost once, and subsequent sessions are nearly instant.
+
+## Public API Surface
+
+DeepMap exposes a focused public API through the `deepmap` crate. The following types and methods form the primary interface for both TUI tool integration and CLI command implementation.
+
+### `RepoMapEngine` -- Main Entry Point
+
+The central orchestrator that owns the scan pipeline, the graph data, and the analysis queries.
+
+| Method | Description |
+|--------|-------------|
+| `new(project_root)` | Create a new engine instance for the given project root path |
+| `get_or_scan(project_root, max_files, max_scan_secs)` | Constructor with session cache; returns cached engine if the project was already scanned in this process, otherwise runs a full scan |
+| `scan(max_files, max_scan_secs)` | Execute the full three-phase pipeline: file traversal, tree-sitter parsing, and PageRank ranking |
+| `query_symbol(name)` | Case-insensitive substring search over symbol names, returns ranked matches sorted by PageRank descending |
+| `call_chain(symbol_id, direction, max_depth)` | BFS traversal of the call graph; supports caller, callee, and bidirectional walks |
+| `hotspots(limit)` | Files ranked by `symbol_count * average_PageRank`, identifying the most maintenance-critical files |
+| `entry_points()` | Heuristic detection of well-known entry-point files by filename stem or path pattern |
+| `suggested_reading_order(limit)` | Files scored for onboarding priority, excluding test and noise files |
+| `module_summary(limit)` | Symbols grouped by top-level directory, sorted by total PageRank descending |
+| `is_scanned()` | Returns `true` if a scan has been completed |
+| `scan_summary_lines()` | Returns formatted summary lines describing scan duration, file counts, and symbol counts |
+
+### `TreeSitterAdapter` -- Multi-Language Parser
+
+Manages per-language tree-sitter parsers and compiled S-expression queries for 8 languages.
+
+| Method | Description |
+|--------|-------------|
+| `new()` | Initialize all 8 language parsers (Rust, Python, JavaScript, TypeScript, Go, HTML, CSS, JSON) |
+| `parse(content, lang)` | Parse source content with the appropriate language grammar |
+| `symbols()` | Extract all function, class, import, and call captures from parsed trees |
+| `imports()` | Extract import declarations with source module and imported names |
+| `calls()` | Extract call expressions with callee name and location |
+| `import_bindings()` (JS/TS only) | Structured import records for ES module and CommonJS imports |
+| `exports()` (JS/TS only) | Structured export records for ES module and CommonJS exports |
+
+### `ImportResolver` -- Import Resolution
+
+Resolves import statements to target files and builds the dependency edges between symbols.
+
+| Method | Description |
+|--------|-------------|
+| `new(project_root, graph)` | Create a resolver with project root and reference to the partially-built graph |
+| `resolve_import_targets(source_file, import_path)` | Resolve an import path to candidate target files using relative resolution, tsconfig aliases, and stem-based lookup |
+
+### Key Data Types
+
+- **`Symbol`** -- Carries `id` (`file:name:line` composite key), `name`, `kind` (function, class, struct, method, arrow_function, etc.), `file_path`, `line_range`, `column`, `visibility`, `docstring`, `signature`, and `pagerank_score`.
+- **`Edge`** -- A directed edge between two symbol IDs with a `weight` field (0.50 for calls, 0.35 for imports).
+- **`RepoGraph`** -- The complete graph container: `symbols`, `outgoing`, `incoming`, `file_symbols`, `file_imports`, `file_calls`, `file_import_bindings`, `file_exports`.
+- **`ScanStats`** -- Scan metadata: `files_found`, `files_parsed`, `files_failed`, `filtered_large_files`, `total_symbols`, `total_edges`, `scan_duration_ms`, `timeout_triggered`, `failed_files`.
+
+### Renderer Functions
+
+Six Markdown report generators in the `renderer` module:
+
+- `render_overview_report()` -- Full project map with entry points, hotspots, reading order, module summary, and key symbols
+- `render_call_chain_report()` -- Caller/callee chain for a symbol with depth grouping
+- `render_file_detail_report()` -- Per-file symbol table as a Markdown table
+- `render_query_report()` -- Topic search results with related test discovery
+- `render_impact_report()` -- Pre-edit impact analysis with transitive dependency listing
+- `render_diff_risk_report()` -- Full diff risk assessment with risk classification and verification suggestions
+
+## Failure Model
+
+DeepMap is designed to be resilient in the face of real-world codebases that are incomplete, misconfigured, or contain pathological files. The following contract describes how every failure mode is handled.
+
+| Scenario | Behavior |
+|----------|----------|
+| **No parser available for language** | File is silently skipped; scanning continues with other files. No error is raised. |
+| **File too large (>10 MiB)** | File is skipped and counted in `filtered_large_files`. |
+| **Excessive AST nesting (>1,000 depth)** | File is skipped as a safety guard against pathological or generated files. |
+| **Parse error / malformed source** | File is skipped; path and error message are recorded in `failed_files` (up to 5 entries). |
+| **Scan timeout (default 300s)** | Partial results are returned; `timeout_triggered` is set to `true` in `ScanStats`. |
+| **Empty project / no supported files** | Returns an empty `RepoGraph`; all reports remain valid but minimal. |
+| **Session cache miss** | A full scan runs automatically; results are cached for subsequent calls. |
+| **Symbol not found (query-symbol / call-chain)** | Returns empty results. This is normal behaviour, not an error. |
+| **Git operations unavailable (impact / diff-risk)** | Reports "not a git repository" clearly in the output; no crash. |
+| **LSP server not installed** | `lsp doctor` reports the server as skipped; `--with-lsp` on other commands degrades gracefully with a clear message. |
+
+In all cases, DeepMap never panics or crashes due to per-file processing failures. Errors are collected, logged, and surfaced through the `ScanStats` metadata or the report output, allowing the calling code to decide how to handle them.
 
 ## Architecture
 

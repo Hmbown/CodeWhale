@@ -26,8 +26,9 @@ DeepMap 是这项工作的自然演进。它将 repomap 中经过验证的核心
 repomap 是一个独立的 Python CLI 工具，那么 DeepMap 就活在 AI 编程助手的
 同一个进程里——没有子进程，没有序列化开销，不需要单独部署。
 
-repomap 和 DeepMap 共享同一个起源故事：它们都是由非专业开发者借助 AI
-编程助手构建的。整个项目本身就是一个证据：我们正在构建的、具备代码库
+repomap 和 DeepMap 共享同一个起源故事：它们都是由 @gjczone 构建的——
+一位非程序员，使用 DeepSeek-V4-Pro，由 GLM-5.1 和 MIMO-V2.5-Pro
+进行交叉验证和审查。整个项目本身就是一个证据：我们正在构建的、具备代码库
 感知能力的 AI 原生编程工具，也能帮助它们的创造者构建有意义的基础设施。
 "吃自己的狗粮"在这里不是偶然，而是重点。
 
@@ -124,6 +125,88 @@ DeepMap 使用两级缓存策略，使得重复调用非常快：
 
 这个设计意味着，AI 在某个项目中首次工作时只支付一次扫描成本，后续会话
 几乎是瞬时的。
+
+## 公开 API 面
+
+DeepMap 通过 `deepmap` crate 暴露了一套聚焦的公开 API。以下类型和方法构成了 TUI 工具集成和 CLI 命令实现的主要接口。
+
+### `RepoMapEngine` —— 主入口
+
+核心调度器，拥有扫描流水线、图数据和分析查询的全部所有权。
+
+| 方法 | 描述 |
+|------|------|
+| `new(project_root)` | 为指定的项目根路径创建新的引擎实例 |
+| `get_or_scan(project_root, max_files, max_scan_secs)` | 带会话缓存的构造函数；如果该项目已在本进程中扫描过，返回缓存的引擎，否则执行完整扫描 |
+| `scan(max_files, max_scan_secs)` | 执行完整的三阶段流水线：文件遍历、tree-sitter 解析和 PageRank 排名 |
+| `query_symbol(name)` | 符号名的不区分大小写的子串搜索，返回按 PageRank 降序排列的匹配结果 |
+| `call_chain(symbol_id, direction, max_depth)` | 调用图的 BFS 遍历；支持调用者、被调用者和双向遍历 |
+| `hotspots(limit)` | 按 `symbol_count * average_PageRank` 排序的文件，识别最需要维护的关键文件 |
+| `entry_points()` | 通过文件名干或路径模式启发式检测常见入口文件 |
+| `suggested_reading_order(limit)` | 按接手优先级评分的文件列表，排除测试和噪音文件 |
+| `module_summary(limit)` | 按顶层目录分组的符号，按总 PageRank 降序排列 |
+| `is_scanned()` | 返回 `true` 如果扫描已完成 |
+| `scan_summary_lines()` | 返回格式化的摘要文本，描述扫描时长、文件数量和符号数量 |
+
+### `TreeSitterAdapter` —— 多语言解析器
+
+管理 8 种语言的 tree-sitter 解析器和编译好的 S-expression 查询。
+
+| 方法 | 描述 |
+|------|------|
+| `new()` | 初始化所有 8 种语言解析器（Rust、Python、JavaScript、TypeScript、Go、HTML、CSS、JSON） |
+| `parse(content, lang)` | 使用相应的语言语法解析源代码内容 |
+| `symbols()` | 从解析树中提取所有函数、类、导入和调用的捕获结果 |
+| `imports()` | 提取导入声明，包含源模块和导入名称 |
+| `calls()` | 提取调用表达式，包含被调用者名称和位置 |
+| `import_bindings()`（仅 JS/TS）| ES 模块和 CommonJS 导入的结构化记录 |
+| `exports()`（仅 JS/TS）| ES 模块和 CommonJS 导出的结构化记录 |
+
+### `ImportResolver` —— 导入解析器
+
+将导入语句解析为目标文件，并构建符号之间的依赖边。
+
+| 方法 | 描述 |
+|------|------|
+| `new(project_root, graph)` | 使用项目根路径和图引用创建解析器 |
+| `resolve_import_targets(source_file, import_path)` | 使用相对路径解析、tsconfig 别名和文件名干查找将导入路径解析为候选目标文件 |
+
+### 关键数据类型
+
+- **`Symbol`** —— 包含 `id`（`file:name:line` 复合键）、`name`、`kind`（function、class、struct、method、arrow_function 等）、`file_path`、`line_range`、`column`、`visibility`、`docstring`、`signature` 和 `pagerank_score`。
+- **`Edge`** —— 两个符号 ID 之间的有向边，包含 `weight` 字段（调用为 0.50，导入为 0.35）。
+- **`RepoGraph`** —— 完整的图容器：`symbols`、`outgoing`、`incoming`、`file_symbols`、`file_imports`、`file_calls`、`file_import_bindings`、`file_exports`。
+- **`ScanStats`** —— 扫描元数据：`files_found`、`files_parsed`、`files_failed`、`filtered_large_files`、`total_symbols`、`total_edges`、`scan_duration_ms`、`timeout_triggered`、`failed_files`。
+
+### 渲染器函数
+
+`renderer` 模块中的六个 Markdown 报告生成器：
+
+- `render_overview_report()` —— 包含入口点、热点文件、阅读顺序、模块摘要和关键符号的完整项目地图
+- `render_call_chain_report()` —— 带深度分组的符号调用者/被调用者链
+- `render_file_detail_report()` —— 以 Markdown 表格展示的每个文件的符号表
+- `render_query_report()` —— 带相关测试发现的主题搜索结果
+- `render_impact_report()` —— 带传递依赖列表的编辑前影响分析
+- `render_diff_risk_report()` —— 带风险分类和验证建议的完整差异风险评估
+
+## 失败模型
+
+DeepMap 被设计为能够优雅地处理真实世界代码库中不完整、配置错误或包含病态文件的情况。以下契约描述了每种失败模式的处理方式。
+
+| 场景 | 行为 |
+|------|------|
+| **语言没有可用的解析器** | 文件被静默跳过；继续扫描其他文件。不抛出错误。 |
+| **文件过大（>10 MiB）** | 文件被跳过，计入 `filtered_large_files`。 |
+| **AST 嵌套过深（>1,000 层）** | 作为对病态或生成文件的安全防护，文件被跳过。 |
+| **解析错误 / 源码格式错误** | 文件被跳过；路径和错误信息记录在 `failed_files` 中（最多 5 条）。 |
+| **扫描超时（默认 300 秒）** | 返回部分结果；`ScanStats` 中的 `timeout_triggered` 设为 `true`。 |
+| **空项目 / 没有支持的文件** | 返回空的 `RepoGraph`；所有报告仍然有效但内容极少。 |
+| **会话缓存未命中** | 自动执行完整扫描；结果会被缓存供后续调用使用。 |
+| **符号未找到（query-symbol / call-chain）** | 返回空结果。这是正常行为，不是错误。 |
+| **Git 操作不可用（impact / diff-risk）** | 在输出中明确报告"不是 git 仓库"；不会崩溃。 |
+| **未安装 LSP 服务器** | `lsp doctor` 报告该服务器被跳过；其他命令中的 `--with-lsp` 优雅降级并给出明确提示。 |
+
+在所有情况下，DeepMap 绝不会因为单个文件的处理失败而 panic 或崩溃。错误被收集、记录，并通过 `ScanStats` 元数据或报告输出呈现，由调用方决定如何处理。
 
 ## 架构
 
