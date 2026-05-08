@@ -558,9 +558,8 @@ mod tests {
         state.start_text(0, None);
         state.push_content(0, "hello world");
 
-        assert_eq!(state.commit_text(0), "h");
-        assert_eq!(state.commit_text(0), "e");
-        assert!(state.has_pending_chunker_lines(0));
+        assert_eq!(state.commit_text(0), "hello world");
+        assert!(!state.has_pending_chunker_lines(0));
     }
 
     #[test]
@@ -569,15 +568,15 @@ mod tests {
         state.start_thinking(0, None);
         state.push_content(0, "thinking deeply");
 
-        assert_eq!(state.commit_text(0), "t");
-        assert_eq!(state.commit_text(0), "h");
-        assert!(state.has_pending_chunker_lines(0));
+        assert_eq!(state.commit_text(0), "thinking deeply");
+        assert!(!state.has_pending_chunker_lines(0));
     }
 
     #[test]
     fn finalize_preserves_uncommitted_micro_chunks() {
         let mut state = StreamingState::new();
         state.start_text(0, None);
+        state.set_low_motion(true);
         state.push_content(0, "abc");
         assert_eq!(state.commit_text(0), "a");
 

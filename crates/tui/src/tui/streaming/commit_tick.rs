@@ -2,8 +2,10 @@
 //!
 //! Bridges [`AdaptiveChunkingPolicy`] with a concrete [`StreamChunker`] queue.
 //! Callers feed raw text deltas via [`StreamChunker::push_delta`], then call
-//! [`run_commit_tick`] on every commit beat to obtain the next small text
-//! slice to flush to the transcript on this beat.
+//! [`run_commit_tick`] on every commit beat to obtain text to flush to the
+//! transcript on this beat. Normal motion drains all text received since the
+//! prior tick so the display follows the upstream delta cadence. Low-motion
+//! mode keeps the old one-grapheme drip to reduce visual churn.
 //!
 //! The chunker is the unit of streaming — one per active block (assistant /
 //! thinking). Tool output is unbuffered and bypasses this path.
@@ -20,8 +22,6 @@ use super::chunking::DrainPlan;
 use super::chunking::QueueSnapshot;
 
 const GRAPHEMES_PER_MICRO_CHUNK: usize = 1;
-const CATCH_UP_MAX_MICRO_CHUNKS: usize = 12;
-
 /// Buffers raw stream deltas and emits committed text in small display chunks.
 #[derive(Debug, Default)]
 pub struct StreamChunker {
@@ -152,8 +152,8 @@ pub fn run_commit_tick(
     }
 
     let max = match decision.drain_plan {
+        DrainPlan::Available => snapshot.queued_lines,
         DrainPlan::Single => 1,
-        DrainPlan::Batch(n) => n.min(CATCH_UP_MAX_MICRO_CHUNKS),
     };
 
     // Drain through the chunker; an empty queue under Smooth produces "".
@@ -204,35 +204,53 @@ mod tests {
 
         chunker.push_delta("hello world");
         let out = run_commit_tick(&mut policy, &mut chunker, now);
-        assert_eq!(out.committed_text, "h");
-        assert!(!chunker.is_idle(), "remaining prose should keep dripping");
+        assert_eq!(out.committed_text, "hello world");
+        assert!(
+            chunker.is_idle(),
+            "normal motion should preserve upstream pacing"
+        );
 
         let out = run_commit_tick(&mut policy, &mut chunker, now + Duration::from_millis(5));
+        assert_eq!(out.committed_text, "");
+    }
+
+    #[test]
+    fn low_motion_keeps_smooth_micro_chunk_pacing() {
+        let mut chunker = StreamChunker::new();
+        let mut policy = AdaptiveChunkingPolicy::new();
+        policy.set_low_motion(true);
+        let now = Instant::now();
+
+        chunker.push_delta("hello world");
+        let out = run_commit_tick(&mut policy, &mut chunker, now);
+        assert_eq!(out.committed_text, "h");
+        assert!(!chunker.is_idle(), "low motion should keep dripping");
+
+        let out = run_commit_tick(&mut policy, &mut chunker, now + Duration::from_millis(20));
         assert_eq!(out.committed_text, "e");
     }
 
     #[test]
-    fn smooth_burst_emits_one_micro_chunk_per_tick() {
+    fn normal_motion_burst_drains_available_backlog() {
         let mut chunker = StreamChunker::new();
         let mut policy = AdaptiveChunkingPolicy::new();
         let t0 = Instant::now();
 
         chunker.push_delta("abc");
-        // Each tick under Smooth pulls exactly one grapheme.
         let out1 = run_commit_tick(&mut policy, &mut chunker, t0);
         assert_eq!(out1.decision.mode, ChunkingMode::Smooth);
-        assert_eq!(out1.committed_text, "a");
+        assert_eq!(out1.committed_text, "abc");
+        assert!(out1.is_idle);
+
         let out2 = run_commit_tick(&mut policy, &mut chunker, t0 + Duration::from_millis(20));
-        assert_eq!(out2.committed_text, "b");
-        let out3 = run_commit_tick(&mut policy, &mut chunker, t0 + Duration::from_millis(40));
-        assert_eq!(out3.committed_text, "c");
-        assert!(out3.is_idle);
+        assert_eq!(out2.committed_text, "");
     }
 
     #[test]
-    fn smooth_stream_keeps_combining_marks_with_base_letter() {
+    fn low_motion_stream_keeps_combining_marks_with_base_letter() {
         let mut chunker = StreamChunker::new();
         let mut policy = AdaptiveChunkingPolicy::new();
+        policy.set_low_motion(true);
         let t0 = Instant::now();
 
         chunker.push_delta("e\u{301}x");
@@ -243,23 +261,20 @@ mod tests {
     }
 
     #[test]
-    fn large_burst_drains_in_catch_up_without_full_jump() {
-        // A large text burst arriving "at once" must trigger CatchUp on the first
-        // commit tick without dumping the full backlog in one jump.
+    fn large_burst_preserves_upstream_burst_in_normal_motion() {
+        // A large text burst arriving "at once" should be displayed at the
+        // same cadence instead of being synthetically dripped and then flushed
+        // at the end of the turn.
         let mut chunker = StreamChunker::new();
         let mut policy = AdaptiveChunkingPolicy::new();
         let now = Instant::now();
 
         let burst = "abcdefghijklmnopqrstuvwxyz".repeat(8);
-        let expected_prefix: String = burst
-            .chars()
-            .take(CATCH_UP_MAX_MICRO_CHUNKS * GRAPHEMES_PER_MICRO_CHUNK)
-            .collect();
         chunker.push_delta(&burst);
         let out = run_commit_tick(&mut policy, &mut chunker, now);
         assert_eq!(out.decision.mode, ChunkingMode::CatchUp);
-        assert_eq!(out.committed_text, expected_prefix);
-        assert!(!out.is_idle);
+        assert_eq!(out.committed_text, burst);
+        assert!(out.is_idle);
     }
 
     #[test]
