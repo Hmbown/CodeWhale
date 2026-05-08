@@ -92,6 +92,17 @@ pub struct ParsedMarkdown {
     blocks: Vec<Block>,
 }
 
+/// Width-dependent rendered line plus the source block kind that produced it.
+///
+/// Most callers only need styled terminal lines, but transcript rendering also
+/// needs to avoid adding its conversational continuation rail in front of code
+/// blocks. Keeping this metadata here avoids guessing from styled spans.
+#[derive(Debug, Clone)]
+pub struct RenderedMarkdownLine {
+    pub line: Line<'static>,
+    pub is_code: bool,
+}
+
 /// Parse markdown source into a width-independent block AST.
 ///
 /// This is a small line-oriented parser tuned for the patterns we render:
@@ -178,8 +189,21 @@ pub fn parse(content: &str) -> ParsedMarkdown {
 /// skip the parse step entirely.
 #[must_use]
 pub fn render_parsed(parsed: &ParsedMarkdown, width: u16, base_style: Style) -> Vec<Line<'static>> {
+    render_parsed_tagged(parsed, width, base_style)
+        .into_iter()
+        .map(|line| line.line)
+        .collect()
+}
+
+/// Render a parsed-markdown AST and preserve per-line source metadata.
+#[must_use]
+pub fn render_parsed_tagged(
+    parsed: &ParsedMarkdown,
+    width: u16,
+    base_style: Style,
+) -> Vec<RenderedMarkdownLine> {
     let width = width.max(1) as usize;
-    let mut out: Vec<Line<'static>> = Vec::with_capacity(parsed.blocks.len());
+    let mut out: Vec<RenderedMarkdownLine> = Vec::with_capacity(parsed.blocks.len());
 
     let mut i = 0;
     while i < parsed.blocks.len() {
@@ -196,11 +220,14 @@ pub fn render_parsed(parsed: &ParsedMarkdown, width: u16, base_style: Style) -> 
             {
                 i += 1;
             }
-            out.extend(render_table_group(
-                &parsed.blocks[start..i],
-                width,
-                base_style,
-            ));
+            out.extend(
+                render_table_group(&parsed.blocks[start..i], width, base_style)
+                    .into_iter()
+                    .map(|line| RenderedMarkdownLine {
+                        line,
+                        is_code: false,
+                    }),
+            );
             continue;
         }
 
@@ -209,44 +236,63 @@ pub fn render_parsed(parsed: &ParsedMarkdown, width: u16, base_style: Style) -> 
                 let style = Style::default()
                     .fg(palette::DEEPSEEK_SKY)
                     .add_modifier(Modifier::BOLD);
-                out.extend(render_wrapped_line(text, width, style, false));
+                out.extend(render_wrapped_line_tagged(text, width, style, false, false));
             }
             Block::HeadingRule => {
-                out.push(Line::from(Span::styled(
-                    "─".repeat(width.min(40)),
-                    Style::default().fg(palette::TEXT_DIM),
-                )));
+                out.push(RenderedMarkdownLine {
+                    line: Line::from(Span::styled(
+                        "─".repeat(width.min(40)),
+                        Style::default().fg(palette::TEXT_DIM),
+                    )),
+                    is_code: false,
+                });
             }
             Block::HorizontalRule => {
-                out.push(Line::from(Span::styled(
-                    "─".repeat(width.min(60)),
-                    Style::default().fg(palette::TEXT_DIM),
-                )));
+                out.push(RenderedMarkdownLine {
+                    line: Line::from(Span::styled(
+                        "─".repeat(width.min(60)),
+                        Style::default().fg(palette::TEXT_DIM),
+                    )),
+                    is_code: false,
+                });
             }
             Block::ListItem { bullet, text } => {
                 let bullet_style = Style::default().fg(palette::DEEPSEEK_SKY);
-                out.extend(render_list_line(
-                    bullet,
-                    text,
-                    width,
-                    bullet_style,
-                    base_style,
-                ));
+                out.extend(
+                    render_list_line(bullet, text, width, bullet_style, base_style)
+                        .into_iter()
+                        .map(|line| RenderedMarkdownLine {
+                            line,
+                            is_code: false,
+                        }),
+                );
             }
             Block::Code { line } => {
                 let code_style = Style::default()
                     .fg(palette::DEEPSEEK_SKY)
                     .add_modifier(Modifier::ITALIC);
-                out.extend(render_wrapped_line(line, width, code_style, true));
+                out.extend(render_wrapped_line_tagged(
+                    line, width, code_style, true, true,
+                ));
             }
             Block::Paragraph { text } => {
                 let link_style = Style::default()
                     .fg(palette::DEEPSEEK_BLUE)
                     .add_modifier(Modifier::UNDERLINED);
-                out.extend(render_line_with_links(text, width, base_style, link_style));
+                out.extend(
+                    render_line_with_links(text, width, base_style, link_style)
+                        .into_iter()
+                        .map(|line| RenderedMarkdownLine {
+                            line,
+                            is_code: false,
+                        }),
+                );
             }
             Block::Blank => {
-                out.push(Line::from(""));
+                out.push(RenderedMarkdownLine {
+                    line: Line::from(""),
+                    is_code: false,
+                });
             }
             Block::TableRow(_) | Block::TableSeparator => unreachable!(),
         }
@@ -254,7 +300,10 @@ pub fn render_parsed(parsed: &ParsedMarkdown, width: u16, base_style: Style) -> 
     }
 
     if out.is_empty() {
-        out.push(Line::from(""));
+        out.push(RenderedMarkdownLine {
+            line: Line::from(""),
+            is_code: false,
+        });
     }
 
     out
@@ -269,6 +318,17 @@ pub fn render_parsed(parsed: &ParsedMarkdown, width: u16, base_style: Style) -> 
 pub fn render_markdown(content: &str, width: u16, base_style: Style) -> Vec<Line<'static>> {
     let parsed = parse(content);
     render_parsed(&parsed, width, base_style)
+}
+
+/// Convenience wrapper: parse + render while keeping per-line source metadata.
+#[must_use]
+pub fn render_markdown_tagged(
+    content: &str,
+    width: u16,
+    base_style: Style,
+) -> Vec<RenderedMarkdownLine> {
+    let parsed = parse(content);
+    render_parsed_tagged(&parsed, width, base_style)
 }
 
 fn parse_heading(line: &str) -> Option<(usize, &str)> {
@@ -305,12 +365,13 @@ fn parse_list_item(line: &str) -> Option<(String, &str)> {
     Some((format!("{}.", &trimmed[..idx]), rest.trim_start()))
 }
 
-fn render_wrapped_line(
+fn render_wrapped_line_tagged(
     line: &str,
     width: usize,
     style: Style,
     indent_code: bool,
-) -> Vec<Line<'static>> {
+    is_code: bool,
+) -> Vec<RenderedMarkdownLine> {
     let prefix = if indent_code { "  " } else { "" };
     let prefix_width = prefix.width();
     let available = width.saturating_sub(prefix_width).max(1);
@@ -324,17 +385,15 @@ fn render_wrapped_line(
     let mut out = Vec::new();
 
     for (idx, chunk) in wrapped.into_iter().enumerate() {
-        if idx == 0 {
-            out.push(Line::from(vec![
-                Span::raw(prefix),
-                Span::styled(chunk, style),
-            ]));
+        let line = if idx == 0 {
+            Line::from(vec![Span::raw(prefix), Span::styled(chunk, style)])
         } else {
-            out.push(Line::from(vec![
+            Line::from(vec![
                 Span::raw(" ".repeat(prefix_width)),
                 Span::styled(chunk, style),
-            ]));
-        }
+            ])
+        };
+        out.push(RenderedMarkdownLine { line, is_code });
     }
 
     out

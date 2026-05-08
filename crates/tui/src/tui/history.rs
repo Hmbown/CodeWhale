@@ -2144,8 +2144,9 @@ fn render_message(
     let prefix_width_u16 = u16::try_from(prefix_width.saturating_add(2)).unwrap_or(u16::MAX);
     let content_width = usize::from(width.saturating_sub(prefix_width_u16).max(1));
     let mut lines = Vec::new();
-    let rendered = markdown_render::render_markdown(content, content_width as u16, body_style);
-    for (idx, line) in rendered.into_iter().enumerate() {
+    let rendered =
+        markdown_render::render_markdown_tagged(content, content_width as u16, body_style);
+    for (idx, rendered_line) in rendered.into_iter().enumerate() {
         if idx == 0 {
             let mut spans = Vec::new();
             if !prefix.is_empty() {
@@ -2155,11 +2156,13 @@ fn render_message(
                 ));
                 spans.push(Span::raw(" "));
             }
-            spans.extend(line.spans);
+            spans.extend(rendered_line.line.spans);
             lines.push(Line::from(spans));
         } else {
             let indent = if prefix.is_empty() {
                 String::new()
+            } else if rendered_line.is_code {
+                " ".repeat(prefix_width + 1)
             } else {
                 let mut s = String::with_capacity(prefix_width + 1);
                 s.push('\u{258F}');
@@ -2168,7 +2171,7 @@ fn render_message(
             };
             let rail_style = Style::default().fg(palette::TEXT_DIM);
             let mut spans = vec![Span::styled(indent, rail_style)];
-            spans.extend(line.spans);
+            spans.extend(rendered_line.line.spans);
             lines.push(Line::from(spans));
         }
     }
@@ -3646,6 +3649,35 @@ mod tests {
             "assistant label dropped: {visible:?}"
         );
         assert!(visible.contains("ready"));
+    }
+
+    #[test]
+    fn assistant_code_block_lines_do_not_get_transcript_rail() {
+        let cell = HistoryCell::Assistant {
+            content: "SQL:\n```sql\nSELECT\nFROM customers\n```".to_string(),
+            streaming: false,
+        };
+        let visible: Vec<String> = cell
+            .lines(80)
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect();
+
+        assert_eq!(visible[0], format!("{ASSISTANT_GLYPH} SQL:"));
+        for line in visible
+            .iter()
+            .filter(|line| line.contains("SELECT") || line.contains("FROM customers"))
+        {
+            assert!(
+                !line.contains('\u{258F}'),
+                "code block line should not inherit the transcript rail: {line:?}"
+            );
+        }
     }
 
     #[test]
