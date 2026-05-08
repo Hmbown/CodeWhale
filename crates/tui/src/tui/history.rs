@@ -31,9 +31,13 @@ const TOOL_RUNNING_SYMBOLS: [&str; 4] = ["·", "◦", "•", "◦"];
 // ~2.88 s — fast enough that the user sees motion within a few hundred ms of
 // starting a tool, slow enough to read as a pulse rather than a strobe.
 const TOOL_STATUS_SYMBOL_MS: u64 = 720;
-/// Visual marker for the user role at the start of their message line. Solid
-/// vertical bar — no animation; user input is a finished thing.
-const USER_GLYPH: &str = "\u{258E}"; // ▎
+/// Visual marker for the user role at the start of their message line. Wider
+/// half block — no animation; user input is a finished thing.
+const USER_GLYPH: &str = "\u{258C}"; // ▌
+/// User-message continuation rail. Matches the wider user glyph so multi-line
+/// prompts read larger than reasoning/tool rails in terminal constraints.
+const USER_RAIL: &str = "\u{258C} "; // ▌ + space
+const USER_PROMPT_ACCENT_RGB: Color = Color::Rgb(112, 0, 0);
 /// Visual marker for the assistant role. Solid bullet that pulses at 2s
 /// cycle while the response is streaming, holds full brightness when idle.
 const ASSISTANT_GLYPH: &str = "\u{25CF}"; // ●
@@ -178,13 +182,7 @@ impl HistoryCell {
     /// `transcript_lines`.
     pub fn lines(&self, width: u16) -> Vec<Line<'static>> {
         match self {
-            HistoryCell::User { content } => render_message(
-                USER_GLYPH,
-                user_label_style(),
-                user_body_style(),
-                content,
-                width,
-            ),
+            HistoryCell::User { content } => render_user_message(content, width),
             HistoryCell::Assistant { content, streaming } => render_message(
                 ASSISTANT_GLYPH,
                 assistant_label_style_for(*streaming, /*low_motion*/ false),
@@ -265,13 +263,7 @@ impl HistoryCell {
                 lines
             }
             HistoryCell::Tool(cell) => cell.lines_with_motion(width, options.low_motion),
-            HistoryCell::User { content } => render_message(
-                USER_GLYPH,
-                user_label_style(),
-                user_body_style(),
-                content,
-                width,
-            ),
+            HistoryCell::User { content } => render_user_message(content, width),
             HistoryCell::Assistant { content, streaming } => render_message(
                 ASSISTANT_GLYPH,
                 assistant_label_style_for(*streaming, options.low_motion),
@@ -297,13 +289,7 @@ impl HistoryCell {
     /// diverge.
     pub fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
         match self {
-            HistoryCell::User { content } => render_message(
-                USER_GLYPH,
-                user_label_style(),
-                user_body_style(),
-                content,
-                width,
-            ),
+            HistoryCell::User { content } => render_user_message(content, width),
             HistoryCell::Assistant { content, streaming } => render_message(
                 ASSISTANT_GLYPH,
                 // Pager / clipboard surface — pin the glyph at full
@@ -2140,6 +2126,38 @@ fn render_message(
     content: &str,
     width: u16,
 ) -> Vec<Line<'static>> {
+    render_message_with_rail(
+        prefix,
+        label_style,
+        body_style,
+        Style::default().fg(palette::TEXT_DIM),
+        None,
+        content,
+        width,
+    )
+}
+
+fn render_user_message(content: &str, width: u16) -> Vec<Line<'static>> {
+    render_message_with_rail(
+        USER_GLYPH,
+        user_label_style(),
+        user_body_style(),
+        Style::default().fg(user_prompt_accent(cached_color_depth())),
+        Some(USER_RAIL),
+        content,
+        width,
+    )
+}
+
+fn render_message_with_rail(
+    prefix: &str,
+    label_style: Style,
+    body_style: Style,
+    rail_style: Style,
+    rail_prefix: Option<&str>,
+    content: &str,
+    width: u16,
+) -> Vec<Line<'static>> {
     let prefix_width = UnicodeWidthStr::width(prefix);
     let prefix_width_u16 = u16::try_from(prefix_width.saturating_add(2)).unwrap_or(u16::MAX);
     let content_width = usize::from(width.saturating_sub(prefix_width_u16).max(1));
@@ -2158,15 +2176,19 @@ fn render_message(
             spans.extend(line.spans);
             lines.push(Line::from(spans));
         } else {
-            let indent = if prefix.is_empty() {
-                String::new()
-            } else {
-                let mut s = String::with_capacity(prefix_width + 1);
-                s.push('\u{258F}');
-                s.extend(std::iter::repeat_n(' ', prefix_width));
-                s
-            };
-            let rail_style = Style::default().fg(palette::TEXT_DIM);
+            let indent = rail_prefix.map_or_else(
+                || {
+                    if prefix.is_empty() {
+                        String::new()
+                    } else {
+                        let mut s = String::with_capacity(prefix_width + 1);
+                        s.push('\u{258F}');
+                        s.extend(std::iter::repeat_n(' ', prefix_width));
+                        s
+                    }
+                },
+                str::to_string,
+            );
             let mut spans = vec![Span::styled(indent, rail_style)];
             spans.extend(line.spans);
             lines.push(Line::from(spans));
@@ -2635,11 +2657,17 @@ fn truncate_text(text: &str, max_len: usize) -> String {
 }
 
 fn user_label_style() -> Style {
-    Style::default().fg(palette::TEXT_MUTED)
+    Style::default().fg(user_prompt_accent(cached_color_depth()))
 }
 
 fn user_body_style() -> Style {
-    Style::default().fg(palette::USER_BODY)
+    let style = Style::default()
+        .fg(user_prompt_accent(cached_color_depth()))
+        .add_modifier(Modifier::BOLD);
+    match user_surface_tint(cached_color_depth()) {
+        Some(bg) => style.bg(bg),
+        None => style,
+    }
 }
 
 /// Style for the assistant glyph (`●`). When the cell is streaming and
@@ -2709,6 +2737,20 @@ fn error_body_style(severity: crate::error_taxonomy::ErrorSeverity) -> Style {
 
 fn thinking_style() -> Style {
     Style::default().fg(palette::TEXT_REASONING)
+}
+
+fn user_surface_tint(depth: palette::ColorDepth) -> Option<Color> {
+    match depth {
+        palette::ColorDepth::Ansi16 => None,
+        _ => Some(palette::adapt_bg(
+            palette::blend(USER_PROMPT_ACCENT_RGB, palette::DEEPSEEK_INK, 0.18),
+            depth,
+        )),
+    }
+}
+
+fn user_prompt_accent(depth: palette::ColorDepth) -> Color {
+    palette::adapt_color(USER_PROMPT_ACCENT_RGB, depth)
 }
 
 fn render_tool_header(
@@ -3078,8 +3120,9 @@ mod tests {
         ASSISTANT_GLYPH, ExecCell, ExecSource, GenericToolCell, HistoryCell, PlanStep,
         PlanUpdateCell, REASONING_CURSOR, REASONING_OPENER, REASONING_RAIL, TOOL_RUNNING_SYMBOLS,
         TOOL_STATUS_SYMBOL_MS, ToolCell, ToolStatus, TranscriptRenderOptions, USER_GLYPH,
-        assistant_label_style_for, extract_reasoning_summary, render_thinking,
-        running_status_label_with_elapsed,
+        USER_PROMPT_ACCENT_RGB, USER_RAIL, assistant_label_style_for, cached_color_depth,
+        extract_reasoning_summary, render_thinking, running_status_label_with_elapsed,
+        user_prompt_accent,
     };
     use crate::deepseek_theme::Theme;
     use crate::models::{ContentBlock, Message};
@@ -3617,6 +3660,15 @@ mod tests {
         let lines = cell.lines(80);
         let head = &lines[0];
         assert_eq!(head.spans[0].content.as_ref(), USER_GLYPH);
+        let expected_accent = user_prompt_accent(cached_color_depth());
+        assert_eq!(head.spans[0].style.fg, Some(expected_accent));
+        let body = head
+            .spans
+            .iter()
+            .find(|span| span.content.as_ref() == "hello")
+            .expect("user body span rendered");
+        assert_eq!(body.style.fg, Some(expected_accent));
+        assert!(body.style.add_modifier.contains(Modifier::BOLD));
         // No "You" literal anywhere in the rendered head line.
         let visible: String = head
             .spans
@@ -3625,6 +3677,30 @@ mod tests {
             .collect::<String>();
         assert!(!visible.contains("You"), "user label dropped: {visible:?}");
         assert!(visible.contains("hello"));
+    }
+
+    #[test]
+    fn user_continuation_rail_uses_user_accent() {
+        let cell = HistoryCell::User {
+            content: "hello\nsecond line".to_string(),
+        };
+        let lines = cell.lines(80);
+
+        assert!(lines.len() >= 2, "expected a continuation line");
+        assert_eq!(lines[1].spans[0].content.as_ref(), USER_RAIL);
+        assert_eq!(
+            lines[1].spans[0].style.fg,
+            Some(user_prompt_accent(cached_color_depth())),
+            "user continuation rail should keep the prompt visually grouped"
+        );
+    }
+
+    #[test]
+    fn user_prompt_accent_keeps_requested_rgb_on_truecolor() {
+        assert_eq!(
+            user_prompt_accent(palette::ColorDepth::TrueColor),
+            USER_PROMPT_ACCENT_RGB
+        );
     }
 
     #[test]
