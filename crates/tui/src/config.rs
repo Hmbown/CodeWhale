@@ -2279,6 +2279,24 @@ fn normalize_model_for_provider(provider: ApiProvider, model: &str) -> Option<St
     normalize_model_name(model).map(|normalized| model_for_provider(provider, normalized))
 }
 
+/// Normalize a user-entered model name for the active provider.
+///
+/// DeepSeek-family hosted providers accept the same short user-facing aliases
+/// (`deepseek-v4-pro`, `deepseek-v4-flash`) but send provider-specific IDs on
+/// the wire. Generic OpenAI-compatible and Ollama providers intentionally pass
+/// model IDs through so custom deployments can use their native names.
+#[must_use]
+pub fn normalize_model_name_for_provider(provider: ApiProvider, model: &str) -> Option<String> {
+    let trimmed = model.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if provider_passes_model_through(provider) {
+        return Some(trimmed.to_string());
+    }
+    normalize_model_for_provider(provider, trimmed)
+}
+
 fn provider_passes_model_through(provider: ApiProvider) -> bool {
     matches!(provider, ApiProvider::Openai | ApiProvider::Ollama)
 }

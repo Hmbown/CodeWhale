@@ -4630,8 +4630,34 @@ async fn apply_command_result(
             }
             AppAction::OpenModelPicker => {
                 if app.view_stack.top_kind() != Some(ModalKind::ModelPicker) {
-                    app.view_stack
-                        .push(crate::tui::model_picker::ModelPickerView::new(app));
+                    app.status_message =
+                        Some(format!("Fetching {} models...", app.api_provider.as_str()));
+                    let picker = match fetch_available_models(config).await {
+                        Ok(models) if !models.is_empty() => {
+                            let count = models.len();
+                            app.status_message = Some(format!("Found {count} model(s)"));
+                            crate::tui::model_picker::ModelPickerView::new_with_models(app, models)
+                        }
+                        Ok(_) => {
+                            app.status_message = Some(format!(
+                                "{} returned no models; showing defaults",
+                                app.api_provider.as_str()
+                            ));
+                            crate::tui::model_picker::ModelPickerView::new(app)
+                        }
+                        Err(error) => {
+                            app.add_message(HistoryCell::System {
+                                content: format!(
+                                    "Failed to fetch {} models: {error}. Showing built-in defaults.",
+                                    app.api_provider.as_str()
+                                ),
+                            });
+                            app.status_message =
+                                Some("Model fetch failed; showing defaults".to_string());
+                            crate::tui::model_picker::ModelPickerView::new(app)
+                        }
+                    };
+                    app.view_stack.push(picker);
                 }
             }
             AppAction::OpenProviderPicker => {

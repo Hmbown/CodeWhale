@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **`/model` uses the active provider's model catalog** - opening the picker now
+  fetches live model IDs from the configured provider, falls back to
+  provider-specific defaults when discovery fails, maps short DeepSeek IDs to
+  provider-specific IDs for `/model <id>`, and sizes the picker columns to keep
+  long provider model names and thinking-effort labels readable.
+
 ## [0.8.20] - 2026-05-08
 
 ### Fixed

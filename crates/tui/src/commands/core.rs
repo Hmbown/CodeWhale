@@ -2,7 +2,7 @@
 
 use std::fmt::Write;
 
-use crate::config::{COMMON_DEEPSEEK_MODELS, normalize_model_name};
+use crate::config::{COMMON_DEEPSEEK_MODELS, normalize_model_name_for_provider};
 use crate::localization::{MessageId, tr};
 use crate::tui::app::{App, AppAction, AppMode, ReasoningEffort};
 use crate::tui::views::{HelpView, ModalKind, SubAgentsView, subagent_view_agents};
@@ -119,7 +119,7 @@ pub fn model(app: &mut App, model_name: Option<&str>) -> CommandResult {
                 AppAction::UpdateCompaction(app.compaction_config()),
             );
         }
-        let Some(model_id) = normalize_model_name(name) else {
+        let Some(model_id) = normalize_model_name_for_provider(app.api_provider, name) else {
             return CommandResult::error(format!(
                 "Invalid model '{name}'. Expected auto or a DeepSeek model ID. Common models: {}",
                 COMMON_DEEPSEEK_MODELS.join(", ")
@@ -341,6 +341,8 @@ mod tests {
         let mut app = App::new(options, &Config::default());
         app.ui_locale = crate::localization::Locale::En;
         app.api_provider = crate::config::ApiProvider::Deepseek;
+        app.model = "deepseek-v4-pro".to_string();
+        app.auto_model = false;
         app
     }
 
@@ -558,6 +560,22 @@ mod tests {
             result.action,
             Some(AppAction::UpdateCompaction(_))
         ));
+    }
+
+    #[test]
+    fn model_change_maps_short_id_for_nvidia_nim() {
+        let mut app = create_test_app();
+        app.api_provider = crate::config::ApiProvider::NvidiaNim;
+
+        let result = model(&mut app, Some("deepseek-v4-flash"));
+
+        assert!(
+            result
+                .message
+                .unwrap()
+                .contains("deepseek-ai/deepseek-v4-flash")
+        );
+        assert_eq!(app.model, "deepseek-ai/deepseek-v4-flash");
     }
 
     #[test]

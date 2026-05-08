@@ -1,4 +1,4 @@
-//! `/model` picker modal: pick a DeepSeek model and a thinking-effort tier
+//! `/model` picker modal: pick a provider-specific model and a thinking-effort tier
 //! and apply both at once (#39).
 //!
 //! Two side-by-side panes — Models on the left, Thinking effort on the
@@ -26,18 +26,144 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Widget},
 };
+use std::collections::HashSet;
+use unicode_width::UnicodeWidthStr;
 
+use crate::config::{
+    ApiProvider, DEFAULT_FIREWORKS_MODEL, DEFAULT_NOVITA_FLASH_MODEL, DEFAULT_NOVITA_MODEL,
+    DEFAULT_NVIDIA_NIM_FLASH_MODEL, DEFAULT_NVIDIA_NIM_MODEL, DEFAULT_OLLAMA_MODEL,
+    DEFAULT_OPENAI_MODEL, DEFAULT_OPENROUTER_FLASH_MODEL, DEFAULT_OPENROUTER_MODEL,
+    DEFAULT_SGLANG_FLASH_MODEL, DEFAULT_SGLANG_MODEL, DEFAULT_TEXT_MODEL, DEFAULT_VLLM_FLASH_MODEL,
+    DEFAULT_VLLM_MODEL,
+};
 use crate::palette;
 use crate::tui::app::{App, ReasoningEffort};
 use crate::tui::views::{ModalKind, ModalView, ViewAction, ViewEvent};
 
-/// Models the picker exposes by default. Kept short on purpose — power
-/// users can still type `/model <id>` for anything else.
-const PICKER_MODELS: &[(&str, &str)] = &[
-    ("auto", "select per turn"),
-    ("deepseek-v4-pro", "flagship"),
-    ("deepseek-v4-flash", "fast / cheap"),
-];
+/// Built-in fallback rows for providers that cannot return a live catalog.
+fn picker_models_for_provider(provider: ApiProvider) -> Vec<(String, String)> {
+    let mut rows = vec![("auto".to_string(), String::new())];
+    let provider_rows: &[&str] = match provider {
+        ApiProvider::Deepseek | ApiProvider::DeepseekCN => {
+            &[DEFAULT_TEXT_MODEL, "deepseek-v4-flash"]
+        }
+        ApiProvider::NvidiaNim => &[DEFAULT_NVIDIA_NIM_MODEL, DEFAULT_NVIDIA_NIM_FLASH_MODEL],
+        ApiProvider::Openai => &[DEFAULT_OPENAI_MODEL],
+        ApiProvider::Openrouter => &[DEFAULT_OPENROUTER_MODEL, DEFAULT_OPENROUTER_FLASH_MODEL],
+        ApiProvider::Novita => &[DEFAULT_NOVITA_MODEL, DEFAULT_NOVITA_FLASH_MODEL],
+        ApiProvider::Fireworks => &[
+            DEFAULT_FIREWORKS_MODEL,
+            "accounts/fireworks/models/deepseek-v4-flash",
+        ],
+        ApiProvider::Sglang => &[DEFAULT_SGLANG_MODEL, DEFAULT_SGLANG_FLASH_MODEL],
+        ApiProvider::Vllm => &[DEFAULT_VLLM_MODEL, DEFAULT_VLLM_FLASH_MODEL],
+        ApiProvider::Ollama => &[DEFAULT_OLLAMA_MODEL],
+    };
+    rows.extend(
+        provider_rows
+            .iter()
+            .map(|id| ((*id).to_string(), String::new())),
+    );
+    rows
+}
+
+fn picker_rows_from_model_ids(model_ids: Vec<String>) -> Vec<(String, String)> {
+    let mut rows = Vec::with_capacity(model_ids.len() + 1);
+    let mut seen = HashSet::new();
+
+    push_model_row(&mut rows, &mut seen, "auto", "");
+    for model_id in model_ids {
+        let id = model_id.trim();
+        if id.is_empty() {
+            continue;
+        }
+        push_model_row(&mut rows, &mut seen, id, "");
+    }
+
+    rows
+}
+
+fn push_model_row(
+    rows: &mut Vec<(String, String)>,
+    seen: &mut HashSet<String>,
+    id: &str,
+    hint: &str,
+) {
+    let key = if id.eq_ignore_ascii_case("auto") {
+        "auto".to_string()
+    } else {
+        id.to_string()
+    };
+    if seen.insert(key) {
+        rows.push((id.to_string(), hint.to_string()));
+    }
+}
+
+fn effort_rows() -> Vec<(String, String)> {
+    PICKER_EFFORTS
+        .iter()
+        .map(|effort| {
+            let label = effort.short_label().to_string();
+            let hint = match effort {
+                ReasoningEffort::Auto => "auto-select".to_string(),
+                ReasoningEffort::Off => "thinking disabled".to_string(),
+                ReasoningEffort::High => "thinking enabled".to_string(),
+                ReasoningEffort::Max => "max effort".to_string(),
+                _ => String::new(),
+            };
+            (label, hint)
+        })
+        .collect()
+}
+
+fn row_display_width(label: &str, hint: &str) -> usize {
+    // Rendered as: " ▸ {label}  ({hint})"; unselected rows reserve the same
+    // marker width, so focused/unfocused rows need the same pane size.
+    let base = 3 + UnicodeWidthStr::width(label);
+    if hint.is_empty() {
+        base
+    } else {
+        base + 4 + UnicodeWidthStr::width(hint)
+    }
+}
+
+fn pane_required_width(title: &str, rows: &[(String, String)]) -> u16 {
+    let title_width = UnicodeWidthStr::width(title) + 2;
+    let row_width = rows
+        .iter()
+        .map(|(label, hint)| row_display_width(label, hint))
+        .max()
+        .unwrap_or(0);
+    saturating_usize_to_u16(title_width.max(row_width) + 2)
+}
+
+fn picker_layout_widths(
+    available_width: u16,
+    model_title: &str,
+    model_rows: &[(String, String)],
+    effort_rows: &[(String, String)],
+) -> (u16, u16, u16) {
+    let model_width = pane_required_width(model_title, model_rows);
+    let effort_width = pane_required_width("Thinking", effort_rows).saturating_add(1);
+    let desired_inner_width = model_width.saturating_add(effort_width);
+    let popup_width = desired_inner_width
+        .saturating_add(2)
+        .min(available_width)
+        .max(1);
+    let inner_width = popup_width.saturating_sub(2);
+
+    if inner_width >= desired_inner_width {
+        return (popup_width, model_width, effort_width);
+    }
+
+    let effort_width = effort_width.min(inner_width.saturating_sub(1));
+    let model_width = inner_width.saturating_sub(effort_width);
+    (popup_width, model_width, effort_width)
+}
+
+fn saturating_usize_to_u16(value: usize) -> u16 {
+    value.min(u16::MAX as usize) as u16
+}
 
 /// Thinking-effort rows shown in the picker, in the order DeepSeek
 /// behaviorally distinguishes them.
@@ -57,6 +183,7 @@ enum Pane {
 pub struct ModelPickerView {
     initial_model: String,
     initial_effort: ReasoningEffort,
+    model_rows: Vec<(String, String)>,
     /// Working selection (separate from the initial values so we can offer a
     /// clean Esc-to-cancel without mutating App state).
     selected_model_idx: usize,
@@ -70,18 +197,25 @@ pub struct ModelPickerView {
 impl ModelPickerView {
     #[must_use]
     pub fn new(app: &App) -> Self {
+        Self::new_with_rows(app, picker_models_for_provider(app.api_provider))
+    }
+
+    #[must_use]
+    pub fn new_with_models(app: &App, model_ids: Vec<String>) -> Self {
+        Self::new_with_rows(app, picker_rows_from_model_ids(model_ids))
+    }
+
+    fn new_with_rows(app: &App, model_rows: Vec<(String, String)>) -> Self {
         let initial_model = if app.auto_model {
             "auto".to_string()
         } else {
             app.model.clone()
         };
-        let mut selected_model_idx = PICKER_MODELS
-            .iter()
-            .position(|(id, _)| *id == initial_model);
+        let mut selected_model_idx = model_rows.iter().position(|(id, _)| *id == initial_model);
         let show_custom_model_row = selected_model_idx.is_none();
         if show_custom_model_row {
             // Custom row sits at the end; precompute its index.
-            selected_model_idx = Some(PICKER_MODELS.len());
+            selected_model_idx = Some(model_rows.len());
         }
         let selected_model_idx = selected_model_idx.unwrap_or(0);
 
@@ -99,6 +233,7 @@ impl ModelPickerView {
         Self {
             initial_model,
             initial_effort,
+            model_rows,
             selected_model_idx,
             selected_effort_idx,
             focus: Pane::Model,
@@ -107,17 +242,17 @@ impl ModelPickerView {
     }
 
     fn model_row_count(&self) -> usize {
-        PICKER_MODELS.len() + if self.show_custom_model_row { 1 } else { 0 }
+        self.model_rows.len() + if self.show_custom_model_row { 1 } else { 0 }
     }
 
     /// Resolve the currently highlighted model row to a model id. If the
     /// custom row is selected we return the original model from the App so
     /// "Apply" doesn't blow away an unrecognised id.
     fn resolved_model(&self) -> String {
-        if self.show_custom_model_row && self.selected_model_idx == PICKER_MODELS.len() {
+        if self.show_custom_model_row && self.selected_model_idx == self.model_rows.len() {
             self.initial_model.clone()
         } else {
-            PICKER_MODELS[self.selected_model_idx].0.to_string()
+            self.model_rows[self.selected_model_idx].0.clone()
         }
     }
 
@@ -201,8 +336,17 @@ impl ModelPickerView {
         let inner = block.inner(area);
         block.render(area, buf);
 
-        let mut lines = Vec::with_capacity(rows.len());
-        for (idx, (label, hint)) in rows.iter().enumerate() {
+        let visible_capacity = inner.height as usize;
+        let start = if visible_capacity == 0 || selected < visible_capacity {
+            0
+        } else {
+            selected + 1 - visible_capacity
+        };
+        let end = rows.len().min(start + visible_capacity);
+
+        let mut lines = Vec::with_capacity(end.saturating_sub(start));
+        for (offset, (label, hint)) in rows[start..end].iter().enumerate() {
+            let idx = start + offset;
             let is_selected = idx == selected;
             let marker = if is_selected { "▸" } else { " " };
             let label_style = if is_selected {
@@ -266,8 +410,20 @@ impl ModalView for ModelPickerView {
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        let popup_width = 64.min(area.width.saturating_sub(4)).max(40);
-        let popup_height = 14.min(area.height.saturating_sub(4)).max(10);
+        let available_width = area.width.saturating_sub(4).max(1);
+        let mut model_rows = self.model_rows.clone();
+        if self.show_custom_model_row {
+            model_rows.push((self.initial_model.clone(), "current (custom)".to_string()));
+        }
+        let model_title = format!("Model ({})", self.model_row_count());
+        let effort_rows = effort_rows();
+        let (popup_width, model_width, effort_width) =
+            picker_layout_widths(available_width, &model_title, &model_rows, &effort_rows);
+        let desired_rows = self.model_row_count().max(PICKER_EFFORTS.len()) as u16;
+        let popup_height = desired_rows
+            .saturating_add(4)
+            .min(area.height.saturating_sub(4))
+            .max(10);
         let popup_area = Rect {
             x: area.x + (area.width.saturating_sub(popup_width)) / 2,
             y: area.y + (area.height.saturating_sub(popup_height)) / 2,
@@ -303,39 +459,21 @@ impl ModalView for ModelPickerView {
 
         let columns = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+            .constraints([
+                Constraint::Length(model_width),
+                Constraint::Length(effort_width),
+            ])
             .split(inner);
 
-        let mut model_rows: Vec<(String, String)> = PICKER_MODELS
-            .iter()
-            .map(|(id, hint)| ((*id).to_string(), (*hint).to_string()))
-            .collect();
-        if self.show_custom_model_row {
-            model_rows.push((self.initial_model.clone(), "current (custom)".to_string()));
-        }
         self.render_pane(
             columns[0],
             buf,
-            "Model",
+            &model_title,
             model_rows,
             self.selected_model_idx,
             self.focus == Pane::Model,
         );
 
-        let effort_rows: Vec<(String, String)> = PICKER_EFFORTS
-            .iter()
-            .map(|effort| {
-                let label = effort.short_label().to_string();
-                let hint = match effort {
-                    ReasoningEffort::Auto => "auto-select per turn".to_string(),
-                    ReasoningEffort::Off => "thinking disabled".to_string(),
-                    ReasoningEffort::High => "thinking enabled (default)".to_string(),
-                    ReasoningEffort::Max => "thinking enabled, max effort".to_string(),
-                    _ => String::new(),
-                };
-                (label, hint)
-            })
-            .collect();
         self.render_pane(
             columns[1],
             buf,
@@ -442,7 +580,8 @@ mod tests {
 
     #[test]
     fn picker_exposes_auto_and_distinct_thinking_tiers() {
-        let model_labels: Vec<_> = PICKER_MODELS.iter().map(|(id, _)| *id).collect();
+        let deepseek_rows = picker_models_for_provider(crate::config::ApiProvider::Deepseek);
+        let model_labels: Vec<_> = deepseek_rows.iter().map(|(id, _)| id.as_str()).collect();
         assert_eq!(
             model_labels,
             vec!["auto", "deepseek-v4-pro", "deepseek-v4-flash"]
@@ -462,6 +601,90 @@ mod tests {
         let view = ModelPickerView::new(&app);
         assert!(view.show_custom_model_row);
         assert_eq!(view.resolved_model(), "deepseek-v4-pro-2026-04-XX");
+    }
+
+    #[test]
+    fn picker_uses_nvidia_nim_model_ids_for_nvidia_provider() {
+        let mut app = create_test_app();
+        app.api_provider = crate::config::ApiProvider::NvidiaNim;
+        app.model = "deepseek-ai/deepseek-v4-flash".to_string();
+
+        let view = ModelPickerView::new(&app);
+        let model_labels: Vec<_> = view.model_rows.iter().map(|(id, _)| id.as_str()).collect();
+
+        assert_eq!(
+            model_labels,
+            vec![
+                "auto",
+                "deepseek-ai/deepseek-v4-pro",
+                "deepseek-ai/deepseek-v4-flash"
+            ]
+        );
+        assert!(!view.show_custom_model_row);
+        assert_eq!(view.resolved_model(), "deepseek-ai/deepseek-v4-flash");
+    }
+
+    #[test]
+    fn picker_uses_live_provider_model_ids_when_supplied() {
+        let mut app = create_test_app();
+        app.api_provider = crate::config::ApiProvider::NvidiaNim;
+        app.model = "meta/llama-3.1-405b-instruct".to_string();
+
+        let view = ModelPickerView::new_with_models(
+            &app,
+            vec![
+                "deepseek-ai/deepseek-v4-pro".to_string(),
+                "meta/llama-3.1-405b-instruct".to_string(),
+                "nv-mistralai/mistral-nemo-12b-instruct".to_string(),
+            ],
+        );
+        let model_labels: Vec<_> = view.model_rows.iter().map(|(id, _)| id.as_str()).collect();
+
+        assert_eq!(
+            model_labels,
+            vec![
+                "auto",
+                "deepseek-ai/deepseek-v4-pro",
+                "meta/llama-3.1-405b-instruct",
+                "nv-mistralai/mistral-nemo-12b-instruct"
+            ]
+        );
+        assert!(!view.show_custom_model_row);
+        assert_eq!(view.resolved_model(), "meta/llama-3.1-405b-instruct");
+    }
+
+    #[test]
+    fn picker_widths_follow_longest_model_and_effort_text() {
+        let model_rows = vec![
+            ("auto".to_string(), String::new()),
+            ("short".to_string(), String::new()),
+            (
+                "provider/family/very-long-model-name".to_string(),
+                String::new(),
+            ),
+        ];
+        let efforts = effort_rows();
+        let (popup_width, model_width, effort_width) =
+            picker_layout_widths(200, "Model (3)", &model_rows, &efforts);
+
+        assert_eq!(model_width, pane_required_width("Model (3)", &model_rows));
+        assert_eq!(effort_width, pane_required_width("Thinking", &efforts) + 1);
+        assert_eq!(popup_width, model_width + effort_width + 2);
+        assert!(effort_width as usize >= row_display_width("high", "thinking enabled") + 3);
+    }
+
+    #[test]
+    fn picker_widths_keep_effort_readable_when_terminal_is_narrow() {
+        let model_rows = vec![(
+            "provider/family/very-long-model-name".to_string(),
+            String::new(),
+        )];
+        let efforts = effort_rows();
+        let (_popup_width, model_width, effort_width) =
+            picker_layout_widths(60, "Model (1)", &model_rows, &efforts);
+
+        assert!(model_width > 0);
+        assert_eq!(effort_width, pane_required_width("Thinking", &efforts) + 1);
     }
 
     #[test]
