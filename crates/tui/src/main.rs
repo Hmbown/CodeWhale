@@ -263,8 +263,9 @@ enum Commands {
 
 #[derive(Args, Debug, Clone)]
 struct ExecArgs {
-    /// Prompt to send to the model
-    prompt: String,
+    /// Prompt to send to the model (multi-word prompts are accepted without quoting)
+    #[arg(trailing_var_arg = true, num_args = 1..)]
+    prompt: Vec<String>,
     /// Override model for this run
     #[arg(long)]
     model: Option<String>,
@@ -662,10 +663,11 @@ async fn main() -> Result<()> {
                         |value| value.clamp(1, MAX_SUBAGENTS),
                     );
                     let auto_mode = args.auto || cli.yolo;
+                    let prompt = args.prompt.join(" ");
                     run_exec_agent(
                         &config,
                         &model,
-                        &args.prompt,
+                        &prompt,
                         workspace,
                         max_subagents,
                         true,
@@ -674,9 +676,9 @@ async fn main() -> Result<()> {
                     )
                     .await
                 } else if args.json {
-                    run_one_shot_json(&config, &model, &args.prompt).await
+                    run_one_shot_json(&config, &model, &args.prompt.join(" ")).await
                 } else {
-                    run_one_shot(&config, &model, &args.prompt).await
+                    run_one_shot(&config, &model, &args.prompt.join(" ")).await
                 }
             }
             Commands::Review(args) => {
