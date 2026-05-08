@@ -334,35 +334,13 @@ fn spacer_rows_between(
 }
 
 fn tool_group_rail(
-    cells: &[CachedCell],
-    cell_index: usize,
-    line_in_cell: usize,
-    rendered_line_count: usize,
+    _cells: &[CachedCell],
+    _cell_index: usize,
+    _line_in_cell: usize,
+    _rendered_line_count: usize,
 ) -> Option<crate::tui::widgets::tool_card::CardRail> {
-    let cached = cells.get(cell_index)?;
-    if !cached.is_tool_groupable || rendered_line_count == 0 {
-        return None;
-    }
-
-    let previous_is_tool = cell_index
-        .checked_sub(1)
-        .and_then(|idx| cells.get(idx))
-        .is_some_and(|cell| cell.is_tool_groupable && !cell.is_empty);
-    let next_is_tool = cells
-        .get(cell_index + 1)
-        .is_some_and(|cell| cell.is_tool_groupable && !cell.is_empty);
-    let first_line_in_group = !previous_is_tool && line_in_cell == 0;
-    let last_line_in_group = !next_is_tool && line_in_cell + 1 == rendered_line_count;
-
-    let rail = match (first_line_in_group, last_line_in_group) {
-        (true, true) if rendered_line_count == 1 => {
-            crate::tui::widgets::tool_card::CardRail::Single
-        }
-        (true, _) => crate::tui::widgets::tool_card::CardRail::Top,
-        (_, true) => crate::tui::widgets::tool_card::CardRail::Bottom,
-        _ => crate::tui::widgets::tool_card::CardRail::Middle,
-    };
-    Some(rail)
+    // Claude Code style: no box-drawing rails. Tool output uses 2-space indent.
+    None
 }
 
 fn line_with_group_rail(

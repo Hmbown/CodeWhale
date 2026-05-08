@@ -609,19 +609,29 @@ impl Renderable for ComposerWidget<'_> {
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(border_color))
                 .style(background);
-            // Vim mode indicator — shown in the top-right corner of the
-            // composer border when vim editing is active.
+            // Vim mode indicator + token estimate in top-right corner.
+            let mut top_right_spans: Vec<Span> = Vec::new();
             if self.app.composer.vim_enabled {
                 let color = match self.app.composer.vim_mode {
                     VimMode::Normal => palette::TEXT_MUTED,
                     VimMode::Insert => palette::DEEPSEEK_SKY,
                     VimMode::Visual => palette::MODE_PLAN,
                 };
-                let label = self.app.composer.vim_mode.label();
-                block = block.title_top(
-                    Line::from(Span::styled(label, Style::default().fg(color).bold()))
-                        .right_aligned(),
-                );
+                top_right_spans.push(Span::styled(
+                    self.app.composer.vim_mode.label().to_string(),
+                    Style::default().fg(color).bold(),
+                ));
+            }
+            if !input_text.trim().is_empty() {
+                let token_est = (input_text.chars().count() as f64 / 3.5).ceil().max(1.0) as u32;
+                if !top_right_spans.is_empty() { top_right_spans.push(Span::raw("  ")); }
+                top_right_spans.push(Span::styled(
+                    format!("~{token_est} tok"),
+                    Style::default().fg(palette::TEXT_HINT),
+                ));
+            }
+            if !top_right_spans.is_empty() {
+                block = block.title_top(Line::from(top_right_spans).right_aligned());
             }
             if let Some(hint_line) = hint_line {
                 block = block.title_bottom(hint_line);
@@ -1859,6 +1869,27 @@ fn build_empty_state_lines(app: &App, area: Rect) -> Vec<Line<'static>> {
         Line::from(Span::styled(
             format!("{inset}{workspace_name}  ·  {}", app.model),
             Style::default().fg(palette::TEXT_MUTED),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("{inset}Describe what you want to build or fix."),
+            Style::default().fg(palette::TEXT_SOFT),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::raw(inset.clone()),
+            Span::styled("  /init", Style::default().fg(palette::DEEPSEEK_BLUE).bold()),
+            Span::styled("   analyze project", Style::default().fg(palette::TEXT_MUTED)),
+        ]),
+        Line::from(vec![
+            Span::raw(inset.clone()),
+            Span::styled("  /help", Style::default().fg(palette::DEEPSEEK_BLUE).bold()),
+            Span::styled("   see all commands", Style::default().fg(palette::TEXT_MUTED)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("{inset}Ctrl+P palette   ·   Alt+Enter newline"),
+            Style::default().fg(palette::TEXT_HINT),
         )),
     ];
 

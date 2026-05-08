@@ -191,6 +191,7 @@ fn selection_to_text_copies_rendered_transcript_block() {
             content: "copy thinking".to_string(),
             streaming: false,
             duration_secs: Some(1.0),
+            expanded: false,
         },
         HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
             name: "exec_shell".to_string(),
@@ -704,6 +705,10 @@ fn saved_session_with_messages(messages: Vec<Message>) -> SavedSession {
             model: "deepseek-v4-pro".to_string(),
             workspace: PathBuf::from("/tmp/resume-recovery"),
             mode: Some("yolo".to_string()),
+            session_cost_usd: 0.0,
+            session_cost_cny: 0.0,
+            subagent_cost_usd: 0.0,
+            subagent_cost_cny: 0.0,
         },
         messages,
         system_prompt: None,
@@ -3969,14 +3974,29 @@ fn history_arrow_handles_empty_input() {
     let mut app = create_test_app();
     app.input_history.push("previous prompt".to_string());
 
+    // Empty composer: Up scrolls the transcript, not navigates history.
     assert!(handle_composer_history_arrow(
         &mut app,
         KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
         false,
         false,
     ));
+    assert!(app.viewport.pending_scroll_delta < 0, "empty composer Up should scroll up");
+    assert!(app.input.is_empty(), "input should stay empty, not load history");
+    assert_eq!(app.viewport.pending_scroll_delta, -1);
+}
 
-    assert_eq!(app.input, "previous prompt");
+#[test]
+fn history_arrow_handles_empty_input_down() {
+    let mut app = create_test_app();
+    // Empty composer: Down scrolls the transcript.
+    assert!(handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+        false,
+        false,
+    ));
+    assert_eq!(app.viewport.pending_scroll_delta, 1, "empty composer Down should scroll down");
 }
 
 #[test]
@@ -3986,14 +4006,15 @@ fn history_arrow_handles_whitespace_input() {
     app.cursor_position = app.input.chars().count();
     app.input_history.push("previous prompt".to_string());
 
+    // Whitespace-only composer: Up scrolls transcript.
     assert!(handle_composer_history_arrow(
         &mut app,
         KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
         false,
         false,
     ));
-
-    assert_eq!(app.input, "previous prompt");
+    assert_eq!(app.viewport.pending_scroll_delta, -1);
+    assert_eq!(app.input, "   ", "whitespace-only input should stay unchanged");
 }
 
 #[test]
@@ -4003,6 +4024,7 @@ fn history_arrow_handles_nonempty_input() {
     app.cursor_position = app.input.chars().count();
     app.input_history.push("previous prompt".to_string());
 
+    // Non-empty composer: Up navigates input history.
     assert!(handle_composer_history_arrow(
         &mut app,
         KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),

@@ -82,7 +82,7 @@ impl ToolSpec for RunTestsTool {
             args.extend(split);
         }
 
-        let command_str = format_command(&context.workspace, &args);
+        let command_str = format_command(&args);
         let output = run_cargo(&context.workspace, &args)?;
 
         let exit_code = output.status.code().unwrap_or(-1);
@@ -117,10 +117,9 @@ fn run_cargo(workspace: &Path, args: &[String]) -> Result<std::process::Output, 
     })
 }
 
-fn format_command(workspace: &Path, args: &[String]) -> String {
+fn format_command(args: &[String]) -> String {
     format!(
-        "(cd {} && cargo {})",
-        workspace.display(),
+        "cargo {}",
         args.iter()
             .map(String::as_str)
             .collect::<Vec<_>>()

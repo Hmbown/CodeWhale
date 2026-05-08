@@ -1610,7 +1610,7 @@ impl ToolSpec for ExecShellTool {
     }
 
     fn description(&self) -> &'static str {
-        "Execute a shell command in the workspace directory. Foreground mode is for bounded commands; use background=true or task_shell_start for long-running work, then poll/wait."
+        "Execute a shell command in the workspace directory (commands already run in the workspace — do NOT prefix with `cd` or `cd <dir> &&`). Foreground mode is for bounded commands; use background=true or task_shell_start for long-running work, then poll/wait."
     }
 
     fn input_schema(&self) -> serde_json::Value {
@@ -1619,7 +1619,7 @@ impl ToolSpec for ExecShellTool {
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": "The shell command to execute"
+                    "description": "The shell command to execute (runs in workspace dir — no cd prefix needed)"
                 },
                 "timeout_ms": {
                     "type": "integer",

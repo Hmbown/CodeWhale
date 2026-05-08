@@ -1899,6 +1899,8 @@ impl RuntimeThreadManager {
             todos: new_shared_todo_list(),
             plan_state: new_shared_plan_state(),
             max_spawn_depth: crate::tools::subagent::DEFAULT_MAX_SPAWN_DEPTH,
+            soft_max_subagents: self.config.soft_max_subagents(),
+            auto_scale: self.config.auto_scale(),
             network_policy,
             snapshots_enabled: self.config.snapshots_config().enabled,
             lsp_config,

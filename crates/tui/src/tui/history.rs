@@ -31,19 +31,12 @@ const TOOL_RUNNING_SYMBOLS: [&str; 4] = ["·", "◦", "•", "◦"];
 // ~2.88 s — fast enough that the user sees motion within a few hundred ms of
 // starting a tool, slow enough to read as a pulse rather than a strobe.
 const TOOL_STATUS_SYMBOL_MS: u64 = 720;
-/// Visual marker for the user role at the start of their message line. Solid
-/// vertical bar — no animation; user input is a finished thing.
-const USER_GLYPH: &str = "\u{258E}"; // ▎
-/// Visual marker for the assistant role. Solid bullet that pulses at 2s
-/// cycle while the response is streaming, holds full brightness when idle.
-const ASSISTANT_GLYPH: &str = "\u{25CF}"; // ●
-/// Transcript body left rail. Solid 1/8 block (`▏`) followed by a space —
-/// used as a visual left-margin anchor for continuation lines, tool-card
-/// detail rows, and affordance lines. Dimmed so it guides the eye without
-/// competing with content.
-const TRANSCRIPT_RAIL: &str = "\u{258F} "; // ▏ + space
-/// Reasoning header opener. Replaces the spinner glyph on thinking cells —
-/// reasoning is a slow exhale, not a tool spin.
+/// Visual marker for the user role. `❯` — Claude Code style.
+const USER_GLYPH: &str = "\u{276F}"; // ❯
+/// Visual marker for the assistant role. `⏺` — Claude Code style. Pulses
+/// at 2s cycle while streaming, holds full brightness when idle.
+const ASSISTANT_GLYPH: &str = "\u{23FA}"; // ⏺
+/// Reasoning header opener — a slow exhale, not a tool spin.
 const REASONING_OPENER: &str = "\u{2026}"; // …
 /// Reasoning body left rail. Dashed (`╎`) instead of the solid `▏` block to
 /// visually separate reasoning from message body and tool output.
@@ -57,16 +50,13 @@ const TOOL_DONE_SYMBOL: &str = "•";
 const TOOL_FAILED_SYMBOL: &str = "•";
 
 /// Render mode controlling whether tool/thinking cells render their compact
-/// "live" form (with caps and collapsed reasoning) or their full transcript
-/// form (uncapped, suitable for the pager / clipboard / message export).
+/// "live" form or their expanded/full form.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenderMode {
-    /// Live in-stream view: thinking is collapsed to a summary, tool output is
-    /// truncated with a "Alt+V for details" affordance.
     Live,
-    /// Full transcript view: every line of reasoning and tool output is
-    /// emitted, no caps, no affordance.
     Transcript,
+    #[allow(dead_code)]
+    Expanded,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,6 +92,7 @@ pub enum HistoryCell {
         content: String,
         streaming: bool,
         duration_secs: Option<f32>,
+        expanded: bool,
     },
     /// An `<archived_context>` seam block produced by the Flash seam manager
     /// (issue #159). Rendered dimmed/italic with a level + range label so
@@ -216,7 +207,8 @@ impl HistoryCell {
                 content,
                 streaming,
                 duration_secs,
-            } => render_thinking(content, width, *streaming, *duration_secs, false, false),
+                ..
+            } => render_thinking(content, width, *streaming, *duration_secs, false, false, false),
             HistoryCell::Tool(cell) => cell.lines_with_motion(width, false),
             HistoryCell::SubAgent(cell) => cell.lines(width),
             HistoryCell::ArchivedContext { .. } => render_archived_context(self, width, false),
@@ -234,12 +226,15 @@ impl HistoryCell {
                 content,
                 streaming,
                 duration_secs,
+                expanded,
+                ..
             } => render_thinking(
                 content,
                 width,
                 *streaming,
                 *duration_secs,
-                !*streaming,
+                !*streaming && !*expanded,
+                *expanded,
                 options.low_motion,
             ),
             HistoryCell::Tool(cell) if !options.show_tool_details => {
@@ -318,12 +313,14 @@ impl HistoryCell {
                 content,
                 streaming,
                 duration_secs,
+                ..
             } => render_thinking(
                 content,
                 width,
                 *streaming,
                 *duration_secs,
                 /*collapsed*/ false,
+                /*expanded*/ true,
                 /*low_motion*/ false,
             ),
             HistoryCell::Tool(cell) => cell.transcript_lines(width),
@@ -484,7 +481,7 @@ fn render_archived_context(
     for (idx, line) in rendered.into_iter().enumerate() {
         if idx == 0 {
             let mut spans = vec![Span::styled(
-                TRANSCRIPT_RAIL.to_string(),
+                "  ".to_string(),
                 Style::default().fg(palette::TEXT_DIM),
             )];
             spans.extend(line.spans);
@@ -568,6 +565,7 @@ pub fn history_cells_from_message(msg: &Message) -> Vec<HistoryCell> {
                         content: thinking.clone(),
                         streaming: false,
                         duration_secs: None,
+                        expanded: false,
                     });
                 }
             }
@@ -1616,7 +1614,7 @@ fn render_checklist_change_card(
     let (marker, marker_color) = checklist_status_marker(&change.status);
     let prefix = format!("{marker} ");
     let prefix_width =
-        UnicodeWidthStr::width(TRANSCRIPT_RAIL) + UnicodeWidthStr::width(prefix.as_str());
+        2 + UnicodeWidthStr::width(prefix.as_str());
     let id_label = format!("Todo #{}", change.id);
     let arrow = " \u{2192} ";
     let status_label = change.status.clone();
@@ -1700,7 +1698,7 @@ fn render_checklist_card(
 
     let cap = match mode {
         RenderMode::Live => CHECKLIST_LIVE_ITEM_LIMIT,
-        RenderMode::Transcript => snapshot.items.len(),
+        RenderMode::Expanded | RenderMode::Transcript => snapshot.items.len(),
     };
     let visible: Vec<&ChecklistItemSnapshot> = snapshot.items.iter().take(cap).collect();
     let omitted = snapshot.items.len().saturating_sub(visible.len());
@@ -1710,7 +1708,7 @@ fn render_checklist_card(
         let prefix = format!("{marker} ");
         // Reserve room for the rail + marker prefix when wrapping content.
         let prefix_width =
-            UnicodeWidthStr::width(TRANSCRIPT_RAIL) + UnicodeWidthStr::width(prefix.as_str());
+            2 + UnicodeWidthStr::width(prefix.as_str());
         let content_width = usize::from(width).saturating_sub(prefix_width).max(1);
         for (idx, part) in wrap_text(item.content.trim(), content_width)
             .into_iter()
@@ -2045,6 +2043,7 @@ fn render_thinking(
     streaming: bool,
     duration_secs: Option<f32>,
     collapsed: bool,
+    expanded: bool,
     low_motion: bool,
 ) -> Vec<Line<'static>> {
     let state = thinking_visual_state(streaming, duration_secs);
@@ -2124,7 +2123,16 @@ fn render_thinking(
         lines.push(Line::from(vec![
             Span::styled(REASONING_RAIL.to_string(), rail_style),
             Span::styled(
-                "thinking collapsed; press Ctrl+O for full text",
+                "thinking collapsed — Enter to expand, Ctrl+O for pager",
+                Style::default().fg(palette::TEXT_MUTED).italic(),
+            ),
+        ]));
+    }
+    if expanded && !streaming && !collapsed && !content.trim().is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled(REASONING_RAIL.to_string(), rail_style),
+            Span::styled(
+                "Enter to collapse",
                 Style::default().fg(palette::TEXT_MUTED).italic(),
             ),
         ]));
@@ -2185,7 +2193,7 @@ fn render_command_mode(command: &str, width: u16, mode: RenderMode) -> Vec<Line<
     let mut lines = Vec::new();
     let cap = match mode {
         RenderMode::Live => TOOL_COMMAND_LINE_LIMIT,
-        RenderMode::Transcript => usize::MAX,
+        RenderMode::Expanded | RenderMode::Transcript => usize::MAX,
     };
     for (count, chunk) in wrap_text(command, width.saturating_sub(4).max(1) as usize)
         .into_iter()
@@ -2618,7 +2626,7 @@ fn status_symbol(started_at: Option<Instant>, status: ToolStatus, low_motion: bo
 fn details_affordance_line(text: &str, style: Style) -> Line<'static> {
     Line::from(vec![
         Span::styled(
-            TRANSCRIPT_RAIL.to_string(),
+            "  ".to_string(),
             Style::default().fg(palette::TEXT_DIM),
         ),
         Span::styled(text.to_string(), style),
@@ -2833,7 +2841,7 @@ fn render_card_detail_line(
     width: u16,
 ) -> Vec<Line<'static>> {
     let label_text = label.map(|text| format!("{text}:"));
-    let prefix_width = UnicodeWidthStr::width(TRANSCRIPT_RAIL)
+    let prefix_width = 2
         + label_text.as_deref().map_or(0, UnicodeWidthStr::width)
         + usize::from(label.is_some());
     let content_width = usize::from(width).saturating_sub(prefix_width).max(1);
@@ -2841,7 +2849,7 @@ fn render_card_detail_line(
     let mut lines = Vec::new();
     for (idx, part) in wrap_text(value, content_width).into_iter().enumerate() {
         let mut spans = vec![Span::styled(
-            TRANSCRIPT_RAIL.to_string(),
+            "  ".to_string(),
             Style::default().fg(palette::TEXT_DIM),
         )];
         if idx == 0 {
@@ -2870,7 +2878,7 @@ fn render_card_detail_line_single(
 ) -> Line<'static> {
     let label_text = label.map(|text| format!("{text}:"));
     let mut spans = vec![Span::styled(
-        TRANSCRIPT_RAIL.to_string(),
+        "  ".to_string(),
         Style::default().fg(palette::TEXT_DIM),
     )];
     if let Some(label_text) = label_text {
@@ -3559,13 +3567,14 @@ mod tests {
             false,
             Some(2.0),
             true,
+            /*expanded*/ false,
             false,
         );
         let text = lines
             .iter()
             .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
             .collect::<String>();
-        assert!(text.contains("thinking collapsed; press Ctrl+O for full text"));
+        assert!(text.contains("thinking collapsed — Enter to expand, Ctrl+O for pager"));
         assert!(text.contains("thinking"));
     }
 
@@ -3831,7 +3840,7 @@ mod tests {
 
     #[test]
     fn render_thinking_uses_dotted_opener_in_header() {
-        let lines = render_thinking("Step one\nStep two", 80, false, Some(2.0), false, true);
+        let lines = render_thinking("Step one\nStep two", 80, false, Some(2.0), false, /*expanded*/ false, true);
         let header = &lines[0];
         // First span carries `…` followed by a space.
         assert!(
@@ -3849,6 +3858,7 @@ mod tests {
             /*streaming*/ false,
             Some(1.0),
             /*collapsed*/ false,
+            /*expanded*/ false,
             /*low_motion*/ true,
         );
         // Header is index 0; first body line is index 1.
@@ -3876,6 +3886,7 @@ mod tests {
             /*streaming*/ true,
             None,
             /*collapsed*/ false,
+            /*expanded*/ false,
             /*low_motion*/ false,
         );
         // Last line is the most recent body line — cursor lives there.
@@ -3896,6 +3907,7 @@ mod tests {
             /*streaming*/ true,
             None,
             /*collapsed*/ false,
+            /*expanded*/ false,
             /*low_motion*/ true,
         );
         let last = lines.last().expect("body line present");
@@ -4087,6 +4099,7 @@ mod tests {
             content: body.to_string(),
             streaming: false,
             duration_secs: Some(3.2),
+            expanded: false,
         };
 
         let live = cell.lines_with_options(
@@ -4125,11 +4138,11 @@ mod tests {
             "live thinking must drop the tail when collapsed"
         );
         assert!(
-            live_text.contains("press Ctrl+O for full text"),
+            live_text.contains("Enter to expand"),
             "live thinking must offer the pager affordance"
         );
         assert!(
-            !transcript_text.contains("press Ctrl+O for full text"),
+            !transcript_text.contains("Enter to expand"),
             "transcript thinking must not include the live affordance"
         );
     }
@@ -4142,6 +4155,7 @@ mod tests {
             content: "One brief reasoning step.".to_string(),
             streaming: false,
             duration_secs: Some(0.4),
+            expanded: false,
         };
 
         let live = cell.lines_with_options(
@@ -4161,7 +4175,7 @@ mod tests {
             "short thinking must render identically on both surfaces"
         );
         assert!(
-            !live_text.contains("press Ctrl+O for full text"),
+            !live_text.contains("Enter to expand"),
             "short thinking must not show the collapse affordance"
         );
     }

@@ -26,16 +26,18 @@ pub fn render_diff(diff: &str, width: u16) -> Vec<Line<'static>> {
         lines.extend(render_diff_summary(&summaries, width));
     }
 
+    let mut current_file: Option<String> = None;
     for raw in diff.lines() {
-        if raw.starts_with("diff --git") || raw.starts_with("index ") {
-            lines.extend(render_header_line(raw, width));
+        if raw.starts_with("diff --git ") {
+            let path = parse_diff_git_path(raw).unwrap_or_else(|| "<file>".to_string());
+            if current_file.as_deref() != Some(&path) {
+                current_file = Some(path.clone());
+                lines.extend(render_file_header(&path, width));
+            }
             continue;
         }
-
-        if raw.starts_with("--- ") || raw.starts_with("+++ ") {
-            lines.extend(render_header_line(raw, width));
-            continue;
-        }
+        if raw.starts_with("index ") { continue; }
+        if raw.starts_with("--- ") || raw.starts_with("+++ ") { continue; }
 
         if raw.starts_with("@@") {
             if let Some((old_start, new_start)) = parse_hunk_header(raw) {
@@ -216,6 +218,18 @@ fn parse_diff_git_path(line: &str) -> Option<String> {
     let _old = parts.next()?;
     let new = parts.next()?;
     Some(new.trim_start_matches("b/").to_string())
+}
+
+fn render_file_header(path: &str, width: u16) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    lines.push(Line::from(""));
+    let bar = "\u{2500}".repeat(width.saturating_sub(path.width() as u16 + 4).max(1) as usize);
+    lines.push(Line::from(vec![
+        Span::styled("── ", Style::default().fg(palette::TEXT_DIM)),
+        Span::styled(path.to_string(), Style::default().fg(palette::DEEPSEEK_SKY).add_modifier(Modifier::BOLD)),
+        Span::styled(format!(" {bar}"), Style::default().fg(palette::TEXT_DIM)),
+    ]));
+    lines
 }
 
 fn render_diff_summary(summaries: &[DiffFileSummary], width: u16) -> Vec<Line<'static>> {
