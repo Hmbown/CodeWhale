@@ -618,8 +618,8 @@ mod tests {
     fn package_version_is_current_hotfix_release() {
         assert_eq!(
             env!("CARGO_PKG_VERSION"),
-            "0.8.20",
-            "0.8.20 release branch must report the release version before publishing"
+            "0.8.21",
+            "0.8.21 release branch must report the release version before publishing"
         );
     }
 

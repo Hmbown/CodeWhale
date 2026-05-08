@@ -9,13 +9,13 @@ description = "Core runtime boundaries for DeepSeek workspace architecture"
 [dependencies]
 anyhow.workspace = true
 chrono.workspace = true
-deepseek-agent = { path = "../agent", version = "0.8.20" }
-deepseek-config = { path = "../config", version = "0.8.20" }
-deepseek-execpolicy = { path = "../execpolicy", version = "0.8.20" }
-deepseek-hooks = { path = "../hooks", version = "0.8.20" }
-deepseek-mcp = { path = "../mcp", version = "0.8.20" }
-deepseek-protocol = { path = "../protocol", version = "0.8.20" }
-deepseek-state = { path = "../state", version = "0.8.20" }
-deepseek-tools = { path = "../tools", version = "0.8.20" }
+deepseek-agent = { path = "../agent", version = "0.8.21" }
+deepseek-config = { path = "../config", version = "0.8.21" }
+deepseek-execpolicy = { path = "../execpolicy", version = "0.8.21" }
+deepseek-hooks = { path = "../hooks", version = "0.8.21" }
+deepseek-mcp = { path = "../mcp", version = "0.8.21" }
+deepseek-protocol = { path = "../protocol", version = "0.8.21" }
+deepseek-state = { path = "../state", version = "0.8.21" }
+deepseek-tools = { path = "../tools", version = "0.8.21" }
 serde_json.workspace = true
 uuid.workspace = true
