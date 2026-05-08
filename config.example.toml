@@ -167,6 +167,21 @@ sandbox_mode = "workspace-write" # read-only | workspace-write | danger-full-acc
 #   auto_allow = ["cargo check", "npm run"]
 #
 # auto_allow = []
+# auto_deny = ["rm -rf"]
+#
+# Typed persistent permission rules. These are intentionally conservative:
+# shell commands use the same arity-aware matching as auto_allow, and file
+# paths are workspace-relative globs.
+#
+# [[permissions.rules]]
+# tool = "exec_shell"
+# decision = "allow" # "allow", "deny", or "ask"
+# command = "cargo test"
+#
+# [[permissions.rules]]
+# tool = "file_edit"
+# decision = "ask"
+# path = "src/**"
 max_subagents = 10 # optional (1-20)
 
 # Optional sub-agent tuning. max_concurrent overrides top-level max_subagents.
