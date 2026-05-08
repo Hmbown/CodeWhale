@@ -1042,9 +1042,11 @@ mod tests {
             api_url("https://api.deepseek.com/v1", "chat/completions"),
             "https://api.deepseek.com/v1/chat/completions"
         );
+        // Non-beta paths from a /beta base URL route to /v1.
+        // Only paths with an explicit beta/ prefix use the beta surface.
         assert_eq!(
             api_url("https://api.deepseek.com/beta", "chat/completions"),
-            "https://api.deepseek.com/beta/chat/completions"
+            "https://api.deepseek.com/v1/chat/completions"
         );
         assert_eq!(
             api_url(
@@ -1068,6 +1070,30 @@ mod tests {
         assert_eq!(
             api_url("https://api.deepseek.com/beta", "beta/completions"),
             "https://api.deepseek.com/beta/completions"
+        );
+    }
+
+    #[test]
+    fn api_url_routes_models_and_non_beta_paths_to_v1() {
+        // The /models endpoint only exists at /v1/models, never at
+        // /beta/models. Non-beta paths from a /beta base URL must
+        // still route to /v1.
+        assert_eq!(
+            api_url("https://api.deepseek.com", "models"),
+            "https://api.deepseek.com/v1/models"
+        );
+        assert_eq!(
+            api_url("https://api.deepseek.com/v1", "models"),
+            "https://api.deepseek.com/v1/models"
+        );
+        assert_eq!(
+            api_url("https://api.deepseek.com/beta", "models"),
+            "https://api.deepseek.com/v1/models"
+        );
+        // explicit v<N> versions other than /v1 should be preserved
+        assert_eq!(
+            api_url("https://openai-compatible.example/api/coding/paas/v4", "models"),
+            "https://openai-compatible.example/api/coding/paas/v4/models"
         );
     }
 
