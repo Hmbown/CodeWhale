@@ -2087,6 +2087,11 @@ async fn run_event_loop(
             let is_plain_char = matches!(key.code, KeyCode::Char(_)) && !has_ctrl_alt_or_super;
             let is_enter = matches!(key.code, KeyCode::Enter);
 
+            if is_macos_option_v_legacy_key(&key) {
+                open_tool_details_pager(app);
+                continue;
+            }
+
             if !is_plain_char
                 && !is_enter
                 && let Some(pending) = app.flush_paste_burst_before_modified_input_if_enabled()
@@ -6661,7 +6666,7 @@ fn active_tool_status_label(app: &App) -> Option<String> {
     if active_foreground_shell_running(app) {
         parts.push("Ctrl+B shell".to_string());
     }
-    parts.push("Alt+V".to_string());
+    parts.push(tool_details_shortcut_label().to_string());
     Some(parts.join(" \u{00B7} "))
 }
 
@@ -8155,7 +8160,8 @@ fn selected_detail_footer_label(app: &App) -> Option<String> {
     )?;
     let label = detail_target_label(app, cell_index)?;
     Some(format!(
-        "Alt+V details: {}",
+        "{} details: {}",
+        tool_details_shortcut_label(),
         truncate_line_to_width(&label, 34)
     ))
 }
@@ -8228,12 +8234,28 @@ fn is_file_tree_toggle_shortcut(key: &KeyEvent) -> bool {
     ctrl_shift_e || cmd_shift_e
 }
 
+fn tool_details_shortcut_label() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "\u{2325}+V"
+    } else {
+        "Alt+V"
+    }
+}
+
 fn details_shortcut_modifiers(modifiers: KeyModifiers) -> bool {
     modifiers.is_empty()
         || modifiers == KeyModifiers::SHIFT
         || (modifiers.contains(KeyModifiers::ALT)
             && !modifiers.contains(KeyModifiers::CONTROL)
             && !modifiers.contains(KeyModifiers::SUPER))
+}
+
+fn is_macos_option_v_legacy_key(key: &KeyEvent) -> bool {
+    is_macos_option_v_legacy_key_for_platform(key, cfg!(target_os = "macos"))
+}
+
+fn is_macos_option_v_legacy_key_for_platform(key: &KeyEvent, is_macos: bool) -> bool {
+    is_macos && key.modifiers.is_empty() && matches!(key.code, KeyCode::Char('\u{221A}'))
 }
 
 fn is_paste_shortcut(key: &KeyEvent) -> bool {

@@ -881,7 +881,7 @@ fn active_tool_status_label_summarizes_live_tool_group() {
     assert!(label.contains("run cargo test"));
     assert!(label.contains("1 active"));
     assert!(label.contains("1 done"));
-    assert!(label.contains("Alt+V"));
+    assert!(label.contains(tool_details_shortcut_label()));
 }
 
 #[test]
@@ -2261,10 +2261,24 @@ fn detail_target_prefers_visible_tool_card() {
     app.viewport.last_transcript_visible = 6;
 
     assert_eq!(detail_target_cell_index(&app), Some(1));
+    let expected = format!("{} details: file_search", tool_details_shortcut_label());
     assert_eq!(
         selected_detail_footer_label(&app).as_deref(),
-        Some("Alt+V details: file_search")
+        Some(expected.as_str())
     );
+}
+
+#[test]
+fn macos_option_v_glyph_is_treated_as_details_shortcut_only_on_macos() {
+    let option_v = KeyEvent::new(KeyCode::Char('\u{221A}'), KeyModifiers::NONE);
+    assert!(is_macos_option_v_legacy_key_for_platform(&option_v, true));
+    assert!(!is_macos_option_v_legacy_key_for_platform(&option_v, false));
+
+    let modified = KeyEvent::new(KeyCode::Char('\u{221A}'), KeyModifiers::SHIFT);
+    assert!(!is_macos_option_v_legacy_key_for_platform(&modified, true));
+
+    let plain_v = KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE);
+    assert!(!is_macos_option_v_legacy_key_for_platform(&plain_v, true));
 }
 
 #[test]
