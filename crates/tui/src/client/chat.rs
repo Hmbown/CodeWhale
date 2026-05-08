@@ -1003,8 +1003,16 @@ pub(super) fn parse_chat_message(payload: &Value) -> Result<MessageResponse> {
             let name = function
                 .and_then(|f| f.get("name"))
                 .and_then(Value::as_str)
-                .unwrap_or("tool")
+                .unwrap_or("")
                 .to_string();
+            let name = if name.is_empty() {
+                logging::warn(format!(
+                    "Non-streaming response returned empty tool name for call {id}; using fallback"
+                ));
+                "unknown_tool".to_string()
+            } else {
+                name
+            };
             let arguments = function
                 .and_then(|f| f.get("arguments"))
                 .and_then(Value::as_str)
@@ -1285,6 +1293,14 @@ pub(super) fn parse_sse_chunk(
                                 .and_then(Value::as_str)
                                 .unwrap_or("")
                                 .to_string();
+                            let name = if name.is_empty() {
+                                logging::warn(format!(
+                                    "API returned empty tool name for call {id}; using fallback"
+                                ));
+                                "unknown_tool".to_string()
+                            } else {
+                                name
+                            };
                             let caller = tc.get("caller").and_then(|v| {
                                 v.get("type").and_then(Value::as_str).map(|caller_type| {
                                     ToolCaller {
