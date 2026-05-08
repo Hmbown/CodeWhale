@@ -7483,17 +7483,8 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEvent> {
             }
         }
         MouseEventKind::Down(MouseButton::Left) => {
-            app.viewport.transcript_scrollbar_dragging = false;
-
             if mouse_hits_rect(mouse, app.viewport.jump_to_latest_button_area) {
                 app.scroll_to_bottom();
-                return Vec::new();
-            }
-
-            if mouse_hits_transcript_scrollbar(app, mouse) {
-                app.viewport.transcript_scrollbar_dragging = true;
-                app.viewport.transcript_selection.clear();
-                scroll_transcript_to_mouse_row(app, mouse.row);
                 return Vec::new();
             }
 
@@ -7516,20 +7507,11 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEvent> {
             }
         }
         MouseEventKind::Drag(MouseButton::Left) => {
-            if app.viewport.transcript_scrollbar_dragging {
-                scroll_transcript_to_mouse_row(app, mouse.row);
-                return Vec::new();
-            }
-
             if app.viewport.transcript_selection.dragging
                 && let Some(point) = selection_point_from_mouse(app, mouse)
             {
                 app.viewport.transcript_selection.head = Some(point);
             }
-        }
-        MouseEventKind::Up(MouseButton::Left) if app.viewport.transcript_scrollbar_dragging => {
-            app.viewport.transcript_scrollbar_dragging = false;
-            app.needs_redraw = true;
         }
         MouseEventKind::Up(MouseButton::Left) if app.viewport.transcript_selection.dragging => {
             app.viewport.transcript_selection.dragging = false;
@@ -7544,57 +7526,6 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEvent> {
     }
 
     Vec::new()
-}
-
-fn mouse_hits_transcript_scrollbar(app: &App, mouse: MouseEvent) -> bool {
-    let Some(area) = app.viewport.last_transcript_area else {
-        return false;
-    };
-    if area.width <= 1 || app.viewport.last_transcript_total <= app.viewport.last_transcript_visible
-    {
-        return false;
-    }
-
-    let scrollbar_col = area.x.saturating_add(area.width.saturating_sub(1));
-    mouse.column == scrollbar_col
-        && mouse.row >= area.y
-        && mouse.row < area.y.saturating_add(area.height)
-}
-
-fn scroll_transcript_to_mouse_row(app: &mut App, row: u16) -> bool {
-    let Some(area) = app.viewport.last_transcript_area else {
-        return false;
-    };
-    let total = app.viewport.last_transcript_total;
-    let visible = app.viewport.last_transcript_visible;
-    if area.height == 0 || total <= visible {
-        return false;
-    }
-
-    let max_start = total.saturating_sub(visible);
-    if max_start == 0 {
-        app.scroll_to_bottom();
-        return true;
-    }
-
-    let max_row = usize::from(area.height.saturating_sub(1));
-    let relative_row = usize::from(row.saturating_sub(area.y)).min(max_row);
-    let numerator = relative_row
-        .saturating_mul(max_start)
-        .saturating_add(max_row / 2);
-    // Round to the nearest transcript offset so short thumbs still feel
-    // responsive on compact terminals.
-    let top = numerator.checked_div(max_row).unwrap_or(0);
-
-    app.viewport.transcript_scroll = if top >= max_start {
-        TranscriptScroll::to_bottom()
-    } else {
-        TranscriptScroll::at_line(top)
-    };
-    app.viewport.pending_scroll_delta = 0;
-    app.user_scrolled_during_stream = !app.viewport.transcript_scroll.is_at_tail();
-    app.needs_redraw = true;
-    true
 }
 
 fn mouse_hits_rect(mouse: MouseEvent, area: Option<Rect>) -> bool {

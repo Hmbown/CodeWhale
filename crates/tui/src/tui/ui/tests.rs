@@ -338,8 +338,19 @@ fn jump_to_latest_button_click_scrolls_to_tail() {
 }
 
 #[test]
-fn transcript_scrollbar_drag_maps_mouse_row_to_scroll_position() {
+fn transcript_scrollbar_gutter_is_not_draggable() {
     let mut app = create_test_app();
+    app.history = vec![HistoryCell::Assistant {
+        content: "alpha beta".to_string(),
+        streaming: false,
+    }];
+    app.resync_history_revisions();
+    app.viewport.transcript_cache.ensure(
+        &app.history,
+        &app.history_revisions,
+        80,
+        app.transcript_render_options(),
+    );
     app.viewport.last_transcript_area = Some(Rect {
         x: 2,
         y: 5,
@@ -349,6 +360,7 @@ fn transcript_scrollbar_drag_maps_mouse_row_to_scroll_position() {
     app.viewport.last_transcript_visible = 10;
     app.viewport.last_transcript_total = 110;
     app.viewport.transcript_scroll = TranscriptScroll::to_bottom();
+    app.user_scrolled_during_stream = false;
 
     let events = handle_mouse_event(
         &mut app,
@@ -361,12 +373,9 @@ fn transcript_scrollbar_drag_maps_mouse_row_to_scroll_position() {
     );
 
     assert!(events.is_empty());
-    assert!(app.viewport.transcript_scrollbar_dragging);
-    assert!(!app.viewport.transcript_selection.dragging);
-    assert!(!app.viewport.transcript_scroll.is_at_tail());
-    let (_, top) = app.viewport.transcript_scroll.resolve_top(&[], 100);
-    assert_eq!(top, 0);
-    assert!(app.user_scrolled_during_stream);
+    assert!(app.viewport.transcript_selection.dragging);
+    assert!(app.viewport.transcript_scroll.is_at_tail());
+    assert!(!app.user_scrolled_during_stream);
 
     handle_mouse_event(
         &mut app,
@@ -380,6 +389,7 @@ fn transcript_scrollbar_drag_maps_mouse_row_to_scroll_position() {
 
     assert!(app.viewport.transcript_scroll.is_at_tail());
     assert!(!app.user_scrolled_during_stream);
+    assert!(app.viewport.transcript_selection.dragging);
 
     handle_mouse_event(
         &mut app,
@@ -391,11 +401,11 @@ fn transcript_scrollbar_drag_maps_mouse_row_to_scroll_position() {
         },
     );
 
-    assert!(!app.viewport.transcript_scrollbar_dragging);
+    assert!(!app.viewport.transcript_selection.dragging);
 }
 
 #[test]
-fn new_left_down_clears_stale_transcript_scrollbar_drag() {
+fn left_down_inside_transcript_starts_selection() {
     let mut app = create_test_app();
     app.history = vec![HistoryCell::Assistant {
         content: "alpha beta".to_string(),
@@ -410,7 +420,6 @@ fn new_left_down_clears_stale_transcript_scrollbar_drag() {
     });
     app.viewport.last_transcript_visible = 10;
     app.viewport.last_transcript_total = 110;
-    app.viewport.transcript_scrollbar_dragging = true;
 
     let events = handle_mouse_event(
         &mut app,
@@ -423,7 +432,7 @@ fn new_left_down_clears_stale_transcript_scrollbar_drag() {
     );
 
     assert!(events.is_empty());
-    assert!(!app.viewport.transcript_scrollbar_dragging);
+    assert!(app.viewport.transcript_selection.dragging);
 }
 
 #[test]
