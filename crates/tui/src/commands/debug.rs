@@ -199,13 +199,34 @@ fn format_cache_inspect(app: &mut App) -> String {
     out.push('\n');
 
     for layer in &inspection.layers {
-        out.push_str(&format!(
+        let mut line = format!(
             "{}: {}, chars={}, hash={}\n",
             layer.name,
             layer.stability.label(),
             layer.char_len,
             layer.sha256
-        ));
+        );
+        if let Some(tool_result) = &layer.tool_result {
+            let trimmed = line.trim_end_matches('\n').to_string();
+            line = format!(
+                "{trimmed}, original_chars={}, sent_chars={}, truncated={}, deduplicated={}\n",
+                tool_result.original_chars,
+                tool_result.sent_chars,
+                tool_result.truncated,
+                tool_result.deduplicated
+            );
+        }
+        if let Some(turn_meta) = &layer.turn_meta {
+            let trimmed = line.trim_end_matches('\n').to_string();
+            line = format!(
+                "{trimmed}, turn_meta_original_chars={}, turn_meta_sent_chars={}, turn_meta_deduplicated={}, turn_meta_sha256={}\n",
+                turn_meta.original_chars,
+                turn_meta.sent_chars,
+                turn_meta.deduplicated,
+                turn_meta.sha256
+            );
+        }
+        out.push_str(&line);
     }
     app.session.last_cache_inspection = Some(inspection);
     out
@@ -614,6 +635,101 @@ mod tests {
         assert!(second.contains("Static base prefix stability: OK"));
         assert!(second.contains("First divergence from previous request: User task"));
         assert!(second.contains("Message #1 assistant: history"));
+    }
+
+    #[test]
+    fn cache_inspect_displays_tool_result_budget_metadata() {
+        let mut app = create_test_app();
+        let long_output = format!("{}{}", "A".repeat(7_000), "Z".repeat(7_000));
+        app.api_messages.push(Message {
+            role: "assistant".to_string(),
+            content: vec![ContentBlock::ToolUse {
+                id: "tool-1".to_string(),
+                name: "shell_command".to_string(),
+                input: serde_json::json!({"command": "cargo test"}),
+                caller: None,
+            }],
+        });
+        app.api_messages.push(Message {
+            role: "user".to_string(),
+            content: vec![ContentBlock::ToolResult {
+                tool_use_id: "tool-1".to_string(),
+                content: long_output.clone(),
+                is_error: None,
+                content_blocks: None,
+            }],
+        });
+        app.api_messages.push(Message {
+            role: "assistant".to_string(),
+            content: vec![ContentBlock::ToolUse {
+                id: "tool-2".to_string(),
+                name: "shell_command".to_string(),
+                input: serde_json::json!({"command": "cargo test"}),
+                caller: None,
+            }],
+        });
+        app.api_messages.push(Message {
+            role: "user".to_string(),
+            content: vec![ContentBlock::ToolResult {
+                tool_use_id: "tool-2".to_string(),
+                content: long_output,
+                is_error: None,
+                content_blocks: None,
+            }],
+        });
+
+        let result = cache(&mut app, Some("inspect"));
+        let msg = result.message.expect("inspect output");
+
+        assert!(msg.contains("original_chars=14000"), "got: {msg}");
+        assert!(msg.contains("truncated=true"), "got: {msg}");
+        assert!(msg.contains("deduplicated=false"), "got: {msg}");
+        assert!(msg.contains("deduplicated=true"), "got: {msg}");
+    }
+
+    #[test]
+    fn cache_inspect_displays_turn_meta_dedup_metadata() {
+        let mut app = create_test_app();
+        let turn_meta = format!(
+            "<turn_meta>\nCurrent local date: 2026-05-09\n{}\n</turn_meta>",
+            "Working set: src/lib.rs\n".repeat(20)
+        );
+        app.api_messages.push(Message {
+            role: "user".to_string(),
+            content: vec![
+                ContentBlock::Text {
+                    text: turn_meta.clone(),
+                    cache_control: None,
+                },
+                ContentBlock::Text {
+                    text: "first task".to_string(),
+                    cache_control: None,
+                },
+            ],
+        });
+        app.api_messages.push(Message {
+            role: "user".to_string(),
+            content: vec![
+                ContentBlock::Text {
+                    text: turn_meta,
+                    cache_control: None,
+                },
+                ContentBlock::Text {
+                    text: "second task".to_string(),
+                    cache_control: None,
+                },
+            ],
+        });
+
+        let result = cache(&mut app, Some("inspect"));
+        let msg = result.message.expect("inspect output");
+
+        assert!(msg.contains("turn_meta_original_chars="), "got: {msg}");
+        assert!(msg.contains("turn_meta_sent_chars="), "got: {msg}");
+        assert!(msg.contains("turn_meta_deduplicated=false"), "got: {msg}");
+        assert!(msg.contains("turn_meta_deduplicated=true"), "got: {msg}");
+        assert!(msg.contains("turn_meta_sha256="), "got: {msg}");
+        assert!(!msg.contains("Working set: src/lib.rs"), "got: {msg}");
     }
 
     #[test]
