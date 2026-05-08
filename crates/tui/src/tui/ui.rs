@@ -5315,14 +5315,17 @@ fn render(f: &mut Frame, app: &mut App) {
     let pending_preview = build_pending_input_preview(app);
     let preview_height = pending_preview.desired_height(size.width);
 
+    let todos_panel_height = super::sidebar::todos_panel_height(app);
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(header_height),   // Header
-            Constraint::Min(1),                  // Chat area
-            Constraint::Length(preview_height),  // Pending input preview (0 if empty)
-            Constraint::Length(composer_height), // Composer
-            Constraint::Length(footer_height),   // Footer
+            Constraint::Length(header_height),         // Header
+            Constraint::Min(1),                        // Chat area
+            Constraint::Length(preview_height),        // Pending input preview (0 if empty)
+            Constraint::Length(todos_panel_height),    // Todos panel (0 when empty)
+            Constraint::Length(composer_height),       // Composer
+            Constraint::Length(footer_height),         // Footer
         ])
         .split(size);
 
@@ -5440,6 +5443,11 @@ fn render(f: &mut Frame, app: &mut App) {
         pending_preview.render(chunks[2], buf);
     }
 
+    // Render todos panel above the composer (collapses to 0 height when empty).
+    if todos_panel_height > 0 {
+        super::sidebar::render_todos_panel(f, chunks[3], app);
+    }
+
     // Render composer
     let cursor_pos = {
         let composer_widget = ComposerWidget::new(
@@ -5449,19 +5457,19 @@ fn render(f: &mut Frame, app: &mut App) {
             &mention_menu_entries,
         );
         let buf = f.buffer_mut();
-        composer_widget.render(chunks[3], buf);
-        composer_widget.cursor_pos(chunks[3])
+        composer_widget.render(chunks[4], buf);
+        composer_widget.cursor_pos(chunks[4])
     };
     if let Some(cursor_pos) = cursor_pos {
         f.set_cursor_position(cursor_pos);
     }
 
     // Render footer
-    render_footer(f, chunks[4], app);
+    render_footer(f, chunks[5], app);
     // Toast stack overlay (#439): when multiple status toasts are queued,
     // surface the older ones as a 1-2 line strip above the footer so a
     // burst of events isn't collapsed to a single visible message.
-    render_toast_stack_overlay(f, size, chunks[4], app);
+    render_toast_stack_overlay(f, size, chunks[5], app);
 
     if !app.view_stack.is_empty() {
         // The live transcript overlay snapshots the app's history + active
