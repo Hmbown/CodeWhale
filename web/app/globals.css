@@ -340,4 +340,4 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 }
 
 /* Anchor scroll-margin so deep links land below the sticky nav. */
-[id] { scroll-margin-top: 5rem; }
+[id] { scroll-margin-top: 6rem; }
