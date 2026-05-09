@@ -105,8 +105,7 @@ use super::views::{
 };
 use super::widgets::pending_input_preview::{ContextPreviewItem, PendingInputPreview};
 use super::widgets::{
-    ChatWidget, ComposerWidget, FooterProps, FooterToast, FooterWidget, HeaderData, HeaderWidget,
-    Renderable,
+    ChatWidget, ComposerWidget, FooterProps, FooterToast, FooterWidget, Renderable,
 };
 
 // === Constants ===
@@ -5564,16 +5563,14 @@ fn render(f: &mut Frame, app: &mut App) {
         return;
     }
 
-    let header_height = 1;
     let footer_height = 1;
-    let body_height = size.height.saturating_sub(header_height + footer_height);
+    let body_height = size.height.saturating_sub(footer_height);
     let slash_menu_entries = visible_slash_menu_entries(app, SLASH_MENU_LIMIT);
     let mention_menu_entries =
         crate::tui::file_mention::visible_mention_menu_entries(app, MENTION_MENU_LIMIT);
     if !mention_menu_entries.is_empty() && app.mention_menu_selected >= mention_menu_entries.len() {
         app.mention_menu_selected = mention_menu_entries.len().saturating_sub(1);
     }
-    let context_usage = context_usage_snapshot(app);
     let composer_max_height = body_height
         .saturating_sub(MIN_CHAT_HEIGHT)
         .max(MIN_COMPOSER_HEIGHT);
@@ -5599,7 +5596,6 @@ fn render(f: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(header_height),         // Header
             Constraint::Min(1),                        // Chat area
             Constraint::Length(preview_height),        // Pending input preview (0 if empty)
             Constraint::Length(todos_panel_height),     // Todos panel (0 when empty)
@@ -5607,55 +5603,6 @@ fn render(f: &mut Frame, app: &mut App) {
             Constraint::Length(footer_height),         // Footer
         ])
         .split(size);
-
-    // Render header
-    {
-        let sanitized_context_window = context_usage
-            .as_ref()
-            .map(|(_, max, _)| *max)
-            .or_else(|| crate::models::context_window_for_model(&app.model));
-        let sanitized_prompt_tokens = context_usage
-            .as_ref()
-            .and_then(|(used, _, _)| u32::try_from(*used).ok());
-        let workspace_name = app
-            .workspace
-            .file_name()
-            .and_then(|value| value.to_str())
-            .filter(|value| !value.is_empty())
-            .unwrap_or("workspace");
-        let model_label = app.model_display_label();
-        let effort_label = app.reasoning_effort_display_label();
-        let provider_label = match app.api_provider {
-            crate::config::ApiProvider::Deepseek => None,
-            crate::config::ApiProvider::DeepseekCN => None,
-            crate::config::ApiProvider::NvidiaNim => Some("NIM"),
-            crate::config::ApiProvider::Openai => Some("OpenAI"),
-            crate::config::ApiProvider::Openrouter => Some("OR"),
-            crate::config::ApiProvider::Novita => Some("Novita"),
-            crate::config::ApiProvider::Fireworks => Some("Fireworks"),
-            crate::config::ApiProvider::Sglang => Some("SGLang"),
-            crate::config::ApiProvider::Vllm => Some("vLLM"),
-            crate::config::ApiProvider::Ollama => Some("Ollama"),
-        };
-        let header_data = HeaderData::new(
-            app.mode,
-            &model_label,
-            workspace_name,
-            app.is_loading,
-            app.ui_theme.header_bg,
-        )
-        .with_usage(
-            app.session.total_conversation_tokens,
-            sanitized_context_window,
-            app.displayed_session_cost_for_currency(app.cost_currency),
-            sanitized_prompt_tokens,
-        )
-        .with_reasoning_effort(Some(&effort_label))
-        .with_provider(provider_label);
-        let header_widget = HeaderWidget::new(header_data);
-        let buf = f.buffer_mut();
-        header_widget.render(chunks[0], buf);
-    }
 
     // Render chat + sidebar + optional file-tree pane
     {
@@ -5665,18 +5612,18 @@ fn render(f: &mut Frame, app: &mut App) {
         // resize) don't retain stale content from a previous frame.
         Block::default()
             .style(Style::default().bg(app.ui_theme.surface_bg))
-            .render(chunks[1], f.buffer_mut());
+            .render(chunks[0], f.buffer_mut());
 
         let mut sidebar_area = None;
 
         // When the file-tree pane is visible and the terminal is wide
         // enough, reserve the left ~25% for the file tree.
         let mut chat_area =
-            if app.file_tree.is_some() && chunks[1].width >= SIDEBAR_VISIBLE_MIN_WIDTH {
+            if app.file_tree.is_some() && chunks[0].width >= SIDEBAR_VISIBLE_MIN_WIDTH {
                 let split = Layout::default()
                     .direction(Direction::Horizontal)
                     .constraints([Constraint::Percentage(25), Constraint::Percentage(75)])
-                    .split(chunks[1]);
+                    .split(chunks[0]);
                 let tree_area = split[0];
                 let remaining = split[1];
 
@@ -5687,7 +5634,7 @@ fn render(f: &mut Frame, app: &mut App) {
 
                 remaining
             } else {
-                chunks[1]
+                chunks[0]
             };
 
         if chat_area.width >= SIDEBAR_VISIBLE_MIN_WIDTH {
@@ -5719,12 +5666,12 @@ fn render(f: &mut Frame, app: &mut App) {
     // Render pending-input preview (queued/steered messages, if any).
     if preview_height > 0 {
         let buf = f.buffer_mut();
-        pending_preview.render(chunks[2], buf);
+        pending_preview.render(chunks[1], buf);
     }
 
     // Render todos panel above the composer
     if todos_panel_height > 0 {
-        super::sidebar::render_todos_panel(f, chunks[3], app);
+        super::sidebar::render_todos_panel(f, chunks[2], app);
     }
 
     // Render composer
@@ -5736,19 +5683,19 @@ fn render(f: &mut Frame, app: &mut App) {
             &mention_menu_entries,
         );
         let buf = f.buffer_mut();
-        composer_widget.render(chunks[4], buf);
-        composer_widget.cursor_pos(chunks[4])
+        composer_widget.render(chunks[3], buf);
+        composer_widget.cursor_pos(chunks[3])
     };
     if let Some(cursor_pos) = cursor_pos {
         f.set_cursor_position(cursor_pos);
     }
 
     // Render footer
-    render_footer(f, chunks[5], app);
+    render_footer(f, chunks[4], app);
     // Toast stack overlay (#439): when multiple status toasts are queued,
     // surface the older ones as a 1-2 line strip above the footer so a
     // burst of events isn't collapsed to a single visible message.
-    render_toast_stack_overlay(f, size, chunks[5], app);
+    render_toast_stack_overlay(f, size, chunks[4], app);
 
     if !app.view_stack.is_empty() {
         // The live transcript overlay snapshots the app's history + active
