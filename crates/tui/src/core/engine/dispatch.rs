@@ -15,13 +15,18 @@
 //! All items are `pub(super)`-only: the public engine surface (Op/Event,
 //! `EngineHandle`, `spawn_engine`) stays in `core/engine.rs`.
 
-use serde_json::json;
+use codewhale_execpolicy::{
+    ExecPolicyEngine, PermissionDecision, ToolPermissionCheck, ToolPermissionContext,
+};
+use serde_json::{Value, json};
+use std::path::{Component, Path, PathBuf};
 
 use crate::models::{Tool, ToolCaller};
 use crate::tools::spec::{ToolError, ToolResult};
 use crate::tui::app::AppMode;
 
 use super::ToolUseState;
+use super::tool_catalog::MULTI_TOOL_PARALLEL_NAME;
 
 // === Types ============================================================
 
@@ -70,6 +75,14 @@ pub(super) struct ParallelToolResult {
     pub(super) results: Vec<ParallelToolResultEntry>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ToolPermissionOverride {
+    Unmatched,
+    Allow { reason: String },
+    Ask { reason: String },
+    Deny { reason: String },
+}
+
 // Hold the lock guard for the duration of a tool execution.
 // The inner guards are held for RAII purposes (dropped when the guard is dropped).
 pub(super) enum ToolExecGuard<'a> {
@@ -97,6 +110,520 @@ pub(super) fn caller_allowed_for_tool(
         return allowed.iter().any(|item| item == requested);
     }
     requested == "direct"
+}
+
+// === Typed permission rules ==========================================
+
+pub(super) fn tool_permission_override_for_call(
+    engine: &ExecPolicyEngine,
+    tool_name: &str,
+    input: &Value,
+    workspace: &Path,
+) -> ToolPermissionOverride {
+    if tool_name == MULTI_TOOL_PARALLEL_NAME {
+        return permission_override_for_parallel_call(engine, input, workspace);
+    }
+
+    if is_shell_permission_tool(tool_name) {
+        let command = input.get("command").and_then(Value::as_str);
+        return permission_override_for_context(engine, tool_name, command, None);
+    }
+
+    if !is_file_permission_tool(tool_name) {
+        return ToolPermissionOverride::Unmatched;
+    }
+
+    let paths = permission_paths_for_file_tool(tool_name, input);
+    if paths.is_empty() {
+        return permission_override_for_context(engine, tool_name, None, None);
+    }
+
+    let mut saw_allow = false;
+    let mut saw_unmatched = false;
+    let mut ask_reason: Option<String> = None;
+
+    for path in paths {
+        match permission_override_for_path(engine, tool_name, &path, workspace) {
+            ToolPermissionOverride::Deny { reason } => {
+                return ToolPermissionOverride::Deny { reason };
+            }
+            ToolPermissionOverride::Ask { reason } => {
+                ask_reason.get_or_insert(reason);
+            }
+            ToolPermissionOverride::Allow { .. } => {
+                saw_allow = true;
+            }
+            ToolPermissionOverride::Unmatched => {
+                saw_unmatched = true;
+            }
+        }
+    }
+
+    if let Some(reason) = ask_reason {
+        ToolPermissionOverride::Ask { reason }
+    } else if saw_allow && !saw_unmatched {
+        ToolPermissionOverride::Allow {
+            reason: format!("Tool '{tool_name}' allowed by permission rule"),
+        }
+    } else {
+        ToolPermissionOverride::Unmatched
+    }
+}
+
+fn permission_override_for_parallel_call(
+    engine: &ExecPolicyEngine,
+    input: &Value,
+    workspace: &Path,
+) -> ToolPermissionOverride {
+    let Ok(calls) = parse_parallel_tool_calls(input) else {
+        return ToolPermissionOverride::Unmatched;
+    };
+
+    let mut saw_allow = false;
+    let mut saw_unmatched = false;
+    let mut ask_reason: Option<String> = None;
+
+    for (nested_tool_name, nested_input) in calls {
+        match tool_permission_override_for_call(engine, &nested_tool_name, &nested_input, workspace)
+        {
+            ToolPermissionOverride::Deny { reason } => {
+                return ToolPermissionOverride::Deny { reason };
+            }
+            ToolPermissionOverride::Ask { reason } => {
+                ask_reason.get_or_insert(reason);
+            }
+            ToolPermissionOverride::Allow { .. } => {
+                saw_allow = true;
+            }
+            ToolPermissionOverride::Unmatched => {
+                saw_unmatched = true;
+            }
+        }
+    }
+
+    if let Some(reason) = ask_reason {
+        ToolPermissionOverride::Ask { reason }
+    } else if saw_allow && !saw_unmatched {
+        ToolPermissionOverride::Allow {
+            reason: format!("Tool '{MULTI_TOOL_PARALLEL_NAME}' allowed by permission rule"),
+        }
+    } else {
+        ToolPermissionOverride::Unmatched
+    }
+}
+
+fn permission_override_for_path(
+    engine: &ExecPolicyEngine,
+    tool_name: &str,
+    path: &str,
+    workspace: &Path,
+) -> ToolPermissionOverride {
+    let mut override_result = ToolPermissionOverride::Unmatched;
+    for candidate in permission_path_candidates(path, workspace) {
+        let next = permission_override_for_context(engine, tool_name, None, Some(&candidate));
+        override_result = combine_permission_overrides(override_result, next);
+        if matches!(override_result, ToolPermissionOverride::Deny { .. }) {
+            break;
+        }
+    }
+    override_result
+}
+
+fn permission_override_for_context(
+    engine: &ExecPolicyEngine,
+    tool_name: &str,
+    command: Option<&str>,
+    path: Option<&str>,
+) -> ToolPermissionOverride {
+    let mut override_result = ToolPermissionOverride::Unmatched;
+    for policy_tool_name in
+        std::iter::once(tool_name).chain(permission_policy_tool_aliases(tool_name).iter().copied())
+    {
+        let next = permission_override_from_check(
+            tool_name,
+            engine.check_tool_permission(ToolPermissionContext {
+                tool: policy_tool_name,
+                command,
+                path,
+                workspace_root: None,
+            }),
+        );
+        override_result = combine_permission_overrides(override_result, next);
+        if matches!(override_result, ToolPermissionOverride::Deny { .. }) {
+            break;
+        }
+    }
+    override_result
+}
+
+fn combine_permission_overrides(
+    current: ToolPermissionOverride,
+    next: ToolPermissionOverride,
+) -> ToolPermissionOverride {
+    match (current, next) {
+        (ToolPermissionOverride::Deny { reason }, _) => ToolPermissionOverride::Deny { reason },
+        (_, ToolPermissionOverride::Deny { reason }) => ToolPermissionOverride::Deny { reason },
+        (ToolPermissionOverride::Ask { reason }, _) => ToolPermissionOverride::Ask { reason },
+        (_, ToolPermissionOverride::Ask { reason }) => ToolPermissionOverride::Ask { reason },
+        (ToolPermissionOverride::Allow { reason }, _) => ToolPermissionOverride::Allow { reason },
+        (_, ToolPermissionOverride::Allow { reason }) => ToolPermissionOverride::Allow { reason },
+        (ToolPermissionOverride::Unmatched, ToolPermissionOverride::Unmatched) => {
+            ToolPermissionOverride::Unmatched
+        }
+    }
+}
+
+fn permission_override_from_check(
+    tool_name: &str,
+    check: ToolPermissionCheck,
+) -> ToolPermissionOverride {
+    let Some(decision) = check.decision else {
+        return ToolPermissionOverride::Unmatched;
+    };
+    let label = check
+        .matched_rule
+        .as_ref()
+        .map(|matched| matched.rule.pattern_label())
+        .unwrap_or_else(|| format!("tool '{tool_name}'"));
+    match decision {
+        PermissionDecision::Allow => ToolPermissionOverride::Allow {
+            reason: format!("Tool '{tool_name}' allowed by permission rule ({label})"),
+        },
+        PermissionDecision::Ask => ToolPermissionOverride::Ask {
+            reason: format!("Approval required by permission rule ({label})"),
+        },
+        PermissionDecision::Deny => ToolPermissionOverride::Deny {
+            reason: format!("Tool '{tool_name}' denied by permission rule ({label})"),
+        },
+    }
+}
+
+fn is_shell_permission_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "exec_shell"
+            | "exec_shell_wait"
+            | "exec_shell_interact"
+            | "exec_shell_cancel"
+            | "exec_wait"
+            | "exec_interact"
+    )
+}
+
+fn is_file_permission_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "read_file" | "write_file" | "edit_file" | "list_dir" | "apply_patch"
+    )
+}
+
+fn permission_policy_tool_aliases(tool_name: &str) -> &'static [&'static str] {
+    match tool_name {
+        "exec_shell_wait"
+        | "exec_shell_interact"
+        | "exec_shell_cancel"
+        | "exec_wait"
+        | "exec_interact" => &["exec_shell"],
+        "read_file" => &["file_read"],
+        "write_file" => &["file_write"],
+        "edit_file" => &["file_edit"],
+        _ => &[],
+    }
+}
+
+fn permission_paths_for_file_tool(tool_name: &str, input: &Value) -> Vec<String> {
+    match tool_name {
+        "read_file" | "write_file" | "edit_file" => input
+            .get("path")
+            .and_then(Value::as_str)
+            .map(|path| vec![path.to_string()])
+            .unwrap_or_default(),
+        "list_dir" => vec![
+            input
+                .get("path")
+                .and_then(Value::as_str)
+                .unwrap_or(".")
+                .to_string(),
+        ],
+        "apply_patch" => apply_patch_permission_paths(input),
+        _ => Vec::new(),
+    }
+}
+
+fn apply_patch_permission_paths(input: &Value) -> Vec<String> {
+    let mut paths = Vec::new();
+    if let Some(path) = input.get("path").and_then(Value::as_str) {
+        push_unique_path(&mut paths, path);
+    }
+    for key in ["changes", "files"] {
+        if let Some(entries) = input.get(key).and_then(Value::as_array) {
+            for entry in entries {
+                if let Some(path) = entry.get("path").and_then(Value::as_str) {
+                    push_unique_path(&mut paths, path);
+                }
+            }
+        }
+    }
+    match input.get("patch").and_then(Value::as_str) {
+        Some(patch) if paths.is_empty() => {
+            for path in parse_unified_diff_permission_paths(patch) {
+                push_unique_path(&mut paths, &path);
+            }
+        }
+        _ => {}
+    }
+    paths
+}
+
+fn parse_unified_diff_permission_paths(patch: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+    let mut old_path: Option<String> = None;
+
+    for line in patch.lines() {
+        if let Some(stripped) = line.strip_prefix("--- ") {
+            old_path = normalize_diff_permission_path(stripped);
+            continue;
+        }
+        if let Some(stripped) = line.strip_prefix("+++ ") {
+            let new_path = normalize_diff_permission_path(stripped);
+            if let Some(path) = new_path.or_else(|| old_path.clone()) {
+                push_unique_path(&mut paths, &path);
+            }
+            old_path = None;
+        }
+    }
+
+    paths
+}
+
+fn normalize_diff_permission_path(raw: &str) -> Option<String> {
+    let raw = diff_permission_path_token(raw)?;
+    if raw.is_empty() || raw == "/dev/null" || raw == "dev/null" {
+        return None;
+    }
+    let raw = raw
+        .strip_prefix("a/")
+        .or_else(|| raw.strip_prefix("b/"))
+        .unwrap_or(&raw);
+    Some(raw.to_string())
+}
+
+fn diff_permission_path_token(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    if raw.starts_with('"') {
+        return parse_quoted_diff_path(raw);
+    }
+    raw.split('\t')
+        .next()
+        .and_then(|path| path.split_whitespace().next())
+        .map(ToString::to_string)
+}
+
+fn parse_quoted_diff_path(raw: &str) -> Option<String> {
+    let mut bytes = Vec::new();
+    let mut chars = raw.strip_prefix('"')?.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' => return Some(String::from_utf8_lossy(&bytes).to_string()),
+            '\\' => {
+                let escaped = chars.next()?;
+                match escaped {
+                    '0'..='7' => {
+                        let mut value = escaped.to_digit(8).unwrap_or(0);
+                        for _ in 0..2 {
+                            let Some(next) = chars.peek().copied() else {
+                                break;
+                            };
+                            let Some(digit) = next.to_digit(8) else {
+                                break;
+                            };
+                            value = value * 8 + digit;
+                            chars.next();
+                        }
+                        bytes.push(value.min(u8::MAX as u32) as u8);
+                    }
+                    'a' => bytes.push(0x07),
+                    'b' => bytes.push(0x08),
+                    'f' => bytes.push(0x0c),
+                    'n' => bytes.push(b'\n'),
+                    'r' => bytes.push(b'\r'),
+                    't' => bytes.push(b'\t'),
+                    'v' => bytes.push(0x0b),
+                    other => {
+                        let mut buf = [0; 4];
+                        bytes.extend_from_slice(other.encode_utf8(&mut buf).as_bytes());
+                    }
+                }
+            }
+            other => {
+                let mut buf = [0; 4];
+                bytes.extend_from_slice(other.encode_utf8(&mut buf).as_bytes());
+            }
+        }
+    }
+
+    None
+}
+
+fn push_unique_path(paths: &mut Vec<String>, path: &str) {
+    if !paths.iter().any(|existing| existing == path) {
+        paths.push(path.to_string());
+    }
+}
+
+fn permission_path_candidates(path: &str, workspace: &Path) -> Vec<String> {
+    let mut candidates = Vec::new();
+    push_unique_path(&mut candidates, path);
+
+    let workspace_bases = permission_workspace_bases(workspace);
+    let workspace_base = workspace_bases
+        .first()
+        .cloned()
+        .unwrap_or_else(|| normalize_permission_path(workspace));
+    let raw_path = Path::new(path);
+    let candidate_path = if raw_path.is_absolute() {
+        raw_path.to_path_buf()
+    } else {
+        workspace_base.join(raw_path)
+    };
+    let candidate_path = normalize_permission_path(&candidate_path);
+
+    for workspace_base in &workspace_bases {
+        if let Some(relative) = workspace_relative_permission_path(&candidate_path, workspace_base)
+        {
+            push_unique_path(&mut candidates, &relative);
+        }
+    }
+
+    if let Some(canonical_path) = canonicalize_permission_path(&candidate_path) {
+        for workspace_base in &workspace_bases {
+            if let Some(relative) =
+                workspace_relative_permission_path(&canonical_path, workspace_base)
+            {
+                push_unique_path(&mut candidates, &relative);
+            }
+        }
+    }
+
+    candidates
+}
+
+fn permission_workspace_bases(workspace: &Path) -> Vec<PathBuf> {
+    let mut bases = Vec::new();
+    let workspace = if workspace.is_absolute() {
+        workspace.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|current_dir| current_dir.join(workspace))
+            .unwrap_or_else(|_| workspace.to_path_buf())
+    };
+    push_unique_path_buf(&mut bases, normalize_permission_path(&workspace));
+    if let Ok(canonical) = workspace.canonicalize() {
+        push_unique_path_buf(&mut bases, normalize_permission_path(&canonical));
+    }
+    bases
+}
+
+fn workspace_relative_permission_path(path: &Path, workspace: &Path) -> Option<String> {
+    let normalized_path = normalize_permission_path(path);
+    normalized_path
+        .strip_prefix(workspace)
+        .ok()
+        .map(permission_path_to_string)
+}
+
+fn canonicalize_permission_path(path: &Path) -> Option<PathBuf> {
+    if path.exists() {
+        return path
+            .canonicalize()
+            .ok()
+            .map(|path| normalize_permission_path(&path));
+    }
+
+    let mut existing_ancestor = path.to_path_buf();
+    let mut suffix_parts: Vec<std::ffi::OsString> = Vec::new();
+
+    while !existing_ancestor.exists() {
+        if let Some(file_name) = existing_ancestor.file_name() {
+            suffix_parts.push(file_name.to_owned());
+        }
+        match existing_ancestor.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => {
+                existing_ancestor = parent.to_path_buf();
+            }
+            _ => return None,
+        }
+    }
+
+    let mut canonical = existing_ancestor
+        .canonicalize()
+        .unwrap_or(existing_ancestor);
+    for part in suffix_parts.into_iter().rev() {
+        canonical.push(part);
+    }
+    Some(normalize_permission_path(&canonical))
+}
+
+fn normalize_permission_path(path: &Path) -> PathBuf {
+    let mut prefix: Option<std::ffi::OsString> = None;
+    let mut is_root = false;
+    let mut stack: Vec<std::ffi::OsString> = Vec::new();
+
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix_component) => {
+                prefix = Some(prefix_component.as_os_str().to_owned());
+            }
+            Component::RootDir => {
+                is_root = true;
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                let parent = Component::ParentDir.as_os_str();
+                if let Some(last) = stack.pop() {
+                    if last == parent {
+                        stack.push(last);
+                        stack.push(parent.to_owned());
+                    }
+                } else if !is_root {
+                    stack.push(parent.to_owned());
+                }
+            }
+            Component::Normal(part) => {
+                stack.push(part.to_owned());
+            }
+        }
+    }
+
+    let mut normalized = PathBuf::new();
+    if let Some(prefix) = prefix {
+        normalized.push(prefix);
+    }
+    if is_root {
+        normalized.push(Path::new(std::path::MAIN_SEPARATOR_STR));
+    }
+    for part in stack {
+        normalized.push(part);
+    }
+    normalized
+}
+
+fn permission_path_to_string(path: &Path) -> String {
+    if path.as_os_str().is_empty() {
+        ".".to_string()
+    } else {
+        path.to_string_lossy().replace('\\', "/")
+    }
+}
+
+fn push_unique_path_buf(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !paths.iter().any(|existing| existing == &path) {
+        paths.push(path);
+    }
 }
 
 pub(super) fn format_tool_error(err: &ToolError, tool_name: &str) -> String {

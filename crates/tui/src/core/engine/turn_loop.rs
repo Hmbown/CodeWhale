@@ -1271,6 +1271,7 @@ impl Engine {
                 if blocked_error.is_none()
                     && tool_def.is_none()
                     && !McpPool::is_mcp_tool(&tool_name)
+                    && tool_name != MULTI_TOOL_PARALLEL_NAME
                     && tool_name != CODE_EXECUTION_TOOL_NAME
                     && tool_name != JS_EXECUTION_TOOL_NAME
                     && !is_tool_search_tool(&tool_name)
@@ -1293,6 +1294,12 @@ impl Engine {
                     approval_description = spec.description().to_string();
                     supports_parallel = spec.supports_parallel();
                     read_only = spec.is_read_only();
+                } else if tool_name == MULTI_TOOL_PARALLEL_NAME {
+                    approval_required = false;
+                    approval_description =
+                        "Execute multiple read-only tools in parallel".to_string();
+                    supports_parallel = false;
+                    read_only = true;
                 } else if tool_name == CODE_EXECUTION_TOOL_NAME {
                     approval_required = true;
                     approval_description =
@@ -1315,15 +1322,42 @@ impl Engine {
 
                 let should_emit_hydration_status =
                     !deferred_tools_hydrated_this_batch.contains(&tool_name);
-                if blocked_error.is_none()
-                    && let Some(result) = maybe_hydrate_requested_deferred_tool(
+
+                if blocked_error.is_none() {
+                    match tool_permission_override_for_call(
+                        &self.config.exec_policy_engine,
+                        &tool_name,
+                        &tool_input,
+                        &self.session.workspace,
+                    ) {
+                        ToolPermissionOverride::Allow { reason } => {
+                            approval_required = false;
+                            approval_description = reason;
+                        }
+                        ToolPermissionOverride::Ask { reason } => {
+                            approval_required = true;
+                            approval_description = reason;
+                        }
+                        ToolPermissionOverride::Deny { reason } => {
+                            approval_required = false;
+                            blocked_error = Some(ToolError::permission_denied(reason));
+                        }
+                        ToolPermissionOverride::Unmatched => {}
+                    }
+                }
+
+                let hydration_result = if blocked_error.is_none() {
+                    maybe_hydrate_requested_deferred_tool(
                         &tool_name,
                         &tool_input,
                         &tool_catalog,
                         &active_tools_at_batch_start,
                         &mut deferred_tools_hydrated_this_batch,
                     )
-                {
+                } else {
+                    None
+                };
+                if let Some(result) = hydration_result {
                     if should_emit_hydration_status {
                         let status = if requested_tool_name == tool_name {
                             format!("Auto-loaded deferred tool '{tool_name}' after model request.")

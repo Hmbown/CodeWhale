@@ -2247,7 +2247,7 @@ mod tests {
             command = "cargo test"
 
             [[permissions.rules]]
-            tool = "file_edit"
+            tool = "edit_file"
             decision = "ask"
             path = "src/**"
             "#,
@@ -2263,7 +2263,7 @@ mod tests {
         );
         assert_eq!(
             config.permissions.rules[1],
-            ToolPermissionRule::file_path("file_edit", PermissionDecision::Ask, "src/**")
+            ToolPermissionRule::file_path("edit_file", PermissionDecision::Ask, "src/**")
         );
     }
 

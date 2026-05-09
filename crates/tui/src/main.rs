@@ -8,6 +8,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{Shell, generate};
+use codewhale_execpolicy::PermissionDecision;
 use dotenvy::dotenv;
 use tempfile::NamedTempFile;
 use wait_timeout::ChildExt;
@@ -4914,6 +4915,11 @@ fn merge_project_config(config: &mut Config, workspace: &Path) {
         config.allow_shell = Some(v);
     }
 
+    // Project-level permission config is allowed only when it tightens the
+    // effective policy. A repository can require extra prompts or denials, but
+    // it cannot grant itself broader tool access.
+    merge_project_permission_config(config, table);
+
     // #454: instructions array — project replaces user. Empty arrays
     // count: explicit `instructions = []` clears the user's list for
     // this repo, useful when the user has a verbose global file that
@@ -4927,6 +4933,72 @@ fn merge_project_config(config: &mut Config, workspace: &Path) {
             .collect();
         config.instructions = Some(entries);
     }
+}
+
+fn merge_project_permission_config(
+    config: &mut Config,
+    table: &toml::map::Map<String, toml::Value>,
+) {
+    if let Some(value) = table.get("auto_allow") {
+        let ignored = value.as_array().map_or(0, Vec::len);
+        if ignored > 0 {
+            eprintln!(
+                "warning: project-scope `auto_allow` is ignored — \
+                 project config cannot grant persistent command allow rules."
+            );
+        }
+    }
+
+    if let Some(value) = table.get("auto_deny") {
+        match string_array_from_project_value(value) {
+            Some(entries) => config.auto_deny.extend(entries),
+            None => eprintln!(
+                "warning: project-scope `auto_deny` is ignored — expected an array of strings."
+            ),
+        }
+    }
+
+    let Some(value) = table.get("permissions") else {
+        return;
+    };
+    let permissions: crate::config::PermissionsConfig = match value.clone().try_into() {
+        Ok(permissions) => permissions,
+        Err(err) => {
+            eprintln!(
+                "warning: project-scope `[permissions]` is ignored — failed to parse permission rules: {err}"
+            );
+            return;
+        }
+    };
+
+    for rule in permissions.rules {
+        match rule.decision {
+            PermissionDecision::Deny | PermissionDecision::Ask => {
+                config.permissions.rules.push(rule);
+            }
+            PermissionDecision::Allow => {
+                eprintln!(
+                    "warning: project-scope allow permission rule `{}` is ignored — \
+                     project config cannot grant persistent tool allow rules.",
+                    rule.pattern_label()
+                );
+            }
+        }
+    }
+}
+
+fn string_array_from_project_value(value: &toml::Value) -> Option<Vec<String>> {
+    Some(
+        value
+            .as_array()?
+            .iter()
+            .map(toml::Value::as_str)
+            .collect::<Option<Vec<_>>>()?
+            .into_iter()
+            .filter(|item| !item.trim().is_empty())
+            .map(str::to_string)
+            .collect(),
+    )
 }
 
 async fn run_interactive(
@@ -5362,6 +5434,7 @@ async fn run_exec_agent(
         search_provider: config.search_provider(),
         search_api_key: config.search.as_ref().and_then(|s| s.api_key.clone()),
         tools_always_load: config.tools_always_load(),
+        exec_policy_engine: config.exec_policy_engine(),
     };
 
     let engine_handle = spawn_engine(engine_config, config);
@@ -6751,6 +6824,48 @@ allow_shell = false
         merge_project_config(&mut config, tmp.path());
         assert_eq!(config.max_subagents, Some(4));
         assert_eq!(config.allow_shell, Some(false));
+    }
+
+    #[test]
+    fn project_overlay_applies_only_tightening_permission_rules() {
+        let tmp = workspace_with_project_config(
+            r#"
+auto_allow = ["cargo test"]
+auto_deny = ["rm -rf"]
+
+[[permissions.rules]]
+tool = "read_file"
+decision = "ask"
+path = "secrets/**"
+
+[[permissions.rules]]
+tool = "write_file"
+decision = "deny"
+path = "src/**"
+
+[[permissions.rules]]
+tool = "exec_shell"
+decision = "allow"
+command = "cargo test"
+"#,
+        );
+        let mut config = Config::default();
+        merge_project_config(&mut config, tmp.path());
+
+        assert!(
+            config.auto_allow.is_empty(),
+            "project-scope auto_allow must not grant access"
+        );
+        assert_eq!(config.auto_deny, ["rm -rf"]);
+        assert_eq!(config.permissions.rules.len(), 2);
+        assert_eq!(
+            config.permissions.rules[0].decision,
+            PermissionDecision::Ask
+        );
+        assert_eq!(
+            config.permissions.rules[1].decision,
+            PermissionDecision::Deny
+        );
     }
 
     #[test]

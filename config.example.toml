@@ -179,7 +179,7 @@ sandbox_mode = "workspace-write" # read-only | workspace-write | danger-full-acc
 # command = "cargo test"
 #
 # [[permissions.rules]]
-# tool = "file_edit"
+# tool = "edit_file"
 # decision = "ask"
 # path = "src/**"
 max_subagents = 10 # optional (1-20)

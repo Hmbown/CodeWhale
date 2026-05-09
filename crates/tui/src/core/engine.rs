@@ -194,6 +194,9 @@ pub struct EngineConfig {
     /// through bubblewrap instead of relying solely on Landlock (#2184).
     #[allow(dead_code)] // Wired through ShellManager in follow-up PR
     pub prefer_bwrap: bool,
+    /// Typed permission rules used before falling back to the legacy approval
+    /// prompt path for shell and file tools.
+    pub exec_policy_engine: codewhale_execpolicy::ExecPolicyEngine,
 }
 
 impl Default for EngineConfig {
@@ -242,6 +245,7 @@ impl Default for EngineConfig {
             ),
             tools_always_load: HashSet::new(),
             prefer_bwrap: false,
+            exec_policy_engine: codewhale_execpolicy::ExecPolicyEngine::default(),
         }
     }
 }
@@ -2234,10 +2238,11 @@ use self::approval::{ApprovalDecision, ApprovalResult, UserInputDecision};
 use self::dispatch::should_parallelize_tool_batch;
 use self::dispatch::{
     ParallelToolResult, ParallelToolResultEntry, ToolExecGuard, ToolExecOutcome,
-    ToolExecutionBatch, ToolExecutionPlan, caller_allowed_for_tool, caller_type_for_tool_use,
-    final_tool_input, format_tool_error, mcp_tool_approval_description, mcp_tool_is_parallel_safe,
-    mcp_tool_is_read_only, parse_parallel_tool_calls, parse_tool_input,
+    ToolExecutionBatch, ToolExecutionPlan, ToolPermissionOverride, caller_allowed_for_tool,
+    caller_type_for_tool_use, final_tool_input, format_tool_error, mcp_tool_approval_description,
+    mcp_tool_is_parallel_safe, mcp_tool_is_read_only, parse_parallel_tool_calls, parse_tool_input,
     plan_tool_execution_batches, should_force_update_plan_first, should_stop_after_plan_tool,
+    tool_permission_override_for_call,
 };
 use self::loop_guard::{AttemptDecision, LoopGuard, OutcomeDecision};
 #[cfg(test)]
