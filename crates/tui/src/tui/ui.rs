@@ -1237,13 +1237,17 @@ async fn run_event_loop(
                                             )
                                         };
                                     let msg = format!(
-                                        "{goal_label}\n\n{goal_context}\n\n---\n\n{recap}\n\n---\n\n\
+                                        "SYSTEM: This is an auto-continue work order, not a chat message. \
+                                         DO NOT explain what you will do. DO NOT summarize. \
+                                         DO NOT describe what you found. \
+                                         Pick one todo NOW and start working with a tool call immediately.\n\n\
+                                         {goal_label}\n\n{goal_context}\n\n---\n\n{recap}\n\n---\n\n\
                                          ACTION: Pick the next pending todo. \
                                          Mark it in_progress with checklist_update. \
-                                         Complete it using tools. \
+                                         Complete it using tools (read_file, write_file, exec_shell, etc.). \
                                          Verify with tests/build. \
                                          Mark it completed with checklist_update.{progress_note}\n\n\
-                                         Move exactly one item from ○ or ⏳ to ✓ this turn."
+                                         Start with a tool call NOW. Move exactly one item from ○ or ⏳ to ✓."
                                     );
                                     app.queued_messages.push_back(QueuedMessage::new(msg, None));
                                     app.goal.auto_continue_turn_count += 1;
@@ -6428,10 +6432,12 @@ fn apply_loaded_session(app: &mut App, session: &SavedSession) -> bool {
             app.pending_todo_count()
         );
         let msg = format!(
-            "{recap}\n\n---\n\n\
-             ACTION: Resume working. Pick the next pending todo. \
+            "SYSTEM: Session restored. This is an auto-continue work order. \
+             DO NOT chat or explain — pick a todo and start working NOW.\n\n\
+             {recap}\n\n---\n\n\
+             ACTION: Pick the next pending todo. \
              Mark it in_progress with checklist_update. \
-             Complete it using tools. \
+             Complete it using tools (read_file, write_file, exec_shell, etc.). \
              Verify with tests/build. \
              Mark it completed with checklist_update.{progress_note}"
         );
