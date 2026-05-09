@@ -9,6 +9,10 @@ permissions:
   contents: write
 
 concurrency:
+  # Keep only one active sync lane for this repo. GitHub Actions concurrency
+  # allows at most one running job plus one pending job in the same group; the
+  # pending run waits for the running one to finish because cancel-in-progress
+  # is false.
   group: sync-upstream-main
   cancel-in-progress: false
 
