@@ -2251,7 +2251,8 @@ mod tests {
         }
     }
 
-    fn test_connection(name: &str, tools: Vec<McpTool>) -> McpConnection {
+    fn test_connection(name: &str, mut tools: Vec<McpTool>) -> McpConnection {
+        tools.sort_by(|a, b| a.name.cmp(&b.name));
         McpConnection {
             name: name.to_string(),
             transport: Box::new(MockTransport {
