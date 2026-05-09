@@ -1426,12 +1426,12 @@ impl Config {
                 "OpenAI API key not found. Run 'deepseek auth set --provider openai', \
                  set OPENAI_API_KEY, or add [providers.openai] api_key in ~/.deepseek/config.toml."
             ),
-            ApiProvider::OpenaiCompatible => anyhow::bail!(
-                "OpenAI-compatible API key and base URL not found. \
-                 Run 'deepseek auth set --provider openai-compatible --url <BASE_URL>', \
-                 set OPENAI_COMPATIBLE_API_KEY and OPENAI_COMPATIBLE_BASE_URL, \
-                 or add [providers.openai_compatible] api_key and base_url in ~/.deepseek/config.toml."
-            ),
+            ApiProvider::OpenaiCompatible => {
+                // Key is optional for openai-compatible (local servers may not
+                // need auth). Return empty string so the client sends no
+                // Authorization header.
+                return Ok(String::new());
+            }
             ApiProvider::Openrouter => anyhow::bail!(
                 "OpenRouter API key not found. Run 'deepseek auth set --provider openrouter', \
                  set OPENROUTER_API_KEY, or add [providers.openrouter] api_key in ~/.deepseek/config.toml."
@@ -3019,6 +3019,23 @@ pub fn has_api_key_for(config: &Config, provider: ApiProvider) -> bool {
         ApiProvider::Sglang | ApiProvider::Vllm | ApiProvider::Ollama
     ) {
         return true;
+    }
+
+    // openai-compatible: key is optional, but a configured base URL means the
+    // provider is usable (the picker shows "(configured)" instead of prompting).
+    if provider == ApiProvider::OpenaiCompatible {
+        if std::env::var("OPENAI_COMPATIBLE_BASE_URL")
+            .is_ok_and(|v| !v.trim().is_empty())
+        {
+            return true;
+        }
+        if config
+            .provider_config_for(provider)
+            .and_then(|entry| entry.base_url.as_ref())
+            .is_some_and(|v| !v.trim().is_empty())
+        {
+            return true;
+        }
     }
 
     if config
