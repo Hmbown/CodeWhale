@@ -860,6 +860,9 @@ pub struct PatchSummaryCell {
     pub summary: String,
     pub status: ToolStatus,
     pub error: Option<String>,
+    /// Full tool output, used for diff rendering when it contains
+    /// a unified diff payload (e.g. from `apply_patch`).
+    pub output: Option<String>,
 }
 
 impl PatchSummaryCell {
@@ -878,12 +881,31 @@ impl PatchSummaryCell {
             None,
             low_motion,
         ));
-        lines.extend(render_compact_kv(
-            "file",
-            &self.path,
-            tool_value_style(),
-            width,
-        ));
+
+        // If the output contains a unified diff, render it inline
+        // matching Claude Code's update/patch display style.
+        if let Some(ref output) = self.output
+            && output_looks_like_diff(output)
+        {
+            let diff_summary = diff_render::diff_summary_label(output);
+            lines.push(render_tool_header_with_summary(
+                "Diff",
+                diff_summary.as_deref(),
+                tool_status_label(self.status),
+                self.status,
+                None,
+                low_motion,
+            ));
+            lines.extend(diff_render::render_diff(output, width));
+        } else {
+            lines.extend(render_compact_kv(
+                "file",
+                &self.path,
+                tool_value_style(),
+                width,
+            ));
+        }
+
         lines.extend(render_tool_output_mode(
             &self.summary,
             width,
@@ -2763,30 +2785,44 @@ fn render_tool_header_with_family_and_summary(
     started_at: Option<Instant>,
     low_motion: bool,
 ) -> Line<'static> {
-    // Claude Code header style: "* verb(summary)" or "✓ verb(summary)"
     let verb = crate::tui::widgets::tool_card::family_label(family);
     let state_color = tool_state_color(status);
     let sym = status_symbol(started_at, status, low_motion);
 
-    let mut header = format!("{sym} {verb}");
+    // Build: "✓ verb running (3s) · summary"
+    let mut parts: Vec<String> = Vec::new();
+    parts.push(format!("{sym} {verb}"));
 
-    // Append elapsed time for long-running tools.
-    if status == ToolStatus::Running
-        && let Some(started) = started_at
-    {
-        let secs = started.elapsed().as_secs();
-        if secs >= 3 {
-            header.push_str(&format!(" ({secs}s)"));
+    // Status badge for running tools (elapsed time).
+    if status == ToolStatus::Running {
+        if let Some(started) = started_at {
+            let secs = started.elapsed().as_secs();
+            if secs >= 3 {
+                parts.push(format!("({secs}s)"));
+            }
         }
+    } else if matches!(status, ToolStatus::Success) {
+        parts.push("done".to_string());
+    } else if matches!(status, ToolStatus::Failed) {
+        parts.push("failed".to_string());
     }
+
+    let header = parts.join(" ");
+
+    let mut spans = vec![Span::styled(header, Style::default().fg(state_color))];
 
     if let Some(s) = summary.and_then(normalize_header_summary) {
-        header.push('(');
-        header.push_str(&truncate_text(&s, TOOL_HEADER_SUMMARY_LIMIT));
-        header.push(')');
+        spans.push(Span::styled(
+            " · ",
+            Style::default().fg(palette::TEXT_DIM),
+        ));
+        spans.push(Span::styled(
+            truncate_text(&s, TOOL_HEADER_SUMMARY_LIMIT),
+            Style::default().fg(palette::TEXT_MUTED),
+        ));
     }
 
-    Line::from(vec![Span::styled(header, Style::default().fg(state_color))])
+    Line::from(spans)
 }
 
 fn normalize_header_summary(summary: &str) -> Option<String> {
@@ -3945,22 +3981,25 @@ mod tests {
 
         let lines = cell.lines_with_motion(80, true);
 
-        // Claude Code header: "· tool" (single span, status-color fg).
+        // Header: "· tool" or similar — state span should use accent color.
         let header = &lines[0];
-        let span = &header.spans[0];
+        let state_span = &header.spans[0];
+        let header_text: String = header
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
         assert!(
-            span.content.contains("tool"),
-            "PlanUpdate routes to Generic family → 'tool' verb: {:?}",
-            span.content
+            header_text.contains("tool"),
+            "PlanUpdate routes to Generic family: {header_text:?}"
         );
         assert_eq!(
-            span.style.fg,
+            state_span.style.fg,
             Some(theme.tool_running_accent),
             "header should use tool_running_accent"
         );
 
-        // Step rows: "| <marker>: <step>" (| rail prefix).
-        // Plain content stays identical.
+        // Step rows: "| <marker>: <step>".
         let visible = lines
             .iter()
             .map(|l| {
@@ -3993,23 +4032,30 @@ mod tests {
 
         let lines = cell.lines_with_motion(80, true);
 
-        // Claude Code header: single span "✗ run(false)"
+        // Header: "✗ run failed · false"
         let header = &lines[0];
-        let span = &header.spans[0];
+        let state_span = &header.spans[0];
         assert_eq!(
-            span.style.fg,
+            state_span.style.fg,
             Some(theme.tool_failed_accent),
             "failed exec header should use tool_failed_accent"
         );
+        let header_text: String = header
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
         assert!(
-            span.content.contains("run"),
-            "ExecCell routes to Run family → contains 'run': {:?}",
-            span.content
+            header_text.contains("run"),
+            "ExecCell routes to Run family: {header_text:?}"
         );
         assert!(
-            span.content.contains("false"),
-            "header should contain command summary: {:?}",
-            span.content
+            header_text.contains("failed"),
+            "status label in header: {header_text:?}"
+        );
+        assert!(
+            header_text.contains("false"),
+            "command summary: {header_text:?}"
         );
     }
 

@@ -5,6 +5,7 @@
 
 use std::collections::HashSet;
 use std::fs;
+use std::io::Read;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
@@ -237,6 +238,15 @@ impl ToolSpec for ApplyPatchTool {
                 tool_result.content.push('\n');
                 tool_result.content.push_str(&diag_block);
             }
+            let old_map: std::collections::HashMap<PathBuf, String> = pending
+                .iter()
+                .filter_map(|pw| {
+                    std::fs::read_to_string(&pw.path)
+                        .ok()
+                        .map(|s| (pw.path.clone(), s))
+                })
+                .collect();
+            tool_result.content = prepend_diffs(&tool_result.content, &pending, &old_map);
             return Ok(tool_result);
         }
 
@@ -272,6 +282,16 @@ impl ToolSpec for ApplyPatchTool {
         if stats.header_path_mismatch.is_none() {
             stats.header_path_mismatch = mismatch_note;
         }
+        // Snapshot old file content before applying writes, so we can
+        // generate accurate unified diffs afterward.
+        let old_contents: std::collections::HashMap<PathBuf, String> = pending
+            .iter()
+            .filter_map(|pw| {
+                std::fs::read_to_string(&pw.path)
+                    .ok()
+                    .map(|s| (pw.path.clone(), s))
+            })
+            .collect();
         apply_pending_writes(&pending)?;
         // Resolve absolute paths for LSP diagnostics query.
         let abs_paths: Vec<PathBuf> = pending
@@ -298,7 +318,41 @@ impl ToolSpec for ApplyPatchTool {
             tool_result.content.push('\n');
             tool_result.content.push_str(&diag_block);
         }
+        tool_result.content = prepend_diffs(&tool_result.content, &pending, &old_contents);
         Ok(tool_result)
+    }
+}
+
+/// Generate unified diffs for each pending write that modified a file,
+/// and prepend them to the tool output so the TUI renders inline diffs.
+fn prepend_diffs(
+    output: &str,
+    pending: &[PendingWrite],
+    old_contents: &std::collections::HashMap<PathBuf, String>,
+) -> String {
+    let mut diffs = String::new();
+    for pw in pending {
+        if pw.content.is_none() {
+            continue;
+        }
+        let display = pw.path.display().to_string();
+        let old = old_contents
+            .get(&pw.path)
+            .map(String::as_str)
+            .unwrap_or("");
+        let new = pw.content.as_deref().unwrap_or("");
+        let diff = crate::tools::diff_format::make_unified_diff(&display, old, new);
+        if !diff.is_empty() {
+            if !diffs.is_empty() {
+                diffs.push('\n');
+            }
+            diffs.push_str(&diff);
+        }
+    }
+    if diffs.is_empty() {
+        output.to_string()
+    } else {
+        format!("{diffs}\n{output}")
     }
 }
 

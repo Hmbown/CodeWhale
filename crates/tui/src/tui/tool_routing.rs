@@ -173,6 +173,7 @@ pub(super) fn handle_tool_call_started(
                 summary,
                 status: ToolStatus::Running,
                 error: None,
+                output: None,
             })),
         );
         return;
@@ -489,6 +490,8 @@ pub(super) fn handle_tool_call_complete(
                 patch.status = status;
                 match result.as_ref() {
                     Ok(tool_result) => {
+                        // Store full output for diff rendering.
+                        patch.output = Some(tool_result.content.clone());
                         if let Ok(json) =
                             serde_json::from_str::<serde_json::Value>(&tool_result.content)
                             && let Some(message) = json.get("message").and_then(|v| v.as_str())
