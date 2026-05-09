@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 pub struct PromptSessionContext<'a> {
     pub user_memory_block: Option<&'a str>,
     pub goal_objective: Option<&'a str>,
+    pub project_context_pack_enabled: bool,
     /// Resolved BCP-47 locale tag for the `## Environment` block in
     /// the system prompt (e.g. `"en"`, `"zh-Hans"`, `"ja"`). The
     /// caller is responsible for resolving this from `Settings`; no
@@ -333,6 +334,7 @@ pub fn system_prompt_for_mode_with_context_and_skills(
         PromptSessionContext {
             user_memory_block,
             goal_objective: None,
+            project_context_pack_enabled: true,
             locale_tag: "en",
         },
     )
@@ -382,6 +384,12 @@ pub fn system_prompt_for_mode_with_context_skills_session_and_approval(
         tracing::warn!("No project context available and auto-generation failed");
         mode_prompt
     };
+
+    if session_context.project_context_pack_enabled
+        && let Some(pack) = crate::project_context::generate_project_context_pack(workspace)
+    {
+        full_prompt = format!("{full_prompt}\n\n{pack}");
+    }
 
     // 2.25. Environment block — locale, platform, shell, pwd. All
     // four inputs are session-stable (workspace path is fixed for
@@ -545,6 +553,7 @@ mod tests {
             PromptSessionContext {
                 user_memory_block: None,
                 goal_objective: None,
+                project_context_pack_enabled: true,
                 locale_tag: "ja",
             },
         ) {
@@ -554,6 +563,59 @@ mod tests {
         assert!(prompt.contains("## Environment"));
         assert!(prompt.contains("- lang: ja"));
         assert!(prompt.contains("- deepseek_version:"));
+    }
+
+    #[test]
+    fn project_context_pack_can_be_disabled() {
+        let tmp = tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join("README.md"), "# Pack test").expect("write readme");
+        let prompt = match system_prompt_for_mode_with_context_skills_and_session(
+            AppMode::Agent,
+            tmp.path(),
+            None,
+            None,
+            None,
+            PromptSessionContext {
+                user_memory_block: None,
+                goal_objective: None,
+                project_context_pack_enabled: false,
+                locale_tag: "en",
+            },
+        ) {
+            SystemPrompt::Text(text) => text,
+            SystemPrompt::Blocks(_) => panic!("expected text system prompt"),
+        };
+        assert!(!prompt.contains("<project_context_pack>"));
+    }
+
+    #[test]
+    fn project_context_pack_is_before_dynamic_tail() {
+        let tmp = tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join("README.md"), "# Pack test").expect("write readme");
+        std::fs::create_dir_all(tmp.path().join(".deepseek")).expect("mkdir");
+        std::fs::write(tmp.path().join(".deepseek").join("handoff.md"), "handoff")
+            .expect("handoff");
+        let prompt = match system_prompt_for_mode_with_context_skills_and_session(
+            AppMode::Agent,
+            tmp.path(),
+            None,
+            None,
+            None,
+            PromptSessionContext {
+                user_memory_block: None,
+                goal_objective: None,
+                project_context_pack_enabled: true,
+                locale_tag: "en",
+            },
+        ) {
+            SystemPrompt::Text(text) => text,
+            SystemPrompt::Blocks(_) => panic!("expected text system prompt"),
+        };
+        assert!(prompt.contains("<project_context_pack>"));
+        assert!(
+            prompt.find("<project_context_pack>").expect("pack")
+                < prompt.find("## Previous Session Handoff").expect("handoff")
+        );
     }
 
     #[test]
@@ -716,6 +778,7 @@ mod tests {
             PromptSessionContext {
                 user_memory_block: None,
                 goal_objective: Some("Fix transcript corruption"),
+                project_context_pack_enabled: true,
                 locale_tag: "en",
             },
         ) {
@@ -743,6 +806,7 @@ mod tests {
             PromptSessionContext {
                 user_memory_block: None,
                 goal_objective: Some("   "),
+                project_context_pack_enabled: true,
                 locale_tag: "en",
             },
         ) {

@@ -11,9 +11,11 @@
 //! The loaded content is injected into the system prompt to give the agent
 //! context about the project's conventions, structure, and requirements.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use serde::Serialize;
 use thiserror::Error;
 
 /// Names of project context files to look for, in priority order.
@@ -26,6 +28,25 @@ const PROJECT_CONTEXT_FILES: &[&str] = &[
 
 /// Maximum size for project context files (to prevent loading huge files)
 const MAX_CONTEXT_SIZE: usize = 100 * 1024; // 100KB
+const PACK_README_MAX_CHARS: usize = 4_000;
+const PACK_MAX_ENTRIES: usize = 400;
+const PACK_MAX_SOURCE_FILES: usize = 80;
+const PACK_MAX_CONFIG_FILES: usize = 80;
+const PACK_MAX_DEPTH: usize = 4;
+const PACK_IGNORED_DIRS: &[&str] = &[
+    ".git",
+    "node_modules",
+    ".venv",
+    "venv",
+    "__pycache__",
+    "dist",
+    "build",
+    "target",
+    ".idea",
+    ".vscode",
+    ".pytest_cache",
+    ".DS_Store",
+];
 
 // === Errors ===
 
@@ -97,6 +118,203 @@ impl ProjectContext {
             )
         })
     }
+}
+
+#[derive(Debug, Serialize)]
+struct ProjectContextPack {
+    project_name: String,
+    directory_structure: Vec<String>,
+    readme: Option<ReadmePack>,
+    config_files: Vec<String>,
+    key_source_files: Vec<String>,
+    counts: BTreeMap<String, usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct ReadmePack {
+    path: String,
+    excerpt: String,
+}
+
+/// Generate a deterministic, cache-friendly project context pack.
+///
+/// The pack intentionally uses only stable workspace facts: relative paths,
+/// sorted entries, bounded README text, and sorted JSON object fields. It does
+/// not include timestamps, random ids, absolute temp paths, or live git state.
+pub fn generate_project_context_pack(workspace: &Path) -> Option<String> {
+    let mut entries = Vec::new();
+    collect_pack_entries(workspace, workspace, 0, &mut entries);
+    entries.sort();
+    entries.truncate(PACK_MAX_ENTRIES);
+
+    let mut config_files = entries
+        .iter()
+        .filter(|path| is_config_file(path))
+        .take(PACK_MAX_CONFIG_FILES)
+        .cloned()
+        .collect::<Vec<_>>();
+    config_files.sort();
+
+    let mut key_source_files = entries
+        .iter()
+        .filter(|path| is_source_file(path))
+        .take(PACK_MAX_SOURCE_FILES)
+        .cloned()
+        .collect::<Vec<_>>();
+    key_source_files.sort();
+
+    let readme = read_readme_excerpt(workspace, &entries);
+    let mut counts = BTreeMap::new();
+    counts.insert("config_files".to_string(), config_files.len());
+    counts.insert("directory_entries".to_string(), entries.len());
+    counts.insert("key_source_files".to_string(), key_source_files.len());
+
+    let pack = ProjectContextPack {
+        project_name: workspace
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("workspace")
+            .to_string(),
+        directory_structure: entries,
+        readme,
+        config_files,
+        key_source_files,
+        counts,
+    };
+
+    let json = serde_json::to_string_pretty(&pack).ok()?;
+    Some(format!(
+        "## Project Context Pack\n\n<project_context_pack>\n{json}\n</project_context_pack>"
+    ))
+}
+
+fn collect_pack_entries(root: &Path, dir: &Path, depth: usize, out: &mut Vec<String>) {
+    if depth > PACK_MAX_DEPTH || out.len() >= PACK_MAX_ENTRIES {
+        return;
+    }
+
+    let Ok(read_dir) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut children = read_dir.filter_map(Result::ok).collect::<Vec<_>>();
+    children.sort_by_key(|entry| entry.path());
+
+    for entry in children {
+        if out.len() >= PACK_MAX_ENTRIES {
+            break;
+        }
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() && PACK_IGNORED_DIRS.contains(&name) {
+            continue;
+        }
+
+        if let Some(relative) = relative_slash_path(root, &path) {
+            if file_type.is_dir() {
+                out.push(format!("{relative}/"));
+                collect_pack_entries(root, &path, depth + 1, out);
+            } else if file_type.is_file() {
+                out.push(relative);
+            }
+        }
+    }
+}
+
+fn relative_slash_path(root: &Path, path: &Path) -> Option<String> {
+    let relative = path.strip_prefix(root).ok()?;
+    let mut parts = Vec::new();
+    for component in relative.components() {
+        parts.push(component.as_os_str().to_string_lossy().to_string());
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("/"))
+    }
+}
+
+fn read_readme_excerpt(workspace: &Path, entries: &[String]) -> Option<ReadmePack> {
+    let path = entries
+        .iter()
+        .find(|path| {
+            let lower = path.to_ascii_lowercase();
+            lower == "readme.md" || lower == "readme.txt" || lower == "readme"
+        })?
+        .clone();
+    let raw = fs::read_to_string(workspace.join(&path)).ok()?;
+    let excerpt = truncate_chars(raw.trim(), PACK_README_MAX_CHARS);
+    if excerpt.is_empty() {
+        None
+    } else {
+        Some(ReadmePack { path, excerpt })
+    }
+}
+
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+    value.chars().take(max_chars).collect::<String>()
+}
+
+fn is_config_file(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    let name = lower.rsplit('/').next().unwrap_or(lower.as_str());
+    matches!(
+        name,
+        "cargo.toml"
+            | "package.json"
+            | "tsconfig.json"
+            | "pyproject.toml"
+            | "requirements.txt"
+            | "go.mod"
+            | "config.toml"
+            | "deepseek.toml"
+            | "dockerfile"
+            | "compose.yaml"
+            | "compose.yml"
+            | "docker-compose.yaml"
+            | "docker-compose.yml"
+            | "makefile"
+    ) || lower.ends_with(".config.js")
+        || lower.ends_with(".config.ts")
+        || lower.ends_with(".toml")
+        || lower.ends_with(".yaml")
+        || lower.ends_with(".yml")
+}
+
+fn is_source_file(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    matches!(
+        lower.rsplit('.').next(),
+        Some(
+            "rs" | "py"
+                | "js"
+                | "jsx"
+                | "ts"
+                | "tsx"
+                | "go"
+                | "java"
+                | "kt"
+                | "c"
+                | "cc"
+                | "cpp"
+                | "h"
+                | "hpp"
+                | "cs"
+                | "rb"
+                | "php"
+                | "swift"
+                | "sql"
+                | "sh"
+                | "bash"
+        )
+    )
 }
 
 /// Load project context from the workspace directory.
@@ -526,6 +744,38 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .contains("Organization instructions")
+        );
+    }
+
+    #[test]
+    fn project_context_pack_is_stable_and_sorted() {
+        let tmp = tempdir().expect("tempdir");
+        fs::write(tmp.path().join("README.md"), "# Demo\n\nReadme body").expect("write");
+        fs::write(tmp.path().join("Cargo.toml"), "[package]\nname = \"demo\"").expect("write");
+        fs::create_dir_all(tmp.path().join("src")).expect("mkdir src");
+        fs::write(tmp.path().join("src").join("z.rs"), "mod z;").expect("write z");
+        fs::write(tmp.path().join("src").join("a.rs"), "mod a;").expect("write a");
+        fs::create_dir_all(tmp.path().join("node_modules").join("pkg")).expect("mkdir ignored");
+        fs::write(
+            tmp.path().join("node_modules").join("pkg").join("index.js"),
+            "ignored",
+        )
+        .expect("write ignored");
+
+        let first = generate_project_context_pack(tmp.path()).expect("pack");
+        let second = generate_project_context_pack(tmp.path()).expect("pack again");
+
+        assert_eq!(first, second);
+        assert!(first.contains("\"project_name\""));
+        assert!(first.contains("\"directory_structure\""));
+        assert!(first.contains("\"README.md\""));
+        assert!(first.contains("\"Cargo.toml\""));
+        assert!(first.contains("\"src/a.rs\""));
+        assert!(first.contains("\"src/z.rs\""));
+        assert!(!first.contains("node_modules"));
+        assert!(
+            first.find("\"src/a.rs\"").expect("a before z")
+                < first.find("\"src/z.rs\"").expect("z")
         );
     }
 }

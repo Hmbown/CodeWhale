@@ -225,31 +225,44 @@ deepseek --provider ollama --model deepseek-coder:1.3b
 
 ---
 
-## What's New In v0.8.23
+## What's New In v0.8.24
 
-A security-focused follow-up to v0.8.22: sanitized child-process environments,
-tighter tool-safety classifications, and fixes for MCP, secrets, and the
-runtime API. [Full changelog](CHANGELOG.md).
+A community-focused bugfix release picking up the backlog after the v0.8.23
+security release. [Full changelog](CHANGELOG.md).
 
-- **Child-process environment scrubbed** — shells, MCP servers, hooks, and other
-  spawned subprocesses now start from an explicit env allowlist instead of
-  inheriting every parent variable. No more accidental `*_API_KEY` or
-  `GITHUB_TOKEN` leakage through subprocesses.
-- **macOS Keychain prompts gone** — the file-backed secret store is now the
-  default; the OS keyring is opt-in via `DEEPSEEK_SECRET_BACKEND=system|keyring`.
-- **MCP servers stay working** — MCP stdio launches now inherit the env vars
-  that `npx`, `uvx`, `python -m`, and proxy-bound corporate setups need, while
-  still scrubbing secrets.
-- **MCP spawn errors are visible** — instead of an opaque wrapper message, you
-  now see the real OS error ("No such file or directory") when an MCP server
-  can't start.
-- **Live thinking is compact by default** — the streaming thinking panel
-  collapses by default; expand via the details toggle.
-- **Runtime API requires auth by default** — `deepseek serve --http` no longer
-  accepts unauthenticated requests.
-- **Plus**: hardened `run_tests` approval, symlink-traversal guards, Plan-mode
-  tool-surface tightening, path-sanitization fixes, and a new
-  `docs/RELEASE_CHECKLIST.md`.
+- **Cache-aware prompt diagnostics + payload optimization** (#1196, thanks
+  **wplll**) — new `/cache inspect` and `/cache warmup` commands, layered
+  prompt classification (static / history / dynamic) with per-layer SHA-256
+  hashes, wire-payload dedup for repeated tool outputs, and a footer cache-hit
+  % chip from the DeepSeek API response. A new **Project Context Pack** is
+  injected into the stable prefix by default to improve cache hit rates;
+  disable with `[context] project_pack = false` if you'd rather keep prompts
+  minimal.
+- **Workspace-local slash commands** (#1259) — drop a `.deepseek/commands/foo.md`
+  in any project and `/foo` works there. Also scans `.cursor/commands/` and
+  `.claude/commands/`. Project-local shadows global by name.
+- **`@`-mention completion finds AI-tool dot-directories** — files inside
+  `.deepseek/`, `.cursor/`, `.claude/`, and `.agents/` are now discoverable
+  via `@` completion even when those dirs are in `.gitignore`.
+- **MCP paginated discovery** (#1250, thanks **Liu-Vince**) — MCP servers that
+  paginate `tools/list` (e.g., gbrain at 5 per page) now have all their tools
+  discovered via `nextCursor`.
+- **Snapshot disk cap** (#1112) — the snapshot side repo enforces a 500 MB
+  hard limit, pruning oldest first when it's hit. Guards against the reported
+  1.2 TB blowup. Thanks **@Giggitycountless** for the PR #1131 proposal.
+- **`/clear` resets the Todos sidebar** (#1258) — was only clearing the Plan
+  panel before.
+- **Mouse-wheel survives focus toggles** — re-arms `EnableMouseCapture` on
+  `FocusGained` so wheel scroll keeps working after Cmd+Tab or screenshot
+  workflows.
+- **i18n: prompts in English get English replies** (#1118) — Chinese
+  filenames in a project tree no longer bias the model toward Chinese
+  responses.
+- **Plus**: language-directive strengthening, MCP error-message clarity
+  improvements (PR #1196), and assorted polish.
+
+⚠️ **Known issue:** v0.8.22+ have a Windows 10 conhost flicker regression
+(#1260) tracked for v0.8.25. v0.8.20 works correctly if you're affected.
 
 ---
 

@@ -4186,6 +4186,7 @@ async fn run_exec_agent(
         mcp_config_path: config.mcp_config_path(),
         skills_dir: config.skills_dir(),
         instructions: config.instructions_paths(),
+        project_context_pack_enabled: config.project_context_pack_enabled(),
         max_steps: 100,
         max_subagents,
         features: config.features(),

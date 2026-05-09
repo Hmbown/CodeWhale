@@ -774,94 +774,160 @@ impl McpConnection {
 
     /// Discover available tools from the MCP server
     async fn discover_tools(&mut self) -> Result<()> {
-        let list_id = self.next_id();
-        self.send(serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": list_id,
-            "method": "tools/list",
-            "params": {}
-        }))
-        .await?;
+        let mut cursor: Option<String> = None;
+        loop {
+            let list_id = self.next_id();
+            let params = match &cursor {
+                Some(c) => serde_json::json!({ "cursor": c }),
+                None => serde_json::json!({}),
+            };
+            self.send(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": list_id,
+                "method": "tools/list",
+                "params": params
+            }))
+            .await?;
 
-        let response = self.recv(list_id).await?;
+            let response = self.recv(list_id).await?;
+            let Some(result) = response.get("result") else {
+                break;
+            };
 
-        if let Some(result) = response.get("result")
-            && let Some(tools) = result.get("tools")
-        {
-            self.tools = serde_json::from_value(tools.clone()).unwrap_or_default();
+            if let Some(tools) = result.get("tools") {
+                let page: Vec<McpTool> = serde_json::from_value(tools.clone()).unwrap_or_default();
+                self.tools.extend(page);
+            }
+
+            cursor = result
+                .get("nextCursor")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned);
+            if cursor.is_none() {
+                break;
+            }
         }
-
         Ok(())
     }
 
     /// Discover available resources from the MCP server
     async fn discover_resources(&mut self) -> Result<()> {
-        let list_id = self.next_id();
-        self.send(serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": list_id,
-            "method": "resources/list",
-            "params": {}
-        }))
-        .await?;
+        let mut cursor: Option<String> = None;
+        loop {
+            let list_id = self.next_id();
+            let params = match &cursor {
+                Some(c) => serde_json::json!({ "cursor": c }),
+                None => serde_json::json!({}),
+            };
+            self.send(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": list_id,
+                "method": "resources/list",
+                "params": params
+            }))
+            .await?;
 
-        let response = self.recv(list_id).await?;
+            let response = self.recv(list_id).await?;
+            let Some(result) = response.get("result") else {
+                break;
+            };
 
-        if let Some(result) = response.get("result")
-            && let Some(resources) = result.get("resources")
-        {
-            self.resources = serde_json::from_value(resources.clone()).unwrap_or_default();
+            if let Some(resources) = result.get("resources") {
+                let page: Vec<McpResource> =
+                    serde_json::from_value(resources.clone()).unwrap_or_default();
+                self.resources.extend(page);
+            }
+
+            cursor = result
+                .get("nextCursor")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned);
+            if cursor.is_none() {
+                break;
+            }
         }
-
         Ok(())
     }
 
     /// Discover available resource templates from the MCP server
     async fn discover_resource_templates(&mut self) -> Result<()> {
-        let list_id = self.next_id();
-        self.send(serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": list_id,
-            "method": "resources/templates/list",
-            "params": {}
-        }))
-        .await?;
+        let mut cursor: Option<String> = None;
+        loop {
+            let list_id = self.next_id();
+            let params = match &cursor {
+                Some(c) => serde_json::json!({ "cursor": c }),
+                None => serde_json::json!({}),
+            };
+            self.send(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": list_id,
+                "method": "resources/templates/list",
+                "params": params
+            }))
+            .await?;
 
-        let response = self.recv(list_id).await?;
+            let response = self.recv(list_id).await?;
+            let Some(result) = response.get("result") else {
+                break;
+            };
 
-        if let Some(result) = response.get("result") {
             let templates = result
                 .get("resourceTemplates")
                 .or_else(|| result.get("templates"))
                 .or_else(|| result.get("resource_templates"));
             if let Some(templates) = templates {
-                self.resource_templates =
+                let page: Vec<McpResourceTemplate> =
                     serde_json::from_value(templates.clone()).unwrap_or_default();
+                self.resource_templates.extend(page);
+            }
+
+            cursor = result
+                .get("nextCursor")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned);
+            if cursor.is_none() {
+                break;
             }
         }
-
         Ok(())
     }
 
     /// Discover available prompts from the MCP server
     async fn discover_prompts(&mut self) -> Result<()> {
-        let list_id = self.next_id();
-        self.send(serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": list_id,
-            "method": "prompts/list",
-            "params": {}
-        }))
-        .await?;
+        let mut cursor: Option<String> = None;
+        loop {
+            let list_id = self.next_id();
+            let params = match &cursor {
+                Some(c) => serde_json::json!({ "cursor": c }),
+                None => serde_json::json!({}),
+            };
+            self.send(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": list_id,
+                "method": "prompts/list",
+                "params": params
+            }))
+            .await?;
 
-        let response = self.recv(list_id).await?;
+            let response = self.recv(list_id).await?;
+            let Some(result) = response.get("result") else {
+                break;
+            };
 
-        if let Some(result) = response.get("result")
-            && let Some(prompts) = result.get("prompts")
-        {
-            self.prompts = serde_json::from_value(prompts.clone()).unwrap_or_default();
+            if let Some(prompts) = result.get("prompts") {
+                let page: Vec<McpPrompt> =
+                    serde_json::from_value(prompts.clone()).unwrap_or_default();
+                self.prompts.extend(page);
+            }
+
+            cursor = result
+                .get("nextCursor")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned);
+            if cursor.is_none() {
+                break;
+            }
         }
-
         Ok(())
     }
 

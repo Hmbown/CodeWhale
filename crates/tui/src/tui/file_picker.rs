@@ -434,6 +434,44 @@ fn collect_candidates(root: &Path) -> Vec<String> {
             break;
         }
     }
+
+    // Whitelist AI-tool dot-directories so they're discoverable even when
+    // gitignored. Walk each one separately with gitignore disabled.
+    for dir in [".deepseek", ".cursor", ".claude", ".agents"] {
+        let dot_dir = root.join(dir);
+        if !dot_dir.is_dir() {
+            continue;
+        }
+        let mut dot_builder = WalkBuilder::new(&dot_dir);
+        dot_builder
+            .hidden(true)
+            .follow_links(false)
+            .git_ignore(false)
+            .ignore(false)
+            .max_depth(Some(WALK_DEPTH.saturating_sub(1)));
+        for entry in dot_builder.build().flatten() {
+            // Exclude machine-generated bulk (e.g. .deepseek/snapshots/).
+            if entry.path().starts_with(root.join(".deepseek/snapshots")) {
+                continue;
+            }
+            if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+                continue;
+            }
+            let path = entry.path();
+            let rel = path.strip_prefix(root).unwrap_or(path);
+            if rel.as_os_str().is_empty() {
+                continue;
+            }
+            let display = path_to_workspace_string(rel);
+            if !display.is_empty() {
+                out.push(display);
+            }
+            if out.len() >= MAX_CANDIDATES {
+                break;
+            }
+        }
+    }
+
     out.sort();
     out
 }

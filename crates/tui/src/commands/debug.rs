@@ -5,9 +5,10 @@
 use std::time::Instant;
 
 use super::CommandResult;
+use crate::client::{PromptInspection, inspect_prompt_for_request};
 use crate::compaction::estimate_input_tokens_conservative;
 use crate::localization::{Locale, MessageId, tr};
-use crate::models::{ContentBlock, SystemPrompt, context_window_for_model};
+use crate::models::{ContentBlock, MessageRequest, SystemPrompt, context_window_for_model};
 use crate::tui::app::{App, AppAction, TurnCacheRecord};
 use crate::tui::history::HistoryCell;
 
@@ -136,9 +137,15 @@ pub fn context(_app: &mut App) -> CommandResult {
 /// `arg` is parsed as a count override (default 10, capped at the ring size).
 /// Renders a fixed-width table the user can paste into a bug report.
 pub fn cache(app: &mut App, arg: Option<&str>) -> CommandResult {
-    let want = arg
-        .and_then(|s| s.trim().parse::<usize>().ok())
-        .unwrap_or(10);
+    let arg = arg.map(str::trim).filter(|s| !s.is_empty());
+    if matches!(arg, Some("inspect")) {
+        return CommandResult::message(format_cache_inspect(app));
+    }
+    if matches!(arg, Some("warmup")) {
+        return CommandResult::action(AppAction::CacheWarmup);
+    }
+
+    let want = arg.and_then(|s| s.parse::<usize>().ok()).unwrap_or(10);
     let cap = app.session.turn_cache_history.len();
     let count = want
         .min(cap)
@@ -149,6 +156,150 @@ pub fn cache(app: &mut App, arg: Option<&str>) -> CommandResult {
     }
 
     CommandResult::message(format_cache_history(app, count, app.ui_locale))
+}
+
+fn format_cache_inspect(app: &mut App) -> String {
+    let reasoning_effort = if app.reasoning_effort == crate::tui::app::ReasoningEffort::Auto {
+        app.last_effective_reasoning_effort
+            .and_then(crate::tui::app::ReasoningEffort::api_value)
+            .map(str::to_string)
+    } else {
+        app.reasoning_effort.api_value().map(str::to_string)
+    };
+    let request = MessageRequest {
+        model: app.model.clone(),
+        messages: app.api_messages.clone(),
+        max_tokens: 0,
+        system: app.system_prompt.clone(),
+        tools: None,
+        tool_choice: None,
+        metadata: None,
+        thinking: None,
+        reasoning_effort,
+        stream: Some(true),
+        temperature: None,
+        top_p: None,
+    };
+    let inspection = inspect_prompt_for_request(&request);
+    let previous = app.session.last_cache_inspection.as_ref();
+
+    let mut out = String::new();
+    out.push_str("Cache Inspect\n");
+    out.push_str("Full prompt text is not printed. Hashes are SHA-256 of each rendered layer.\n");
+    out.push_str(&format!(
+        "Base static prefix hash: {}\n",
+        inspection.base_static_prefix_hash
+    ));
+    out.push_str(&format!(
+        "Full request prefix hash: {}\n",
+        inspection.full_request_prefix_hash
+    ));
+    out.push_str(&format_static_prefix_status(previous, &inspection));
+    out.push_str(&format_first_divergence(previous, &inspection));
+    out.push('\n');
+
+    for layer in &inspection.layers {
+        let mut line = format!(
+            "{}: {}, chars={}, hash={}\n",
+            layer.name,
+            layer.stability.label(),
+            layer.char_len,
+            layer.sha256
+        );
+        if let Some(tool_result) = &layer.tool_result {
+            let trimmed = line.trim_end_matches('\n').to_string();
+            line = format!(
+                "{trimmed}, original_chars={}, sent_chars={}, truncated={}, deduplicated={}\n",
+                tool_result.original_chars,
+                tool_result.sent_chars,
+                tool_result.truncated,
+                tool_result.deduplicated
+            );
+        }
+        if let Some(turn_meta) = &layer.turn_meta {
+            let trimmed = line.trim_end_matches('\n').to_string();
+            line = format!(
+                "{trimmed}, turn_meta_original_chars={}, turn_meta_sent_chars={}, turn_meta_deduplicated={}, turn_meta_sha256={}\n",
+                turn_meta.original_chars,
+                turn_meta.sent_chars,
+                turn_meta.deduplicated,
+                turn_meta.sha256
+            );
+        }
+        out.push_str(&line);
+    }
+    app.session.last_cache_inspection = Some(inspection);
+    out
+}
+
+fn format_static_prefix_status(
+    previous: Option<&PromptInspection>,
+    current: &PromptInspection,
+) -> String {
+    let Some(previous) = previous else {
+        return "Static base prefix stability: no previous request\n".to_string();
+    };
+    if previous.base_static_prefix_hash == current.base_static_prefix_hash {
+        return "Static base prefix stability: OK\n".to_string();
+    }
+
+    let changed = changed_static_layers(previous, current);
+    if changed.is_empty() {
+        "Static base prefix stability: WARNING (base hash changed)\n".to_string()
+    } else {
+        format!(
+            "Static base prefix stability: WARNING changed layers: {}\n",
+            changed.join(", ")
+        )
+    }
+}
+
+fn format_first_divergence(
+    previous: Option<&PromptInspection>,
+    current: &PromptInspection,
+) -> String {
+    let Some(previous) = previous else {
+        return "First divergence from previous request: unavailable\n".to_string();
+    };
+    let max_len = previous.layers.len().max(current.layers.len());
+    for index in 0..max_len {
+        match (previous.layers.get(index), current.layers.get(index)) {
+            (Some(prev), Some(curr)) if prev.name == curr.name && prev.sha256 == curr.sha256 => {}
+            (Some(prev), Some(curr)) if prev.name == curr.name => {
+                return format!("First divergence from previous request: {}\n", curr.name);
+            }
+            (Some(_), Some(curr)) => {
+                return format!("First divergence from previous request: {}\n", curr.name);
+            }
+            (None, Some(curr)) => {
+                return format!("First divergence from previous request: {}\n", curr.name);
+            }
+            (Some(prev), None) => {
+                return format!(
+                    "First divergence from previous request: {} removed\n",
+                    prev.name
+                );
+            }
+            (None, None) => break,
+        }
+    }
+    "First divergence from previous request: none\n".to_string()
+}
+
+fn changed_static_layers(previous: &PromptInspection, current: &PromptInspection) -> Vec<String> {
+    current
+        .layers
+        .iter()
+        .filter(|layer| layer.stability.label() == "static")
+        .filter(|layer| {
+            previous
+                .layers
+                .iter()
+                .find(|previous_layer| previous_layer.name == layer.name)
+                .is_none_or(|previous_layer| previous_layer.sha256 != layer.sha256)
+        })
+        .map(|layer| layer.name.clone())
+        .collect()
 }
 
 fn format_cache_history(app: &App, count: usize, locale: Locale) -> String {
@@ -414,6 +565,171 @@ mod tests {
         let result = cache(&mut app, None);
         let msg = result.message.expect("cache produces a message");
         assert!(msg.contains("no turns recorded yet"), "got: {msg}");
+    }
+
+    #[test]
+    fn cache_inspect_reports_hashes_without_prompt_text() {
+        let mut app = create_test_app();
+        app.system_prompt = Some(SystemPrompt::Text(
+            "Base policy\n\n<project_instructions source=\"AGENTS.md\">\nSECRET_PROJECT_RULE\n</project_instructions>"
+                .to_string(),
+        ));
+        app.api_messages.push(Message {
+            role: "user".to_string(),
+            content: vec![ContentBlock::Text {
+                text: "SECRET_USER_TASK".to_string(),
+                cache_control: None,
+            }],
+        });
+
+        let result = cache(&mut app, Some("inspect"));
+        let msg = result.message.expect("inspect output");
+
+        assert!(msg.contains("Cache Inspect"));
+        assert!(msg.contains("Base static prefix hash:"));
+        assert!(msg.contains("Full request prefix hash:"));
+        assert!(msg.contains("Static base prefix stability: no previous request"));
+        assert!(msg.contains("First divergence from previous request: unavailable"));
+        assert!(msg.contains("Global system prefix: static"));
+        assert!(msg.contains("Project context: static"));
+        assert!(msg.contains("User task: dynamic"));
+        assert!(!msg.contains("SECRET_PROJECT_RULE"));
+        assert!(!msg.contains("SECRET_USER_TASK"));
+    }
+
+    #[test]
+    fn cache_inspect_reports_divergence_from_previous_request() {
+        let mut app = create_test_app();
+        app.system_prompt = Some(SystemPrompt::Text(
+            "Base policy\n\n## Environment\n\n- shell: powershell".to_string(),
+        ));
+        app.api_messages.push(Message {
+            role: "assistant".to_string(),
+            content: vec![crate::models::ContentBlock::Text {
+                text: "Prior answer".to_string(),
+                cache_control: None,
+            }],
+        });
+        app.api_messages.push(Message {
+            role: "user".to_string(),
+            content: vec![crate::models::ContentBlock::Text {
+                text: "First task".to_string(),
+                cache_control: None,
+            }],
+        });
+
+        let first = cache(&mut app, Some("inspect"))
+            .message
+            .expect("first inspect output");
+        assert!(first.contains("Static base prefix stability: no previous request"));
+
+        if let Some(last) = app.api_messages.last_mut()
+            && let Some(crate::models::ContentBlock::Text { text, .. }) = last.content.first_mut()
+        {
+            *text = "Second task".to_string();
+        }
+
+        let second = cache(&mut app, Some("inspect"))
+            .message
+            .expect("second inspect output");
+        assert!(second.contains("Static base prefix stability: OK"));
+        assert!(second.contains("First divergence from previous request: User task"));
+        assert!(second.contains("Message #1 assistant: history"));
+    }
+
+    #[test]
+    fn cache_inspect_displays_tool_result_budget_metadata() {
+        let mut app = create_test_app();
+        let long_output = format!("{}{}", "A".repeat(7_000), "Z".repeat(7_000));
+        app.api_messages.push(Message {
+            role: "assistant".to_string(),
+            content: vec![ContentBlock::ToolUse {
+                id: "tool-1".to_string(),
+                name: "shell_command".to_string(),
+                input: serde_json::json!({"command": "cargo test"}),
+                caller: None,
+            }],
+        });
+        app.api_messages.push(Message {
+            role: "user".to_string(),
+            content: vec![ContentBlock::ToolResult {
+                tool_use_id: "tool-1".to_string(),
+                content: long_output.clone(),
+                is_error: None,
+                content_blocks: None,
+            }],
+        });
+        app.api_messages.push(Message {
+            role: "assistant".to_string(),
+            content: vec![ContentBlock::ToolUse {
+                id: "tool-2".to_string(),
+                name: "shell_command".to_string(),
+                input: serde_json::json!({"command": "cargo test"}),
+                caller: None,
+            }],
+        });
+        app.api_messages.push(Message {
+            role: "user".to_string(),
+            content: vec![ContentBlock::ToolResult {
+                tool_use_id: "tool-2".to_string(),
+                content: long_output,
+                is_error: None,
+                content_blocks: None,
+            }],
+        });
+
+        let result = cache(&mut app, Some("inspect"));
+        let msg = result.message.expect("inspect output");
+
+        assert!(msg.contains("original_chars=14000"), "got: {msg}");
+        assert!(msg.contains("truncated=true"), "got: {msg}");
+        assert!(msg.contains("deduplicated=false"), "got: {msg}");
+        assert!(msg.contains("deduplicated=true"), "got: {msg}");
+    }
+
+    #[test]
+    fn cache_inspect_displays_turn_meta_dedup_metadata() {
+        let mut app = create_test_app();
+        let turn_meta = format!(
+            "<turn_meta>\nCurrent local date: 2026-05-09\n{}\n</turn_meta>",
+            "Working set: src/lib.rs\n".repeat(20)
+        );
+        app.api_messages.push(Message {
+            role: "user".to_string(),
+            content: vec![
+                ContentBlock::Text {
+                    text: turn_meta.clone(),
+                    cache_control: None,
+                },
+                ContentBlock::Text {
+                    text: "first task".to_string(),
+                    cache_control: None,
+                },
+            ],
+        });
+        app.api_messages.push(Message {
+            role: "user".to_string(),
+            content: vec![
+                ContentBlock::Text {
+                    text: turn_meta,
+                    cache_control: None,
+                },
+                ContentBlock::Text {
+                    text: "second task".to_string(),
+                    cache_control: None,
+                },
+            ],
+        });
+
+        let result = cache(&mut app, Some("inspect"));
+        let msg = result.message.expect("inspect output");
+
+        assert!(msg.contains("turn_meta_original_chars="), "got: {msg}");
+        assert!(msg.contains("turn_meta_sent_chars="), "got: {msg}");
+        assert!(msg.contains("turn_meta_deduplicated=false"), "got: {msg}");
+        assert!(msg.contains("turn_meta_deduplicated=true"), "got: {msg}");
+        assert!(msg.contains("turn_meta_sha256="), "got: {msg}");
+        assert!(!msg.contains("Working set: src/lib.rs"), "got: {msg}");
     }
 
     #[test]

@@ -1483,9 +1483,20 @@ fn footer_auxiliary_spans_show_cache_when_compact() {
     app.session.last_prompt_cache_miss_tokens = Some(12_000);
     app.session.session_cost = 12.34;
 
-    let compact = spans_text(&footer_auxiliary_spans(&app, 14));
-    assert!(compact.contains("cache"));
+    let compact = spans_text(&footer_auxiliary_spans(&app, 48));
+    assert!(compact.contains("Cache: 75.0% hit"));
     assert!(!compact.contains('$'));
+}
+
+#[test]
+fn footer_auxiliary_spans_show_cache_unavailable_when_provider_omits_cache_fields() {
+    let mut app = create_test_app();
+    app.session.last_prompt_tokens = Some(48_000);
+    app.session.last_completion_tokens = Some(2_000);
+
+    let roomy = spans_text(&footer_auxiliary_spans(&app, 72));
+
+    assert!(roomy.contains("Cache: unavailable"));
 }
 
 #[test]
@@ -1496,8 +1507,8 @@ fn footer_auxiliary_spans_show_cache_and_cost_when_roomy() {
     app.session.last_prompt_cache_miss_tokens = Some(12_000);
     app.session.session_cost = 12.34;
 
-    let roomy = spans_text(&footer_auxiliary_spans(&app, 32));
-    assert!(roomy.contains("cache hit 75%"));
+    let roomy = spans_text(&footer_auxiliary_spans(&app, 72));
+    assert!(roomy.contains("Cache: 75.0% hit | hit 36000 | miss 12000"));
     assert!(roomy.contains("$12.34"));
     assert!(
         !roomy.contains("ctx"),

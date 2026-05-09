@@ -690,6 +690,10 @@ pub struct ContextConfig {
     /// v0.7.5 audits V4 prefix-cache behavior.
     #[serde(default)]
     pub enabled: Option<bool>,
+    /// Include a deterministic project context pack in the stable prompt
+    /// prefix. Default: true; set `[context] project_pack = false` to disable.
+    #[serde(default)]
+    pub project_pack: Option<bool>,
     /// Verbatim window: last N turns never summarized. Default: 16.
     #[serde(default)]
     pub verbatim_window_turns: Option<usize>,
@@ -1497,6 +1501,11 @@ impl Config {
             .as_ref()
             .and_then(|m| m.enabled)
             .unwrap_or(false)
+    }
+
+    #[must_use]
+    pub fn project_context_pack_enabled(&self) -> bool {
+        self.context.project_pack.unwrap_or(true)
     }
 
     /// Return whether shell execution is allowed.
@@ -2444,6 +2453,10 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
         lsp: override_cfg.lsp.or(base.lsp),
         context: ContextConfig {
             enabled: override_cfg.context.enabled.or(base.context.enabled),
+            project_pack: override_cfg
+                .context
+                .project_pack
+                .or(base.context.project_pack),
             verbatim_window_turns: override_cfg
                 .context
                 .verbatim_window_turns
@@ -4102,6 +4115,15 @@ api_key = "old-openrouter-key"
 
         let merged = apply_profile(config, Some("work")).expect("profile");
         assert_eq!(merged.context.enabled, Some(true));
+    }
+
+    #[test]
+    fn project_context_pack_defaults_on_and_can_be_disabled() {
+        let mut config = Config::default();
+        assert!(config.project_context_pack_enabled());
+
+        config.context.project_pack = Some(false);
+        assert!(!config.project_context_pack_enabled());
     }
 
     #[test]

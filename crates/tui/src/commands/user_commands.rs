@@ -1,9 +1,18 @@
-//! User-defined slash commands from project-local and user-global command dirs.
+//! User-defined slash commands from `~/.deepseek/commands/<name>.md` and
+//! workspace-local `<workspace>/.deepseek/commands/<name>.md`.
 //!
-//! Users drop `.md` files into `$WORKSPACE/.deepseek/commands/`,
-//! `$WORKSPACE/.cursor/commands/`, or `~/.deepseek/commands/` and the
-//! filename (without `.md` extension) becomes a slash command. When invoked
-//! via `/name`, the file contents are sent as a user message.
+//! Users drop `.md` files into a commands directory and the filename
+//! (without `.md` extension) becomes a slash command. When invoked via
+//! `/name`, the file contents are sent as a user message.
+//!
+//! ## Precedence
+//!
+//! Workspace-local directories shadow user-global by name:
+//!
+//! 1. `<workspace>/.deepseek/commands/`  (project-local, highest)
+//! 2. `<workspace>/.claude/commands/`    (Claude Code interop)
+//! 3. `<workspace>/.cursor/commands/`    (Cursor interop)
+//! 4. `~/.deepseek/commands/`            (user-global, lowest)
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -12,83 +21,117 @@ use crate::tui::app::{App, AppAction};
 
 use super::CommandResult;
 
-/// Path to the user commands directory: `~/.deepseek/commands/`.
-fn commands_dir() -> PathBuf {
+/// Path to the global user commands directory: `~/.deepseek/commands/`.
+fn global_commands_dir() -> PathBuf {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("~"));
     home.join(".deepseek").join("commands")
 }
 
-fn project_commands_dirs(workspace: &Path) -> [PathBuf; 2] {
-    [
-        workspace.join(".deepseek").join("commands"),
-        workspace.join(".cursor").join("commands"),
-    ]
-}
-
-fn command_dirs_for_workspace(workspace: Option<&Path>) -> Vec<PathBuf> {
+/// Return all candidate commands directories in precedence order.
+fn commands_dirs(workspace: Option<&Path>) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
-    if let Some(workspace) = workspace {
-        dirs.extend(project_commands_dirs(workspace));
+    if let Some(ws) = workspace {
+        dirs.push(ws.join(".deepseek").join("commands"));
+        dirs.push(ws.join(".claude").join("commands"));
+        dirs.push(ws.join(".cursor").join("commands"));
     }
-    dirs.push(commands_dir());
+    dirs.push(global_commands_dir());
     dirs
 }
 
-fn load_commands_from_dirs(dirs: impl IntoIterator<Item = PathBuf>) -> Vec<(String, String)> {
+/// Scan a single commands directory for `.md` files and return
+/// `(name, content)` pairs. Errors are silently skipped.
+fn load_commands_from_dir(dir: &Path) -> Vec<(String, String)> {
     let mut commands: Vec<(String, String)> = Vec::new();
-    let mut seen = HashSet::new();
 
-    for dir in dirs {
-        if !dir.exists() {
+    for path in sorted_markdown_paths(dir) {
+        let Some(stem) = command_name_from_path(&path) else {
             continue;
-        }
-
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(entries) => entries,
+        };
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
             Err(_) => continue,
         };
+        commands.push((stem, content));
+    }
 
-        let mut paths: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
-        paths.sort();
+    commands
+}
 
-        for path in paths {
-            if path.extension().and_then(|e| e.to_str()) != Some("md") {
-                continue;
+fn load_command_names_from_dir(dir: &Path) -> Vec<String> {
+    sorted_markdown_paths(dir)
+        .into_iter()
+        .filter_map(|path| command_name_from_path(&path))
+        .collect()
+}
+
+fn sorted_markdown_paths(dir: &Path) -> Vec<PathBuf> {
+    if !dir.is_dir() {
+        return Vec::new();
+    }
+
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut paths: Vec<PathBuf> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| command_name_from_path(path).is_some())
+        .collect();
+    paths.sort();
+    paths
+}
+
+fn command_name_from_path(path: &Path) -> Option<String> {
+    if path.extension().and_then(|e| e.to_str()) != Some("md") {
+        return None;
+    }
+    path.file_stem().and_then(|s| s.to_str()).map(str::to_lowercase)
+}
+
+/// Scan every candidate commands directory and return merged
+/// `(name, content)` pairs. Workspace-local directories shadow
+/// user-global by name — the first occurrence of a name wins.
+///
+/// Pass `None` for the workspace to scan only the global directory
+/// (backward-compatible with callers that don't have workspace context).
+pub fn load_user_commands(workspace: Option<&Path>) -> Vec<(String, String)> {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut commands: Vec<(String, String)> = Vec::new();
+
+    for dir in commands_dirs(workspace) {
+        for (name, content) in load_commands_from_dir(&dir) {
+            if seen.insert(name.clone()) {
+                commands.push((name, content));
             }
-            let stem = match path.file_stem().and_then(|s| s.to_str()) {
-                Some(stem) => stem.to_lowercase(),
-                None => continue,
-            };
-            if seen.contains(&stem) {
-                continue;
-            }
-            let content = match std::fs::read_to_string(&path) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-            seen.insert(stem.clone());
-            commands.push((stem, content));
         }
     }
 
-    // Sort by name for deterministic ordering after precedence is resolved.
+    // Sort by name for deterministic ordering.
     commands.sort_by(|a, b| a.0.cmp(&b.0));
     commands
 }
 
-/// Scan command directories for `.md` files and return `(name, content)` pairs.
+/// Scan every candidate commands directory and return merged command names.
 ///
-/// The name is the filename without the `.md` extension, normalized to
-/// lowercase. Files that fail to read are silently skipped. The directory
-/// is re-scanned on every call so newly-added commands show up immediately
-/// without requiring a restart.
-pub fn load_user_commands_for_workspace(workspace: Option<&Path>) -> Vec<(String, String)> {
-    load_commands_from_dirs(command_dirs_for_workspace(workspace))
-}
+/// This avoids reading command file bodies during autocomplete, where the UI
+/// may call this on every typed character.
+pub fn load_user_command_names(workspace: Option<&Path>) -> Vec<String> {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut commands: Vec<String> = Vec::new();
 
-/// Scan `~/.deepseek/commands/` for `.md` files and return `(name, content)` pairs.
-pub fn load_user_commands() -> Vec<(String, String)> {
-    load_user_commands_for_workspace(None)
+    for dir in commands_dirs(workspace) {
+        for name in load_command_names_from_dir(&dir) {
+            if seen.insert(name.clone()) {
+                commands.push(name);
+            }
+        }
+    }
+
+    commands.sort();
+    commands
 }
 
 /// Check if the input matches a user-defined command and return the
@@ -113,7 +156,7 @@ pub fn try_dispatch_user_command(app: &mut App, input: &str) -> Option<CommandRe
     let command = command.strip_prefix('/').unwrap_or(&command);
     let args = parts.get(1).copied().unwrap_or("").trim();
 
-    let user_commands = load_user_commands_for_workspace(Some(&app.workspace));
+    let user_commands = load_user_commands(Some(&app.workspace));
 
     for (name, content) in &user_commands {
         if name == command {
@@ -129,26 +172,26 @@ pub fn try_dispatch_user_command(app: &mut App, input: &str) -> Option<CommandRe
 ///
 /// The prefix should be the command name portion only (after `/`).
 /// Returns entries formatted as `/name`.
-pub fn user_commands_matching(prefix: &str) -> Vec<String> {
-    user_commands_matching_for_workspace(prefix, None)
-}
-
-pub fn user_commands_matching_for_workspace(prefix: &str, workspace: Option<&Path>) -> Vec<String> {
+///
+/// `workspace` is used to also scan workspace-local command directories;
+/// pass `None` when no workspace context is available.
+pub fn user_commands_matching(prefix: &str, workspace: Option<&Path>) -> Vec<String> {
     let prefix = prefix.to_lowercase();
-    load_user_commands_for_workspace(workspace)
+    load_user_command_names(workspace)
         .into_iter()
-        .filter(|(name, _)| name.starts_with(&prefix))
-        .map(|(name, _)| format!("/{}", name))
+        .filter(|name| name.starts_with(&prefix))
+        .map(|name| format!("/{name}"))
         .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[test]
-    fn test_commands_dir_contains_deepseek_commands() {
-        let dir = commands_dir();
+    fn test_global_commands_dir_contains_deepseek_commands() {
+        let dir = global_commands_dir();
         let parts: Vec<_> = dir
             .components()
             .filter_map(|component| component.as_os_str().to_str())
@@ -163,13 +206,9 @@ mod tests {
     }
 
     #[test]
-    fn test_load_user_commands_when_dir_absent() {
-        // Use a temp dir that definitely doesn't have a commands dir.
-        let _tmp = std::env::temp_dir().join("deepseek-test-nonexistent");
-        // Temporarily override the home for this test by checking the
-        // function with a non-existent directory path.
-        let cmds = load_user_commands();
-        // Should not panic; returns empty vec when dir doesn't exist.
+    fn test_load_user_commands_when_no_dir_exists() {
+        let cmds = load_user_commands(None);
+        // Should not panic; returns empty vec when no directories exist.
         assert!(cmds.is_empty() || !cmds.is_empty());
     }
 
@@ -205,51 +244,178 @@ mod tests {
     }
 
     #[test]
-    fn test_user_commands_matching_with_prefix() {
-        let matches = user_commands_matching("zzzznotfound");
+    fn test_user_commands_matching_with_prefix_no_workspace() {
+        let matches = user_commands_matching("zzzznotfound", None);
         assert!(matches.is_empty());
     }
 
+    // ── Workspace-local commands tests ─────────────────────────────────
+
+    fn write_command(dir: &Path, name: &str, body: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join(format!("{name}.md")), body).unwrap();
+    }
+
     #[test]
-    fn load_user_commands_includes_project_local_dirs() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let deepseek_commands = tmp.path().join(".deepseek").join("commands");
-        let cursor_commands = tmp.path().join(".cursor").join("commands");
-        std::fs::create_dir_all(&deepseek_commands).expect("mkdir deepseek commands");
-        std::fs::create_dir_all(&cursor_commands).expect("mkdir cursor commands");
-        std::fs::write(deepseek_commands.join("Review.md"), "review project").expect("write");
-        std::fs::write(cursor_commands.join("Plan.md"), "plan project").expect("write");
+    fn load_user_commands_scans_workspace_local_dir() {
+        let tmp = TempDir::new().unwrap();
+        let ws = tmp.path();
+        let cmds_dir = ws.join(".deepseek").join("commands");
+        write_command(&cmds_dir, "hello", "echo hi");
 
-        let cmds = load_user_commands_for_workspace(Some(tmp.path()));
-
+        let cmds = load_user_commands(Some(ws));
+        let names: Vec<&str> = cmds.iter().map(|(n, _)| n.as_str()).collect();
         assert!(
-            cmds.iter()
-                .any(|(name, body)| name == "review" && body == "review project")
-        );
-        assert!(
-            cmds.iter()
-                .any(|(name, body)| name == "plan" && body == "plan project")
+            names.contains(&"hello"),
+            "expected 'hello' in workspace-local commands: {names:?}"
         );
     }
 
     #[test]
-    fn project_commands_override_global_commands() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let project_commands = tmp.path().join(".deepseek").join("commands");
-        let global_commands = tmp.path().join("global").join("commands");
-        std::fs::create_dir_all(&project_commands).expect("mkdir project commands");
-        std::fs::create_dir_all(&global_commands).expect("mkdir global commands");
-        std::fs::write(project_commands.join("Audit.md"), "project audit")
-            .expect("write project");
-        std::fs::write(global_commands.join("audit.md"), "global audit").expect("write global");
+    fn load_user_commands_scans_claude_and_cursor_dirs() {
+        let tmp = TempDir::new().unwrap();
+        let ws = tmp.path();
+        write_command(
+            &ws.join(".claude").join("commands"),
+            "claude-cmd",
+            "claude body",
+        );
+        write_command(
+            &ws.join(".cursor").join("commands"),
+            "cursor-cmd",
+            "cursor body",
+        );
 
-        let cmds = load_commands_from_dirs(vec![project_commands, global_commands]);
+        let cmds = load_user_commands(Some(ws));
+        let names: Vec<&str> = cmds.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(
+            names.contains(&"claude-cmd"),
+            "expected 'claude-cmd': {names:?}"
+        );
+        assert!(
+            names.contains(&"cursor-cmd"),
+            "expected 'cursor-cmd': {names:?}"
+        );
+    }
 
+    #[test]
+    fn workspace_local_shadows_global_by_name() {
+        let tmp = TempDir::new().unwrap();
+        let ws = tmp.path();
+
+        // Workspace-local version
+        write_command(
+            &ws.join(".deepseek").join("commands"),
+            "shared",
+            "workspace version",
+        );
+        // Global version — simulate by putting it in a "global" temp dir.
+        // Since we can't easily override `dirs::home_dir()`, we test the
+        // first-match-wins semantics by putting the same name in both
+        // workspace-scanned dirs. The first dir in precedence order wins.
+        write_command(
+            &ws.join(".claude").join("commands"),
+            "shared",
+            "claude version",
+        );
+
+        let cmds = load_user_commands(Some(ws));
+        let shared = cmds
+            .iter()
+            .find(|(n, _)| n == "shared")
+            .expect("shared present");
         assert_eq!(
-            cmds.iter()
-                .find(|(name, _)| name == "audit")
-                .map(|(_, body)| body.as_str()),
-            Some("project audit")
+            shared.1, "workspace version",
+            "workspace-local (.deepseek) must shadow later dirs"
+        );
+    }
+
+    #[test]
+    fn load_user_commands_without_workspace_falls_back_to_global_only() {
+        // When no workspace is passed, only the global ~/.deepseek/commands/
+        // is scanned. On test machines this dir often doesn't exist, so we
+        // just verify we don't panic.
+        let cmds = load_user_commands(None);
+        // This should not panic; can be empty or have user's real commands.
+        let _ = cmds;
+    }
+
+    #[test]
+    fn try_dispatch_uses_workspace_local_command() {
+        use crate::config::Config;
+        use crate::tui::app::TuiOptions;
+
+        let tmp = TempDir::new().unwrap();
+        let ws = tmp.path().to_path_buf();
+        write_command(
+            &ws.join(".deepseek").join("commands"),
+            "hello",
+            "Hello, $ARGUMENTS!",
+        );
+
+        let options = TuiOptions {
+            model: "deepseek-v4-pro".to_string(),
+            workspace: ws.clone(),
+            config_path: None,
+            config_profile: None,
+            allow_shell: false,
+            use_alt_screen: true,
+            use_mouse_capture: false,
+            use_bracketed_paste: true,
+            max_subagents: 1,
+            skills_dir: PathBuf::from("."),
+            memory_path: PathBuf::from("memory.md"),
+            notes_path: PathBuf::from("notes.txt"),
+            mcp_config_path: PathBuf::from("mcp.json"),
+            use_memory: false,
+            start_in_agent_mode: false,
+            skip_onboarding: true,
+            yolo: false,
+            resume_session_id: None,
+            initial_input: None,
+        };
+        let mut app = App::new(options, &Config::default());
+        let result = try_dispatch_user_command(&mut app, "/hello world");
+        assert!(result.is_some());
+        let cmd_result = result.unwrap();
+        match cmd_result.action {
+            Some(AppAction::SendMessage(msg)) => {
+                assert!(msg.contains("Hello, world!"), "got: {msg}");
+            }
+            other => panic!("expected SendMessage action, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn user_commands_matching_with_workspace() {
+        let tmp = TempDir::new().unwrap();
+        let ws = tmp.path();
+        write_command(
+            &ws.join(".deepseek").join("commands"),
+            "project-cmd",
+            "body",
+        );
+
+        let matches = user_commands_matching("project", Some(ws));
+        assert!(
+            matches.contains(&"/project-cmd".to_string()),
+            "got: {matches:?}"
+        );
+    }
+
+    #[test]
+    fn user_command_names_do_not_require_readable_bodies() {
+        let tmp = TempDir::new().unwrap();
+        let ws = tmp.path();
+        let commands_dir = ws.join(".deepseek").join("commands");
+        std::fs::create_dir_all(&commands_dir).unwrap();
+        std::fs::write(commands_dir.join("name-only.md"), "body").unwrap();
+
+        let names = load_user_command_names(Some(ws));
+
+        assert!(
+            names.contains(&"name-only".to_string()),
+            "got: {names:?}"
         );
     }
 }

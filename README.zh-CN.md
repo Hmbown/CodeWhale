@@ -192,24 +192,36 @@ deepseek --provider ollama --model deepseek-coder:1.3b
 
 ---
 
-## v0.8.23 新功能
+## v0.8.24 新功能
 
-面向安全的 v0.8.22 跟进版本：子进程环境清理、工具安全分类收紧，以及 MCP、
-密钥存储和运行时 API 的修复。[完整更新日志](CHANGELOG.md)。
+承接 v0.8.23 安全发布之后的社区 bug 修复版本。[完整更新日志](CHANGELOG.md)。
 
-- **子进程环境已清理** — shell、MCP 服务器、hooks 等子进程现在从显式环境变量
-  白名单启动，不再继承所有父进程变量。`*_API_KEY`、`GITHUB_TOKEN` 等敏感信息
-  不会通过子进程泄露。
-- **macOS 钥匙串弹窗已消除** — 文件存储现在是默认的密钥后端；系统钥匙串需通过
-  `DEEPSEEK_SECRET_BACKEND=system|keyring` 主动选择加入。
-- **MCP 服务器保持正常运行** — MCP stdio 启动时保留 `npx`、`uvx`、`python -m`
-  和企业代理等所需的环境变量，同时继续清理密钥。
-- **MCP 启动错误现在可见** — 不再显示模糊的包装错误信息，而是直接展示真实的
-  操作系统错误（如 "No such file or directory"）。
-- **实时思考默认折叠** — 流式思考面板默认折叠，可通过详情切换展开。
-- **运行时 API 默认要求认证** — `deepseek serve --http` 不再接受未认证请求。
-- **此外**：加固 `run_tests` 审批策略、符号链接遍历防护、Plan 模式工具集收紧、
-  路径清理修复，以及新增 `docs/RELEASE_CHECKLIST.md`。
+- **缓存感知的 prompt 诊断和载荷优化** (#1196，感谢 **wplll**) — 新增
+  `/cache inspect` 和 `/cache warmup` 命令，对系统 prompt 进行分层（static /
+  history / dynamic）并展示每层的 SHA-256 哈希；线材有效载荷去重重复工具输出；
+  页脚展示来自 DeepSeek API 响应的缓存命中率。新增**项目上下文包**默认注入到
+  稳定前缀以提高缓存命中率；如需保持 prompt 简洁，可在配置中设置
+  `[context] project_pack = false` 关闭。
+- **工作区本地的斜杠命令** (#1259) — 在任意项目中放置
+  `.deepseek/commands/foo.md`，`/foo` 即可在该项目中可用。同时扫描
+  `.cursor/commands/` 和 `.claude/commands/`。项目本地按名称覆盖全局。
+- **`@` 提示补全可发现 AI 工具点目录** — 即使
+  `.deepseek/`、`.cursor/`、`.claude/`、`.agents/` 在 `.gitignore` 中，
+  这些目录下的文件也能通过 `@` 补全发现。
+- **MCP 分页发现** (#1250，感谢 **Liu-Vince**) — 对 `tools/list` 进行分页的
+  MCP 服务器（如 gbrain 每页 5 个）现在通过 `nextCursor` 完整发现所有工具。
+- **快照磁盘容量上限** (#1112) — 快照副本仓库现在强制 500 MB 上限，
+  超出时按时间从旧到新清理。可防止报告中 1.2 TB 快照失控。感谢
+  **@Giggitycountless** 的 PR #1131 提案。
+- **`/clear` 现在重置 Todos 侧边栏** (#1258) — 以前只清空 Plan 面板。
+- **鼠标滚轮在焦点切换后仍可用** — 在 `FocusGained` 时重新启用
+  `EnableMouseCapture`，使 Cmd+Tab 或截屏后滚轮滚动仍正常工作。
+- **i18n：英文提问得到英文回复** (#1118) — 项目中的中文文件名不再使模型偏向
+  中文回复。
+- **此外**：语言指令加强、MCP 错误信息更清晰（来自 PR #1196），及若干打磨。
+
+⚠️ **已知问题**：v0.8.22+ 在 Windows 10 conhost 上存在闪烁回归（#1260），
+跟踪到 v0.8.25 修复。如受影响，v0.8.20 工作正常。
 
 ---
 

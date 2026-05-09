@@ -8,6 +8,7 @@ use ratatui::layout::Rect;
 use serde_json::Value;
 use thiserror::Error;
 
+use crate::client::PromptInspection;
 use crate::compaction::CompactionConfig;
 use crate::config::{
     ApiProvider, Config, DEFAULT_TEXT_MODEL, SavedCredential, has_api_key, save_api_key,
@@ -626,6 +627,7 @@ pub struct SessionState {
     pub total_tokens: u32,
     pub total_conversation_tokens: u32,
     pub turn_cache_history: VecDeque<TurnCacheRecord>,
+    pub last_cache_inspection: Option<PromptInspection>,
 }
 
 impl Default for SessionState {
@@ -646,6 +648,7 @@ impl Default for SessionState {
             total_tokens: 0,
             total_conversation_tokens: 0,
             turn_cache_history: VecDeque::new(),
+            last_cache_inspection: None,
         }
     }
 }
@@ -3692,11 +3695,20 @@ impl App {
     }
 
     pub fn clear_todos(&mut self) -> bool {
+        // Clear the todo list (the sidebar checklist). Uses try_lock so the
+        // UI thread doesn't block if the engine briefly holds the mutex
+        // during tool execution; the caller can retry or show a busy message.
+        let todos_cleared = if let Ok(mut todos) = self.todos.try_lock() {
+            todos.clear();
+            true
+        } else {
+            false
+        };
+        // Also clear the plan state — /clear means a full reset.
         if let Ok(mut plan) = self.plan_state.try_lock() {
             *plan = crate::tools::plan::PlanState::default();
-            return true;
         }
-        false
+        todos_cleared
     }
 
     pub fn update_model_compaction_budget(&mut self) {
@@ -3809,6 +3821,7 @@ pub enum AppAction {
     },
     ListSubAgents,
     FetchModels,
+    CacheWarmup,
     /// Switch the active LLM backend (DeepSeek vs NVIDIA NIM) without
     /// restarting the process. The runtime rebuilds its API client from
     /// the updated config. `model` overrides the post-switch model

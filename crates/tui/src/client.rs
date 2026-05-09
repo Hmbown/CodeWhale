@@ -891,6 +891,9 @@ pub(super) fn parse_usage(usage: Option<&Value>) -> Usage {
         })
         .and_then(Value::as_u64)
         .unwrap_or(0);
+    let total_tokens = usage
+        .and_then(|u| u.get("total_tokens"))
+        .and_then(Value::as_u64);
     let reasoning_tokens_raw = usage
         .and_then(|u| u.get("completion_tokens_details"))
         .and_then(|details| details.get("reasoning_tokens"))
@@ -899,6 +902,10 @@ pub(super) fn parse_usage(usage: Option<&Value>) -> Usage {
         && let Some(reasoning_tokens) = reasoning_tokens_raw
     {
         output_tokens = reasoning_tokens;
+    } else if output_tokens == 0
+        && let Some(total_tokens) = total_tokens
+    {
+        output_tokens = total_tokens.saturating_sub(input_tokens);
     }
     let cached_tokens = usage
         .and_then(|u| u.get("prompt_tokens_details"))
@@ -978,6 +985,16 @@ impl DeepSeekClient {
 }
 
 mod chat;
+
+pub(crate) use chat::PromptInspection;
+
+pub(crate) fn inspect_prompt_for_request(request: &MessageRequest) -> PromptInspection {
+    chat::inspect_prompt_for_request(request)
+}
+
+pub(crate) fn build_cache_warmup_request(request: &MessageRequest) -> MessageRequest {
+    chat::build_cache_warmup_request(request)
+}
 
 #[cfg(test)]
 mod tests {
@@ -1367,6 +1384,267 @@ mod tests {
             out.iter()
                 .any(|value| value.get("role").and_then(Value::as_str) == Some("tool")),
             "matching tool result should remain"
+        );
+    }
+
+    #[test]
+    fn prompt_builder_keeps_system_first_and_current_user_input_last() {
+        let request = MessageRequest {
+            model: "deepseek-v4-pro".to_string(),
+            messages: vec![
+                Message {
+                    role: "assistant".to_string(),
+                    content: vec![ContentBlock::Text {
+                        text: "Previous answer".to_string(),
+                        cache_control: None,
+                    }],
+                },
+                Message {
+                    role: "user".to_string(),
+                    content: vec![
+                        ContentBlock::Text {
+                            text: "<turn_meta>\nCurrent local date: 2026-05-08\n</turn_meta>"
+                                .to_string(),
+                            cache_control: None,
+                        },
+                        ContentBlock::Text {
+                            text: "Current user question".to_string(),
+                            cache_control: None,
+                        },
+                    ],
+                },
+            ],
+            max_tokens: 1024,
+            system: Some(SystemPrompt::Text(
+                "Stable mode, project rules, and tool policy".to_string(),
+            )),
+            tools: None,
+            tool_choice: None,
+            metadata: None,
+            thinking: None,
+            reasoning_effort: Some("max".to_string()),
+            stream: None,
+            temperature: None,
+            top_p: None,
+        };
+
+        let out = build_chat_messages_for_request(&request);
+
+        assert_eq!(out[0].get("role").and_then(Value::as_str), Some("system"));
+        assert_eq!(
+            out[0].get("content").and_then(Value::as_str),
+            Some("Stable mode, project rules, and tool policy")
+        );
+        let last = out.last().expect("latest user message");
+        assert_eq!(last.get("role").and_then(Value::as_str), Some("user"));
+        assert!(
+            last.get("content")
+                .and_then(Value::as_str)
+                .is_some_and(|content| content.ends_with("Current user question")),
+            "current-turn user input must be at the tail of the wire prompt: {last:?}"
+        );
+    }
+
+    #[test]
+    fn prompt_inspect_reports_stable_layers_and_dynamic_user_task() {
+        let request = MessageRequest {
+            model: "deepseek-v4-pro".to_string(),
+            messages: vec![
+                Message {
+                    role: "assistant".to_string(),
+                    content: vec![ContentBlock::Text {
+                        text: "Prior answer".to_string(),
+                        cache_control: None,
+                    }],
+                },
+                Message {
+                    role: "user".to_string(),
+                    content: vec![ContentBlock::Text {
+                        text: "Current task".to_string(),
+                        cache_control: None,
+                    }],
+                },
+            ],
+            max_tokens: 1024,
+            system: Some(SystemPrompt::Text(
+                "Base policy\n\n<project_instructions source=\"AGENTS.md\">\nRules\n</project_instructions>\n\n## Project Context Pack\n\n<project_context_pack>\n{}\n</project_context_pack>\n\n## Environment\n\n- lang: en"
+                    .to_string(),
+            )),
+            tools: None,
+            tool_choice: None,
+            metadata: None,
+            thinking: None,
+            reasoning_effort: Some("max".to_string()),
+            stream: None,
+            temperature: None,
+            top_p: None,
+        };
+
+        let inspection = inspect_prompt_for_request(&request);
+
+        assert_eq!(inspection.base_static_prefix_hash.len(), 64);
+        assert_eq!(inspection.full_request_prefix_hash.len(), 64);
+        assert!(inspection.layers.iter().any(|layer| {
+            layer.name == "Global system prefix"
+                && layer.stability.label() == "static"
+                && layer.char_len == "Base policy".chars().count()
+                && layer.sha256.len() == 64
+        }));
+        assert!(inspection.layers.iter().any(|layer| {
+            layer.name == "Project context" && layer.stability.label() == "static"
+        }));
+        assert!(inspection.layers.iter().any(|layer| {
+            layer.name == "Project context pack" && layer.stability.label() == "static"
+        }));
+        assert!(inspection.layers.iter().any(|layer| {
+            layer.name == "Message #1 assistant" && layer.stability.label() == "history"
+        }));
+        assert!(
+            inspection.layers.last().is_some_and(
+                |layer| layer.name == "User task" && layer.stability.label() == "dynamic"
+            )
+        );
+    }
+
+    #[test]
+    fn prompt_inspect_keeps_static_base_hash_across_different_user_tasks() {
+        fn request_with_user_task(task: &str) -> MessageRequest {
+            MessageRequest {
+                model: "deepseek-v4-pro".to_string(),
+                messages: vec![
+                    Message {
+                        role: "assistant".to_string(),
+                        content: vec![ContentBlock::Text {
+                            text: "Prior answer".to_string(),
+                            cache_control: None,
+                        }],
+                    },
+                    Message {
+                        role: "user".to_string(),
+                        content: vec![ContentBlock::Text {
+                            text: task.to_string(),
+                            cache_control: None,
+                        }],
+                    },
+                ],
+                max_tokens: 1024,
+                system: Some(SystemPrompt::Text(
+                    "Base policy\n\n## Environment\n\n- shell: powershell\n\n## Skills\n\n- rust\n\n## Context Management\n\nKeep concise\n\n## Compact\n\nTemplate"
+                        .to_string(),
+                )),
+                tools: None,
+                tool_choice: None,
+                metadata: None,
+                thinking: None,
+                reasoning_effort: Some("max".to_string()),
+                stream: None,
+                temperature: None,
+                top_p: None,
+            }
+        }
+
+        let first = inspect_prompt_for_request(&request_with_user_task("First task"));
+        let second = inspect_prompt_for_request(&request_with_user_task("Second task"));
+        let mut changed_history_request = request_with_user_task("Second task");
+        changed_history_request.messages[0] = Message {
+            role: "assistant".to_string(),
+            content: vec![ContentBlock::Text {
+                text: "Different prior answer".to_string(),
+                cache_control: None,
+            }],
+        };
+        let changed_history = inspect_prompt_for_request(&changed_history_request);
+
+        assert_eq!(
+            first.base_static_prefix_hash,
+            second.base_static_prefix_hash
+        );
+        assert_eq!(
+            first.full_request_prefix_hash, second.full_request_prefix_hash,
+            "full request prefix excludes the final dynamic user task"
+        );
+        assert_ne!(
+            second.full_request_prefix_hash, changed_history.full_request_prefix_hash,
+            "full request prefix can change when session history changes"
+        );
+        assert!(
+            second.layers.last().is_some_and(
+                |layer| layer.name == "User task" && layer.stability.label() == "dynamic"
+            ),
+            "current user task must remain the final layer"
+        );
+        assert!(second.layers.iter().any(|layer| {
+            layer.name == "Message #1 assistant" && layer.stability.label() == "history"
+        }));
+        assert!(!second.layers.iter().any(
+            |layer| layer.name.starts_with("Message #") && layer.stability.label() == "static"
+        ));
+    }
+
+    #[test]
+    fn cache_warmup_request_reuses_stable_prefix_and_fixed_user_tail() {
+        let request = MessageRequest {
+            model: "deepseek-v4-pro".to_string(),
+            messages: vec![
+                Message {
+                    role: "assistant".to_string(),
+                    content: vec![ContentBlock::Text {
+                        text: "Stable prior answer".to_string(),
+                        cache_control: None,
+                    }],
+                },
+                Message {
+                    role: "user".to_string(),
+                    content: vec![ContentBlock::Text {
+                        text: "Dynamic latest user task".to_string(),
+                        cache_control: None,
+                    }],
+                },
+            ],
+            max_tokens: 1024,
+            system: Some(SystemPrompt::Text(
+                "Base policy\n\n<project_instructions source=\"AGENTS.md\">\nStable project rules\n</project_instructions>\n\n## Previous Session Handoff\n\nDynamic handoff"
+                    .to_string(),
+            )),
+            tools: None,
+            tool_choice: None,
+            metadata: None,
+            thinking: None,
+            reasoning_effort: Some("max".to_string()),
+            stream: Some(true),
+            temperature: Some(0.7),
+            top_p: None,
+        };
+
+        let warmup = build_cache_warmup_request(&request);
+
+        assert_eq!(warmup.max_tokens, 8);
+        assert_eq!(warmup.temperature, Some(0.0));
+        assert_eq!(warmup.reasoning_effort.as_deref(), Some("max"));
+        assert_eq!(warmup.messages.len(), 2);
+        assert_eq!(warmup.messages[0].role, "assistant");
+        assert_eq!(warmup.messages[1].role, "user");
+        assert_eq!(
+            warmup.messages[1].content,
+            vec![ContentBlock::Text {
+                text: "请只回复 OK".to_string(),
+                cache_control: None,
+            }]
+        );
+
+        let wire = build_chat_messages_for_request(&warmup);
+        let system = wire
+            .first()
+            .and_then(|value| value.get("content"))
+            .and_then(Value::as_str)
+            .expect("warmup system prompt");
+        assert!(system.contains("Stable project rules"));
+        assert!(!system.contains("Dynamic handoff"));
+        assert!(
+            !wire
+                .iter()
+                .any(|value| value.to_string().contains("Dynamic latest user task")),
+            "warmup must not include the dynamic latest user task"
         );
     }
 
@@ -2040,6 +2318,21 @@ mod tests {
                 .expect("DeepSeek V4 Pro pricing should apply")
                 > 0.0
         );
+    }
+
+    #[test]
+    fn parse_usage_derives_completion_tokens_from_total_tokens_when_needed() {
+        let usage = parse_usage(Some(&json!({
+            "prompt_tokens": 100,
+            "total_tokens": 125,
+            "prompt_cache_hit_tokens": 70,
+            "prompt_cache_miss_tokens": 30
+        })));
+
+        assert_eq!(usage.input_tokens, 100);
+        assert_eq!(usage.output_tokens, 25);
+        assert_eq!(usage.prompt_cache_hit_tokens, Some(70));
+        assert_eq!(usage.prompt_cache_miss_tokens, Some(30));
     }
 
     #[test]

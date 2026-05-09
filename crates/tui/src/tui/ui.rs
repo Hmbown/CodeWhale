@@ -30,7 +30,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::audit::log_sensitive_event;
 use crate::automation_manager::{AutomationManager, AutomationSchedulerConfig, spawn_scheduler};
-use crate::client::DeepSeekClient;
+use crate::client::{DeepSeekClient, build_cache_warmup_request};
 use crate::commands;
 use crate::compaction::estimate_input_tokens_conservative;
 use crate::config::{ApiProvider, Config, DEFAULT_NVIDIA_NIM_BASE_URL};
@@ -40,7 +40,10 @@ use crate::core::engine::{EngineConfig, EngineHandle, spawn_engine};
 use crate::core::events::Event as EngineEvent;
 use crate::core::ops::Op;
 use crate::hooks::HookEvent;
-use crate::models::{ContentBlock, Message, SystemPrompt, context_window_for_model};
+use crate::llm_client::LlmClient;
+use crate::models::{
+    ContentBlock, Message, MessageRequest, SystemPrompt, Usage, context_window_for_model,
+};
 use crate::palette;
 use crate::prompts;
 use crate::session_manager::{
@@ -510,6 +513,7 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         mcp_config_path: config.mcp_config_path(),
         skills_dir: app.skills_dir.clone(),
         instructions: config.instructions_paths(),
+        project_context_pack_enabled: config.project_context_pack_enabled(),
         // Effectively unlimited. V4 has a 1M context window and the user
         // wants the model running until it's actually done. The previous cap
         // of 100 hit the ceiling on long multi-step plans (wide refactors,
@@ -1592,8 +1596,14 @@ async fn run_event_loop(
             // terminal's keyboard mode, which breaks IME compositor state.
             // Acknowledging FocusGained and re-pushing the flags restores
             // the IME so CJK input methods work after a focus toggle.
+            // The same reset can drop the terminal's mouse-tracking mode,
+            // leaving wheel scroll dead until restart — re-arm mouse
+            // capture on focus-gain so wheel events keep flowing.
             if terminal_event_needs_viewport_recapture(&evt) {
                 push_keyboard_enhancement_flags(terminal.backend_mut());
+                if app.use_mouse_capture {
+                    let _ = execute!(terminal.backend_mut(), EnableMouseCapture);
+                }
                 force_terminal_repaint = true;
                 app.needs_redraw = true;
             }
@@ -2981,6 +2991,50 @@ async fn fetch_available_models(config: &Config) -> Result<Vec<String>> {
     Ok(ids)
 }
 
+async fn run_cache_warmup(app: &App, config: &Config) -> Result<Usage> {
+    let client = DeepSeekClient::new(config)?;
+    let reasoning_effort = if app.reasoning_effort == ReasoningEffort::Auto {
+        app.last_effective_reasoning_effort
+            .and_then(ReasoningEffort::api_value)
+            .map(str::to_string)
+    } else {
+        app.reasoning_effort.api_value().map(str::to_string)
+    };
+    let request = MessageRequest {
+        model: app.model.clone(),
+        messages: app.api_messages.clone(),
+        max_tokens: 1024,
+        system: app.system_prompt.clone(),
+        tools: None,
+        tool_choice: None,
+        metadata: None,
+        thinking: None,
+        reasoning_effort,
+        stream: None,
+        temperature: None,
+        top_p: None,
+    };
+    let warmup = build_cache_warmup_request(&request);
+    let response =
+        tokio::time::timeout(Duration::from_secs(45), client.create_message(warmup)).await??;
+    Ok(response.usage)
+}
+
+fn format_cache_warmup_result(usage: &Usage) -> String {
+    let cache = match (
+        usage.prompt_cache_hit_tokens,
+        usage.prompt_cache_miss_tokens,
+    ) {
+        (Some(hit), Some(miss)) => format!("Cache warmup complete: hit {hit} | miss {miss}"),
+        (Some(hit), None) => format!("Cache warmup complete: hit {hit} | miss unavailable"),
+        (None, Some(miss)) => format!("Cache warmup complete: hit unavailable | miss {miss}"),
+        (None, None) => "Cache warmup complete: cache telemetry unavailable".to_string(),
+    };
+    format!(
+        "{cache}\nNote: the first warmup is usually a miss. Later requests that reuse the same stable prefix may hit the provider cache; a hit is not guaranteed."
+    )
+}
+
 fn format_available_models_message(current_model: &str, models: &[String]) -> String {
     let mut lines = vec![format!("Available models ({})", models.len())];
     for model in models {
@@ -3739,6 +3793,7 @@ async fn dispatch_user_message(
             prompts::PromptSessionContext {
                 user_memory_block: None,
                 goal_objective: app.goal.goal_objective.as_deref(),
+                project_context_pack_enabled: config.project_context_pack_enabled(),
                 locale_tag: app.ui_locale.tag(),
             },
         ),
@@ -4553,6 +4608,24 @@ async fn apply_command_result(
                         app.add_message(HistoryCell::System {
                             content: format!("Failed to fetch models: {error}"),
                         });
+                    }
+                }
+            }
+            AppAction::CacheWarmup => {
+                app.status_message = Some("Warming DeepSeek cache...".to_string());
+                match run_cache_warmup(app, config).await {
+                    Ok(usage) => {
+                        let message = format_cache_warmup_result(&usage);
+                        app.add_message(HistoryCell::System {
+                            content: message.clone(),
+                        });
+                        app.status_message = Some("Cache warmup complete".to_string());
+                    }
+                    Err(error) => {
+                        app.add_message(HistoryCell::System {
+                            content: format!("Cache warmup failed: {error}"),
+                        });
+                        app.status_message = Some("Cache warmup failed".to_string());
                     }
                 }
             }
@@ -7002,8 +7075,14 @@ fn footer_coherence_spans(app: &App) -> Vec<Span<'static>> {
 }
 
 fn footer_cache_spans(app: &App) -> Vec<Span<'static>> {
-    let Some(hit_tokens) = app.session.last_prompt_cache_hit_tokens else {
+    if app.session.last_prompt_tokens.is_none() && app.session.last_completion_tokens.is_none() {
         return Vec::new();
+    };
+    let Some(hit_tokens) = app.session.last_prompt_cache_hit_tokens else {
+        return vec![Span::styled(
+            "Cache: unavailable",
+            Style::default().fg(palette::TEXT_MUTED),
+        )];
     };
     let miss_tokens = app
         .session
@@ -7015,11 +7094,11 @@ fn footer_cache_spans(app: &App) -> Vec<Span<'static>> {
                 .saturating_sub(hit_tokens)
         });
     let total = hit_tokens.saturating_add(miss_tokens);
-    if total == 0 {
-        return Vec::new();
-    }
-
-    let percent = (f64::from(hit_tokens) / f64::from(total) * 100.0).clamp(0.0, 100.0);
+    let percent = if total == 0 {
+        0.0
+    } else {
+        (f64::from(hit_tokens) / f64::from(total) * 100.0).clamp(0.0, 100.0)
+    };
     // Threshold-based coloring for cache hit rate (#396):
     //   >80%: green (good cache utilization)
     //   40-80%: yellow/warning
@@ -7032,7 +7111,10 @@ fn footer_cache_spans(app: &App) -> Vec<Span<'static>> {
         palette::STATUS_ERROR
     };
     vec![Span::styled(
-        format!("cache hit {:.0}%", percent),
+        format!(
+            "Cache: {:.1}% hit | hit {hit_tokens} | miss {miss_tokens}",
+            percent
+        ),
         Style::default().fg(color),
     )]
 }

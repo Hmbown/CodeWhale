@@ -830,6 +830,33 @@ fn turn_metadata_includes_current_local_date_without_working_set() {
 }
 
 #[test]
+fn user_text_message_keeps_current_turn_input_after_turn_metadata() {
+    let tmp = tempdir().expect("tempdir");
+    let config = EngineConfig {
+        workspace: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    let (engine, _handle) = Engine::new(config, &Config::default());
+
+    let user_msg =
+        engine.user_text_message_with_turn_metadata("explain the cache metrics".to_string());
+
+    let last_text = user_msg
+        .content
+        .iter()
+        .rev()
+        .find_map(|block| {
+            if let ContentBlock::Text { text, .. } = block {
+                Some(text.as_str())
+            } else {
+                None
+            }
+        })
+        .expect("user text block");
+    assert_eq!(last_text, "explain the cache metrics");
+}
+
+#[test]
 fn messages_with_turn_metadata_preserves_stored_messages_for_prefix_cache() {
     let tmp = tempdir().expect("tempdir");
     fs::create_dir_all(tmp.path().join("src")).expect("mkdir");

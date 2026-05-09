@@ -5,6 +5,95 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.24] - 2026-05-09
+
+A bugfix + refactor release picking up the backlog after the v0.8.23 security
+release. Big thanks to **wplll** (cache-aware prompt + `/cache inspect`),
+**Liu-Vince** (MCP pagination diagnosis), **@Giggitycountless** (snapshot cap
+proposal), and to issue reporters **@SamhandsomeLee**,
+**@barjatiyasaurabh**, **@tyculw**, **@hongyuatcufe**, and **@ljlbit** for
+the bugs fixed below.
+
+### Fixed
+
+- **Mouse-wheel scroll survives focus toggles** — on macOS, switching away
+  (Cmd+Tab, opening the screenshot tool, etc.) and back can drop the
+  terminal's mouse-tracking mode, leaving wheel scroll dead until restart.
+  The TUI now re-arms `EnableMouseCapture` on `FocusGained` alongside the
+  existing keyboard-mode recapture, so wheel events keep flowing after a
+  focus round-trip.
+- **Workspace-local slash commands are now loaded (#1259)** — user command
+  files placed in `<workspace>/.deepseek/commands/`,
+  `<workspace>/.claude/commands/`, and `<workspace>/.cursor/commands/` are
+  now discovered alongside the existing global `~/.deepseek/commands/`.
+  Workspace-local commands shadow global by name, matching the precedence
+  model already used for skills. Reported by **@SamhandsomeLee**.
+- **`@`-mention completion finds AI-tool dot-directories** — files inside
+  `.deepseek/`, `.cursor/`, `.claude/`, and `.agents/` are now discoverable
+  in `@`-mention Tab-completion even when those directories are excluded by
+  `.gitignore`. The fix also applies to the Ctrl+P file picker and fuzzy
+  file resolution.
+- **MCP paginated discovery (#1250, #1256)** — tools, resources, resource
+  templates, and prompts from MCP servers that paginate their responses
+  (e.g., gbrain at 5 items per page) are now fully discovered by following
+  the MCP spec's `nextCursor` across all pages. Reported by
+  **@hongyuatcufe**; thanks to **Liu-Vince** for the diagnosis and PR
+  #1256 with the same fix shape.
+- **Snapshot storage has a disk-space cap (#1112)** — the snapshot side repo
+  now enforces a 500 MB hard limit. When the limit is exceeded at snapshot
+  time, the oldest snapshots are pruned aggressively to stay under a 400 MB
+  target. Guards against the reported 1.2 TB snapshot blowup during
+  high-churn sessions. Reported by **@tyculw**; thanks to
+  **@Giggitycountless** for the PR #1131 proposal that informed the
+  hard-cap approach.
+- **`/clear` now resets the Todos sidebar (#1258)** — previously `/clear`
+  only reset the Plan panel; the Todos checklist persisted across clears
+  until app restart. The fix ensures `clear_todos()` clears the
+  `SharedTodoList` inner state. Reported by **@barjatiyasaurabh**.
+
+### Added
+
+- **Cache-aware prompt diagnostics + payload optimization (#1196)** — adds
+  a `PromptBuilder` that classifies the system prompt into `static` /
+  `history` / `dynamic` layers for cache-prefix stability, plus:
+  - `/cache inspect` — shows SHA-256 hashes per layer, base static prefix
+    hash vs full request prefix hash, static-prefix stability across
+    turns, and first-divergence tracking. Does not print prompt text.
+  - `/cache warmup` — prefetches the stable prefix to seed the DeepSeek
+    context cache.
+  - **Project Context Pack injected into the stable prefix by default**
+    — a structured workspace summary (directory listing up to 4 levels /
+    400 entries, README excerpt up to 4 KB, config + key source file
+    lists). Adds **~1–10 KB to every prompt depending on repo size**, in
+    exchange for a much more cacheable prefix. **Default ON**; disable
+    with `[context] project_pack = false` in `~/.deepseek/config.toml`
+    if you'd rather keep prompts minimal.
+  - Wire-payload optimization: large tool outputs are budgeted, repeated
+    identical tool outputs and `<turn_meta>` blocks are deduplicated
+    with stable refs (wire-only — local session messages stay intact).
+  - Footer cache-hit % chip from `prompt_cache_hit_tokens` /
+    `prompt_cache_miss_tokens` in the API response.
+
+  Thanks **wplll** for the design and implementation.
+
+### Changed
+
+- **Language directive strengthened against project-context bias (#1118)**
+  — the system prompt now explicitly instructs the model that project
+  context (AGENTS.md, auto-generated instructions, file trees) is NOT a
+  language signal. Chinese filenames in a repo no longer bias the model
+  toward Chinese replies when the user writes in English. Reported by
+  **@ljlbit**.
+
+### Known issues
+
+- **Windows flicker/shake regression (#1260, #1251)** — v0.8.22 and v0.8.23
+  exhibit content flickering on Windows 10 (v0.8.20 works correctly). The
+  issue is likely caused by the viewport-reset escape sequence
+  (`\x1b[r\x1b[?6l\x1b[H\x1b[2J\x1b[3J`) added in v0.8.22 to fix viewport
+  drift. On Windows conhost, this sequence may trigger a full screen clear
+  on every repaint. A platform guard or less aggressive sequence is needed.
+
 ## [0.8.23] - 2026-05-08
 
 A security-focused follow-up to v0.8.22. The bulk of the diff is hardening of

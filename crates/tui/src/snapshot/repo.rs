@@ -50,6 +50,15 @@ pub struct SnapshotRepo {
 
 const STALE_TMP_PACK_AGE: Duration = Duration::from_secs(60 * 60);
 
+/// Maximum total snapshot storage in megabytes before pruning kicks in at
+/// snapshot time. Keeps the side repo from blowing up the user's disk during
+/// long-running or high-churn sessions (#1112).
+const MAX_SNAPSHOT_SIZE_MB: u64 = 500;
+
+/// Grace margin below `MAX_SNAPSHOT_SIZE_MB` used as the prune target
+/// so the repo doesn't hit the limit again one snapshot later.
+const PRUNE_TARGET_MB: u64 = 400;
+
 const BUILTIN_EXCLUDES: &str = "\
 # DeepSeek TUI built-in snapshot exclusions
 node_modules/
@@ -203,8 +212,53 @@ impl SnapshotRepo {
     /// `git add -A` honours the user's workspace ignore rules while staging
     /// into the side repo's index.
     ///
+    /// Before committing, checks whether the snapshot directory exceeds
+    /// [`MAX_SNAPSHOT_SIZE_MB`] and prunes the oldest snapshots if it does.
+    ///
     /// Returns the snapshot's commit SHA.
     pub fn snapshot(&self, label: &str) -> io::Result<SnapshotId> {
+        // Guard against disk blowup (#1112): if the snapshot directory has
+        // grown beyond the limit, prune aggressively before adding more.
+        if let Ok(current_mb) = dir_size_mb(&self.git_dir)
+            && current_mb > MAX_SNAPSHOT_SIZE_MB
+        {
+            tracing::warn!(
+                target: "snapshot",
+                current_mb,
+                limit_mb = MAX_SNAPSHOT_SIZE_MB,
+                "snapshot storage approaching limit — pruning aggressively"
+            );
+            // Walk backward from a 1-second retention to zero until
+            // we're under the target, or until there's nothing left.
+            let mut age = Duration::from_secs(1);
+            for _ in 0..10 {
+                let _ = self.prune_older_than(age);
+                if let Ok(new_size) = dir_size_mb(&self.git_dir)
+                    && new_size <= PRUNE_TARGET_MB
+                {
+                    tracing::info!(
+                        target: "snapshot",
+                        new_size_mb = new_size,
+                        "pruned snapshot storage back under limit"
+                    );
+                    break;
+                }
+                age = age.saturating_sub(Duration::from_millis(100));
+            }
+            // Fallback: if even 0-second pruning didn't help (shouldn't
+            // happen but belt-and-suspenders), nuke the refs so the next
+            // snapshot starts a fresh history.
+            if let Ok(final_size) = dir_size_mb(&self.git_dir)
+                && final_size > MAX_SNAPSHOT_SIZE_MB
+            {
+                tracing::warn!(
+                    target: "snapshot",
+                    "snapshot storage still over limit after pruning; wiping history"
+                );
+                let _ = self.prune_older_than(Duration::ZERO);
+                let _ = self.prune_unreachable_objects();
+            }
+        }
         // Stage every tracked + untracked path the workspace exposes.
         // `--all` here means `add` + `update` + `remove` — the same set
         // `git status` would show.
@@ -515,6 +569,32 @@ fn write_builtin_excludes(git_dir: &Path) -> io::Result<()> {
     let info_dir = git_dir.join("info");
     std::fs::create_dir_all(&info_dir)?;
     std::fs::write(info_dir.join("exclude"), BUILTIN_EXCLUDES)
+}
+
+/// Recursively compute the total size of a directory in megabytes.
+fn dir_size_mb(root: &Path) -> io::Result<u64> {
+    fn walk(dir: &Path, total: &mut u64) -> io::Result<()> {
+        if !dir.is_dir() {
+            return Ok(());
+        }
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            let ft = entry.file_type()?;
+            if ft.is_symlink() {
+                continue;
+            }
+            if ft.is_dir() {
+                walk(&path, total)?;
+            } else if ft.is_file() {
+                *total = total.saturating_add(entry.metadata().map(|m| m.len()).unwrap_or(0));
+            }
+        }
+        Ok(())
+    }
+    let mut total: u64 = 0;
+    walk(root, &mut total)?;
+    Ok(total / (1024 * 1024))
 }
 
 fn cleanup_stale_pack_temps(git_dir: &Path, stale_age: Duration) -> io::Result<usize> {
@@ -1010,5 +1090,40 @@ mod tests {
         assert!(is_home_directory(&home_canonical, Some(home)));
         assert!(!is_home_directory(&workspace_canonical, Some(home)));
         assert!(!is_home_directory(&home_canonical, None));
+    }
+
+    #[test]
+    fn dir_size_mb_measures_directory_bytes() {
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().join("sizedir");
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        // 3 bytes per file — well under 1 MB.
+        std::fs::write(dir.join("a.txt"), b"abc").unwrap();
+        std::fs::write(dir.join("sub/b.txt"), b"xyz").unwrap();
+
+        let size = dir_size_mb(&dir).expect("dir_size_mb");
+        assert_eq!(size, 0, "6 bytes should be 0 MB");
+
+        // Write 2 MB of data.
+        let big = dir.join("big.bin");
+        std::fs::write(&big, vec![0u8; 2 * 1024 * 1024]).unwrap();
+        let size = dir_size_mb(&dir).expect("dir_size_mb after big write");
+        assert_eq!(size, 2, "expected 2 MB after writing 2 MB file");
+    }
+
+    /// Regression: snapshot size cap (#1112). When the snapshot dir grows,
+    /// `snapshot()` must prune old snapshots to stay under the limit.
+    /// This test uses the real size constants, which are 500/400 MB —
+    /// we can't easily blow up a temp dir to 500 MB in a unit test.
+    /// Instead we verify the guard logic doesn't panic or error on a
+    /// small repo (well under the cap), and that `snapshot()` still works.
+    #[test]
+    fn snapshot_succeeds_when_under_size_cap() {
+        let tmp = tempdir().unwrap();
+        let (repo, _home) = make_repo(tmp.path());
+        // The side repo is tiny — well under 500 MB. Snapshot should work.
+        std::fs::write(repo.work_tree().join("f.txt"), b"hello").unwrap();
+        let id = repo.snapshot("pre-turn:1").expect("snapshot under cap");
+        assert_eq!(id.as_str().len(), 40);
     }
 }

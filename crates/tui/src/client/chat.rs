@@ -4,12 +4,13 @@
 //! request building (`build_chat_messages*`), and SSE parsing (`parse_sse_chunk`)
 //! all live here.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::pin::Pin;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use tokio::time::timeout as tokio_timeout;
 
 /// Default idle timeout for SSE stream reads (300 seconds = 5 minutes).
@@ -407,16 +408,575 @@ pub(super) fn build_chat_messages(
         messages,
         model,
         should_replay_reasoning_content(model, None),
+        false,
     )
 }
 
 pub(super) fn build_chat_messages_for_request(request: &MessageRequest) -> Vec<Value> {
-    build_chat_messages_with_reasoning(
-        request.system.as_ref(),
-        &request.messages,
-        &request.model,
-        should_replay_reasoning_content(&request.model, request.reasoning_effort.as_deref()),
+    PromptBuilder::for_request(request).build()
+}
+
+pub(crate) fn inspect_prompt_for_request(request: &MessageRequest) -> PromptInspection {
+    PromptBuilder::for_request(request).inspect()
+}
+
+pub(crate) fn build_cache_warmup_request(request: &MessageRequest) -> MessageRequest {
+    PromptBuilder::for_request(request).build_cache_warmup_request()
+}
+
+struct PromptBuilder<'a> {
+    system: Option<&'a SystemPrompt>,
+    messages: &'a [Message],
+    model: &'a str,
+    reasoning_effort: Option<&'a str>,
+}
+
+impl<'a> PromptBuilder<'a> {
+    fn for_request(request: &'a MessageRequest) -> Self {
+        Self {
+            system: request.system.as_ref(),
+            messages: &request.messages,
+            model: &request.model,
+            reasoning_effort: request.reasoning_effort.as_deref(),
+        }
+    }
+
+    fn build(self) -> Vec<Value> {
+        build_chat_messages_with_reasoning(
+            self.system,
+            self.messages,
+            self.model,
+            should_replay_reasoning_content(self.model, self.reasoning_effort),
+            false,
+        )
+    }
+
+    fn inspect(self) -> PromptInspection {
+        let messages = build_chat_messages_with_reasoning(
+            self.system,
+            self.messages,
+            self.model,
+            should_replay_reasoning_content(self.model, self.reasoning_effort),
+            true,
+        );
+        inspect_wire_messages(&messages)
+    }
+
+    fn build_cache_warmup_request(self) -> MessageRequest {
+        let system = stable_system_prompt(self.system);
+        let mut messages = stable_history_messages(self.messages);
+        messages.push(Message {
+            role: "user".to_string(),
+            content: vec![ContentBlock::Text {
+                text: CACHE_WARMUP_USER_TAIL.to_string(),
+                cache_control: None,
+            }],
+        });
+
+        MessageRequest {
+            model: self.model.to_string(),
+            messages,
+            max_tokens: 8,
+            system,
+            tools: None,
+            tool_choice: None,
+            metadata: None,
+            thinking: None,
+            reasoning_effort: self.reasoning_effort.map(str::to_string),
+            stream: None,
+            temperature: Some(0.0),
+            top_p: None,
+        }
+    }
+}
+
+pub(crate) const CACHE_WARMUP_USER_TAIL: &str = "请只回复 OK";
+const TOOL_RESULT_SENT_CHAR_BUDGET: usize = 12_000;
+const TOOL_RESULT_HEAD_CHARS: usize = 4_000;
+const TOOL_RESULT_TAIL_CHARS: usize = 4_000;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PromptInspection {
+    pub base_static_prefix_hash: String,
+    pub full_request_prefix_hash: String,
+    pub layers: Vec<PromptLayerInspection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PromptLayerInspection {
+    pub name: String,
+    pub stability: PromptLayerStability,
+    pub char_len: usize,
+    pub sha256: String,
+    pub tool_result: Option<ToolResultInspection>,
+    pub turn_meta: Option<TurnMetaInspection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ToolResultInspection {
+    pub original_chars: usize,
+    pub sent_chars: usize,
+    pub truncated: bool,
+    pub deduplicated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TurnMetaInspection {
+    pub original_chars: usize,
+    pub sent_chars: usize,
+    pub deduplicated: bool,
+    pub sha256: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PromptLayerStability {
+    Static,
+    History,
+    Dynamic,
+}
+
+impl PromptLayerStability {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Static => "static",
+            Self::History => "history",
+            Self::Dynamic => "dynamic",
+        }
+    }
+}
+
+fn inspect_wire_messages(messages: &[Value]) -> PromptInspection {
+    let mut layers = Vec::new();
+    let mut base_static_prefix_parts = Vec::new();
+    let mut full_request_prefix_parts = Vec::new();
+
+    for (index, message) in messages.iter().enumerate() {
+        let role = message
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let content = message_content_for_inspect(message);
+        let is_last = index + 1 == messages.len();
+
+        if index == 0 && role == "system" {
+            for (name, stability, body) in split_system_layers(&content) {
+                if stability == PromptLayerStability::Static {
+                    base_static_prefix_parts.push(body.to_string());
+                }
+                if stability != PromptLayerStability::Dynamic {
+                    full_request_prefix_parts.push(body.to_string());
+                }
+                layers.push(prompt_layer(name, stability, body));
+            }
+        } else {
+            let stability = if (is_last && role == "user") || role == "tool" {
+                PromptLayerStability::Dynamic
+            } else {
+                PromptLayerStability::History
+            };
+            let name = if is_last && role == "user" {
+                "User task".to_string()
+            } else {
+                format!("Message #{index} {role}")
+            };
+            if stability != PromptLayerStability::Dynamic {
+                full_request_prefix_parts.push(content.clone());
+            }
+            let mut layer = prompt_layer(name, stability, &content);
+            layer.tool_result = tool_result_inspection_for_message(message);
+            layer.turn_meta = turn_meta_inspection_for_message(message);
+            layers.push(layer);
+        }
+    }
+
+    let base_static_prefix = base_static_prefix_parts.join("\n");
+    let full_request_prefix = full_request_prefix_parts.join("\n");
+
+    PromptInspection {
+        base_static_prefix_hash: sha256_hex(base_static_prefix.as_bytes()),
+        full_request_prefix_hash: sha256_hex(full_request_prefix.as_bytes()),
+        layers,
+    }
+}
+
+fn message_content_for_inspect(message: &Value) -> String {
+    let mut parts = Vec::new();
+    if let Some(content) = message.get("content").and_then(Value::as_str)
+        && !content.is_empty()
+    {
+        parts.push(content.to_string());
+    }
+    if let Some(reasoning) = message.get("reasoning_content").and_then(Value::as_str)
+        && !reasoning.is_empty()
+    {
+        parts.push(reasoning.to_string());
+    }
+    if let Some(tool_calls) = message.get("tool_calls") {
+        parts.push(tool_calls.to_string());
+    }
+    parts.join("\n")
+}
+
+fn tool_result_inspection_for_message(message: &Value) -> Option<ToolResultInspection> {
+    if message.get("role").and_then(Value::as_str) != Some("tool") {
+        return None;
+    }
+    let budget = message.get("_tool_result_budget")?;
+    Some(ToolResultInspection {
+        original_chars: budget
+            .get("original_chars")
+            .and_then(Value::as_u64)
+            .and_then(|n| usize::try_from(n).ok())?,
+        sent_chars: budget
+            .get("sent_chars")
+            .and_then(Value::as_u64)
+            .and_then(|n| usize::try_from(n).ok())?,
+        truncated: budget
+            .get("truncated")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        deduplicated: budget
+            .get("deduplicated")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    })
+}
+
+fn turn_meta_inspection_for_message(message: &Value) -> Option<TurnMetaInspection> {
+    let budget = message.get("_turn_meta_budget")?;
+    Some(TurnMetaInspection {
+        original_chars: budget
+            .get("original_chars")
+            .and_then(Value::as_u64)
+            .and_then(|n| usize::try_from(n).ok())?,
+        sent_chars: budget
+            .get("sent_chars")
+            .and_then(Value::as_u64)
+            .and_then(|n| usize::try_from(n).ok())?,
+        deduplicated: budget
+            .get("deduplicated")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        sha256: budget
+            .get("sha256")
+            .and_then(Value::as_str)
+            .map(str::to_string)?,
+    })
+}
+
+fn split_system_layers(content: &str) -> Vec<(String, PromptLayerStability, &str)> {
+    let markers = [
+        ("Project context", "<project_instructions"),
+        ("Project context pack", "## Project Context Pack"),
+        ("Environment", "## Environment"),
+        ("Configured instructions", "<instructions "),
+        ("User memory", "## User Memory"),
+        ("Current session goal", "## Current Session Goal"),
+        ("Skills", "## Skills"),
+        ("Context management", "## Context Management"),
+        ("Compact template", "## Compact"),
+        ("Previous session handoff", "## Previous Session Handoff"),
+    ];
+
+    let mut starts: Vec<(usize, &str)> = markers
+        .iter()
+        .filter_map(|(name, marker)| content.find(marker).map(|idx| (idx, *name)))
+        .collect();
+    starts.sort_by_key(|(idx, _)| *idx);
+
+    let mut layers = Vec::new();
+    let first_marker = starts.first().map_or(content.len(), |(idx, _)| *idx);
+    if first_marker > 0 {
+        layers.push((
+            "Global system prefix".to_string(),
+            PromptLayerStability::Static,
+            content[..first_marker].trim(),
+        ));
+    }
+
+    for (i, (start, name)) in starts.iter().enumerate() {
+        let end = starts.get(i + 1).map_or(content.len(), |(idx, _)| *idx);
+        let stability = if *name == "Previous session handoff" {
+            PromptLayerStability::Dynamic
+        } else if is_static_base_layer(name) {
+            PromptLayerStability::Static
+        } else {
+            PromptLayerStability::History
+        };
+        layers.push(((*name).to_string(), stability, content[*start..end].trim()));
+    }
+
+    if layers.is_empty() {
+        layers.push((
+            "Global system prefix".to_string(),
+            PromptLayerStability::Static,
+            content.trim(),
+        ));
+    }
+    layers
+}
+
+fn is_static_base_layer(name: &str) -> bool {
+    matches!(
+        name,
+        "Global system prefix"
+            | "Environment"
+            | "Skills"
+            | "Project context"
+            | "Project context pack"
+            | "Context management"
+            | "Compact template"
     )
+}
+
+fn stable_system_prompt(system: Option<&SystemPrompt>) -> Option<SystemPrompt> {
+    let instructions = system_to_instructions(system.cloned())?;
+    let stable = split_system_layers(&instructions)
+        .into_iter()
+        .filter_map(|(_, stability, body)| {
+            (stability == PromptLayerStability::Static).then_some(body)
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    if stable.trim().is_empty() {
+        None
+    } else {
+        Some(SystemPrompt::Text(stable))
+    }
+}
+
+fn stable_history_messages(messages: &[Message]) -> Vec<Message> {
+    let mut end = messages.len();
+    if messages
+        .last()
+        .is_some_and(|message| message.role.as_str() == "user")
+    {
+        end = end.saturating_sub(1);
+    }
+    messages[..end].to_vec()
+}
+
+fn prompt_layer(
+    name: String,
+    stability: PromptLayerStability,
+    content: &str,
+) -> PromptLayerInspection {
+    PromptLayerInspection {
+        name,
+        stability,
+        char_len: content.chars().count(),
+        sha256: sha256_hex(content.as_bytes()),
+        tool_result: None,
+        turn_meta: None,
+    }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("{:x}", hasher.finalize())
+}
+
+#[derive(Clone)]
+struct PendingToolCallInfo {
+    tool_name: String,
+    input: Value,
+}
+
+struct SeenToolResult {
+    message_label: String,
+    original_chars: usize,
+}
+
+struct WireToolResult {
+    content: String,
+    original_chars: usize,
+    sent_chars: usize,
+    truncated: bool,
+    deduplicated: bool,
+}
+
+#[derive(Clone)]
+struct TurnMetaBudget {
+    original_chars: usize,
+    sent_chars: usize,
+    deduplicated: bool,
+    sha256: String,
+}
+
+struct LastFullTurnMeta {
+    sha256: String,
+}
+
+fn render_turn_meta_for_wire(
+    text: &str,
+    last_full_turn_meta: &mut Option<LastFullTurnMeta>,
+) -> (String, TurnMetaBudget) {
+    let original_chars = text.chars().count();
+    let sha = sha256_hex(text.as_bytes());
+
+    if last_full_turn_meta
+        .as_ref()
+        .is_some_and(|previous| previous.sha256 == sha)
+    {
+        let rendered =
+            format!("<TURN_META_REF sha=\"{sha}\" original_chars=\"{original_chars}\" />");
+        let budget = TurnMetaBudget {
+            original_chars,
+            sent_chars: rendered.chars().count(),
+            deduplicated: true,
+            sha256: sha,
+        };
+        return (rendered, budget);
+    }
+
+    *last_full_turn_meta = Some(LastFullTurnMeta {
+        sha256: sha.clone(),
+    });
+    (
+        text.to_string(),
+        TurnMetaBudget {
+            original_chars,
+            sent_chars: original_chars,
+            deduplicated: false,
+            sha256: sha,
+        },
+    )
+}
+
+fn is_turn_meta_text(text: &str) -> bool {
+    text.trim_start().starts_with("<turn_meta>")
+}
+
+fn turn_meta_budget_json(turn_meta: &TurnMetaBudget) -> Value {
+    json!({
+        "original_chars": turn_meta.original_chars,
+        "sent_chars": turn_meta.sent_chars,
+        "deduplicated": turn_meta.deduplicated,
+        "sha256": turn_meta.sha256,
+    })
+}
+
+fn compact_tool_result_for_wire(
+    tool_name: &str,
+    input: &Value,
+    content: &str,
+    message_label: &str,
+    seen_tool_results: &mut HashMap<String, SeenToolResult>,
+) -> WireToolResult {
+    let original_chars = content.chars().count();
+    let sha = sha256_hex(content.as_bytes());
+
+    if let Some(previous) = seen_tool_results.get(&sha) {
+        let content = format!(
+            "<TOOL_RESULT_REF sha=\"{}\" original_message=\"{}\" chars=\"{}\" />",
+            sha, previous.message_label, previous.original_chars
+        );
+        return WireToolResult {
+            sent_chars: content.chars().count(),
+            content,
+            original_chars,
+            truncated: false,
+            deduplicated: true,
+        };
+    }
+
+    seen_tool_results.insert(
+        sha.clone(),
+        SeenToolResult {
+            message_label: message_label.to_string(),
+            original_chars,
+        },
+    );
+
+    if original_chars <= TOOL_RESULT_SENT_CHAR_BUDGET {
+        return WireToolResult {
+            content: content.to_string(),
+            original_chars,
+            sent_chars: original_chars,
+            truncated: false,
+            deduplicated: false,
+        };
+    }
+
+    let head = first_chars(content, TOOL_RESULT_HEAD_CHARS);
+    let tail = last_chars(content, TOOL_RESULT_TAIL_CHARS);
+    let kept = head.chars().count() + tail.chars().count();
+    let omitted = original_chars.saturating_sub(kept);
+    let compacted = format!(
+        "[TOOL_RESULT_TRUNCATED]\n\
+         tool_name: {tool_name}\n\
+         command_or_query: {}\n\
+         exit_status: {}\n\
+         original_chars: {original_chars}\n\
+         sha256: {sha}\n\
+         first_chars:\n\
+         {head}\n\n\
+         [... truncated {omitted} chars from middle ...]\n\n\
+         last_chars:\n\
+         {tail}",
+        tool_command_or_query(input),
+        tool_exit_status(content)
+    );
+
+    WireToolResult {
+        sent_chars: compacted.chars().count(),
+        content: compacted,
+        original_chars,
+        truncated: true,
+        deduplicated: false,
+    }
+}
+
+fn tool_command_or_query(input: &Value) -> String {
+    for key in ["command", "cmd", "query", "q", "pattern", "path", "url"] {
+        if let Some(value) = input.get(key) {
+            return summarize_for_metadata(value, 500);
+        }
+    }
+    summarize_for_metadata(input, 500)
+}
+
+fn tool_exit_status(content: &str) -> String {
+    if let Ok(value) = serde_json::from_str::<Value>(content) {
+        for key in ["exit_code", "exit_status", "status", "code"] {
+            if let Some(value) = value.get(key) {
+                return summarize_for_metadata(value, 120);
+            }
+        }
+    }
+
+    for line in content.lines().take(20) {
+        let trimmed = line.trim();
+        for prefix in ["Exit code:", "exit code:", "Exit status:", "exit status:"] {
+            if let Some(value) = trimmed.strip_prefix(prefix) {
+                return value.trim().to_string();
+            }
+        }
+    }
+    "unknown".to_string()
+}
+
+fn summarize_for_metadata(value: &Value, max_chars: usize) -> String {
+    let raw = value
+        .as_str()
+        .map(str::to_string)
+        .unwrap_or_else(|| value.to_string());
+    let mut summarized = first_chars(&raw.replace('\n', "\\n"), max_chars);
+    if raw.chars().count() > max_chars {
+        summarized.push_str("...");
+    }
+    summarized
+}
+
+fn first_chars(value: &str, count: usize) -> String {
+    value.chars().take(count).collect()
+}
+
+fn last_chars(value: &str, count: usize) -> String {
+    let mut chars: Vec<char> = value.chars().rev().take(count).collect();
+    chars.reverse();
+    chars.into_iter().collect()
 }
 
 fn build_chat_messages_with_reasoning(
@@ -424,9 +984,12 @@ fn build_chat_messages_with_reasoning(
     messages: &[Message],
     _model: &str,
     include_reasoning: bool,
+    include_tool_budget_metadata: bool,
 ) -> Vec<Value> {
     let mut out = Vec::new();
-    let mut pending_tool_calls: HashSet<String> = HashSet::new();
+    let mut pending_tool_calls: HashMap<String, PendingToolCallInfo> = HashMap::new();
+    let mut seen_tool_results: HashMap<String, SeenToolResult> = HashMap::new();
+    let mut last_full_turn_meta: Option<LastFullTurnMeta> = None;
 
     if let Some(instructions) = system_to_instructions(system.cloned())
         && !instructions.trim().is_empty()
@@ -442,15 +1005,25 @@ fn build_chat_messages_with_reasoning(
         let mut text_parts = Vec::new();
         let mut thinking_parts = Vec::new();
         let mut tool_calls = Vec::new();
-        let mut tool_call_ids = Vec::new();
-        let mut tool_results: Vec<(String, Value)> = Vec::new();
+        let mut tool_call_infos = Vec::new();
+        let mut tool_results: Vec<(String, String, String)> = Vec::new();
+        let mut turn_meta_budget: Option<TurnMetaBudget> = None;
         let later_user_turn = messages[message_index + 1..]
             .iter()
             .any(message_starts_user_turn);
 
         for block in &message.content {
             match block {
-                ContentBlock::Text { text, .. } => text_parts.push(text.clone()),
+                ContentBlock::Text { text, .. } => {
+                    if is_turn_meta_text(text) {
+                        let (rendered, budget) =
+                            render_turn_meta_for_wire(text, &mut last_full_turn_meta);
+                        text_parts.push(rendered);
+                        turn_meta_budget = Some(budget);
+                    } else {
+                        text_parts.push(text.clone());
+                    }
+                }
                 ContentBlock::Thinking { thinking } => thinking_parts.push(thinking.clone()),
                 ContentBlock::ToolUse {
                     id,
@@ -475,21 +1048,21 @@ fn build_chat_messages_with_reasoning(
                         });
                     }
                     tool_calls.push(call);
-                    tool_call_ids.push(id.clone());
+                    tool_call_infos.push((
+                        id.clone(),
+                        PendingToolCallInfo {
+                            tool_name: name.clone(),
+                            input: input.clone(),
+                        },
+                    ));
                 }
                 ContentBlock::ToolResult {
                     tool_use_id,
                     content,
                     ..
                 } => {
-                    tool_results.push((
-                        tool_use_id.clone(),
-                        json!({
-                            "role": "tool",
-                            "tool_call_id": tool_use_id,
-                            "content": content,
-                        }),
-                    ));
+                    let message_label = format!("Message #{message_index}");
+                    tool_results.push((tool_use_id.clone(), content.clone(), message_label));
                 }
                 ContentBlock::ServerToolUse { .. }
                 | ContentBlock::ToolSearchToolResult { .. }
@@ -541,7 +1114,7 @@ fn build_chat_messages_with_reasoning(
             }
             if has_tool_calls {
                 msg["tool_calls"] = json!(tool_calls);
-                pending_tool_calls = tool_call_ids.into_iter().collect();
+                pending_tool_calls = tool_call_infos.into_iter().collect();
             } else {
                 pending_tool_calls.clear();
             }
@@ -549,18 +1122,26 @@ fn build_chat_messages_with_reasoning(
         } else if role == "system" {
             let content = text_parts.join("\n");
             if !content.trim().is_empty() {
-                out.push(json!({
+                let mut msg = json!({
                     "role": "system",
                     "content": content,
-                }));
+                });
+                if include_tool_budget_metadata && let Some(turn_meta) = &turn_meta_budget {
+                    msg["_turn_meta_budget"] = turn_meta_budget_json(turn_meta);
+                }
+                out.push(msg);
             }
         } else if role == "user" {
             let content = text_parts.join("\n");
             if !content.trim().is_empty() {
-                out.push(json!({
+                let mut msg = json!({
                     "role": "user",
                     "content": content,
-                }));
+                });
+                if include_tool_budget_metadata && let Some(turn_meta) = &turn_meta_budget {
+                    msg["_turn_meta_budget"] = turn_meta_budget_json(turn_meta);
+                }
+                out.push(msg);
             }
         }
 
@@ -568,8 +1149,28 @@ fn build_chat_messages_with_reasoning(
             if pending_tool_calls.is_empty() {
                 logging::warn("Dropping tool results without matching tool_calls");
             } else {
-                for (tool_id, tool_msg) in tool_results {
-                    if pending_tool_calls.remove(&tool_id) {
+                for (tool_id, content, message_label) in tool_results {
+                    if let Some(tool_info) = pending_tool_calls.remove(&tool_id) {
+                        let wire_result = compact_tool_result_for_wire(
+                            &tool_info.tool_name,
+                            &tool_info.input,
+                            &content,
+                            &message_label,
+                            &mut seen_tool_results,
+                        );
+                        let mut tool_msg = json!({
+                            "role": "tool",
+                            "tool_call_id": tool_id,
+                            "content": wire_result.content,
+                        });
+                        if include_tool_budget_metadata {
+                            tool_msg["_tool_result_budget"] = json!({
+                                "original_chars": wire_result.original_chars,
+                                "sent_chars": wire_result.sent_chars,
+                                "truncated": wire_result.truncated,
+                                "deduplicated": wire_result.deduplicated,
+                            });
+                        }
                         out.push(tool_msg);
                     } else {
                         logging::warn(format!(
@@ -1721,5 +2322,303 @@ mod stream_decoder_tests {
         assert_eq!(built.len(), 1);
         assert_eq!(built[0]["role"], "system");
         assert_eq!(built[0]["content"], "internal runtime event");
+    }
+
+    fn tool_use_message(id: &str, name: &str, input: Value) -> Message {
+        Message {
+            role: "assistant".to_string(),
+            content: vec![ContentBlock::ToolUse {
+                id: id.to_string(),
+                name: name.to_string(),
+                input,
+                caller: None,
+            }],
+        }
+    }
+
+    fn tool_result_message(id: &str, content: &str) -> Message {
+        Message {
+            role: "user".to_string(),
+            content: vec![ContentBlock::ToolResult {
+                tool_use_id: id.to_string(),
+                content: content.to_string(),
+                is_error: None,
+                content_blocks: None,
+            }],
+        }
+    }
+
+    fn user_message_with_turn_meta(turn_meta: &str, task: &str) -> Message {
+        Message {
+            role: "user".to_string(),
+            content: vec![
+                ContentBlock::Text {
+                    text: turn_meta.to_string(),
+                    cache_control: None,
+                },
+                ContentBlock::Text {
+                    text: task.to_string(),
+                    cache_control: None,
+                },
+            ],
+        }
+    }
+
+    fn tool_message_content(messages: &[Value], index: usize) -> &str {
+        messages
+            .iter()
+            .filter(|message| message.get("role").and_then(Value::as_str) == Some("tool"))
+            .nth(index)
+            .and_then(|message| message.get("content").and_then(Value::as_str))
+            .expect("tool message content")
+    }
+
+    fn user_message_content(messages: &[Value], index: usize) -> &str {
+        messages
+            .iter()
+            .filter(|message| message.get("role").and_then(Value::as_str) == Some("user"))
+            .nth(index)
+            .and_then(|message| message.get("content").and_then(Value::as_str))
+            .expect("user message content")
+    }
+
+    #[test]
+    fn request_builder_deduplicates_consecutive_identical_turn_meta_for_wire() {
+        let turn_meta = "<turn_meta>\nCurrent local date: 2026-05-09\n</turn_meta>";
+        let messages = vec![
+            user_message_with_turn_meta(turn_meta, "first task"),
+            Message {
+                role: "assistant".to_string(),
+                content: vec![ContentBlock::Text {
+                    text: "first answer".to_string(),
+                    cache_control: None,
+                }],
+            },
+            user_message_with_turn_meta(turn_meta, "second task"),
+        ];
+
+        let built = build_chat_messages(None, &messages, "deepseek-v4-flash");
+        let first = user_message_content(&built, 0);
+        let second = user_message_content(&built, 1);
+        let expected_sha = sha256_hex(turn_meta.as_bytes());
+        let expected_ref = format!(
+            "<TURN_META_REF sha=\"{expected_sha}\" original_chars=\"{}\" />",
+            turn_meta.chars().count()
+        );
+
+        assert!(first.starts_with(turn_meta), "got: {first}");
+        assert!(second.starts_with(&expected_ref), "got: {second}");
+        assert!(second.ends_with("second task"), "got: {second}");
+        assert_eq!(
+            second,
+            format!("{expected_ref}\nsecond task"),
+            "ref text must stay stable"
+        );
+    }
+
+    #[test]
+    fn request_builder_keeps_changed_turn_meta_full_and_updates_recent_hash() {
+        let first_meta = "<turn_meta>\nCurrent local date: 2026-05-09\n</turn_meta>";
+        let second_meta =
+            "<turn_meta>\nCurrent local date: 2026-05-09\nWorking set: src/lib.rs\n</turn_meta>";
+        let messages = vec![
+            user_message_with_turn_meta(first_meta, "first task"),
+            user_message_with_turn_meta(second_meta, "second task"),
+        ];
+
+        let built = build_chat_messages(None, &messages, "deepseek-v4-flash");
+        let first = user_message_content(&built, 0);
+        let second = user_message_content(&built, 1);
+
+        assert!(first.starts_with(first_meta), "got: {first}");
+        assert!(second.starts_with(second_meta), "got: {second}");
+        assert!(!second.contains("<TURN_META_REF"), "got: {second}");
+    }
+
+    #[test]
+    fn turn_meta_dedup_is_wire_only_and_does_not_mutate_session_message() {
+        let turn_meta = "<turn_meta>\nCurrent local date: 2026-05-09\n</turn_meta>";
+        let messages = vec![
+            user_message_with_turn_meta(turn_meta, "first task"),
+            user_message_with_turn_meta(turn_meta, "second task"),
+        ];
+
+        let built = build_chat_messages(None, &messages, "deepseek-v4-flash");
+        assert!(
+            user_message_content(&built, 1).starts_with("<TURN_META_REF"),
+            "got: {}",
+            user_message_content(&built, 1)
+        );
+
+        match &messages[1].content[0] {
+            ContentBlock::Text { text, .. } => assert_eq!(text, turn_meta),
+            other => panic!("expected text block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cache_inspect_reports_turn_meta_dedup_metadata() {
+        let turn_meta = format!(
+            "<turn_meta>\nCurrent local date: 2026-05-09\n{}\n</turn_meta>",
+            "Working set: src/lib.rs\n".repeat(20)
+        );
+        let request = MessageRequest {
+            model: "deepseek-v4-flash".to_string(),
+            messages: vec![
+                user_message_with_turn_meta(&turn_meta, "first task"),
+                user_message_with_turn_meta(&turn_meta, "second task"),
+            ],
+            max_tokens: 0,
+            system: None,
+            tools: None,
+            tool_choice: None,
+            metadata: None,
+            thinking: None,
+            reasoning_effort: None,
+            stream: None,
+            temperature: None,
+            top_p: None,
+        };
+
+        let inspection = inspect_prompt_for_request(&request);
+        let turn_meta_layers: Vec<_> = inspection
+            .layers
+            .iter()
+            .filter_map(|layer| layer.turn_meta.as_ref())
+            .collect();
+
+        assert_eq!(turn_meta_layers.len(), 2);
+        assert_eq!(
+            turn_meta_layers[0].original_chars,
+            turn_meta.chars().count()
+        );
+        assert_eq!(turn_meta_layers[0].sent_chars, turn_meta.chars().count());
+        assert!(!turn_meta_layers[0].deduplicated);
+        assert_eq!(turn_meta_layers[0].sha256, sha256_hex(turn_meta.as_bytes()));
+        assert_eq!(
+            turn_meta_layers[1].original_chars,
+            turn_meta.chars().count()
+        );
+        assert!(turn_meta_layers[1].sent_chars < turn_meta_layers[1].original_chars);
+        assert!(turn_meta_layers[1].deduplicated);
+        assert_eq!(turn_meta_layers[1].sha256, turn_meta_layers[0].sha256);
+    }
+
+    #[test]
+    fn request_builder_truncates_large_tool_result_for_wire() {
+        let long_output = format!("{}{}", "A".repeat(7_000), "Z".repeat(7_000));
+        let messages = vec![
+            tool_use_message(
+                "tool-long",
+                "shell_command",
+                json!({"command": "cargo test"}),
+            ),
+            tool_result_message("tool-long", &long_output),
+        ];
+
+        let built = build_chat_messages(None, &messages, "deepseek-v4-flash");
+        let sent = tool_message_content(&built, 0);
+
+        assert!(sent.contains("[TOOL_RESULT_TRUNCATED]"), "got: {sent}");
+        assert!(sent.contains("tool_name: shell_command"), "got: {sent}");
+        assert!(sent.contains("command_or_query: cargo test"), "got: {sent}");
+        assert!(sent.contains("original_chars: 14000"), "got: {sent}");
+        assert!(sent.contains("sha256:"), "got: {sent}");
+        assert!(sent.contains(&"A".repeat(4_000)), "got: {sent}");
+        assert!(sent.contains(&"Z".repeat(4_000)), "got: {sent}");
+        assert!(
+            sent.contains("truncated 6000 chars from middle"),
+            "got: {sent}"
+        );
+        assert_ne!(sent, long_output);
+    }
+
+    #[test]
+    fn request_builder_deduplicates_identical_tool_results_for_wire() {
+        let output = "same tool output";
+        let messages = vec![
+            tool_use_message("tool-1", "read_file", json!({"path": "README.md"})),
+            tool_result_message("tool-1", output),
+            tool_use_message("tool-2", "read_file", json!({"path": "README.md"})),
+            tool_result_message("tool-2", output),
+        ];
+
+        let built = build_chat_messages(None, &messages, "deepseek-v4-flash");
+        let first = tool_message_content(&built, 0);
+        let second = tool_message_content(&built, 1);
+
+        assert_eq!(first, output);
+        assert!(
+            second.starts_with("<TOOL_RESULT_REF sha=\""),
+            "got: {second}"
+        );
+        assert!(
+            second.contains("original_message=\"Message #1\""),
+            "got: {second}"
+        );
+        assert!(second.contains("chars=\"16\""), "got: {second}");
+    }
+
+    #[test]
+    fn tool_result_budget_is_wire_only_and_does_not_mutate_session_message() {
+        let long_output = format!("{}{}", "A".repeat(7_000), "Z".repeat(7_000));
+        let messages = vec![
+            tool_use_message(
+                "tool-long",
+                "shell_command",
+                json!({"command": "cargo test"}),
+            ),
+            tool_result_message("tool-long", &long_output),
+        ];
+
+        let built = build_chat_messages(None, &messages, "deepseek-v4-flash");
+        let sent = tool_message_content(&built, 0);
+        assert_ne!(sent, long_output);
+
+        match &messages[1].content[0] {
+            ContentBlock::ToolResult { content, .. } => assert_eq!(content, &long_output),
+            other => panic!("expected tool result, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cache_inspect_reports_tool_result_budget_metadata() {
+        let long_output = format!("{}{}", "A".repeat(7_000), "Z".repeat(7_000));
+        let request = MessageRequest {
+            model: "deepseek-v4-flash".to_string(),
+            messages: vec![
+                tool_use_message("tool-1", "shell_command", json!({"command": "cargo test"})),
+                tool_result_message("tool-1", &long_output),
+                tool_use_message("tool-2", "shell_command", json!({"command": "cargo test"})),
+                tool_result_message("tool-2", &long_output),
+            ],
+            max_tokens: 0,
+            system: None,
+            tools: None,
+            tool_choice: None,
+            metadata: None,
+            thinking: None,
+            reasoning_effort: None,
+            stream: None,
+            temperature: None,
+            top_p: None,
+        };
+
+        let inspection = inspect_prompt_for_request(&request);
+        let tool_layers: Vec<_> = inspection
+            .layers
+            .iter()
+            .filter_map(|layer| layer.tool_result.as_ref())
+            .collect();
+
+        assert_eq!(tool_layers.len(), 2);
+        assert_eq!(tool_layers[0].original_chars, 14_000);
+        assert!(tool_layers[0].sent_chars < tool_layers[0].original_chars);
+        assert!(tool_layers[0].truncated);
+        assert!(!tool_layers[0].deduplicated);
+        assert_eq!(tool_layers[1].original_chars, 14_000);
+        assert!(tool_layers[1].sent_chars < 200);
+        assert!(!tool_layers[1].truncated);
+        assert!(tool_layers[1].deduplicated);
     }
 }

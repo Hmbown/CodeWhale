@@ -95,6 +95,7 @@ pub struct EngineConfig {
     /// `instructions = [...]` config (or the per-project override).
     /// Resolved via `expand_path` so `~` works.
     pub instructions: Vec<PathBuf>,
+    pub project_context_pack_enabled: bool,
     /// Maximum number of assistant steps before stopping.
     pub max_steps: u32,
     /// Maximum number of concurrently active subagents.
@@ -166,6 +167,7 @@ impl Default for EngineConfig {
             mcp_config_path: PathBuf::from("mcp.json"),
             skills_dir: crate::skills::default_skills_dir(),
             instructions: Vec::new(),
+            project_context_pack_enabled: true,
             max_steps: 100,
             max_subagents: DEFAULT_MAX_SUBAGENTS,
             features: Features::with_defaults(),
@@ -442,6 +444,7 @@ impl Engine {
                 prompts::PromptSessionContext {
                     user_memory_block: user_memory_block.as_deref(),
                     goal_objective: config.goal_objective.as_deref(),
+                    project_context_pack_enabled: config.project_context_pack_enabled,
                     locale_tag: &config.locale_tag,
                 },
                 session.approval_mode,
@@ -1862,6 +1865,7 @@ impl Engine {
             prompts::PromptSessionContext {
                 user_memory_block: user_memory_block.as_deref(),
                 goal_objective: self.config.goal_objective.as_deref(),
+                project_context_pack_enabled: self.config.project_context_pack_enabled,
                 locale_tag: &self.config.locale_tag,
             },
             self.session.approval_mode,
