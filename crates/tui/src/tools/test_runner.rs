@@ -1,7 +1,7 @@
 //! Cargo test runner tool: `run_tests`.
 //!
-//! This tool intentionally auto-approves test execution to encourage
-//! frequent verification loops while still scoping execution to the workspace.
+//! `cargo test` runs workspace code, so this tool follows the same explicit
+//! approval policy as the other code-executing tools.
 
 use std::path::Path;
 use std::process::Command;
@@ -61,8 +61,9 @@ impl ToolSpec for RunTestsTool {
     }
 
     fn approval_requirement(&self) -> ApprovalRequirement {
-        // Tests are encouraged, so avoid gating them behind approval.
-        ApprovalRequirement::Auto
+        // `run_tests` declares `ToolCapability::ExecutesCode` — match the
+        // default approval policy for code-executing tools.
+        ApprovalRequirement::Required
     }
 
     async fn execute(&self, input: Value, context: &ToolContext) -> Result<ToolResult, ToolError> {
@@ -188,6 +189,18 @@ mod tests {
             .expect("cargo should spawn");
         assert!(status.success(), "cargo init failed");
         project_dir
+    }
+
+    /// `run_tests` is `ToolCapability::ExecutesCode`, so it must follow the
+    /// explicit-approval policy that applies to other code-executing tools.
+    #[test]
+    fn run_tests_requires_user_approval() {
+        let tool = RunTestsTool;
+        assert_eq!(
+            tool.approval_requirement(),
+            ApprovalRequirement::Required,
+            "run_tests must gate cargo test behind user approval"
+        );
     }
 
     #[tokio::test]

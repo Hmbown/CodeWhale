@@ -34,7 +34,6 @@ use crate::{commands, config::COMMON_DEEPSEEK_MODELS};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    prelude::Stylize,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{

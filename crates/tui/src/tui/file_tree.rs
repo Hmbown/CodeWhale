@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Style, Stylize},
+    style::Style,
     text::{Line, Span},
     widgets::{Block, Paragraph, Wrap},
 };

@@ -124,7 +124,7 @@ fn search_files(
     let mut results: Vec<FileSearchMatch> = Vec::new();
 
     let mut builder = WalkBuilder::new(base_path);
-    builder.hidden(false).follow_links(true).require_git(false);
+    builder.hidden(false).follow_links(false).require_git(false);
     let walker = builder.build();
 
     for entry in walker {
@@ -321,5 +321,28 @@ mod tests {
         assert!(result.success);
         assert!(result.content.contains("main.rs"));
         assert!(!result.content.contains("notes.md"));
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn test_file_search_does_not_follow_symlinked_files() {
+        let tmp = tempdir().expect("tempdir");
+        let root = tmp.path().join("workspace");
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&root).expect("mkdir workspace");
+        std::fs::create_dir_all(&outside).expect("mkdir outside");
+        let outside_file = outside.join("secret.txt");
+        std::fs::write(&outside_file, "outside\n").expect("write outside");
+        std::os::unix::fs::symlink(&outside_file, root.join("secret.txt")).expect("symlink");
+
+        let ctx = ToolContext::new(root);
+        let tool = FileSearchTool;
+        let result = tool
+            .execute(json!({"query": "secret"}), &ctx)
+            .await
+            .expect("execute");
+
+        assert!(result.success);
+        assert!(!result.content.contains("secret.txt"));
     }
 }

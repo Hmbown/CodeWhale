@@ -33,6 +33,24 @@ use crate::tui::app::AppMode;
 const EVENT_CHANNEL_CAPACITY: usize = 1024;
 const MAX_ACTIVE_THREADS_DEFAULT: usize = 8;
 const SUMMARY_LIMIT: usize = 280;
+
+fn validated_record_id<'a>(id: &'a str, label: &str) -> Result<&'a str> {
+    let trimmed = id.trim();
+    if trimmed.is_empty() {
+        bail!("{label} cannot be empty");
+    }
+    if trimmed != id {
+        bail!("{label} cannot contain leading or trailing whitespace");
+    }
+    if !trimmed
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        bail!("{label} contains unsupported characters");
+    }
+    Ok(trimmed)
+}
+
 /// Bumped to 2 for v0.6.6 — see issue #124. The persisted thread/turn/item
 /// records didn't change shape, but the live engine semantics did: cycle
 /// boundaries advance the `Session.cycle_count` and produce archived JSONL
@@ -241,36 +259,43 @@ impl RuntimeThreadStore {
         })
     }
 
-    fn thread_path(&self, thread_id: &str) -> PathBuf {
-        self.threads_dir.join(format!("{thread_id}.json"))
+    fn record_path(base: &Path, id: &str, extension: &str, label: &str) -> Result<PathBuf> {
+        let id = validated_record_id(id, label)?;
+        Ok(base.join(format!("{id}.{extension}")))
     }
 
-    fn turn_path(&self, turn_id: &str) -> PathBuf {
-        self.turns_dir.join(format!("{turn_id}.json"))
+    fn thread_path(&self, thread_id: &str) -> Result<PathBuf> {
+        Self::record_path(&self.threads_dir, thread_id, "json", "thread id")
     }
 
-    fn item_path(&self, item_id: &str) -> PathBuf {
-        self.items_dir.join(format!("{item_id}.json"))
+    fn turn_path(&self, turn_id: &str) -> Result<PathBuf> {
+        Self::record_path(&self.turns_dir, turn_id, "json", "turn id")
     }
 
-    fn events_path(&self, thread_id: &str) -> PathBuf {
-        self.events_dir.join(format!("{thread_id}.jsonl"))
+    fn item_path(&self, item_id: &str) -> Result<PathBuf> {
+        Self::record_path(&self.items_dir, item_id, "json", "item id")
+    }
+
+    fn events_path(&self, thread_id: &str) -> Result<PathBuf> {
+        Self::record_path(&self.events_dir, thread_id, "jsonl", "thread id")
     }
 
     pub fn save_thread(&self, thread: &ThreadRecord) -> Result<()> {
-        write_json_atomic(&self.thread_path(&thread.id), thread)
+        write_json_atomic(&self.thread_path(&thread.id)?, thread)
     }
 
     pub fn save_turn(&self, turn: &TurnRecord) -> Result<()> {
-        write_json_atomic(&self.turn_path(&turn.id), turn)
+        validated_record_id(&turn.thread_id, "thread id")?;
+        write_json_atomic(&self.turn_path(&turn.id)?, turn)
     }
 
     pub fn save_item(&self, item: &TurnItemRecord) -> Result<()> {
-        write_json_atomic(&self.item_path(&item.id), item)
+        validated_record_id(&item.turn_id, "turn id")?;
+        write_json_atomic(&self.item_path(&item.id)?, item)
     }
 
     pub fn load_thread(&self, thread_id: &str) -> Result<ThreadRecord> {
-        let path = self.thread_path(thread_id);
+        let path = self.thread_path(thread_id)?;
         let raw = fs::read_to_string(&path)
             .with_context(|| format!("Failed to read thread {}", path.display()))?;
         let record: ThreadRecord = serde_json::from_str(&raw)
@@ -286,7 +311,7 @@ impl RuntimeThreadStore {
     }
 
     pub fn load_turn(&self, turn_id: &str) -> Result<TurnRecord> {
-        let path = self.turn_path(turn_id);
+        let path = self.turn_path(turn_id)?;
         let raw = fs::read_to_string(&path)
             .with_context(|| format!("Failed to read turn {}", path.display()))?;
         let record: TurnRecord = serde_json::from_str(&raw)
@@ -302,7 +327,7 @@ impl RuntimeThreadStore {
     }
 
     pub fn load_item(&self, item_id: &str) -> Result<TurnItemRecord> {
-        let path = self.item_path(item_id);
+        let path = self.item_path(item_id)?;
         let raw = fs::read_to_string(&path)
             .with_context(|| format!("Failed to read item {}", path.display()))?;
         let record: TurnItemRecord = serde_json::from_str(&raw)
@@ -345,6 +370,7 @@ impl RuntimeThreadStore {
     }
 
     pub fn list_turns_for_thread(&self, thread_id: &str) -> Result<Vec<TurnRecord>> {
+        validated_record_id(thread_id, "thread id")?;
         let mut out = Vec::new();
         for entry in fs::read_dir(&self.turns_dir)
             .with_context(|| format!("Failed to read {}", self.turns_dir.display()))?
@@ -374,6 +400,7 @@ impl RuntimeThreadStore {
     }
 
     pub fn list_items_for_turn(&self, turn_id: &str) -> Result<Vec<TurnItemRecord>> {
+        validated_record_id(turn_id, "turn id")?;
         let mut out = Vec::new();
         for entry in fs::read_dir(&self.items_dir)
             .with_context(|| format!("Failed to read {}", self.items_dir.display()))?
@@ -414,6 +441,15 @@ impl RuntimeThreadStore {
         event: impl Into<String>,
         payload: Value,
     ) -> Result<RuntimeEventRecord> {
+        validated_record_id(thread_id, "thread id")?;
+        if let Some(turn_id) = turn_id {
+            validated_record_id(turn_id, "turn id")?;
+        }
+        if let Some(item_id) = item_id {
+            validated_record_id(item_id, "item id")?;
+        }
+        let path = self.events_path(thread_id)?;
+
         let mut state = self.state.lock().await;
         let seq = state.next_seq;
         state.next_seq = state.next_seq.saturating_add(1);
@@ -431,7 +467,6 @@ impl RuntimeThreadStore {
             payload,
         };
 
-        let path = self.events_path(thread_id);
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
@@ -451,7 +486,7 @@ impl RuntimeThreadStore {
         thread_id: &str,
         since_seq: Option<u64>,
     ) -> Result<Vec<RuntimeEventRecord>> {
-        let path = self.events_path(thread_id);
+        let path = self.events_path(thread_id)?;
         if !path.exists() {
             return Ok(Vec::new());
         }
@@ -3319,6 +3354,37 @@ mod tests {
         // Locks the bump in (issue #124). Bump deliberately when persisted
         // shape changes.
         assert_eq!(CURRENT_RUNTIME_SCHEMA_VERSION, 2);
+    }
+
+    #[test]
+    fn store_rejects_path_like_record_ids() {
+        let dir = test_runtime_dir();
+        let store = RuntimeThreadStore::open(dir.clone()).expect("open store");
+
+        let err = store
+            .load_thread("../outside")
+            .expect_err("path traversal id should fail");
+        assert!(
+            format!("{err:#}").contains("unsupported characters"),
+            "got: {err:#}"
+        );
+
+        let mut thread = sample_thread("thr_bad/id");
+        let err = store
+            .save_thread(&thread)
+            .expect_err("path separator id should fail");
+        assert!(
+            format!("{err:#}").contains("unsupported characters"),
+            "got: {err:#}"
+        );
+
+        thread.id = " thr_bad".to_string();
+        let err = store
+            .save_thread(&thread)
+            .expect_err("whitespace id should fail");
+        assert!(format!("{err:#}").contains("whitespace"), "got: {err:#}");
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

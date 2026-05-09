@@ -103,7 +103,10 @@ impl SkillRegistry {
     #[must_use]
     pub fn discover(dir: &Path) -> Self {
         let mut registry = Self::default();
-        if !dir.exists() {
+        let Ok(canonical_dir) = fs::canonicalize(dir) else {
+            return registry;
+        };
+        if !canonical_dir.is_dir() {
             return registry;
         }
 
@@ -403,8 +406,12 @@ pub fn skills_directories(workspace: &Path) -> Vec<PathBuf> {
 
 fn existing_skill_dirs(candidates: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
     let mut out = Vec::new();
+    let mut seen = HashSet::new();
     for path in candidates {
-        if path.is_dir() && !out.iter().any(|p: &PathBuf| p == &path) {
+        let Ok(canonical_path) = fs::canonicalize(&path) else {
+            continue;
+        };
+        if canonical_path.is_dir() && seen.insert(canonical_path) {
             out.push(path);
         }
     }

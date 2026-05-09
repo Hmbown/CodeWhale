@@ -10,7 +10,7 @@ use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
     prelude::Widget,
-    style::{Style, Stylize},
+    style::Style,
     text::{Line, Span},
     widgets::{Block, Paragraph, Wrap},
 };

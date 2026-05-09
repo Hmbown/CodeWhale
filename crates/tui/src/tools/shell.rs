@@ -25,6 +25,7 @@ use std::os::unix::process::CommandExt;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
 use super::shell_output::{summarize_output, truncate_with_meta};
+use crate::child_env;
 use crate::sandbox::{
     CommandSpec,
     ExecEnv,
@@ -765,10 +766,7 @@ impl ShellManager {
             cmd.stdin(Stdio::piped());
         }
 
-        // Set environment variables from exec_env
-        for (key, value) in &exec_env.env {
-            cmd.env(key, value);
-        }
+        child_env::apply_to_command(&mut cmd, child_env::string_map_env(&exec_env.env));
 
         let mut child = cmd
             .spawn()
@@ -904,9 +902,7 @@ impl ShellManager {
         }
         install_parent_death_signal(&mut cmd);
 
-        for (key, value) in &exec_env.env {
-            cmd.env(key, value);
-        }
+        child_env::apply_to_command(&mut cmd, child_env::string_map_env(&exec_env.env));
 
         let mut child = cmd
             .spawn()
@@ -1010,9 +1006,7 @@ impl ShellManager {
                 cmd.arg(arg);
             }
             cmd.cwd(working_dir);
-            for (key, value) in &exec_env.env {
-                cmd.env(key, value);
-            }
+            child_env::apply_to_pty_command(&mut cmd, child_env::string_map_env(&exec_env.env));
 
             let child = pair
                 .slave
@@ -1048,9 +1042,7 @@ impl ShellManager {
                 cmd.process_group(0);
             }
 
-            for (key, value) in &exec_env.env {
-                cmd.env(key, value);
-            }
+            child_env::apply_to_command(&mut cmd, child_env::string_map_env(&exec_env.env));
 
             let mut child = cmd
                 .spawn()

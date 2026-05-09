@@ -271,6 +271,7 @@ pub enum MessageId {
     CmdLspDescription,
     CmdShareDescription,
     CmdUndoDescription,
+    CmdVerboseDescription,
     CmdYoloDescription,
     CmdCacheAdvice,
     CmdCacheFootnote,
@@ -461,6 +462,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CmdLspDescription,
     MessageId::CmdShareDescription,
     MessageId::CmdUndoDescription,
+    MessageId::CmdVerboseDescription,
     MessageId::CmdYoloDescription,
     MessageId::CmdCacheAdvice,
     MessageId::CmdCacheFootnote,
@@ -802,6 +804,7 @@ fn english(id: MessageId) -> &'static str {
             "Manage workspace trust and per-path allowlist (`/trust add <path>`, `/trust list`, `/trust on|off`)"
         }
         MessageId::CmdUndoDescription => "Remove last message pair",
+        MessageId::CmdVerboseDescription => "Toggle full live thinking in the transcript",
         MessageId::CmdYoloDescription => "Enable YOLO mode (shell + trust + auto-approve)",
         MessageId::CmdCacheAdvice => {
             "Hit/miss ratios over ~70% after the third turn indicate a stable cache prefix; \n\
@@ -1089,6 +1092,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
             "ワークスペースの信頼設定とパス別許可リストを管理（`/trust add <path>`、`/trust list`、`/trust on|off`）"
         }
         MessageId::CmdUndoDescription => "最後のメッセージ対を削除",
+        MessageId::CmdVerboseDescription => "ライブ思考表示の詳細モードを切り替え",
         MessageId::CmdYoloDescription => "YOLO モードを有効化（shell + 信頼 + 自動承認）",
         MessageId::CmdCacheAdvice => {
             "3 ターン目以降にヒット率が ~70% 以上で安定していれば、プレフィックスキャッシュは健全。\n\
@@ -1348,6 +1352,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
             "管理工作区信任与按路径的白名单（`/trust add <path>`、`/trust list`、`/trust on|off`）"
         }
         MessageId::CmdUndoDescription => "移除最后一组消息对",
+        MessageId::CmdVerboseDescription => "切换实时思考内容的完整显示",
         MessageId::CmdYoloDescription => "启用 YOLO 模式（shell + 信任 + 自动批准）",
         MessageId::CmdCacheAdvice => {
             "第 3 轮起命中率稳定在 ~70% 以上即表示前缀缓存稳定；\n\
@@ -1625,6 +1630,7 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
             "Gerenciar a confiança do workspace e a allowlist por caminho (`/trust add <path>`, `/trust list`, `/trust on|off`)"
         }
         MessageId::CmdUndoDescription => "Remover o último par de mensagens",
+        MessageId::CmdVerboseDescription => "Alternar pensamento ao vivo completo no transcript",
         MessageId::CmdYoloDescription => {
             "Ativar o modo YOLO (shell + confiança + aprovação automática)"
         }

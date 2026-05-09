@@ -51,7 +51,7 @@ pub fn summarize_project(root: &Path) -> String {
     let mut key_files = Vec::new();
 
     let mut builder = WalkBuilder::new(root);
-    builder.hidden(false).follow_links(true).max_depth(Some(2));
+    builder.hidden(false).follow_links(false).max_depth(Some(2));
     let walker = builder.build();
 
     for entry in walker {
@@ -59,6 +59,9 @@ pub fn summarize_project(root: &Path) -> String {
             Ok(entry) => entry,
             Err(_) => continue,
         };
+        if entry.file_type().is_some_and(|ft| ft.is_symlink()) {
+            continue;
+        }
         if is_key_file(entry.path())
             && let Ok(rel) = entry.path().strip_prefix(root)
         {
@@ -113,10 +116,13 @@ pub fn project_tree(root: &Path, max_depth: usize) -> String {
     let mut builder = WalkBuilder::new(root);
     builder
         .hidden(false)
-        .follow_links(true)
+        .follow_links(false)
         .max_depth(Some(max_depth + 1));
 
     for entry in builder.build().flatten() {
+        if entry.file_type().is_some_and(|ft| ft.is_symlink()) {
+            continue;
+        }
         let depth = entry.depth();
         if depth == 0 || depth > max_depth {
             continue;
@@ -714,6 +720,22 @@ mod project_mapping_tests {
         fs::write(root.join("a.txt"), "a").expect("write");
 
         assert_eq!(project_tree(root, 1), project_tree(root, 1));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn project_mapping_does_not_follow_symlinked_key_files() {
+        let tmp = tempdir().expect("tempdir");
+        let root = tmp.path().join("workspace");
+        let outside = tmp.path().join("outside");
+        fs::create_dir_all(&root).expect("mkdir workspace");
+        fs::create_dir_all(&outside).expect("mkdir outside");
+        let outside_file = outside.join("Cargo.toml");
+        fs::write(&outside_file, "[package]\nname = \"outside\"\n").expect("write outside");
+        std::os::unix::fs::symlink(&outside_file, root.join("Cargo.toml")).expect("symlink");
+
+        assert_eq!(summarize_project(&root), "Unknown project type");
+        assert!(!project_tree(&root, 1).contains("Cargo.toml"));
     }
 
     #[test]

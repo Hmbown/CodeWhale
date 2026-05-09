@@ -7,7 +7,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::fs;
-use std::path::Path;
+use std::path::{Component, Path};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::process::{Child, ChildStdin, ChildStdout};
 
+use crate::child_env;
 use crate::network_policy::{Decision, NetworkPolicyDecider, host_from_url};
 use crate::utils::write_atomic;
 
@@ -23,6 +24,19 @@ use crate::utils::write_atomic;
 
 /// Bytes of a non-2xx response body to surface in connection errors.
 const ERROR_BODY_PREVIEW_BYTES: usize = 200;
+
+fn validate_mcp_config_path(path: &Path) -> Result<()> {
+    if path.as_os_str().is_empty() {
+        anyhow::bail!("MCP config path cannot be empty");
+    }
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        anyhow::bail!("MCP config path cannot contain '..' components");
+    }
+    Ok(())
+}
 
 /// Mask a URL so any embedded credentials in the userinfo portion (e.g.
 /// `https://user:secret@host`) are replaced with `***`. Failures fall back to
@@ -653,9 +667,12 @@ impl McpConnection {
                 .stderr(std::process::Stdio::null())
                 .kill_on_drop(true);
 
-            for (key, value) in &config.env {
-                cmd.env(key, value);
-            }
+            // MCP stdio servers are user-configured integrations. Use the
+            // wider MCP allowlist so common Node/Python/proxy/CA-bundle
+            // bootstrap variables (NVM_DIR, NODE_OPTIONS, NPM_CONFIG_*,
+            // HTTP(S)_PROXY, …) reach the child. See `sanitized_mcp_env`
+            // and #1244 for context.
+            child_env::apply_to_tokio_command_mcp(&mut cmd, child_env::string_map_env(&config.env));
 
             let mut child = cmd.spawn().with_context(|| {
                 let env_keys: Vec<&str> = config.env.keys().map(String::as_str).collect();
@@ -1046,6 +1063,7 @@ impl McpPool {
 
     /// Create a pool from a configuration file path
     pub fn from_config_path(path: &std::path::Path) -> Result<Self> {
+        validate_mcp_config_path(path)?;
         let config = if path.exists() {
             let contents = fs::read_to_string(path)
                 .with_context(|| format!("Failed to read MCP config: {}", path.display()))?;
@@ -1605,6 +1623,7 @@ pub struct McpManagerSnapshot {
 }
 
 pub fn load_config(path: &Path) -> Result<McpConfig> {
+    validate_mcp_config_path(path)?;
     if !path.exists() {
         return Ok(McpConfig::default());
     }
@@ -1615,6 +1634,7 @@ pub fn load_config(path: &Path) -> Result<McpConfig> {
 }
 
 pub fn save_config(path: &Path, cfg: &McpConfig) -> Result<()> {
+    validate_mcp_config_path(path)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).with_context(|| {
             format!("Failed to create MCP config directory {}", parent.display())
@@ -1746,7 +1766,7 @@ pub async fn discover_manager_snapshot(
         .connect_all()
         .await
         .into_iter()
-        .map(|(name, err)| (name, err.to_string()))
+        .map(|(name, err)| (name, format!("{err:#}")))
         .collect::<HashMap<_, _>>();
     Ok(snapshot_from_config(
         path,
@@ -1972,6 +1992,15 @@ mod tests {
     }
 
     #[test]
+    fn test_mcp_config_rejects_traversal_path() {
+        let err = load_config(Path::new("../mcp.json")).expect_err("traversal path should fail");
+        assert!(
+            format!("{err:#}").contains("cannot contain '..'"),
+            "got: {err:#}"
+        );
+    }
+
+    #[test]
     fn test_mcp_config_manager_actions_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("mcp.json");
@@ -2081,6 +2110,47 @@ mod tests {
         let pool = McpPool::new(McpConfig::default());
         assert!(pool.server_names().is_empty());
         assert!(pool.all_tools().is_empty());
+    }
+
+    /// #1244: when an MCP stdio server fails to spawn, the underlying OS
+    /// error (e.g. ENOENT for a missing binary) must reach the user via the
+    /// snapshot.error string. Regression test for `err.to_string()` dropping
+    /// the anyhow chain — without `{err:#}` the user sees only the opaque
+    /// wrapper "MCP stdio spawn failed (...)" and has nothing to act on.
+    #[tokio::test]
+    async fn discover_snapshot_includes_underlying_spawn_error_in_chain() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp.json");
+        fs::write(
+            &path,
+            r#"{
+                "mcpServers": {
+                    "broken": {
+                        "command": "deepseek-tui-test-this-binary-does-not-exist-9f8e7d6c5b4a",
+                        "args": []
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let snapshot = discover_manager_snapshot(&path, None, false).await.unwrap();
+        let server = snapshot
+            .servers
+            .iter()
+            .find(|s| s.name == "broken")
+            .expect("broken server should appear in snapshot");
+        let err = server
+            .error
+            .as_deref()
+            .expect("broken server should have an error");
+        let lowered = err.to_lowercase();
+        assert!(
+            lowered.contains("os error")
+                || lowered.contains("not found")
+                || lowered.contains("no such"),
+            "expected underlying spawn error in chain, got: {err}"
+        );
     }
 
     #[test]

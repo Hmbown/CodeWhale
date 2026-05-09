@@ -17,7 +17,6 @@ use ignore::WalkBuilder;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    prelude::Stylize,
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Padding, Paragraph, Widget},

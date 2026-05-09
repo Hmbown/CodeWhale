@@ -5,6 +5,185 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.23] - 2026-05-08
+
+A security-focused follow-up to v0.8.22. The bulk of the diff is hardening of
+the child-process surface — shells, MCP stdio servers, and other spawned
+subprocesses — plus a related set of MCP, secret-store, and tool-policy
+fixes uncovered during follow-up review.
+
+### Security
+
+- **Sanitized child-process environments** - shells, MCP stdio servers, hooks,
+  and other child processes spawned from the TUI now start from an explicit
+  allowlist of parent environment variables rather than inheriting every
+  parent var. The base allowlist covers `PATH`, `HOME`, `USER`, `LANG`/`LC_*`,
+  `TERM`/`COLORTERM`, `SHELL`, `TMPDIR`/`TMP`/`TEMP`, and the corresponding
+  Windows variables. Stops casual exfiltration of `*_API_KEY`, `AWS_*`,
+  `GITHUB_TOKEN`, and similar through a spawned subprocess.
+- **Tighter shell safety classification** - the `exec_shell` deny-list was
+  reviewed and broadened to cover additional dangerous command patterns.
+- **Plan mode tool surface narrowed** - planning sub-agents see a smaller,
+  read-only tool surface so a plan-mode call can no longer mutate workspace
+  state.
+- **Sub-agent approval boundaries preserved** - sub-agents inherit the
+  parent's approval policy and cannot escalate beyond it.
+- **Symlinked workspace walks no longer followed** - workspace-relative
+  walkers (file-search, project context) now refuse to traverse symlinks
+  pointing outside the workspace root.
+- **Path and output handling tightened** - several tools that build paths
+  from model output now reject `..` segments and absolute paths outside the
+  workspace.
+- **Runtime API requires authentication by default** - `deepseek serve --http`
+  no longer accepts unauthenticated requests in its default configuration.
+- **Security-sensitive dependencies bumped** - routine bump pass for crates
+  with recent advisories.
+- **MCP config paths reject traversal** - `load_config`/`save_config` now
+  refuse paths containing `..` components.
+- **Hardened `run_tests` approval policy.** Thanks to **@47Cid** for the
+  responsible disclosure.
+
+### Fixed
+
+- **macOS Keychain prompt at startup** - the file-backed secret store is now
+  the default. The OS keyring is opt-in via
+  `DEEPSEEK_SECRET_BACKEND=system|keyring`, and the auth status surface
+  refers to "secret store" rather than "keyring" where appropriate.
+- **MCP stdio spawn errors are now visible (#1244)** - when spawning a stdio
+  MCP server fails (e.g., `npx` not on `PATH`), the underlying OS error is
+  now shown ("No such file or directory (os error 2)") instead of the opaque
+  wrapper "MCP stdio spawn failed (...)". The fix applies to the snapshot,
+  the `mcp connect` / `mcp validate` CLI commands, and the in-TUI status
+  events.
+- **MCP servers no longer break under env scrub (#1244)** - MCP stdio launches
+  now inherit a wider env allowlist than arbitrary shell tools, so common
+  `npx ...`, `uvx ...`, `python -m mcp_server_*`, and proxy-bound corporate
+  setups keep working under the new child-env scrub. Pass-through includes
+  `NVM_DIR`, `NODE_OPTIONS`, `NODE_PATH`, `NODE_EXTRA_CA_CERTS`,
+  `NPM_CONFIG_*`, `VOLTA_HOME`, `COREPACK_HOME`, `PYTHONPATH`, `PYTHONHOME`,
+  `VIRTUAL_ENV`, `PIPX_*`, `POETRY_HOME`, `UV_*`, `GEM_*`, `BUNDLE_*`,
+  `JAVA_HOME`, `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` / `ALL_PROXY` /
+  `FTP_PROXY` (case-insensitive), `SSL_CERT_FILE`, `SSL_CERT_DIR`,
+  `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`. Secret-bearing parent env stays
+  scrubbed.
+
+### Changed
+
+- **Live thinking is compact by default** - the streaming "thinking" panel
+  collapses by default; expand via the existing details toggle.
+
+### Added
+
+- **`docs/RELEASE_CHECKLIST.md`** - explicit pre-tag checklist (CHANGELOG,
+  versions, preflight, npm wrapper smoke) so the v0.8.21/v0.8.22 CHANGELOG
+  gap does not recur.
+
+### Known issues
+
+- **Mid-run MCP server stderr is still suppressed** - if a stdio MCP server
+  spawns successfully but exits later (e.g., crashes during `initialize`),
+  its stderr is not yet captured. Spawn-time OS errors (the most common
+  case from #1244) are visible. Full mid-run stderr capture is planned for
+  v0.8.24.
+
+## [0.8.22] - 2026-05-08
+
+A focused security release.
+
+### Security
+
+- **Hardened `fetch_url` redirect handling.** Thanks to **@47Cid** for the
+  responsible disclosure.
+
+## [0.8.21] - 2026-05-08
+
+A community-heavy release rolling up two weeks of contributor PRs across the
+TUI, runtime, and docs. Big thanks to **Reid (@reidliu41)**,
+**jiaren wang (@JiarenWang)**, **Friende (@pengyou200902)**,
+**ZzzPL (@Oliver-ZPLiu)**, **Sun**, **Liu-Vince**, **kitty**, and
+**Aqil Aziz** for the contributions below.
+
+### Added
+
+- **Distinct user-message body color** (#1168) - user turns now render in a
+  green body color so the conversation flow is easier to scan at a glance.
+
+### Fixed
+
+- **Plan mode enforces read-only tool boundaries** (#1114) - planning calls
+  can no longer reach into write-side tools. Thanks **jiaren wang**.
+- **Composer arrow keys navigate input history** (#1117) - up/down in the
+  composer cycles through prior prompts when the cursor is on the first/last
+  line. Thanks **Reid**.
+- **RLM preserves prompt cache usage** (#1127) - the RLM batch path no longer
+  resets prompt-cache hits between calls. Thanks **Sun**.
+- **`fetch_url` proxy DNS opt-in** (#1103) - the proxy DNS path is now opt-in
+  rather than always forced, fixing breakage in environments where the proxy
+  cannot resolve the target host. Thanks **Sun**.
+- **Undo syncs session context after snapshot restore** (#1150, fixes #1139) -
+  rolling back a turn now correctly resyncs the in-memory session so a
+  follow-up turn doesn't see stale context. Thanks **jiaren wang**.
+- **Stale busy-state watchdog** (#1170) - the TUI now recovers if the busy
+  indicator gets stuck after an aborted turn. Thanks **ZzzPL**.
+- **`gh` discovered across common install paths** - the `gh` tool is found
+  whether installed via Homebrew, apt, the Windows MSI, or the GitHub CLI
+  installer. Thanks **kitty**.
+- **Code block indentation preserved in transcript** - leading whitespace
+  inside fenced code blocks is no longer collapsed during rendering.
+  Thanks **Liu-Vince**.
+- **Stream pacing preserves upstream cadence** - long streaming responses
+  no longer chunk together when the upstream is bursty.
+  Thanks **Sun**.
+- **Task list output gets headers** - the long-form `/tasks` output now has
+  group headers so it scans cleanly. Thanks **Reid**.
+- **macOS option-V details shortcut** - the details toggle now works correctly
+  on US Mac keyboards where Option+V produces `√`.
+- **Uppercase approval shortcuts accepted** - `[A]/[D]/[V]` work in either
+  case in the approval dialog.
+- **Transcript scrollbar inert** - the transcript scrollbar no longer captures
+  clicks intended for content below it.
+- **Hide transcript rail before code blocks** - the rail glyph no longer
+  bleeds onto the line just above a fenced code block.
+- **Pager exit hint prominent** - the "press q to exit" hint is now visible
+  on the pager footer.
+- **Empty tool call names fall back to a placeholder** - a model that returns
+  an empty `function.name` in a tool call no longer hangs the turn.
+- **MCP SSE waits for endpoint before connect returns** (#1225) - the SSE
+  transport no longer reports "connected" before the endpoint event has been
+  received, fixing a race where the first request was lost.
+- **Git branch status item renders** (#1226, fixes #1217) - the
+  `StatusItem::GitBranch` toggle now produces a footer entry instead of a
+  blank slot.
+- **Beta endpoint routes non-beta paths to v1** (#1174) - paths that aren't
+  available on the DeepSeek beta host are transparently redirected to the v1
+  host instead of failing.
+- **Skill packs accept workflow-pack archive layouts** (#1164) - skill
+  archives produced by the workflow pack tool now install correctly.
+- **Interactive sessions stay in alternate screen** (#1158) - returning from
+  a sub-process no longer kicks the TUI back to the primary screen mid-turn.
+- **Slash-menu arrow navigation wraps** (#1152) - up at the top / down at the
+  bottom of the slash menu wraps to the other end.
+- **CLI preserves split prompt words from Windows shims** (#1160) - prompt
+  arguments forwarded by the npm wrapper on Windows are no longer joined into
+  one giant token.
+- **`libc` extended to all Unix targets** (#1173) - improves FreeBSD build
+  compatibility.
+- **Memory truncation marker reports omitted bytes** - the `[…N bytes
+  omitted]` marker now shows an accurate count. Thanks **Friende**.
+
+### Docs
+
+- **Memory skill link** (#1096) - corrected. Thanks **Aqil Aziz**.
+- **Help keybinding reference** (#1095) - corrected. Thanks **Friende**.
+- **Additional environment variables** documented in the config reference.
+  Thanks **Liu-Vince**.
+- **Docker volume guidance** - the install snippet now uses a writable named
+  data volume rather than a bind mount that may be read-only on some hosts.
+- **Competitive analysis reflects LSP diagnostics** (#1171) - the doc now
+  matches the shipping LSP diagnostics implementation.
+- **Dispatcher path for `/run-pr`** (#1227) - the README now points at the
+  dispatcher binary.
+
 ## [0.8.20] - 2026-05-08
 
 ### Fixed

@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fs;
 #[cfg(unix)]
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
 
 use anyhow::{Context, Result, bail};
@@ -451,6 +451,17 @@ impl ConfigToml {
         }
     }
 
+    #[must_use]
+    pub fn get_display_value(&self, key: &str) -> Option<String> {
+        self.get_value(key).map(|value| {
+            if is_sensitive_config_key(key) {
+                redact_secret(&value)
+            } else {
+                value
+            }
+        })
+    }
+
     pub fn set_value(&mut self, key: &str, value: &str) -> Result<()> {
         match key {
             "provider" => {
@@ -824,7 +835,8 @@ impl ConfigToml {
     ///
     /// This method keeps library callers prompt-free: CLI flag → config file
     /// → environment. Call `resolve_runtime_options_with_secrets` when a
-    /// user-facing dispatcher should recover OS-keyring credentials.
+    /// user-facing dispatcher should recover credentials from the configured
+    /// secret store.
     #[must_use]
     pub fn resolve_runtime_options(&self, cli: &CliRuntimeOverrides) -> ResolvedRuntimeOptions {
         let no_keyring = Secrets::new(std::sync::Arc::new(
@@ -835,7 +847,7 @@ impl ConfigToml {
 
     /// Resolve runtime options using an explicit secrets façade.
     ///
-    /// API-key precedence is **CLI flag → config-file → keyring → environment**.
+    /// API-key precedence is **CLI flag → config-file → secret store → environment**.
     #[must_use]
     pub fn resolve_runtime_options_with_secrets(
         &self,
@@ -858,8 +870,8 @@ impl ConfigToml {
         // CLI flag wins outright. Otherwise: config-file → injected secrets/env.
         // This makes `deepseek auth set` a reliable fix even when the user's
         // shell still exports an old key. When the file is empty, the injected
-        // secrets façade recovers older OS-keyring credentials before falling
-        // back to ambient env.
+        // secrets façade recovers configured secret-store credentials before
+        // falling back to ambient env.
         let from_file = provider_cfg.api_key.clone().or(root_deepseek_api_key);
         let (api_key, api_key_source) = if let Some(value) = cli.api_key.clone() {
             (Some(value), Some(RuntimeApiKeySource::Cli))
@@ -1229,16 +1241,19 @@ pub fn default_secrets() -> &'static Secrets {
 }
 
 pub fn resolve_config_path(explicit: Option<PathBuf>) -> Result<PathBuf> {
-    if let Some(path) = explicit {
-        return Ok(path);
-    }
-    if let Ok(path) = std::env::var("DEEPSEEK_CONFIG_PATH") {
+    let path = if let Some(path) = explicit {
+        path
+    } else if let Ok(path) = std::env::var("DEEPSEEK_CONFIG_PATH") {
         let trimmed = path.trim();
         if !trimmed.is_empty() {
-            return Ok(PathBuf::from(trimmed));
+            PathBuf::from(trimmed)
+        } else {
+            return default_config_path();
         }
-    }
-    default_config_path()
+    } else {
+        return default_config_path();
+    };
+    normalize_config_file_path(path)
 }
 
 pub fn default_config_path() -> Result<PathBuf> {
@@ -1305,6 +1320,35 @@ fn redact_secret(secret: &str) -> String {
         .rev()
         .collect();
     format!("{prefix}***{suffix}")
+}
+
+#[must_use]
+pub fn is_sensitive_config_key(key: &str) -> bool {
+    matches!(
+        key,
+        "api_key" | "auth.chatgpt_access_token" | "auth.device_code_session"
+    ) || key.ends_with(".api_key")
+}
+
+fn normalize_config_file_path(path: PathBuf) -> Result<PathBuf> {
+    if path.as_os_str().is_empty() {
+        bail!("config path cannot be empty");
+    }
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        bail!("config path cannot contain '..' components");
+    }
+    if path.file_name().is_none() {
+        bail!("config path must include a file name");
+    }
+    if path.is_absolute() {
+        return Ok(path);
+    }
+    Ok(std::env::current_dir()
+        .context("failed to resolve current directory for config path")?
+        .join(path))
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1799,6 +1843,38 @@ mod tests {
     }
 
     #[test]
+    fn get_display_value_redacts_sensitive_keys() {
+        let mut config = ConfigToml {
+            api_key: Some("sk-deepseek-secret".to_string()),
+            chatgpt_access_token: Some("chatgpt-access-secret".to_string()),
+            ..ConfigToml::default()
+        };
+        config.providers.openrouter.api_key = Some("openrouter-secret-value".to_string());
+        config.model = Some("deepseek-v4-pro".to_string());
+
+        assert_eq!(
+            config.get_display_value("api_key").as_deref(),
+            Some("sk-d***cret")
+        );
+        assert_eq!(
+            config
+                .get_display_value("auth.chatgpt_access_token")
+                .as_deref(),
+            Some("chat***cret")
+        );
+        assert_eq!(
+            config
+                .get_display_value("providers.openrouter.api_key")
+                .as_deref(),
+            Some("open***alue")
+        );
+        assert_eq!(
+            config.get_display_value("model").as_deref(),
+            Some("deepseek-v4-pro")
+        );
+    }
+
+    #[test]
     fn list_values_redacts_unicode_api_key_without_byte_slicing() {
         let config = ConfigToml {
             api_key: Some("密钥密钥密钥密钥123456789".to_string()),
@@ -1811,6 +1887,13 @@ mod tests {
             values.get("api_key").map(String::as_str),
             Some("密钥密钥***6789")
         );
+    }
+
+    #[test]
+    fn normalize_config_file_path_rejects_traversal() {
+        let err = normalize_config_file_path(PathBuf::from("../config.toml"))
+            .expect_err("traversal path should fail");
+        assert!(format!("{err:#}").contains("cannot contain '..'"));
     }
 
     #[cfg(unix)]

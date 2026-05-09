@@ -18,8 +18,8 @@ export interface RepoFacts {
 }
 
 export const FACTS: RepoFacts = {
-  "generatedAt": "2026-05-08T02:25:40.439Z",
-  "version": "0.8.18",
+  "generatedAt": "2026-05-08T19:10:07.269Z",
+  "version": "0.8.22",
   "crates": [
     "agent",
     "app-server",

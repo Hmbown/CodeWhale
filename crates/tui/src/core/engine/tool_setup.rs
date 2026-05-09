@@ -48,7 +48,7 @@ impl Engine {
                 .with_diagnostics_tool()
                 .with_skill_tools()
                 .with_validation_tools()
-                .with_runtime_task_tools()
+                .with_runtime_read_only_task_tools()
                 .with_todo_tool(todo_list)
                 .with_plan_tool(plan_state)
         } else {
@@ -60,10 +60,14 @@ impl Engine {
 
         builder = builder
             .with_review_tool(self.deepseek_client.clone(), self.session.model.clone())
-            .with_rlm_tool(self.deepseek_client.clone(), self.session.model.clone())
-            .with_fim_tool(self.deepseek_client.clone(), self.session.model.clone())
             .with_user_input_tool()
             .with_parallel_tool();
+
+        if mode != AppMode::Plan {
+            builder = builder
+                .with_rlm_tool(self.deepseek_client.clone(), self.session.model.clone())
+                .with_fim_tool(self.deepseek_client.clone(), self.session.model.clone());
+        }
 
         if self.config.features.enabled(Feature::ApplyPatch) && mode != AppMode::Plan {
             builder = builder.with_patch_tools();

@@ -554,6 +554,25 @@ impl ToolRegistryBuilder {
             .with_tool(Arc::new(GithubCloseIssueTool))
     }
 
+    /// Include only read-only durable task, PR-attempt, GitHub, and automation
+    /// inspection tools. Plan mode uses this surface so it can observe state
+    /// without starting work, changing remotes, or mutating automation config.
+    #[must_use]
+    pub fn with_runtime_read_only_task_tools(self) -> Self {
+        use super::automation::{AutomationListTool, AutomationReadTool};
+        use super::github::{GithubIssueContextTool, GithubPrContextTool};
+        use super::tasks::{PrAttemptListTool, PrAttemptReadTool, TaskListTool, TaskReadTool};
+
+        self.with_tool(Arc::new(TaskListTool))
+            .with_tool(Arc::new(TaskReadTool))
+            .with_tool(Arc::new(GithubIssueContextTool))
+            .with_tool(Arc::new(GithubPrContextTool))
+            .with_tool(Arc::new(PrAttemptListTool))
+            .with_tool(Arc::new(PrAttemptReadTool))
+            .with_tool(Arc::new(AutomationListTool))
+            .with_tool(Arc::new(AutomationReadTool))
+    }
+
     /// Include web search tools.
     #[must_use]
     pub fn with_web_tools(self) -> Self {

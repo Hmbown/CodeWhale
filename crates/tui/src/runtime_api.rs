@@ -76,6 +76,8 @@ pub struct RuntimeApiOptions {
     /// Optional bearer token required for `/v1/*` routes. If omitted here,
     /// `run_http_server` also checks `DEEPSEEK_RUNTIME_TOKEN`.
     pub auth_token: Option<String>,
+    /// Allow `/v1/*` routes without auth when no token is configured.
+    pub insecure_no_auth: bool,
 }
 
 impl Default for RuntimeApiOptions {
@@ -86,8 +88,53 @@ impl Default for RuntimeApiOptions {
             workers: 2,
             cors_origins: Vec::new(),
             auth_token: None,
+            insecure_no_auth: false,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedRuntimeAuth {
+    token: Option<String>,
+    generated: bool,
+}
+
+fn resolve_runtime_auth(
+    cli_token: Option<String>,
+    env_token: Option<String>,
+    insecure_no_auth: bool,
+) -> ResolvedRuntimeAuth {
+    if let Some(token) = first_nonblank_token(cli_token).or_else(|| first_nonblank_token(env_token))
+    {
+        return ResolvedRuntimeAuth {
+            token: Some(token),
+            generated: false,
+        };
+    }
+    if insecure_no_auth {
+        return ResolvedRuntimeAuth {
+            token: None,
+            generated: false,
+        };
+    }
+    ResolvedRuntimeAuth {
+        token: Some(generate_runtime_token()),
+        generated: true,
+    }
+}
+
+fn first_nonblank_token(token: Option<String>) -> Option<String> {
+    token
+        .map(|token| token.trim().to_string())
+        .filter(|token| !token.is_empty())
+}
+
+fn generate_runtime_token() -> String {
+    format!(
+        "dst_{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    )
 }
 
 #[derive(Debug, Deserialize)]
@@ -348,11 +395,12 @@ pub async fn run_http_server(
             .map(|h| h.join(".deepseek").join("sessions"))
             .unwrap_or_else(|| PathBuf::from(".deepseek").join("sessions"))
     });
-    let runtime_token = options
-        .auth_token
-        .clone()
-        .or_else(|| std::env::var("DEEPSEEK_RUNTIME_TOKEN").ok())
-        .filter(|token| !token.trim().is_empty());
+    let resolved_auth = resolve_runtime_auth(
+        options.auth_token.clone(),
+        std::env::var("DEEPSEEK_RUNTIME_TOKEN").ok(),
+        options.insecure_no_auth,
+    );
+    let runtime_token = resolved_auth.token.clone();
     let auth_enabled = runtime_token.is_some();
     let skill_state = SkillStateStore::load_default().unwrap_or_else(|err| {
         tracing::warn!(
@@ -370,7 +418,7 @@ pub async fn run_http_server(
         sessions_dir,
         mcp_config_path: config.mcp_config_path(),
         automations,
-        runtime_token,
+        runtime_token: runtime_token.clone(),
         skill_state: Arc::new(Mutex::new(skill_state)),
         auth_required: auth_enabled,
         bind_host: options.host.clone(),
@@ -386,6 +434,17 @@ pub async fn run_http_server(
         .with_context(|| format!("Failed to bind {addr}"))?;
 
     println!("Runtime API listening on http://{addr}");
+    if resolved_auth.generated {
+        if let Some(token) = runtime_token.as_deref() {
+            println!("Runtime API auth: generated bearer token for this process.");
+            println!("  Authorization: Bearer {token}");
+            println!("  Set DEEPSEEK_RUNTIME_TOKEN or pass --auth-token for a stable token.");
+        }
+    } else if auth_enabled {
+        println!("Runtime API auth: bearer token required for /v1/* routes.");
+    } else {
+        println!("Runtime API auth: disabled by explicit insecure mode.");
+    }
     let is_loopback = options.host == "127.0.0.1" || options.host == "::1";
     if is_loopback {
         println!("Security: this server is local-first. Do not expose it to untrusted networks.");
@@ -396,7 +455,7 @@ pub async fn run_http_server(
         );
         if !auth_enabled {
             println!(
-                "  WARNING: --auth-token (or DEEPSEEK_RUNTIME_TOKEN) is unset. Anyone on the network can call /v1/* without authentication."
+                "  WARNING: auth is disabled. Anyone on the network can call /v1/* without authentication."
             );
         }
         println!(
@@ -405,9 +464,6 @@ pub async fn run_http_server(
             port = options.port,
             auth = auth_enabled,
         );
-    }
-    if auth_enabled {
-        println!("Runtime API auth: bearer token required for /v1/* routes.");
     }
     let serve_result = axum::serve(listener, app)
         .await
@@ -1602,30 +1658,35 @@ fn run_git(workspace: &std::path::Path, args: &[&str]) -> Option<String> {
 }
 
 fn resolve_skills_dir(config: &Config, workspace: &std::path::Path) -> PathBuf {
-    let agents_skills = workspace.join(".agents").join("skills");
-    if agents_skills.exists() {
-        return agents_skills;
-    }
-    let local_skills = workspace.join("skills");
-    if local_skills.exists() {
-        return local_skills;
+    // Canonicalize the workspace once so the symlink-containment check below
+    // compares like-for-like. If the workspace can't be canonicalized at all
+    // (e.g. it doesn't exist on disk yet) fall back to the configured global
+    // skills dir rather than risk constructing paths from a non-existent root.
+    let canonical_workspace = match fs::canonicalize(workspace) {
+        Ok(path) => path,
+        Err(_) => return config.skills_dir(),
+    };
+    for candidate in [
+        canonical_workspace.join(".agents").join("skills"),
+        canonical_workspace.join("skills"),
+    ] {
+        // Re-canonicalize the candidate so a `.agents/skills` symlink to e.g.
+        // `/etc` cannot promote arbitrary filesystem locations into the
+        // skills directory. The candidate must still resolve under the
+        // canonicalized workspace root after symlink expansion.
+        if let Ok(canon) = fs::canonicalize(&candidate)
+            && canon.starts_with(&canonical_workspace)
+            && canon.is_dir()
+        {
+            return canon;
+        }
     }
     config.skills_dir()
 }
 
 fn load_mcp_config_or_default(path: &std::path::Path) -> Result<McpConfig, ApiError> {
-    if !path.exists() {
-        return Ok(McpConfig::default());
-    }
-    let raw = fs::read_to_string(path).map_err(|e| {
-        ApiError::internal(format!("Failed to read MCP config {}: {e}", path.display()))
-    })?;
-    serde_json::from_str::<McpConfig>(&raw).map_err(|e| {
-        ApiError::internal(format!(
-            "Failed to parse MCP config {}: {e}",
-            path.display()
-        ))
-    })
+    crate::mcp::load_config(path)
+        .map_err(|e| ApiError::internal(format!("Failed to load MCP config: {e:#}")))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1843,6 +1904,50 @@ mod tests {
                 error: None,
             }
         }
+    }
+
+    #[test]
+    fn runtime_auth_generates_token_by_default() {
+        let auth = resolve_runtime_auth(None, None, false);
+        assert!(auth.generated);
+        let token = auth.token.expect("generated token");
+        assert!(token.starts_with("dst_"));
+        assert!(token.len() > 32);
+    }
+
+    #[test]
+    fn runtime_auth_requires_explicit_insecure_for_no_token() {
+        let auth = resolve_runtime_auth(None, None, true);
+        assert_eq!(
+            auth,
+            ResolvedRuntimeAuth {
+                token: None,
+                generated: false,
+            }
+        );
+    }
+
+    #[test]
+    fn runtime_auth_prefers_cli_token_over_env_token() {
+        let auth = resolve_runtime_auth(
+            Some(" cli-token ".to_string()),
+            Some("env-token".to_string()),
+            false,
+        );
+        assert_eq!(
+            auth,
+            ResolvedRuntimeAuth {
+                token: Some("cli-token".to_string()),
+                generated: false,
+            }
+        );
+    }
+
+    #[test]
+    fn runtime_auth_ignores_blank_configured_tokens() {
+        let auth = resolve_runtime_auth(Some(" ".to_string()), Some("\t".to_string()), false);
+        assert!(auth.generated);
+        assert!(auth.token.is_some());
     }
 
     async fn spawn_test_server_with_root(
@@ -3046,11 +3151,10 @@ mod tests {
         let root = std::env::temp_dir().join(format!("deepseek-session-resume-{}", Uuid::new_v4()));
         let sessions_dir = root.join("sessions");
         fs::create_dir_all(&sessions_dir)?;
-        let session_id = "sess_test_resume";
         let session = json!({
             "schema_version": 1,
             "metadata": {
-                "id": session_id,
+                "id": "sess_test_resume",
                 "title": "Test resume session",
                 "created_at": "2025-01-01T00:00:00Z",
                 "updated_at": "2025-01-01T00:10:00Z",
@@ -3073,7 +3177,7 @@ mod tests {
             "system_prompt": null
         });
         fs::write(
-            sessions_dir.join(format!("{session_id}.json")),
+            sessions_dir.join("sess_test_resume.json"),
             serde_json::to_string_pretty(&session)?,
         )?;
 
@@ -3086,14 +3190,14 @@ mod tests {
 
         let resp = client
             .post(format!(
-                "http://{addr}/v1/sessions/{session_id}/resume-thread"
+                "http://{addr}/v1/sessions/sess_test_resume/resume-thread"
             ))
             .json(&json!({ "model": "deepseek-v4-pro" }))
             .send()
             .await?;
         assert_eq!(resp.status(), StatusCode::CREATED);
         let resumed: serde_json::Value = resp.json().await?;
-        assert_eq!(resumed["session_id"], session_id);
+        assert_eq!(resumed["session_id"], "sess_test_resume");
         assert_eq!(resumed["message_count"], 2);
 
         let thread_id = resumed["thread_id"]
@@ -3597,5 +3701,67 @@ mod tests {
 
         handle.abort();
         Ok(())
+    }
+
+    #[test]
+    fn resolve_skills_dir_finds_workspace_local_agents_skills() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workspace = tmp.path();
+        let local_skills = workspace.join(".agents").join("skills");
+        fs::create_dir_all(&local_skills).expect("create skills dir");
+
+        let config = Config::default();
+        let resolved = resolve_skills_dir(&config, workspace);
+
+        let expected = fs::canonicalize(&local_skills).expect("canonical local skills");
+        assert_eq!(resolved, expected);
+    }
+
+    #[test]
+    fn resolve_skills_dir_finds_workspace_local_skills_fallback() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workspace = tmp.path();
+        let local_skills = workspace.join("skills");
+        fs::create_dir_all(&local_skills).expect("create skills dir");
+
+        let config = Config::default();
+        let resolved = resolve_skills_dir(&config, workspace);
+
+        let expected = fs::canonicalize(&local_skills).expect("canonical local skills");
+        assert_eq!(resolved, expected);
+    }
+
+    /// A `skills` symlink that points outside the workspace must NOT be
+    /// returned as the resolved skills directory. Containment check ensures
+    /// the canonicalized candidate stays under the canonicalized workspace
+    /// root, so a malicious or misconfigured symlink can't promote
+    /// `/etc` (or any other path) into the skills loader.
+    #[cfg(unix)]
+    #[test]
+    fn resolve_skills_dir_rejects_symlink_escaping_workspace() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workspace_root = tmp.path().join("workspace");
+        let escape_target = tmp.path().join("escape_target");
+        fs::create_dir_all(&workspace_root).expect("create workspace");
+        fs::create_dir_all(&escape_target).expect("create escape target");
+
+        let dotagents = workspace_root.join(".agents");
+        fs::create_dir_all(&dotagents).expect("create .agents");
+        let bad_link = dotagents.join("skills");
+        std::os::unix::fs::symlink(&escape_target, &bad_link).expect("symlink");
+
+        let config = Config::default();
+        let resolved = resolve_skills_dir(&config, &workspace_root);
+
+        let canon_escape = fs::canonicalize(&escape_target).expect("canon escape");
+        assert_ne!(
+            resolved, canon_escape,
+            "symlink escaping workspace must not be resolved as skills dir"
+        );
+        assert_eq!(
+            resolved,
+            config.skills_dir(),
+            "with no valid in-workspace skills dir, resolution should fall back to config"
+        );
     }
 }

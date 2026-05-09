@@ -20,10 +20,7 @@ use tempfile::TempDir;
 fn format_resume_hint_uses_canonical_resume_command() {
     assert_eq!(
         format_resume_hint(Some("019dd9d6-4f44-7c83-9863-59674a12b827")),
-        Some(
-            "To continue this session, run deepseek resume 019dd9d6-4f44-7c83-9863-59674a12b827"
-                .to_string()
-        )
+        Some("To continue this session, run deepseek --continue".to_string())
     );
 }
 

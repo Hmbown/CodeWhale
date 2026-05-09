@@ -16,6 +16,7 @@ mod acp_server;
 mod audit;
 mod auto_reasoning;
 mod automation_manager;
+mod child_env;
 mod client;
 mod command_safety;
 mod commands;
@@ -437,6 +438,9 @@ struct ServeArgs {
     /// `DEEPSEEK_RUNTIME_TOKEN` when omitted.
     #[arg(long = "auth-token", value_name = "TOKEN")]
     auth_token: Option<String>,
+    /// Disable runtime API auth when no token is configured. Only use on a trusted loopback.
+    #[arg(long = "insecure")]
+    insecure_no_auth: bool,
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -748,6 +752,7 @@ async fn main() -> Result<()> {
                             workers: args.workers.clamp(1, 8),
                             cors_origins,
                             auth_token: args.auth_token,
+                            insecure_no_auth: args.insecure_no_auth,
                         },
                     )
                     .await
@@ -1732,11 +1737,10 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
         std::io::stdout().flush().ok();
 
         match test_api_connectivity(config).await {
-            Ok(model) => {
+            Ok(()) => {
                 println!(
-                    "\r  {} API connection successful (model: {})",
-                    "✓".truecolor(aqua_r, aqua_g, aqua_b),
-                    model
+                    "\r  {} API connection successful",
+                    "✓".truecolor(aqua_r, aqua_g, aqua_b)
                 );
             }
             Err(e) => {
@@ -2544,7 +2548,7 @@ async fn run_models(config: &Config, args: ModelsArgs) -> Result<()> {
 }
 
 /// Test API connectivity by making a minimal request
-async fn test_api_connectivity(config: &Config) -> Result<String> {
+async fn test_api_connectivity(config: &Config) -> Result<()> {
     use crate::client::DeepSeekClient;
     use crate::models::{ContentBlock, Message, MessageRequest};
 
@@ -2576,7 +2580,7 @@ async fn test_api_connectivity(config: &Config) -> Result<String> {
     // Use tokio timeout to catch hanging requests
     let timeout_duration = std::time::Duration::from_secs(15);
     match tokio::time::timeout(timeout_duration, client.create_message(request)).await {
-        Ok(Ok(_response)) => Ok(model),
+        Ok(Ok(_response)) => Ok(()),
         Ok(Err(e)) => Err(e),
         Err(_) => anyhow::bail!("Request timeout after 15 seconds"),
     }
@@ -3256,7 +3260,7 @@ async fn run_mcp_command(config: &Config, command: McpCommand) -> Result<()> {
                     println!("Connected to all configured MCP servers.");
                 } else {
                     for (name, err) in errors {
-                        eprintln!("Failed to connect {name}: {err}");
+                        eprintln!("Failed to connect {name}: {err:#}");
                     }
                 }
             }
@@ -3373,7 +3377,7 @@ async fn run_mcp_command(config: &Config, command: McpCommand) -> Result<()> {
             }
             eprintln!("MCP validation failed:");
             for (name, err) in errors {
-                eprintln!("  - {name}: {err}");
+                eprintln!("  - {name}: {err:#}");
             }
             bail!("one or more MCP servers failed validation");
         }
@@ -3553,9 +3557,7 @@ fn run_sandbox_command(args: SandboxArgs) -> Result<()> {
         .current_dir(&exec_env.cwd)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    for (key, value) in &exec_env.env {
-        cmd.env(key, value);
-    }
+    child_env::apply_to_command(&mut cmd, child_env::string_map_env(&exec_env.env));
 
     let mut child = cmd
         .spawn()
@@ -3746,17 +3748,13 @@ fn recover_interrupted_checkpoint_for_resume(launch_workspace: &Path) -> Option<
         // sessions`, then clear it so the next launch in this folder doesn't
         // re-trip the nag. Print a one-line notice pointing at the explicit
         // resume command — but DO NOT auto-load the session here.
-        let session_id_for_notice = session.metadata.id.clone();
         let _ = manager.save_session(&session);
         let _ = manager.clear_checkpoint();
         eprintln!(
-            "Note: an interrupted session ({}…) from another workspace ({}) is \
-             available. Run `deepseek resume {}` from there to recover it, or \
-             use `deepseek sessions` to list all saved sessions. Starting fresh \
-             in {}.",
-            &session_id_for_notice.chars().take(8).collect::<String>(),
+            "Note: an interrupted session from another workspace ({}) is \
+             available. Run `deepseek sessions` to list saved sessions. Starting \
+             fresh in {}.",
             session_workspace.display(),
-            session_id_for_notice,
             launch_workspace.display(),
         );
         return None;
@@ -3790,27 +3788,22 @@ fn preserve_interrupted_checkpoint_for_explicit_resume(launch_workspace: &Path) 
         return;
     };
 
-    let session_id = session.metadata.id.clone();
     let session_workspace = session.metadata.workspace.clone();
     let _ = manager.save_session(&session);
     let _ = manager.clear_checkpoint();
 
     let age_str = checkpoint_age_label(age);
-    let short_id = session_id.chars().take(8).collect::<String>();
     if session_manager::workspace_scope_matches(&session_workspace, launch_workspace) {
         eprintln!(
-            "Found an in-flight session snapshot ({age_str}, {short_id}…). \
-             Starting a new session. Run `deepseek resume {session_id}` or \
-             `deepseek --continue` to resume it."
+            "Found an in-flight session snapshot ({age_str}). Starting a new \
+             session. Run `deepseek --continue` to resume it."
         );
     } else {
         eprintln!(
-            "Note: an interrupted session ({short_id}…) from another workspace ({}) \
-             is available. Run `deepseek resume {}` from there to recover it, or \
-             use `deepseek sessions` to list all saved sessions. Starting fresh \
-             in {}.",
+            "Note: an interrupted session from another workspace ({}) is \
+             available. Run `deepseek sessions` to list saved sessions. Starting \
+             fresh in {}.",
             session_workspace.display(),
-            session_id,
             launch_workspace.display(),
         );
     }

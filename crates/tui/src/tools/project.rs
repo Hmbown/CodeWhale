@@ -63,10 +63,13 @@ fn generate_project_map(root: &std::path::Path, max_depth: usize) -> Result<Proj
     // For key_files, we can just do a quick scan since summarize_project doesn't return them directly anymore
     let mut key_files = Vec::new();
     let mut builder = ignore::WalkBuilder::new(root);
-    builder.hidden(false).follow_links(true).max_depth(Some(2));
+    builder.hidden(false).follow_links(false).max_depth(Some(2));
     let walker = builder.build();
 
     for entry in walker.flatten() {
+        if entry.file_type().is_some_and(|ft| ft.is_symlink()) {
+            continue;
+        }
         if is_key_file(entry.path())
             && let Ok(rel) = entry.path().strip_prefix(root)
         {

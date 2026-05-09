@@ -401,7 +401,6 @@ impl ModalView for ShellControlView {
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
         use ratatui::{
-            prelude::Stylize,
             style::Style,
             text::{Line, Span},
             widgets::{Block, Borders, Clear, Padding, Paragraph, Widget},
@@ -1028,7 +1027,6 @@ fn config_hint_for_key(key: &str) -> &'static str {
 
 fn render_config_editor_value_line(edit: &ConfigEdit) -> ratatui::text::Line<'static> {
     use ratatui::{
-        prelude::Stylize,
         style::Style,
         text::{Line, Span},
     };
@@ -1185,7 +1183,6 @@ impl ModalView for ConfigView {
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
         use ratatui::{
-            prelude::Stylize,
             style::Style,
             text::{Line, Span},
             widgets::{Block, Borders, Clear, Padding, Paragraph, Widget},
@@ -1539,7 +1536,6 @@ impl ModalView for SubAgentsView {
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
         use ratatui::{
-            prelude::Stylize,
             style::Style,
             text::{Line, Span},
             widgets::{Block, Borders, Clear, Padding, Paragraph, Widget},
@@ -1716,7 +1712,6 @@ fn append_subagent_group(
     content_width: usize,
 ) {
     use ratatui::{
-        prelude::Stylize,
         style::Style,
         text::{Line, Span},
     };

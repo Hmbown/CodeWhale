@@ -16,6 +16,7 @@
 //! that happens to contain "REQ" or "FINAL" can't be confused with control
 //! messages.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -24,6 +25,8 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use uuid::Uuid;
+
+use crate::child_env;
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -192,9 +195,15 @@ impl PythonRuntime {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
 
-        if let Some(path) = context_path {
-            cmd.env("RLM_CONTEXT_FILE", path);
-        }
+        let context_env = context_path
+            .map(|path| {
+                vec![(
+                    OsString::from("RLM_CONTEXT_FILE"),
+                    path.as_os_str().to_os_string(),
+                )]
+            })
+            .unwrap_or_default();
+        child_env::apply_to_tokio_command(&mut cmd, context_env);
 
         let mut child = cmd
             .spawn()

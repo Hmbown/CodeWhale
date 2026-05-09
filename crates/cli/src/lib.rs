@@ -256,7 +256,7 @@ enum AuthCommand {
         #[arg(long, value_enum)]
         provider: ProviderArg,
     },
-    /// Delete a provider's key from config and keyring storage.
+    /// Delete a provider's key from config and secret-store storage.
     Clear {
         #[arg(long, value_enum)]
         provider: ProviderArg,
@@ -556,14 +556,14 @@ fn resolve_runtime_for_dispatch_with_secrets(
         match store.save() {
             Ok(()) => {
                 eprintln!(
-                    "info: recovered API key from OS keyring and saved it to {}",
+                    "info: recovered API key from secret store and saved it to {}",
                     store.path().display()
                 );
                 resolved.api_key_source = Some(RuntimeApiKeySource::ConfigFile);
             }
             Err(err) => {
                 eprintln!(
-                    "warning: recovered API key from OS keyring but failed to save {}: {err}",
+                    "warning: recovered API key from secret store but failed to save {}: {err}",
                     store.path().display()
                 );
             }
@@ -806,7 +806,7 @@ fn auth_status_lines(store: &ConfigStore, secrets: &Secrets) -> Vec<String> {
     let active_source = if config_key.is_some() {
         "config"
     } else if keyring_key.is_some() {
-        "keyring"
+        "secret store"
     } else if env_key.is_some() {
         "env"
     } else {
@@ -832,14 +832,14 @@ fn auth_status_lines(store: &ConfigStore, secrets: &Secrets) -> Vec<String> {
     vec![
         format!("provider: {}", provider.as_str()),
         format!("active source: {active_label}"),
-        "lookup order: config -> keyring -> env".to_string(),
+        "lookup order: config -> secret store -> env".to_string(),
         format!(
             "config file: {} ({})",
             store.path().display(),
             source_status(config_key, "missing")
         ),
         format!(
-            "keyring: {} ({})",
+            "secret store: {} ({})",
             secrets.backend_name(),
             source_status(keyring_key.as_deref(), "missing")
         ),
@@ -929,7 +929,7 @@ fn run_auth_command_with_secrets(
             let source = if in_file {
                 Some("config-file")
             } else if in_keyring {
-                Some("keyring")
+                Some("secret-store")
             } else if in_env {
                 Some("env")
             } else {
@@ -947,11 +947,11 @@ fn run_auth_command_with_secrets(
             clear_provider_api_key_from_config(store, provider);
             clear_provider_api_key_from_keyring(secrets, provider);
             store.save()?;
-            println!("cleared API key for {slot} from config and keyring");
+            println!("cleared API key for {slot} from config and secret store");
             Ok(())
         }
         AuthCommand::List => {
-            println!("provider     config keyring env  active");
+            println!("provider     config store env  active");
             let active_provider = store.config.provider;
             for provider in PROVIDER_LIST {
                 let slot = provider_slot(provider);
@@ -962,7 +962,7 @@ fn run_auth_command_with_secrets(
                 let active = if file {
                     "config"
                 } else if keyring == Some(true) {
-                    "keyring"
+                    "store"
                 } else if env {
                     "env"
                 } else {
@@ -1012,8 +1012,8 @@ fn prompt_api_key(slot: &str) -> Result<String> {
     Ok(key)
 }
 
-/// Move plaintext keys from config.toml into an explicit platform credential
-/// store. Hidden in v0.8.8 because the normal setup path is config/env only.
+/// Move plaintext keys from config.toml into the configured secret store.
+/// Hidden in v0.8.8 because the normal setup path is config/env only.
 fn run_auth_migrate(store: &mut ConfigStore, secrets: &Secrets, dry_run: bool) -> Result<()> {
     let mut migrated: Vec<(ProviderKind, &'static str)> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
@@ -1042,7 +1042,9 @@ fn run_auth_migrate(store: &mut ConfigStore, secrets: &Secrets, dry_run: bool) -
             migrated.push((provider, slot));
             continue;
         } else if let Err(err) = secrets.set(slot, &value) {
-            warnings.push(format!("skipped {slot}: failed to write to keyring: {err}"));
+            warnings.push(format!(
+                "skipped {slot}: failed to write to secret store: {err}"
+            ));
             continue;
         }
         if !dry_run {
@@ -1060,7 +1062,7 @@ fn run_auth_migrate(store: &mut ConfigStore, secrets: &Secrets, dry_run: bool) -
             .context("failed to write updated config.toml")?;
     }
 
-    println!("keyring backend: {}", secrets.backend_name());
+    println!("secret store backend: {}", secrets.backend_name());
     if migrated.is_empty() {
         println!("nothing to migrate (config.toml has no plaintext api_key entries)");
     } else {
@@ -1088,7 +1090,7 @@ fn run_auth_migrate(store: &mut ConfigStore, secrets: &Secrets, dry_run: bool) -
 fn run_config_command(store: &mut ConfigStore, command: ConfigCommand) -> Result<()> {
     match command {
         ConfigCommand::Get { key } => {
-            if let Some(value) = store.config.get_value(&key) {
+            if let Some(value) = store.config.get_display_value(&key) {
                 println!("{value}");
                 return Ok(());
             }
@@ -2273,10 +2275,10 @@ mod tests {
 
         assert!(output.contains("provider: deepseek"));
         assert!(output.contains("active source: config (last4: ...3333)"));
-        assert!(output.contains("lookup order: config -> keyring -> env"));
+        assert!(output.contains("lookup order: config -> secret store -> env"));
         assert!(output.contains("config file: "));
         assert!(output.contains("set, last4: ...3333"));
-        assert!(output.contains("keyring: in-memory (test) (set, last4: ...2222)"));
+        assert!(output.contains("secret store: in-memory (test) (set, last4: ...2222)"));
         assert!(output.contains("env var: DEEPSEEK_API_KEY (set, last4: ...1111)"));
         assert!(!output.contains("sk-config-3333"));
         assert!(!output.contains("sk-keyring-2222"));

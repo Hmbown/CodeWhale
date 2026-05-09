@@ -841,6 +841,7 @@ pub struct App {
     #[allow(dead_code)]
     pub fancy_animations: bool,
     pub show_thinking: bool,
+    pub verbose_transcript: bool,
     pub show_tool_details: bool,
     pub ui_locale: Locale,
     pub cost_currency: CostCurrency,
@@ -1425,6 +1426,7 @@ impl App {
             low_motion,
             fancy_animations,
             show_thinking,
+            verbose_transcript: false,
             show_tool_details,
             ui_locale,
             cost_currency,
@@ -2555,6 +2557,7 @@ impl App {
     pub fn transcript_render_options(&self) -> TranscriptRenderOptions {
         TranscriptRenderOptions {
             show_thinking: self.show_thinking,
+            verbose: self.verbose_transcript,
             show_tool_details: self.show_tool_details,
             calm_mode: self.calm_mode,
             low_motion: self.low_motion,

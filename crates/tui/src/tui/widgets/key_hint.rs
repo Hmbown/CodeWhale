@@ -25,10 +25,7 @@
 use std::fmt;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use ratatui::{
-    style::{Style, Stylize},
-    text::Span,
-};
+use ratatui::{style::Style, text::Span};
 
 // Compile-time platform detection. The `#[cfg(test)]` arm forces the macOS
 // rendering during `cargo test` so unit tests are deterministic regardless of

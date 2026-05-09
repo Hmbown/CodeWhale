@@ -773,18 +773,17 @@ impl SubAgentRuntime {
     }
 
     /// Build a child runtime cloning this one, incrementing `spawn_depth`,
-    /// deriving a child cancellation token, and forcing `auto_approve` on
-    /// the child's `ToolContext`. Used at spawn entry to construct the
-    /// runtime the new sub-agent will see.
+    /// and deriving a child cancellation token. Used at spawn entry to
+    /// construct the runtime the new sub-agent will see.
     ///
-    /// The `auto_approve` override is deliberate: spawning IS the approval.
-    /// Per-tool prompts inside a child would break delegation, so children
-    /// inherit a YOLO-equivalent context regardless of the parent's mode.
-    /// The workspace boundary + sandbox profile still apply.
+    /// Children inherit the parent's approval state. A non-auto parent can
+    /// still delegate read-only investigation, but approval-gated child tools
+    /// are blocked by the sub-agent registry instead of being silently run
+    /// without a prompt.
     #[must_use]
     pub fn child_runtime(&self) -> Self {
         let mut child_context = self.context.clone();
-        child_context.auto_approve = true;
+        child_context.auto_approve = self.context.auto_approve;
         Self {
             client: self.client.clone(),
             model: self.model.clone(),
@@ -826,7 +825,8 @@ pub struct SubAgent {
     pub result: Option<String>,
     pub steps_taken: u32,
     pub started_at: Instant,
-    /// `None` = full registry inheritance (v0.6.6 default).
+    /// `None` = full registry inheritance, with approval-gated tools still
+    /// blocked unless the parent runtime is auto-approved.
     /// `Some(list)` = explicit narrow allowlist (Custom agents, legacy).
     pub allowed_tools: Option<Vec<String>>,
     /// Stable id of the manager that spawned this agent (#405). Compared
@@ -1695,7 +1695,7 @@ impl ToolSpec for AgentSpawnTool {
                 "allowed_tools": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "description": "Explicit tool allowlist (required for custom type). Default behavior is full registry inheritance from the parent."
+                    "description": "Explicit tool allowlist (required for custom type). Default behavior is full registry inheritance from the parent; approval-gated tools still require an auto-approved parent."
                 },
                 "model": {
                     "type": "string",
@@ -1793,9 +1793,9 @@ impl ToolSpec for AgentSpawnTool {
         };
 
         // Derive the child's runtime as a durable background job: it keeps
-        // its own cancellation token, forces auto_approve, and optionally
-        // overrides cwd if the caller passed one (used for the parallel-
-        // worktree pattern).
+        // its own cancellation token, inherits the parent approval state, and
+        // optionally overrides cwd if the caller passed one (used for the
+        // parallel-worktree pattern).
         let mut child_runtime = self.runtime.background_runtime();
         if let Some(cwd) = validated_cwd {
             child_runtime.context.workspace = cwd;
@@ -2786,6 +2786,7 @@ struct SubAgentTask {
     prompt: String,
     assignment: SubAgentAssignment,
     /// `None` = full registry inheritance. `Some(list)` = explicit narrow.
+    /// Approval-gated tools still require an auto-approved parent runtime.
     allowed_tools: Option<Vec<String>>,
     fork_context: bool,
     started_at: Instant,
@@ -3960,14 +3961,16 @@ fn is_read_only_tool(name: &str) -> bool {
 /// Two modes:
 /// - **Full inheritance** (`allowed_tools = None`): the child sees the same
 ///   tool surface as the parent's Agent mode — every tool family including
-///   `with_subagent_tools` (so it can recurse). This is the v0.6.6 default.
+///   `with_subagent_tools` (so it can recurse). Approval-gated tools are
+///   callable only when the parent runtime is auto-approved.
 /// - **Explicit narrow** (`allowed_tools = Some(list)`): legacy / Custom
 ///   path. The registry still builds the full surface, but only the listed
 ///   tool names are visible to the model and callable.
 struct SubAgentToolRegistry {
-    /// `None` → full inheritance (no filter applied). `Some(list)` →
+    /// `None` → full inheritance (no allowlist filter applied). `Some(list)` →
     /// only the listed tools are visible to the model and callable.
     allowed_tools: Option<Vec<String>>,
+    auto_approve: bool,
     registry: ToolRegistry,
 }
 
@@ -3997,6 +4000,7 @@ impl SubAgentToolRegistry {
 
         Self {
             allowed_tools: explicit_allowed_tools,
+            auto_approve: runtime.context.auto_approve,
             registry,
         }
     }
@@ -4035,6 +4039,16 @@ impl SubAgentToolRegistry {
     async fn execute(&self, _agent_id: &str, name: &str, input: Value) -> Result<String> {
         if !self.is_tool_allowed(name) {
             return Err(anyhow!("Tool {name} not allowed for this sub-agent"));
+        }
+        if !self.auto_approve {
+            let Some(spec) = self.registry.get(name) else {
+                return Err(anyhow!("Tool {name} is not registered"));
+            };
+            if spec.approval_requirement() != ApprovalRequirement::Auto {
+                return Err(anyhow!(
+                    "Tool {name} requires approval and cannot run inside this sub-agent unless the parent session is auto-approved"
+                ));
+            }
         }
         reject_subagent_terminal_takeover(name, &input)?;
         self.registry
@@ -4099,10 +4113,10 @@ fn build_allowed_tools(
         ));
     }
 
-    // Default: full registry inheritance from the parent. The child sees
-    // every tool the parent has, including the sub-agent management family
-    // (so it can recurse). Sandbox + workspace + depth cap remain the
-    // safety net.
+    // Default: full registry inheritance from the parent. The child sees every
+    // tool the parent has, including the sub-agent management family. The
+    // registry execution guard still blocks approval-gated tools unless the
+    // parent runtime is auto-approved.
     Ok(None)
 }
 

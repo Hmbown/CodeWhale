@@ -1066,18 +1066,46 @@ fn would_exceed_depth_at_boundary() {
 }
 
 #[test]
-fn child_runtime_increments_depth_and_forces_auto_approve() {
+fn child_runtime_increments_depth_and_preserves_auto_approve() {
     let mut parent = stub_runtime();
     parent.spawn_depth = 1;
     parent.context.auto_approve = false; // parent in suggest mode
     let child = parent.child_runtime();
     assert_eq!(child.spawn_depth, 2, "child depth = parent + 1");
     assert!(
-        child.context.auto_approve,
-        "child must auto-approve regardless of parent mode (spawning IS the approval)"
+        !child.context.auto_approve,
+        "child must inherit parent approval state"
     );
-    // Parent mode is unchanged — the override is on the child only.
     assert!(!parent.context.auto_approve);
+
+    parent.context.auto_approve = true;
+    let auto_child = parent.child_runtime();
+    assert!(
+        auto_child.context.auto_approve,
+        "auto-approved parents should still create auto-approved children"
+    );
+}
+
+#[tokio::test]
+async fn subagent_registry_blocks_approval_tools_without_parent_auto_approve() {
+    let mut runtime = stub_runtime();
+    runtime.context.auto_approve = false;
+    let registry = SubAgentToolRegistry::new(
+        runtime,
+        Some(vec!["exec_shell".to_string()]),
+        Arc::new(Mutex::new(TodoList::new())),
+        Arc::new(Mutex::new(PlanState::default())),
+    );
+
+    let err = registry
+        .execute("agent_test", "exec_shell", json!({"command": "echo hi"}))
+        .await
+        .expect_err("approval-gated child tool should be blocked");
+
+    assert!(
+        err.to_string().contains("requires approval"),
+        "unexpected error: {err}"
+    );
 }
 
 #[test]

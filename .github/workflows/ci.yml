@@ -8,6 +8,9 @@ on:
   schedule:
     - cron: '31 6 * * 1'
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -Dwarnings

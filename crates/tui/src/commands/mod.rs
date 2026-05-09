@@ -349,6 +349,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         description_id: MessageId::CmdThemeDescription,
     },
     CommandInfo {
+        name: "verbose",
+        aliases: &[],
+        usage: "/verbose [on|off]",
+        description_id: MessageId::CmdVerboseDescription,
+    },
+    CommandInfo {
         name: "trust",
         aliases: &[],
         usage: "/trust [on|off|add <path>|remove <path>|list]",
@@ -549,6 +555,7 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "agent" => config::agent_mode(app),
         "plan" => config::plan_mode(app),
         "theme" => config::theme(app),
+        "verbose" => config::verbose(app, arg),
         "trust" => config::trust(app, arg),
         "logout" => config::logout(app),
 
@@ -928,6 +935,22 @@ mod tests {
         let result = execute("/config", &mut app);
         assert!(result.message.is_none());
         assert!(matches!(result.action, Some(AppAction::OpenConfigView)));
+    }
+
+    #[test]
+    fn execute_verbose_toggles_live_transcript_detail() {
+        let mut app = create_test_app();
+        assert!(!app.verbose_transcript);
+
+        let result = execute("/verbose on", &mut app);
+        assert!(!result.is_error);
+        assert!(app.verbose_transcript);
+        assert!(result.message.unwrap().contains("on"));
+
+        let result = execute("/verbose off", &mut app);
+        assert!(!result.is_error);
+        assert!(!app.verbose_transcript);
+        assert!(result.message.unwrap().contains("off"));
     }
 
     #[test]

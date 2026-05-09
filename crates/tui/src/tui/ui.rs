@@ -443,9 +443,7 @@ fn format_resume_hint(session_id: Option<&str>) -> Option<String> {
     if session_id.is_empty() {
         return None;
     }
-    Some(format!(
-        "To continue this session, run deepseek resume {session_id}"
-    ))
+    Some("To continue this session, run deepseek --continue".to_string())
 }
 
 fn terminal_probe_timeout(config: &Config) -> Duration {
@@ -3613,7 +3611,6 @@ fn ensure_streaming_thinking_active_entry(app: &mut App) -> usize {
         content: String::new(),
         streaming: true,
         duration_secs: None,
-        expanded: false,
     });
     app.streaming_thinking_active_entry = Some(entry_idx);
     app.bump_active_cell_revision();

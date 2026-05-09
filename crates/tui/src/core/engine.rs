@@ -1552,7 +1552,7 @@ impl Engine {
             let _ = self
                 .tx_event
                 .send(Event::status(format!(
-                    "Failed to connect MCP server '{server}': {err}"
+                    "Failed to connect MCP server '{server}': {err:#}"
                 )))
                 .await;
         }

@@ -12,7 +12,7 @@ use crate::utils::write_atomic;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use uuid::Uuid;
 
 /// Maximum number of sessions to retain
@@ -31,6 +31,31 @@ const fn default_session_schema_version() -> u32 {
 
 const fn default_queue_schema_version() -> u32 {
     CURRENT_QUEUE_SCHEMA_VERSION
+}
+
+fn normalize_managed_dir(path: PathBuf) -> std::io::Result<PathBuf> {
+    if path.as_os_str().is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "managed directory path cannot be empty",
+        ));
+    }
+    if path.components().any(|component| {
+        matches!(
+            component,
+            Component::ParentDir | Component::Prefix(_) | Component::RootDir
+        )
+    }) && path.is_relative()
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "managed directory path cannot contain traversal components",
+        ));
+    }
+    if path.is_absolute() {
+        return Ok(path);
+    }
+    std::env::current_dir().map(|cwd| cwd.join(path))
 }
 
 /// Persisted queued message for offline/degraded mode.
@@ -137,6 +162,7 @@ pub struct SavedSession {
 }
 
 /// Manager for session persistence operations
+#[derive(Debug)]
 pub struct SessionManager {
     /// Directory where sessions are stored
     sessions_dir: PathBuf,
@@ -165,6 +191,7 @@ impl SessionManager {
 
     /// Create a new `SessionManager` with the specified sessions directory
     pub fn new(sessions_dir: PathBuf) -> std::io::Result<Self> {
+        let sessions_dir = normalize_managed_dir(sessions_dir)?;
         // Ensure the sessions directory exists
         fs::create_dir_all(&sessions_dir)?;
         Ok(Self { sessions_dir })
@@ -1099,6 +1126,13 @@ mod tests {
     }
 
     #[test]
+    fn test_session_manager_rejects_relative_traversal_dir() {
+        let err = SessionManager::new(PathBuf::from("../sessions"))
+            .expect_err("relative traversal directory should fail");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
     fn test_truncate_title() {
         assert_eq!(truncate_title("Short", 50), "Short");
         assert_eq!(
@@ -1272,8 +1306,7 @@ mod tests {
             .expect("present");
         assert!(
             unscoped.session_id.is_none(),
-            "save with None must persist a missing session_id, got {:?}",
-            unscoped.session_id
+            "save with None must persist a missing session_id"
         );
     }
 

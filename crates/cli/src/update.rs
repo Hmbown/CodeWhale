@@ -140,10 +140,33 @@ struct Asset {
     browser_download_url: String,
 }
 
+/// Per-OS extra arguments to pass to every `curl` invocation issued from
+/// `deepseek update`. On Windows the system curl is built against Schannel,
+/// which performs mandatory certificate-revocation checks; if the user's
+/// network can't reach the OCSP/CRL responders (corporate firewalls,
+/// captive portals, IPv6 hiccups, some ISPs) the TLS handshake fails with
+/// `CRYPT_E_NO_REVOCATION_CHECK (0x80092012)` and `deepseek update` cannot
+/// proceed. `--ssl-no-revoke` tells Schannel to skip the revocation check
+/// for these one-shot HTTPS GETs against `api.github.com` /
+/// `objects.githubusercontent.com`. Other backends (OpenSSL/LibreSSL) accept
+/// the flag silently as a no-op, so we leave the helper a pure function over
+/// `os` and only consult `std::env::consts::OS` at call sites.
+pub(crate) fn extra_curl_args_for_os(os: &str) -> &'static [&'static str] {
+    match os {
+        "windows" => &["--ssl-no-revoke"],
+        _ => &[],
+    }
+}
+
+fn current_extra_curl_args() -> &'static [&'static str] {
+    extra_curl_args_for_os(std::env::consts::OS)
+}
+
 /// Fetch the latest release metadata from GitHub.
 fn fetch_latest_release() -> Result<Release> {
     let url = "https://api.github.com/repos/Hmbown/DeepSeek-TUI/releases/latest";
     let output = Command::new("curl")
+        .args(current_extra_curl_args())
         .args([
             "-sSfL",
             "-H",
@@ -171,6 +194,7 @@ fn fetch_latest_release() -> Result<Release> {
 /// Download a URL to bytes using curl.
 fn download_url(url: &str) -> Result<Vec<u8>> {
     let output = Command::new("curl")
+        .args(current_extra_curl_args())
         .args(["-sSfL", url])
         .output()
         .with_context(|| format!("failed to download {url}"))?;
@@ -280,6 +304,35 @@ fn backup_path_for(target: &Path) -> std::path::PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Windows curl is built against Schannel and performs mandatory
+    /// certificate-revocation checks. Networks that can't reach OCSP/CRL
+    /// responders trip `CRYPT_E_NO_REVOCATION_CHECK (0x80092012)`. Verify
+    /// we pass `--ssl-no-revoke` so `deepseek update` works in those
+    /// environments.
+    #[test]
+    fn windows_curl_extras_disable_certificate_revocation_check() {
+        let args = extra_curl_args_for_os("windows");
+        assert!(
+            args.contains(&"--ssl-no-revoke"),
+            "Windows curl invocations must include --ssl-no-revoke; got {args:?}"
+        );
+    }
+
+    /// Other OS curl backends (OpenSSL/LibreSSL on macOS/Linux/BSD) do
+    /// not need the Schannel-specific revocation override. Asserting an
+    /// empty extras list pins the behavior — adding new flags should be
+    /// a deliberate change with its own test.
+    #[test]
+    fn non_windows_curl_extras_are_empty() {
+        for os in ["linux", "macos", "freebsd", "openbsd", "netbsd"] {
+            assert!(
+                extra_curl_args_for_os(os).is_empty(),
+                "expected no curl extras for {os}, got {:?}",
+                extra_curl_args_for_os(os)
+            );
+        }
+    }
 
     /// Verify the arch mapping used when constructing asset names.
     /// The mapping must use release-asset naming (arm64/x64), not Rust

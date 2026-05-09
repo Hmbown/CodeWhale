@@ -260,6 +260,16 @@ fn collect_files_recursive(
     for entry in entries {
         let entry = entry.map_err(|e| ToolError::execution_failed(e.to_string()))?;
         let path = entry.path();
+        let file_type = entry.file_type().map_err(|e| {
+            ToolError::execution_failed(format!(
+                "Failed to inspect file type for {}: {}",
+                path.display(),
+                e
+            ))
+        })?;
+        if file_type.is_symlink() {
+            continue;
+        }
 
         // Get relative path for pattern matching
         let relative = path.strip_prefix(root).unwrap_or(&path);
@@ -270,9 +280,9 @@ fn collect_files_recursive(
             continue;
         }
 
-        if path.is_dir() {
+        if file_type.is_dir() {
             collect_files_recursive(root, &path, include_patterns, exclude_patterns, files)?;
-        } else if path.is_file() {
+        } else if file_type.is_file() {
             // Check inclusions (if any specified)
             if include_patterns.is_empty() || should_include(&relative_str, include_patterns) {
                 files.push(path);
@@ -542,6 +552,31 @@ mod tests {
                 .next()
                 .is_some_and(|ext| ext.eq_ignore_ascii_case("rs"))
         );
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn test_grep_files_does_not_follow_symlinked_files() {
+        let tmp = tempdir().expect("tempdir");
+        let root = tmp.path().join("workspace");
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&root).expect("mkdir workspace");
+        std::fs::create_dir_all(&outside).expect("mkdir outside");
+        let outside_file = outside.join("secret.txt");
+        fs::write(&outside_file, "NEEDLE\n").expect("write outside");
+        std::os::unix::fs::symlink(&outside_file, root.join("secret.txt")).expect("symlink");
+
+        let ctx = ToolContext::new(root);
+        let tool = GrepFilesTool;
+        let result = tool
+            .execute(json!({"pattern": "NEEDLE"}), &ctx)
+            .await
+            .expect("execute");
+
+        assert!(result.success);
+        let parsed: Value = serde_json::from_str(&result.content).unwrap();
+        assert_eq!(parsed["total_matches"].as_u64().unwrap(), 0);
+        assert_eq!(parsed["files_searched"].as_u64().unwrap(), 0);
     }
 
     #[tokio::test]

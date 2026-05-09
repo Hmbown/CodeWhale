@@ -1,14 +1,13 @@
 //! Secret storage for DeepSeek API keys.
 //!
 //! Provides a small abstraction (`KeyringStore`) plus a default
-//! implementation backed by the OS keyring (`DefaultKeyringStore`),
-//! a file-based fallback for headless or unsupported platforms
-//! (`FileKeyringStore`), and an in-memory store for tests
+//! file-based implementation (`FileKeyringStore`), an opt-in OS keyring
+//! implementation (`DefaultKeyringStore`), and an in-memory store for tests
 //! (`InMemoryKeyringStore`).
 //!
-//! Higher-level lookup through [`Secrets::resolve`] checks the keyring first
+//! Higher-level lookup through [`Secrets::resolve`] checks the secret store first
 //! and falls back to environment variables. Config-file precedence lives in the
-//! config crate so user-facing commands can keep `config -> keyring -> env`
+//! config crate so user-facing commands can keep `config -> secret store -> env`
 //! explicit at the call site.
 #![deny(missing_docs)]
 
@@ -23,6 +22,9 @@ use thiserror::Error;
 /// Default OS keychain service name. macOS users can verify entries with
 /// `security find-generic-password -s deepseek -a <provider>`.
 pub const DEFAULT_SERVICE: &str = "deepseek";
+/// Select the secret storage backend. Supported values are `file` (default)
+/// and `system`/`keyring` for the OS credential store.
+pub const SECRET_BACKEND_ENV: &str = "DEEPSEEK_SECRET_BACKEND";
 
 /// Errors that may arise from a [`KeyringStore`] backend.
 #[derive(Debug, Error)]
@@ -61,9 +63,10 @@ pub trait KeyringStore: Send + Sync {
 }
 
 /// OS keyring backend (macOS Keychain, Windows Credential Manager,
-/// Linux Secret Service / kwallet). On platforms without a configured
-/// native keyring dependency, probing this backend returns an unsupported
-/// error so [`Secrets::auto_detect`] can fall back to [`FileKeyringStore`].
+/// Linux Secret Service / kwallet). This backend is opt-in through
+/// [`SECRET_BACKEND_ENV`]. On platforms without a configured native
+/// keyring dependency, probing this backend returns an unsupported error so
+/// [`Secrets::auto_detect`] can fall back to [`FileKeyringStore`].
 #[derive(Debug, Clone)]
 pub struct DefaultKeyringStore {
     /// Keyring service name (defaults to [`DEFAULT_SERVICE`]).
@@ -349,17 +352,35 @@ impl KeyringStore for FileKeyringStore {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SecretBackendSelection {
+    File,
+    System,
+    Unknown,
+}
+
+fn secret_backend_selection(value: Option<&str>) -> SecretBackendSelection {
+    match value.map(str::trim).filter(|value| !value.is_empty()) {
+        None => SecretBackendSelection::File,
+        Some(value) => match value.to_ascii_lowercase().as_str() {
+            "file" | "local" | "json" => SecretBackendSelection::File,
+            "system" | "keyring" | "os" | "os-keyring" => SecretBackendSelection::System,
+            _ => SecretBackendSelection::Unknown,
+        },
+    }
+}
+
 /// High-level façade combining a [`KeyringStore`] with environment
 /// variable fallbacks.
 ///
-/// Lookup precedence: **keyring → env → none**. Callers that also have
+/// Lookup precedence: **secret store → env → none**. Callers that also have
 /// a TOML config layer must wire that themselves at the very end of
 /// the chain.
 #[derive(Clone)]
 pub struct Secrets {
     /// Underlying secret store.
     pub store: Arc<dyn KeyringStore>,
-    /// Owner identifier within the keyring (typically "deepseek"); the
+    /// Owner identifier within the secret store (typically "deepseek"); the
     /// `key` parameter passed to `resolve` is mapped to a slot in the
     /// store as-is, while envs are looked up by canonical name.
     service: String,
@@ -368,7 +389,7 @@ pub struct Secrets {
 /// Source layer that provided a resolved secret.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SecretSource {
-    /// The configured keyring backend returned the secret.
+    /// The configured secret-store backend returned the secret.
     Keyring,
     /// A process environment variable returned the secret.
     Env,
@@ -393,11 +414,50 @@ impl Secrets {
         }
     }
 
-    /// Construct the platform-appropriate default backend. On platforms
-    /// where an OS keyring backend is reachable this returns
-    /// [`DefaultKeyringStore`]; otherwise it falls back to
-    /// [`FileKeyringStore`] under `~/.deepseek/secrets/`.
+    /// Construct the default backend. The prompt-free default is
+    /// [`FileKeyringStore`] under `~/.deepseek/secrets/`. Set
+    /// [`SECRET_BACKEND_ENV`] to `system` or `keyring` to opt into the OS
+    /// credential store.
     pub fn auto_detect() -> Self {
+        match secret_backend_selection(std::env::var(SECRET_BACKEND_ENV).ok().as_deref()) {
+            SecretBackendSelection::File => Self::file_backed_default(),
+            SecretBackendSelection::Unknown => {
+                tracing::warn!(
+                    "{SECRET_BACKEND_ENV} has an unsupported value; using file-backed secret store"
+                );
+                Self::file_backed_default()
+            }
+            SecretBackendSelection::System => {
+                let default_store = DefaultKeyringStore::default();
+                match default_store.probe() {
+                    Ok(()) => Self::new(Arc::new(default_store)),
+                    Err(err) => {
+                        tracing::warn!(
+                            "OS keyring unavailable ({err}); falling back to file-backed secret store"
+                        );
+                        Self::file_backed_default()
+                    }
+                }
+            }
+        }
+    }
+
+    fn file_backed_default() -> Self {
+        let path = FileKeyringStore::default_path()
+            .unwrap_or_else(|_| PathBuf::from(".deepseek-secrets.json"));
+        Self::new(Arc::new(FileKeyringStore::new(path)))
+    }
+
+    /// Construct the file-backed default backend directly.
+    #[must_use]
+    pub fn file_backed() -> Self {
+        Self::file_backed_default()
+    }
+
+    /// Construct the opt-in OS credential backend, falling back to the
+    /// file-backed store when the platform backend is unavailable.
+    #[must_use]
+    pub fn system_keyring() -> Self {
         let default_store = DefaultKeyringStore::default();
         match default_store.probe() {
             Ok(()) => Self::new(Arc::new(default_store)),
@@ -405,9 +465,7 @@ impl Secrets {
                 tracing::warn!(
                     "OS keyring unavailable ({err}); falling back to file-backed secret store"
                 );
-                let path = FileKeyringStore::default_path()
-                    .unwrap_or_else(|_| PathBuf::from(".deepseek-secrets.json"));
-                Self::new(Arc::new(FileKeyringStore::new(path)))
+                Self::file_backed_default()
             }
         }
     }
@@ -418,7 +476,7 @@ impl Secrets {
         self.store.backend_name()
     }
 
-    /// Resolve a secret with `keyring → env → none` precedence.
+    /// Resolve a secret with `secret store → env → none` precedence.
     ///
     /// `name` is the canonical provider name (`"deepseek"`,
     /// `"openrouter"`, `"novita"`, `"nvidia"`/`"nvidia-nim"`, `"openai"`).
@@ -512,11 +570,65 @@ mod tests {
             "VLLM_API_KEY",
             "OLLAMA_API_KEY",
             "OPENAI_API_KEY",
+            SECRET_BACKEND_ENV,
         ] {
             // Safety: tests serialise on env_lock(); the broader
             // workspace has the same pattern in `crates/config`.
             unsafe { std::env::remove_var(var) };
         }
+    }
+
+    #[test]
+    fn backend_selection_defaults_to_file() {
+        assert_eq!(secret_backend_selection(None), SecretBackendSelection::File);
+        assert_eq!(
+            secret_backend_selection(Some("")),
+            SecretBackendSelection::File
+        );
+        assert_eq!(
+            secret_backend_selection(Some("  file  ")),
+            SecretBackendSelection::File
+        );
+    }
+
+    #[test]
+    fn backend_selection_accepts_explicit_system_keyring() {
+        assert_eq!(
+            secret_backend_selection(Some("system")),
+            SecretBackendSelection::System
+        );
+        assert_eq!(
+            secret_backend_selection(Some("keyring")),
+            SecretBackendSelection::System
+        );
+        assert_eq!(
+            secret_backend_selection(Some("os-keyring")),
+            SecretBackendSelection::System
+        );
+    }
+
+    #[test]
+    fn auto_detect_is_file_backed_by_default() {
+        let _lock = env_lock();
+        clear_known_envs();
+
+        let secrets = Secrets::auto_detect();
+
+        assert_eq!(secrets.backend_name(), "file-based (~/.deepseek/secrets/)");
+    }
+
+    #[test]
+    fn auto_detect_honors_explicit_file_backend() {
+        let _lock = env_lock();
+        clear_known_envs();
+        // Safety: env mutation guarded by env_lock().
+        unsafe { std::env::set_var(SECRET_BACKEND_ENV, "local") };
+
+        let secrets = Secrets::auto_detect();
+
+        assert_eq!(secrets.backend_name(), "file-based (~/.deepseek/secrets/)");
+        // Safety: env mutation guarded by env_lock().
+        unsafe { std::env::remove_var(SECRET_BACKEND_ENV) };
     }
 
     #[test]

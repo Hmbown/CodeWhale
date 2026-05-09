@@ -614,12 +614,31 @@ mod tests {
         assert!(prompt.contains("Approval Policy: Suggest"));
     }
 
+    /// Gate against shipping a release with a missing CHANGELOG entry — which
+    /// is exactly what happened with v0.8.21 / v0.8.22 (entries had to be
+    /// backfilled in v0.8.23). Asserts the top-of-file CHANGELOG contains a
+    /// `## [X.Y.Z]` heading matching the current `CARGO_PKG_VERSION`. No
+    /// hardcoded version string — the test self-updates with the workspace
+    /// version bump and only fires when the CHANGELOG is the missing piece.
     #[test]
-    fn package_version_is_current_hotfix_release() {
-        assert_eq!(
-            env!("CARGO_PKG_VERSION"),
-            "0.8.22",
-            "0.8.22 release branch must report the release version before publishing"
+    fn changelog_entry_exists_for_current_package_version() {
+        let version = env!("CARGO_PKG_VERSION");
+        let changelog_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("CHANGELOG.md");
+        let contents = std::fs::read_to_string(&changelog_path).unwrap_or_else(|err| {
+            panic!(
+                "failed to read CHANGELOG.md at {}: {err}",
+                changelog_path.display()
+            )
+        });
+        let header = format!("## [{version}]");
+        assert!(
+            contents.contains(&header),
+            "CHANGELOG.md is missing a `{header}` entry for the current package \
+             version. Add a release section at the top before tagging — see \
+             docs/RELEASE_CHECKLIST.md."
         );
     }
 

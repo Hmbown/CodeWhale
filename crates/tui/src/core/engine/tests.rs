@@ -2,6 +2,7 @@ use super::*;
 
 use crate::models::SystemBlock;
 use crate::test_support::lock_test_env;
+use crate::tools::spec::ToolCapability;
 use serde_json::json;
 use std::collections::HashSet;
 use std::ffi::OsString;
@@ -451,8 +452,40 @@ fn turn_tool_registry_builder_keeps_plan_mode_read_only_for_files() {
     assert!(!registry.contains("exec_shell"));
     assert!(!registry.contains("exec_shell_wait"));
     assert!(!registry.contains("exec_shell_interact"));
+    assert!(!registry.contains("task_shell_start"));
+    assert!(!registry.contains("task_create"));
+    assert!(!registry.contains("task_gate_run"));
+    assert!(!registry.contains("rlm"));
+    assert!(!registry.contains("fim_edit"));
     assert!(registry.contains("update_plan"));
-    assert!(registry.contains("task_create"));
+    assert!(registry.contains("task_list"));
+    assert!(registry.contains("task_read"));
+
+    let plan_state_tools = [
+        "checklist_add",
+        "checklist_update",
+        "checklist_write",
+        "todo_add",
+        "todo_update",
+        "todo_write",
+        "update_plan",
+    ];
+    let mut write_or_exec_tools: Vec<String> = registry
+        .all()
+        .into_iter()
+        .filter(|tool| !plan_state_tools.contains(&tool.name()))
+        .filter(|tool| {
+            let capabilities = tool.capabilities();
+            capabilities.contains(&ToolCapability::WritesFiles)
+                || capabilities.contains(&ToolCapability::ExecutesCode)
+        })
+        .map(|tool| tool.name().to_string())
+        .collect();
+    write_or_exec_tools.sort();
+    assert!(
+        write_or_exec_tools.is_empty(),
+        "Plan mode must not register file-writing or code-execution tools: {write_or_exec_tools:?}"
+    );
 }
 
 #[test]
