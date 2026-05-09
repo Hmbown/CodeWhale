@@ -19,6 +19,7 @@
 provider = "deepseek" # deepseek | deepseek-cn | nvidia-nim | openai | openrouter | novita | fireworks | sglang | vllm | ollama
 api_key = "YOUR_DEEPSEEK_API_KEY" # must be non-empty
 base_url = "https://api.deepseek.com/beta"
+# baseurl = "http://127.0.0.1:11434/v1"        # compatibility alias; http:// endpoints are allowed
 # provider = "deepseek-cn"                       # mainland China preset (official https://api.deepseek.com)
 # base_url = "https://api.deepseek.com"         # opt out of DeepSeek beta features
 # Optional custom model request headers for OpenAI-compatible gateways.
@@ -38,6 +39,7 @@ base_url = "https://api.deepseek.com/beta"
 #   deepseek-ai/DeepSeek-V4-Pro    — SGLang self-hosted Pro model ID
 #   deepseek-ai/DeepSeek-V4-Flash  — SGLang self-hosted Flash model ID
 default_text_model = "deepseek-v4-pro"
+# model = "deepseek-v4-pro"                    # compatibility alias for root default_text_model
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Thinking Mode (DeepSeek V4 reasoning effort)

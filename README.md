@@ -357,7 +357,7 @@ Full shortcut catalog: [docs/KEYBINDINGS.md](docs/KEYBINDINGS.md).
 
 ## Configuration
 
-User config: `~/.deepseek/config.toml`. Project overlay: `<workspace>/.deepseek/config.toml` (denied: `api_key`, `base_url`, `provider`, `mcp_config_path`). [config.example.toml](config.example.toml) has every option.
+User config: `~/.deepseek/config.toml`. Project overlay: `<workspace>/.deepseek/config.toml` (denied: `api_key`, `base_url`, `provider`, `mcp_config_path`). Root `base_url` / `default_text_model` remain canonical, and compatibility aliases `baseurl` / `model` are also accepted (including `http://...` endpoints). [config.example.toml](config.example.toml) has every option.
 
 Key environment variables:
 

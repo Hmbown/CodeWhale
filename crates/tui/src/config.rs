@@ -758,9 +758,11 @@ pub struct PerModelContextConfig {
 pub struct Config {
     pub provider: Option<String>,
     pub api_key: Option<String>,
+    #[serde(alias = "baseurl")]
     pub base_url: Option<String>,
     /// Optional extra HTTP headers sent to model API requests.
     pub http_headers: Option<HashMap<String, String>>,
+    #[serde(alias = "model")]
     pub default_text_model: Option<String>,
     /// DeepSeek reasoning-effort tier: `"off" | "low" | "medium" | "high" | "max"`.
     /// Defaults to `"max"` at runtime if unset.
@@ -1017,6 +1019,7 @@ impl LspConfigToml {
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ProviderConfig {
     pub api_key: Option<String>,
+    #[serde(alias = "baseurl")]
     pub base_url: Option<String>,
     pub model: Option<String>,
     pub http_headers: Option<HashMap<String, String>>,
@@ -4164,6 +4167,39 @@ api_key = "old-openrouter-key"
 
         assert_eq!(config.api_provider(), ApiProvider::Deepseek);
         assert_eq!(config.deepseek_base_url(), "https://api.deepseek.com");
+    }
+
+    #[test]
+    fn root_baseurl_and_model_aliases_load_from_config_file() -> Result<()> {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "deepseek-tui-root-alias-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
+
+        let config_path = temp_root.join(".deepseek").join("config.toml");
+        ensure_parent_dir(&config_path)?;
+        fs::write(
+            &config_path,
+            r#"api_key = "alias-root-key"
+baseurl = "http://gateway.example/v1"
+model = "deepseek-v4-flash"
+"#,
+        )?;
+
+        let config = Config::load(None, None)?;
+        assert_eq!(config.api_provider(), ApiProvider::Deepseek);
+        assert_eq!(config.deepseek_api_key()?, "alias-root-key");
+        assert_eq!(config.deepseek_base_url(), "http://gateway.example/v1");
+        assert_eq!(config.default_model(), "deepseek-v4-flash");
+        Ok(())
     }
 
     #[test]

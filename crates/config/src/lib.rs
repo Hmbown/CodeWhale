@@ -89,6 +89,7 @@ impl ProviderKind {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ProviderConfigToml {
     pub api_key: Option<String>,
+    #[serde(alias = "baseurl")]
     pub base_url: Option<String>,
     pub model: Option<String>,
     #[serde(default)]
@@ -154,6 +155,7 @@ pub struct ConfigToml {
     /// and `deepseek-tui` can share a single config file.
     pub api_key: Option<String>,
     /// TUI-compatible DeepSeek base URL.
+    #[serde(alias = "baseurl")]
     pub base_url: Option<String>,
     /// Optional extra HTTP headers forwarded to model API requests.
     #[serde(default)]
@@ -1603,6 +1605,27 @@ mod tests {
         assert_eq!(resolved.api_key.as_deref(), Some("root-key"));
         assert_eq!(resolved.base_url, "https://api.deepseek.com");
         assert_eq!(resolved.model, "deepseek-v4-pro");
+    }
+
+    #[test]
+    fn root_baseurl_alias_and_model_field_resolve_for_deepseek() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        let config: ConfigToml = toml::from_str(
+            r#"
+api_key = "root-key"
+baseurl = "http://gateway.example/v1"
+model = "deepseek-v4-flash"
+"#,
+        )
+        .expect("alias config should parse");
+
+        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::Deepseek);
+        assert_eq!(resolved.api_key.as_deref(), Some("root-key"));
+        assert_eq!(resolved.base_url, "http://gateway.example/v1");
+        assert_eq!(resolved.model, "deepseek-v4-flash");
     }
 
     #[test]
