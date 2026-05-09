@@ -163,9 +163,9 @@ records architectural attachment points.
 
 The implementation includes a required pure Rust `crates/game` runtime for
 manifests, path validation, bounded lookup, constrained Starlark driver
-functions, structured render data, and atomic save commits. That crate must not
-depend on ratatui, the TUI, the LLM client, shell/network execution, Python, or
-external game repos.
+functions, structured render data, git-like story branch/playbook data, and
+atomic save commits. That crate must not depend on ratatui, the TUI, the LLM
+client, shell/network execution, Python, or external game repos.
 
 The TUI side wires `crates/cli`, `crates/tui/src/main.rs`, `commands/`,
 `tui/app.rs`, `tui/ui.rs`, `core/engine/tool_setup.rs`,

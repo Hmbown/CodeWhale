@@ -36,12 +36,13 @@ pub fn game(app: &mut App, arg: Option<&str>) -> CommandResult {
     match action.as_str() {
         "status" => status(app),
         "render" => render(app),
+        "choices" | "playbook" => choices(app),
         "saves" => saves(app),
         "dev" => dev(app, parts.next()),
         "exit" | "close" => exit(app),
-        _ => {
-            CommandResult::error("Usage: /game [status|render|saves|dev [on|off]|exit]".to_string())
-        }
+        _ => CommandResult::error(
+            "Usage: /game [status|render|choices|saves|dev [on|off]|exit]".to_string(),
+        ),
     }
 }
 
@@ -104,6 +105,16 @@ fn render(app: &mut App) -> CommandResult {
         CommandResult::message("Rendered the active Game Console session.".to_string())
     } else {
         CommandResult::message("No active Game Console session. Use /play.".to_string())
+    }
+}
+
+fn choices(app: &mut App) -> CommandResult {
+    let Some(session) = app.game_session.as_ref() else {
+        return CommandResult::message("No active Game Console session. Use /play.".to_string());
+    };
+    match session.choices_report() {
+        Ok(report) => CommandResult::message(report),
+        Err(err) => CommandResult::error(format!("failed to read game choices: {err}")),
     }
 }
 

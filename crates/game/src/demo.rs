@@ -26,6 +26,107 @@ pub fn reconciliation_initial_state(driver_id: &str, driver_version: &str) -> Va
             "actors": ["girlfriend"],
             "items": []
         },
+        "interaction": {
+            "mode": "choice_and_freeform",
+            "freeform_allowed": true,
+            "verbs": [
+                {
+                    "command": "[APOLOGIZE]",
+                    "label": "Apologize",
+                    "description": "Own what you did without asking her to comfort you."
+                },
+                {
+                    "command": "[ASK]",
+                    "label": "Ask",
+                    "description": "Invite her to say what still hurts."
+                },
+                {
+                    "command": "[WAIT]",
+                    "label": "Wait",
+                    "description": "Let silence and body language matter."
+                }
+            ],
+            "suggestions": [
+                {
+                    "id": "choice_apologize",
+                    "label": "Admit fear",
+                    "input": "[APOLOGIZE] I was scared and I made you feel unwanted. I still care about you.",
+                    "description": "Best route toward honest admission.",
+                    "target_node": "honest_admission"
+                },
+                {
+                    "id": "choice_ask",
+                    "label": "Ask what she needed",
+                    "input": "[ASK] What did you need from me that night?",
+                    "description": "Slower trust-repair route.",
+                    "target_node": "trust_repair"
+                },
+                {
+                    "id": "choice_stop",
+                    "label": "Stop her",
+                    "input": "[WAIT] I step aside so she can leave if she wants, then say one clear sentence.",
+                    "description": "Shows restraint before speaking.",
+                    "target_node": "trust_repair"
+                }
+            ]
+        },
+        "story": {
+            "style": {
+                "id": "emotional_reconciliation",
+                "title": "Emotional reconciliation",
+                "pacing": "Slow down for apology, silence, and visible restraint.",
+                "turn_shape": "Player action -> emotional landing -> boundary check -> trust shift.",
+                "branch_policy": "Branch by emotional posture: honest repair, patient listening, or pressure failure."
+            },
+            "active_branch": "mainline",
+            "active_node": "opening_apology",
+            "branches": {
+                "mainline": {
+                    "head": "opening_apology"
+                }
+            },
+            "nodes": {
+                "opening_apology": {
+                    "title": "The last stair",
+                    "status": "active",
+                    "summary": "She is close enough to hear one honest action before leaving.",
+                    "gate": "Choose a sincere action that does not block her.",
+                    "next": ["honest_admission", "trust_repair", "pressure_failure"]
+                },
+                "honest_admission": {
+                    "title": "Honest admission",
+                    "status": "available",
+                    "summary": "The player admits fear or avoidance without deflecting blame.",
+                    "gate": "A direct apology and score_action delta above zero.",
+                    "parents": ["opening_apology"],
+                    "next": ["trust_repair"]
+                },
+                "trust_repair": {
+                    "title": "Trust repair",
+                    "status": "locked",
+                    "summary": "She pauses long enough to answer instead of leaving immediately.",
+                    "gate": "Relationship score 3 or higher with no pressure flag.",
+                    "parents": ["opening_apology", "honest_admission"],
+                    "next": ["success"]
+                },
+                "pressure_failure": {
+                    "title": "Pressure failure",
+                    "status": "available",
+                    "summary": "Pressuring her may keep her physically present while ending the conversation.",
+                    "gate": "Blocking, demanding, or centering the player's pain.",
+                    "parents": ["opening_apology"],
+                    "next": []
+                },
+                "success": {
+                    "title": "She stays to talk",
+                    "status": "locked",
+                    "summary": "Trust is repaired enough for the conversation to continue off the stairs.",
+                    "gate": "Relationship score 3 or higher with honest admission and no pressure flag.",
+                    "parents": ["trust_repair"],
+                    "next": []
+                }
+            }
+        },
         "ui": {
             "panels": [
                 {

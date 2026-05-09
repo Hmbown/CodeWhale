@@ -339,6 +339,29 @@ simple but structured:
     "actors": [],
     "items": []
   },
+  "interaction": {
+    "mode": "choice_and_freeform",
+    "freeform_allowed": true,
+    "verbs": [],
+    "suggestions": []
+  },
+  "story": {
+    "style": {
+      "id": "deliberation_drama",
+      "title": "Deliberation drama",
+      "pacing": "One-room pressure with evidence, procedure, time, and vote shifts.",
+      "turn_shape": "Action -> reaction -> pressure shift -> next dilemma.",
+      "branch_policy": "Branch by argument route, not by wording alone.",
+      "tension_axes": [],
+      "principles": []
+    },
+    "active_branch": "mainline",
+    "active_node": "opening",
+    "branches": {
+      "mainline": {"head": "opening"}
+    },
+    "nodes": {}
+  },
   "ui": {
     "panels": []
   },
@@ -348,6 +371,33 @@ simple but structured:
   }
 }
 ```
+
+The `story.style` block is the cartridge's compact storytelling contract.
+`game_playbook` surfaces it so the model can optimize pacing, tension, and
+branch movement for emotional reconciliation, deliberation drama, mystery, RPG,
+survival, political intrigue, or another declared plot type.
+
+The rest of the `story` block intentionally uses git-like concepts without
+using the user's repository as the game save: branch heads point to story nodes,
+nodes can record parent beats, and `TURN_LOG.jsonl` is the immutable commit
+history. This keeps branching progress explicit while avoiding accidental
+repository commits, worktree conflicts, or merges during normal play.
+
+Runtime reliability rules:
+
+- malformed interaction/story edges should surface as `game_playbook` warnings
+  instead of crashing normal play
+- every successful player action commits at most one turn
+- state patches must preserve `schema_version`, `revision`, `driver`,
+  `interaction`, `story`, `world`, and `ui`
+- branch movement should keep `story.active_node` and the active branch head in
+  sync
+- missing or locked next nodes should degrade to a safe current-node resolution
+  with clear player-facing options
+- deterministic driver failures must not invent numeric facts; the turn should
+  either continue conservatively or explain why the action cannot resolve yet
+- after a major branch move, update suggestions so the next turn remains
+  playable without hidden knowledge
 
 `TURN_LOG.jsonl` is append-only. Each line records one committed turn:
 
@@ -439,11 +489,13 @@ Game-specific behavior:
 - skills provide instructions only; native game tools own persistence
 - generated NPC skills update automatically after critical committed events and
   at a periodic checkpoint, defaulting to every five committed turns
+- reusable interaction parsing and branch-pacing rules should be distilled into
+  loadable skills and loaded only when a turn needs them
 
-Manifest-declared game and driver skills auto-load for the active game session.
-They are scoped instructions only: they cannot expand the player tool profile,
-escape the game or driver roots, override save authority, or change the
-approval/sandbox policy.
+Manifest-declared game and driver skills are discoverable for the active game
+session and loaded by name when needed. They are scoped instructions only: they
+cannot expand the player tool profile, escape the game or driver roots, override
+save authority, or change the approval/sandbox policy.
 
 The model-visible game prompt should combine:
 
@@ -543,6 +595,7 @@ V1 tools:
 | --- | --- | --- |
 | `game_status` | Validate active game/save and return warnings/errors | No |
 | `game_render` | Return structured panel data from current save | No |
+| `game_playbook` | Return current commands, suggested choices, and story branch nodes | No |
 | `game_lookup` | Retrieve bounded package content by handle or query | No |
 | `game_run_driver` | Run a declared deterministic driver function | No |
 | `game_commit_turn` | Append one turn and apply a JSON Merge Patch | Yes |
@@ -564,7 +617,7 @@ Disallowed in player mode:
 
 - shell execution
 - generic file write/edit tools
-- git tools
+- repository git tools
 - code execution tools
 - broad workspace inspection tools
 - network tools unless a later game feature explicitly requires them
@@ -573,6 +626,11 @@ Developer mode can re-enable normal inspection tools and raw state views, but
 must be visually distinct from player mode.
 
 ### Tool ABIs
+
+`game_playbook` has no input. It returns the active save's current command
+verbs, suggested choices, active branch/head, story style profile, and visible
+story nodes so the model can route player input without re-reading the entire
+save.
 
 `game_lookup` input:
 
@@ -657,6 +715,7 @@ Slash commands:
 /play [game-or-path]
 /game status
 /game render
+/game choices
 /game saves
 /game dev
 /game exit

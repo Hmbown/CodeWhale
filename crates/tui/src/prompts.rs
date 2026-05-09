@@ -32,7 +32,10 @@ fn render_game_session_block(game_session: &crate::game::GameSession) -> String 
     block.push_str(
         "\n\nGame rules for this turn:\n\
          - Resolve player actions as gameplay, not as repository work.\n\
-         - Use `game_status`, `game_render`, `game_lookup`, and `game_run_driver` for game facts and deterministic driver logic.\n\
+         - Use `game_status`, `game_render`, `game_playbook`, `game_lookup`, and `game_run_driver` for game facts, current choices, story nodes, and deterministic driver logic.\n\
+         - Use the active story style from `game_playbook` to adapt narration, pacing, tension axes, and branch movement to the cartridge's plot type.\n\
+         - Treat story progress as a git-like graph in save state: each committed turn advances the active node/ref only when a visible gate is satisfied. Do not use the user's repository git history as the game save.\n\
+         - Load game or driver skills with `load_skill` only when the current action needs that rule pack.\n\
          - Persist authoritative state only with `game_commit_turn` using the current save revision.\n\
          - Do not use ordinary coding, shell, git, network, or file-editing tools for player-mode gameplay.",
     );

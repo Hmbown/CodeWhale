@@ -187,7 +187,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo {
         name: "game",
         aliases: &[],
-        usage: "/game [status|render|saves|dev [on|off]|exit]",
+        usage: "/game [status|render|choices|saves|dev [on|off]|exit]",
         description_id: MessageId::CmdGameDescription,
     },
     CommandInfo {

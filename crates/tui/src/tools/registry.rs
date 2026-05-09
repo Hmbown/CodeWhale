@@ -510,10 +510,12 @@ impl ToolRegistryBuilder {
     #[must_use]
     pub fn with_game_tools(self) -> Self {
         use super::game::{
-            GameCommitTurnTool, GameLookupTool, GameRenderTool, GameRunDriverTool, GameStatusTool,
+            GameCommitTurnTool, GameLookupTool, GamePlaybookTool, GameRenderTool,
+            GameRunDriverTool, GameStatusTool,
         };
         self.with_tool(Arc::new(GameStatusTool))
             .with_tool(Arc::new(GameRenderTool))
+            .with_tool(Arc::new(GamePlaybookTool))
             .with_tool(Arc::new(GameLookupTool))
             .with_tool(Arc::new(GameRunDriverTool))
             .with_tool(Arc::new(GameCommitTurnTool))

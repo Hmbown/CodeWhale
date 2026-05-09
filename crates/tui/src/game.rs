@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use deepseek_game::driver::{DriverResolver, LoadedDriver};
+use deepseek_game::interaction::{build_playbook, format_playbook};
 use deepseek_game::manifest::LoadedGame;
 use deepseek_game::render::{RenderPanel, render_panels};
 use deepseek_game::save::{LoadedSave, driver_lock, load_save};
@@ -33,8 +34,17 @@ pub struct LoadedGameSession {
     pub driver_requirement: String,
     pub locked_driver_version: Option<String>,
     pub panels: Vec<RenderPanel>,
+    pub skills: Vec<GameSkillCatalogEntry>,
     pub warnings: Vec<String>,
     pub developer_mode: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct GameSkillCatalogEntry {
+    pub name: String,
+    pub description: String,
+    pub path: PathBuf,
+    pub source: String,
 }
 
 #[derive(Debug, Clone)]
@@ -101,6 +111,23 @@ impl GameSession {
             }
         }
     }
+
+    pub fn choices_report(&self) -> Result<String> {
+        match self {
+            Self::Loaded(session) => session.choices_report(),
+            Self::Notice(notice) => Ok(format!(
+                "No loaded Game Console session: {}",
+                notice.message
+            )),
+        }
+    }
+
+    pub fn skill_directories(&self) -> Vec<PathBuf> {
+        match self {
+            Self::Loaded(session) => session.skill_directories(),
+            Self::Notice(_) => Vec::new(),
+        }
+    }
 }
 
 impl LoadedGameSession {
@@ -135,6 +162,10 @@ impl LoadedGameSession {
             lines.push("Warnings:".to_string());
             lines.extend(self.warnings.iter().map(|warning| format!("- {warning}")));
         }
+        if !self.skills.is_empty() {
+            lines.push(String::new());
+            lines.push(format!("Loadable game skills: {}", self.skills.len()));
+        }
         lines.join("\n")
     }
 
@@ -165,6 +196,27 @@ impl LoadedGameSession {
             lines.push("Warnings:".to_string());
             lines.extend(self.warnings.iter().map(|warning| format!("- {warning}")));
         }
+        if !self.skills.is_empty() {
+            lines.push(String::new());
+            lines.push("Loadable game skills:".to_string());
+            for skill in &self.skills {
+                let description = if skill.description.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!(" - {}", skill.description.trim())
+                };
+                let path = if self.developer_mode {
+                    format!(" @ {}", skill.path.display())
+                } else {
+                    String::new()
+                };
+                lines.push(format!(
+                    "- {} ({}){}{}",
+                    skill.name, skill.source, description, path
+                ));
+            }
+            lines.push("Use load_skill when a turn needs that rule pack.".to_string());
+        }
         if !self.panels.is_empty() {
             lines.push(String::new());
             lines.push("Panels:".to_string());
@@ -176,6 +228,22 @@ impl LoadedGameSession {
             }
         }
         lines.join("\n")
+    }
+
+    fn choices_report(&self) -> Result<String> {
+        let save = load_save(&self.saves_root, &self.save_id)?;
+        Ok(format_playbook(&build_playbook(&save.state)))
+    }
+
+    fn skill_directories(&self) -> Vec<PathBuf> {
+        let mut dirs = vec![
+            self.game_root.join("skills"),
+            self.saves_root.join(&self.save_id).join("skills"),
+        ];
+        if let Some(driver_root) = &self.driver_root {
+            dirs.push(driver_root.join("skills"));
+        }
+        dirs.into_iter().filter(|dir| dir.is_dir()).collect()
     }
 }
 
@@ -248,6 +316,11 @@ fn build_loaded_session(
     }
     let resolved_driver = resolve_driver(&loaded_game, Some(&locked_driver.version))?;
     let locked_driver_version = resolved_driver.manifest.driver.version.clone();
+    let skills = discover_game_skill_catalog(
+        &loaded_game.root,
+        &loaded_save.root,
+        Some(&resolved_driver.root),
+    );
     let mut warnings = loaded_game.warnings;
     warnings.extend(resolved_driver.warnings);
     Ok(LoadedGameSession {
@@ -262,9 +335,48 @@ fn build_loaded_session(
         driver_requirement: loaded_game.manifest.driver.version,
         locked_driver_version: Some(locked_driver_version),
         panels: render_panels(&loaded_save.state),
+        skills,
         warnings,
         developer_mode,
     })
+}
+
+fn discover_game_skill_catalog(
+    game_root: &Path,
+    save_root: &Path,
+    driver_root: Option<&Path>,
+) -> Vec<GameSkillCatalogEntry> {
+    let mut roots = vec![
+        ("game".to_string(), game_root.join("skills")),
+        ("save".to_string(), save_root.join("skills")),
+    ];
+    if let Some(driver_root) = driver_root {
+        roots.push(("driver".to_string(), driver_root.join("skills")));
+    }
+
+    let mut entries = Vec::new();
+    for (source, root) in roots {
+        if !root.is_dir() {
+            continue;
+        }
+        let registry = crate::skills::SkillRegistry::discover(&root);
+        for skill in registry.list() {
+            if entries
+                .iter()
+                .any(|entry: &GameSkillCatalogEntry| entry.name == skill.name)
+            {
+                continue;
+            }
+            entries.push(GameSkillCatalogEntry {
+                name: skill.name.clone(),
+                description: skill.description.clone(),
+                path: skill.path.clone(),
+                source: source.clone(),
+            });
+        }
+    }
+    entries.sort_by(|left, right| left.name.cmp(&right.name));
+    entries
 }
 
 fn resolve_driver(loaded_game: &LoadedGame, locked_version: Option<&str>) -> Result<LoadedDriver> {
@@ -345,7 +457,12 @@ mod tests {
         assert_eq!(session.driver_id, "deliberation-drama");
         assert_eq!(session.locked_driver_version.as_deref(), Some("0.1.0"));
         assert!(session.driver_root.is_some());
-        assert_eq!(session.panels.len(), 4);
+        assert!(
+            session.panels.len() >= 6,
+            "expected base panels plus action/story panels"
+        );
+        assert!(session.panels.iter().any(|panel| panel.id == "actions"));
+        assert!(session.panels.iter().any(|panel| panel.id == "story"));
         assert!(session.warnings.is_empty(), "{:?}", session.warnings);
 
         let driver_root = session.driver_root.as_ref().expect("driver root");

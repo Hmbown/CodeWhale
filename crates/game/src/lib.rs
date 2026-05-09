@@ -7,6 +7,7 @@ pub mod agents;
 pub mod demo;
 pub mod driver;
 pub mod error;
+pub mod interaction;
 pub mod lookup;
 pub mod manifest;
 pub mod paths;

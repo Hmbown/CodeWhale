@@ -212,6 +212,198 @@
       "testimony summaries"
     ]
   },
+  "interaction": {
+    "mode": "choice_and_freeform",
+    "freeform_allowed": true,
+    "verbs": [
+      {
+        "command": "[ASK]",
+        "label": "Ask a juror",
+        "description": "Question a juror's reason, hesitation, or confidence."
+      },
+      {
+        "command": "[INSPECT]",
+        "label": "Inspect evidence",
+        "description": "Review admitted exhibits or testimony summaries already in the room."
+      },
+      {
+        "command": "[DEMONSTRATE]",
+        "label": "Demonstrate",
+        "description": "Run a physical or logical reconstruction from admitted facts."
+      },
+      {
+        "command": "[PROTECT]",
+        "label": "Protect process",
+        "description": "Slow the room down and make space for quieter jurors."
+      },
+      {
+        "command": "[CHALLENGE]",
+        "label": "Challenge reasoning",
+        "description": "Call out bias, indifference, coercion, or unsupported certainty."
+      },
+      {
+        "command": "[VOTE]",
+        "label": "Request vote",
+        "description": "Ask the Foreman for a formal or informal ballot."
+      }
+    ],
+    "suggestions": [
+      {
+        "id": "choice_protect_dissent",
+        "label": "Protect the dissent",
+        "input": "[PROTECT] I ask Juror 8 why he voted not guilty, then ask the room to slow down long enough to hear him.",
+        "description": "Opens the process route and prevents an immediate rush.",
+        "target_node": "lone_doubt_defense"
+      },
+      {
+        "id": "choice_inspect_knife",
+        "label": "Inspect the knife",
+        "input": "[INSPECT] I ask to see the knife evidence summary and whether anyone can explain why it felt unique.",
+        "description": "Moves toward the first concrete evidence route.",
+        "target_node": "knife_weapon_doubt"
+      },
+      {
+        "id": "choice_request_vote",
+        "label": "Take a temperature vote",
+        "input": "[VOTE] I request a quick anonymous vote after Juror 8 gives his reason.",
+        "description": "Tests public pressure without forcing a final verdict.",
+        "target_node": "lone_doubt_defense"
+      }
+    ]
+  },
+  "story": {
+    "style": {
+      "id": "deliberation_drama",
+      "title": "Deliberation drama",
+      "pacing": "One-room pressure with evidence, procedure, heat, fatigue, and vote shifts.",
+      "turn_shape": "Player action -> juror reaction -> room pressure shift -> next dilemma.",
+      "branch_policy": "Branch by argument route: process, evidence, prejudice, indifference, or final holdout."
+    },
+    "active_branch": "mainline",
+    "active_node": "opening_ballot",
+    "branches": {
+      "mainline": {
+        "head": "opening_ballot"
+      }
+    },
+    "nodes": {
+      "opening_ballot": {
+        "title": "Opening ballot",
+        "status": "active",
+        "summary": "The room begins with eleven guilty votes, one not-guilty vote, and Juror 13 undeclared.",
+        "gate": "Establish whether the room will hear reasons before ending.",
+        "next": [
+          "lone_doubt_defense",
+          "knife_weapon_doubt",
+          "prejudice_exposure"
+        ]
+      },
+      "lone_doubt_defense": {
+        "title": "Lone doubt defense",
+        "status": "hinted",
+        "summary": "A single dissent becomes legitimate enough to discuss.",
+        "gate": "Protect Juror 8 or procedure without coercing the majority.",
+        "parents": [
+          "opening_ballot"
+        ],
+        "next": [
+          "knife_weapon_doubt",
+          "witness_timing",
+          "noise_audibility"
+        ]
+      },
+      "knife_weapon_doubt": {
+        "title": "Knife / weapon doubt",
+        "status": "available",
+        "summary": "The supposedly unique weapon can become a practical doubt rather than a hidden clue.",
+        "gate": "Inspect the admitted exhibit or reconstruct the attack motion.",
+        "parents": [
+          "opening_ballot",
+          "lone_doubt_defense"
+        ],
+        "next": [
+          "witness_timing",
+          "sightline_perception"
+        ]
+      },
+      "witness_timing": {
+        "title": "Witness timing",
+        "status": "locked",
+        "summary": "A timeline reconstruction may weaken certainty if the room earns it.",
+        "gate": "Ask for a reconstruction after process standing is protected.",
+        "parents": [
+          "lone_doubt_defense",
+          "knife_weapon_doubt"
+        ],
+        "next": [
+          "noise_audibility",
+          "sightline_perception"
+        ]
+      },
+      "noise_audibility": {
+        "title": "Noise / audibility",
+        "status": "locked",
+        "summary": "Environmental noise can complicate confident testimony.",
+        "gate": "Ask about admitted room and train-noise testimony after timing is visible.",
+        "parents": [
+          "witness_timing"
+        ],
+        "next": [
+          "sightline_perception"
+        ]
+      },
+      "sightline_perception": {
+        "title": "Sightline / perception",
+        "status": "locked",
+        "summary": "The room can question how clearly a visual witness perceived events.",
+        "gate": "Release perception details through admitted testimony, not hidden-state leakage.",
+        "parents": [
+          "knife_weapon_doubt",
+          "noise_audibility"
+        ],
+        "next": [
+          "final_holdout_collapse"
+        ]
+      },
+      "prejudice_exposure": {
+        "title": "Prejudice exposure",
+        "status": "hinted",
+        "summary": "A biased argument can lose social power when challenged at the right moment.",
+        "gate": "Challenge dehumanizing reasoning without turning the room into a shouting match.",
+        "parents": [
+          "opening_ballot"
+        ],
+        "next": [
+          "indifference_exposure",
+          "final_holdout_collapse"
+        ]
+      },
+      "indifference_exposure": {
+        "title": "Indifference exposure",
+        "status": "locked",
+        "summary": "A careless vote must become morally accountable before it counts as progress.",
+        "gate": "Expose convenience voting while procedure_integrity remains high.",
+        "parents": [
+          "prejudice_exposure"
+        ],
+        "next": [
+          "final_holdout_collapse"
+        ]
+      },
+      "final_holdout_collapse": {
+        "title": "Final holdout collapse",
+        "status": "locked",
+        "summary": "The strongest ending opens only after evidence doubt and personal rage separate.",
+        "gate": "Resolve most evidence nodes and isolate revenge reasoning without coercion.",
+        "parents": [
+          "sightline_perception",
+          "prejudice_exposure",
+          "indifference_exposure"
+        ],
+        "next": []
+      }
+    }
+  },
   "ui": {
     "panels": [
       {

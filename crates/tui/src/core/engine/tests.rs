@@ -511,6 +511,7 @@ fn game_player_profile_exposes_only_game_safe_tools() {
     for name in [
         "game_status",
         "game_render",
+        "game_playbook",
         "game_lookup",
         "game_run_driver",
         "game_commit_turn",

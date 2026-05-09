@@ -14,6 +14,7 @@ use super::spec::{
 
 pub struct GameStatusTool;
 pub struct GameRenderTool;
+pub struct GamePlaybookTool;
 pub struct GameLookupTool;
 pub struct GameRunDriverTool;
 pub struct GameCommitTurnTool;
@@ -97,6 +98,47 @@ impl ToolSpec for GameRenderTool {
             "save_id": save.id,
             "revision": save.state.get("revision").and_then(Value::as_u64),
             "panels": panels,
+        }))
+        .map_err(to_tool_error)
+    }
+}
+
+#[async_trait]
+impl ToolSpec for GamePlaybookTool {
+    fn name(&self) -> &'static str {
+        "game_playbook"
+    }
+
+    fn description(&self) -> &'static str {
+        "Return the active game's current commands, suggested choices, and visible story-branch nodes."
+    }
+
+    fn input_schema(&self) -> Value {
+        empty_schema()
+    }
+
+    fn capabilities(&self) -> Vec<ToolCapability> {
+        vec![ToolCapability::ReadOnly, ToolCapability::Sandboxable]
+    }
+
+    fn approval_requirement(&self) -> ApprovalRequirement {
+        ApprovalRequirement::Auto
+    }
+
+    fn supports_parallel(&self) -> bool {
+        true
+    }
+
+    async fn execute(&self, _input: Value, context: &ToolContext) -> Result<ToolResult, ToolError> {
+        let session = loaded_game(context)?;
+        let save = deepseek_game::save::load_save(&session.saves_root, &session.save_id)
+            .map_err(to_tool_error)?;
+        let playbook = deepseek_game::interaction::build_playbook(&save.state);
+        ToolResult::json(&json!({
+            "save_id": save.id,
+            "revision": save.state.get("revision").and_then(Value::as_u64),
+            "playbook": playbook,
+            "display": deepseek_game::interaction::format_playbook(&playbook),
         }))
         .map_err(to_tool_error)
     }

@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 
 use crate::agents::build_agent_packs;
 use crate::driver::{DriverResolver, load_driver};
+use crate::interaction::build_playbook;
 use crate::lookup::{HARD_LOOKUP_BYTES, LookupRequest, lookup};
 use crate::manifest::load_game;
 use crate::render::{RenderPanelKind, render_panels};
@@ -245,8 +246,10 @@ fn lookup_is_bounded_and_rejects_handle_traversal() {
 fn render_panels_use_state_ui_or_structured_fallback() {
     let state = demo::reconciliation_initial_state("galgame", "0.1.0");
     let panels = render_panels(&state);
-    assert_eq!(panels.len(), 2);
+    assert_eq!(panels.len(), 4);
     assert_eq!(panels[0].kind, RenderPanelKind::Scene);
+    assert_eq!(panels[2].kind, RenderPanelKind::Actions);
+    assert_eq!(panels[3].kind, RenderPanelKind::Story);
 
     let fallback = json!({
         "scene": {"location": "Room", "summary": "A quiet room."},
@@ -256,6 +259,88 @@ fn render_panels_use_state_ui_or_structured_fallback() {
     let panels = render_panels(&fallback);
     assert_eq!(panels.len(), 3);
     assert_eq!(panels[0].title, "Room");
+}
+
+#[test]
+fn playbook_exposes_choices_and_git_like_story_branch() {
+    let state = demo::reconciliation_initial_state("galgame", "0.1.0");
+    let playbook = build_playbook(&state);
+
+    assert_eq!(playbook.active_branch.as_deref(), Some("mainline"));
+    assert_eq!(
+        playbook.story_style.as_ref().map(|style| style.id.as_str()),
+        Some("emotional_reconciliation")
+    );
+    assert_eq!(
+        playbook.active_node.as_ref().map(|node| node.id.as_str()),
+        Some("opening_apology")
+    );
+    assert_eq!(playbook.suggestions.len(), 3);
+    assert_eq!(
+        playbook.suggestions[0].target_node.as_deref(),
+        Some("honest_admission")
+    );
+    assert!(playbook.warnings.is_empty(), "{:?}", playbook.warnings);
+}
+
+#[test]
+fn playbook_reports_non_fatal_story_warnings() {
+    let state = json!({
+        "schema_version": 1,
+        "revision": 0,
+        "driver": {
+            "id": "test",
+            "version": "0.1.0"
+        },
+        "interaction": {
+            "suggestions": [
+                {
+                    "id": "bad_choice",
+                    "label": "Bad",
+                    "input": "[ASK] Missing target",
+                    "target_node": "missing"
+                }
+            ]
+        },
+        "story": {
+            "active_branch": "mainline",
+            "active_node": "start",
+            "branches": {
+                "mainline": {
+                    "head": "start"
+                }
+            },
+            "nodes": {
+                "start": {
+                    "title": "Start",
+                    "status": "active",
+                    "next": ["missing"]
+                }
+            }
+        }
+    });
+
+    let playbook = build_playbook(&state);
+    assert_eq!(
+        playbook.active_node.as_ref().map(|node| node.id.as_str()),
+        Some("start")
+    );
+    assert!(
+        playbook
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("missing next node missing")),
+        "{:?}",
+        playbook.warnings
+    );
+    assert!(
+        playbook
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("targets missing story node missing")),
+        "{:?}",
+        playbook.warnings
+    );
 }
 
 #[test]

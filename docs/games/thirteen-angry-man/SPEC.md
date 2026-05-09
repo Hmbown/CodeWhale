@@ -170,6 +170,11 @@ Example:
 
 Critical nodes are not a strict linear checklist. They are major pressure points
 that should exist in the fixed background and become available through play.
+The shipped save represents them as a git-like story graph with a deliberation
+drama style profile: `story.style` declares pacing and tension axes,
+`active_branch` names the route, each branch has a `head`, and each node records
+likely parents and next nodes. This is game state only; normal play must not
+branch or commit the repository itself.
 
 | Node | Purpose | Typical Release Gate | Gameplay Effect |
 | --- | --- | --- | --- |

@@ -27,7 +27,7 @@
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
-use crate::skills::{Skill, discover_in_workspace, skills_directories};
+use crate::skills::{Skill, SkillRegistry, discover_in_workspace, skills_directories};
 
 use super::spec::{
     ApprovalRequirement, ToolCapability, ToolContext, ToolError, ToolResult, ToolSpec,
@@ -92,8 +92,12 @@ impl ToolSpec for LoadSkillTool {
         // already lists, so the model never asks for a name it
         // can't find.
         let registry = discover_in_workspace(&context.workspace);
-        let Some(skill) = registry.get(name) else {
-            let available: Vec<&str> = registry.list().iter().map(|s| s.name.as_str()).collect();
+        let skill = registry
+            .get(name)
+            .cloned()
+            .or_else(|| find_game_skill(context, name));
+        let Some(skill) = skill else {
+            let available = available_skill_names(context, &registry);
             let hint = if available.is_empty() {
                 let dirs: Vec<String> = skills_directories(&context.workspace)
                     .iter()
@@ -114,16 +118,39 @@ impl ToolSpec for LoadSkillTool {
             return Err(ToolError::execution_failed(hint));
         };
 
-        let body = format_skill_body(skill);
+        let body = format_skill_body(&skill);
         Ok(ToolResult::success(body).with_metadata(json!({
             "skill_name": skill.name,
             "skill_path": skill.path.display().to_string(),
-            "companion_files": collect_companion_files(skill)
+            "companion_files": collect_companion_files(&skill)
                 .into_iter()
                 .map(|p| p.display().to_string())
                 .collect::<Vec<String>>(),
         })))
     }
+}
+
+fn find_game_skill(context: &ToolContext, name: &str) -> Option<Skill> {
+    let game_session = context.game_session.as_ref()?;
+    for dir in game_session.skill_directories() {
+        let registry = SkillRegistry::discover(&dir);
+        if let Some(skill) = registry.get(name) {
+            return Some(skill.clone());
+        }
+    }
+    None
+}
+
+fn available_skill_names(context: &ToolContext, registry: &SkillRegistry) -> Vec<String> {
+    let mut names = std::collections::BTreeSet::new();
+    names.extend(registry.list().iter().map(|skill| skill.name.clone()));
+    if let Some(game_session) = context.game_session.as_ref() {
+        for dir in game_session.skill_directories() {
+            let game_registry = SkillRegistry::discover(&dir);
+            names.extend(game_registry.list().iter().map(|skill| skill.name.clone()));
+        }
+    }
+    names.into_iter().collect()
 }
 
 /// Render the skill body the model will see. Includes the description
@@ -337,6 +364,47 @@ mod tests {
             path_str.contains(".opencode"),
             "skill_path should point at the .opencode dir: {path_str}"
         );
+    }
+
+    #[tokio::test]
+    async fn execute_finds_skills_from_active_game_session() {
+        let tmp = tempdir().unwrap();
+        let game_root = tmp.path().join("game");
+        let game_skills = game_root.join("skills");
+        write_skill(
+            &game_skills,
+            "game-only",
+            "Only available through the active game",
+            "Game skill body marker.",
+        );
+
+        let mut context = ToolContext::new(tmp.path().join("workspace"));
+        context.game_session = Some(crate::game::GameSession::Loaded(
+            crate::game::LoadedGameSession {
+                game_root,
+                saves_root: tmp.path().join("saves"),
+                driver_root: None,
+                game_id: "game".to_string(),
+                title: "Game".to_string(),
+                save_id: "default".to_string(),
+                revision: 0,
+                driver_id: "driver".to_string(),
+                driver_requirement: "0.1.0".to_string(),
+                locked_driver_version: Some("0.1.0".to_string()),
+                panels: Vec::new(),
+                skills: Vec::new(),
+                warnings: Vec::new(),
+                developer_mode: false,
+            },
+        ));
+
+        let tool = LoadSkillTool;
+        let result = tool
+            .execute(json!({"name": "game-only"}), &context)
+            .await
+            .expect("load_skill should find active game skills");
+        assert!(result.success);
+        assert!(result.content.contains("Game skill body marker."));
     }
 
     #[tokio::test]

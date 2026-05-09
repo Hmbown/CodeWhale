@@ -26,6 +26,7 @@ implementation registers the native `game_*` tools when an active
 |---|---|---|
 | `game_status` | Validate the active game/save and return warnings or errors. | No |
 | `game_render` | Return structured panel data from the current save. | No |
+| `game_playbook` | Return current commands, suggested choices, and visible story nodes. | No |
 | `game_lookup` | Retrieve bounded content under the game package root. | No |
 | `game_run_driver` | Run a declared deterministic driver function. | No |
 | `game_commit_turn` | Append one turn and update save state atomically. | Yes |
@@ -37,11 +38,15 @@ game-scoped and should converge on declared driver roles and generated agent
 packs. V1 should not add a model-visible `game_parallel` wrapper; safe
 parallelism is an engine behavior, not an advertised meta-tool.
 
-Shell, generic file write/edit tools, git tools, broad workspace inspection,
+Shell, generic file write/edit tools, repository git tools, broad workspace inspection,
 code execution, and network tools stay out of player mode unless a later game
 feature explicitly adds and documents a safe exception. Developer mode can
 expose raw paths, raw state, validation details, and normal inspection tools,
 but it must be visually distinct from player mode.
+
+Game progress may use git-like concepts inside save state, such as branch heads
+and immutable turn records, but normal player mode must not commit to or branch
+the user's repository.
 
 ## Current surface (v0.7.5)
 

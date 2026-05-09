@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::interaction::{build_playbook, format_playbook};
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RenderPanel {
     pub id: String,
@@ -16,6 +18,8 @@ pub enum RenderPanelKind {
     Player,
     Goals,
     Log,
+    Actions,
+    Story,
     Custom,
 }
 
@@ -25,11 +29,13 @@ pub fn render_panels(state: &Value) -> Vec<RenderPanel> {
         .and_then(Value::as_array)
         .filter(|panels| !panels.is_empty())
     {
-        return panels
+        let mut rendered = panels
             .iter()
             .enumerate()
             .map(|(index, panel)| panel_from_state(index, panel))
-            .collect();
+            .collect::<Vec<_>>();
+        append_playbook_panels(&mut rendered, state);
+        return rendered;
     }
 
     let mut panels = Vec::new();
@@ -57,6 +63,7 @@ pub fn render_panels(state: &Value) -> Vec<RenderPanel> {
             kind: RenderPanelKind::Goals,
         });
     }
+    append_playbook_panels(&mut panels, state);
     panels
 }
 
@@ -76,8 +83,46 @@ fn panel_from_state(index: usize, panel: &Value) -> RenderPanel {
             Some("player") => RenderPanelKind::Player,
             Some("goals") => RenderPanelKind::Goals,
             Some("log") => RenderPanelKind::Log,
+            Some("actions") => RenderPanelKind::Actions,
+            Some("story") => RenderPanelKind::Story,
             _ => RenderPanelKind::Custom,
         },
+    }
+}
+
+fn append_playbook_panels(panels: &mut Vec<RenderPanel>, state: &Value) {
+    let playbook = build_playbook(state);
+    if !playbook.suggestions.is_empty() && !panels.iter().any(|panel| panel.id == "actions") {
+        panels.push(RenderPanel {
+            id: "actions".to_string(),
+            title: "Actions".to_string(),
+            body: format_playbook(&playbook),
+            kind: RenderPanelKind::Actions,
+        });
+    }
+    if let Some(node) = playbook.active_node
+        && !panels.iter().any(|panel| panel.id == "story")
+    {
+        let mut body = Vec::new();
+        body.push(format!("{} [{}]", node.title, node.status));
+        if !node.summary.is_empty() {
+            body.push(node.summary);
+        }
+        if let Some(gate) = node.gate {
+            body.push(format!("Gate: {gate}"));
+        }
+        if !node.parents.is_empty() {
+            body.push(format!("Parents: {}", node.parents.join(", ")));
+        }
+        if !node.next_nodes.is_empty() {
+            body.push(format!("Next: {}", node.next_nodes.join(", ")));
+        }
+        panels.push(RenderPanel {
+            id: "story".to_string(),
+            title: "Story Beat".to_string(),
+            body: body.join("\n"),
+            kind: RenderPanelKind::Story,
+        });
     }
 }
 
