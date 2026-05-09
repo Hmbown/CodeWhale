@@ -130,9 +130,10 @@ const UI_ACTIVE_POLL_MS: u64 = 24;
 const WEB_CONFIG_POLL_MS: u64 = 16;
 const DISPATCH_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(30);
 // Forced repaint cadence while a turn is live (model loading, compacting,
-// sub-agents running). Drives the per-tool spinner pulse — 20 fps keeps the
-// animation reading as smooth motion without wasteful redraws.
-const UI_STATUS_ANIMATION_MS: u64 = 50;
+// sub-agents running). Drives the per-tool spinner pulse — keep this fast
+// enough that the spinner reads as motion (~12 fps) instead of
+// teleport-frames.
+const UI_STATUS_ANIMATION_MS: u64 = 80;
 const WORKSPACE_CONTEXT_REFRESH_SECS: u64 = 15;
 const SIDEBAR_VISIBLE_MIN_WIDTH: u16 = 100;
 const DEFAULT_TERMINAL_PROBE_TIMEOUT_MS: u64 = 500;
