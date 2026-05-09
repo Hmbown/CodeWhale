@@ -212,7 +212,10 @@ pub enum RequestPayloadMode {
 /// in the API payload (after normalization / provider-specific mapping).
 #[must_use]
 pub fn provider_capability(provider: ApiProvider, resolved_model: &str) -> ProviderCapability {
-    if matches!(provider, ApiProvider::Openai | ApiProvider::OpenaiCompatible) {
+    if matches!(
+        provider,
+        ApiProvider::Openai | ApiProvider::OpenaiCompatible
+    ) {
         return ProviderCapability {
             provider,
             resolved_model: resolved_model.to_string(),
@@ -3024,9 +3027,7 @@ pub fn has_api_key_for(config: &Config, provider: ApiProvider) -> bool {
     // openai-compatible: key is optional, but a configured base URL means the
     // provider is usable (the picker shows "(configured)" instead of prompting).
     if provider == ApiProvider::OpenaiCompatible {
-        if std::env::var("OPENAI_COMPATIBLE_BASE_URL")
-            .is_ok_and(|v| !v.trim().is_empty())
-        {
+        if std::env::var("OPENAI_COMPATIBLE_BASE_URL").is_ok_and(|v| !v.trim().is_empty()) {
             return true;
         }
         if config

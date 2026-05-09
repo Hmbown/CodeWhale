@@ -1017,7 +1017,10 @@ pub fn load_project_config(workspace: &Path) -> Option<ConfigToml> {
 }
 
 fn normalize_model_for_provider(provider: ProviderKind, model: &str) -> String {
-    if matches!(provider, ProviderKind::Ollama | ProviderKind::OpenaiCompatible) {
+    if matches!(
+        provider,
+        ProviderKind::Ollama | ProviderKind::OpenaiCompatible
+    ) {
         return model.to_string();
     }
 
