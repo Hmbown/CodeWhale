@@ -27,7 +27,7 @@ pub fn provider(app: &mut App, args: Option<&str>) -> CommandResult {
 
     let Some(target) = ApiProvider::parse(name) else {
         return CommandResult::error(format!(
-            "Unknown provider '{name}'. Expected: deepseek, openai, nvidia-nim, openrouter, novita, fireworks, sglang, vllm, ollama, or anthropic."
+            "Unknown provider '{name}'. Expected: deepseek, openai, nvidia-nim, openrouter, novita, fireworks, sglang, vllm, or ollama."
         ));
     };
 
