@@ -235,18 +235,17 @@ impl Engine {
                 &self.session.messages,
             );
 
-            // Build verbatim window and inject semantic context when vector
-            // memory is available.
-            let messages = self.messages_with_turn_metadata();
-            let _verbatim_info = self
-                .build_verbatim_window_for_request(&messages)
-                .await;
+            // Build verbatim window + retrieve semantic context from
+            // vector memory, then prepare filtered messages and
+            // augmented system prompt for the API request.
+            let (filtered_messages, augmented_system_prompt) =
+                self.prepare_request_context().await;
 
             let request = MessageRequest {
                 model: self.session.model.clone(),
-                messages: self.messages_with_turn_metadata(),
+                messages: filtered_messages,
                 max_tokens: effective_max_output_tokens(&self.session.model),
-                system: self.session.system_prompt.clone(),
+                system: augmented_system_prompt,
                 tools: active_tools.clone(),
                 tool_choice: if active_tools.is_some() {
                     if self.config.strict_tool_mode {

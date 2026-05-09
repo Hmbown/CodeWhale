@@ -38,7 +38,7 @@ use crate::mcp::McpPool;
 use crate::models::ToolCaller;
 use crate::models::{
     ContentBlock, ContentBlockStart, Delta, LEGACY_DEEPSEEK_CONTEXT_WINDOW_TOKENS, Message,
-    MessageRequest, StreamEvent, SystemPrompt, Tool, Usage,
+    MessageRequest, StreamEvent, SystemBlock, SystemPrompt, Tool, Usage,
 };
 use crate::prompts;
 use crate::seam_manager::{SeamConfig, SeamManager};
@@ -1932,17 +1932,25 @@ impl Engine {
         }
     }
 
-    /// Build a `VerbatimWindow` for the current session state and inject
-    /// semantic context when vector DB is available.
+    /// Build a `RetrievedContext` for the current session state.
     ///
-    /// Returns `(verbatim_count, total)` for logging.
+    /// Computes the verbatim window, then retrieves relevant memories and
+    /// history summaries from the vector database for injection into the
+    /// system prompt. When vector DB is unavailable, returns a context where
+    /// all messages are verbatim.
     pub(super) async fn build_verbatim_window_for_request(
         &mut self,
         messages: &[Message],
-    ) -> (usize, usize) {
+    ) -> crate::vector_db::RetrievedContext {
         let total = messages.len();
         if total == 0 || self.vector_db.is_none() {
-            return (total, total);
+            let verbatim = (0..total).collect();
+            return crate::vector_db::RetrievedContext {
+                verbatim_messages: verbatim,
+                window_extended: false,
+                memory_blocks: Vec::new(),
+                summary_blocks: Vec::new(),
+            };
         }
 
         // Collect tool call/result indices from message history.
@@ -1962,16 +1970,19 @@ impl Engine {
             }
         }
 
-        let window_size = self.config.verbatim_window_turns.max(1);
+        let window_turns = self.config.verbatim_window_turns.max(1);
         let vw = crate::vector_db::VerbatimWindow::build(
             total,
-            window_size * 2,
+            window_turns * 2,
             &[],
             &tool_call_indices,
             &tool_result_indices,
         );
         let verbatim_count = vw.len();
         let history_count = total.saturating_sub(verbatim_count);
+
+        let mut memory_blocks: Vec<String> = Vec::new();
+        let mut summary_blocks: Vec<String> = Vec::new();
 
         if history_count > 0 {
             let query = messages
@@ -1995,23 +2006,121 @@ impl Engine {
 
             if !query.is_empty() {
                 if let Some(ref vdb) = self.vector_db {
+                    // Retrieve relevant memories (Tier 3)
                     match vdb.search_memories(&query, 3, None).await {
                         Ok(results) if !results.is_empty() => {
                             tracing::debug!(
                                 memory_count = results.len(),
                                 "found relevant memories from vector store"
                             );
+                            for r in &results {
+                                let tag = r
+                                    .tags
+                                    .as_ref()
+                                    .and_then(|t| t.split(',').next())
+                                    .unwrap_or("memory");
+                                memory_blocks
+                                    .push(format!("[{tag}] {}", r.content));
+                            }
                         }
                         Ok(_) => {}
                         Err(e) => {
                             tracing::warn!("vector memory search failed: {e}");
                         }
                     }
+
+                    // Retrieve relevant history summaries (Tier 2)
+                    match vdb.search_summaries(&query, 2).await {
+                        Ok(results) if !results.is_empty() => {
+                            tracing::debug!(
+                                summary_count = results.len(),
+                                "found relevant history summaries from vector store"
+                            );
+                            for s in &results {
+                                summary_blocks.push(s.summary.clone());
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            tracing::warn!("vector summary search failed: {e}");
+                        }
+                    }
                 }
             }
         }
 
-        (verbatim_count, total)
+        crate::vector_db::RetrievedContext {
+            verbatim_messages: vw.indices,
+            window_extended: vw.extended,
+            memory_blocks,
+            summary_blocks,
+        }
+    }
+
+    /// Augment the system prompt with vector-retrieved context blocks.
+    ///
+    /// Appends a `<retrieved_context>` text block to the existing system
+    /// prompt. Returns the original prompt unchanged when the retrieved
+    /// context is empty.
+    fn augment_system_prompt_with_context(
+        system: Option<SystemPrompt>,
+        retrieved: &crate::vector_db::RetrievedContext,
+    ) -> Option<SystemPrompt> {
+        let context_block = retrieved.to_system_block()?;
+        let Some(existing) = system else {
+            return Some(SystemPrompt::Text(context_block));
+        };
+        let augmented = match existing {
+            SystemPrompt::Text(base) => {
+                SystemPrompt::Text(format!("{base}\n\n{context_block}"))
+            }
+            SystemPrompt::Blocks(mut blocks) => {
+                blocks.push(SystemBlock {
+                    block_type: "text".to_string(),
+                    text: context_block,
+                    cache_control: None,
+                });
+                SystemPrompt::Blocks(blocks)
+            }
+        };
+        Some(augmented)
+    }
+
+    /// Prepare the final message list and system prompt for the API request.
+    ///
+    /// Applies the verbatim window to filter messages and augments the
+    /// system prompt with retrieved semantic context from the vector DB.
+    /// Returns `(filtered_messages, augmented_system_prompt)`.
+    pub(super) async fn prepare_request_context(
+        &mut self,
+    ) -> (Vec<Message>, Option<SystemPrompt>) {
+        let all_messages = self.messages_with_turn_metadata();
+        let retrieved = self
+            .build_verbatim_window_for_request(&all_messages)
+            .await;
+
+        // Filter messages to only the verbatim window
+        let filtered: Vec<Message> = retrieved
+            .verbatim_messages
+            .iter()
+            .filter_map(|&idx| all_messages.get(idx).cloned())
+            .collect();
+
+        let augmented_system =
+            Self::augment_system_prompt_with_context(
+                self.session.system_prompt.clone(),
+                &retrieved,
+            );
+
+        tracing::debug!(
+            verbatim = retrieved.verbatim_messages.len(),
+            total = all_messages.len(),
+            memories = retrieved.memory_blocks.len(),
+            summaries = retrieved.summary_blocks.len(),
+            "prepared request context"
+        );
+
+        (filtered, augmented_system)
     }
 }
 

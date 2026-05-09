@@ -9,13 +9,22 @@
 //! all operations return empty/no-op results so the rest of the codebase
 //! compiles without ONNX Runtime or LanceDB dependencies.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
+use tokio::sync::Mutex as AsyncMutex;
+
+/// Serializable container for persistence.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct PersistedMemories {
+    #[serde(default)]
+    memories: Vec<MemoryRecord>,
+    #[serde(default)]
+    summaries: Vec<HistorySummary>,
+}
 
 // ---------------------------------------------------------------------------
 // Public types (always available, no feature gate)
@@ -62,13 +71,20 @@ pub struct HistorySummary {
 // VectorDbService — main public API
 // ---------------------------------------------------------------------------
 
-/// In-memory fallback when `vector-memory` feature is disabled.
+/// In-memory backend with optional JSON file persistence.
 ///
-/// Stores records in a `Vec` and uses naive keyword matching for retrieval.
-/// This lets the rest of the codebase function without ONNX Runtime.
+/// When `persist_path` is set, memories are saved to a JSON file on every
+/// mutation and loaded on construction. This provides cross-session durability
+/// without requiring LanceDB or ONNX Runtime.
+///
+/// When `vector-memory` feature is enabled and LanceDB is available, the
+/// LanceBackend takes over persistence; this backend remains as a fast
+/// in-memory read cache.
 struct InMemoryBackend {
     memories: Vec<MemoryRecord>,
     summaries: Vec<HistorySummary>,
+    /// Optional path for JSON file persistence.
+    persist_path: Option<PathBuf>,
 }
 
 impl InMemoryBackend {
@@ -76,10 +92,53 @@ impl InMemoryBackend {
         Self {
             memories: Vec::new(),
             summaries: Vec::new(),
+            persist_path: None,
         }
     }
 
-    fn store_memory(&mut self, item: NewMemoryItem) -> MemoryRecord {
+    fn with_persist_path(mut self, path: PathBuf) -> Self {
+        self.persist_path = Some(path);
+        self
+    }
+
+    /// Load memories from the persist file if it exists.
+    async fn load_from_disk(&mut self) -> Result<()> {
+        let Some(ref path) = self.persist_path else {
+            return Ok(());
+        };
+        if !path.exists() {
+            return Ok(());
+        }
+        let data = tokio::fs::read_to_string(path).await?;
+        let stored: PersistedMemories = serde_json::from_str(&data).unwrap_or_default();
+        self.memories = stored.memories;
+        self.summaries = stored.summaries;
+        tracing::debug!(
+            memories = self.memories.len(),
+            summaries = self.summaries.len(),
+            path = %path.display(),
+            "loaded memories from disk"
+        );
+        Ok(())
+    }
+
+    /// Persist current state to the persist file.
+    async fn save_to_disk(&self) {
+        let Some(ref path) = self.persist_path else {
+            return;
+        };
+        let stored = PersistedMemories {
+            memories: self.memories.clone(),
+            summaries: self.summaries.clone(),
+        };
+        if let Ok(json) = serde_json::to_string_pretty(&stored) {
+            if let Err(e) = crate::utils::write_atomic(path, json.as_bytes()) {
+                tracing::warn!("failed to persist memories to {}: {e}", path.display());
+            }
+        }
+    }
+
+    async fn store_memory(&mut self, item: NewMemoryItem) -> MemoryRecord {
         let record = MemoryRecord {
             id: uuid::Uuid::new_v4().to_string(),
             content: item.content,
@@ -91,6 +150,7 @@ impl InMemoryBackend {
             score: 0.0,
         };
         self.memories.push(record.clone());
+        self.save_to_disk().await;
         record
     }
 
@@ -131,8 +191,9 @@ impl InMemoryBackend {
         scored
     }
 
-    fn store_summary(&mut self, summary: HistorySummary) {
+    async fn store_summary(&mut self, summary: HistorySummary) {
         self.summaries.push(summary);
+        self.save_to_disk().await;
     }
 
     fn search_summaries(&self, query: &str, k: usize) -> Vec<HistorySummary> {
@@ -170,11 +231,15 @@ impl InMemoryBackend {
         scored
     }
 
-    fn delete_expired(&mut self) -> usize {
+    async fn delete_expired(&mut self) -> usize {
         let now = Utc::now();
         let before = self.memories.len();
         self.memories.retain(|m| m.ttl.map_or(true, |t| t > now));
-        before - self.memories.len()
+        let deleted = before - self.memories.len();
+        if deleted > 0 {
+            self.save_to_disk().await;
+        }
+        deleted
     }
 
     fn count_memories(&self) -> usize {
@@ -220,7 +285,7 @@ mod lance {
 #[derive(Clone)]
 pub struct VectorDbService {
     /// In-memory fallback backend (always available)
-    memory: Arc<RwLock<InMemoryBackend>>,
+    memory: Arc<AsyncMutex<InMemoryBackend>>,
     /// LanceDB backend (only when feature is enabled)
     #[cfg(feature = "vector-memory")]
     lance: Option<Arc<lance::LanceBackend>>,
@@ -229,10 +294,13 @@ pub struct VectorDbService {
 impl VectorDbService {
     /// Create a new service.
     ///
-    /// * `path` — directory for LanceDB storage (ignored when feature is off)
+    /// * `path` — directory for LanceDB storage (also used for JSON fallback)
     /// * `_dim` — embedding dimension (ignored when feature is off)
     pub async fn connect(path: &Path, _dim: usize) -> Result<Self> {
-        let memory = Arc::new(RwLock::new(InMemoryBackend::new()));
+        let persist_path = path.join("memories.json");
+        let mut backend = InMemoryBackend::new().with_persist_path(persist_path);
+        backend.load_from_disk().await?;
+        let memory = Arc::new(AsyncMutex::new(backend));
 
         #[cfg(feature = "vector-memory")]
         {
@@ -250,14 +318,12 @@ impl VectorDbService {
         }
     }
 
-    /// Store a memory item.
+    /// Store a memory item (persisted to disk immediately).
     pub async fn store_memory(&self, item: NewMemoryItem) -> Result<MemoryRecord> {
-        let record = self.memory.write().await.store_memory(item);
+        let record = self.memory.lock().await.store_memory(item).await;
 
         #[cfg(feature = "vector-memory")]
         {
-            // Forward to LanceDB asynchronously (fire-and-forget on write)
-            // Real embedding + LanceDB write will happen in a future phase
             tracing::debug!(memory_id = %record.id, "stored memory (lancedb: pending)");
         }
 
@@ -273,7 +339,7 @@ impl VectorDbService {
     ) -> Result<Vec<MemoryRecord>> {
         let results = self
             .memory
-            .read()
+            .lock()
             .await
             .search_memories(query, k as usize, filter);
 
@@ -291,9 +357,9 @@ impl VectorDbService {
         Ok(results)
     }
 
-    /// Store a history summary from compaction.
+    /// Store a history summary from compaction (persisted to disk).
     pub async fn store_summary(&self, summary: HistorySummary) -> Result<()> {
-        self.memory.write().await.store_summary(summary);
+        self.memory.lock().await.store_summary(summary).await;
         Ok(())
     }
 
@@ -301,15 +367,15 @@ impl VectorDbService {
     pub async fn search_summaries(&self, query: &str, k: u32) -> Result<Vec<HistorySummary>> {
         let results = self
             .memory
-            .read()
+            .lock()
             .await
             .search_summaries(query, k as usize);
         Ok(results)
     }
 
-    /// Delete expired memories.
+    /// Delete expired memories (persisted to disk).
     pub async fn delete_expired_memories(&self) -> Result<usize> {
-        let deleted = self.memory.write().await.delete_expired();
+        let deleted = self.memory.lock().await.delete_expired().await;
 
         #[cfg(feature = "vector-memory")]
         {
@@ -321,7 +387,53 @@ impl VectorDbService {
 
     /// Count total memories.
     pub async fn count_memories(&self) -> Result<usize> {
-        Ok(self.memory.read().await.count_memories())
+        Ok(self.memory.lock().await.count_memories())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Retrieved context — bundles verbatim window indices + semantic retrieval
+// ---------------------------------------------------------------------------
+
+/// Context retrieved from the vector database for a request.
+///
+/// Contains the verbatim window (which messages to send verbatim) and any
+/// retrieved memory/summary blocks to inject into the system prompt.
+#[derive(Debug, Clone, Default)]
+pub struct RetrievedContext {
+    /// Messages to send verbatim to the API (filtered from full history).
+    pub verbatim_messages: Vec<usize>,
+    /// Whether the verbatim window was extended for tool pairing.
+    pub window_extended: bool,
+    /// Retrieved memory blocks for system prompt injection.
+    pub memory_blocks: Vec<String>,
+    /// Retrieved history summary blocks for system prompt injection.
+    pub summary_blocks: Vec<String>,
+}
+
+impl RetrievedContext {
+    /// True when no context was retrieved (all messages verbatim, no blocks).
+    pub fn is_empty(&self) -> bool {
+        self.memory_blocks.is_empty() && self.summary_blocks.is_empty()
+    }
+
+    /// Build a `<retrieved_context>` block for injection into the system
+    /// prompt. Returns `None` when no blocks are present.
+    pub fn to_system_block(&self) -> Option<String> {
+        let mut parts: Vec<String> = Vec::new();
+        for mem in &self.memory_blocks {
+            parts.push(format!("- [memory] {mem}"));
+        }
+        for sum in &self.summary_blocks {
+            parts.push(format!("- [history] {sum}"));
+        }
+        if parts.is_empty() {
+            return None;
+        }
+        Some(format!(
+            "<retrieved_context>\n{}\n</retrieved_context>",
+            parts.join("\n")
+        ))
     }
 }
 
@@ -520,11 +632,18 @@ mod tests {
 
     // ── VectorDbService ──
 
-    #[tokio::test]
-    async fn store_and_retrieve_memory() {
-        let svc = VectorDbService::connect(Path::new("/tmp/test_vdb"), 384)
+    /// Helper: create a VectorDbService backed by a fresh temp dir.
+    async fn new_test_svc() -> (VectorDbService, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let svc = VectorDbService::connect(dir.path().join("vdb").as_path(), 384)
             .await
             .unwrap();
+        (svc, dir)
+    }
+
+    #[tokio::test]
+    async fn store_and_retrieve_memory() {
+        let (svc, _dir) = new_test_svc().await;
 
         svc.store_memory(NewMemoryItem {
             content: "用户喜欢 4 空格缩进".into(),
@@ -543,9 +662,7 @@ mod tests {
 
     #[tokio::test]
     async fn search_non_existent() {
-        let svc = VectorDbService::connect(Path::new("/tmp/test_vdb2"), 384)
-            .await
-            .unwrap();
+        let (svc, _dir) = new_test_svc().await;
 
         svc.store_memory(NewMemoryItem {
             content: "测试记忆".into(),
@@ -563,9 +680,7 @@ mod tests {
 
     #[tokio::test]
     async fn multiple_memories_ranked() {
-        let svc = VectorDbService::connect(Path::new("/tmp/test_vdb3"), 384)
-            .await
-            .unwrap();
+        let (svc, _dir) = new_test_svc().await;
 
         svc.store_memory(NewMemoryItem {
             content: "用户用 cargo test --workspace 运行测试".into(),
@@ -595,9 +710,7 @@ mod tests {
 
     #[tokio::test]
     async fn store_and_search_summaries() {
-        let svc = VectorDbService::connect(Path::new("/tmp/test_vdb4"), 384)
-            .await
-            .unwrap();
+        let (svc, _dir) = new_test_svc().await;
 
         svc.store_summary(HistorySummary {
             id: "sum-1".into(),
@@ -618,9 +731,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_expired_memories() {
-        let svc = VectorDbService::connect(Path::new("/tmp/test_vdb5"), 384)
-            .await
-            .unwrap();
+        let (svc, _dir) = new_test_svc().await;
 
         svc.store_memory(NewMemoryItem {
             content: "会过期的记忆".into(),
@@ -651,9 +762,7 @@ mod tests {
 
     #[tokio::test]
     async fn count_stored_memories() {
-        let svc = VectorDbService::connect(Path::new("/tmp/test_vdb6"), 384)
-            .await
-            .unwrap();
+        let (svc, _dir) = new_test_svc().await;
 
         for i in 0..5 {
             svc.store_memory(NewMemoryItem {
