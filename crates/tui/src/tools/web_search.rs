@@ -1,11 +1,17 @@
-//! Web search tool backed by DuckDuckGo HTML results (with Bing fallback).
+//! Web search tool backed by multiple providers: DuckDuckGo (HTML scrape
+//! with Bing fallback), Tavily API, and Bocha (博查) API.
 //!
 //! This is the primary web search surface for agents. For browsing workflows
 //! (page open, click, screenshot) use a direct URL approach instead.
+//!
+//! Set `[search]` in config.toml to switch providers:
+//!   provider = "tavily"  # requires api_key
+//!   api_key = "tvly-..."
 
 use super::spec::{
     ApprovalRequirement, ToolCapability, ToolContext, ToolError, ToolResult, ToolSpec, optional_u64,
 };
+use crate::config::SearchProvider;
 use crate::network_policy::{Decision, NetworkPolicyDecider};
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose};
@@ -115,7 +121,7 @@ impl ToolSpec for WebSearchTool {
     }
 
     fn description(&self) -> &'static str {
-        "Search the web using DuckDuckGo or Bing and return structured results with URLs and snippets."
+        "Search the web using DuckDuckGo, Tavily, or Bocha and return structured results with URLs and snippets. Provider is configured via [search] in config.toml."
     }
 
     fn input_schema(&self) -> Value {
@@ -171,6 +177,19 @@ impl ToolSpec for WebSearchTool {
             usize::try_from(optional_search_max_results(&input)).unwrap_or(DEFAULT_MAX_RESULTS);
         let max_results = max_results.clamp(1, MAX_RESULTS);
         let timeout_ms = optional_u64(&input, "timeout_ms", DEFAULT_TIMEOUT_MS).min(60_000);
+
+        // Dispatch to the configured search provider.
+        match context.search_provider {
+            SearchProvider::Tavily => {
+                return self.run_tavily_search(&query, max_results, timeout_ms, context).await;
+            }
+            SearchProvider::Bocha => {
+                return self.run_bocha_search(&query, max_results, timeout_ms, context).await;
+            }
+            SearchProvider::DuckDuckGo => {
+                // fall through to existing DuckDuckGo + Bing fallback logic
+            }
+        }
 
         // Per-domain network policy gate (#135). The "host" for web search is
         // the upstream search engine domain — DuckDuckGo first, Bing on
@@ -255,6 +274,212 @@ impl ToolSpec for WebSearchTool {
         let response = WebSearchResponse {
             query,
             source,
+            count: results.len(),
+            message,
+            results,
+        };
+
+        ToolResult::json(&response).map_err(|e| ToolError::execution_failed(e.to_string()))
+    }
+}
+
+impl WebSearchTool {
+    /// Search via Tavily AI Search API (https://tavily.com).
+    async fn run_tavily_search(
+        &self,
+        query: &str,
+        max_results: usize,
+        timeout_ms: u64,
+        context: &ToolContext,
+    ) -> Result<ToolResult, ToolError> {
+        let api_key = context
+            .search_api_key
+            .as_deref()
+            .ok_or_else(|| {
+                ToolError::execution_failed(
+                    "Tavily search requires an API key. Set `[search] api_key = \"tvly-...\"` in config.toml.",
+                )
+            })?;
+
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_millis(timeout_ms))
+            .build()
+            .map_err(|e| {
+                ToolError::execution_failed(format!("Failed to build HTTP client: {e}"))
+            })?;
+
+        let payload = json!({
+            "api_key": api_key,
+            "query": query,
+            "search_depth": "basic",
+            "max_results": max_results,
+        });
+
+        let resp = client
+            .post("https://api.tavily.com/search")
+            .header("Content-Type", "application/json")
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| {
+                ToolError::execution_failed(format!("Tavily search request failed: {e}"))
+            })?;
+
+        let status = resp.status();
+        let body = resp.text().await.map_err(|e| {
+            ToolError::execution_failed(format!("Failed to read Tavily response: {e}"))
+        })?;
+
+        if !status.is_success() {
+            return Err(ToolError::execution_failed(format!(
+                "Tavily search failed: HTTP {} — {body}",
+                status.as_u16()
+            )));
+        }
+
+        let parsed: serde_json::Value = serde_json::from_str(&body).map_err(|e| {
+            ToolError::execution_failed(format!("Failed to parse Tavily response: {e}"))
+        })?;
+
+        let results: Vec<WebSearchEntry> = parsed
+            .get("results")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flat_map(|arr| arr.iter())
+            .filter_map(|item| {
+                let title = item.get("title")?.as_str()?.to_string();
+                let url = item.get("url")?.as_str()?.to_string();
+                let snippet = item
+                    .get("content")
+                    .or_else(|| item.get("snippet"))
+                    .and_then(|s| s.as_str())
+                    .map(|s| s.to_string());
+                Some(WebSearchEntry {
+                    title,
+                    url,
+                    snippet,
+                })
+            })
+            .take(max_results)
+            .collect();
+
+        let message = if results.is_empty() {
+            "No results found".to_string()
+        } else {
+            format!("Found {} result(s)", results.len())
+        };
+
+        let response = WebSearchResponse {
+            query: query.to_string(),
+            source: "tavily".to_string(),
+            count: results.len(),
+            message,
+            results,
+        };
+
+        ToolResult::json(&response).map_err(|e| ToolError::execution_failed(e.to_string()))
+    }
+
+    /// Search via Bocha AI Search API (https://bochaai.com).
+    async fn run_bocha_search(
+        &self,
+        query: &str,
+        max_results: usize,
+        timeout_ms: u64,
+        context: &ToolContext,
+    ) -> Result<ToolResult, ToolError> {
+        let api_key = context
+            .search_api_key
+            .as_deref()
+            .ok_or_else(|| {
+                ToolError::execution_failed(
+                    "Bocha search requires an API key. Set `[search] api_key = \"sk-...\"` in config.toml.",
+                )
+            })?;
+
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_millis(timeout_ms))
+            .build()
+            .map_err(|e| {
+                ToolError::execution_failed(format!("Failed to build HTTP client: {e}"))
+            })?;
+
+        let payload = json!({
+            "query": query,
+            "freshness": "noLimit",
+            "count": max_results,
+        });
+
+        let resp = client
+            .post("https://api.bochaai.com/v1/ai/search")
+            .header("Content-Type", "application/json")
+            .header("Authorization", format!("Bearer {api_key}"))
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| {
+                ToolError::execution_failed(format!("Bocha search request failed: {e}"))
+            })?;
+
+        let status = resp.status();
+        let body = resp.text().await.map_err(|e| {
+            ToolError::execution_failed(format!("Failed to read Bocha response: {e}"))
+        })?;
+
+        if !status.is_success() {
+            return Err(ToolError::execution_failed(format!(
+                "Bocha search failed: HTTP {} — {body}",
+                status.as_u16()
+            )));
+        }
+
+        let parsed: serde_json::Value = serde_json::from_str(&body).map_err(|e| {
+            ToolError::execution_failed(format!("Failed to parse Bocha response: {e}"))
+        })?;
+
+        // Bocha returns `{"code": 200, "data": {"pages": [...]}}`
+        let results: Vec<WebSearchEntry> = parsed
+            .get("data")
+            .and_then(|d| d.get("pages"))
+            .or_else(|| parsed.get("pages"))
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flat_map(|arr| arr.iter())
+            .filter_map(|item| {
+                let title = item
+                    .get("name")
+                    .or_else(|| item.get("title"))
+                    .and_then(|s| s.as_str())?
+                    .to_string();
+                let url = item
+                    .get("url")
+                    .or_else(|| item.get("link"))
+                    .and_then(|s| s.as_str())?
+                    .to_string();
+                let snippet = item
+                    .get("summary")
+                    .or_else(|| item.get("snippet"))
+                    .or_else(|| item.get("description"))
+                    .and_then(|s| s.as_str())
+                    .map(|s| s.to_string());
+                Some(WebSearchEntry {
+                    title,
+                    url,
+                    snippet,
+                })
+            })
+            .take(max_results)
+            .collect();
+
+        let message = if results.is_empty() {
+            "No results found".to_string()
+        } else {
+            format!("Found {} result(s)", results.len())
+        };
+
+        let response = WebSearchResponse {
+            query: query.to_string(),
+            source: "bocha".to_string(),
             count: results.len(),
             message,
             results,

@@ -208,6 +208,23 @@ max_subagents = 10 # optional (1-20)
 # model = "deepseek-coder:1.3b"             # or any local Ollama tag
 
 # ─────────────────────────────────────────────────────────────────────────────────
+# Web Search Provider
+# ─────────────────────────────────────────────────────────────────────────────────
+# Choose which backend `web_search` uses. Default is DuckDuckGo HTML scraping
+# with Bing fallback — no API key needed but may be blocked in some regions.
+# Switch to Tavily or Bocha for reliable search in mainland China.
+#
+# [search]
+# provider = "duckduckgo"   # duckduckgo | tavily | bocha
+#                            # tavily: https://tavily.com — AI search, needs api_key
+#                            # bocha:  https://bochaai.com — 博查AI搜索，国内友好，需api_key
+# api_key = "tvly-YOUR_KEY"  # required for tavily and bocha
+#
+# Env-var overrides:
+#   DEEPSEEK_SEARCH_PROVIDER → search.provider
+#   DEEPSEEK_SEARCH_API_KEY  → search.api_key
+
+# ─────────────────────────────────────────────────────────────────────────────────
 # Network Policy (#135)
 # ─────────────────────────────────────────────────────────────────────────────────
 # Per-domain allow/deny rules for outbound network calls made by the TUI's

@@ -132,6 +132,12 @@ pub struct ToolContext {
     /// routing (e.g. in sub-agents and test contexts to avoid recursion).
     pub large_output_router: Option<crate::tools::large_output_router::LargeOutputRouter>,
 
+    /// Which search backend `web_search` should use. Default: DuckDuckGo with
+    /// Bing fallback. Set via `[search] provider` in config.toml.
+    pub search_provider: crate::config::SearchProvider,
+    /// API key for Tavily or Bocha. `None` for DuckDuckGo.
+    pub search_api_key: Option<String>,
+
     /// Per-session workshop variable store (#548). Holds the raw content of
     /// the most recent large-tool routing event so the parent can call
     /// `promote_to_context` later. `None` when the router is disabled.
@@ -168,6 +174,8 @@ impl ToolContext {
             memory_path: None,
             lsp_manager: None,
             large_output_router: None,
+            search_provider: crate::config::SearchProvider::default(),
+            search_api_key: None,
             workshop_vars: None,
         }
     }
@@ -202,6 +210,8 @@ impl ToolContext {
             memory_path: None,
             lsp_manager: None,
             large_output_router: None,
+            search_provider: crate::config::SearchProvider::default(),
+            search_api_key: None,
             workshop_vars: None,
         }
     }
@@ -236,6 +246,8 @@ impl ToolContext {
             memory_path: None,
             lsp_manager: None,
             large_output_router: None,
+            search_provider: crate::config::SearchProvider::default(),
+            search_api_key: None,
             workshop_vars: None,
         }
     }

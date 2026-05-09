@@ -154,6 +154,10 @@ pub struct EngineConfig {
     pub strict_tool_mode: bool,
     /// Workshop / large-tool-output routing (#548). `None` disables routing.
     pub workshop: Option<crate::tools::large_output_router::WorkshopConfig>,
+    /// Which search backend `web_search` should use. Default: DuckDuckGo.
+    pub search_provider: crate::config::SearchProvider,
+    /// API key for Tavily or Bocha. `None` for DuckDuckGo.
+    pub search_api_key: Option<String>,
 }
 
 impl Default for EngineConfig {
@@ -188,6 +192,8 @@ impl Default for EngineConfig {
             goal_objective: None,
             locale_tag: "en".to_string(),
             workshop: None,
+            search_provider: crate::config::SearchProvider::default(),
+            search_api_key: None,
         }
     }
 }
@@ -1502,6 +1508,10 @@ impl Engine {
         if let Some(backend) = self.sandbox_backend.as_ref() {
             ctx = ctx.with_sandbox_backend(std::sync::Arc::clone(backend));
         }
+
+        // Wire search provider config.
+        ctx.search_provider = self.config.search_provider;
+        ctx.search_api_key = self.config.search_api_key.clone();
 
         let policy = sandbox_policy_for_mode(mode, &self.session.workspace);
         let mut ctx = ctx.with_elevated_sandbox_policy(policy);
