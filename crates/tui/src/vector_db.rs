@@ -129,6 +129,7 @@ impl Embedder {
         Ok(model.embed(texts, None)?)
     }
 
+    #[allow(dead_code)]
     pub fn dim(&self) -> usize {
         self.dim
     }
@@ -184,6 +185,7 @@ impl InMemoryBackend {
         self
     }
 
+    #[allow(dead_code)]
     fn with_max_items(mut self, max: usize) -> Self {
         self.max_items = max;
         self
@@ -351,6 +353,7 @@ impl InMemoryBackend {
         scored
     }
 
+    #[allow(dead_code)]
     async fn delete_expired(&mut self) -> usize {
         let now = Utc::now();
         let before = self.memories.len();
@@ -362,6 +365,7 @@ impl InMemoryBackend {
         deleted
     }
 
+    #[allow(dead_code)]
     fn count_memories(&self) -> usize {
         self.memories.len()
     }
@@ -606,6 +610,7 @@ mod lance {
         }
 
         /// Delete memories past their TTL with three-tier fallback (#10).
+        #[allow(dead_code)]
         ///
         /// Tier 1: SQL predicate delete (fastest, most efficient).
         /// Tier 2: Query all records, filter expired in memory, delete via
@@ -661,6 +666,7 @@ mod lance {
         }
 
         /// Count total memories.
+        #[allow(dead_code)]
         pub async fn count_memories(&self) -> Result<usize> {
             let table = self.open_table("memories").await?;
             Ok(table.count_rows(None::<String>).await?)
@@ -1078,6 +1084,7 @@ impl VectorDbService {
     }
 
     /// Delete expired memories.
+    #[allow(dead_code)]
     pub async fn delete_expired_memories(&self) -> Result<usize> {
         #[cfg(feature = "vector-memory")]
         if let Some(ref lance) = self.lance {
@@ -1091,6 +1098,7 @@ impl VectorDbService {
     }
 
     /// Count total memories.
+    #[allow(dead_code)]
     pub async fn count_memories(&self) -> Result<usize> {
         #[cfg(feature = "vector-memory")]
         if let Some(ref lance) = self.lance {
@@ -1148,6 +1156,7 @@ pub struct RetrievedContext {
     /// Messages to send verbatim to the API (filtered from full history).
     pub verbatim_messages: Vec<usize>,
     /// Whether the verbatim window was extended for tool pairing.
+    #[allow(dead_code)]
     pub window_extended: bool,
     /// Retrieved memory blocks for system prompt injection.
     pub memory_blocks: Vec<String>,
@@ -1157,6 +1166,7 @@ pub struct RetrievedContext {
 
 impl RetrievedContext {
     /// True when no context was retrieved (all messages verbatim, no blocks).
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.memory_blocks.is_empty() && self.summary_blocks.is_empty()
     }
@@ -1264,21 +1274,25 @@ impl VerbatimWindow {
     }
 
     /// Number of messages in the window.
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.indices.len()
     }
 
     /// Whether the window is empty.
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.indices.is_empty()
     }
 
     /// Check if a specific index is in the verbatim window.
+    #[allow(dead_code)]
     pub fn contains(&self, idx: usize) -> bool {
         self.indices.contains(&idx)
     }
 
     /// Iterate over indices in order.
+    #[allow(dead_code)]
     pub fn iter(&self) -> impl Iterator<Item = &usize> {
         self.indices.iter()
     }
