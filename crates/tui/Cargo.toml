@@ -73,7 +73,7 @@ sha2 = "0.10"
 
 # Vector memory system
 lancedb = { version = "0.27", optional = true }
-fastembed = { version = "5.13", optional = true }
+fastembed = { version = "5.13", optional = true, features = ["ort-download-binaries"] }
 arrow-array = { version = "57", optional = true }
 
 [dev-dependencies]
