@@ -2042,7 +2042,11 @@ fn apply_env_overrides(config: &mut Config) {
     if matches!(config.api_provider(), ApiProvider::Openai)
         && let Ok(value) = std::env::var("OPENAI_MODEL")
     {
-        config.default_text_model = Some(value);
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .openai
+            .model = Some(value);
     }
     if let Ok(value) =
         std::env::var("DEEPSEEK_MODEL").or_else(|_| std::env::var("DEEPSEEK_DEFAULT_TEXT_MODEL"))
