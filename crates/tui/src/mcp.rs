@@ -1029,6 +1029,7 @@ impl McpConnection {
                 break;
             }
         }
+        self.tools.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(())
     }
 
@@ -1458,6 +1459,7 @@ impl McpPool {
                 tools.push((format!("mcp_{}_{}", server, tool.name), tool));
             }
         }
+        tools.sort_by(|a, b| a.0.cmp(&b.0));
         tools
     }
 
@@ -1733,6 +1735,7 @@ impl McpPool {
             });
         }
 
+        api_tools.sort_by(|a, b| a.name.cmp(&b.name));
         api_tools
     }
 
@@ -2215,6 +2218,65 @@ pub fn format_tool_result(result: &serde_json::Value) -> String {
 mod tests {
     use super::*;
 
+    struct MockTransport {
+        responses: VecDeque<serde_json::Value>,
+    }
+
+    #[async_trait::async_trait]
+    impl McpTransport for MockTransport {
+        async fn send(&mut self, _msg: serde_json::Value) -> Result<()> {
+            Ok(())
+        }
+
+        async fn recv(&mut self) -> Result<serde_json::Value> {
+            self.responses
+                .pop_front()
+                .context("mock MCP response queue is empty")
+        }
+    }
+
+    fn test_server_config() -> McpServerConfig {
+        McpServerConfig {
+            command: Some("test".to_string()),
+            args: Vec::new(),
+            env: HashMap::new(),
+            url: None,
+            connect_timeout: None,
+            execute_timeout: None,
+            read_timeout: None,
+            disabled: false,
+            enabled: true,
+            required: false,
+            enabled_tools: Vec::new(),
+            disabled_tools: Vec::new(),
+        }
+    }
+
+    fn test_connection(name: &str, tools: Vec<McpTool>) -> McpConnection {
+        McpConnection {
+            name: name.to_string(),
+            transport: Box::new(MockTransport {
+                responses: VecDeque::new(),
+            }),
+            tools,
+            resources: Vec::new(),
+            resource_templates: Vec::new(),
+            prompts: Vec::new(),
+            request_id: AtomicU64::new(1),
+            state: ConnectionState::Ready,
+            config: test_server_config(),
+            cancel_token: tokio_util::sync::CancellationToken::new(),
+        }
+    }
+
+    fn test_tool(name: &str) -> McpTool {
+        McpTool {
+            name: name.to_string(),
+            description: None,
+            input_schema: serde_json::json!({}),
+        }
+    }
+
     #[test]
     fn test_mcp_config_defaults() {
         let config = McpConfig::default();
@@ -2398,6 +2460,84 @@ mod tests {
         let pool = McpPool::new(McpConfig::default());
         assert!(pool.server_names().is_empty());
         assert!(pool.all_tools().is_empty());
+    }
+
+    #[tokio::test]
+    async fn discover_tools_sorts_paginated_results_by_name() {
+        let mut conn = McpConnection {
+            name: "test".to_string(),
+            transport: Box::new(MockTransport {
+                responses: VecDeque::from([
+                    serde_json::json!({
+                        "id": 1,
+                        "result": {
+                            "tools": [{ "name": "zeta" }, { "name": "alpha" }],
+                            "nextCursor": "page-2"
+                        }
+                    }),
+                    serde_json::json!({
+                        "id": 2,
+                        "result": {
+                            "tools": [{ "name": "middle" }]
+                        }
+                    }),
+                ]),
+            }),
+            tools: Vec::new(),
+            resources: Vec::new(),
+            resource_templates: Vec::new(),
+            prompts: Vec::new(),
+            request_id: AtomicU64::new(1),
+            state: ConnectionState::Ready,
+            config: test_server_config(),
+            cancel_token: tokio_util::sync::CancellationToken::new(),
+        };
+
+        conn.discover_tools().await.unwrap();
+
+        let names: Vec<&str> = conn.tools().iter().map(|tool| tool.name.as_str()).collect();
+        assert_eq!(names, vec!["alpha", "middle", "zeta"]);
+    }
+
+    #[test]
+    fn mcp_pool_tool_exports_are_sorted_by_final_api_name() {
+        let mut config = McpConfig::default();
+        config
+            .servers
+            .insert("zserver".to_string(), test_server_config());
+        config
+            .servers
+            .insert("aserver".to_string(), test_server_config());
+
+        let mut pool = McpPool::new(config);
+        pool.connections.insert(
+            "zserver".to_string(),
+            test_connection("zserver", vec![test_tool("zeta"), test_tool("alpha")]),
+        );
+        pool.connections.insert(
+            "aserver".to_string(),
+            test_connection("aserver", vec![test_tool("middle")]),
+        );
+
+        let all_tool_names: Vec<String> =
+            pool.all_tools().into_iter().map(|(name, _)| name).collect();
+        assert_eq!(
+            all_tool_names,
+            vec![
+                "mcp_aserver_middle".to_string(),
+                "mcp_zserver_alpha".to_string(),
+                "mcp_zserver_zeta".to_string(),
+            ]
+        );
+
+        let api_tool_names: Vec<String> = pool
+            .to_api_tools()
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect();
+        let mut sorted_api_tool_names = api_tool_names.clone();
+        sorted_api_tool_names.sort();
+        assert_eq!(api_tool_names, sorted_api_tool_names);
     }
 
     /// #1244: when an MCP stdio server fails to spawn, the underlying OS
