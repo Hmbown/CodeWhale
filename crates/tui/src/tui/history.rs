@@ -37,11 +37,9 @@ const USER_GLYPH: &str = "\u{258E}"; // ▎
 /// Visual marker for the assistant role. Solid bullet that pulses at 2s
 /// cycle while the response is streaming, holds full brightness when idle.
 const ASSISTANT_GLYPH: &str = "\u{25CF}"; // ●
-/// Transcript body left rail. Solid 1/8 block (`▏`) followed by a space —
-/// used as a visual left-margin anchor for continuation lines, tool-card
-/// detail rows, and affordance lines. Dimmed so it guides the eye without
-/// competing with content.
-const TRANSCRIPT_RAIL: &str = "\u{258F} "; // ▏ + space
+/// Claude Code-style pipe rail for tool content lines. Used by
+/// `render_card_detail_line` and output rendering inside tool blocks.
+const TOOL_CONTENT_RAIL: &str = "│ ";
 /// Reasoning header opener. Replaces the spinner glyph on thinking cells —
 /// reasoning is a slow exhale, not a tool spin.
 const REASONING_OPENER: &str = "\u{2026}"; // …
@@ -486,7 +484,7 @@ fn render_archived_context(
     for (idx, line) in rendered.into_iter().enumerate() {
         if idx == 0 {
             let mut spans = vec![Span::styled(
-                TRANSCRIPT_RAIL.to_string(),
+                TOOL_CONTENT_RAIL.to_string(),
                 Style::default().fg(palette::TEXT_DIM),
             )];
             spans.extend(line.spans);
@@ -1618,7 +1616,7 @@ fn render_checklist_change_card(
     let (marker, marker_color) = checklist_status_marker(&change.status);
     let prefix = format!("{marker} ");
     let prefix_width =
-        UnicodeWidthStr::width(TRANSCRIPT_RAIL) + UnicodeWidthStr::width(prefix.as_str());
+        UnicodeWidthStr::width(TOOL_CONTENT_RAIL) + UnicodeWidthStr::width(prefix.as_str());
     let id_label = format!("Todo #{}", change.id);
     let arrow = " \u{2192} ";
     let status_label = change.status.clone();
@@ -1712,7 +1710,7 @@ fn render_checklist_card(
         let prefix = format!("{marker} ");
         // Reserve room for the rail + marker prefix when wrapping content.
         let prefix_width =
-            UnicodeWidthStr::width(TRANSCRIPT_RAIL) + UnicodeWidthStr::width(prefix.as_str());
+            UnicodeWidthStr::width(TOOL_CONTENT_RAIL) + UnicodeWidthStr::width(prefix.as_str());
         let content_width = usize::from(width).saturating_sub(prefix_width).max(1);
         for (idx, part) in wrap_text(item.content.trim(), content_width)
             .into_iter()
@@ -2623,7 +2621,7 @@ fn status_symbol(started_at: Option<Instant>, status: ToolStatus, low_motion: bo
 fn details_affordance_line(text: &str, style: Style) -> Line<'static> {
     Line::from(vec![
         Span::styled(
-            TRANSCRIPT_RAIL.to_string(),
+            TOOL_CONTENT_RAIL.to_string(),
             Style::default().fg(palette::TEXT_DIM),
         ),
         Span::styled(text.to_string(), style),
@@ -2760,49 +2758,35 @@ fn render_tool_header_with_family(
 fn render_tool_header_with_family_and_summary(
     family: crate::tui::widgets::tool_card::ToolFamily,
     summary: Option<&str>,
-    state: &str,
+    _state: &str,
     status: ToolStatus,
     started_at: Option<Instant>,
     low_motion: bool,
 ) -> Line<'static> {
-    // For long-running tools, append elapsed seconds so the user can see the
-    // call isn't stuck. Threshold matches the eye's "did this hang?" reflex
-    // — under 3s we stay quiet so quick reads/greps don't visually churn.
-    let state_owned: String = if state == "running"
-        && status == ToolStatus::Running
+    // Claude Code header style: "* verb(summary)" or "✓ verb(summary)"
+    let verb = crate::tui::widgets::tool_card::family_label(family);
+    let state_color = tool_state_color(status);
+    let sym = status_symbol(started_at, status, low_motion);
+
+    let mut header = format!("{sym} {verb}");
+
+    // Append elapsed time for long-running tools.
+    if status == ToolStatus::Running
         && let Some(started) = started_at
     {
-        running_status_label_with_elapsed(started.elapsed().as_secs())
-    } else {
-        state.to_string()
-    };
-
-    let glyph = crate::tui::widgets::tool_card::family_glyph(family);
-    let verb = crate::tui::widgets::tool_card::family_label(family);
-
-    let mut spans = vec![
-        Span::styled(
-            format!("{} ", status_symbol(started_at, status, low_motion)),
-            Style::default().fg(tool_state_color(status)),
-        ),
-        Span::styled(
-            format!("{glyph} "),
-            Style::default().fg(tool_state_color(status)),
-        ),
-        Span::styled(verb.to_string(), tool_title_style()),
-        Span::styled(" ", Style::default()),
-        Span::styled(state_owned, tool_status_style(status)),
-    ];
-
-    if let Some(summary) = summary.and_then(normalize_header_summary) {
-        spans.push(Span::styled(" · ", Style::default().fg(palette::TEXT_DIM)));
-        spans.push(Span::styled(
-            truncate_text(&summary, TOOL_HEADER_SUMMARY_LIMIT),
-            Style::default().fg(palette::TEXT_MUTED),
-        ));
+        let secs = started.elapsed().as_secs();
+        if secs >= 3 {
+            header.push_str(&format!(" ({secs}s)"));
+        }
     }
 
-    Line::from(spans)
+    if let Some(s) = summary.and_then(normalize_header_summary) {
+        header.push('(');
+        header.push_str(&truncate_text(&s, TOOL_HEADER_SUMMARY_LIMIT));
+        header.push(')');
+    }
+
+    Line::from(vec![Span::styled(header, Style::default().fg(state_color))])
 }
 
 fn normalize_header_summary(summary: &str) -> Option<String> {
@@ -2819,18 +2803,6 @@ fn normalize_header_summary(summary: &str) -> Option<String> {
     }
 }
 
-/// Build the "running" label with an elapsed-seconds badge for long-running
-/// tools. Below 3s the badge is suppressed to avoid visual churn for tools
-/// that resolve in milliseconds; at 3s and beyond the badge appears and ticks
-/// every second the tool stays in flight.
-pub(crate) fn running_status_label_with_elapsed(elapsed_secs: u64) -> String {
-    if elapsed_secs < 3 {
-        "running".to_string()
-    } else {
-        format!("running ({elapsed_secs}s)")
-    }
-}
-
 fn render_card_detail_line(
     label: Option<&str>,
     value: &str,
@@ -2838,7 +2810,7 @@ fn render_card_detail_line(
     width: u16,
 ) -> Vec<Line<'static>> {
     let label_text = label.map(|text| format!("{text}:"));
-    let prefix_width = UnicodeWidthStr::width(TRANSCRIPT_RAIL)
+    let prefix_width = UnicodeWidthStr::width(TOOL_CONTENT_RAIL)
         + label_text.as_deref().map_or(0, UnicodeWidthStr::width)
         + usize::from(label.is_some());
     let content_width = usize::from(width).saturating_sub(prefix_width).max(1);
@@ -2846,7 +2818,7 @@ fn render_card_detail_line(
     let mut lines = Vec::new();
     for (idx, part) in wrap_text(value, content_width).into_iter().enumerate() {
         let mut spans = vec![Span::styled(
-            TRANSCRIPT_RAIL.to_string(),
+            TOOL_CONTENT_RAIL.to_string(),
             Style::default().fg(palette::TEXT_DIM),
         )];
         if idx == 0 {
@@ -2875,7 +2847,7 @@ fn render_card_detail_line_single(
 ) -> Line<'static> {
     let label_text = label.map(|text| format!("{text}:"));
     let mut spans = vec![Span::styled(
-        TRANSCRIPT_RAIL.to_string(),
+        TOOL_CONTENT_RAIL.to_string(),
         Style::default().fg(palette::TEXT_DIM),
     )];
     if let Some(label_text) = label_text {
@@ -2884,14 +2856,6 @@ fn render_card_detail_line_single(
     }
     spans.push(Span::styled(value.to_string(), value_style));
     Line::from(spans)
-}
-
-fn tool_title_style() -> Style {
-    active_theme().tool_title_style()
-}
-
-fn tool_status_style(status: ToolStatus) -> Style {
-    active_theme().tool_status_style(status)
 }
 
 fn tool_detail_label_style() -> Style {
@@ -2904,9 +2868,9 @@ fn tool_state_color(status: ToolStatus) -> Color {
 
 fn tool_status_label(status: ToolStatus) -> &'static str {
     match status {
-        ToolStatus::Running => "running",
-        ToolStatus::Success => "done",
-        ToolStatus::Failed => "issue",
+        ToolStatus::Running => "",
+        ToolStatus::Success => "",
+        ToolStatus::Failed => "",
     }
 }
 
@@ -3087,7 +3051,6 @@ mod tests {
         PlanUpdateCell, REASONING_CURSOR, REASONING_OPENER, REASONING_RAIL, TOOL_RUNNING_SYMBOLS,
         TOOL_STATUS_SYMBOL_MS, ToolCell, ToolStatus, TranscriptRenderOptions, USER_GLYPH,
         assistant_label_style_for, extract_reasoning_summary, render_thinking,
-        running_status_label_with_elapsed,
     };
     use crate::deepseek_theme::Theme;
     use crate::models::{ContentBlock, Message};
@@ -3492,20 +3455,6 @@ mod tests {
         let change_line: String = lines[1].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(change_line.contains("#99"));
         assert!(change_line.contains("(missing title)"));
-    }
-
-    #[test]
-    fn running_status_label_omits_elapsed_below_threshold() {
-        assert_eq!(running_status_label_with_elapsed(0), "running");
-        assert_eq!(running_status_label_with_elapsed(1), "running");
-        assert_eq!(running_status_label_with_elapsed(2), "running");
-    }
-
-    #[test]
-    fn running_status_label_appends_elapsed_at_three_seconds() {
-        assert_eq!(running_status_label_with_elapsed(3), "running (3s)");
-        assert_eq!(running_status_label_with_elapsed(7), "running (7s)");
-        assert_eq!(running_status_label_with_elapsed(120), "running (120s)");
     }
 
     #[test]
