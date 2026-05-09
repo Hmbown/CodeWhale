@@ -13,9 +13,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::process::{Child as TokioChild, ChildStdin as TokioChildStdin, Command as TokioCommand};
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 use uuid::Uuid;
 use wait_timeout::ChildExt;
 
@@ -33,6 +37,8 @@ use crate::sandbox::{
     SandboxPolicy as ExecutionSandboxPolicy, // Rename to avoid conflict with spec::SandboxPolicy
     SandboxType,
 };
+
+const IO_DRAIN_TIMEOUT: Duration = Duration::from_millis(2_000);
 
 /// Status of a shell process
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -117,12 +123,13 @@ pub struct ShellDeltaResult {
 }
 
 enum ShellChild {
-    Process(Child),
+    Process(Box<std::process::Child>),
+    TokioProcess(Box<TokioChild>),
     Pty(Box<dyn portable_pty::Child + Send>),
 }
 
 #[cfg(unix)]
-fn kill_child_process_group(child: &mut Child) -> std::io::Result<()> {
+fn kill_child_process_group(child: &mut std::process::Child) -> std::io::Result<()> {
     let pgid = child.id() as libc::pid_t;
     if pgid <= 0 {
         return child.kill();
@@ -211,6 +218,9 @@ impl ShellChild {
             ShellChild::Process(child) => child
                 .try_wait()
                 .map(|status| status.map(ShellExitStatus::from_std)),
+            ShellChild::TokioProcess(child) => child
+                .try_wait()
+                .map(|status| status.map(ShellExitStatus::from_std)),
             ShellChild::Pty(child) => child
                 .try_wait()
                 .map(|status| status.map(ShellExitStatus::from_pty)),
@@ -220,6 +230,9 @@ impl ShellChild {
     fn wait(&mut self) -> std::io::Result<ShellExitStatus> {
         match self {
             ShellChild::Process(child) => child.wait().map(ShellExitStatus::from_std),
+            ShellChild::TokioProcess(_) => Err(std::io::Error::other(
+                "async shell child cannot be synchronously waited",
+            )),
             ShellChild::Pty(child) => child.wait().map(ShellExitStatus::from_pty),
         }
     }
@@ -230,20 +243,48 @@ impl ShellChild {
             ShellChild::Process(child) => kill_child_process_group(child),
             #[cfg(not(unix))]
             ShellChild::Process(child) => child.kill(),
+            ShellChild::TokioProcess(child) => child.start_kill(),
             ShellChild::Pty(child) => child.kill(),
         }
     }
 }
 
+#[cfg(target_os = "linux")]
+fn install_parent_death_signal_tokio(cmd: &mut TokioCommand) {
+    use std::os::unix::process::CommandExt;
+    unsafe {
+        cmd.pre_exec(|| {
+            let result = libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM, 0, 0, 0);
+            if result == -1 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        });
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn install_parent_death_signal_tokio(_cmd: &mut TokioCommand) {}
+
 enum StdinWriter {
     Pipe(ChildStdin),
+    Tokio(mpsc::UnboundedSender<StdinCommand>),
     Pty(Box<dyn Write + Send>),
+}
+
+enum StdinCommand {
+    Write(Vec<u8>),
+    Close,
 }
 
 impl StdinWriter {
     fn write_all(&mut self, data: &[u8]) -> std::io::Result<()> {
         match self {
             StdinWriter::Pipe(stdin) => stdin.write_all(data),
+            StdinWriter::Tokio(tx) => tx
+                .send(StdinCommand::Write(data.to_vec()))
+                .map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "stdin closed")),
             StdinWriter::Pty(writer) => writer.write_all(data),
         }
     }
@@ -251,7 +292,17 @@ impl StdinWriter {
     fn flush(&mut self) -> std::io::Result<()> {
         match self {
             StdinWriter::Pipe(stdin) => stdin.flush(),
+            StdinWriter::Tokio(_) => Ok(()),
             StdinWriter::Pty(writer) => writer.flush(),
+        }
+    }
+
+    fn close(&mut self) -> std::io::Result<()> {
+        match self {
+            StdinWriter::Pipe(_) | StdinWriter::Pty(_) => Ok(()),
+            StdinWriter::Tokio(tx) => tx
+                .send(StdinCommand::Close)
+                .map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "stdin closed")),
         }
     }
 }
@@ -276,6 +327,96 @@ fn spawn_reader_thread<R: Read + Send + 'static>(
     })
 }
 
+fn spawn_async_reader_task<R>(mut reader: R, buffer: Arc<Mutex<Vec<u8>>>) -> JoinHandle<()>
+where
+    R: AsyncRead + Unpin + Send + 'static,
+{
+    tokio::spawn(async move {
+        let mut chunk = [0u8; 4096];
+        loop {
+            match reader.read(&mut chunk).await {
+                Ok(0) => break,
+                Ok(n) => {
+                    if let Ok(mut guard) = buffer.lock() {
+                        guard.extend_from_slice(&chunk[..n]);
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    })
+}
+
+fn spawn_async_stdin_task(mut stdin: TokioChildStdin) -> mpsc::UnboundedSender<StdinCommand> {
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        while let Some(command) = rx.recv().await {
+            match command {
+                StdinCommand::Write(bytes) => {
+                    if stdin.write_all(&bytes).await.is_err() {
+                        break;
+                    }
+                    let _ = stdin.flush().await;
+                }
+                StdinCommand::Close => break,
+            }
+        }
+    });
+    tx
+}
+
+enum ReaderHandle {
+    Blocking(std::thread::JoinHandle<()>),
+    Async(JoinHandle<()>),
+}
+
+impl ReaderHandle {
+    fn is_finished(&self) -> bool {
+        match self {
+            ReaderHandle::Blocking(handle) => handle.is_finished(),
+            ReaderHandle::Async(handle) => handle.is_finished(),
+        }
+    }
+
+    fn collect(self) {
+        match self {
+            ReaderHandle::Blocking(handle) => {
+                let _ = handle.join();
+            }
+            ReaderHandle::Async(handle) => {
+                handle.abort();
+            }
+        }
+    }
+
+    fn abort(self) {
+        match self {
+            ReaderHandle::Blocking(_handle) => {
+                // Blocking readers cannot be cancelled safely. They will exit
+                // once their pipe/PTY closes; dropping the handle detaches it.
+            }
+            ReaderHandle::Async(handle) => handle.abort(),
+        }
+    }
+}
+
+fn collect_reader_handle(handle: &mut Option<ReaderHandle>, drain_expired: bool) {
+    let Some(reader) = handle.as_ref() else {
+        return;
+    };
+
+    if reader.is_finished() {
+        if let Some(reader) = handle.take() {
+            reader.collect();
+        }
+    } else if drain_expired
+        && matches!(reader, ReaderHandle::Async(_))
+        && let Some(reader) = handle.take()
+    {
+        reader.abort();
+    }
+}
+
 /// A background shell process being tracked
 pub struct BackgroundShell {
     pub id: String,
@@ -290,16 +431,18 @@ pub struct BackgroundShell {
     stderr_buffer: Option<Arc<Mutex<Vec<u8>>>>,
     stdout_cursor: usize,
     stderr_cursor: usize,
+    output_drain_deadline: Option<Instant>,
     stdin: Option<StdinWriter>,
     child: Option<ShellChild>,
-    stdout_thread: Option<std::thread::JoinHandle<()>>,
-    stderr_thread: Option<std::thread::JoinHandle<()>>,
+    stdout_thread: Option<ReaderHandle>,
+    stderr_thread: Option<ReaderHandle>,
 }
 
 impl BackgroundShell {
     /// Check if the process has completed and update status
     fn poll(&mut self) -> bool {
         if self.status != ShellStatus::Running {
+            self.collect_finished_output();
             return true;
         }
 
@@ -312,13 +455,15 @@ impl BackgroundShell {
                     } else {
                         ShellStatus::Failed
                     };
-                    self.collect_output();
+                    self.output_drain_deadline = Some(Instant::now() + IO_DRAIN_TIMEOUT);
+                    self.collect_finished_output();
                     true
                 }
                 Ok(None) => false, // Still running
                 Err(_) => {
                     self.status = ShellStatus::Failed;
-                    self.collect_output();
+                    self.output_drain_deadline = Some(Instant::now() + IO_DRAIN_TIMEOUT);
+                    self.collect_finished_output();
                     true
                 }
             }
@@ -327,16 +472,25 @@ impl BackgroundShell {
         }
     }
 
-    /// Collect output from the background threads
-    fn collect_output(&mut self) {
-        if let Some(handle) = self.stdout_thread.take() {
-            let _ = handle.join();
-        }
-        if let Some(handle) = self.stderr_thread.take() {
-            let _ = handle.join();
-        }
+    /// Collect output from reader threads that have already finished.
+    ///
+    /// This intentionally avoids blocking while the shell manager lock is
+    /// held. Some commands can leave inherited stdio handles open in helper
+    /// processes after the immediate child exits, and a blocking join here
+    /// would freeze any UI code trying to list shell jobs.
+    fn collect_finished_output(&mut self) {
+        let drain_expired = self
+            .output_drain_deadline
+            .is_some_and(|deadline| Instant::now() >= deadline);
+        collect_reader_handle(&mut self.stdout_thread, drain_expired);
+        collect_reader_handle(&mut self.stderr_thread, drain_expired);
         self.stdin = None;
         self.child = None;
+    }
+
+    fn output_drained(&mut self) -> bool {
+        self.collect_finished_output();
+        self.stdout_thread.is_none() && self.stderr_thread.is_none()
     }
 
     fn write_stdin(&mut self, input: &str, close: bool) -> Result<()> {
@@ -348,6 +502,7 @@ impl BackgroundShell {
                 stdin.flush().ok();
             }
             if close {
+                stdin.close().ok();
                 self.stdin = None;
             }
             return Ok(());
@@ -422,10 +577,13 @@ impl BackgroundShell {
     fn kill(&mut self) -> Result<()> {
         if let Some(ref mut child) = self.child {
             child.kill().context("Failed to kill process")?;
-            let _ = child.wait();
+            if !matches!(child, ShellChild::TokioProcess(_)) {
+                let _ = child.wait();
+            }
         }
         self.status = ShellStatus::Killed;
-        self.collect_output();
+        self.output_drain_deadline = Some(Instant::now() + IO_DRAIN_TIMEOUT);
+        self.collect_finished_output();
         Ok(())
     }
 
@@ -495,7 +653,9 @@ impl Drop for BackgroundShell {
             && let Some(ref mut child) = self.child
         {
             let _ = child.kill();
-            let _ = child.wait();
+            if !matches!(child, ShellChild::TokioProcess(_)) {
+                let _ = child.wait();
+            }
         }
     }
 }
@@ -1018,7 +1178,10 @@ impl ShellManager {
                 .master
                 .try_clone_reader()
                 .context("Failed to clone PTY reader")?;
-            let stdout_thread = Some(spawn_reader_thread(reader, Arc::clone(&stdout_buffer)));
+            let stdout_thread = Some(ReaderHandle::Blocking(spawn_reader_thread(
+                reader,
+                Arc::clone(&stdout_buffer),
+            )));
             let writer = pair
                 .master
                 .take_writer()
@@ -1029,6 +1192,47 @@ impl ShellManager {
                 Some(StdinWriter::Pty(writer)),
                 stdout_thread,
                 None,
+            )
+        } else if tokio::runtime::Handle::try_current().is_ok() {
+            let mut cmd = TokioCommand::new(program);
+            cmd.args(args)
+                .current_dir(working_dir)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            #[cfg(unix)]
+            {
+                cmd.process_group(0);
+            }
+            install_parent_death_signal_tokio(&mut cmd);
+
+            child_env::apply_to_tokio_command(&mut cmd, child_env::string_map_env(&exec_env.env));
+
+            let mut child = cmd
+                .spawn()
+                .with_context(|| format!("Failed to spawn background: {original_command}"))?;
+
+            let stdout_handle = child.stdout.take().context("Failed to capture stdout")?;
+            let stderr_handle = child.stderr.take().context("Failed to capture stderr")?;
+            let stdin_handle = child
+                .stdin
+                .take()
+                .map(spawn_async_stdin_task)
+                .map(StdinWriter::Tokio);
+
+            let stdout_thread = Some(ReaderHandle::Async(spawn_async_reader_task(
+                stdout_handle,
+                Arc::clone(&stdout_buffer),
+            )));
+            let stderr_thread = stderr_buffer.as_ref().map(|buffer| {
+                ReaderHandle::Async(spawn_async_reader_task(stderr_handle, Arc::clone(buffer)))
+            });
+
+            (
+                ShellChild::TokioProcess(Box::new(child)),
+                stdin_handle,
+                stdout_thread,
+                stderr_thread,
             )
         } else {
             let mut cmd = Command::new(program);
@@ -1041,6 +1245,7 @@ impl ShellManager {
             {
                 cmd.process_group(0);
             }
+            install_parent_death_signal(&mut cmd);
 
             child_env::apply_to_command(&mut cmd, child_env::string_map_env(&exec_env.env));
 
@@ -1052,16 +1257,16 @@ impl ShellManager {
             let stderr_handle = child.stderr.take().context("Failed to capture stderr")?;
             let stdin_handle = child.stdin.take().map(StdinWriter::Pipe);
 
-            let stdout_thread = Some(spawn_reader_thread(
+            let stdout_thread = Some(ReaderHandle::Blocking(spawn_reader_thread(
                 stdout_handle,
                 Arc::clone(&stdout_buffer),
-            ));
-            let stderr_thread = stderr_buffer
-                .as_ref()
-                .map(|buffer| spawn_reader_thread(stderr_handle, Arc::clone(buffer)));
+            )));
+            let stderr_thread = stderr_buffer.as_ref().map(|buffer| {
+                ReaderHandle::Blocking(spawn_reader_thread(stderr_handle, Arc::clone(buffer)))
+            });
 
             (
-                ShellChild::Process(child),
+                ShellChild::Process(Box::new(child)),
                 stdin_handle,
                 stdout_thread,
                 stderr_thread,
@@ -1081,6 +1286,7 @@ impl ShellManager {
             stderr_buffer,
             stdout_cursor: 0,
             stderr_cursor: 0,
+            output_drain_deadline: None,
             stdin,
             child: Some(child),
             stdout_thread,
@@ -1266,6 +1472,12 @@ impl ShellManager {
         timeout_ms: u64,
     ) -> Result<ShellDeltaResult> {
         self.get_output_delta(task_id, wait, timeout_ms)
+    }
+
+    fn output_drained(&mut self, task_id: &str) -> bool {
+        self.processes
+            .get_mut(task_id)
+            .is_none_or(BackgroundShell::output_drained)
     }
 
     /// Attach durable task context to a live shell job.
@@ -1575,7 +1787,25 @@ async fn execute_foreground_via_background(
         };
 
         if snapshot.status != ShellStatus::Running {
-            return Ok(snapshot);
+            let drained = {
+                let mut manager = context
+                    .shell_manager
+                    .lock()
+                    .map_err(|_| anyhow!("shell manager lock poisoned"))?;
+                manager.output_drained(&task_id)
+            };
+            if !drained {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                continue;
+            }
+            let final_snapshot = {
+                let mut manager = context
+                    .shell_manager
+                    .lock()
+                    .map_err(|_| anyhow!("shell manager lock poisoned"))?;
+                manager.get_output(&task_id, false, 0)?
+            };
+            return Ok(final_snapshot);
         }
 
         if Instant::now() >= deadline {

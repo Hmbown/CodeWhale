@@ -3668,19 +3668,29 @@ fn should_use_mouse_capture_with(
 
 /// Whether to enable terminal mouse capture by default for this platform/host.
 ///
-/// Returns `false` on Windows (legacy console mouse-mode reporting is flaky;
-/// `--mouse-capture` opts in) and on JetBrains' JediTerm, which advertises
-/// mouse support but delivers SGR mouse-event escape sequences as raw text
-/// in the input stream — visible to users as garbled characters in the
-/// composer when they move the mouse over the TUI (#878, #898). The user
-/// can still opt back in with `[tui] mouse_capture = true` in
-/// `~/.deepseek/config.toml` or `--mouse-capture`.
+/// Returns `true` by default for terminals with reliable mouse reporting.
+///
+/// Legacy Windows consoles have flaky mouse-mode reporting, but Windows
+/// Terminal reliably reports wheel events and otherwise forwards wheel input
+/// to the shell/composer history. JetBrains' JediTerm advertises mouse support
+/// but delivers SGR mouse-event escape sequences as raw text in the input
+/// stream — visible to users as garbled characters in the composer when they
+/// move the mouse over the TUI (#878, #898). The user can always opt in/out
+/// with `[tui] mouse_capture = true/false` in `~/.deepseek/config.toml` or the
+/// `--mouse-capture` / `--no-mouse-capture` flags.
 fn default_mouse_capture_enabled(terminal_emulator: Option<&str>) -> bool {
-    if cfg!(windows) {
-        return false;
-    }
+    default_mouse_capture_enabled_with(terminal_emulator, std::env::var_os("WT_SESSION").is_some())
+}
+
+fn default_mouse_capture_enabled_with(
+    terminal_emulator: Option<&str>,
+    windows_terminal: bool,
+) -> bool {
     if matches!(terminal_emulator, Some(t) if t.eq_ignore_ascii_case("JetBrains-JediTerm")) {
         return false;
+    }
+    if cfg!(windows) {
+        return windows_terminal;
     }
     true
 }
@@ -4645,11 +4655,13 @@ mod terminal_mode_tests {
 
     #[test]
     #[cfg(windows)]
-    fn mouse_capture_defaults_off_on_windows_when_alternate_screen_is_active() {
-        let cli = parse_cli(&["deepseek"]);
-        let config = Config::default();
+    fn mouse_capture_defaults_off_on_legacy_windows_console() {
+        assert!(!default_mouse_capture_enabled_with(None, false));
+    }
 
-        assert!(!should_use_mouse_capture_with(&cli, &config, true, None));
+    #[test]
+    fn mouse_capture_defaults_on_in_windows_terminal() {
+        assert!(default_mouse_capture_enabled_with(None, true));
     }
 
     #[test]

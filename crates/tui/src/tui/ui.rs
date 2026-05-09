@@ -557,7 +557,7 @@ async fn refresh_active_task_panel(app: &mut App, task_manager: &SharedTaskManag
     entries.extend(active_rlm_task_entries(app));
 
     if let Some(shell_mgr) = app.runtime_services.shell_manager.as_ref()
-        && let Ok(mut mgr) = shell_mgr.lock()
+        && let Ok(mut mgr) = shell_mgr.try_lock()
     {
         for job in mgr.list_jobs() {
             if !matches!(job.status, crate::tools::shell::ShellStatus::Running) {
