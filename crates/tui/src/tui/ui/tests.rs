@@ -94,6 +94,27 @@ fn word_cursor_modifier_accepts_control_and_alt() {
 }
 
 #[test]
+fn plain_home_end_edit_non_empty_composer() {
+    let mut app = create_test_app();
+    app.input = "alpha beta".to_string();
+    app.cursor_position = app.input.chars().count();
+
+    assert!(handle_plain_home_end(&mut app, KeyCode::Home));
+    assert_eq!(app.cursor_position, 0);
+
+    assert!(handle_plain_home_end(&mut app, KeyCode::End));
+    assert_eq!(app.cursor_position, app.input.chars().count());
+}
+
+#[test]
+fn plain_home_end_falls_through_when_composer_empty() {
+    let mut app = create_test_app();
+
+    assert!(!handle_plain_home_end(&mut app, KeyCode::Home));
+    assert!(!handle_plain_home_end(&mut app, KeyCode::End));
+}
+
+#[test]
 fn selection_point_from_position_ignores_top_padding() {
     let area = Rect {
         x: 10,

@@ -2696,6 +2696,9 @@ async fn run_event_loop(
                     app.move_cursor_right();
                 }
                 KeyCode::Home if key.modifiers.is_empty() => {
+                    if handle_plain_home_end(app, key.code) {
+                        continue;
+                    }
                     if let Some(anchor) =
                         TranscriptScroll::anchor_for(app.viewport.transcript_cache.line_meta(), 0)
                     {
@@ -2703,6 +2706,9 @@ async fn run_event_loop(
                     }
                 }
                 KeyCode::End if key.modifiers.is_empty() => {
+                    if handle_plain_home_end(app, key.code) {
+                        continue;
+                    }
                     app.scroll_to_bottom();
                 }
                 KeyCode::Home | KeyCode::Char('a')
@@ -2963,6 +2969,18 @@ fn handle_vim_normal_key(app: &mut App, c: char) {
             // Unknown normal-mode key — silently ignored in Normal mode.
         }
     }
+}
+
+fn handle_plain_home_end(app: &mut App, code: KeyCode) -> bool {
+    if app.input.is_empty() {
+        return false;
+    }
+    match code {
+        KeyCode::Home => app.move_cursor_start(),
+        KeyCode::End => app.move_cursor_end(),
+        _ => return false,
+    }
+    true
 }
 
 fn apply_alt_4_shortcut(app: &mut App, _modifiers: KeyModifiers) {
