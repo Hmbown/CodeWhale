@@ -79,7 +79,7 @@ export default async function DocsPage({ params }: { params: Promise<{ locale: s
             <article className="lg:col-span-9 space-y-14 min-w-0">
 
               {/* 模式 */}
-              <section id="modes">
+              <section id="modes" className="scroll-mt-32">
                 <h2 className="font-display text-3xl mb-1">
                   模式 <span className="font-cjk text-indigo text-2xl ml-2">Modes</span>
                 </h2>
@@ -104,7 +104,7 @@ export default async function DocsPage({ params }: { params: Promise<{ locale: s
               </section>
 
               {/* 工具 */}
-              <section id="tools">
+              <section id="tools" className="scroll-mt-32">
                 <h2 className="font-display text-3xl mb-1">
                   工具 <span className="font-cjk text-indigo text-2xl ml-2">Tools</span>
                 </h2>
@@ -130,7 +130,7 @@ export default async function DocsPage({ params }: { params: Promise<{ locale: s
               </section>
 
               {/* 审批 */}
-              <section id="approval">
+              <section id="approval" className="scroll-mt-32">
                 <h2 className="font-display text-3xl mb-1">
                   审批与沙箱 <span className="font-cjk text-indigo text-2xl ml-2">Approval</span>
                 </h2>
@@ -156,7 +156,7 @@ export default async function DocsPage({ params }: { params: Promise<{ locale: s
               </section>
 
               {/* 配置 */}
-              <section id="config">
+              <section id="config" className="scroll-mt-32">
                 <h2 className="font-display text-3xl mb-1">
                   配置 <span className="font-cjk text-indigo text-2xl ml-2">Configuration</span>
                 </h2>
@@ -186,7 +186,7 @@ command = "~/.deepseek/hooks/pre.sh"        # / message_submit / mode_change / o
               </section>
 
               {/* MCP */}
-              <section id="mcp">
+              <section id="mcp" className="scroll-mt-32">
                 <h2 className="font-display text-3xl mb-1">
                   MCP 服务器 <span className="font-cjk text-indigo text-2xl ml-2">MCP</span>
                 </h2>
@@ -212,7 +212,7 @@ command = "~/.deepseek/hooks/pre.sh"        # / message_submit / mode_change / o
               </section>
 
               {/* 技能 */}
-              <section id="skills">
+              <section id="skills" className="scroll-mt-32">
                 <h2 className="font-display text-3xl mb-1">
                   技能 <span className="font-cjk text-indigo text-2xl ml-2">Skills</span>
                 </h2>
@@ -224,7 +224,7 @@ command = "~/.deepseek/hooks/pre.sh"        # / message_submit / mode_change / o
               </section>
 
               {/* 提供商 */}
-              <section id="providers">
+              <section id="providers" className="scroll-mt-32">
                 <h2 className="font-display text-3xl mb-1">
                   提供商 <span className="font-cjk text-indigo text-2xl ml-2">Providers</span>
                 </h2>
@@ -245,7 +245,7 @@ command = "~/.deepseek/hooks/pre.sh"        # / message_submit / mode_change / o
               </section>
 
               {/* 快捷键 */}
-              <section id="shortcuts">
+              <section id="shortcuts" className="scroll-mt-32">
                 <h2 className="font-display text-3xl mb-1">
                   快捷键 <span className="font-cjk text-indigo text-2xl ml-2">Shortcuts</span>
                 </h2>
@@ -307,7 +307,7 @@ command = "~/.deepseek/hooks/pre.sh"        # / message_submit / mode_change / o
 
             <article className="lg:col-span-9 space-y-14 min-w-0">
 
-              <section id="modes">
+              <section id="modes" className="scroll-mt-32">
                 <h2 className="font-display text-3xl mb-1">
                   Modes <span className="font-cjk text-indigo text-2xl ml-2">模式</span>
                 </h2>
@@ -331,7 +331,7 @@ command = "~/.deepseek/hooks/pre.sh"        # / message_submit / mode_change / o
                 </div>
               </section>
 
-              <section id="tools">
+              <section id="tools" className="scroll-mt-32">
                 <h2 className="font-display text-3xl mb-1">
                   Tools <span className="font-cjk text-indigo text-2xl ml-2">工具</span>
                 </h2>
@@ -356,7 +356,7 @@ command = "~/.deepseek/hooks/pre.sh"        # / message_submit / mode_change / o
                 </div>
               </section>
 
-              <section id="approval">
+              <section id="approval" className="scroll-mt-32">
                 <h2 className="font-display text-3xl mb-1">
                   Approval & Sandbox <span className="font-cjk text-indigo text-2xl ml-2">审批</span>
                 </h2>
@@ -381,7 +381,7 @@ command = "~/.deepseek/hooks/pre.sh"        # / message_submit / mode_change / o
                 </p>
               </section>
 
-              <section id="config">
+              <section id="config" className="scroll-mt-32">
                 <h2 className="font-display text-3xl mb-1">
                   Configuration <span className="font-cjk text-indigo text-2xl ml-2">配置</span>
                 </h2>
@@ -410,7 +410,7 @@ command = "~/.deepseek/hooks/pre.sh"        # / message_submit / mode_change / o
                 </p>
               </section>
 
-              <section id="mcp">
+              <section id="mcp" className="scroll-mt-32">
                 <h2 className="font-display text-3xl mb-1">
                   MCP Servers <span className="font-cjk text-indigo text-2xl ml-2">MCP</span>
                 </h2>
@@ -435,7 +435,7 @@ command = "~/.deepseek/hooks/pre.sh"        # / message_submit / mode_change / o
                 </pre>
               </section>
 
-              <section id="skills">
+              <section id="skills" className="scroll-mt-32">
                 <h2 className="font-display text-3xl mb-1">
                   Skills <span className="font-cjk text-indigo text-2xl ml-2">技能</span>
                 </h2>
@@ -446,7 +446,7 @@ command = "~/.deepseek/hooks/pre.sh"        # / message_submit / mode_change / o
                 </p>
               </section>
 
-              <section id="providers">
+              <section id="providers" className="scroll-mt-32">
                 <h2 className="font-display text-3xl mb-1">
                   Providers <span className="font-cjk text-indigo text-2xl ml-2">提供商</span>
                 </h2>
@@ -466,7 +466,7 @@ command = "~/.deepseek/hooks/pre.sh"        # / message_submit / mode_change / o
                 </div>
               </section>
 
-              <section id="shortcuts">
+              <section id="shortcuts" className="scroll-mt-32">
                 <h2 className="font-display text-3xl mb-1">
                   Shortcuts <span className="font-cjk text-indigo text-2xl ml-2">快捷键</span>
                 </h2>
