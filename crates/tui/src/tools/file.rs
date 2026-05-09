@@ -67,7 +67,33 @@ impl ToolSpec for ReadFileTool {
             ToolError::execution_failed(format!("Failed to read {}: {}", file_path.display(), e))
         })?;
 
-        Ok(ToolResult::success(contents))
+        // Append related code chunks from the vector DB code_index (Tier 4)
+        // when available. This gives the model broader context about the
+        // codebase without requiring separate read_file calls. Best-effort:
+        // if the search fails we still return the file contents as-is.
+        let mut body = contents;
+        if let Some(ref vdb) = context.vector_db {
+            let query = format!("{} {}", path_str, &body[..body.len().min(200)]);
+            if let Ok(chunks) = vdb.search_code(&query, 3).await {
+                if !chunks.is_empty() {
+                    let related: Vec<String> = chunks
+                        .into_iter()
+                        .map(|(fp, content, score)| {
+                            format!(
+                                "--- related: {fp} (score={score:.2}) ---\n{content}",
+                            )
+                        })
+                        .collect();
+                    if !related.is_empty() {
+                        body.push_str("\n\n<related_code>\n");
+                        body.push_str(&related.join("\n\n"));
+                        body.push_str("\n</related_code>");
+                    }
+                }
+            }
+        }
+
+        Ok(ToolResult::success(body))
     }
 }
 
