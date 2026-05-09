@@ -1290,7 +1290,12 @@ mod tests {
     }
 
     #[test]
-    fn chat_messages_omit_prior_non_tool_reasoning_after_new_user_turn() {
+    fn chat_messages_keep_prior_non_tool_reasoning_after_new_user_turn() {
+        // The serialized JSON for a stored assistant message MUST be a pure
+        // function of that message — never of what comes after it. DeepSeek's
+        // prompt cache hashes the leading bytes of every request; flipping
+        // `reasoning_content` on/off across turns rewrites historical bytes
+        // and busts the prefix cache from that message onwards. (#583)
         let messages = vec![
             Message {
                 role: "user".to_string(),
@@ -1330,9 +1335,68 @@ mod tests {
             assistant.get("content").and_then(Value::as_str),
             Some("Final answer")
         );
-        assert!(
-            assistant.get("reasoning_content").is_none(),
-            "non-tool reasoning from previous turns should not be replayed"
+        assert_eq!(
+            assistant.get("reasoning_content").and_then(Value::as_str),
+            Some("Internal explanation plan"),
+            "reasoning_content must be preserved across follow-up user turns to keep DeepSeek's prefix cache warm"
+        );
+    }
+
+    #[test]
+    fn chat_messages_assistant_json_is_byte_stable_across_follow_up_user_turn() {
+        // Direct prefix-cache regression: the JSON for the assistant message
+        // built on turn N must equal the JSON for the same assistant message
+        // built on turn N+1, after a new user message has been appended.
+        let assistant = Message {
+            role: "assistant".to_string(),
+            content: vec![
+                ContentBlock::Thinking {
+                    thinking: "I should explain step by step.".to_string(),
+                },
+                ContentBlock::Text {
+                    text: "Here is the explanation.".to_string(),
+                    cache_control: None,
+                },
+            ],
+        };
+        let user_initial = Message {
+            role: "user".to_string(),
+            content: vec![ContentBlock::Text {
+                text: "Explain it".to_string(),
+                cache_control: None,
+            }],
+        };
+        let user_follow_up = Message {
+            role: "user".to_string(),
+            content: vec![ContentBlock::Text {
+                text: "Next question".to_string(),
+                cache_control: None,
+            }],
+        };
+
+        let turn_n = build_chat_messages(
+            None,
+            &[user_initial.clone(), assistant.clone()],
+            "deepseek-v4-pro",
+        );
+        let turn_n_plus_1 = build_chat_messages(
+            None,
+            &[user_initial, assistant, user_follow_up],
+            "deepseek-v4-pro",
+        );
+
+        let assistant_n = turn_n
+            .iter()
+            .find(|v| v.get("role").and_then(Value::as_str) == Some("assistant"))
+            .expect("assistant present in turn N");
+        let assistant_n1 = turn_n_plus_1
+            .iter()
+            .find(|v| v.get("role").and_then(Value::as_str) == Some("assistant"))
+            .expect("assistant present in turn N+1");
+
+        assert_eq!(
+            assistant_n, assistant_n1,
+            "assistant message JSON must be byte-identical across turns or DeepSeek's prefix cache breaks"
         );
     }
 
