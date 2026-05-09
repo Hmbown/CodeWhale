@@ -446,6 +446,15 @@ impl ExecPolicyEngine {
                     proposed_network_policy_amendments: vec![],
                 }
             }
+            AskForApproval::Reject { rules: false, .. }
+                if matches!(tool_rule.decision, Some(PermissionDecision::Allow)) =>
+            {
+                ExecApprovalRequirement::NeedsApproval {
+                    reason: "Approval requested by policy mode.".to_string(),
+                    proposed_execpolicy_amendment: None,
+                    proposed_network_policy_amendments: vec![],
+                }
+            }
             _ if matches!(tool_rule.decision, Some(PermissionDecision::Allow)) => {
                 ExecApprovalRequirement::Skip {
                     bypass_sandbox: false,
@@ -569,10 +578,9 @@ fn command_rule_matches(
 fn path_pattern_matches(pattern: &str, path: &str, workspace_root: Option<&str>) -> bool {
     let pattern = normalize_path_pattern(pattern);
     let path = normalize_path_for_matching(path, workspace_root);
-    if let Some(prefix) = pattern.strip_suffix("/**")
-        && path.starts_with(&format!("{prefix}/"))
-    {
-        return true;
+    match pattern.strip_suffix("/**") {
+        Some(prefix) if path.starts_with(&format!("{prefix}/")) => return true,
+        _ => {}
     }
     if !pattern.contains('*') && !pattern.contains('?') {
         return pattern == path;
@@ -846,6 +854,33 @@ mod tests {
         assert_eq!(
             decision.reason(),
             "Policy is configured to reject rule-exceptions."
+        );
+    }
+
+    #[test]
+    fn reject_without_rules_still_requires_approval_for_allow_rule() {
+        let engine =
+            ExecPolicyEngine::with_rulesets(vec![Ruleset::user(vec![], vec![]).with_rules(vec![
+                ToolPermissionRule::exec_shell(PermissionDecision::Allow, "cargo test"),
+            ])]);
+
+        let decision = engine
+            .check(ctx(
+                "cargo test --workspace",
+                AskForApproval::Reject {
+                    sandbox_approval: false,
+                    rules: false,
+                    mcp_elicitations: false,
+                },
+            ))
+            .unwrap();
+
+        assert!(decision.allow);
+        assert!(decision.requires_approval);
+        assert_eq!(decision.requirement.phase(), "needs_approval");
+        assert_eq!(
+            decision.matched_rule.as_deref(),
+            Some("tool 'exec_shell', command 'cargo test'")
         );
     }
 
