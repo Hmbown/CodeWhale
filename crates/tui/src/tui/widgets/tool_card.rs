@@ -175,14 +175,17 @@ pub enum CardRail {
     /// Any middle line — body content. `│`.
     Middle,
     /// Last line of the card. `╰`.
+    #[allow(dead_code)]
     Bottom,
     /// Single-line card — no rail at all.
+    #[allow(dead_code)]
     Single,
 }
 
 /// Map a [`CardRail`] position to its rail glyph. Returned as a `&str`
 /// because callers paste it into a span.
 #[must_use]
+#[allow(dead_code)] // wired by future card-refactor follow-ups
 pub fn rail_glyph(rail: CardRail) -> &'static str {
     match rail {
         CardRail::Top => "\u{256D}",    // ╭

@@ -266,24 +266,7 @@ impl HistoryCell {
                 }
                 lines
             }
-            HistoryCell::Tool(cell) => {
-                let lines = cell.lines_with_motion(width, options.low_motion);
-                // Apply Claude Code-style card rails for completed multi-line
-                // tools. Running tools and single-line tools stay as-is.
-                let status = cell.status();
-                if matches!(status, ToolStatus::Success | ToolStatus::Failed)
-                    && lines.len() > 1
-                {
-                    let footer = match status {
-                        ToolStatus::Success => Some("✓ completed"),
-                        ToolStatus::Failed => Some("✗ failed"),
-                        _ => None,
-                    };
-                    render_with_card_rails(lines, status, footer)
-                } else {
-                    lines
-                }
-            }
+            HistoryCell::Tool(cell) => cell.lines_with_motion(width, options.low_motion),
             HistoryCell::User { content } => render_message(
                 USER_GLYPH,
                 user_label_style(),
@@ -2933,57 +2916,6 @@ fn tool_detail_label_style() -> Style {
 
 fn tool_state_color(status: ToolStatus) -> Color {
     active_theme().tool_status_color(status)
-}
-
-/// Wrap tool-card content lines with left-rail glyphs (╭ │ ╰)
-/// matching Claude Code's card rendering style.
-fn render_with_card_rails<'a>(
-    mut lines: Vec<Line<'a>>,
-    status: ToolStatus,
-    footer: Option<&str>,
-) -> Vec<Line<'a>> {
-    use crate::tui::widgets::tool_card::{CardRail, rail_glyph};
-    if lines.is_empty() {
-        return lines;
-    }
-    let status_color = tool_state_color(status);
-    let rail_style = Style::default().fg(status_color);
-    let dim_rail = Style::default().fg(palette::TEXT_DIM);
-
-    // Prepend rail glyph to each line.
-    if lines.len() <= 1 {
-        // Single-line: no rail decoration needed.
-        return lines;
-    }
-    for (i, line) in lines.iter_mut().enumerate() {
-        let rail = if i == 0 {
-            CardRail::Top
-        } else {
-            CardRail::Middle
-        };
-        let glyph = rail_glyph(rail);
-        // Status color on the top rail, dim on body rails.
-        let style = if i == 0 {
-            rail_style
-        } else {
-            dim_rail
-        };
-        let mut spans = vec![Span::styled(format!("{glyph} "), style)];
-        spans.extend(line.spans.iter().cloned());
-        *line = Line::from(spans);
-    }
-
-    // Add footer line for completed / failed tools.
-    if let Some(footer_text) = footer {
-        let glyph = rail_glyph(CardRail::Bottom);
-        let footer_style = Style::default().fg(status_color);
-        lines.push(Line::from(vec![Span::styled(
-            format!("{glyph} {footer_text}"),
-            footer_style,
-        )]));
-    }
-
-    lines
 }
 
 fn tool_status_label(status: ToolStatus) -> &'static str {
