@@ -77,6 +77,13 @@ impl TodoList {
         }
     }
 
+    /// Restore a todo list from persisted items. Rebuilds next_id from
+    /// the maximum existing id + 1.
+    pub fn from_items(items: Vec<TodoItem>) -> Self {
+        let next_id = items.iter().map(|item| item.id).max().unwrap_or(0) + 1;
+        Self { items, next_id }
+    }
+
     /// Return a snapshot of the list with computed metrics.
     #[must_use]
     pub fn snapshot(&self) -> TodoListSnapshot {

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use ratatui::layout::Rect;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
@@ -25,7 +26,7 @@ use crate::settings::Settings;
 use crate::tools::plan::{SharedPlanState, new_shared_plan_state};
 use crate::tools::shell::new_shared_shell_manager;
 use crate::tools::spec::RuntimeToolServices;
-use crate::tools::subagent::SubAgentResult;
+use crate::tools::subagent::{SubAgentResult, SubAgentStatus};
 use crate::tools::todo::{SharedTodoList, new_shared_todo_list};
 use crate::tui::active_cell::ActiveCell;
 use crate::tui::approval::ApprovalMode;
@@ -603,7 +604,7 @@ impl Default for ViewportState {
 /// Goal mode state (#397). Also hosts auto-continue (#goals):
 /// when enabled, the agent autonomously keeps pushing turns until
 /// all todos are completed or the user interrupts.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct GoalState {
     pub goal_objective: Option<String>,
     pub goal_token_budget: Option<u32>,
@@ -625,17 +626,104 @@ pub struct GoalState {
     /// How many consecutive turns the model produced no tool calls
     /// (idle chatter instead of doing work).
     pub idle_streak: u32,
+    /// When todos reach zero, we don't stop immediately. Instead we
+    /// send one confirmation turn asking the model whether the goal is
+    /// truly achieved. If the model confirms (no new todos added),
+    /// auto-continue stops. If it adds more todos, we continue.
+    pub completion_confirmation_pending: bool,
+    /// Conversation context snapshot captured at goal-set time so the
+    /// model can re-orient after many auto-continue turns. Includes the
+    /// goal objective, initial transcript state, and workspace info.
+    pub goal_context: Option<String>,
+}
+
+impl Default for GoalState {
+    fn default() -> Self {
+        Self {
+            goal_objective: None,
+            goal_token_budget: None,
+            goal_started_at: None,
+            auto_continue: false,
+            auto_continue_turn_count: 0,
+            prev_pending_count: None,
+            stuck_streak: 0,
+            idle_streak: 0,
+            completion_confirmation_pending: false,
+            goal_context: None,
+        }
+    }
+}
+
+impl Serialize for GoalState {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut state = s.serialize_struct("GoalState", 10)?;
+        state.serialize_field("goal_objective", &self.goal_objective)?;
+        state.serialize_field("goal_token_budget", &self.goal_token_budget)?;
+        // Instant is not serializable; store elapsed seconds instead.
+        let elapsed_secs = self.goal_started_at.map(|t| t.elapsed().as_secs());
+        state.serialize_field("goal_started_elapsed_secs", &elapsed_secs)?;
+        state.serialize_field("auto_continue", &self.auto_continue)?;
+        state.serialize_field("auto_continue_turn_count", &self.auto_continue_turn_count)?;
+        state.serialize_field("prev_pending_count", &self.prev_pending_count)?;
+        state.serialize_field("stuck_streak", &self.stuck_streak)?;
+        state.serialize_field("idle_streak", &self.idle_streak)?;
+        state.serialize_field("completion_confirmation_pending", &self.completion_confirmation_pending)?;
+        state.serialize_field("goal_context", &self.goal_context)?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for GoalState {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Helper {
+            goal_objective: Option<String>,
+            goal_token_budget: Option<u32>,
+            goal_started_elapsed_secs: Option<u64>,
+            auto_continue: bool,
+            #[serde(default)]
+            auto_continue_turn_count: u32,
+            #[serde(default)]
+            prev_pending_count: Option<usize>,
+            #[serde(default)]
+            stuck_streak: u32,
+            #[serde(default)]
+            idle_streak: u32,
+            #[serde(default)]
+            completion_confirmation_pending: bool,
+            #[serde(default)]
+            goal_context: Option<String>,
+        }
+        let h = Helper::deserialize(d)?;
+        Ok(GoalState {
+            goal_objective: h.goal_objective,
+            goal_token_budget: h.goal_token_budget,
+            goal_started_at: h.goal_started_elapsed_secs.map(|secs| {
+                Instant::now()
+                    .checked_sub(Duration::from_secs(secs))
+                    .unwrap_or_else(Instant::now)
+            }),
+            auto_continue: h.auto_continue,
+            auto_continue_turn_count: h.auto_continue_turn_count,
+            prev_pending_count: h.prev_pending_count,
+            stuck_streak: h.stuck_streak,
+            idle_streak: h.idle_streak,
+            completion_confirmation_pending: h.completion_confirmation_pending,
+            goal_context: h.goal_context,
+        })
+    }
 }
 
 /// Auto-continue stops if the pending todo count hasn't changed for this
 /// many consecutive turns.
-pub const STUCK_THRESHOLD: u32 = 3;
+pub const STUCK_THRESHOLD: u32 = 5;
 /// Auto-continue stops after this many turns regardless of progress.
 /// Set to 0 to disable the turn limit entirely.
 pub const MAX_AUTO_CONTINUE_TURNS: u32 = 0;
 /// Auto-continue stops if the model produces this many consecutive turns
 /// with no tool calls (idle chatter instead of work).
-pub const IDLE_TURN_THRESHOLD: u32 = 2;
+pub const IDLE_TURN_THRESHOLD: u32 = 3;
 
 /// Session cost and token telemetry state.
 #[derive(Debug, Clone)]
@@ -3634,9 +3722,10 @@ impl App {
             .find(|cell| matches!(cell, HistoryCell::Assistant { .. }))
         {
             if let HistoryCell::Assistant { content, .. } = last_assistant {
-                // Truncate to ~500 chars for the recap
-                let summary = if content.len() > 500 {
-                    format!("{}…", &content[..500])
+                // Truncate to ~500 chars, safe on UTF-8 boundaries.
+                let summary = if content.chars().count() > 500 {
+                    let truncated: String = content.chars().take(500).collect();
+                    format!("{truncated}…")
                 } else {
                     content.clone()
                 };
@@ -3646,10 +3735,30 @@ impl App {
             }
         }
 
-        // Active sub-agents
+        // Active sub-agents (with per-model breakdown)
         let agent_count = crate::tui::subagent_routing::running_agent_count(self);
         if agent_count > 0 {
-            lines.push(format!("**Active sub-agents**: {agent_count}"));
+            // Count by model name for cost visibility.
+            let mut model_counts: std::collections::HashMap<String, usize> =
+                std::collections::HashMap::new();
+            for agent in &self.subagent_cache {
+                if matches!(agent.status, SubAgentStatus::Running) {
+                    let label = if agent.model.is_empty() {
+                        "default"
+                    } else {
+                        agent.model.as_str()
+                    };
+                    *model_counts.entry(label.to_string()).or_insert(0) += 1;
+                }
+            }
+            let breakdown: Vec<String> = model_counts
+                .iter()
+                .map(|(model, count)| format!("{count}×{model}"))
+                .collect();
+            lines.push(format!(
+                "**Active sub-agents**: {agent_count} ({})",
+                breakdown.join(", ")
+            ));
             lines.push(String::new());
         }
 

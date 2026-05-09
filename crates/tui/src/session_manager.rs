@@ -126,6 +126,14 @@ pub struct SavedSession {
     /// `/attach` mentions. Optional for backward-compatible session loads.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub context_references: Vec<SessionContextReference>,
+    /// Serialized goal state (GoalState as JSON). Persisted so
+    /// auto-continue can resume after restart/crash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal_state_json: Option<String>,
+    /// Serialized todo items (Vec<TodoItem> as JSON). Persisted so
+    /// incomplete work survives restart/crash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub todos_json: Option<String>,
 }
 
 /// Manager for session persistence operations
@@ -603,6 +611,8 @@ pub fn create_saved_session_with_mode(
             truncation_note,
         ),
         context_references: Vec::new(),
+        goal_state_json: None,
+        todos_json: None,
     }
 }
 
@@ -870,6 +880,8 @@ mod tests {
             },
             system_prompt: None,
             context_references: Vec::new(),
+            goal_state_json: None,
+            todos_json: None,
         };
         manager.save_session(&session).expect("save");
     }
@@ -900,6 +912,8 @@ mod tests {
             },
             system_prompt: None,
             context_references: Vec::new(),
+            goal_state_json: None,
+            todos_json: None,
         };
         manager.save_session(&session).expect("save empty");
     }

@@ -1046,8 +1046,28 @@ async fn run_event_loop(
                                     });
 
                                 // Safety: detect stuck state (no progress
-                                // after N consecutive turns).
-                                let stuck = if let Some(prev) =
+                                // after N consecutive turns). Skip if any
+                                // todo is in_progress — the model IS
+                                // actively working on something.
+                                let has_in_progress = app
+                                    .todos
+                                    .try_lock()
+                                    .map(|todos| {
+                                        todos.snapshot().items.iter().any(
+                                            |item| {
+                                                matches!(
+                                                    item.status,
+                                                    crate::tools::todo::TodoStatus::InProgress
+                                                )
+                                            },
+                                        )
+                                    })
+                                    .unwrap_or(false);
+                                let stuck = if has_in_progress {
+                                    // Model is working — reset streak.
+                                    app.goal.stuck_streak = 0;
+                                    false
+                                } else if let Some(prev) =
                                     app.goal.prev_pending_count
                                     && prev == incomplete
                                 {
@@ -1090,12 +1110,34 @@ async fn run_event_loop(
                                         && app.goal.auto_continue_turn_count
                                             >= MAX_AUTO_CONTINUE_TURNS;
 
+                                // When todos reach zero, don't stop
+                                // immediately. Send one confirmation
+                                // turn so the model can decide whether
+                                // the goal is truly achieved or needs
+                                // more checklist items.
                                 let stop_reason: Option<String> =
                                     if incomplete == 0 {
-                                        Some(
-                                            "All todos completed"
-                                                .to_string(),
-                                        )
+                                        if app.goal.completion_confirmation_pending {
+                                            // Model already got a chance
+                                            // to add more todos and
+                                            // didn't — goal is done.
+                                            Some("Goal achieved — all todos completed and confirmed".to_string())
+                                        } else {
+                                            // First time hitting zero:
+                                            // ask for confirmation.
+                                            app.goal.completion_confirmation_pending = true;
+                                            None // Don't stop yet
+                                        }
+                                    } else {
+                                        // Model added more todos — reset
+                                        // confirmation flag.
+                                        app.goal.completion_confirmation_pending = false;
+                                        None
+                                    };
+
+                                let stop_reason: Option<String> =
+                                    if let Some(reason) = stop_reason {
+                                        Some(reason)
                                     } else if budget_exceeded {
                                         Some(
                                             "Token budget exhausted"
@@ -1121,13 +1163,70 @@ async fn run_event_loop(
                                     };
 
                                 if let Some(reason) = stop_reason {
-                                    app.status_message = Some(format!(
+                                    let status = format!(
                                         "Auto-continue finished: {reason}.",
-                                    ));
+                                    );
+                                    app.status_message = Some(status.clone());
+                                    // Also push the stop reason into the
+                                    // transcript so the user can see why.
+                                    app.history.push(HistoryCell::System {
+                                        content: format!("⏹ {status}"),
+                                    });
+                                    app.mark_history_updated();
                                     app.goal.auto_continue = false;
-                                } else {
+                                    app.goal.completion_confirmation_pending = false;
+                                } else if app.goal.completion_confirmation_pending {
+                                    // All todos done but the model may
+                                    // have marked items done prematurely.
+                                    // Require a 3-point verification:
+                                    //   1. Tests/build pass?
+                                    //   2. All referenced issues resolved?
+                                    //   3. Any remaining TODO/FIXME?
+                                    // Only reply GOAL_COMPLETE if all three
+                                    // pass. Otherwise add checklist items.
                                     let msg = format!(
-                                        "Continue working on the remaining todo items.\n\n{recap}"
+                                        "You've marked all checklist items as completed. \
+                                         Before confirming, verify with objective evidence:\n\n\
+                                         1. Run relevant tests/build — do they pass?\n\
+                                         2. Review the conversation — are ALL issues resolved?\n\
+                                         3. Search for remaining TODO/FIXME/hack markers.\n\n\
+                                         If ALL three pass, reply \"GOAL_COMPLETE\". \
+                                         If ANY issue remains, add new items with checklist_add.\n\n{recap}"
+                                    );
+                                    app.queued_messages.push_back(QueuedMessage::new(msg, None));
+                                    app.goal.auto_continue_turn_count += 1;
+                                    app.status_message = Some(format!(
+                                        "Auto-continue turn #{} — verifying goal completion",
+                                        app.goal.auto_continue_turn_count
+                                    ));
+                                } else {
+                                    // Include the goal context so the model
+                                    // can re-orient across many turns.
+                                    let goal_context_block = app
+                                        .goal
+                                        .goal_context
+                                        .as_deref()
+                                        .map(|ctx| {
+                                            format!(
+                                                "\n\n## Goal Context (from /goal set time)\n\n{ctx}"
+                                            )
+                                        })
+                                        .unwrap_or_default();
+                                    let decomposition_hint =
+                                        if let Some(prev) =
+                                            app.goal.prev_pending_count
+                                            && incomplete < prev
+                                        {
+                                            // Todo was just completed:
+                                            // prompt to split next tasks.
+                                            "\n\nProgress made. Review the Goal Context above and split the \
+                                             next set of tasks from the remaining goal. \
+                                             Add them with checklist_add."
+                                        } else {
+                                            ""
+                                        };
+                                    let msg = format!(
+                                        "Continue working on the remaining todo items.\n\n{recap}{goal_context_block}{decomposition_hint}"
                                     );
                                     app.queued_messages.push_back(QueuedMessage::new(msg, None));
                                     app.goal.auto_continue_turn_count += 1;
@@ -3140,6 +3239,13 @@ fn build_session_snapshot(app: &App, manager: &SessionManager) -> SavedSession {
         updated.metadata.subagent_cost_usd = app.session.subagent_cost;
         updated.metadata.subagent_cost_cny = app.session.subagent_cost_cny;
         updated.context_references = app.session_context_references.clone();
+        updated.goal_state_json =
+            serde_json::to_string(&app.goal).ok();
+        updated.todos_json = app
+            .todos
+            .try_lock()
+            .ok()
+            .and_then(|todos| serde_json::to_string(&todos.snapshot().items).ok());
         updated
     } else {
         let mut session = create_saved_session_with_mode(
@@ -3155,6 +3261,13 @@ fn build_session_snapshot(app: &App, manager: &SessionManager) -> SavedSession {
         session.metadata.subagent_cost_usd = app.session.subagent_cost;
         session.metadata.subagent_cost_cny = app.session.subagent_cost_cny;
         session.context_references = app.session_context_references.clone();
+        session.goal_state_json =
+            serde_json::to_string(&app.goal).ok();
+        session.todos_json = app
+            .todos
+            .try_lock()
+            .ok()
+            .and_then(|todos| serde_json::to_string(&todos.snapshot().items).ok());
         session
     }
 }
@@ -6243,6 +6356,24 @@ fn apply_loaded_session(app: &mut App, session: &SavedSession) -> bool {
     app.session.last_prompt_cache_miss_tokens = None;
     app.session.last_reasoning_replay_tokens = None;
     app.session.turn_cache_history.clear();
+
+    // Restore persisted goal state and todos so auto-continue can
+    // pick up where it left off after a restart/crash.
+    if let Some(ref json) = session.goal_state_json {
+        if let Ok(goal) = serde_json::from_str::<crate::tui::app::GoalState>(json) {
+            app.goal = goal;
+        }
+    }
+    if let Some(ref json) = session.todos_json {
+        if let Ok(items) =
+            serde_json::from_str::<Vec<crate::tools::todo::TodoItem>>(json)
+        {
+            if let Ok(mut todos) = app.todos.try_lock() {
+                *todos = crate::tools::todo::TodoList::from_items(items);
+            }
+        }
+    }
+
     app.current_session_id = Some(session.metadata.id.clone());
     app.workspace_context = None;
     app.workspace_context_refreshed_at = None;
@@ -6257,6 +6388,29 @@ fn apply_loaded_session(app: &mut App, session: &SavedSession) -> bool {
     } else {
         false
     };
+
+    // If the restored session has auto-continue enabled and incomplete
+    // todos, queue a continuation message so the agent picks up where
+    // it left off without user intervention.
+    if app.goal.auto_continue && app.pending_todo_count() > 0 {
+        let obj_hint = app
+            .goal
+            .goal_objective
+            .as_deref()
+            .map(|obj| format!(" for \"{obj}\""))
+            .unwrap_or_default();
+        app.status_message = Some(format!(
+            "Session restored — resuming auto-continue{obj_hint} (turn #{}, {} todo(s) remaining).",
+            app.goal.auto_continue_turn_count,
+            app.pending_todo_count()
+        ));
+        let recap = app.recap_text();
+        let msg = format!(
+            "Continue working on the remaining todo items.\n\n{recap}"
+        );
+        app.queued_messages.push_back(QueuedMessage::new(msg, None));
+    }
+
     app.scroll_to_bottom();
     recovered
 }

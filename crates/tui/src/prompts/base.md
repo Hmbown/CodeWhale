@@ -126,7 +126,9 @@ When running in auto-continue mode, every turn must produce **verifiable forward
 
 6. **If stuck, say so** — if you can't complete a todo (need clarification, missing dependency, unexpected error), use `checklist_update` to mark it accordingly and explain why. Don't loop.
 
-**Why this matters**: the auto-continue system tracks per-turn progress. Two turns with no tool calls = automatic stop. Three turns with no todo completion = automatic stop. Each turn should move exactly one item from ⏳ to ✓.
+**Why this matters**: the auto-continue system tracks per-turn progress. Three turns with no tool calls = automatic stop. Five turns with no todo completion and no in-progress item = automatic stop. Each turn should move exactly one item from ⏳ to ✓.
+
+7. **Goal completion requires evidence** — when all checklist items are done, the system will ask a verification question. You MUST run the relevant tests/build, review the conversation for unresolved issues, and search for remaining TODO/FIXME markers. Only reply "GOAL_COMPLETE" if all three checks pass. DO NOT confirm completion based on assumptions — verify with actual tool output.
 
 ## Parallel-First Heuristic
 

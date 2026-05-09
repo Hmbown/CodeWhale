@@ -713,6 +713,8 @@ fn saved_session_with_messages(messages: Vec<Message>) -> SavedSession {
         messages,
         system_prompt: None,
         context_references: Vec::new(),
+        goal_state_json: None,
+        todos_json: None,
     }
 }
 
