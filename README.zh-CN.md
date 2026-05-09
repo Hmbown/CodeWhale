@@ -4,6 +4,10 @@
 
 [English README](README.md)
 
+> ⚠️ **安全警告**：发现仿冒仓库 `DeepSeek-TUI/DeepSeek-TUI` 冒充本项目，其发布资产含蠕虫病毒
+> （VirusTotal 已确认）。**请仅从官方仓库下载：[Hmbown/DeepSeek-TUI](https://github.com/Hmbown/DeepSeek-TUI)。**
+> 详见 [#1286](https://github.com/Hmbown/DeepSeek-TUI/issues/1286)。
+
 ## 安装
 
 `deepseek` 是自包含 Rust 二进制——**运行时不依赖 Node.js 或 Python**。

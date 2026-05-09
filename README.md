@@ -4,6 +4,11 @@
 
 [简体中文 README](README.zh-CN.md)
 
+> ⚠️ **SECURITY WARNING**: A fake repository `DeepSeek-TUI/DeepSeek-TUI` is impersonating this
+> project and distributing malware-infected release assets. **Only download from the official
+> repository: [Hmbown/DeepSeek-TUI](https://github.com/Hmbown/DeepSeek-TUI).**
+> See [#1286](https://github.com/Hmbown/DeepSeek-TUI/issues/1286) for details.
+
 ## Install
 
 `deepseek` is distributed as Rust binaries: the dispatcher command
