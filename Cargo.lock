@@ -1313,6 +1313,7 @@ dependencies = [
  "clap_complete",
  "colored",
  "crossterm 0.28.1",
+ "deepseek-execpolicy",
  "deepseek-secrets",
  "deepseek-tools",
  "dirs",

@@ -152,6 +152,210 @@ fn make_plan_at(
     }
 }
 
+fn permission_engine_with_rules(
+    rules: Vec<deepseek_execpolicy::ToolPermissionRule>,
+) -> deepseek_execpolicy::ExecPolicyEngine {
+    deepseek_execpolicy::ExecPolicyEngine::with_rulesets(vec![
+        deepseek_execpolicy::Ruleset::user(vec![], vec![]).with_rules(rules),
+    ])
+}
+
+fn permission_test_workspace() -> &'static Path {
+    Path::new(".")
+}
+
+#[test]
+fn typed_permission_allows_shell_command_before_approval_prompt() {
+    let engine =
+        permission_engine_with_rules(vec![deepseek_execpolicy::ToolPermissionRule::exec_shell(
+            deepseek_execpolicy::PermissionDecision::Allow,
+            "cargo test",
+        )]);
+
+    let decision = tool_permission_override_for_call(
+        &engine,
+        "exec_shell",
+        &json!({"command": "cargo test --workspace"}),
+        permission_test_workspace(),
+    );
+
+    assert!(matches!(decision, ToolPermissionOverride::Allow { .. }));
+}
+
+#[test]
+fn typed_permission_can_force_read_file_approval() {
+    let engine =
+        permission_engine_with_rules(vec![deepseek_execpolicy::ToolPermissionRule::file_path(
+            "read_file",
+            deepseek_execpolicy::PermissionDecision::Ask,
+            "secrets/**",
+        )]);
+
+    let decision = tool_permission_override_for_call(
+        &engine,
+        "read_file",
+        &json!({"path": "secrets/a.env"}),
+        permission_test_workspace(),
+    );
+
+    assert!(matches!(decision, ToolPermissionOverride::Ask { .. }));
+}
+
+#[test]
+fn typed_permission_matches_absolute_workspace_file_paths() {
+    let workspace = tempdir().expect("workspace");
+    let absolute_path = workspace.path().join("secrets/a.env");
+    let engine =
+        permission_engine_with_rules(vec![deepseek_execpolicy::ToolPermissionRule::file_path(
+            "read_file",
+            deepseek_execpolicy::PermissionDecision::Deny,
+            "secrets/**",
+        )]);
+
+    let decision = tool_permission_override_for_call(
+        &engine,
+        "read_file",
+        &json!({"path": absolute_path.to_string_lossy()}),
+        workspace.path(),
+    );
+
+    assert!(matches!(decision, ToolPermissionOverride::Deny { .. }));
+}
+
+#[cfg(unix)]
+#[test]
+fn typed_permission_matches_symlink_resolved_workspace_file_paths() {
+    use std::os::unix::fs::symlink;
+
+    let workspace = tempdir().expect("workspace");
+    let secrets_dir = workspace.path().join("secrets");
+    fs::create_dir(&secrets_dir).expect("create secrets dir");
+    fs::write(secrets_dir.join("a.env"), "token").expect("write secret");
+    symlink(&secrets_dir, workspace.path().join("alias")).expect("symlink secrets");
+    let engine =
+        permission_engine_with_rules(vec![deepseek_execpolicy::ToolPermissionRule::file_path(
+            "read_file",
+            deepseek_execpolicy::PermissionDecision::Deny,
+            "secrets/**",
+        )]);
+
+    let decision = tool_permission_override_for_call(
+        &engine,
+        "read_file",
+        &json!({"path": "alias/a.env"}),
+        workspace.path(),
+    );
+
+    assert!(matches!(decision, ToolPermissionOverride::Deny { .. }));
+}
+
+#[test]
+fn typed_permission_checks_nested_parallel_tool_calls() {
+    let engine =
+        permission_engine_with_rules(vec![deepseek_execpolicy::ToolPermissionRule::file_path(
+            "read_file",
+            deepseek_execpolicy::PermissionDecision::Deny,
+            "secrets/**",
+        )]);
+
+    let decision = tool_permission_override_for_call(
+        &engine,
+        "multi_tool_use.parallel",
+        &json!({
+            "tool_uses": [{
+                "recipient_name": "read_file",
+                "parameters": { "path": "secrets/a.env" }
+            }]
+        }),
+        permission_test_workspace(),
+    );
+
+    assert!(matches!(decision, ToolPermissionOverride::Deny { .. }));
+}
+
+#[test]
+fn typed_permission_matches_legacy_file_tool_aliases() {
+    let engine =
+        permission_engine_with_rules(vec![deepseek_execpolicy::ToolPermissionRule::file_path(
+            "file_edit",
+            deepseek_execpolicy::PermissionDecision::Ask,
+            "src/**",
+        )]);
+
+    let decision = tool_permission_override_for_call(
+        &engine,
+        "edit_file",
+        &json!({"path": "src/main.rs"}),
+        permission_test_workspace(),
+    );
+
+    assert!(matches!(decision, ToolPermissionOverride::Ask { .. }));
+}
+
+#[test]
+fn typed_permission_denies_file_path_before_tool_execution() {
+    let engine =
+        permission_engine_with_rules(vec![deepseek_execpolicy::ToolPermissionRule::file_path(
+            "write_file",
+            deepseek_execpolicy::PermissionDecision::Deny,
+            "src/**",
+        )]);
+
+    let decision = tool_permission_override_for_call(
+        &engine,
+        "write_file",
+        &json!({"path": "src/main.rs", "content": "fn main() {}"}),
+        permission_test_workspace(),
+    );
+
+    assert!(matches!(decision, ToolPermissionOverride::Deny { .. }));
+}
+
+#[test]
+fn typed_permission_requires_all_apply_patch_paths_to_be_allowed() {
+    let engine =
+        permission_engine_with_rules(vec![deepseek_execpolicy::ToolPermissionRule::file_path(
+            "apply_patch",
+            deepseek_execpolicy::PermissionDecision::Allow,
+            "docs/**",
+        )]);
+
+    let decision = tool_permission_override_for_call(
+        &engine,
+        "apply_patch",
+        &json!({
+            "changes": [
+                { "path": "docs/a.md", "content": "ok" },
+                { "path": "src/lib.rs", "content": "needs existing approval" }
+            ]
+        }),
+        permission_test_workspace(),
+    );
+
+    assert_eq!(decision, ToolPermissionOverride::Unmatched);
+}
+
+#[test]
+fn typed_permission_allows_apply_patch_when_all_paths_match() {
+    let engine =
+        permission_engine_with_rules(vec![deepseek_execpolicy::ToolPermissionRule::file_path(
+            "apply_patch",
+            deepseek_execpolicy::PermissionDecision::Allow,
+            "docs/**",
+        )]);
+
+    let decision = tool_permission_override_for_call(
+        &engine,
+        "apply_patch",
+        &json!({
+            "patch": "--- a/docs/a.md\n+++ b/docs/a.md\n@@ -1 +1 @@\n-old\n+new\n"
+        }),
+        permission_test_workspace(),
+    );
+
+    assert!(matches!(decision, ToolPermissionOverride::Allow { .. }));
+}
+
 fn api_tool(name: &str) -> Tool {
     Tool {
         tool_type: Some("function".to_string()),

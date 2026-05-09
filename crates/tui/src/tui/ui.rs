@@ -721,6 +721,7 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
             .and_then(|s| s.provider)
             .unwrap_or_default(),
         search_api_key: config.search.as_ref().and_then(|s| s.api_key.clone()),
+        exec_policy_engine: config.exec_policy_engine(),
     }
 }
 

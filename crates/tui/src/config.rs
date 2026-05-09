@@ -8,6 +8,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use deepseek_execpolicy::{ExecPolicyEngine, Ruleset, ToolPermissionRule};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 #[cfg(unix)]
@@ -913,6 +914,12 @@ pub struct AutoConfig {
     pub cost_saving: Option<bool>,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct PermissionsConfig {
+    #[serde(default)]
+    pub rules: Vec<ToolPermissionRule>,
+}
+
 /// Resolved CLI configuration, including defaults and environment overrides.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Config {
@@ -947,6 +954,15 @@ pub struct Config {
     pub approval_policy: Option<String>,
     pub sandbox_mode: Option<String>,
     pub yolo: Option<bool>,
+    /// Legacy shell command permission rules. These are translated into typed
+    /// `exec_shell` allow/deny rules before tool execution.
+    #[serde(default)]
+    pub auto_allow: Vec<String>,
+    #[serde(default)]
+    pub auto_deny: Vec<String>,
+    /// Typed, persistent tool permission rules.
+    #[serde(default)]
+    pub permissions: PermissionsConfig,
     /// External sandbox backend: `"none"` or `"opensandbox"`.
     /// When set, exec_shell routes commands through the backend's HTTP API
     /// instead of spawning a local process.
@@ -1816,6 +1832,20 @@ impl Config {
     #[must_use]
     pub fn allow_shell(&self) -> bool {
         self.allow_shell.unwrap_or(false)
+    }
+
+    /// Build the user-layer permission ruleset used by the tool execution
+    /// approval path.
+    #[must_use]
+    pub fn permission_ruleset(&self) -> Ruleset {
+        Ruleset::user(self.auto_allow.clone(), self.auto_deny.clone())
+            .with_rules(self.permissions.rules.clone())
+    }
+
+    /// Build the permission engine for shell/file tool approval decisions.
+    #[must_use]
+    pub fn exec_policy_engine(&self) -> ExecPolicyEngine {
+        ExecPolicyEngine::with_rulesets(vec![self.permission_ruleset()])
     }
 
     /// Return the maximum number of concurrent sub-agents.
@@ -2922,6 +2952,9 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
         yolo: override_cfg.yolo.or(base.yolo),
         approval_policy: override_cfg.approval_policy.or(base.approval_policy),
         sandbox_mode: override_cfg.sandbox_mode.or(base.sandbox_mode),
+        auto_allow: merge_non_empty_vec(base.auto_allow, override_cfg.auto_allow),
+        auto_deny: merge_non_empty_vec(base.auto_deny, override_cfg.auto_deny),
+        permissions: merge_permissions_config(base.permissions, override_cfg.permissions),
         sandbox_backend: override_cfg.sandbox_backend.or(base.sandbox_backend),
         sandbox_url: override_cfg.sandbox_url.or(base.sandbox_url),
         sandbox_api_key: override_cfg.sandbox_api_key.or(base.sandbox_api_key),
@@ -2976,6 +3009,25 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
         strict_tool_mode: override_cfg.strict_tool_mode.or(base.strict_tool_mode),
         runtime_api: override_cfg.runtime_api.or(base.runtime_api),
         workshop: override_cfg.workshop.or(base.workshop),
+    }
+}
+
+fn merge_non_empty_vec<T>(base: Vec<T>, override_cfg: Vec<T>) -> Vec<T> {
+    if override_cfg.is_empty() {
+        base
+    } else {
+        override_cfg
+    }
+}
+
+fn merge_permissions_config(
+    base: PermissionsConfig,
+    override_cfg: PermissionsConfig,
+) -> PermissionsConfig {
+    if override_cfg.rules.is_empty() {
+        base
+    } else {
+        override_cfg
     }
 }
 
@@ -4050,6 +4102,44 @@ mod tests {
             high.subagent_api_timeout_secs(),
             MAX_SUBAGENT_API_TIMEOUT_SECS
         );
+    }
+
+    #[test]
+    fn config_loads_typed_permission_rules_for_exec_policy_engine() -> Result<()> {
+        let _guard = lock_test_env();
+        let temp = tempfile::tempdir()?;
+        let _env = EnvGuard::new(temp.path());
+        let config_path = temp.path().join("config.toml");
+        fs::write(
+            &config_path,
+            r#"
+auto_allow = ["git status"]
+auto_deny = ["rm -rf"]
+
+[[permissions.rules]]
+tool = "read_file"
+decision = "ask"
+path = "secrets/**"
+"#,
+        )?;
+
+        let config = Config::load(Some(config_path), None)?;
+        assert_eq!(config.auto_allow, ["git status"]);
+        assert_eq!(config.auto_deny, ["rm -rf"]);
+
+        let decision = config.exec_policy_engine().check_tool_permission(
+            deepseek_execpolicy::ToolPermissionContext {
+                tool: "read_file",
+                command: None,
+                path: Some("secrets/token.txt"),
+            },
+        );
+
+        assert_eq!(
+            decision.decision,
+            Some(deepseek_execpolicy::PermissionDecision::Ask)
+        );
+        Ok(())
     }
 
     #[test]
