@@ -137,8 +137,6 @@ const RECOVERY_PROBE_COOLDOWN: Duration = Duration::from_secs(15);
 
 const DEFAULT_CLIENT_RATE_LIMIT_RPS: f64 = 8.0;
 const DEFAULT_CLIENT_RATE_LIMIT_BURST: f64 = 16.0;
-const ALLOW_INSECURE_HTTP_ENV: &str = "DEEPSEEK_ALLOW_INSECURE_HTTP";
-
 pub(super) const SSE_BACKPRESSURE_HIGH_WATERMARK: usize = 8 * 1024 * 1024; // 8 MB
 pub(super) const SSE_BACKPRESSURE_SLEEP_MS: u64 = 10;
 pub(super) const SSE_MAX_LINES_PER_CHUNK: usize = 256;
@@ -323,37 +321,12 @@ pub(super) async fn bounded_error_text(response: reqwest::Response, max_bytes: u
 }
 
 fn validate_base_url_security(base_url: &str) -> Result<()> {
-    if base_url.starts_with("https://")
-        || base_url.starts_with("http://localhost")
-        || base_url.starts_with("http://127.0.0.1")
-        || base_url.starts_with("http://[::1]")
-    {
+    if base_url.starts_with("https://") || base_url.starts_with("http://") {
         return Ok(());
-    }
-
-    if base_url.starts_with("http://")
-        && std::env::var(ALLOW_INSECURE_HTTP_ENV)
-            .ok()
-            .as_deref()
-            .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-    {
-        logging::warn(format!(
-            "Using insecure HTTP base URL because {} is set",
-            ALLOW_INSECURE_HTTP_ENV
-        ));
-        return Ok(());
-    }
-
-    if base_url.starts_with("http://") {
-        anyhow::bail!(
-            "Refusing insecure base URL '{}'. Use HTTPS or set {}=1 to override for trusted environments.",
-            base_url,
-            ALLOW_INSECURE_HTTP_ENV
-        );
     }
 
     anyhow::bail!(
-        "Refusing base URL '{}': only HTTPS (or explicitly allowed HTTP) URLs are supported.",
+        "Refusing base URL '{}': only http:// and https:// URLs are supported.",
         base_url,
     )
 }
@@ -2511,10 +2484,8 @@ mod tests {
     }
 
     #[test]
-    fn base_url_security_rejects_insecure_non_local_http() {
-        let err = validate_base_url_security("http://api.deepseek.com")
-            .expect_err("non-local insecure HTTP should be rejected");
-        assert!(err.to_string().contains("Refusing insecure base URL"));
+    fn base_url_security_allows_non_local_http() {
+        assert!(validate_base_url_security("http://api.deepseek.com").is_ok());
     }
 
     #[test]

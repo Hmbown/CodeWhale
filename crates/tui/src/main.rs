@@ -168,7 +168,7 @@ struct Cli {
     #[arg(long = "fresh")]
     fresh: bool,
 
-    /// Skip loading project-level config from $WORKSPACE/.deepseek/config.toml
+    /// Deprecated compatibility flag; project-level config overlays are disabled.
     #[arg(long = "no-project-config")]
     no_project_config: bool,
 }
@@ -2475,13 +2475,13 @@ fn doctor_timeout_recovery_lines(config: &Config) -> Vec<String> {
                 && !target.base_url.contains("api.deepseeki.com") =>
         {
             lines.push(
-                "If this is a custom DeepSeek-compatible endpoint, set its HTTPS base URL in ~/.deepseek/config.toml and rerun `deepseek doctor`."
+                "If this is a custom DeepSeek-compatible endpoint, set its base URL in ~/.deepseek/config.toml and rerun `deepseek doctor`."
                     .to_string(),
             );
         }
         crate::config::ApiProvider::Deepseek | crate::config::ApiProvider::DeepseekCN => {
             lines.push(
-                "If this is a custom DeepSeek-compatible endpoint, confirm it serves `/v1/models` and `/v1/chat/completions` over HTTPS."
+                "If this is a custom DeepSeek-compatible endpoint, confirm it serves `/v1/models` and `/v1/chat/completions` over HTTP or HTTPS."
                     .to_string(),
             );
         }
@@ -3805,10 +3805,10 @@ fn preserve_interrupted_checkpoint_for_explicit_resume(launch_workspace: &Path) 
     }
 }
 
-/// Load project-level config from `$WORKSPACE/.deepseek/config.toml` and
-/// apply its fields as overrides on top of the global config (#485).
-/// Only explicitly set fields in the project file are applied; everything
-/// else falls back to the global value.
+/// Legacy project-config overlay helper retained only for unit tests.
+/// Production runtime intentionally ignores `$WORKSPACE/.deepseek/config.toml`
+/// and only honors `~/.deepseek/config.toml` plus explicit CLI/env overrides.
+#[cfg(test)]
 fn merge_project_config(config: &mut Config, workspace: &Path) {
     let path = workspace.join(".deepseek").join("config.toml");
     let raw = match std::fs::read_to_string(&path) {
@@ -3921,13 +3921,11 @@ async fn run_interactive(
         .clone()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
-    // Merge project-level config from $WORKSPACE/.deepseek/config.toml
-    // unless --no-project-config was passed (#485).
-    let mut merged_config = config.clone();
-    if !cli.no_project_config {
-        merge_project_config(&mut merged_config, &workspace);
-    }
-    let config = &merged_config;
+    // Project-level `.deepseek/config.toml` overlays are intentionally
+    // disabled. Runtime uses only `~/.deepseek/config.toml` plus explicit
+    // CLI / env overrides so opening a repo cannot silently change model,
+    // provider, or other behavior.
+    let _ = cli.no_project_config;
 
     if !cli.skip_onboarding {
         match crate::config::ensure_config_file_exists(cli.config.clone()) {
