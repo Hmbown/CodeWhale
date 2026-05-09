@@ -3694,29 +3694,32 @@ impl App {
         self.history_navigation_draft = None;
     }
 
+    /// Retry a `try_lock` up to `retries` times with a 1ms pause between
+    /// attempts. Returns `Some(guard)` on success, `None` if the lock
+    /// remains contended after all retries.
+    fn retry_lock<T>(mutex: &tokio::sync::Mutex<T>, retries: u32) -> Option<tokio::sync::MutexGuard<'_, T>> {
+        for _ in 0..retries {
+            if let Ok(guard) = mutex.try_lock() {
+                return Some(guard);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        None
+    }
+
     pub fn clear_todos(&mut self) -> bool {
         // Clear the todo list (the sidebar checklist). Retry with try_lock
         // so /clear always resets todos even when the engine briefly holds
         // the mutex during tool execution.
-        let todos_cleared = {
-            let mut cleared = false;
-            for _ in 0..100 {
-                if let Ok(mut todos) = self.todos.try_lock() {
-                    todos.clear();
-                    cleared = true;
-                    break;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(1));
-            }
-            cleared
+        let todos_cleared = if let Some(mut todos) = Self::retry_lock(&self.todos, 100) {
+            todos.clear();
+            true
+        } else {
+            false
         };
         // Also clear the plan state — /clear means a full reset.
-        for _ in 0..100 {
-            if let Ok(mut plan) = self.plan_state.try_lock() {
-                *plan = crate::tools::plan::PlanState::default();
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(1));
+        if let Some(mut plan) = Self::retry_lock(&self.plan_state, 100) {
+            *plan = crate::tools::plan::PlanState::default();
         }
         todos_cleared
     }
