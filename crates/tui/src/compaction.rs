@@ -2294,15 +2294,16 @@ mod tests {
 
         // 110 messages @ ~500 tokens each → ~55K total tokens.
         // Above the floor (50K), below threshold (2M): no compaction.
+        // Use vector_db_enabled=true so the floor is 50K (not 500K).
         let messages: Vec<Message> = (0..110).map(|_| msg("user", &"x".repeat(2000))).collect();
-        assert!(!should_compact(&messages, &config, None, None, None, false));
+        assert!(!should_compact(&messages, &config, None, None, None, true));
 
         // Crank threshold below total → compaction fires.
         let config_lower = CompactionConfig {
             token_threshold: 10_000,
             ..config
         };
-        assert!(should_compact(&messages, &config_lower, None, None, None, false));
+        assert!(should_compact(&messages, &config_lower, None, None, None, true));
     }
 
     /// `CompactionConfig::default()` ships with the floor set to

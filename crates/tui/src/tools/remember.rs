@@ -76,17 +76,36 @@ impl ToolSpec for RememberTool {
 
         // Write to vector DB for semantic retrieval (best-effort).
         if let Some(ref vdb) = context.vector_db {
-            let item = crate::vector_db::NewMemoryItem {
-                content: note.to_string(),
-                source: "model".to_string(),
-                session_id: context.state_namespace.clone(),
-                tags: Some("remembered".to_string()),
-                ttl: None,
-            };
-            if let Err(e) = vdb.store_memory(item).await {
-                tracing::warn!(
-                    "remember tool: failed to store memory in vector db: {e}"
+            // #5: memory dedup — check for existing similar memories
+            // before writing. If an existing memory matches the new note
+            // with score > 0.85, skip the write to avoid polluting the
+            // vector store with near-duplicates.
+            let existing = vdb
+                .search_memories(note, 3, None)
+                .await
+                .unwrap_or_default();
+            let too_similar = existing
+                .iter()
+                .any(|m| m.score > 0.85 && m.content.to_lowercase().contains(&note.to_lowercase()));
+
+            if too_similar {
+                tracing::debug!(
+                    note = %note,
+                    "remember tool: skipping duplicate memory (score > 0.85)"
                 );
+            } else {
+                let item = crate::vector_db::NewMemoryItem {
+                    content: note.to_string(),
+                    source: "model".to_string(),
+                    session_id: context.state_namespace.clone(),
+                    tags: Some("remembered".to_string()),
+                    ttl: None,
+                };
+                if let Err(e) = vdb.store_memory(item).await {
+                    tracing::warn!(
+                        "remember tool: failed to store memory in vector db: {e}"
+                    );
+                }
             }
         }
 
