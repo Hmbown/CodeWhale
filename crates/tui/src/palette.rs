@@ -1,18 +1,18 @@
-//! Color palette — Claude Code style: warm-neutral dark, amber reasoning.
+//! Color palette — Claude Code style: warm-neutral dark, soft clay accents.
 
 use ratatui::style::Color;
 
 // === Base RGBs ===
-pub const INK_RGB: (u8, u8, u8) = (13, 17, 23);
-pub const SLATE_RGB: (u8, u8, u8) = (22, 27, 34);
-pub const ELEVATED_RGB: (u8, u8, u8) = (33, 38, 45);
-pub const BORDER_RGB: (u8, u8, u8) = (48, 54, 61);
-pub const AMBER_RGB: (u8, u8, u8) = (210, 153, 34);
-pub const AMBER_DIM_RGB: (u8, u8, u8) = (180, 130, 60);
-pub const GREEN_RGB: (u8, u8, u8) = (63, 185, 80);
-pub const RED_RGB: (u8, u8, u8) = (248, 81, 73);
-pub const BLUE_RGB: (u8, u8, u8) = (88, 166, 255);
-pub const SKY_RGB: (u8, u8, u8) = (121, 192, 255);
+pub const INK_RGB: (u8, u8, u8) = (16, 15, 13);
+pub const SLATE_RGB: (u8, u8, u8) = (25, 23, 20);
+pub const ELEVATED_RGB: (u8, u8, u8) = (35, 32, 28);
+pub const BORDER_RGB: (u8, u8, u8) = (72, 64, 55);
+pub const AMBER_RGB: (u8, u8, u8) = (219, 128, 91);
+pub const AMBER_DIM_RGB: (u8, u8, u8) = (176, 113, 78);
+pub const GREEN_RGB: (u8, u8, u8) = (91, 164, 108);
+pub const RED_RGB: (u8, u8, u8) = (232, 93, 86);
+pub const BLUE_RGB: (u8, u8, u8) = AMBER_RGB;
+pub const SKY_RGB: (u8, u8, u8) = (238, 156, 112);
 #[allow(dead_code)]
 pub const PINK_RGB: (u8, u8, u8) = (219, 109, 165);
 
@@ -29,17 +29,17 @@ pub const DEEPSEEK_NAVY_RGB: (u8, u8, u8) = (24, 63, 138);
 
 // Light theme
 pub const LIGHT_SURFACE_RGB: (u8, u8, u8) = (255, 255, 255);
-pub const LIGHT_PANEL_RGB: (u8, u8, u8) = (246, 248, 250);
-pub const LIGHT_ELEVATED_RGB: (u8, u8, u8) = (240, 242, 245);
-pub const LIGHT_REASONING_RGB: (u8, u8, u8) = (255, 248, 220);
-pub const LIGHT_SUCCESS_RGB: (u8, u8, u8) = (220, 252, 231);
-pub const LIGHT_ERROR_RGB: (u8, u8, u8) = (255, 235, 233);
-pub const LIGHT_TEXT_BODY_RGB: (u8, u8, u8) = (31, 35, 40);
-pub const LIGHT_TEXT_MUTED_RGB: (u8, u8, u8) = (101, 109, 118);
-pub const LIGHT_TEXT_HINT_RGB: (u8, u8, u8) = (130, 138, 147);
-pub const LIGHT_TEXT_SOFT_RGB: (u8, u8, u8) = (51, 55, 60);
-pub const LIGHT_BORDER_RGB: (u8, u8, u8) = (208, 215, 222);
-pub const LIGHT_SELECTION_RGB: (u8, u8, u8) = (219, 234, 254);
+pub const LIGHT_PANEL_RGB: (u8, u8, u8) = (250, 248, 244);
+pub const LIGHT_ELEVATED_RGB: (u8, u8, u8) = (242, 238, 231);
+pub const LIGHT_REASONING_RGB: (u8, u8, u8) = (255, 244, 232);
+pub const LIGHT_SUCCESS_RGB: (u8, u8, u8) = (227, 245, 231);
+pub const LIGHT_ERROR_RGB: (u8, u8, u8) = (255, 237, 233);
+pub const LIGHT_TEXT_BODY_RGB: (u8, u8, u8) = (39, 35, 31);
+pub const LIGHT_TEXT_MUTED_RGB: (u8, u8, u8) = (108, 99, 88);
+pub const LIGHT_TEXT_HINT_RGB: (u8, u8, u8) = (139, 128, 113);
+pub const LIGHT_TEXT_SOFT_RGB: (u8, u8, u8) = (67, 60, 52);
+pub const LIGHT_BORDER_RGB: (u8, u8, u8) = (216, 204, 188);
+pub const LIGHT_SELECTION_RGB: (u8, u8, u8) = (246, 216, 197);
 
 #[allow(dead_code)]
 pub const BORDER_COLOR_RGB: (u8, u8, u8) = BORDER_RGB;
@@ -58,18 +58,55 @@ pub const SKY: Color = Color::Rgb(SKY_RGB.0, SKY_RGB.1, SKY_RGB.2);
 #[allow(dead_code)]
 pub const PINK: Color = Color::Rgb(PINK_RGB.0, PINK_RGB.1, PINK_RGB.2);
 
-pub const LIGHT_SURFACE: Color = Color::Rgb(LIGHT_SURFACE_RGB.0, LIGHT_SURFACE_RGB.1, LIGHT_SURFACE_RGB.2);
+pub const LIGHT_SURFACE: Color = Color::Rgb(
+    LIGHT_SURFACE_RGB.0,
+    LIGHT_SURFACE_RGB.1,
+    LIGHT_SURFACE_RGB.2,
+);
 pub const LIGHT_PANEL: Color = Color::Rgb(LIGHT_PANEL_RGB.0, LIGHT_PANEL_RGB.1, LIGHT_PANEL_RGB.2);
-pub const LIGHT_ELEVATED: Color = Color::Rgb(LIGHT_ELEVATED_RGB.0, LIGHT_ELEVATED_RGB.1, LIGHT_ELEVATED_RGB.2);
-pub const LIGHT_REASONING: Color = Color::Rgb(LIGHT_REASONING_RGB.0, LIGHT_REASONING_RGB.1, LIGHT_REASONING_RGB.2);
-pub const LIGHT_SUCCESS: Color = Color::Rgb(LIGHT_SUCCESS_RGB.0, LIGHT_SUCCESS_RGB.1, LIGHT_SUCCESS_RGB.2);
+pub const LIGHT_ELEVATED: Color = Color::Rgb(
+    LIGHT_ELEVATED_RGB.0,
+    LIGHT_ELEVATED_RGB.1,
+    LIGHT_ELEVATED_RGB.2,
+);
+pub const LIGHT_REASONING: Color = Color::Rgb(
+    LIGHT_REASONING_RGB.0,
+    LIGHT_REASONING_RGB.1,
+    LIGHT_REASONING_RGB.2,
+);
+pub const LIGHT_SUCCESS: Color = Color::Rgb(
+    LIGHT_SUCCESS_RGB.0,
+    LIGHT_SUCCESS_RGB.1,
+    LIGHT_SUCCESS_RGB.2,
+);
 pub const LIGHT_ERROR: Color = Color::Rgb(LIGHT_ERROR_RGB.0, LIGHT_ERROR_RGB.1, LIGHT_ERROR_RGB.2);
-pub const LIGHT_TEXT_BODY: Color = Color::Rgb(LIGHT_TEXT_BODY_RGB.0, LIGHT_TEXT_BODY_RGB.1, LIGHT_TEXT_BODY_RGB.2);
-pub const LIGHT_TEXT_MUTED: Color = Color::Rgb(LIGHT_TEXT_MUTED_RGB.0, LIGHT_TEXT_MUTED_RGB.1, LIGHT_TEXT_MUTED_RGB.2);
-pub const LIGHT_TEXT_HINT: Color = Color::Rgb(LIGHT_TEXT_HINT_RGB.0, LIGHT_TEXT_HINT_RGB.1, LIGHT_TEXT_HINT_RGB.2);
-pub const LIGHT_TEXT_SOFT: Color = Color::Rgb(LIGHT_TEXT_SOFT_RGB.0, LIGHT_TEXT_SOFT_RGB.1, LIGHT_TEXT_SOFT_RGB.2);
-pub const LIGHT_BORDER: Color = Color::Rgb(LIGHT_BORDER_RGB.0, LIGHT_BORDER_RGB.1, LIGHT_BORDER_RGB.2);
-pub const LIGHT_SELECTION_BG: Color = Color::Rgb(LIGHT_SELECTION_RGB.0, LIGHT_SELECTION_RGB.1, LIGHT_SELECTION_RGB.2);
+pub const LIGHT_TEXT_BODY: Color = Color::Rgb(
+    LIGHT_TEXT_BODY_RGB.0,
+    LIGHT_TEXT_BODY_RGB.1,
+    LIGHT_TEXT_BODY_RGB.2,
+);
+pub const LIGHT_TEXT_MUTED: Color = Color::Rgb(
+    LIGHT_TEXT_MUTED_RGB.0,
+    LIGHT_TEXT_MUTED_RGB.1,
+    LIGHT_TEXT_MUTED_RGB.2,
+);
+pub const LIGHT_TEXT_HINT: Color = Color::Rgb(
+    LIGHT_TEXT_HINT_RGB.0,
+    LIGHT_TEXT_HINT_RGB.1,
+    LIGHT_TEXT_HINT_RGB.2,
+);
+pub const LIGHT_TEXT_SOFT: Color = Color::Rgb(
+    LIGHT_TEXT_SOFT_RGB.0,
+    LIGHT_TEXT_SOFT_RGB.1,
+    LIGHT_TEXT_SOFT_RGB.2,
+);
+pub const LIGHT_BORDER: Color =
+    Color::Rgb(LIGHT_BORDER_RGB.0, LIGHT_BORDER_RGB.1, LIGHT_BORDER_RGB.2);
+pub const LIGHT_SELECTION_BG: Color = Color::Rgb(
+    LIGHT_SELECTION_RGB.0,
+    LIGHT_SELECTION_RGB.1,
+    LIGHT_SELECTION_RGB.2,
+);
 
 // Legacy re-exports — keep call sites minimal diff
 pub const DEEPSEEK_BLUE: Color = BLUE;
@@ -83,51 +120,52 @@ pub const DEEPSEEK_AQUA: Color = Color::Rgb(54, 187, 212);
 pub const DEEPSEEK_NAVY: Color = Color::Rgb(24, 63, 138);
 
 // === Semantic text colors ===
-pub const TEXT_BODY: Color = Color::Rgb(230, 237, 243);
-pub const TEXT_SECONDARY: Color = Color::Rgb(139, 148, 158);
-pub const TEXT_HINT: Color = Color::Rgb(110, 118, 129);
-pub const TEXT_SOFT: Color = Color::Rgb(201, 209, 217);
+pub const TEXT_BODY: Color = Color::Rgb(235, 230, 218);
+pub const TEXT_SECONDARY: Color = Color::Rgb(166, 155, 140);
+pub const TEXT_HINT: Color = Color::Rgb(119, 110, 98);
+pub const TEXT_SOFT: Color = Color::Rgb(213, 204, 190);
 pub const TEXT_ACCENT: Color = SKY;
 pub const SELECTION_TEXT: Color = Color::White;
-pub const TEXT_REASONING: Color = Color::Rgb(210, 170, 110);
+pub const TEXT_REASONING: Color = Color::Rgb(206, 158, 112);
 
 pub const TEXT_PRIMARY: Color = TEXT_BODY;
 pub const TEXT_MUTED: Color = TEXT_SECONDARY;
 pub const TEXT_DIM: Color = TEXT_HINT;
-pub const USER_BODY: Color = Color::Rgb(74, 222, 128); // #4ADE80 green
+pub const USER_BODY: Color = TEXT_BODY;
 pub const LIGHT_USER_BODY: Color = Color::Rgb(21, 128, 61); // #15803D green
 
 // === Surfaces ===
 pub const SURFACE_ELEVATED: Color = ELEVATED;
-pub const SURFACE_REASONING: Color = Color::Rgb(45, 40, 20);
-pub const SURFACE_REASONING_TINT: Color = Color::Rgb(20, 19, 16);
+pub const SURFACE_REASONING: Color = Color::Rgb(50, 38, 27);
+pub const SURFACE_REASONING_TINT: Color = Color::Rgb(27, 23, 19);
 #[allow(dead_code)]
-pub const SURFACE_REASONING_ACTIVE: Color = Color::Rgb(55, 48, 24);
+pub const SURFACE_REASONING_ACTIVE: Color = Color::Rgb(60, 45, 31);
 #[allow(dead_code)]
-pub const SURFACE_TOOL: Color = Color::Rgb(28, 32, 37);
+pub const SURFACE_TOOL: Color = Color::Rgb(30, 27, 23);
 #[allow(dead_code)]
-pub const SURFACE_TOOL_ACTIVE: Color = Color::Rgb(35, 39, 45);
+pub const SURFACE_TOOL_ACTIVE: Color = Color::Rgb(39, 35, 30);
 #[allow(dead_code)]
-pub const SURFACE_SUCCESS: Color = Color::Rgb(20, 50, 35);
+pub const SURFACE_SUCCESS: Color = Color::Rgb(25, 48, 34);
 #[allow(dead_code)]
-pub const SURFACE_ERROR: Color = Color::Rgb(55, 25, 30);
+pub const SURFACE_ERROR: Color = Color::Rgb(56, 27, 25);
 #[allow(dead_code)]
-pub const SURFACE_PANEL: Color = Color::Rgb(21, 33, 52);
+pub const SURFACE_PANEL: Color = Color::Rgb(25, 23, 20);
 #[allow(dead_code)]
-pub const BACKGROUND_DARK: Color = Color::Rgb(13, 26, 48);
+pub const BACKGROUND_DARK: Color = INK;
+const LEGACY_BACKGROUND_DARK: Color = Color::Rgb(11, 21, 38);
 #[allow(dead_code)]
 pub const COMPOSER_BG: Color = SLATE;
 
 // === Diff ===
-pub const DIFF_ADDED_BG: Color = Color::Rgb(18, 54, 36);
-pub const DIFF_DELETED_BG: Color = Color::Rgb(54, 22, 28);
-pub const DIFF_ADDED: Color = Color::Rgb(87, 209, 130);
+pub const DIFF_ADDED_BG: Color = Color::Rgb(22, 48, 33);
+pub const DIFF_DELETED_BG: Color = Color::Rgb(55, 25, 24);
+pub const DIFF_ADDED: Color = Color::Rgb(113, 195, 129);
 
 // === Accent colors ===
 pub const ACCENT_REASONING_LIVE: Color = AMBER_DIM;
 pub const ACCENT_TOOL_LIVE: Color = AMBER;
-pub const ACCENT_TOOL_ISSUE: Color = Color::Rgb(200, 130, 130);
-pub const TEXT_TOOL_OUTPUT: Color = Color::Rgb(177, 186, 196);
+pub const ACCENT_TOOL_ISSUE: Color = Color::Rgb(224, 126, 112);
+pub const TEXT_TOOL_OUTPUT: Color = Color::Rgb(190, 181, 166);
 #[allow(dead_code)]
 pub const ACCENT_PRIMARY: Color = BLUE;
 #[allow(dead_code)]
@@ -144,11 +182,11 @@ pub const STATUS_NEUTRAL: Color = Color::Rgb(160, 160, 160);
 
 // === Mode badges ===
 pub const MODE_AGENT: Color = SKY;
-pub const MODE_YOLO: Color = Color::Rgb(255, 140, 100);
+pub const MODE_YOLO: Color = RED;
 pub const MODE_PLAN: Color = AMBER;
 
 // === Selection ===
-pub const SELECTION_BG: Color = Color::Rgb(38, 56, 86);
+pub const SELECTION_BG: Color = Color::Rgb(89, 61, 45);
 
 // === UiTheme ===
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,15 +215,15 @@ pub struct UiTheme {
 }
 
 pub const UI_THEME: UiTheme = UiTheme {
-    name: "midnight",
+    name: "claude-code",
     mode: PaletteMode::Dark,
-    surface_bg: INK,
+    surface_bg: Color::Reset,
     panel_bg: SLATE,
     elevated_bg: ELEVATED,
-    composer_bg: SLATE,
+    composer_bg: Color::Reset,
     selection_bg: SELECTION_BG,
-    header_bg: INK,
-    footer_bg: INK,
+    header_bg: Color::Reset,
+    footer_bg: Color::Reset,
     mode_agent: MODE_AGENT,
     mode_yolo: MODE_YOLO,
     mode_plan: MODE_PLAN,
@@ -201,7 +239,7 @@ pub const UI_THEME: UiTheme = UiTheme {
 };
 
 pub const LIGHT_UI_THEME: UiTheme = UiTheme {
-    name: "midnight-light",
+    name: "claude-code-light",
     mode: PaletteMode::Light,
     surface_bg: LIGHT_SURFACE,
     panel_bg: LIGHT_PANEL,
@@ -234,12 +272,18 @@ pub enum PaletteMode {
 impl PaletteMode {
     #[must_use]
     pub fn from_colorfgbg(value: &str) -> Option<Self> {
-        let bg = value.split(';').rev().find_map(|part| part.parse::<u16>().ok())?;
+        let bg = value
+            .split(';')
+            .rev()
+            .find_map(|part| part.parse::<u16>().ok())?;
         Some(if bg >= 8 { Self::Light } else { Self::Dark })
     }
     #[must_use]
     pub fn detect() -> Self {
-        std::env::var("COLORFGBG").ok().and_then(|v| Self::from_colorfgbg(&v)).unwrap_or(Self::Dark)
+        std::env::var("COLORFGBG")
+            .ok()
+            .and_then(|v| Self::from_colorfgbg(&v))
+            .unwrap_or(Self::Dark)
     }
 }
 
@@ -252,7 +296,9 @@ impl UiTheme {
         }
     }
     #[must_use]
-    pub fn detect() -> Self { Self::for_mode(PaletteMode::detect()) }
+    pub fn detect() -> Self {
+        Self::for_mode(PaletteMode::detect())
+    }
     #[must_use]
     pub fn with_background_color(mut self, color: Color) -> Self {
         self.surface_bg = color;
@@ -325,7 +371,7 @@ pub fn adapt_bg_for_palette_mode(color: Color, mode: PaletteMode) -> Color {
         return color;
     }
 
-    if color == DEEPSEEK_INK || color == BACKGROUND_DARK {
+    if color == DEEPSEEK_INK || color == BACKGROUND_DARK || color == LEGACY_BACKGROUND_DARK {
         LIGHT_SURFACE
     } else if color == DEEPSEEK_SLATE
         || color == COMPOSER_BG
@@ -360,20 +406,40 @@ pub fn adapt_bg_for_palette_mode(color: Color, mode: PaletteMode) -> Color {
 /// Terminal color depth, used to gate truecolor surfaces (e.g. reasoning bg
 /// tints) on terminals that can't render them faithfully.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ColorDepth { Ansi16, Ansi256, TrueColor }
+pub enum ColorDepth {
+    Ansi16,
+    Ansi256,
+    TrueColor,
+}
 
 impl ColorDepth {
     #[must_use]
     pub fn detect() -> Self {
         if let Ok(ct) = std::env::var("COLORTERM") {
-            if ct.to_ascii_lowercase().contains("truecolor") || ct.to_ascii_lowercase().contains("24bit") { return Self::TrueColor; }
+            if ct.to_ascii_lowercase().contains("truecolor")
+                || ct.to_ascii_lowercase().contains("24bit")
+            {
+                return Self::TrueColor;
+            }
         }
-        if std::env::var_os("WT_SESSION").is_some() { return Self::TrueColor; }
+        if std::env::var_os("WT_SESSION").is_some() {
+            return Self::TrueColor;
+        }
         if let Ok(tp) = std::env::var("TERM_PROGRAM") {
             let tp = tp.to_ascii_lowercase();
-            if tp.contains("iterm") || tp.contains("wezterm") || tp.contains("vscode") || tp.contains("warp") { return Self::TrueColor; }
+            if tp.contains("iterm")
+                || tp.contains("wezterm")
+                || tp.contains("vscode")
+                || tp.contains("warp")
+            {
+                return Self::TrueColor;
+            }
         }
-        match std::env::var("TERM").unwrap_or_default().to_ascii_lowercase().as_str() {
+        match std::env::var("TERM")
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str()
+        {
             t if t.contains("truecolor") || t.contains("24bit") => Self::TrueColor,
             t if t.contains("256") => Self::Ansi256,
             "" | "dumb" => Self::Ansi16,
@@ -406,7 +472,10 @@ pub fn adapt_bg(color: Color, depth: ColorDepth) -> Color {
 
 #[must_use]
 pub fn reasoning_surface_tint(depth: ColorDepth) -> Option<Color> {
-    match depth { ColorDepth::Ansi16 => None, _ => Some(adapt_bg(SURFACE_REASONING_TINT, depth)) }
+    match depth {
+        ColorDepth::Ansi16 => None,
+        _ => Some(adapt_bg(SURFACE_REASONING_TINT, depth)),
+    }
 }
 
 #[allow(dead_code)]
@@ -415,7 +484,11 @@ pub fn blend(fg: Color, bg: Color, alpha: f32) -> Color {
     let alpha = alpha.clamp(0.0, 1.0);
     match (fg, bg) {
         (Color::Rgb(fr, fg_, fb), Color::Rgb(br, bg_, bb)) => {
-            let mix = |a: u8, b: u8| -> u8 { (f32::from(b) + (f32::from(a) - f32::from(b)) * alpha).round().clamp(0.0, 255.0) as u8 };
+            let mix = |a: u8, b: u8| -> u8 {
+                (f32::from(b) + (f32::from(a) - f32::from(b)) * alpha)
+                    .round()
+                    .clamp(0.0, 255.0) as u8
+            };
             Color::Rgb(mix(fr, br), mix(fg_, bg_), mix(fb, bb))
         }
         _ => fg,
@@ -440,40 +513,106 @@ pub fn pulse_brightness(color: Color, now_ms: u64) -> Color {
 #[allow(dead_code)]
 fn nearest_ansi16(r: u8, g: u8, b: u8) -> Color {
     let lum = (u16::from(r) + u16::from(g) + u16::from(b)) / 3;
-    if lum < 24 { return Color::Black; }
-    if r > 220 && g > 220 && b > 220 { return Color::White; }
+    if lum < 24 {
+        return Color::Black;
+    }
+    if r > 220 && g > 220 && b > 220 {
+        return Color::White;
+    }
     let bright = lum > 144;
-    let max = r.max(g).max(b); let min = r.min(g).min(b);
-    if max.saturating_sub(min) < 16 { return if bright { Color::Gray } else { Color::DarkGray }; }
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    if max.saturating_sub(min) < 16 {
+        return if bright { Color::Gray } else { Color::DarkGray };
+    }
     if r >= g && r >= b {
-        if g > b + 24 { return if bright { Color::LightYellow } else { Color::Yellow }; }
-        else if b > r.saturating_sub(24) { return if bright { Color::LightMagenta } else { Color::Magenta }; }
-        else { return if bright { Color::LightRed } else { Color::Red }; }
+        if g > b + 24 {
+            return if bright {
+                Color::LightYellow
+            } else {
+                Color::Yellow
+            };
+        } else if b > r.saturating_sub(24) {
+            return if bright {
+                Color::LightMagenta
+            } else {
+                Color::Magenta
+            };
+        } else {
+            return if bright { Color::LightRed } else { Color::Red };
+        }
     } else if g >= r && g >= b {
-        if b > r + 24 { return if bright { Color::LightCyan } else { Color::Cyan }; }
-        else { return if bright { Color::LightGreen } else { Color::Green }; }
-    } else if r.saturating_add(48) >= b && r > g + 24 { return if bright { Color::LightMagenta } else { Color::Magenta }; }
-    else if g.saturating_add(48) >= b && g > r + 24 { return if bright { Color::LightCyan } else { Color::Cyan }; }
-    else { return if bright { Color::LightBlue } else { Color::Blue }; }
+        if b > r + 24 {
+            return if bright {
+                Color::LightCyan
+            } else {
+                Color::Cyan
+            };
+        } else {
+            return if bright {
+                Color::LightGreen
+            } else {
+                Color::Green
+            };
+        }
+    } else if r.saturating_add(48) >= b && r > g + 24 {
+        return if bright {
+            Color::LightMagenta
+        } else {
+            Color::Magenta
+        };
+    } else if g.saturating_add(48) >= b && g > r + 24 {
+        return if bright {
+            Color::LightCyan
+        } else {
+            Color::Cyan
+        };
+    } else {
+        return if bright {
+            Color::LightBlue
+        } else {
+            Color::Blue
+        };
+    }
 }
 
 #[allow(dead_code)]
 fn rgb_to_ansi256(r: u8, g: u8, b: u8) -> u8 {
     const CUBE_LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
     fn nearest_cube_level(channel: u8) -> usize {
-        CUBE_LEVELS.iter().enumerate().min_by_key(|(_, lv)| channel.abs_diff(**lv)).map(|(i, _)| i).unwrap_or(0)
+        CUBE_LEVELS
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, lv)| channel.abs_diff(**lv))
+            .map(|(i, _)| i)
+            .unwrap_or(0)
     }
     fn dist_sq(a: (u8, u8, u8), b: (u8, u8, u8)) -> u32 {
-        let dr = i32::from(a.0) - i32::from(b.0); let dg = i32::from(a.1) - i32::from(b.1); let db = i32::from(a.2) - i32::from(b.2);
+        let dr = i32::from(a.0) - i32::from(b.0);
+        let dg = i32::from(a.1) - i32::from(b.1);
+        let db = i32::from(a.2) - i32::from(b.2);
         (dr * dr + dg * dg + db * db) as u32
     }
-    let ri = nearest_cube_level(r); let gi = nearest_cube_level(g); let bi = nearest_cube_level(b);
+    let ri = nearest_cube_level(r);
+    let gi = nearest_cube_level(g);
+    let bi = nearest_cube_level(b);
     let cube_rgb = (CUBE_LEVELS[ri], CUBE_LEVELS[gi], CUBE_LEVELS[bi]);
     let cube_index = 16 + (36 * ri) as u8 + (6 * gi) as u8 + bi as u8;
     let avg = ((u16::from(r) + u16::from(g) + u16::from(b)) / 3) as u8;
-    let gray_i = if avg <= 8 { 0 } else if avg >= 238 { 23 } else { ((u16::from(avg) - 8 + 5) / 10).min(23) as u8 };
-    let gray = 8 + 10 * gray_i; let gray_index = 232 + gray_i;
-    if dist_sq((r, g, b), (gray, gray, gray)) < dist_sq((r, g, b), cube_rgb) { gray_index } else { cube_index }
+    let gray_i = if avg <= 8 {
+        0
+    } else if avg >= 238 {
+        23
+    } else {
+        ((u16::from(avg) - 8 + 5) / 10).min(23) as u8
+    };
+    let gray = 8 + 10 * gray_i;
+    let gray_index = 232 + gray_i;
+    if dist_sq((r, g, b), (gray, gray, gray)) < dist_sq((r, g, b), cube_rgb) {
+        gray_index
+    } else {
+        cube_index
+    }
 }
 
 #[cfg(test)]
@@ -482,7 +621,10 @@ mod tests {
 
     #[test]
     fn palette_mode_parses_colorfgbg_background_slot() {
-        assert_eq!(PaletteMode::from_colorfgbg("0;15"), Some(PaletteMode::Light));
+        assert_eq!(
+            PaletteMode::from_colorfgbg("0;15"),
+            Some(PaletteMode::Light)
+        );
         assert_eq!(PaletteMode::from_colorfgbg("15;0"), Some(PaletteMode::Dark));
     }
 
@@ -495,10 +637,10 @@ mod tests {
 
     #[test]
     fn dark_palette_uses_correct_tokens() {
-        assert_eq!(INK, Color::Rgb(13, 17, 23));
-        assert_eq!(AMBER, Color::Rgb(210, 153, 34));
-        assert_eq!(GREEN, Color::Rgb(63, 185, 80));
-        assert_eq!(RED, Color::Rgb(248, 81, 73));
+        assert_eq!(INK, Color::Rgb(16, 15, 13));
+        assert_eq!(AMBER, Color::Rgb(219, 128, 91));
+        assert_eq!(GREEN, Color::Rgb(91, 164, 108));
+        assert_eq!(RED, Color::Rgb(232, 93, 86));
     }
 
     #[test]
@@ -511,7 +653,7 @@ mod tests {
 
     #[test]
     fn parse_hex_rgb_works() {
-        assert_eq!(parse_hex_rgb_color("#0D1117"), Some(INK));
+        assert_eq!(parse_hex_rgb_color("#100f0d"), Some(INK));
         assert_eq!(parse_hex_rgb_color("#zzz"), None);
     }
 }

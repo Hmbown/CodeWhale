@@ -686,7 +686,7 @@ fn fallback_translation(candidate: Option<&'static str>, id: MessageId) -> &'sta
 
 fn english(id: MessageId) -> &'static str {
     match id {
-        MessageId::ComposerPlaceholder => "Write a task or use /.",
+        MessageId::ComposerPlaceholder => "Try \"fix lint errors\"",
         MessageId::HistorySearchPlaceholder => "Search prompt history...",
         MessageId::HistorySearchTitle => "History Search",
         MessageId::HistoryHintMove => "Up/Down move",
@@ -972,7 +972,7 @@ fn translation(locale: Locale, id: MessageId) -> Option<&'static str> {
 
 fn japanese(id: MessageId) -> Option<&'static str> {
     Some(match id {
-        MessageId::ComposerPlaceholder => "タスクを書くか / を使う。",
+        MessageId::ComposerPlaceholder => "例: \"lint エラーを直す\"",
         MessageId::HistorySearchPlaceholder => "プロンプト履歴を検索...",
         MessageId::HistorySearchTitle => "履歴検索",
         MessageId::HistoryHintMove => "Up/Down 移動",
@@ -1252,7 +1252,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
 
 fn chinese_simplified(id: MessageId) -> Option<&'static str> {
     Some(match id {
-        MessageId::ComposerPlaceholder => "编写任务或使用 /。",
+        MessageId::ComposerPlaceholder => "试试“修复 lint 错误”",
         MessageId::HistorySearchPlaceholder => "搜索提示历史...",
         MessageId::HistorySearchTitle => "历史搜索",
         MessageId::HistoryHintMove => "Up/Down 移动",
@@ -1496,7 +1496,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
 
 fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
     Some(match id {
-        MessageId::ComposerPlaceholder => "Escreva uma tarefa ou use /.",
+        MessageId::ComposerPlaceholder => "Tente \"corrigir erros de lint\"",
         MessageId::HistorySearchPlaceholder => "Pesquisar histórico de prompts...",
         MessageId::HistorySearchTitle => "Busca no histórico",
         MessageId::HistoryHintMove => "Up/Down move",
@@ -1564,9 +1564,7 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::CmdGoalDescription => {
             "Definir uma meta de sessão com orçamento de tokens opcional"
         }
-        MessageId::CmdRecapDescription => {
-            "Exibir um resumo estruturado do estado da sessão"
-        }
+        MessageId::CmdRecapDescription => "Exibir um resumo estruturado do estado da sessão",
         MessageId::CmdInitDescription => "Gerar AGENTS.md para o projeto",
         MessageId::CmdLspDescription => "Alternar diagnóstico LSP ligado ou desligado",
         MessageId::CmdShareDescription => "Exportar a sessão atual como uma URL web compartilhável",

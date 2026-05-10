@@ -238,7 +238,6 @@ fn selection_to_text_copies_rendered_transcript_block() {
             content: "copy thinking".to_string(),
             streaming: false,
             duration_secs: Some(1.0),
-            expanded: false,
         },
         HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
             name: "exec_shell".to_string(),
@@ -4318,8 +4317,14 @@ fn history_arrow_handles_empty_input() {
         false,
         false,
     ));
-    assert!(app.viewport.pending_scroll_delta < 0, "empty composer Up should scroll up");
-    assert!(app.input.is_empty(), "input should stay empty, not load history");
+    assert!(
+        app.viewport.pending_scroll_delta < 0,
+        "empty composer Up should scroll up"
+    );
+    assert!(
+        app.input.is_empty(),
+        "input should stay empty, not load history"
+    );
     assert_eq!(app.viewport.pending_scroll_delta, -1);
 }
 
@@ -4333,7 +4338,10 @@ fn history_arrow_handles_empty_input_down() {
         false,
         false,
     ));
-    assert_eq!(app.viewport.pending_scroll_delta, 1, "empty composer Down should scroll down");
+    assert_eq!(
+        app.viewport.pending_scroll_delta, 1,
+        "empty composer Down should scroll down"
+    );
 }
 
 #[test]
@@ -4351,7 +4359,10 @@ fn history_arrow_handles_whitespace_input() {
         false,
     ));
     assert_eq!(app.viewport.pending_scroll_delta, -1);
-    assert_eq!(app.input, "   ", "whitespace-only input should stay unchanged");
+    assert_eq!(
+        app.input, "   ",
+        "whitespace-only input should stay unchanged"
+    );
 }
 
 #[test]

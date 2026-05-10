@@ -27,21 +27,21 @@
 /// and label for the card header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolFamily {
-    /// Reads, listings, exploration. `▷ read`.
+    /// Reads, listings, exploration. `Read`.
     Read,
-    /// Edits, patches, writes. `◆ patch`.
+    /// Edits, patches, writes. `Edit`.
     Patch,
-    /// Shell, child processes. `▶ run`.
+    /// Shell, child processes. `Bash`.
     Run,
-    /// Grep, fuzzy file search, web search. `⌕ find`.
+    /// Grep, fuzzy file search, web search. `Search`.
     Find,
-    /// Single sub-agent dispatch. `◐ delegate`.
+    /// Single sub-agent dispatch. `Task`.
     Delegate,
-    /// Multi-agent fanout dispatch (rlm). `⋮⋮ fanout`.
+    /// Multi-agent fanout dispatch. `Fanout`.
     Fanout,
-    /// Recursive language model work. `⋮⋮ rlm`.
+    /// Recursive language model work. `RLM`.
     Rlm,
-    /// Reasoning / chain-of-thought. `… think`. Reasoning has its own
+    /// Reasoning / chain-of-thought. `Think`. Reasoning has its own
     /// render path (`render_thinking` in `history.rs`); the family is
     /// declared here for completeness so any future code that reaches for
     /// it has the matching glyph + label vocabulary.
@@ -147,21 +147,19 @@ pub fn family_glyph(family: ToolFamily) -> &'static str {
     }
 }
 
-/// The short verb label for a family — appears in card headers next to the
-/// glyph. Lowercased on purpose; the verb-glyph + label is the new card
-/// title vocabulary.
+/// The short title for a family. Matches Claude Code's terse tool names.
 #[must_use]
 pub fn family_label(family: ToolFamily) -> &'static str {
     match family {
-        ToolFamily::Read => "read",
-        ToolFamily::Patch => "patch",
-        ToolFamily::Run => "run",
-        ToolFamily::Find => "find",
-        ToolFamily::Delegate => "delegate",
-        ToolFamily::Fanout => "fanout",
-        ToolFamily::Rlm => "rlm",
-        ToolFamily::Think => "think",
-        ToolFamily::Generic => "tool",
+        ToolFamily::Read => "Read",
+        ToolFamily::Patch => "Edit",
+        ToolFamily::Run => "Bash",
+        ToolFamily::Find => "Search",
+        ToolFamily::Delegate => "Task",
+        ToolFamily::Fanout => "Fanout",
+        ToolFamily::Rlm => "RLM",
+        ToolFamily::Think => "Think",
+        ToolFamily::Generic => "Tool",
     }
 }
 

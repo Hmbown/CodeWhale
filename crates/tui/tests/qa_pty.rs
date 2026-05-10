@@ -20,6 +20,7 @@ use qa_harness::keys;
 
 const BOOT_TIMEOUT: Duration = Duration::from_secs(15);
 const KEY_TIMEOUT: Duration = Duration::from_secs(5);
+const COMPOSER_BOOT_MARKER: &str = "Try \"fix lint errors\"";
 
 fn boot_minimal() -> anyhow::Result<(qa_harness::harness::SealedWorkspace, Harness)> {
     let ws = make_sealed_workspace()?;
@@ -97,8 +98,8 @@ fn assert_viewport_starts_at_top(frame: &qa_harness::Frame) {
 fn smoke_boot_paints_composer() -> anyhow::Result<()> {
     let (_ws, mut h) = boot_minimal()?;
 
-    // The composer panel border is labelled "Composer" — wait for it.
-    h.wait_for_text("Composer", BOOT_TIMEOUT)?;
+    // The Claude-style composer has no title; wait for its placeholder.
+    h.wait_for_text(COMPOSER_BOOT_MARKER, BOOT_TIMEOUT)?;
 
     let f = h.frame();
     assert!(
@@ -116,7 +117,7 @@ fn smoke_boot_paints_composer() -> anyhow::Result<()> {
 #[test]
 fn viewport_origin_stays_row_zero_after_failed_turn() -> anyhow::Result<()> {
     let (_ws, mut h) = boot_minimal_without_retry()?;
-    h.wait_for_text("Composer", BOOT_TIMEOUT)?;
+    h.wait_for_text(COMPOSER_BOOT_MARKER, BOOT_TIMEOUT)?;
     assert_viewport_starts_at_top(h.frame());
 
     h.send(keys::key::text("trigger a failed turn"))?;
@@ -143,7 +144,7 @@ fn viewport_origin_stays_row_zero_after_failed_turn() -> anyhow::Result<()> {
 #[test]
 fn smoke_keystroke_reaches_composer() -> anyhow::Result<()> {
     let (_ws, mut h) = boot_minimal()?;
-    h.wait_for_text("Composer", BOOT_TIMEOUT)?;
+    h.wait_for_text(COMPOSER_BOOT_MARKER, BOOT_TIMEOUT)?;
 
     h.send(keys::key::text("hello-from-pty"))?;
     h.wait_for_text("hello-from-pty", KEY_TIMEOUT)?;
@@ -180,7 +181,7 @@ fn skills_menu_shows_local_and_global_skills() -> anyhow::Result<()> {
         .size(40, 140)
         .spawn()?;
 
-    h.wait_for_text("Composer", BOOT_TIMEOUT)?;
+    h.wait_for_text(COMPOSER_BOOT_MARKER, BOOT_TIMEOUT)?;
     h.send(keys::key::text("/skills"))?;
     h.wait_for_idle(Duration::from_millis(300), Duration::from_secs(2))?;
     h.send(keys::key::enter())?;
@@ -211,7 +212,7 @@ fn skills_menu_shows_local_and_global_skills() -> anyhow::Result<()> {
 #[test]
 fn paste_bracketed_with_trailing_newline_does_not_autosubmit() -> anyhow::Result<()> {
     let (_ws, mut h) = boot_minimal()?;
-    h.wait_for_text("Composer", BOOT_TIMEOUT)?;
+    h.wait_for_text(COMPOSER_BOOT_MARKER, BOOT_TIMEOUT)?;
 
     // ~200 chars matching the original report. Trailing newline is the
     // payload that historically triggered the auto-submit.
@@ -251,7 +252,7 @@ fn paste_bracketed_with_trailing_newline_does_not_autosubmit() -> anyhow::Result
 #[test]
 fn paste_unbracketed_with_trailing_newline_does_not_autosubmit() -> anyhow::Result<()> {
     let (_ws, mut h) = boot_minimal()?;
-    h.wait_for_text("Composer", BOOT_TIMEOUT)?;
+    h.wait_for_text(COMPOSER_BOOT_MARKER, BOOT_TIMEOUT)?;
     // Let the boot fully settle so input handling is wired up.
     h.wait_for_idle(Duration::from_millis(300), Duration::from_secs(3))?;
 

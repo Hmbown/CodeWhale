@@ -25,7 +25,7 @@ const TOOL_TEXT_LIMIT: usize = 180;
 const TOOL_HEADER_SUMMARY_LIMIT: usize = 56;
 const TOOL_OUTPUT_HEAD_LINES: usize = 2;
 const TOOL_OUTPUT_TAIL_LINES: usize = 2;
-const TOOL_RUNNING_SYMBOLS: [&str; 4] = ["·", "◦", "•", "◦"];
+const TOOL_RUNNING_SYMBOLS: [&str; 4] = ["✻", "✽", "✶", "✽"];
 // Spinner cadence per glyph. The status-animation tick (UI_STATUS_ANIMATION_MS
 // = 360 ms) fires every two glyphs, so a full 4-glyph "heartbeat" lands in
 // ~2.88 s — fast enough that the user sees motion within a few hundred ms of
@@ -33,18 +33,18 @@ const TOOL_RUNNING_SYMBOLS: [&str; 4] = ["·", "◦", "•", "◦"];
 const TOOL_STATUS_SYMBOL_MS: u64 = 720;
 /// Visual marker for the user role at the start of their message line. Solid
 /// vertical bar — no animation; user input is a finished thing.
-const USER_GLYPH: &str = "\u{258E}"; // ▎
+const USER_GLYPH: &str = ">";
 /// Visual marker for the assistant role. Solid bullet that pulses at 2s
 /// cycle while the response is streaming, holds full brightness when idle.
-const ASSISTANT_GLYPH: &str = "\u{25CF}"; // ●
+const ASSISTANT_GLYPH: &str = "\u{273B}"; // ✻
 /// Transcript body left rail. Solid 1/8 block (`▏`) followed by a space —
 /// used as a visual left-margin anchor for continuation lines, tool-card
 /// detail rows, and affordance lines. Dimmed so it guides the eye without
 /// competing with content.
-const TRANSCRIPT_RAIL: &str = "\u{258F} "; // ▏ + space
+const TRANSCRIPT_RAIL: &str = "  \u{23BF} "; // ⎿ + space
 /// Reasoning header opener. Replaces the spinner glyph on thinking cells —
 /// reasoning is a slow exhale, not a tool spin.
-const REASONING_OPENER: &str = "\u{2026}"; // …
+const REASONING_OPENER: &str = "\u{273B}"; // ✻
 /// Reasoning body left rail. Dashed (`╎`) instead of the solid `▏` block to
 /// visually separate reasoning from message body and tool output.
 const REASONING_RAIL: &str = "\u{254E} "; // ╎ + space
@@ -53,8 +53,8 @@ const REASONING_RAIL: &str = "\u{254E} "; // ╎ + space
 const REASONING_CURSOR: &str = "\u{258E}"; // ▎
 const TOOL_CARD_SUMMARY_LINES: usize = 4;
 const THINKING_SUMMARY_LINE_LIMIT: usize = 4;
-const TOOL_DONE_SYMBOL: &str = "•";
-const TOOL_FAILED_SYMBOL: &str = "•";
+const TOOL_DONE_SYMBOL: &str = "\u{23FA}"; // ⏺
+const TOOL_FAILED_SYMBOL: &str = "\u{23FA}"; // ⏺
 
 /// Render mode controlling whether tool/thinking cells render their compact
 /// "live" form (with caps and collapsed reasoning) or their full transcript
@@ -2660,14 +2660,14 @@ fn truncate_text(text: &str, max_len: usize) -> String {
 }
 
 fn user_label_style() -> Style {
-    Style::default().fg(palette::TEXT_MUTED)
+    Style::default().fg(palette::TEXT_SOFT)
 }
 
 fn user_body_style() -> Style {
     Style::default().fg(palette::USER_BODY)
 }
 
-/// Style for the assistant glyph (`●`). When the cell is streaming and
+/// Style for the assistant glyph (`✻`). When the cell is streaming and
 /// motion is allowed, the foreground pulses on a 2s cycle between 30% and
 /// 100% brightness — the only deliberately animated element in a calm
 /// transcript. When idle (or low_motion is on) it sits at the full DeepSeek
@@ -2678,9 +2678,9 @@ fn assistant_label_style_for(streaming: bool, low_motion: bool) -> Style {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
-        palette::pulse_brightness(palette::DEEPSEEK_SKY, now_ms)
+        palette::pulse_brightness(palette::ACCENT_TOOL_LIVE, now_ms)
     } else {
-        palette::DEEPSEEK_SKY
+        palette::ACCENT_TOOL_LIVE
     };
     Style::default().fg(color)
 }
@@ -2794,16 +2794,11 @@ fn render_tool_header_with_family_and_summary(
         state.to_string()
     };
 
-    let glyph = crate::tui::widgets::tool_card::family_glyph(family);
     let verb = crate::tui::widgets::tool_card::family_label(family);
 
     let mut spans = vec![
         Span::styled(
             format!("{} ", status_symbol(started_at, status, low_motion)),
-            Style::default().fg(tool_state_color(status)),
-        ),
-        Span::styled(
-            format!("{glyph} "),
             Style::default().fg(tool_state_color(status)),
         ),
         Span::styled(verb.to_string(), tool_title_style()),

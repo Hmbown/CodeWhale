@@ -8,9 +8,9 @@ use crate::palette;
 pub fn lines() -> Vec<Line<'static>> {
     vec![
         Line::from(Span::styled(
-            "DeepSeek TUI",
+            "✻ Welcome to DeepSeek TUI",
             Style::default()
-                .fg(palette::DEEPSEEK_BLUE)
+                .fg(palette::ACCENT_TOOL_LIVE)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(

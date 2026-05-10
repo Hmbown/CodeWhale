@@ -412,7 +412,6 @@ mod tests {
             content: content.to_string(),
             streaming,
             duration_secs: None,
-            expanded: false,
         }
     }
 
