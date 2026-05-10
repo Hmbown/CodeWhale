@@ -1,15 +1,15 @@
-//! Desktop notifications for turn completion.
+//! Desktop notifications for long agent-turn completion.
 //!
-//! Supports five delivery mechanisms:
+//! Supports three delivery mechanisms:
 //! - **OSC 9** — terminal escape sequence (`\x1b]9;…\x07`) for iTerm2,
 //!   Ghostty, WezTerm, and tmux (with DCS passthrough).
-//! - **Kitty** — OSC 99 protocol with ST terminator (no audible beep).
-//! - **Ghostty** — OSC 777 notification protocol.
+//! - **Native** — OS-level notification via `osascript` (macOS) or
+//!   `notify-send` (Linux), working in any terminal.
 //! - **BEL** — audible bell (`\x07`) as a last-resort fallback.
 //!
-//! When `method = "auto"`, the resolver picks the best method for the
-//! current terminal; Windows falls back to `Off` to avoid the error chime
-//! (#583).
+//! When `method = "auto"`, the resolver prefers OSC 9 for known-capable
+//! terminals and falls back to native OS notifications on Unix; Windows
+//! falls back to `Off` to avoid the error chime (#583).
 
 #[cfg(target_os = "windows")]
 use windows::Win32::System::Diagnostics::Debug::MessageBeep;
@@ -22,20 +22,23 @@ use std::time::Duration;
 /// Notification delivery method.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Method {
-    /// Automatically pick the best protocol for the current terminal.
-    /// See [`resolve_method`] for the canonical resolution table.
+    /// Automatically pick `Osc9` for known capable terminals
+    /// (`iTerm.app`, `Ghostty`, `WezTerm`, `Cmux`); on Unix, falls
+    /// back to native OS notifications (`osascript` / `notify-send`)
+    /// when the terminal doesn't advertise OSC 9 support. On Windows
+    /// the non-OSC-9 fallback is `Off` instead of `Bel`, because BEL
+    /// maps to the system error chime (#583).
     #[default]
     Auto,
     /// OSC 9 escape: `\x1b]9;<msg>\x07`
     Osc9,
     /// Plain BEL character: `\x07`
     Bel,
-    /// Kitty notification protocol (OSC 99) with ST terminator.
-    /// Uses `ESC ] 99 ; params ST` — no audible beep, unlike BEL.
-    Kitty,
-    /// Ghostty notification protocol (OSC 777).
-    /// Uses `ESC ] 777 ; notify ; title ; message BEL`.
-    Ghostty,
+    /// Native OS notification: `osascript display notification` on macOS,
+    /// `notify-send` on Linux. Works in any terminal — no OSC 9 support
+    /// required. Best-effort; falls back to `Bel` if the native command
+    /// is unavailable.
+    Native,
     /// Suppress all notifications.
     Off,
 }
@@ -55,70 +58,162 @@ fn windows_bell() {
     }
 }
 
-/// Resolve `Auto` to a concrete method by inspecting `$TERM_PROGRAM`,
-/// `$LC_TERMINAL`, and `$TERM`.
+/// Resolve `Auto` to a concrete method by inspecting `$TERM_PROGRAM` and
+/// `$LC_TERMINAL`.
 ///
-/// Resolution table:
-/// - `iTerm.app`, `WezTerm`, `Cmux` → `Osc9`
-/// - `Ghostty` → `Ghostty` (OSC 777)
-/// - `kitty` → `Kitty` (OSC 99)
-/// - `$LC_TERMINAL` matches OSC-9 capable → `Osc9` (Cmux that sets LC_TERMINAL)
-/// - `$TERM` contains `ghostty` → `Osc9` (cmux etc.)
-/// - `$TERM` contains `kitty` → `Kitty`
-/// - Unix unknown → `Bel`
-/// - Windows unknown → `Off`
+/// Known OSC-9 capable programs: `iTerm.app`, `Ghostty`, `WezTerm`, `Cmux`
+/// (these resolve to `Osc9` on every platform, including Windows
+/// when running inside WezTerm).
+///
+/// The probe order is: `$TERM_PROGRAM` first, then `$LC_TERMINAL` as a
+/// fallback for terminals (e.g. Cmux) that set `LC_TERMINAL` instead of
+/// `TERM_PROGRAM`. If neither env var matches a known OSC-9 capable terminal,
+/// the fallback is platform-dependent:
+/// - **macOS / Linux / other Unix:** `Bel` (a single `\x07` byte).
+/// - **Windows:** `Off`. BEL is mapped by the Windows audio stack
+///   to `SystemAsterisk` / `MB_OK`, the same chime used by
+///   application error popups, so it sounds like an error
+///   notification even though the turn completed successfully (#583).
+///   Users can opt back in with `[notifications].method = "bel"` or
+///   pick a known OSC-9 terminal.
+///
+/// Terminals that set neither env var (e.g. Cmux in some configurations)
+/// can force OSC 9 with `[notifications].method = "osc9"` in the config file.
 #[must_use]
 fn resolve_method() -> Method {
+    const OSC9_TERMINALS: &[&str] = &["iTerm.app", "Ghostty", "WezTerm", "Cmux"];
+
     let term_program = std::env::var("TERM_PROGRAM").unwrap_or_default();
-    match term_program.as_str() {
-        "iTerm.app" | "WezTerm" | "Cmux" => return Method::Osc9,
-        "Ghostty" => return Method::Ghostty,
-        "kitty" => return Method::Kitty,
-        _ => {}
+    if OSC9_TERMINALS.contains(&term_program.as_str()) {
+        return Method::Osc9;
     }
 
-    // LC_TERMINAL fallback for terminals (e.g. Cmux) that set
-    // LC_TERMINAL instead of TERM_PROGRAM.
     let lc_terminal = std::env::var("LC_TERMINAL").unwrap_or_default();
-    match lc_terminal.as_str() {
-        "iTerm.app" | "Ghostty" | "WezTerm" | "Cmux" => return Method::Osc9,
-        _ => {}
+    if OSC9_TERMINALS.contains(&lc_terminal.as_str()) {
+        return Method::Osc9;
     }
 
     if cfg!(target_os = "windows") {
-        return Method::Off;
-    }
-
-    // Ghostty-based terminals (cmux, etc.) may not set their own
-    // TERM_PROGRAM but do set TERM=xterm-ghostty. Likewise for Kitty.
-    let term = std::env::var("TERM").unwrap_or_default();
-    if term.contains("ghostty") {
-        Method::Osc9
-    } else if term.contains("kitty") {
-        Method::Kitty
+        Method::Off
     } else {
         Method::Bel
     }
 }
 
-/// Wrap an escape sequence for terminal multiplexer passthrough.
+/// Best-guess the macOS bundle identifier of the current terminal.
 ///
-/// tmux intercepts escape sequences; DCS passthrough tunnels them to
-/// the outer terminal unmodified. Every ESC inside the payload is
-/// doubled so tmux does not interpret it as DCS end.
-fn wrap_for_multiplexer(seq: &str, in_tmux: bool) -> String {
-    if in_tmux {
-        let escaped = seq.replace('\x1b', "\x1b\x1b");
-        format!("\x1bPtmux;{escaped}\x1b\\")
-    } else {
-        seq.to_string()
-    }
+/// Maps known `$TERM_PROGRAM` values to their bundle IDs. When
+/// `TERM_PROGRAM` is unrecognised, falls back to a cached one-shot
+/// `osascript` probe that asks for the frontmost application's id.
+/// The result is memoised in a `OnceLock` so the probe runs at most
+/// once per process.
+#[cfg(target_os = "macos")]
+fn terminal_bundle_id() -> Option<&'static str> {
+    use std::sync::OnceLock;
+    static BUNDLE_ID: OnceLock<Option<String>> = OnceLock::new();
+    BUNDLE_ID
+        .get_or_init(|| {
+            let term_program = std::env::var("TERM_PROGRAM").unwrap_or_default();
+            match term_program.as_str() {
+                "iTerm.app" => Some("com.googlecode.iterm2".into()),
+                "Ghostty" => Some("com.mitchellh.ghostty".into()),
+                "Cmux" => Some("com.cmuxterm.app".into()),
+                "WezTerm" => Some("com.github.wez.wezterm".into()),
+                _ => {
+                    // Fallback: ask the window server which app is frontmost.
+                    let output = std::process::Command::new("osascript")
+                        .arg("-e")
+                        .arg("tell application \"System Events\" to get bundle identifier of first application process whose frontmost is true")
+                        .output()
+                        .ok()
+                        .and_then(|o| String::from_utf8(o.stdout).ok())
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty());
+                    output
+                }
+            }
+        })
+        .as_deref()
+}
+
+/// Check whether `terminal-notifier` is available on this system.
+#[cfg(target_os = "macos")]
+fn has_terminal_notifier() -> bool {
+    static CHECK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *CHECK.get_or_init(|| {
+        std::process::Command::new("which")
+            .arg("terminal-notifier")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map_or(false, |s| s.success())
+    })
+}
+
+/// Fire a native OS notification.
+///
+/// On macOS, prefers `terminal-notifier` (supports click-to-focus via
+/// `-activate BUNDLE_ID`) with a fallback to `osascript display
+/// notification`. On Linux, uses `notify-send`.
+///
+/// Spawns a short-lived thread so the caller is not blocked on the
+/// process. Best-effort: failures from a missing binary or a
+/// non-responsive notification daemon are silently ignored — the
+/// notification is a convenience, not a correctness requirement.
+fn native_notify(msg: &str) {
+    let msg = msg.to_string();
+    std::thread::spawn(move || {
+        #[cfg(target_os = "macos")]
+        {
+            // terminal-notifier: clickable notification that can
+            // activate (bring-to-front) the terminal window.
+            if has_terminal_notifier() {
+                let mut cmd = std::process::Command::new("terminal-notifier");
+                cmd.arg("-title").arg("DeepSeek TUI");
+                cmd.arg("-message").arg(&msg);
+                if let Some(bundle_id) = terminal_bundle_id() {
+                    cmd.arg("-activate").arg(bundle_id);
+                }
+                cmd.stdout(std::process::Stdio::null());
+                cmd.stderr(std::process::Stdio::null());
+                let _ = cmd.spawn();
+                return;
+            }
+            // Fallback: plain osascript notification (no click-to-focus).
+            let _ = std::process::Command::new("osascript")
+                .arg("-e")
+                .arg(format!(
+                    "display notification \"{msg}\" with title \"DeepSeek TUI\""
+                ))
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+        }
+        #[cfg(all(target_os = "linux", not(target_os = "macos")))]
+        {
+            if std::process::Command::new("which")
+                .arg("notify-send")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map_or(false, |s| s.success())
+            {
+                let _ = std::process::Command::new("notify-send")
+                    .arg("DeepSeek TUI")
+                    .arg(&msg)
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn();
+            }
+        }
+    });
 }
 
 /// Build the raw escape bytes for the given method and message.
 ///
-/// When `in_tmux` is `true`, OSC sequences are wrapped in DCS passthrough
-/// so tmux forwards them to the outer terminal.
+/// When `in_tmux` is `true` and the method is `Osc9`, the sequence is
+/// wrapped in a DCS passthrough so tmux forwards it to the outer terminal:
+/// `\x1bPtmux;\x1b<OSC-9>\x1b\\`
 #[must_use]
 fn build_escape(method: Method, in_tmux: bool, msg: &str) -> Vec<u8> {
     match method {
@@ -126,28 +221,17 @@ fn build_escape(method: Method, in_tmux: bool, msg: &str) -> Vec<u8> {
         Method::Osc9 => {
             let inner = format!("\x1b]9;{msg}\x07");
             if in_tmux {
+                // DCS passthrough: every ESC inside the payload must be
+                // doubled so tmux does not interpret it as DCS end.
                 let escaped_inner = inner.replace('\x1b', "\x1b\x1b");
                 format!("\x1bPtmux;{escaped_inner}\x1b\\").into_bytes()
             } else {
                 inner.into_bytes()
             }
         }
-        Method::Kitty => {
-            // Kitty notification: OSC 99 ; params ST
-            // ST terminator (ESC \) instead of BEL to avoid audible beep.
-            let title_seq = "\x1b]99;d=0:p=title\x1b\\";
-            let body_seq = format!("\x1b]99;p=body;{msg}\x1b\\");
-            let focus_seq = "\x1b]99;d=1:a=focus\x1b\\";
-            let combined = format!("{title_seq}{body_seq}{focus_seq}");
-            wrap_for_multiplexer(&combined, in_tmux).into_bytes()
-        }
-        Method::Ghostty => {
-            // Ghostty notification: OSC 777 ; notify ; title ; message BEL
-            let seq = format!("\x1b]777;notify;DeepSeek TUI;{msg}\x07");
-            wrap_for_multiplexer(&seq, in_tmux).into_bytes()
-        }
         // Auto and Off should not reach build_escape.
-        Method::Auto | Method::Off => vec![],
+        // Native goes through native_notify(), not through bytes.
+        Method::Auto | Method::Off | Method::Native => vec![],
     }
 }
 
@@ -171,6 +255,11 @@ pub fn notify_done_to<W: Write>(
         Method::Auto => resolve_method(),
         other => other,
     };
+    // Native goes through the OS notification path, not terminal escapes.
+    if effective == Method::Native {
+        native_notify(msg);
+        return;
+    }
     let bytes = build_escape(effective, in_tmux, msg);
     if bytes.is_empty() {
         return;
@@ -190,13 +279,15 @@ pub fn notify_done_to<W: Write>(
 
 /// Emit a turn-complete notification to **stdout** if `elapsed >= threshold`.
 ///
-/// With `method = Auto`, selects the best protocol for the current terminal
-/// (OSC 9, Kitty OSC 99, Ghostty OSC 777, or Bel). The unknown-terminal
-/// fallback is platform-aware — `Bel` on macOS / Linux, `Off` on Windows
-/// (where BEL maps to the `SystemAsterisk` / `MB_OK` error chime, #583).
-/// See [`resolve_method`] for the canonical resolution table. Pass
-/// `in_tmux = true` (i.e. `$TMUX` is non-empty at runtime) to wrap OSC
-/// sequences in a DCS passthrough.
+/// With `method = Auto`, selects `Osc9` for known capable terminals
+/// (`iTerm.app`, `Ghostty`, `WezTerm`, `Cmux`, or any terminal with
+/// `TERM` containing `ghostty`); the unknown-terminal fallback is
+/// platform-aware — `Native` on macOS / Linux (system notification via
+/// `osascript` / `notify-send`), `Off` on Windows (where BEL
+/// maps to the `SystemAsterisk` / `MB_OK` error chime, #583). See
+/// [`resolve_method`] for the canonical resolution table. Pass
+/// `in_tmux = true` (i.e. `$TMUX` is non-empty at runtime) to wrap OSC 9
+/// in a DCS passthrough.
 pub fn notify_done(
     method: Method,
     in_tmux: bool,
@@ -270,173 +361,6 @@ pub fn humanize_duration(d: Duration) -> String {
     format!("{total}s")
 }
 
-// ── Per-turn notification composition ────────────────────────────────
-//
-// The helpers below decide *whether* to notify on a completed turn and
-// *what message* to put in the body. The low-level dispatcher is
-// `notify_done`; everything in this block sits in front of it.
-
-use crate::models::{ContentBlock, Message};
-use crate::tui::app::App;
-
-/// Resolve the effective notification method/threshold/include-summary tuple
-/// for a completed turn, taking the high-level
-/// `[tui].notification_condition` override into account on top of the
-/// lower-level `[notifications]` block.
-///
-/// Returns `None` to mean "do not notify" (either because the user set
-/// `notification_condition = "never"` or because the resolved method is
-/// `Off`).
-pub fn settings(config: &crate::config::Config) -> Option<(Method, Duration, bool)> {
-    let notif = config.notifications_config();
-    let method = match notif.method {
-        crate::config::NotificationMethod::Auto => Method::Auto,
-        crate::config::NotificationMethod::Osc9 => Method::Osc9,
-        crate::config::NotificationMethod::Bel => Method::Bel,
-        crate::config::NotificationMethod::Kitty => Method::Kitty,
-        crate::config::NotificationMethod::Ghostty => Method::Ghostty,
-        crate::config::NotificationMethod::Off => Method::Off,
-    };
-
-    if let Some(condition) = config
-        .tui
-        .as_ref()
-        .and_then(|tui| tui.notification_condition)
-    {
-        match condition {
-            crate::config::NotificationCondition::Always => {
-                return Some((method, Duration::ZERO, notif.include_summary));
-            }
-            crate::config::NotificationCondition::Never => return None,
-        }
-    }
-
-    Some((
-        method,
-        Duration::from_secs(notif.threshold_secs),
-        notif.include_summary,
-    ))
-}
-
-/// Build the notification body for a completed turn. Prefers the live
-/// streaming text the user just saw; falls back to the latest assistant
-/// message in `api_messages` if streaming text is empty (for example, the
-/// turn finished entirely through tool output). When `include_summary` is
-/// true, an elapsed/cost line is appended.
-pub fn completed_turn_message(
-    app: &App,
-    current_streaming_text: &str,
-    include_summary: bool,
-    turn_elapsed: Duration,
-    turn_cost: Option<crate::pricing::CostEstimate>,
-) -> String {
-    let mut msg = text_summary(current_streaming_text)
-        .or_else(|| latest_assistant_text(&app.api_messages))
-        .unwrap_or_else(|| "deepseek: turn complete".to_string());
-
-    if include_summary {
-        let human = humanize_duration(turn_elapsed);
-        let summary = match turn_cost {
-            Some(c) => {
-                let cost = crate::pricing::format_cost_estimate(c, app.cost_currency);
-                format!("deepseek: turn complete ({human}, {cost})")
-            }
-            None => format!("deepseek: turn complete ({human})"),
-        };
-        if msg == "deepseek: turn complete" {
-            msg = summary;
-        } else {
-            msg.push('\n');
-            msg.push_str(&summary);
-        }
-    }
-
-    msg
-}
-
-/// Compose a notification body for a sub-agent completion. Falls back
-/// to a generic "sub-agent X complete" if no human-readable line can
-/// be teased out of the child's transcript.
-pub fn subagent_completion_message(
-    id: &str,
-    result: &str,
-    include_summary: bool,
-    elapsed: Duration,
-) -> String {
-    let result_line = result
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty() && !line.starts_with("<deepseek:subagent.done>"));
-    let mut msg = result_line
-        .and_then(text_summary)
-        .map(|summary| format!("sub-agent {id}: {summary}"))
-        .unwrap_or_else(|| format!("deepseek: sub-agent {id} complete"));
-
-    if include_summary {
-        let human = humanize_duration(elapsed);
-        msg.push('\n');
-        msg.push_str(&format!("deepseek: sub-agent complete ({human})"));
-    }
-
-    msg
-}
-
-/// Find the latest assistant message in `messages` and return a
-/// notification-ready summary of its `Text` content. Thinking blocks,
-/// tool calls, and tool results are skipped — only the user-visible
-/// reply contributes to the body.
-pub fn latest_assistant_text(messages: &[Message]) -> Option<String> {
-    messages
-        .iter()
-        .rev()
-        .find(|message| message.role == "assistant")
-        .and_then(|message| {
-            let text = message
-                .content
-                .iter()
-                .filter_map(|block| match block {
-                    ContentBlock::Text { text, .. } => Some(text.as_str()),
-                    ContentBlock::Thinking { .. }
-                    | ContentBlock::ToolUse { .. }
-                    | ContentBlock::ToolResult { .. }
-                    | ContentBlock::ServerToolUse { .. }
-                    | ContentBlock::ToolSearchToolResult { .. }
-                    | ContentBlock::CodeExecutionToolResult { .. } => None,
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            text_summary(&text)
-        })
-}
-
-/// Sanitize + collapse + truncate streaming text into something fit to
-/// hand the OS notification system. Returns `None` when nothing
-/// useful remains after sanitization.
-pub fn text_summary(text: &str) -> Option<String> {
-    const MAX_CHARS: usize = 360;
-
-    let sanitized = super::ui::sanitize_stream_chunk(text);
-    let collapsed = sanitized
-        .lines()
-        .map(str::trim)
-        .filter(|line: &&str| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n");
-    let trimmed = collapsed.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    if let Some((idx, _)) = trimmed.char_indices().nth(MAX_CHARS) {
-        let mut s = String::with_capacity(idx + 3);
-        s.push_str(&trimmed[..idx]);
-        s.push_str("...");
-        Some(s)
-    } else {
-        Some(trimmed.to_string())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::{Mutex, OnceLock};
@@ -487,39 +411,12 @@ mod tests {
         assert!(out.is_empty());
     }
 
+    /// Native goes through `osascript` / `notify-send`, not terminal
+    /// escapes — the Write sink must stay empty.
     #[test]
-    fn kitty_escape_uses_st_terminator() {
-        let out = capture(Method::Kitty, false, "done", 0, 1);
-        let s = String::from_utf8(out).unwrap();
-        assert!(s.contains("99;"), "should have kitty OSC 99");
-        assert!(s.contains("\x1b\\"), "kitty uses ST terminator");
-        assert!(!s.contains("\x07"), "kitty should NOT use BEL");
-    }
-
-    #[test]
-    fn ghostty_escape_format() {
-        let out = capture(Method::Ghostty, false, "done", 0, 1);
-        let s = String::from_utf8(out).unwrap();
-        assert!(
-            s.contains("777;notify;DeepSeek TUI;done"),
-            "should have ghostty seq"
-        );
-    }
-
-    #[test]
-    fn kitty_tmux_dcs_passthrough() {
-        let out = capture(Method::Kitty, true, "hello", 0, 1);
-        let s = String::from_utf8(out).unwrap();
-        assert!(s.starts_with("\x1bPtmux;"), "should start with DCS");
-        assert!(s.ends_with("\x1b\\"), "should end with ST");
-    }
-
-    #[test]
-    fn ghostty_tmux_dcs_passthrough() {
-        let out = capture(Method::Ghostty, true, "hello", 0, 1);
-        let s = String::from_utf8(out).unwrap();
-        assert!(s.starts_with("\x1bPtmux;"), "should start with DCS");
-        assert!(s.ends_with("\x1b\\"), "should end with ST");
+    fn native_method_emits_no_terminal_bytes() {
+        let out = capture(Method::Native, false, "hello", 0, 1);
+        assert!(out.is_empty());
     }
 
     #[test]
@@ -621,19 +518,17 @@ mod tests {
 
     #[test]
     #[cfg(not(target_os = "windows"))]
-    fn auto_detect_picks_bel_for_unknown_on_unix() {
+    fn auto_detect_picks_native_for_unknown_on_unix() {
         let _lock = env_lock();
         let prev_tp = std::env::var_os("TERM_PROGRAM");
         let prev_lc = std::env::var_os("LC_TERMINAL");
-        let prev_term = std::env::var_os("TERM");
         // SAFETY: test-only; serialised by env_lock().
-        // Clear LC_TERMINAL and TERM so the fallback probes don't
-        // accidentally pick up an OSC-9 / Kitty / Ghostty capable
-        // terminal from the test runner environment.
+        // Clear LC_TERMINAL so the LC_TERMINAL fallback probe does not
+        // accidentally pick up an OSC-9 capable terminal from the test runner
+        // environment and shadow the Bel fallback we're trying to verify.
         unsafe {
             std::env::set_var("TERM_PROGRAM", "xterm-256color");
             std::env::remove_var("LC_TERMINAL");
-            std::env::set_var("TERM", "xterm-256color");
         }
         let resolved = resolve_method();
         // SAFETY: test-only; serialised by env_lock().
@@ -646,12 +541,8 @@ mod tests {
                 Some(v) => std::env::set_var("LC_TERMINAL", v),
                 None => std::env::remove_var("LC_TERMINAL"),
             }
-            match prev_term {
-                Some(v) => std::env::set_var("TERM", v),
-                None => std::env::remove_var("TERM"),
-            }
         }
-        assert_eq!(resolved, Method::Bel);
+        assert_eq!(resolved, Method::Native);
     }
 
     /// #583: on Windows, an unknown TERM_PROGRAM resolves to `Off`
@@ -700,6 +591,26 @@ mod tests {
         assert_eq!(resolved, Method::Osc9);
     }
 
+    /// Cmux (cmux.com) is a Ghostty-based macOS terminal that supports
+    /// OSC 9 natively. When it sets `TERM_PROGRAM=Cmux`, auto-detect
+    /// must resolve to `Osc9`.
+    #[test]
+    fn auto_detect_picks_osc9_for_cmux() {
+        let _lock = env_lock();
+        let prev_term_program = std::env::var_os("TERM_PROGRAM");
+        // SAFETY: test-only; serialised by env_lock().
+        unsafe { std::env::set_var("TERM_PROGRAM", "Cmux") };
+        let resolved = resolve_method();
+        // SAFETY: test-only; serialised by env_lock().
+        unsafe {
+            match prev_term_program {
+                Some(v) => std::env::set_var("TERM_PROGRAM", v),
+                None => std::env::remove_var("TERM_PROGRAM"),
+            }
+        }
+        assert_eq!(resolved, Method::Osc9);
+    }
+
     /// Ghostty-based terminals (cmux, etc.) may not set
     /// `TERM_PROGRAM` but do set `TERM=xterm-ghostty`. The `$TERM`
     /// fallback should catch them.
@@ -707,26 +618,20 @@ mod tests {
     #[cfg(not(target_os = "windows"))]
     fn auto_detect_picks_osc9_for_xterm_ghostty_term_fallback() {
         let _lock = env_lock();
-        let prev_tp = std::env::var_os("TERM_PROGRAM");
-        let prev_lc = std::env::var_os("LC_TERMINAL");
+        let prev_term_program = std::env::var_os("TERM_PROGRAM");
         let prev_term = std::env::var_os("TERM");
         // Simulate a Ghostty-based terminal that only sets TERM.
         // SAFETY: test-only; serialised by env_lock().
         unsafe {
             std::env::remove_var("TERM_PROGRAM");
-            std::env::remove_var("LC_TERMINAL");
             std::env::set_var("TERM", "xterm-ghostty");
         }
         let resolved = resolve_method();
         // SAFETY: test-only; serialised by env_lock().
         unsafe {
-            match prev_tp {
+            match prev_term_program {
                 Some(v) => std::env::set_var("TERM_PROGRAM", v),
                 None => std::env::remove_var("TERM_PROGRAM"),
-            }
-            match prev_lc {
-                Some(v) => std::env::set_var("LC_TERMINAL", v),
-                None => std::env::remove_var("LC_TERMINAL"),
             }
             match prev_term {
                 Some(v) => std::env::set_var("TERM", v),
@@ -736,105 +641,32 @@ mod tests {
         assert_eq!(resolved, Method::Osc9);
     }
 
-    /// Ghostty now has its own protocol (OSC 777).
-    #[test]
-    fn auto_detect_picks_ghostty_from_term_program() {
-        let _lock = env_lock();
-        let prev = std::env::var_os("TERM_PROGRAM");
-        // SAFETY: test-only; serialised by env_lock().
-        unsafe { std::env::set_var("TERM_PROGRAM", "Ghostty") };
-        let resolved = resolve_method();
-        // SAFETY: test-only; serialised by env_lock().
-        unsafe {
-            match prev {
-                Some(v) => std::env::set_var("TERM_PROGRAM", v),
-                None => std::env::remove_var("TERM_PROGRAM"),
-            }
-        }
-        assert_eq!(resolved, Method::Ghostty);
-    }
-
-    #[test]
-    fn auto_detect_picks_kitty_from_term_program() {
-        let _lock = env_lock();
-        let prev = std::env::var_os("TERM_PROGRAM");
-        // SAFETY: test-only; serialised by env_lock().
-        unsafe { std::env::set_var("TERM_PROGRAM", "kitty") };
-        let resolved = resolve_method();
-        // SAFETY: test-only; serialised by env_lock().
-        unsafe {
-            match prev {
-                Some(v) => std::env::set_var("TERM_PROGRAM", v),
-                None => std::env::remove_var("TERM_PROGRAM"),
-            }
-        }
-        assert_eq!(resolved, Method::Kitty);
-    }
-
+    /// When neither `TERM_PROGRAM` nor `TERM` suggests an OSC-9 capable
+    /// terminal, the fallback on Unix is `Native`.
     #[test]
     #[cfg(not(target_os = "windows"))]
-    fn auto_detect_picks_kitty_from_term_fallback() {
+    fn auto_detect_falls_back_to_native_for_unrelated_term() {
         let _lock = env_lock();
-        let prev_tp = std::env::var_os("TERM_PROGRAM");
-        let prev_lc = std::env::var_os("LC_TERMINAL");
+        let prev_term_program = std::env::var_os("TERM_PROGRAM");
         let prev_term = std::env::var_os("TERM");
         // SAFETY: test-only; serialised by env_lock().
         unsafe {
             std::env::remove_var("TERM_PROGRAM");
-            std::env::remove_var("LC_TERMINAL");
-            std::env::set_var("TERM", "xterm-kitty");
-        }
-        let resolved = resolve_method();
-        // SAFETY: test-only; serialised by env_lock().
-        unsafe {
-            match prev_tp {
-                Some(v) => std::env::set_var("TERM_PROGRAM", v),
-                None => std::env::remove_var("TERM_PROGRAM"),
-            }
-            match prev_lc {
-                Some(v) => std::env::set_var("LC_TERMINAL", v),
-                None => std::env::remove_var("LC_TERMINAL"),
-            }
-            match prev_term {
-                Some(v) => std::env::set_var("TERM", v),
-                None => std::env::remove_var("TERM"),
-            }
-        }
-        assert_eq!(resolved, Method::Kitty);
-    }
-
-    /// When neither `TERM_PROGRAM` nor `TERM` suggests a known capable
-    /// terminal, the fallback on Unix is `Bel`.
-    #[test]
-    #[cfg(not(target_os = "windows"))]
-    fn auto_detect_falls_back_to_bel_for_unrelated_term() {
-        let _lock = env_lock();
-        let prev_tp = std::env::var_os("TERM_PROGRAM");
-        let prev_lc = std::env::var_os("LC_TERMINAL");
-        let prev_term = std::env::var_os("TERM");
-        // SAFETY: test-only; serialised by env_lock().
-        unsafe {
-            std::env::remove_var("TERM_PROGRAM");
-            std::env::remove_var("LC_TERMINAL");
             std::env::set_var("TERM", "xterm-256color");
         }
         let resolved = resolve_method();
         // SAFETY: test-only; serialised by env_lock().
         unsafe {
-            match prev_tp {
+            match prev_term_program {
                 Some(v) => std::env::set_var("TERM_PROGRAM", v),
                 None => std::env::remove_var("TERM_PROGRAM"),
-            }
-            match prev_lc {
-                Some(v) => std::env::set_var("LC_TERMINAL", v),
-                None => std::env::remove_var("LC_TERMINAL"),
             }
             match prev_term {
                 Some(v) => std::env::set_var("TERM", v),
                 None => std::env::remove_var("TERM"),
             }
         }
-        assert_eq!(resolved, Method::Bel);
+        assert_eq!(resolved, Method::Native);
     }
 
     #[test]
