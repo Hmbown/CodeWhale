@@ -11,6 +11,9 @@ use super::CommandResult;
 pub fn init(app: &mut App) -> CommandResult {
     let workspace = &app.workspace;
 
+    // Ensure .deepseek/ is gitignored if we're inside a git repo.
+    ensure_deepseek_gitignored(workspace);
+
     // Check if AGENTS.md already exists
     let agents_path = workspace.join("AGENTS.md");
     if agents_path.exists() {
@@ -30,6 +33,39 @@ pub fn init(app: &mut App) -> CommandResult {
             agents_path.display()
         )),
         Err(e) => CommandResult::error(format!("Failed to create AGENTS.md: {e}")),
+    }
+}
+
+/// If `workspace` is inside a git repository, ensure `.deepseek/` is listed
+/// in the nearest `.gitignore` so that snapshots, instructions, and other
+/// workspace-local state are not accidentally committed.
+fn ensure_deepseek_gitignored(workspace: &Path) {
+    // Only act if this workspace is a git repo.
+    if !workspace.join(".git").exists() {
+        return;
+    }
+
+    let gitignore = workspace.join(".gitignore");
+    let entry = ".deepseek/";
+
+    // Read existing contents (if any) and check whether the entry is already present.
+    if let Ok(existing) = std::fs::read_to_string(&gitignore) {
+        if existing.lines().any(|line| line.trim() == entry) {
+            return; // already ignored
+        }
+    }
+
+    // Append the entry. If .gitignore doesn't exist yet, create it with a header.
+    use std::io::Write;
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&gitignore)
+    {
+        Ok(mut file) => {
+            let _ = writeln!(file, "{entry}");
+        }
+        Err(_) => {} // non-fatal: user may not have write permissions
     }
 }
 
@@ -280,5 +316,52 @@ version = "1.0.0"
     fn test_extract_cargo_name_not_found() {
         let cargo = "[package]\nversion = \"1.0.0\"";
         assert_eq!(extract_cargo_name(cargo), None);
+    }
+
+    #[test]
+    fn ensure_deepseek_gitignored_creates_gitignore() {
+        let tmpdir = TempDir::new().unwrap();
+        // Simulate a git repo.
+        std::fs::create_dir_all(tmpdir.path().join(".git")).unwrap();
+
+        ensure_deepseek_gitignored(tmpdir.path());
+
+        let content = std::fs::read_to_string(tmpdir.path().join(".gitignore")).unwrap();
+        assert!(content.contains(".deepseek/"));
+    }
+
+    #[test]
+    fn ensure_deepseek_gitignored_appends_to_existing() {
+        let tmpdir = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmpdir.path().join(".git")).unwrap();
+        std::fs::write(tmpdir.path().join(".gitignore"), "target/\n").unwrap();
+
+        ensure_deepseek_gitignored(tmpdir.path());
+
+        let content = std::fs::read_to_string(tmpdir.path().join(".gitignore")).unwrap();
+        assert!(content.contains("target/"));
+        assert!(content.contains(".deepseek/"));
+    }
+
+    #[test]
+    fn ensure_deepseek_gitignored_idempotent() {
+        let tmpdir = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmpdir.path().join(".git")).unwrap();
+
+        ensure_deepseek_gitignored(tmpdir.path());
+        ensure_deepseek_gitignored(tmpdir.path());
+
+        let content = std::fs::read_to_string(tmpdir.path().join(".gitignore")).unwrap();
+        assert_eq!(content.matches(".deepseek/").count(), 1);
+    }
+
+    #[test]
+    fn ensure_deepseek_gitignored_skips_non_git_repo() {
+        let tmpdir = TempDir::new().unwrap();
+        // No .git directory — not a git repo.
+
+        ensure_deepseek_gitignored(tmpdir.path());
+
+        assert!(!tmpdir.path().join(".gitignore").exists());
     }
 }
