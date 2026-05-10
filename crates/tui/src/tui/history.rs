@@ -207,13 +207,30 @@ impl HistoryCell {
                     )
                 }
             }
-            HistoryCell::Error { message, severity } => render_message(
-                error_label_text(*severity),
-                error_label_style(*severity),
-                error_body_style(*severity),
-                message,
-                width,
-            ),
+            HistoryCell::Error { message, severity } => {
+                // Error messages are machine-generated and should not be run
+                // through markdown rendering, which would mangle env-var names
+                // containing underscores (e.g. DEEPSEEK_ALLOW_INSECURE_HTTP
+                // would lose its underscores as italic markers).
+                let label = error_label_text(*severity);
+                let label_style = error_label_style(*severity);
+                let body_style = error_body_style(*severity);
+                let prefix_width = UnicodeWidthStr::width(label);
+                let content_width = width.saturating_sub(2 + prefix_width as u16).max(1);
+                let mut lines = wrap_plain_line(message, body_style, content_width);
+                // Add the label prefix to the first line
+                if let Some(first) = lines.get_mut(0) {
+                    first.spans.insert(0, Span::raw(" "));
+                    first.spans.insert(0, Span::styled(label, label_style));
+                }
+                // Continuation rail for subsequent lines
+                let rail = format!("{}{}", '\u{258F}', " ".repeat(prefix_width));
+                let rail_style = Style::default().fg(palette::TEXT_DIM);
+                for line in lines.iter_mut().skip(1) {
+                    line.spans.insert(0, Span::styled(rail.clone(), rail_style));
+                }
+                lines
+            }
             HistoryCell::Thinking {
                 content,
                 streaming,
@@ -3681,6 +3698,77 @@ mod tests {
             assert!(
                 !line.contains('\u{258F}'),
                 "code block line should not inherit the transcript rail: {line:?}"
+            );
+        }
+    }
+
+    /// Issue #1212 repro: a multi-line SQL fence rendered after a short
+    /// intro paragraph. Every code-block line — not just the first or last —
+    /// must avoid the `▏` rail.
+    #[test]
+    fn assistant_long_code_block_keeps_every_line_rail_free() {
+        let cell = HistoryCell::Assistant {
+            content: "Here's the query:\n```sql\nSELECT\n  c.customer_id,\n  c.name,\n  COUNT(o.order_id) AS order_count\nFROM customers c\nJOIN orders o ON c.customer_id = o.customer_id;\n```".to_string(),
+            streaming: false,
+        };
+        let visible: Vec<String> = cell
+            .lines(80)
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect();
+
+        let code_markers = ["SELECT", "customer_id", "name,", "COUNT", "FROM", "JOIN"];
+        for marker in code_markers {
+            let line = visible
+                .iter()
+                .find(|line| line.contains(marker))
+                .unwrap_or_else(|| panic!("expected code line containing {marker:?}"));
+            assert!(
+                !line.contains('\u{258F}'),
+                "code block line containing {marker:?} must not have the transcript rail: {line:?}"
+            );
+        }
+    }
+
+    /// Edge case: a blank line inside a fence is still a code line; it must
+    /// not regress to the rail because the empty body falls through a
+    /// different wrap branch.
+    #[test]
+    fn assistant_code_block_blank_line_keeps_no_rail() {
+        let cell = HistoryCell::Assistant {
+            content: "```\nfn one() {}\n\nfn two() {}\n```".to_string(),
+            streaming: false,
+        };
+        for line in cell.lines(80).iter().skip(1) {
+            let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+            assert!(
+                !text.contains('\u{258F}'),
+                "fence body line must stay rail-free: {text:?}"
+            );
+        }
+    }
+
+    /// Wrapped code lines (a single source line longer than the viewport)
+    /// emit multiple rendered lines from one `Block::Code`. None of them
+    /// should leak the rail.
+    #[test]
+    fn assistant_wrapped_code_lines_keep_no_rail() {
+        let long = "let x = ".to_string() + &"abcdef ".repeat(40);
+        let content = format!("```\n{long}\n```");
+        let cell = HistoryCell::Assistant {
+            content,
+            streaming: false,
+        };
+        for line in cell.lines(40).iter().skip(1) {
+            let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+            assert!(
+                !text.contains('\u{258F}'),
+                "wrapped code line must stay rail-free: {text:?}"
             );
         }
     }

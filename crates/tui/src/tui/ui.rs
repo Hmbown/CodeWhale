@@ -69,7 +69,7 @@ use crate::tui::pager::PagerView;
 use crate::tui::persistence_actor::{self, PersistRequest};
 use crate::tui::plan_prompt::PlanPromptView;
 use crate::tui::scrolling::{ScrollDirection, TranscriptScroll};
-use crate::tui::selection::TranscriptSelectionPoint;
+use crate::tui::selection::{SelectionAutoscroll, TranscriptSelectionPoint};
 use crate::tui::session_picker::SessionPickerView;
 use crate::tui::shell_job_routing::{
     add_shell_job_message, format_shell_job_list, format_shell_poll, open_shell_job_pager,
@@ -208,30 +208,24 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
     if use_alt_screen {
         execute!(stdout, EnterAlternateScreen)?;
     }
-    if use_mouse_capture {
-        execute!(stdout, EnableMouseCapture)?;
-    }
-    if use_bracketed_paste {
-        execute!(stdout, EnableBracketedPaste)?;
-    }
-    // Enable focus events so the terminal reports FocusGained/FocusLost.
-    // Necessary for IME compositor re-activation on macOS when the user
-    // switches away (Cmd+Tab) and returns.
-    execute!(stdout, EnableFocusChange)?;
-    // #442: opt into the Kitty keyboard protocol's escape-code
-    // disambiguation so terminals that support it (Kitty, Ghostty,
+    // Mouse capture, bracketed paste, focus events, and the Kitty
+    // keyboard-protocol escape-disambiguation flag (#442). Single source
+    // of truth shared with the FocusGained recovery path and
+    // resume_terminal — see recover_terminal_modes.
+    //
+    // Focus events are necessary for IME compositor re-activation on
+    // macOS when the user switches away (Cmd+Tab) and returns. The Kitty
+    // keyboard protocol opt-in is best-effort: terminals that don't
+    // support it (iTerm2, Terminal.app, Windows 10 conhost) silently
+    // discard the escape, while supporting terminals (Kitty, Ghostty,
     // Alacritty 0.13+, WezTerm, recent Konsole, recent xterm) report
-    // unambiguous events for Option/Alt-modified keys, plain Esc, and
-    // multi-byte sequences. Terminals that don't recognise the escape
-    // silently discard it; behaviour is identical to today on legacy
-    // terminals (iTerm2, Terminal.app, Windows 10 conhost).
+    // unambiguous events for Option/Alt-modified keys and plain Esc.
     //
     // Only `DISAMBIGUATE_ESCAPE_CODES` is pushed — the higher tiers
     // (`REPORT_EVENT_TYPES`, `REPORT_ALL_KEYS_AS_ESCAPE_CODES`) emit
     // release events that the existing key handlers would mis-route
-    // as duplicate presses. Best-effort: failure to push is logged
-    // and ignored so a quirky terminal can't block startup.
-    push_keyboard_enhancement_flags(&mut stdout);
+    // as duplicate presses.
+    recover_terminal_modes(&mut stdout, use_mouse_capture, use_bracketed_paste);
     let color_depth = palette::ColorDepth::detect();
     let palette_mode = palette::PaletteMode::detect();
     tracing::debug!(
@@ -1509,6 +1503,10 @@ async fn run_event_loop(
         // Expire the "Press Ctrl+C again to quit" prompt silently after its
         // window. Triggers a redraw if the prompt was visible.
         app.tick_quit_armed();
+        // While the user is drag-selecting past the transcript edge, advance
+        // the viewport on a fixed cadence and extend the selection head so a
+        // long passage can be selected in one drag (#1163).
+        tick_selection_autoscroll(app);
         let allow_workspace_context_refresh =
             !app.is_loading && !has_running_agents && !app.is_compacting;
         refresh_workspace_context_if_needed(app, now, allow_workspace_context_refresh);
@@ -1559,6 +1557,13 @@ async fn run_event_loop(
             let remaining = deadline.saturating_duration_since(now);
             poll_timeout = poll_timeout.min(remaining.max(Duration::from_millis(50)));
         }
+        // Drag-edge auto-scroll wakes the loop on its own cadence so the
+        // viewport keeps advancing while the user holds the mouse outside
+        // the transcript rect (#1163).
+        if let Some(state) = app.viewport.selection_autoscroll {
+            let remaining = state.next_tick.saturating_duration_since(now);
+            poll_timeout = poll_timeout.min(remaining);
+        }
         poll_timeout = clamp_event_poll_timeout(poll_timeout);
 
         // #549: this async task also performs a blocking terminal poll. Give
@@ -1595,24 +1600,18 @@ async fn run_event_loop(
                 continue;
             }
 
-            // Re-push keyboard enhancement flags on focus-gain and force a
-            // full viewport reset before repainting. App-switching and
-            // interactive handoffs can leave the host terminal scrolled away
-            // from row 0; treating focus as a recapture point prevents the
-            // native scrollback gutter / blank-top-row failure mode from
-            // persisting after the user returns.
-            // On macOS, switching away (Cmd+Tab) and back can reset the
-            // terminal's keyboard mode, which breaks IME compositor state.
-            // Acknowledging FocusGained and re-pushing the flags restores
-            // the IME so CJK input methods work after a focus toggle.
-            // The same reset can drop the terminal's mouse-tracking mode,
-            // leaving wheel scroll dead until restart — re-arm mouse
-            // capture on focus-gain so wheel events keep flowing.
+            // Re-establish terminal mode flags on focus-gain and force a full
+            // viewport reset before repainting. App-switching and interactive
+            // handoffs can leave the host terminal scrolled away from row 0
+            // and (on macOS) can drop the keyboard, mouse-tracking, or
+            // bracketed-paste modes — recover_terminal_modes() is the
+            // canonical place those flags live.
             if terminal_event_needs_viewport_recapture(&evt) {
-                push_keyboard_enhancement_flags(terminal.backend_mut());
-                if app.use_mouse_capture {
-                    let _ = execute!(terminal.backend_mut(), EnableMouseCapture);
-                }
+                recover_terminal_modes(
+                    terminal.backend_mut(),
+                    app.use_mouse_capture,
+                    app.use_bracketed_paste,
+                );
                 force_terminal_repaint = true;
                 app.needs_redraw = true;
             }
@@ -2714,19 +2713,22 @@ async fn run_event_loop(
                 KeyCode::Right => {
                     app.move_cursor_right();
                 }
-                KeyCode::Home if key.modifiers.is_empty() => {
+                KeyCode::Home if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     if let Some(anchor) =
                         TranscriptScroll::anchor_for(app.viewport.transcript_cache.line_meta(), 0)
                     {
                         app.viewport.transcript_scroll = anchor;
                     }
                 }
-                KeyCode::End if key.modifiers.is_empty() => {
+                KeyCode::End if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     app.scroll_to_bottom();
                 }
                 KeyCode::Home | KeyCode::Char('a')
                     if key.modifiers.contains(KeyModifiers::CONTROL) =>
                 {
+                    app.move_cursor_start();
+                }
+                KeyCode::Home => {
                     app.move_cursor_start();
                 }
                 KeyCode::End => {
@@ -6414,14 +6416,11 @@ fn resume_terminal(
     if use_alt_screen {
         execute!(terminal.backend_mut(), EnterAlternateScreen)?;
     }
-    if use_mouse_capture {
-        execute!(terminal.backend_mut(), EnableMouseCapture)?;
-    }
-    if use_bracketed_paste {
-        execute!(terminal.backend_mut(), EnableBracketedPaste)?;
-    }
-    execute!(terminal.backend_mut(), EnableFocusChange)?;
-    push_keyboard_enhancement_flags(terminal.backend_mut());
+    recover_terminal_modes(
+        terminal.backend_mut(),
+        use_mouse_capture,
+        use_bracketed_paste,
+    );
     reset_terminal_viewport(terminal)?;
     Ok(())
 }
@@ -6449,6 +6448,35 @@ fn push_keyboard_enhancement_flags<W: Write>(writer: &mut W) {
             ?err,
             "PushKeyboardEnhancementFlags ignored (terminal lacks support)"
         );
+    }
+}
+
+/// Re-establish terminal mode flags. Idempotent and best-effort: each
+/// underlying flag is silently discarded by terminals that don't support
+/// it, and a single flag's failure doesn't prevent later flags from being
+/// attempted.
+///
+/// **Canonical location for terminal-mode setup.** If you add a new mode
+/// flag at startup or in `resume_terminal`, add it here too — `FocusGained`
+/// recovery calls this and will silently fall behind otherwise.
+///
+/// Excluded by design: raw mode and the alternate screen — those persist
+/// across focus events and are only re-established by `resume_terminal`
+/// after a suspension, which always runs a separate path.
+fn recover_terminal_modes<W: Write>(
+    writer: &mut W,
+    use_mouse_capture: bool,
+    use_bracketed_paste: bool,
+) {
+    push_keyboard_enhancement_flags(writer);
+    if use_mouse_capture && let Err(err) = execute!(writer, EnableMouseCapture) {
+        tracing::debug!(?err, "EnableMouseCapture ignored");
+    }
+    if use_bracketed_paste && let Err(err) = execute!(writer, EnableBracketedPaste) {
+        tracing::debug!(?err, "EnableBracketedPaste ignored");
+    }
+    if let Err(err) = execute!(writer, EnableFocusChange) {
+        tracing::debug!(?err, "EnableFocusChange ignored");
     }
 }
 
@@ -7583,6 +7611,17 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEvent> {
             }
         }
         MouseEventKind::Down(MouseButton::Left) => {
+            app.viewport.transcript_scrollbar_dragging = false;
+            app.viewport.selection_autoscroll = None;
+
+            // Click on the transcript scrollbar gutter starts a scrollbar
+            // drag so the visible thumb remains interactive for users who
+            // prefer mouse-based navigation.
+            if mouse_hits_transcript_scrollbar(app, mouse) {
+                app.viewport.transcript_scrollbar_dragging = true;
+                return Vec::new();
+            }
+
             if mouse_hits_rect(mouse, app.viewport.jump_to_latest_button_area) {
                 app.scroll_to_bottom();
                 return Vec::new();
@@ -7607,14 +7646,23 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEvent> {
             }
         }
         MouseEventKind::Drag(MouseButton::Left) => {
-            if app.viewport.transcript_selection.dragging
-                && let Some(point) = selection_point_from_mouse(app, mouse)
-            {
-                app.viewport.transcript_selection.head = Some(point);
+            if app.viewport.transcript_scrollbar_dragging {
+                scroll_transcript_to_mouse_row(app, mouse.row);
+                return Vec::new();
             }
+
+            if app.viewport.transcript_selection.dragging {
+                update_selection_drag(app, mouse);
+            }
+        }
+        MouseEventKind::Up(MouseButton::Left) if app.viewport.transcript_scrollbar_dragging => {
+            app.viewport.transcript_scrollbar_dragging = false;
+            app.viewport.selection_autoscroll = None;
+            app.needs_redraw = true;
         }
         MouseEventKind::Up(MouseButton::Left) if app.viewport.transcript_selection.dragging => {
             app.viewport.transcript_selection.dragging = false;
+            app.viewport.selection_autoscroll = None;
             if selection_has_content(app) {
                 copy_active_selection(app);
             }
@@ -7626,6 +7674,154 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEvent> {
     }
 
     Vec::new()
+}
+
+fn mouse_hits_transcript_scrollbar(app: &App, mouse: MouseEvent) -> bool {
+    let Some(area) = app.viewport.last_transcript_area else {
+        return false;
+    };
+    if area.width <= 1 || app.viewport.last_transcript_total <= app.viewport.last_transcript_visible
+    {
+        return false;
+    }
+
+    let scrollbar_col = area.x.saturating_add(area.width.saturating_sub(1));
+    mouse.column == scrollbar_col
+        && mouse.row >= area.y
+        && mouse.row < area.y.saturating_add(area.height)
+}
+
+fn scroll_transcript_to_mouse_row(app: &mut App, row: u16) -> bool {
+    let Some(area) = app.viewport.last_transcript_area else {
+        return false;
+    };
+    let total = app.viewport.last_transcript_total;
+    let visible = app.viewport.last_transcript_visible;
+    if area.height == 0 || total <= visible {
+        return false;
+    }
+
+    let max_start = total.saturating_sub(visible);
+    if max_start == 0 {
+        app.scroll_to_bottom();
+        return true;
+    }
+
+    let max_row = usize::from(area.height.saturating_sub(1));
+    let relative_row = usize::from(row.saturating_sub(area.y)).min(max_row);
+    let numerator = relative_row
+        .saturating_mul(max_start)
+        .saturating_add(max_row / 2);
+    // Round to the nearest transcript offset so short thumbs still feel
+    // responsive on compact terminals.
+    let top = numerator.checked_div(max_row).unwrap_or(0);
+
+    app.viewport.transcript_scroll = if top >= max_start {
+        TranscriptScroll::to_bottom()
+    } else {
+        TranscriptScroll::at_line(top)
+    };
+    app.viewport.pending_scroll_delta = 0;
+    app.user_scrolled_during_stream = !app.viewport.transcript_scroll.is_at_tail();
+    app.needs_redraw = true;
+    true
+}
+
+/// Cadence between auto-scroll ticks while drag-selecting past the
+/// transcript edge (#1163). 30 ms ≈ 33 lines/sec, comparable to the feel
+/// of a steady scroll-wheel drag.
+const SELECTION_AUTOSCROLL_INTERVAL: Duration = Duration::from_millis(30);
+
+/// Update the transcript selection while the left button is dragging.
+/// When the mouse leaves the transcript rect vertically, arm
+/// `selection_autoscroll` so the main loop can advance the viewport on a
+/// fixed cadence; when the mouse returns inside, disarm it.
+fn update_selection_drag(app: &mut App, mouse: MouseEvent) {
+    if let Some(point) = selection_point_from_mouse(app, mouse) {
+        app.viewport.transcript_selection.head = Some(point);
+        app.viewport.selection_autoscroll = None;
+        return;
+    }
+
+    let Some(area) = app.viewport.last_transcript_area else {
+        return;
+    };
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+
+    let direction = if mouse.row < area.y {
+        -1
+    } else if mouse.row >= area.y.saturating_add(area.height) {
+        1
+    } else {
+        // Outside horizontally only — leave selection head where it is.
+        return;
+    };
+
+    let max_col = area.x.saturating_add(area.width.saturating_sub(1));
+    let column = mouse.column.clamp(area.x, max_col);
+
+    // Fire on the next tick immediately by setting `next_tick` to now.
+    app.viewport.selection_autoscroll = Some(SelectionAutoscroll {
+        direction,
+        column,
+        next_tick: Instant::now(),
+    });
+    app.needs_redraw = true;
+}
+
+/// Advance the drag-edge auto-scroll one step if its cadence has elapsed.
+/// Called once per main-loop iteration.
+fn tick_selection_autoscroll(app: &mut App) {
+    let Some(state) = app.viewport.selection_autoscroll else {
+        return;
+    };
+
+    if !app.viewport.transcript_selection.dragging {
+        app.viewport.selection_autoscroll = None;
+        return;
+    }
+
+    let Some(area) = app.viewport.last_transcript_area else {
+        return;
+    };
+    if area.height == 0 {
+        return;
+    }
+
+    let now = Instant::now();
+    if now < state.next_tick {
+        return;
+    }
+
+    app.viewport.pending_scroll_delta = app
+        .viewport
+        .pending_scroll_delta
+        .saturating_add(state.direction);
+    app.user_scrolled_during_stream = true;
+
+    let edge_row = if state.direction < 0 {
+        area.y
+    } else {
+        area.y.saturating_add(area.height.saturating_sub(1))
+    };
+    if let Some(point) = selection_point_from_position(
+        area,
+        state.column,
+        edge_row,
+        app.viewport.last_transcript_top,
+        app.viewport.last_transcript_total,
+        app.viewport.last_transcript_padding_top,
+    ) {
+        app.viewport.transcript_selection.head = Some(point);
+    }
+
+    app.viewport.selection_autoscroll = Some(SelectionAutoscroll {
+        next_tick: now + SELECTION_AUTOSCROLL_INTERVAL,
+        ..state
+    });
+    app.needs_redraw = true;
 }
 
 fn mouse_hits_rect(mouse: MouseEvent, area: Option<Rect>) -> bool {
@@ -7915,17 +8111,35 @@ fn selection_to_text(app: &App) -> Option<String> {
     let mut selected_lines = Vec::new();
     #[allow(clippy::needless_range_loop)]
     for line_index in start_index..=end_index {
-        let line_text = line_to_plain(&lines[line_index]);
+        // Rail-prefix decorations are stored as cache metadata rather than
+        // detected from glyphs, so new decoration types are covered without
+        // changes to the copy path (#1163).
+        let rail_width = app.viewport.transcript_cache.rail_prefix_width(line_index);
+        // Convert the rendered line to plain text (strips OSC-8), then
+        // slice off the rail prefix so subsequent column offsets operate
+        // on content-only text.
+        let full_text = line_to_plain(&lines[line_index]);
+        let line_text = if rail_width > 0 {
+            slice_text(&full_text, rail_width, text_display_width(&full_text))
+        } else {
+            full_text
+        };
         let line_width = text_display_width(&line_text);
-        let (col_start, col_end) = if start_index == end_index {
+        // Selection coordinates are recorded in rendered-column space, which
+        // includes the visual rail prefix. Add rail_width back so the column
+        // window maps correctly into the rail-stripped text.
+        let (raw_col_start, raw_col_end) = if start_index == end_index {
             (start.column, end.column)
         } else if line_index == start_index {
-            (start.column, line_width)
+            (start.column, line_width.saturating_add(rail_width))
         } else if line_index == end_index {
             (0, end.column)
         } else {
-            (0, line_width)
+            (0, line_width.saturating_add(rail_width))
         };
+
+        let col_start = raw_col_start.saturating_sub(rail_width).min(line_width);
+        let col_end = raw_col_end.saturating_sub(rail_width).min(line_width);
 
         let slice = slice_text(&line_text, col_start, col_end);
         selected_lines.push(slice);

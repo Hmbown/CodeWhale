@@ -901,6 +901,16 @@ impl Engine {
         self.turn_counter = self.turn_counter.saturating_add(1);
         self.capacity_controller.mark_turn_start(self.turn_counter);
 
+        // Emit turn started event IMMEDIATELY so the UI knows the turn is
+        // active. The snapshot below can take 30+ seconds on slow filesystems
+        // (e.g. WSL2 /mnt/c) and must not delay the TurnStarted event.
+        let _ = self
+            .tx_event
+            .send(Event::TurnStarted {
+                turn_id: turn.id.clone(),
+            })
+            .await;
+
         // Snapshot the workspace BEFORE we touch a single tool. Run the git
         // work on the blocking pool so the async runtime stays responsive;
         // failure is non-fatal (the helper logs at WARN).
@@ -910,14 +920,6 @@ impl Engine {
             let _ = tokio::task::spawn_blocking(move || pre_turn_snapshot(&pre_workspace, pre_seq))
                 .await;
         }
-
-        // Emit turn started event
-        let _ = self
-            .tx_event
-            .send(Event::TurnStarted {
-                turn_id: turn.id.clone(),
-            })
-            .await;
 
         // A new turn means any leftover retry banner (success cleared
         // it, failure pinned it) is no longer relevant — reset to idle

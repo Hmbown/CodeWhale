@@ -460,6 +460,7 @@ fn turn_tool_registry_builder_keeps_plan_mode_read_only_for_files() {
     assert!(registry.contains("update_plan"));
     assert!(registry.contains("task_list"));
     assert!(registry.contains("task_read"));
+    assert!(registry.contains("recall_archive"));
 
     let plan_state_tools = [
         "checklist_add",
@@ -486,6 +487,26 @@ fn turn_tool_registry_builder_keeps_plan_mode_read_only_for_files() {
         write_or_exec_tools.is_empty(),
         "Plan mode must not register file-writing or code-execution tools: {write_or_exec_tools:?}"
     );
+}
+
+#[test]
+fn parent_turn_registry_includes_recall_archive_for_investigative_modes() {
+    let (engine, _handle) = Engine::new(EngineConfig::default(), &Config::default());
+
+    for mode in [AppMode::Plan, AppMode::Agent, AppMode::Yolo] {
+        let registry = engine
+            .build_turn_tool_registry_builder(
+                mode,
+                engine.config.todos.clone(),
+                engine.config.plan_state.clone(),
+            )
+            .build(engine.build_tool_context(mode, false));
+
+        assert!(
+            registry.contains("recall_archive"),
+            "parent {mode:?} registry should expose recall_archive"
+        );
+    }
 }
 
 #[test]

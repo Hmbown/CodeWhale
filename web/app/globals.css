@@ -339,5 +339,5 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
   .ticker-track { gap: 1.5rem; padding-right: 1.5rem; }
 }
 
-/* Anchor scroll-margin so deep links land below the sticky nav. */
-[id] { scroll-margin-top: 5rem; }
+/* Anchor fallback; page-level scroll-mt utilities should be able to override it. */
+:where([id]) { scroll-margin-top: 5rem; }

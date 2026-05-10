@@ -72,7 +72,10 @@ pub fn list_skills(app: &mut App, arg: Option<&str>) -> CommandResult {
 
     let mut output = format!("Available skills ({}):\n", registry.len());
     output.push_str("─────────────────────────────\n");
-    for skill in registry.list() {
+    for (idx, skill) in registry.list().iter().enumerate() {
+        if idx > 0 {
+            output.push('\n');
+        }
         let _ = writeln!(output, "  /{} - {}", skill.name, skill.description);
     }
     let _ = write!(
@@ -556,6 +559,35 @@ mod tests {
         let msg = result.message.unwrap();
         assert!(msg.contains("Available skills"));
         assert!(msg.contains("/test-skill"));
+    }
+
+    #[test]
+    fn test_list_skills_separates_entries_with_blank_line() {
+        let tmpdir = TempDir::new().unwrap();
+        let _home = IsolatedHome::new(&tmpdir);
+        create_skill_dir(
+            &tmpdir,
+            "alpha-skill",
+            "---\nname: alpha-skill\ndescription: First skill\n---\nDo alpha work",
+        );
+        create_skill_dir(
+            &tmpdir,
+            "beta-skill",
+            "---\nname: beta-skill\ndescription: Second skill\n---\nDo beta work",
+        );
+
+        let mut app = create_test_app_with_tmpdir(&tmpdir);
+        let result = list_skills(&mut app, None);
+        let msg = result.message.unwrap();
+        let alpha = msg.find("/alpha-skill").expect("alpha skill should render");
+        let beta = msg.find("/beta-skill").expect("beta skill should render");
+        let (first, second) = if alpha < beta {
+            (alpha, beta)
+        } else {
+            (beta, alpha)
+        };
+
+        assert!(msg[first..second].contains("\n\n"), "got: {msg}");
     }
 
     #[test]

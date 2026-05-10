@@ -113,6 +113,9 @@ impl SkillRegistry {
         let mut visited = HashSet::new();
         Self::discover_recursive(dir, 0, &mut registry, &mut visited);
         registry
+            .skills
+            .sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.path.cmp(&b.path)));
+        registry
     }
 
     fn discover_recursive(
@@ -496,9 +499,6 @@ fn render_skills_block(registry: &SkillRegistry) -> Option<String> {
         return None;
     }
 
-    let mut skills = registry.list().to_vec();
-    skills.sort_by(|a, b| a.name.cmp(&b.name));
-
     let mut out = String::new();
     out.push_str("## Skills\n");
     out.push_str(
@@ -510,7 +510,7 @@ instructions when using a specific skill.\n\n",
     out.push_str("### Available skills\n");
 
     let mut omitted = 0usize;
-    for skill in skills {
+    for skill in registry.list() {
         // Use the real on-disk path captured at discovery — the directory
         // name can differ from the frontmatter `name` for community
         // installs, in which case `<dir>/<name>/SKILL.md` would not exist
@@ -767,6 +767,48 @@ mod tests {
         assert!(
             rendered.chars().count() < super::MAX_AVAILABLE_SKILLS_CHARS + 4_000,
             "rendered length should stay near the budget"
+        );
+    }
+
+    #[test]
+    fn render_skills_block_preserves_registry_precedence_under_prompt_budget() {
+        let tmpdir = TempDir::new().unwrap();
+        let mut registry = super::SkillRegistry::default();
+        registry.skills.push(super::Skill {
+            name: "workspace-priority".to_string(),
+            description: "must survive truncation".to_string(),
+            body: "body".to_string(),
+            path: tmpdir
+                .path()
+                .join(".claude")
+                .join("skills")
+                .join("workspace-priority")
+                .join("SKILL.md"),
+        });
+
+        let big_desc = "y".repeat(super::MAX_SKILL_DESCRIPTION_CHARS - 20);
+        for i in 0..200 {
+            registry.skills.push(super::Skill {
+                name: format!("aaa-global-{i:03}"),
+                description: big_desc.clone(),
+                body: "body".to_string(),
+                path: tmpdir
+                    .path()
+                    .join(".deepseek")
+                    .join("skills")
+                    .join(format!("aaa-global-{i:03}"))
+                    .join("SKILL.md"),
+            });
+        }
+
+        let rendered = super::render_skills_block(&registry).expect("skill context");
+        assert!(
+            rendered.contains("workspace-priority"),
+            "higher-precedence workspace skills must not be reordered behind globals:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("additional skills omitted from this prompt budget"),
+            "fixture should exceed prompt budget"
         );
     }
 

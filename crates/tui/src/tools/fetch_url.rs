@@ -318,7 +318,14 @@ async fn validate_fetch_target(
             "requests to localhost are not allowed",
         ));
     }
-    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+    // Normalize bracketed IPv6 literals before the literal-IP check so they
+    // route through the same restricted-IP policy as unbracketed forms
+    // (GHSA-88gh-2526-gfrr).
+    let ip_candidate = host
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .unwrap_or(host.as_str());
+    if let Ok(ip) = ip_candidate.parse::<std::net::IpAddr>() {
         if is_restricted_ip(&ip) {
             return Err(ToolError::permission_denied(format!(
                 "IP {ip} is a restricted address (private/loopback/link-local)"
@@ -567,6 +574,52 @@ mod tests {
         let url = reqwest::Url::parse("http://169.254.169.254/latest/meta-data").unwrap();
         let err = validate_fetch_target(&url, &ctx()).await.unwrap_err();
         assert!(format!("{err}").contains("restricted address"));
+    }
+
+    // GHSA-88gh-2526-gfrr — regression coverage for bracketed IPv6 literals.
+    #[tokio::test]
+    async fn rejects_ipv6_literal_loopback() {
+        let url = reqwest::Url::parse("http://[::1]/").unwrap();
+        let err = validate_fetch_target(&url, &ctx())
+            .await
+            .expect_err("[::1] must be rejected as restricted");
+        assert!(format!("{err}").contains("restricted"));
+    }
+
+    #[tokio::test]
+    async fn rejects_ipv6_literal_ula() {
+        let url = reqwest::Url::parse("http://[fc00::1]/").unwrap();
+        let err = validate_fetch_target(&url, &ctx())
+            .await
+            .expect_err("[fc00::1] must be rejected as restricted");
+        assert!(format!("{err}").contains("restricted"));
+    }
+
+    #[tokio::test]
+    async fn rejects_ipv6_literal_link_local() {
+        let url = reqwest::Url::parse("http://[fe80::1]/").unwrap();
+        let err = validate_fetch_target(&url, &ctx())
+            .await
+            .expect_err("[fe80::1] must be rejected as restricted");
+        assert!(format!("{err}").contains("restricted"));
+    }
+
+    #[tokio::test]
+    async fn rejects_ipv6_literal_ipv4_mapped_loopback() {
+        let url = reqwest::Url::parse("http://[::ffff:127.0.0.1]/").unwrap();
+        let err = validate_fetch_target(&url, &ctx())
+            .await
+            .expect_err("[::ffff:127.0.0.1] must be rejected as restricted");
+        assert!(format!("{err}").contains("restricted"));
+    }
+
+    #[tokio::test]
+    async fn rejects_ipv6_literal_unspecified() {
+        let url = reqwest::Url::parse("http://[::]/").unwrap();
+        let err = validate_fetch_target(&url, &ctx())
+            .await
+            .expect_err("[::] must be rejected as restricted");
+        assert!(format!("{err}").contains("restricted"));
     }
 
     #[tokio::test]

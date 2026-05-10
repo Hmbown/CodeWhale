@@ -14,17 +14,18 @@ path = "src/main.rs"
 anyhow.workspace = true
 clap.workspace = true
 clap_complete.workspace = true
-deepseek-agent = { path = "../agent", version = "0.8.24" }
-deepseek-app-server = { path = "../app-server", version = "0.8.24" }
-deepseek-config = { path = "../config", version = "0.8.24" }
-deepseek-execpolicy = { path = "../execpolicy", version = "0.8.24" }
-deepseek-mcp = { path = "../mcp", version = "0.8.24" }
-deepseek-secrets = { path = "../secrets", version = "0.8.24" }
-deepseek-state = { path = "../state", version = "0.8.24" }
+deepseek-agent = { path = "../agent", version = "0.8.26" }
+deepseek-app-server = { path = "../app-server", version = "0.8.26" }
+deepseek-config = { path = "../config", version = "0.8.26" }
+deepseek-execpolicy = { path = "../execpolicy", version = "0.8.26" }
+deepseek-mcp = { path = "../mcp", version = "0.8.26" }
+deepseek-secrets = { path = "../secrets", version = "0.8.26" }
+deepseek-state = { path = "../state", version = "0.8.26" }
 chrono.workspace = true
 dirs.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+reqwest = { workspace = true, features = ["blocking"] }
 tokio.workspace = true
 sha2.workspace = true
 tempfile = "3.16"

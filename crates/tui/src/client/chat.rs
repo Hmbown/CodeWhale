@@ -1008,9 +1008,6 @@ fn build_chat_messages_with_reasoning(
         let mut tool_call_infos = Vec::new();
         let mut tool_results: Vec<(String, String, String)> = Vec::new();
         let mut turn_meta_budget: Option<TurnMetaBudget> = None;
-        let later_user_turn = messages[message_index + 1..]
-            .iter()
-            .any(message_starts_user_turn);
 
         for block in &message.content {
             match block {
@@ -1075,14 +1072,18 @@ fn build_chat_messages_with_reasoning(
             let mut reasoning_content = thinking_parts.join("\n");
             let has_text = !content.trim().is_empty();
             let has_tool_calls = !tool_calls.is_empty();
-            // DeepSeek thinking-mode tool calls must replay `reasoning_content`
-            // on subsequent requests. Non-tool assistant reasoning can be
-            // omitted once a later real user text message starts a new turn.
-            let include_reasoning_for_turn =
-                include_reasoning && (has_tool_calls || !later_user_turn);
-            let mut has_reasoning =
-                include_reasoning_for_turn && !reasoning_content.trim().is_empty();
-            if include_reasoning_for_turn && has_tool_calls && !has_reasoning {
+            // Reasoning replay must be a function of the stored message ONLY,
+            // never of later history. DeepSeek's prefix cache hashes the raw
+            // bytes of every message; flipping `reasoning_content` on/off
+            // depending on whether a follow-up user turn exists rewrites a
+            // historical message between turns and busts the cache from that
+            // point onwards. Always emit `reasoning_content` when the model
+            // requires replay AND the stored message carries thinking text.
+            // Tool-call messages with empty thinking still need a placeholder
+            // (DeepSeek 400s without it), but text-only assistant messages
+            // simply omit the field when there's nothing to replay.
+            let mut has_reasoning = include_reasoning && !reasoning_content.trim().is_empty();
+            if include_reasoning && has_tool_calls && !has_reasoning {
                 logging::warn(
                     "Substituting placeholder reasoning_content for DeepSeek tool-call assistant message",
                 );
@@ -1293,14 +1294,6 @@ fn build_chat_messages_with_reasoning(
     }
 
     out
-}
-
-fn message_starts_user_turn(message: &Message) -> bool {
-    message.role == "user"
-        && message.content.iter().any(|block| match block {
-            ContentBlock::Text { text, .. } => !text.trim().is_empty(),
-            _ => false,
-        })
 }
 
 pub(super) fn tool_to_chat(tool: &Tool) -> Value {

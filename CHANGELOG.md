@@ -5,6 +5,204 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.26] - 2026-05-09
+
+A security + polish release. Two responsibly-disclosed issues were
+patched, plus a small batch of internal release-pipeline fixes. Big
+thanks to **@JafarAkhondali** and **@47Cid** for the disclosures.
+
+### Security
+
+- Hardened the `fetch_url` tool's network-target validation
+  (GHSA-88gh-2526-gfrr). Thanks to **@JafarAkhondali**.
+- Tightened the default privileges of sub-agents created through
+  `task_create` (GHSA-72w5-pf8h-xfp4). Thanks to **@47Cid**.
+
+Both items will have full advisory text once the GHSA entries are
+published.
+
+### Fixed
+
+- **Hint when root `base_url` is set with a non-DeepSeek provider
+  (#1308)** — config load now logs a warning telling the user to
+  move the URL under the matching `[providers.<name>]` table or use
+  the `*_BASE_URL` env var. Closes the silent-ignore footgun for
+  Ollama / vLLM / OpenAI-compatible setups.
+- **Insecure base-URL error message is more discoverable (#1303)** —
+  the rejection now spells out which env var to set (with underscores
+  visible), notes that loopback hosts are auto-allowed, and shows a
+  one-line `DEEPSEEK_ALLOW_INSECURE_HTTP=1 deepseek` example.
+- **Workspace skills survive prompt truncation** — when the skill
+  catalog needs trimming to fit the prompt budget, workspace-local
+  skills now keep precedence over global ones rather than being
+  truncated indiscriminately. Thanks **@hhhaiai**.
+- **`/skills` listing has visual spacing** between entries so long
+  skill descriptions don't run together. Thanks **@reidliu41**.
+- **Provider base-URL overrides reach the active provider** — the
+  per-provider `*_BASE_URL` env vars (e.g. `OPENAI_BASE_URL`,
+  `OPENROUTER_BASE_URL`) now propagate into the active provider's
+  config entry consistently. Closes a gap where the override was
+  parsed but never applied. Thanks **@reidliu41**.
+- **WSL2 turn-start timeout** — `TurnStarted` is now emitted before the
+  snapshot step so a slow snapshot on WSL2's `/mnt/*` volumes doesn't
+  push past the runtime watchdog and surface a spurious "engine may
+  have stopped" error. Thanks **@michaeltse321**.
+- **`/init` auto-adds `.deepseek/` to `.gitignore` (#1326)** when the
+  workspace is a git repo, so workspace-local snapshots, instructions,
+  and pastes don't get accidentally committed. Idempotent on repeated
+  runs. Thanks **@Giggitycountless**.
+- **MCP tool ordering is deterministic** — discovered tools and the
+  resulting API tool block are now sorted by name so the prompt
+  prefix the model sees is stable across runs, regardless of
+  server-side pagination order. Improves prompt-cache hit rates with
+  multi-server MCP setups. Thanks **@hxy91819**.
+- **Error cells render as plain text** so env-var names (`API_KEY_FOO`)
+  in error messages keep their underscores instead of being parsed as
+  markdown emphasis. Thanks **@douglarek**.
+- **`/clear` resets the Todos sidebar (#1258)** — previously `/clear`
+  only reset the Plan panel; the Todos checklist persisted across
+  clears. Thanks **@Giggitycountless**.
+- **Drag-select past the viewport edge auto-scrolls (#1163, #1255,
+  #1292, #1298)** — when the mouse drag reaches the top or bottom of
+  the transcript area the viewport now scrolls to follow the
+  selection, the way text editors do. **Copy strips every visual-only
+  decoration glyph** — tool-card rails (`╭│╰`), transcript rails
+  (`▏`), reasoning rails (`╎`), tool-status symbols (`·•◦`), and
+  tool-family glyphs no longer leak into clipboard output. Thanks
+  **@Oliver-ZPLiu**.
+- MCP stdio servers no longer discard stderr. The spawn site now pipes
+  stderr through a bounded ring buffer; when a server crashes
+  mid-session, the transport-closed error includes the captured stderr
+  tail instead of disappearing into `Stdio::null`. Useful for debugging
+  Node/Python MCP servers that fail well after `initialize`.
+- Mouse capture now defaults on inside Windows Terminal (#1169, #1298,
+  #1331). When `WT_SESSION` is set, in-app text selection is enabled
+  by default and the wheel scrolls the transcript again (rather than
+  the terminal interpreting wheel events as input-history keys).
+  Legacy conhost stays opt-in via `--mouse-capture` or `[tui]
+  mouse_capture = true` to preserve the protections from #878 / #898.
+  Selection now clamps to the transcript region instead of the
+  terminal painting native selection across the sidebar.
+- The build script now invalidates its cache on `.git/HEAD` changes, so
+  the embedded short-SHA in `deepseek --version` stays current after
+  commits and branch switches without needing `cargo clean`. Both
+  regular checkouts and `git worktree` layouts are handled.
+- The release-time `changelog_entry_exists_for_current_package_version`
+  gate walks up from the crate manifest to find `CHANGELOG.md` instead
+  of assuming a fixed `../../CHANGELOG.md` layout. The workspace path
+  still resolves; running the suite from a packaged crate skips the
+  gate quietly instead of panicking.
+
+## [0.8.25] - 2026-05-09
+
+A stabilization + drift-fixes release. Headline work hardens the
+self-update path (no more `curl` shellout, real SHA-256 verification),
+fixes long-cell truncation in markdown tables, centralizes the MCP
+JSON-RPC framing, and unifies terminal-mode recovery on focus events.
+Big thanks to **Reid Liu (@reidliu41)** (Streamable HTTP MCP transport,
+`/config` column alignment), **Duducoco (@Duducoco)** (cache-stable
+`reasoning_content` replay), **jinpengxuan (@jinpengxuan)** (provider
+credentials during onboarding), **heloanc (@heloanc)** (Home/End cursor
+keys), **Wenjunyun123 (@Wenjunyun123)** (docs anchor scroll), and
+**Liu-Vince (@Liu-Vince)** (zh-Hans approval-dialog wording) for the
+contributions below.
+
+### Added
+
+- **Streamable HTTP MCP endpoints with SSE fallback (#1300)** — adds
+  the third MCP transport alongside stdio and SSE. The new transport
+  posts JSON-RPC over plain HTTP with optional SSE upgrade for servers
+  that prefer streaming responses. Thanks **Reid Liu (@reidliu41)**.
+- **`recall_archive` exposed in the parent agent registry** — the
+  read-only BM25 archive search tool was previously only available to
+  sub-agents; it is now callable from Plan, Agent, and YOLO parent
+  registries. Plan mode's read-only contract is preserved (the existing
+  registry test was updated to assert membership while still rejecting
+  write/exec tools).
+
+### Changed
+
+- **Markdown tables wrap long cells instead of truncating (#1163-adjacent)**
+  — long cell content is word-wrapped within the column instead of
+  collapsing to `…`. Column separators are preserved on every wrapped
+  line so the table grid stays readable.
+- **MCP JSON-RPC framing centralized** — request/response correlation,
+  timeout handling, and message framing now live above the byte-level
+  transports. Stdio, SSE, and the new Streamable HTTP transport share a
+  single protocol layer instead of each maintaining its own copy of the
+  framing code.
+- **Self-update is curl-free and verifies SHA-256** — `deepseek update`
+  no longer shells out to system `curl` (and no longer needs the
+  Schannel `--ssl-no-revoke` Windows hack from v0.8.23). Downloads now
+  use `reqwest::blocking` with rustls, and the aggregated
+  `deepseek-artifacts-sha256.txt` manifest is parsed and checked
+  against each downloaded asset before it is installed. Verification
+  status is surfaced in the update output.
+- **Terminal-mode recovery unified in `recover_terminal_modes()`** —
+  startup, `FocusGained`, and `resume_terminal` all route through one
+  idempotent helper that re-establishes keyboard enhancement flags,
+  mouse capture, bracketed paste, and focus events. Adding a new mode
+  flag now only has to happen in one place.
+
+### Fixed
+
+- **`reasoning_content` replay stable for prompt cache (#1297)** —
+  reasoning text replayed from saved sessions now hashes consistently
+  across turns so the cache-aware prompt builder's static-prefix
+  stability isn't broken by replays. Thanks **Duducoco (@Duducoco)**.
+- **Active provider credentials respected during onboarding (#1265)**
+  — the onboarding flow now reads credentials from the active provider
+  instead of falling back to the default DeepSeek path when another
+  provider is selected. Thanks **jinpengxuan (@jinpengxuan)**.
+- **Home/End keys move the input cursor (#1246)** — Home and End now
+  jump the composer cursor to line start/end instead of being
+  swallowed. Thanks **heloanc (@heloanc)**.
+- **Docs anchor scroll-margin overrideable (#1282)** — the
+  scroll-margin offset on docs anchors is now overrideable so embedded
+  contexts can adjust it without forking the stylesheet. Thanks
+  **Wenjunyun123 (@Wenjunyun123)**.
+- **`/config` view columns aligned (#1290)** — the `/config` table now
+  sizes the key column from the actual data instead of a fixed width,
+  so long keys no longer overflow into the value column. Thanks
+  **Reid Liu (@reidliu41)**.
+- **zh-Hans approval dialog wording (#1274)** — uses 终止 (terminate)
+  instead of 中止 (abort) in the Chinese approval dialog, matching the
+  English semantics. Thanks **Liu-Vince (@Liu-Vince)**.
+
+### Removed
+
+- **Unwired `[context.per_model]` config field** — the field had no
+  runtime consumer and was only present in the config schema. Removed
+  to keep the schema honest. Existing configs that still contain a
+  `[context.per_model.*]` table continue to load (serde ignores
+  unknown keys; covered by a regression test).
+- **Stale aspirational `[cycle.per_model]` comments** — reference to a
+  config table that was never wired. No behavior change.
+
+### Documentation
+
+- **`.claude/CODEMAP_v0.8.25_dead_code.md`** — committed the
+  cycle/seam/coherence/capacity codemap with a softened
+  `cycle_manager` classification: live by code trace, design
+  load-bearing, practical load-bearing unproven. Use this to decide
+  the v0.8.26+ product direction for the cycle/seam/capacity
+  subsystems.
+
+### Known issues
+
+- **Windows 10 conhost flicker regression (#1260, #1251)** —
+  v0.8.22-and-later content flickering on Windows 10 is still present.
+  The viewport-reset escape sequence added in v0.8.22 needs a Windows
+  guard. Deferred to v0.8.26.
+- **Snapshot system still snapshots every turn** — the v0.8.24 500 MB
+  hard cap protects against blowups, but the underlying design still
+  snapshots on every turn regardless of whether the workspace changed.
+  A write-aware skip is planned for v0.8.26.
+- **`▏` glyph leak in code blocks (#1212)**, **mouse selection
+  crossing the sidebar (#1169)**, **drag-select edge auto-scroll
+  (#1163)**, **mid-run MCP server stderr capture** — all deferred to
+  v0.8.26.
+
 ## [0.8.24] - 2026-05-09
 
 A bugfix + refactor release picking up the backlog after the v0.8.23 security

@@ -37,8 +37,8 @@
 //!   context manager (#159).
 //! - Phase guard: callers only invoke `should_advance_cycle` at clean turn
 //!   boundaries (no in-flight tool, no streaming, no approval modal).
-//! - Per-model overrides: `[cycle.per_model]` in config.toml lets operators
-//!   tune the threshold separately for `deepseek-v4-pro` vs. `-flash`.
+//! - Per-model defaults: `CycleConfig` can carry model-specific thresholds
+//!   for `deepseek-v4-pro` and `deepseek-v4-flash`.
 
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
@@ -76,7 +76,7 @@ pub const DEFAULT_BRIEFING_MAX_TOKENS: usize = 3_000;
 /// configured token cap. Matches `compaction::estimate_tokens` (~4 chars/token).
 const APPROX_CHARS_PER_TOKEN: usize = 4;
 
-/// Per-model cycle tuning. Loaded from `[cycle.per_model.<model>]`.
+/// Per-model cycle tuning.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelCycleConfig {
     /// Token threshold above which a cycle boundary fires.

@@ -682,13 +682,32 @@ mod tests {
     /// `## [X.Y.Z]` heading matching the current `CARGO_PKG_VERSION`. No
     /// hardcoded version string — the test self-updates with the workspace
     /// version bump and only fires when the CHANGELOG is the missing piece.
+    ///
+    /// Walks up from `CARGO_MANIFEST_DIR` to find `CHANGELOG.md` instead of
+    /// assuming a fixed `../../CHANGELOG.md` layout. The workspace root is
+    /// the common case, but the walk also tolerates deeper crate layouts and
+    /// the packaged-crate case (where the workspace root has been stripped
+    /// out): if no `CHANGELOG.md` is reachable, the gate quietly skips
+    /// rather than panicking, so consumers running the suite outside the
+    /// workspace checkout don't see a spurious failure.
     #[test]
     fn changelog_entry_exists_for_current_package_version() {
         let version = env!("CARGO_PKG_VERSION");
-        let changelog_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("..")
-            .join("CHANGELOG.md");
+        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let Some(changelog_path) = manifest_dir
+            .ancestors()
+            .map(|dir| dir.join("CHANGELOG.md"))
+            .find(|candidate| candidate.is_file())
+        else {
+            eprintln!(
+                "changelog_entry_exists_for_current_package_version: no \
+                 CHANGELOG.md found above {} — skipping (this gate only \
+                 fires inside a workspace checkout).",
+                manifest_dir.display()
+            );
+            return;
+        };
+
         let contents = std::fs::read_to_string(&changelog_path).unwrap_or_else(|err| {
             panic!(
                 "failed to read CHANGELOG.md at {}: {err}",

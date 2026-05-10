@@ -35,7 +35,7 @@ use crate::tui::file_mention::ContextReference;
 use crate::tui::history::{HistoryCell, TranscriptRenderOptions};
 use crate::tui::paste_burst::{FlushResult, PasteBurst};
 use crate::tui::scrolling::{MouseScrollState, TranscriptLineMeta, TranscriptScroll};
-use crate::tui::selection::TranscriptSelection;
+use crate::tui::selection::{SelectionAutoscroll, TranscriptSelection};
 use crate::tui::streaming::StreamingState;
 use crate::tui::transcript::TranscriptViewCache;
 use crate::tui::views::ViewStack;
@@ -575,6 +575,8 @@ pub struct ViewportState {
     pub mouse_scroll: MouseScrollState,
     pub transcript_cache: TranscriptViewCache,
     pub transcript_selection: TranscriptSelection,
+    pub selection_autoscroll: Option<SelectionAutoscroll>,
+    pub transcript_scrollbar_dragging: bool,
     pub last_transcript_area: Option<Rect>,
     pub last_transcript_top: usize,
     pub last_transcript_visible: usize,
@@ -591,6 +593,8 @@ impl Default for ViewportState {
             mouse_scroll: MouseScrollState::new(),
             transcript_cache: TranscriptViewCache::new(),
             transcript_selection: TranscriptSelection::default(),
+            selection_autoscroll: None,
+            transcript_scrollbar_dragging: false,
             last_transcript_area: None,
             last_transcript_top: 0,
             last_transcript_visible: 0,
@@ -3694,18 +3698,34 @@ impl App {
         self.history_navigation_draft = None;
     }
 
+    /// Retry a `try_lock` up to `retries` times with a 1ms pause between
+    /// attempts. Returns `Some(guard)` on success, `None` if the lock
+    /// remains contended after all retries.
+    fn retry_lock<T>(
+        mutex: &tokio::sync::Mutex<T>,
+        retries: u32,
+    ) -> Option<tokio::sync::MutexGuard<'_, T>> {
+        for _ in 0..retries {
+            if let Ok(guard) = mutex.try_lock() {
+                return Some(guard);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        None
+    }
+
     pub fn clear_todos(&mut self) -> bool {
-        // Clear the todo list (the sidebar checklist). Uses try_lock so the
-        // UI thread doesn't block if the engine briefly holds the mutex
-        // during tool execution; the caller can retry or show a busy message.
-        let todos_cleared = if let Ok(mut todos) = self.todos.try_lock() {
+        // Clear the todo list (the sidebar checklist). Retry with try_lock
+        // so /clear always resets todos even when the engine briefly holds
+        // the mutex during tool execution.
+        let todos_cleared = if let Some(mut todos) = Self::retry_lock(&self.todos, 100) {
             todos.clear();
             true
         } else {
             false
         };
         // Also clear the plan state — /clear means a full reset.
-        if let Ok(mut plan) = self.plan_state.try_lock() {
+        if let Some(mut plan) = Self::retry_lock(&self.plan_state, 100) {
             *plan = crate::tools::plan::PlanState::default();
         }
         todos_cleared
@@ -3911,6 +3931,7 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::tools::plan::{PlanItemArg, StepStatus, UpdatePlanArgs};
+    use crate::tools::todo::TodoStatus;
     use crate::tui::clipboard::PastedImage;
 
     fn test_options(yolo: bool) -> TuiOptions {
@@ -4059,6 +4080,24 @@ mod tests {
         let app = App::new(test_options(false), &Config::default());
         assert!(app.history.is_empty());
         assert_eq!(app.history_version, 0);
+    }
+
+    #[test]
+    fn clear_todos_resets_todos_list() {
+        let mut app = App::new(test_options(false), &Config::default());
+
+        // Seed some todos.
+        {
+            let mut todos = app.todos.try_lock().expect("todos lock");
+            todos.add("buy milk".to_string(), TodoStatus::Pending);
+            todos.add("write code".to_string(), TodoStatus::InProgress);
+            assert_eq!(todos.snapshot().items.len(), 2);
+        }
+
+        assert!(app.clear_todos());
+
+        let todos = app.todos.try_lock().expect("todos lock");
+        assert!(todos.snapshot().items.is_empty());
     }
 
     #[test]

@@ -1,5 +1,7 @@
 //! Text selection state for the transcript view.
 
+use std::time::Instant;
+
 // === Types ===
 
 /// A selection endpoint in the transcript (line/column).
@@ -15,6 +17,20 @@ pub struct TranscriptSelection {
     pub anchor: Option<TranscriptSelectionPoint>,
     pub head: Option<TranscriptSelectionPoint>,
     pub dragging: bool,
+}
+
+/// Drag-past-edge auto-scroll state. While the user holds the left button
+/// and the cursor is above or below the transcript rect, the main loop
+/// advances `pending_scroll_delta` and extends the selection head on a
+/// fixed cadence so a long passage can be selected in one drag (#1163).
+#[derive(Debug, Clone, Copy)]
+pub struct SelectionAutoscroll {
+    /// `-1` scrolls up, `+1` scrolls down. Never `0`.
+    pub direction: i32,
+    /// Last in-bounds mouse column, in absolute terminal coordinates.
+    pub column: u16,
+    /// When the next tick is allowed to fire.
+    pub next_tick: Instant,
 }
 
 impl TranscriptSelection {

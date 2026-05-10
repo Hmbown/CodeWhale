@@ -647,6 +647,62 @@ fn parse_table_row(line: &str) -> Option<Vec<String>> {
     Some(cells)
 }
 
+/// Word-wrap a single cell's text into one or more visual lines, each
+/// constrained to `col_width` display columns. Whitespace is the preferred
+/// break point; words wider than `col_width` are hard-broken at character
+/// boundaries so wrapping always makes progress (no infinite loop on URLs
+/// or paths). Returns at least one segment.
+fn wrap_cell_text(cell: &str, col_width: usize) -> Vec<String> {
+    if cell.is_empty() || cell.width() <= col_width {
+        return vec![cell.to_string()];
+    }
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut current_w = 0usize;
+
+    let push_word_breaking_chars =
+        |word: &str, current: &mut String, current_w: &mut usize, lines: &mut Vec<String>| {
+            for ch in word.chars() {
+                let cw = ch.width().unwrap_or(1);
+                if *current_w + cw > col_width && *current_w > 0 {
+                    lines.push(std::mem::take(current));
+                    *current_w = 0;
+                }
+                current.push(ch);
+                *current_w += cw;
+            }
+        };
+
+    for word in cell.split_whitespace() {
+        let word_w = word.width();
+        if current_w == 0 {
+            if word_w > col_width {
+                push_word_breaking_chars(word, &mut current, &mut current_w, &mut lines);
+            } else {
+                current.push_str(word);
+                current_w = word_w;
+            }
+        } else if current_w + 1 + word_w <= col_width {
+            current.push(' ');
+            current.push_str(word);
+            current_w += 1 + word_w;
+        } else {
+            lines.push(std::mem::take(&mut current));
+            current_w = 0;
+            if word_w > col_width {
+                push_word_breaking_chars(word, &mut current, &mut current_w, &mut lines);
+            } else {
+                current.push_str(word);
+                current_w = word_w;
+            }
+        }
+    }
+    if !current.is_empty() || lines.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
 fn render_table_row(cells: &[String], width: usize, base_style: Style) -> Vec<Line<'static>> {
     if cells.is_empty() {
         return vec![Line::from("")];
@@ -654,39 +710,35 @@ fn render_table_row(cells: &[String], width: usize, base_style: Style) -> Vec<Li
     let col_width = (width.saturating_sub(3 * cells.len() + 1)) / cells.len();
     let col_width = col_width.max(4);
     let sep_style = Style::default().fg(palette::TEXT_DIM);
-    let mut spans: Vec<Span> = vec![Span::styled("│ ".to_string(), sep_style)];
-    for (i, cell) in cells.iter().enumerate() {
-        let truncated = if cell.width() > col_width {
-            let mut s = String::new();
-            let mut w = 0;
-            for ch in cell.chars() {
-                let cw = ch.width().unwrap_or(1);
-                if w + cw + 1 > col_width {
-                    s.push('…');
-                    break;
-                }
-                s.push(ch);
-                w += cw;
+
+    // Wrap each cell into one or more visual segments. The row's visual
+    // height equals the tallest column. Cells that wrap to fewer segments
+    // get blank-padded continuation lines so column separators stay aligned.
+    let wrapped: Vec<Vec<String>> = cells.iter().map(|c| wrap_cell_text(c, col_width)).collect();
+    let row_height = wrapped.iter().map(Vec::len).max().unwrap_or(1).max(1);
+
+    let mut lines: Vec<Line<'static>> = Vec::with_capacity(row_height);
+    for row in 0..row_height {
+        let mut spans: Vec<Span> = vec![Span::styled("│ ".to_string(), sep_style)];
+        for (i, cell_segments) in wrapped.iter().enumerate() {
+            let segment = cell_segments.get(row).map(String::as_str).unwrap_or("");
+            let cell_spans: Vec<(String, Style)> =
+                parse_inline_spans(segment, base_style, link_style());
+            let cell_width: usize = cell_spans.iter().map(|(t, _)| t.width()).sum();
+            let pad = col_width.saturating_sub(cell_width);
+            for (text, style) in cell_spans {
+                spans.push(Span::styled(text, style));
             }
-            s
-        } else {
-            cell.clone()
-        };
-        let cell_spans: Vec<(String, Style)> =
-            parse_inline_spans(&truncated, base_style, link_style());
-        let cell_width: usize = cell_spans.iter().map(|(t, _)| t.width()).sum();
-        let pad = col_width.saturating_sub(cell_width);
-        for (text, style) in cell_spans {
-            spans.push(Span::styled(text, style));
+            spans.push(Span::raw(" ".repeat(pad)));
+            if i + 1 < cells.len() {
+                spans.push(Span::styled(" │ ".to_string(), sep_style));
+            } else {
+                spans.push(Span::styled(" │".to_string(), sep_style));
+            }
         }
-        spans.push(Span::raw(" ".repeat(pad)));
-        if i + 1 < cells.len() {
-            spans.push(Span::styled(" │ ".to_string(), sep_style));
-        } else {
-            spans.push(Span::styled(" │".to_string(), sep_style));
-        }
+        lines.push(Line::from(spans));
     }
-    vec![Line::from(spans)]
+    lines
 }
 
 fn table_col_width(num_cols: usize, term_width: usize) -> usize {
@@ -1159,5 +1211,85 @@ mod tests {
             text.contains('\u{2524}'),
             "middle-right junction missing: {text:?}"
         );
+    }
+
+    /// Cells longer than the per-column width must word-wrap to multiple
+    /// lines instead of getting truncated with `…`. Truncation silently
+    /// drops content the user can never see — particularly bad in narrow
+    /// Windows terminals or with verbose English/Chinese instructional
+    /// tables (the common LLM-output case).
+    #[test]
+    fn table_cell_wider_than_column_wraps_instead_of_truncating() {
+        let src = "| Feature | How to verify |\n\
+                   |---|---|\n\
+                   | Workspace-local commands | Drop a .deepseek/commands/foo.md in any project, run deepseek from there, type /foo — should dispatch |\n";
+        let lines = render_markdown(src, 80, Style::default());
+        let combined: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
+            .collect();
+
+        assert!(
+            !combined.contains('…'),
+            "table cell was truncated with `…` instead of wrapping; got: {combined:?}"
+        );
+        assert!(
+            combined.contains("type /foo"),
+            "tail of long cell was lost; got: {combined:?}"
+        );
+        assert!(
+            combined.contains("Workspace-local commands"),
+            "short cell content lost; got: {combined:?}"
+        );
+    }
+
+    /// Wrapped table rows must keep column separators on every visual
+    /// line so the columns remain visually aligned across all wrapped
+    /// segments. A wrapped row's continuation lines should still show
+    /// the `│` separator pipes at the same column positions.
+    #[test]
+    fn wrapped_table_row_preserves_column_separators() {
+        let src = "| A | B |\n\
+                   |---|---|\n\
+                   | short | this is a very very long second cell that absolutely must wrap to a new visual line because it cannot fit in the column allocated to it at this terminal width |\n";
+        let lines = render_markdown(src, 60, Style::default());
+        let rendered: Vec<String> = lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect();
+
+        // Every line in the rendered table — including wrapped continuation
+        // lines — must show the pipe column separator. We identify table
+        // body lines as ones that start with the row separator `│`.
+        let body_lines: Vec<&String> = rendered.iter().filter(|s| s.starts_with('│')).collect();
+
+        assert!(
+            body_lines.len() >= 3,
+            "expected at least header + multi-line data row (3+ body lines), got {}: {:?}",
+            body_lines.len(),
+            body_lines
+        );
+
+        for line in &body_lines {
+            assert!(
+                line.matches('│').count() >= 3,
+                "every wrapped table line should have N+1 column separators \
+                 for N columns; got fewer in: {line:?}"
+            );
+        }
+
+        // All of the long cell's content must appear across the wrapped lines.
+        let combined: String = rendered.join("\n");
+        for fragment in ["this is a very very long", "must wrap", "terminal width"] {
+            assert!(
+                combined.contains(fragment),
+                "fragment {fragment:?} missing from wrapped output:\n{combined}"
+            );
+        }
     }
 }

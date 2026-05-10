@@ -3644,7 +3644,14 @@ fn should_use_alt_screen(_cli: &Cli, _config: &Config) -> bool {
 
 fn should_use_mouse_capture(cli: &Cli, config: &Config, use_alt_screen: bool) -> bool {
     let terminal_emulator = std::env::var("TERMINAL_EMULATOR").ok();
-    should_use_mouse_capture_with(cli, config, use_alt_screen, terminal_emulator.as_deref())
+    let wt_session = std::env::var("WT_SESSION").ok().filter(|s| !s.is_empty());
+    should_use_mouse_capture_with(
+        cli,
+        config,
+        use_alt_screen,
+        terminal_emulator.as_deref(),
+        wt_session.as_deref(),
+    )
 }
 
 fn should_use_mouse_capture_with(
@@ -3652,6 +3659,7 @@ fn should_use_mouse_capture_with(
     config: &Config,
     use_alt_screen: bool,
     terminal_emulator: Option<&str>,
+    wt_session: Option<&str>,
 ) -> bool {
     if !use_alt_screen || cli.no_mouse_capture {
         return false;
@@ -3663,21 +3671,28 @@ fn should_use_mouse_capture_with(
         .tui
         .as_ref()
         .and_then(|tui| tui.mouse_capture)
-        .unwrap_or_else(|| default_mouse_capture_enabled(terminal_emulator))
+        .unwrap_or_else(|| default_mouse_capture_enabled(terminal_emulator, wt_session))
 }
 
 /// Whether to enable terminal mouse capture by default for this platform/host.
 ///
-/// Returns `false` on Windows (legacy console mouse-mode reporting is flaky;
-/// `--mouse-capture` opts in) and on JetBrains' JediTerm, which advertises
-/// mouse support but delivers SGR mouse-event escape sequences as raw text
-/// in the input stream — visible to users as garbled characters in the
-/// composer when they move the mouse over the TUI (#878, #898). The user
-/// can still opt back in with `[tui] mouse_capture = true` in
+/// On Windows the default depends on the host: Windows Terminal (which sets
+/// `WT_SESSION`) handles mouse-mode reporting cleanly, so default-on there
+/// gives users in-app text selection and keeps the application's selection
+/// clamped to the transcript area (#1169). Legacy conhost stays default-off
+/// because its mouse-mode reporting can leak SGR escape sequences as raw
+/// text into the composer (#878 / #898).
+///
+/// Off elsewhere only for JetBrains' JediTerm, which advertises mouse
+/// support but forwards the same SGR escape sequences as raw input. The
+/// user can still opt back in with `[tui] mouse_capture = true` in
 /// `~/.deepseek/config.toml` or `--mouse-capture`.
-fn default_mouse_capture_enabled(terminal_emulator: Option<&str>) -> bool {
+fn default_mouse_capture_enabled(
+    terminal_emulator: Option<&str>,
+    wt_session: Option<&str>,
+) -> bool {
     if cfg!(windows) {
-        return false;
+        return wt_session.is_some();
     }
     if matches!(terminal_emulator, Some(t) if t.eq_ignore_ascii_case("JetBrains-JediTerm")) {
         return false;
@@ -4650,16 +4665,43 @@ mod terminal_mode_tests {
         let cli = parse_cli(&["deepseek"]);
         let config = Config::default();
 
-        assert!(should_use_mouse_capture_with(&cli, &config, true, None));
+        assert!(should_use_mouse_capture_with(
+            &cli, &config, true, None, None
+        ));
     }
 
     #[test]
     #[cfg(windows)]
-    fn mouse_capture_defaults_off_on_windows_when_alternate_screen_is_active() {
+    fn mouse_capture_defaults_off_on_legacy_windows_console() {
+        // Legacy conhost (no `WT_SESSION`) keeps the v0.8.x default-off
+        // behavior: mouse-mode reporting on legacy console can leak SGR
+        // escapes into the composer.
         let cli = parse_cli(&["deepseek"]);
         let config = Config::default();
 
-        assert!(!should_use_mouse_capture_with(&cli, &config, true, None));
+        assert!(!should_use_mouse_capture_with(
+            &cli, &config, true, None, None
+        ));
+    }
+
+    // #1169: Windows Terminal sets `WT_SESSION` and handles mouse-mode
+    // reporting cleanly, so default-on there gives users in-app text
+    // selection (and the side-effect of clamping selection to the
+    // transcript region instead of the terminal painting across the
+    // sidebar via native selection).
+    #[test]
+    #[cfg(windows)]
+    fn mouse_capture_defaults_on_in_windows_terminal() {
+        let cli = parse_cli(&["deepseek"]);
+        let config = Config::default();
+
+        assert!(should_use_mouse_capture_with(
+            &cli,
+            &config,
+            true,
+            None,
+            Some("{a3a3b3a8-aa00-0000-0000-000000000000}"),
+        ));
     }
 
     #[test]
@@ -4667,7 +4709,9 @@ mod terminal_mode_tests {
         let cli = parse_cli(&["deepseek", "--no-mouse-capture"]);
         let config = Config::default();
 
-        assert!(!should_use_mouse_capture_with(&cli, &config, true, None));
+        assert!(!should_use_mouse_capture_with(
+            &cli, &config, true, None, None
+        ));
     }
 
     #[test]
@@ -4685,7 +4729,9 @@ mod terminal_mode_tests {
             ..Config::default()
         };
 
-        assert!(!should_use_mouse_capture_with(&cli, &config, true, None));
+        assert!(!should_use_mouse_capture_with(
+            &cli, &config, true, None, None
+        ));
     }
 
     #[test]
@@ -4693,7 +4739,9 @@ mod terminal_mode_tests {
         let cli = parse_cli(&["deepseek", "--mouse-capture"]);
         let config = Config::default();
 
-        assert!(should_use_mouse_capture_with(&cli, &config, true, None));
+        assert!(should_use_mouse_capture_with(
+            &cli, &config, true, None, None
+        ));
     }
 
     #[test]
@@ -4711,7 +4759,9 @@ mod terminal_mode_tests {
             ..Config::default()
         };
 
-        assert!(should_use_mouse_capture_with(&cli, &config, true, None));
+        assert!(should_use_mouse_capture_with(
+            &cli, &config, true, None, None
+        ));
     }
 
     #[test]
@@ -4719,7 +4769,9 @@ mod terminal_mode_tests {
         let cli = parse_cli(&["deepseek", "--mouse-capture"]);
         let config = Config::default();
 
-        assert!(!should_use_mouse_capture_with(&cli, &config, false, None));
+        assert!(!should_use_mouse_capture_with(
+            &cli, &config, false, None, None
+        ));
     }
 
     // Issue #878 / #898: JetBrains JediTerm advertises mouse support but
@@ -4739,6 +4791,7 @@ mod terminal_mode_tests {
             &config,
             true,
             Some("JetBrains-JediTerm"),
+            None,
         ));
     }
 
@@ -4754,6 +4807,7 @@ mod terminal_mode_tests {
             &config,
             true,
             Some("jetbrains-jediterm"),
+            None,
         ));
     }
 
@@ -4767,6 +4821,7 @@ mod terminal_mode_tests {
             &config,
             true,
             Some("JetBrains-JediTerm"),
+            None,
         ));
     }
 
@@ -4790,6 +4845,7 @@ mod terminal_mode_tests {
             &config,
             true,
             Some("JetBrains-JediTerm"),
+            None,
         ));
     }
 }

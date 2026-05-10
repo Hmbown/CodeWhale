@@ -225,44 +225,45 @@ deepseek --provider ollama --model deepseek-coder:1.3b
 
 ---
 
-## What's New In v0.8.24
+## What's New In v0.8.25
 
-A community-focused bugfix release picking up the backlog after the v0.8.23
-security release. [Full changelog](CHANGELOG.md).
+A stabilization + drift-fixes release. [Full changelog](CHANGELOG.md).
 
-- **Cache-aware prompt diagnostics + payload optimization** (#1196, thanks
-  **wplll**) — new `/cache inspect` and `/cache warmup` commands, layered
-  prompt classification (static / history / dynamic) with per-layer SHA-256
-  hashes, wire-payload dedup for repeated tool outputs, and a footer cache-hit
-  % chip from the DeepSeek API response. A new **Project Context Pack** is
-  injected into the stable prefix by default to improve cache hit rates;
-  disable with `[context] project_pack = false` if you'd rather keep prompts
-  minimal.
-- **Workspace-local slash commands** (#1259) — drop a `.deepseek/commands/foo.md`
-  in any project and `/foo` works there. Also scans `.cursor/commands/` and
-  `.claude/commands/`. Project-local shadows global by name.
-- **`@`-mention completion finds AI-tool dot-directories** — files inside
-  `.deepseek/`, `.cursor/`, `.claude/`, and `.agents/` are now discoverable
-  via `@` completion even when those dirs are in `.gitignore`.
-- **MCP paginated discovery** (#1250, thanks **Liu-Vince**) — MCP servers that
-  paginate `tools/list` (e.g., gbrain at 5 per page) now have all their tools
-  discovered via `nextCursor`.
-- **Snapshot disk cap** (#1112) — the snapshot side repo enforces a 500 MB
-  hard limit, pruning oldest first when it's hit. Guards against the reported
-  1.2 TB blowup. Thanks **@Giggitycountless** for the PR #1131 proposal.
-- **`/clear` resets the Todos sidebar** (#1258) — was only clearing the Plan
-  panel before.
-- **Mouse-wheel survives focus toggles** — re-arms `EnableMouseCapture` on
-  `FocusGained` so wheel scroll keeps working after Cmd+Tab or screenshot
-  workflows.
-- **i18n: prompts in English get English replies** (#1118) — Chinese
-  filenames in a project tree no longer bias the model toward Chinese
-  responses.
-- **Plus**: language-directive strengthening, MCP error-message clarity
-  improvements (PR #1196), and assorted polish.
+- **Markdown tables wrap long cells** instead of truncating with `…`.
+  Long cell content is word-wrapped within the column and the grid stays
+  intact on every wrapped line.
+- **Self-update is `curl`-free and verifies SHA-256** — `deepseek update`
+  uses `reqwest` with rustls and parses the aggregated checksum manifest
+  to verify each downloaded asset before installing. Drops the v0.8.23
+  Schannel `--ssl-no-revoke` Windows hack.
+- **MCP JSON-RPC framing centralized** — request/response correlation,
+  timeouts, and message framing now live above the byte transports.
+  Stdio, SSE, and the new Streamable HTTP transport share one protocol
+  layer.
+- **Streamable HTTP MCP endpoints** (#1300, thanks **Reid Liu
+  (@reidliu41)**) — third MCP transport alongside stdio and SSE.
+- **Terminal-mode recovery unified** — startup, `FocusGained`, and
+  `resume_terminal` all route through one `recover_terminal_modes()`
+  helper. Wheel scroll, keyboard enhancement, bracketed paste, and
+  focus events are re-armed in one place after focus round-trips.
+- **`recall_archive` available in parent registries** — the read-only
+  BM25 archive search tool is now callable from Plan, Agent, and YOLO
+  parent registries (was sub-agent only).
+- **Onboarding respects the active provider** (#1265, thanks
+  **jinpengxuan (@jinpengxuan)**), **Home/End move the cursor**
+  (#1246, thanks **heloanc (@heloanc)**), **`/config` view columns
+  align to data** (#1290, thanks **Reid Liu (@reidliu41)**),
+  **`reasoning_content` replay is cache-stable** (#1297, thanks
+  **Duducoco (@Duducoco)**), **docs anchor scroll-margin overrideable**
+  (#1282, thanks **Wenjunyun123 (@Wenjunyun123)**), **zh-Hans
+  approval-dialog uses 终止** (#1274, thanks **Liu-Vince
+  (@Liu-Vince)**).
 
-⚠️ **Known issue:** v0.8.22+ have a Windows 10 conhost flicker regression
-(#1260) tracked for v0.8.25. v0.8.20 works correctly if you're affected.
+⚠️ **Known issues carried over to v0.8.26:** Windows 10 conhost flicker
+(#1260, #1251), per-turn snapshotting (no write-aware skip yet), `▏`
+glyph leak in code blocks (#1212), mouse selection crossing the
+sidebar (#1169), drag-select edge auto-scroll (#1163), mid-run MCP
+stderr capture.
 
 ---
 

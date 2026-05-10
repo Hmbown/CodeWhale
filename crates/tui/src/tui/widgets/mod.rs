@@ -1387,7 +1387,7 @@ fn single_key_value(_locale: Locale) -> &'static str {
 
 fn footer_controls(locale: Locale) -> &'static str {
     match locale {
-        Locale::ZhHans => "  ·  v：完整参数  ·  Esc：中止",
+        Locale::ZhHans => "  ·  v：完整参数  ·  Esc：终止",
         _ => "  ·  v: full params  ·  Esc: abort",
     }
 }
@@ -1495,7 +1495,7 @@ fn option_deny(locale: Locale) -> &'static str {
 
 fn option_abort(locale: Locale) -> &'static str {
     match locale {
-        Locale::ZhHans => "中止本轮",
+        Locale::ZhHans => "终止本轮",
         _ => "Abort the turn",
     }
 }

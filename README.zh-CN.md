@@ -192,36 +192,36 @@ deepseek --provider ollama --model deepseek-coder:1.3b
 
 ---
 
-## v0.8.24 新功能
+## v0.8.25 新功能
 
-承接 v0.8.23 安全发布之后的社区 bug 修复版本。[完整更新日志](CHANGELOG.md)。
+稳定性 + 漂移修复版本。[完整更新日志](CHANGELOG.md)。
 
-- **缓存感知的 prompt 诊断和载荷优化** (#1196，感谢 **wplll**) — 新增
-  `/cache inspect` 和 `/cache warmup` 命令，对系统 prompt 进行分层（static /
-  history / dynamic）并展示每层的 SHA-256 哈希；线材有效载荷去重重复工具输出；
-  页脚展示来自 DeepSeek API 响应的缓存命中率。新增**项目上下文包**默认注入到
-  稳定前缀以提高缓存命中率；如需保持 prompt 简洁，可在配置中设置
-  `[context] project_pack = false` 关闭。
-- **工作区本地的斜杠命令** (#1259) — 在任意项目中放置
-  `.deepseek/commands/foo.md`，`/foo` 即可在该项目中可用。同时扫描
-  `.cursor/commands/` 和 `.claude/commands/`。项目本地按名称覆盖全局。
-- **`@` 提示补全可发现 AI 工具点目录** — 即使
-  `.deepseek/`、`.cursor/`、`.claude/`、`.agents/` 在 `.gitignore` 中，
-  这些目录下的文件也能通过 `@` 补全发现。
-- **MCP 分页发现** (#1250，感谢 **Liu-Vince**) — 对 `tools/list` 进行分页的
-  MCP 服务器（如 gbrain 每页 5 个）现在通过 `nextCursor` 完整发现所有工具。
-- **快照磁盘容量上限** (#1112) — 快照副本仓库现在强制 500 MB 上限，
-  超出时按时间从旧到新清理。可防止报告中 1.2 TB 快照失控。感谢
-  **@Giggitycountless** 的 PR #1131 提案。
-- **`/clear` 现在重置 Todos 侧边栏** (#1258) — 以前只清空 Plan 面板。
-- **鼠标滚轮在焦点切换后仍可用** — 在 `FocusGained` 时重新启用
-  `EnableMouseCapture`，使 Cmd+Tab 或截屏后滚轮滚动仍正常工作。
-- **i18n：英文提问得到英文回复** (#1118) — 项目中的中文文件名不再使模型偏向
-  中文回复。
-- **此外**：语言指令加强、MCP 错误信息更清晰（来自 PR #1196），及若干打磨。
+- **Markdown 表格长单元格自动换行**，不再以 `…` 截断。长内容在列内
+  按词换行，网格在每个换行后保持完整。
+- **自更新不再依赖 `curl` 并验证 SHA-256** — `deepseek update` 现在使用
+  `reqwest` + rustls，并解析聚合校验清单以在安装前验证每个下载产物。
+  移除了 v0.8.23 为 Windows 添加的 Schannel `--ssl-no-revoke` 临时方案。
+- **MCP JSON-RPC 帧处理统一** — 请求/响应关联、超时、消息帧现在都位于
+  字节传输层之上。Stdio、SSE 和新的 Streamable HTTP 传输共享同一协议层。
+- **Streamable HTTP MCP 端点** (#1300，感谢 **Reid Liu (@reidliu41)**)
+  — 在 stdio 和 SSE 之外新增第三种 MCP 传输。
+- **终端模式恢复统一** — 启动、`FocusGained` 和 `resume_terminal` 都
+  通过同一个 `recover_terminal_modes()` 辅助函数。鼠标滚轮、键盘增强、
+  括号粘贴、焦点事件在焦点往返后只需一处重新启用。
+- **`recall_archive` 在父级注册表中可用** — 只读 BM25 归档搜索工具
+  现在可在 Plan、Agent 和 YOLO 父级注册表中调用（此前仅子代理可用）。
+- **入门时尊重当前 provider** (#1265，感谢 **jinpengxuan
+  (@jinpengxuan)**)、**Home/End 移动光标** (#1246，感谢 **heloanc
+  (@heloanc)**)、**`/config` 视图列宽对齐数据** (#1290，感谢 **Reid
+  Liu (@reidliu41)**)、**`reasoning_content` 重放对缓存稳定** (#1297，
+  感谢 **Duducoco (@Duducoco)**)、**docs 锚点 scroll-margin 可覆盖**
+  (#1282，感谢 **Wenjunyun123 (@Wenjunyun123)**)、**zh-Hans 审批对话框
+  使用「终止」** (#1274，感谢 **Liu-Vince (@Liu-Vince)**)。
 
-⚠️ **已知问题**：v0.8.22+ 在 Windows 10 conhost 上存在闪烁回归（#1260），
-跟踪到 v0.8.25 修复。如受影响，v0.8.20 工作正常。
+⚠️ **已知问题（沿用至 v0.8.26）**：Windows 10 conhost 闪烁（#1260、
+#1251）、按轮次快照（尚无写感知跳过）、代码块中 `▏` 字符泄漏（#1212）、
+鼠标选择跨入侧边栏（#1169）、拖拽选择边缘自动滚动（#1163）、运行时
+MCP 服务器 stderr 捕获。
 
 ---
 
