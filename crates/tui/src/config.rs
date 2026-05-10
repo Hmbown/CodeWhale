@@ -4644,6 +4644,43 @@ model = "glm-5"
     }
 
     #[test]
+    fn openai_compatible_env_overrides_provider_base_url_and_model() -> Result<()> {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "deepseek-tui-openai-compat-env-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
+
+        // Safety: test-only environment mutation guarded by a global mutex.
+        unsafe {
+            env::set_var("DEEPSEEK_PROVIDER", "openai-compatible");
+            env::set_var("OPENAI_COMPATIBLE_API_KEY", "openai-compat-key");
+            env::set_var(
+                "OPENAI_COMPATIBLE_BASE_URL",
+                "https://custom-llm.example.com/v1",
+            );
+            env::set_var("OPENAI_COMPATIBLE_MODEL", "llama-4");
+        }
+
+        let config = Config::load(None, None)?;
+        assert_eq!(config.api_provider(), ApiProvider::OpenaiCompatible);
+        assert_eq!(config.deepseek_api_key()?, "openai-compat-key");
+        assert_eq!(
+            config.deepseek_base_url(),
+            "https://custom-llm.example.com/v1"
+        );
+        assert_eq!(config.default_model(), "llama-4");
+        Ok(())
+    }
+
+    #[test]
     fn openrouter_provider_uses_canonical_defaults() -> Result<()> {
         let _lock = lock_test_env();
         let nanos = SystemTime::now()

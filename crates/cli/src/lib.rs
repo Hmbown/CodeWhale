@@ -896,18 +896,14 @@ fn run_auth_command_with_secrets(
             let provider: ProviderKind = provider.into();
             let slot = provider_slot(provider);
 
-            // openai-compatible requires a base URL.
-            if provider == ProviderKind::OpenaiCompatible {
-                let provider_cfg = store.config.providers.for_provider_mut(provider);
-                if let Some(url) = url.clone() {
-                    provider_cfg.base_url = Some(url);
-                } else if provider_cfg.base_url.is_none() {
-                    let entered = prompt_base_url(slot)?;
-                    provider_cfg.base_url = Some(entered);
-                }
-            } else if let Some(url) = url.clone() {
-                let provider_cfg = store.config.providers.for_provider_mut(provider);
-                provider_cfg.base_url = Some(url);
+            // Apply --url when present, or prompt for openai-compatible.
+            let provider_cfg = store.config.providers.for_provider_mut(provider);
+            if let Some(u) = url {
+                provider_cfg.base_url = Some(validate_openai_compatible_url(&u)?);
+            } else if provider == ProviderKind::OpenaiCompatible && provider_cfg.base_url.is_none()
+            {
+                let entered = prompt_base_url(slot)?;
+                provider_cfg.base_url = Some(entered);
             }
 
             if provider == ProviderKind::Ollama && api_key.is_none() && !api_key_stdin {
@@ -1083,19 +1079,67 @@ fn prompt_base_url(slot: &str) -> Result<String> {
     use std::io::{IsTerminal, Write};
     eprint!("Enter base URL for {slot}: ");
     io::stderr().flush().ok();
-    if !io::stdin().is_terminal() {
-        // Non-interactive: read directly without prompting twice.
-        return read_api_key_from_stdin();
+    let url = if !io::stdin().is_terminal() {
+        // Non-interactive: read a single line without prompting twice.
+        read_line_from_stdin()?
+    } else {
+        let mut buf = String::new();
+        io::stdin()
+            .read_line(&mut buf)
+            .context("failed to read base URL from stdin")?;
+        buf.trim().to_string()
+    };
+    validate_openai_compatible_url(&url)
+}
+
+/// Validate and sanitise a user-supplied base URL for the openai-compatible
+/// provider.  Rejects empty strings, whitespace-only values, and URLs whose
+/// scheme is not `http` or `https`.  Strips any embedded credentials from the
+/// userinfo portion so they never end up in config files or error messages.
+fn validate_openai_compatible_url(url: &str) -> Result<String> {
+    if url.trim().is_empty() {
+        bail!("empty base URL provided — openai-compatible requires a base URL");
     }
+
+    // Quick sanity: only accept http/https schemes.
+    let lower = url.trim().to_ascii_lowercase();
+    if !lower.starts_with("https://") && !lower.starts_with("http://") {
+        let scheme = lower.split("://").next().unwrap_or(&lower);
+        bail!(
+            "unsupported URL scheme '{scheme}://' — only http and https are allowed for openai-compatible"
+        );
+    }
+
+    // Strip userinfo (user:password@) so credentials are never persisted or
+    // logged.  The user should pass secrets via api_key instead.
+    if let Some(rest) = lower
+        .strip_prefix("https://")
+        .or_else(|| lower.strip_prefix("http://"))
+    {
+        if let Some(at_pos) = rest.find('@') {
+            let host_and_path = &rest[at_pos + 1..];
+            if host_and_path.is_empty() {
+                bail!("invalid base URL — host is empty after stripping credentials");
+            }
+            let scheme = if lower.starts_with("https") {
+                "https"
+            } else {
+                "http"
+            };
+            return Ok(format!("{scheme}://***:***@{host_and_path}"));
+        }
+    }
+
+    Ok(url.trim().to_string())
+}
+
+/// Read exactly one line from stdin (trimmed).
+fn read_line_from_stdin() -> Result<String> {
     let mut buf = String::new();
     io::stdin()
         .read_line(&mut buf)
-        .context("failed to read base URL from stdin")?;
-    let url = buf.trim().to_string();
-    if url.is_empty() {
-        bail!("empty base URL provided — openai-compatible requires a base URL");
-    }
-    Ok(url)
+        .context("failed to read from stdin")?;
+    Ok(buf.trim().to_string())
 }
 
 /// Move plaintext keys from config.toml into the configured secret store.
@@ -2823,5 +2867,58 @@ mod tests {
 
         let resolved = locate_sibling_tui_binary().expect("override must resolve");
         assert_eq!(resolved, custom);
+    }
+
+    // --- validate_openai_compatible_url ---
+
+    #[test]
+    fn validate_url_rejects_empty() {
+        assert!(validate_openai_compatible_url("").is_err());
+        assert!(validate_openai_compatible_url("   ").is_err());
+    }
+
+    #[test]
+    fn validate_url_rejects_non_http_schemes() {
+        assert!(validate_openai_compatible_url("file:///etc/passwd").is_err());
+        assert!(validate_openai_compatible_url("ftp://example.com").is_err());
+        assert!(
+            validate_openai_compatible_url("javascript:alert(1)").is_err(),
+            "javascript: URIs must be rejected at config time"
+        );
+    }
+
+    #[test]
+    fn validate_url_accepts_http_and_https() {
+        assert!(validate_openai_compatible_url("https://api.openai.com/v1").is_ok());
+        assert!(validate_openai_compatible_url("http://localhost:8000/v1").is_ok());
+        assert!(validate_openai_compatible_url("https://example.com").is_ok());
+    }
+
+    #[test]
+    fn validate_url_strips_userinfo() {
+        let sanitized =
+            validate_openai_compatible_url("https://user:secret@api.example.com/v1").unwrap();
+        assert!(
+            !sanitized.contains("user"),
+            "username must be stripped: {sanitized}"
+        );
+        assert!(
+            !sanitized.contains("secret"),
+            "password must be stripped: {sanitized}"
+        );
+        assert!(
+            sanitized.contains("***"),
+            "credentials replaced with ***: {sanitized}"
+        );
+        assert!(
+            sanitized.ends_with("api.example.com/v1"),
+            "host+path preserved: {sanitized}"
+        );
+    }
+
+    #[test]
+    fn validate_url_trims_whitespace() {
+        let result = validate_openai_compatible_url("  https://api.example.com/v1  ").unwrap();
+        assert_eq!(result, "https://api.example.com/v1");
     }
 }
