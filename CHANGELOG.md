@@ -47,6 +47,16 @@ published.
   snapshot step so a slow snapshot on WSL2's `/mnt/*` volumes doesn't
   push past the runtime watchdog and surface a spurious "engine may
   have stopped" error. Thanks **@michaeltse321**.
+- **Cache-busting events now surface in the footer** — when the system
+  prompt prefix changes (CLAUDE.md edit, skill install, mode switch,
+  cycle advance) or the engine trims oldest messages to fit the context
+  budget, a status message explains the cache reset rather than leaving
+  the user to guess why the hit rate dropped.
+- **Removed `cache_summary` from CompactionConfig** — this was an
+  Anthropic-specific concept (`"cache_control": {"type": "ephemeral"}`)
+  that never had any effect with the DeepSeek API. The related dead
+  code in compaction message building and `to_api_tools_with_cache`
+  was also cleaned up.
 - **`/init` auto-adds `.deepseek/` to `.gitignore` (#1326)** when the
   workspace is a git repo, so workspace-local snapshots, instructions,
   and pastes don't get accidentally committed. Idempotent on repeated

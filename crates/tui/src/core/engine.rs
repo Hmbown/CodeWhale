@@ -1085,7 +1085,7 @@ impl Engine {
             Vec::new()
         };
         let tools = tool_registry.as_ref().map(|registry| {
-            build_model_tool_catalog(registry.to_api_tools_with_cache(true), mcp_tools, mode)
+            build_model_tool_catalog(registry.to_api_tools(), mcp_tools, mode)
         });
 
         // Main turn loop
@@ -1346,6 +1346,11 @@ impl Engine {
         {
             self.session.messages.remove(0);
             removed = removed.saturating_add(1);
+        }
+        if removed > 0 {
+            let _ = self.tx_event.try_send(Event::status(format!(
+                "Trimmed {removed} oldest messages to fit context budget — prefix cache reset"
+            )));
         }
         removed
     }
@@ -1876,8 +1881,15 @@ impl Engine {
             merge_system_prompts(Some(&base), self.session.compaction_summary_prompt.clone());
         let stable_hash = system_prompt_hash(stable_prompt.as_ref());
         if self.session.last_system_prompt_hash != Some(stable_hash) {
+            let had_prior = self.session.last_system_prompt_hash.is_some();
             self.session.system_prompt = stable_prompt;
             self.session.last_system_prompt_hash = Some(stable_hash);
+            if had_prior {
+                let _ = self.tx_event.try_send(Event::status(
+                    "System prompt changed — KV prefix cache will reset on next turn"
+                        .to_string(),
+                ));
+            }
         }
     }
 

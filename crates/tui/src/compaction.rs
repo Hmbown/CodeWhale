@@ -13,7 +13,7 @@ use crate::config::DEFAULT_TEXT_MODEL;
 use crate::llm_client::LlmClient;
 use crate::logging;
 use crate::models::{
-    CacheControl, ContentBlock, Message, MessageRequest, SystemBlock, SystemPrompt,
+    ContentBlock, Message, MessageRequest, SystemBlock, SystemPrompt,
     context_window_for_model,
 };
 
@@ -30,7 +30,6 @@ pub struct CompactionConfig {
     pub enabled: bool,
     pub token_threshold: usize,
     pub model: String,
-    pub cache_summary: bool,
     /// Hard floor — `should_compact` returns `false` when total session
     /// tokens fall below this number, regardless of `enabled` or
     /// `token_threshold`. Defaults to [`MINIMUM_AUTO_COMPACTION_TOKENS`]
@@ -57,7 +56,6 @@ impl Default for CompactionConfig {
             // `compaction_threshold_for_model_and_effort`.
             token_threshold: 800_000,
             model: DEFAULT_TEXT_MODEL.to_string(),
-            cache_summary: true,
             auto_floor_tokens: MINIMUM_AUTO_COMPACTION_TOKENS,
         }
     }
@@ -1042,13 +1040,7 @@ pub async fn compact_messages(
              ---\n\n\
              Pinned messages follow:"
         ),
-        cache_control: if config.cache_summary {
-            Some(CacheControl {
-                cache_type: "ephemeral".to_string(),
-            })
-        } else {
-            None
-        },
+        cache_control: None,
     };
 
     let pinned_messages = messages
