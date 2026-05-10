@@ -698,6 +698,24 @@ async fn run_event_loop(
                         }
                     }
                     EngineEvent::MessageComplete { .. } => {
+                        // #861 RC3: defensive drain of a still-active thinking
+                        // entry. Normally `ThinkingComplete` arrives first and
+                        // populates `last_reasoning` before we get here, but
+                        // when the engine bursts events the channel can
+                        // deliver `MessageComplete` first, in which case
+                        // `last_reasoning.take()` below would be `None` and
+                        // the thinking block would be dropped from
+                        // `api_messages` — causing a DeepSeek HTTP 400 on the
+                        // next turn (V4 thinking-mode requires
+                        // `reasoning_content` replay). Inline-finalize the
+                        // thinking entry here so this branch is order-
+                        // independent.
+                        if app.streaming_thinking_active_entry.is_some() {
+                            if finalize_current_streaming_thinking(app) {
+                                transcript_batch_updated = true;
+                            }
+                            stash_reasoning_buffer_into_last_reasoning(app);
+                        }
                         if let Some(index) = app.streaming_message_index.take() {
                             let remaining = app.streaming_state.finalize_block_text(0);
                             if !remaining.is_empty() {

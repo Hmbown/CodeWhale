@@ -3861,6 +3861,57 @@ fn engine_error_finalizes_active_thinking_block() {
 }
 
 #[test]
+fn message_complete_drain_preserves_thinking_when_thinking_complete_lost() {
+    // #861 RC3: when the engine bursts events, `MessageComplete` can be
+    // dispatched ahead of `ThinkingComplete`. Without the defensive drain,
+    // `app.last_reasoning` would be `None` at `last_reasoning.take()` time
+    // and the thinking block would be dropped from `api_messages`,
+    // causing a DeepSeek HTTP 400 on the next turn (V4 thinking-mode
+    // requires `reasoning_content` replay).
+    //
+    // This test exercises the head-of-handler drain in isolation: with a
+    // thinking entry still active and `last_reasoning` empty, the drain
+    // must transfer `reasoning_buffer` into `last_reasoning` before the
+    // remainder of `MessageComplete` reads it.
+    let mut app = create_test_app();
+
+    let _ = ensure_streaming_thinking_active_entry(&mut app);
+    app.thinking_started_at = Some(Instant::now());
+    app.streaming_state.start_thinking(0, None);
+    app.streaming_state.push_content(0, "deep reasoning text");
+    let _ = app.streaming_state.commit_text(0);
+    app.reasoning_buffer.push_str("deep reasoning text");
+
+    assert!(
+        app.last_reasoning.is_none(),
+        "precondition: ThinkingComplete has NOT fired"
+    );
+    assert!(
+        app.streaming_thinking_active_entry.is_some(),
+        "precondition: thinking entry is still active"
+    );
+
+    // Mirror the head of `EngineEvent::MessageComplete` — the new defensive
+    // drain installed by the #861 RC3 fix.
+    if app.streaming_thinking_active_entry.is_some() {
+        let _ = finalize_current_streaming_thinking(&mut app);
+        stash_reasoning_buffer_into_last_reasoning(&mut app);
+    }
+
+    assert!(
+        app.last_reasoning
+            .as_deref()
+            .is_some_and(|s| s.contains("deep reasoning text")),
+        "defensive drain must move reasoning into last_reasoning so the\
+         downstream `last_reasoning.take()` produces a Thinking block"
+    );
+    assert!(
+        app.streaming_thinking_active_entry.is_none(),
+        "thinking entry must be cleared after the drain"
+    );
+}
+
+#[test]
 fn second_thinking_block_appends_new_entry_in_same_active_cell() {
     // Real V4 turns can emit Thinking → Tool → Thinking → Tool before any
     // prose; the second thinking block should land as a fresh entry inside
