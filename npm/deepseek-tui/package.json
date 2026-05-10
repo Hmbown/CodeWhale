@@ -40,6 +40,9 @@
     "access": "public"
   },
   "preferGlobal": true,
+  "optionalDependencies": {
+    "terminal-notifier": "^2.0.0"
+  },
   "files": [
     "bin/*.js",
     "scripts/*.js",

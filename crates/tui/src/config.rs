@@ -411,13 +411,16 @@ pub enum NotificationCondition {
 #[derive(Debug, Clone, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum NotificationMethod {
-    /// Auto-detect: OSC 9 for iTerm.app / Ghostty / WezTerm; BEL on
-    /// macOS / Linux otherwise; on Windows the fallback is `Off`
-    /// because BEL maps to the system error chime there (#583).
+    /// Auto-detect: OSC 9 for iTerm.app / Ghostty / WezTerm / Cmux;
+    /// native OS notification on macOS / Linux otherwise; on Windows
+    /// the fallback is `Off` because BEL maps to the system error
+    /// chime there (#583).
     #[default]
     Auto,
     /// OSC 9 escape.
     Osc9,
+    /// Native OS notification (osascript / notify-send).
+    Native,
     /// Plain BEL character.
     Bel,
     /// Disable notifications.
