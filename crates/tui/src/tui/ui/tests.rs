@@ -4706,3 +4706,58 @@ fn subagent_completion_notification_can_include_elapsed_summary() {
     assert!(msg.contains("deepseek: sub-agent agent_live complete"));
     assert!(msg.contains("deepseek: sub-agent complete (1m 5s)"));
 }
+
+#[test]
+fn sanitize_stream_chunk_keeps_printable_and_drops_control_bytes() {
+    // `sanitize_stream_chunk` is the per-chunk filter every piece of
+    // streaming text goes through (assistant content, thinking
+    // content, tool results, web-search snippets). Pin both
+    // invariants:
+    //
+    // 1. preserve user-visible whitespace (newline / tab) — collapsing
+    //    those would mangle code blocks and tool output;
+    // 2. drop terminal-escape-friendly control bytes — a chunk
+    //    containing `\u{1b}[2J` (clear screen) or `\u{8}` (backspace)
+    //    must not reach the renderer.
+    let cleaned = super::sanitize_stream_chunk("hello\tworld\n");
+    assert_eq!(cleaned, "hello\tworld\n", "tabs and newlines must survive");
+
+    // ESC + CSI sequence: only the printable letters/digits survive.
+    let cleaned = super::sanitize_stream_chunk("text\u{1b}[2Jmore");
+    assert_eq!(cleaned, "text[2Jmore", "ESC byte must be filtered");
+
+    // Bell, backspace, vertical tab, form feed — all are control
+    // characters that aren't `\n` or `\t`. Drop them.
+    let cleaned = super::sanitize_stream_chunk("a\u{7}b\u{8}c\u{b}d\u{c}e");
+    assert_eq!(cleaned, "abcde");
+
+    // Carriage return is also a control char; today's renderer expects
+    // unix newlines, so CR is filtered out. Pin so a future CRLF-mode
+    // change has to update this test intentionally.
+    let cleaned = super::sanitize_stream_chunk("line1\r\nline2");
+    assert_eq!(cleaned, "line1\nline2");
+}
+
+#[test]
+fn sanitize_stream_chunk_preserves_unicode() {
+    // Non-ASCII Unicode is not control — CJK, emoji, accented Latin
+    // all pass through untouched.
+    let cjk = "\u{4f60}\u{597d}\u{ff0c}DeepSeek";
+    assert_eq!(super::sanitize_stream_chunk(cjk), cjk);
+
+    let emoji_and_accents = "caf\u{e9} \u{1f680} build";
+    assert_eq!(
+        super::sanitize_stream_chunk(emoji_and_accents),
+        emoji_and_accents,
+    );
+}
+
+#[test]
+fn sanitize_stream_chunk_handles_empty_and_whitespace() {
+    assert_eq!(super::sanitize_stream_chunk(""), "");
+    assert_eq!(super::sanitize_stream_chunk("   "), "   ");
+    // A chunk that's purely control bytes shrinks to empty — caller
+    // branches that skip empty chunks handle the result, so the
+    // filter doesn't need to inject a placeholder.
+    assert_eq!(super::sanitize_stream_chunk("\u{1b}\u{7}\u{8}"), "");
+}
