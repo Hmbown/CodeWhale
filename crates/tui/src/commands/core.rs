@@ -306,6 +306,21 @@ pub fn home_dashboard(app: &mut App) -> CommandResult {
     CommandResult::message(stats)
 }
 
+/// Toggle output translation to Chinese on/off.
+///
+/// When enabled, the model is instructed to respond in Chinese and an
+/// interception layer translates any remaining English output before it
+/// reaches the user.
+pub fn translate(app: &mut App) -> CommandResult {
+    app.translation_enabled = !app.translation_enabled;
+    let locale = app.ui_locale;
+    if app.translation_enabled {
+        CommandResult::message(tr(locale, MessageId::CmdTranslateOn))
+    } else {
+        CommandResult::message(tr(locale, MessageId::CmdTranslateOff))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

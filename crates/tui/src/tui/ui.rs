@@ -508,6 +508,7 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         skills_dir: app.skills_dir.clone(),
         instructions: config.instructions_paths(),
         project_context_pack_enabled: config.project_context_pack_enabled(),
+        translation_enabled: app.translation_enabled,
         // Effectively unlimited. V4 has a 1M context window and the user
         // wants the model running until it's actually done. The previous cap
         // of 100 hit the ceiling on long multi-step plans (wide refactors,
@@ -741,6 +742,23 @@ async fn run_event_loop(
                                 role: "assistant".to_string(),
                                 content: blocks,
                             });
+                        }
+
+                        // Post-hoc translation check: when translation is
+                        // enabled and the assistant output is predominantly
+                        // English, show a status note. The primary mechanism
+                        // is the system prompt instruction; this is the
+                        // fallback interception layer.
+                        if app.translation_enabled
+                            && !current_streaming_text.is_empty()
+                        {
+                            use crate::tui::translation::needs_translation;
+                            if needs_translation(&current_streaming_text) {
+                                app.status_message = Some(
+                                    "⚠ 检测到英文输出，翻译拦截已激活（/translate 已开启）"
+                                        .to_string(),
+                                );
+                            }
                         }
                     }
                     EngineEvent::ThinkingStarted { .. } => {
@@ -3797,6 +3815,7 @@ async fn dispatch_user_message(
                 goal_objective: app.goal.goal_objective.as_deref(),
                 project_context_pack_enabled: config.project_context_pack_enabled(),
                 locale_tag: app.ui_locale.tag(),
+                translation_enabled: app.translation_enabled,
             },
         ),
     );
@@ -3889,6 +3908,7 @@ async fn dispatch_user_message(
             trust_mode: app.trust_mode,
             auto_approve: app.mode == AppMode::Yolo,
             approval_mode: app.approval_mode,
+            translation_enabled: app.translation_enabled,
         })
         .await
     {

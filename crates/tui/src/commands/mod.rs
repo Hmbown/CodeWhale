@@ -373,6 +373,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         description_id: MessageId::CmdTokensDescription,
     },
     CommandInfo {
+        name: "translate",
+        aliases: &[],
+        usage: "/translate",
+        description_id: MessageId::CmdTranslateDescription,
+    },
+    CommandInfo {
         name: "system",
         aliases: &[],
         usage: "/system",
@@ -553,6 +559,7 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "logout" => config::logout(app),
 
         // Debug commands
+        "translate" => core::translate(app),
         "tokens" => debug::tokens(app),
         "cost" => debug::cost(app),
         "cache" => debug::cache(app, arg),

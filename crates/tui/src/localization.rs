@@ -266,6 +266,9 @@ pub enum MessageId {
     CmdSystemDescription,
     CmdTaskDescription,
     CmdTokensDescription,
+    CmdTranslateDescription,
+    CmdTranslateOff,
+    CmdTranslateOn,
     CmdTrustDescription,
     CmdLspDescription,
     CmdShareDescription,
@@ -457,6 +460,9 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CmdSystemDescription,
     MessageId::CmdTaskDescription,
     MessageId::CmdTokensDescription,
+    MessageId::CmdTranslateDescription,
+    MessageId::CmdTranslateOff,
+    MessageId::CmdTranslateOn,
     MessageId::CmdTrustDescription,
     MessageId::CmdLspDescription,
     MessageId::CmdShareDescription,
@@ -798,6 +804,9 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CmdSystemDescription => "Show current system prompt",
         MessageId::CmdTaskDescription => "Manage background tasks",
         MessageId::CmdTokensDescription => "Show token usage for session",
+        MessageId::CmdTranslateDescription => "Toggle output translation to Chinese on/off",
+        MessageId::CmdTranslateOff => "Output translation disabled (original model output shown)",
+        MessageId::CmdTranslateOn => "Output translation enabled: model responses will be shown in Chinese",
         MessageId::CmdTrustDescription => {
             "Manage workspace trust and per-path allowlist (`/trust add <path>`, `/trust list`, `/trust on|off`)"
         }
@@ -1085,6 +1094,9 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::CmdSystemDescription => "現在のシステムプロンプトを表示",
         MessageId::CmdTaskDescription => "バックグラウンドタスクを管理",
         MessageId::CmdTokensDescription => "セッションのトークン使用量を表示",
+        MessageId::CmdTranslateDescription => "中国語出力翻訳のオン・オフを切り替え",
+        MessageId::CmdTranslateOff => "出力翻訳が無効になりました（元のモデル出力を表示）",
+        MessageId::CmdTranslateOn => "出力翻訳が有効になりました：モデル応答が中国語で表示されます",
         MessageId::CmdTrustDescription => {
             "ワークスペースの信頼設定とパス別許可リストを管理（`/trust add <path>`、`/trust list`、`/trust on|off`）"
         }
@@ -1344,6 +1356,9 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CmdSystemDescription => "显示当前系统提示词",
         MessageId::CmdTaskDescription => "管理后台任务",
         MessageId::CmdTokensDescription => "显示本次会话的 token 用量",
+        MessageId::CmdTranslateDescription => "切换输出翻译为中文的开/关状态",
+        MessageId::CmdTranslateOff => "输出翻译已关闭（显示原始模型输出）",
+        MessageId::CmdTranslateOn => "输出翻译已开启：模型回复将以中文显示给用户",
         MessageId::CmdTrustDescription => {
             "管理工作区信任与按路径的白名单（`/trust add <path>`、`/trust list`、`/trust on|off`）"
         }
@@ -1619,6 +1634,9 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::CmdSystemDescription => "Exibir o prompt de sistema atual",
         MessageId::CmdTaskDescription => "Gerenciar tarefas em segundo plano",
         MessageId::CmdTokensDescription => "Exibir o uso de tokens da sessão",
+        MessageId::CmdTranslateDescription => "Alternar tradução de saída para chinês ligado/desligado",
+        MessageId::CmdTranslateOff => "Tradução de saída desativada (saída original do modelo exibida)",
+        MessageId::CmdTranslateOn => "Tradução de saída ativada: as respostas do modelo serão exibidas em chinês",
         MessageId::CmdTrustDescription => {
             "Gerenciar a confiança do workspace e a allowlist por caminho (`/trust add <path>`, `/trust list`, `/trust on|off`)"
         }

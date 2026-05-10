@@ -24,6 +24,10 @@ pub struct PromptSessionContext<'a> {
     /// disk I/O happens inside the prompt builder, so the workspace-
     /// static portion of the system prompt stays cache-friendly.
     pub locale_tag: &'a str,
+    /// When true, a ## Language Output Requirement block is appended
+    /// to the system prompt instructing the model to respond in
+    /// Simplified Chinese.
+    pub translation_enabled: bool,
 }
 
 /// Conventional location for the structured session-handoff artifact (#32).
@@ -38,6 +42,24 @@ pub const HANDOFF_RELATIVE_PATH: &str = ".deepseek/handoff.md";
 /// its own. Files larger than this are truncated with an `[…elided]`
 /// marker rather than skipped entirely so the model still sees the head.
 const INSTRUCTIONS_FILE_MAX_BYTES: usize = 100 * 1024;
+
+/// System prompt block appended when `translation_enabled` is true.
+/// Instructs the model to respond in Simplified Chinese for all
+/// natural-language output — explanations, summaries, conversation.
+/// Code identifiers, untranslatable technical terms, and explicitly
+/// requested English code blocks are exempt.
+const TRANSLATION_OUTPUT_INSTRUCTION: &str = "\
+## Language Output Requirement\n\
+\n\
+The user requires all responses in Simplified Chinese (简体中文). \
+Always respond in Chinese — use natural, professional Chinese for all \
+explanations, code comments, summaries, and conversational turns. \
+Only output English for:\n\
+- Code identifiers (variable names, function names, file paths)\n\
+- Technical terms that lack a standard Chinese translation\n\
+- Code blocks the user explicitly requests in English\n\n\
+This is a hard display requirement: the user does not read English, \
+so any English prose in your response will block their decision-making.";
 
 /// Render a `## Environment` block listing the resolved locale tag,
 /// runtime version, host platform, login shell, and current working directory.
@@ -336,6 +358,7 @@ pub fn system_prompt_for_mode_with_context_and_skills(
             goal_objective: None,
             project_context_pack_enabled: true,
             locale_tag: "en",
+            translation_enabled: false,
         },
     )
 }
@@ -401,6 +424,12 @@ pub fn system_prompt_for_mode_with_context_skills_session_and_approval(
         "{full_prompt}\n\n{}",
         render_environment_block(workspace, session_context.locale_tag),
     );
+
+    // 2.3a. Translation output instruction — when enabled, instruct
+    // the model to respond in Simplified Chinese.
+    if session_context.translation_enabled {
+        full_prompt = format!("{full_prompt}\n\n{TRANSLATION_OUTPUT_INSTRUCTION}");
+    }
 
     // 2.5a. Configured `instructions = [...]` files (#454). Loaded
     // and concatenated in declared order. Lives above the skills
@@ -555,6 +584,7 @@ mod tests {
                 goal_objective: None,
                 project_context_pack_enabled: true,
                 locale_tag: "ja",
+                translation_enabled: false,
             },
         ) {
             SystemPrompt::Text(text) => text,
@@ -580,6 +610,7 @@ mod tests {
                 goal_objective: None,
                 project_context_pack_enabled: false,
                 locale_tag: "en",
+                translation_enabled: false,
             },
         ) {
             SystemPrompt::Text(text) => text,
@@ -606,6 +637,7 @@ mod tests {
                 goal_objective: None,
                 project_context_pack_enabled: true,
                 locale_tag: "en",
+                translation_enabled: false,
             },
         ) {
             SystemPrompt::Text(text) => text,
@@ -799,6 +831,7 @@ mod tests {
                 goal_objective: Some("Fix transcript corruption"),
                 project_context_pack_enabled: true,
                 locale_tag: "en",
+                translation_enabled: false,
             },
         ) {
             SystemPrompt::Text(text) => text,
@@ -827,6 +860,7 @@ mod tests {
                 goal_objective: Some("   "),
                 project_context_pack_enabled: true,
                 locale_tag: "en",
+                translation_enabled: false,
             },
         ) {
             SystemPrompt::Text(text) => text,
