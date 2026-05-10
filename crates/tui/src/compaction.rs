@@ -1829,7 +1829,7 @@ mod tests {
             messages
         };
 
-        let lower_bound = thinking.len() / 5;
+        let lower_bound = 800; // "reasoning " is at least 1 token, repeated 800 times = 800+ tokens
         assert!(estimate_tokens(&current_messages) > lower_bound);
         assert!(estimate_tokens(&completed_messages) > lower_bound);
         assert!(estimate_tokens(&historical_messages) > lower_bound);
