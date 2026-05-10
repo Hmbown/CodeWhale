@@ -439,7 +439,7 @@ fn format_resume_hint(session_id: Option<&str>) -> Option<String> {
     if session_id.is_empty() {
         return None;
     }
-    Some("To continue this session, run deepseek --continue".to_string())
+    Some("To continue this session, execute deepseek run --continue".to_string())
 }
 
 fn terminal_probe_timeout(config: &Config) -> Duration {
