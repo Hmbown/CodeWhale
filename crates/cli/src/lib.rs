@@ -2530,6 +2530,7 @@ mod tests {
             sandbox_mode: None,
             yolo: None,
             http_headers: std::collections::BTreeMap::new(),
+            allow_insecure_http: false,
         };
 
         let cmd = build_tui_command(&cli, &resolved, Vec::new()).expect("command");

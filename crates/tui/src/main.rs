@@ -2695,13 +2695,13 @@ fn doctor_timeout_recovery_lines(config: &Config) -> Vec<String> {
                 && !target.base_url.contains("api.deepseeki.com") =>
         {
             lines.push(
-                "If this is a custom DeepSeek-compatible endpoint, set its base URL in ~/.deepseek/config.toml and rerun `deepseek doctor`."
+                "If this is a custom DeepSeek-compatible endpoint, set its base URL in ~/.deepseek/config.toml (and `allow_insecure_http = true` if it is remote plain HTTP) and rerun `deepseek doctor`."
                     .to_string(),
             );
         }
         crate::config::ApiProvider::Deepseek | crate::config::ApiProvider::DeepseekCN => {
             lines.push(
-                "If this is a custom DeepSeek-compatible endpoint, confirm it serves `/v1/models` and `/v1/chat/completions` over HTTP or HTTPS."
+                "If this is a custom DeepSeek-compatible endpoint, confirm it serves `/v1/models` and `/v1/chat/completions`; remote plain HTTP also requires `allow_insecure_http = true`."
                     .to_string(),
             );
         }

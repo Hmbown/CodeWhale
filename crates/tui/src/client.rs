@@ -320,35 +320,25 @@ pub(super) async fn bounded_error_text(response: reqwest::Response, max_bytes: u
     String::from_utf8_lossy(&buf).into_owned()
 }
 
-fn validate_base_url_security(base_url: &str) -> Result<()> {
-    if base_url.starts_with("https://") || base_url.starts_with("http://") {
+fn validate_base_url_security(base_url: &str, allow_insecure_http: bool) -> Result<()> {
+    if base_url.starts_with("https://")
+        || base_url.starts_with("http://localhost")
+        || base_url.starts_with("http://127.0.0.1")
+        || base_url.starts_with("http://[::1]")
+    {
         return Ok(());
     }
 
-    if base_url.starts_with("http://")
-        && std::env::var(ALLOW_INSECURE_HTTP_ENV)
-            .ok()
-            .as_deref()
-            .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-    {
-        logging::warn(format!(
-            "Using insecure HTTP base URL because {} is set",
-            ALLOW_INSECURE_HTTP_ENV
-        ));
+    if base_url.starts_with("http://") && allow_insecure_http {
+        logging::warn("Using insecure HTTP base URL because it was explicitly allowed");
         return Ok(());
     }
 
     if base_url.starts_with("http://") {
         anyhow::bail!(
-            "Refusing insecure base URL '{base_url}'.\n\
-             \n\
-             Loopback hosts (localhost, 127.0.0.1, [::1]) are auto-allowed.\n\
-             For other trusted local hosts (LAN, llama.cpp on a private IP, etc.)\n\
-             set the env var `{env}=1` in the shell that runs deepseek and re-run.\n\
-             \n\
-             Example: `{env}=1 deepseek` (note the underscores).",
-            base_url = base_url,
-            env = ALLOW_INSECURE_HTTP_ENV,
+            "Refusing insecure base URL '{}'. Use HTTPS, set allow_insecure_http = true in ~/.deepseek/config.toml, or set {}=1 for a one-off trusted override.",
+            base_url,
+            ALLOW_INSECURE_HTTP_ENV
         );
     }
 
@@ -469,7 +459,7 @@ impl DeepSeekClient {
         let api_key = config.deepseek_api_key()?;
         let base_url = config.deepseek_base_url();
         let api_provider = config.api_provider();
-        validate_base_url_security(&base_url)?;
+        validate_base_url_security(&base_url, config.allow_insecure_http())?;
         let retry = config.retry_policy();
         let default_model = config.default_model();
         let http_headers = config.http_headers();
@@ -2655,14 +2645,21 @@ mod tests {
     }
 
     #[test]
-    fn base_url_security_allows_non_local_http() {
-        assert!(validate_base_url_security("http://api.deepseek.com").is_ok());
+    fn base_url_security_rejects_insecure_non_local_http() {
+        let err = validate_base_url_security("http://api.deepseek.com", false)
+            .expect_err("non-local insecure HTTP should be rejected");
+        assert!(err.to_string().contains("Refusing insecure base URL"));
     }
 
     #[test]
     fn base_url_security_allows_localhost_http() {
-        assert!(validate_base_url_security("http://localhost:8080").is_ok());
-        assert!(validate_base_url_security("http://127.0.0.1:8080").is_ok());
+        assert!(validate_base_url_security("http://localhost:8080", false).is_ok());
+        assert!(validate_base_url_security("http://127.0.0.1:8080", false).is_ok());
+    }
+
+    #[test]
+    fn base_url_security_allows_non_local_http_when_explicitly_enabled() {
+        assert!(validate_base_url_security("http://gateway.example/v1", true).is_ok());
     }
 
     #[test]

@@ -19,7 +19,8 @@
 provider = "deepseek" # deepseek | deepseek-cn | nvidia-nim | openai | atlascloud | openrouter | novita | fireworks | sglang | vllm | ollama
 api_key = "YOUR_DEEPSEEK_API_KEY" # must be non-empty
 base_url = "https://api.deepseek.com/beta"
-# baseurl = "http://127.0.0.1:11434/v1"        # compatibility alias; http:// endpoints are allowed
+# allow_insecure_http = true                   # required for trusted non-local http:// gateways
+# baseurl = "http://127.0.0.1:11434/v1"        # compatibility alias for base_url
 # provider = "deepseek-cn"                       # mainland China preset (official https://api.deepseek.com)
 # base_url = "https://api.deepseek.com"         # opt out of DeepSeek beta features
 # Optional custom model request headers for OpenAI-compatible gateways.
@@ -78,10 +79,9 @@ memory_path = "~/.deepseek/memory.md"
 # is expanded so `~` and env vars work; missing files are skipped with
 # a tracing warning. Files are capped at 100 KiB per entry.
 #
-# Project-level config (.deepseek/config.toml in the workspace) replaces
-# the user-level array wholesale rather than merging — list `~/global.md`
-# inside the project array if you want both. An explicit empty array
-# (`instructions = []`) clears the user list for the current repo.
+# Runtime intentionally ignores `<workspace>/.deepseek/config.toml`.
+# Put repo-specific instructions in `AGENTS.md`, and keep persistent user
+# defaults in `~/.deepseek/config.toml`.
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # User memory (#489) — opt-in. When enabled, the TUI reads memory_path on
@@ -171,6 +171,7 @@ max_subagents = 10 # optional (1-20)
 [providers.deepseek]
 # api_key = "YOUR_DEEPSEEK_API_KEY"
 # base_url = "https://api.deepseek.com/beta"
+# allow_insecure_http = true                   # only for trusted non-local http:// gateways
 # model = "deepseek-v4-pro"
 # http_headers = { "X-Model-Provider-Id" = "your-model-provider" } # optional custom request headers
 
@@ -184,6 +185,7 @@ max_subagents = 10 # optional (1-20)
 [providers.openai]
 # api_key = "YOUR_OPENAI_COMPATIBLE_API_KEY"
 # base_url = "https://api.openai.com/v1"
+# allow_insecure_http = true                   # if your compatible gateway is remote http://
 # model = "gpt-4.1"
 
 # AtlasCloud OpenAI-compatible endpoint (https://www.atlascloud.ai/docs/models/llm)

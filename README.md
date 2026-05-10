@@ -419,7 +419,7 @@ Full shortcut catalog: [docs/KEYBINDINGS.md](docs/KEYBINDINGS.md).
 
 ## Configuration
 
-User config: `~/.deepseek/config.toml`. Project overlay: `<workspace>/.deepseek/config.toml` (denied: `api_key`, `base_url`, `provider`, `mcp_config_path`). Root `base_url` / `default_text_model` remain canonical, and compatibility aliases `baseurl` / `model` are also accepted (including `http://...` endpoints). [config.example.toml](config.example.toml) has every option.
+Runtime config lives in `~/.deepseek/config.toml`; `<workspace>/.deepseek/config.toml` is not auto-loaded. Root `api_key` / `base_url` / `default_text_model` remain canonical DeepSeek defaults, and compatibility aliases `baseurl` / `model` are also accepted. For trusted non-local `http://...` gateways, set `allow_insecure_http = true` next to the configured `base_url` (or use `DEEPSEEK_ALLOW_INSECURE_HTTP=1` for a one-off override). [config.example.toml](config.example.toml) has every option.
 
 Key environment variables:
 

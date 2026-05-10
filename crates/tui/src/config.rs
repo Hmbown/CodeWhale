@@ -808,6 +808,8 @@ pub struct Config {
     pub api_key: Option<String>,
     #[serde(alias = "baseurl")]
     pub base_url: Option<String>,
+    #[serde(default)]
+    pub allow_insecure_http: Option<bool>,
     /// Optional extra HTTP headers sent to model API requests.
     pub http_headers: Option<HashMap<String, String>>,
     #[serde(alias = "model")]
@@ -1094,6 +1096,8 @@ pub struct ProviderConfig {
     pub api_key: Option<String>,
     #[serde(alias = "baseurl")]
     pub base_url: Option<String>,
+    #[serde(default)]
+    pub allow_insecure_http: Option<bool>,
     pub model: Option<String>,
     pub http_headers: Option<HashMap<String, String>>,
 }
@@ -1469,6 +1473,26 @@ impl Config {
             .to_string()
         });
         normalize_base_url(&base)
+    }
+
+    #[must_use]
+    pub fn allow_insecure_http(&self) -> bool {
+        let provider = self.api_provider();
+        if let Some(value) = self
+            .provider_config_for(provider)
+            .and_then(|provider| provider.allow_insecure_http)
+        {
+            return value;
+        }
+        if matches!(provider, ApiProvider::Deepseek | ApiProvider::DeepseekCN)
+            && let Some(value) = self.allow_insecure_http
+        {
+            return value;
+        }
+        std::env::var("DEEPSEEK_ALLOW_INSECURE_HTTP")
+            .ok()
+            .as_deref()
+            .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
     }
 
     fn active_provider_preserves_custom_base_url_model(&self) -> bool {
@@ -2641,6 +2665,9 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
         provider: override_cfg.provider.or(base.provider),
         api_key: override_cfg.api_key.or(base.api_key),
         base_url: override_cfg.base_url.or(base.base_url),
+        allow_insecure_http: override_cfg
+            .allow_insecure_http
+            .or(base.allow_insecure_http),
         http_headers: override_cfg.http_headers.or(base.http_headers),
         default_text_model: override_cfg.default_text_model.or(base.default_text_model),
         reasoning_effort: override_cfg.reasoning_effort.or(base.reasoning_effort),
@@ -2718,6 +2745,9 @@ fn merge_provider_config(base: ProviderConfig, override_cfg: ProviderConfig) -> 
     ProviderConfig {
         api_key: override_cfg.api_key.or(base.api_key),
         base_url: override_cfg.base_url.or(base.base_url),
+        allow_insecure_http: override_cfg
+            .allow_insecure_http
+            .or(base.allow_insecure_http),
         model: override_cfg.model.or(base.model),
         http_headers: override_cfg.http_headers.or(base.http_headers),
     }
@@ -4549,6 +4579,7 @@ api_key = "old-openrouter-key"
             &config_path,
             r#"api_key = "alias-root-key"
 baseurl = "http://gateway.example/v1"
+allow_insecure_http = true
 model = "deepseek-v4-flash"
 "#,
         )?;
@@ -4557,7 +4588,46 @@ model = "deepseek-v4-flash"
         assert_eq!(config.api_provider(), ApiProvider::Deepseek);
         assert_eq!(config.deepseek_api_key()?, "alias-root-key");
         assert_eq!(config.deepseek_base_url(), "http://gateway.example/v1");
+        assert!(config.allow_insecure_http());
         assert_eq!(config.default_model(), "deepseek-v4-flash");
+        Ok(())
+    }
+
+    #[test]
+    fn provider_allow_insecure_http_loads_from_config_file() -> Result<()> {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "deepseek-tui-provider-http-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
+
+        let config_path = temp_root.join(".deepseek").join("config.toml");
+        ensure_parent_dir(&config_path)?;
+        fs::write(
+            &config_path,
+            r#"provider = "openai"
+
+[providers.openai]
+api_key = "gateway-key"
+base_url = "http://gateway.example/v1"
+allow_insecure_http = true
+model = "glm-5"
+"#,
+        )?;
+
+        let config = Config::load(None, None)?;
+        assert_eq!(config.api_provider(), ApiProvider::Openai);
+        assert_eq!(config.deepseek_api_key()?, "gateway-key");
+        assert_eq!(config.deepseek_base_url(), "http://gateway.example/v1");
+        assert!(config.allow_insecure_http());
+        assert_eq!(config.default_model(), "glm-5");
         Ok(())
     }
 

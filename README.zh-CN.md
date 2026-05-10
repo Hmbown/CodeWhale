@@ -338,7 +338,7 @@ deepseek update                                # 检查并应用二进制更新
 
 ## 配置
 
-用户配置：`~/.deepseek/config.toml`。项目覆盖：`<workspace>/.deepseek/config.toml`（以下密钥被拒绝：`api_key`、`base_url`、`provider`、`mcp_config_path`）。根级仍以 `base_url` / `default_text_model` 为标准写法，同时兼容 `baseurl` / `model`，`http://...` 的自建接口地址也可直接配置。完整选项见 [config.example.toml](config.example.toml)。
+运行时默认只读取 `~/.deepseek/config.toml`；`<workspace>/.deepseek/config.toml` 不会自动加载。根级仍以 `api_key` / `base_url` / `default_text_model` 为标准写法，同时兼容 `baseurl` / `model`。如果要连接受信任的非本地 `http://...` 网关，请在对应 `base_url` 旁边设置 `allow_insecure_http = true`（或临时使用 `DEEPSEEK_ALLOW_INSECURE_HTTP=1`）。完整选项见 [config.example.toml](config.example.toml)。
 
 常用环境变量：
 
