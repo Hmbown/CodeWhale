@@ -126,11 +126,6 @@ pub struct ToolContext {
     /// result when this is present and the manager is enabled.
     pub lsp_manager: Option<Arc<LspManager>>,
 
-    /// Path-permission engine (Phase 3). When `Some`, tools can check
-    /// whether they're allowed to operate on a given file path before
-    /// requesting user approval. `None` disables path-level rules.
-    pub path_permissions: Option<Arc<tokio::sync::Mutex<crate::execpolicy::path_permission::PathPermissionEngine>>>,
-
     /// Large-output router (#548). When `Some`, tool results that exceed the
     /// configured token threshold are routed through a V4-Flash synthesis
     /// sub-agent before being returned to the parent context. `None` disables
@@ -172,7 +167,6 @@ impl ToolContext {
             sandbox_backend: None,
             memory_path: None,
             lsp_manager: None,
-            path_permissions: None,
             large_output_router: None,
             workshop_vars: None,
         }
@@ -207,7 +201,6 @@ impl ToolContext {
             sandbox_backend: None,
             memory_path: None,
             lsp_manager: None,
-            path_permissions: None,
             large_output_router: None,
             workshop_vars: None,
         }
@@ -242,7 +235,6 @@ impl ToolContext {
             sandbox_backend: None,
             memory_path: None,
             lsp_manager: None,
-            path_permissions: None,
             large_output_router: None,
             workshop_vars: None,
         }
@@ -292,18 +284,6 @@ impl ToolContext {
     #[allow(dead_code)]
     pub fn with_lsp_manager(mut self, manager: Arc<LspManager>) -> Self {
         self.lsp_manager = Some(manager);
-        self
-    }
-
-    /// Attach a path-permission engine for file-level access control.
-    #[must_use]
-    #[allow(dead_code)]
-    pub fn with_path_permissions(
-        mut self,
-        engine: crate::execpolicy::path_permission::PathPermissionEngine,
-    ) -> Self {
-        self.path_permissions =
-            Some(Arc::new(tokio::sync::Mutex::new(engine)));
         self
     }
 
