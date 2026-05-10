@@ -3181,6 +3181,7 @@ fn notification_settings(
     let method = match notif.method {
         crate::config::NotificationMethod::Auto => crate::tui::notifications::Method::Auto,
         crate::config::NotificationMethod::Osc9 => crate::tui::notifications::Method::Osc9,
+        crate::config::NotificationMethod::Native => crate::tui::notifications::Method::Native,
         crate::config::NotificationMethod::Bel => crate::tui::notifications::Method::Bel,
         crate::config::NotificationMethod::Off => crate::tui::notifications::Method::Off,
     };

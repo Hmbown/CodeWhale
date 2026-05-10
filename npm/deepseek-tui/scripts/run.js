@@ -1,4 +1,6 @@
 const { spawnSync } = require("child_process");
+const path = require("path");
+const fs = require("fs");
 const { getBinaryPath } = require("./install");
 
 const pkg = require("../package.json");
@@ -17,9 +19,31 @@ function handleVersionFallback(binaryName) {
   }
 }
 
+// On macOS, find the bundled terminal-notifier.app binary so the Rust
+// native_notify() code path can use it for click-to-focus notifications.
+// terminal-notifier is an optional dependency — if missing (e.g. Cargo
+// install), the Rust side falls back to plain osascript.
+function prependTerminalNotifierToPath() {
+  if (process.platform !== "darwin") return;
+  const candidates = [
+    // npm < 9 / older layout: binary lives in terminal-notifier/vendor/
+    path.resolve(__dirname, "..", "node_modules", "terminal-notifier", "vendor", "terminal-notifier.app", "Contents", "MacOS"),
+    // npm 9+ / workspaces flatten: .bin/ symlinks to terminal-notifier
+    path.resolve(__dirname, "..", "node_modules", ".bin"),
+  ];
+  for (const dir of candidates) {
+    if (fs.existsSync(dir)) {
+      process.env.PATH = `${dir}${path.delimiter}${process.env.PATH || ""}`;
+      return;
+    }
+  }
+}
+
 async function run(binaryName) {
   // Intercept --version before attempting binary download/launch
   handleVersionFallback(binaryName);
+
+  prependTerminalNotifierToPath();
 
   const binaryPath = await getBinaryPath(binaryName);
   const result = spawnSync(binaryPath, process.argv.slice(2), {

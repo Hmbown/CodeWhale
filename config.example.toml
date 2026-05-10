@@ -370,23 +370,29 @@ base_url = "https://integrate.api.nvidia.com/v1"
 default_text_model = "deepseek-ai/deepseek-v4-pro"
 
 # ─────────────────────────────────────────────────────────────────────────────────
-# Desktop Notifications (OSC 9 / BEL on long agent-turn completion)
+# Desktop Notifications (OSC 9 / native / BEL on long agent-turn completion)
 # ─────────────────────────────────────────────────────────────────────────────────
 # Emits an escape sequence to the terminal when a turn **completes successfully**
 # and took longer than `threshold_secs`. Failed or cancelled turns are
 # intentionally silent. Useful when you tab away from the TUI and want an alert
 # for "your task is ready".
 #
-# method        = "auto"   # auto | osc9 | bel | off
-#                 auto: OSC 9 for iTerm.app / Ghostty / WezTerm.
-#                       On macOS / Linux, falls back to BEL.
+# method        = "auto"   # auto | osc9 | native | bel | off
+#                 auto: OSC 9 for iTerm.app / Ghostty / WezTerm / Cmux
+#                       (or any terminal with TERM containing "ghostty").
+#                       On macOS / Linux, falls back to native
+#                       (osascript display notification) — works in any
+#                       terminal, no OSC 9 support required.
 #                       On Windows, falls back to "off" — BEL maps to the
 #                       system error chime (SystemAsterisk / MB_OK), which
 #                       sounds like an error popup. Set method = "bel"
 #                       explicitly to opt back in (#583).
-#                 osc9: \x1b]9;<msg>\x07 (iTerm2-style; shows macOS notification)
-#                 bel:  plain \x07 beep
-#                 off:  disable entirely
+#                 osc9:   \x1b]9;<msg>\x07 (iTerm2-style; shows macOS notification
+#                         in iTerm2/Ghostty/WezTerm/Cmux)
+#                 native: osascript display notification (macOS) /
+#                         notify-send (Linux) — works in any terminal
+#                 bel:    plain \x07 beep
+#                 off:    disable entirely
 # threshold_secs = 30      # only notify when the turn took >= this many seconds
 # include_summary = false  # include elapsed time + cost in the notification body
 [notifications]
