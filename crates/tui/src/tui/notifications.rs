@@ -209,6 +209,115 @@ fn native_notify(msg: &str) {
     });
 }
 
+/// Best-guess the macOS bundle identifier of the current terminal.
+///
+/// Maps known `$TERM_PROGRAM` values to their bundle IDs. When
+/// `TERM_PROGRAM` is unrecognised, falls back to a cached one-shot
+/// `osascript` probe that asks for the frontmost application's id.
+/// The result is memoised in a `OnceLock` so the probe runs at most
+/// once per process.
+#[cfg(target_os = "macos")]
+fn terminal_bundle_id() -> Option<&'static str> {
+    use std::sync::OnceLock;
+    static BUNDLE_ID: OnceLock<Option<String>> = OnceLock::new();
+    BUNDLE_ID
+        .get_or_init(|| {
+            let term_program = std::env::var("TERM_PROGRAM").unwrap_or_default();
+            match term_program.as_str() {
+                "iTerm.app" => Some("com.googlecode.iterm2".into()),
+                "Ghostty" => Some("com.mitchellh.ghostty".into()),
+                "Cmux" => Some("com.cmuxterm.app".into()),
+                "WezTerm" => Some("com.github.wez.wezterm".into()),
+                _ => {
+                    // Fallback: ask the window server which app is frontmost.
+                    let output = std::process::Command::new("osascript")
+                        .arg("-e")
+                        .arg("tell application \"System Events\" to get bundle identifier of first application process whose frontmost is true")
+                        .output()
+                        .ok()
+                        .and_then(|o| String::from_utf8(o.stdout).ok())
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty());
+                    output
+                }
+            }
+        })
+        .as_deref()
+}
+
+/// Check whether `terminal-notifier` is available on this system.
+#[cfg(target_os = "macos")]
+fn has_terminal_notifier() -> bool {
+    static CHECK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *CHECK.get_or_init(|| {
+        std::process::Command::new("which")
+            .arg("terminal-notifier")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map_or(false, |s| s.success())
+    })
+}
+
+/// Fire a native OS notification.
+///
+/// On macOS, prefers `terminal-notifier` (supports click-to-focus via
+/// `-activate BUNDLE_ID`) with a fallback to `osascript display
+/// notification`. On Linux, uses `notify-send`.
+///
+/// Spawns a short-lived thread so the caller is not blocked on the
+/// process. Best-effort: failures from a missing binary or a
+/// non-responsive notification daemon are silently ignored — the
+/// notification is a convenience, not a correctness requirement.
+fn native_notify(msg: &str) {
+    let msg = msg.to_string();
+    std::thread::spawn(move || {
+        #[cfg(target_os = "macos")]
+        {
+            // terminal-notifier: clickable notification that can
+            // activate (bring-to-front) the terminal window.
+            if has_terminal_notifier() {
+                let mut cmd = std::process::Command::new("terminal-notifier");
+                cmd.arg("-title").arg("DeepSeek TUI");
+                cmd.arg("-message").arg(&msg);
+                if let Some(bundle_id) = terminal_bundle_id() {
+                    cmd.arg("-activate").arg(bundle_id);
+                }
+                cmd.stdout(std::process::Stdio::null());
+                cmd.stderr(std::process::Stdio::null());
+                let _ = cmd.spawn();
+                return;
+            }
+            // Fallback: plain osascript notification (no click-to-focus).
+            let _ = std::process::Command::new("osascript")
+                .arg("-e")
+                .arg(format!(
+                    "display notification \"{msg}\" with title \"DeepSeek TUI\""
+                ))
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+        }
+        #[cfg(all(target_os = "linux", not(target_os = "macos")))]
+        {
+            if std::process::Command::new("which")
+                .arg("notify-send")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map_or(false, |s| s.success())
+            {
+                let _ = std::process::Command::new("notify-send")
+                    .arg("DeepSeek TUI")
+                    .arg(&msg)
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn();
+            }
+        }
+    });
+}
+
 /// Build the raw escape bytes for the given method and message.
 ///
 /// When `in_tmux` is `true` and the method is `Osc9`, the sequence is
