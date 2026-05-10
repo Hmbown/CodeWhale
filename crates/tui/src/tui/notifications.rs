@@ -79,7 +79,7 @@ fn windows_bell() {
 /// - `kitty` → `Kitty` (OSC 99)
 /// - `$TERM` contains `ghostty` → `Osc9` (cmux etc.)
 /// - `$TERM` contains `kitty` → `Kitty`
-/// - Unix unknown → `Native`
+/// - Unix unknown → `Bel` (no AppleScript injection risk)
 /// - Windows unknown → `Off`
 #[must_use]
 fn resolve_method() -> Method {
@@ -96,7 +96,7 @@ fn resolve_method() -> Method {
             } else if term.contains("kitty") {
                 Method::Kitty
             } else {
-                Method::Native
+                Method::Bel
             }
         }
     }
@@ -524,7 +524,7 @@ mod tests {
 
     #[test]
     #[cfg(not(target_os = "windows"))]
-    fn auto_detect_picks_native_for_unknown_on_unix() {
+    fn auto_detect_picks_bel_for_unknown_on_unix() {
         let _lock = env_lock();
         let prev = std::env::var_os("TERM_PROGRAM");
         // SAFETY: test-only; serialised by env_lock().
@@ -537,7 +537,7 @@ mod tests {
                 None => std::env::remove_var("TERM_PROGRAM"),
             }
         }
-        assert_eq!(resolved, Method::Native);
+        assert_eq!(resolved, Method::Bel);
     }
 
     /// #583: on Windows, an unknown TERM_PROGRAM resolves to `Off`
@@ -694,11 +694,11 @@ mod tests {
         assert_eq!(resolved, Method::Kitty);
     }
 
-    /// When neither `TERM_PROGRAM` nor `TERM` suggests an OSC-9 capable
-    /// terminal, the fallback on Unix is `Native`.
+    /// When neither `TERM_PROGRAM` nor `TERM` suggests a known capable
+    /// terminal, the fallback on Unix is `Bel` (no AppleScript injection risk).
     #[test]
     #[cfg(not(target_os = "windows"))]
-    fn auto_detect_falls_back_to_native_for_unrelated_term() {
+    fn auto_detect_falls_back_to_bel_for_unrelated_term() {
         let _lock = env_lock();
         let prev_term_program = std::env::var_os("TERM_PROGRAM");
         let prev_term = std::env::var_os("TERM");
@@ -719,7 +719,7 @@ mod tests {
                 None => std::env::remove_var("TERM"),
             }
         }
-        assert_eq!(resolved, Method::Native);
+        assert_eq!(resolved, Method::Bel);
     }
 
     #[test]
