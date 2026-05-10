@@ -1090,7 +1090,7 @@ async fn create_summary(
         let mut estimated = estimate_input_tokens_conservative(&request.messages, request.system.as_ref());
         let mut dropped_count = 0;
         
-        while estimated as u32 + max_out > window && request.messages.len() > 1 {
+        while estimated.saturating_add(max_out as usize) > window as usize && request.messages.len() > 1 {
             request.messages.remove(0);
             dropped_count += 1;
             
