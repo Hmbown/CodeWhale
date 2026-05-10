@@ -49,13 +49,17 @@ fn windows_bell() {
     }
 }
 
-/// Resolve `Auto` to a concrete method by inspecting `$TERM_PROGRAM`.
+/// Resolve `Auto` to a concrete method by inspecting `$TERM_PROGRAM` and
+/// `$LC_TERMINAL`.
 ///
-/// Known OSC-9 capable programs: `iTerm.app`, `Ghostty`, `WezTerm`
+/// Known OSC-9 capable programs: `iTerm.app`, `Ghostty`, `WezTerm`, `Cmux`
 /// (these resolve to `Osc9` on every platform, including Windows
 /// when running inside WezTerm).
 ///
-/// Otherwise the fallback is platform-dependent:
+/// The probe order is: `$TERM_PROGRAM` first, then `$LC_TERMINAL` as a
+/// fallback for terminals (e.g. Cmux) that set `LC_TERMINAL` instead of
+/// `TERM_PROGRAM`. If neither env var matches a known OSC-9 capable terminal,
+/// the fallback is platform-dependent:
 /// - **macOS / Linux / other Unix:** `Bel` (a single `\x07` byte).
 /// - **Windows:** `Off`. BEL is mapped by the Windows audio stack
 ///   to `SystemAsterisk` / `MB_OK`, the same chime used by
@@ -63,13 +67,27 @@ fn windows_bell() {
 ///   notification even though the turn completed successfully (#583).
 ///   Users can opt back in with `[notifications].method = "bel"` or
 ///   pick a known OSC-9 terminal.
+///
+/// Terminals that set neither env var (e.g. Cmux in some configurations)
+/// can force OSC 9 with `[notifications].method = "osc9"` in the config file.
 #[must_use]
 fn resolve_method() -> Method {
+    const OSC9_TERMINALS: &[&str] = &["iTerm.app", "Ghostty", "WezTerm", "Cmux"];
+
     let term_program = std::env::var("TERM_PROGRAM").unwrap_or_default();
-    match term_program.as_str() {
-        "iTerm.app" | "Ghostty" | "WezTerm" => Method::Osc9,
-        _ if cfg!(target_os = "windows") => Method::Off,
-        _ => Method::Bel,
+    if OSC9_TERMINALS.contains(&term_program.as_str()) {
+        return Method::Osc9;
+    }
+
+    let lc_terminal = std::env::var("LC_TERMINAL").unwrap_or_default();
+    if OSC9_TERMINALS.contains(&lc_terminal.as_str()) {
+        return Method::Osc9;
+    }
+
+    if cfg!(target_os = "windows") {
+        Method::Off
+    } else {
+        Method::Bel
     }
 }
 
@@ -309,19 +327,85 @@ mod tests {
         assert_eq!(resolved, Method::Osc9);
     }
 
+    /// Cmux in typical configurations does not set `TERM_PROGRAM`; it sets
+    /// `LC_TERMINAL=Cmux` instead. Verify the `LC_TERMINAL` fallback probe
+    /// correctly resolves to `Osc9`.
+    #[test]
+    fn auto_detect_picks_osc9_for_cmux_via_lc_terminal() {
+        let _lock = env_lock();
+        let prev_tp = std::env::var_os("TERM_PROGRAM");
+        let prev_lc = std::env::var_os("LC_TERMINAL");
+        // SAFETY: test-only; serialised by env_lock().
+        unsafe {
+            std::env::remove_var("TERM_PROGRAM");
+            std::env::set_var("LC_TERMINAL", "Cmux");
+        }
+        let resolved = resolve_method();
+        // SAFETY: test-only; serialised by env_lock().
+        unsafe {
+            match prev_tp {
+                Some(v) => std::env::set_var("TERM_PROGRAM", v),
+                None => std::env::remove_var("TERM_PROGRAM"),
+            }
+            match prev_lc {
+                Some(v) => std::env::set_var("LC_TERMINAL", v),
+                None => std::env::remove_var("LC_TERMINAL"),
+            }
+        }
+        assert_eq!(resolved, Method::Osc9);
+    }
+
+    /// `LC_TERMINAL` should also match other OSC-9 capable terminals in case
+    /// they set it in addition to or instead of `TERM_PROGRAM`.
+    #[test]
+    fn auto_detect_picks_osc9_for_wezterm_via_lc_terminal() {
+        let _lock = env_lock();
+        let prev_tp = std::env::var_os("TERM_PROGRAM");
+        let prev_lc = std::env::var_os("LC_TERMINAL");
+        // SAFETY: test-only; serialised by env_lock().
+        unsafe {
+            std::env::remove_var("TERM_PROGRAM");
+            std::env::set_var("LC_TERMINAL", "WezTerm");
+        }
+        let resolved = resolve_method();
+        // SAFETY: test-only; serialised by env_lock().
+        unsafe {
+            match prev_tp {
+                Some(v) => std::env::set_var("TERM_PROGRAM", v),
+                None => std::env::remove_var("TERM_PROGRAM"),
+            }
+            match prev_lc {
+                Some(v) => std::env::set_var("LC_TERMINAL", v),
+                None => std::env::remove_var("LC_TERMINAL"),
+            }
+        }
+        assert_eq!(resolved, Method::Osc9);
+    }
+
     #[test]
     #[cfg(not(target_os = "windows"))]
     fn auto_detect_picks_bel_for_unknown_on_unix() {
         let _lock = env_lock();
-        let prev = std::env::var_os("TERM_PROGRAM");
+        let prev_tp = std::env::var_os("TERM_PROGRAM");
+        let prev_lc = std::env::var_os("LC_TERMINAL");
         // SAFETY: test-only; serialised by env_lock().
-        unsafe { std::env::set_var("TERM_PROGRAM", "xterm-256color") };
+        // Clear LC_TERMINAL so the LC_TERMINAL fallback probe does not
+        // accidentally pick up an OSC-9 capable terminal from the test runner
+        // environment and shadow the Bel fallback we're trying to verify.
+        unsafe {
+            std::env::set_var("TERM_PROGRAM", "xterm-256color");
+            std::env::remove_var("LC_TERMINAL");
+        }
         let resolved = resolve_method();
         // SAFETY: test-only; serialised by env_lock().
         unsafe {
-            match prev {
+            match prev_tp {
                 Some(v) => std::env::set_var("TERM_PROGRAM", v),
                 None => std::env::remove_var("TERM_PROGRAM"),
+            }
+            match prev_lc {
+                Some(v) => std::env::set_var("LC_TERMINAL", v),
+                None => std::env::remove_var("LC_TERMINAL"),
             }
         }
         assert_eq!(resolved, Method::Bel);
