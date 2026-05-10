@@ -436,21 +436,30 @@ fn default_threshold_secs() -> u64 {
     30
 }
 
+fn default_idle_threshold_secs() -> u64 {
+    6
+}
+
 /// Desktop-notification configuration (OSC 9 / BEL on turn completion).
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct NotificationsConfig {
-    /// Delivery method: `auto` | `osc9` | `bel` | `off`. Default: `auto`.
-    /// `auto` resolves to OSC 9 for iTerm.app / Ghostty / WezTerm / Cmux
-    /// (detected via `$TERM_PROGRAM` then `$LC_TERMINAL`); on macOS / Linux
-    /// it falls back to BEL, and on Windows it falls back to `Off` so the
-    /// post-turn notification doesn't ring the system error chime (#583).
-    /// Use `method = "osc9"` explicitly when your terminal is OSC-9 capable
-    /// but sets neither env var (e.g. Cmux without `LC_TERMINAL`).
+    /// Delivery method: `auto` | `osc9` | `kitty` | `ghostty` | `bel` | `native` | `off`.
+    /// Default: `auto`.
+    /// `auto` resolves to the best protocol for the current terminal;
+    /// on unknown terminals falls back to BEL (no AppleScript injection risk);
+    /// on Windows falls back to `Off` (#583).
     #[serde(default)]
     pub method: NotificationMethod,
     /// Only notify when the turn took at least this many seconds. Default: 30.
+    /// Used as a fallback when `idle_threshold_secs` is 0.
     #[serde(default = "default_threshold_secs")]
     pub threshold_secs: u64,
+    /// Idle threshold in seconds. When > 0, notifications fire after the user
+    /// has been idle (no keyboard input) for this many seconds after a turn
+    /// completes, rather than using the fixed elapsed-time threshold.
+    /// Default: 6. Set to 0 to disable idle detection and use `threshold_secs`.
+    #[serde(default = "default_idle_threshold_secs")]
+    pub idle_threshold_secs: u64,
     /// Include a short summary (elapsed time + cost) in the notification body.
     /// Default: `false`.
     #[serde(default)]

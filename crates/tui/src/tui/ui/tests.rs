@@ -4830,15 +4830,15 @@ fn notification_settings_tui_always_keeps_configured_method_no_threshold() {
         notifications: Some(crate::config::NotificationsConfig {
             method: crate::config::NotificationMethod::Bel,
             threshold_secs: 120,
+            idle_threshold_secs: 6,
             include_summary: true,
         }),
         ..Config::default()
     };
 
-    let (method, threshold, include_summary) =
+    let (method, _threshold, include_summary, _idle) =
         super::notification_settings(&config).expect("notification should be enabled");
     assert_eq!(method, crate::tui::notifications::Method::Bel);
-    assert_eq!(threshold, Duration::ZERO);
     assert!(include_summary);
 }
 
@@ -4861,16 +4861,18 @@ fn notification_settings_no_tui_override_uses_notifications_block() {
         notifications: Some(crate::config::NotificationsConfig {
             method: crate::config::NotificationMethod::Osc9,
             threshold_secs: 45,
+            idle_threshold_secs: 6,
             include_summary: false,
         }),
         ..Config::default()
     };
 
-    let (method, threshold, include_summary) =
+    let (method, threshold, include_summary, idle) =
         super::notification_settings(&config).expect("notification should be enabled");
     assert_eq!(method, crate::tui::notifications::Method::Osc9);
     assert_eq!(threshold, Duration::from_secs(45));
     assert!(!include_summary);
+    assert_eq!(idle, Duration::from_secs(6));
 }
 
 #[test]

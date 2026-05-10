@@ -1037,9 +1037,11 @@ async fn run_event_loop(
                             app.accrue_session_cost_estimate(cost);
                         }
 
-                        // Emit OSC 9 / BEL desktop notification for long turns.
+                        // Emit desktop notification for completed turns.
+                        // Uses idle detection: fires when user hasn't typed
+                        // for idle_threshold_secs (default 6s).
                         if status == crate::core::events::TurnOutcomeStatus::Completed
-                            && let Some((method, threshold, include_summary)) =
+                            && let Some((method, _threshold, include_summary, idle_threshold)) =
                                 notification_settings(config)
                         {
                             let in_tmux = std::env::var("TMUX").is_ok_and(|v| !v.is_empty());
@@ -1050,12 +1052,13 @@ async fn run_event_loop(
                                 turn_elapsed,
                                 turn_cost,
                             );
-                            crate::tui::notifications::notify_done(
+                            crate::tui::notifications::notify_after_idle(
                                 method,
                                 in_tmux,
                                 &msg,
-                                threshold,
-                                turn_elapsed,
+                                idle_threshold,
+                                app.last_interaction_time,
+                                crate::tui::notifications::MAX_IDLE_WAIT,
                             );
                         }
 
@@ -1265,7 +1268,7 @@ async fn run_event_loop(
                         let should_recapture_terminal =
                             !has_other_running_subagents && app.use_alt_screen;
                         if !has_other_running_subagents
-                            && let Some((method, threshold, include_summary)) =
+                            && let Some((method, _threshold, include_summary, idle_threshold)) =
                                 notification_settings(config)
                         {
                             let in_tmux = std::env::var("TMUX").is_ok_and(|v| !v.is_empty());
@@ -1275,12 +1278,13 @@ async fn run_event_loop(
                                 include_summary,
                                 subagent_elapsed,
                             );
-                            crate::tui::notifications::notify_done(
+                            crate::tui::notifications::notify_after_idle(
                                 method,
                                 in_tmux,
                                 &msg,
-                                threshold,
-                                subagent_elapsed,
+                                idle_threshold,
+                                app.last_interaction_time,
+                                crate::tui::notifications::MAX_IDLE_WAIT,
                             );
                         }
                         if should_recapture_terminal {
@@ -1831,6 +1835,9 @@ async fn run_event_loop(
             if key.kind != KeyEventKind::Press {
                 continue;
             }
+
+            // Track last keyboard interaction for idle-based notifications.
+            app.last_interaction_time = std::time::Instant::now();
 
             // Handle onboarding flow
             if app.onboarding != OnboardingState::None {
@@ -3357,7 +3364,7 @@ fn sanitize_stream_chunk(chunk: &str) -> String {
 /// `Off`).
 fn notification_settings(
     config: &Config,
-) -> Option<(crate::tui::notifications::Method, Duration, bool)> {
+) -> Option<(crate::tui::notifications::Method, Duration, bool, Duration)> {
     let notif = config.notifications_config();
     let method = match notif.method {
         crate::config::NotificationMethod::Auto => crate::tui::notifications::Method::Auto,
@@ -3368,6 +3375,7 @@ fn notification_settings(
         crate::config::NotificationMethod::Ghostty => crate::tui::notifications::Method::Ghostty,
         crate::config::NotificationMethod::Off => crate::tui::notifications::Method::Off,
     };
+    let idle_threshold = Duration::from_secs(notif.idle_threshold_secs);
 
     if let Some(condition) = config
         .tui
@@ -3376,7 +3384,7 @@ fn notification_settings(
     {
         match condition {
             crate::config::NotificationCondition::Always => {
-                return Some((method, Duration::ZERO, notif.include_summary));
+                return Some((method, Duration::ZERO, notif.include_summary, idle_threshold));
             }
             crate::config::NotificationCondition::Never => return None,
         }
@@ -3386,6 +3394,7 @@ fn notification_settings(
         method,
         Duration::from_secs(notif.threshold_secs),
         notif.include_summary,
+        idle_threshold,
     ))
 }
 

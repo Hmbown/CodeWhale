@@ -738,6 +738,10 @@ pub struct App {
     pub next_history_revision: u64,
     pub api_messages: Vec<Message>,
     pub is_loading: bool,
+    /// Timestamp of last keyboard input. Used by idle-based notification
+    /// triggering — notifications fire only when the user has been idle
+    /// for `idle_threshold_secs` after a turn completes.
+    pub last_interaction_time: std::time::Instant,
     /// Degraded connectivity mode; new user inputs are queued for later retry.
     pub offline_mode: bool,
     /// Whether an `EngineEvent::Error` has already been posted for the
@@ -1396,6 +1400,7 @@ impl App {
             next_history_revision: 1,
             api_messages: Vec::new(),
             is_loading: false,
+            last_interaction_time: std::time::Instant::now(),
             offline_mode: false,
             turn_error_posted: false,
             status_message: None,
