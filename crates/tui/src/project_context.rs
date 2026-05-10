@@ -381,13 +381,32 @@ fn load_project_context_with_parents_and_home(
         }
     }
 
-    if !ctx.has_instructions()
-        && let Some(global_ctx) = load_global_agents_context(workspace, home_dir)
-    {
+    // Always check `~/.deepseek/AGENTS.md` so user-wide preferences
+    // travel into every session (#1157). When both global and project
+    // instructions exist, the global block prepends the project's so
+    // workspace overrides win the last word; when only global exists,
+    // it continues to serve as the fallback. `source_path` keeps
+    // pointing at the more-specific source (project > global) for
+    // display purposes.
+    if let Some(global_ctx) = load_global_agents_context(workspace, home_dir) {
         ctx.warnings.extend(global_ctx.warnings.iter().cloned());
-        if global_ctx.has_instructions() {
-            ctx.instructions = global_ctx.instructions;
-            ctx.source_path = global_ctx.source_path;
+        if let Some(global_text) = global_ctx.instructions {
+            match ctx.instructions.take() {
+                Some(project_text) => {
+                    ctx.instructions = Some(merge_global_and_project_instructions(
+                        &global_text,
+                        global_ctx.source_path.as_deref(),
+                        &project_text,
+                    ));
+                    // Leave `ctx.source_path` pointing at the project /
+                    // parent file — that's the location the user might
+                    // want to edit when something looks wrong.
+                }
+                None => {
+                    ctx.instructions = Some(global_text);
+                    ctx.source_path = global_ctx.source_path;
+                }
+            }
         }
     }
 
@@ -410,6 +429,27 @@ fn load_project_context_with_parents_and_home(
     }
 
     ctx
+}
+
+/// Combine `~/.deepseek/AGENTS.md` (global, user-wide preferences) with a
+/// project-local AGENTS.md/CLAUDE.md/instructions.md. Global comes first
+/// so workspace-specific rules can override it — the model reads in
+/// declared order. Each block is wrapped in a labelled fence so the
+/// model can tell which level any rule comes from when the two sets
+/// disagree (#1157).
+fn merge_global_and_project_instructions(
+    global: &str,
+    global_source: Option<&Path>,
+    project: &str,
+) -> String {
+    let global_label = global_source
+        .map(|p| format!("<!-- global: {} -->", p.display()))
+        .unwrap_or_else(|| "<!-- global -->".to_string());
+    format!(
+        "{global_label}\n{}\n\n<!-- project (overrides global where they conflict) -->\n{}",
+        global.trim_end(),
+        project.trim_start(),
+    )
 }
 
 fn load_global_agents_context(workspace: &Path, home_dir: Option<&Path>) -> Option<ProjectContext> {
@@ -847,7 +887,10 @@ mod tests {
     }
 
     #[test]
-    fn test_local_agents_takes_priority_over_global_agents() {
+    fn test_local_and_global_agents_merge_when_both_exist() {
+        // #1157: when both `~/.deepseek/AGENTS.md` and a project AGENTS.md
+        // exist, the prompt should carry user-wide preferences AND the
+        // project's overrides — not silently drop the global file.
         let workspace = tempdir().expect("workspace tempdir");
         fs::write(workspace.path().join("AGENTS.md"), "Local instructions")
             .expect("write local agents");
@@ -862,9 +905,54 @@ mod tests {
 
         assert!(ctx.has_instructions());
         let instructions = ctx.instructions.as_ref().unwrap();
-        assert!(instructions.contains("Local instructions"));
-        assert!(!instructions.contains("Global instructions"));
+        assert!(
+            instructions.contains("Global instructions"),
+            "global block missing from merged instructions:\n{instructions}"
+        );
+        assert!(
+            instructions.contains("Local instructions"),
+            "project block missing from merged instructions:\n{instructions}"
+        );
+        // Global block precedes the project block so project rules read
+        // last and win "last word" precedence with the model.
+        let global_at = instructions.find("Global instructions").unwrap();
+        let local_at = instructions.find("Local instructions").unwrap();
+        assert!(
+            global_at < local_at,
+            "global block must come before project block, got global={global_at} local={local_at}"
+        );
+        // The merged block is labelled so the model can tell the layers
+        // apart when it needs to explain which rule it followed.
+        assert!(
+            instructions.contains("project (overrides global where they conflict)"),
+            "expected labelled separator between global and project blocks"
+        );
+        // `source_path` keeps pointing at the more-specific file so the
+        // user knows where to edit the workspace-level override.
         assert_eq!(ctx.source_path, Some(workspace.path().join("AGENTS.md")));
+    }
+
+    #[test]
+    fn test_global_agents_only_no_project_unchanged_fallback() {
+        // Sanity: when only the global file exists, the historical
+        // fallback behaviour is preserved — no merge framing leaks in.
+        let workspace = tempdir().expect("workspace tempdir");
+        let home = tempdir().expect("home tempdir");
+        let global_dir = home.path().join(".deepseek");
+        fs::create_dir(&global_dir).expect("mkdir .deepseek");
+        let global_agents = global_dir.join("AGENTS.md");
+        fs::write(&global_agents, "Just the global instructions").expect("write global agents");
+
+        let ctx = load_project_context_with_parents_and_home(workspace.path(), Some(home.path()));
+
+        assert!(ctx.has_instructions());
+        let instructions = ctx.instructions.as_ref().unwrap();
+        assert!(instructions.contains("Just the global instructions"));
+        assert!(
+            !instructions.contains("project (overrides global"),
+            "merge-framing label should not appear when there's nothing to merge"
+        );
+        assert_eq!(ctx.source_path, Some(global_agents));
     }
 
     #[test]
