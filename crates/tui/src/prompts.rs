@@ -394,42 +394,13 @@ pub fn system_prompt_for_mode_with_context_skills_session_and_approval(
     // 2.25. Environment block — locale, platform, shell, pwd. All
     // four inputs are session-stable (workspace path is fixed for
     // the run; locale is loaded once by the caller; platform/shell
-    // come from process env). Inserted above instructions/skills so
-    // it remains in the workspace-static cache layer alongside the
-    // mode prompt and project context.
+    // come from process env). Inserted above skills so it remains in
+    // the workspace-static cache layer alongside the mode prompt and
+    // project context.
     full_prompt = format!(
         "{full_prompt}\n\n{}",
         render_environment_block(workspace, session_context.locale_tag),
     );
-
-    // 2.5a. Configured `instructions = [...]` files (#454). Loaded
-    // and concatenated in declared order. Lives above the skills
-    // block so it's part of the workspace-static layer that the KV
-    // prefix cache can hit, and so per-project overrides apply
-    // consistently turn-over-turn.
-    if let Some(paths) = instructions
-        && let Some(block) = render_instructions_block(paths)
-    {
-        full_prompt = format!("{full_prompt}\n\n{block}");
-    }
-
-    // 2.5b. User memory block (#489). Goes above skills/context-management
-    // because it's session-stable: the memory file changes when the user
-    // edits it via `/memory` or `# foo` quick-add, but not turn-over-turn.
-    if let Some(memory_block) = session_context.user_memory_block
-        && !memory_block.trim().is_empty()
-    {
-        full_prompt = format!("{full_prompt}\n\n{memory_block}");
-    }
-
-    if let Some(goal_objective) = session_context.goal_objective
-        && !goal_objective.trim().is_empty()
-    {
-        full_prompt = format!(
-            "{full_prompt}\n\n## Current Session Goal\n\n<session_goal>\n{}\n</session_goal>",
-            goal_objective.trim()
-        );
-    }
 
     // 3. Skills block. #432: walks every candidate workspace
     // skills directory (`.agents/skills`, `skills`,
@@ -473,9 +444,45 @@ pub fn system_prompt_for_mode_with_context_skills_session_and_approval(
 
     // ── Volatile-content boundary ─────────────────────────────────────────
     // Everything below drifts mid-session and busts the prefix cache for
-    // bytes that follow. Keep new static blocks above this comment.
+    // bytes that follow. All static layers (mode, project context, env,
+    // skills, context management, compact template) live above this line
+    // so DeepSeek's KV prefix cache can hit on the entire system prompt
+    // regardless of per-session edits to memory, goals, or instructions.
 
-    // 6. Previous-session handoff (file-backed, rewritten by `/compact`).
+    // 6a. Configured `instructions = [...]` files (#454). Loaded
+    // and concatenated in declared order. Placed below the volatile boundary
+    // because these files are workspace-scoped and may differ between
+    // sessions; any edit to them would otherwise bust the prefix cache for
+    // all subsequent static layers.
+    if let Some(paths) = instructions
+        && let Some(block) = render_instructions_block(paths)
+    {
+        full_prompt = format!("{full_prompt}\n\n{block}");
+    }
+
+    // 6b. User memory block (#489). Placed below the volatile boundary
+    // because memory entries are editable mid-session via `/memory` or
+    // `# foo` quick-add. When they change, they only invalidate the
+    // trailing handoff block — the static prefix above stays cached.
+    if let Some(memory_block) = session_context.user_memory_block
+        && !memory_block.trim().is_empty()
+    {
+        full_prompt = format!("{full_prompt}\n\n{memory_block}");
+    }
+
+    // 6c. Current session goal. Also volatile: users set / change goals
+    // during a session via `/goal`. Placed below the boundary for the
+    // same reason as memory.
+    if let Some(goal_objective) = session_context.goal_objective
+        && !goal_objective.trim().is_empty()
+    {
+        full_prompt = format!(
+            "{full_prompt}\n\n## Current Session Goal\n\n<session_goal>\n{}\n</session_goal>",
+            goal_objective.trim()
+        );
+    }
+
+    // 7. Previous-session handoff (file-backed, rewritten by `/compact`).
     if let Some(handoff_block) = load_handoff_block(workspace) {
         full_prompt = format!("{full_prompt}\n\n{handoff_block}");
     }
@@ -767,7 +774,7 @@ mod tests {
     }
 
     #[test]
-    fn session_goal_is_injected_above_handoff_tail() {
+    fn session_goal_is_injected_below_compact_template() {
         let tmp = tempdir().expect("tempdir");
         let prompt = match system_prompt_for_mode_with_context_skills_and_session(
             AppMode::Agent,
@@ -790,7 +797,11 @@ mod tests {
         let compact_pos = prompt.find("## Compaction Handoff").expect("compact block");
 
         assert!(prompt.contains("Fix transcript corruption"));
-        assert!(goal_pos < compact_pos);
+        // Session goal is volatile content — it lives below the
+        // volatile-content boundary (after the compact template) so
+        // per-session goal changes don't bust the prefix cache for
+        // static layers.
+        assert!(compact_pos < goal_pos);
         assert!(!prompt.contains("src/lib.rs"));
     }
 
