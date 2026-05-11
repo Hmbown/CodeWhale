@@ -844,7 +844,7 @@ fn render_sidebar_section(
 
 #[cfg(test)]
 mod tests {
-    use super::{SidebarSubagentSummary, plan_panel_empty_hint, subagent_navigator_lines};
+    use super::{SidebarHoverSection, SidebarHoverState, SidebarSubagentSummary, plan_panel_empty_hint, subagent_navigator_lines};
     use ratatui::text::Line;
 
     fn lines_to_text(lines: &[Line<'static>]) -> Vec<String> {
