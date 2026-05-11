@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::io::{self, Stdout, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -139,6 +140,23 @@ const SIDEBAR_VISIBLE_MIN_WIDTH: u16 = 100;
 const DEFAULT_TERMINAL_PROBE_TIMEOUT_MS: u64 = 500;
 
 type AppTerminal = Terminal<ColorCompatBackend<Stdout>>;
+
+type PendingToolUses = Vec<(String, String, serde_json::Value)>;
+
+#[derive(Debug)]
+enum TranslationEvent {
+    AssistantMessage {
+        history_index: Option<usize>,
+        original_text: String,
+        translated: anyhow::Result<String>,
+        thinking: Option<String>,
+        tool_uses: PendingToolUses,
+    },
+    Thinking {
+        placeholder: String,
+        translated: anyhow::Result<String>,
+    },
+}
 // Reset scroll region (`\x1b[r`), origin mode (`\x1b[?6l`), and home the cursor
 // (`\x1b[H`) before letting ratatui's diff renderer repaint. The destructive
 // `\x1b[2J\x1b[3J` pair was previously appended here to also wipe the visible
@@ -380,6 +398,7 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
 
     // Spawn the Engine - it will handle all API communication
     let engine_handle = spawn_engine(engine_config, config);
+    let translation_client = Arc::new(DeepSeekClient::new(config)?);
 
     if !app.api_messages.is_empty() {
         let _ = engine_handle
@@ -414,6 +433,7 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
         engine_handle,
         task_manager,
         &event_broker,
+        translation_client,
     )
     .await;
     automation_cancel.cancel();
@@ -634,9 +654,13 @@ async fn run_event_loop(
     mut engine_handle: EngineHandle,
     task_manager: SharedTaskManager,
     event_broker: &EventBroker,
+    translation_client: Arc<DeepSeekClient>,
 ) -> Result<()> {
     // Track streaming state
     let mut current_streaming_text = String::new();
+    let (translation_tx, mut translation_rx) =
+        tokio::sync::mpsc::unbounded_channel::<TranslationEvent>();
+    let mut pending_translations = 0usize;
     let mut last_queue_state = (app.queued_messages.clone(), app.queued_draft.clone());
     let mut last_task_refresh = Instant::now()
         .checked_sub(Duration::from_secs(2))
@@ -659,6 +683,92 @@ async fn run_event_loop(
     loop {
         if !drain_web_config_events(&mut web_config_session, app, config, &engine_handle).await {
             web_config_session = None;
+        }
+
+        while let Ok(event) = translation_rx.try_recv() {
+            match event {
+                TranslationEvent::AssistantMessage {
+                    history_index,
+                    original_text,
+                    translated,
+                    thinking,
+                    tool_uses,
+                } => {
+                    pending_translations = pending_translations.saturating_sub(1);
+                    let text = match translated {
+                        Ok(text) => {
+                            app.status_message = Some(
+                                crate::localization::tr(
+                                    app.ui_locale,
+                                    crate::localization::MessageId::TranslationComplete,
+                                )
+                                .to_string(),
+                            );
+                            text
+                        }
+                        Err(err) => {
+                            tracing::warn!("assistant translation failed: {err}");
+                            app.status_message = Some(format!(
+                                "{}: {err}",
+                                crate::localization::tr(
+                                    app.ui_locale,
+                                    crate::localization::MessageId::TranslationFailed,
+                                )
+                            ));
+                            crate::localization::hidden_translation_failed(app.ui_locale)
+                                .to_string()
+                        }
+                    };
+
+                    if let Some(index) = history_index
+                        && let Some(HistoryCell::Assistant { content, .. }) =
+                            app.history.get_mut(index)
+                    {
+                        *content = text.clone();
+                        app.bump_history_cell(index);
+                    }
+                    if !replace_matching_assistant_text(app, &original_text, text.clone()) {
+                        push_assistant_message(app, text, thinking, tool_uses);
+                    }
+                    if pending_translations == 0
+                        && !matches!(app.runtime_turn_status.as_deref(), Some("in_progress"))
+                    {
+                        app.is_loading = pending_translations > 0;
+                    }
+                    app.needs_redraw = true;
+                }
+                TranslationEvent::Thinking {
+                    placeholder,
+                    translated,
+                } => {
+                    pending_translations = pending_translations.saturating_sub(1);
+                    let text = match translated {
+                        Ok(text) => {
+                            app.status_message = Some(
+                                crate::localization::thinking_translation_complete(app.ui_locale)
+                                    .to_string(),
+                            );
+                            text
+                        }
+                        Err(err) => {
+                            tracing::warn!("thinking translation failed: {err}");
+                            app.status_message = Some(format!(
+                                "{}: {err}",
+                                crate::localization::thinking_translation_failed(app.ui_locale)
+                            ));
+                            crate::localization::hidden_translation_failed(app.ui_locale)
+                                .to_string()
+                        }
+                    };
+                    replace_pending_thinking_translation(app, &placeholder, text);
+                    if pending_translations == 0
+                        && !matches!(app.runtime_turn_status.as_deref(), Some("in_progress"))
+                    {
+                        app.is_loading = false;
+                    }
+                    app.needs_redraw = true;
+                }
+            }
         }
 
         if last_task_refresh.elapsed() >= Duration::from_millis(2500) {
@@ -727,7 +837,9 @@ async fn run_event_loop(
                             }
                             stash_reasoning_buffer_into_last_reasoning(app);
                         }
+                        let mut completed_message_index = None;
                         if let Some(index) = app.streaming_message_index.take() {
+                            completed_message_index = Some(index);
                             let remaining = app.streaming_state.finalize_block_text(0);
                             if !remaining.is_empty() {
                                 append_streaming_text(app, index, &remaining);
@@ -745,99 +857,55 @@ async fn run_event_loop(
                             transcript_batch_updated = true;
                         }
 
-                        // ── Post-hoc translation ────────────────────────────
-                        // When translation is enabled and the assistant output
-                        // is predominantly English, call deepseek-v4-flash to
-                        // translate it into Simplified Chinese BEFORE the text
-                        // is committed to api_messages.  The primary mechanism
-                        // is the system-prompt instruction; this is the
-                        // fallback interception layer.
+                        let thinking = app.last_reasoning.take();
+                        let tool_uses = app.pending_tool_uses.drain(..).collect::<Vec<_>>();
+                        let history_index = completed_message_index;
+
                         if app.translation_enabled
                             && !current_streaming_text.is_empty()
+                            && crate::tui::translation::needs_translation(&current_streaming_text)
                         {
-                            use crate::tui::translation::{
-                                needs_translation,
-                                translate_text,
-                            };
-                            if needs_translation(&current_streaming_text) {
-                                app.status_message = Some(
-                                    "🔄 正在翻译...".to_string(),
-                                );
-                                match translate_text(
-                                    &current_streaming_text,
-                                    config,
+                            app.status_message = Some(
+                                crate::localization::tr(
+                                    app.ui_locale,
+                                    crate::localization::MessageId::TranslationInProgress,
                                 )
-                                .await
-                                {
-                                    Ok(translated) => {
-                                        current_streaming_text = translated;
-                                        // Update the streaming assistant
-                                        // history cell so the display shows
-                                        // the translation immediately.
-                                        for cell in
-                                            app.history.iter_mut().rev()
-                                        {
-                                            if let HistoryCell::Assistant {
-                                                content,
-                                                ..
-                                            } = cell
-                                            {
-                                                *content =
-                                                    current_streaming_text
-                                                        .clone();
-                                                break;
-                                            }
-                                        }
-                                        app.status_message = Some(
-                                            "✓ 翻译完成".to_string(),
-                                        );
-                                    }
-                                    Err(e) => {
-                                        tracing::warn!(
-                                            "translate_text failed: {e}",
-                                        );
-                                        app.status_message = Some(format!(
-                                            "✗ 翻译失败: {e}",
-                                        ));
-                                    }
-                                }
-                            }
-                        }
-
-                        let mut blocks = Vec::new();
-                        let thinking = app.last_reasoning.take();
-                        if let Some(thinking) = thinking {
-                            blocks.push(ContentBlock::Thinking { thinking });
-                        }
-                        if !current_streaming_text.is_empty() {
-                            blocks.push(ContentBlock::Text {
-                                text: current_streaming_text.clone(),
-                                cache_control: None,
+                                .to_string(),
+                            );
+                            app.is_loading = true;
+                            pending_translations = pending_translations.saturating_add(1);
+                            let tx = translation_tx.clone();
+                            let client = translation_client.clone();
+                            let original_text = current_streaming_text.clone();
+                            let translation_model = app
+                                .last_effective_model
+                                .clone()
+                                .unwrap_or_else(|| app.model.clone());
+                            let target_language =
+                                app.ui_locale.translation_target_name().to_string();
+                            tokio::spawn(async move {
+                                let translated = crate::tui::translation::translate_text(
+                                    &original_text,
+                                    &client,
+                                    &translation_model,
+                                    &target_language,
+                                )
+                                .await;
+                                let _ = tx.send(TranslationEvent::AssistantMessage {
+                                    history_index,
+                                    original_text,
+                                    translated,
+                                    thinking,
+                                    tool_uses,
+                                });
                             });
-                        }
-                        for (id, name, input) in app.pending_tool_uses.drain(..) {
-                            blocks.push(ContentBlock::ToolUse {
-                                id,
-                                name,
-                                input,
-                                caller: None,
-                            });
-                        }
-
-                        // DeepSeek rejects assistant messages that contain only reasoning blocks.
-                        // Keep reasoning in transcript cells, but only persist assistant turns that
-                        // include visible text and/or tool calls.
-                        let has_sendable_content = blocks.iter().any(|block| {
-                            matches!(
-                                block,
-                                ContentBlock::Text { .. } | ContentBlock::ToolUse { .. }
-                            )
-                        });
-                        if has_sendable_content {
-                            app.api_messages.push(Message {
-                                role: "assistant".to_string(),
-                                content: blocks,
-                            });
+                        } else {
+                            push_assistant_message(
+                                app,
+                                current_streaming_text.clone(),
+                                thinking,
+                                tool_uses,
+                            );
                         }
                     }
                     EngineEvent::ThinkingStarted { .. } => {
@@ -845,6 +913,14 @@ async fn run_event_loop(
                         // visually with the tool calls that follow until the
                         // next assistant prose chunk flushes the group.
                         if start_streaming_thinking_block(app) {
+                            transcript_batch_updated = true;
+                        }
+                        if app.translation_enabled {
+                            let entry_idx = ensure_streaming_thinking_active_entry(app);
+                            let placeholder = crate::localization::thinking_translation_placeholder(
+                                app.ui_locale,
+                            );
+                            set_streaming_thinking_placeholder(app, entry_idx, placeholder);
                             transcript_batch_updated = true;
                         }
                     }
@@ -862,10 +938,13 @@ async fn run_event_loop(
                         app.streaming_state.push_content(0, &sanitized);
                         let committed = app.streaming_state.commit_text(0);
                         if !committed.is_empty() {
-                            // When translation is enabled, suppress real-time
-                            // thinking display — the thinking block will be
-                            // translated and displayed on ThinkingComplete.
-                            if !app.translation_enabled {
+                            if app.translation_enabled {
+                                let placeholder =
+                                    crate::localization::thinking_translation_placeholder(
+                                        app.ui_locale,
+                                    );
+                                set_streaming_thinking_placeholder(app, entry_idx, placeholder);
+                            } else {
                                 append_streaming_thinking(app, entry_idx, &committed);
                             }
                             transcript_batch_updated = true;
@@ -873,86 +952,65 @@ async fn run_event_loop(
                     }
                     EngineEvent::ThinkingComplete { .. } => {
                         if app.translation_enabled {
-                            // Drain remaining buffered thinking text and
-                            // combine with accumulated reasoning buffer to
-                            // get the full English thinking content.
-                            let remaining =
-                                app.streaming_state.finalize_block_text(0);
-                            let mut full_thinking =
-                                app.reasoning_buffer.clone();
-                            if !remaining.is_empty() {
-                                full_thinking.push_str(&remaining);
+                            let original_thinking = app.reasoning_buffer.clone();
+                            let _ = app.streaming_state.finalize_block_text(0);
+                            let duration = app
+                                .thinking_started_at
+                                .take()
+                                .map(|t| t.elapsed().as_secs_f32());
+                            if finalize_streaming_thinking_active_entry(app, duration, "") {
+                                transcript_batch_updated = true;
                             }
-                            let translated = if !full_thinking.is_empty() {
-                                use crate::tui::translation::{
-                                    needs_translation,
-                                    translate_text,
-                                };
-                                if needs_translation(&full_thinking) {
-                                    app.status_message = Some(
-                                        "🔄 正在翻译思考内容..."
-                                            .to_string(),
-                                    );
-                                    match translate_text(
-                                        &full_thinking,
-                                        config,
-                                    )
-                                    .await
-                                    {
-                                        Ok(translated) => {
-                                            app.status_message = Some(
-                                                "✓ 翻译完成".to_string(),
-                                            );
-                                            translated
-                                        }
-                                        Err(e) => {
-                                            tracing::warn!(
-                                                "thinking translation failed: {e}",
-                                            );
-                                            app.status_message = Some(
-                                                format!(
-                                                    "✗ 思考翻译失败: {e}",
-                                                ),
-                                            );
-                                            full_thinking
-                                        }
-                                    }
-                                } else {
-                                    full_thinking
-                                }
-                            } else {
-                                full_thinking
-                            };
-                            // Set the (possibly translated) content into
-                            // the HistoryCell::Thinking and mark it done.
-                            if let Some(entry_idx) =
-                                app.streaming_thinking_active_entry.take()
+                            if !original_thinking.is_empty()
+                                && crate::tui::translation::needs_translation(&original_thinking)
                             {
-                                let duration = app
-                                    .thinking_started_at
-                                    .take()
-                                    .map(|t| t.elapsed().as_secs_f32());
-                                if let Some(active) =
-                                    app.active_cell.as_mut()
-                                    && let Some(
-                                        HistoryCell::Thinking {
-                                            content,
-                                            streaming,
-                                            duration_secs,
-                                        },
-                                    ) = active.entry_mut(entry_idx)
-                                {
-                                    *content = translated;
-                                    *streaming = false;
-                                    *duration_secs = duration;
-                                }
-                                app.bump_active_cell_revision();
-                                transcript_batch_updated = true;
+                                app.status_message = Some(
+                                    crate::localization::thinking_translation_in_progress(
+                                        app.ui_locale,
+                                    )
+                                    .to_string(),
+                                );
+                                app.is_loading = true;
+                                pending_translations = pending_translations.saturating_add(1);
+                                let tx = translation_tx.clone();
+                                let client = translation_client.clone();
+                                let translation_model = app
+                                    .last_effective_model
+                                    .clone()
+                                    .unwrap_or_else(|| app.model.clone());
+                                let placeholder =
+                                    crate::localization::thinking_translation_placeholder(
+                                        app.ui_locale,
+                                    )
+                                    .to_string();
+                                let target_language =
+                                    app.ui_locale.translation_target_name().to_string();
+                                tokio::spawn(async move {
+                                    let translated = crate::tui::translation::translate_text(
+                                        &original_thinking,
+                                        &client,
+                                        &translation_model,
+                                        &target_language,
+                                    )
+                                    .await;
+                                    let _ = tx.send(TranslationEvent::Thinking {
+                                        placeholder,
+                                        translated,
+                                    });
+                                });
+                            } else {
+                                let placeholder =
+                                    crate::localization::thinking_translation_placeholder(
+                                        app.ui_locale,
+                                    );
+                                replace_pending_thinking_translation(
+                                    app,
+                                    placeholder,
+                                    original_thinking,
+                                );
                             }
-                        } else {
-                            if finalize_current_streaming_thinking(app) {
-                                transcript_batch_updated = true;
-                            }
+                        } else if finalize_current_streaming_thinking(app) {
+                            transcript_batch_updated = true;
                         }
                         stash_reasoning_buffer_into_last_reasoning(app);
                     }
@@ -1591,11 +1649,7 @@ async fn run_event_loop(
         } else if let Some(entry_idx) = app.streaming_thinking_active_entry {
             let committed = app.streaming_state.commit_text(0);
             if !committed.is_empty() {
-                // Suppress real-time display when translation is pending;
-                // the translated content will be set on ThinkingComplete.
-                if !app.translation_enabled {
-                    append_streaming_thinking(app, entry_idx, &committed);
-                }
+                append_streaming_thinking(app, entry_idx, &committed);
                 transcript_batch_updated = true;
             }
         }
@@ -3636,6 +3690,66 @@ fn append_streaming_text(app: &mut App, index: usize, text: &str) {
     }
 }
 
+fn push_assistant_message(
+    app: &mut App,
+    text: String,
+    thinking: Option<String>,
+    tool_uses: PendingToolUses,
+) {
+    let mut blocks = Vec::new();
+    if let Some(thinking) = thinking {
+        blocks.push(ContentBlock::Thinking { thinking });
+    }
+    if !text.is_empty() {
+        blocks.push(ContentBlock::Text {
+            text,
+            cache_control: None,
+        });
+    }
+    for (id, name, input) in tool_uses {
+        blocks.push(ContentBlock::ToolUse {
+            id,
+            name,
+            input,
+            caller: None,
+        });
+    }
+
+    let has_sendable_content = blocks.iter().any(|block| {
+        matches!(
+            block,
+            ContentBlock::Text { .. } | ContentBlock::ToolUse { .. }
+        )
+    });
+    if has_sendable_content {
+        app.api_messages.push(Message {
+            role: "assistant".to_string(),
+            content: blocks,
+        });
+    }
+}
+
+fn replace_matching_assistant_text(
+    app: &mut App,
+    original_text: &str,
+    translated_text: String,
+) -> bool {
+    for message in app.api_messages.iter_mut().rev() {
+        if message.role != "assistant" {
+            continue;
+        }
+        for block in &mut message.content {
+            if let ContentBlock::Text { text, .. } = block
+                && text == original_text
+            {
+                *text = translated_text;
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Ensure an in-flight Thinking entry exists in `active_cell` and return its
 /// entry index. If no thinking entry is currently streaming, push a fresh one.
 /// P2.3: thinking shares the active cell with subsequent tool calls so the
@@ -3674,6 +3788,45 @@ fn append_streaming_thinking(app: &mut App, entry_idx: usize, text: &str) {
     };
     if mutated {
         app.bump_active_cell_revision();
+    }
+}
+
+fn set_streaming_thinking_placeholder(app: &mut App, entry_idx: usize, placeholder: &str) {
+    let mutated = if let Some(active) = app.active_cell.as_mut()
+        && let Some(HistoryCell::Thinking { content, .. }) = active.entry_mut(entry_idx)
+        && content.is_empty()
+    {
+        content.push_str(placeholder);
+        true
+    } else {
+        false
+    };
+    if mutated {
+        app.bump_active_cell_revision();
+    }
+}
+
+fn replace_pending_thinking_translation(app: &mut App, placeholder: &str, translated_text: String) {
+    if let Some(active) = app.active_cell.as_mut() {
+        for idx in (0..active.entry_count()).rev() {
+            if let Some(HistoryCell::Thinking { content, .. }) = active.entry_mut(idx)
+                && content == placeholder
+            {
+                *content = translated_text;
+                app.bump_active_cell_revision();
+                return;
+            }
+        }
+    }
+
+    for idx in (0..app.history.len()).rev() {
+        if let Some(HistoryCell::Thinking { content, .. }) = app.history.get_mut(idx)
+            && content == placeholder
+        {
+            *content = translated_text;
+            app.bump_history_cell(idx);
+            return;
+        }
     }
 }
 

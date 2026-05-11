@@ -10,8 +10,8 @@
 //!
 //! - `needs_translation()` — heuristic to detect if text is predominantly
 //!   English and should be translated.
-//! - `translate_text()` — calls `deepseek-v4-flash` (via `DeepSeekClient`)
-//!   to translate English text to Simplified Chinese. The dedicated
+//! - `translate_text()` — calls the current session model through a
+//!   shared `DeepSeekClient` to translate text to the current locale. The dedicated
 //!   translation agent receives only the source text and returns only the
 //!   translation — no tool calls, no conversation history.
 //! - `TranslationStatus` — tracks per-message translation status in the UI.
@@ -19,7 +19,6 @@
 use anyhow::Result;
 
 use crate::client::DeepSeekClient;
-use crate::config::Config;
 
 /// Heuristic threshold: if more than this fraction of alphabetic characters
 /// are Latin (A-Z / a-z), the text is considered English.
@@ -83,19 +82,22 @@ fn is_cjk(ch: char) -> bool {
     )
 }
 
-/// Translate English text to Simplified Chinese using a dedicated
-/// translation agent (deepseek-v4-flash).
+/// Translate text to the requested target language using a dedicated
+/// translation agent.
 ///
 /// This is a lightweight, focused API call — no streaming, no tool calls,
 /// no conversation history. The agent's only role is translation.
 ///
 /// # Errors
 ///
-/// Returns an error if the API call fails, the response is malformed,
-/// or the client cannot be constructed from the supplied config.
-pub async fn translate_text(text: &str, config: &Config) -> Result<String> {
-    let client = DeepSeekClient::new(config)?;
-    client.translate(text).await
+/// Returns an error if the API call fails or the response is malformed.
+pub async fn translate_text(
+    text: &str,
+    client: &DeepSeekClient,
+    model: &str,
+    target_language: &str,
+) -> Result<String> {
+    client.translate(text, model, target_language).await
 }
 
 /// Status of a translation operation for a single message.

@@ -85,6 +85,7 @@ fn show_single_setting(app: &App, key: &str) -> CommandResult {
         match l {
             crate::localization::Locale::En => "en",
             crate::localization::Locale::ZhHans => "zh-Hans",
+            crate::localization::Locale::ZhHant => "zh-Hant",
             crate::localization::Locale::Ja => "ja",
             crate::localization::Locale::PtBr => "pt-BR",
         }

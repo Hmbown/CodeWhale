@@ -142,7 +142,6 @@ const ALLOW_INSECURE_HTTP_ENV: &str = "DEEPSEEK_ALLOW_INSECURE_HTTP";
 pub(super) const SSE_BACKPRESSURE_HIGH_WATERMARK: usize = 8 * 1024 * 1024; // 8 MB
 pub(super) const SSE_BACKPRESSURE_SLEEP_MS: u64 = 10;
 pub(super) const SSE_MAX_LINES_PER_CHUNK: usize = 256;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ConnectionState {
     Healthy,
@@ -573,29 +572,36 @@ fn build_default_headers(
 }
 
 impl DeepSeekClient {
-    /// Translate text from English to Simplified Chinese using a focused
-    /// non-streaming chat completion call (deepseek-v4-flash).
+    /// Translate text to the requested target language using a focused
+    /// non-streaming chat completion call on the supplied model.
     ///
     /// This is a lightweight translation service — no tool calls, no
     /// streaming, no conversation history. The dedicated translation agent
     /// receives the source text and returns only the translated result.
-    pub async fn translate(&self, text: &str) -> Result<String> {
+    pub async fn translate(
+        &self,
+        text: &str,
+        model: &str,
+        target_language: &str,
+    ) -> Result<String> {
         let url = api_url(&self.base_url, "chat/completions");
-        let body = serde_json::json!({
-            "model": "deepseek-v4-flash",
+        let mut body = serde_json::json!({
+            "model": model,
             "messages": [
                 {
                     "role": "system",
-                    "content": "You are a professional translator. Your ONLY task is to translate English text to Simplified Chinese (简体中文). \
-                                Rules:\n\
-                                1. Output ONLY the translation, nothing else — no explanations, no notes, no quotes.\n\
-                                2. Preserve all code blocks (```...```), URLs, file paths, command names, \
-                                and technical terms like API names, function names, and library names untranslated.\n\
-                                3. Keep Markdown formatting (headings, lists, bold, italics, links) intact.\n\
-                                4. Translate all natural-language prose naturally and professionally.\n\
-                                5. Do NOT add any prefix, suffix, or commentary.\n\
-                                6. If the input is already Chinese or contains no English prose to translate, \
-                                return it as-is."
+                    "content": format!(
+                        "You are a professional translator. Your ONLY task is to translate text to {target_language}. \
+                         Rules:\n\
+                         1. Output ONLY the translation, nothing else — no explanations, no notes, no quotes.\n\
+                         2. Preserve all code blocks (```...```), URLs, file paths, command names, \
+                         and technical terms like API names, function names, and library names untranslated.\n\
+                         3. Keep Markdown formatting (headings, lists, bold, italics, links) intact.\n\
+                         4. Translate all natural-language prose naturally and professionally.\n\
+                         5. Do NOT add any prefix, suffix, or commentary.\n\
+                         6. If the input is already in {target_language} or contains no prose to translate, \
+                         return it as-is."
+                    )
                 },
                 {
                     "role": "user",
@@ -606,6 +612,7 @@ impl DeepSeekClient {
             "temperature": 0.1,
             "stream": false
         });
+        apply_reasoning_effort(&mut body, Some("off"), self.api_provider);
 
         let response = self
             .send_with_retry(|| self.http_client.post(&url).json(&body))

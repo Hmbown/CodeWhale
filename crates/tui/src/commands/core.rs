@@ -307,9 +307,9 @@ pub fn home_dashboard(app: &mut App) -> CommandResult {
     CommandResult::message(stats)
 }
 
-/// Toggle output translation to Chinese on/off.
+/// Toggle output translation to the current system language on/off.
 ///
-/// When enabled, the model is instructed to respond in Chinese and an
+/// When enabled, the model is instructed to respond in the current locale and an
 /// interception layer translates any remaining English output before it
 /// reaches the user.
 pub fn translate(app: &mut App) -> CommandResult {
