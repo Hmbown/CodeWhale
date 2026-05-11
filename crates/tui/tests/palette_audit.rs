@@ -2,7 +2,7 @@
 //!
 //! These tests ensure that deprecated colors (like DEEPSEEK_AQUA) are not used
 //! directly in user-visible code. The dark palette intentionally follows a
-//! Claude Code-style warm neutral theme, while legacy DeepSeek names remain as
+//! DeepSeek whale-blue theme, while legacy DeepSeek names remain as
 //! compatibility aliases.
 
 use std::fs;
@@ -141,7 +141,7 @@ fn verify_status_success_uses_semantic_green() {
 
     assert!(
         content.contains("pub const STATUS_SUCCESS: Color = GREEN;"),
-        "STATUS_SUCCESS should use the semantic Claude-style green token"
+        "STATUS_SUCCESS should use the semantic DeepSeek teal token"
     );
 }
 
@@ -152,16 +152,20 @@ fn verify_brand_colors_defined() {
     let content = fs::read_to_string(&palette_path).expect("Failed to read palette.rs");
 
     assert!(
-        content.contains("pub const BLUE_RGB: (u8, u8, u8) = AMBER_RGB;"),
-        "BLUE is a legacy alias to the Claude-style amber accent"
+        content.contains("pub const BLUE_RGB: (u8, u8, u8) = (66, 153, 255);"),
+        "BLUE should be the DeepSeek primary accent"
     );
     assert!(
-        content.contains("pub const SKY_RGB: (u8, u8, u8) = (238, 156, 112);"),
-        "SKY should be the warm Claude-style highlight"
+        content.contains("pub const AMBER_RGB: (u8, u8, u8) = (91, 196, 255);"),
+        "AMBER is kept as a legacy semantic slot but should be DeepSeek cyan"
+    );
+    assert!(
+        content.contains("pub const SKY_RGB: (u8, u8, u8) = (91, 216, 255);"),
+        "SKY should be the DeepSeek bright highlight"
     );
     assert!(
         content.contains("pub const RED_RGB: (u8, u8, u8) = (232, 93, 86);"),
-        "RED should be the Claude-style issue accent"
+        "RED should remain the issue accent"
     );
 }
 

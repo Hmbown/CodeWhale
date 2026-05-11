@@ -147,7 +147,7 @@ fn render_sidebar_plan(f: &mut Frame, area: Rect, app: &App) {
     let content_width = area.width.saturating_sub(4) as usize;
     let mut lines: Vec<Line<'static>> = Vec::with_capacity(usize::from(area.height).max(4));
 
-    // === Goal Mode (#397) — gold outline matching todo items ===
+    // === Goal Mode (#397) — accent outline matching todo items ===
     if let Some(ref objective) = app.goal.goal_objective {
         lines.push(Line::from(Span::styled(
             format!(
@@ -178,7 +178,7 @@ fn render_sidebar_plan(f: &mut Frame, area: Rect, app: &App) {
                 Style::default().fg(palette::TEXT_MUTED),
             )));
         }
-        // Gold separator
+        // Accent separator
         lines.push(Line::from(Span::styled(
             "─".repeat(content_width.min(24)),
             Style::default().fg(palette::STATUS_WARNING),
@@ -313,7 +313,7 @@ fn render_sidebar_todos(f: &mut Frame, area: Rect, app: &App) {
                 lines.push(Line::from(vec![
                     Span::styled(
                         format!("{}%", snapshot.completion_pct),
-                        Style::default().fg(palette::STATUS_SUCCESS).bold(),
+                        Style::default().fg(palette::DEEPSEEK_BLUE).bold(),
                     ),
                     Span::styled(
                         format!(" complete ({completed}/{total})"),
@@ -326,8 +326,8 @@ fn render_sidebar_todos(f: &mut Frame, area: Rect, app: &App) {
                 for item in snapshot.items.iter().take(max_items) {
                     let (prefix, color) = match item.status {
                         TodoStatus::Pending => ("[ ]", palette::TEXT_MUTED),
-                        TodoStatus::InProgress => ("[~]", palette::STATUS_WARNING),
-                        TodoStatus::Completed => ("[x]", palette::STATUS_SUCCESS),
+                        TodoStatus::InProgress => ("[~]", palette::DEEPSEEK_SKY),
+                        TodoStatus::Completed => ("[x]", palette::DEEPSEEK_BLUE),
                     };
                     let text = format!("{prefix} #{} {}", item.id, item.content);
                     lines.push(Line::from(Span::styled(
@@ -807,7 +807,7 @@ pub fn render_todos_panel(f: &mut Frame, area: Rect, app: &App) {
     lines.push(Line::from(vec![
         Span::styled(
             format!("{}%", snapshot.completion_pct),
-            Style::default().fg(palette::STATUS_SUCCESS).bold(),
+            Style::default().fg(palette::DEEPSEEK_BLUE).bold(),
         ),
         Span::styled(
             format!(" complete ({completed}/{total})"),
@@ -818,8 +818,8 @@ pub fn render_todos_panel(f: &mut Frame, area: Rect, app: &App) {
     for item in snapshot.items.iter().take(TODOS_PANEL_MAX_ITEMS) {
         let (prefix, color) = match item.status {
             TodoStatus::Pending => ("[ ]", palette::TEXT_MUTED),
-            TodoStatus::InProgress => ("[~]", palette::STATUS_WARNING),
-            TodoStatus::Completed => ("[x]", palette::STATUS_SUCCESS),
+            TodoStatus::InProgress => ("[~]", palette::DEEPSEEK_SKY),
+            TodoStatus::Completed => ("[x]", palette::DEEPSEEK_BLUE),
         };
         let text = format!("{prefix} #{} {}", item.id, item.content);
         lines.push(Line::from(Span::styled(

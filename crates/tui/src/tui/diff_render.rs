@@ -1,8 +1,8 @@
 //! Diff rendering helpers for TUI previews.
 
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::palette;
 
@@ -52,8 +52,7 @@ pub fn render_diff(diff: &str, width: u16) -> Vec<Line<'static>> {
             continue;
         }
 
-        if raw.starts_with('+') && !raw.starts_with("+++") {
-            let content = raw.trim_start_matches('+');
+        if let Some(content) = raw.strip_prefix('+') {
             lines.extend(render_diff_line(
                 content,
                 width,
@@ -63,6 +62,8 @@ pub fn render_diff(diff: &str, width: u16) -> Vec<Line<'static>> {
                 Style::default()
                     .fg(palette::DIFF_ADDED)
                     .bg(palette::DIFF_ADDED_BG),
+                Style::default().fg(Color::White).bg(palette::DIFF_ADDED_BG),
+                true,
             ));
             if let Some(line) = new_line.as_mut() {
                 *line = line.saturating_add(1);
@@ -70,8 +71,7 @@ pub fn render_diff(diff: &str, width: u16) -> Vec<Line<'static>> {
             continue;
         }
 
-        if raw.starts_with('-') && !raw.starts_with("---") {
-            let content = raw.trim_start_matches('-');
+        if let Some(content) = raw.strip_prefix('-') {
             lines.extend(render_diff_line(
                 content,
                 width,
@@ -79,8 +79,12 @@ pub fn render_diff(diff: &str, width: u16) -> Vec<Line<'static>> {
                 new_line,
                 '-',
                 Style::default()
-                    .fg(palette::STATUS_ERROR)
+                    .fg(palette::DIFF_DELETED)
                     .bg(palette::DIFF_DELETED_BG),
+                Style::default()
+                    .fg(Color::White)
+                    .bg(palette::DIFF_DELETED_BG),
+                true,
             ));
             if let Some(line) = old_line.as_mut() {
                 *line = line.saturating_add(1);
@@ -88,15 +92,16 @@ pub fn render_diff(diff: &str, width: u16) -> Vec<Line<'static>> {
             continue;
         }
 
-        if raw.starts_with(' ') {
-            let content = raw.trim_start_matches(' ');
+        if let Some(content) = raw.strip_prefix(' ') {
             lines.extend(render_diff_line(
                 content,
                 width,
                 old_line,
                 new_line,
                 ' ',
+                Style::default().fg(palette::TEXT_TOOL_SUMMARY_DIM),
                 Style::default().fg(palette::TEXT_PRIMARY),
+                false,
             ));
             if let Some(line) = old_line.as_mut() {
                 *line = line.saturating_add(1);
@@ -242,38 +247,21 @@ fn render_file_header(path: &str, width: u16) -> Vec<Line<'static>> {
 }
 
 fn render_diff_summary(summaries: &[DiffFileSummary], width: u16) -> Vec<Line<'static>> {
-    let files = summaries.len();
     let added: usize = summaries.iter().map(|summary| summary.added).sum();
     let deleted: usize = summaries.iter().map(|summary| summary.deleted).sum();
-    let hunks: usize = summaries.iter().map(|summary| summary.hunks).sum();
 
     let mut lines = Vec::new();
     lines.extend(wrap_with_style(
         &format!(
-            "summary: {files} file{}, +{added} -{deleted}, {hunks} hunk{}",
-            if files == 1 { "" } else { "s" },
-            if hunks == 1 { "" } else { "s" },
+            "Added {added} line{}, removed {deleted} line{}",
+            if added == 1 { "" } else { "s" },
+            if deleted == 1 { "" } else { "s" },
         ),
         Style::default()
             .fg(palette::TEXT_PRIMARY)
             .add_modifier(Modifier::BOLD),
         width,
     ));
-    for summary in summaries {
-        let row = format!(
-            "  {}  +{} -{}  {} hunk{}",
-            summary.path,
-            summary.added,
-            summary.deleted,
-            summary.hunks,
-            if summary.hunks == 1 { "" } else { "s" },
-        );
-        lines.extend(wrap_with_style(
-            &row,
-            Style::default().fg(palette::TEXT_MUTED),
-            width,
-        ));
-    }
     lines
 }
 
@@ -307,33 +295,37 @@ fn render_diff_line(
     old_line: Option<usize>,
     new_line: Option<usize>,
     marker: char,
-    style: Style,
+    prefix_style: Style,
+    content_style: Style,
+    fill_to_width: bool,
 ) -> Vec<Line<'static>> {
     let prefix = format_line_numbers(old_line, new_line, marker);
     let prefix_width = prefix.width();
     let available = width.saturating_sub(prefix_width as u16).max(1) as usize;
-    let wrapped = wrap_text(content, available);
+    let wrapped = wrap_code_text(content, available);
 
     let mut out = Vec::new();
     for (idx, chunk) in wrapped.into_iter().enumerate() {
+        let chunk = if fill_to_width {
+            pad_to_width(&chunk, available)
+        } else {
+            chunk
+        };
         if idx == 0 {
             out.push(Line::from(vec![
-                Span::styled(prefix.clone(), Style::default().fg(palette::TEXT_MUTED)),
-                Span::styled(chunk, style),
+                Span::styled(prefix.clone(), prefix_style),
+                Span::styled(chunk, content_style),
             ]));
         } else {
             out.push(Line::from(vec![
-                Span::raw(" ".repeat(prefix_width)),
-                Span::styled(chunk, style),
+                Span::styled(" ".repeat(prefix_width), prefix_style),
+                Span::styled(chunk, content_style),
             ]));
         }
     }
 
     if out.is_empty() {
-        out.push(Line::from(vec![Span::styled(
-            prefix,
-            Style::default().fg(palette::TEXT_MUTED),
-        )]));
+        out.push(Line::from(vec![Span::styled(prefix, prefix_style)]));
     }
 
     out
@@ -408,9 +400,48 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
+fn wrap_code_text(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![text.to_string()];
+    }
+
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    let mut current_width = 0;
+
+    for ch in text.chars() {
+        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if current_width + ch_width > width && !current.is_empty() {
+            lines.push(current);
+            current = String::new();
+            current_width = 0;
+        }
+        current.push(ch);
+        current_width += ch_width;
+    }
+
+    if current.is_empty() {
+        lines.push(String::new());
+    } else {
+        lines.push(current);
+    }
+
+    lines
+}
+
+fn pad_to_width(text: &str, width: usize) -> String {
+    let current = text.width();
+    if current >= width {
+        text.to_string()
+    } else {
+        format!("{text}{}", " ".repeat(width - current))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::style::Color;
 
     fn line_text(line: &Line<'static>) -> String {
         line.spans
@@ -462,8 +493,8 @@ diff --git a/src/a.rs b/src/a.rs
 
         let rendered = render_diff(diff, 80);
         let text = rendered.iter().map(line_text).collect::<Vec<_>>();
-        assert!(text[0].contains("summary: 1 file, +1 -1, 1 hunk"));
-        assert!(text.iter().any(|line| line.contains("src/a.rs +1 -1")));
+        assert!(text[0].contains("Added 1 line, removed 1 line"));
+        assert!(text.iter().any(|line| line.contains("src/a.rs")));
         assert!(
             text.iter().any(|line| line.contains(" + new")),
             "added line should carry + gutter: {text:?}"
@@ -471,6 +502,48 @@ diff --git a/src/a.rs b/src/a.rs
         assert!(
             text.iter().any(|line| line.contains(" - old")),
             "deleted line should carry - gutter: {text:?}"
+        );
+
+        let added = rendered
+            .iter()
+            .find(|line| line_text(line).contains(" + new"))
+            .expect("added line");
+        assert_eq!(added.spans[0].style.bg, Some(palette::DIFF_ADDED_BG));
+        assert_eq!(added.spans[0].style.fg, Some(palette::DIFF_ADDED));
+        assert_eq!(added.spans[1].style.bg, Some(palette::DIFF_ADDED_BG));
+        assert_eq!(added.spans[1].style.fg, Some(Color::White));
+
+        let deleted = rendered
+            .iter()
+            .find(|line| line_text(line).contains(" - old"))
+            .expect("deleted line");
+        assert_eq!(deleted.spans[0].style.bg, Some(palette::DIFF_DELETED_BG));
+        assert_eq!(deleted.spans[0].style.fg, Some(palette::DIFF_DELETED));
+        assert_eq!(deleted.spans[1].style.bg, Some(palette::DIFF_DELETED_BG));
+        assert_eq!(deleted.spans[1].style.fg, Some(Color::White));
+    }
+
+    #[test]
+    fn render_diff_preserves_code_indent_and_prefix_operators() {
+        let diff = "\
+diff --git a/src/a.rs b/src/a.rs
+--- a/src/a.rs
++++ b/src/a.rs
+@@ -1,2 +1,2 @@
+-    --counter;
++    ++counter;
+ context
+";
+
+        let rendered = render_diff(diff, 80);
+        let text = rendered.iter().map(line_text).collect::<Vec<_>>();
+        assert!(
+            text.iter().any(|line| line.contains("-     --counter;")),
+            "deleted code indentation/operator prefix should survive: {text:?}"
+        );
+        assert!(
+            text.iter().any(|line| line.contains("+     ++counter;")),
+            "added code indentation/operator prefix should survive: {text:?}"
         );
     }
 }

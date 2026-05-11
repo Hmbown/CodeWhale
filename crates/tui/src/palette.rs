@@ -1,20 +1,20 @@
-//! Color palette — Claude Code style: warm-neutral dark, soft clay accents.
+//! Color palette — DeepSeek style: whale-blue dark, crisp cyan accents.
 
 use ratatui::style::Color;
 
 // === Base RGBs ===
-pub const INK_RGB: (u8, u8, u8) = (16, 15, 13);
-pub const SLATE_RGB: (u8, u8, u8) = (25, 23, 20);
-pub const ELEVATED_RGB: (u8, u8, u8) = (35, 32, 28);
-pub const BORDER_RGB: (u8, u8, u8) = (72, 64, 55);
-pub const AMBER_RGB: (u8, u8, u8) = (219, 128, 91);
-pub const AMBER_DIM_RGB: (u8, u8, u8) = (176, 113, 78);
-pub const GREEN_RGB: (u8, u8, u8) = (91, 164, 108);
+pub const INK_RGB: (u8, u8, u8) = (7, 12, 18);
+pub const SLATE_RGB: (u8, u8, u8) = (11, 20, 28);
+pub const ELEVATED_RGB: (u8, u8, u8) = (16, 31, 42);
+pub const BORDER_RGB: (u8, u8, u8) = (54, 90, 112);
+pub const AMBER_RGB: (u8, u8, u8) = (91, 196, 255);
+pub const AMBER_DIM_RGB: (u8, u8, u8) = (54, 142, 188);
+pub const GREEN_RGB: (u8, u8, u8) = (70, 208, 170);
 pub const RED_RGB: (u8, u8, u8) = (232, 93, 86);
-pub const BLUE_RGB: (u8, u8, u8) = AMBER_RGB;
-pub const SKY_RGB: (u8, u8, u8) = (238, 156, 112);
+pub const BLUE_RGB: (u8, u8, u8) = (66, 153, 255);
+pub const SKY_RGB: (u8, u8, u8) = (91, 216, 255);
 #[allow(dead_code)]
-pub const PINK_RGB: (u8, u8, u8) = (219, 109, 165);
+pub const PINK_RGB: (u8, u8, u8) = (134, 179, 255);
 
 // Legacy re-exports — keep for minimal diff
 pub const DEEPSEEK_BLUE_RGB: (u8, u8, u8) = BLUE_RGB;
@@ -31,17 +31,17 @@ pub const DEEPSEEK_NAVY_RGB: (u8, u8, u8) = (24, 63, 138);
 
 // Light theme
 pub const LIGHT_SURFACE_RGB: (u8, u8, u8) = (255, 255, 255);
-pub const LIGHT_PANEL_RGB: (u8, u8, u8) = (250, 248, 244);
-pub const LIGHT_ELEVATED_RGB: (u8, u8, u8) = (242, 238, 231);
-pub const LIGHT_REASONING_RGB: (u8, u8, u8) = (255, 244, 232);
-pub const LIGHT_SUCCESS_RGB: (u8, u8, u8) = (227, 245, 231);
+pub const LIGHT_PANEL_RGB: (u8, u8, u8) = (246, 250, 253);
+pub const LIGHT_ELEVATED_RGB: (u8, u8, u8) = (235, 244, 250);
+pub const LIGHT_REASONING_RGB: (u8, u8, u8) = (230, 246, 255);
+pub const LIGHT_SUCCESS_RGB: (u8, u8, u8) = (222, 248, 241);
 pub const LIGHT_ERROR_RGB: (u8, u8, u8) = (255, 237, 233);
-pub const LIGHT_TEXT_BODY_RGB: (u8, u8, u8) = (39, 35, 31);
-pub const LIGHT_TEXT_MUTED_RGB: (u8, u8, u8) = (108, 99, 88);
-pub const LIGHT_TEXT_HINT_RGB: (u8, u8, u8) = (139, 128, 113);
-pub const LIGHT_TEXT_SOFT_RGB: (u8, u8, u8) = (67, 60, 52);
-pub const LIGHT_BORDER_RGB: (u8, u8, u8) = (216, 204, 188);
-pub const LIGHT_SELECTION_RGB: (u8, u8, u8) = (246, 216, 197);
+pub const LIGHT_TEXT_BODY_RGB: (u8, u8, u8) = (21, 34, 48);
+pub const LIGHT_TEXT_MUTED_RGB: (u8, u8, u8) = (86, 107, 124);
+pub const LIGHT_TEXT_HINT_RGB: (u8, u8, u8) = (116, 137, 154);
+pub const LIGHT_TEXT_SOFT_RGB: (u8, u8, u8) = (43, 63, 80);
+pub const LIGHT_BORDER_RGB: (u8, u8, u8) = (198, 218, 232);
+pub const LIGHT_SELECTION_RGB: (u8, u8, u8) = (207, 234, 250);
 
 #[allow(dead_code)]
 pub const BORDER_COLOR_RGB: (u8, u8, u8) = BORDER_RGB;
@@ -122,13 +122,13 @@ pub const DEEPSEEK_AQUA: Color = Color::Rgb(54, 187, 212);
 pub const DEEPSEEK_NAVY: Color = Color::Rgb(24, 63, 138);
 
 // === Semantic text colors ===
-pub const TEXT_BODY: Color = Color::Rgb(235, 230, 218);
-pub const TEXT_SECONDARY: Color = Color::Rgb(166, 155, 140);
-pub const TEXT_HINT: Color = Color::Rgb(136, 126, 112);
-pub const TEXT_SOFT: Color = Color::Rgb(213, 204, 190);
+pub const TEXT_BODY: Color = Color::Rgb(238, 247, 255);
+pub const TEXT_SECONDARY: Color = Color::Rgb(168, 190, 205);
+pub const TEXT_HINT: Color = Color::Rgb(119, 145, 162);
+pub const TEXT_SOFT: Color = Color::Rgb(218, 235, 247);
 pub const TEXT_ACCENT: Color = SKY;
 pub const SELECTION_TEXT: Color = Color::White;
-pub const TEXT_REASONING: Color = Color::Rgb(206, 158, 112);
+pub const TEXT_REASONING: Color = Color::Rgb(154, 213, 235);
 
 pub const TEXT_PRIMARY: Color = TEXT_BODY;
 pub const TEXT_MUTED: Color = TEXT_SECONDARY;
@@ -138,20 +138,20 @@ pub const LIGHT_USER_BODY: Color = Color::Rgb(21, 128, 61); // #15803D green
 
 // === Surfaces ===
 pub const SURFACE_ELEVATED: Color = ELEVATED;
-pub const SURFACE_REASONING: Color = Color::Rgb(50, 38, 27);
-pub const SURFACE_REASONING_TINT: Color = Color::Rgb(27, 23, 19);
+pub const SURFACE_REASONING: Color = Color::Rgb(16, 37, 50);
+pub const SURFACE_REASONING_TINT: Color = Color::Rgb(9, 22, 31);
 #[allow(dead_code)]
-pub const SURFACE_REASONING_ACTIVE: Color = Color::Rgb(60, 45, 31);
+pub const SURFACE_REASONING_ACTIVE: Color = Color::Rgb(20, 50, 68);
 #[allow(dead_code)]
-pub const SURFACE_TOOL: Color = Color::Rgb(30, 27, 23);
+pub const SURFACE_TOOL: Color = Color::Rgb(12, 25, 35);
 #[allow(dead_code)]
-pub const SURFACE_TOOL_ACTIVE: Color = Color::Rgb(39, 35, 30);
+pub const SURFACE_TOOL_ACTIVE: Color = Color::Rgb(17, 36, 48);
 #[allow(dead_code)]
-pub const SURFACE_SUCCESS: Color = Color::Rgb(25, 48, 34);
+pub const SURFACE_SUCCESS: Color = Color::Rgb(10, 45, 39);
 #[allow(dead_code)]
 pub const SURFACE_ERROR: Color = Color::Rgb(56, 27, 25);
 #[allow(dead_code)]
-pub const SURFACE_PANEL: Color = Color::Rgb(25, 23, 20);
+pub const SURFACE_PANEL: Color = Color::Rgb(11, 20, 28);
 #[allow(dead_code)]
 pub const BACKGROUND_DARK: Color = INK;
 const LEGACY_BACKGROUND_DARK: Color = Color::Rgb(11, 21, 38);
@@ -159,15 +159,18 @@ const LEGACY_BACKGROUND_DARK: Color = Color::Rgb(11, 21, 38);
 pub const COMPOSER_BG: Color = SLATE;
 
 // === Diff ===
-pub const DIFF_ADDED_BG: Color = Color::Rgb(22, 48, 33);
-pub const DIFF_DELETED_BG: Color = Color::Rgb(55, 25, 24);
-pub const DIFF_ADDED: Color = Color::Rgb(113, 195, 129);
+pub const DIFF_ADDED_BG: Color = Color::Rgb(0, 55, 6);
+pub const DIFF_DELETED_BG: Color = Color::Rgb(88, 0, 0);
+pub const DIFF_ADDED: Color = Color::Rgb(91, 220, 91);
+pub const DIFF_DELETED: Color = Color::Rgb(255, 116, 116);
 
 // === Accent colors ===
 pub const ACCENT_REASONING_LIVE: Color = AMBER_DIM;
-pub const ACCENT_TOOL_LIVE: Color = AMBER;
+pub const ACCENT_TOOL_LIVE: Color = SKY;
 pub const ACCENT_TOOL_ISSUE: Color = Color::Rgb(224, 126, 112);
-pub const TEXT_TOOL_OUTPUT: Color = Color::Rgb(190, 181, 166);
+pub const TEXT_TOOL_SUMMARY: Color = Color::Rgb(166, 155, 140);
+pub const TEXT_TOOL_SUMMARY_DIM: Color = Color::Rgb(136, 126, 112);
+pub const TEXT_TOOL_OUTPUT: Color = Color::White;
 #[allow(dead_code)]
 pub const ACCENT_PRIMARY: Color = BLUE;
 #[allow(dead_code)]
@@ -188,7 +191,7 @@ pub const MODE_YOLO: Color = RED;
 pub const MODE_PLAN: Color = AMBER;
 
 // === Selection ===
-pub const SELECTION_BG: Color = Color::Rgb(89, 61, 45);
+pub const SELECTION_BG: Color = Color::Rgb(20, 74, 105);
 
 // === UiTheme ===
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -217,7 +220,7 @@ pub struct UiTheme {
 }
 
 pub const UI_THEME: UiTheme = UiTheme {
-    name: "claude-code",
+    name: "deepseek",
     mode: PaletteMode::Dark,
     surface_bg: Color::Reset,
     panel_bg: SLATE,
@@ -241,7 +244,7 @@ pub const UI_THEME: UiTheme = UiTheme {
 };
 
 pub const LIGHT_UI_THEME: UiTheme = UiTheme {
-    name: "claude-code-light",
+    name: "deepseek-light",
     mode: PaletteMode::Light,
     surface_bg: LIGHT_SURFACE,
     panel_bg: LIGHT_PANEL,
@@ -252,10 +255,10 @@ pub const LIGHT_UI_THEME: UiTheme = UiTheme {
     footer_bg: LIGHT_SURFACE,
     mode_agent: BLUE,
     mode_yolo: RED,
-    mode_plan: Color::Rgb(180, 83, 9),
+    mode_plan: BLUE,
     status_ready: LIGHT_TEXT_MUTED,
     status_working: BLUE,
-    status_warning: Color::Rgb(180, 83, 9),
+    status_warning: BLUE,
     text_dim: LIGHT_TEXT_HINT,
     text_hint: LIGHT_TEXT_HINT,
     text_muted: LIGHT_TEXT_MUTED,
@@ -344,9 +347,9 @@ pub fn adapt_fg_for_palette_mode(color: Color, _bg: Color, mode: PaletteMode) ->
 
     if color == TEXT_BODY || color == SELECTION_TEXT || color == Color::White {
         LIGHT_TEXT_BODY
-    } else if color == TEXT_SECONDARY || color == TEXT_MUTED {
+    } else if color == TEXT_SECONDARY || color == TEXT_MUTED || color == TEXT_TOOL_SUMMARY {
         LIGHT_TEXT_MUTED
-    } else if color == TEXT_HINT || color == TEXT_DIM {
+    } else if color == TEXT_HINT || color == TEXT_DIM || color == TEXT_TOOL_SUMMARY_DIM {
         LIGHT_TEXT_HINT
     } else if color == TEXT_SOFT || color == TEXT_TOOL_OUTPUT {
         LIGHT_TEXT_SOFT
@@ -360,6 +363,8 @@ pub fn adapt_fg_for_palette_mode(color: Color, _bg: Color, mode: PaletteMode) ->
         Color::Rgb(159, 18, 57)
     } else if color == DIFF_ADDED {
         Color::Rgb(22, 101, 52)
+    } else if color == DIFF_DELETED {
+        Color::Rgb(185, 28, 28)
     } else if color == USER_BODY {
         LIGHT_USER_BODY
     } else {
@@ -639,9 +644,9 @@ mod tests {
 
     #[test]
     fn dark_palette_uses_correct_tokens() {
-        assert_eq!(INK, Color::Rgb(16, 15, 13));
-        assert_eq!(AMBER, Color::Rgb(219, 128, 91));
-        assert_eq!(GREEN, Color::Rgb(91, 164, 108));
+        assert_eq!(INK, Color::Rgb(7, 12, 18));
+        assert_eq!(AMBER, Color::Rgb(91, 196, 255));
+        assert_eq!(GREEN, Color::Rgb(70, 208, 170));
         assert_eq!(RED, Color::Rgb(232, 93, 86));
     }
 
@@ -655,7 +660,7 @@ mod tests {
 
     #[test]
     fn parse_hex_rgb_works() {
-        assert_eq!(parse_hex_rgb_color("#100f0d"), Some(INK));
+        assert_eq!(parse_hex_rgb_color("#070c12"), Some(INK));
         assert_eq!(parse_hex_rgb_color("#zzz"), None);
     }
 }

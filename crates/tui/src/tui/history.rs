@@ -1664,11 +1664,11 @@ fn render_checklist_change_card(
 
 fn checklist_status_marker(status: &str) -> (&'static str, Color) {
     match status.to_ascii_lowercase().as_str() {
-        "completed" | "done" => ("\u{2611}", palette::STATUS_SUCCESS), // ☑
+        "completed" | "done" => ("\u{2611}", palette::DEEPSEEK_BLUE), // ☑
         "in_progress" | "inprogress" | "running" => ("\u{25D0}", palette::DEEPSEEK_SKY), // ◐
-        "blocked" | "failed" => ("\u{2717}", palette::STATUS_ERROR),   // ✗
+        "blocked" | "failed" => ("\u{2717}", palette::STATUS_ERROR),  // ✗
         "cancelled" | "canceled" | "skipped" => ("\u{2298}", palette::TEXT_MUTED), // ⊘
-        _ => ("\u{2610}", palette::TEXT_MUTED),                        // ☐ pending
+        _ => ("\u{2610}", palette::TEXT_MUTED),                       // ☐ pending
     }
 }
 
@@ -2884,12 +2884,18 @@ fn render_tool_header_with_family_and_summary(
     ];
 
     if let Some(summary) = summary {
-        spans.push(Span::styled("(", Style::default().fg(palette::TEXT_DIM)));
+        spans.push(Span::styled(
+            "(",
+            Style::default().fg(palette::TEXT_TOOL_SUMMARY_DIM),
+        ));
         spans.push(Span::styled(
             truncate_text(&summary, TOOL_HEADER_SUMMARY_LIMIT),
-            Style::default().fg(palette::TEXT_MUTED),
+            Style::default().fg(palette::TEXT_TOOL_SUMMARY),
         ));
-        spans.push(Span::styled(")", Style::default().fg(palette::TEXT_DIM)));
+        spans.push(Span::styled(
+            ")",
+            Style::default().fg(palette::TEXT_TOOL_SUMMARY_DIM),
+        ));
     } else {
         spans.push(Span::styled(" ", Style::default()));
         spans.push(Span::styled(state_owned, tool_status_style(status)));
@@ -3180,7 +3186,7 @@ mod tests {
         PlanUpdateCell, REASONING_CURSOR, REASONING_OPENER, REASONING_RAIL, TOOL_RUNNING_SYMBOLS,
         TOOL_STATUS_SYMBOL_MS, ToolCell, ToolStatus, TranscriptRenderOptions, USER_GLYPH,
         assistant_label_style_for, extract_reasoning_summary, render_thinking,
-        running_status_label_with_elapsed,
+        render_tool_header_with_family_and_summary, running_status_label_with_elapsed,
     };
     use crate::deepseek_theme::Theme;
     use crate::models::{ContentBlock, Message};
@@ -4154,6 +4160,28 @@ mod tests {
         assert!(
             !visible.contains(REASONING_CURSOR),
             "low_motion must suppress the streaming cursor: {visible:?}"
+        );
+    }
+
+    #[test]
+    fn tool_header_summary_keeps_claude_code_gray() {
+        let header = render_tool_header_with_family_and_summary(
+            crate::tui::widgets::tool_card::ToolFamily::Run,
+            Some("cd /tmp && ls"),
+            "done",
+            ToolStatus::Success,
+            None,
+            true,
+        );
+
+        assert_eq!(
+            header.spans[2].style.fg,
+            Some(palette::TEXT_TOOL_SUMMARY_DIM)
+        );
+        assert_eq!(header.spans[3].style.fg, Some(palette::TEXT_TOOL_SUMMARY));
+        assert_eq!(
+            header.spans[4].style.fg,
+            Some(palette::TEXT_TOOL_SUMMARY_DIM)
         );
     }
 
