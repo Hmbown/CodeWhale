@@ -504,6 +504,8 @@ pub struct ApprovalView {
     pending_confirm: Option<ApprovalOption>,
     timeout: Option<Duration>,
     requested_at: Instant,
+    /// Whether the approval card is collapsed to a single-line banner.
+    pub(crate) collapsed: bool,
 }
 
 impl ApprovalView {
@@ -520,6 +522,7 @@ impl ApprovalView {
             pending_confirm: None,
             timeout: None,
             requested_at: Instant::now(),
+            collapsed: false,
         }
     }
 
@@ -625,6 +628,10 @@ impl ModalView for ApprovalView {
 
     fn handle_key(&mut self, key: KeyEvent) -> ViewAction {
         match key.code {
+            KeyCode::Tab => {
+                self.collapsed = !self.collapsed;
+                ViewAction::None
+            }
             KeyCode::Up | KeyCode::Char('k') => {
                 self.select_prev();
                 ViewAction::None

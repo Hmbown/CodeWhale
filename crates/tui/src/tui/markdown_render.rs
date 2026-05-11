@@ -566,9 +566,15 @@ fn parse_inline_spans(line: &str, base_style: Style, link_style: Style) -> Vec<(
             && let Some(end) = rest[1..].find('*')
         {
             let inner = &rest[1..1 + end];
-            out.push((inner.to_string(), italic_style));
-            rest = &rest[1 + end + 1..];
-            continue;
+            let after = &rest[1 + end + 1..];
+            // Closing delimiter must not be immediately followed by a
+            // letter, digit, or underscore (otherwise it's part of an
+            // identifier like `deepseek_tui`, not italic markup).
+            if !after.starts_with(|c: char| c.is_alphanumeric() || c == '_') {
+                out.push((inner.to_string(), italic_style));
+                rest = after;
+                continue;
+            }
         }
         // _italic_
         if rest.starts_with('_')
@@ -576,9 +582,14 @@ fn parse_inline_spans(line: &str, base_style: Style, link_style: Style) -> Vec<(
             && let Some(end) = rest[1..].find('_')
         {
             let inner = &rest[1..1 + end];
-            out.push((inner.to_string(), italic_style));
-            rest = &rest[1 + end + 1..];
-            continue;
+            let after = &rest[1 + end + 1..];
+            // Closing delimiter must not be immediately followed by a
+            // letter, digit, or underscore.
+            if !after.starts_with(|c: char| c.is_alphanumeric() || c == '_') {
+                out.push((inner.to_string(), italic_style));
+                rest = after;
+                continue;
+            }
         }
         // `inline code`
         if let Some(end) = rest.strip_prefix('`').and_then(|s| s.find('`')) {

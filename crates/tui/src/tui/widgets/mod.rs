@@ -1010,6 +1010,28 @@ impl Renderable for ApprovalWidget<'_> {
             return;
         }
 
+        // Collapsed mode: a single-line banner at the bottom of the area
+        // so the user can still see the transcript behind it.
+        if self.view.collapsed {
+            let bar_y = area.y.saturating_add(area.height.saturating_sub(1));
+            let bar_area = Rect::new(area.x, bar_y, area.width, 1);
+            Clear.render(bar_area, buf);
+
+            let risk = self.request.risk;
+            let palette_colors = approval_palette(risk);
+            let summary = format!(
+                " {} — {}  [Tab to expand] ",
+                self.request.tool_name,
+                risk_badge_text(risk, self.view.locale()),
+            );
+            let line = Line::from(Span::styled(
+                summary,
+                Style::default().fg(palette::DEEPSEEK_INK).bg(palette_colors.accent).add_modifier(Modifier::BOLD),
+            ));
+            Paragraph::new(line).render(bar_area, buf);
+            return;
+        }
+
         let card_area = compute_takeover_area(area);
         Clear.render(card_area, buf);
 
