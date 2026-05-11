@@ -1418,6 +1418,31 @@ const FOREGROUND_TIMEOUT_RECOVERY_HINT: &str = "Foreground exec_shell is for bou
 The timed-out process was killed; rerun long work with task_shell_start or exec_shell with \
 background: true, then poll with task_shell_wait or exec_shell_wait.";
 
+const MACOS_PROVENANCE_HINT: &str = "Docker buildx failed to update its activity file due to a macOS \
+com.apple.provenance restriction. Files created by Docker Desktop's signed process carry a \
+kernel-enforced provenance tag that blocks writes from child processes (including the TUI \
+shell sandbox). Workarounds: (1) run the Docker build from a regular terminal outside the \
+TUI, or (2) disable BuildKit with DOCKER_BUILDKIT=0 (only works if your Dockerfiles do not \
+use RUN --mount directives).";
+
+pub(crate) fn looks_like_macos_provenance_failure(result: &ShellResult) -> bool {
+    if matches!(result.status, ShellStatus::Completed) && result.exit_code == Some(0) {
+        return false;
+    }
+    let combined = format!("{}\n{}", result.stdout, result.stderr).to_ascii_lowercase();
+    combined.contains("com.apple.provenance")
+        || combined.contains("update builder last activity")
+        || (combined.contains("buildx/activity") && combined.contains("operation not permitted"))
+}
+
+fn macos_provenance_hint(result: &ShellResult) -> Option<&'static str> {
+    if looks_like_macos_provenance_failure(result) {
+        Some(MACOS_PROVENANCE_HINT)
+    } else {
+        None
+    }
+}
+
 fn command_likely_needs_network(command: &str) -> bool {
     let normalized = command.to_ascii_lowercase();
     let Some(primary) = extract_primary_command(&normalized) else {
@@ -1933,6 +1958,7 @@ impl ToolSpec for ExecShellTool {
                 };
                 let network_restricted_hint =
                     shell_network_restricted_hint(context, command, &result).map(str::to_string);
+                let provenance_hint = macos_provenance_hint(&result);
                 let mut output = if interactive {
                     format!(
                         "Interactive command completed (exit code: {:?})",
@@ -1971,6 +1997,9 @@ impl ToolSpec for ExecShellTool {
                     )
                 };
                 if let Some(hint) = network_restricted_hint.as_deref() {
+                    output = format!("{hint}\n\n{output}");
+                }
+                if let Some(hint) = provenance_hint {
                     output = format!("{hint}\n\n{output}");
                 }
 
@@ -2027,6 +2056,9 @@ impl ToolSpec for ExecShellTool {
                     metadata["sandbox_network_restricted"] = json!(true);
                     metadata["sandbox_network_denied_hint"] = json!(hint);
                 }
+                if provenance_hint.is_some() {
+                    metadata["macos_provenance_restricted"] = json!(true);
+                }
 
                 Ok(ToolResult {
                     content: output,
@@ -2072,6 +2104,7 @@ fn build_shell_delta_tool_result(delta: ShellDeltaResult, context: &ToolContext)
     let result = delta.result;
     let network_restricted_hint =
         shell_network_restricted_hint(context, &delta.command, &result).map(str::to_string);
+    let provenance_hint = macos_provenance_hint(&result);
     let stdout_summary = summarize_output(&result.stdout);
     let stderr_summary = summarize_output(&result.stderr);
     let summary = if !stderr_summary.is_empty() {
@@ -2094,6 +2127,9 @@ fn build_shell_delta_tool_result(delta: ShellDeltaResult, context: &ToolContext)
         format!("{}\n\nSTDERR:\n{}", result.stdout, result.stderr)
     };
     if let Some(hint) = network_restricted_hint.as_deref() {
+        output = format!("{hint}\n\n{output}");
+    }
+    if let Some(hint) = provenance_hint {
         output = format!("{hint}\n\n{output}");
     }
 
@@ -2128,6 +2164,12 @@ fn build_shell_delta_tool_result(delta: ShellDeltaResult, context: &ToolContext)
     {
         object.insert("sandbox_network_restricted".to_string(), json!(true));
         object.insert("sandbox_network_denied_hint".to_string(), json!(hint));
+    }
+    if provenance_hint.is_some()
+        && let Some(metadata) = tool_result.metadata.as_mut()
+        && let Some(object) = metadata.as_object_mut()
+    {
+        object.insert("macos_provenance_restricted".to_string(), json!(true));
     }
     tool_result
 }

@@ -689,3 +689,57 @@ async fn test_exec_shell_cancel_tool_can_kill_all_running_processes() {
     assert_eq!(first_job.snapshot.status, ShellStatus::Killed);
     assert_eq!(second_job.snapshot.status, ShellStatus::Killed);
 }
+
+fn make_failed_result(stderr: &str) -> ShellResult {
+    ShellResult {
+        task_id: None,
+        status: ShellStatus::Failed,
+        exit_code: Some(1),
+        stdout: String::new(),
+        stderr: stderr.to_string(),
+        duration_ms: 0,
+        stdout_len: 0,
+        stderr_len: stderr.len(),
+        stdout_omitted: 0,
+        stderr_omitted: 0,
+        stdout_truncated: false,
+        sandboxed: false,
+        sandbox_type: None,
+        sandbox_denied: false,
+        stderr_truncated: false,
+    }
+}
+
+#[test]
+fn test_macos_provenance_detected_by_activity_time_message() {
+    let result = make_failed_result(
+        "failed to update builder last activity time: open \
+         /Users/user/.docker/buildx/activity/.tmp-abc: operation not permitted",
+    );
+    assert!(looks_like_macos_provenance_failure(&result));
+}
+
+#[test]
+fn test_macos_provenance_detected_by_activity_path_and_eperm() {
+    let result = make_failed_result(
+        "error: open /home/user/.docker/buildx/activity/foo: operation not permitted",
+    );
+    assert!(looks_like_macos_provenance_failure(&result));
+}
+
+#[test]
+fn test_macos_provenance_not_triggered_on_success() {
+    let mut result = make_failed_result(
+        "failed to update builder last activity time: open \
+         /Users/user/.docker/buildx/activity/.tmp-abc: operation not permitted",
+    );
+    result.status = ShellStatus::Completed;
+    result.exit_code = Some(0);
+    assert!(!looks_like_macos_provenance_failure(&result));
+}
+
+#[test]
+fn test_macos_provenance_not_triggered_on_unrelated_eperm() {
+    let result = make_failed_result("open /some/other/path: operation not permitted");
+    assert!(!looks_like_macos_provenance_failure(&result));
+}
