@@ -1062,18 +1062,7 @@ impl Engine {
                     )));
                 }
 
-                if maybe_activate_requested_deferred_tool(
-                    &tool_name,
-                    &tool_catalog,
-                    &mut active_tool_names,
-                ) {
-                    let _ = self
-                        .tx_event
-                        .send(Event::status(format!(
-                            "Auto-loaded deferred tool '{tool_name}' after model request."
-                        )))
-                        .await;
-                }
+                let requested_tool_name = tool_name.clone();
                 let mut tool_def = tool_catalog.iter().find(|def| def.name == tool_name);
 
                 // Resolve hallucinated tool names when the model emits a
@@ -1092,21 +1081,6 @@ impl Engine {
                         // Update the tool_uses entry so the result is
                         // attributed to the canonical name.
                         tool.name = tool_name.clone();
-                        // Re-run the deferred-activation check with the
-                        // canonical name.
-                        if maybe_activate_requested_deferred_tool(
-                            &tool_name,
-                            &tool_catalog,
-                            &mut active_tool_names,
-                        ) {
-                            let _ = self
-                                .tx_event
-                                .send(Event::status(format!(
-                                    "Auto-loaded deferred tool '{}' after resolving '{}'.",
-                                    tool_name, tool_name
-                                )))
-                                .await;
-                        }
                     }
                 }
 
@@ -1155,6 +1129,27 @@ impl Engine {
                 }
 
                 if blocked_error.is_none()
+                    && let Some(result) = maybe_hydrate_requested_deferred_tool(
+                        &tool_name,
+                        &tool_input,
+                        &tool_catalog,
+                        &mut active_tool_names,
+                    )
+                {
+                    let status = if requested_tool_name == tool_name {
+                        format!("Auto-loaded deferred tool '{tool_name}' after model request.")
+                    } else {
+                        format!(
+                            "Auto-loaded deferred tool '{}' after resolving '{}'.",
+                            tool_name, requested_tool_name
+                        )
+                    };
+                    let _ = self.tx_event.send(Event::status(status)).await;
+                    guard_result = Some(result);
+                }
+
+                if blocked_error.is_none()
+                    && guard_result.is_none()
                     && let AttemptDecision::Block(message) =
                         loop_guard.record_attempt(&tool_name, &tool_input)
                 {
@@ -1656,6 +1651,12 @@ impl Engine {
                             &outcome.name,
                             &output,
                         );
+                        let tool_was_executed = output
+                            .metadata
+                            .as_ref()
+                            .and_then(|metadata| metadata.get("executed"))
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(true);
                         let output_content = output.content;
 
                         tool_call.set_result(output_content.clone(), duration);
@@ -1670,7 +1671,7 @@ impl Engine {
                         // this on success — failed edits leave the file
                         // untouched, so polling for diagnostics would just
                         // surface stale state.
-                        if output.success {
+                        if output.success && tool_was_executed {
                             self.run_post_edit_lsp_hook(&outcome.name, &tool_input)
                                 .await;
                         }

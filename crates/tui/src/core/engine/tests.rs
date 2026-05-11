@@ -367,6 +367,61 @@ fn model_tool_catalog_applies_native_and_mcp_deferral() {
 }
 
 #[test]
+fn deferred_edit_file_first_use_hydrates_schema_without_execution() {
+    let mut edit = api_tool("edit_file");
+    edit.defer_loading = Some(true);
+    edit.input_schema = json!({
+        "type": "object",
+        "properties": {
+            "path": { "type": "string" },
+            "search": { "type": "string" },
+            "replace": { "type": "string" }
+        },
+        "required": ["path", "search", "replace"]
+    });
+
+    let catalog = vec![edit];
+    let mut active = HashSet::new();
+    let result = maybe_hydrate_requested_deferred_tool(
+        "edit_file",
+        &json!({
+            "path": "src/foo.rs",
+            "old_string": "before",
+            "new_string": "after"
+        }),
+        &catalog,
+        &mut active,
+    )
+    .expect("first deferred use should hydrate");
+
+    assert!(active.contains("edit_file"));
+    assert!(result.success);
+    assert!(result.content.contains("Tool `edit_file` was deferred"));
+    assert!(result.content.contains("path: string"));
+    assert!(result.content.contains("search: string"));
+    assert!(result.content.contains("replace: string"));
+    assert!(result.content.contains("old_string -> search"));
+    assert!(result.content.contains("new_string -> replace"));
+    assert!(result.content.contains("The tool was not executed"));
+
+    let metadata = result.metadata.expect("metadata");
+    assert_eq!(metadata["event"], "tool.schema_hydrated");
+    assert_eq!(metadata["executed"], false);
+    assert_eq!(metadata["retry_required"], true);
+
+    assert!(
+        maybe_hydrate_requested_deferred_tool(
+            "edit_file",
+            &json!({"path": "src/foo.rs", "search": "before", "replace": "after"}),
+            &catalog,
+            &mut active,
+        )
+        .is_none(),
+        "already-active deferred tools should execute normally"
+    );
+}
+
+#[test]
 fn model_tool_catalog_keeps_everything_loaded_in_yolo_mode() {
     let catalog = build_model_tool_catalog(
         vec![api_tool("project_map")],

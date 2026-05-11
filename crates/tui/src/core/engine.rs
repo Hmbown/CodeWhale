@@ -2049,10 +2049,12 @@ use self::tool_catalog::{
     CODE_EXECUTION_TOOL_NAME, MULTI_TOOL_PARALLEL_NAME, REQUEST_USER_INPUT_NAME,
     active_tools_for_step, build_model_tool_catalog, ensure_advanced_tooling,
     execute_code_execution_tool, execute_tool_search, initial_active_tools, is_tool_search_tool,
-    maybe_activate_requested_deferred_tool, missing_tool_error_message,
+    maybe_hydrate_requested_deferred_tool, missing_tool_error_message,
 };
 #[cfg(test)]
-use self::tool_catalog::{TOOL_SEARCH_BM25_NAME, should_default_defer_tool};
+use self::tool_catalog::{
+    TOOL_SEARCH_BM25_NAME, maybe_activate_requested_deferred_tool, should_default_defer_tool,
+};
 use self::tool_execution::emit_tool_audit;
 use self::tool_setup::sandbox_policy_for_mode;
 
