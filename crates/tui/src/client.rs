@@ -568,6 +568,54 @@ fn build_default_headers(
 }
 
 impl DeepSeekClient {
+    /// Translate text from English to Simplified Chinese using a focused
+    /// non-streaming chat completion call (deepseek-v4-flash).
+    ///
+    /// This is a lightweight translation service — no tool calls, no
+    /// streaming, no conversation history. The dedicated translation agent
+    /// receives the source text and returns only the translated result.
+    pub async fn translate(&self, text: &str) -> Result<String> {
+        let url = api_url(&self.base_url, "chat/completions");
+        let body = serde_json::json!({
+            "model": "deepseek-v4-flash",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You are a professional translator. Your ONLY task is to translate English text to Simplified Chinese (简体中文). \
+                                Rules:\n\
+                                1. Output ONLY the translation, nothing else — no explanations, no notes, no quotes.\n\
+                                2. Preserve all code blocks (```...```), URLs, file paths, command names, \
+                                and technical terms like API names, function names, and library names untranslated.\n\
+                                3. Keep Markdown formatting (headings, lists, bold, italics, links) intact.\n\
+                                4. Translate all natural-language prose naturally and professionally.\n\
+                                5. Do NOT add any prefix, suffix, or commentary.\n\
+                                6. If the input is already Chinese or contains no English prose to translate, \
+                                return it as-is."
+                },
+                {
+                    "role": "user",
+                    "content": text
+                }
+            ],
+            "max_tokens": 4096,
+            "temperature": 0.1,
+            "stream": false
+        });
+
+        let response = self
+            .send_with_retry(|| self.http_client.post(&url).json(&body))
+            .await?;
+
+        let value: serde_json::Value = response.json().await?;
+        let translated = value["choices"][0]["message"]["content"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("translate: unexpected API response shape"))?
+            .trim()
+            .to_string();
+
+        Ok(translated)
+    }
+
     /// List available models from the provider.
     pub async fn list_models(&self) -> Result<Vec<AvailableModel>> {
         let url = api_url(&self.base_url, "models");

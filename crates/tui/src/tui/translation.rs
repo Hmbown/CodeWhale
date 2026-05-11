@@ -10,10 +10,16 @@
 //!
 //! - `needs_translation()` — heuristic to detect if text is predominantly
 //!   English and should be translated.
-//! - `TranslationState` — tracks per-message translation status in the UI.
-//!
-//! Future: `translate_text()` will call the DeepSeek Flash API for
-//! actual translation when the primary prompt-layer mechanism fails.
+//! - `translate_text()` — calls `deepseek-v4-flash` (via `DeepSeekClient`)
+//!   to translate English text to Simplified Chinese. The dedicated
+//!   translation agent receives only the source text and returns only the
+//!   translation — no tool calls, no conversation history.
+//! - `TranslationStatus` — tracks per-message translation status in the UI.
+
+use anyhow::Result;
+
+use crate::client::DeepSeekClient;
+use crate::config::Config;
 
 /// Heuristic threshold: if more than this fraction of alphabetic characters
 /// are Latin (A-Z / a-z), the text is considered English.
@@ -77,6 +83,21 @@ fn is_cjk(ch: char) -> bool {
     )
 }
 
+/// Translate English text to Simplified Chinese using a dedicated
+/// translation agent (deepseek-v4-flash).
+///
+/// This is a lightweight, focused API call — no streaming, no tool calls,
+/// no conversation history. The agent's only role is translation.
+///
+/// # Errors
+///
+/// Returns an error if the API call fails, the response is malformed,
+/// or the client cannot be constructed from the supplied config.
+pub async fn translate_text(text: &str, config: &Config) -> Result<String> {
+    let client = DeepSeekClient::new(config)?;
+    client.translate(text).await
+}
+
 /// Status of a translation operation for a single message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(dead_code)]
@@ -132,13 +153,11 @@ mod tests {
 
     #[test]
     fn code_with_short_labels_not_falsely_detected() {
-        // Short identifiers in code are not enough to trigger detection.
         assert!(!needs_translation("let x = 1; let y = 2;"));
     }
 
     #[test]
     fn long_english_code_is_detected() {
-        // Long English identifiers in code are correctly detected as English.
         assert!(needs_translation(
             "function calculateTotalRevenueForQuarterlyReport() { return; }"
         ));
