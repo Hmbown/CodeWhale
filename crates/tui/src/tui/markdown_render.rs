@@ -430,7 +430,7 @@ fn render_line_with_links(
 }
 
 /// Parse an entire line into (text, style) segments, handling **bold**,
-/// *italic*, `code`, ~~strikethrough~~, [text](url) links, and bare URLs.
+/// *italic*, `code`, ~~strikethrough~~, \[text\](url) links, and bare URLs.
 fn parse_inline_spans(line: &str, base_style: Style, link_style: Style) -> Vec<(String, Style)> {
     let bold_style = base_style.add_modifier(Modifier::BOLD);
     let italic_style = base_style.add_modifier(Modifier::ITALIC);

@@ -14,9 +14,9 @@ use super::CommandResult;
 const USAGE: &str = "/anchor <text> | /anchor list | /anchor remove <n>";
 
 /// Handle the `/anchor` command with subcommands:
-///   /anchor <text>       - add a new anchor
+///   /anchor \<text\>       - add a new anchor
 ///   /anchor list         - list all anchors
-///   /anchor remove <n>   - remove anchor by 1-based index
+///   /anchor remove \<n\>   - remove anchor by 1-based index
 pub fn anchor(app: &mut App, content: Option<&str>) -> CommandResult {
     let input = match content {
         Some(c) => c.trim(),

@@ -71,7 +71,7 @@ use crate::config::Config;
 ///
 /// Returns `None` when no external sandbox backend is configured (i.e. the
 /// `sandbox_backend` key is absent, empty, or `"none"`). When `"opensandbox"`
-/// is set, constructs an [`OpenSandboxBackend`] using `sandbox_url` and
+/// is set, constructs an [`OpenSandboxBackend`](super::opensandbox::OpenSandboxBackend) using `sandbox_url` and
 /// `sandbox_api_key`.
 pub fn create_backend(config: &Config) -> Result<Option<Box<dyn SandboxBackend>>> {
     let kind = config
