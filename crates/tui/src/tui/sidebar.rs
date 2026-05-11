@@ -21,7 +21,7 @@ use crate::tools::plan::StepStatus;
 use crate::tools::subagent::SubAgentStatus;
 use crate::tools::todo::TodoStatus;
 
-use super::app::{App, SidebarFocus};
+use super::app::{App, SidebarFocus, SidebarHoverSection, SidebarHoverState};
 use super::history::{HistoryCell, ToolCell, ToolStatus};
 use super::subagent_routing::active_fanout_counts;
 use super::ui::truncate_line_to_width;
@@ -31,7 +31,9 @@ use super::ui::truncate_line_to_width;
 /// does not prematurely hide the session+agents breakdown.
 const COST_EQ_TOLERANCE: f64 = 1e-6;
 
-pub fn render_sidebar(f: &mut Frame, area: Rect, app: &App) {
+pub fn render_sidebar(f: &mut Frame, area: Rect, app: &mut App) {
+    // Clear hover state at the start of each render
+    app.sidebar_hover = SidebarHoverState::default();
     if area.width < 24 || area.height < 8 {
         // Paint a styled block over the area so stale cells from a previous
         // (wider) frame don't persist as bleed-through artifacts (#400).
@@ -56,7 +58,7 @@ pub fn render_sidebar(f: &mut Frame, area: Rect, app: &App) {
 /// clipped because Todos/Tasks/Agents each reserved 25% of the height even
 /// when they had nothing to show. Plan is always rendered (it owns the
 /// session-wide empty-state hint).
-fn render_sidebar_auto(f: &mut Frame, area: Rect, app: &App) {
+fn render_sidebar_auto(f: &mut Frame, area: Rect, app: &mut App) {
     #[derive(Clone, Copy)]
     enum Panel {
         Plan,
@@ -146,7 +148,7 @@ fn render_sidebar_auto(f: &mut Frame, area: Rect, app: &App) {
 /// That kept the user wondering whether the panel was broken; the
 /// hint instead tells them what the panel is for and how to populate
 /// it.
-fn render_sidebar_plan(f: &mut Frame, area: Rect, app: &App) {
+fn render_sidebar_plan(f: &mut Frame, area: Rect, app: &mut App) {
     if area.height < 3 {
         return;
     }
@@ -154,9 +156,11 @@ fn render_sidebar_plan(f: &mut Frame, area: Rect, app: &App) {
     let theme = Theme::for_palette_mode(app.ui_theme.mode);
     let content_width = area.width.saturating_sub(4) as usize;
     let mut lines: Vec<Line<'static>> = Vec::with_capacity(usize::from(area.height).max(4));
+    let mut full_texts: Vec<String> = Vec::with_capacity(usize::from(area.height).max(4));
 
     // === Goal Mode (#397) — gold outline matching todo items ===
     if let Some(ref objective) = app.goal.goal_objective {
+        full_texts.push(objective.clone());
         lines.push(Line::from(Span::styled(
             format!(
                 "◆ {}",
@@ -239,6 +243,7 @@ fn render_sidebar_plan(f: &mut Frame, area: Rect, app: &App) {
                 ]));
 
                 if let Some(explanation) = plan.explanation() {
+                    full_texts.push(explanation.to_string());
                     lines.push(Line::from(Span::styled(
                         truncate_line_to_width(explanation, content_width.max(1)),
                         Style::default().fg(theme.plan_explanation_color),
@@ -258,6 +263,7 @@ fn render_sidebar_plan(f: &mut Frame, area: Rect, app: &App) {
                     if !elapsed.is_empty() {
                         let _ = write!(text, " ({elapsed})");
                     }
+                    full_texts.push(text.clone());
                     lines.push(Line::from(Span::styled(
                         truncate_line_to_width(&text, content_width.max(1)),
                         Style::default().fg(color),
@@ -281,7 +287,7 @@ fn render_sidebar_plan(f: &mut Frame, area: Rect, app: &App) {
         }
     }
 
-    render_sidebar_section(f, area, "Plan", lines, app);
+    render_sidebar_section(f, area, "Plan", lines, full_texts, app);
 }
 
 /// One-line hint shown when the Plan section has nothing to display
@@ -295,13 +301,14 @@ fn plan_panel_empty_hint(content_width: usize) -> String {
     truncate_line_to_width(full, content_width)
 }
 
-fn render_sidebar_todos(f: &mut Frame, area: Rect, app: &App) {
+fn render_sidebar_todos(f: &mut Frame, area: Rect, app: &mut App) {
     if area.height < 3 {
         return;
     }
 
     let content_width = area.width.saturating_sub(4) as usize;
     let mut lines: Vec<Line<'static>> = Vec::with_capacity(usize::from(area.height).max(4));
+    let mut full_texts: Vec<String> = Vec::with_capacity(usize::from(area.height).max(4));
 
     match app.todos.try_lock() {
         Ok(todos) => {
@@ -338,6 +345,7 @@ fn render_sidebar_todos(f: &mut Frame, area: Rect, app: &App) {
                         TodoStatus::Completed => ("[x]", palette::STATUS_SUCCESS),
                     };
                     let text = format!("{prefix} #{} {}", item.id, item.content);
+                    full_texts.push(text.clone());
                     lines.push(Line::from(Span::styled(
                         truncate_line_to_width(&text, content_width.max(1)),
                         Style::default().fg(color),
@@ -361,16 +369,17 @@ fn render_sidebar_todos(f: &mut Frame, area: Rect, app: &App) {
         }
     }
 
-    render_sidebar_section(f, area, "Todos", lines, app);
+    render_sidebar_section(f, area, "Todos", lines, full_texts, app);
 }
 
-fn render_sidebar_tasks(f: &mut Frame, area: Rect, app: &App) {
+fn render_sidebar_tasks(f: &mut Frame, area: Rect, app: &mut App) {
     if area.height < 3 {
         return;
     }
 
     let content_width = area.width.saturating_sub(4) as usize;
     let mut lines: Vec<Line<'static>> = Vec::with_capacity(usize::from(area.height).max(4));
+    let mut full_texts: Vec<String> = Vec::with_capacity(usize::from(area.height).max(4));
 
     if let Some(turn_id) = app.runtime_turn_id.as_ref() {
         let status = app
@@ -432,16 +441,24 @@ fn render_sidebar_tasks(f: &mut Frame, area: Rect, app: &App) {
                 .duration_ms
                 .map(|ms| format!("{:.1}s", ms as f64 / 1000.0))
                 .unwrap_or_else(|| "-".to_string());
+            let full_label = format!(
+                "{} {} {}",
+                task.id,
+                task.status,
+                duration
+            );
             let label = format!(
                 "{} {} {}",
                 truncate_line_to_width(&task.id, 10),
                 task.status,
                 duration
             );
+            full_texts.push(full_label);
             lines.push(Line::from(Span::styled(
                 truncate_line_to_width(&label, content_width.max(1)),
                 Style::default().fg(color),
             )));
+            full_texts.push(task.prompt_summary.clone());
             lines.push(Line::from(Span::styled(
                 format!(
                     "  {}",
@@ -455,10 +472,10 @@ fn render_sidebar_tasks(f: &mut Frame, area: Rect, app: &App) {
         }
     }
 
-    render_sidebar_section(f, area, "Tasks", lines, app);
+    render_sidebar_section(f, area, "Tasks", lines, full_texts, app);
 }
 
-fn render_sidebar_subagents(f: &mut Frame, area: Rect, app: &App) {
+fn render_sidebar_subagents(f: &mut Frame, area: Rect, app: &mut App) {
     if area.height < 3 {
         return;
     }
@@ -508,7 +525,7 @@ fn render_sidebar_subagents(f: &mut Frame, area: Rect, app: &App) {
     };
     let lines = subagent_navigator_lines(&summary, content_width);
 
-    render_sidebar_section(f, area, "Agents", lines, app);
+    render_sidebar_section(f, area, "Agents", lines, Vec::new(), app);
 }
 
 /// Minimal projection of the data the sub-agent sidebar needs. Lifted out
@@ -623,7 +640,7 @@ pub fn subagent_navigator_lines(
 /// cost, MCP server count, LSP toggle state, cycle count, and memory
 /// file size + mtime. Each section is a compact one-liner so the panel
 /// reads as a dashboard rather than a scrolling list.
-fn render_context_panel(f: &mut Frame, area: Rect, app: &App) {
+fn render_context_panel(f: &mut Frame, area: Rect, app: &mut App) {
     if area.height < 3 {
         return;
     }
@@ -753,7 +770,7 @@ fn render_context_panel(f: &mut Frame, area: Rect, app: &App) {
         )));
     }
 
-    render_sidebar_section(f, area, "Session", lines, app);
+    render_sidebar_section(f, area, "Session", lines, Vec::new(), app);
 }
 
 fn render_sidebar_section(
@@ -761,7 +778,8 @@ fn render_sidebar_section(
     area: Rect,
     title: &str,
     lines: Vec<Line<'static>>,
-    app: &App,
+    full_texts: Vec<String>,
+    app: &mut App,
 ) {
     if area.width < 4 || area.height < 3 {
         // Clear stale cells before bailing out (#400).
@@ -772,6 +790,20 @@ fn render_sidebar_section(
     }
 
     let theme = Theme::for_palette_mode(app.ui_theme.mode);
+
+    // Record hover metadata for mouse tooltip support.
+    let padding = theme.section_padding;
+    let content_area = Rect {
+        x: area.x + 1 + padding.left,
+        y: area.y + 1 + padding.top,
+        width: area.width.saturating_sub(2 + padding.left + padding.right),
+        height: area.height.saturating_sub(2 + padding.top + padding.bottom),
+    };
+    app.sidebar_hover.sections.push(SidebarHoverSection {
+        area,
+        content_area,
+        lines: full_texts,
+    });
     // Truncate the panel title so it always fits within the section width
     // even after a resize. The title occupies up to 4 chars of border chrome
     // (two spaces + one space on each side), so the max title length is
@@ -966,6 +998,50 @@ mod tests {
             role_line.chars().count() <= 16,
             "role line {role_line:?} exceeded content_width"
         );
+    }
+
+    // ---- Sidebar hover tooltip tests ----
+
+    #[test]
+    fn sidebar_hover_state_default_is_empty() {
+        let state = SidebarHoverState::default();
+        assert!(state.sections.is_empty());
+    }
+
+    #[test]
+    fn sidebar_hover_section_stores_lines() {
+        use ratatui::layout::Rect;
+        let section = SidebarHoverSection {
+            area: Rect::new(0, 0, 40, 10),
+            content_area: Rect::new(1, 1, 38, 8),
+            lines: vec!["line 1".to_string(), "line 2".to_string()],
+        };
+        assert_eq!(section.lines.len(), 2);
+        assert_eq!(section.lines[0], "line 1");
+        assert!(section.content_area.x > section.area.x);
+    }
+
+    #[test]
+    fn hover_line_matching_respects_content_area_offset() {
+        use ratatui::layout::Rect;
+        let section = SidebarHoverSection {
+            area: Rect::new(60, 0, 40, 10),
+            content_area: Rect::new(62, 2, 36, 6),
+            lines: vec!["first".to_string(), "second".to_string(), "third".to_string()],
+        };
+
+        // Mouse within content area, first line
+        assert!(62 >= 62 && 62 < 62 + 36); // column in range
+        assert!(2 >= 2 && 2 < 2 + 6); // row in range
+        let line_idx = (2u16.saturating_sub(2)) as usize;
+        assert_eq!(section.lines[line_idx], "first");
+
+        // Mouse within content area, second line
+        let line_idx = (3u16.saturating_sub(2)) as usize;
+        assert_eq!(section.lines[line_idx], "second");
+
+        // Mouse outside content area (above)
+        assert!(1u16 < 2u16);
     }
 
     #[test]

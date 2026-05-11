@@ -5699,6 +5699,35 @@ fn render(f: &mut Frame, app: &mut App) {
 
         if let Some(sidebar_area) = sidebar_area {
             super::sidebar::render_sidebar(f, sidebar_area, app);
+
+            // Render sidebar hover tooltip if active.
+            if let Some(ref tooltip_text) = app.sidebar_hover_tooltip {
+                if let Some((mouse_col, mouse_row)) = app.last_mouse_pos {
+                    let text_width = (tooltip_text.len() as u16).min(60).max(10);
+                    let tooltip_height = 1u16;
+                    let x = mouse_col
+                        .saturating_add(2)
+                        .min(size.width.saturating_sub(text_width));
+                    let y = mouse_row
+                        .saturating_sub(1)
+                        .min(size.height.saturating_sub(tooltip_height));
+                    if text_width > 0 && tooltip_height > 0 {
+                        let tooltip_area = Rect {
+                            x,
+                            y,
+                            width: text_width,
+                            height: tooltip_height,
+                        };
+                        let tooltip = ratatui::widgets::Paragraph::new(tooltip_text.as_str())
+                            .style(
+                                Style::default()
+                                    .bg(palette::STATUS_WARNING)
+                                    .fg(palette::TEXT_MUTED),
+                            );
+                        f.render_widget(tooltip, tooltip_area);
+                    }
+                }
+            }
         }
     }
 
@@ -7857,6 +7886,36 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEvent> {
     }
 
     match mouse.kind {
+        MouseEventKind::Moved => {
+            // Update last mouse position for tooltip rendering.
+            app.last_mouse_pos = Some((mouse.column, mouse.row));
+
+            // Check sidebar sections for hover tooltip.
+            let mut found = false;
+            for section in &app.sidebar_hover.sections {
+                if mouse.column >= section.content_area.x
+                    && mouse.column < section.content_area.x.saturating_add(section.content_area.width)
+                    && mouse.row >= section.content_area.y
+                    && mouse.row < section.content_area.y.saturating_add(section.content_area.height)
+                {
+                    let line_idx =
+                        (mouse.row.saturating_sub(section.content_area.y)) as usize;
+                    if line_idx < section.lines.len() {
+                        let new_tooltip = section.lines[line_idx].clone();
+                        if app.sidebar_hover_tooltip.as_deref() != Some(&new_tooltip) {
+                            app.sidebar_hover_tooltip = Some(new_tooltip);
+                            app.needs_redraw = true;
+                        }
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            if !found && app.sidebar_hover_tooltip.is_some() {
+                app.sidebar_hover_tooltip = None;
+                app.needs_redraw = true;
+            }
+        }
         MouseEventKind::ScrollUp => {
             let update = app.viewport.mouse_scroll.on_scroll(ScrollDirection::Up);
             app.viewport.pending_scroll_delta += update.delta_lines;
