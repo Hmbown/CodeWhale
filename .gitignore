@@ -91,3 +91,6 @@ apps/
 
 # Maintainer-internal design notes (trade-secret material, never published)
 .private/
+
+# Java rewrite experiment (NOT tracked by git)
+deepseek-tui-java/

@@ -557,7 +557,9 @@ fn estimate_tokens_for_message(message: &Message, include_thinking: bool) -> usi
             ContentBlock::Text { text, .. } => tokenizer.encode_ordinary(text).len(),
             // Historical reasoning blocks are UI/session metadata for DeepSeek.
             // Only current-turn tool-call reasoning is sent back to the API.
-            ContentBlock::Thinking { thinking } if include_thinking => tokenizer.encode_ordinary(thinking).len(),
+            ContentBlock::Thinking { thinking } if include_thinking => {
+                tokenizer.encode_ordinary(thinking).len()
+            }
             ContentBlock::Thinking { .. } => 0,
             ContentBlock::ToolUse { input, .. } => serde_json::to_string(input)
                 .map(|s| tokenizer.encode_ordinary(&s).len())
@@ -610,7 +612,9 @@ pub fn estimate_input_tokens_conservative(
 ) -> usize {
     // 1.1x safety margin to account for tokenizer differences (cl100k vs Llama/DeepSeek)
     let message_tokens = estimate_tokens(messages).saturating_mul(11).div_ceil(10);
-    let system_tokens = estimate_system_tokens_conservative(system).saturating_mul(11).div_ceil(10);
+    let system_tokens = estimate_system_tokens_conservative(system)
+        .saturating_mul(11)
+        .div_ceil(10);
     let framing_overhead = messages.len().saturating_mul(12).saturating_add(48);
     message_tokens
         .saturating_add(system_tokens)
@@ -1088,36 +1092,50 @@ async fn create_summary(
     if let Some(window) = context_window_for_model(model) {
         let max_out = request.max_tokens;
         let mut raw_message_tokens = estimate_tokens(&request.messages);
-        let system_tokens = estimate_system_tokens_conservative(request.system.as_ref()).saturating_mul(11).div_ceil(10);
+        let system_tokens = estimate_system_tokens_conservative(request.system.as_ref())
+            .saturating_mul(11)
+            .div_ceil(10);
         let mut dropped_count = 0;
         while request.messages.len() > 1 {
             let message_tokens_scaled = raw_message_tokens.saturating_mul(11).div_ceil(10);
             let framing_overhead = request.messages.len().saturating_mul(12).saturating_add(48);
-            let estimated = message_tokens_scaled.saturating_add(system_tokens).saturating_add(framing_overhead);
+            let estimated = message_tokens_scaled
+                .saturating_add(system_tokens)
+                .saturating_add(framing_overhead);
 
             if estimated.saturating_add(max_out as usize) <= window as usize {
                 break;
             }
 
             let removed = request.messages.remove(0);
-            raw_message_tokens = raw_message_tokens.saturating_sub(estimate_tokens_for_message(&removed, message_has_tool_use(&removed)));
+            raw_message_tokens = raw_message_tokens.saturating_sub(estimate_tokens_for_message(
+                &removed,
+                message_has_tool_use(&removed),
+            ));
             dropped_count += 1;
 
             // Keep dropping if the new first message is a tool result or assistant message,
             // to ensure we always start the truncated history with a clean user message.
             while request.messages.len() > 1 {
                 let first = &request.messages[0];
-                let is_clean_user = first.role == "user" && first.content.iter().all(|c| matches!(c, ContentBlock::Text { .. }));
+                let is_clean_user = first.role == "user"
+                    && first
+                        .content
+                        .iter()
+                        .all(|c| matches!(c, ContentBlock::Text { .. }));
                 if is_clean_user {
                     break;
                 }
                 let removed = request.messages.remove(0);
-                raw_message_tokens = raw_message_tokens.saturating_sub(estimate_tokens_for_message(&removed, message_has_tool_use(&removed)));
+                raw_message_tokens = raw_message_tokens.saturating_sub(
+                    estimate_tokens_for_message(&removed, message_has_tool_use(&removed)),
+                );
                 dropped_count += 1;
             }
         }
 
-        if dropped_count > 0 {            logging::warn(format!(
+        if dropped_count > 0 {
+            logging::warn(format!(
                 "Compaction summary payload exceeded API limit. Dropped {} oldest messages to fit.",
                 dropped_count
             ));
@@ -2312,7 +2330,9 @@ mod tests {
         // That's above the floor (500K) AND below the deliberately high
         // token_threshold, so auto-compaction stays off — by threshold,
         // not floor.
-        let messages: Vec<Message> = (0..11).map(|_| msg("user", &"hello ".repeat(60_000))).collect();
+        let messages: Vec<Message> = (0..11)
+            .map(|_| msg("user", &"hello ".repeat(60_000)))
+            .collect();
         assert!(!should_compact(&messages, &config, None, None, None));
 
         // Crank threshold below total → compaction fires now that we're

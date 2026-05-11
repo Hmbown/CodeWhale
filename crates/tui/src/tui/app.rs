@@ -3917,10 +3917,11 @@ impl App {
     }
 
     pub fn recalculate_token_estimate(&mut self) {
-        self.session.estimated_context_tokens = crate::compaction::estimate_input_tokens_conservative(
-            &self.api_messages,
-            self.system_prompt.as_ref(),
-        );
+        self.session.estimated_context_tokens =
+            crate::compaction::estimate_input_tokens_conservative(
+                &self.api_messages,
+                self.system_prompt.as_ref(),
+            );
     }
 
     pub fn push_api_message(&mut self, message: Message) {
