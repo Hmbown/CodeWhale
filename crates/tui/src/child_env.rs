@@ -223,12 +223,7 @@ fn normalize_key(key: &OsStr) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, OnceLock};
-
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
+    use crate::test_support::lock_test_env;
 
     #[test]
     fn mcp_env_allowlist_inherits_base_keys() {
@@ -356,7 +351,7 @@ mod tests {
 
     #[test]
     fn sanitized_mcp_env_passes_through_node_bootstrap() {
-        let _guard = env_lock().lock().expect("env lock");
+        let _guard = lock_test_env();
         let prev = std::env::var_os("NVM_DIR");
         unsafe {
             std::env::set_var("NVM_DIR", "/tmp/test-nvm");
@@ -378,7 +373,7 @@ mod tests {
 
     #[test]
     fn sanitized_mcp_env_drops_unrelated_secret_like_values() {
-        let _guard = env_lock().lock().expect("env lock");
+        let _guard = lock_test_env();
         let prev = std::env::var_os("DEEPSEEK_MCP_TEST_SECRET");
         unsafe {
             std::env::set_var("DEEPSEEK_MCP_TEST_SECRET", "should-not-leak");
@@ -403,7 +398,7 @@ mod tests {
 
     #[test]
     fn sanitized_child_env_drops_parent_secret_like_values() {
-        let _guard = env_lock().lock().expect("env lock");
+        let _guard = lock_test_env();
         let previous = std::env::var_os("DEEPSEEK_CHILD_ENV_TEST_SECRET");
         unsafe {
             std::env::set_var("DEEPSEEK_CHILD_ENV_TEST_SECRET", "parent-secret");
@@ -428,7 +423,7 @@ mod tests {
 
     #[test]
     fn explicit_child_env_values_win_over_parent_allowlist() {
-        let _guard = env_lock().lock().expect("env lock");
+        let _guard = lock_test_env();
         let previous = std::env::var_os("PATH");
         unsafe {
             std::env::set_var("PATH", "/parent/bin");

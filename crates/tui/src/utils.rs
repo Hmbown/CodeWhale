@@ -764,3 +764,58 @@ mod project_mapping_tests {
         assert_eq!(suffix, "Makefile, README.md");
     }
 }
+
+#[cfg(test)]
+mod truncate_tests {
+    use super::truncate_with_ellipsis;
+
+    #[test]
+    fn ascii_short_string_is_returned_unchanged() {
+        assert_eq!(truncate_with_ellipsis("hello", 10, "..."), "hello");
+    }
+
+    #[test]
+    fn ascii_string_at_exact_limit_is_returned_unchanged() {
+        assert_eq!(truncate_with_ellipsis("hello", 5, "..."), "hello");
+    }
+
+    #[test]
+    fn ascii_string_over_limit_is_truncated_with_ellipsis() {
+        assert_eq!(truncate_with_ellipsis("hello world", 8, "..."), "hello...");
+    }
+
+    #[test]
+    fn cjk_string_truncates_on_char_boundary_not_byte_boundary() {
+        // "你好世界" is 4 chars × 3 bytes each = 12 bytes.
+        // With max_len=8 and ellipsis="..." (3 bytes), budget=5 bytes.
+        // Byte index of '好' is 3 (≤ 5), byte index of '世' is 6 (> 5), so
+        // exactly one CJK char fits: result is "你...".
+        assert_eq!(truncate_with_ellipsis("你好世界", 8, "..."), "你...");
+    }
+
+    #[test]
+    fn cjk_string_shorter_than_limit_is_returned_unchanged() {
+        assert_eq!(truncate_with_ellipsis("你好", 10, "..."), "你好");
+    }
+
+    #[test]
+    fn mixed_ascii_cjk_truncates_on_char_boundary() {
+        // "hi你好" = 2 + 6 = 8 bytes; max_len=6, ellipsis="…" (3 bytes), budget=3.
+        // Byte indices of chars: h=0, i=1, 你=2, 好=5.
+        // take_while(i <= 3): 0, 1, 2 → last=2, so "hi" + "…"
+        let result = truncate_with_ellipsis("hi你好", 6, "…");
+        assert!(result.starts_with("hi"), "should preserve leading ASCII: {result}");
+        assert!(result.contains('…'), "should contain ellipsis: {result}");
+    }
+
+    #[test]
+    fn empty_string_is_returned_unchanged() {
+        assert_eq!(truncate_with_ellipsis("", 5, "..."), "");
+    }
+
+    #[test]
+    fn string_that_fits_exactly_within_byte_budget_is_unchanged() {
+        // "abc" = 3 bytes, max_len=3 → s.len() == max_len, returned as-is.
+        assert_eq!(truncate_with_ellipsis("abc", 3, "..."), "abc");
+    }
+}
