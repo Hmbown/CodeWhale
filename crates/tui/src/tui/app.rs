@@ -822,7 +822,7 @@ pub struct App {
     /// Trust mode - allow access outside workspace
     pub trust_mode: bool,
     /// Translation mode — when enabled, the model is instructed to respond in
-    /// Chinese (Simplified) and a post-hoc translation layer replaces any
+    /// the current locale and a post-hoc translation layer replaces any
     /// remaining English output before it reaches the user.
     pub translation_enabled: bool,
     /// Ordered list of footer items the user wants visible. Sourced from

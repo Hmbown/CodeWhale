@@ -26,7 +26,7 @@ pub struct PromptSessionContext<'a> {
     pub locale_tag: &'a str,
     /// When true, a ## Language Output Requirement block is appended
     /// to the system prompt instructing the model to respond in
-    /// Simplified Chinese.
+    /// the resolved session locale.
     pub translation_enabled: bool,
 }
 
@@ -44,22 +44,46 @@ pub const HANDOFF_RELATIVE_PATH: &str = ".deepseek/handoff.md";
 const INSTRUCTIONS_FILE_MAX_BYTES: usize = 100 * 1024;
 
 /// System prompt block appended when `translation_enabled` is true.
-/// Instructs the model to respond in Simplified Chinese for all
+/// Instructs the model to respond in the resolved session locale for all
 /// natural-language output — explanations, summaries, conversation.
 /// Code identifiers, untranslatable technical terms, and explicitly
 /// requested English code blocks are exempt.
-const TRANSLATION_OUTPUT_INSTRUCTION: &str = "\
+fn translation_output_instruction(locale_tag: &str) -> String {
+    let target_language = translation_target_language_for_tag(locale_tag);
+    format!(
+        "\
 ## Language Output Requirement\n\
 \n\
-The user requires all responses in Simplified Chinese (简体中文). \
-Always respond in Chinese — use natural, professional Chinese for all \
+The user requires all responses in {target_language}. \
+Always respond in {target_language} — use natural, professional language for all \
 explanations, code comments, summaries, and conversational turns. \
 Only output English for:\n\
 - Code identifiers (variable names, function names, file paths)\n\
-- Technical terms that lack a standard Chinese translation\n\
+- Technical terms that lack a standard translation in {target_language}\n\
 - Code blocks the user explicitly requests in English\n\n\
 This is a hard display requirement: the user does not read English, \
-so any English prose in your response will block their decision-making.";
+so any English prose in your response will block their decision-making."
+    )
+}
+
+fn translation_target_language_for_tag(locale_tag: &str) -> &'static str {
+    let normalized = locale_tag.trim().to_ascii_lowercase();
+    if normalized.starts_with("ja") {
+        "Japanese (日本語)"
+    } else if normalized.starts_with("zh-hant")
+        || normalized.contains("-tw")
+        || normalized.contains("-hk")
+        || normalized.contains("-mo")
+    {
+        "Traditional Chinese (繁體中文)"
+    } else if normalized.starts_with("zh") {
+        "Simplified Chinese (简体中文)"
+    } else if normalized.starts_with("pt") {
+        "Brazilian Portuguese (Português do Brasil)"
+    } else {
+        "English"
+    }
+}
 
 /// Render a `## Environment` block listing the resolved locale tag,
 /// runtime version, host platform, login shell, and current working directory.
@@ -424,9 +448,12 @@ pub fn system_prompt_for_mode_with_context_skills_session_and_approval(
     );
 
     // 2.3a. Translation output instruction — when enabled, instruct
-    // the model to respond in Simplified Chinese.
+    // the model to respond in the resolved session locale.
     if session_context.translation_enabled {
-        full_prompt = format!("{full_prompt}\n\n{TRANSLATION_OUTPUT_INSTRUCTION}");
+        full_prompt = format!(
+            "{full_prompt}\n\n{}",
+            translation_output_instruction(session_context.locale_tag)
+        );
     }
 
     // 2.5a. Configured `instructions = [...]` files (#454). Loaded

@@ -96,7 +96,7 @@ pub struct EngineConfig {
     /// Resolved via `expand_path` so `~` works.
     pub instructions: Vec<PathBuf>,
     pub project_context_pack_enabled: bool,
-    /// When true, the model is instructed to respond in Simplified Chinese
+    /// When true, the model is instructed to respond in the current locale
     /// and a post-hoc translation layer replaces remaining English output.
     pub translation_enabled: bool,
     /// Maximum number of assistant steps before stopping.

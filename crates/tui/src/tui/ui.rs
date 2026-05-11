@@ -2027,7 +2027,7 @@ async fn run_event_loop(
                         app.onboarding = OnboardingState::Welcome;
                         app.status_message = None;
                     }
-                    // Language picker hotkeys: 1-5 select + persist (#566).
+                    // Language picker hotkeys select + persist (#566).
                     //
                     // Note: this used to be a single match-guard with `&& let`,
                     // but `if_let_guard` is a nightly-only feature on Rust

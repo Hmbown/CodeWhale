@@ -1110,7 +1110,7 @@ fn english(id: MessageId) -> &'static str {
             "Pick the UI language. You can change it any time with `/settings set locale <tag>`."
         }
         MessageId::OnboardLanguageFooter => {
-            "Press 1-5 to choose, or Enter to keep the current setting"
+            "Press 1-6 to choose, or Enter to keep the current setting"
         }
         // Onboarding — API key entry.
         MessageId::OnboardApiKeyTitle => "Connect your DeepSeek API key",
@@ -1474,7 +1474,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::OnboardLanguageBlurb => {
             "UI 言語を選んでください。`/settings set locale <tag>` でいつでも変更できます。"
         }
-        MessageId::OnboardLanguageFooter => "1〜5 で選択、または Enter で現在の設定を維持",
+        MessageId::OnboardLanguageFooter => "1〜6 で選択、または Enter で現在の設定を維持",
         // Onboarding — API key entry.
         MessageId::OnboardApiKeyTitle => "DeepSeek API キーを設定",
         MessageId::OnboardApiKeyStep1 => {
@@ -1775,7 +1775,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::OnboardLanguageBlurb => {
             "选择界面语言。可随时使用 `/settings set locale <tag>` 修改。"
         }
-        MessageId::OnboardLanguageFooter => "按 1-5 选择，或按 Enter 保留当前设置",
+        MessageId::OnboardLanguageFooter => "按 1-6 选择，或按 Enter 保留当前设置",
         // Onboarding — API key entry.
         MessageId::OnboardApiKeyTitle => "连接你的 DeepSeek API 密钥",
         MessageId::OnboardApiKeyStep1 => {
@@ -2129,7 +2129,7 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
             "Escolha o idioma da interface. Você pode mudá-lo a qualquer momento com `/settings set locale <tag>`."
         }
         MessageId::OnboardLanguageFooter => {
-            "Pressione 1-5 para escolher, ou Enter para manter a configuração atual"
+            "Pressione 1-6 para escolher, ou Enter para manter a configuração atual"
         }
         // Onboarding — API key entry.
         MessageId::OnboardApiKeyTitle => "Conecte sua chave de API DeepSeek",
