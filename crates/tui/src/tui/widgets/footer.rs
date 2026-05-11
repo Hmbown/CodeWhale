@@ -1255,7 +1255,10 @@ mod tests {
 
         let line = render_at_width(props, 40);
 
-        assert!(line.contains("agent"), "left status should survive: {line:?}");
+        assert!(
+            line.contains("agent"),
+            "left status should survive: {line:?}"
+        );
         assert!(
             !line.contains("Cache:"),
             "oversized right chip should drop instead of crowding the row: {line:?}",
@@ -1266,7 +1269,10 @@ mod tests {
     #[test]
     fn render_keeps_right_chips_when_left_status_leaves_room() {
         let app = make_app();
-        let cache = vec![Span::styled("Cache: 75.0% hit".to_string(), Style::default())];
+        let cache = vec![Span::styled(
+            "Cache: 75.0% hit".to_string(),
+            Style::default(),
+        )];
         let props = FooterProps::from_app(
             &app,
             None,
@@ -1281,8 +1287,14 @@ mod tests {
 
         let line = render_at_width(props, 80);
 
-        assert!(line.contains("agent"), "left status should render: {line:?}");
-        assert!(line.contains("Cache: 75.0% hit"), "right chip should render: {line:?}");
+        assert!(
+            line.contains("agent"),
+            "left status should render: {line:?}"
+        );
+        assert!(
+            line.contains("Cache: 75.0% hit"),
+            "right chip should render: {line:?}"
+        );
         assert!(line.width() <= 80, "footer must fit in one row: {line:?}");
     }
 
