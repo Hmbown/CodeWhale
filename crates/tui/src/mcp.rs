@@ -787,8 +787,14 @@ impl McpConnection {
 
         if let Some(result) = response.get("result")
             && let Some(tools) = result.get("tools")
+            && let Some(arr) = tools.as_array()
         {
-            self.tools = serde_json::from_value(tools.clone()).unwrap_or_default();
+            for item in arr {
+                match serde_json::from_value::<McpTool>(item.clone()) {
+                    Ok(tool) => self.tools.push(tool),
+                    Err(_) => {}
+                }
+            }
         }
 
         Ok(())
@@ -809,8 +815,14 @@ impl McpConnection {
 
         if let Some(result) = response.get("result")
             && let Some(resources) = result.get("resources")
+            && let Some(arr) = resources.as_array()
         {
-            self.resources = serde_json::from_value(resources.clone()).unwrap_or_default();
+            for item in arr {
+                match serde_json::from_value::<McpResource>(item.clone()) {
+                    Ok(resource) => self.resources.push(resource),
+                    Err(_) => {}
+                }
+            }
         }
 
         Ok(())
@@ -834,9 +846,13 @@ impl McpConnection {
                 .get("resourceTemplates")
                 .or_else(|| result.get("templates"))
                 .or_else(|| result.get("resource_templates"));
-            if let Some(templates) = templates {
-                self.resource_templates =
-                    serde_json::from_value(templates.clone()).unwrap_or_default();
+            if let Some(arr) = templates.and_then(|t| t.as_array()) {
+                for item in arr {
+                    match serde_json::from_value::<McpResourceTemplate>(item.clone()) {
+                        Ok(tmpl) => self.resource_templates.push(tmpl),
+                        Err(_) => {}
+                    }
+                }
             }
         }
 
@@ -858,8 +874,14 @@ impl McpConnection {
 
         if let Some(result) = response.get("result")
             && let Some(prompts) = result.get("prompts")
+            && let Some(arr) = prompts.as_array()
         {
-            self.prompts = serde_json::from_value(prompts.clone()).unwrap_or_default();
+            for item in arr {
+                match serde_json::from_value::<McpPrompt>(item.clone()) {
+                    Ok(prompt) => self.prompts.push(prompt),
+                    Err(_) => {}
+                }
+            }
         }
 
         Ok(())
