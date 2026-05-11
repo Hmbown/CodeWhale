@@ -250,7 +250,10 @@ impl<'a> HeaderWidget<'a> {
         let body = if !include_prefix {
             trimmed.to_string()
         } else if trimmed.eq_ignore_ascii_case("max") || trimmed.eq_ignore_ascii_case("maximum") {
-            format!("\u{1F433} {trimmed}")
+            // Use a non-emoji diamond (U+25C6, always 1 column) instead of an
+            // SMP emoji whose rendered width is inconsistent across terminals
+            // (cmd/PowerShell, WezTerm, Alacritty). See issue #1314.
+            format!("\u{25C6} {trimmed}")
         } else {
             format!("\u{00B7} {trimmed}")
         };
