@@ -149,6 +149,16 @@ type AppTerminal = Terminal<ColorCompatBackend<Stdout>>;
 // TurnComplete / focus-gain / resize. The alt-screen buffer's double-buffering
 // plus ratatui's `terminal.clear()` are sufficient to repaint cleanly.
 const TERMINAL_ORIGIN_RESET: &[u8] = b"\x1b[r\x1b[?6l\x1b[H";
+/// Begin synchronized update (DEC 2026): tell the terminal to defer
+/// rendering until END_SYNC_UPDATE is received. Best-effort —
+/// terminals that don't support this silently ignore the sequence.
+/// Reduces flicker on GPU-accelerated terminals (Ghostty, VSCode
+/// Terminal, Kitty, WezTerm) by batching ratatui's incremental
+/// diff writes into a single frame.
+const BEGIN_SYNC_UPDATE: &[u8] = b"\x1b[?2026h";
+/// End synchronized update (DEC 2026): tell the terminal to render
+/// the complete frame now.
+const END_SYNC_UPDATE: &[u8] = b"\x1b[?2026l";
 
 /// Run the interactive TUI event loop.
 ///
@@ -449,7 +459,7 @@ fn format_resume_hint(session_id: Option<&str>) -> Option<String> {
     if session_id.is_empty() {
         return None;
     }
-    Some("To continue this session, run deepseek --continue".to_string())
+    Some("To continue this session, execute deepseek run --continue".to_string())
 }
 
 fn terminal_probe_timeout(config: &Config) -> Duration {
@@ -701,6 +711,24 @@ async fn run_event_loop(
                         }
                     }
                     EngineEvent::MessageComplete { .. } => {
+                        // #861 RC3: defensive drain of a still-active thinking
+                        // entry. Normally `ThinkingComplete` arrives first and
+                        // populates `last_reasoning` before we get here, but
+                        // when the engine bursts events the channel can
+                        // deliver `MessageComplete` first, in which case
+                        // `last_reasoning.take()` below would be `None` and
+                        // the thinking block would be dropped from
+                        // `api_messages` — causing a DeepSeek HTTP 400 on the
+                        // next turn (V4 thinking-mode requires
+                        // `reasoning_content` replay). Inline-finalize the
+                        // thinking entry here so this branch is order-
+                        // independent.
+                        if app.streaming_thinking_active_entry.is_some() {
+                            if finalize_current_streaming_thinking(app) {
+                                transcript_batch_updated = true;
+                            }
+                            stash_reasoning_buffer_into_last_reasoning(app);
+                        }
                         if let Some(index) = app.streaming_message_index.take() {
                             let remaining = app.streaming_state.finalize_block_text(0);
                             if !remaining.is_empty() {
@@ -857,6 +885,7 @@ async fn run_event_loop(
                     EngineEvent::TurnStarted { turn_id } => {
                         app.is_loading = true;
                         app.offline_mode = false;
+                        app.turn_error_posted = false;
                         app.dispatch_started_at = None;
                         current_streaming_text.clear();
                         app.streaming_state.reset();
@@ -967,7 +996,14 @@ async fn run_event_loop(
                             recorded_at: Instant::now(),
                         });
                         if let Some(error) = error {
-                            app.status_message = Some(format!("Turn failed: {error}"));
+                            // Only show "Turn failed:" in the composer status
+                            // area when an EngineEvent::Error has NOT already
+                            // posted the same message into the transcript.
+                            // Otherwise the error appears twice: once in a
+                            // HistoryCell and again as a redundant status line.
+                            if !app.turn_error_posted {
+                                app.status_message = Some(format!("Turn failed: {error}"));
+                            }
                         }
 
                         // Update session cost
@@ -1750,11 +1786,8 @@ async fn run_event_loop(
             None
         };
         if app.needs_redraw && draw_wait.is_none() {
-            if force_terminal_repaint {
-                reset_terminal_viewport(terminal)?;
-                force_terminal_repaint = false;
-            }
-            draw_app_frame(terminal, app)?;
+            draw_app_frame_inner(terminal, app, force_terminal_repaint)?;
+            force_terminal_repaint = false;
             frame_rate_limiter.mark_emitted(Instant::now());
             app.needs_redraw = false;
         }
@@ -2802,15 +2835,23 @@ async fn run_event_loop(
                             } else {
                                 build_queued_message(app, input)
                             };
-                            // Force steer: bypass decide_submit_disposition.
-                            if let Err(err) =
-                                steer_user_message(app, &engine_handle, queued.clone()).await
-                            {
-                                app.queue_message(queued);
-                                app.status_message = Some(format!(
-                                    "Steer failed ({err}); queued {} message(s)",
-                                    app.queued_message_count()
-                                ));
+                            if app.is_loading {
+                                // Engine is busy — steer into the current turn.
+                                if let Err(err) =
+                                    steer_user_message(app, &engine_handle, queued.clone()).await
+                                {
+                                    app.queue_message(queued);
+                                    app.status_message = Some(format!(
+                                        "Steer failed ({err}); queued {} message(s)",
+                                        app.queued_message_count()
+                                    ));
+                                }
+                            } else {
+                                // Engine is idle — send as a regular message
+                                // so the content is not lost to rx_steer's
+                                // stale-drain in handle_send_message (#1331).
+                                submit_or_steer_message(app, config, &engine_handle, queued)
+                                    .await?;
                             }
                         }
                     }
@@ -3457,6 +3498,7 @@ pub(crate) fn apply_engine_error_to_app(
     });
     app.is_loading = false;
     app.dispatch_started_at = None;
+    app.turn_error_posted = true;
     if matches!(
         envelope.category,
         crate::error_taxonomy::ErrorCategory::Authentication
@@ -3470,14 +3512,12 @@ pub(crate) fn apply_engine_error_to_app(
         );
         return;
     }
-    if recoverable {
-        app.status_message = Some(format!("Connection interrupted: {message}"));
-    } else {
+    if !recoverable {
         app.offline_mode = true;
-        app.status_message = Some(format!(
-            "Engine error; queued messages stay pending: {message}"
-        ));
     }
+    // Error is already in the transcript as HistoryCell::Error above;
+    // don't emit a redundant status_message that would become a sticky
+    // toast in the footer — that duplicates the transcript entry.
 }
 
 fn persist_offline_queue_state(app: &App) {
@@ -5943,10 +5983,46 @@ fn render(f: &mut Frame, app: &mut App) {
     }
 }
 
-fn draw_app_frame(terminal: &mut AppTerminal, app: &mut App) -> Result<()> {
+/// Draw a complete application frame, optionally with a full viewport reset.
+///
+/// When `full_repaint` is true, the terminal scroll margins and origin mode
+/// are reset, the screen is cleared, ratatui's buffer is emptied, and then
+/// the full UI is drawn — all within a single DEC 2026 synchronized-update
+/// batch so GPU-accelerated terminals (Ghostty, VS Code, Kitty) render one
+/// complete frame instead of a blank intermediate frame followed by the UI.
+///
+/// When `full_repaint` is false, only the diff from the previous draw is
+/// written (normal incremental update path).
+fn draw_app_frame_inner(
+    terminal: &mut AppTerminal,
+    app: &mut App,
+    full_repaint: bool,
+) -> Result<()> {
     terminal.backend_mut().set_palette_mode(app.ui_theme.mode);
-    terminal.draw(|f| render(f, app))?;
-    Ok(())
+    let _ = terminal.backend_mut().write_all(BEGIN_SYNC_UPDATE);
+
+    // Run fallible draw operations in a closure so END_SYNC_UPDATE is
+    // always sent even if an intermediate step fails. Without this, a
+    // failing `?` would return early and leave the terminal stuck in
+    // synchronized-update mode (screen frozen).
+    let result = (|| -> Result<()> {
+        if full_repaint {
+            terminal.backend_mut().write_all(TERMINAL_ORIGIN_RESET)?;
+            terminal.backend_mut().flush()?;
+            terminal.clear()?;
+        }
+        terminal.draw(|f| render(f, app))?;
+        Ok(())
+    })();
+
+    // Always end the synchronized update, regardless of success or failure.
+    let _ = terminal.backend_mut().write_all(END_SYNC_UPDATE);
+    let _ = terminal.backend_mut().flush();
+    result
+}
+
+fn draw_app_frame(terminal: &mut AppTerminal, app: &mut App) -> Result<()> {
+    draw_app_frame_inner(terminal, app, false)
 }
 
 /// Pull the latest snapshot of cells / revisions / render options into the
@@ -6065,12 +6141,11 @@ async fn handle_view_events(
                     }
                     ReviewDecision::Denied | ReviewDecision::Abort => {
                         // Cache the denial so the model retry-loop doesn't
-                        // re-prompt for the same command (#360). Only when
-                        // the user actively denied (not when the timeout
-                        // fired) — a timeout might mean the user stepped
-                        // away rather than refused.
+                        // re-prompt for the exact same approval_key (#360).
+                        // Only the key (per-call unique) is stored — NOT
+                        // the tool_name, which would block all future
+                        // invocations of the same tool type (#1377).
                         if !timed_out {
-                            app.approval_session_denied.insert(tool_name.clone());
                             app.approval_session_denied.insert(approval_key);
                         }
                         let _ = engine_handle.deny_tool_call(tool_id).await;
@@ -6877,10 +6952,24 @@ fn reset_terminal_viewport(terminal: &mut AppTerminal) -> Result<()> {
     // for why; the immediately-following ratatui `terminal.clear()` flushes a
     // single clear via the diff renderer, which the alt-screen buffer absorbs
     // without visible flicker on the affected terminals.
-    terminal.backend_mut().write_all(TERMINAL_ORIGIN_RESET)?;
-    terminal.backend_mut().flush()?;
-    terminal.clear()?;
-    Ok(())
+    //
+    // Wrap the reset+clear sequence in DEC 2026 synchronized-output mode
+    // (`\x1b[?2026h` … `\x1b[?2026l`) so GPU-accelerated terminals
+    // (Ghostty, VSCode, Kitty, WezTerm) defer rendering until the whole
+    // frame is staged. Terminals that don't support it silently ignore.
+    let _ = terminal.backend_mut().write_all(BEGIN_SYNC_UPDATE);
+
+    let result = (|| -> Result<()> {
+        terminal.backend_mut().write_all(TERMINAL_ORIGIN_RESET)?;
+        terminal.backend_mut().flush()?;
+        terminal.clear()?;
+        Ok(())
+    })();
+
+    // Always end the synchronized update, regardless of success or failure.
+    let _ = terminal.backend_mut().write_all(END_SYNC_UPDATE);
+    let _ = terminal.backend_mut().flush();
+    result
 }
 
 fn push_keyboard_enhancement_flags<W: Write>(writer: &mut W) {

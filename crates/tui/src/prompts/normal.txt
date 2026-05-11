@@ -1,6 +1,0 @@
-## Mode: normal
-
-Reads and `rlm` run silently. Writes, patches, and shell commands ask for approval.
-
-Before requesting writes, use `checklist_write` to outline your approach — visible plans build trust.
-For complex work, layer `update_plan` (strategy) above `checklist_write` (tactics).

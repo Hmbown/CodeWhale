@@ -20,7 +20,7 @@ use tempfile::TempDir;
 fn format_resume_hint_uses_canonical_resume_command() {
     assert_eq!(
         format_resume_hint(Some("019dd9d6-4f44-7c83-9863-59674a12b827")),
-        Some("To continue this session, run deepseek --continue".to_string())
+        Some("To continue this session, execute deepseek run --continue".to_string())
     );
 }
 
@@ -1383,6 +1383,56 @@ async fn model_change_update_syncs_engine_model_before_compaction() {
 
 #[tokio::test]
 async fn provider_switch_clears_turn_cache_history() {
+    // `switch_provider` persists the new provider to `Settings`, which
+    // writes through `dirs::data_dir()` (`~/Library/Application
+    // Support/deepseek/settings.toml` on macOS). Without redirecting
+    // HOME / USERPROFILE we would clobber the developer's real
+    // preferences and leave `default_provider = "ollama"` behind —
+    // which then leaks into any subsequent test that constructs an
+    // `App`. Hold the process-wide env lock for the duration so we
+    // serialize with other tests that mutate the same env vars.
+    // Wrap the lock inside a guard struct so clippy's
+    // `await_holding_lock` doesn't fire on the `.await` below; the
+    // pattern matches `tools::recall_archive::HomeGuard`.
+    struct HomeGuard {
+        _tmp: tempfile::TempDir,
+        prev_home: Option<std::ffi::OsString>,
+        prev_userprofile: Option<std::ffi::OsString>,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+    impl Drop for HomeGuard {
+        fn drop(&mut self) {
+            // SAFETY: still holding the process-wide env lock.
+            unsafe {
+                match self.prev_home.take() {
+                    Some(v) => std::env::set_var("HOME", v),
+                    None => std::env::remove_var("HOME"),
+                }
+                match self.prev_userprofile.take() {
+                    Some(v) => std::env::set_var("USERPROFILE", v),
+                    None => std::env::remove_var("USERPROFILE"),
+                }
+            }
+        }
+    }
+    let _home = {
+        let lock = crate::test_support::lock_test_env();
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let prev_home = std::env::var_os("HOME");
+        let prev_userprofile = std::env::var_os("USERPROFILE");
+        // SAFETY: serialized by the process-wide test env lock.
+        unsafe {
+            std::env::set_var("HOME", tmp.path());
+            std::env::set_var("USERPROFILE", tmp.path());
+        }
+        HomeGuard {
+            _tmp: tmp,
+            prev_home,
+            prev_userprofile,
+            _lock: lock,
+        }
+    };
+
     let mut app = create_test_app();
     app.push_turn_cache_record(crate::tui::app::TurnCacheRecord {
         input_tokens: 100,
@@ -3881,6 +3931,57 @@ fn engine_error_finalizes_active_thinking_block() {
 }
 
 #[test]
+fn message_complete_drain_preserves_thinking_when_thinking_complete_lost() {
+    // #861 RC3: when the engine bursts events, `MessageComplete` can be
+    // dispatched ahead of `ThinkingComplete`. Without the defensive drain,
+    // `app.last_reasoning` would be `None` at `last_reasoning.take()` time
+    // and the thinking block would be dropped from `api_messages`,
+    // causing a DeepSeek HTTP 400 on the next turn (V4 thinking-mode
+    // requires `reasoning_content` replay).
+    //
+    // This test exercises the head-of-handler drain in isolation: with a
+    // thinking entry still active and `last_reasoning` empty, the drain
+    // must transfer `reasoning_buffer` into `last_reasoning` before the
+    // remainder of `MessageComplete` reads it.
+    let mut app = create_test_app();
+
+    let _ = ensure_streaming_thinking_active_entry(&mut app);
+    app.thinking_started_at = Some(Instant::now());
+    app.streaming_state.start_thinking(0, None);
+    app.streaming_state.push_content(0, "deep reasoning text");
+    let _ = app.streaming_state.commit_text(0);
+    app.reasoning_buffer.push_str("deep reasoning text");
+
+    assert!(
+        app.last_reasoning.is_none(),
+        "precondition: ThinkingComplete has NOT fired"
+    );
+    assert!(
+        app.streaming_thinking_active_entry.is_some(),
+        "precondition: thinking entry is still active"
+    );
+
+    // Mirror the head of `EngineEvent::MessageComplete` — the new defensive
+    // drain installed by the #861 RC3 fix.
+    if app.streaming_thinking_active_entry.is_some() {
+        let _ = finalize_current_streaming_thinking(&mut app);
+        stash_reasoning_buffer_into_last_reasoning(&mut app);
+    }
+
+    assert!(
+        app.last_reasoning
+            .as_deref()
+            .is_some_and(|s| s.contains("deep reasoning text")),
+        "defensive drain must move reasoning into last_reasoning so the\
+         downstream `last_reasoning.take()` produces a Thinking block"
+    );
+    assert!(
+        app.streaming_thinking_active_entry.is_none(),
+        "thinking entry must be cleared after the drain"
+    );
+}
+
+#[test]
 fn second_thinking_block_appends_new_entry_in_same_active_cell() {
     // Real V4 turns can emit Thinking → Tool → Thinking → Tool before any
     // prose; the second thinking block should land as a fresh entry inside
@@ -4049,13 +4150,10 @@ fn recoverable_engine_error_does_not_enter_offline_mode() {
         "recoverable error must keep the session online so the user can retry"
     );
     assert!(!app.is_loading);
-    let status = app
-        .status_message
-        .as_deref()
-        .expect("recoverable errors must set a status message");
+    assert!(app.turn_error_posted, "turn_error_posted must be set");
     assert!(
-        status.starts_with("Connection interrupted"),
-        "expected interrupt-style status, got {status:?}"
+        app.status_message.is_none(),
+        "recoverable error should NOT set status_message — already in transcript as HistoryCell::Error"
     );
 
     // Sanity: the rendered cell is the categorized Error variant, not a plain System note.
@@ -4089,13 +4187,10 @@ fn non_recoverable_engine_error_enters_offline_mode() {
         "non-recoverable error must enter offline mode"
     );
     assert!(!app.is_loading);
-    let status = app
-        .status_message
-        .as_deref()
-        .expect("non-recoverable errors must set a status message");
+    assert!(app.turn_error_posted, "turn_error_posted must be set");
     assert!(
-        status.starts_with("Engine error"),
-        "expected engine-error status, got {status:?}"
+        app.status_message.is_none(),
+        "non-recoverable error should NOT set status_message — already in transcript as HistoryCell::Error"
     );
 }
 
@@ -4119,6 +4214,7 @@ fn env_only_auth_failure_reopens_api_key_onboarding() {
         "env-only auth failures should prompt for a saved config key"
     );
     assert!(app.onboarding_needs_api_key);
+    assert!(app.turn_error_posted, "turn_error_posted must be set");
     let status = app
         .status_message
         .as_deref()

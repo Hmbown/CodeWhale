@@ -26,7 +26,7 @@ impl ToolSpec for ReadFileTool {
     }
 
     fn description(&self) -> &'static str {
-        "Read a file from the workspace. Plain text is returned as-is; PDFs are auto-extracted via `pdftotext` (poppler) when available."
+        "Read a UTF-8 file from the workspace. Use this instead of `cat`, `head`, `tail`, or `sed -n '..p'` in `exec_shell` — it's faster, sandbox-aware, and skips the approval prompt. Plain text is returned as-is; PDFs are auto-extracted via `pdftotext` (poppler) when available. Cannot read images or non-PDF binaries."
     }
 
     fn input_schema(&self) -> Value {
@@ -191,7 +191,7 @@ impl ToolSpec for WriteFileTool {
     }
 
     fn description(&self) -> &'static str {
-        "Write content to a UTF-8 file in the workspace."
+        "Write content to a UTF-8 file in the workspace. Use this instead of heredocs (`cat <<EOF > file`) or `echo > file` in `exec_shell` — diffs render inline and approval is handled cleanly. Creates or overwrites; parent directories are auto-created."
     }
 
     fn input_schema(&self) -> Value {
@@ -290,7 +290,7 @@ impl ToolSpec for EditFileTool {
     }
 
     fn description(&self) -> &'static str {
-        "Replace text in a file using search/replace. Required: 'path' (file to edit), 'search' (exact text to find), 'replace' (text to substitute)."
+        "Replace text in a single file via exact search/replace. Use this instead of `sed -i` in `exec_shell` for in-place edits. For multi-hunk or cross-file changes, use `apply_patch` instead. Required: 'path', 'search' (exact text to find), 'replace' (text to substitute)."
     }
 
     fn input_schema(&self) -> Value {
@@ -384,7 +384,7 @@ impl ToolSpec for ListDirTool {
     }
 
     fn description(&self) -> &'static str {
-        "List entries in a directory relative to the workspace."
+        "List entries in a directory relative to the workspace. Use this instead of `ls`, `ls -la`, or `find . -maxdepth 1` in `exec_shell` for directory listings."
     }
 
     fn input_schema(&self) -> Value {

@@ -192,33 +192,51 @@ deepseek --provider ollama --model deepseek-coder:1.3b
 
 ---
 
-## v0.8.26 新功能
+## v0.8.27 新功能
 
-安全 + 优化版本。[完整更新日志](CHANGELOG.md)。
+优化版本：17 个社区 PR + 一轮针对 v0.8.26 发布后 24-48 小时内用户报告
+问题的集中修复。[完整更新日志](CHANGELOG.md)。
 
-- **安全加固** — 强化了 `fetch_url` 网络目标验证（GHSA-88gh-2526-gfrr）
-  并收紧了 `task_create` 子代理的默认权限（GHSA-72w5-pf8h-xfp4）。
-  感谢 **@JafarAkhondali** 和 **@47Cid** 的负责任的披露。
-- **代码块边栏字符从复制内容中剥离** (#1212，感谢 **Oliver-ZPLiu
-  (@Oliver-ZPLiu)**) — `▏` 不再泄漏到剪贴板或拖拽选择中。
-- **拖拽选择可超出视口边缘自动滚动** (#1163，感谢 **Oliver-ZPLiu
-  (@Oliver-ZPLiu)**)。
-- **MCP stdio 服务器捕获 stderr** — 运行中的服务器诊断信息现在可用。
-- **Windows Terminal 默认开启鼠标捕获** (#1169，感谢 **Giggitycountless
-  (@Giggitycountless)**)。
-- **`/clear` 重置 Todos 侧边栏**（感谢 **Giggitycountless
-  (@Giggitycountless)**）、**提示预算截断时保持技能可见**（感谢 **hhhaiai
-  (@hhhaiai)**）、**`/skills` 列表间距修复** 以及 **base URL 覆盖传递到
-  provider**（感谢 **reidliu41 (@reidliu41)**）、**WSL2 轮次启动超时
-  修复**（感谢 **michaeltse321 (@michaeltse321)**）、**自动将
-  `.deepseek/` 添加到 `.gitignore`**（感谢 **Giggitycountless
-  (@Giggitycountless)**）、**错误单元格渲染时禁用 markdown**（感谢
-  **douglarek (@douglarek)**）、**MCP 工具排序稳定化** (#1319)、
-  **非 DeepSeek provider 使用根 `base_url` 时输出配置警告** (#1308)。
-
-⚠️ **已知问题（沿用至 v0.8.27）**：Windows 10 conhost 闪烁（#1260、
-#1251）、按轮次快照（尚无写感知跳过）、非 WT 终端鼠标选择跨入侧边栏
-(#1169)。
+- **跨终端闪烁修复**（Ghostty / VSCode 终端 / Win10 conhost；v0.8.26
+  发布后报告最多的回归问题 — #1119、#1260、#1295、#1352、#1356、
+  #1363、#1366）。视口重置序列移除了破坏性的 `2J/3J`，由 alt-screen
+  和差分渲染处理重绘，不再闪烁。
+- **长输出文字不再溢出右边缘** (#1344、#1351)。段落和代码块在字符
+  边界对超长词进行硬断行 — 与 v0.8.25 表格单元格修复保持一致。
+- **Pager 复制功能** 通过 `c` 或 `y` 键 (#1354) — 所有全屏 pager
+  (`Alt+V` 工具详情、`Ctrl+O` 思考内容、shell-job / task / MCP
+  管理器) 都支持应用内复制键。
+- **上下文感知的 Ctrl+C** (#1337、#1367) — 选中文本→复制（匹配
+  Windows 系统约定）、正在生成→中断、空闲→两次按键确认退出。
+  `Cmd+C` / `Ctrl+Shift+C` 行为不变。
+- **MCP pool 在 `mcp.json` 变化时自动重载** (#1267 part 2) — 编辑
+  配置后不再需要手动 `/mcp reload`。每次工具调用前做轻量级
+  mtime + 内容哈希检查；网络文件系统粗粒度 mtime 不会造成抖动。
+- **模型可调用的 `notify` 工具** (#1322) — 用于"长任务完成"提醒的
+  桌面通知。沿用现有 `[notifications].method` 配置；设为 off
+  时静默无操作。
+- **新手引导界面在所选语言中渲染** — 第二步选择简体中文 / 日本語 /
+  Português (Brasil) 后，后续步骤全部使用该语言。对避免 IME 频繁
+  切换的 CJK 用户特别有用。
+- **粘贴体验重构** — 大粘贴在粘贴时立即转换为 `@paste-…md`
+  （在发送前可见，避免"自动发送了一个我没授权的 @mention"的意外）；
+  粘贴突发检测在终端支持 bracketed paste 后自动停用；短 CJK 内容
+  粘贴的尾部换行不再触发自动发送 (#1302，感谢 **@reidliu41**
+  PR #1342)。
+- **`/skills <prefix>`** 按名称前缀过滤本地技能列表 (#1318) — 在
+  v0.8.26 的行间距改进 (#1328 来自 **@reidliu41**) 基础上。
+- **`/skills --remote` 错误诊断提示** (#1329) — 拉取注册表失败时，
+  错误链末尾会附加一行提示，指出最可能的原因（DNS / TLS / 拒绝 /
+  4xx / 429 / 超时）。
+- **17 个社区 PR 落地** — `/mode` 统一命令、`/status` 诊断、
+  `/feedback`、会话产物元数据、子代理结果自报告、全局 AGENTS.md
+  回退、`--yolo` CLI→TUI 传递、`composer_arrows_scroll`、会话成本
+  持久化、provider 感知模型选择器 + 持久化、HTTP User-Agent、
+  HTTP-400 配额重试、显式隐藏文件补全、Windows 鼠标捕获文档、
+  README zh-CN 同步、工具输出渲染性能 + 卡片栏、测试覆盖扩展。
+  感谢 **@reidliu41**、**@THINKER-ONLY**、**@manaskarra**、
+  **@fuleinist**、**@lbcheng888**、**@imkingjh999**、**@dst1213**、
+  **@SamhandsomeLee**、**@Oliver-ZPLiu**、**@whtis**、**@tuohai666**。
 
 ---
 

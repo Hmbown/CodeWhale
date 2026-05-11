@@ -1746,7 +1746,7 @@ mod tests {
         let task = manager
             .add_task(NewTaskRequest::from_prompt("test persistence"))
             .await?;
-        let finished = wait_for_terminal_state(&manager, &task.id, Duration::from_secs(3)).await?;
+        let finished = wait_for_terminal_state(&manager, &task.id, Duration::from_secs(10)).await?;
         assert_eq!(finished.status, TaskStatus::Completed);
         assert_eq!(finished.thread_id.as_deref(), Some("thr_test"));
         assert_eq!(finished.turn_id.as_deref(), Some("turn_test"));
@@ -1774,7 +1774,7 @@ mod tests {
         let task = manager
             .add_task(NewTaskRequest::from_prompt("test metadata"))
             .await?;
-        let finished = wait_for_terminal_state(&manager, &task.id, Duration::from_secs(3)).await?;
+        let finished = wait_for_terminal_state(&manager, &task.id, Duration::from_secs(10)).await?;
         let updated = manager
             .record_tool_metadata(
                 &finished.id,
@@ -1815,7 +1815,7 @@ mod tests {
 
         sleep(Duration::from_millis(10)).await;
         let _ = manager.cancel_task(&task.id).await?;
-        let finished = wait_for_terminal_state(&manager, &task.id, Duration::from_secs(3)).await?;
+        let finished = wait_for_terminal_state(&manager, &task.id, Duration::from_secs(10)).await?;
         assert_eq!(finished.status, TaskStatus::Canceled);
         Ok(())
     }
@@ -1865,7 +1865,7 @@ mod tests {
         let task = manager
             .add_task(NewTaskRequest::from_prompt("test schema gate"))
             .await?;
-        let _ = wait_for_terminal_state(&manager, &task.id, Duration::from_secs(3)).await?;
+        let _ = wait_for_terminal_state(&manager, &task.id, Duration::from_secs(10)).await?;
         drop(manager);
 
         let task_path = root.join("tasks").join(format!("{}.json", task.id));

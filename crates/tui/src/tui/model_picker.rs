@@ -376,7 +376,8 @@ mod tests {
     use crate::tui::app::{App, TuiOptions};
     use std::path::PathBuf;
 
-    fn create_test_app() -> App {
+    fn create_test_app() -> (App, std::sync::MutexGuard<'static, ()>) {
+        let lock = crate::test_support::lock_test_env();
         let options = TuiOptions {
             model: "deepseek-v4-pro".to_string(),
             workspace: PathBuf::from("."),
@@ -401,19 +402,22 @@ mod tests {
         let mut app = App::new(options, &Config::default());
         // App::new merges in `~/.config/deepseek/settings.toml` /
         // `Application Support/deepseek/settings.toml`, which can override
-        // the model and effort with whatever the developer happens to have
-        // saved. Pin both back to known values so the picker tests below
-        // exercise the picker logic, not the user's environment.
-        app.api_provider = ApiProvider::Deepseek;
+        // the model, effort, and provider with whatever the developer
+        // happens to have saved. Pin all three back to known values so
+        // the picker tests below exercise the picker logic, not the
+        // user's environment. In particular `api_provider` matters because
+        // pass-through providers (Ollama, OpenAI) hide the DeepSeek model
+        // rows and leave only `auto` + custom — Down has nowhere to go.
         app.model = "deepseek-v4-pro".to_string();
         app.auto_model = false;
         app.reasoning_effort = ReasoningEffort::Max;
-        app
+        app.api_provider = ApiProvider::Deepseek;
+        (app, lock)
     }
 
     #[test]
     fn picker_initial_selection_matches_app_state() {
-        let mut app = create_test_app();
+        let (mut app, _lock) = create_test_app();
         app.model = "deepseek-v4-flash".to_string();
         app.reasoning_effort = ReasoningEffort::Max;
         let view = ModelPickerView::new(&app);
@@ -423,7 +427,7 @@ mod tests {
 
     #[test]
     fn picker_initial_selection_matches_auto_state() {
-        let mut app = create_test_app();
+        let (mut app, _lock) = create_test_app();
         app.model = "auto".to_string();
         app.auto_model = true;
         app.reasoning_effort = ReasoningEffort::Auto;
@@ -436,7 +440,7 @@ mod tests {
 
     #[test]
     fn picker_auto_model_forces_auto_effort_on_apply() {
-        let mut app = create_test_app();
+        let (mut app, _lock) = create_test_app();
         app.model = "auto".to_string();
         app.auto_model = true;
         app.reasoning_effort = ReasoningEffort::Off;
@@ -454,7 +458,7 @@ mod tests {
 
     #[test]
     fn picker_normalizes_low_medium_to_high() {
-        let mut app = create_test_app();
+        let (mut app, _lock) = create_test_app();
         app.reasoning_effort = ReasoningEffort::Medium;
         let view = ModelPickerView::new(&app);
         assert_eq!(
@@ -481,7 +485,7 @@ mod tests {
 
     #[test]
     fn picker_preserves_unknown_model_via_custom_row() {
-        let mut app = create_test_app();
+        let (mut app, _lock) = create_test_app();
         app.model = "deepseek-v4-pro-2026-04-XX".to_string();
         let view = ModelPickerView::new(&app);
         assert!(view.show_custom_model_row);
@@ -490,7 +494,7 @@ mod tests {
 
     #[test]
     fn arrow_keys_move_within_focused_pane() {
-        let app = create_test_app();
+        let (app, _lock) = create_test_app();
         let mut view = ModelPickerView::new(&app);
         // Default focus is Model; move down then up.
         let initial = view.selected_model_idx;
@@ -508,7 +512,7 @@ mod tests {
 
     #[test]
     fn tab_switches_focus_and_arrow_now_moves_effort() {
-        let mut app = create_test_app();
+        let (mut app, _lock) = create_test_app();
         // Default is Max; pin to Off so the Down arrow has
         // somewhere to go.
         app.reasoning_effort = ReasoningEffort::Off;
@@ -528,7 +532,7 @@ mod tests {
 
     #[test]
     fn enter_emits_apply_event_with_selection() {
-        let mut app = create_test_app();
+        let (mut app, _lock) = create_test_app();
         app.reasoning_effort = ReasoningEffort::High;
         let mut view = ModelPickerView::new(&app);
         view.handle_key(KeyEvent::new(
@@ -560,7 +564,7 @@ mod tests {
 
     #[test]
     fn esc_closes_without_emitting() {
-        let app = create_test_app();
+        let (app, _lock) = create_test_app();
         let mut view = ModelPickerView::new(&app);
         let action = view.handle_key(KeyEvent::new(
             KeyCode::Esc,

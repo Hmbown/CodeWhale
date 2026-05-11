@@ -21,8 +21,8 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1.0.100"
 arboard = "3.4"
-deepseek-secrets = { path = "../secrets", version = "0.8.27" }
-deepseek-tools = { path = "../tools", version = "0.8.27" }
+deepseek-secrets = { path = "../secrets", version = "0.8.28" }
+deepseek-tools = { path = "../tools", version = "0.8.28" }
 schemaui = { version = "0.12.0", default-features = false, optional = true }
 async-stream = "0.3.6"
 async-trait = "0.1"

@@ -432,10 +432,12 @@ fn default_threshold_secs() -> u64 {
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct NotificationsConfig {
     /// Delivery method: `auto` | `osc9` | `bel` | `off`. Default: `auto`.
-    /// `auto` resolves to OSC 9 in iTerm.app / Ghostty / WezTerm; on
-    /// macOS / Linux it falls back to BEL, and on Windows it falls
-    /// back to `Off` so the post-turn notification doesn't ring the
-    /// system error chime (#583).
+    /// `auto` resolves to OSC 9 for iTerm.app / Ghostty / WezTerm / Cmux
+    /// (detected via `$TERM_PROGRAM` then `$LC_TERMINAL`); on macOS / Linux
+    /// it falls back to BEL, and on Windows it falls back to `Off` so the
+    /// post-turn notification doesn't ring the system error chime (#583).
+    /// Use `method = "osc9"` explicitly when your terminal is OSC-9 capable
+    /// but sets neither env var (e.g. Cmux without `LC_TERMINAL`).
     #[serde(default)]
     pub method: NotificationMethod,
     /// Only notify when the turn took at least this many seconds. Default: 30.
@@ -5293,6 +5295,7 @@ api_key = "novita-table-key"
         ));
         fs::create_dir_all(&temp_root)?;
         let _guard = EnvGuard::new(&temp_root);
+        unsafe { std::env::set_var("DEEPSEEK_SECRET_BACKEND", "local") };
 
         let path = save_api_key_for(ApiProvider::Openrouter, "or-saved-key")?;
         let contents = fs::read_to_string(&path)?;
@@ -5371,6 +5374,7 @@ api_key = "novita-table-key"
         ));
         fs::create_dir_all(&temp_root)?;
         let _guard = EnvGuard::new(&temp_root);
+        unsafe { std::env::set_var("DEEPSEEK_SECRET_BACKEND", "local") };
 
         let path = save_api_key_for(ApiProvider::DeepseekCN, "cn-saved-key")?;
         let contents = fs::read_to_string(&path)?;

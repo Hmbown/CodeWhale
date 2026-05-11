@@ -811,6 +811,11 @@ pub struct App {
     pub is_loading: bool,
     /// Degraded connectivity mode; new user inputs are queued for later retry.
     pub offline_mode: bool,
+    /// Whether an `EngineEvent::Error` has already been posted for the
+    /// current turn. Suppresses the redundant "Turn failed:" status line
+    /// that `TurnComplete { error: .. }` would otherwise emit on top of
+    /// the in-transcript error cell.
+    pub turn_error_posted: bool,
     /// Legacy status text sink retained for compatibility with existing call sites.
     pub status_message: Option<String>,
     /// Recent status toasts (ephemeral, newest at back).
@@ -1477,6 +1482,7 @@ impl App {
             api_messages: Vec::new(),
             is_loading: false,
             offline_mode: false,
+            turn_error_posted: false,
             status_message: None,
             status_toasts: VecDeque::new(),
             sticky_status: None,

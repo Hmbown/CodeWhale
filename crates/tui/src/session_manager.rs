@@ -18,11 +18,6 @@ use uuid::Uuid;
 
 /// Maximum number of sessions to retain
 const MAX_SESSIONS: usize = 50;
-/// Maximum number of messages to persist per session (#402 P0).
-/// Beyond this limit, the oldest messages are dropped and a truncation
-/// note is prepended to the system prompt. Keeps session files bounded
-/// so save/load remains fast even for long-running conversations.
-const MAX_PERSISTED_MESSAGES: usize = 500;
 const CURRENT_SESSION_SCHEMA_VERSION: u32 = 1;
 const CURRENT_QUEUE_SCHEMA_VERSION: u32 = 1;
 
@@ -744,8 +739,6 @@ pub fn create_saved_session_with_id_and_mode(
         })
         .unwrap_or_else(|| "New Session".to_string());
 
-    let (capped_messages, truncation_note) = cap_messages(messages);
-
     SavedSession {
         schema_version: CURRENT_SESSION_SCHEMA_VERSION,
         metadata: SessionMetadata {
@@ -760,11 +753,8 @@ pub fn create_saved_session_with_id_and_mode(
             mode: mode.map(str::to_string),
             cost: SessionCostSnapshot::default(),
         },
-        messages: capped_messages,
-        system_prompt: merge_truncation_note(
-            system_prompt_to_string(system_prompt),
-            truncation_note,
-        ),
+        messages: messages.to_vec(),
+        system_prompt: system_prompt_to_string(system_prompt),
         context_references: Vec::new(),
         goal_state_json: None,
         todos_json: None,
@@ -780,45 +770,12 @@ pub fn update_session(
     system_prompt: Option<&SystemPrompt>,
 ) -> SavedSession {
     session.schema_version = CURRENT_SESSION_SCHEMA_VERSION;
-    let (capped_messages, truncation_note) = cap_messages(messages);
-    session.messages = capped_messages;
+    session.messages = messages.to_vec();
     session.metadata.updated_at = Utc::now();
     session.metadata.message_count = messages.len();
     session.metadata.total_tokens = total_tokens;
-    session.system_prompt = merge_truncation_note(
-        system_prompt_to_string(system_prompt).or(session.system_prompt),
-        truncation_note,
-    );
+    session.system_prompt = system_prompt_to_string(system_prompt).or(session.system_prompt);
     session
-}
-
-/// Cap messages to [`MAX_PERSISTED_MESSAGES`], keeping the most recent.
-/// Returns the capped slice and an optional truncation note.
-fn cap_messages(messages: &[Message]) -> (Vec<Message>, Option<String>) {
-    let total = messages.len();
-    if total <= MAX_PERSISTED_MESSAGES {
-        return (messages.to_vec(), None);
-    }
-    let dropped = total - MAX_PERSISTED_MESSAGES;
-    let note = format!(
-        "Note: {dropped} older messages were dropped from the session file \
-         to keep persistence bounded. The full conversation history may \
-         still be recoverable from cycle archives."
-    );
-    (
-        messages[total - MAX_PERSISTED_MESSAGES..].to_vec(),
-        Some(note),
-    )
-}
-
-/// Merge an optional truncation note into the system prompt string.
-fn merge_truncation_note(system_prompt: Option<String>, note: Option<String>) -> Option<String> {
-    match (system_prompt, note) {
-        (None, None) => None,
-        (Some(sp), None) => Some(sp),
-        (None, Some(note)) => Some(format!("[Session note]\n{note}")),
-        (Some(sp), Some(note)) => Some(format!("[Session note]\n{note}\n\n---\n\n{sp}")),
-    }
 }
 
 /// String-scan a JSON byte buffer for the top-level `"metadata":{...}`
@@ -1319,6 +1276,32 @@ mod tests {
         let updated = update_session(session, &new_messages, 100, None);
         assert_eq!(updated.messages.len(), 2);
         assert_eq!(updated.metadata.total_tokens, 100);
+    }
+
+    #[test]
+    fn saved_session_preserves_all_messages_for_prefix_cache() {
+        let tmp = tempdir().expect("tempdir");
+        let messages = (0..550)
+            .map(|i| make_test_message("user", &format!("message {i}")))
+            .collect::<Vec<_>>();
+        let system_prompt = SystemPrompt::Text("stable system prompt".to_string());
+
+        let session = create_saved_session(
+            &messages,
+            "deepseek-v4-pro",
+            tmp.path(),
+            123,
+            Some(&system_prompt),
+        );
+
+        assert_eq!(session.metadata.message_count, messages.len());
+        assert_eq!(session.messages.len(), messages.len());
+        assert_eq!(session.messages.first(), messages.first());
+        assert_eq!(session.messages.last(), messages.last());
+        assert_eq!(
+            session.system_prompt.as_deref(),
+            Some("stable system prompt")
+        );
     }
 
     #[test]

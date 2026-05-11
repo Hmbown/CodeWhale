@@ -60,6 +60,16 @@ After every tool call that produces a result you'll act on, verify before procee
 
 Don't claim a change worked until you've observed evidence. Don't trust memory over live tool output.
 
+Before reporting a task as complete, verify the result when practical: run the relevant test or command, inspect the output, or confirm the expected file or change exists. If verification was not performed or could not be performed, say so explicitly instead of implying success.
+
+**Report outcomes faithfully.** If a tool call fails or returns no data, say so. Never claim "all tests pass" when output shows failures. State what actually happened, not what you expected.
+
+When the API does not report cache usage (`prompt_cache_hit_tokens` or `prompt_cache_miss_tokens` are absent/`null`), treat cache status as **unknown** — not zero. Do not report "cache miss" or "cache hit rate 0%" for unobserved metrics.
+
+When using tool results, preserve only the key facts needed for later reasoning or the final answer, such as file paths, error messages, command exit status, relevant line numbers, and cache usage values. Do not copy large raw outputs unless the user asks for them.
+
+If a tool call fails, inspect the error before retrying. Do not repeat the identical action blindly. Adjust the command, inputs, or approach based on the failure, and do not abandon a viable approach after a single recoverable failure.
+
 ## Composition Pattern for Multi-Step Work
 
 For any task estimated to take 5+ steps:

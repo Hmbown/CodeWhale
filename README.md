@@ -225,45 +225,61 @@ deepseek --provider ollama --model deepseek-coder:1.3b
 
 ---
 
-## What's New In v0.8.25
+## What's New In v0.8.27
 
-A stabilization + drift-fixes release. [Full changelog](CHANGELOG.md).
+A polish release: 17 community PRs plus a focused user-issue sweep
+over the 24–48 hours after v0.8.26 shipped. [Full changelog](CHANGELOG.md).
 
-- **Markdown tables wrap long cells** instead of truncating with `…`.
-  Long cell content is word-wrapped within the column and the grid stays
-  intact on every wrapped line.
-- **Self-update is `curl`-free and verifies SHA-256** — `deepseek update`
-  uses `reqwest` with rustls and parses the aggregated checksum manifest
-  to verify each downloaded asset before installing. Drops the v0.8.23
-  Schannel `--ssl-no-revoke` Windows hack.
-- **MCP JSON-RPC framing centralized** — request/response correlation,
-  timeouts, and message framing now live above the byte transports.
-  Stdio, SSE, and the new Streamable HTTP transport share one protocol
-  layer.
-- **Streamable HTTP MCP endpoints** (#1300, thanks **Reid Liu
-  (@reidliu41)**) — third MCP transport alongside stdio and SSE.
-- **Terminal-mode recovery unified** — startup, `FocusGained`, and
-  `resume_terminal` all route through one `recover_terminal_modes()`
-  helper. Wheel scroll, keyboard enhancement, bracketed paste, and
-  focus events are re-armed in one place after focus round-trips.
-- **`recall_archive` available in parent registries** — the read-only
-  BM25 archive search tool is now callable from Plan, Agent, and YOLO
-  parent registries (was sub-agent only).
-- **Onboarding respects the active provider** (#1265, thanks
-  **jinpengxuan (@jinpengxuan)**), **Home/End move the cursor**
-  (#1246, thanks **heloanc (@heloanc)**), **`/config` view columns
-  align to data** (#1290, thanks **Reid Liu (@reidliu41)**),
-  **`reasoning_content` replay is cache-stable** (#1297, thanks
-  **Duducoco (@Duducoco)**), **docs anchor scroll-margin overrideable**
-  (#1282, thanks **Wenjunyun123 (@Wenjunyun123)**), **zh-Hans
-  approval-dialog uses 终止** (#1274, thanks **Liu-Vince
-  (@Liu-Vince)**).
-
-⚠️ **Known issues carried over to v0.8.26:** Windows 10 conhost flicker
-(#1260, #1251), per-turn snapshotting (no write-aware skip yet), `▏`
-glyph leak in code blocks (#1212), mouse selection crossing the
-sidebar (#1169), drag-select edge auto-scroll (#1163), mid-run MCP
-stderr capture.
+- **Cross-terminal flicker fixed** on Ghostty / VSCode terminal /
+  Win10 conhost (the most-reported v0.8.26 regression — #1119, #1260,
+  #1295, #1352, #1356, #1363, #1366). Dropped destructive `2J/3J`
+  from the viewport-reset sequence; alt-screen + diff rendering
+  handle repaints without flicker.
+- **Long output text no longer overflows the right edge** (#1344,
+  #1351). Paragraphs and code blocks hard-break overlong words at
+  character boundaries — matches the v0.8.25 table-cell fix.
+- **Pager copy-out** via `c` or `y` (#1354) — every full-screen pager
+  (`Alt+V` tool details, `Ctrl+O` thinking, shell-job / task / MCP
+  managers) accepts an in-app copy keybinding.
+- **Context-sensitive Ctrl+C** (#1337, #1367) — selection→copy on
+  Windows (matches OS convention), turn-active→cancel, idle→arm-exit
+  with a 2s confirmation window. `Cmd+C` / `Ctrl+Shift+C` continue
+  to copy unchanged.
+- **MCP pool auto-reloads on `mcp.json` change** (#1267 part 2) —
+  no more manual `/mcp reload` after editing config. Cheap mtime +
+  content-hash check on each tool invocation; networked filesystems
+  with coarse mtime granularity don't churn.
+- **Model-callable `notify` tool** (#1322) — desktop notification
+  for "long task done" pings. Honors your existing
+  `[notifications].method` config; silent no-op when off.
+- **Onboarding screens render in the selected language** — pick
+  简体中文 / 日本語 / Português (Brasil) at step 2 and the rest of
+  the flow follows. Particularly nice for CJK-IME users avoiding
+  English typing during setup.
+- **Paste UX rebuilt** — large pastes get the `@paste-…md`
+  treatment immediately (visible before submit, no "auto-sent an
+  @mention I didn't authorize" surprise); paste-burst auto-disables
+  on terminals where bracketed paste works; short CJK pastes no
+  longer auto-submit on the trailing newline (#1302, thanks
+  **@reidliu41** PR #1342).
+- **`/skills <prefix>`** filters the local skills list (#1318) — on
+  top of v0.8.26's inter-row spacing (#1328 from **@reidliu41**).
+- **`/skills --remote` diagnostic hints** (#1329) — when fetching
+  the registry fails, the error chain now ends with a one-line
+  hint pointing at the most likely cause (DNS / TLS / refused /
+  4xx / 429 / timeout).
+- **17 community PRs landed** — `/mode` unification, `/status`
+  diagnostics, `/feedback`, session artifact metadata, subagent
+  self-report compaction, global AGENTS.md fallback, `--yolo`
+  CLI→TUI propagation, `composer_arrows_scroll`, session cost
+  persistence, provider-aware model picker + persistence, HTTP
+  User-Agent header, HTTP-400 quota retry, explicit hidden file
+  completions, Windows mouse-capture docs, README zh-CN sync,
+  tool-output render perf + card-rail, expanded test coverage.
+  Thanks to **@reidliu41**, **@THINKER-ONLY**, **@manaskarra**,
+  **@fuleinist**, **@lbcheng888**, **@imkingjh999**, **@dst1213**,
+  **@SamhandsomeLee**, **@Oliver-ZPLiu**, **@whtis**,
+  **@tuohai666**.
 
 ---
 

@@ -1,7 +1,7 @@
 {
   "name": "deepseek-tui",
-  "version": "0.8.27",
-  "deepseekBinaryVersion": "0.8.27",
+  "version": "0.8.28",
+  "deepseekBinaryVersion": "0.8.28",
   "description": "Install and run deepseek and deepseek-tui binaries from GitHub release artifacts.",
   "author": "Hmbown",
   "license": "MIT",

@@ -87,7 +87,7 @@ impl ToolSpec for FetchUrlTool {
     }
 
     fn description(&self) -> &'static str {
-        "Fetch a known URL directly (HTTP GET) and return its content. Use this when the user gives a URL or you already know the canonical link — it's faster and more reliable than web_search for known pages."
+        "Fetch a known URL directly (HTTP GET) and return its content. Use this instead of `curl` in `exec_shell` — sandboxed, network-policy aware, and properly decoded. Plain-text endpoints (`.md`, `.txt`, `.json`, `.yaml`, `raw.githubusercontent.com`, public APIs) prefer this over the browser/automation stack. For unknown queries, use `web_search` first."
     }
 
     fn input_schema(&self) -> Value {

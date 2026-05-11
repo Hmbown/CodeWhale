@@ -269,7 +269,6 @@ fn display_list(values: &[String]) -> String {
 mod tests {
     use super::*;
     use crate::config::Config;
-    use crate::test_support::lock_test_env;
     use crate::tui::app::{App, TuiOptions};
     use std::env;
     use std::ffi::OsString;
@@ -280,10 +279,12 @@ mod tests {
         home: Option<OsString>,
         userprofile: Option<OsString>,
         deepseek_config_path: Option<OsString>,
+        _lock: std::sync::MutexGuard<'static, ()>,
     }
 
     impl EnvGuard {
         fn new(home: &Path) -> Self {
+            let lock = crate::test_support::lock_test_env();
             let config_path = home.join(".deepseek").join("config.toml");
             let home_prev = env::var_os("HOME");
             let userprofile_prev = env::var_os("USERPROFILE");
@@ -300,6 +301,7 @@ mod tests {
                 home: home_prev,
                 userprofile: userprofile_prev,
                 deepseek_config_path: deepseek_config_prev,
+                _lock: lock,
             }
         }
     }
@@ -363,7 +365,6 @@ mod tests {
 
     #[test]
     fn network_allow_persists_host_and_removes_exact_deny() {
-        let _lock = lock_test_env();
         let home = temp_home("allow");
         let _guard = EnvGuard::new(&home);
         let config_path = home.join(".deepseek").join("config.toml");
@@ -385,7 +386,6 @@ mod tests {
 
     #[test]
     fn network_allow_extracts_host_from_url() {
-        let _lock = lock_test_env();
         let home = temp_home("url");
         let _guard = EnvGuard::new(&home);
 
@@ -399,7 +399,6 @@ mod tests {
 
     #[test]
     fn network_default_rejects_unknown_value() {
-        let _lock = lock_test_env();
         let home = temp_home("default");
         let _guard = EnvGuard::new(&home);
 

@@ -2086,10 +2086,18 @@ fn render_thinking(
     lines.push(Line::from(header_spans));
 
     let content_width = width.saturating_sub(3).max(1);
-    let body_text = if collapsed && streaming {
-        String::new()
-    } else if collapsed {
-        extract_reasoning_summary(content).unwrap_or_else(|| content.trim().to_string())
+    let body_text = if collapsed {
+        if streaming {
+            // #861 RC4 / #1324: during streaming we don't yet have a
+            // completed reasoning block, so `extract_reasoning_summary`
+            // is meaningless. Show the raw content and let the
+            // truncation logic below keep the *last* `LIMIT` lines so
+            // the user sees the model's most recent thinking instead of
+            // staring at an empty placeholder.
+            content.to_string()
+        } else {
+            extract_reasoning_summary(content).unwrap_or_else(|| content.trim().to_string())
+        }
     } else {
         content.to_string()
     };
@@ -2100,7 +2108,14 @@ fn render_thinking(
     };
     let mut truncated = false;
     if collapsed && rendered.len() > THINKING_SUMMARY_LINE_LIMIT {
-        rendered.truncate(THINKING_SUMMARY_LINE_LIMIT);
+        if streaming {
+            // Drop the *head* during streaming so the visible window
+            // tracks the live cursor at the bottom.
+            let drop = rendered.len() - THINKING_SUMMARY_LINE_LIMIT;
+            rendered.drain(0..drop);
+        } else {
+            rendered.truncate(THINKING_SUMMARY_LINE_LIMIT);
+        }
         truncated = true;
     }
 
@@ -2128,13 +2143,24 @@ fn render_thinking(
         lines.push(Line::from(spans));
     }
 
-    if collapsed && (!streaming && (truncated || body_text.trim() != content.trim())) {
+    let needs_affordance = collapsed
+        && if streaming {
+            // #861 RC4 / #1324: during streaming, surface the affordance
+            // whenever any head lines have been clipped so the user
+            // knows there's more above and how to reach it.
+            truncated
+        } else {
+            truncated || body_text.trim() != content.trim()
+        };
+    if needs_affordance {
+        let label = if streaming {
+            "thinking continues; press Ctrl+O for full text"
+        } else {
+            "thinking collapsed; press Ctrl+O for full text"
+        };
         lines.push(Line::from(vec![
             Span::styled(REASONING_RAIL.to_string(), rail_style),
-            Span::styled(
-                "thinking collapsed; press Ctrl+O for full text",
-                Style::default().fg(palette::TEXT_MUTED).italic(),
-            ),
+            Span::styled(label, Style::default().fg(palette::TEXT_MUTED).italic()),
         ]));
     }
 
@@ -3659,6 +3685,64 @@ mod tests {
     }
 
     #[test]
+    fn render_thinking_streaming_collapsed_shows_live_content() {
+        // #861 RC4 / #1324: during a live thinking block in collapsed view,
+        // the body must NOT be blanked out. Users want to watch the model
+        // think; the previous behaviour stalled on a "thinking..." spinner
+        // until ThinkingComplete fired.
+        let lines = render_thinking(
+            "Step 1: read the code\nStep 2: trace the call\nStep 3: form a hypothesis",
+            80,
+            true, // streaming
+            None, // no duration yet
+            true, // collapsed
+            true, // low_motion (no cursor noise to grep)
+        );
+        let text = lines
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
+            .collect::<String>();
+        assert!(
+            text.contains("Step 3: form a hypothesis"),
+            "the most recent thinking line must be visible during streaming, got: {text}"
+        );
+        // "thinking..." placeholder must not be the only thing rendered.
+        assert!(
+            !text.contains("thinking..."),
+            "raw content present means the placeholder line should not be drawn, got: {text}"
+        );
+    }
+
+    #[test]
+    fn render_thinking_streaming_truncated_shows_continues_affordance() {
+        // #861 RC4: when a streaming thinking block exceeds the line cap,
+        // surface a live affordance pointing at Ctrl+O. The earlier code
+        // suppressed the affordance unless `!streaming`.
+        let long = (1..=10)
+            .map(|i| format!("Reasoning line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let lines = render_thinking(&long, 80, true, None, true, true);
+        let text = lines
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
+            .collect::<String>();
+        assert!(
+            text.contains("thinking continues; press Ctrl+O for full text"),
+            "streaming-truncation affordance missing, got: {text}"
+        );
+        // The most recent line must be the visible tail (head dropped).
+        assert!(
+            text.contains("Reasoning line 10"),
+            "tail line missing, got: {text}"
+        );
+        assert!(
+            !text.contains("Reasoning line 1\n"),
+            "head should be clipped, got: {text}"
+        );
+    }
+
+    #[test]
     fn tool_lines_with_options_respects_low_motion_in_default_path() {
         // Use a 2× cycle offset so the animated frame lands on index 2,
         // which is maximally far from index 0. This avoids flaky failures on
@@ -4071,38 +4155,6 @@ mod tests {
             !visible.contains(REASONING_CURSOR),
             "low_motion must suppress the streaming cursor: {visible:?}"
         );
-    }
-
-    #[test]
-    fn streaming_thinking_live_collapses_unless_verbose() {
-        let cell = HistoryCell::Thinking {
-            content: "private step one\nprivate step two".to_string(),
-            streaming: true,
-            duration_secs: None,
-        };
-
-        let compact = cell.lines_with_options(
-            80,
-            TranscriptRenderOptions {
-                low_motion: true,
-                ..TranscriptRenderOptions::default()
-            },
-        );
-        let compact_text = lines_text(&compact);
-        assert!(compact_text.contains("thinking..."));
-        assert!(!compact_text.contains("private step one"));
-
-        let verbose = cell.lines_with_options(
-            80,
-            TranscriptRenderOptions {
-                verbose: true,
-                low_motion: true,
-                ..TranscriptRenderOptions::default()
-            },
-        );
-        let verbose_text = lines_text(&verbose);
-        assert!(verbose_text.contains("private step one"));
-        assert!(verbose_text.contains("private step two"));
     }
 
     // === Theme parity tests ===

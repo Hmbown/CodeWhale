@@ -157,8 +157,6 @@ pub const COMPACT_TEMPLATE: &str = include_str!("prompts/compact.md");
 /// Legacy base prompt (agent.txt — now decomposed into base.md + overlays).
 /// Still available for callers that haven't migrated to the layered API.
 pub const AGENT_PROMPT: &str = include_str!("prompts/agent.txt");
-pub const YOLO_PROMPT: &str = include_str!("prompts/yolo.txt");
-pub const PLAN_PROMPT: &str = include_str!("prompts/plan.txt");
 
 // ── Personality selection ─────────────────────────────────────────────
 
@@ -939,10 +937,8 @@ mod tests {
 
     #[test]
     fn legacy_constants_still_available() {
-        // Verify the old .txt constants still compile and contain expected content
+        // Verify the legacy .txt constant still compiles and contains expected content
         assert!(!AGENT_PROMPT.is_empty());
-        assert!(!YOLO_PROMPT.is_empty());
-        assert!(!PLAN_PROMPT.is_empty());
     }
 
     // ── Cache-prefix stability harness (#263 step 2) ───────────────────────

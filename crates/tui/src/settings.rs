@@ -316,6 +316,15 @@ impl Settings {
             self.low_motion = true;
             self.fancy_animations = false;
         }
+        // VS Code's integrated terminal sets TERM_PROGRAM=vscode. Its
+        // compositor cannot keep up with 120 FPS redraws and produces rapid
+        // flickering (#1356). Drop to the 30 FPS low-motion cap automatically.
+        // Like NO_ANIMATIONS above, this unconditionally overrides any
+        // disk-loaded value — consistent precedence: env signals always win.
+        if std::env::var("TERM_PROGRAM").as_deref() == Ok("vscode") {
+            self.low_motion = true;
+            self.fancy_animations = false;
+        }
     }
 
     /// Save settings to disk
@@ -820,10 +829,13 @@ mod tests {
 
     /// Tests that mutate process-global `NO_ANIMATIONS` serialise
     /// through this guard so the cargo parallel runner doesn't
-    /// observe interleaved overrides.
+    /// observe interleaved overrides. Uses the process-wide test env
+    /// lock so this serializes with the TERM_PROGRAM tests too —
+    /// otherwise a `NO_ANIMATIONS=1` leak from this test family can
+    /// flip a concurrent `TERM_PROGRAM=iTerm` test's `low_motion`
+    /// assertion through the shared `apply_env_overrides` path.
     fn no_animations_test_guard() -> std::sync::MutexGuard<'static, ()> {
-        static GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        GUARD.lock().unwrap_or_else(|e| e.into_inner())
+        crate::test_support::lock_test_env()
     }
 
     #[test]
@@ -899,6 +911,69 @@ mod tests {
         }
     }
 
+    /// Serialise tests that mutate `TERM_PROGRAM` through this guard.
+    /// Uses the process-wide test env lock so this serializes not just
+    /// with itself but with every other env-mutating test in the suite
+    /// — otherwise a concurrent test that calls `Settings::default()`
+    /// can read whatever value our two `set_var`s have raced into the
+    /// env at that instant.
+    fn term_program_test_guard() -> std::sync::MutexGuard<'static, ()> {
+        crate::test_support::lock_test_env()
+    }
+
+    #[test]
+    fn vscode_term_program_forces_low_motion_on() {
+        let _g = term_program_test_guard();
+        let prev = std::env::var_os("TERM_PROGRAM");
+        // SAFETY: serialised by the guard.
+        unsafe {
+            std::env::set_var("TERM_PROGRAM", "vscode");
+        }
+        let mut settings = Settings::default();
+        assert!(!settings.low_motion, "default is animated");
+        settings.apply_env_overrides();
+        assert!(
+            settings.low_motion,
+            "TERM_PROGRAM=vscode must enable low_motion to prevent flickering (#1356)"
+        );
+        assert!(
+            !settings.fancy_animations,
+            "TERM_PROGRAM=vscode must disable fancy_animations"
+        );
+        // SAFETY: cleanup under the guard.
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("TERM_PROGRAM", v),
+                None => std::env::remove_var("TERM_PROGRAM"),
+            }
+        }
+    }
+
+    #[test]
+    fn non_vscode_term_program_does_not_force_low_motion() {
+        let _g = term_program_test_guard();
+        let prev = std::env::var_os("TERM_PROGRAM");
+        for program in ["iTerm.app", "Apple_Terminal", "WezTerm", "xterm-256color"] {
+            // SAFETY: serialised by the guard.
+            unsafe {
+                std::env::set_var("TERM_PROGRAM", program);
+            }
+            let mut s = Settings::default();
+            s.apply_env_overrides();
+            assert!(
+                !s.low_motion,
+                "TERM_PROGRAM={program:?} should not force low_motion"
+            );
+        }
+        // SAFETY: cleanup under the guard.
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("TERM_PROGRAM", v),
+                None => std::env::remove_var("TERM_PROGRAM"),
+            }
+        }
+    }
+
     // ────────────────────────────────────────────────────────────────────────
     // TuiPrefs tests
     // ────────────────────────────────────────────────────────────────────────
@@ -906,8 +981,7 @@ mod tests {
     /// Serialise tests that mutate `DEEPSEEK_CONFIG_PATH` through this guard
     /// so the parallel test runner doesn't observe interleaved env values.
     fn config_path_test_guard() -> std::sync::MutexGuard<'static, ()> {
-        static GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        GUARD.lock().unwrap_or_else(|e| e.into_inner())
+        crate::test_support::lock_test_env()
     }
 
     #[test]

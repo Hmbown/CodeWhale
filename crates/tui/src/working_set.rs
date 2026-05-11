@@ -93,9 +93,18 @@ impl Workspace {
 
     fn build_file_index(&self) -> HashMap<String, Vec<PathBuf>> {
         let mut index: HashMap<String, Vec<PathBuf>> = HashMap::new();
+        let mut total: usize = 0;
         let builder = discovery_walk_builder(&self.root, Some(6));
 
         for entry in builder.build().flatten() {
+            if total >= FILE_INDEX_MAX_ENTRIES {
+                tracing::warn!(
+                    target: "working_set",
+                    limit = FILE_INDEX_MAX_ENTRIES,
+                    "file-index discovery hit the entry cap; truncating to keep first-turn latency bounded (#697)"
+                );
+                return index;
+            }
             if entry
                 .file_type()
                 .is_some_and(|ft| ft.is_file() || ft.is_dir())
@@ -105,11 +114,15 @@ impl Workspace {
                     .entry(name)
                     .or_default()
                     .push(entry.path().to_path_buf());
+                total += 1;
             }
         }
 
         // Also index AI-tool dot-directories with gitignore disabled.
         for dir_name in DISCOVERY_ALWAYS_DIRS {
+            if total >= FILE_INDEX_MAX_ENTRIES {
+                break;
+            }
             let dot_dir = self.root.join(dir_name);
             if !dot_dir.is_dir() {
                 continue;
@@ -122,6 +135,9 @@ impl Workspace {
                 .ignore(false)
                 .max_depth(Some(5));
             for entry in dot_builder.build().flatten() {
+                if total >= FILE_INDEX_MAX_ENTRIES {
+                    break;
+                }
                 // Exclude machine-generated bulk (e.g. .deepseek/snapshots/).
                 if path_is_excluded_from_discovery(&self.root, entry.path()) {
                     continue;
@@ -135,8 +151,27 @@ impl Workspace {
                         .entry(name)
                         .or_default()
                         .push(entry.path().to_path_buf());
+                    total += 1;
                 }
             }
+        }
+
+        // Beyond the curated dot-dir whitelist above, also index any explicit
+        // hidden/ignored path the user might `@`-mention (e.g. a project's
+        // own `.generated/specs/`). `local_reference_paths` walks with
+        // gitignore disabled but still honors `.deepseekignore`.
+        for path in local_reference_paths(&self.root, LOCAL_REFERENCE_SCAN_LIMIT) {
+            if total >= FILE_INDEX_MAX_ENTRIES {
+                break;
+            }
+            let Some(name) = path
+                .file_name()
+                .map(|name| name.to_string_lossy().to_lowercase())
+            else {
+                continue;
+            };
+            index.entry(name).or_default().push(path);
+            total += 1;
         }
         index
     }
@@ -183,8 +218,26 @@ impl Workspace {
                 &mut substring_hits,
                 &mut seen,
             );
+            add_local_reference_completions(
+                cwd,
+                cwd,
+                &needle,
+                limit,
+                &mut prefix_hits,
+                &mut substring_hits,
+                &mut seen,
+            );
         }
         walk_for_completions(
+            &self.root,
+            &self.root,
+            &needle,
+            limit,
+            &mut prefix_hits,
+            &mut substring_hits,
+            &mut seen,
+        );
+        add_local_reference_completions(
             &self.root,
             &self.root,
             &needle,
@@ -206,6 +259,15 @@ impl Workspace {
 /// Mirrors the existing `project_tree` cutoff and keeps Tab snappy in deep
 /// monorepos.
 const COMPLETIONS_WALK_DEPTH: usize = 6;
+
+/// Hard cap on the number of `(file or directory)` entries indexed by
+/// [`WorkingSet::build_file_index`]. The fuzzy-resolve index is a
+/// convenience for [`WorkingSet::fuzzy_resolve`]; missing entries fall
+/// back to literal-path resolution. Capping here keeps the first
+/// `fuzzy_resolve` call bounded on huge workspaces (#697 reported a
+/// ~10s hang on the first turn). For typical projects 50K is well
+/// above the actual entry count and the cap is a no-op.
+const FILE_INDEX_MAX_ENTRIES: usize = 50_000;
 
 /// Directories that must remain discoverable for `@`-mention completion and
 /// fuzzy file resolution even when excluded by `.gitignore`. AI-tool
@@ -370,10 +432,8 @@ fn walk_for_completions(
     );
 }
 
-#[allow(dead_code)]
 const LOCAL_REFERENCE_SCAN_LIMIT: usize = 4096;
 
-#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
 fn add_local_reference_completions(
     root: &Path,
@@ -408,12 +468,10 @@ fn add_local_reference_completions(
     }
 }
 
-#[allow(dead_code)]
 fn should_try_local_reference_completion(needle: &str) -> bool {
     !needle.is_empty() && (needle.starts_with('.') || needle.contains('/') || needle.contains('\\'))
 }
 
-#[allow(dead_code)]
 fn local_reference_paths(root: &Path, limit: usize) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut builder = WalkBuilder::new(root);
@@ -445,7 +503,6 @@ fn local_reference_paths(root: &Path, limit: usize) -> Vec<PathBuf> {
     out
 }
 
-#[allow(dead_code)]
 fn should_skip_local_reference_dir(path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return false;
@@ -1500,7 +1557,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "wiring incomplete — add_local_reference_completions not yet called from completions()"]
     fn workspace_completions_surface_explicit_hidden_and_ignored_paths() {
         let tmp = TempDir::new().unwrap();
         std::fs::write(tmp.path().join(".gitignore"), ".deepseek/\n.generated/\n").unwrap();
@@ -1543,7 +1599,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "wiring incomplete — needs add_local_reference_completions integration"]
     fn fuzzy_index_resolves_hidden_and_ignored_files_except_deepseekignored() {
         let tmp = TempDir::new().unwrap();
         std::fs::write(tmp.path().join(".gitignore"), ".generated/\n").unwrap();

@@ -115,7 +115,7 @@ impl ToolSpec for WebSearchTool {
     }
 
     fn description(&self) -> &'static str {
-        "Search the web using DuckDuckGo or Bing and return structured results with URLs and snippets."
+        "Search the web (DuckDuckGo or Bing) and return ranked results with URLs and snippets. Use this instead of scraping search engines with `curl` in `exec_shell`. For a known canonical URL, prefer `fetch_url` directly."
     }
 
     fn input_schema(&self) -> Value {
