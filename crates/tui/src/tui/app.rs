@@ -668,8 +668,6 @@ pub struct SidebarHoverState {
 /// Per-section metadata for sidebar hover detection.
 #[derive(Debug, Clone)]
 pub struct SidebarHoverSection {
-    /// The outer area of the section block.
-    pub area: Rect,
     /// Content area within the section (inside border + padding).
     pub content_area: Rect,
     /// Full original text for each content line rendered.

@@ -441,12 +441,7 @@ fn render_sidebar_tasks(f: &mut Frame, area: Rect, app: &mut App) {
                 .duration_ms
                 .map(|ms| format!("{:.1}s", ms as f64 / 1000.0))
                 .unwrap_or_else(|| "-".to_string());
-            let full_label = format!(
-                "{} {} {}",
-                task.id,
-                task.status,
-                duration
-            );
+            let full_label = format!("{} {} {}", task.id, task.status, duration);
             let label = format!(
                 "{} {} {}",
                 truncate_line_to_width(&task.id, 10),
@@ -800,7 +795,6 @@ fn render_sidebar_section(
         height: area.height.saturating_sub(2 + padding.top + padding.bottom),
     };
     app.sidebar_hover.sections.push(SidebarHoverSection {
-        area,
         content_area,
         lines: full_texts,
     });
@@ -844,7 +838,10 @@ fn render_sidebar_section(
 
 #[cfg(test)]
 mod tests {
-    use super::{SidebarHoverSection, SidebarHoverState, SidebarSubagentSummary, plan_panel_empty_hint, subagent_navigator_lines};
+    use super::{
+        SidebarHoverSection, SidebarHoverState, SidebarSubagentSummary, plan_panel_empty_hint,
+        subagent_navigator_lines,
+    };
     use ratatui::text::Line;
 
     fn lines_to_text(lines: &[Line<'static>]) -> Vec<String> {
@@ -1012,36 +1009,36 @@ mod tests {
     fn sidebar_hover_section_stores_lines() {
         use ratatui::layout::Rect;
         let section = SidebarHoverSection {
-            area: Rect::new(0, 0, 40, 10),
             content_area: Rect::new(1, 1, 38, 8),
             lines: vec!["line 1".to_string(), "line 2".to_string()],
         };
         assert_eq!(section.lines.len(), 2);
         assert_eq!(section.lines[0], "line 1");
-        assert!(section.content_area.x > section.area.x);
+        assert!(section.content_area.x > 0);
     }
 
     #[test]
     fn hover_line_matching_respects_content_area_offset() {
         use ratatui::layout::Rect;
         let section = SidebarHoverSection {
-            area: Rect::new(60, 0, 40, 10),
             content_area: Rect::new(62, 2, 36, 6),
-            lines: vec!["first".to_string(), "second".to_string(), "third".to_string()],
+            lines: vec![
+                "first".to_string(),
+                "second".to_string(),
+                "third".to_string(),
+            ],
         };
 
         // Mouse within content area, first line
-        assert!(62 >= 62 && 62 < 62 + 36); // column in range
-        assert!(2 >= 2 && 2 < 2 + 6); // row in range
-        let line_idx = (2u16.saturating_sub(2)) as usize;
+        let line_idx = (2u16.saturating_sub(section.content_area.y)) as usize;
         assert_eq!(section.lines[line_idx], "first");
 
         // Mouse within content area, second line
-        let line_idx = (3u16.saturating_sub(2)) as usize;
+        let line_idx = (3u16.saturating_sub(section.content_area.y)) as usize;
         assert_eq!(section.lines[line_idx], "second");
 
-        // Mouse outside content area (above)
-        assert!(1u16 < 2u16);
+        // Mouse outside content area (above) — row < content_area.y
+        assert!((1u16) < section.content_area.y);
     }
 
     #[test]
