@@ -15,12 +15,17 @@ use crate::tools::spec::{
 
 pub struct ImageAnalyzeTool {
     config: VisionModelConfig,
+    client: reqwest::Client,
 }
 
 impl ImageAnalyzeTool {
     #[must_use]
     pub fn new(config: VisionModelConfig) -> Self {
-        Self { config }
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(120))
+            .build()
+            .expect("Failed to build HTTP client");
+        Self { config, client }
     }
 
     async fn read_image_file(path: &Path) -> Result<(String, String), ToolError> {
@@ -103,7 +108,17 @@ impl ToolSpec for ImageAnalyzeTool {
             .and_then(|v| v.as_str())
             .unwrap_or("Describe this image in detail.");
 
-        let resolved_path = context.workspace.join(image_path);
+        let image_path_buf = Path::new(image_path);
+        if image_path_buf.is_absolute()
+            || image_path_buf
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return Err(ToolError::execution_failed(
+                "image_path must be a relative path within the workspace and cannot escape it.",
+            ));
+        }
+        let resolved_path = context.workspace.join(image_path_buf);
         let (image_data, mime_type) = Self::read_image_file(&resolved_path).await?;
 
         let payload = json!({
@@ -126,11 +141,6 @@ impl ToolSpec for ImageAnalyzeTool {
             "temperature": 0.7
         });
 
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(120))
-            .build()
-            .map_err(|e| ToolError::execution_failed(format!("Failed to build HTTP client: {e}")))?;
-
         let url = format!("{}/chat/completions", self.base_url());
         let api_key = self.api_key();
 
@@ -145,7 +155,7 @@ impl ToolSpec for ImageAnalyzeTool {
         let response = with_retry(
             &retry_config,
             || {
-                let client = client.clone();
+                let client = self.client.clone();
                 let url = url.clone();
                 let api_key = api_key.clone();
                 let payload = payload.clone();
