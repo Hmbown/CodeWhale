@@ -5,6 +5,7 @@
 
 mod anchor;
 mod attachment;
+mod change;
 mod config;
 mod core;
 mod cycle;
@@ -387,6 +388,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         description_id: MessageId::CmdDiffDescription,
     },
     CommandInfo {
+        name: "change",
+        aliases: &[],
+        usage: "/change",
+        description_id: MessageId::CmdChangeDescription,
+    },
+    CommandInfo {
         name: "undo",
         aliases: &[],
         usage: "/undo",
@@ -558,6 +565,9 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "tokens" => debug::tokens(app),
         "cost" => debug::cost(app),
         "cache" => debug::cache(app, arg),
+
+        // ChangeLog command
+        "change" => change::change(app),
         "system" => debug::system_prompt(app),
         "context" | "ctx" => debug::context(app),
         "edit" => debug::edit(app),

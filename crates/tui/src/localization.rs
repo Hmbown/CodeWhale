@@ -217,6 +217,10 @@ pub enum MessageId {
     CmdAttachDescription,
     CmdAnchorDescription,
     CmdCacheDescription,
+    CmdChangeDescription,
+    CmdChangeHeader,
+    CmdChangeTranslationQueued,
+    CmdChangeTranslationUnavailable,
     CmdClearDescription,
     CmdCompactDescription,
     CmdConfigDescription,
@@ -498,6 +502,10 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CmdCacheHeader,
     MessageId::CmdCacheNoData,
     MessageId::CmdCacheTotals,
+    MessageId::CmdChangeDescription,
+    MessageId::CmdChangeHeader,
+    MessageId::CmdChangeTranslationQueued,
+    MessageId::CmdChangeTranslationUnavailable,
     MessageId::CmdCostReport,
     MessageId::CmdTokensCacheBoth,
     MessageId::CmdTokensCacheHitOnly,
@@ -782,6 +790,14 @@ fn english(id: MessageId) -> &'static str {
         }
         MessageId::CmdCacheDescription => {
             "Show DeepSeek prefix-cache hit/miss stats for the last N turns"
+        }
+        MessageId::CmdChangeDescription => "Show the latest changelog entry",
+        MessageId::CmdChangeHeader => "Latest Changelog",
+        MessageId::CmdChangeTranslationQueued => {
+            "English release notes are shown below. A translated version will be requested next; if the provider is unavailable, this English text is the fallback."
+        }
+        MessageId::CmdChangeTranslationUnavailable => {
+            "English release notes are shown below. Translation is unavailable because the current session has no API key or is offline."
         }
         MessageId::CmdClearDescription => "Clear conversation history",
         MessageId::CmdCompactDescription => {
@@ -1120,6 +1136,14 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::CmdCacheDescription => {
             "直近 N ターンの DeepSeek プレフィックスキャッシュのヒット/ミス統計を表示"
         }
+        MessageId::CmdChangeDescription => "最新の更新履歴を表示",
+        MessageId::CmdChangeHeader => "最新の更新履歴",
+        MessageId::CmdChangeTranslationQueued => {
+            "英語のリリースノートを以下に表示します。次に翻訳を依頼します。プロバイダーを利用できない場合は、この英語版がフォールバックです。"
+        }
+        MessageId::CmdChangeTranslationUnavailable => {
+            "英語のリリースノートを以下に表示します。現在のセッションに API キーがないかオフラインのため、翻訳は利用できません。"
+        }
         MessageId::CmdClearDescription => "会話履歴をクリア",
         MessageId::CmdCompactDescription => {
             "コンテキスト圧縮で容量を確保（旧式：v0.6.6 以降はサイクル再起動を推奨）"
@@ -1445,6 +1469,14 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CmdAnchorDescription => "钉选关键事实，在压缩后自动注入上下文",
         MessageId::CmdAttachDescription => "附加图片或视频媒体；文本文件或目录请使用 @path",
         MessageId::CmdCacheDescription => "显示最近 N 轮的 DeepSeek 前缀缓存命中/未命中统计",
+        MessageId::CmdChangeDescription => "显示最新的更新日志",
+        MessageId::CmdChangeHeader => "最新更新日志",
+        MessageId::CmdChangeTranslationQueued => {
+            "下面显示英文发布说明。接下来会请求模型翻译；如果当前提供商不可用，这段英文内容就是备用结果。"
+        }
+        MessageId::CmdChangeTranslationUnavailable => {
+            "下面显示英文发布说明。当前会话没有 API Key 或处于离线状态，无法翻译。"
+        }
         MessageId::CmdClearDescription => "清除对话历史",
         MessageId::CmdCompactDescription => {
             "触发上下文压缩以释放空间（旧版命令；v0.6.6 起建议改用循环重启）"
@@ -1737,6 +1769,14 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         }
         MessageId::CmdCacheDescription => {
             "Exibir estatísticas de hit/miss do cache de prefixo DeepSeek nas últimas N rodadas"
+        }
+        MessageId::CmdChangeDescription => "Mostrar a entrada mais recente do changelog",
+        MessageId::CmdChangeHeader => "Changelog Mais Recente",
+        MessageId::CmdChangeTranslationQueued => {
+            "As notas de versao em ingles aparecem abaixo. Uma versao traduzida sera solicitada em seguida; se o provedor estiver indisponivel, este texto em ingles sera o fallback."
+        }
+        MessageId::CmdChangeTranslationUnavailable => {
+            "As notas de versao em ingles aparecem abaixo. A traducao esta indisponivel porque a sessao atual nao tem chave de API ou esta offline."
         }
         MessageId::CmdClearDescription => "Limpar o histórico da conversa",
         MessageId::CmdCompactDescription => {
