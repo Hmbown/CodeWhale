@@ -433,6 +433,15 @@ impl ExecPolicyEngine {
                     proposed_network_policy_amendments: vec![],
                 }
             }
+            AskForApproval::OnRequest
+                if matches!(tool_rule.decision, Some(PermissionDecision::Allow)) =>
+            {
+                ExecApprovalRequirement::NeedsApproval {
+                    reason: "Approval requested by policy mode.".to_string(),
+                    proposed_execpolicy_amendment: None,
+                    proposed_network_policy_amendments: vec![],
+                }
+            }
             _ if matches!(tool_rule.decision, Some(PermissionDecision::Allow)) => {
                 ExecApprovalRequirement::Skip {
                     bypass_sandbox: false,
