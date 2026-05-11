@@ -586,6 +586,14 @@ impl ToolRegistryBuilder {
             .with_tool(Arc::new(WebRunTool))
     }
 
+    /// Register the `image_analyze` vision tool.
+    /// Only registered when `[vision_model]` is configured in config.toml.
+    #[must_use]
+    pub fn with_vision_tools(self, config: crate::config::VisionModelConfig) -> Self {
+        use crate::vision::tools::ImageAnalyzeTool;
+        self.with_tool(Arc::new(ImageAnalyzeTool::new(config)))
+    }
+
     /// Previously registered the OpenAI-style `multi_tool_use.parallel`
     /// meta-tool. DeepSeek-V4 has native parallel tool calls (multiple
     /// `tool_calls` entries in one assistant turn) and the meta-tool name

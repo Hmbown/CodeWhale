@@ -68,6 +68,7 @@ mod task_manager;
 mod test_support;
 mod tools;
 mod tui;
+mod vision;
 mod utils;
 mod working_set;
 mod workspace_trust;
