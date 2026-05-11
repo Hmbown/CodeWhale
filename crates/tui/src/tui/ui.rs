@@ -661,6 +661,7 @@ async fn run_event_loop(
     let (translation_tx, mut translation_rx) =
         tokio::sync::mpsc::unbounded_channel::<TranslationEvent>();
     let mut pending_translations = 0usize;
+    let mut pending_thinking_translations = 0usize;
     let mut last_queue_state = (app.queued_messages.clone(), app.queued_draft.clone());
     let mut last_task_refresh = Instant::now()
         .checked_sub(Duration::from_secs(2))
@@ -695,6 +696,7 @@ async fn run_event_loop(
                     tool_uses,
                 } => {
                     pending_translations = pending_translations.saturating_sub(1);
+                    pending_thinking_translations = pending_thinking_translations.saturating_sub(1);
                     let text = match translated {
                         Ok(text) => {
                             app.status_message = Some(
@@ -917,10 +919,7 @@ async fn run_event_loop(
                         }
                         if app.translation_enabled {
                             let entry_idx = ensure_streaming_thinking_active_entry(app);
-                            let placeholder = crate::localization::thinking_translation_placeholder(
-                                app.ui_locale,
-                            );
-                            set_streaming_thinking_placeholder(app, entry_idx, placeholder);
+                            set_streaming_thinking_placeholder(app, entry_idx);
                             transcript_batch_updated = true;
                         }
                     }
@@ -939,11 +938,7 @@ async fn run_event_loop(
                         let committed = app.streaming_state.commit_text(0);
                         if !committed.is_empty() {
                             if app.translation_enabled {
-                                let placeholder =
-                                    crate::localization::thinking_translation_placeholder(
-                                        app.ui_locale,
-                                    );
-                                set_streaming_thinking_placeholder(app, entry_idx, placeholder);
+                                set_streaming_thinking_placeholder(app, entry_idx);
                             } else {
                                 append_streaming_thinking(app, entry_idx, &committed);
                             }
@@ -972,6 +967,8 @@ async fn run_event_loop(
                                 );
                                 app.is_loading = true;
                                 pending_translations = pending_translations.saturating_add(1);
+                                pending_thinking_translations =
+                                    pending_thinking_translations.saturating_add(1);
                                 let tx = translation_tx.clone();
                                 let client = translation_client.clone();
                                 let translation_model = app
@@ -1649,7 +1646,11 @@ async fn run_event_loop(
         } else if let Some(entry_idx) = app.streaming_thinking_active_entry {
             let committed = app.streaming_state.commit_text(0);
             if !committed.is_empty() {
-                append_streaming_thinking(app, entry_idx, &committed);
+                if app.translation_enabled {
+                    set_streaming_thinking_placeholder(app, entry_idx);
+                } else {
+                    append_streaming_thinking(app, entry_idx, &committed);
+                }
                 transcript_batch_updated = true;
             }
         }
@@ -1708,6 +1709,9 @@ async fn run_event_loop(
             && last_status_frame.elapsed()
                 >= Duration::from_millis(status_animation_interval_ms(app))
         {
+            if animate_pending_thinking_translation(app, pending_thinking_translations > 0) {
+                app.mark_history_updated();
+            }
             if !app.low_motion && history_has_live_motion(&app.history) {
                 app.mark_history_updated();
             }
@@ -3791,13 +3795,35 @@ fn append_streaming_thinking(app: &mut App, entry_idx: usize, text: &str) {
     }
 }
 
-fn set_streaming_thinking_placeholder(app: &mut App, entry_idx: usize, placeholder: &str) {
+fn thinking_translation_placeholder_frame(app: &App) -> String {
+    let base = crate::localization::thinking_translation_placeholder(app.ui_locale);
+    let elapsed = app
+        .thinking_started_at
+        .or(app.turn_started_at)
+        .map(|started| started.elapsed().as_secs_f32())
+        .unwrap_or_default();
+    let frame = match (elapsed.mul_add(2.0, 0.0) as usize) % 4 {
+        0 => "|",
+        1 => "/",
+        2 => "-",
+        _ => "\\",
+    };
+    format!("{base} ({elapsed:.1}s {frame})")
+}
+
+fn set_streaming_thinking_placeholder(app: &mut App, entry_idx: usize) {
+    let base = crate::localization::thinking_translation_placeholder(app.ui_locale);
+    let next = thinking_translation_placeholder_frame(app);
     let mutated = if let Some(active) = app.active_cell.as_mut()
         && let Some(HistoryCell::Thinking { content, .. }) = active.entry_mut(entry_idx)
-        && content.is_empty()
+        && (content.is_empty() || content.starts_with(base))
     {
-        content.push_str(placeholder);
-        true
+        if *content != next {
+            *content = next;
+            true
+        } else {
+            false
+        }
     } else {
         false
     };
@@ -3806,11 +3832,37 @@ fn set_streaming_thinking_placeholder(app: &mut App, entry_idx: usize, placehold
     }
 }
 
+fn animate_pending_thinking_translation(app: &mut App, translation_pending: bool) -> bool {
+    if !app.translation_enabled {
+        return false;
+    }
+    let thinking_streaming = app.streaming_thinking_active_entry.is_some();
+    if !translation_pending && !thinking_streaming {
+        return false;
+    }
+    let base = crate::localization::thinking_translation_placeholder(app.ui_locale);
+    let next = thinking_translation_placeholder_frame(app);
+
+    if let Some(active) = app.active_cell.as_mut() {
+        for idx in (0..active.entry_count()).rev() {
+            if let Some(HistoryCell::Thinking { content, .. }) = active.entry_mut(idx)
+                && content.starts_with(base)
+                && *content != next
+            {
+                *content = next.clone();
+                app.bump_active_cell_revision();
+                return true;
+            }
+        }
+    }
+    false
+}
+
 fn replace_pending_thinking_translation(app: &mut App, placeholder: &str, translated_text: String) {
     if let Some(active) = app.active_cell.as_mut() {
         for idx in (0..active.entry_count()).rev() {
             if let Some(HistoryCell::Thinking { content, .. }) = active.entry_mut(idx)
-                && content == placeholder
+                && content.starts_with(placeholder)
             {
                 *content = translated_text;
                 app.bump_active_cell_revision();
@@ -3821,7 +3873,7 @@ fn replace_pending_thinking_translation(app: &mut App, placeholder: &str, transl
 
     for idx in (0..app.history.len()).rev() {
         if let Some(HistoryCell::Thinking { content, .. }) = app.history.get_mut(idx)
-            && content == placeholder
+            && content.starts_with(placeholder)
         {
             *content = translated_text;
             app.bump_history_cell(idx);
