@@ -278,6 +278,18 @@ web_search = true # enables canonical web.run plus the compatibility web_search 
 apply_patch = true
 mcp = true
 exec_policy = true
+# vision_model = false  # enable vision model for image_analyze tool
+
+# ─────────────────────────────────────────────────────────────────────────────────
+# Vision Model Configuration (optional)
+# ─────────────────────────────────────────────────────────────────────────────────
+# Uses an OpenAI-compatible vision model API for the `image_analyze` tool.
+# api_key inherits from the main config if not specified.
+#
+# [vision_model]
+# model = "gemini-3.1-flash-lite-preview"  # Required: vision-capable model ID
+# api_key = "YOUR_API_KEY"                 # Optional: defaults to main api_key
+# base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"  # Optional
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Retry Configuration

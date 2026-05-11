@@ -143,6 +143,7 @@ pub struct EngineConfig {
     /// Path to the user memory file (#489). Always populated; only
     /// consulted when `memory_enabled` is `true`.
     pub memory_path: PathBuf,
+    pub vision_config: Option<crate::config::VisionModelConfig>,
     pub goal_objective: Option<String>,
     /// Resolved BCP-47 locale tag (e.g. `"en"`, `"zh-Hans"`, `"ja"`)
     /// for the `## Environment` block in the system prompt. The
@@ -184,6 +185,7 @@ impl Default for EngineConfig {
             subagent_model_overrides: HashMap::new(),
             memory_enabled: false,
             memory_path: PathBuf::from("./memory.md"),
+            vision_config: None,
             strict_tool_mode: false,
             goal_objective: None,
             locale_tag: "en".to_string(),

@@ -856,6 +856,24 @@ pub struct Config {
     /// default threshold of 4 096 tokens applies and routing is active.
     #[serde(default)]
     pub workshop: Option<crate::tools::large_output_router::WorkshopConfig>,
+
+    /// Vision model configuration for the `image_analyze` tool.
+    #[serde(default)]
+    pub vision_model: Option<VisionModelConfig>,
+}
+
+/// Vision model configuration for the `image_analyze` tool.
+/// Uses an OpenAI-compatible vision model API.
+#[derive(Debug, Clone, Deserialize)]
+pub struct VisionModelConfig {
+    /// Model identifier (e.g., "gemini-3.1-flash-lite-preview").
+    pub model: String,
+    /// API key for the vision model. Inherits from main config if not specified.
+    #[serde(default)]
+    pub api_key: Option<String>,
+    /// Base URL for the vision model API. Defaults to OpenAI.
+    #[serde(default)]
+    pub base_url: Option<String>,
 }
 
 /// `[runtime_api]` table — knobs for the local HTTP/SSE daemon.
@@ -1545,6 +1563,16 @@ impl Config {
             .as_ref()
             .and_then(|m| m.enabled)
             .unwrap_or(false)
+    }
+
+    /// Return the configured vision model config, inheriting api_key from main config.
+    #[must_use]
+    pub fn vision_model_config(&self) -> Option<VisionModelConfig> {
+        let mut config = self.vision_model.clone()?;
+        if config.api_key.is_none() {
+            config.api_key = self.api_key.clone();
+        }
+        Some(config)
     }
 
     #[must_use]
@@ -2518,6 +2546,7 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
         mcp_config_path: override_cfg.mcp_config_path.or(base.mcp_config_path),
         notes_path: override_cfg.notes_path.or(base.notes_path),
         memory_path: override_cfg.memory_path.or(base.memory_path),
+        vision_model: override_cfg.vision_model.or(base.vision_model),
         // #454: project's instructions array replaces user's array
         // wholesale. The typical "merge" pattern is for users who want
         // both — they list `~/global.md` inside the project array.

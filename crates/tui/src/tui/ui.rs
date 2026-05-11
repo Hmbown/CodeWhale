@@ -556,6 +556,7 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         subagent_model_overrides: config.subagent_model_overrides(),
         memory_enabled: config.memory_enabled(),
         memory_path: config.memory_path(),
+        vision_config: config.vision_model_config(),
         strict_tool_mode: config.strict_tool_mode.unwrap_or(false),
         goal_objective: app.goal.goal_objective.clone(),
         locale_tag: app.ui_locale.tag().to_string(),
