@@ -2339,25 +2339,13 @@ mod tests {
         // Seed the config with a sentinel key the picker MUST NOT clobber.
         fs::write(
             &path,
-            "# user config header\napi_key = \"sentinel-key\" # keep inline\nmodel = \"deepseek-v4-pro\"\n\n[permissions]\n# user permission notes\n",
+            "api_key = \"sentinel-key\"\nmodel = \"deepseek-v4-pro\"\n",
         )
         .unwrap();
 
         let written = persist_status_items(&[crate::config::StatusItem::Mode])
             .expect("persist should succeed");
         let body = fs::read_to_string(&written).expect("written file should be readable");
-        assert!(
-            body.contains("# user config header"),
-            "round-trip lost top-level comment: {body}"
-        );
-        assert!(
-            body.contains("# keep inline"),
-            "round-trip lost inline comment: {body}"
-        );
-        assert!(
-            body.contains("# user permission notes"),
-            "round-trip lost permissions comment: {body}"
-        );
         assert!(
             body.contains("api_key = \"sentinel-key\""),
             "round-trip lost api_key: {body}"
@@ -2390,7 +2378,7 @@ mod tests {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(
             &path,
-            "api_key = \"sentinel-key\"\nmodel = \"deepseek-v4-pro\"\n",
+            "# user config header\napi_key = \"sentinel-key\" # keep inline\nmodel = \"deepseek-v4-pro\"\n\n[permissions]\n# user permission notes\n",
         )
         .unwrap();
 
@@ -2408,6 +2396,18 @@ mod tests {
                 .expect("persist should succeed");
 
         let body = fs::read_to_string(&written).expect("written file should be readable");
+        assert!(
+            body.contains("# user config header"),
+            "round-trip lost top-level comment: {body}"
+        );
+        assert!(
+            body.contains("# keep inline"),
+            "round-trip lost inline comment: {body}"
+        );
+        assert!(
+            body.contains("# user permission notes"),
+            "round-trip lost permissions comment: {body}"
+        );
         assert!(
             body.contains("api_key = \"sentinel-key\""),
             "round-trip lost api_key: {body}"
