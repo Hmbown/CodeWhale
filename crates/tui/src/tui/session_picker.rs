@@ -491,7 +491,8 @@ fn build_list_lines(
         let style = if idx == selected {
             Style::default()
                 .fg(palette::SELECTION_TEXT)
-                .bg(palette::SELECTION_BG)
+                .bg(palette::DEEPSEEK_BLUE)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(palette::TEXT_PRIMARY)
         };
@@ -769,6 +770,32 @@ mod tests {
                 width
             );
         }
+    }
+
+    #[test]
+    fn build_list_lines_selected_row_uses_strong_highlight() {
+        let sessions = vec![
+            test_session(1, "first session"),
+            test_session(2, "second session"),
+        ];
+        let lines = build_list_lines(&sessions, 1, 80, 0, 5, false, "", "recent", false, None);
+
+        let selected_line = lines
+            .iter()
+            .find(|line| {
+                line.spans
+                    .iter()
+                    .any(|span| span.content.contains("second session"))
+            })
+            .expect("selected session should render");
+        let span = selected_line
+            .spans
+            .first()
+            .expect("selected row should have a span");
+
+        assert_eq!(span.style.fg, Some(palette::SELECTION_TEXT));
+        assert_eq!(span.style.bg, Some(palette::DEEPSEEK_BLUE));
+        assert!(span.style.add_modifier.contains(Modifier::BOLD));
     }
 
     #[test]
