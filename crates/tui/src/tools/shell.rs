@@ -1401,7 +1401,13 @@ fn tail_from_buffer(buffer: &Arc<Mutex<Vec<u8>>>, max_tail_chars: usize) -> (usi
     let guard = buffer.lock().unwrap_or_else(|e| e.into_inner());
     let total = guard.len();
     // Over-estimate byte count (4 bytes per char worst case for UTF-8).
-    let tail_start = total.saturating_sub(max_tail_chars.saturating_mul(4));
+    let mut tail_start = total.saturating_sub(max_tail_chars.saturating_mul(4));
+    // Snap forward to the next valid UTF-8 codepoint boundary so we don't
+    // pass a slice beginning with continuation bytes (0x80–0xBF) to
+    // from_utf8_lossy, which would emit a leading U+FFFD replacement char.
+    while tail_start < total && (guard[tail_start] & 0xC0) == 0x80 {
+        tail_start += 1;
+    }
     let tail_str = String::from_utf8_lossy(&guard[tail_start..]).into_owned();
     (total, tail_text(&tail_str, max_tail_chars))
 }
