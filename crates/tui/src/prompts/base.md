@@ -170,10 +170,10 @@ Multiple `tool_calls` in one turn run in parallel. `web_search` returns `ref_id`
 ## Tool Selection Guide
 
 ### `apply_patch`
-Use `apply_patch` for structural edits, coordinated changes, or cases where line context matters. Use `write_file` for brand-new files or full-file rewrites. Use `edit_file` for a single unambiguous replacement.
+Use `apply_patch` for structural edits, coordinated changes, or cases where line context matters. Use `write_file` for brand-new files, full-file rewrites, or large-scope modifications to existing files where multiple intertwined changes make local replacement unreliable. Use `edit_file` for a single unambiguous replacement.
 
 ### `edit_file`
-Use `edit_file` for one clear replacement in one file. Use `apply_patch` when the edit changes whole blocks, touches multiple files, or needs surrounding line context.
+Use `edit_file` for one clear replacement in one file. Do not use `edit_file` for multi-block structural deletions, cross-cutting refactors, or changes that touch more than one logical unit; those require `apply_patch` or `write_file`.
 
 ### `exec_shell`
 Use `exec_shell` for shell-native diagnostics, pipelines, and bounded commands. Use structured tools for structured operations when they map directly (`grep_files`, `git_diff`, `read_file`). For long commands, servers, full test suites, or release computations, start background work with `task_shell_start` or `exec_shell` using `background: true`, then poll with `task_shell_wait` or `exec_shell_wait`.
