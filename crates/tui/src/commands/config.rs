@@ -329,8 +329,19 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
             app.update_model_compaction_budget();
             app.session.last_prompt_tokens = None;
             app.session.last_completion_tokens = None;
+            let message = if persist {
+                match persist_root_string_key("default_text_model", &model) {
+                    Ok(path) => format!(
+                        "model = {model} (saved to {}; takes effect as default on next start)",
+                        path.display()
+                    ),
+                    Err(e) => return CommandResult::error(format!("Failed to save model: {e}")),
+                }
+            } else {
+                format!("model = {model} (session only, add --save to persist)")
+            };
             return CommandResult::with_message_and_action(
-                format!("model = {model}"),
+                message,
                 AppAction::UpdateCompaction(app.compaction_config()),
             );
         }
@@ -1292,10 +1303,29 @@ mod tests {
     #[test]
     fn test_set_model_with_save_flag() {
         let mut app = create_test_app();
-        let _result = set_config(&mut app, Some("model deepseek-v4-flash --save"));
-        // Note: This test may fail in environments where settings can't be saved
-        // The important thing is that the model is updated
+        let result = set_config(&mut app, Some("model deepseek-v4-flash --save"));
         assert_eq!(app.model, "deepseek-v4-flash");
+        let msg = result.message.unwrap_or_default();
+        assert!(
+            !msg.contains("session only"),
+            "expected no 'session only' hint when --save is used, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_set_model_without_save_shows_session_only_hint() {
+        let mut app = create_test_app();
+        let result = set_config(&mut app, Some("model deepseek-v4-flash"));
+        assert_eq!(app.model, "deepseek-v4-flash");
+        let msg = result.message.unwrap_or_default();
+        assert!(
+            msg.contains("session only"),
+            "expected 'session only' hint when --save not used, got: {msg}"
+        );
+        assert!(
+            msg.contains("--save"),
+            "expected '--save' hint in message, got: {msg}"
+        );
     }
 
     #[test]
