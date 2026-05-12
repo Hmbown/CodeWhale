@@ -364,13 +364,10 @@ fn apply_patch_permission_paths(input: &Value) -> Vec<String> {
             }
         }
     }
-    match input.get("patch").and_then(Value::as_str) {
-        Some(patch) if paths.is_empty() => {
-            for path in parse_unified_diff_permission_paths(patch) {
-                push_unique_path(&mut paths, &path);
-            }
+    if let Some(patch) = input.get("patch").and_then(Value::as_str) {
+        for path in parse_unified_diff_permission_paths(patch) {
+            push_unique_path(&mut paths, &path);
         }
-        _ => {}
     }
     paths
 }

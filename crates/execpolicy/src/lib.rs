@@ -280,6 +280,7 @@ pub struct ExecPolicyEngine {
     /// Layered rulesets (builtin → agent → user). When non-empty, takes precedence
     /// over the legacy flat lists below.
     rulesets: Vec<Ruleset>,
+    layered_rules: Vec<LayeredToolPermissionRule>,
     /// Legacy flat lists kept for backward compatibility with `new()`.
     trusted_prefixes: Vec<String>,
     denied_prefixes: Vec<String>,
@@ -291,8 +292,11 @@ pub struct ExecPolicyEngine {
 impl ExecPolicyEngine {
     /// Legacy constructor: wraps the two vecs into a User-layer ruleset.
     pub fn new(trusted_prefixes: Vec<String>, denied_prefixes: Vec<String>) -> Self {
+        let layered_rules =
+            build_layered_permission_rules(&[], &trusted_prefixes, &denied_prefixes);
         Self {
             rulesets: vec![],
+            layered_rules,
             trusted_prefixes,
             denied_prefixes,
             approved_for_session: HashSet::new(),
@@ -304,8 +308,10 @@ impl ExecPolicyEngine {
     /// Rulesets are sorted by layer priority on construction.
     pub fn with_rulesets(mut rulesets: Vec<Ruleset>) -> Self {
         rulesets.sort_by_key(|r| r.layer);
+        let layered_rules = build_layered_permission_rules(&rulesets, &[], &[]);
         Self {
             rulesets,
+            layered_rules,
             trusted_prefixes: vec![],
             denied_prefixes: vec![],
             approved_for_session: HashSet::new(),
@@ -317,42 +323,15 @@ impl ExecPolicyEngine {
     pub fn add_ruleset(&mut self, ruleset: Ruleset) {
         self.rulesets.push(ruleset);
         self.rulesets.sort_by_key(|r| r.layer);
-    }
-
-    fn layered_permission_rules(&self) -> Vec<LayeredToolPermissionRule> {
-        let mut rules = Vec::new();
-        if self.rulesets.is_empty() {
-            rules.extend(legacy_command_rules(
-                RulesetLayer::User,
-                &self.trusted_prefixes,
-                &self.denied_prefixes,
-            ));
-            return rules;
-        }
-
-        for ruleset in &self.rulesets {
-            rules.extend(
-                ruleset
-                    .rules
-                    .iter()
-                    .cloned()
-                    .map(|rule| LayeredToolPermissionRule {
-                        layer: ruleset.layer,
-                        rule,
-                    }),
-            );
-            rules.extend(legacy_command_rules(
-                ruleset.layer,
-                &ruleset.trusted_prefixes,
-                &ruleset.denied_prefixes,
-            ));
-        }
-        rules.extend(legacy_command_rules(
-            RulesetLayer::User,
+        self.layered_rules = build_layered_permission_rules(
+            &self.rulesets,
             &self.trusted_prefixes,
             &self.denied_prefixes,
-        ));
-        rules
+        );
+    }
+
+    fn layered_permission_rules(&self) -> &[LayeredToolPermissionRule] {
+        &self.layered_rules
     }
 
     pub fn remember_session_approval(&mut self, approval_key: String) {
@@ -365,7 +344,7 @@ impl ExecPolicyEngine {
 
     #[must_use]
     pub fn check_tool_permission(&self, ctx: ToolPermissionContext<'_>) -> ToolPermissionCheck {
-        let mut best: Option<(LayeredToolPermissionRule, usize)> = None;
+        let mut best: Option<(&LayeredToolPermissionRule, usize)> = None;
 
         for candidate in self.layered_permission_rules() {
             if !tool_rule_matches(&candidate.rule, &ctx, &self.arity_dict) {
@@ -373,7 +352,7 @@ impl ExecPolicyEngine {
             }
             let specificity = rule_specificity(&candidate.rule);
             let should_replace = best.as_ref().is_none_or(|(current, current_specificity)| {
-                compare_rule_priority(&candidate, specificity, current, *current_specificity)
+                compare_rule_priority(candidate, specificity, current, *current_specificity)
             });
             if should_replace {
                 best = Some((candidate, specificity));
@@ -385,7 +364,7 @@ impl ExecPolicyEngine {
                 decision: Some(matched.rule.decision),
                 matched_rule: Some(MatchedToolPermissionRule {
                     layer: matched.layer,
-                    rule: matched.rule,
+                    rule: matched.rule.clone(),
                 }),
             },
             None => ToolPermissionCheck::unmatched(),
@@ -515,6 +494,46 @@ fn legacy_command_rules(
                 }),
         )
         .collect()
+}
+
+fn build_layered_permission_rules(
+    rulesets: &[Ruleset],
+    trusted_prefixes: &[String],
+    denied_prefixes: &[String],
+) -> Vec<LayeredToolPermissionRule> {
+    let mut rules = Vec::new();
+    if rulesets.is_empty() {
+        rules.extend(legacy_command_rules(
+            RulesetLayer::User,
+            trusted_prefixes,
+            denied_prefixes,
+        ));
+        return rules;
+    }
+
+    for ruleset in rulesets {
+        rules.extend(
+            ruleset
+                .rules
+                .iter()
+                .cloned()
+                .map(|rule| LayeredToolPermissionRule {
+                    layer: ruleset.layer,
+                    rule,
+                }),
+        );
+        rules.extend(legacy_command_rules(
+            ruleset.layer,
+            &ruleset.trusted_prefixes,
+            &ruleset.denied_prefixes,
+        ));
+    }
+    rules.extend(legacy_command_rules(
+        RulesetLayer::User,
+        trusted_prefixes,
+        denied_prefixes,
+    ));
+    rules
 }
 
 fn compare_rule_priority(

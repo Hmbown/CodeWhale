@@ -1295,7 +1295,7 @@ impl Engine {
                     supports_parallel = spec.supports_parallel();
                     read_only = spec.is_read_only();
                 } else if tool_name == MULTI_TOOL_PARALLEL_NAME {
-                    approval_required = false;
+                    approval_required = true;
                     approval_description =
                         "Execute multiple read-only tools in parallel".to_string();
                     supports_parallel = false;

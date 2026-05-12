@@ -384,20 +384,7 @@ fn permission_decision_label(decision: PermissionDecision) -> &'static str {
 }
 
 fn toml_string(value: &str) -> String {
-    let mut out = String::with_capacity(value.len() + 2);
-    out.push('"');
-    for ch in value.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            _ => out.push(ch),
-        }
-    }
-    out.push('"');
-    out
+    toml_edit::Value::from(value).to_string()
 }
 
 fn file_path_permission_rules(tool_name: &str, path: &str) -> Vec<ToolPermissionRule> {
@@ -533,9 +520,7 @@ fn apply_patch_permission_paths(input: &Value) -> Vec<String> {
             }
         }
     }
-    if paths.is_empty()
-        && let Some(patch) = input.get("patch").and_then(Value::as_str)
-    {
+    if let Some(patch) = input.get("patch").and_then(Value::as_str) {
         for path in parse_unified_diff_permission_paths(patch) {
             push_unique_permission_path(&mut paths, &path);
         }
@@ -565,7 +550,7 @@ fn parse_unified_diff_permission_paths(patch: &str) -> Vec<String> {
 }
 
 fn normalize_diff_permission_path(raw: &str) -> Option<String> {
-    let raw = raw.trim();
+    let raw = raw.split('\t').next()?.trim();
     if raw.is_empty() || raw == "/dev/null" || raw == "dev/null" {
         return None;
     }
@@ -1667,6 +1652,55 @@ mod tests {
                 "apply_patch",
                 PermissionDecision::Allow,
                 "docs/new.md"
+            )]
+        );
+    }
+
+    #[test]
+    fn persistent_permission_rules_extract_patch_even_with_path_field() {
+        let rules = build_persistent_permission_rules(
+            "apply_patch",
+            &json!({
+                "path": "docs/declared.md",
+                "patch": "\
+            --- a/docs/old.md\n\
+            +++ b/docs/new.md\n\
+            @@ -1 +1 @@\n"
+            }),
+        );
+
+        assert_eq!(
+            rules,
+            vec![
+                ToolPermissionRule::file_path(
+                    "apply_patch",
+                    PermissionDecision::Allow,
+                    "docs/declared.md"
+                ),
+                ToolPermissionRule::file_path(
+                    "apply_patch",
+                    PermissionDecision::Allow,
+                    "docs/new.md"
+                )
+            ]
+        );
+    }
+
+    #[test]
+    fn persistent_permission_rules_parse_diff_headers_with_timestamps() {
+        let rules = build_persistent_permission_rules(
+            "apply_patch",
+            &json!({
+                "patch": "--- a/docs/a.md\t2026-05-12 12:00:00\n+++ b/docs/a.md\t2026-05-12 12:00:01\n@@ -1 +1 @@\n-old\n+new\n"
+            }),
+        );
+
+        assert_eq!(
+            rules,
+            vec![ToolPermissionRule::file_path(
+                "apply_patch",
+                PermissionDecision::Allow,
+                "docs/a.md"
             )]
         );
     }

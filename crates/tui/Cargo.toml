@@ -55,6 +55,7 @@ serde_json = { version = "1.0.149", features = ["preserve_order"] }
 schemars = { version = "1.2.1", features = ["derive", "preserve_order"] }
 shellexpand = "3"
 toml = "0.9.7"
+toml_edit = "0.23.10"
 tokio = { version = "1.49.0", features = ["full"] }
 tokio-util = { version = "0.7.16", features = ["io"] }
 unicode-width = "0.2"
