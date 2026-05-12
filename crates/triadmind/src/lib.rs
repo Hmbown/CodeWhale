@@ -67,3 +67,4 @@ pub mod generator;
 pub mod visualizer;
 pub mod workflow;
 pub mod runtime;
+pub mod abstraction_memory;
