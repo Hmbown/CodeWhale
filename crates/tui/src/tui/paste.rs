@@ -20,6 +20,9 @@ pub fn handle_paste_burst_key(app: &mut App, key: &KeyEvent, now: Instant) -> bo
     if !app.use_paste_burst_detection {
         return false;
     }
+    if app.vim_is_normal_mode() || app.vim_is_visual_mode() {
+        return false;
+    }
     // Once we've observed a real `Event::Paste` in this session, bracketed
     // paste is verified working and the rapid-keystroke heuristic is
     // unnecessary. Skipping it eliminates false positives on fast typing /
@@ -129,7 +132,7 @@ fn in_command_context(app: &App) -> bool {
 mod tests {
     use super::*;
     use crate::config::Config;
-    use crate::tui::app::TuiOptions;
+    use crate::tui::app::{TuiOptions, VimMode};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
@@ -308,6 +311,20 @@ mod tests {
         app.insert_paste_text("line 1\r\nline 2");
         assert_eq!(app.input, "line 1\nline 2");
         assert!(app.use_bracketed_paste);
+    }
+
+    #[test]
+    fn paste_burst_does_not_bypass_vim_normal_mode() {
+        let mut app = test_app();
+        app.composer.vim_enabled = true;
+        app.composer.vim_mode = VimMode::Normal;
+
+        assert!(!handle_paste_burst_key(
+            &mut app,
+            &plain('a'),
+            Instant::now()
+        ));
+        assert!(app.input.is_empty());
     }
 
     /// Once the session has observed a real `Event::Paste`, the

@@ -11,7 +11,9 @@ use crate::llm_client::LlmClient;
 use crate::localization::resolve_locale;
 use crate::models::{ContentBlock, Message, MessageRequest, MessageResponse, SystemPrompt};
 use crate::settings::Settings;
-use crate::tui::app::{App, AppAction, AppMode, OnboardingState, ReasoningEffort, SidebarFocus};
+use crate::tui::app::{
+    App, AppAction, AppMode, OnboardingState, ReasoningEffort, SidebarFocus, VimMode,
+};
 use crate::tui::approval::ApprovalMode;
 use anyhow::Result;
 
@@ -138,6 +140,14 @@ fn show_single_setting(app: &App, key: &str) -> CommandResult {
         "composer_border" | "border" => {
             Some(if app.composer_border { "true" } else { "false" }.to_string())
         }
+        "composer_vim_mode" | "vim_mode" | "vim" => Some(
+            if app.composer.vim_enabled {
+                "vim"
+            } else {
+                "normal"
+            }
+            .to_string(),
+        ),
         "transcript_spacing" | "spacing" => {
             Some(spacing_display(app.transcript_spacing).to_string())
         }
@@ -204,6 +214,38 @@ pub fn verbose(app: &mut App, arg: Option<&str>) -> CommandResult {
     } else {
         "Verbose transcript off: live thinking stays compact."
     })
+}
+
+/// Toggle composer Vim modal editing for the current session.
+pub fn vim(app: &mut App, arg: Option<&str>) -> CommandResult {
+    let next = match arg.map(str::trim).filter(|s| !s.is_empty()) {
+        None => !app.composer.vim_enabled,
+        Some(raw) => match raw.to_ascii_lowercase().as_str() {
+            "on" | "true" | "1" | "yes" | "enable" | "enabled" => true,
+            "off" | "false" | "0" | "no" | "disable" | "disabled" => false,
+            "toggle" => !app.composer.vim_enabled,
+            _ => return CommandResult::error("Usage: /vim [on|off|toggle]"),
+        },
+    };
+
+    set_composer_vim_enabled(app, next);
+    CommandResult::message(if next {
+        "Vim mode enabled."
+    } else {
+        "Vim mode disabled."
+    })
+}
+
+fn set_composer_vim_enabled(app: &mut App, enabled: bool) {
+    app.composer.vim_enabled = enabled;
+    app.composer.vim_pending_d = false;
+    app.composer.vim_pending_y = false;
+    app.composer.vim_mode = if enabled {
+        VimMode::Normal
+    } else {
+        VimMode::Insert
+    };
+    app.needs_redraw = true;
 }
 
 /// Persist `tui.status_items` to `~/.deepseek/config.toml` without disturbing
@@ -439,6 +481,9 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
         "composer_border" | "border" => {
             app.composer_border = settings.composer_border;
             app.needs_redraw = true;
+        }
+        "composer_vim_mode" | "vim_mode" | "vim" => {
+            set_composer_vim_enabled(app, settings.composer_vim_mode == "vim");
         }
         "paste_burst_detection" | "paste_burst" => {
             app.use_paste_burst_detection = settings.paste_burst_detection;
@@ -1491,6 +1536,59 @@ mod tests {
         assert!(result.message.is_some());
         assert!(!app.composer_border);
         assert!(app.needs_redraw);
+    }
+
+    #[test]
+    fn vim_command_toggles_composer_vim_mode() {
+        let mut app = create_test_app();
+        assert!(!app.composer.vim_enabled);
+
+        let result = vim(&mut app, None);
+
+        assert_eq!(result.message.as_deref(), Some("Vim mode enabled."));
+        assert!(app.composer.vim_enabled);
+        assert_eq!(app.composer.vim_mode, VimMode::Normal);
+        assert!(app.needs_redraw);
+
+        let result = vim(&mut app, None);
+
+        assert_eq!(result.message.as_deref(), Some("Vim mode disabled."));
+        assert!(!app.composer.vim_enabled);
+        assert_eq!(app.composer.vim_mode, VimMode::Insert);
+    }
+
+    #[test]
+    fn vim_command_accepts_explicit_states() {
+        let mut app = create_test_app();
+
+        let result = vim(&mut app, Some("on"));
+        assert_eq!(result.message.as_deref(), Some("Vim mode enabled."));
+        assert!(app.composer.vim_enabled);
+        assert_eq!(app.composer.vim_mode, VimMode::Normal);
+
+        let result = vim(&mut app, Some("off"));
+        assert_eq!(result.message.as_deref(), Some("Vim mode disabled."));
+        assert!(!app.composer.vim_enabled);
+        assert_eq!(app.composer.vim_mode, VimMode::Insert);
+    }
+
+    #[test]
+    fn config_vim_updates_live_composer_state() {
+        let _lock = lock_test_env();
+        let mut app = create_test_app();
+        assert!(!app.composer.vim_enabled);
+
+        let result = set_config(&mut app, Some("vim vim"));
+
+        assert!(!result.is_error);
+        assert!(app.composer.vim_enabled);
+        assert_eq!(app.composer.vim_mode, VimMode::Normal);
+
+        let result = set_config(&mut app, Some("vim normal"));
+
+        assert!(!result.is_error);
+        assert!(!app.composer.vim_enabled);
+        assert_eq!(app.composer.vim_mode, VimMode::Insert);
     }
 
     #[test]

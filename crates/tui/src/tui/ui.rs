@@ -3026,14 +3026,17 @@ async fn run_event_loop(
 ///
 /// Implements the core set of normal-mode bindings:
 /// - `h` / `l`  — left / right by character
-/// - `j` / `k`  — down / up by logical line (falls back to prev/next history)
-/// - `w` / `b`  — word forward / backward
+/// - `j` / `k`  — down / up by logical line
+/// - `w` / `b` / `e`  — word forward / backward / end
 /// - `0` / `$`  — line start / end
 /// - `x`        — delete character under cursor
+/// - `D`        — delete to end of line
 /// - `d` (×2)   — delete current line (`dd`)
-/// - `i`        — enter Insert before cursor
-/// - `a`        — enter Insert after cursor
-/// - `o`        — open new line below and enter Insert
+/// - `y` (×2)   — yank current line (`yy`)
+/// - `p` / `P`  — put yanked text after / before
+/// - `i` / `I`  — enter Insert before cursor / at line start
+/// - `a` / `A`  — enter Insert after cursor / at line end
+/// - `o` / `O`  — open new line below / above and enter Insert
 /// - `v`        — enter Visual mode
 /// - `G`        — move to end of buffer
 fn handle_vim_normal_key(app: &mut App, c: char) {
@@ -3044,6 +3047,14 @@ fn handle_vim_normal_key(app: &mut App, c: char) {
         app.composer.vim_pending_d = false;
         if c == 'd' {
             app.vim_delete_line();
+        }
+        // Any other key cancels the pending operator.
+        return;
+    }
+    if app.composer.vim_pending_y {
+        app.composer.vim_pending_y = false;
+        if c == 'y' {
+            app.vim_yank_line();
         }
         // Any other key cancels the pending operator.
         return;
@@ -3068,6 +3079,9 @@ fn handle_vim_normal_key(app: &mut App, c: char) {
         'b' => {
             app.vim_move_word_backward();
         }
+        'e' => {
+            app.vim_move_word_end();
+        }
         '0' => {
             app.vim_move_line_start();
         }
@@ -3077,18 +3091,44 @@ fn handle_vim_normal_key(app: &mut App, c: char) {
         'x' => {
             app.vim_delete_char_under_cursor();
         }
+        'D' => {
+            app.kill_to_end_of_line();
+        }
         'd' => {
             // Start the `dd` operator sequence.
             app.composer.vim_pending_d = true;
         }
+        'y' => {
+            // Start the `yy` operator sequence.
+            app.composer.vim_pending_y = true;
+        }
+        'p' => {
+            app.vim_put_after();
+        }
+        'P' => {
+            app.vim_put_before();
+        }
         'i' => {
             app.vim_enter_insert();
+        }
+        'I' => {
+            app.vim_insert_line_start();
         }
         'a' => {
             app.vim_enter_append();
         }
+        'A' => {
+            app.vim_append_line_end();
+        }
         'o' => {
             app.vim_open_line_below();
+        }
+        'O' => {
+            app.vim_open_line_above();
+        }
+        '/' if app.input.is_empty() => {
+            app.insert_char('/');
+            app.vim_enter_insert();
         }
         'v' => {
             app.composer.vim_mode = VimMode::Visual;

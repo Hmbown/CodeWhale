@@ -188,6 +188,7 @@ pub const PLANNED_QA_LOCALES: &[LocaleSpec] = &[
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MessageId {
     ComposerPlaceholder,
+    ComposerVimNormalPlaceholder,
     HistorySearchPlaceholder,
     HistorySearchTitle,
     HistoryHintMove,
@@ -272,6 +273,7 @@ pub enum MessageId {
     CmdShareDescription,
     CmdUndoDescription,
     CmdVerboseDescription,
+    CmdVimDescription,
     CmdCacheAdvice,
     CmdCacheFootnote,
     CmdCacheHeader,
@@ -411,6 +413,7 @@ pub enum MessageId {
 #[allow(dead_code)]
 pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::ComposerPlaceholder,
+    MessageId::ComposerVimNormalPlaceholder,
     MessageId::HistorySearchPlaceholder,
     MessageId::HistorySearchTitle,
     MessageId::HistoryHintMove,
@@ -493,6 +496,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CmdShareDescription,
     MessageId::CmdUndoDescription,
     MessageId::CmdVerboseDescription,
+    MessageId::CmdVimDescription,
     MessageId::CmdCacheAdvice,
     MessageId::CmdCacheFootnote,
     MessageId::CmdCacheHeader,
@@ -742,6 +746,9 @@ fn fallback_translation(candidate: Option<&'static str>, id: MessageId) -> &'sta
 fn english(id: MessageId) -> &'static str {
     match id {
         MessageId::ComposerPlaceholder => "Write a task or use /.",
+        MessageId::ComposerVimNormalPlaceholder => {
+            "Press i for INSERT mode. Esc returns to NORMAL mode."
+        }
         MessageId::HistorySearchPlaceholder => "Search prompt history...",
         MessageId::HistorySearchTitle => "History Search",
         MessageId::HistoryHintMove => "Up/Down move",
@@ -858,6 +865,7 @@ fn english(id: MessageId) -> &'static str {
         }
         MessageId::CmdUndoDescription => "Remove last message pair",
         MessageId::CmdVerboseDescription => "Toggle full live thinking in the transcript",
+        MessageId::CmdVimDescription => "Toggle Vim mode for the composer",
         MessageId::CmdCacheAdvice => {
             "Hit/miss ratios over ~70% after the third turn indicate a stable cache prefix; \n\
              lower than that on long sessions suggests prefix churn worth investigating (#263)."
@@ -1077,6 +1085,9 @@ fn translation(locale: Locale, id: MessageId) -> Option<&'static str> {
 fn japanese(id: MessageId) -> Option<&'static str> {
     Some(match id {
         MessageId::ComposerPlaceholder => "タスクを書くか / を使う。",
+        MessageId::ComposerVimNormalPlaceholder => {
+            "i で INSERT モード、Esc で NORMAL モードに戻ります。"
+        }
         MessageId::HistorySearchPlaceholder => "プロンプト履歴を検索...",
         MessageId::HistorySearchTitle => "履歴検索",
         MessageId::HistoryHintMove => "Up/Down 移動",
@@ -1199,6 +1210,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         }
         MessageId::CmdUndoDescription => "最後のメッセージ対を削除",
         MessageId::CmdVerboseDescription => "ライブ思考表示の詳細モードを切り替え",
+        MessageId::CmdVimDescription => "コンポーザーの Vim モードを切り替え",
         MessageId::CmdCacheAdvice => {
             "3 ターン目以降にヒット率が ~70% 以上で安定していれば、プレフィックスキャッシュは健全。\n\
              長いセッションでこれを下回る場合はプレフィックスのドリフトの可能性あり (#263)。"
@@ -1410,6 +1422,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
 fn chinese_simplified(id: MessageId) -> Option<&'static str> {
     Some(match id {
         MessageId::ComposerPlaceholder => "编写任务或使用 /。",
+        MessageId::ComposerVimNormalPlaceholder => "按 i 进入插入模式，Esc 回到普通模式。",
         MessageId::HistorySearchPlaceholder => "搜索提示历史...",
         MessageId::HistorySearchTitle => "历史搜索",
         MessageId::HistoryHintMove => "Up/Down 移动",
@@ -1512,6 +1525,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         }
         MessageId::CmdUndoDescription => "移除最后一组消息对",
         MessageId::CmdVerboseDescription => "切换实时思考内容的完整显示",
+        MessageId::CmdVimDescription => "切换输入框的 Vim 模式",
         MessageId::CmdCacheAdvice => {
             "第 3 轮起命中率稳定在 ~70% 以上即表示前缀缓存稳定；\n\
              长会话中明显偏低则意味着前缀有抖动，值得排查（#263）。"
@@ -1695,6 +1709,9 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
 fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
     Some(match id {
         MessageId::ComposerPlaceholder => "Escreva uma tarefa ou use /.",
+        MessageId::ComposerVimNormalPlaceholder => {
+            "Pressione i para INSERT. Esc volta ao modo NORMAL."
+        }
         MessageId::HistorySearchPlaceholder => "Pesquisar histórico de prompts...",
         MessageId::HistorySearchTitle => "Busca no histórico",
         MessageId::HistoryHintMove => "Up/Down move",
@@ -1825,6 +1842,7 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         }
         MessageId::CmdUndoDescription => "Remover o último par de mensagens",
         MessageId::CmdVerboseDescription => "Alternar pensamento ao vivo completo no transcript",
+        MessageId::CmdVimDescription => "Alternar modo Vim no compositor",
         MessageId::CmdCacheAdvice => {
             "Taxas de hit/miss acima de ~70% a partir do terceiro turno indicam um prefixo de cache estável;\n\
              valores menores em sessões longas sugerem instabilidade no prefixo, vale investigar (#263)."

@@ -693,6 +693,7 @@ impl Settings {
                 "composer_border",
                 "Show a border around the composer input area: on/off",
             ),
+            ("composer_vim_mode", "Composer editing mode: normal, vim"),
             (
                 "transcript_spacing",
                 "Transcript spacing: compact, comfortable, spacious",

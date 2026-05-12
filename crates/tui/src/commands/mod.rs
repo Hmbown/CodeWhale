@@ -350,6 +350,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         description_id: MessageId::CmdVerboseDescription,
     },
     CommandInfo {
+        name: "vim",
+        aliases: &[],
+        usage: "/vim [on|off|toggle]",
+        description_id: MessageId::CmdVimDescription,
+    },
+    CommandInfo {
         name: "trust",
         aliases: &[],
         usage: "/trust [on|off|add <path>|remove <path>|list]",
@@ -551,6 +557,7 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "mode" => config::mode(app, arg),
         "theme" => config::theme(app),
         "verbose" => config::verbose(app, arg),
+        "vim" => config::vim(app, arg),
         "trust" => config::trust(app, arg),
         "logout" => config::logout(app),
 

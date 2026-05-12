@@ -602,6 +602,8 @@ pub struct ComposerState {
     /// user presses `d` in Normal mode; cleared on the next key (either `d`
     /// to complete `dd`, or any other key to cancel).
     pub vim_pending_d: bool,
+    /// Pending `y` prefix for the `yy` yank-line operator.
+    pub vim_pending_y: bool,
 }
 
 impl Default for ComposerState {
@@ -625,6 +627,7 @@ impl Default for ComposerState {
             vim_enabled: false,
             vim_mode: VimMode::Normal,
             vim_pending_d: false,
+            vim_pending_y: false,
         }
     }
 }
@@ -1395,6 +1398,7 @@ impl App {
                 vim_enabled: composer_vim_enabled,
                 vim_mode: VimMode::Normal,
                 vim_pending_d: false,
+                vim_pending_y: false,
             },
             viewport: ViewportState::default(),
             goal: GoalState::default(),
@@ -3225,6 +3229,50 @@ impl App {
         self.move_cursor_word_backward();
     }
 
+    /// Move to the end of the current or next word (vim `e`).
+    pub fn vim_move_word_end(&mut self) {
+        let text = self.input.clone();
+        let total = char_count(&text);
+        if total == 0 {
+            return;
+        }
+
+        let mut pos = self.cursor_position.min(total.saturating_sub(1));
+        let current_byte = byte_index_at_char(&text, pos);
+        let current = text[current_byte..].chars().next().unwrap_or(' ');
+
+        if !current.is_whitespace() {
+            while pos + 1 < total {
+                let next_byte = byte_index_at_char(&text, pos + 1);
+                let next = text[next_byte..].chars().next().unwrap_or(' ');
+                if next.is_whitespace() {
+                    break;
+                }
+                pos += 1;
+            }
+        } else {
+            while pos < total {
+                let byte = byte_index_at_char(&text, pos);
+                let ch = text[byte..].chars().next().unwrap_or(' ');
+                if !ch.is_whitespace() {
+                    break;
+                }
+                pos += 1;
+            }
+            while pos + 1 < total {
+                let next_byte = byte_index_at_char(&text, pos + 1);
+                let next = text[next_byte..].chars().next().unwrap_or(' ');
+                if next.is_whitespace() {
+                    break;
+                }
+                pos += 1;
+            }
+        }
+
+        self.cursor_position = pos;
+        self.needs_redraw = true;
+    }
+
     /// Delete the character under the cursor (vim `x`).
     pub fn vim_delete_char_under_cursor(&mut self) {
         let total = char_count(&self.input);
@@ -3241,35 +3289,126 @@ impl App {
         self.needs_redraw = true;
     }
 
-    /// Delete the entire current logical line (vim `dd`).
-    pub fn vim_delete_line(&mut self) {
-        let text = self.input.clone();
-        let cursor_byte = byte_index_at_char(&text, self.cursor_position);
+    fn current_vim_line_content_range(&self) -> (usize, usize) {
+        let text = self.input.as_str();
+        let cursor_byte = byte_index_at_char(text, self.cursor_position);
         let line_start_byte = text[..cursor_byte].rfind('\n').map_or(0, |idx| idx + 1);
         let line_end_byte = text[cursor_byte..]
             .find('\n')
             .map_or(text.len(), |rel| cursor_byte + rel);
+        (line_start_byte, line_end_byte)
+    }
 
-        // Include the trailing newline if present, or the leading newline for the
-        // very last non-terminated line to avoid leaving a dangling newline.
-        let (remove_start, remove_end) = if line_end_byte < text.len() {
-            // There is a newline after the line — remove it too.
+    fn current_vim_line_delete_range(&self) -> (usize, usize) {
+        let (line_start_byte, line_end_byte) = self.current_vim_line_content_range();
+
+        if line_end_byte < self.input.len() {
             (line_start_byte, line_end_byte + 1)
         } else if line_start_byte > 0 {
-            // Last line without trailing newline — remove the preceding newline.
             (line_start_byte - 1, line_end_byte)
         } else {
-            // Only line in the buffer.
             (line_start_byte, line_end_byte)
-        };
+        }
+    }
+
+    /// Yank the current logical line into the kill buffer (vim `yy`).
+    pub fn vim_yank_line(&mut self) -> bool {
+        if self.input.is_empty() {
+            return false;
+        }
+
+        let (line_start_byte, line_end_byte) = self.current_vim_line_content_range();
+        let mut yanked = self.input[line_start_byte..line_end_byte].to_string();
+        yanked.push('\n');
+        self.kill_buffer = yanked;
+        self.needs_redraw = true;
+        true
+    }
+
+    /// Delete the entire current logical line (vim `dd`).
+    pub fn vim_delete_line(&mut self) {
+        let (line_start_byte, line_end_byte) = self.current_vim_line_content_range();
+        let mut removed_line = self.input[line_start_byte..line_end_byte].to_string();
+        removed_line.push('\n');
+        self.kill_buffer = removed_line;
+
+        let (remove_start, remove_end) = self.current_vim_line_delete_range();
 
         self.input.replace_range(remove_start..remove_end, "");
         self.cursor_position = char_count(&self.input[..remove_start]);
         self.needs_redraw = true;
     }
 
+    /// Put the kill buffer after the current cursor or current line (vim `p`).
+    pub fn vim_put_after(&mut self) -> bool {
+        self.vim_put(true)
+    }
+
+    /// Put the kill buffer before the current cursor or current line (vim `P`).
+    pub fn vim_put_before(&mut self) -> bool {
+        self.vim_put(false)
+    }
+
+    fn vim_put(&mut self, after: bool) -> bool {
+        if self.kill_buffer.is_empty() {
+            return false;
+        }
+
+        let text = self.kill_buffer.clone();
+        let insert_byte = if text.ends_with('\n') {
+            let (line_start_byte, line_end_byte) = self.current_vim_line_content_range();
+            if after {
+                if line_end_byte < self.input.len() {
+                    line_end_byte + 1
+                } else if self.input.is_empty() {
+                    0
+                } else {
+                    self.input.len()
+                }
+            } else {
+                line_start_byte
+            }
+        } else {
+            let cursor = self.cursor_position.min(char_count(&self.input));
+            let cursor = if after {
+                (cursor + 1).min(char_count(&self.input))
+            } else {
+                cursor
+            };
+            byte_index_at_char(&self.input, cursor)
+        };
+
+        self.input.insert_str(insert_byte, &text);
+        self.cursor_position = char_count(&self.input[..insert_byte]);
+        self.slash_menu_hidden = false;
+        self.mention_menu_hidden = false;
+        self.mention_menu_selected = 0;
+        self.needs_redraw = true;
+        true
+    }
+
     /// Enter insert mode at the cursor (vim `i`).
     pub fn vim_enter_insert(&mut self) {
+        self.vim_mode = VimMode::Insert;
+        self.needs_redraw = true;
+    }
+
+    /// Enter insert mode at the first non-blank character of the line (vim `I`).
+    pub fn vim_insert_line_start(&mut self) {
+        let text = self.input.clone();
+        let cursor_byte = byte_index_at_char(&text, self.cursor_position);
+        let line_start_byte = text[..cursor_byte].rfind('\n').map_or(0, |idx| idx + 1);
+        let line_end_byte = text[cursor_byte..]
+            .find('\n')
+            .map_or(text.len(), |rel| cursor_byte + rel);
+        let mut target_byte = line_start_byte;
+        for (rel, ch) in text[line_start_byte..line_end_byte].char_indices() {
+            if !ch.is_whitespace() {
+                target_byte = line_start_byte + rel;
+                break;
+            }
+        }
+        self.cursor_position = char_count(&text[..target_byte]);
         self.vim_mode = VimMode::Insert;
         self.needs_redraw = true;
     }
@@ -3284,6 +3423,13 @@ impl App {
         self.needs_redraw = true;
     }
 
+    /// Enter insert mode at the end of the current line (vim `A`).
+    pub fn vim_append_line_end(&mut self) {
+        self.vim_move_line_end();
+        self.vim_mode = VimMode::Insert;
+        self.needs_redraw = true;
+    }
+
     /// Open a new line below and enter insert mode (vim `o`).
     pub fn vim_open_line_below(&mut self) {
         // Move to end of line, then insert a newline.
@@ -3292,10 +3438,22 @@ impl App {
         self.vim_mode = VimMode::Insert;
     }
 
+    /// Open a new line above and enter insert mode (vim `O`).
+    pub fn vim_open_line_above(&mut self) {
+        let text = self.input.clone();
+        let cursor_byte = byte_index_at_char(&text, self.cursor_position);
+        let line_start_byte = text[..cursor_byte].rfind('\n').map_or(0, |idx| idx + 1);
+        self.input.insert(line_start_byte, '\n');
+        self.cursor_position = char_count(&self.input[..line_start_byte]);
+        self.vim_mode = VimMode::Insert;
+        self.needs_redraw = true;
+    }
+
     /// Return to Normal mode from Insert or Visual (vim `Esc`).
     pub fn vim_enter_normal(&mut self) {
         self.vim_mode = VimMode::Normal;
         self.vim_pending_d = false;
+        self.vim_pending_y = false;
         // In Normal mode the cursor sits on a character, not after the last one.
         let total = char_count(&self.input);
         if self.cursor_position > 0 && self.cursor_position >= total {
@@ -3318,12 +3476,10 @@ impl App {
     }
 
     /// Move the cursor down one logical line within the buffer (vim `j`).
-    /// Falls back to history-down when already on the last line.
     pub fn vim_move_down(&mut self) {
         let text = self.input.clone();
         let total = char_count(&text);
         if self.cursor_position >= total {
-            self.history_down();
             return;
         }
         let cursor_byte = byte_index_at_char(&text, self.cursor_position);
@@ -3340,13 +3496,10 @@ impl App {
             let target_col = col.min(next_line_char_len);
             self.cursor_position = char_count(&text[..next_line_start]) + target_col;
             self.needs_redraw = true;
-        } else {
-            self.history_down();
         }
     }
 
     /// Move the cursor up one logical line within the buffer (vim `k`).
-    /// Falls back to history-up when already on the first line.
     pub fn vim_move_up(&mut self) {
         let text = self.input.clone();
         let cursor_byte = byte_index_at_char(&text, self.cursor_position);
@@ -3361,8 +3514,6 @@ impl App {
             let target_col = col.min(prev_line_len);
             self.cursor_position = char_count(&text[..prev_start]) + target_col;
             self.needs_redraw = true;
-        } else {
-            self.history_up();
         }
     }
 

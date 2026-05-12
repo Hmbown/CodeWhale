@@ -299,6 +299,9 @@ Common settings keys:
 - `background_color` (`#RRGGBB`, `RRGGBB`, or `default`): optional main TUI
   background color applied to the root, header, transcript, and footer
   surfaces while preserving panel contrast.
+- `composer_vim_mode` (`normal`, `vim`; default `normal`): enables modal Vim
+  editing in the composer. Use `/vim` to toggle it for the current session, or
+  `/config vim vim --save` to persist it.
 - `cost_currency` (`usd`, `cny`; default `usd`): currency used by the footer,
   context panel, `/cost`, `/tokens`, and long-turn notification summaries. The
   aliases `rmb` and `yuan` normalize to `cny`.

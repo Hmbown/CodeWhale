@@ -2,6 +2,7 @@ use super::*;
 use crate::config::{ApiProvider, Config};
 use crate::config_ui::{self, WebConfigSession, WebConfigSessionEvent};
 use crate::core::engine::mock_engine_handle;
+use crate::tui::app::VimMode;
 use crate::tui::file_mention::{
     apply_mention_menu_selection, find_file_mention_completions, partial_file_mention_at_cursor,
     try_autocomplete_file_mention, user_request_with_file_mentions, visible_mention_menu_entries,
@@ -5019,4 +5020,132 @@ fn sanitize_stream_chunk_handles_empty_and_whitespace() {
     // branches that skip empty chunks handle the result, so the
     // filter doesn't need to inject a placeholder.
     assert_eq!(super::sanitize_stream_chunk("\u{1b}\u{7}\u{8}"), "");
+}
+
+#[test]
+fn vim_normal_i_enters_insert_mode() {
+    let mut app = create_test_app();
+    app.composer.vim_enabled = true;
+    app.composer.vim_mode = VimMode::Normal;
+
+    super::handle_vim_normal_key(&mut app, 'i');
+
+    assert_eq!(app.composer.vim_mode, VimMode::Insert);
+    assert!(app.needs_redraw);
+}
+
+#[test]
+fn vim_normal_plain_chars_do_not_insert_text() {
+    let mut app = create_test_app();
+    app.composer.vim_enabled = true;
+    app.composer.vim_mode = VimMode::Normal;
+
+    super::handle_vim_normal_key(&mut app, 'a');
+
+    assert!(app.input.is_empty());
+    assert_eq!(app.composer.vim_mode, VimMode::Insert);
+}
+
+#[test]
+fn vim_normal_yy_yanks_line_and_p_puts_after() {
+    let mut app = create_test_app();
+    app.composer.vim_enabled = true;
+    app.composer.vim_mode = VimMode::Normal;
+    app.input = "one\ntwo\nthree".to_string();
+    app.cursor_position = 4;
+
+    super::handle_vim_normal_key(&mut app, 'y');
+    super::handle_vim_normal_key(&mut app, 'y');
+
+    assert_eq!(app.kill_buffer, "two\n");
+
+    super::handle_vim_normal_key(&mut app, 'p');
+
+    assert_eq!(app.input, "one\ntwo\ntwo\nthree");
+}
+
+#[test]
+fn vim_normal_dd_cuts_line_for_later_put() {
+    let mut app = create_test_app();
+    app.composer.vim_enabled = true;
+    app.composer.vim_mode = VimMode::Normal;
+    app.input = "one\ntwo\nthree".to_string();
+    app.cursor_position = 4;
+
+    super::handle_vim_normal_key(&mut app, 'd');
+    super::handle_vim_normal_key(&mut app, 'd');
+
+    assert_eq!(app.input, "one\nthree");
+    assert_eq!(app.kill_buffer, "two\n");
+
+    super::handle_vim_normal_key(&mut app, 'P');
+
+    assert_eq!(app.input, "one\ntwo\nthree");
+}
+
+#[test]
+fn vim_normal_jk_do_not_navigate_prompt_history() {
+    let mut app = create_test_app();
+    app.composer.vim_enabled = true;
+    app.composer.vim_mode = VimMode::Normal;
+    app.input_history.push("previous prompt".to_string());
+
+    super::handle_vim_normal_key(&mut app, 'k');
+    super::handle_vim_normal_key(&mut app, 'j');
+
+    assert!(app.input.is_empty());
+    assert!(app.history_index.is_none());
+}
+
+#[test]
+fn vim_normal_i_a_o_variants_enter_insert_mode() {
+    let mut app = create_test_app();
+    app.composer.vim_enabled = true;
+    app.composer.vim_mode = VimMode::Normal;
+    app.input = "  one\ntwo".to_string();
+    app.cursor_position = 3;
+
+    super::handle_vim_normal_key(&mut app, 'I');
+    assert_eq!(app.cursor_position, 2);
+    assert_eq!(app.composer.vim_mode, VimMode::Insert);
+
+    app.composer.vim_mode = VimMode::Normal;
+    app.cursor_position = 2;
+    super::handle_vim_normal_key(&mut app, 'A');
+    assert_eq!(app.cursor_position, 5);
+    assert_eq!(app.composer.vim_mode, VimMode::Insert);
+
+    app.composer.vim_mode = VimMode::Normal;
+    super::handle_vim_normal_key(&mut app, 'O');
+    assert_eq!(app.input, "\n  one\ntwo");
+    assert_eq!(app.composer.vim_mode, VimMode::Insert);
+}
+
+#[test]
+fn vim_normal_e_and_d_delete_to_line_end() {
+    let mut app = create_test_app();
+    app.composer.vim_enabled = true;
+    app.composer.vim_mode = VimMode::Normal;
+    app.input = "one two\nthree".to_string();
+    app.cursor_position = 0;
+
+    super::handle_vim_normal_key(&mut app, 'e');
+    assert_eq!(app.cursor_position, 2);
+
+    super::handle_vim_normal_key(&mut app, 'D');
+    assert_eq!(app.input, "on\nthree");
+    assert_eq!(app.kill_buffer, "e two");
+}
+
+#[test]
+fn vim_normal_slash_starts_slash_command_input() {
+    let mut app = create_test_app();
+    app.composer.vim_enabled = true;
+    app.composer.vim_mode = VimMode::Normal;
+
+    super::handle_vim_normal_key(&mut app, '/');
+
+    assert_eq!(app.input, "/");
+    assert_eq!(app.cursor_position, 1);
+    assert_eq!(app.composer.vim_mode, VimMode::Insert);
 }

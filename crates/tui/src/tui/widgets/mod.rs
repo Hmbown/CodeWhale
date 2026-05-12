@@ -632,13 +632,7 @@ impl Renderable for ComposerWidget<'_> {
 
         let mut input_lines = Vec::new();
         if input_text.is_empty() {
-            let placeholder = if self.app.is_history_search_active() {
-                self.app
-                    .tr(crate::localization::MessageId::HistorySearchPlaceholder)
-            } else {
-                self.app
-                    .tr(crate::localization::MessageId::ComposerPlaceholder)
-            };
+            let placeholder = composer_placeholder(self.app);
             input_lines.push(Line::from(Span::styled(
                 placeholder,
                 Style::default().fg(palette::TEXT_MUTED).italic(),
@@ -657,13 +651,7 @@ impl Renderable for ComposerWidget<'_> {
         // wrap the single Line at render time, so we must estimate the wrapped
         // row count ourselves to keep padding accurate on narrow widths.
         let visual_rows = if input_text.is_empty() {
-            let placeholder = if self.app.is_history_search_active() {
-                self.app
-                    .tr(crate::localization::MessageId::HistorySearchPlaceholder)
-            } else {
-                self.app
-                    .tr(crate::localization::MessageId::ComposerPlaceholder)
-            };
+            let placeholder = composer_placeholder(self.app);
             placeholder_visual_lines_for(placeholder, content_width)
         } else {
             input_lines.len()
@@ -938,13 +926,7 @@ impl Renderable for ComposerWidget<'_> {
         let (visible_lines, cursor_row, cursor_col) =
             layout_input(input_text, input_cursor, content_width, input_rows_budget);
         let visual_rows = if input_text.is_empty() {
-            let placeholder = if self.app.is_history_search_active() {
-                self.app
-                    .tr(crate::localization::MessageId::HistorySearchPlaceholder)
-            } else {
-                self.app
-                    .tr(crate::localization::MessageId::ComposerPlaceholder)
-            };
+            let placeholder = composer_placeholder(self.app);
             placeholder_visual_lines_for(placeholder, content_width)
         } else {
             visible_lines.len()
@@ -1892,6 +1874,16 @@ fn placeholder_visual_lines_for(placeholder: &str, content_width: usize) -> usiz
     wrap_text(placeholder, content_width).len().max(1)
 }
 
+fn composer_placeholder(app: &App) -> &'static str {
+    if app.is_history_search_active() {
+        app.tr(crate::localization::MessageId::HistorySearchPlaceholder)
+    } else if app.composer.vim_enabled && app.composer.vim_mode == VimMode::Normal {
+        app.tr(crate::localization::MessageId::ComposerVimNormalPlaceholder)
+    } else {
+        app.tr(crate::localization::MessageId::ComposerPlaceholder)
+    }
+}
+
 fn composer_min_input_rows(density: ComposerDensity) -> usize {
     match density {
         ComposerDensity::Compact => 2,
@@ -2162,14 +2154,14 @@ mod tests {
     use super::{
         ApprovalWidget, COMPOSER_PANEL_HEIGHT, ChatWidget, ComposerWidget, Renderable,
         SlashMenuEntry, apply_selection_to_line, composer_height, composer_max_height,
-        composer_min_input_rows, composer_top_padding, compute_takeover_area, cursor_row_col,
-        layout_input, pad_lines_to_bottom, placeholder_visual_lines, should_render_empty_state,
-        slash_completion_hints, wrap_input_lines, wrap_text,
+        composer_min_input_rows, composer_placeholder, composer_top_padding, compute_takeover_area,
+        cursor_row_col, layout_input, pad_lines_to_bottom, placeholder_visual_lines,
+        should_render_empty_state, slash_completion_hints, wrap_input_lines, wrap_text,
     };
     use crate::config::Config;
     use crate::localization::Locale;
     use crate::palette;
-    use crate::tui::app::{App, ComposerDensity, TuiOptions};
+    use crate::tui::app::{App, ComposerDensity, TuiOptions, VimMode};
     use crate::tui::history::{GenericToolCell, HistoryCell, ToolCell, ToolStatus};
     use crate::tui::scrolling::TranscriptScroll;
     use ratatui::{
@@ -2529,6 +2521,22 @@ mod tests {
         // cursor_x = 0 + (1-0) + 0 = 1
         // cursor_y = 0 + (1-0) + (2+0) = 3
         assert_eq!(widget.cursor_pos(area), Some((1, 3)));
+    }
+
+    #[test]
+    fn empty_vim_normal_composer_uses_vim_hint_placeholder() {
+        let mut app = create_test_app();
+        app.ui_locale = Locale::En;
+        app.composer.vim_enabled = true;
+        app.composer.vim_mode = VimMode::Normal;
+
+        assert_eq!(
+            composer_placeholder(&app),
+            "Press i for INSERT mode. Esc returns to NORMAL mode."
+        );
+
+        app.composer.vim_mode = VimMode::Insert;
+        assert_eq!(composer_placeholder(&app), "Write a task or use /.");
     }
 
     #[test]
