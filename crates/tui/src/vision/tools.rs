@@ -109,7 +109,11 @@ impl ToolSpec for ImageAnalyzeTool {
             .unwrap_or("Describe this image in detail.");
 
         let image_path_buf = Path::new(image_path);
+        // On Windows, `Path::is_absolute()` does not recognize `/etc/hosts`
+        // as absolute, so also reject Unix-style absolute paths explicitly.
+        let looks_like_unix_absolute = image_path.starts_with('/') && !image_path.starts_with("//");
         if image_path_buf.is_absolute()
+            || looks_like_unix_absolute
             || image_path_buf
                 .components()
                 .any(|c| matches!(c, std::path::Component::ParentDir))
