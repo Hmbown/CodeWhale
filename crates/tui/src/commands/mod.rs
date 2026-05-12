@@ -734,6 +734,13 @@ pub fn persist_root_string_key(
     config::persist_root_string_key(config_path, key, value)
 }
 
+/// Persist generated tool permission rules to `~/.deepseek/config.toml`.
+pub fn persist_permission_rules(
+    rules: &[deepseek_execpolicy::ToolPermissionRule],
+) -> anyhow::Result<std::path::PathBuf> {
+    config::persist_permission_rules(rules)
+}
+
 pub fn switch_mode(app: &mut App, mode: crate::tui::app::AppMode) -> String {
     config::switch_mode(app, mode)
 }

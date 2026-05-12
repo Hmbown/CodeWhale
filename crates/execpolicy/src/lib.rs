@@ -9,8 +9,8 @@ use globset::GlobBuilder;
 use serde::{Deserialize, Serialize};
 
 /// Priority layer for a permission ruleset. Higher ordinal = higher priority.
-/// Deny rules still win across layers; for non-deny ties the higher-priority
-/// layer wins before pattern specificity is considered.
+/// Deny rules still win across layers. For non-deny matches, higher-priority
+/// layers win first, then narrower patterns, then ask/allow precedence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RulesetLayer {
@@ -523,14 +523,23 @@ fn compare_rule_priority(
     current: &LayeredToolPermissionRule,
     current_specificity: usize,
 ) -> bool {
+    match (candidate.rule.decision, current.rule.decision) {
+        (PermissionDecision::Deny, PermissionDecision::Deny) => {
+            return (candidate.layer, candidate_specificity) > (current.layer, current_specificity);
+        }
+        (PermissionDecision::Deny, _) => return true,
+        (_, PermissionDecision::Deny) => return false,
+        _ => {}
+    }
+
     (
-        candidate.rule.decision.precedence(),
         candidate.layer,
         candidate_specificity,
+        candidate.rule.decision.precedence(),
     ) > (
-        current.rule.decision.precedence(),
         current.layer,
         current_specificity,
+        current.rule.decision.precedence(),
     )
 }
 
@@ -937,6 +946,25 @@ mod tests {
     }
 
     #[test]
+    fn more_specific_allow_rule_wins_over_broad_ask_rule() {
+        let engine =
+            ExecPolicyEngine::with_rulesets(vec![Ruleset::user(vec![], vec![]).with_rules(vec![
+                ToolPermissionRule::exec_shell(PermissionDecision::Ask, "cargo test"),
+                ToolPermissionRule::exec_shell(PermissionDecision::Allow, "cargo test --workspace"),
+            ])]);
+
+        let decision = engine.check(exec_ctx("cargo test --workspace")).unwrap();
+
+        assert!(decision.allow);
+        assert!(!decision.requires_approval);
+        assert_eq!(decision.requirement.phase(), "allowed");
+        assert_eq!(
+            decision.matched_rule.as_deref(),
+            Some("tool 'exec_shell', command 'cargo test --workspace'")
+        );
+    }
+
+    #[test]
     fn ask_rule_overrides_on_failure_policy() {
         let engine =
             ExecPolicyEngine::with_rulesets(vec![Ruleset::user(vec![], vec![]).with_rules(vec![
@@ -972,6 +1000,35 @@ mod tests {
         });
 
         assert_eq!(decision.decision, Some(PermissionDecision::Allow));
+    }
+
+    #[test]
+    fn exact_path_allow_rule_wins_over_broad_path_ask_rule() {
+        let engine =
+            ExecPolicyEngine::with_rulesets(vec![Ruleset::user(vec![], vec![]).with_rules(vec![
+                ToolPermissionRule::file_path("file_edit", PermissionDecision::Ask, "src/**"),
+                ToolPermissionRule::file_path(
+                    "file_edit",
+                    PermissionDecision::Allow,
+                    "src/main.rs",
+                ),
+            ])]);
+
+        let decision = engine.check_tool_permission(ToolPermissionContext {
+            tool: "file_edit",
+            command: None,
+            path: Some("src/main.rs"),
+        });
+
+        assert_eq!(decision.decision, Some(PermissionDecision::Allow));
+        let label = decision
+            .matched_rule
+            .as_ref()
+            .map(|matched| matched.rule.pattern_label());
+        assert_eq!(
+            label.as_deref(),
+            Some("tool 'file_edit', path 'src/main.rs'")
+        );
     }
 
     #[test]

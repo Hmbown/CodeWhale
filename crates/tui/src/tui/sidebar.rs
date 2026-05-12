@@ -1952,9 +1952,8 @@ mod tests {
         ACTIVE_TOOL_COMPLETED_ROW_TTL, ACTIVE_TOOL_STALE_RUNNING_ROW_TTL, AutoSidebarPanel,
         AutoSidebarState, SidebarAgentRow, SidebarHoverSection, SidebarHoverState,
         SidebarSubagentSummary, SidebarToolRow, SidebarWorkChecklistItem, SidebarWorkStrategyStep,
-        SidebarWorkSummary, ToolRowOrder, auto_sidebar_panels, editorial_tool_rows,
-        duration_ms, subagent_panel_lines, task_panel_lines, work_panel_empty_hint,
-        work_panel_lines,
+        SidebarWorkSummary, ToolRowOrder, auto_sidebar_panels, duration_ms, editorial_tool_rows,
+        subagent_panel_lines, task_panel_lines, work_panel_empty_hint, work_panel_lines,
     };
     use crate::config::Config;
     use crate::palette::PaletteMode;

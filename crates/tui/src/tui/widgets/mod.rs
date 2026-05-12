@@ -1224,6 +1224,82 @@ impl Renderable for ApprovalWidget<'_> {
 
         lines.push(Line::from(""));
 
+        if let Some(preview) = self.request.permission_rule_preview() {
+            let preview_width = card_area.width.saturating_sub(16) as usize;
+            let preview_lines = preview.lines().collect::<Vec<_>>();
+            let preview_line_limit = 2;
+            for (idx, preview_line) in preview_lines.iter().take(preview_line_limit).enumerate() {
+                let rendered = crate::utils::truncate_with_ellipsis(
+                    preview_line,
+                    preview_width.max(20),
+                    "...",
+                );
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        if idx == 0 {
+                            label_rule(locale)
+                        } else {
+                            "      "
+                        },
+                        Style::default().fg(palette::TEXT_HINT),
+                    ),
+                    Span::styled(rendered, Style::default().fg(palette::TEXT_SECONDARY)),
+                ]));
+            }
+            if preview_lines.len() > preview_line_limit {
+                let hidden = preview_lines.len() - preview_line_limit;
+                let hidden_line = hidden_rule_preview_line(locale, hidden);
+                let rendered = crate::utils::truncate_with_ellipsis(
+                    &hidden_line,
+                    preview_width.max(20),
+                    "...",
+                );
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled("      ", Style::default().fg(palette::TEXT_HINT)),
+                    Span::styled(rendered, Style::default().fg(palette::TEXT_SECONDARY)),
+                ]));
+            }
+            let mut spans = vec![
+                Span::raw("  "),
+                Span::styled(
+                    "[s] ",
+                    Style::default()
+                        .fg(palette_colors.shortcut)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    option_save_rule(locale),
+                    Style::default().fg(palette::TEXT_BODY),
+                ),
+            ];
+            if self.view.pending_persist_rule() {
+                spans.push(Span::raw("  "));
+                spans.push(Span::styled(
+                    staged_marker(locale),
+                    Style::default()
+                        .fg(palette_colors.accent)
+                        .add_modifier(Modifier::BOLD),
+                ));
+            }
+            lines.push(Line::from(spans));
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(
+                    "[p] ",
+                    Style::default()
+                        .fg(palette_colors.shortcut)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    option_view_rule_preview(locale),
+                    Style::default().fg(palette::TEXT_BODY),
+                ),
+            ]));
+            lines.push(Line::from(""));
+        }
+
         let options = approval_options_for(risk, locale);
 
         for (i, opt) in options.iter().enumerate() {
@@ -1443,6 +1519,38 @@ fn label_params(locale: Locale) -> &'static str {
     }
 }
 
+fn label_rule(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "规则：",
+        _ => "Rule:   ",
+    }
+}
+
+fn staged_marker(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "(待确认)",
+        _ => "(staged)",
+    }
+}
+
+fn hidden_rule_preview_line(locale: Locale, hidden: usize) -> String {
+    match locale {
+        Locale::ZhHans => format!("... 还有 {hidden} 行，按 [p] 查看完整规则"),
+        _ => format!("... +{hidden} more line(s); press [p] to view all"),
+    }
+}
+
+fn single_key_prefix(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "单键批准：",
+        _ => "Single key approves: ",
+    }
+}
+
+fn single_key_value(_locale: Locale) -> &'static str {
+    "Enter / 1 / y"
+}
+
 fn footer_controls(locale: Locale) -> &'static str {
     match locale {
         Locale::ZhHans => "  ·  v：完整参数  ·  Esc：终止",
@@ -1507,6 +1615,20 @@ fn option_approve_always(locale: Locale) -> &'static str {
     match locale {
         Locale::ZhHans => "本会话同类自动批准",
         _ => "Approve always for this kind",
+    }
+}
+
+fn option_save_rule(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "保存此规则并批准",
+        _ => "Save this rule and approve",
+    }
+}
+
+fn option_view_rule_preview(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "查看完整规则预览",
+        _ => "View full rule preview",
     }
 }
 

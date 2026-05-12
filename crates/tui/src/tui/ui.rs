@@ -6517,6 +6517,7 @@ async fn handle_view_events(
                 timed_out,
                 approval_key,
                 approval_grouping_key,
+                persistent_rules,
             } => {
                 apply_approval_decision(
                     app,
@@ -6528,6 +6529,7 @@ async fn handle_view_events(
                         timed_out,
                         approval_key,
                         approval_grouping_key,
+                        persistent_rules,
                     },
                 )
                 .await;
@@ -6816,12 +6818,13 @@ fn push_approval_request_view(
         maybe_add_patch_preview(app, tool_input);
     }
 
-    let request = ApprovalRequest::new_with_intent(
+    let request = ApprovalRequest::new_with_workspace_and_intent(
         id,
         tool_name,
         description,
         tool_input,
         approval_key,
+        &app.workspace,
         intent_summary,
     );
     app.view_stack
@@ -6835,6 +6838,7 @@ struct ApprovalDecisionEvent {
     timed_out: bool,
     approval_key: String,
     approval_grouping_key: String,
+    persistent_rules: Vec<deepseek_execpolicy::ToolPermissionRule>,
 }
 
 async fn apply_approval_decision(
@@ -6852,9 +6856,45 @@ async fn apply_approval_decision(
             .insert(event.approval_grouping_key.clone());
     }
 
+    let mut live_persistent_rules = Vec::new();
+    if matches!(
+        event.decision,
+        ReviewDecision::Approved | ReviewDecision::ApprovedForSession
+    ) && !event.persistent_rules.is_empty()
+    {
+        match commands::persist_permission_rules(&event.persistent_rules) {
+            Ok(path) => {
+                live_persistent_rules = event.persistent_rules;
+                let noun = if live_persistent_rules.len() == 1 {
+                    "rule"
+                } else {
+                    "rules"
+                };
+                app.push_status_toast(
+                    format!("Saved permission {noun} to {}", path.display()),
+                    StatusToastLevel::Success,
+                    Some(5_000),
+                );
+            }
+            Err(err) => {
+                app.push_status_toast(
+                    format!("Failed to save permission rule: {err}"),
+                    StatusToastLevel::Error,
+                    Some(10_000),
+                );
+            }
+        }
+    }
+
     match event.decision {
         ReviewDecision::Approved | ReviewDecision::ApprovedForSession => {
-            let _ = engine_handle.approve_tool_call(event.tool_id).await;
+            if live_persistent_rules.is_empty() {
+                let _ = engine_handle.approve_tool_call(event.tool_id).await;
+            } else {
+                let _ = engine_handle
+                    .approve_tool_call_with_rules(event.tool_id, live_persistent_rules)
+                    .await;
+            }
         }
         ReviewDecision::Denied => {
             // Cache the denial so the model retry-loop doesn't re-prompt for
