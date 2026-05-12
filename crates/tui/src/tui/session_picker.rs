@@ -560,8 +560,8 @@ fn build_preview_lines(session: &SavedSession) -> Vec<String> {
     }
     out.push("".to_string());
 
-    const MAX_MESSAGES: usize = 50;
-    const MAX_DIALOGUE: usize = 20;
+    const MAX_MESSAGES: usize = 6;
+    const MAX_DIALOGUE: usize = 6;
     let mut dialogue_lines: Vec<String> = Vec::new();
     for message in session.messages.iter().take(MAX_MESSAGES) {
         let role = message.role.to_ascii_uppercase();
