@@ -366,6 +366,34 @@ fn typed_permission_requires_all_apply_patch_paths_to_be_allowed() {
 }
 
 #[test]
+fn typed_permission_checks_apply_patch_diff_even_when_path_field_is_present() {
+    let engine = permission_engine_with_rules(vec![
+        deepseek_execpolicy::ToolPermissionRule::file_path(
+            "apply_patch",
+            deepseek_execpolicy::PermissionDecision::Allow,
+            "docs/**",
+        ),
+        deepseek_execpolicy::ToolPermissionRule::file_path(
+            "apply_patch",
+            deepseek_execpolicy::PermissionDecision::Deny,
+            "secrets/**",
+        ),
+    ]);
+
+    let decision = tool_permission_override_for_call(
+        &engine,
+        "apply_patch",
+        &json!({
+            "path": "docs/a.md",
+            "patch": "--- a/docs/a.md\n+++ b/secrets/token.txt\n@@ -1 +1 @@\n-old\n+new\n"
+        }),
+        permission_test_workspace(),
+    );
+
+    assert!(matches!(decision, ToolPermissionOverride::Deny { .. }));
+}
+
+#[test]
 fn typed_permission_allows_apply_patch_when_all_paths_match() {
     let engine =
         permission_engine_with_rules(vec![deepseek_execpolicy::ToolPermissionRule::file_path(
@@ -379,6 +407,27 @@ fn typed_permission_allows_apply_patch_when_all_paths_match() {
         "apply_patch",
         &json!({
             "patch": "--- a/docs/a.md\n+++ b/docs/a.md\n@@ -1 +1 @@\n-old\n+new\n"
+        }),
+        permission_test_workspace(),
+    );
+
+    assert!(matches!(decision, ToolPermissionOverride::Allow { .. }));
+}
+
+#[test]
+fn typed_permission_parses_apply_patch_paths_with_diff_timestamps() {
+    let engine =
+        permission_engine_with_rules(vec![deepseek_execpolicy::ToolPermissionRule::file_path(
+            "apply_patch",
+            deepseek_execpolicy::PermissionDecision::Allow,
+            "docs/**",
+        )]);
+
+    let decision = tool_permission_override_for_call(
+        &engine,
+        "apply_patch",
+        &json!({
+            "patch": "--- a/docs/a.md\t2026-05-12 12:00:00\n+++ b/docs/a.md\t2026-05-12 12:00:01\n@@ -1 +1 @@\n-old\n+new\n"
         }),
         permission_test_workspace(),
     );
