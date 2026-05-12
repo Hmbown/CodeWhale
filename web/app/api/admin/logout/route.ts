@@ -1,3 +1,9 @@
+/**
+ * @ApiRoute POST /api/admin/logout
+ *
+ * Maintainer logout endpoint. Clears the mt_sid session cookie and
+ * redirects to the admin page.
+ */
 import { NextResponse } from "next/server";
 import { getAgentEnv, deleteSession } from "@/lib/community-agent";
 

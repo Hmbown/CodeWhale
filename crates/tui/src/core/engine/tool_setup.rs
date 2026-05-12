@@ -92,6 +92,8 @@ impl Engine {
             builder = builder.with_remember_tool();
         }
 
+        builder = crate::tools::triadmind::register_triadmind_tools(builder);
+
         builder
     }
 }

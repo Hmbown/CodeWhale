@@ -36,6 +36,7 @@ pub mod tasks;
 pub mod test_runner;
 pub mod todo;
 pub mod tool_result_retrieval;
+pub mod triadmind;
 pub mod truncate;
 pub mod user_input;
 pub mod validate_data;

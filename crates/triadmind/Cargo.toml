@@ -1,0 +1,25 @@
+[package]
+name = "deepseek-triadmind"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Native Rust port of TriadMind architecture governance: topology extraction, protocol validation, rules injection, and dream analysis"
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+walkdir = "2"
+regex = "1"
+
+# Optional: tree-sitter support (requires C build toolchain)
+# tree-sitter = { version = "0.24", optional = true }
+# tree-sitter-rust = { version = "0.23", optional = true }
+# tree-sitter-typescript = { version = "0.23", optional = true }
+
+[features]
+default = []
+tree-sitter = []

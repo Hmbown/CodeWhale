@@ -175,6 +175,19 @@ deepseek --version
 Use npm or direct GitHub release downloads when you need the newest release
 before Scoop's manifest catches up.
 
+If Windows auto-detection keeps misreporting missing `link.exe` / `vcvars64.bat`,
+start the app through the repo launcher instead of letting nested shells guess
+your MSVC setup:
+
+```bat
+cd DeepSeek-TUI
+start-deepseek-msvc.cmd
+```
+
+The launcher loads Visual Studio's `VsDevCmd.bat` (or `vcvars64.bat` fallback),
+pins the Rust toolchain to `stable-x86_64-pc-windows-msvc`, and then starts
+`deepseek` with a known-good environment.
+
 
 <details id="install-from-source">
 <summary>Install from source</summary>

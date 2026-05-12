@@ -123,3 +123,15 @@ Long sessions in DeepSeek TUI WILL degrade and crash if you work sequentially. T
 6. **After every 3 turns, check:** context under 60%? Sub-agents still running? PRs ready to push? `cargo check` still passes?
 
 **The "mismanaged genius" problem:** The system prompt was written for a less capable model and treats sub-agents, RLM, and parallel execution as specialty escape hatches. The model *can* do all of this — the prompt just doesn't encourage it strongly enough. We fixed this in v0.8.6 (see `PROMPT_ANALYSIS.md`).
+
+<!-- TRIADMIND_RULES_START -->
+# TriadMind Session Rules
+
+- Bootstrap version: 1.0
+- Before architecture decisions, read `.triadmind/triad-map.json` and `.triadmind/runtime-map.json`.
+- Before coding, read `.triadmind/config.json`, `.triadmind/master-prompt.md`, and `.triadmind/runtime-diagnostics.json`.
+- Run fail-closed: if `triadmind verify --strict` fails, stop implementation and fix topology quality first.
+- Prefer the protocol lifecycle: `macro -> meso -> micro -> finalize -> plan -> apply -> handoff`.
+- Prioritize operations in this order: `reuse > modify > create_child`.
+- For runtime regressions, generate repair artifacts first (`triadmind heal`) before ad-hoc patching.
+<!-- TRIADMIND_RULES_END -->

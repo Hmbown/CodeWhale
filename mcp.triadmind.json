@@ -1,0 +1,15 @@
+{
+  "servers": {
+    "triadmind": {
+      "command": "node",
+      "args": [
+        "D:/TraidMind/triadmind-core/dist/src/mcp-server.js"
+      ],
+      "env": {
+        "TRIADMIND_MCP_LOG": "D:/TraidMind/triadmind-core/.triadmind/mcp-debug.log"
+      },
+      "disabled": false,
+      "execute_timeout": 120
+    }
+  }
+}

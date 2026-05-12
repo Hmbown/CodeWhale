@@ -206,6 +206,7 @@ impl Engine {
             // request and inject them as a synthetic user message so the
             // model sees compile errors before its next reasoning step.
             self.flush_pending_lsp_diagnostics().await;
+            self.flush_pending_triadmind_diagnostics().await;
 
             // #159: layered context seam checkpoint. This is opt-in for
             // v0.7.5 while #200 audits cache-hit behavior; when enabled it
@@ -1662,6 +1663,8 @@ impl Engine {
                         // surface stale state.
                         if output.success {
                             self.run_post_edit_lsp_hook(&outcome.name, &tool_input)
+                                .await;
+                            self.run_post_edit_triadmind_hook(&outcome.name, &tool_input)
                                 .await;
                         }
 

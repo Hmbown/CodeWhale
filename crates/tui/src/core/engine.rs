@@ -345,6 +345,8 @@ pub struct Engine {
     /// Diagnostics collected during the current step's tool calls. Drained
     /// and forwarded as a synthetic user message before the next API call.
     pending_lsp_blocks: Vec<crate::lsp::DiagnosticBlock>,
+    /// TriadMind architecture diagnostics collected during tool calls.
+    pending_triadmind_messages: Vec<String>,
 }
 
 // === Internal tool helpers ===
@@ -552,6 +554,7 @@ impl Engine {
             turn_counter: 0,
             lsp_manager,
             pending_lsp_blocks: Vec::new(),
+            pending_triadmind_messages: Vec::new(),
             workshop_vars,
             sandbox_backend,
         };
@@ -2011,6 +2014,7 @@ use context::{
 mod dispatch;
 mod loop_guard;
 mod lsp_hooks;
+mod triadmind_hooks;
 mod streaming;
 mod tool_catalog;
 mod tool_execution;
