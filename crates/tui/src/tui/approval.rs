@@ -20,9 +20,9 @@
 //!   impact summary visible, then lets `Enter` commit the highlighted
 //!   option or `y` / `a` / `d` commit directly.
 //!
-//! The decision events emitted upstream are unchanged
-//! (`ViewEvent::ApprovalDecision`), so `ui.rs` and the engine handle
-//! both variants without modification. Auto-approve / YOLO bypasses
+//! The decision events emitted upstream are still
+//! `ViewEvent::ApprovalDecision`, with optional persistent permission
+//! rules for the "save this rule" action. Auto-approve / YOLO bypasses
 //! happen *before* the view is constructed (see `tui/ui.rs`); this
 //! module always assumes the user is being asked.
 
@@ -31,8 +31,9 @@ use crate::sandbox::SandboxPolicy;
 use crate::tui::views::{ModalKind, ModalView, ViewAction, ViewEvent};
 use crate::tui::widgets::{ApprovalWidget, ElevationWidget, Renderable};
 use crossterm::event::{KeyCode, KeyEvent};
+use deepseek_execpolicy::{PermissionDecision, ToolPermissionRule};
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
 /// Determines when tool executions require user approval
@@ -134,15 +135,47 @@ pub struct ApprovalRequest {
     /// Lossy / arity-aware fingerprint, used to scope *approvals* so an
     /// "approve for session" covers later flag variants (v0.8.37).
     pub approval_grouping_key: String,
+    /// Generated persistent allow rules for the "save this rule" action.
+    pub persistent_rules: Vec<ToolPermissionRule>,
 }
 
 impl ApprovalRequest {
+    #[cfg(test)]
     pub fn new(
         id: &str,
         tool_name: &str,
         description: &str,
         params: &Value,
         approval_key: &str,
+    ) -> Self {
+        Self::new_inner(id, tool_name, description, params, approval_key, None)
+    }
+
+    pub fn new_with_workspace(
+        id: &str,
+        tool_name: &str,
+        description: &str,
+        params: &Value,
+        approval_key: &str,
+        workspace: &Path,
+    ) -> Self {
+        Self::new_inner(
+            id,
+            tool_name,
+            description,
+            params,
+            approval_key,
+            Some(workspace),
+        )
+    }
+
+    fn new_inner(
+        id: &str,
+        tool_name: &str,
+        description: &str,
+        params: &Value,
+        approval_key: &str,
+        workspace: Option<&Path>,
     ) -> Self {
         let category = get_tool_category(tool_name);
         let risk = classify_risk(tool_name, category, params);
@@ -159,6 +192,7 @@ impl ApprovalRequest {
             params: params.clone(),
             approval_key: approval_key.to_string(),
             approval_grouping_key,
+            persistent_rules: build_persistent_permission_rules_inner(tool_name, params, workspace),
         }
     }
 
@@ -182,6 +216,323 @@ impl ApprovalRequest {
             }
             _ => self.impacts.clone(),
         }
+    }
+
+    pub fn permission_rule_preview(&self) -> Option<String> {
+        if self.persistent_rules.is_empty() {
+            None
+        } else {
+            Some(format_permission_rules_preview(&self.persistent_rules))
+        }
+    }
+}
+
+#[cfg(test)]
+pub fn build_persistent_permission_rules(
+    tool_name: &str,
+    params: &Value,
+) -> Vec<ToolPermissionRule> {
+    build_persistent_permission_rules_inner(tool_name, params, None)
+}
+
+#[cfg(test)]
+pub fn build_persistent_permission_rules_for_workspace(
+    tool_name: &str,
+    params: &Value,
+    workspace: &Path,
+) -> Vec<ToolPermissionRule> {
+    build_persistent_permission_rules_inner(tool_name, params, Some(workspace))
+}
+
+fn build_persistent_permission_rules_inner(
+    tool_name: &str,
+    params: &Value,
+    workspace: Option<&Path>,
+) -> Vec<ToolPermissionRule> {
+    match tool_name {
+        "exec_shell"
+        | "exec_shell_wait"
+        | "exec_shell_interact"
+        | "exec_wait"
+        | "exec_interact" => params
+            .get("command")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|command| !command.is_empty())
+            .map(|command| {
+                let mut rule = ToolPermissionRule::new(tool_name, PermissionDecision::Allow);
+                rule.command = Some(command.to_string());
+                vec![rule]
+            })
+            .unwrap_or_default(),
+        "read_file" | "write_file" | "edit_file" => params
+            .get("path")
+            .and_then(Value::as_str)
+            .and_then(|path| normalize_persistent_permission_path(path, workspace))
+            .map(|path| file_path_permission_rules(tool_name, &path))
+            .unwrap_or_default(),
+        "list_dir" => {
+            let Some(path) = params
+                .get("path")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|path| !path.is_empty())
+                .or(Some("."))
+                .and_then(|path| normalize_persistent_permission_path(path, workspace))
+            else {
+                return Vec::new();
+            };
+            file_path_permission_rules(tool_name, &path)
+        }
+        "apply_patch" => apply_patch_permission_paths(params)
+            .into_iter()
+            .filter_map(|path| normalize_persistent_permission_path(&path, workspace))
+            .flat_map(|path| file_path_permission_rules(tool_name, &path))
+            .fold(Vec::new(), |mut rules, rule| {
+                push_unique_permission_rule(&mut rules, rule);
+                rules
+            }),
+        _ => Vec::new(),
+    }
+}
+
+pub fn format_permission_rules_preview(rules: &[ToolPermissionRule]) -> String {
+    rules
+        .iter()
+        .map(format_permission_rule_preview)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn format_permission_rule_preview(rule: &ToolPermissionRule) -> String {
+    let mut lines = vec![
+        "[[permissions.rules]]".to_string(),
+        format!("tool = {}", toml_string(&rule.tool)),
+        format!(
+            "decision = {}",
+            toml_string(permission_decision_label(rule.decision))
+        ),
+    ];
+    if let Some(command) = rule.command.as_deref() {
+        lines.push(format!("command = {}", toml_string(command)));
+    }
+    if let Some(path) = rule.path.as_deref() {
+        lines.push(format!("path = {}", toml_string(path)));
+    }
+    lines.join("\n")
+}
+
+fn permission_decision_label(decision: PermissionDecision) -> &'static str {
+    match decision {
+        PermissionDecision::Allow => "allow",
+        PermissionDecision::Deny => "deny",
+        PermissionDecision::Ask => "ask",
+    }
+}
+
+fn toml_string(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn file_path_permission_rules(tool_name: &str, path: &str) -> Vec<ToolPermissionRule> {
+    persistent_file_rule_tools(tool_name)
+        .iter()
+        .map(|tool| ToolPermissionRule::file_path(*tool, PermissionDecision::Allow, path))
+        .collect()
+}
+
+fn persistent_file_rule_tools(tool_name: &str) -> Vec<&str> {
+    match tool_name {
+        "read_file" => vec!["read_file", "file_read"],
+        "write_file" => vec!["write_file", "file_write"],
+        "edit_file" => vec!["edit_file", "file_edit"],
+        _ => vec![tool_name],
+    }
+}
+
+fn normalize_persistent_permission_path(raw: &str, workspace: Option<&Path>) -> Option<String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+
+    let raw_path = Path::new(raw);
+    let normalized = if let Some(workspace) = workspace {
+        let workspace = absolute_normalized_workspace(workspace);
+        let candidate = if raw_path.is_absolute() {
+            normalize_path(raw_path)
+        } else {
+            normalize_path(&workspace.join(raw_path))
+        };
+        candidate
+            .strip_prefix(&workspace)
+            .map(normalize_path)
+            .unwrap_or_else(|_| {
+                if raw_path.is_absolute() {
+                    candidate
+                } else {
+                    normalize_path(raw_path)
+                }
+            })
+    } else {
+        normalize_path(raw_path)
+    };
+
+    let path = permission_path_to_string(&normalized);
+    if path_contains_glob_metachar(&path) {
+        return None;
+    }
+    Some(path)
+}
+
+fn absolute_normalized_workspace(workspace: &Path) -> PathBuf {
+    let workspace = if workspace.is_absolute() {
+        workspace.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|current_dir| current_dir.join(workspace))
+            .unwrap_or_else(|_| workspace.to_path_buf())
+    };
+    normalize_path(&workspace)
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut prefix: Option<std::ffi::OsString> = None;
+    let mut is_root = false;
+    let mut stack: Vec<std::ffi::OsString> = Vec::new();
+
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix_component) => {
+                prefix = Some(prefix_component.as_os_str().to_owned());
+            }
+            Component::RootDir => {
+                is_root = true;
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                let parent = Component::ParentDir.as_os_str();
+                if let Some(last) = stack.pop() {
+                    if last == parent {
+                        stack.push(last);
+                        stack.push(parent.to_owned());
+                    }
+                } else if !is_root {
+                    stack.push(parent.to_owned());
+                }
+            }
+            Component::Normal(part) => {
+                stack.push(part.to_owned());
+            }
+        }
+    }
+
+    let mut normalized = PathBuf::new();
+    if let Some(prefix) = prefix {
+        normalized.push(prefix);
+    }
+    if is_root {
+        normalized.push(Path::new(std::path::MAIN_SEPARATOR_STR));
+    }
+    for part in stack {
+        normalized.push(part);
+    }
+    normalized
+}
+
+fn permission_path_to_string(path: &Path) -> String {
+    if path.as_os_str().is_empty() {
+        ".".to_string()
+    } else {
+        path.to_string_lossy().replace('\\', "/")
+    }
+}
+
+fn path_contains_glob_metachar(path: &str) -> bool {
+    path.chars()
+        .any(|ch| matches!(ch, '*' | '?' | '[' | ']' | '{' | '}'))
+}
+
+fn apply_patch_permission_paths(input: &Value) -> Vec<String> {
+    let mut paths = Vec::new();
+    if let Some(path) = input.get("path").and_then(Value::as_str) {
+        push_unique_permission_path(&mut paths, path);
+    }
+    for key in ["changes", "files"] {
+        if let Some(entries) = input.get(key).and_then(Value::as_array) {
+            for entry in entries {
+                if let Some(path) = entry.get("path").and_then(Value::as_str) {
+                    push_unique_permission_path(&mut paths, path);
+                }
+            }
+        }
+    }
+    if paths.is_empty()
+        && let Some(patch) = input.get("patch").and_then(Value::as_str)
+    {
+        for path in parse_unified_diff_permission_paths(patch) {
+            push_unique_permission_path(&mut paths, &path);
+        }
+    }
+    paths
+}
+
+fn parse_unified_diff_permission_paths(patch: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+    let mut old_path: Option<String> = None;
+
+    for line in patch.lines() {
+        if let Some(stripped) = line.strip_prefix("--- ") {
+            old_path = normalize_diff_permission_path(stripped);
+            continue;
+        }
+        if let Some(stripped) = line.strip_prefix("+++ ") {
+            let new_path = normalize_diff_permission_path(stripped);
+            if let Some(path) = new_path.or_else(|| old_path.clone()) {
+                push_unique_permission_path(&mut paths, &path);
+            }
+            old_path = None;
+        }
+    }
+
+    paths
+}
+
+fn normalize_diff_permission_path(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    if raw.is_empty() || raw == "/dev/null" || raw == "dev/null" {
+        return None;
+    }
+    let raw = raw
+        .strip_prefix("a/")
+        .or_else(|| raw.strip_prefix("b/"))
+        .unwrap_or(raw);
+    Some(raw.to_string())
+}
+
+fn push_unique_permission_path(paths: &mut Vec<String>, path: &str) {
+    let path = path.trim();
+    if !path.is_empty() && !paths.iter().any(|existing| existing == path) {
+        paths.push(path.to_string());
+    }
+}
+
+fn push_unique_permission_rule(rules: &mut Vec<ToolPermissionRule>, rule: ToolPermissionRule) {
+    if !rules.iter().any(|existing| existing == &rule) {
+        rules.push(rule);
     }
 }
 
@@ -482,6 +833,16 @@ impl ApprovalOption {
             ApprovalOption::Abort => ReviewDecision::Abort,
         }
     }
+
+    /// Whether this option needs an explicit second-key confirmation in
+    /// the destructive variant. Deny/Abort are never staged.
+    fn requires_confirm(self, risk: RiskLevel) -> bool {
+        matches!(risk, RiskLevel::Destructive)
+            && matches!(
+                self,
+                ApprovalOption::ApproveOnce | ApprovalOption::ApproveAlways
+            )
+    }
 }
 
 /// Approval overlay state managed by the modal view stack
@@ -490,6 +851,11 @@ pub struct ApprovalView {
     request: ApprovalRequest,
     selected: usize,
     locale: Locale,
+    /// When `Some`, the destructive variant has staged this approval and
+    /// is waiting for the user to press the same key (or `Enter`) again.
+    /// Any other key clears the staging.
+    pending_confirm: Option<ApprovalOption>,
+    pending_persist_rule: bool,
     timeout: Option<Duration>,
     requested_at: Instant,
     /// Whether the approval card is collapsed to a single-line banner.
@@ -507,6 +873,8 @@ impl ApprovalView {
             request,
             selected: 0,
             locale,
+            pending_confirm: None,
+            pending_persist_rule: false,
             timeout: None,
             requested_at: Instant::now(),
             collapsed: false,
@@ -515,10 +883,16 @@ impl ApprovalView {
 
     fn select_prev(&mut self) {
         self.selected = self.selected.saturating_sub(1);
+        // Moving the selection abandons any staged confirmation; the
+        // user is reconsidering.
+        self.pending_confirm = None;
+        self.pending_persist_rule = false;
     }
 
     fn select_next(&mut self) {
         self.selected = (self.selected + 1).min(ApprovalOption::ORDER.len() - 1);
+        self.pending_confirm = None;
+        self.pending_persist_rule = false;
     }
 
     fn current_option(&self) -> ApprovalOption {
@@ -542,17 +916,52 @@ impl ApprovalView {
         self.request.risk
     }
 
+    /// The staged option, if any. `None` in the benign variant or when
+    /// no approve key has been pressed yet.
+    pub(crate) fn pending_confirm(&self) -> Option<ApprovalOption> {
+        self.pending_confirm
+    }
+
+    pub(crate) fn pending_persist_rule(&self) -> bool {
+        self.pending_persist_rule
+    }
+
     pub(crate) fn locale(&self) -> Locale {
         self.locale
     }
 
-    /// Commit the given option and close the approval modal.
-    fn commit_option(&mut self, option: ApprovalOption) -> ViewAction {
-        self.selected = option.index();
+    /// Try to commit (or stage) the given option respecting the
+    /// variant's confirmation policy. Returns the action the modal
+    /// stack should apply.
+    fn commit_or_stage(&mut self, option: ApprovalOption) -> ViewAction {
+        self.pending_persist_rule = false;
+        if option.requires_confirm(self.request.risk) {
+            // Two-step destructive flow: first press stages, second
+            // press of the same option commits.
+            if self.pending_confirm == Some(option) {
+                self.pending_confirm = None;
+                return self.emit_decision(option.decision(), false);
+            }
+            self.pending_confirm = Some(option);
+            self.selected = option.index();
+            return ViewAction::None;
+        }
+        // Benign variant or non-approve options commit immediately.
+        self.pending_confirm = None;
+        self.pending_persist_rule = false;
         self.emit_decision(option.decision(), false)
     }
 
     fn emit_decision(&self, decision: ReviewDecision, timed_out: bool) -> ViewAction {
+        self.emit_decision_with_rules(decision, timed_out, Vec::new())
+    }
+
+    fn emit_decision_with_rules(
+        &self,
+        decision: ReviewDecision,
+        timed_out: bool,
+        persistent_rules: Vec<ToolPermissionRule>,
+    ) -> ViewAction {
         ViewAction::EmitAndClose(ViewEvent::ApprovalDecision {
             tool_id: self.request.id.clone(),
             tool_name: self.request.tool_name.clone(),
@@ -560,7 +969,28 @@ impl ApprovalView {
             timed_out,
             approval_key: self.request.approval_key.clone(),
             approval_grouping_key: self.request.approval_grouping_key.clone(),
+            persistent_rules,
         })
+    }
+
+    fn commit_or_stage_persist_rule(&mut self) -> ViewAction {
+        if self.request.persistent_rules.is_empty() {
+            self.pending_confirm = None;
+            self.pending_persist_rule = false;
+            return ViewAction::None;
+        }
+        if matches!(self.request.risk, RiskLevel::Destructive) && !self.pending_persist_rule {
+            self.pending_confirm = None;
+            self.pending_persist_rule = true;
+            return ViewAction::None;
+        }
+        self.pending_confirm = None;
+        self.pending_persist_rule = false;
+        self.emit_decision_with_rules(
+            ReviewDecision::Approved,
+            false,
+            self.request.persistent_rules.clone(),
+        )
     }
 
     fn emit_params_pager(&self) -> ViewAction {
@@ -568,6 +998,16 @@ impl ApprovalView {
             .unwrap_or_else(|_| self.request.params.to_string());
         ViewAction::Emit(ViewEvent::OpenTextPager {
             title: format!("Tool Params: {}", self.request.tool_name),
+            content,
+        })
+    }
+
+    fn emit_permission_rule_pager(&self) -> ViewAction {
+        let Some(content) = self.request.permission_rule_preview() else {
+            return ViewAction::None;
+        };
+        ViewAction::Emit(ViewEvent::OpenTextPager {
+            title: format!("Permission Rule: {}", self.request.tool_name),
             content,
         })
     }
@@ -603,23 +1043,39 @@ impl ModalView for ApprovalView {
                 self.select_next();
                 ViewAction::None
             }
-            KeyCode::Enter => self.commit_option(self.current_option()),
+            KeyCode::Enter => self.commit_or_stage(self.current_option()),
             // Direct shortcuts; '1' / '2' map to the first two options
             // so a numeric pad still works for approve flows.
             KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Char('1') => {
-                self.commit_option(ApprovalOption::ApproveOnce)
+                self.commit_or_stage(ApprovalOption::ApproveOnce)
             }
             KeyCode::Char('a') | KeyCode::Char('A') | KeyCode::Char('2') => {
-                self.commit_option(ApprovalOption::ApproveAlways)
+                self.commit_or_stage(ApprovalOption::ApproveAlways)
             }
+            KeyCode::Char('s') | KeyCode::Char('S') => self.commit_or_stage_persist_rule(),
             KeyCode::Char('n')
             | KeyCode::Char('N')
             | KeyCode::Char('d')
             | KeyCode::Char('D')
-            | KeyCode::Char('3') => self.commit_option(ApprovalOption::Deny),
-            KeyCode::Char('v') | KeyCode::Char('V') => self.emit_params_pager(),
+            | KeyCode::Char('3') => self.commit_or_stage(ApprovalOption::Deny),
+            KeyCode::Char('v') | KeyCode::Char('V') => {
+                self.pending_confirm = None;
+                self.pending_persist_rule = false;
+                self.emit_params_pager()
+            }
+            KeyCode::Char('p') | KeyCode::Char('P') => {
+                self.pending_confirm = None;
+                self.pending_persist_rule = false;
+                self.emit_permission_rule_pager()
+            }
             KeyCode::Esc => self.emit_decision(ReviewDecision::Abort, false),
-            _ => ViewAction::None,
+            _ => {
+                // Any unrecognised key cancels a staged confirmation —
+                // the user is no longer aiming at "approve".
+                self.pending_confirm = None;
+                self.pending_persist_rule = false;
+                ViewAction::None
+            }
         }
     }
 
@@ -1102,6 +1558,138 @@ mod tests {
         );
     }
 
+    #[test]
+    fn persistent_permission_rule_preview_uses_exact_command() {
+        let request = ApprovalRequest::new(
+            "test-id",
+            "exec_shell",
+            "Run a shell command",
+            &json!({"command": "cargo test --workspace"}),
+            "test_key",
+        );
+
+        assert_eq!(
+            request.persistent_rules,
+            vec![ToolPermissionRule::exec_shell(
+                PermissionDecision::Allow,
+                "cargo test --workspace"
+            )]
+        );
+        let preview = request
+            .permission_rule_preview()
+            .expect("exec_shell should produce a preview");
+        assert!(preview.contains("[[permissions.rules]]"));
+        assert!(preview.contains("tool = \"exec_shell\""));
+        assert!(preview.contains("decision = \"allow\""));
+        assert!(preview.contains("command = \"cargo test --workspace\""));
+    }
+
+    #[test]
+    fn persistent_permission_rule_preserves_shell_alias_tool_name() {
+        let rules = build_persistent_permission_rules(
+            "exec_shell_wait",
+            &json!({"command": "cargo test --workspace"}),
+        );
+
+        let mut expected = ToolPermissionRule::new("exec_shell_wait", PermissionDecision::Allow);
+        expected.command = Some("cargo test --workspace".to_string());
+        assert_eq!(rules, vec![expected]);
+    }
+
+    #[test]
+    fn persistent_permission_rules_extract_apply_patch_diff_paths() {
+        let rules = build_persistent_permission_rules(
+            "apply_patch",
+            &json!({
+                "patch": "\
+            --- a/docs/old.md\n\
+            +++ b/docs/new.md\n\
+            @@ -1 +1 @@\n"
+            }),
+        );
+
+        assert_eq!(
+            rules,
+            vec![ToolPermissionRule::file_path(
+                "apply_patch",
+                PermissionDecision::Allow,
+                "docs/new.md"
+            )]
+        );
+    }
+
+    #[test]
+    fn persistent_permission_rules_skip_glob_like_file_paths() {
+        assert!(
+            build_persistent_permission_rules("read_file", &json!({"path": "src/**"})).is_empty()
+        );
+        assert!(
+            build_persistent_permission_rules(
+                "apply_patch",
+                &json!({"files": [{"path": "docs/*.md"}]})
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn persistent_permission_rules_normalize_absolute_paths_to_workspace_relative() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let path = workspace.path().join("src").join("main.rs");
+
+        let rules = build_persistent_permission_rules_for_workspace(
+            "write_file",
+            &json!({"path": path.to_string_lossy()}),
+            workspace.path(),
+        );
+
+        assert_eq!(
+            rules,
+            vec![
+                ToolPermissionRule::file_path(
+                    "write_file",
+                    PermissionDecision::Allow,
+                    "src/main.rs"
+                ),
+                ToolPermissionRule::file_path(
+                    "file_write",
+                    PermissionDecision::Allow,
+                    "src/main.rs"
+                )
+            ]
+        );
+    }
+
+    #[test]
+    fn persistent_permission_rules_extract_apply_patch_file_entries() {
+        let rules = build_persistent_permission_rules(
+            "apply_patch",
+            &json!({
+                "files": [
+                    {"path": "src/lib.rs"},
+                    {"path": "src/lib.rs"},
+                    {"path": "src/main.rs"}
+                ]
+            }),
+        );
+
+        assert_eq!(
+            rules,
+            vec![
+                ToolPermissionRule::file_path(
+                    "apply_patch",
+                    PermissionDecision::Allow,
+                    "src/lib.rs"
+                ),
+                ToolPermissionRule::file_path(
+                    "apply_patch",
+                    PermissionDecision::Allow,
+                    "src/main.rs"
+                )
+            ]
+        );
+    }
+
     // ========================================================================
     // ApprovalView Tests — Benign Variant (single-key approve)
     // ========================================================================
@@ -1198,6 +1786,53 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn benign_s_saves_rule_and_approves() {
+        let mut view = ApprovalView::new(benign_request());
+        let action = view.handle_key(create_key_event(KeyCode::Char('s')));
+
+        match action {
+            ViewAction::EmitAndClose(ViewEvent::ApprovalDecision {
+                decision,
+                persistent_rules,
+                ..
+            }) => {
+                assert_eq!(decision, ReviewDecision::Approved);
+                assert_eq!(
+                    persistent_rules,
+                    vec![
+                        ToolPermissionRule::file_path(
+                            "read_file",
+                            PermissionDecision::Allow,
+                            "src/main.rs"
+                        ),
+                        ToolPermissionRule::file_path(
+                            "file_read",
+                            PermissionDecision::Allow,
+                            "src/main.rs"
+                        )
+                    ]
+                );
+            }
+            other => panic!("expected persistent approval event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn p_opens_full_permission_rule_preview() {
+        let mut view = ApprovalView::new(benign_request());
+        let action = view.handle_key(create_key_event(KeyCode::Char('p')));
+
+        match action {
+            ViewAction::Emit(ViewEvent::OpenTextPager { title, content }) => {
+                assert_eq!(title, "Permission Rule: read_file");
+                assert!(content.contains("tool = \"read_file\""));
+                assert!(content.contains("tool = \"file_read\""));
+            }
+            other => panic!("expected permission rule pager, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1323,7 +1958,7 @@ mod tests {
     }
 
     // ========================================================================
-    // ApprovalView Tests — Destructive Variant (one-step approve with warning)
+    // ApprovalView Tests — Destructive Variant (two-key confirm)
     // ========================================================================
 
     #[test]
@@ -1333,10 +1968,16 @@ mod tests {
     }
 
     #[test]
-    fn destructive_y_first_press_approves_once() {
+    fn destructive_y_first_press_stages_then_second_commits() {
         for code in [KeyCode::Char('y'), KeyCode::Char('Y')] {
             let mut view = ApprovalView::new(destructive_request());
 
+            // First press stages — no decision emitted yet.
+            let action = view.handle_key(create_key_event(code));
+            assert!(matches!(action, ViewAction::None));
+            assert_eq!(view.pending_confirm(), Some(ApprovalOption::ApproveOnce));
+
+            // Second press of the same key commits.
             let action = view.handle_key(create_key_event(code));
             assert!(
                 matches!(
@@ -1352,10 +1993,52 @@ mod tests {
     }
 
     #[test]
-    fn destructive_enter_approves_selected_option() {
+    fn destructive_s_first_press_stages_then_second_saves_rule() {
         let mut view = ApprovalView::new(destructive_request());
 
-        // Selection starts at ApproveOnce — Enter commits the selected option.
+        let action = view.handle_key(create_key_event(KeyCode::Char('s')));
+        assert!(matches!(action, ViewAction::None));
+        assert_eq!(view.pending_confirm(), None);
+        assert!(view.pending_persist_rule());
+
+        let action = view.handle_key(create_key_event(KeyCode::Char('s')));
+        match action {
+            ViewAction::EmitAndClose(ViewEvent::ApprovalDecision {
+                decision,
+                persistent_rules,
+                ..
+            }) => {
+                assert_eq!(decision, ReviewDecision::Approved);
+                assert_eq!(
+                    persistent_rules,
+                    vec![
+                        ToolPermissionRule::file_path(
+                            "write_file",
+                            PermissionDecision::Allow,
+                            "src/main.rs"
+                        ),
+                        ToolPermissionRule::file_path(
+                            "file_write",
+                            PermissionDecision::Allow,
+                            "src/main.rs"
+                        )
+                    ]
+                );
+            }
+            other => panic!("expected persistent approval event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn destructive_enter_first_press_stages_then_second_commits() {
+        let mut view = ApprovalView::new(destructive_request());
+
+        // Selection starts at ApproveOnce — Enter stages.
+        let action = view.handle_key(create_key_event(KeyCode::Enter));
+        assert!(matches!(action, ViewAction::None));
+        assert_eq!(view.pending_confirm(), Some(ApprovalOption::ApproveOnce));
+
+        // Second Enter on the same selection commits.
         let action = view.handle_key(create_key_event(KeyCode::Enter));
         assert!(matches!(
             action,
@@ -1367,32 +2050,41 @@ mod tests {
     }
 
     #[test]
-    fn destructive_navigation_then_enter_commits_highlighted_option() {
+    fn destructive_navigation_clears_staged_confirmation() {
         let mut view = ApprovalView::new(destructive_request());
 
+        view.handle_key(create_key_event(KeyCode::Char('y')));
+        assert_eq!(view.pending_confirm(), Some(ApprovalOption::ApproveOnce));
+
+        // Moving the selection abandons the staging.
         view.handle_key(create_key_event(KeyCode::Down));
-        let action = view.handle_key(create_key_event(KeyCode::Enter));
-        assert!(matches!(
-            action,
-            ViewAction::EmitAndClose(ViewEvent::ApprovalDecision {
-                decision: ReviewDecision::ApprovedForSession,
-                ..
-            })
-        ));
+        assert_eq!(view.pending_confirm(), None);
     }
 
     #[test]
-    fn destructive_unrelated_key_keeps_modal_open() {
+    fn destructive_unrelated_key_clears_staged_confirmation() {
         let mut view = ApprovalView::new(destructive_request());
 
+        view.handle_key(create_key_event(KeyCode::Char('y')));
+        assert_eq!(view.pending_confirm(), Some(ApprovalOption::ApproveOnce));
+
+        // A key with no mapped action clears the staging.
         let action = view.handle_key(create_key_event(KeyCode::Char('q')));
         assert!(matches!(action, ViewAction::None));
+        assert_eq!(view.pending_confirm(), None);
     }
 
     #[test]
-    fn destructive_a_first_press_approves_for_session() {
+    fn destructive_a_first_press_stages_then_second_commits_session() {
         for code in [KeyCode::Char('a'), KeyCode::Char('A')] {
             let mut view = ApprovalView::new(destructive_request());
+
+            let action = view.handle_key(create_key_event(code));
+            assert!(matches!(action, ViewAction::None));
+            assert_eq!(
+                view.pending_confirm(),
+                Some(ApprovalOption::ApproveAlways)
+            );
 
             let action = view.handle_key(create_key_event(code));
             assert!(
@@ -1406,6 +2098,24 @@ mod tests {
                 "expected ApprovedForSession for {code:?}"
             );
         }
+    }
+
+    #[test]
+    fn destructive_y_then_a_does_not_commit_either() {
+        // Pressing 'y' then 'a' must NOT commit ApproveAlways — the
+        // second key is a different option, so it re-stages instead.
+        let mut view = ApprovalView::new(destructive_request());
+
+        let action = view.handle_key(create_key_event(KeyCode::Char('y')));
+        assert!(matches!(action, ViewAction::None));
+        assert_eq!(view.pending_confirm(), Some(ApprovalOption::ApproveOnce));
+
+        let action = view.handle_key(create_key_event(KeyCode::Char('a')));
+        assert!(matches!(action, ViewAction::None));
+        assert_eq!(
+            view.pending_confirm(),
+            Some(ApprovalOption::ApproveAlways)
+        );
     }
 
     #[test]

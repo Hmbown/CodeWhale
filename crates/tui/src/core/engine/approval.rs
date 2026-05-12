@@ -15,6 +15,7 @@ use super::Engine;
 pub(super) enum ApprovalDecision {
     Approved {
         id: String,
+        persistent_rules: Vec<deepseek_execpolicy::ToolPermissionRule>,
     },
     Denied {
         id: String,
@@ -86,7 +87,16 @@ impl Engine {
                         ));
                     };
                     match decision {
-                        ApprovalDecision::Approved { id } if id == tool_id => {
+                        ApprovalDecision::Approved {
+                            id,
+                            persistent_rules,
+                        } if id == tool_id => {
+                            if !persistent_rules.is_empty() {
+                                self.config.exec_policy_engine.add_ruleset(
+                                    deepseek_execpolicy::Ruleset::user(vec![], vec![])
+                                        .with_rules(persistent_rules),
+                                );
+                            }
                             return Ok(ApprovalResult::Approved);
                         }
                         ApprovalDecision::Denied { id } if id == tool_id => {

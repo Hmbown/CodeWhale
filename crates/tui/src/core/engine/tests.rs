@@ -322,6 +322,36 @@ fn typed_permission_matches_legacy_file_tool_aliases() {
 }
 
 #[test]
+fn typed_permission_exact_saved_alias_allow_beats_broad_alias_ask() {
+    let engine = permission_engine_with_rules(vec![
+        deepseek_execpolicy::ToolPermissionRule::file_path(
+            "file_edit",
+            deepseek_execpolicy::PermissionDecision::Ask,
+            "src/**",
+        ),
+        deepseek_execpolicy::ToolPermissionRule::file_path(
+            "edit_file",
+            deepseek_execpolicy::PermissionDecision::Allow,
+            "src/main.rs",
+        ),
+        deepseek_execpolicy::ToolPermissionRule::file_path(
+            "file_edit",
+            deepseek_execpolicy::PermissionDecision::Allow,
+            "src/main.rs",
+        ),
+    ]);
+
+    let decision = tool_permission_override_for_call(
+        &engine,
+        "edit_file",
+        &json!({"path": "src/main.rs"}),
+        permission_test_workspace(),
+    );
+
+    assert!(matches!(decision, ToolPermissionOverride::Allow { .. }));
+}
+
+#[test]
 fn typed_permission_denies_file_path_before_tool_execution() {
     let engine =
         permission_engine_with_rules(vec![codewhale_execpolicy::ToolPermissionRule::file_path(
