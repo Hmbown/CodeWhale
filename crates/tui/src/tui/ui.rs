@@ -6740,11 +6740,14 @@ fn push_keyboard_enhancement_flags<W: Write>(writer: &mut W) {
     }
 }
 
-fn pop_keyboard_enhancement_flags<W: Write>(writer: &mut W) {
+pub(crate) fn pop_keyboard_enhancement_flags<W: Write>(writer: &mut W) {
     // Mirror of push_keyboard_enhancement_flags: crossterm's
     // PopKeyboardEnhancementFlags also has is_ansi_code_supported() == false
     // on Windows, so write the pop escape directly to restore the terminal to
     // its pre-launch keyboard mode.
+    // pub(crate) so the panic hook in main.rs and external_editor.rs can
+    // also call the Windows-aware path instead of using the raw crossterm
+    // execute!() macro which silently no-ops on Windows.
     #[cfg(windows)]
     {
         if let Err(err) = write!(writer, "\x1b[<1u").and_then(|()| writer.flush()) {
@@ -6772,6 +6775,13 @@ fn pop_keyboard_enhancement_flags<W: Write>(writer: &mut W) {
 /// Excluded by design: raw mode and the alternate screen — those persist
 /// across focus events and are only re-established by `resume_terminal`
 /// after a suspension, which always runs a separate path.
+///
+/// Note: calling this on every FocusGained event pushes one extra Kitty
+/// keyboard mode level onto the terminal's stack without a preceding pop.
+/// After N focus cycles the stack reaches depth N; at shutdown only one
+/// level is popped. On terminals with a finite stack this is benign because
+/// the terminal clears the stack on process exit. A future improvement is
+/// to pop-then-push here so the stack stays at depth ≤1.
 fn recover_terminal_modes<W: Write>(
     writer: &mut W,
     use_mouse_capture: bool,

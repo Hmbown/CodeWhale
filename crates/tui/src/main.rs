@@ -590,11 +590,14 @@ async fn main() -> Result<()> {
         // Restore the terminal first so the panic message itself, plus the
         // user's shell after exit, are visible. Best-effort — we may not be
         // in raw / alt-screen mode if the panic happens pre-TUI.
-        use crossterm::event::{
-            DisableBracketedPaste, DisableMouseCapture, PopKeyboardEnhancementFlags,
-        };
+        use crossterm::event::{DisableBracketedPaste, DisableMouseCapture};
         use crossterm::terminal::{LeaveAlternateScreen, disable_raw_mode};
-        let _ = crossterm::execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
+        // Use the Windows-aware helper: crossterm's PopKeyboardEnhancementFlags
+        // is a no-op on Windows (is_ansi_code_supported() == false), so the
+        // plain execute!() form would leave the terminal in Kitty-enhanced mode
+        // after a panic. pop_keyboard_enhancement_flags writes the pop escape
+        // directly on Windows (#1359).
+        crate::tui::ui::pop_keyboard_enhancement_flags(&mut std::io::stdout());
         // Best-effort: turn off bracketed paste + mouse capture so the user's
         // parent shell doesn't get stuck wrapping pastes in `\e[200~…\e[201~`
         // or printing `\e[<…M` on every click after a TUI panic.

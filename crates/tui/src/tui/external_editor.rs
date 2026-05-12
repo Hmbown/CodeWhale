@@ -15,10 +15,7 @@ use std::io::{self, Stdout, Write};
 use std::process::Command;
 
 use crossterm::{
-    event::{
-        DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-        PopKeyboardEnhancementFlags,
-    },
+    event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -133,7 +130,9 @@ pub(crate) fn spawn_editor_for_input(
     // #443: pop keyboard enhancement flags first so the editor
     // process doesn't inherit a half-configured input mode. Best-
     // effort — matches the shutdown / panic paths in main.rs.
-    let _ = execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags);
+    // Use the Windows-aware helper: the raw crossterm execute!() is a
+    // no-op on Windows and would leave the editor process in Kitty mode.
+    super::ui::pop_keyboard_enhancement_flags(terminal.backend_mut());
     let _ = disable_raw_mode();
     if use_bracketed_paste {
         let _ = execute!(terminal.backend_mut(), DisableBracketedPaste);
