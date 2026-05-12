@@ -1,6 +1,6 @@
 //! External-binary dependency resolution for tools that shell out to
-//! locally-installed programs (Python for `code_execution`, `pdftotext`
-//! for PDF reading in `read_file`, future tools as added).
+//! locally-installed programs (Python for `code_execution` / RLM REPL,
+//! `pdftotext` for PDF reading in `read_file`, future tools as added).
 //!
 //! Before v0.8.31, tools that called external binaries hardcoded the
 //! command name and failed at execution time when the binary wasn't on
@@ -9,8 +9,8 @@
 //! `python`, not `python3`) saw `Failed to execute tool: program not
 //! found` with no upstream hint of what was wrong.
 //!
-//! This module centralises the probe-then-decide pattern. The two
-//! supported callers today are:
+//! This module centralises the probe-then-decide pattern. The supported
+//! callers today are:
 //!
 //! - Tool catalog construction (`core::engine::tool_catalog`): for
 //!   tools that should be advertised to the model only when the
@@ -18,6 +18,8 @@
 //! - Doctor command (`run_doctor` in `main.rs`): for surfacing the
 //!   resolved state to the user so missing dependencies aren't an
 //!   invisible failure.
+//! - Long-lived REPL runtime (`repl::runtime`): for RLM and inline `repl`
+//!   blocks that need to spawn Python on every supported platform.
 //!
 //! Results are cached for the process lifetime via [`std::sync::OnceLock`]
 //! — probing a binary involves a `Command::output` per candidate and
@@ -83,7 +85,7 @@ pub fn resolve_python_interpreter() -> Option<String> {
                     tracing::info!(
                         target: "tool_dependencies",
                         candidate = candidate,
-                        "Resolved Python interpreter for code_execution",
+                        "Resolved Python interpreter",
                     );
                     return Some((*candidate).to_string());
                 }
@@ -91,7 +93,7 @@ pub fn resolve_python_interpreter() -> Option<String> {
             tracing::warn!(
                 target: "tool_dependencies",
                 tried = ?PYTHON_CANDIDATES,
-                "No Python interpreter found; code_execution tool will not be advertised",
+                "No Python interpreter found",
             );
             None
         })

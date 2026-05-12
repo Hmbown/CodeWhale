@@ -1,6 +1,6 @@
 //! Long-lived Python REPL runtime.
 //!
-//! One `python3 -u` subprocess lives for the duration of an RLM turn (or an
+//! One Python subprocess lives for the duration of an RLM turn (or an
 //! inline `repl` block sequence in the agent loop). Code blocks are sent
 //! over stdin framed by `__RLM_RUN__`/`__RLM_END__` sentinels; the bootstrap
 //! `exec()`s them into the same global namespace so variables, imports,
@@ -27,6 +27,7 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use uuid::Uuid;
 
 use crate::child_env;
+use crate::dependencies::{PYTHON_CANDIDATES, resolve_python_interpreter, split_interpreter_spec};
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -186,8 +187,23 @@ impl PythonRuntime {
         let session_id = Uuid::new_v4().simple().to_string();
         let bootstrap = render_bootstrap(&session_id);
 
-        let mut cmd = Command::new("python3");
-        cmd.arg("-u")
+        let interpreter = resolve_python_interpreter().ok_or_else(|| {
+            format!(
+                "no Python interpreter found on PATH (tried {:?}). \
+                 Install Python 3 and ensure one of these commands works, then restart deepseek-tui.",
+                PYTHON_CANDIDATES,
+            )
+        })?;
+        let (program, interpreter_args) = split_interpreter_spec(&interpreter);
+        if program.is_empty() {
+            return Err(format!(
+                "resolved Python interpreter is empty: {interpreter:?}"
+            ));
+        }
+
+        let mut cmd = Command::new(&program);
+        cmd.args(&interpreter_args)
+            .arg("-u")
             .arg("-c")
             .arg(&bootstrap)
             .stdin(Stdio::piped())
@@ -207,16 +223,16 @@ impl PythonRuntime {
 
         let mut child = cmd
             .spawn()
-            .map_err(|e| format!("failed to spawn python3: {e}"))?;
+            .map_err(|e| format!("failed to spawn Python interpreter `{interpreter}`: {e}"))?;
 
         let stdin = child
             .stdin
             .take()
-            .ok_or_else(|| "python3 stdin pipe missing".to_string())?;
+            .ok_or_else(|| format!("Python interpreter `{interpreter}` stdin pipe missing"))?;
         let raw_stdout = child
             .stdout
             .take()
-            .ok_or_else(|| "python3 stdout pipe missing".to_string())?;
+            .ok_or_else(|| format!("Python interpreter `{interpreter}` stdout pipe missing"))?;
         let stdout = BufReader::new(raw_stdout);
 
         let mut rt = Self {
@@ -240,12 +256,14 @@ impl PythonRuntime {
             Ok(Ok(())) => Ok(rt),
             Ok(Err(e)) => {
                 let _ = rt.child.kill().await;
-                Err(format!("python3 bootstrap failed: {e}"))
+                Err(format!(
+                    "Python interpreter `{interpreter}` bootstrap failed: {e}"
+                ))
             }
             Err(_) => {
                 let _ = rt.child.kill().await;
                 Err(format!(
-                    "python3 bootstrap did not signal ready within {}s",
+                    "Python interpreter `{interpreter}` bootstrap did not signal ready within {}s",
                     SPAWN_READY_TIMEOUT.as_secs()
                 ))
             }
@@ -261,7 +279,7 @@ impl PythonRuntime {
                 .await
                 .map_err(|e| format!("stdout read: {e}"))?;
             if n == 0 {
-                return Err("python3 closed stdout before ready signal".to_string());
+                return Err("Python interpreter closed stdout before ready signal".to_string());
             }
             let trimmed = line.trim_end_matches(['\n', '\r']);
             if trimmed == ready_sentinel {
@@ -323,7 +341,7 @@ impl PythonRuntime {
                     .await
                     .map_err(|e| format!("stdout read: {e}"))?;
                 if n == 0 {
-                    return Err("python3 closed stdout mid-round".to_string());
+                    return Err("Python interpreter closed stdout mid-round".to_string());
                 }
                 let trimmed = line.trim_end_matches(['\n', '\r']);
 

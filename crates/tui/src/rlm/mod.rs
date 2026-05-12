@@ -20,7 +20,7 @@
 //! - The root LLM receives small metadata messages — length, preview,
 //!   helper list, prior-round summary.
 //! - Code rounds and sub-LLM calls travel over a single stdin/stdout
-//!   pipe to a long-lived `python3 -u` subprocess. No HTTP sidecar.
+//!   pipe to a long-lived Python subprocess. No HTTP sidecar.
 
 use crate::models::Usage;
 
