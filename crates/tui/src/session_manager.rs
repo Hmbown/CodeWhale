@@ -907,7 +907,11 @@ pub(crate) fn extract_title(raw: &str) -> &str {
 }
 
 /// Strip common thinking/reasoning XML tags from assistant text.
+/// Short-circuits if no thinking markers are present to avoid allocation.
 pub(crate) fn strip_thinking_tags(text: &str) -> String {
+    if !text.contains("<think") && !text.contains("<thinking") && !text.contains("<reasoning") {
+        return text.to_string();
+    }
     let tags = ["think", "thinking", "reasoning"];
     let mut result = text.to_string();
     for tag in &tags {
