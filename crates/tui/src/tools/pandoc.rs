@@ -127,6 +127,19 @@ impl ToolSpec for PandocConvertTool {
             )));
         }
 
+        let resolved_output_path: Option<PathBuf> = match output_path_str {
+            Some(p) => Some(context.resolve_path(p)?),
+            None => None,
+        };
+
+        // Binary formats can't round-trip through stdout reliably —
+        // require an output_path so the bytes survive the trip.
+        if resolved_output_path.is_none() && format_is_binary(&target_format) {
+            return Err(ToolError::invalid_input(format!(
+                "target_format `{target_format}` is binary; provide an `output_path` to write the converted file."
+            )));
+        }
+
         // Resolve the pandoc binary at execution time too — registration
         // gated on resolve_pandoc(), but a concurrent uninstall between
         // catalog build and the model's call should produce a clear
@@ -140,19 +153,6 @@ impl ToolSpec for PandocConvertTool {
                  Windows: `winget install JohnMacFarlane.Pandoc`) and restart deepseek-tui.",
             )
         })?;
-
-        let resolved_output_path: Option<PathBuf> = match output_path_str {
-            Some(p) => Some(context.resolve_path(p)?),
-            None => None,
-        };
-
-        // Binary formats can't round-trip through stdout reliably —
-        // require an output_path so the bytes survive the trip.
-        if resolved_output_path.is_none() && format_is_binary(&target_format) {
-            return Err(ToolError::invalid_input(format!(
-                "target_format `{target_format}` is binary; provide an `output_path` to write the converted file."
-            )));
-        }
 
         let mut cmd = Command::new(&pandoc);
         cmd.arg(&source_path);
@@ -265,9 +265,6 @@ mod tests {
 
     #[tokio::test]
     async fn pandoc_convert_rejects_inline_request_for_binary_format() {
-        if !pandoc_present() {
-            return;
-        }
         let tmp = tempdir().expect("tempdir");
         let src = tmp.path().join("in.md");
         fs::write(&src, "# hi").unwrap();
