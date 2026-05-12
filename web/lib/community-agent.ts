@@ -9,10 +9,9 @@
  * - Cites specific files / line numbers / linked issues when discussing code.
  * - Always ends with the draft disclaimer.
  */
-const BASE = process.env.DEEPSEEK_BASE_URL ?? "https://api.deepseek.com";
-const MODEL = process.env.DEEPSEEK_MODEL ?? "deepseek-v4-flash";
-
 const MAX_OUTPUT_TOKENS = 2_000;
+const FALLBACK_BASE = "https://api.deepseek.com";
+const FALLBACK_MODEL = "deepseek-v4-flash";
 
 interface ChatMessage {
   role: "system" | "user" | "assistant";
@@ -47,17 +46,20 @@ export async function agentChat(
   apiKey: string,
   jsonMode = false
 ): Promise<{ content: string; usage: { input: number; output: number } }> {
-  const res = await fetch(`${BASE}/v1/chat/completions`, {
+  const base = process.env.DEEPSEEK_BASE_URL ?? FALLBACK_BASE;
+  const model = process.env.DEEPSEEK_MODEL ?? FALLBACK_MODEL;
+  const res = await fetch(`${base}/v1/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: MODEL,
+      model,
       messages,
       temperature: 0.3,
       max_tokens: MAX_OUTPUT_TOKENS,
+      reasoning_effort: "high",
       ...(jsonMode ? { response_format: { type: "json_object" } } : {}),
     }),
   });

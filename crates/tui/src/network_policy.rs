@@ -3,6 +3,10 @@
 // approval-modal hook that v0.7.x adds incrementally. Dead-code warnings
 // would otherwise be noisy until those call sites land.
 #![allow(dead_code)]
+// Audit-write failure must route through `tracing::*`, not raw stderr —
+// see `runtime_log` for the scroll-demon rationale.
+#![deny(clippy::print_stdout)]
+#![deny(clippy::print_stderr)]
 
 //! Per-domain network policy for outbound network calls (#135).
 //!
@@ -290,7 +294,11 @@ impl NetworkAuditor {
             return;
         }
         if let Err(err) = self.try_record(host, tool, decision_label) {
-            eprintln!("network audit write failed: {err}");
+            // Routed through tracing so it lands in
+            // `~/.deepseek/logs/tui-YYYY-MM-DD.log` rather than the
+            // alt-screen — see `runtime_log` for the scroll-demon
+            // rationale.
+            tracing::warn!(target: "network_policy", ?err, host, tool, "network audit write failed");
         }
     }
 

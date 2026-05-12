@@ -365,12 +365,8 @@ pub fn detect_denial(exit_code: i32, stderr: &str) -> bool {
 mod tests {
     use super::*;
 
-    /// Serializes tests that mutate process-global env vars (HOME, CARGO_HOME)
-    /// so they don't race with each other or with sibling tests in this
-    /// crate that read those vars. Mirrors the pattern in main.rs::tests
-    /// (commit d06eaed0).
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
+    // Tests that mutate HOME/CARGO_HOME use crate::test_support::lock_test_env()
+    // so they don't race with sibling tests in this crate that read those vars.
     #[test]
     fn test_is_available() {
         // This test just checks the function doesn't panic
@@ -429,11 +425,11 @@ mod tests {
     /// sandbox-exec refuse to load the profile.
     #[test]
     fn test_cargo_home_paths_emitted_in_policy_and_params_when_home_set() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = crate::test_support::lock_test_env();
 
-        // SAFETY: HOME / CARGO_HOME are process-global. ENV_LOCK serializes
-        // all tests in this module that mutate them, and we always restore
-        // the prior value before returning.
+        // SAFETY: HOME / CARGO_HOME are process-global. lock_test_env
+        // serializes tests that mutate them, and we always restore the
+        // prior value before returning.
         let saved_home = std::env::var_os("HOME");
         let saved_cargo = std::env::var_os("CARGO_HOME");
         unsafe {
@@ -485,11 +481,11 @@ mod tests {
     /// would crash sandbox-exec on profile load.
     #[test]
     fn test_cargo_home_skipped_when_no_env() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = crate::test_support::lock_test_env();
 
         let saved_home = std::env::var_os("HOME");
         let saved_cargo = std::env::var_os("CARGO_HOME");
-        // SAFETY: HOME/CARGO_HOME are process-global; ENV_LOCK serializes
+        // SAFETY: HOME/CARGO_HOME are process-global; lock_test_env serializes
         // mutations here and we restore the prior values before returning.
         unsafe {
             std::env::remove_var("HOME");

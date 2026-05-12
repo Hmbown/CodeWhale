@@ -13,6 +13,7 @@ use tempfile::NamedTempFile;
 use wait_timeout::ChildExt;
 
 mod acp_server;
+mod artifacts;
 mod audit;
 mod auto_reasoning;
 mod automation_manager;
@@ -53,6 +54,7 @@ pub mod repl;
 mod retry_status;
 pub mod rlm;
 mod runtime_api;
+mod runtime_log;
 mod runtime_threads;
 mod sandbox;
 mod schema_migration;
@@ -151,7 +153,8 @@ struct Cli {
     #[arg(long = "no-alt-screen", hide = true)]
     no_alt_screen: bool,
 
-    /// Enable TUI mouse capture for internal scrolling and transcript selection
+    /// Enable TUI mouse capture for internal scrolling, transcript selection,
+    /// and scrollbar dragging
     /// (default off on Windows)
     #[arg(long = "mouse-capture", conflicts_with = "no_mouse_capture")]
     mouse_capture: bool,
@@ -3644,7 +3647,16 @@ fn should_use_alt_screen(_cli: &Cli, _config: &Config) -> bool {
 
 fn should_use_mouse_capture(cli: &Cli, config: &Config, use_alt_screen: bool) -> bool {
     let terminal_emulator = std::env::var("TERMINAL_EMULATOR").ok();
-    should_use_mouse_capture_with(cli, config, use_alt_screen, terminal_emulator.as_deref())
+    let wt_session = std::env::var("WT_SESSION").ok().filter(|s| !s.is_empty());
+    let conemu_pid = std::env::var("ConEmuPID").ok().filter(|s| !s.is_empty());
+    should_use_mouse_capture_with(
+        cli,
+        config,
+        use_alt_screen,
+        terminal_emulator.as_deref(),
+        wt_session.as_deref(),
+        conemu_pid.as_deref(),
+    )
 }
 
 fn should_use_mouse_capture_with(
@@ -3652,6 +3664,8 @@ fn should_use_mouse_capture_with(
     config: &Config,
     use_alt_screen: bool,
     terminal_emulator: Option<&str>,
+    wt_session: Option<&str>,
+    conemu_pid: Option<&str>,
 ) -> bool {
     if !use_alt_screen || cli.no_mouse_capture {
         return false;
@@ -3663,21 +3677,30 @@ fn should_use_mouse_capture_with(
         .tui
         .as_ref()
         .and_then(|tui| tui.mouse_capture)
-        .unwrap_or_else(|| default_mouse_capture_enabled(terminal_emulator))
+        .unwrap_or_else(|| default_mouse_capture_enabled(terminal_emulator, wt_session, conemu_pid))
 }
 
 /// Whether to enable terminal mouse capture by default for this platform/host.
 ///
-/// Returns `false` on Windows (legacy console mouse-mode reporting is flaky;
-/// `--mouse-capture` opts in) and on JetBrains' JediTerm, which advertises
-/// mouse support but delivers SGR mouse-event escape sequences as raw text
-/// in the input stream — visible to users as garbled characters in the
-/// composer when they move the mouse over the TUI (#878, #898). The user
-/// can still opt back in with `[tui] mouse_capture = true` in
+/// On Windows the default depends on the host: Windows Terminal (which sets
+/// `WT_SESSION`) and ConEmu/Cmder (which set `ConEmuPID`) handle mouse-mode
+/// reporting cleanly, so default-on there gives users in-app text selection
+/// and keeps the application's selection clamped to the transcript area
+/// (#1169). Legacy conhost (CMD without either env var) stays default-off
+/// because its mouse-mode reporting can leak SGR escape sequences as raw
+/// text into the composer (#878 / #898).
+///
+/// Off elsewhere only for JetBrains' JediTerm, which advertises mouse
+/// support but forwards the same SGR escape sequences as raw input. The
+/// user can still opt back in with `[tui] mouse_capture = true` in
 /// `~/.deepseek/config.toml` or `--mouse-capture`.
-fn default_mouse_capture_enabled(terminal_emulator: Option<&str>) -> bool {
+fn default_mouse_capture_enabled(
+    terminal_emulator: Option<&str>,
+    wt_session: Option<&str>,
+    conemu_pid: Option<&str>,
+) -> bool {
     if cfg!(windows) {
-        return false;
+        return wt_session.is_some() || conemu_pid.is_some();
     }
     if matches!(terminal_emulator, Some(t) if t.eq_ignore_ascii_case("JetBrains-JediTerm")) {
         return false;
@@ -4627,6 +4650,7 @@ mod terminal_mode_tests {
                 terminal_probe_timeout_ms: None,
                 status_items: None,
                 osc8_links: None,
+                composer_arrows_scroll: None,
                 notification_condition: None,
             }),
             ..Config::default()
@@ -4641,16 +4665,62 @@ mod terminal_mode_tests {
         let cli = parse_cli(&["deepseek"]);
         let config = Config::default();
 
-        assert!(should_use_mouse_capture_with(&cli, &config, true, None));
+        assert!(should_use_mouse_capture_with(
+            &cli, &config, true, None, None, None
+        ));
     }
 
     #[test]
     #[cfg(windows)]
-    fn mouse_capture_defaults_off_on_windows_when_alternate_screen_is_active() {
+    fn mouse_capture_defaults_off_on_legacy_windows_console() {
+        // Legacy conhost (no `WT_SESSION` and no `ConEmuPID`) keeps the
+        // v0.8.x default-off behavior: mouse-mode reporting on legacy console
+        // can leak SGR escapes into the composer.
         let cli = parse_cli(&["deepseek"]);
         let config = Config::default();
 
-        assert!(!should_use_mouse_capture_with(&cli, &config, true, None));
+        assert!(!should_use_mouse_capture_with(
+            &cli, &config, true, None, None, None
+        ));
+    }
+
+    // #1169: Windows Terminal sets `WT_SESSION` and handles mouse-mode
+    // reporting cleanly, so default-on there gives users in-app text
+    // selection (and the side-effect of clamping selection to the
+    // transcript region instead of the terminal painting across the
+    // sidebar via native selection).
+    #[test]
+    #[cfg(windows)]
+    fn mouse_capture_defaults_on_in_windows_terminal() {
+        let cli = parse_cli(&["deepseek"]);
+        let config = Config::default();
+
+        assert!(should_use_mouse_capture_with(
+            &cli,
+            &config,
+            true,
+            None,
+            Some("{a3a3b3a8-aa00-0000-0000-000000000000}"),
+            None,
+        ));
+    }
+
+    // ConEmu/Cmder sets `ConEmuPID` and handles VT mouse-mode reporting
+    // cleanly; default mouse capture on there so users get in-app scrolling.
+    #[test]
+    #[cfg(windows)]
+    fn mouse_capture_defaults_on_in_conemu() {
+        let cli = parse_cli(&["deepseek"]);
+        let config = Config::default();
+
+        assert!(should_use_mouse_capture_with(
+            &cli,
+            &config,
+            true,
+            None,
+            None,
+            Some("12345"),
+        ));
     }
 
     #[test]
@@ -4658,7 +4728,9 @@ mod terminal_mode_tests {
         let cli = parse_cli(&["deepseek", "--no-mouse-capture"]);
         let config = Config::default();
 
-        assert!(!should_use_mouse_capture_with(&cli, &config, true, None));
+        assert!(!should_use_mouse_capture_with(
+            &cli, &config, true, None, None, None
+        ));
     }
 
     #[test]
@@ -4671,12 +4743,15 @@ mod terminal_mode_tests {
                 terminal_probe_timeout_ms: None,
                 status_items: None,
                 osc8_links: None,
+                composer_arrows_scroll: None,
                 notification_condition: None,
             }),
             ..Config::default()
         };
 
-        assert!(!should_use_mouse_capture_with(&cli, &config, true, None));
+        assert!(!should_use_mouse_capture_with(
+            &cli, &config, true, None, None, None
+        ));
     }
 
     #[test]
@@ -4684,7 +4759,9 @@ mod terminal_mode_tests {
         let cli = parse_cli(&["deepseek", "--mouse-capture"]);
         let config = Config::default();
 
-        assert!(should_use_mouse_capture_with(&cli, &config, true, None));
+        assert!(should_use_mouse_capture_with(
+            &cli, &config, true, None, None, None
+        ));
     }
 
     #[test]
@@ -4697,12 +4774,15 @@ mod terminal_mode_tests {
                 terminal_probe_timeout_ms: None,
                 status_items: None,
                 osc8_links: None,
+                composer_arrows_scroll: None,
                 notification_condition: None,
             }),
             ..Config::default()
         };
 
-        assert!(should_use_mouse_capture_with(&cli, &config, true, None));
+        assert!(should_use_mouse_capture_with(
+            &cli, &config, true, None, None, None
+        ));
     }
 
     #[test]
@@ -4710,7 +4790,9 @@ mod terminal_mode_tests {
         let cli = parse_cli(&["deepseek", "--mouse-capture"]);
         let config = Config::default();
 
-        assert!(!should_use_mouse_capture_with(&cli, &config, false, None));
+        assert!(!should_use_mouse_capture_with(
+            &cli, &config, false, None, None, None
+        ));
     }
 
     // Issue #878 / #898: JetBrains JediTerm advertises mouse support but
@@ -4730,6 +4812,8 @@ mod terminal_mode_tests {
             &config,
             true,
             Some("JetBrains-JediTerm"),
+            None,
+            None,
         ));
     }
 
@@ -4745,6 +4829,8 @@ mod terminal_mode_tests {
             &config,
             true,
             Some("jetbrains-jediterm"),
+            None,
+            None,
         ));
     }
 
@@ -4758,6 +4844,8 @@ mod terminal_mode_tests {
             &config,
             true,
             Some("JetBrains-JediTerm"),
+            None,
+            None,
         ));
     }
 
@@ -4771,6 +4859,7 @@ mod terminal_mode_tests {
                 terminal_probe_timeout_ms: None,
                 status_items: None,
                 osc8_links: None,
+                composer_arrows_scroll: None,
                 notification_condition: None,
             }),
             ..Config::default()
@@ -4781,6 +4870,8 @@ mod terminal_mode_tests {
             &config,
             true,
             Some("JetBrains-JediTerm"),
+            None,
+            None,
         ));
     }
 }
@@ -5198,13 +5289,6 @@ mod setup_helper_tests {
     use std::collections::BTreeSet;
     use tempfile::TempDir;
 
-    // Serialize tests that mutate process-global env vars. Without this,
-    // `cargo test` runs them in parallel and they race on `DEEPSEEK_API_KEY`,
-    // causing intermittent CI failures (one test reads while another's set
-    // is still active). `unwrap_or_else` recovers from poisoning so a panic
-    // in one test doesn't cascade through the whole module.
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     #[test]
     fn init_tools_dir_creates_readme_and_example() {
         let tmp = TempDir::new().unwrap();
@@ -5359,7 +5443,7 @@ mod setup_helper_tests {
 
     #[test]
     fn plain_launch_preserves_checkpoint_but_starts_fresh() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = crate::test_support::lock_test_env();
         let tmp = TempDir::new().unwrap();
         let workspace = tmp.path().join("workspace");
         std::fs::create_dir_all(&workspace).unwrap();
@@ -5395,7 +5479,7 @@ mod setup_helper_tests {
 
     #[test]
     fn continue_recovers_same_workspace_checkpoint() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = crate::test_support::lock_test_env();
         let tmp = TempDir::new().unwrap();
         let workspace = tmp.path().join("workspace");
         std::fs::create_dir_all(&workspace).unwrap();
@@ -5459,6 +5543,7 @@ mod setup_helper_tests {
             "RUST_LOG",
             "DEEPSEEK_APPROVAL_POLICY",
             "DEEPSEEK_SANDBOX_MODE",
+            "DEEPSEEK_YOLO",
         ] {
             assert!(
                 keys.contains(required),
@@ -5504,7 +5589,7 @@ mod setup_helper_tests {
 
     #[test]
     fn resolve_api_key_source_reports_env_when_set() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = crate::test_support::lock_test_env();
         let prev = std::env::var("DEEPSEEK_API_KEY").ok();
         let prev_source = std::env::var("DEEPSEEK_API_KEY_SOURCE").ok();
         unsafe {
@@ -5526,7 +5611,7 @@ mod setup_helper_tests {
 
     #[test]
     fn resolve_api_key_source_reports_dispatcher_keyring() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = crate::test_support::lock_test_env();
         let prev = std::env::var("DEEPSEEK_API_KEY").ok();
         let prev_source = std::env::var("DEEPSEEK_API_KEY_SOURCE").ok();
         unsafe {
@@ -5548,7 +5633,7 @@ mod setup_helper_tests {
 
     #[test]
     fn resolve_api_key_source_prefers_config_over_env() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = crate::test_support::lock_test_env();
         let prev = std::env::var("DEEPSEEK_API_KEY").ok();
         let prev_source = std::env::var("DEEPSEEK_API_KEY_SOURCE").ok();
         unsafe {

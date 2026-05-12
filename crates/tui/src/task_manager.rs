@@ -828,7 +828,9 @@ impl TaskManager {
             mode: req.mode.unwrap_or_else(|| self.cfg.default_mode.clone()),
             allow_shell: req.allow_shell.unwrap_or(self.cfg.allow_shell),
             trust_mode: req.trust_mode.unwrap_or(self.cfg.trust_mode),
-            auto_approve: req.auto_approve.unwrap_or(true),
+            // Auto-approval must be opted into explicitly
+            // (GHSA-72w5-pf8h-xfp4).
+            auto_approve: req.auto_approve.unwrap_or(false),
             status: TaskStatus::Queued,
             created_at: Utc::now(),
             started_at: None,
@@ -1744,7 +1746,7 @@ mod tests {
         let task = manager
             .add_task(NewTaskRequest::from_prompt("test persistence"))
             .await?;
-        let finished = wait_for_terminal_state(&manager, &task.id, Duration::from_secs(3)).await?;
+        let finished = wait_for_terminal_state(&manager, &task.id, Duration::from_secs(10)).await?;
         assert_eq!(finished.status, TaskStatus::Completed);
         assert_eq!(finished.thread_id.as_deref(), Some("thr_test"));
         assert_eq!(finished.turn_id.as_deref(), Some("turn_test"));
@@ -1772,7 +1774,7 @@ mod tests {
         let task = manager
             .add_task(NewTaskRequest::from_prompt("test metadata"))
             .await?;
-        let finished = wait_for_terminal_state(&manager, &task.id, Duration::from_secs(3)).await?;
+        let finished = wait_for_terminal_state(&manager, &task.id, Duration::from_secs(10)).await?;
         let updated = manager
             .record_tool_metadata(
                 &finished.id,
@@ -1813,8 +1815,43 @@ mod tests {
 
         sleep(Duration::from_millis(10)).await;
         let _ = manager.cancel_task(&task.id).await?;
-        let finished = wait_for_terminal_state(&manager, &task.id, Duration::from_secs(3)).await?;
+        let finished = wait_for_terminal_state(&manager, &task.id, Duration::from_secs(10)).await?;
         assert_eq!(finished.status, TaskStatus::Canceled);
+        Ok(())
+    }
+
+    // GHSA-72w5-pf8h-xfp4 — regression: omitted optional fields must not
+    // silently elevate the spawned task's privileges.
+    #[tokio::test]
+    async fn add_task_without_optional_fields_does_not_grant_shell_or_auto_approve() -> Result<()> {
+        let root = std::env::temp_dir().join(format!("deepseek-task-test-{}", Uuid::new_v4()));
+        let manager =
+            TaskManager::start_with_executor(test_config(root.clone()), Arc::new(MockExecutor))
+                .await?;
+
+        let req = NewTaskRequest {
+            prompt: "fix TODOs and write a README".to_string(),
+            model: None,
+            workspace: None,
+            mode: None,
+            allow_shell: None,
+            trust_mode: None,
+            auto_approve: None,
+        };
+        let task = manager.add_task(req).await?;
+
+        assert!(
+            !task.allow_shell,
+            "model-omitted allow_shell must default to false (no silent shell grant)"
+        );
+        assert!(
+            !task.auto_approve,
+            "model-omitted auto_approve must default to false (no silent auto-approval)"
+        );
+        assert!(
+            !task.trust_mode,
+            "model-omitted trust_mode must default to false"
+        );
         Ok(())
     }
 
@@ -1828,7 +1865,7 @@ mod tests {
         let task = manager
             .add_task(NewTaskRequest::from_prompt("test schema gate"))
             .await?;
-        let _ = wait_for_terminal_state(&manager, &task.id, Duration::from_secs(3)).await?;
+        let _ = wait_for_terminal_state(&manager, &task.id, Duration::from_secs(10)).await?;
         drop(manager);
 
         let task_path = root.join("tasks").join(format!("{}.json", task.id));

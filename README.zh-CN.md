@@ -192,36 +192,93 @@ deepseek --provider ollama --model deepseek-coder:1.3b
 
 ---
 
-## v0.8.25 新功能
+## v0.8.29 新功能
 
-稳定性 + 漂移修复版本。[完整更新日志](CHANGELOG.md)。
+维护版本，核心是修复 v0.8.27 / v0.8.28 引入的"滚动幽灵"回归
+（#1085 类问题）和 Ctrl+R 会话恢复跨项目泄漏的问题（#1395），
+外加 25 个社区 PR。[完整更新日志](CHANGELOG.md)。
 
-- **Markdown 表格长单元格自动换行**，不再以 `…` 截断。长内容在列内
-  按词换行，网格在每个换行后保持完整。
-- **自更新不再依赖 `curl` 并验证 SHA-256** — `deepseek update` 现在使用
-  `reqwest` + rustls，并解析聚合校验清单以在安装前验证每个下载产物。
-  移除了 v0.8.23 为 Windows 添加的 Schannel `--ssl-no-revoke` 临时方案。
-- **MCP JSON-RPC 帧处理统一** — 请求/响应关联、超时、消息帧现在都位于
-  字节传输层之上。Stdio、SSE 和新的 Streamable HTTP 传输共享同一协议层。
-- **Streamable HTTP MCP 端点** (#1300，感谢 **Reid Liu (@reidliu41)**)
-  — 在 stdio 和 SSE 之外新增第三种 MCP 传输。
-- **终端模式恢复统一** — 启动、`FocusGained` 和 `resume_terminal` 都
-  通过同一个 `recover_terminal_modes()` 辅助函数。鼠标滚轮、键盘增强、
-  括号粘贴、焦点事件在焦点往返后只需一处重新启用。
-- **`recall_archive` 在父级注册表中可用** — 只读 BM25 归档搜索工具
-  现在可在 Plan、Agent 和 YOLO 父级注册表中调用（此前仅子代理可用）。
-- **入门时尊重当前 provider** (#1265，感谢 **jinpengxuan
-  (@jinpengxuan)**)、**Home/End 移动光标** (#1246，感谢 **heloanc
-  (@heloanc)**)、**`/config` 视图列宽对齐数据** (#1290，感谢 **Reid
-  Liu (@reidliu41)**)、**`reasoning_content` 重放对缓存稳定** (#1297，
-  感谢 **Duducoco (@Duducoco)**)、**docs 锚点 scroll-margin 可覆盖**
-  (#1282，感谢 **Wenjunyun123 (@Wenjunyun123)**)、**zh-Hans 审批对话框
-  使用「终止」** (#1274，感谢 **Liu-Vince (@Liu-Vince)**)。
+- **"滚动幽灵"彻底修复**（#1085 回归）。并行子代理运行
+  `exec_shell` 时，alt-screen 会被滚动出 ratatui 差分渲染器的
+  视野，header 上方出现越来越大的空白带。三层防护一并上线：
+  写入 `~/.deepseek/logs/tui-YYYY-MM-DD.log` 的 `tracing-subscriber`、
+  alt-screen 生命周期内的 fd 级 stderr 重定向（Unix `dup2`）、
+  以及 `tools/`、`core/`、`tui/`、`network_policy.rs`、
+  `runtime_threads.rs` 模块的
+  `#![deny(clippy::print_stdout, clippy::print_stderr)]`。今后在
+  这些模块新增 `eprintln!` 会被 CI 拒绝。
+- **Ctrl+R 会话恢复改为按当前工作区过滤**（#1395，PR #1397，
+  来自 **@linzhiqin2003**）— 此前列出磁盘上所有会话，导致
+  在项目 B 打开 DeepSeek-TUI 时按下 Ctrl+R 可能恢复项目 A 的
+  历史记录。
+- **运行时版本号直接显示在 header 中。** Header 右侧集群在
+  provider / effort / Live / context 之后增加一个 `v0.8.29`
+  小标签，在终端宽度紧张时最先收起。
+- **MCP HTTP 传输现在尊重 HTTP(S)_PROXY**（#1408，来自
+  **@hlx98007**）— 公司出口代理、国内 Clash / Shadowsocks 代理
+  现在能正确应用于 MCP HTTP 连接，跟 box 上的其他工具
+  （curl、npm、git 等）保持一致。同时支持 `NO_PROXY`。
+- **MCP 发现接受不规范条目**（PR #1410，来自 **@Liu-Vince**）—
+  一个错误的 tool / resource / prompt 条目不再让整页丢失；
+  错误条目被跳过，目录的其余部分正常返回。
+- **MCP SSE 接受 CRLF 分隔的 endpoint 事件**（#1309，PR #1358，
+  来自 **@reidliu41**）— FastMCP / uvicorn 风格的 SSE 流不再因
+  只等待 LF 分隔符而超时。
+- **输入框会忽略泄漏的鼠标报告字节**（#1418，PR #1421，来自
+  **@reidliu41**）— 某些 SSH / IDE 终端链路把 `[<35;44;18M`
+  这类鼠标报告泄漏到 stdin 时，不再把输入区域填满。
+- **Footer 芯片会遵守可用宽度**（#1357，PR #1417，来自
+  **@Wenjunyun123**）— 窄终端下，过长的 cache / aux 芯片会先
+  收起，而不是挤压左侧状态或 composer 区域。
+- **笔记管理斜杠命令**（PR #1407，来自 **@reidliu41**）—
+  `/note add`、`/note list` 等命令在 TUI 内提供持久笔记功能。
+- **全局 `~/.deepseek/AGENTS.md` 与项目 AGENTS.md 合并**
+  （#1157，PR #1399，来自 **@linzhiqin2003**）— 此前工作区
+  自带 AGENTS.md 会完全遮蔽全局基准，现在分层叠加。
+- **语言指令：thinking 跟随用户消息语言**（#1118，PR #1398，
+  来自 **@linzhiqin2003**）— 此前项目上下文推断的 `lang`
+  字段可能压制最新用户消息的语言，导致中文对话出现英文 thinking。
+- **网络搜索过滤垃圾 SERP**（#964，PR #1396，来自
+  **@linzhiqin2003**）— Bing / DDG 回退路径丢弃污染快速查找
+  结果的 SEO 农场域名。
+- **Auto 路由识别 CJK 调试 / 搜索关键词**（PR #1401、#1402，
+  来自 **@linzhiqin2003**）— `--model auto` 和推理强度选择器
+  现在能正确路由中文 / 日文技术查询，此前会回退到通用基准。
+- **Deferred tools 首次执行前会先加载 schema**（#1419，PR #1429，
+  来自 **@SamhandsomeLee**）— `edit_file` 等延迟加载工具现在会先
+  展示期望字段并要求模型重试，而不是执行模型猜测出来的参数名。
+- **DeepSeek 公开别名会正确回放 thinking-mode 工具轮次**（PR #1428，
+  来自 **@Beltran12138**）— `deepseek-chat` 和
+  `deepseek-reasoner` 现在与显式 V4 模型 ID 一样触发
+  `reasoning_content` replay，避免工具调用后的第二轮 400。
+- **技能补全收敛到 `/skill` 下**（#1437，PR #1442，来自
+  **@reidliu41**）— 本地技能很多时不会再挤满根级 `/` 命令菜单。
+- **`edit_file` 拒绝无变化替换**（PR #1460，来自
+  **@xiluoduyu**）— `search` / `replace` 完全相同时会直接返回
+  清晰的参数错误，而不是生成空 diff。
+- **Windows 终端布局使用宽度稳定的字形**（#1314，PR #1465，来自
+  **@CrepuscularIRIS**）— header 和文件树不再依赖 cmd /
+  PowerShell 容易误判宽度的 SMP emoji。
+- **Ghostty 默认启用低动态渲染**（#1445，PR #1468，来自
+  **@CrepuscularIRIS**）— 受影响终端无需手动配置即可避开动画闪烁。
+- **Docker buildx provenance 的 EPERM 失败会给出提示**（#1449，
+  PR #1469，来自 **@CrepuscularIRIS**）— macOS shell 输出命中
+  受限 metadata 写入失败时，会提示 provenance 相关开关。
+- **Windows CMD 的鼠标滚轮回退会滚动 transcript**（#1443，
+  PR #1471，来自 **@CrepuscularIRIS**）— 关闭 mouse capture 时，
+  被终端映射成 Up / Down 的滚轮事件不再循环 composer 历史。
+- **`sync-cnb.yml` 工作流加固** — 显式 `permissions: contents:
+  read`、`actions/checkout` v3 → v4、触发器收紧到 `main` +
+  `v*` 标签（不再镜像 feature 分支）。
+- **新增 +438 LOC 测试覆盖** — `error_taxonomy`、
+  `parse_pages_arg`、Web 搜索优先级、`sanitize_stream_chunk`
+  控制字节过滤（PR #1403–#1406，来自 **@linzhiqin2003**）。
 
-⚠️ **已知问题（沿用至 v0.8.26）**：Windows 10 conhost 闪烁（#1260、
-#1251）、按轮次快照（尚无写感知跳过）、代码块中 `▏` 字符泄漏（#1212）、
-鼠标选择跨入侧边栏（#1169）、拖拽选择边缘自动滚动（#1163）、运行时
-MCP 服务器 stderr 捕获。
+感谢本周期落地 10 个 PR 的 **@linzhiqin2003**、落地 5 个 PR 的
+**@reidliu41**、落地 4 个 PR 的 **@CrepuscularIRIS**，以及
+**@SamhandsomeLee**、**@Beltran12138**、**@Wenjunyun123**、
+**@hlx98007**、**@Liu-Vince**、**@xiluoduyu**，和报告 #1395 的
+**@shenxiaodaosanhua**。
 
 ---
 
@@ -243,7 +300,7 @@ deepseek resume --last                         # 恢复最近会话
 deepseek resume <SESSION_ID>                   # 按 UUID 恢复指定会话
 deepseek fork <SESSION_ID>                     # 在指定轮次分叉会话
 deepseek serve --http                          # HTTP/SSE API 服务
-deepseek pr <N>                                # 获取 PR 并预填审查提示
+deepseek run pr <N>                            # 获取 PR 并预填审查提示
 deepseek mcp list                              # 列出已配置 MCP 服务器
 deepseek mcp validate                          # 校验 MCP 配置和连接
 deepseek mcp-server                            # 启动 dispatcher MCP stdio 服务器

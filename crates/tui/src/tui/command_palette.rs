@@ -818,7 +818,7 @@ mod tests {
     #[test]
     fn command_palette_filters_with_section_shortcuts() {
         let entries = vec![
-            palette_entry(PaletteSection::Command, "/agent", "agent command", "/agent"),
+            palette_entry(PaletteSection::Command, "/mode", "mode command", "/mode"),
             palette_entry(
                 PaletteSection::Skill,
                 "skill:search",
@@ -836,7 +836,7 @@ mod tests {
         ];
         let mut view = CommandPaletteView::new(entries);
 
-        view.query = "c:agent".to_string();
+        view.query = "c:mode".to_string();
         view.refilter();
         assert_eq!(view.filtered, vec![0]);
 

@@ -64,6 +64,7 @@ pub enum Op {
 
     /// Sync engine session state (used for resume/load)
     SyncSession {
+        session_id: Option<String>,
         messages: Vec<Message>,
         system_prompt: Option<SystemPrompt>,
         model: String,

@@ -8,6 +8,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::{Component, Path};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -17,6 +18,7 @@ use reqwest::header::{ACCEPT, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::process::{Child, ChildStdin, ChildStdout};
+use tokio::sync::Mutex as TokioMutex;
 
 use crate::child_env;
 use crate::network_policy::{Decision, NetworkPolicyDecider, host_from_url};
@@ -54,6 +56,40 @@ fn mask_url_secrets(url: &str) -> String {
         return clone.to_string();
     }
     url.to_string()
+}
+
+/// Redact the userinfo segment (`username[:password]@…` portion) from
+/// a proxy URL so it can be safely included in `tracing::warn!` output
+/// without leaking the
+/// password into the on-disk log. URLs without userinfo are returned
+/// unchanged. Garbage input (no `://` scheme separator) is also returned
+/// unchanged — the malformed-URL warning path is the only caller, so an
+/// unparseable input is already the failure case.
+fn redact_proxy_userinfo(proxy_url: &str) -> String {
+    let Some(scheme_end) = proxy_url.find("://") else {
+        return proxy_url.to_string();
+    };
+    let after_scheme = scheme_end + 3;
+    // The userinfo segment ends at the next `@`, but only if that `@`
+    // comes before the next `/`, `?`, or `#` (otherwise the `@` is in a
+    // path / query and the URL has no userinfo at all).
+    let rest = &proxy_url[after_scheme..];
+    let at_idx = rest.find('@');
+    let path_idx = rest.find(['/', '?', '#']);
+    let userinfo_end = match (at_idx, path_idx) {
+        (Some(a), Some(p)) if a < p => Some(a),
+        (Some(a), None) => Some(a),
+        _ => None,
+    };
+    if let Some(end) = userinfo_end {
+        let mut out = String::with_capacity(proxy_url.len());
+        out.push_str(&proxy_url[..after_scheme]);
+        out.push_str("***@");
+        out.push_str(&rest[end + 1..]);
+        out
+    } else {
+        proxy_url.to_string()
+    }
 }
 
 /// Mask any obvious token-like substrings in a body excerpt before surfacing
@@ -288,6 +324,10 @@ pub struct StdioTransport {
     child: Child,
     stdin: ChildStdin,
     reader: tokio::io::BufReader<ChildStdout>,
+    /// Tail of stderr lines from the spawned MCP server. A background task
+    /// drains the child's stderr into this buffer so a mid-run crash leaves
+    /// some context behind instead of `Stdio::null` swallowing it.
+    stderr_tail: Arc<StderrTail>,
 }
 
 /// How long `StdioTransport::shutdown` waits for the child to exit on SIGTERM
@@ -295,6 +335,54 @@ pub struct StdioTransport {
 /// can't stall TUI exit; well-behaved servers almost always exit within
 /// a few hundred ms.
 const STDIO_SHUTDOWN_GRACE: Duration = Duration::from_millis(2_000);
+
+/// How many lines of MCP-server stderr to keep around for crash diagnostics.
+/// Bounded so a chatty server can't grow this without limit; large enough to
+/// catch typical Node/Python startup or panic output.
+const STDERR_TAIL_CAPACITY: usize = 64;
+
+/// Bounded ring buffer for the most recent stderr lines from a spawned MCP
+/// server. Used by `StdioTransport` to surface server-side context when the
+/// transport read side fails (server crashed, exited early, etc).
+#[derive(Default)]
+pub struct StderrTail {
+    lines: TokioMutex<VecDeque<String>>,
+}
+
+impl StderrTail {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            lines: TokioMutex::new(VecDeque::with_capacity(STDERR_TAIL_CAPACITY)),
+        })
+    }
+
+    async fn push(&self, line: String) {
+        let mut buf = self.lines.lock().await;
+        if buf.len() >= STDERR_TAIL_CAPACITY {
+            buf.pop_front();
+        }
+        buf.push_back(line);
+    }
+
+    async fn snapshot(&self) -> Vec<String> {
+        self.lines.lock().await.iter().cloned().collect()
+    }
+}
+
+/// Format the captured stderr tail for inclusion in an error message. Empty
+/// tails return `None` so the caller can fall back to its original message.
+async fn format_stderr_context(tail: &StderrTail) -> Option<String> {
+    let lines = tail.snapshot().await;
+    if lines.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "MCP server stderr (last {} line{}):\n{}",
+        lines.len(),
+        if lines.len() == 1 { "" } else { "s" },
+        lines.join("\n"),
+    ))
+}
 
 /// Best-effort SIGTERM. On Unix uses `libc::kill`; on Windows there's no
 /// equivalent so we let `kill_on_drop` (TerminateProcess) handle it via the
@@ -334,8 +422,19 @@ impl McpTransport for StdioTransport {
         let mut line = String::new();
         loop {
             line.clear();
-            let bytes = self.reader.read_line(&mut line).await?;
+            let bytes = match self.reader.read_line(&mut line).await {
+                Ok(b) => b,
+                Err(err) => {
+                    if let Some(stderr) = format_stderr_context(&self.stderr_tail).await {
+                        anyhow::bail!("Stdio transport read error: {err}\n{stderr}");
+                    }
+                    return Err(err.into());
+                }
+            };
             if bytes == 0 {
+                if let Some(stderr) = format_stderr_context(&self.stderr_tail).await {
+                    anyhow::bail!("Stdio transport closed\n{stderr}");
+                }
                 anyhow::bail!("Stdio transport closed");
             }
 
@@ -509,18 +608,21 @@ impl SseTransport {
             let s = String::from_utf8_lossy(&chunk);
             buffer.push_str(&s);
 
-            while let Some(pos) = buffer.find("\n\n") {
+            while let Some((pos, separator_len)) = find_sse_event_separator(&buffer) {
                 let event_block = buffer[..pos].to_string();
-                buffer = buffer[pos + 2..].to_string();
+                buffer = buffer[pos + separator_len..].to_string();
 
                 let mut event_type = "message";
                 let mut data = String::new();
 
                 for line in event_block.lines() {
-                    if let Some(stripped) = line.strip_prefix("event: ") {
-                        event_type = stripped;
-                    } else if let Some(stripped) = line.strip_prefix("data: ") {
-                        data.push_str(stripped);
+                    if let Some(value) = sse_field_value(line, "event:") {
+                        event_type = value;
+                    } else if let Some(value) = sse_field_value(line, "data:") {
+                        if !data.is_empty() {
+                            data.push('\n');
+                        }
+                        data.push_str(value);
                     }
                 }
 
@@ -775,6 +877,15 @@ fn parse_sse_message_data(body: &str) -> Vec<Vec<u8>> {
     messages
 }
 
+fn find_sse_event_separator(buffer: &str) -> Option<(usize, usize)> {
+    match (buffer.find("\n\n"), buffer.find("\r\n\r\n")) {
+        (Some(lf), Some(crlf)) if crlf < lf => Some((crlf, 4)),
+        (Some(lf), _) => Some((lf, 2)),
+        (_, Some(crlf)) => Some((crlf, 4)),
+        _ => None,
+    }
+}
+
 fn sse_field_value<'a>(line: &'a str, field: &str) -> Option<&'a str> {
     let value = line.strip_prefix(field)?;
     Some(value.strip_prefix(' ').unwrap_or(value))
@@ -869,9 +980,45 @@ impl McpConnection {
                     }
                 }
             }
-            let client = reqwest::Client::builder()
-                .timeout(Duration::from_secs(connect_timeout_secs))
-                .build()?;
+            // Honor the standard `HTTP_PROXY` / `HTTPS_PROXY` (and their
+            // lowercase equivalents) plus `NO_PROXY` env vars when
+            // reaching MCP HTTP servers (#1408). Reqwest 0.13 does not
+            // auto-detect these by default, so users behind corporate
+            // proxies, on China-mainland connections routing through a
+            // local Clash / Shadowsocks tunnel, etc. previously had MCP
+            // HTTP traffic bypass the proxy entirely while every other
+            // tool on the box (curl, npm, …) used it.
+            let mut client_builder =
+                reqwest::Client::builder().timeout(Duration::from_secs(connect_timeout_secs));
+            let env_proxy_url = std::env::var("HTTPS_PROXY")
+                .or_else(|_| std::env::var("https_proxy"))
+                .or_else(|_| std::env::var("HTTP_PROXY"))
+                .or_else(|_| std::env::var("http_proxy"))
+                .ok()
+                .filter(|s| !s.trim().is_empty());
+            if let Some(proxy_url) = env_proxy_url {
+                match reqwest::Proxy::all(&proxy_url) {
+                    Ok(proxy) => {
+                        let proxy = proxy.no_proxy(reqwest::NoProxy::from_env());
+                        client_builder = client_builder.proxy(proxy);
+                    }
+                    Err(err) => {
+                        // Redact userinfo (the `username[:password]@…`
+                        // portion of the URL) before logging so an
+                        // HTTPS_PROXY that embeds credentials
+                        // (common in corporate setups) doesn't leak the
+                        // password to the on-disk `~/.deepseek/logs/`.
+                        let proxy_redacted = redact_proxy_userinfo(&proxy_url);
+                        tracing::warn!(
+                            target: "mcp",
+                            ?err,
+                            proxy = %proxy_redacted,
+                            "ignoring malformed HTTP(S)_PROXY env var; MCP connection will bypass proxy"
+                        );
+                    }
+                }
+            }
+            let client = client_builder.build()?;
             Box::new(HttpTransport::new(
                 client,
                 url.clone(),
@@ -883,7 +1030,7 @@ impl McpConnection {
             cmd.args(&config.args)
                 .stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::null())
+                .stderr(std::process::Stdio::piped())
                 .kill_on_drop(true);
 
             // MCP stdio servers are user-configured integrations. Use the
@@ -903,11 +1050,28 @@ impl McpConnection {
 
             let stdin = child.stdin.take().context("Failed to get MCP stdin")?;
             let stdout = child.stdout.take().context("Failed to get MCP stdout")?;
+            let stderr = child.stderr.take().context("Failed to get MCP stderr")?;
+
+            // Drain stderr into a bounded ring buffer so a crash mid-run
+            // leaves diagnostic breadcrumbs instead of disappearing into
+            // `Stdio::null`. The task exits naturally when the child closes
+            // its stderr (kill_on_drop / exit / explicit shutdown).
+            let stderr_tail = StderrTail::new();
+            {
+                let tail = Arc::clone(&stderr_tail);
+                tokio::spawn(async move {
+                    let mut lines = tokio::io::BufReader::new(stderr).lines();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        tail.push(line).await;
+                    }
+                });
+            }
 
             Box::new(StdioTransport {
                 child,
                 stdin,
                 reader: tokio::io::BufReader::new(stdout),
+                stderr_tail,
             })
         } else {
             anyhow::bail!(
@@ -1013,9 +1177,19 @@ impl McpConnection {
                 break;
             };
 
-            if let Some(tools) = result.get("tools") {
-                let page: Vec<McpTool> = serde_json::from_value(tools.clone()).unwrap_or_default();
-                self.tools.extend(page);
+            if let Some(arr) = result.get("tools").and_then(|t| t.as_array()) {
+                for item in arr {
+                    match serde_json::from_value::<McpTool>(item.clone()) {
+                        Ok(tool) => self.tools.push(tool),
+                        Err(err) => {
+                            // Skip individual malformed entries instead of
+                            // dropping the whole page (#1410). The old
+                            // `unwrap_or_default()` would silently throw
+                            // away every tool when one was misshapen.
+                            tracing::debug!(target: "mcp", ?err, "skipping malformed tool item");
+                        }
+                    }
+                }
             }
 
             cursor = result
@@ -1026,6 +1200,10 @@ impl McpConnection {
                 break;
             }
         }
+        // Sort by tool name so the order the model sees doesn't depend on
+        // server-side pagination ordering — keeps the prompt prefix stable
+        // for cache-hit purposes (#1319).
+        self.tools.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(())
     }
 
@@ -1051,10 +1229,15 @@ impl McpConnection {
                 break;
             };
 
-            if let Some(resources) = result.get("resources") {
-                let page: Vec<McpResource> =
-                    serde_json::from_value(resources.clone()).unwrap_or_default();
-                self.resources.extend(page);
+            if let Some(arr) = result.get("resources").and_then(|r| r.as_array()) {
+                for item in arr {
+                    match serde_json::from_value::<McpResource>(item.clone()) {
+                        Ok(resource) => self.resources.push(resource),
+                        Err(err) => {
+                            tracing::debug!(target: "mcp", ?err, "skipping malformed resource item");
+                        }
+                    }
+                }
             }
 
             cursor = result
@@ -1094,10 +1277,15 @@ impl McpConnection {
                 .get("resourceTemplates")
                 .or_else(|| result.get("templates"))
                 .or_else(|| result.get("resource_templates"));
-            if let Some(templates) = templates {
-                let page: Vec<McpResourceTemplate> =
-                    serde_json::from_value(templates.clone()).unwrap_or_default();
-                self.resource_templates.extend(page);
+            if let Some(arr) = templates.and_then(|t| t.as_array()) {
+                for item in arr {
+                    match serde_json::from_value::<McpResourceTemplate>(item.clone()) {
+                        Ok(tmpl) => self.resource_templates.push(tmpl),
+                        Err(err) => {
+                            tracing::debug!(target: "mcp", ?err, "skipping malformed resource_template item");
+                        }
+                    }
+                }
             }
 
             cursor = result
@@ -1133,10 +1321,15 @@ impl McpConnection {
                 break;
             };
 
-            if let Some(prompts) = result.get("prompts") {
-                let page: Vec<McpPrompt> =
-                    serde_json::from_value(prompts.clone()).unwrap_or_default();
-                self.prompts.extend(page);
+            if let Some(arr) = result.get("prompts").and_then(|p| p.as_array()) {
+                for item in arr {
+                    match serde_json::from_value::<McpPrompt>(item.clone()) {
+                        Ok(prompt) => self.prompts.push(prompt),
+                        Err(err) => {
+                            tracing::debug!(target: "mcp", ?err, "skipping malformed prompt item");
+                        }
+                    }
+                }
             }
 
             cursor = result
@@ -1338,15 +1531,32 @@ pub struct McpPool {
     connections: HashMap<String, McpConnection>,
     config: McpConfig,
     network_policy: Option<NetworkPolicyDecider>,
+    /// Source path the config was loaded from, when `from_config_path` was
+    /// used. `None` for pools constructed directly via `new` (tests, ad-hoc
+    /// snapshots). Drives the lazy-reload check (#1267 part 2): when the
+    /// file's mtime moves, the pool re-reads the config and compares its
+    /// content hash to decide whether to drop existing connections.
+    config_source: Option<std::path::PathBuf>,
+    /// 64-bit content hash of the active config (`hash_mcp_config`). Compared
+    /// against the freshly-loaded config after an mtime change to skip
+    /// reloading when the file was merely touched.
+    config_hash: u64,
+    /// Most recently observed mtime of `config_source`. Updated whenever the
+    /// reload check runs (whether or not it triggered a reload).
+    last_mtime: Option<std::time::SystemTime>,
 }
 
 impl McpPool {
     /// Create a new pool with the given configuration
     pub fn new(config: McpConfig) -> Self {
+        let config_hash = hash_mcp_config(&config);
         Self {
             connections: HashMap::new(),
             config,
             network_policy: None,
+            config_source: None,
+            config_hash,
+            last_mtime: None,
         }
     }
 
@@ -1361,7 +1571,11 @@ impl McpPool {
         } else {
             McpConfig::default()
         };
-        Ok(Self::new(config))
+        let last_mtime = mcp_config_mtime(path);
+        let mut pool = Self::new(config);
+        pool.config_source = Some(path.to_path_buf());
+        pool.last_mtime = last_mtime;
+        Ok(pool)
     }
 
     /// Attach a per-domain network policy (#135). When set, HTTP/SSE
@@ -1371,8 +1585,63 @@ impl McpPool {
         self
     }
 
+    /// If the source config file's mtime has changed since the last check,
+    /// re-read it and (only when the content hash also changed) drop all
+    /// existing connections so the next `get_or_connect` reattaches under
+    /// the new config. No-op when the pool was constructed via [`McpPool::new`]
+    /// (no source path), when stat fails, or when the file content is
+    /// byte-identical to what we last loaded. Returns `Ok(true)` if any
+    /// connections were dropped, `Ok(false)` otherwise.
+    ///
+    /// This is the lazy half of the auto-reload story for #1267: instead of a
+    /// long-lived file watcher, the next tool invocation pays a single `stat`
+    /// call (and only re-reads the file when the mtime moved). On networked
+    /// or remote filesystems where mtime granularity is poor, the hash
+    /// compare keeps us from churning connections on every check.
+    pub async fn reload_if_config_changed(&mut self) -> Result<bool> {
+        let Some(path) = self.config_source.clone() else {
+            return Ok(false);
+        };
+        let current_mtime = match mcp_config_mtime(&path) {
+            Some(m) => m,
+            None => return Ok(false),
+        };
+        if Some(current_mtime) == self.last_mtime {
+            return Ok(false);
+        }
+        // mtime moved — we owe a re-read.
+        let new_config: McpConfig = if path.exists() {
+            let contents = fs::read_to_string(&path)
+                .with_context(|| format!("Failed to re-read MCP config: {}", path.display()))?;
+            serde_json::from_str(&contents)
+                .with_context(|| format!("Failed to re-parse MCP config: {}", path.display()))?
+        } else {
+            McpConfig::default()
+        };
+        let new_hash = hash_mcp_config(&new_config);
+        // Always advance last_mtime so a touched-but-unchanged file doesn't
+        // make us re-read on every subsequent call.
+        self.last_mtime = Some(current_mtime);
+        if new_hash == self.config_hash {
+            return Ok(false);
+        }
+        // Real content change — drop all live connections so the next
+        // get_or_connect picks up the new config (sandbox flags, env, args).
+        self.connections.clear();
+        self.config = new_config;
+        self.config_hash = new_hash;
+        Ok(true)
+    }
+
     /// Get or create a connection to a server
     pub async fn get_or_connect(&mut self, server_name: &str) -> Result<&mut McpConnection> {
+        // Lazy auto-reload (#1267 part 2): cheap mtime-then-hash check before
+        // each connection lookup. Errors from the reload check (stat failure,
+        // partial config parse) are swallowed here so a transient FS hiccup
+        // can't take down the whole tool dispatch — the user still gets the
+        // existing connection to respond to.
+        let _ = self.reload_if_config_changed().await;
+
         let is_ready = self
             .connections
             .get(server_name)
@@ -1459,6 +1728,9 @@ impl McpPool {
                 tools.push((format!("mcp_{}_{}", server, tool.name), tool));
             }
         }
+        // Sort by prefixed name so iteration order across servers is
+        // deterministic for prefix-cache stability (#1319).
+        tools.sort_by(|a, b| a.0.cmp(&b.0));
         tools
     }
 
@@ -1734,6 +2006,9 @@ impl McpPool {
             });
         }
 
+        // Sort by name for prefix-cache stability — the tool block sent to
+        // the model needs to be deterministic across runs (#1319).
+        api_tools.sort_by(|a, b| a.name.cmp(&b.name));
         api_tools
     }
 
@@ -1920,6 +2195,35 @@ pub fn load_config(path: &Path) -> Result<McpConfig> {
         .with_context(|| format!("Failed to read MCP config {}", path.display()))?;
     serde_json::from_str(&contents)
         .with_context(|| format!("Failed to parse MCP config {}", path.display()))
+}
+
+/// 64-bit content hash of an [`McpConfig`]. Used by [`McpPool`] to decide
+/// whether a freshly-read config differs from the one currently driving the
+/// live connections. Hashing the JSON serialization avoids forcing every
+/// nested config type to derive `Hash` (the timeouts struct, network policy
+/// stubs, etc.). The hash is stable across runs of the same Rust toolchain
+/// for byte-identical input.
+fn hash_mcp_config(config: &McpConfig) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let bytes = serde_json::to_vec(config).unwrap_or_default();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Best-effort fetch of the MCP config file's last-modified time. Returns
+/// `None` when the file is missing, when stat fails, when the platform
+/// doesn't expose mtime, or when the path fails the same allow-list check
+/// that `load_config` / `save_config` apply. The lazy-reload check in
+/// `McpPool::get_or_connect` treats `None` as "skip the check this turn",
+/// so a rejected path simply degrades to "no auto-reload" rather than an
+/// error path. Callers already validate via `validate_mcp_config_path` at
+/// construction time; the redundant validation here keeps this helper
+/// safe-by-construction for any future caller and ties the validation to
+/// the call site rather than relying on cross-function reasoning.
+fn mcp_config_mtime(path: &Path) -> Option<std::time::SystemTime> {
+    validate_mcp_config_path(path).ok()?;
+    fs::metadata(path).ok()?.modified().ok()
 }
 
 pub fn save_config(path: &Path, cfg: &McpConfig) -> Result<()> {
@@ -2538,6 +2842,139 @@ mod tests {
         assert!(pool.all_tools().is_empty());
     }
 
+    /// #1267 part 2: a pool built without a source path has no file to watch,
+    /// so `reload_if_config_changed` must short-circuit instead of trying
+    /// to stat `/`.
+    #[tokio::test]
+    async fn reload_if_config_changed_is_noop_without_source_path() {
+        let mut pool = McpPool::new(McpConfig::default());
+        let reloaded = pool.reload_if_config_changed().await.unwrap();
+        assert!(!reloaded, "no source path → no reload");
+    }
+
+    /// #1267 part 2: when the on-disk config is byte-unchanged, the lazy
+    /// reload must not drop connections — every call to `get_or_connect`
+    /// would otherwise pay a full reconnect cycle on networked filesystems
+    /// where mtime granularity is coarse.
+    #[tokio::test]
+    async fn reload_if_config_changed_skips_when_content_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp.json");
+        std::fs::write(&path, r#"{"servers":{}}"#).unwrap();
+        let mut pool = McpPool::from_config_path(&path).unwrap();
+        // Force the mtime to advance without changing content.
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        std::fs::write(&path, r#"{"servers":{}}"#).unwrap();
+        let reloaded = pool.reload_if_config_changed().await.unwrap();
+        assert!(
+            !reloaded,
+            "content-unchanged config must not trigger a reload"
+        );
+    }
+
+    /// #1267 part 2: when the on-disk config changes content, the next
+    /// `reload_if_config_changed` call must swap in the new config and
+    /// (would) drop all live connections. We can't stand up a real
+    /// `McpConnection` in a unit test, so we observe the swap via the
+    /// publicly-readable side: server names go from empty to non-empty.
+    #[tokio::test]
+    async fn reload_if_config_changed_swaps_config_on_content_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp.json");
+        std::fs::write(&path, r#"{"servers":{}}"#).unwrap();
+        let mut pool = McpPool::from_config_path(&path).unwrap();
+        assert!(pool.server_names().is_empty());
+        // Mutate the file so both the mtime and the hash change.
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        std::fs::write(
+            &path,
+            r#"{"servers":{"new":{"command":"echo","args":["hi"]}}}"#,
+        )
+        .unwrap();
+        let reloaded = pool.reload_if_config_changed().await.unwrap();
+        assert!(reloaded, "content-changed config must trigger reload");
+        let names = pool.server_names();
+        assert!(
+            names.contains(&"new"),
+            "expected new server in pool after reload, got {names:?}"
+        );
+    }
+
+    /// #1267 part 2: hash-based comparison must be stable for byte-identical
+    /// configs and distinct for differing configs.
+    #[test]
+    fn hash_mcp_config_is_stable_and_change_sensitive() {
+        let a = McpConfig::default();
+        let b = McpConfig::default();
+        assert_eq!(hash_mcp_config(&a), hash_mcp_config(&b));
+        let mut c = McpConfig::default();
+        c.servers.insert(
+            "x".into(),
+            McpServerConfig {
+                command: Some("/bin/echo".into()),
+                args: vec!["hi".into()],
+                env: Default::default(),
+                url: None,
+                connect_timeout: None,
+                execute_timeout: None,
+                read_timeout: None,
+                disabled: false,
+                enabled: true,
+                required: false,
+                enabled_tools: Vec::new(),
+                disabled_tools: Vec::new(),
+            },
+        );
+        assert_ne!(
+            hash_mcp_config(&a),
+            hash_mcp_config(&c),
+            "hash must change when servers map changes"
+        );
+    }
+
+    /// #1319: discovered tools must be sorted by name so the prompt prefix
+    /// is stable across runs (cache-hit stability), even when the server
+    /// returns them in arbitrary or paginated order.
+    #[tokio::test]
+    async fn discover_tools_sorts_by_name_for_cache_stability() {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let transport = ScriptedValueTransport {
+            sent: Arc::clone(&sent),
+            responses: VecDeque::from([
+                json_frame(serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "result": {
+                        "tools": [
+                            { "name": "zeta", "inputSchema": {} },
+                            { "name": "alpha", "inputSchema": {} }
+                        ],
+                        "nextCursor": "page-2"
+                    }
+                })),
+                json_frame(serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "result": {
+                        "tools": [
+                            { "name": "mu", "inputSchema": {} },
+                            { "name": "beta", "inputSchema": {} }
+                        ]
+                    }
+                })),
+            ]),
+        };
+        let mut conn = test_connection(Box::new(transport));
+        conn.discover_tools().await.expect("discover");
+
+        let names: Vec<&str> = conn.tools.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["alpha", "beta", "mu", "zeta"],
+            "tools must be sorted by name regardless of server order or pagination"
+        );
+    }
+
     /// #1244: when an MCP stdio server fails to spawn, the underlying OS
     /// error (e.g. ENOENT for a missing binary) must reach the user via the
     /// snapshot.error string. Regression test for `err.to_string()` dropping
@@ -2587,6 +3024,18 @@ mod tests {
         let value: serde_json::Value = serde_json::from_slice(&messages[0]).unwrap();
         assert_eq!(value["id"], 1);
         assert!(value.get("result").is_some());
+    }
+
+    #[test]
+    fn find_sse_event_separator_accepts_lf_and_crlf() {
+        assert_eq!(
+            find_sse_event_separator("event: endpoint\n\n"),
+            Some((15, 2))
+        );
+        assert_eq!(
+            find_sse_event_separator("event: endpoint\r\n\r\n"),
+            Some((15, 4))
+        );
     }
 
     #[tokio::test]
@@ -2639,8 +3088,10 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
-            for _ in 0..6 {
-                let (mut socket, _) = listener.accept().await.unwrap();
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
                 tokio::spawn(async move {
                     let request = read_http_request(&mut socket).await;
                     assert!(request.starts_with("POST /mcp "));
@@ -2749,6 +3200,42 @@ mod tests {
     }
 
     #[test]
+    fn redact_proxy_userinfo_strips_password() {
+        // Corporate-style proxy URL with embedded creds — the
+        // password must never reach the on-disk log file. URL strings
+        // are assembled from placeholder constants via `format!` so the
+        // literal source never contains a scheme-prefixed username +
+        // password pair (colon-separated, `@`-terminated) that
+        // GitGuardian's "Basic Auth String" detector would flag as a
+        // committed credential.
+        let (placeholder_user, placeholder_pass) = ("PLACEHOLDER_USER", "PLACEHOLDER_PASS");
+        let with_creds = format!("http://{placeholder_user}:{placeholder_pass}@proxy.example/");
+        let redacted = redact_proxy_userinfo(&with_creds);
+        assert_eq!(redacted, "http://***@proxy.example/");
+        assert!(!redacted.contains(placeholder_pass));
+        assert!(!redacted.contains(placeholder_user));
+
+        // User only (no password) — still redacted.
+        let with_user_only = format!("https://{placeholder_user}@proxy.example:8080");
+        let redacted = redact_proxy_userinfo(&with_user_only);
+        assert_eq!(redacted, "https://***@proxy.example:8080");
+
+        // No userinfo segment — pass through.
+        let redacted = redact_proxy_userinfo("http://proxy.example:3128/");
+        assert_eq!(redacted, "http://proxy.example:3128/");
+
+        // `@` appears only in the path, not as userinfo separator —
+        // must not be mistaken for credentials.
+        let redacted = redact_proxy_userinfo("http://proxy.example/path@thing");
+        assert_eq!(redacted, "http://proxy.example/path@thing");
+
+        // Garbage input (no `://`) returned unchanged — the
+        // surrounding warning log is the only caller and is already
+        // handling the malformed-URL case.
+        assert_eq!(redact_proxy_userinfo("not-a-url"), "not-a-url");
+    }
+
+    #[test]
     fn redact_body_preview_masks_api_key_param() {
         let redacted = redact_body_preview("error message api_key=sk-12345&other=val");
         assert!(redacted.contains("api_key=***"), "redacted: {redacted}");
@@ -2782,6 +3269,7 @@ mod tests {
             child,
             stdin,
             reader: tokio::io::BufReader::new(stdout),
+            stderr_tail: StderrTail::new(),
         };
 
         // shutdown() should send SIGTERM and complete within the grace window.
@@ -2803,6 +3291,64 @@ mod tests {
         assert!(
             !still_alive,
             "child {pid} survived StdioTransport::shutdown — SIGTERM not delivered"
+        );
+    }
+
+    /// Mid-run MCP server crash: the v0.8.x spawn path used `Stdio::null` for
+    /// stderr, so a server that died with a useful stderr message left the
+    /// caller with only "Stdio transport closed". Now stderr is piped into a
+    /// bounded ring buffer and surfaced when the read side fails.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stdio_transport_recv_error_includes_stderr_tail() {
+        use tokio::process::Command as TokioCommand;
+
+        let mut cmd = TokioCommand::new("sh");
+        cmd.arg("-c")
+            .arg("echo 'mcp-server: failed to load plugin' 1>&2; exit 1")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true);
+
+        let mut child = cmd.spawn().expect("spawn sh");
+        let stdin = child.stdin.take().expect("stdin");
+        let stdout = child.stdout.take().expect("stdout");
+        let stderr = child.stderr.take().expect("stderr");
+
+        let stderr_tail = StderrTail::new();
+        {
+            let tail = Arc::clone(&stderr_tail);
+            tokio::spawn(async move {
+                let mut lines = tokio::io::BufReader::new(stderr).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    tail.push(line).await;
+                }
+            });
+        }
+
+        let mut transport = StdioTransport {
+            child,
+            stdin,
+            reader: tokio::io::BufReader::new(stdout),
+            stderr_tail,
+        };
+
+        // Give the subprocess time to write its stderr line and exit.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        let err = transport
+            .recv()
+            .await
+            .expect_err("expected transport closed error");
+        let err_str = format!("{err}");
+        assert!(
+            err_str.contains("Stdio transport closed"),
+            "missing closed marker in: {err_str}"
+        );
+        assert!(
+            err_str.contains("mcp-server: failed to load plugin"),
+            "stderr context missing from error: {err_str}"
         );
     }
 
@@ -2886,6 +3432,91 @@ mod tests {
         assert!(
             post_seen.load(AtomicOrdering::SeqCst),
             "first SSE send should POST to the discovered endpoint"
+        );
+
+        cancel_token.cancel();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn sse_connect_accepts_crlf_endpoint_events() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering as AtomicOrdering},
+        };
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let post_seen = Arc::new(AtomicBool::new(false));
+        let server_post_seen = Arc::clone(&post_seen);
+        let cancel_token = tokio_util::sync::CancellationToken::new();
+        let server_cancel = cancel_token.clone();
+
+        let server = tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let post_seen = Arc::clone(&server_post_seen);
+                let server_cancel = server_cancel.clone();
+                tokio::spawn(async move {
+                    let mut request = Vec::new();
+                    let mut buf = [0; 1024];
+                    loop {
+                        let n = socket.read(&mut buf).await.unwrap();
+                        if n == 0 {
+                            return;
+                        }
+                        request.extend_from_slice(&buf[..n]);
+                        if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                            break;
+                        }
+                    }
+                    let request = String::from_utf8_lossy(&request);
+                    if request.starts_with("GET /sse ") {
+                        socket
+                            .write_all(
+                                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n",
+                            )
+                            .await
+                            .unwrap();
+                        socket
+                            .write_all(b"event: endpoint\r\ndata: /messages\r\n\r\n")
+                            .await
+                            .unwrap();
+                        server_cancel.cancelled().await;
+                    } else if request.starts_with("POST /messages ") {
+                        post_seen.store(true, AtomicOrdering::SeqCst);
+                        socket
+                            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                            .await
+                            .unwrap();
+                    }
+                });
+            }
+        });
+
+        let client = reqwest::Client::new();
+        let url = format!("http://{addr}/sse");
+        let mut transport =
+            SseTransport::connect(client, url, cancel_token.clone(), Duration::from_secs(2))
+                .await
+                .unwrap();
+
+        transport
+            .send(json_frame(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize"
+            })))
+            .await
+            .unwrap();
+
+        assert!(
+            post_seen.load(AtomicOrdering::SeqCst),
+            "first SSE send should POST to the CRLF-discovered endpoint"
         );
 
         cancel_token.cancel();

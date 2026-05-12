@@ -1,6 +1,6 @@
 //! Shared text helpers for TUI selection and clipboard workflows.
 
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthChar;
 
 use crate::tui::history::HistoryCell;
@@ -16,26 +16,31 @@ pub(super) fn history_cell_to_text(cell: &HistoryCell, width: u16) -> String {
 
 fn line_to_string(line: Line<'static>) -> String {
     let mut out = String::new();
-    for span in line.spans {
-        if span.content.contains('\x1b') {
-            osc8::strip_into(&span.content, &mut out);
-        } else {
-            out.push_str(&span.content);
-        }
-    }
+    append_spans_plain(line.spans.iter(), &mut out);
     out
 }
 
+/// Convert a rendered transcript line to plain text, stripping OSC-8 link
+/// escape sequences. The caller is responsible for shifting selection columns
+/// to account for any visual-only rail prefix (see
+/// `TranscriptViewCache::rail_prefix_width`).
 pub(super) fn line_to_plain(line: &Line<'static>) -> String {
     let mut out = String::new();
-    for span in &line.spans {
+    append_spans_plain(line.spans.iter(), &mut out);
+    out
+}
+
+fn append_spans_plain<'a, I>(spans: I, out: &mut String)
+where
+    I: Iterator<Item = &'a Span<'a>>,
+{
+    for span in spans {
         if span.content.contains('\x1b') {
-            osc8::strip_into(&span.content, &mut out);
+            osc8::strip_into(&span.content, out);
         } else {
             out.push_str(span.content.as_ref());
         }
     }
-    out
 }
 
 pub(super) fn text_display_width(text: &str) -> usize {
@@ -79,8 +84,6 @@ mod tests {
 
     #[test]
     fn line_to_plain_strips_osc_8_wrapper() {
-        // A span carrying an OSC 8-wrapped URL must not leak the escape into
-        // selection / clipboard output. The visible label survives.
         let wrapped = format!(
             "\x1b]8;;{}\x1b\\{}\x1b]8;;\x1b\\",
             "https://example.com", "https://example.com"
@@ -90,12 +93,46 @@ mod tests {
             Span::raw(wrapped),
             Span::raw(" for details"),
         ]);
-        assert_eq!(line_to_plain(&line), "see https://example.com for details");
+        let text = line_to_plain(&line);
+        assert_eq!(text, "see https://example.com for details");
     }
 
     #[test]
     fn line_to_plain_passes_through_plain_spans() {
         let line = Line::from(vec![Span::raw("plain "), Span::raw("text")]);
-        assert_eq!(line_to_plain(&line), "plain text");
+        let text = line_to_plain(&line);
+        assert_eq!(text, "plain text");
+    }
+
+    #[test]
+    fn line_to_plain_includes_all_spans() {
+        // Visual-only rail spans are stripped by the caller using
+        // TranscriptViewCache::rail_prefix_width — line_to_plain itself
+        // is a faithful span-to-string pass-through.
+        let line = Line::from(vec![Span::raw("\u{2502} "), Span::raw("tool output")]);
+        let text = line_to_plain(&line);
+        assert_eq!(text, "\u{2502} tool output");
+    }
+
+    #[test]
+    fn slice_text_respects_column_bounds() {
+        let text = "hello world";
+        assert_eq!(slice_text(text, 0, 5), "hello");
+        assert_eq!(slice_text(text, 6, 11), "world");
+        assert_eq!(slice_text(text, 0, 0), "");
+        assert_eq!(slice_text(text, 0, 100), text);
+    }
+
+    #[test]
+    fn slice_text_handles_multibyte_characters() {
+        let text = "a─b"; // U+2500 is 1 display column on supported terminals
+        assert_eq!(slice_text(text, 1, 2), "─");
+        assert_eq!(slice_text(text, 0, 3), text);
+    }
+
+    #[test]
+    fn slice_text_truncates_at_end() {
+        let text = "ab";
+        assert_eq!(slice_text(text, 1, 5), "b");
     }
 }

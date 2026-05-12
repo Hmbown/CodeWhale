@@ -202,7 +202,16 @@ impl LlmError {
             400 => {
                 // Classify 400 errors by examining the response body
                 let body_lower = body.to_lowercase();
-                if body_lower.contains("context_length")
+                if body_lower.contains("insufficientquota")
+                    || body_lower.contains("insufficient_quota")
+                    || body_lower.contains("exceeded your current quota")
+                    || body_lower.contains("quota exceeded")
+                {
+                    LlmError::RateLimited {
+                        message: body.to_string(),
+                        retry_after: None,
+                    }
+                } else if body_lower.contains("context_length")
                     || body_lower.contains("token")
                     || body_lower.contains("too long")
                     || body_lower.contains("maximum")
@@ -845,6 +854,14 @@ mod tests {
         // Context length
         let err = LlmError::from_http_response(400, "context_length_exceeded");
         assert!(matches!(err, LlmError::ContextLengthError(_)));
+
+        // Some OpenAI-compatible gateways return quota/rate-limit errors as HTTP 400.
+        let err = LlmError::from_http_response(
+            400,
+            r#"{"error":{"code":"insufficientquota","message":"You exceeded your current quota"}}"#,
+        );
+        assert!(matches!(err, LlmError::RateLimited { .. }));
+        assert!(err.is_retryable());
 
         // Content policy
         let err = LlmError::from_http_response(400, "content_policy_violation");

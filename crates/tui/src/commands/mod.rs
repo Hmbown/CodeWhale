@@ -9,6 +9,7 @@ mod config;
 mod core;
 mod cycle;
 mod debug;
+mod feedback;
 mod goal;
 mod hooks;
 mod init;
@@ -26,6 +27,7 @@ mod session;
 pub mod share;
 mod skills;
 mod stash;
+mod status;
 mod task;
 mod user_commands;
 
@@ -208,6 +210,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         description_id: MessageId::CmdLinksDescription,
     },
     CommandInfo {
+        name: "feedback",
+        aliases: &[],
+        usage: "/feedback [bug|feature|security]",
+        description_id: MessageId::CmdFeedbackDescription,
+    },
+    CommandInfo {
         name: "home",
         aliases: &["stats", "overview"],
         usage: "/home",
@@ -216,7 +224,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo {
         name: "note",
         aliases: &[],
-        usage: "/note <text>",
+        usage: "/note [add|list|show|edit|remove|clear|path]",
         description_id: MessageId::CmdNoteDescription,
     },
     CommandInfo {
@@ -324,22 +332,10 @@ pub const COMMANDS: &[CommandInfo] = &[
         description_id: MessageId::CmdConfigDescription,
     },
     CommandInfo {
-        name: "yolo",
+        name: "mode",
         aliases: &[],
-        usage: "/yolo",
-        description_id: MessageId::CmdYoloDescription,
-    },
-    CommandInfo {
-        name: "agent",
-        aliases: &[],
-        usage: "/agent",
-        description_id: MessageId::CmdAgentDescription,
-    },
-    CommandInfo {
-        name: "plan",
-        aliases: &[],
-        usage: "/plan",
-        description_id: MessageId::CmdPlanDescription,
+        usage: "/mode [agent|plan|yolo|1|2|3]",
+        description_id: MessageId::CmdModeDescription,
     },
     CommandInfo {
         name: "theme",
@@ -433,8 +429,14 @@ pub const COMMANDS: &[CommandInfo] = &[
         description_id: MessageId::CmdSettingsDescription,
     },
     CommandInfo {
+        name: "status",
+        aliases: &[],
+        usage: "/status",
+        description_id: MessageId::CmdStatusDescription,
+    },
+    CommandInfo {
         name: "statusline",
-        aliases: &["status"],
+        aliases: &[],
         usage: "/statusline",
         description_id: MessageId::CmdStatuslineDescription,
     },
@@ -442,7 +444,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo {
         name: "skills",
         aliases: &[],
-        usage: "/skills [--remote|sync]",
+        usage: "/skills [--remote|sync|<prefix>]",
         description_id: MessageId::CmdSkillsDescription,
     },
     CommandInfo {
@@ -520,6 +522,7 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "hooks" | "hook" => hooks::hooks(app, arg),
         "subagents" | "agents" => core::subagents(app),
         "links" | "dashboard" | "api" => core::deepseek_links(app),
+        "feedback" => feedback::feedback(app, arg),
         "home" | "stats" | "overview" => core::home_dashboard(app),
         "note" => note::note(app, arg),
         "memory" => memory::memory(app, arg),
@@ -543,10 +546,9 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         // Config commands
         "config" => config::config_command(app, arg),
         "settings" => config::show_settings(app),
-        "statusline" | "status" => config::status_line(app),
-        "yolo" => config::yolo(app),
-        "agent" => config::agent_mode(app),
-        "plan" => config::plan_mode(app),
+        "status" => status::status(app),
+        "statusline" => config::status_line(app),
+        "mode" => config::mode(app, arg),
         "theme" => config::theme(app),
         "verbose" => config::verbose(app, arg),
         "trust" => config::trust(app, arg),
@@ -599,7 +601,6 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "set" => CommandResult::error(
             "The /set command was retired. Use /config to edit settings and /settings to inspect current values.",
         ),
-        "normal" => config::normal_mode(app),
         "deepseek" => CommandResult::error(
             "The /deepseek command was renamed. Use /links (aliases: /dashboard, /api).",
         ),
@@ -645,6 +646,10 @@ pub fn persist_status_items(
 /// Persist a root-level string key in `config.toml`.
 pub fn persist_root_string_key(key: &str, value: &str) -> anyhow::Result<std::path::PathBuf> {
     config::persist_root_string_key(key, value)
+}
+
+pub fn switch_mode(app: &mut App, mode: crate::tui::app::AppMode) -> String {
+    config::switch_mode(app, mode)
 }
 
 /// Auto-select a model based on request complexity.
@@ -841,7 +846,9 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::tui::app::{App, AppAction, TuiOptions};
-    use std::path::PathBuf;
+    use std::ffi::OsString;
+    use std::path::{Path, PathBuf};
+    use std::sync::MutexGuard;
 
     fn create_test_app() -> App {
         let options = TuiOptions {
@@ -1004,16 +1011,53 @@ mod tests {
         assert!(deepseek_result.action.is_none());
     }
 
+    struct ConfigPathGuard {
+        previous: Option<OsString>,
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    impl ConfigPathGuard {
+        fn new(config_path: &Path) -> Self {
+            let lock = crate::test_support::lock_test_env();
+            let previous = std::env::var_os("DEEPSEEK_CONFIG_PATH");
+            // Safety: test-only environment mutation guarded by a global mutex.
+            unsafe {
+                std::env::set_var("DEEPSEEK_CONFIG_PATH", config_path);
+            }
+            Self {
+                previous,
+                _lock: lock,
+            }
+        }
+    }
+
+    impl Drop for ConfigPathGuard {
+        fn drop(&mut self) {
+            // Safety: test-only environment mutation guarded by a global mutex.
+            unsafe {
+                if let Some(previous) = self.previous.take() {
+                    std::env::set_var("DEEPSEEK_CONFIG_PATH", previous);
+                } else {
+                    std::env::remove_var("DEEPSEEK_CONFIG_PATH");
+                }
+            }
+        }
+    }
+
     /// Build an App scoped to an isolated tempdir so dispatch-side-effects
-    /// (e.g. `/init` writing AGENTS.md, `/export` writing chat transcripts)
-    /// don't pollute the repo working tree when the smoke tests run.
-    fn create_isolated_test_app() -> (App, tempfile::TempDir) {
+    /// (e.g. `/init` writing AGENTS.md, `/export` writing chat transcripts,
+    /// `/logout` clearing credentials) don't pollute the repo working tree or
+    /// the developer's real config when the smoke tests run.
+    fn create_isolated_test_app() -> (App, tempfile::TempDir, ConfigPathGuard) {
         let tmpdir = tempfile::TempDir::new().expect("tempdir for smoke test");
         let workspace = tmpdir.path().to_path_buf();
+        let config_path = workspace.join(".deepseek").join("config.toml");
+        std::fs::create_dir_all(config_path.parent().expect("config parent")).expect("config dir");
+        let guard = ConfigPathGuard::new(&config_path);
         let options = TuiOptions {
             model: "deepseek-v4-pro".to_string(),
             workspace: workspace.clone(),
-            config_path: None,
+            config_path: Some(config_path),
             config_profile: None,
             allow_shell: false,
             use_alt_screen: true,
@@ -1032,7 +1076,7 @@ mod tests {
             initial_input: None,
         };
         let app = App::new(options, &Config::default());
-        (app, tmpdir)
+        (app, tmpdir, guard)
     }
 
     /// Smoke test: every entry in `COMMANDS` must dispatch to a real handler.
@@ -1078,7 +1122,7 @@ mod tests {
             if skip_in_dispatch_smoke(command.name) {
                 continue;
             }
-            let (mut app, tmpdir) = create_isolated_test_app();
+            let (mut app, tmpdir, _guard) = create_isolated_test_app();
             let invocation = invocation_for(command.name, command.name, tmpdir.path());
             let result = execute(&invocation, &mut app);
             if let Some(msg) = &result.message {
@@ -1100,7 +1144,7 @@ mod tests {
                 continue;
             }
             for alias in command.aliases {
-                let (mut app, tmpdir) = create_isolated_test_app();
+                let (mut app, tmpdir, _guard) = create_isolated_test_app();
                 let invocation = invocation_for(command.name, alias, tmpdir.path());
                 let result = execute(&invocation, &mut app);
                 if let Some(msg) = &result.message {

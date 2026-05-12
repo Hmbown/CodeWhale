@@ -8,6 +8,7 @@
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use crate::localization::MessageId;
 use crate::palette;
 use crate::tui::app::App;
 
@@ -29,14 +30,14 @@ pub fn lines(app: &App) -> Vec<Line<'static>> {
 
     let mut out: Vec<Line<'static>> = vec![
         Line::from(Span::styled(
-            "Choose your language",
+            app.tr(MessageId::OnboardLanguageTitle).to_string(),
             Style::default()
                 .fg(palette::DEEPSEEK_SKY)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(Span::styled(
-            "Pick the UI language. You can change it any time with `/settings set locale <tag>`.",
+            app.tr(MessageId::OnboardLanguageBlurb).to_string(),
             Style::default().fg(palette::TEXT_MUTED),
         )),
         Line::from(""),
@@ -73,26 +74,10 @@ pub fn lines(app: &App) -> Vec<Line<'static>> {
     }
 
     out.push(Line::from(""));
-    out.push(Line::from(vec![
-        Span::styled("Press ", Style::default().fg(palette::TEXT_MUTED)),
-        Span::styled(
-            "1-5",
-            Style::default()
-                .fg(palette::TEXT_PRIMARY)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" to choose, or ", Style::default().fg(palette::TEXT_MUTED)),
-        Span::styled(
-            "Enter",
-            Style::default()
-                .fg(palette::TEXT_PRIMARY)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            " to keep the current setting",
-            Style::default().fg(palette::TEXT_MUTED),
-        ),
-    ]));
+    out.push(Line::from(Span::styled(
+        app.tr(MessageId::OnboardLanguageFooter).to_string(),
+        Style::default().fg(palette::TEXT_MUTED),
+    )));
 
     out
 }

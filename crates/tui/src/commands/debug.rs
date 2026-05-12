@@ -1134,6 +1134,8 @@ mod tests {
                 output: Some("updated".to_string()),
                 prompts: None,
                 spillover_path: None,
+                output_summary: None,
+                is_diff: false,
             })));
         app.history.push(HistoryCell::Assistant {
             content: "Done, file is fixed now.".to_string(),
@@ -1300,6 +1302,8 @@ mod tests {
                 output: Some("updated a".to_string()),
                 prompts: None,
                 spillover_path: None,
+                output_summary: None,
+                is_diff: false,
             })));
         app.history
             .push(HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
@@ -1309,6 +1313,8 @@ mod tests {
                 output: Some("updated b".to_string()),
                 prompts: None,
                 spillover_path: None,
+                output_summary: None,
+                is_diff: false,
             })));
         app.history.push(HistoryCell::Assistant {
             content: "Done.".to_string(),
@@ -1612,6 +1618,7 @@ pub fn patch_undo(app: &mut App) -> CommandResult {
     CommandResult::with_message_and_action(
         summary,
         AppAction::SyncSession {
+            session_id: app.current_session_id.clone(),
             messages: app.api_messages.clone(),
             system_prompt: app.system_prompt.clone(),
             model: app.model.clone(),

@@ -346,9 +346,15 @@ fn validate_base_url_security(base_url: &str) -> Result<()> {
 
     if base_url.starts_with("http://") {
         anyhow::bail!(
-            "Refusing insecure base URL '{}'. Use HTTPS or set {}=1 to override for trusted environments.",
-            base_url,
-            ALLOW_INSECURE_HTTP_ENV
+            "Refusing insecure base URL '{base_url}'.\n\
+             \n\
+             Loopback hosts (localhost, 127.0.0.1, [::1]) are auto-allowed.\n\
+             For other trusted local hosts (LAN, llama.cpp on a private IP, etc.)\n\
+             set the env var `{env}=1` in the shell that runs deepseek and re-run.\n\
+             \n\
+             Example: `{env}=1 deepseek` (note the underscores).",
+            base_url = base_url,
+            env = ALLOW_INSECURE_HTTP_ENV,
         );
     }
 
@@ -508,6 +514,11 @@ impl DeepSeekClient {
         let headers = build_default_headers(api_key, extra_headers)?;
         let mut builder = reqwest::Client::builder()
             .default_headers(headers)
+            .user_agent(concat!(
+                "Mozilla/5.0 (compatible; deepseek-tui/",
+                env!("CARGO_PKG_VERSION"),
+                "; +https://github.com/Hmbown/DeepSeek-TUI)"
+            ))
             .connect_timeout(Duration::from_secs(30))
             .tcp_keepalive(Some(Duration::from_secs(30)))
             .http2_keep_alive_interval(Some(Duration::from_secs(15)))
@@ -646,10 +657,6 @@ impl DeepSeekClient {
                         .map_err(|err| LlmError::from_reqwest(&err))?;
                     let status = response.status();
                     if status.is_success() {
-                        return Ok(response);
-                    }
-                    let retryable = status.as_u16() == 429 || status.is_server_error();
-                    if !retryable {
                         return Ok(response);
                     }
                     let retry_after = extract_retry_after(response.headers());

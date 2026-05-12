@@ -55,6 +55,7 @@ export async function runTriage(env: AgentEnv): Promise<Record<string, unknown>>
         headers: {
           Accept: "application/vnd.github+json",
           "X-GitHub-Api-Version": "2022-11-28",
+          "User-Agent": "deepseek-tui-web",
           ...(env.GITHUB_TOKEN ? { Authorization: `Bearer ${env.GITHUB_TOKEN}` } : {}),
         },
       }
@@ -119,6 +120,7 @@ export async function runPrReview(env: AgentEnv): Promise<Record<string, unknown
         headers: {
           Accept: "application/vnd.github+json",
           "X-GitHub-Api-Version": "2022-11-28",
+          "User-Agent": "deepseek-tui-web",
           ...(env.GITHUB_TOKEN ? { Authorization: `Bearer ${env.GITHUB_TOKEN}` } : {}),
         },
       }
@@ -142,6 +144,7 @@ export async function runPrReview(env: AgentEnv): Promise<Record<string, unknown
             headers: {
               Accept: "application/vnd.github+json",
               "X-GitHub-Api-Version": "2022-11-28",
+              "User-Agent": "deepseek-tui-web",
               ...(env.GITHUB_TOKEN ? { Authorization: `Bearer ${env.GITHUB_TOKEN}` } : {}),
             },
           });
@@ -200,6 +203,7 @@ export async function runStale(env: AgentEnv): Promise<Record<string, unknown>> 
         headers: {
           Accept: "application/vnd.github+json",
           "X-GitHub-Api-Version": "2022-11-28",
+          "User-Agent": "deepseek-tui-web",
           ...(env.GITHUB_TOKEN ? { Authorization: `Bearer ${env.GITHUB_TOKEN}` } : {}),
         },
       }
@@ -264,6 +268,7 @@ export async function runDupes(env: AgentEnv): Promise<Record<string, unknown>> 
         headers: {
           Accept: "application/vnd.github+json",
           "X-GitHub-Api-Version": "2022-11-28",
+          "User-Agent": "deepseek-tui-web",
           ...(env.GITHUB_TOKEN ? { Authorization: `Bearer ${env.GITHUB_TOKEN}` } : {}),
         },
       }
@@ -325,6 +330,7 @@ export async function runDigest(env: AgentEnv): Promise<Record<string, unknown>>
           headers: {
             Accept: "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "deepseek-tui-web",
             ...(env.GITHUB_TOKEN ? { Authorization: `Bearer ${env.GITHUB_TOKEN}` } : {}),
           },
         }
@@ -335,6 +341,7 @@ export async function runDigest(env: AgentEnv): Promise<Record<string, unknown>>
           headers: {
             Accept: "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "deepseek-tui-web",
             ...(env.GITHUB_TOKEN ? { Authorization: `Bearer ${env.GITHUB_TOKEN}` } : {}),
           },
         }

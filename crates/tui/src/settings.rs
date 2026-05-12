@@ -169,9 +169,18 @@ pub struct Settings {
     pub auto_compact: bool,
     /// Reduce status noise and collapse details more aggressively
     pub calm_mode: bool,
-    /// Reduce animation and redraw churn
+    /// Streaming pacing mode. `true` pins the chunker to one-character-per-
+    /// commit-tick (typewriter); `false` drains the upstream cadence (each
+    /// commit flushes everything queued, which matches V4-pro's burst pattern
+    /// when the prefix cache is warm). Has no effect on the footer water-spout
+    /// animation — that is gated independently by [`Self::fancy_animations`].
     pub low_motion: bool,
-    /// Enable fancy footer animations (water-spout strip, pulsing text)
+    /// Enable the footer water-spout animation strip during live turns. The
+    /// strip's wave cadence is synchronized with the character-commit rate, so
+    /// the visual flow matches whatever streaming pacing [`Self::low_motion`]
+    /// selects: typewriter mode drips, upstream mode surges, tool calls /
+    /// planning pauses freeze the surface. Set `false` to keep the gap as
+    /// plain whitespace.
     pub fancy_animations: bool,
     /// Enable terminal bracketed-paste mode. Default true. Disable if your
     /// terminal mishandles the `\e[?2004h` escape (rare; some legacy
@@ -211,8 +220,22 @@ pub struct Settings {
     pub cost_currency: String,
     /// Maximum number of input history entries to save
     pub max_input_history: usize,
+    /// Default provider override (e.g. "deepseek", "openai").
+    pub default_provider: Option<String>,
     /// Default model to use
     pub default_model: Option<String>,
+    /// Per-provider model overrides. Key is provider name (e.g. "openai"),
+    /// value is the model id. Takes precedence over `default_model`.
+    pub provider_models: Option<std::collections::HashMap<String, String>>,
+    /// Header status indicator next to the effort chip. Cycles through a
+    /// per-turn animation keyed off `App::turn_started_at`:
+    /// - `"whale"` (default): historical `🐳 → 🐋` 12-frame sequence
+    ///   originally shipped in v0.3.5, removed in v0.8.x's "smoother TUI
+    ///   streaming" pass, restored in v0.8.30. Idle frame is a steady `🐳`.
+    /// - `"dots"`: the 6-frame geometric sequence (`◍ ◉ ◌ ◌ ◉ ◍`) that
+    ///   replaced the whale during the dots era.
+    /// - `"off"`: hide the indicator entirely.
+    pub status_indicator: String,
 }
 
 impl Default for Settings {
@@ -247,7 +270,10 @@ impl Default for Settings {
             context_panel: false,
             cost_currency: "usd".to_string(),
             max_input_history: 100,
+            default_provider: None,
             default_model: None,
+            provider_models: None,
+            status_indicator: "whale".to_string(),
         }
     }
 }
@@ -288,6 +314,7 @@ impl Settings {
             s.composer_density = normalize_composer_density(&s.composer_density).to_string();
             s.transcript_spacing = normalize_transcript_spacing(&s.transcript_spacing).to_string();
             s.sidebar_focus = normalize_sidebar_focus(&s.sidebar_focus).to_string();
+            s.status_indicator = normalize_status_indicator(&s.status_indicator).to_string();
             s.locale = normalize_configured_locale(&s.locale)
                 .unwrap_or("en")
                 .to_string();
@@ -306,6 +333,19 @@ impl Settings {
     /// only re-read on `Settings::load()`.
     pub fn apply_env_overrides(&mut self) {
         if env_truthy("NO_ANIMATIONS") {
+            self.low_motion = true;
+            self.fancy_animations = false;
+        }
+        // VS Code (TERM_PROGRAM=vscode, #1356) and Ghostty (TERM_PROGRAM=ghostty,
+        // #1445) both produce visible flicker at 120 FPS: VS Code's compositor
+        // cannot keep pace; Ghostty's GPU compositor flash-renders each full-screen
+        // repaint. Drop to the 30 FPS low-motion cap for both automatically.
+        // Like NO_ANIMATIONS above, this unconditionally overrides any
+        // disk-loaded value — consistent precedence: env signals always win.
+        if matches!(
+            std::env::var("TERM_PROGRAM").as_deref(),
+            Ok("vscode") | Ok("ghostty")
+        ) {
             self.low_motion = true;
             self.fancy_animations = false;
         }
@@ -395,6 +435,15 @@ impl Settings {
                     );
                 }
                 self.transcript_spacing = normalized.to_string();
+            }
+            "status_indicator" | "indicator" => {
+                let normalized = normalize_status_indicator(value);
+                if !["whale", "dots", "off"].contains(&normalized) {
+                    anyhow::bail!(
+                        "Failed to update setting: invalid status indicator '{value}'. Expected: whale, dots, off."
+                    );
+                }
+                self.status_indicator = normalized.to_string();
             }
             "default_mode" | "mode" => {
                 let normalized = normalize_mode(value);
@@ -507,6 +556,7 @@ impl Settings {
         lines.push(format!("  composer_border:    {}", self.composer_border));
         lines.push(format!("  composer_vim_mode:  {}", self.composer_vim_mode));
         lines.push(format!("  transcript_spacing: {}", self.transcript_spacing));
+        lines.push(format!("  status_indicator:   {}", self.status_indicator));
         lines.push(format!("  default_mode:       {}", self.default_mode));
         lines.push(format!(
             "  sidebar_width:      {}%",
@@ -537,10 +587,13 @@ impl Settings {
                 "Auto-compact near context limit: on/off (default on)",
             ),
             ("calm_mode", "Calmer UI defaults: on/off"),
-            ("low_motion", "Reduce animation and redraw churn: on/off"),
+            (
+                "low_motion",
+                "Streaming pacing: on = typewriter (one char/tick), off = upstream cadence",
+            ),
             (
                 "fancy_animations",
-                "Fancy footer animations (water-spout strip): on/off",
+                "Footer water-spout strip (wave synced to typing speed): on/off",
             ),
             (
                 "bracketed_paste",
@@ -572,6 +625,10 @@ impl Settings {
                 "transcript_spacing",
                 "Transcript spacing: compact, comfortable, spacious",
             ),
+            (
+                "status_indicator",
+                "Header status indicator next to effort chip: whale, dots, off",
+            ),
             ("default_mode", "Default mode: agent, plan, yolo"),
             ("sidebar_width", "Sidebar width percentage: 10-50"),
             (
@@ -585,6 +642,13 @@ impl Settings {
                 "Default model: auto or any DeepSeek model ID (e.g. deepseek-v4-pro)",
             ),
         ]
+    }
+
+    /// Persist the model for a specific provider.
+    pub fn set_model_for_provider(&mut self, provider: &str, model: &str) {
+        self.provider_models
+            .get_or_insert_with(std::collections::HashMap::new)
+            .insert(provider.to_string(), model.to_string());
     }
 }
 
@@ -633,6 +697,19 @@ fn normalize_transcript_spacing(value: &str) -> &str {
         "compact" | "tight" => "compact",
         "comfortable" | "default" | "normal" => "comfortable",
         "spacious" | "loose" => "spacious",
+        _ => value,
+    }
+}
+
+/// Normalize the `status_indicator` header chip setting. Accepts the
+/// canonical names plus common aliases ("none"/"hidden" → "off",
+/// "dot" → "dots"). Unknown values fall through unchanged so the parser
+/// in `update_setting` can surface a clear error.
+fn normalize_status_indicator(value: &str) -> &str {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "whale" | "🐳" | "🐋" => "whale",
+        "dots" | "dot" => "dots",
+        "off" | "none" | "hidden" | "false" => "off",
         _ => value,
     }
 }
@@ -803,10 +880,13 @@ mod tests {
 
     /// Tests that mutate process-global `NO_ANIMATIONS` serialise
     /// through this guard so the cargo parallel runner doesn't
-    /// observe interleaved overrides.
+    /// observe interleaved overrides. Uses the process-wide test env
+    /// lock so this serializes with the TERM_PROGRAM tests too —
+    /// otherwise a `NO_ANIMATIONS=1` leak from this test family can
+    /// flip a concurrent `TERM_PROGRAM=iTerm` test's `low_motion`
+    /// assertion through the shared `apply_env_overrides` path.
     fn no_animations_test_guard() -> std::sync::MutexGuard<'static, ()> {
-        static GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        GUARD.lock().unwrap_or_else(|e| e.into_inner())
+        crate::test_support::lock_test_env()
     }
 
     #[test]
@@ -882,6 +962,97 @@ mod tests {
         }
     }
 
+    /// Serialise tests that mutate `TERM_PROGRAM` through this guard.
+    /// Uses the process-wide test env lock so this serializes not just
+    /// with itself but with every other env-mutating test in the suite
+    /// — otherwise a concurrent test that calls `Settings::default()`
+    /// can read whatever value our two `set_var`s have raced into the
+    /// env at that instant.
+    fn term_program_test_guard() -> std::sync::MutexGuard<'static, ()> {
+        crate::test_support::lock_test_env()
+    }
+
+    #[test]
+    fn vscode_term_program_forces_low_motion_on() {
+        let _g = term_program_test_guard();
+        let prev = std::env::var_os("TERM_PROGRAM");
+        // SAFETY: serialised by the guard.
+        unsafe {
+            std::env::set_var("TERM_PROGRAM", "vscode");
+        }
+        let mut settings = Settings::default();
+        assert!(!settings.low_motion, "default is animated");
+        settings.apply_env_overrides();
+        assert!(
+            settings.low_motion,
+            "TERM_PROGRAM=vscode must enable low_motion to prevent flickering (#1356)"
+        );
+        assert!(
+            !settings.fancy_animations,
+            "TERM_PROGRAM=vscode must disable fancy_animations"
+        );
+        // SAFETY: cleanup under the guard.
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("TERM_PROGRAM", v),
+                None => std::env::remove_var("TERM_PROGRAM"),
+            }
+        }
+    }
+
+    #[test]
+    fn ghostty_term_program_forces_low_motion_on() {
+        let _g = term_program_test_guard();
+        let prev = std::env::var_os("TERM_PROGRAM");
+        // SAFETY: serialised by the guard.
+        unsafe {
+            std::env::set_var("TERM_PROGRAM", "ghostty");
+        }
+        let mut settings = Settings::default();
+        assert!(!settings.low_motion, "default is animated");
+        settings.apply_env_overrides();
+        assert!(
+            settings.low_motion,
+            "TERM_PROGRAM=ghostty must enable low_motion to prevent flickering (#1445)"
+        );
+        assert!(
+            !settings.fancy_animations,
+            "TERM_PROGRAM=ghostty must disable fancy_animations"
+        );
+        // SAFETY: cleanup under the guard.
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("TERM_PROGRAM", v),
+                None => std::env::remove_var("TERM_PROGRAM"),
+            }
+        }
+    }
+
+    #[test]
+    fn non_vscode_term_program_does_not_force_low_motion() {
+        let _g = term_program_test_guard();
+        let prev = std::env::var_os("TERM_PROGRAM");
+        for program in ["iTerm.app", "Apple_Terminal", "WezTerm", "xterm-256color"] {
+            // SAFETY: serialised by the guard.
+            unsafe {
+                std::env::set_var("TERM_PROGRAM", program);
+            }
+            let mut s = Settings::default();
+            s.apply_env_overrides();
+            assert!(
+                !s.low_motion,
+                "TERM_PROGRAM={program:?} should not force low_motion"
+            );
+        }
+        // SAFETY: cleanup under the guard.
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("TERM_PROGRAM", v),
+                None => std::env::remove_var("TERM_PROGRAM"),
+            }
+        }
+    }
+
     // ────────────────────────────────────────────────────────────────────────
     // TuiPrefs tests
     // ────────────────────────────────────────────────────────────────────────
@@ -889,8 +1060,7 @@ mod tests {
     /// Serialise tests that mutate `DEEPSEEK_CONFIG_PATH` through this guard
     /// so the parallel test runner doesn't observe interleaved env values.
     fn config_path_test_guard() -> std::sync::MutexGuard<'static, ()> {
-        static GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        GUARD.lock().unwrap_or_else(|e| e.into_inner())
+        crate::test_support::lock_test_env()
     }
 
     #[test]

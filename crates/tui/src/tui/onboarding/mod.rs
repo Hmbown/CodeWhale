@@ -36,7 +36,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         OnboardingState::Language => language::lines(app),
         OnboardingState::ApiKey => api_key::lines(app),
         OnboardingState::TrustDirectory => trust_directory::lines(app),
-        OnboardingState::Tips => tips_lines(),
+        OnboardingState::Tips => tips_lines(app),
         OnboardingState::None => Vec::new(),
     };
 
@@ -94,40 +94,32 @@ fn onboarding_step(app: &App) -> (usize, usize) {
     (step, total)
 }
 
-pub fn tips_lines() -> Vec<ratatui::text::Line<'static>> {
+pub fn tips_lines(app: &App) -> Vec<ratatui::text::Line<'static>> {
+    use crate::localization::MessageId;
     use ratatui::style::Modifier;
     use ratatui::text::{Line, Span};
 
     vec![
         Line::from(Span::styled(
-            "Start Simple",
+            app.tr(MessageId::OnboardTipsTitle).to_string(),
             Style::default()
                 .fg(palette::DEEPSEEK_SKY)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        Line::from(Span::raw(
-            "Write the task in plain language. Use /help or Ctrl+K when you want a command.",
-        )),
-        Line::from(Span::raw(
-            "The bottom composer is multi-line: Enter sends, Alt+Enter or Ctrl+J adds a new line.",
-        )),
-        Line::from(Span::raw(
-            "Switch modes only when the job changes: Plan for review-first work, Agent for execution, YOLO when you want auto-approval.",
-        )),
-        Line::from(Span::raw(
-            "Ctrl+R resumes earlier sessions, and Esc backs out of the current draft or overlay.",
-        )),
+        Line::from(Span::raw(app.tr(MessageId::OnboardTipsLine1).to_string())),
+        Line::from(Span::raw(app.tr(MessageId::OnboardTipsLine2).to_string())),
+        Line::from(Span::raw(app.tr(MessageId::OnboardTipsLine3).to_string())),
+        Line::from(Span::raw(app.tr(MessageId::OnboardTipsLine4).to_string())),
         Line::from(vec![
-            Span::styled("Press ", Style::default().fg(palette::TEXT_MUTED)),
             Span::styled(
-                "Enter",
+                app.tr(MessageId::OnboardTipsFooterEnter).to_string(),
                 Style::default()
                     .fg(palette::TEXT_PRIMARY)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                " to open the workspace",
+                app.tr(MessageId::OnboardTipsFooterAction).to_string(),
                 Style::default().fg(palette::TEXT_MUTED),
             ),
         ]),

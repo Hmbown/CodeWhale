@@ -11,6 +11,8 @@ Press `Tab` to complete composer menus, queue a draft as a next-turn follow-up
 while a turn is running, or cycle through the visible modes when the composer is
 otherwise idle: **Plan → Agent → YOLO → Plan**.
 Press `Shift+Tab` to cycle reasoning effort.
+Run `/mode` to open the mode picker, or switch directly with `/mode agent`,
+`/mode plan`, `/mode yolo`, `/mode 1`, `/mode 2`, or `/mode 3`.
 
 - **Plan**: design-first prompting. Read-only investigation tools stay available; shell and patch execution stay off. Use this when you want to think out loud and produce a plan to hand to a human (yourself later, or a reviewer).
 - **Agent**: multi-step tool use. Approvals for shell and paid tools (file writes are allowed without a prompt).
@@ -20,7 +22,6 @@ All three modes have access to the `rlm` tool. Inside its Python REPL, `llm_quer
 
 ## Compatibility Notes
 
-- `/normal` is a hidden compatibility alias that switches to `Agent`.
 - Older settings files with `default_mode = "normal"` still load as `agent`; saving rewrites the normalized value.
 
 ## Escape Key Behavior
@@ -83,7 +84,7 @@ Run `deepseek --help` for the canonical list. Common flags:
 - `-r, --resume <ID|PREFIX|latest>`: resume a saved session
 - `-c, --continue`: resume the most recent session in this workspace
 - `--max-subagents <N>`: clamp to `1..=20`
-- `--mouse-capture` / `--no-mouse-capture`: opt in or out of internal mouse scrolling, transcript selection, and right-click context actions. Mouse capture is enabled by default on non-Windows terminals so drag selection copies only user/assistant transcript text; hold Shift while dragging or use `--no-mouse-capture` for raw terminal selection. It defaults off on Windows (CMD/terminal mouse-escape spam in the prompt) and inside JetBrains JediTerm — PyCharm/IDEA/CLion/etc. — where the terminal advertises mouse support but forwards SGR mouse events as raw text (#878, #898). Use `--mouse-capture` to opt in anywhere it's defaulted off.
+- `--mouse-capture` / `--no-mouse-capture`: opt in or out of internal mouse scrolling, transcript selection, right-click context actions, and transcript scrollbar dragging. Mouse capture is enabled by default on non-Windows terminals so drag selection copies only transcript text and stays scoped to the transcript pane; hold Shift while dragging or use `--no-mouse-capture` for raw terminal selection. It defaults off on Windows (CMD/terminal mouse-escape spam in the prompt) and inside JetBrains JediTerm — PyCharm/IDEA/CLion/etc. — where the terminal advertises mouse support but forwards SGR mouse events as raw text (#878, #898). Use `--mouse-capture` to opt in anywhere it's defaulted off. On Windows, raw terminal selection may cross the right sidebar because the terminal, not the TUI, owns the selection.
 - `--profile <NAME>`: select config profile
 - `--config <PATH>`: config file path
 - `-v, --verbose`: verbose logging

@@ -483,24 +483,24 @@ mod tests {
     #[test]
     fn substring_filter_narrows_to_command() {
         let mut view = HelpView::new();
-        type_filter(&mut view, "yolo");
+        type_filter(&mut view, "mode yolo");
         assert!(!view.filtered.is_empty());
         // Every filtered entry should genuinely contain the query in its
         // searchable haystack — no false positives slipped past.
         for idx in &view.filtered {
             assert!(
                 view.entries[*idx].haystack.contains("yolo"),
-                "entry {:?} leaked through `yolo` filter",
+                "entry {:?} leaked through `mode yolo` filter",
                 view.entries[*idx]
             );
         }
-        // The `/yolo` command must survive the filter; it's the canonical
-        // single-term match.
+        // The unified `/mode` command must surface when filtering for a
+        // concrete mode value.
         assert!(
             view.filtered
                 .iter()
-                .any(|idx| view.entries[*idx].label == "/yolo"),
-            "/yolo should match the `yolo` filter"
+                .any(|idx| view.entries[*idx].label == "/mode"),
+            "/mode should match the `mode yolo` filter"
         );
     }
 
@@ -618,14 +618,14 @@ mod tests {
     #[test]
     fn render_with_filter_shows_only_matching_section_and_status() {
         let mut view = HelpView::new();
-        type_filter(&mut view, "yolo");
+        type_filter(&mut view, "mode yolo");
         let area = Rect::new(0, 0, 96, 24);
         let mut buf = Buffer::empty(area);
         view.render(area, &mut buf);
 
         let dump = buffer_text(&buf, area);
         assert!(
-            dump.contains("Filter: yolo"),
+            dump.contains("Filter: mode yolo"),
             "filter echo missing:\n{dump}"
         );
         assert!(
@@ -633,12 +633,12 @@ mod tests {
             "match counter missing in dump:\n{dump}"
         );
         assert!(
-            dump.contains("/yolo"),
-            "expected /yolo command in filtered render:\n{dump}"
+            dump.contains("/mode"),
+            "expected /mode command in filtered render:\n{dump}"
         );
         assert!(
-            !dump.contains("/agent"),
-            "non-matching commands should not render under a `yolo` filter:\n{dump}"
+            !dump.contains("/model"),
+            "non-matching commands should not render under a `mode yolo` filter:\n{dump}"
         );
     }
 

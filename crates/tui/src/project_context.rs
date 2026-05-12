@@ -26,6 +26,10 @@ const PROJECT_CONTEXT_FILES: &[&str] = &[
     ".deepseek/instructions.md",
 ];
 
+/// User-level project instructions loaded as a fallback when the workspace and
+/// its parents do not define project context.
+const GLOBAL_AGENTS_RELATIVE_PATH: &[&str] = &[".deepseek", "AGENTS.md"];
+
 /// Maximum size for project context files (to prevent loading huge files)
 const MAX_CONTEXT_SIZE: usize = 100 * 1024; // 100KB
 const PACK_README_MAX_CHARS: usize = 4_000;
@@ -351,6 +355,13 @@ pub fn load_project_context(workspace: &Path) -> ProjectContext {
 ///
 /// This allows for monorepo setups where a root AGENTS.md applies to all subdirectories.
 pub fn load_project_context_with_parents(workspace: &Path) -> ProjectContext {
+    load_project_context_with_parents_and_home(workspace, dirs::home_dir().as_deref())
+}
+
+fn load_project_context_with_parents_and_home(
+    workspace: &Path,
+    home_dir: Option<&Path>,
+) -> ProjectContext {
     let mut ctx = load_project_context(workspace);
 
     // If no context found in workspace, check parent directories
@@ -370,13 +381,45 @@ pub fn load_project_context_with_parents(workspace: &Path) -> ProjectContext {
         }
     }
 
+    // Always check `~/.deepseek/AGENTS.md` so user-wide preferences
+    // travel into every session (#1157). When both global and project
+    // instructions exist, the global block prepends the project's so
+    // workspace overrides win the last word; when only global exists,
+    // it continues to serve as the fallback. `source_path` keeps
+    // pointing at the more-specific source (project > global) for
+    // display purposes.
+    if let Some(global_ctx) = load_global_agents_context(workspace, home_dir) {
+        ctx.warnings.extend(global_ctx.warnings.iter().cloned());
+        if let Some(global_text) = global_ctx.instructions {
+            match ctx.instructions.take() {
+                Some(project_text) => {
+                    ctx.instructions = Some(merge_global_and_project_instructions(
+                        &global_text,
+                        global_ctx.source_path.as_deref(),
+                        &project_text,
+                    ));
+                    // Leave `ctx.source_path` pointing at the project /
+                    // parent file — that's the location the user might
+                    // want to edit when something looks wrong.
+                }
+                None => {
+                    ctx.instructions = Some(global_text);
+                    ctx.source_path = global_ctx.source_path;
+                }
+            }
+        }
+    }
+
     // Auto-generate .deepseek/instructions.md when no context file exists anywhere.
     // This avoids the per-turn filesystem scan fallback in prompts.rs that
     // breaks KV prefix cache stability.
     if !ctx.has_instructions()
         && let Some(generated) = auto_generate_context(workspace)
     {
+        let mut warnings = std::mem::take(&mut ctx.warnings);
         ctx = load_project_context(workspace);
+        warnings.extend(ctx.warnings.iter().cloned());
+        ctx.warnings = warnings;
         if !ctx.has_instructions() {
             // Loaded from the file we just wrote — use the generated content
             // directly as a last resort (shouldn't normally happen).
@@ -386,6 +429,49 @@ pub fn load_project_context_with_parents(workspace: &Path) -> ProjectContext {
     }
 
     ctx
+}
+
+/// Combine `~/.deepseek/AGENTS.md` (global, user-wide preferences) with a
+/// project-local AGENTS.md/CLAUDE.md/instructions.md. Global comes first
+/// so workspace-specific rules can override it — the model reads in
+/// declared order. Each block is wrapped in a labelled fence so the
+/// model can tell which level any rule comes from when the two sets
+/// disagree (#1157).
+fn merge_global_and_project_instructions(
+    global: &str,
+    global_source: Option<&Path>,
+    project: &str,
+) -> String {
+    let global_label = global_source
+        .map(|p| format!("<!-- global: {} -->", p.display()))
+        .unwrap_or_else(|| "<!-- global -->".to_string());
+    format!(
+        "{global_label}\n{}\n\n<!-- project (overrides global where they conflict) -->\n{}",
+        global.trim_end(),
+        project.trim_start(),
+    )
+}
+
+fn load_global_agents_context(workspace: &Path, home_dir: Option<&Path>) -> Option<ProjectContext> {
+    let home = home_dir?;
+    let mut path = home.to_path_buf();
+    for component in GLOBAL_AGENTS_RELATIVE_PATH {
+        path.push(component);
+    }
+
+    if !(path.exists() && path.is_file()) {
+        return None;
+    }
+
+    let mut ctx = ProjectContext::empty(workspace.to_path_buf());
+    match load_context_file(&path) {
+        Ok(content) => {
+            ctx.instructions = Some(content);
+            ctx.source_path = Some(path);
+        }
+        Err(error) => ctx.warnings.push(error.to_string()),
+    }
+    Some(ctx)
 }
 
 /// Generate a context file from project tree + summary and write it to
@@ -776,6 +862,122 @@ mod tests {
         assert!(
             first.find("\"src/a.rs\"").expect("a before z")
                 < first.find("\"src/z.rs\"").expect("z")
+        );
+    }
+
+    #[test]
+    fn test_load_global_agents_when_project_has_no_context() {
+        let workspace = tempdir().expect("workspace tempdir");
+        let home = tempdir().expect("home tempdir");
+        let global_dir = home.path().join(".deepseek");
+        fs::create_dir(&global_dir).expect("mkdir .deepseek");
+        let global_agents = global_dir.join("AGENTS.md");
+        fs::write(&global_agents, "Global instructions").expect("write global agents");
+
+        let ctx = load_project_context_with_parents_and_home(workspace.path(), Some(home.path()));
+
+        assert!(ctx.has_instructions());
+        assert!(
+            ctx.instructions
+                .as_ref()
+                .unwrap()
+                .contains("Global instructions")
+        );
+        assert_eq!(ctx.source_path, Some(global_agents));
+    }
+
+    #[test]
+    fn test_local_and_global_agents_merge_when_both_exist() {
+        // #1157: when both `~/.deepseek/AGENTS.md` and a project AGENTS.md
+        // exist, the prompt should carry user-wide preferences AND the
+        // project's overrides — not silently drop the global file.
+        let workspace = tempdir().expect("workspace tempdir");
+        fs::write(workspace.path().join("AGENTS.md"), "Local instructions")
+            .expect("write local agents");
+
+        let home = tempdir().expect("home tempdir");
+        let global_dir = home.path().join(".deepseek");
+        fs::create_dir(&global_dir).expect("mkdir .deepseek");
+        fs::write(global_dir.join("AGENTS.md"), "Global instructions")
+            .expect("write global agents");
+
+        let ctx = load_project_context_with_parents_and_home(workspace.path(), Some(home.path()));
+
+        assert!(ctx.has_instructions());
+        let instructions = ctx.instructions.as_ref().unwrap();
+        assert!(
+            instructions.contains("Global instructions"),
+            "global block missing from merged instructions:\n{instructions}"
+        );
+        assert!(
+            instructions.contains("Local instructions"),
+            "project block missing from merged instructions:\n{instructions}"
+        );
+        // Global block precedes the project block so project rules read
+        // last and win "last word" precedence with the model.
+        let global_at = instructions.find("Global instructions").unwrap();
+        let local_at = instructions.find("Local instructions").unwrap();
+        assert!(
+            global_at < local_at,
+            "global block must come before project block, got global={global_at} local={local_at}"
+        );
+        // The merged block is labelled so the model can tell the layers
+        // apart when it needs to explain which rule it followed.
+        assert!(
+            instructions.contains("project (overrides global where they conflict)"),
+            "expected labelled separator between global and project blocks"
+        );
+        // `source_path` keeps pointing at the more-specific file so the
+        // user knows where to edit the workspace-level override.
+        assert_eq!(ctx.source_path, Some(workspace.path().join("AGENTS.md")));
+    }
+
+    #[test]
+    fn test_global_agents_only_no_project_unchanged_fallback() {
+        // Sanity: when only the global file exists, the historical
+        // fallback behaviour is preserved — no merge framing leaks in.
+        let workspace = tempdir().expect("workspace tempdir");
+        let home = tempdir().expect("home tempdir");
+        let global_dir = home.path().join(".deepseek");
+        fs::create_dir(&global_dir).expect("mkdir .deepseek");
+        let global_agents = global_dir.join("AGENTS.md");
+        fs::write(&global_agents, "Just the global instructions").expect("write global agents");
+
+        let ctx = load_project_context_with_parents_and_home(workspace.path(), Some(home.path()));
+
+        assert!(ctx.has_instructions());
+        let instructions = ctx.instructions.as_ref().unwrap();
+        assert!(instructions.contains("Just the global instructions"));
+        assert!(
+            !instructions.contains("project (overrides global"),
+            "merge-framing label should not appear when there's nothing to merge"
+        );
+        assert_eq!(ctx.source_path, Some(global_agents));
+    }
+
+    #[test]
+    fn test_invalid_global_agents_warns_and_falls_back_to_generated_context() {
+        let workspace = tempdir().expect("workspace tempdir");
+        let home = tempdir().expect("home tempdir");
+        let global_dir = home.path().join(".deepseek");
+        fs::create_dir(&global_dir).expect("mkdir .deepseek");
+        fs::write(global_dir.join("AGENTS.md"), "   \n  ").expect("write empty global agents");
+
+        let ctx = load_project_context_with_parents_and_home(workspace.path(), Some(home.path()));
+
+        assert!(
+            ctx.warnings
+                .iter()
+                .any(|warning| warning.contains("Context file") && warning.contains("is empty")),
+            "expected empty global AGENTS.md warning, got {:?}",
+            ctx.warnings
+        );
+        assert!(ctx.has_instructions());
+        assert!(
+            ctx.instructions
+                .as_ref()
+                .unwrap()
+                .contains("Project Structure (Auto-generated)")
         );
     }
 }

@@ -27,6 +27,10 @@ fn message_text(message: &Message) -> &str {
     }
 }
 
+fn estimate_tool_description_tokens_conservative(text: &str) -> usize {
+    text.chars().count().div_ceil(3)
+}
+
 #[test]
 fn test_agent_type_from_str() {
     assert_eq!(
@@ -146,6 +150,59 @@ fn test_implementer_and_verifier_have_distinct_prompts() {
             || verifier.to_lowercase().contains("test suite")
             || verifier.to_lowercase().contains("validation"),
         "Verifier prompt should reference its role: {verifier}"
+    );
+}
+
+#[test]
+fn test_agent_type_prompts_include_shared_output_contract_once() {
+    for (agent_type, marker) in [
+        (SubAgentType::General, "general-purpose sub-agent"),
+        (SubAgentType::Explore, "exploration sub-agent"),
+        (SubAgentType::Plan, "planning sub-agent"),
+        (SubAgentType::Review, "code review sub-agent"),
+        (SubAgentType::Implementer, "implementation sub-agent"),
+        (SubAgentType::Verifier, "verification sub-agent"),
+        (SubAgentType::Custom, "custom sub-agent"),
+    ] {
+        let prompt = agent_type.system_prompt();
+        assert!(prompt.contains(marker));
+        assert_eq!(
+            prompt.matches("## Output contract (mandatory)").count(),
+            1,
+            "{agent_type:?} prompt should include the shared output contract exactly once"
+        );
+        assert!(prompt.contains("### SUMMARY") && prompt.contains("### BLOCKERS"));
+    }
+}
+
+#[test]
+fn agent_spawn_description_warns_parent_to_verify_self_reports_within_budget() {
+    let tmp = tempdir().expect("tempdir");
+    let manager = new_shared_subagent_manager(tmp.path().to_path_buf(), 1);
+    let tool = AgentSpawnTool::new(manager, stub_runtime());
+    let description = tool.description();
+
+    assert!(
+        description
+            .contains("## Trust model: subagent results are self-reports, not verified facts")
+    );
+    assert!(description.contains("`agent_result` returns the child's narrative summary"));
+    assert!(description.contains("| Side effect | Re-verify with |"));
+    assert!(description.contains("If the child returns a verifiable handle"));
+    for row in [
+        "| URL claimed posted/written | `fetch_url` and check the response |",
+        "| File claimed created | `read_file` or `list_dir` |",
+        "| File claimed edited | `read_file` and check the change is present |",
+        "| HTTP POST/PUT response | inspect status code and body |",
+        "| Git operation | `git_status` / `git_diff` |",
+        "| Test claimed passing | `run_tests` |",
+        "| Process claimed started | `exec_shell` (e.g. `pgrep`, `lsof -i`) |",
+    ] {
+        assert!(description.contains(row));
+    }
+    assert!(
+        estimate_tool_description_tokens_conservative(description) <= 1024,
+        "agent_spawn description exceeds the conservative 1024-token budget"
     );
 }
 

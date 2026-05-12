@@ -469,6 +469,45 @@ fn render_line_with_links(
             }
             continue;
         }
+        // If the word itself is wider than an entire line, hard-break it at
+        // character boundaries so wrapping always makes progress (#1344,
+        // #1351). Without this, long URLs / paths / hashes were placed on
+        // their own line whole and silently overflowed the right edge of
+        // the transcript.
+        if ww > width && width > 0 {
+            // Flush the in-progress line first.
+            if !current_spans.is_empty() {
+                if let Some(last) = current_spans.last()
+                    && last.content.as_ref() == " "
+                {
+                    current_spans.pop();
+                }
+                lines.push(Line::from(std::mem::take(&mut current_spans)));
+                current_width = 0;
+            }
+            // Char-break the word into width-sized chunks. Each full chunk
+            // becomes its own line; the final partial chunk continues the
+            // current line so the next word can pack onto it.
+            let mut chunk = String::new();
+            let mut chunk_w = 0usize;
+            for ch in word.chars() {
+                let cw = ch.width().unwrap_or(1);
+                if chunk_w + cw > width && chunk_w > 0 {
+                    lines.push(Line::from(vec![Span::styled(
+                        std::mem::take(&mut chunk),
+                        style,
+                    )]));
+                    chunk_w = 0;
+                }
+                chunk.push(ch);
+                chunk_w += cw;
+            }
+            if !chunk.is_empty() {
+                current_spans.push(Span::styled(chunk, style));
+                current_width = chunk_w;
+            }
+            continue;
+        }
         // Wrap before this word if it doesn't fit.
         if current_width > 0 && current_width + ww > width {
             // Trim trailing space span before breaking.
@@ -660,24 +699,11 @@ fn wrap_cell_text(cell: &str, col_width: usize) -> Vec<String> {
     let mut current = String::new();
     let mut current_w = 0usize;
 
-    let push_word_breaking_chars =
-        |word: &str, current: &mut String, current_w: &mut usize, lines: &mut Vec<String>| {
-            for ch in word.chars() {
-                let cw = ch.width().unwrap_or(1);
-                if *current_w + cw > col_width && *current_w > 0 {
-                    lines.push(std::mem::take(current));
-                    *current_w = 0;
-                }
-                current.push(ch);
-                *current_w += cw;
-            }
-        };
-
     for word in cell.split_whitespace() {
         let word_w = word.width();
         if current_w == 0 {
             if word_w > col_width {
-                push_word_breaking_chars(word, &mut current, &mut current_w, &mut lines);
+                push_word_breaking_chars(word, col_width, &mut current, &mut current_w, &mut lines);
             } else {
                 current.push_str(word);
                 current_w = word_w;
@@ -690,7 +716,7 @@ fn wrap_cell_text(cell: &str, col_width: usize) -> Vec<String> {
             lines.push(std::mem::take(&mut current));
             current_w = 0;
             if word_w > col_width {
-                push_word_breaking_chars(word, &mut current, &mut current_w, &mut lines);
+                push_word_breaking_chars(word, col_width, &mut current, &mut current_w, &mut lines);
             } else {
                 current.push_str(word);
                 current_w = word_w;
@@ -891,6 +917,18 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
 
     for word in text.split_whitespace() {
         let word_width = word.width();
+        // If this single word is wider than the entire line, hard-break it
+        // at character boundaries so wrapping always makes progress
+        // (#1344, #1351). Without this, long URLs / paths / hashes overflow
+        // the right edge silently.
+        if word_width > width {
+            if !current.is_empty() {
+                lines.push(std::mem::take(&mut current));
+                current_width = 0;
+            }
+            push_word_breaking_chars(word, width, &mut current, &mut current_width, &mut lines);
+            continue;
+        }
         let additional = if current.is_empty() {
             word_width
         } else {
@@ -917,6 +955,29 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
     }
 
     lines
+}
+
+/// Push characters from `word` into `current`, flushing to `lines` when the
+/// running display width would exceed `width`. Width is computed at the
+/// `unicode-width` char level, matching the rest of the rendering pipeline.
+/// Used by `wrap_text` and `wrap_cell_text` so a word longer than the
+/// allotted width never silently overflows the right edge.
+fn push_word_breaking_chars(
+    word: &str,
+    width: usize,
+    current: &mut String,
+    current_width: &mut usize,
+    lines: &mut Vec<String>,
+) {
+    for ch in word.chars() {
+        let cw = ch.width().unwrap_or(1);
+        if *current_width + cw > width && *current_width > 0 {
+            lines.push(std::mem::take(current));
+            *current_width = 0;
+        }
+        current.push(ch);
+        *current_width += cw;
+    }
 }
 
 #[cfg(test)]
@@ -1291,5 +1352,152 @@ mod tests {
                 "fragment {fragment:?} missing from wrapped output:\n{combined}"
             );
         }
+    }
+
+    // ─── Paragraph wrap regression suite (#1344, #1351) ────────────────────
+    //
+    // The bug: paragraph wrap (render_line_with_links) and code-block wrap
+    // (wrap_text) are word-based. A single word wider than the available
+    // width was placed alone on a line and silently overflowed the right
+    // edge of the transcript. Long URLs / paths / hashes / no-whitespace
+    // CJK runs all hit this. The fix hard-breaks overlong words at
+    // character boundaries; these tests pin that across widths 40/60/80/120.
+
+    fn rendered_widths(rendered: &[Line<'static>]) -> Vec<usize> {
+        rendered
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref().width())
+                    .sum::<usize>()
+            })
+            .collect()
+    }
+
+    fn render_paragraph_for_test(text: &str, width: usize) -> Vec<Line<'static>> {
+        render_line_with_links(text, width, Style::default(), Style::default())
+    }
+
+    #[test]
+    fn paragraph_wrap_breaks_overlong_word_at_width_40() {
+        // 200-char no-whitespace token must not exceed the 40-col window.
+        let long = "a".repeat(200);
+        let rendered = render_paragraph_for_test(&long, 40);
+        for w in rendered_widths(&rendered) {
+            assert!(w <= 40, "rendered width {w} exceeds 40-col window");
+        }
+        // And the full content must still be present across the wrapped lines.
+        let combined: String = rendered
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert_eq!(combined.matches('a').count(), 200);
+    }
+
+    #[test]
+    fn paragraph_wrap_breaks_overlong_word_at_widths_60_80_120() {
+        let long = format!("https://example.com/{}", "p".repeat(180));
+        for &width in &[60usize, 80, 120] {
+            let rendered = render_paragraph_for_test(&long, width);
+            for w in rendered_widths(&rendered) {
+                assert!(
+                    w <= width,
+                    "width={width}: rendered line width {w} exceeds budget"
+                );
+            }
+            assert!(rendered.len() >= 2, "width={width}: expected wrap");
+        }
+    }
+
+    #[test]
+    fn paragraph_wrap_keeps_short_words_unbroken() {
+        // Regression guard: short words must still be broken at whitespace,
+        // not mid-word. Width 40, only short words, expect zero mid-word
+        // breaks (each line reads as natural English).
+        let text = "the quick brown fox jumps over the lazy dog and then it stops moving";
+        let rendered = render_paragraph_for_test(text, 40);
+        for line in &rendered {
+            let s: String = line.spans.iter().map(|s| s.content.to_string()).collect();
+            // Heuristic: trimmed line should not start with a partial word
+            // (i.e. should start with a real English start) — every line in
+            // this fixture starts with a word in our short list.
+            let first = s.split_whitespace().next().unwrap_or("");
+            assert!(
+                [
+                    "the", "quick", "brown", "fox", "jumps", "over", "lazy", "dog", "and", "then",
+                    "it", "stops", "moving"
+                ]
+                .contains(&first),
+                "line {s:?} appears to start with a partial word"
+            );
+        }
+    }
+
+    #[test]
+    fn paragraph_wrap_mixed_short_and_overlong_word() {
+        // The overlong word must wrap; the trailing short words must pack
+        // onto subsequent lines. The combined content is preserved.
+        let long = "x".repeat(150);
+        let text = format!("intro {long} tail words go here");
+        let rendered = render_paragraph_for_test(&text, 80);
+        for w in rendered_widths(&rendered) {
+            assert!(w <= 80, "rendered width {w} exceeds 80-col window");
+        }
+        let combined: String = rendered
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        for fragment in ["intro", "tail", "words", "go", "here"] {
+            assert!(
+                combined.contains(fragment),
+                "fragment {fragment:?} missing from wrapped output:\n{combined}"
+            );
+        }
+        assert_eq!(combined.matches('x').count(), 150);
+    }
+
+    #[test]
+    fn wrap_text_breaks_overlong_word_for_code_blocks() {
+        // The standalone code-block wrap (wrap_text) had the same overflow
+        // bug; pin the fix at widths 40 and 80.
+        for &width in &[40usize, 80] {
+            let long = "z".repeat(200);
+            let lines = wrap_text(&long, width);
+            for line in &lines {
+                assert!(
+                    line.width() <= width,
+                    "wrap_text line {line:?} exceeds {width}"
+                );
+            }
+            let combined: String = lines.join("");
+            assert_eq!(combined.matches('z').count(), 200);
+        }
+    }
+
+    #[test]
+    fn wrap_cell_text_already_handled_long_words_remains_correct() {
+        // Regression guard for the v0.8.25 table-cell fix. After consolidating
+        // the char-break helper, wrap_cell_text must continue to handle
+        // overlong cells. Pin the property: every wrapped segment fits
+        // within the column width, and content is preserved.
+        let long = "y".repeat(120);
+        let segments = wrap_cell_text(&long, 30);
+        for seg in &segments {
+            assert!(seg.width() <= 30, "segment {seg:?} exceeds col 30");
+        }
+        let combined: String = segments.join("");
+        assert_eq!(combined.matches('y').count(), 120);
+    }
+
+    #[test]
+    fn paragraph_wrap_handles_zero_width_gracefully() {
+        // Width 0 should not panic or hang; it returns the input as-is or
+        // empty, but never produces a line wider than 0 (when 0 means "no
+        // budget at all"). This pins the early-return path against future
+        // regressions.
+        let rendered = render_paragraph_for_test("hello world", 0);
+        // Any output is acceptable (the path is degenerate); assert no panic.
+        let _ = rendered;
     }
 }

@@ -244,6 +244,7 @@ pub enum Event {
     /// text block, and that assistant message still has to be persisted for
     /// later `reasoning_content` replay.
     SessionUpdated {
+        session_id: String,
         messages: Vec<Message>,
         system_prompt: Option<SystemPrompt>,
         model: String,

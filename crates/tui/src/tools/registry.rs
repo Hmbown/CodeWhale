@@ -672,6 +672,18 @@ impl ToolRegistryBuilder {
         self.with_tool(Arc::new(RememberTool))
     }
 
+    /// Include the `notify` tool — model-callable desktop notification
+    /// (#1322). Routes through the existing `tui::notifications` OSC 9 /
+    /// BEL pipeline so the user's `[notifications].method` config is
+    /// honoured automatically (including `off`). Always safe to register
+    /// because the tool has no side effects beyond a single terminal
+    /// escape write.
+    #[must_use]
+    pub fn with_notify_tool(self) -> Self {
+        use super::notify::NotifyTool;
+        self.with_tool(Arc::new(NotifyTool))
+    }
+
     /// Include MCP tools from a connected pool as first-class registry
     /// citizens. Each MCP tool is wrapped in a lightweight adapter that
     /// implements `ToolSpec`, so the unified `ToolRegistryBuilder` flow

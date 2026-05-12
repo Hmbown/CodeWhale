@@ -11,23 +11,66 @@ use crate::tui::history::{
 };
 use crate::tui::views::{ModalView, ViewAction};
 use crate::working_set::Workspace;
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::MutexGuard;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
-#[test]
-fn format_resume_hint_uses_canonical_resume_command() {
-    assert_eq!(
-        format_resume_hint(Some("019dd9d6-4f44-7c83-9863-59674a12b827")),
-        Some("To continue this session, run deepseek --continue".to_string())
-    );
+struct ConfigPathEnvGuard {
+    _tmp: TempDir,
+    previous: Option<OsString>,
+    _lock: MutexGuard<'static, ()>,
+}
+
+impl ConfigPathEnvGuard {
+    fn new() -> Self {
+        let lock = crate::test_support::lock_test_env();
+        let tmp = TempDir::new().expect("config tempdir");
+        let config_path = tmp.path().join(".deepseek").join("config.toml");
+        std::fs::create_dir_all(config_path.parent().expect("config parent")).expect("config dir");
+        let previous = std::env::var_os("DEEPSEEK_CONFIG_PATH");
+        // Safety: test-only environment mutation guarded by a global mutex.
+        unsafe {
+            std::env::set_var("DEEPSEEK_CONFIG_PATH", &config_path);
+        }
+        Self {
+            _tmp: tmp,
+            previous,
+            _lock: lock,
+        }
+    }
+}
+
+impl Drop for ConfigPathEnvGuard {
+    fn drop(&mut self) {
+        // Safety: test-only environment mutation guarded by a global mutex.
+        unsafe {
+            if let Some(previous) = self.previous.take() {
+                std::env::set_var("DEEPSEEK_CONFIG_PATH", previous);
+            } else {
+                std::env::remove_var("DEEPSEEK_CONFIG_PATH");
+            }
+        }
+    }
 }
 
 #[test]
-fn format_resume_hint_omits_missing_session_id() {
-    assert_eq!(format_resume_hint(None), None);
-    assert_eq!(format_resume_hint(Some("   ")), None);
+fn resume_hint_uses_canonical_resume_command() {
+    assert_eq!(
+        resume_hint_text(),
+        "To continue this session, execute deepseek run --continue"
+    );
+    assert!(should_show_resume_hint(Some(
+        "019dd9d6-4f44-7c83-9863-59674a12b827"
+    )));
+}
+
+#[test]
+fn resume_hint_omits_missing_session_id() {
+    assert!(!should_show_resume_hint(None));
+    assert!(!should_show_resume_hint(Some("   ")));
 }
 
 #[test]
@@ -87,20 +130,32 @@ fn recover_terminal_modes_runs_without_panic_on_windows() {
 }
 
 #[test]
-fn terminal_origin_reset_resets_scroll_region_origin_and_clears() {
+fn terminal_origin_reset_resets_scroll_region_origin_without_destructive_clear() {
     assert!(
         TERMINAL_ORIGIN_RESET.starts_with(b"\x1b[r\x1b[?6l"),
         "must reset scroll margins and origin mode before repaint"
     );
     assert!(
-        TERMINAL_ORIGIN_RESET.ends_with(b"\x1b[H\x1b[2J\x1b[3J"),
-        "must home the cursor and clear the viewport"
+        TERMINAL_ORIGIN_RESET.ends_with(b"\x1b[H"),
+        "must home the cursor at the end of the reset sequence"
+    );
+    // Cross-terminal flicker regression (#1119, #1352, #1356, #1363, #1366,
+    // #1260, #1295): emitting CSI 2J/3J here in addition to the
+    // immediately-following ratatui `terminal.clear()` produced a visible
+    // blank-then-repaint flicker on Ghostty / VSCode terminal / Win10 conhost
+    // every TurnComplete. The cleared back-buffer plus a single ratatui clear
+    // is sufficient on the alt-screen.
+    assert!(
+        !TERMINAL_ORIGIN_RESET
+            .windows(b"\x1b[2J".len())
+            .any(|sequence| sequence == b"\x1b[2J"),
+        "must not emit destructive CSI 2J — causes visible flicker"
     );
     assert!(
-        TERMINAL_ORIGIN_RESET
+        !TERMINAL_ORIGIN_RESET
             .windows(b"\x1b[3J".len())
             .any(|sequence| sequence == b"\x1b[3J"),
-        "must erase saved scrollback when reclaiming the viewport"
+        "must not emit destructive CSI 3J — causes visible flicker"
     );
 }
 
@@ -221,7 +276,7 @@ fn selection_to_text_handles_multiline_and_reversed_endpoints() {
         column: 6,
     });
 
-    assert_eq!(selection_to_text(&app).as_deref(), Some("a beta\n▏ gam"));
+    assert_eq!(selection_to_text(&app).as_deref(), Some("a beta\ngam"));
 }
 
 #[test]
@@ -246,6 +301,8 @@ fn selection_to_text_copies_rendered_transcript_block() {
             output: Some("tool output line".to_string()),
             prompts: None,
             spillover_path: None,
+            output_summary: None,
+            is_diff: false,
         })),
         HistoryCell::Assistant {
             content: "copy assistant".to_string(),
@@ -275,10 +332,19 @@ fn selection_to_text_copies_rendered_transcript_block() {
 
     let selected = selection_to_text(&app).expect("selection text");
     assert!(selected.contains("Note copy system"), "{selected:?}");
-    assert!(selected.contains("▎ copy user"), "{selected:?}");
+    assert!(selected.contains("copy user"), "{selected:?}");
     assert!(selected.contains("copy thinking"), "{selected:?}");
     assert!(selected.contains("tool output line"), "{selected:?}");
-    assert!(selected.contains("● copy assistant"), "{selected:?}");
+    assert!(selected.contains("copy assistant"), "{selected:?}");
+    // #1163: tool-card middle lines are rendered with a `│ ` left rail
+    // glyph, but that decoration must not leak into copied text. Assert
+    // no isolated rail glyph survives at the start of any line.
+    for (idx, line) in selected.lines().enumerate() {
+        assert!(
+            !line.starts_with("\u{2502} "),
+            "line {idx} retained tool-card rail prefix: {line:?}"
+        );
+    }
 }
 
 #[test]
@@ -384,8 +450,11 @@ fn jump_to_latest_button_click_scrolls_to_tail() {
     assert!(!app.viewport.transcript_selection.dragging);
 }
 
+/// Clicking the transcript scrollbar gutter starts a scrollbar drag (not
+/// text selection) so the visible thumb remains interactive for users who
+/// prefer mouse-based navigation.
 #[test]
-fn transcript_scrollbar_gutter_is_not_draggable() {
+fn transcript_scrollbar_gutter_starts_scrollbar_drag() {
     let mut app = create_test_app();
     app.history = vec![HistoryCell::Assistant {
         content: "alpha beta".to_string(),
@@ -409,6 +478,8 @@ fn transcript_scrollbar_gutter_is_not_draggable() {
     app.viewport.transcript_scroll = TranscriptScroll::to_bottom();
     app.user_scrolled_during_stream = false;
 
+    // Left-down on the scrollbar gutter (column == right edge) starts a
+    // scrollbar drag, not a transcript selection.
     let events = handle_mouse_event(
         &mut app,
         MouseEvent {
@@ -420,10 +491,17 @@ fn transcript_scrollbar_gutter_is_not_draggable() {
     );
 
     assert!(events.is_empty());
-    assert!(app.viewport.transcript_selection.dragging);
-    assert!(app.viewport.transcript_scroll.is_at_tail());
-    assert!(!app.user_scrolled_during_stream);
+    assert!(
+        app.viewport.transcript_scrollbar_dragging,
+        "gutter click should start scrollbar drag"
+    );
+    assert!(
+        !app.viewport.transcript_selection.dragging,
+        "gutter click should NOT start text selection"
+    );
 
+    // Drag moves the viewport (no assertion on exact scroll position — the
+    // mapping depends on area geometry).
     handle_mouse_event(
         &mut app,
         MouseEvent {
@@ -433,11 +511,9 @@ fn transcript_scrollbar_gutter_is_not_draggable() {
             modifiers: KeyModifiers::NONE,
         },
     );
+    assert!(app.viewport.transcript_scrollbar_dragging);
 
-    assert!(app.viewport.transcript_scroll.is_at_tail());
-    assert!(!app.user_scrolled_during_stream);
-    assert!(app.viewport.transcript_selection.dragging);
-
+    // Left-up ends the scrollbar drag.
     handle_mouse_event(
         &mut app,
         MouseEvent {
@@ -448,7 +524,7 @@ fn transcript_scrollbar_gutter_is_not_draggable() {
         },
     );
 
-    assert!(!app.viewport.transcript_selection.dragging);
+    assert!(!app.viewport.transcript_scrollbar_dragging);
 }
 
 #[test]
@@ -480,6 +556,264 @@ fn left_down_inside_transcript_starts_selection() {
 
     assert!(events.is_empty());
     assert!(app.viewport.transcript_selection.dragging);
+}
+
+#[test]
+fn drag_below_viewport_arms_autoscroll_down() {
+    let mut app = create_test_app();
+    app.history = vec![HistoryCell::Assistant {
+        content: "alpha beta".to_string(),
+        streaming: false,
+    }];
+    app.resync_history_revisions();
+    app.viewport.transcript_cache.ensure(
+        &app.history,
+        &app.history_revisions,
+        80,
+        app.transcript_render_options(),
+    );
+    app.viewport.last_transcript_area = Some(Rect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 8,
+    });
+    app.viewport.last_transcript_total = app.viewport.transcript_cache.total_lines();
+    app.viewport.transcript_selection.dragging = true;
+    app.viewport.transcript_selection.anchor = Some(TranscriptSelectionPoint {
+        line_index: 0,
+        column: 0,
+    });
+    app.viewport.transcript_selection.head = Some(TranscriptSelectionPoint {
+        line_index: 0,
+        column: 0,
+    });
+
+    handle_mouse_event(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: 4,
+            row: 12, // below area.y + area.height (= 8)
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+
+    let state = app.viewport.selection_autoscroll.expect("autoscroll armed");
+    assert_eq!(state.direction, 1);
+    assert_eq!(state.column, 4);
+}
+
+#[test]
+fn drag_above_viewport_arms_autoscroll_up() {
+    let mut app = create_test_app();
+    app.viewport.last_transcript_area = Some(Rect {
+        x: 5,
+        y: 4,
+        width: 40,
+        height: 6,
+    });
+    app.viewport.transcript_selection.dragging = true;
+    app.viewport.transcript_selection.anchor = Some(TranscriptSelectionPoint {
+        line_index: 5,
+        column: 0,
+    });
+    app.viewport.transcript_selection.head = Some(TranscriptSelectionPoint {
+        line_index: 5,
+        column: 0,
+    });
+
+    handle_mouse_event(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: 50, // outside horizontally too — clamped to area.x + width - 1
+            row: 1,     // above area.y (= 4)
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+
+    let state = app.viewport.selection_autoscroll.expect("autoscroll armed");
+    assert_eq!(state.direction, -1);
+    assert_eq!(state.column, 5 + 40 - 1);
+}
+
+#[test]
+fn drag_back_inside_disarms_autoscroll() {
+    let mut app = create_test_app();
+    app.history = vec![HistoryCell::Assistant {
+        content: "alpha beta".to_string(),
+        streaming: false,
+    }];
+    app.resync_history_revisions();
+    app.viewport.transcript_cache.ensure(
+        &app.history,
+        &app.history_revisions,
+        80,
+        app.transcript_render_options(),
+    );
+    app.viewport.last_transcript_area = Some(Rect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 8,
+    });
+    app.viewport.last_transcript_total = app.viewport.transcript_cache.total_lines();
+    app.viewport.transcript_selection.dragging = true;
+    app.viewport.transcript_selection.anchor = Some(TranscriptSelectionPoint {
+        line_index: 0,
+        column: 0,
+    });
+    app.viewport.transcript_selection.head = Some(TranscriptSelectionPoint {
+        line_index: 0,
+        column: 0,
+    });
+    app.viewport.selection_autoscroll = Some(SelectionAutoscroll {
+        direction: 1,
+        column: 4,
+        next_tick: Instant::now(),
+    });
+
+    handle_mouse_event(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: 6,
+            row: 0, // inside area
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+
+    assert!(app.viewport.selection_autoscroll.is_none());
+    let head = app
+        .viewport
+        .transcript_selection
+        .head
+        .expect("head present");
+    assert_eq!(head.column, 6);
+}
+
+#[test]
+fn mouse_up_clears_selection_autoscroll() {
+    let mut app = create_test_app();
+    app.viewport.transcript_selection.dragging = true;
+    app.viewport.selection_autoscroll = Some(SelectionAutoscroll {
+        direction: -1,
+        column: 0,
+        next_tick: Instant::now(),
+    });
+
+    handle_mouse_event(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+
+    assert!(app.viewport.selection_autoscroll.is_none());
+    assert!(!app.viewport.transcript_selection.dragging);
+}
+
+#[test]
+fn tick_selection_autoscroll_advances_pending_scroll_when_due() {
+    let mut app = create_test_app();
+    app.viewport.last_transcript_area = Some(Rect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 8,
+    });
+    app.viewport.last_transcript_total = 200;
+    app.viewport.transcript_selection.dragging = true;
+    app.viewport.transcript_selection.anchor = Some(TranscriptSelectionPoint {
+        line_index: 0,
+        column: 0,
+    });
+    app.viewport.transcript_selection.head = Some(TranscriptSelectionPoint {
+        line_index: 0,
+        column: 0,
+    });
+    let earlier = Instant::now() - Duration::from_millis(100);
+    app.viewport.selection_autoscroll = Some(SelectionAutoscroll {
+        direction: 1,
+        column: 10,
+        next_tick: earlier,
+    });
+
+    tick_selection_autoscroll(&mut app);
+
+    assert_eq!(app.viewport.pending_scroll_delta, 1);
+    assert!(app.user_scrolled_during_stream);
+    let next_tick = app
+        .viewport
+        .selection_autoscroll
+        .expect("still armed")
+        .next_tick;
+    assert!(next_tick > earlier);
+    let head = app
+        .viewport
+        .transcript_selection
+        .head
+        .expect("head extended");
+    // Edge row for direction = +1 is the bottom of area (height - 1 = 7),
+    // so head.line_index should equal last_transcript_top + 7.
+    assert_eq!(head.line_index, 7);
+    assert_eq!(head.column, 10);
+}
+
+#[test]
+fn tick_selection_autoscroll_respects_cadence() {
+    let mut app = create_test_app();
+    app.viewport.last_transcript_area = Some(Rect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 8,
+    });
+    app.viewport.transcript_selection.dragging = true;
+    let future = Instant::now() + Duration::from_secs(60);
+    app.viewport.selection_autoscroll = Some(SelectionAutoscroll {
+        direction: 1,
+        column: 0,
+        next_tick: future,
+    });
+
+    tick_selection_autoscroll(&mut app);
+
+    assert_eq!(app.viewport.pending_scroll_delta, 0);
+    assert_eq!(
+        app.viewport
+            .selection_autoscroll
+            .expect("still armed")
+            .next_tick,
+        future,
+        "next_tick must not advance before its deadline"
+    );
+}
+
+#[test]
+fn tick_selection_autoscroll_clears_when_drag_ended() {
+    let mut app = create_test_app();
+    app.viewport.last_transcript_area = Some(Rect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 8,
+    });
+    app.viewport.transcript_selection.dragging = false;
+    app.viewport.selection_autoscroll = Some(SelectionAutoscroll {
+        direction: 1,
+        column: 0,
+        next_tick: Instant::now() - Duration::from_millis(100),
+    });
+
+    tick_selection_autoscroll(&mut app);
+
+    assert!(app.viewport.selection_autoscroll.is_none());
+    assert_eq!(app.viewport.pending_scroll_delta, 0);
 }
 
 #[test]
@@ -728,6 +1062,30 @@ fn create_test_app() -> App {
     App::new(options, &Config::default())
 }
 
+fn create_test_options() -> TuiOptions {
+    TuiOptions {
+        model: "deepseek-v4-pro".to_string(),
+        workspace: PathBuf::from("."),
+        config_path: None,
+        config_profile: None,
+        allow_shell: false,
+        use_alt_screen: true,
+        use_mouse_capture: false,
+        use_bracketed_paste: true,
+        max_subagents: 1,
+        skills_dir: PathBuf::from("."),
+        memory_path: PathBuf::from("memory.md"),
+        notes_path: PathBuf::from("notes.txt"),
+        mcp_config_path: PathBuf::from("mcp.json"),
+        use_memory: false,
+        start_in_agent_mode: false,
+        skip_onboarding: false,
+        yolo: false,
+        resume_session_id: None,
+        initial_input: None,
+    }
+}
+
 fn text_message(role: &str, text: &str) -> Message {
     Message {
         role: role.to_string(),
@@ -751,10 +1109,12 @@ fn saved_session_with_messages(messages: Vec<Message>) -> SavedSession {
             model: "deepseek-v4-pro".to_string(),
             workspace: PathBuf::from("/tmp/resume-recovery"),
             mode: Some("yolo".to_string()),
+            cost: crate::session_manager::SessionCostSnapshot::default(),
         },
         messages,
         system_prompt: None,
         context_references: Vec::new(),
+        artifacts: Vec::new(),
     }
 }
 
@@ -856,6 +1216,7 @@ async fn drain_web_config_events_applies_draft_without_closing_session() {
 
 #[tokio::test]
 async fn drain_web_config_events_closes_session_after_commit() {
+    let _config_env = ConfigPathEnvGuard::new();
     let mut app = create_test_app();
     let mut config = Config::default();
     let engine = mock_engine_handle();
@@ -917,6 +1278,7 @@ fn active_tool_status_label_summarizes_live_tool_group() {
             duration_ms: None,
             source: ExecSource::Assistant,
             interaction: None,
+            output_summary: None,
         })),
     );
     active.push_tool(
@@ -928,6 +1290,8 @@ fn active_tool_status_label_summarizes_live_tool_group() {
             output: Some("done".to_string()),
             prompts: None,
             spillover_path: None,
+            output_summary: None,
+            is_diff: false,
         })),
     );
     app.active_cell = Some(active);
@@ -954,6 +1318,8 @@ fn active_tool_status_label_counts_foreground_rlm_work() {
             output: None,
             prompts: None,
             spillover_path: None,
+            output_summary: None,
+            is_diff: false,
         })),
     );
     app.active_cell = Some(active);
@@ -981,6 +1347,7 @@ fn terminal_probe_timeout_uses_tui_config_and_clamps() {
             status_items: None,
             osc8_links: None,
             notification_condition: None,
+            composer_arrows_scroll: None,
         }),
         ..Config::default()
     };
@@ -1081,6 +1448,56 @@ async fn model_change_update_syncs_engine_model_before_compaction() {
 
 #[tokio::test]
 async fn provider_switch_clears_turn_cache_history() {
+    // `switch_provider` persists the new provider to `Settings`, which
+    // writes through `dirs::data_dir()` (`~/Library/Application
+    // Support/deepseek/settings.toml` on macOS). Without redirecting
+    // HOME / USERPROFILE we would clobber the developer's real
+    // preferences and leave `default_provider = "ollama"` behind —
+    // which then leaks into any subsequent test that constructs an
+    // `App`. Hold the process-wide env lock for the duration so we
+    // serialize with other tests that mutate the same env vars.
+    // Wrap the lock inside a guard struct so clippy's
+    // `await_holding_lock` doesn't fire on the `.await` below; the
+    // pattern matches `tools::recall_archive::HomeGuard`.
+    struct HomeGuard {
+        _tmp: tempfile::TempDir,
+        prev_home: Option<std::ffi::OsString>,
+        prev_userprofile: Option<std::ffi::OsString>,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+    impl Drop for HomeGuard {
+        fn drop(&mut self) {
+            // SAFETY: still holding the process-wide env lock.
+            unsafe {
+                match self.prev_home.take() {
+                    Some(v) => std::env::set_var("HOME", v),
+                    None => std::env::remove_var("HOME"),
+                }
+                match self.prev_userprofile.take() {
+                    Some(v) => std::env::set_var("USERPROFILE", v),
+                    None => std::env::remove_var("USERPROFILE"),
+                }
+            }
+        }
+    }
+    let _home = {
+        let lock = crate::test_support::lock_test_env();
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let prev_home = std::env::var_os("HOME");
+        let prev_userprofile = std::env::var_os("USERPROFILE");
+        // SAFETY: serialized by the process-wide test env lock.
+        unsafe {
+            std::env::set_var("HOME", tmp.path());
+            std::env::set_var("USERPROFILE", tmp.path());
+        }
+        HomeGuard {
+            _tmp: tmp,
+            prev_home,
+            prev_userprofile,
+            _lock: lock,
+        }
+    };
+
     let mut app = create_test_app();
     app.push_turn_cache_record(crate::tui::app::TurnCacheRecord {
         input_tokens: 100,
@@ -1871,6 +2288,49 @@ fn test_ctrl_c_exits_when_not_loading() {
 }
 
 #[test]
+fn ctrl_c_disposition_idle_arms_exit_prompt() {
+    let app = create_test_app();
+    assert!(!app.is_loading);
+    assert!(!app.quit_is_armed());
+    assert_eq!(ctrl_c_disposition(&app), CtrlCDisposition::ArmExit);
+}
+
+#[test]
+fn ctrl_c_disposition_loading_cancels_turn() {
+    let mut app = create_test_app();
+    app.is_loading = true;
+    assert_eq!(ctrl_c_disposition(&app), CtrlCDisposition::CancelTurn);
+}
+
+#[test]
+fn ctrl_c_disposition_armed_idle_confirms_exit() {
+    let mut app = create_test_app();
+    app.arm_quit();
+    assert!(app.quit_is_armed());
+    assert_eq!(ctrl_c_disposition(&app), CtrlCDisposition::ConfirmExit);
+}
+
+#[test]
+fn ctrl_c_disposition_loading_beats_armed_quit() {
+    // If a turn started while quit is armed, the user almost certainly meant
+    // "cancel the turn", not "exit". Pin that priority order.
+    let mut app = create_test_app();
+    app.arm_quit();
+    app.is_loading = true;
+    assert_eq!(ctrl_c_disposition(&app), CtrlCDisposition::CancelTurn);
+}
+
+#[test]
+fn ctrl_c_disposition_no_selection_means_no_copy() {
+    // Regression guard for #1337: with no transcript selection, Ctrl+C must
+    // NOT route to copy. (When selection is active, the copy branch wins;
+    // exercised by the integration-level mouse-drag tests in this file.)
+    let app = create_test_app();
+    assert!(!selection_has_content(&app));
+    assert_ne!(ctrl_c_disposition(&app), CtrlCDisposition::CopySelection);
+}
+
+#[test]
 fn test_ctrl_d_exits_when_input_empty() {
     let mut app = create_test_app();
     app.input.clear();
@@ -2216,6 +2676,8 @@ fn jump_to_adjacent_tool_cell_finds_next_and_previous() {
             output: Some("done".to_string()),
             prompts: None,
             spillover_path: None,
+            output_summary: None,
+            is_diff: false,
         })),
         HistoryCell::Assistant {
             content: "ok".to_string(),
@@ -2228,6 +2690,8 @@ fn jump_to_adjacent_tool_cell_finds_next_and_previous() {
             output: Some("...".to_string()),
             prompts: None,
             spillover_path: None,
+            output_summary: None,
+            is_diff: false,
         })),
     ];
     app.mark_history_updated();
@@ -2284,6 +2748,8 @@ fn detail_target_prefers_visible_tool_card() {
             output: Some("done".to_string()),
             prompts: None,
             spillover_path: None,
+            output_summary: None,
+            is_diff: false,
         })),
         HistoryCell::Assistant {
             content: "ok".to_string(),
@@ -2296,6 +2762,8 @@ fn detail_target_prefers_visible_tool_card() {
             output: Some("...".to_string()),
             prompts: None,
             spillover_path: None,
+            output_summary: None,
+            is_diff: false,
         })),
     ];
     app.tool_details_by_cell.insert(
@@ -2387,6 +2855,8 @@ fn spillover_pager_section_returns_none_when_no_spillover() {
         output: Some("hi".to_string()),
         prompts: None,
         spillover_path: None,
+        output_summary: None,
+        is_diff: false,
     }))];
     app.resync_history_revisions();
     assert!(spillover_pager_section(&app, 0).is_none());
@@ -2408,6 +2878,8 @@ fn spillover_pager_section_loads_file_when_present() {
         output: Some("(truncated head)".to_string()),
         prompts: None,
         spillover_path: Some(path.clone()),
+        output_summary: None,
+        is_diff: false,
     }))];
     app.resync_history_revisions();
 
@@ -2431,6 +2903,8 @@ fn spillover_pager_section_returns_notice_when_file_missing() {
         output: Some("(truncated head)".to_string()),
         prompts: None,
         spillover_path: Some(bogus),
+        output_summary: None,
+        is_diff: false,
     }))];
     app.resync_history_revisions();
 
@@ -2454,6 +2928,7 @@ fn terminal_pause_has_live_owner_only_for_running_exec_cells() {
             duration_ms: None,
             source: ExecSource::Assistant,
             interaction: Some("interactive".to_string()),
+            output_summary: None,
         })),
     );
     app.active_cell = Some(active);
@@ -2469,6 +2944,8 @@ fn terminal_pause_has_live_owner_only_for_running_exec_cells() {
             output: None,
             prompts: None,
             spillover_path: None,
+            output_summary: None,
+            is_diff: false,
         })),
     );
     app.active_cell = Some(active);
@@ -2492,6 +2969,8 @@ fn active_rlm_task_entries_surface_foreground_rlm_work() {
             output: None,
             prompts: None,
             spillover_path: None,
+            output_summary: None,
+            is_diff: false,
         })),
     );
     app.active_cell = Some(active);
@@ -2505,17 +2984,20 @@ fn active_rlm_task_entries_surface_foreground_rlm_work() {
 }
 
 #[test]
-fn details_shortcut_modifiers_accept_plain_shift_and_alt_only() {
-    assert!(details_shortcut_modifiers(KeyModifiers::NONE));
-    assert!(details_shortcut_modifiers(KeyModifiers::SHIFT));
-    assert!(details_shortcut_modifiers(KeyModifiers::ALT));
-    assert!(details_shortcut_modifiers(
-        KeyModifiers::ALT | KeyModifiers::SHIFT
-    ));
-    assert!(!details_shortcut_modifiers(KeyModifiers::CONTROL));
-    assert!(!details_shortcut_modifiers(
+fn alt_nav_modifiers_require_alt_and_exclude_ctrl_super() {
+    // v0.8.30 — transcript-nav shortcuts (`Alt+G`, `Alt+[`, etc.) require
+    // Alt, allow Shift for capital-letter forms, and block Ctrl/Super so
+    // they don't collide with clipboard / window shortcuts. Bare and
+    // Shift-only modifiers fall through to text insertion now.
+    assert!(!alt_nav_modifiers(KeyModifiers::NONE));
+    assert!(!alt_nav_modifiers(KeyModifiers::SHIFT));
+    assert!(alt_nav_modifiers(KeyModifiers::ALT));
+    assert!(alt_nav_modifiers(KeyModifiers::ALT | KeyModifiers::SHIFT));
+    assert!(!alt_nav_modifiers(KeyModifiers::CONTROL));
+    assert!(!alt_nav_modifiers(
         KeyModifiers::ALT | KeyModifiers::CONTROL
     ));
+    assert!(!alt_nav_modifiers(KeyModifiers::ALT | KeyModifiers::SUPER));
 }
 
 #[test]
@@ -2820,6 +3302,86 @@ fn tool_child_usage_metadata_updates_live_cost_counter() {
     handle_tool_call_complete(&mut app, "review-usage", "review", &result);
 
     assert!(app.session.subagent_cost > 0.0);
+}
+
+#[test]
+fn spilled_tool_completion_records_session_artifact_metadata() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let spillover_path = tmp.path().join("call-big.txt");
+    let raw = "checking crate ... error[E0425]: cannot find value\n".repeat(20);
+    std::fs::write(&spillover_path, &raw).expect("write spillover");
+    let result = Ok(
+        crate::tools::spec::ToolResult::success("checking crate ...").with_metadata(
+            serde_json::json!({
+                "spillover_path": spillover_path.display().to_string(),
+                "artifact_session_id": "session-123",
+                "artifact_relative_path": "artifacts/art_call-big.txt",
+                "artifact_byte_size": raw.len() as u64,
+                "artifact_preview": "checking crate ... error[E0425]: cannot find value",
+            }),
+        ),
+    );
+    let mut app = create_test_app();
+    app.current_session_id = Some("session-123".to_string());
+
+    handle_tool_call_complete(&mut app, "call-big", "exec_shell", &result);
+
+    assert_eq!(app.session_artifacts.len(), 1);
+    let artifact = &app.session_artifacts[0];
+    assert_eq!(artifact.kind, crate::artifacts::ArtifactKind::ToolOutput);
+    assert_eq!(artifact.session_id, "session-123");
+    assert_eq!(artifact.tool_call_id, "call-big");
+    assert_eq!(artifact.tool_name, "exec_shell");
+    assert_eq!(artifact.byte_size, raw.len() as u64);
+    assert_eq!(
+        artifact.storage_path,
+        PathBuf::from("artifacts/art_call-big.txt")
+    );
+    assert!(artifact.preview.starts_with("checking crate"));
+
+    let manager =
+        crate::session_manager::SessionManager::new(tmp.path().join("sessions")).expect("manager");
+    let snapshot = build_session_snapshot(&app, &manager);
+    assert_eq!(snapshot.artifacts, app.session_artifacts);
+}
+
+#[test]
+fn first_snapshot_preserves_current_session_id_for_artifact_ownership() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let manager =
+        crate::session_manager::SessionManager::new(tmp.path().join("sessions")).expect("manager");
+    let mut app = create_test_app();
+    app.current_session_id = Some("session-123".to_string());
+    app.api_messages.push(text_message("user", "hello"));
+
+    let snapshot = build_session_snapshot(&app, &manager);
+
+    assert_eq!(snapshot.metadata.id, "session-123");
+}
+
+#[test]
+fn apply_loaded_session_restores_artifact_registry() {
+    let mut app = create_test_app();
+    let mut session = saved_session_with_messages(vec![
+        text_message("user", "hello"),
+        text_message("assistant", "hi"),
+    ]);
+    session.artifacts.push(crate::artifacts::ArtifactRecord {
+        id: "art_call_big".to_string(),
+        kind: crate::artifacts::ArtifactKind::ToolOutput,
+        session_id: "session-123".to_string(),
+        tool_call_id: "call-big".to_string(),
+        tool_name: "exec_shell".to_string(),
+        created_at: chrono::Utc::now(),
+        byte_size: 128,
+        preview: "hello".to_string(),
+        storage_path: PathBuf::from("/tmp/tool_outputs/call-big.txt"),
+    });
+
+    let recovered = apply_loaded_session(&mut app, &session);
+
+    assert!(!recovered);
+    assert_eq!(app.session_artifacts, session.artifacts);
 }
 
 #[test]
@@ -3390,6 +3952,42 @@ fn flush_active_cell_finalizes_unclosed_thinking_block() {
 }
 
 #[test]
+fn open_thinking_pager_finds_thinking_in_active_cell() {
+    // After ThinkingComplete fires, the finalized thinking entry stays in
+    // `app.active_cell` with `streaming = false` until the active cell is
+    // flushed to history (end-of-turn, or when an assistant text arrives).
+    // During that window the transcript still renders the
+    // "thinking collapsed; press Ctrl+O for full text" affordance from
+    // `render_thinking`, so the handler must reach across the virtual
+    // transcript — not just `app.history` — or the promise is a lie.
+    // Regression guard for the v0.8.29 affordance/handler mismatch.
+    let mut app = create_test_app();
+    let _ = ensure_streaming_thinking_active_entry(&mut app);
+    append_streaming_thinking(&mut app, 0, "deliberating");
+    let finalized = finalize_streaming_thinking_active_entry(&mut app, Some(1.2), "");
+    assert!(finalized);
+    assert!(
+        app.history.is_empty(),
+        "thinking entry stays in active_cell until flush"
+    );
+    let active = app.active_cell.as_ref().expect("active cell present");
+    assert!(matches!(
+        active.entries().first(),
+        Some(HistoryCell::Thinking {
+            streaming: false,
+            ..
+        })
+    ));
+
+    assert!(open_thinking_pager(&mut app));
+    assert_eq!(
+        app.view_stack.top_kind(),
+        Some(ModalKind::Pager),
+        "pager must open for thinking entries still in active_cell"
+    );
+}
+
+#[test]
 fn engine_error_finalizes_active_thinking_block() {
     use crate::error_taxonomy::StreamError;
 
@@ -3417,6 +4015,57 @@ fn engine_error_finalizes_active_thinking_block() {
         "error path must drain pending thinking tail"
     );
     assert!(app.streaming_thinking_active_entry.is_none());
+}
+
+#[test]
+fn message_complete_drain_preserves_thinking_when_thinking_complete_lost() {
+    // #861 RC3: when the engine bursts events, `MessageComplete` can be
+    // dispatched ahead of `ThinkingComplete`. Without the defensive drain,
+    // `app.last_reasoning` would be `None` at `last_reasoning.take()` time
+    // and the thinking block would be dropped from `api_messages`,
+    // causing a DeepSeek HTTP 400 on the next turn (V4 thinking-mode
+    // requires `reasoning_content` replay).
+    //
+    // This test exercises the head-of-handler drain in isolation: with a
+    // thinking entry still active and `last_reasoning` empty, the drain
+    // must transfer `reasoning_buffer` into `last_reasoning` before the
+    // remainder of `MessageComplete` reads it.
+    let mut app = create_test_app();
+
+    let _ = ensure_streaming_thinking_active_entry(&mut app);
+    app.thinking_started_at = Some(Instant::now());
+    app.streaming_state.start_thinking(0, None);
+    app.streaming_state.push_content(0, "deep reasoning text");
+    let _ = app.streaming_state.commit_text(0);
+    app.reasoning_buffer.push_str("deep reasoning text");
+
+    assert!(
+        app.last_reasoning.is_none(),
+        "precondition: ThinkingComplete has NOT fired"
+    );
+    assert!(
+        app.streaming_thinking_active_entry.is_some(),
+        "precondition: thinking entry is still active"
+    );
+
+    // Mirror the head of `EngineEvent::MessageComplete` — the new defensive
+    // drain installed by the #861 RC3 fix.
+    if app.streaming_thinking_active_entry.is_some() {
+        let _ = finalize_current_streaming_thinking(&mut app);
+        stash_reasoning_buffer_into_last_reasoning(&mut app);
+    }
+
+    assert!(
+        app.last_reasoning
+            .as_deref()
+            .is_some_and(|s| s.contains("deep reasoning text")),
+        "defensive drain must move reasoning into last_reasoning so the\
+         downstream `last_reasoning.take()` produces a Thinking block"
+    );
+    assert!(
+        app.streaming_thinking_active_entry.is_none(),
+        "thinking entry must be cleared after the drain"
+    );
 }
 
 #[test]
@@ -3588,13 +4237,10 @@ fn recoverable_engine_error_does_not_enter_offline_mode() {
         "recoverable error must keep the session online so the user can retry"
     );
     assert!(!app.is_loading);
-    let status = app
-        .status_message
-        .as_deref()
-        .expect("recoverable errors must set a status message");
+    assert!(app.turn_error_posted, "turn_error_posted must be set");
     assert!(
-        status.starts_with("Connection interrupted"),
-        "expected interrupt-style status, got {status:?}"
+        app.status_message.is_none(),
+        "recoverable error should NOT set status_message — already in transcript as HistoryCell::Error"
     );
 
     // Sanity: the rendered cell is the categorized Error variant, not a plain System note.
@@ -3628,13 +4274,10 @@ fn non_recoverable_engine_error_enters_offline_mode() {
         "non-recoverable error must enter offline mode"
     );
     assert!(!app.is_loading);
-    let status = app
-        .status_message
-        .as_deref()
-        .expect("non-recoverable errors must set a status message");
+    assert!(app.turn_error_posted, "turn_error_posted must be set");
     assert!(
-        status.starts_with("Engine error"),
-        "expected engine-error status, got {status:?}"
+        app.status_message.is_none(),
+        "non-recoverable error should NOT set status_message — already in transcript as HistoryCell::Error"
     );
 }
 
@@ -3658,6 +4301,7 @@ fn env_only_auth_failure_reopens_api_key_onboarding() {
         "env-only auth failures should prompt for a saved config key"
     );
     assert!(app.onboarding_needs_api_key);
+    assert!(app.turn_error_posted, "turn_error_posted must be set");
     let status = app
         .status_message
         .as_deref()
@@ -3989,6 +4633,8 @@ fn checklist_write_renders_dedicated_card() {
         ),
         prompts: None,
         spillover_path: None,
+            output_summary: None,
+            is_diff: false,
     };
     let lines = cell.lines_with_mode(80, true, crate::tui::history::RenderMode::Live);
     let text: Vec<String> = lines
@@ -4025,21 +4671,27 @@ fn checklist_write_renders_dedicated_card() {
 #[test]
 fn history_arrow_handles_empty_input() {
     let mut app = create_test_app();
+    // Explicitly disable arrows-scroll so this test covers the
+    // history-navigation path regardless of the mouse-capture default.
+    app.composer_arrows_scroll = false;
     app.input_history.push("previous prompt".to_string());
 
+    // With arrows-scroll off: empty composer Up navigates input history (#1117).
     assert!(handle_composer_history_arrow(
         &mut app,
         KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
         false,
         false,
     ));
-
     assert_eq!(app.input, "previous prompt");
 }
 
 #[test]
 fn history_arrow_handles_whitespace_input() {
     let mut app = create_test_app();
+    // Explicitly disable arrows-scroll so this test covers the
+    // history-navigation path regardless of the mouse-capture default.
+    app.composer_arrows_scroll = false;
     app.input = "   ".to_string();
     app.cursor_position = app.input.chars().count();
     app.input_history.push("previous prompt".to_string());
@@ -4050,7 +4702,6 @@ fn history_arrow_handles_whitespace_input() {
         false,
         false,
     ));
-
     assert_eq!(app.input, "previous prompt");
 }
 
@@ -4069,6 +4720,104 @@ fn history_arrow_handles_nonempty_input() {
     ));
 
     assert_eq!(app.input, "previous prompt");
+}
+
+#[test]
+fn composer_arrows_scroll_empty_up() {
+    let mut app = create_test_app();
+    app.composer_arrows_scroll = true;
+
+    // Opt-in: empty composer Up scrolls transcript.
+    assert!(handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+        false,
+        false,
+    ));
+    assert_eq!(app.viewport.pending_scroll_delta, -1);
+    assert!(app.input.is_empty());
+}
+
+#[test]
+fn composer_arrows_scroll_empty_down() {
+    let mut app = create_test_app();
+    app.composer_arrows_scroll = true;
+
+    assert!(handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+        false,
+        false,
+    ));
+    assert_eq!(app.viewport.pending_scroll_delta, 1);
+}
+
+#[test]
+fn composer_arrows_scroll_nonempty_still_navigates_history() {
+    let mut app = create_test_app();
+    app.composer_arrows_scroll = true;
+    app.input = "hello".to_string();
+    app.cursor_position = app.input.chars().count();
+    app.input_history.push("previous prompt".to_string());
+
+    // Even with the option on, non-empty composer still navigates history.
+    assert!(handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+        false,
+        false,
+    ));
+    assert_eq!(app.input, "previous prompt");
+}
+
+// #1443: when mouse capture is off (e.g. Windows CMD), arrow-scroll
+// must default to true so mouse-wheel events (sent as arrow keys by
+// the terminal) scroll the transcript rather than cycling history.
+#[test]
+fn composer_arrows_scroll_defaults_true_without_mouse_capture() {
+    let options = TuiOptions {
+        use_mouse_capture: false,
+        ..create_test_options()
+    };
+    let app = App::new(options, &Config::default());
+    assert!(
+        app.composer_arrows_scroll,
+        "arrows-scroll must default to true when mouse capture is off"
+    );
+}
+
+#[test]
+fn composer_arrows_scroll_defaults_false_with_mouse_capture() {
+    let options = TuiOptions {
+        use_mouse_capture: true,
+        ..create_test_options()
+    };
+    let app = App::new(options, &Config::default());
+    assert!(
+        !app.composer_arrows_scroll,
+        "arrows-scroll must default to false when mouse capture is on"
+    );
+}
+
+#[test]
+fn composer_arrows_scroll_config_overrides_default() {
+    let config = Config {
+        tui: Some(crate::config::TuiConfig {
+            composer_arrows_scroll: Some(false),
+            ..Default::default()
+        }),
+        ..Config::default()
+    };
+    // Even with mouse_capture off, explicit config=false wins.
+    let options = TuiOptions {
+        use_mouse_capture: false,
+        ..create_test_options()
+    };
+    let app = App::new(options, &config);
+    assert!(
+        !app.composer_arrows_scroll,
+        "explicit config=false must override the mouse-capture-derived default"
+    );
 }
 
 #[test]
@@ -4215,4 +4964,59 @@ fn subagent_completion_notification_can_include_elapsed_summary() {
 
     assert!(msg.contains("deepseek: sub-agent agent_live complete"));
     assert!(msg.contains("deepseek: sub-agent complete (1m 5s)"));
+}
+
+#[test]
+fn sanitize_stream_chunk_keeps_printable_and_drops_control_bytes() {
+    // `sanitize_stream_chunk` is the per-chunk filter every piece of
+    // streaming text goes through (assistant content, thinking
+    // content, tool results, web-search snippets). Pin both
+    // invariants:
+    //
+    // 1. preserve user-visible whitespace (newline / tab) — collapsing
+    //    those would mangle code blocks and tool output;
+    // 2. drop terminal-escape-friendly control bytes — a chunk
+    //    containing `\u{1b}[2J` (clear screen) or `\u{8}` (backspace)
+    //    must not reach the renderer.
+    let cleaned = super::sanitize_stream_chunk("hello\tworld\n");
+    assert_eq!(cleaned, "hello\tworld\n", "tabs and newlines must survive");
+
+    // ESC + CSI sequence: only the printable letters/digits survive.
+    let cleaned = super::sanitize_stream_chunk("text\u{1b}[2Jmore");
+    assert_eq!(cleaned, "text[2Jmore", "ESC byte must be filtered");
+
+    // Bell, backspace, vertical tab, form feed — all are control
+    // characters that aren't `\n` or `\t`. Drop them.
+    let cleaned = super::sanitize_stream_chunk("a\u{7}b\u{8}c\u{b}d\u{c}e");
+    assert_eq!(cleaned, "abcde");
+
+    // Carriage return is also a control char; today's renderer expects
+    // unix newlines, so CR is filtered out. Pin so a future CRLF-mode
+    // change has to update this test intentionally.
+    let cleaned = super::sanitize_stream_chunk("line1\r\nline2");
+    assert_eq!(cleaned, "line1\nline2");
+}
+
+#[test]
+fn sanitize_stream_chunk_preserves_unicode() {
+    // Non-ASCII Unicode is not control — CJK, emoji, accented Latin
+    // all pass through untouched.
+    let cjk = "\u{4f60}\u{597d}\u{ff0c}DeepSeek";
+    assert_eq!(super::sanitize_stream_chunk(cjk), cjk);
+
+    let emoji_and_accents = "caf\u{e9} \u{1f680} build";
+    assert_eq!(
+        super::sanitize_stream_chunk(emoji_and_accents),
+        emoji_and_accents,
+    );
+}
+
+#[test]
+fn sanitize_stream_chunk_handles_empty_and_whitespace() {
+    assert_eq!(super::sanitize_stream_chunk(""), "");
+    assert_eq!(super::sanitize_stream_chunk("   "), "   ");
+    // A chunk that's purely control bytes shrinks to empty — caller
+    // branches that skip empty chunks handle the result, so the
+    // filter doesn't need to inject a placeholder.
+    assert_eq!(super::sanitize_stream_chunk("\u{1b}\u{7}\u{8}"), "");
 }

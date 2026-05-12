@@ -214,7 +214,6 @@ pub enum MessageId {
     HelpFooterMove,
     HelpFooterJump,
     HelpFooterClose,
-    CmdAgentDescription,
     CmdAttachDescription,
     CmdAnchorDescription,
     CmdCacheDescription,
@@ -229,6 +228,7 @@ pub enum MessageId {
     CmdEditDescription,
     CmdExitDescription,
     CmdExportDescription,
+    CmdFeedbackDescription,
     CmdHelpDescription,
     CmdHomeDescription,
     CmdHooksDescription,
@@ -240,11 +240,11 @@ pub enum MessageId {
     CmdLogoutDescription,
     CmdMcpDescription,
     CmdMemoryDescription,
+    CmdModeDescription,
     CmdModelDescription,
     CmdModelsDescription,
     CmdNetworkDescription,
     CmdNoteDescription,
-    CmdPlanDescription,
     CmdThemeDescription,
     CmdProviderDescription,
     CmdQueueDescription,
@@ -260,6 +260,7 @@ pub enum MessageId {
     CmdSkillDescription,
     CmdSkillsDescription,
     CmdStashDescription,
+    CmdStatusDescription,
     CmdStatuslineDescription,
     CmdSubagentsDescription,
     CmdSwarmDescription,
@@ -271,7 +272,6 @@ pub enum MessageId {
     CmdShareDescription,
     CmdUndoDescription,
     CmdVerboseDescription,
-    CmdYoloDescription,
     CmdCacheAdvice,
     CmdCacheFootnote,
     CmdCacheHeader,
@@ -376,6 +376,36 @@ pub enum MessageId {
     HomeYoloModeCaution,
     HomePlanModeTip,
     HomePlanModeChecklistTip,
+    // Onboarding screens — language picker.
+    OnboardLanguageTitle,
+    OnboardLanguageBlurb,
+    OnboardLanguageFooter,
+    // Onboarding screens — API key entry.
+    OnboardApiKeyTitle,
+    OnboardApiKeyStep1,
+    OnboardApiKeyStep2,
+    OnboardApiKeySavedHint,
+    OnboardApiKeyFormatHint,
+    OnboardApiKeyPlaceholder,
+    OnboardApiKeyLabel,
+    OnboardApiKeyFooter,
+    // Onboarding screens — workspace trust prompt.
+    OnboardTrustTitle,
+    OnboardTrustQuestion,
+    OnboardTrustLocationPrefix,
+    OnboardTrustRiskHint,
+    OnboardTrustEffectHint,
+    OnboardTrustFooterPrefix,
+    OnboardTrustFooterMiddle,
+    OnboardTrustFooterSuffix,
+    // Onboarding screens — final tips screen.
+    OnboardTipsTitle,
+    OnboardTipsLine1,
+    OnboardTipsLine2,
+    OnboardTipsLine3,
+    OnboardTipsLine4,
+    OnboardTipsFooterEnter,
+    OnboardTipsFooterAction,
 }
 
 #[allow(dead_code)]
@@ -407,7 +437,6 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::HelpFooterMove,
     MessageId::HelpFooterJump,
     MessageId::HelpFooterClose,
-    MessageId::CmdAgentDescription,
     MessageId::CmdAnchorDescription,
     MessageId::CmdAttachDescription,
     MessageId::CmdCacheDescription,
@@ -422,6 +451,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CmdEditDescription,
     MessageId::CmdExitDescription,
     MessageId::CmdExportDescription,
+    MessageId::CmdFeedbackDescription,
     MessageId::CmdHelpDescription,
     MessageId::CmdHomeDescription,
     MessageId::CmdHooksDescription,
@@ -432,11 +462,11 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CmdLogoutDescription,
     MessageId::CmdMcpDescription,
     MessageId::CmdMemoryDescription,
+    MessageId::CmdModeDescription,
     MessageId::CmdModelDescription,
     MessageId::CmdModelsDescription,
     MessageId::CmdNetworkDescription,
     MessageId::CmdNoteDescription,
-    MessageId::CmdPlanDescription,
     MessageId::CmdProviderDescription,
     MessageId::CmdQueueDescription,
     MessageId::CmdRecallDescription,
@@ -451,6 +481,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CmdSkillDescription,
     MessageId::CmdSkillsDescription,
     MessageId::CmdStashDescription,
+    MessageId::CmdStatusDescription,
     MessageId::CmdStatuslineDescription,
     MessageId::CmdSubagentsDescription,
     MessageId::CmdSwarmDescription,
@@ -462,7 +493,6 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CmdShareDescription,
     MessageId::CmdUndoDescription,
     MessageId::CmdVerboseDescription,
-    MessageId::CmdYoloDescription,
     MessageId::CmdCacheAdvice,
     MessageId::CmdCacheFootnote,
     MessageId::CmdCacheHeader,
@@ -567,6 +597,32 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::HomeYoloModeCaution,
     MessageId::HomePlanModeTip,
     MessageId::HomePlanModeChecklistTip,
+    MessageId::OnboardLanguageTitle,
+    MessageId::OnboardLanguageBlurb,
+    MessageId::OnboardLanguageFooter,
+    MessageId::OnboardApiKeyTitle,
+    MessageId::OnboardApiKeyStep1,
+    MessageId::OnboardApiKeyStep2,
+    MessageId::OnboardApiKeySavedHint,
+    MessageId::OnboardApiKeyFormatHint,
+    MessageId::OnboardApiKeyPlaceholder,
+    MessageId::OnboardApiKeyLabel,
+    MessageId::OnboardApiKeyFooter,
+    MessageId::OnboardTrustTitle,
+    MessageId::OnboardTrustQuestion,
+    MessageId::OnboardTrustLocationPrefix,
+    MessageId::OnboardTrustRiskHint,
+    MessageId::OnboardTrustEffectHint,
+    MessageId::OnboardTrustFooterPrefix,
+    MessageId::OnboardTrustFooterMiddle,
+    MessageId::OnboardTrustFooterSuffix,
+    MessageId::OnboardTipsTitle,
+    MessageId::OnboardTipsLine1,
+    MessageId::OnboardTipsLine2,
+    MessageId::OnboardTipsLine3,
+    MessageId::OnboardTipsLine4,
+    MessageId::OnboardTipsFooterEnter,
+    MessageId::OnboardTipsFooterAction,
 ];
 
 pub fn tr(locale: Locale, id: MessageId) -> &'static str {
@@ -718,7 +774,6 @@ fn english(id: MessageId) -> &'static str {
         MessageId::HelpFooterMove => "  Up/Down move ",
         MessageId::HelpFooterJump => " PgUp/PgDn jump ",
         MessageId::HelpFooterClose => " Esc close ",
-        MessageId::CmdAgentDescription => "Switch to agent mode",
         MessageId::CmdAnchorDescription => {
             "Pin a fact that survives compaction (auto-injected into context)"
         }
@@ -741,6 +796,7 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CmdEditDescription => "Revise and resubmit the last message",
         MessageId::CmdExitDescription => "Exit the application",
         MessageId::CmdExportDescription => "Export conversation to markdown",
+        MessageId::CmdFeedbackDescription => "Generate a GitHub feedback URL",
         MessageId::CmdHelpDescription => "Show help information",
         MessageId::CmdHomeDescription => "Show home dashboard with stats and quick actions",
         MessageId::CmdHooksDescription => "List configured lifecycle hooks (read-only)",
@@ -754,15 +810,13 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CmdLogoutDescription => "Clear API key and return to setup",
         MessageId::CmdMcpDescription => "Open or manage MCP servers",
         MessageId::CmdMemoryDescription => "Inspect or manage the persistent user-memory file",
+        MessageId::CmdModeDescription => {
+            "Switch mode or open picker: /mode [agent|plan|yolo|1|2|3]"
+        }
         MessageId::CmdModelDescription => "Switch or view current model",
         MessageId::CmdModelsDescription => "List available models from API",
         MessageId::CmdNetworkDescription => "Manage network allow and deny rules",
-        MessageId::CmdNoteDescription => {
-            "Append note to persistent notes file (.deepseek/notes.md)"
-        }
-        MessageId::CmdPlanDescription => {
-            "Switch to plan mode and review suggested implementation steps"
-        }
+        MessageId::CmdNoteDescription => "Add, list, edit, or remove workspace notes",
         MessageId::CmdThemeDescription => "Toggle between dark and light theme",
         MessageId::CmdProviderDescription => {
             "Switch or view the active LLM backend (deepseek | nvidia-nim | ollama)"
@@ -785,11 +839,12 @@ fn english(id: MessageId) -> &'static str {
             "Activate a skill, or install/update/uninstall/trust a community skill"
         }
         MessageId::CmdSkillsDescription => {
-            "List local skills (or --remote to browse the curated registry)"
+            "List local skills (filter by `/skills <prefix>`; --remote browses the curated registry)"
         }
         MessageId::CmdStashDescription => {
             "Park or restore a composer draft (Ctrl+S to push, /stash list/pop)"
         }
+        MessageId::CmdStatusDescription => "Show runtime session status",
         MessageId::CmdStatuslineDescription => "Configure which items appear in the footer",
         MessageId::CmdSubagentsDescription => "List sub-agent status",
         MessageId::CmdSwarmDescription => {
@@ -803,7 +858,6 @@ fn english(id: MessageId) -> &'static str {
         }
         MessageId::CmdUndoDescription => "Remove last message pair",
         MessageId::CmdVerboseDescription => "Toggle full live thinking in the transcript",
-        MessageId::CmdYoloDescription => "Enable YOLO mode (shell + trust + auto-approve)",
         MessageId::CmdCacheAdvice => {
             "Hit/miss ratios over ~70% after the third turn indicate a stable cache prefix; \n\
              lower than that on long sessions suggests prefix churn worth investigating (#263)."
@@ -951,11 +1005,63 @@ fn english(id: MessageId) -> &'static str {
         MessageId::HomeModeTips => "Mode Tips",
         MessageId::HomeAgentModeTip => "Agent mode - Use tools for autonomous tasks",
         MessageId::HomeAgentModeReviewTip => "  Use Ctrl+X to review in Plan mode before executing",
-        MessageId::HomeAgentModeYoloTip => "  Type /yolo to enable full tool access",
+        MessageId::HomeAgentModeYoloTip => "  Type /mode yolo to enable full tool access",
         MessageId::HomeYoloModeTip => "YOLO mode - Full tool access, no approvals",
         MessageId::HomeYoloModeCaution => "  Be careful with destructive operations!",
         MessageId::HomePlanModeTip => "Plan mode - Design before implementing",
-        MessageId::HomePlanModeChecklistTip => "  Use /plan to create structured checklists",
+        MessageId::HomePlanModeChecklistTip => "  Use /mode plan to create structured checklists",
+        // Onboarding — language picker.
+        MessageId::OnboardLanguageTitle => "Choose your language",
+        MessageId::OnboardLanguageBlurb => {
+            "Pick the UI language. You can change it any time with `/settings set locale <tag>`."
+        }
+        MessageId::OnboardLanguageFooter => {
+            "Press 1-5 to choose, or Enter to keep the current setting"
+        }
+        // Onboarding — API key entry.
+        MessageId::OnboardApiKeyTitle => "Connect your DeepSeek API key",
+        MessageId::OnboardApiKeyStep1 => {
+            "Step 1.  Open https://platform.deepseek.com/api_keys and create a key."
+        }
+        MessageId::OnboardApiKeyStep2 => "Step 2.  Paste it below and press Enter.",
+        MessageId::OnboardApiKeySavedHint => {
+            "Saved to ~/.deepseek/config.toml so it works from any folder."
+        }
+        MessageId::OnboardApiKeyFormatHint => {
+            "Paste the full key exactly as issued (no spaces or newlines)."
+        }
+        MessageId::OnboardApiKeyPlaceholder => "(paste key here)",
+        MessageId::OnboardApiKeyLabel => "Key: ",
+        MessageId::OnboardApiKeyFooter => "Press Enter to save, Esc to go back.",
+        // Onboarding — workspace trust.
+        MessageId::OnboardTrustTitle => "Trust Workspace",
+        MessageId::OnboardTrustQuestion => "Do you trust the contents of this directory?",
+        MessageId::OnboardTrustLocationPrefix => "You are in ",
+        MessageId::OnboardTrustRiskHint => {
+            "Working with untrusted contents comes with higher risk of prompt injection."
+        }
+        MessageId::OnboardTrustEffectHint => {
+            "Trusting this directory records it in global config and enables trusted workspace mode."
+        }
+        MessageId::OnboardTrustFooterPrefix => "Press ",
+        MessageId::OnboardTrustFooterMiddle => " to trust and continue, ",
+        MessageId::OnboardTrustFooterSuffix => " to quit",
+        // Onboarding — final tips.
+        MessageId::OnboardTipsTitle => "Start Simple",
+        MessageId::OnboardTipsLine1 => {
+            "Write the task in plain language. Use /help or Ctrl+K when you want a command."
+        }
+        MessageId::OnboardTipsLine2 => {
+            "The bottom composer is multi-line: Enter sends, Alt+Enter or Ctrl+J adds a new line."
+        }
+        MessageId::OnboardTipsLine3 => {
+            "Switch modes only when the job changes: Plan for review-first work, Agent for execution, YOLO when you want auto-approval."
+        }
+        MessageId::OnboardTipsLine4 => {
+            "Ctrl+R resumes earlier sessions, and Esc backs out of the current draft or overlay."
+        }
+        MessageId::OnboardTipsFooterEnter => "Press Enter",
+        MessageId::OnboardTipsFooterAction => " to open the workspace",
     }
 }
 
@@ -1003,7 +1109,6 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::HelpFooterMove => "  Up/Down 移動 ",
         MessageId::HelpFooterJump => " PgUp/PgDn ジャンプ ",
         MessageId::HelpFooterClose => " Esc 閉じる ",
-        MessageId::CmdAgentDescription => "Agent モードに切り替え",
         MessageId::CmdAnchorDescription => {
             "コンパクション後も保持される重要な事実をピン留め（コンテキストに自動注入）"
         }
@@ -1028,6 +1133,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::CmdEditDescription => "最後のメッセージを編集して再送信",
         MessageId::CmdExitDescription => "アプリを終了",
         MessageId::CmdExportDescription => "会話を Markdown にエクスポート",
+        MessageId::CmdFeedbackDescription => "GitHub フィードバック URL を生成",
         MessageId::CmdHelpDescription => "ヘルプを表示",
         MessageId::CmdHomeDescription => "統計とクイックアクション付きのホームダッシュボードを表示",
         MessageId::CmdHooksDescription => {
@@ -1043,11 +1149,13 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::CmdLogoutDescription => "API キーを消去してセットアップに戻る",
         MessageId::CmdMcpDescription => "MCP サーバを開く・管理する",
         MessageId::CmdMemoryDescription => "永続ユーザーメモリファイルを確認・管理",
+        MessageId::CmdModeDescription => {
+            "動作モードを切り替え、または選択画面を開く: /mode [agent|plan|yolo|1|2|3]"
+        }
         MessageId::CmdModelDescription => "現在のモデルを切り替え・確認",
         MessageId::CmdModelsDescription => "API から利用可能なモデルを一覧表示",
         MessageId::CmdNetworkDescription => "ネットワーク許可・拒否ルールを管理",
-        MessageId::CmdNoteDescription => "永続ノートファイル（.deepseek/notes.md）に追記",
-        MessageId::CmdPlanDescription => "Plan モードに切り替え、推奨される実装手順を確認",
+        MessageId::CmdNoteDescription => "ワークスペースノートの追加、一覧、編集、削除",
         MessageId::CmdThemeDescription => "テーマ（ダーク/ライト）を切り替え",
         MessageId::CmdProviderDescription => {
             "現在の LLM バックエンドを切り替え・確認（deepseek | nvidia-nim | ollama）"
@@ -1072,11 +1180,12 @@ fn japanese(id: MessageId) -> Option<&'static str> {
             "スキルを有効化、またはコミュニティスキルをインストール／更新／アンインストール／信頼"
         }
         MessageId::CmdSkillsDescription => {
-            "ローカルスキルを一覧表示（--remote で精選レジストリを参照）"
+            "ローカルスキルを一覧表示（`/skills <prefix>` で絞り込み、--remote で精選レジストリを参照）"
         }
         MessageId::CmdStashDescription => {
             "コンポーザーの下書きを退避／復元（Ctrl+S で退避、/stash list|pop）"
         }
+        MessageId::CmdStatusDescription => "実行中のセッション状態を表示",
         MessageId::CmdStatuslineDescription => "フッターに表示する項目を設定",
         MessageId::CmdSubagentsDescription => "サブエージェントの状態を一覧表示",
         MessageId::CmdSwarmDescription => {
@@ -1090,7 +1199,6 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         }
         MessageId::CmdUndoDescription => "最後のメッセージ対を削除",
         MessageId::CmdVerboseDescription => "ライブ思考表示の詳細モードを切り替え",
-        MessageId::CmdYoloDescription => "YOLO モードを有効化（shell + 信頼 + 自動承認）",
         MessageId::CmdCacheAdvice => {
             "3 ターン目以降にヒット率が ~70% 以上で安定していれば、プレフィックスキャッシュは健全。\n\
              長いセッションでこれを下回る場合はプレフィックスのドリフトの可能性あり (#263)。"
@@ -1239,11 +1347,63 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::HomeModeTips => "モードヒント",
         MessageId::HomeAgentModeTip => "Agent モード - ツールを使って自律的なタスクを実行",
         MessageId::HomeAgentModeReviewTip => "  実行前に Ctrl+X で Plan モードでレビュー",
-        MessageId::HomeAgentModeYoloTip => "  /yolo と入力して完全なツールアクセスを有効化",
+        MessageId::HomeAgentModeYoloTip => "  /mode yolo と入力して完全なツールアクセスを有効化",
         MessageId::HomeYoloModeTip => "YOLO モード - 完全なツールアクセス、承認なし",
         MessageId::HomeYoloModeCaution => "  破壊的な操作には注意してください！",
         MessageId::HomePlanModeTip => "Plan モード - 実装前に設計",
-        MessageId::HomePlanModeChecklistTip => "  /plan を使って構造化されたチェックリストを作成",
+        MessageId::HomePlanModeChecklistTip => {
+            "  /mode plan を使って構造化されたチェックリストを作成"
+        }
+        // Onboarding — language picker.
+        MessageId::OnboardLanguageTitle => "言語を選択",
+        MessageId::OnboardLanguageBlurb => {
+            "UI 言語を選んでください。`/settings set locale <tag>` でいつでも変更できます。"
+        }
+        MessageId::OnboardLanguageFooter => "1〜5 で選択、または Enter で現在の設定を維持",
+        // Onboarding — API key entry.
+        MessageId::OnboardApiKeyTitle => "DeepSeek API キーを設定",
+        MessageId::OnboardApiKeyStep1 => {
+            "ステップ 1. https://platform.deepseek.com/api_keys を開いてキーを作成。"
+        }
+        MessageId::OnboardApiKeyStep2 => "ステップ 2. 下に貼り付けて Enter を押してください。",
+        MessageId::OnboardApiKeySavedHint => {
+            "~/.deepseek/config.toml に保存されるので、どのフォルダからでも有効になります。"
+        }
+        MessageId::OnboardApiKeyFormatHint => {
+            "発行されたキーをそのまま貼り付けてください（空白や改行を含めない）。"
+        }
+        MessageId::OnboardApiKeyPlaceholder => "（ここにキーを貼り付け）",
+        MessageId::OnboardApiKeyLabel => "キー: ",
+        MessageId::OnboardApiKeyFooter => "Enter で保存、Esc で戻る。",
+        // Onboarding — workspace trust.
+        MessageId::OnboardTrustTitle => "ワークスペースを信頼",
+        MessageId::OnboardTrustQuestion => "このディレクトリの内容を信頼しますか？",
+        MessageId::OnboardTrustLocationPrefix => "現在の場所: ",
+        MessageId::OnboardTrustRiskHint => {
+            "信頼されていない内容を扱うとプロンプトインジェクションのリスクが高くなります。"
+        }
+        MessageId::OnboardTrustEffectHint => {
+            "信頼するとグローバル設定に記録され、信頼済みワークスペースモードが有効になります。"
+        }
+        MessageId::OnboardTrustFooterPrefix => "キー ",
+        MessageId::OnboardTrustFooterMiddle => " で信頼して続行、",
+        MessageId::OnboardTrustFooterSuffix => " で終了",
+        // Onboarding — final tips.
+        MessageId::OnboardTipsTitle => "シンプルに始めよう",
+        MessageId::OnboardTipsLine1 => {
+            "タスクを自然な言葉で記入。コマンドが必要な時は /help や Ctrl+K を使ってください。"
+        }
+        MessageId::OnboardTipsLine2 => {
+            "下の入力欄は複数行対応です。Enter で送信、Alt+Enter または Ctrl+J で改行。"
+        }
+        MessageId::OnboardTipsLine3 => {
+            "用途に応じてモードを切り替え：Plan は事前レビュー、Agent は実行、YOLO は自動承認。"
+        }
+        MessageId::OnboardTipsLine4 => {
+            "Ctrl+R で過去のセッションを再開、Esc で現在の入力やオーバーレイをキャンセル。"
+        }
+        MessageId::OnboardTipsFooterEnter => "Enter を押す",
+        MessageId::OnboardTipsFooterAction => " とワークスペースが開きます",
     })
 }
 
@@ -1280,7 +1440,6 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::HelpFooterMove => "  Up/Down 移动 ",
         MessageId::HelpFooterJump => " PgUp/PgDn 跳转 ",
         MessageId::HelpFooterClose => " Esc 关闭 ",
-        MessageId::CmdAgentDescription => "切换到 Agent 模式",
         MessageId::CmdAnchorDescription => "钉选关键事实，在压缩后自动注入上下文",
         MessageId::CmdAttachDescription => "附加图片或视频媒体；文本文件或目录请使用 @path",
         MessageId::CmdCacheDescription => "显示最近 N 轮的 DeepSeek 前缀缓存命中/未命中统计",
@@ -1297,6 +1456,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CmdEditDescription => "修改并重新提交最后一条消息",
         MessageId::CmdExitDescription => "退出应用",
         MessageId::CmdExportDescription => "将对话导出为 Markdown",
+        MessageId::CmdFeedbackDescription => "生成 GitHub 反馈链接",
         MessageId::CmdHelpDescription => "显示帮助信息",
         MessageId::CmdHomeDescription => "显示主页面板，含统计与快捷操作",
         MessageId::CmdHooksDescription => "列出已配置的生命周期钩子（只读）",
@@ -1310,11 +1470,11 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CmdLogoutDescription => "清除 API 密钥并返回设置",
         MessageId::CmdMcpDescription => "打开或管理 MCP 服务器",
         MessageId::CmdMemoryDescription => "查看或管理持久用户记忆文件",
+        MessageId::CmdModeDescription => "切换运行模式或打开选择器：/mode [agent|plan|yolo|1|2|3]",
         MessageId::CmdModelDescription => "切换或查看当前模型",
         MessageId::CmdModelsDescription => "列出 API 中可用的模型",
         MessageId::CmdNetworkDescription => "管理网络允许和拒绝规则",
-        MessageId::CmdNoteDescription => "将笔记追加到持久笔记文件（.deepseek/notes.md）",
-        MessageId::CmdPlanDescription => "切换到 Plan 模式并查看建议的实现步骤",
+        MessageId::CmdNoteDescription => "添加、列出、编辑或删除工作区笔记",
         MessageId::CmdThemeDescription => "在浅色和深色主题之间切换",
         MessageId::CmdProviderDescription => {
             "切换或查看当前 LLM 后端（deepseek | nvidia-nim | ollama）"
@@ -1334,8 +1494,11 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CmdSessionsDescription => "打开会话选择器",
         MessageId::CmdSettingsDescription => "显示持久化设置",
         MessageId::CmdSkillDescription => "激活技能，或安装/更新/卸载/信任社区技能",
-        MessageId::CmdSkillsDescription => "列出本地技能（或使用 --remote 浏览精选注册表）",
+        MessageId::CmdSkillsDescription => {
+            "列出本地技能（用 `/skills <prefix>` 按名称前缀过滤，--remote 浏览精选注册表）"
+        }
         MessageId::CmdStashDescription => "暂存或恢复输入草稿（Ctrl+S 暂存，/stash list|pop）",
+        MessageId::CmdStatusDescription => "显示当前运行状态",
         MessageId::CmdStatuslineDescription => "配置底栏要显示哪些条目",
         MessageId::CmdSubagentsDescription => "列出子代理状态",
         MessageId::CmdSwarmDescription => {
@@ -1349,7 +1512,6 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         }
         MessageId::CmdUndoDescription => "移除最后一组消息对",
         MessageId::CmdVerboseDescription => "切换实时思考内容的完整显示",
-        MessageId::CmdYoloDescription => "启用 YOLO 模式（shell + 信任 + 自动批准）",
         MessageId::CmdCacheAdvice => {
             "第 3 轮起命中率稳定在 ~70% 以上即表示前缀缓存稳定；\n\
              长会话中明显偏低则意味着前缀有抖动，值得排查（#263）。"
@@ -1482,11 +1644,51 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::HomeModeTips => "模式提示",
         MessageId::HomeAgentModeTip => "Agent 模式 - 使用工具执行自主任务",
         MessageId::HomeAgentModeReviewTip => "  按 Ctrl+X 可在 Plan 模式下审查后再执行",
-        MessageId::HomeAgentModeYoloTip => "  输入 /yolo 启用完整工具访问",
+        MessageId::HomeAgentModeYoloTip => "  输入 /mode yolo 启用完整工具访问",
         MessageId::HomeYoloModeTip => "YOLO 模式 - 完整工具访问，无需审批",
         MessageId::HomeYoloModeCaution => "  请小心破坏性操作！",
         MessageId::HomePlanModeTip => "Plan 模式 - 先设计再实现",
-        MessageId::HomePlanModeChecklistTip => "  使用 /plan 创建结构化检查清单",
+        MessageId::HomePlanModeChecklistTip => "  使用 /mode plan 创建结构化检查清单",
+        // Onboarding — language picker.
+        MessageId::OnboardLanguageTitle => "选择语言",
+        MessageId::OnboardLanguageBlurb => {
+            "选择界面语言。可随时使用 `/settings set locale <tag>` 修改。"
+        }
+        MessageId::OnboardLanguageFooter => "按 1-5 选择，或按 Enter 保留当前设置",
+        // Onboarding — API key entry.
+        MessageId::OnboardApiKeyTitle => "连接你的 DeepSeek API 密钥",
+        MessageId::OnboardApiKeyStep1 => {
+            "步骤 1.  打开 https://platform.deepseek.com/api_keys 创建一个密钥。"
+        }
+        MessageId::OnboardApiKeyStep2 => "步骤 2.  把密钥粘贴到下方并按 Enter。",
+        MessageId::OnboardApiKeySavedHint => {
+            "保存到 ~/.deepseek/config.toml，因此在任何目录下都生效。"
+        }
+        MessageId::OnboardApiKeyFormatHint => "请完整粘贴密钥（不要含空格或换行）。",
+        MessageId::OnboardApiKeyPlaceholder => "（在此粘贴密钥）",
+        MessageId::OnboardApiKeyLabel => "密钥: ",
+        MessageId::OnboardApiKeyFooter => "Enter 保存，Esc 返回。",
+        // Onboarding — workspace trust.
+        MessageId::OnboardTrustTitle => "信任工作目录",
+        MessageId::OnboardTrustQuestion => "你信任此目录中的内容吗？",
+        MessageId::OnboardTrustLocationPrefix => "当前位置：",
+        MessageId::OnboardTrustRiskHint => "处理不受信任的内容会增加提示词注入的风险。",
+        MessageId::OnboardTrustEffectHint => {
+            "信任此目录会记录在全局配置中，并启用受信任工作区模式。"
+        }
+        MessageId::OnboardTrustFooterPrefix => "按 ",
+        MessageId::OnboardTrustFooterMiddle => " 信任并继续，",
+        MessageId::OnboardTrustFooterSuffix => " 退出",
+        // Onboarding — final tips.
+        MessageId::OnboardTipsTitle => "从简开始",
+        MessageId::OnboardTipsLine1 => "用自然语言描述任务。需要命令时使用 /help 或 Ctrl+K。",
+        MessageId::OnboardTipsLine2 => "底部输入框支持多行：Enter 发送，Alt+Enter 或 Ctrl+J 换行。",
+        MessageId::OnboardTipsLine3 => {
+            "按需切换模式：Plan 适合先审后行，Agent 用于执行，YOLO 启用自动批准。"
+        }
+        MessageId::OnboardTipsLine4 => "Ctrl+R 恢复历史会话，Esc 退出当前输入或弹层。",
+        MessageId::OnboardTipsFooterEnter => "按 Enter",
+        MessageId::OnboardTipsFooterAction => " 进入工作区",
     })
 }
 
@@ -1525,7 +1727,6 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::HelpFooterMove => "  Up/Down move ",
         MessageId::HelpFooterJump => " PgUp/PgDn salta ",
         MessageId::HelpFooterClose => " Esc fecha ",
-        MessageId::CmdAgentDescription => "Mudar para o modo agent",
         MessageId::CmdAnchorDescription => {
             "Fixar um fato que sobrevive à compactação (injetado automaticamente no contexto)"
         }
@@ -1552,6 +1753,7 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::CmdEditDescription => "Revisar e reenviar a última mensagem",
         MessageId::CmdExitDescription => "Sair do aplicativo",
         MessageId::CmdExportDescription => "Exportar a conversa para markdown",
+        MessageId::CmdFeedbackDescription => "Gerar uma URL de feedback no GitHub",
         MessageId::CmdHelpDescription => "Exibir informações de ajuda",
         MessageId::CmdHomeDescription => "Exibir o painel inicial com estatísticas e ações rápidas",
         MessageId::CmdHooksDescription => {
@@ -1571,15 +1773,13 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::CmdMemoryDescription => {
             "Inspecionar ou gerenciar o arquivo persistente de memória do usuário"
         }
+        MessageId::CmdModeDescription => {
+            "Alternar modo ou abrir seletor: /mode [agent|plan|yolo|1|2|3]"
+        }
         MessageId::CmdModelDescription => "Trocar ou exibir o modelo atual",
         MessageId::CmdModelsDescription => "Listar os modelos disponíveis pela API",
         MessageId::CmdNetworkDescription => "Gerenciar regras de rede permitidas e bloqueadas",
-        MessageId::CmdNoteDescription => {
-            "Adicionar nota ao arquivo persistente (.deepseek/notes.md)"
-        }
-        MessageId::CmdPlanDescription => {
-            "Mudar para o modo plan e revisar os passos de implementação sugeridos"
-        }
+        MessageId::CmdNoteDescription => "Adicionar, listar, editar ou remover notas do workspace",
         MessageId::CmdThemeDescription => "Alternar entre o tema claro e escuro",
         MessageId::CmdProviderDescription => {
             "Trocar ou exibir o backend LLM ativo (deepseek | nvidia-nim | ollama)"
@@ -1606,11 +1806,12 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
             "Ativar uma skill, ou instalar/atualizar/desinstalar/confiar em uma skill da comunidade"
         }
         MessageId::CmdSkillsDescription => {
-            "Listar skills locais (ou --remote para navegar pelo registro curado)"
+            "Listar skills locais (filtre com `/skills <prefixo>`; --remote navega pelo registro curado)"
         }
         MessageId::CmdStashDescription => {
             "Estacionar ou restaurar rascunho do compositor (Ctrl+S estaciona, /stash list|pop)"
         }
+        MessageId::CmdStatusDescription => "Exibir o status da sessão em execução",
         MessageId::CmdStatuslineDescription => "Configurar quais itens aparecem no rodapé",
         MessageId::CmdSubagentsDescription => "Listar o status dos sub-agentes",
         MessageId::CmdSwarmDescription => {
@@ -1624,9 +1825,6 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         }
         MessageId::CmdUndoDescription => "Remover o último par de mensagens",
         MessageId::CmdVerboseDescription => "Alternar pensamento ao vivo completo no transcript",
-        MessageId::CmdYoloDescription => {
-            "Ativar o modo YOLO (shell + confiança + aprovação automática)"
-        }
         MessageId::CmdCacheAdvice => {
             "Taxas de hit/miss acima de ~70% a partir do terceiro turno indicam um prefixo de cache estável;\n\
              valores menores em sessões longas sugerem instabilidade no prefixo, vale investigar (#263)."
@@ -1782,12 +1980,66 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
             "  Use Ctrl+X para revisar no modo Plan antes de executar"
         }
         MessageId::HomeAgentModeYoloTip => {
-            "  Digite /yolo para habilitar acesso total às ferramentas"
+            "  Digite /mode yolo para habilitar acesso total às ferramentas"
         }
         MessageId::HomeYoloModeTip => "Modo YOLO - Acesso total a ferramentas, sem aprovações",
         MessageId::HomeYoloModeCaution => "  Tenha cuidado com operações destrutivas!",
         MessageId::HomePlanModeTip => "Modo Plan - Planeje antes de implementar",
-        MessageId::HomePlanModeChecklistTip => "  Use /plan para criar checklists estruturados",
+        MessageId::HomePlanModeChecklistTip => {
+            "  Use /mode plan para criar checklists estruturados"
+        }
+        // Onboarding — language picker.
+        MessageId::OnboardLanguageTitle => "Escolha o idioma",
+        MessageId::OnboardLanguageBlurb => {
+            "Escolha o idioma da interface. Você pode mudá-lo a qualquer momento com `/settings set locale <tag>`."
+        }
+        MessageId::OnboardLanguageFooter => {
+            "Pressione 1-5 para escolher, ou Enter para manter a configuração atual"
+        }
+        // Onboarding — API key entry.
+        MessageId::OnboardApiKeyTitle => "Conecte sua chave de API DeepSeek",
+        MessageId::OnboardApiKeyStep1 => {
+            "Passo 1.  Abra https://platform.deepseek.com/api_keys e crie uma chave."
+        }
+        MessageId::OnboardApiKeyStep2 => "Passo 2.  Cole abaixo e pressione Enter.",
+        MessageId::OnboardApiKeySavedHint => {
+            "Salvo em ~/.deepseek/config.toml para funcionar em qualquer pasta."
+        }
+        MessageId::OnboardApiKeyFormatHint => {
+            "Cole a chave inteira como foi emitida (sem espaços ou quebras de linha)."
+        }
+        MessageId::OnboardApiKeyPlaceholder => "(cole a chave aqui)",
+        MessageId::OnboardApiKeyLabel => "Chave: ",
+        MessageId::OnboardApiKeyFooter => "Enter para salvar, Esc para voltar.",
+        // Onboarding — workspace trust.
+        MessageId::OnboardTrustTitle => "Confiar no diretório",
+        MessageId::OnboardTrustQuestion => "Você confia no conteúdo deste diretório?",
+        MessageId::OnboardTrustLocationPrefix => "Você está em ",
+        MessageId::OnboardTrustRiskHint => {
+            "Trabalhar com conteúdo não confiável aumenta o risco de injeção de prompt."
+        }
+        MessageId::OnboardTrustEffectHint => {
+            "Confiar neste diretório o registra na configuração global e habilita o modo workspace confiável."
+        }
+        MessageId::OnboardTrustFooterPrefix => "Pressione ",
+        MessageId::OnboardTrustFooterMiddle => " para confiar e continuar, ",
+        MessageId::OnboardTrustFooterSuffix => " para sair",
+        // Onboarding — final tips.
+        MessageId::OnboardTipsTitle => "Comece simples",
+        MessageId::OnboardTipsLine1 => {
+            "Escreva a tarefa em linguagem natural. Use /help ou Ctrl+K para comandos."
+        }
+        MessageId::OnboardTipsLine2 => {
+            "O composer inferior é multilinhas: Enter envia, Alt+Enter ou Ctrl+J adiciona uma nova linha."
+        }
+        MessageId::OnboardTipsLine3 => {
+            "Mude de modo apenas quando o trabalho mudar: Plan para revisar antes, Agent para execução, YOLO para auto-aprovação."
+        }
+        MessageId::OnboardTipsLine4 => {
+            "Ctrl+R retoma sessões anteriores, e Esc cancela o rascunho ou overlay atual."
+        }
+        MessageId::OnboardTipsFooterEnter => "Pressione Enter",
+        MessageId::OnboardTipsFooterAction => " para abrir o workspace",
     })
 }
 

@@ -92,6 +92,9 @@ struct Cli {
     no_mouse_capture: bool,
     #[arg(long = "skip-onboarding")]
     skip_onboarding: bool,
+    /// YOLO mode: auto-approve all tools
+    #[arg(long)]
+    yolo: bool,
     #[arg(short = 'p', long = "prompt", value_name = "PROMPT")]
     prompt_flag: Option<String>,
     #[arg(
@@ -425,6 +428,7 @@ fn run() -> Result<()> {
         telemetry: cli.telemetry,
         approval_policy: cli.approval_policy.clone(),
         sandbox_mode: cli.sandbox_mode.clone(),
+        yolo: Some(cli.yolo),
     };
     let command = cli.command.take();
 
@@ -1440,6 +1444,9 @@ fn build_tui_command(
     }
     if let Some(mode) = cli.sandbox_mode.as_ref() {
         cmd.env("DEEPSEEK_SANDBOX_MODE", mode);
+    }
+    if cli.yolo {
+        cmd.env("DEEPSEEK_YOLO", "true");
     }
     if let Some(api_key) = cli.api_key.as_ref() {
         cmd.env("DEEPSEEK_API_KEY", api_key);
@@ -2509,6 +2516,7 @@ mod tests {
             telemetry: false,
             approval_policy: None,
             sandbox_mode: None,
+            yolo: None,
             http_headers: std::collections::BTreeMap::new(),
         };
 

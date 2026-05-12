@@ -153,7 +153,7 @@ impl ToolSpec for ApplyPatchTool {
     }
 
     fn description(&self) -> &'static str {
-        "Apply a unified diff patch to a file. Supports multi-hunk patches with fuzzy matching."
+        "Apply a unified-diff patch (multi-hunk, multi-file). Use this instead of `git apply`, `patch`, or repeated `edit_file` calls in `exec_shell` — single transactional change with fuzzy matching and a rendered diff."
     }
 
     fn input_schema(&self) -> Value {

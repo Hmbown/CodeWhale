@@ -29,7 +29,7 @@ impl ToolSpec for FileSearchTool {
     }
 
     fn description(&self) -> &'static str {
-        "Search for files using fuzzy matching with score-based ranking."
+        "Find files by name using fuzzy matching with score-based ranking. Use this instead of `find -name` or `fd` in `exec_shell` for filename search. Pass `extensions` to filter by suffix."
     }
 
     fn input_schema(&self) -> Value {

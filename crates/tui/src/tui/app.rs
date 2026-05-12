@@ -8,6 +8,7 @@ use ratatui::layout::Rect;
 use serde_json::Value;
 use thiserror::Error;
 
+use crate::artifacts::ArtifactRecord;
 use crate::client::PromptInspection;
 use crate::compaction::CompactionConfig;
 use crate::config::{
@@ -35,7 +36,7 @@ use crate::tui::file_mention::ContextReference;
 use crate::tui::history::{HistoryCell, TranscriptRenderOptions};
 use crate::tui::paste_burst::{FlushResult, PasteBurst};
 use crate::tui::scrolling::{MouseScrollState, TranscriptLineMeta, TranscriptScroll};
-use crate::tui::selection::TranscriptSelection;
+use crate::tui::selection::{SelectionAutoscroll, TranscriptSelection};
 use crate::tui::streaming::StreamingState;
 use crate::tui::transcript::TranscriptViewCache;
 use crate::tui::views::ViewStack;
@@ -368,6 +369,66 @@ fn sanitize_api_key_text(text: &str) -> String {
     text.chars().filter(|c| !c.is_control()).collect()
 }
 
+fn strip_raw_mouse_report_runs(input: &str, cursor: usize) -> Option<(String, usize)> {
+    let chars: Vec<char> = input.chars().collect();
+    let mut output = String::with_capacity(input.len());
+    let mut new_cursor = 0usize;
+    let mut changed = false;
+    let mut index = 0usize;
+
+    while index < chars.len() {
+        if is_raw_mouse_report_run_char(chars[index]) {
+            let start = index;
+            while index < chars.len() && is_raw_mouse_report_run_char(chars[index]) {
+                index += 1;
+            }
+            let run = &chars[start..index];
+            if looks_like_raw_mouse_report_run(run) {
+                changed = true;
+                continue;
+            }
+            for (offset, ch) in run.iter().copied().enumerate() {
+                if start + offset < cursor {
+                    new_cursor += 1;
+                }
+                output.push(ch);
+            }
+            continue;
+        }
+
+        if index < cursor {
+            new_cursor += 1;
+        }
+        output.push(chars[index]);
+        index += 1;
+    }
+
+    changed.then(|| {
+        let cursor = new_cursor.min(char_count(&output));
+        (output, cursor)
+    })
+}
+
+fn is_raw_mouse_report_run_char(ch: char) -> bool {
+    matches!(ch, '\x1b' | '[' | '<' | ';' | ':' | 'M' | 'm') || ch.is_ascii_digit()
+}
+
+fn looks_like_raw_mouse_report_run(run: &[char]) -> bool {
+    if run.len() < 5 {
+        return false;
+    }
+    let has_separator = run.iter().any(|ch| matches!(ch, ';' | ':'));
+    let terminators = run.iter().filter(|ch| matches!(ch, 'M' | 'm')).count();
+    if !has_separator || terminators == 0 {
+        return false;
+    }
+    has_sgr_mouse_marker(run) || terminators >= 2
+}
+
+fn has_sgr_mouse_marker(run: &[char]) -> bool {
+    run.windows(2).any(|window| window == ['[', '<'])
+}
+
 const MAX_SUBMITTED_INPUT_CHARS: usize = 16_000;
 const MAX_DRAFT_HISTORY: usize = 50;
 
@@ -575,6 +636,8 @@ pub struct ViewportState {
     pub mouse_scroll: MouseScrollState,
     pub transcript_cache: TranscriptViewCache,
     pub transcript_selection: TranscriptSelection,
+    pub selection_autoscroll: Option<SelectionAutoscroll>,
+    pub transcript_scrollbar_dragging: bool,
     pub last_transcript_area: Option<Rect>,
     pub last_transcript_top: usize,
     pub last_transcript_visible: usize,
@@ -591,6 +654,8 @@ impl Default for ViewportState {
             mouse_scroll: MouseScrollState::new(),
             transcript_cache: TranscriptViewCache::new(),
             transcript_selection: TranscriptSelection::default(),
+            selection_autoscroll: None,
+            transcript_scrollbar_dragging: false,
             last_transcript_area: None,
             last_transcript_top: 0,
             last_transcript_visible: 0,
@@ -675,6 +740,11 @@ pub struct App {
     pub is_loading: bool,
     /// Degraded connectivity mode; new user inputs are queued for later retry.
     pub offline_mode: bool,
+    /// Whether an `EngineEvent::Error` has already been posted for the
+    /// current turn. Suppresses the redundant "Turn failed:" status line
+    /// that `TurnComplete { error: .. }` would otherwise emit on top of
+    /// the in-transcript error cell.
+    pub turn_error_posted: bool,
     /// Legacy status text sink retained for compatibility with existing call sites.
     pub status_message: Option<String>,
     /// Recent status toasts (ephemeral, newest at back).
@@ -715,8 +785,22 @@ pub struct App {
     pub use_memory: bool,
     pub use_alt_screen: bool,
     pub use_mouse_capture: bool,
+    /// When true, plain Up/Down on an empty composer scroll the transcript
+    /// instead of navigating input history.  Defaults to `true` when mouse
+    /// capture is off: terminals that convert mouse-wheel events to arrow-key
+    /// sequences (e.g. Windows CMD without `WT_SESSION`) get page-scrolling
+    /// without any explicit config (#1443).
+    pub composer_arrows_scroll: bool,
     pub use_bracketed_paste: bool,
     pub use_paste_burst_detection: bool,
+    /// Set to `true` the first time a real `Event::Paste` arrives during a
+    /// session. Once set, `handle_paste_burst_key` short-circuits — there's
+    /// no point running the rapid-keypress heuristic on a terminal that
+    /// already delivers paste-as-event correctly. Avoids paste-burst false
+    /// positives on Ghostty / iTerm2 / WezTerm / Windows Terminal where
+    /// fast typing or IME commits could otherwise be mis-classified as a
+    /// paste burst (#1322 follow-up).
+    pub bracketed_paste_seen: bool,
     #[allow(dead_code)]
     pub system_prompt: Option<SystemPrompt>,
     pub auto_compact: bool,
@@ -726,6 +810,11 @@ pub struct App {
     /// until the footer widget consumes it.
     #[allow(dead_code)]
     pub fancy_animations: bool,
+    /// Header status-indicator chip mode. One of `"whale"` (default, cycles
+    /// 🐳→🐋 frames keyed off `turn_started_at`), `"dots"` (geometric ◌
+    /// frames), or `"off"` (chip hidden entirely). Loaded from settings;
+    /// changed via `/config status_indicator <whale|dots|off>`.
+    pub status_indicator: String,
     pub show_thinking: bool,
     pub verbose_transcript: bool,
     pub show_tool_details: bool,
@@ -796,6 +885,8 @@ pub struct App {
     pub backtrack: crate::tui::backtrack::BacktrackState,
     /// Current session ID for auto-save updates
     pub current_session_id: Option<String>,
+    /// Metadata-only registry of large tool outputs produced in this session.
+    pub session_artifacts: Vec<ArtifactRecord>,
     /// Trust mode - allow access outside workspace
     pub trust_mode: bool,
     /// Ordered list of footer items the user wants visible. Sourced from
@@ -1123,17 +1214,25 @@ impl App {
             initial_input,
         } = options;
 
-        let provider = config.api_provider();
+        let mut provider = config.api_provider();
 
         // Check if API key exists
         let needs_api_key = !has_api_key(config);
         let api_key_env_only = crate::config::active_provider_uses_env_only_api_key(config);
         let was_onboarded = crate::tui::onboarding::is_onboarded();
         let settings = Settings::load().unwrap_or_else(|_| Settings::default());
+
+        // Let settings override the config provider so runtime switches survive restarts.
+        if let Some(ref provider_str) = settings.default_provider
+            && let Some(parsed) = ApiProvider::parse(provider_str)
+        {
+            provider = parsed;
+        }
         let auto_compact = settings.auto_compact;
         let calm_mode = settings.calm_mode;
         let low_motion = settings.low_motion;
         let fancy_animations = settings.fancy_animations;
+        let status_indicator = settings.status_indicator.clone();
         let show_thinking = settings.show_thinking;
         let show_tool_details = settings.show_tool_details;
         let ui_locale = resolve_locale(&settings.locale);
@@ -1158,7 +1257,20 @@ impl App {
         {
             ui_theme = ui_theme.with_background_color(background);
         }
-        let model = settings.default_model.clone().unwrap_or(model);
+        let model = settings
+            .provider_models
+            .as_ref()
+            .and_then(|m| m.get(provider.as_str()).cloned())
+            .or_else(|| {
+                // default_model is a DeepSeek-centric setting; other providers
+                // get their model from config.toml / env (e.g. OPENAI_MODEL).
+                if matches!(provider, ApiProvider::Deepseek | ApiProvider::DeepseekCN) {
+                    settings.default_model.clone()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(model);
         let auto_model = model.trim().eq_ignore_ascii_case("auto");
         let threshold_model = if auto_model {
             DEFAULT_TEXT_MODEL
@@ -1285,6 +1397,7 @@ impl App {
             api_messages: Vec::new(),
             is_loading: false,
             offline_mode: false,
+            turn_error_posted: false,
             status_message: None,
             status_toasts: VecDeque::new(),
             sticky_status: None,
@@ -1306,11 +1419,13 @@ impl App {
             use_mouse_capture,
             use_bracketed_paste,
             use_paste_burst_detection,
+            bracketed_paste_seen: false,
             system_prompt: None,
             auto_compact,
             calm_mode,
             low_motion,
             fancy_animations,
+            status_indicator,
             show_thinking,
             verbose_transcript: false,
             show_tool_details,
@@ -1358,6 +1473,7 @@ impl App {
             view_stack: ViewStack::new(),
             backtrack: crate::tui::backtrack::BacktrackState::new(),
             current_session_id: None,
+            session_artifacts: Vec::new(),
             trust_mode: initial_mode == AppMode::Yolo,
             status_items: config
                 .tui
@@ -1432,6 +1548,11 @@ impl App {
             collapsed_cell_map: Vec::new(),
             edit_in_progress: false,
             lsp_enabled: config.lsp.as_ref().and_then(|l| l.enabled).unwrap_or(true),
+            composer_arrows_scroll: config
+                .tui
+                .as_ref()
+                .and_then(|tui| tui.composer_arrows_scroll)
+                .unwrap_or(!use_mouse_capture),
         }
     }
 
@@ -1905,13 +2026,14 @@ impl App {
         self.needs_redraw = true;
     }
 
-    /// Clear the history and its revision tracking. Used by /clear, session
-    /// reset, and other "wipe and reload" flows.
+    /// Clear the history and its session-scoped side indexes. Used by /clear,
+    /// session reset, and other "wipe and reload" flows.
     pub fn clear_history(&mut self) {
         self.history.clear();
         self.history_revisions.clear();
         self.context_references_by_cell.clear();
         self.session_context_references.clear();
+        self.session_artifacts.clear();
         self.collapsed_cells.clear();
         self.collapsed_cell_map.clear();
         self.history_version = self.history_version.wrapping_add(1);
@@ -2485,6 +2607,7 @@ impl App {
         let byte_index = byte_index_at_char(&self.input, cursor);
         self.input.insert_str(byte_index, text);
         self.cursor_position = cursor + char_count(text);
+        self.strip_raw_mouse_reports_from_input();
         self.slash_menu_hidden = false;
         self.mention_menu_hidden = false;
         self.mention_menu_selected = 0;
@@ -2500,6 +2623,14 @@ impl App {
             self.insert_str(&normalized);
         }
         self.paste_burst.clear_after_explicit_paste();
+        // Visible-before-submit consolidation: when the post-paste input
+        // is over the cap, swap it for an @paste-…md mention immediately
+        // (instead of waiting until the user presses Enter and getting
+        // surprised by an auto-sent @mention). The same logic runs as a
+        // safety-net at submit time so any other code path that fills
+        // self.input above the cap still consolidates rather than
+        // silently truncating.
+        self.consolidate_large_input_if_oversized();
     }
 
     pub fn insert_media_attachment(&mut self, kind: &str, path: &Path, description: Option<&str>) {
@@ -2738,10 +2869,23 @@ impl App {
         let byte_index = byte_index_at_char(&self.input, cursor);
         self.input.insert(byte_index, c);
         self.cursor_position = cursor + 1;
+        self.strip_raw_mouse_reports_from_input();
         self.slash_menu_hidden = false;
         self.mention_menu_hidden = false;
         self.mention_menu_selected = 0;
         self.needs_redraw = true;
+    }
+
+    fn strip_raw_mouse_reports_from_input(&mut self) {
+        if !self.use_mouse_capture {
+            return;
+        }
+        if let Some((input, cursor_position)) =
+            strip_raw_mouse_report_runs(&self.input, self.cursor_position)
+        {
+            self.input = input;
+            self.cursor_position = cursor_position;
+        }
     }
 
     pub fn delete_char(&mut self) {
@@ -3420,12 +3564,12 @@ impl App {
             self.paste_burst.clear_after_explicit_paste();
             return None;
         }
-        // When the input exceeds the safety cap, consolidate it into a
-        // workspace paste file and replace it with an @mention so the
-        // model can read the full content at turn time (#553).
-        if char_count(&self.input) > MAX_SUBMITTED_INPUT_CHARS {
-            self.consolidate_large_input();
-        }
+        // Safety net: if any earlier path filled the buffer above the
+        // safety cap without going through `insert_paste_text`, fold it
+        // into a workspace paste file now (#553). Bracketed pastes hit
+        // the consolidation in `insert_paste_text` first, so the user
+        // sees the @mention in the composer before submission.
+        self.consolidate_large_input_if_oversized();
         let input = self.input.clone();
         if !input.starts_with('/') {
             self.input_history.push(input.clone());
@@ -3482,6 +3626,17 @@ impl App {
             }
         }
         self.submit_input()
+    }
+
+    /// Public wrapper around [`Self::consolidate_large_input`] that no-ops
+    /// when the current input fits inside the safety cap. Both the paste-
+    /// insert path (visible-before-submit) and the submit-time safety net
+    /// route through here, so the cap is enforced exactly once even when
+    /// both paths fire on the same buffer.
+    fn consolidate_large_input_if_oversized(&mut self) {
+        if char_count(&self.input) > MAX_SUBMITTED_INPUT_CHARS {
+            self.consolidate_large_input();
+        }
     }
 
     /// When the composer input exceeds [`MAX_SUBMITTED_INPUT_CHARS`], write
@@ -3694,18 +3849,34 @@ impl App {
         self.history_navigation_draft = None;
     }
 
+    /// Retry a `try_lock` up to `retries` times with a 1ms pause between
+    /// attempts. Returns `Some(guard)` on success, `None` if the lock
+    /// remains contended after all retries.
+    fn retry_lock<T>(
+        mutex: &tokio::sync::Mutex<T>,
+        retries: u32,
+    ) -> Option<tokio::sync::MutexGuard<'_, T>> {
+        for _ in 0..retries {
+            if let Ok(guard) = mutex.try_lock() {
+                return Some(guard);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        None
+    }
+
     pub fn clear_todos(&mut self) -> bool {
-        // Clear the todo list (the sidebar checklist). Uses try_lock so the
-        // UI thread doesn't block if the engine briefly holds the mutex
-        // during tool execution; the caller can retry or show a busy message.
-        let todos_cleared = if let Ok(mut todos) = self.todos.try_lock() {
+        // Clear the todo list (the sidebar checklist). Retry with try_lock
+        // so /clear always resets todos even when the engine briefly holds
+        // the mutex during tool execution.
+        let todos_cleared = if let Some(mut todos) = Self::retry_lock(&self.todos, 100) {
             todos.clear();
             true
         } else {
             false
         };
         // Also clear the plan state — /clear means a full reset.
-        if let Ok(mut plan) = self.plan_state.try_lock() {
+        if let Some(mut plan) = Self::retry_lock(&self.plan_state, 100) {
             *plan = crate::tools::plan::PlanState::default();
         }
         todos_cleared
@@ -3790,6 +3961,7 @@ pub enum AppAction {
     #[allow(dead_code)] // For explicit /load command
     LoadSession(PathBuf),
     SyncSession {
+        session_id: Option<String>,
         messages: Vec<Message>,
         system_prompt: Option<SystemPrompt>,
         model: String,
@@ -3802,8 +3974,17 @@ pub enum AppAction {
     /// Open the `/provider` picker modal — DeepSeek / NVIDIA NIM / OpenRouter
     /// / Novita with inline API-key prompt for un-configured providers (#52).
     OpenProviderPicker,
+    /// Open the `/mode` picker modal for Agent / Plan / YOLO.
+    OpenModePicker,
     /// Open the `/statusline` multi-select picker for footer items.
     OpenStatusPicker,
+    /// Open the `/feedback` picker for GitHub issue/security destinations.
+    OpenFeedbackPicker,
+    /// Open an external URL in the system browser.
+    OpenExternalUrl {
+        url: String,
+        label: String,
+    },
     /// Send a message to the AI (normal chat mode).
     SendMessage(String),
     /// Run a Recursive Language Model (RLM) turn — Algorithm 1 from
@@ -3911,6 +4092,7 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::tools::plan::{PlanItemArg, StepStatus, UpdatePlanArgs};
+    use crate::tools::todo::TodoStatus;
     use crate::tui::clipboard::PastedImage;
 
     fn test_options(yolo: bool) -> TuiOptions {
@@ -3941,6 +4123,59 @@ mod tests {
     fn test_trust_mode_follows_yolo_on_startup() {
         let app = App::new(test_options(true), &Config::default());
         assert!(app.trust_mode);
+    }
+
+    #[test]
+    fn composer_strips_raw_sgr_mouse_report_when_mouse_capture_is_enabled() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.use_mouse_capture = true;
+
+        app.insert_str("[<35;44;18M");
+
+        assert_eq!(app.input, "");
+        assert_eq!(app.cursor_position, 0);
+    }
+
+    #[test]
+    fn composer_strips_corrupted_mouse_report_burst() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.use_mouse_capture = true;
+        app.insert_str("draft ");
+        let leaked = "43;19M[<35;44;18M[<35;45;18M5;46;18M;48;18M";
+
+        app.insert_str(leaked);
+
+        assert_eq!(app.input, "draft ");
+        assert_eq!(app.cursor_position, "draft ".chars().count());
+    }
+
+    #[test]
+    fn composer_keeps_mouse_like_text_when_mouse_capture_is_disabled() {
+        let mut app = App::new(test_options(false), &Config::default());
+
+        app.insert_str("[<35;44;18M");
+
+        assert_eq!(app.input, "[<35;44;18M");
+    }
+
+    #[test]
+    fn composer_keeps_normal_bracket_text_with_mouse_capture_enabled() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.use_mouse_capture = true;
+
+        app.insert_str("Use [<tag>] normally");
+
+        assert_eq!(app.input, "Use [<tag>] normally");
+    }
+
+    #[test]
+    fn composer_keeps_coordinate_like_text_with_mouse_capture_enabled() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.use_mouse_capture = true;
+
+        app.insert_str("Size 12;34M");
+
+        assert_eq!(app.input, "Size 12;34M");
     }
 
     #[test]
@@ -4009,6 +4244,66 @@ mod tests {
     }
 
     #[test]
+    fn paste_consolidates_oversized_text_into_paste_file_visibly() {
+        // Visible-before-submit consolidation (paste UX): when a single
+        // bracketed paste exceeds the safety cap, the @mention must
+        // replace the input *immediately*, so the user sees what's
+        // about to be sent before pressing Enter — not as a side effect
+        // of submit.
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let mut opts = test_options(false);
+        opts.workspace = tmp.path().to_path_buf();
+        let mut app = App::new(opts, &Config::default());
+        let full_content = "y".repeat(MAX_SUBMITTED_INPUT_CHARS + 256);
+
+        app.insert_paste_text(&full_content);
+
+        // Composer should now contain the @mention, not the full text.
+        assert!(
+            app.input.starts_with("@.deepseek/pastes/paste-") && app.input.ends_with(".md"),
+            "expected @mention in composer after large paste, got: {}",
+            app.input
+        );
+        // The cursor moves to the end of the @mention.
+        assert_eq!(app.cursor_position, app.input.chars().count());
+        // The paste file must exist with the full content.
+        let rel_path = &app.input[1..];
+        let abs = tmp.path().join(rel_path);
+        assert!(abs.is_file(), "paste file must exist at {abs:?}");
+        let written = std::fs::read_to_string(&abs).expect("read");
+        assert_eq!(written, full_content);
+        // A toast confirms what happened so the user isn't surprised.
+        assert!(
+            app.status_toasts
+                .iter()
+                .any(|t| t.text.contains("consolidated")),
+            "expected consolidation toast"
+        );
+    }
+
+    #[test]
+    fn paste_under_threshold_does_not_consolidate() {
+        // Negative path: a small paste must NOT spawn a paste file. The
+        // input stays inline so the user can edit it freely.
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let mut opts = test_options(false);
+        opts.workspace = tmp.path().to_path_buf();
+        let mut app = App::new(opts, &Config::default());
+        let small = "hello world\nthis is fine".to_string();
+
+        app.insert_paste_text(&small);
+
+        assert_eq!(app.input, small);
+        assert!(!app.input.starts_with("@.deepseek/pastes/"));
+        // No paste file gets written for under-cap pastes.
+        let pastes_dir = tmp.path().join(".deepseek/pastes");
+        assert!(
+            !pastes_dir.exists() || std::fs::read_dir(&pastes_dir).unwrap().next().is_none(),
+            "no paste file should be written for under-cap content"
+        );
+    }
+
+    #[test]
     fn submit_input_consolidates_oversized_input_into_paste_file() {
         let tmp = tempfile::TempDir::new().expect("tempdir");
         let mut opts = test_options(false);
@@ -4059,6 +4354,24 @@ mod tests {
         let app = App::new(test_options(false), &Config::default());
         assert!(app.history.is_empty());
         assert_eq!(app.history_version, 0);
+    }
+
+    #[test]
+    fn clear_todos_resets_todos_list() {
+        let mut app = App::new(test_options(false), &Config::default());
+
+        // Seed some todos.
+        {
+            let mut todos = app.todos.try_lock().expect("todos lock");
+            todos.add("buy milk".to_string(), TodoStatus::Pending);
+            todos.add("write code".to_string(), TodoStatus::InProgress);
+            assert_eq!(todos.snapshot().items.len(), 2);
+        }
+
+        assert!(app.clear_todos());
+
+        let todos = app.todos.try_lock().expect("todos lock");
+        assert!(todos.snapshot().items.is_empty());
     }
 
     #[test]
@@ -4358,6 +4671,7 @@ mod tests {
     #[test]
     fn history_search_filters_matches_and_skips_duplicates() {
         let mut app = App::new(test_options(false), &Config::default());
+        app.input_history.clear();
         app.input_history.push("alpha one".to_string());
         app.input_history.push("beta two".to_string());
         app.input_history.push("alpha one".to_string());
@@ -4375,6 +4689,7 @@ mod tests {
     #[test]
     fn history_search_matches_unicode_case_insensitively() {
         let mut app = App::new(test_options(false), &Config::default());
+        app.input_history.clear();
         app.input_history.push("CAFÉ prompt".to_string());
 
         app.start_history_search();
@@ -4389,6 +4704,7 @@ mod tests {
     #[test]
     fn history_search_accepts_match_without_submitting() {
         let mut app = App::new(test_options(false), &Config::default());
+        app.input_history.clear();
         app.input_history.push("older prompt".to_string());
 
         app.start_history_search();
@@ -4403,6 +4719,7 @@ mod tests {
     #[test]
     fn history_search_cancel_restores_pre_search_draft() {
         let mut app = App::new(test_options(false), &Config::default());
+        app.input_history.clear();
         app.input = "current draft".to_string();
         app.cursor_position = 7;
         app.input_history.push("older prompt".to_string());
