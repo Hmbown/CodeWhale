@@ -127,20 +127,6 @@ impl ToolSpec for PandocConvertTool {
             )));
         }
 
-        // Resolve the pandoc binary at execution time too — registration
-        // gated on resolve_pandoc(), but a concurrent uninstall between
-        // catalog build and the model's call should produce a clear
-        // error rather than the cryptic "program not found" from raw
-        // Command::spawn.
-        let pandoc = crate::dependencies::resolve_pandoc().ok_or_else(|| {
-            ToolError::execution_failed(
-                "pandoc_convert: pandoc binary not found on PATH. \
-                 Install pandoc (macOS: `brew install pandoc`; \
-                 Debian/Ubuntu: `apt install pandoc`; \
-                 Windows: `winget install JohnMacFarlane.Pandoc`) and restart deepseek-tui.",
-            )
-        })?;
-
         let resolved_output_path: Option<PathBuf> = match output_path_str {
             Some(p) => Some(context.resolve_path(p)?),
             None => None,
@@ -153,6 +139,22 @@ impl ToolSpec for PandocConvertTool {
                 "target_format `{target_format}` is binary; provide an `output_path` to write the converted file."
             )));
         }
+
+        // Resolve the pandoc binary at execution time too — registration
+        // gated on resolve_pandoc(), but a concurrent uninstall between
+        // catalog build and the model's call should produce a clear
+        // error rather than the cryptic "program not found" from raw
+        // Command::spawn. Keep this after input-only validation so bad
+        // requests get deterministic schema errors even when pandoc is
+        // absent on the host.
+        let pandoc = crate::dependencies::resolve_pandoc().ok_or_else(|| {
+            ToolError::execution_failed(
+                "pandoc_convert: pandoc binary not found on PATH. \
+                 Install pandoc (macOS: `brew install pandoc`; \
+                 Debian/Ubuntu: `apt install pandoc`; \
+                 Windows: `winget install JohnMacFarlane.Pandoc`) and restart deepseek-tui.",
+            )
+        })?;
 
         let mut cmd = Command::new(&pandoc);
         cmd.arg(&source_path);
