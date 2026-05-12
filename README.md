@@ -372,6 +372,8 @@ The first ACP slice supports new sessions and prompt responses through your
 existing DeepSeek config/API key. Tool-backed editing and checkpoint replay are
 not exposed through ACP yet.
 
+For full tool-backed ACP support (Feishu/WeChat/QQ/Discord/Telegram), the community adapter [acp-deepseek-adapter](https://github.com/rockeverm3m/acp-deepseek-adapter) bridges deepseek exec --auto to cc-connect.
+
 ### Keyboard Shortcuts
 
 | Key | Action |
