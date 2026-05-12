@@ -52,8 +52,21 @@ impl EngineHandle {
 
     /// Approve a pending tool call
     pub async fn approve_tool_call(&self, id: impl Into<String>) -> Result<()> {
+        self.approve_tool_call_with_rules(id, Vec::new()).await
+    }
+
+    /// Approve a pending tool call and add persistent permission rules to the
+    /// live engine policy for the rest of this session.
+    pub async fn approve_tool_call_with_rules(
+        &self,
+        id: impl Into<String>,
+        persistent_rules: Vec<deepseek_execpolicy::ToolPermissionRule>,
+    ) -> Result<()> {
         self.tx_approval
-            .send(ApprovalDecision::Approved { id: id.into() })
+            .send(ApprovalDecision::Approved {
+                id: id.into(),
+                persistent_rules,
+            })
             .await?;
         Ok(())
     }

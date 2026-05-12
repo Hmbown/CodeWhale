@@ -348,6 +348,82 @@ pub fn persist_root_string_key(key: &str, value: &str) -> anyhow::Result<PathBuf
     Ok(path)
 }
 
+pub fn persist_permission_rules(
+    rules: &[deepseek_execpolicy::ToolPermissionRule],
+) -> anyhow::Result<PathBuf> {
+    use anyhow::Context;
+    use std::fs;
+
+    let path = config_toml_path()?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create config directory {}", parent.display()))?;
+    }
+
+    let mut doc: toml::Value = if path.exists() {
+        let raw = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read config at {}", path.display()))?;
+        toml::from_str(&raw)
+            .with_context(|| format!("failed to parse config at {}", path.display()))?
+    } else {
+        toml::Value::Table(toml::value::Table::new())
+    };
+    let table = doc
+        .as_table_mut()
+        .context("config.toml root must be a table")?;
+    let permissions_entry = table
+        .entry("permissions".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()));
+    let permissions_table = permissions_entry
+        .as_table_mut()
+        .context("`permissions` section in config.toml must be a table")?;
+    let rules_entry = permissions_table
+        .entry("rules".to_string())
+        .or_insert_with(|| toml::Value::Array(Vec::new()));
+    let rules_array = rules_entry
+        .as_array_mut()
+        .context("`permissions.rules` in config.toml must be an array")?;
+
+    for rule in rules {
+        let value = permission_rule_to_toml_value(rule);
+        if !rules_array.iter().any(|existing| existing == &value) {
+            rules_array.push(value);
+        }
+    }
+
+    let body = toml::to_string_pretty(&doc).context("failed to serialize config.toml")?;
+    fs::write(&path, body)
+        .with_context(|| format!("failed to write config at {}", path.display()))?;
+    Ok(path)
+}
+
+fn permission_rule_to_toml_value(rule: &deepseek_execpolicy::ToolPermissionRule) -> toml::Value {
+    let mut table = toml::value::Table::new();
+    table.insert("tool".to_string(), toml::Value::String(rule.tool.clone()));
+    table.insert(
+        "decision".to_string(),
+        toml::Value::String(permission_decision_label(rule.decision).to_string()),
+    );
+    if let Some(command) = rule.command.as_deref() {
+        table.insert(
+            "command".to_string(),
+            toml::Value::String(command.to_string()),
+        );
+    }
+    if let Some(path) = rule.path.as_deref() {
+        table.insert("path".to_string(), toml::Value::String(path.to_string()));
+    }
+    toml::Value::Table(table)
+}
+
+fn permission_decision_label(decision: deepseek_execpolicy::PermissionDecision) -> &'static str {
+    match decision {
+        deepseek_execpolicy::PermissionDecision::Allow => "allow",
+        deepseek_execpolicy::PermissionDecision::Deny => "deny",
+        deepseek_execpolicy::PermissionDecision::Ask => "ask",
+    }
+}
+
 /// Resolve the path to `~/.deepseek/config.toml` (or
 /// `$DEEPSEEK_CONFIG_PATH`). Mirrors what `Config::load` accepts so we
 /// never write to a different file than the one we read.
@@ -1995,5 +2071,54 @@ mod tests {
             body.contains("status_items"),
             "expected status_items in {body}"
         );
+    }
+
+    #[test]
+    fn persist_permission_rules_writes_deduped_rules_and_preserves_config() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "deepseek-permission-rules-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root).unwrap();
+        let _guard = EnvGuard::new(&temp_root);
+
+        let path = temp_root.join(".deepseek").join("config.toml");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            "api_key = \"sentinel-key\"\nmodel = \"deepseek-v4-pro\"\n",
+        )
+        .unwrap();
+
+        let cargo_rule = deepseek_execpolicy::ToolPermissionRule::exec_shell(
+            deepseek_execpolicy::PermissionDecision::Allow,
+            "cargo test",
+        );
+        let docs_rule = deepseek_execpolicy::ToolPermissionRule::file_path(
+            "read_file",
+            deepseek_execpolicy::PermissionDecision::Allow,
+            "docs/README.md",
+        );
+        let written =
+            persist_permission_rules(&[cargo_rule.clone(), cargo_rule.clone(), docs_rule.clone()])
+                .expect("persist should succeed");
+
+        let body = fs::read_to_string(&written).expect("written file should be readable");
+        assert!(
+            body.contains("api_key = \"sentinel-key\""),
+            "round-trip lost api_key: {body}"
+        );
+        assert!(
+            body.contains("model = \"deepseek-v4-pro\""),
+            "round-trip lost model: {body}"
+        );
+
+        let config = Config::load(Some(written), None).expect("written config should load");
+        assert_eq!(config.permissions.rules, vec![cargo_rule, docs_rule]);
     }
 }
