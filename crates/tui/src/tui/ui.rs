@@ -142,6 +142,12 @@ const UI_STATUS_ANIMATION_MS: u64 = 80;
 const WORKSPACE_CONTEXT_REFRESH_SECS: u64 = 15;
 const SIDEBAR_VISIBLE_MIN_WIDTH: u16 = 100;
 const DEFAULT_TERMINAL_PROBE_TIMEOUT_MS: u64 = 500;
+/// Number of incremental (non-full-repaint) draws between periodic full
+/// viewport resets on TurnComplete.  The full reset keeps ratatui's
+/// buffer model in sync with terminal reality without flashing on every
+/// turn.  50 draws ≈ 4 s of streaming at the footer-animation cadence
+/// (~12.5 fps) or ~0.4 s at the 120 FPS cap.
+const PERIODIC_FULL_REPAINT_EVERY_N: u64 = 50;
 
 type AppTerminal = Terminal<ColorCompatBackend<Stdout>>;
 
@@ -735,6 +741,10 @@ async fn run_event_loop(
     let mut web_config_session: Option<WebConfigSession> = None;
     let mut terminal_paused_at: Option<Instant> = None;
     let mut force_terminal_repaint = false;
+    // Tracks how many incremental draws have happened since the last
+    // full repaint.  Used to throttle periodic full resets on
+    // TurnComplete so we don't clear+redraw on every single turn.
+    let mut draws_since_last_full_repaint: u64 = 0;
 
     loop {
         if !drain_web_config_events(&mut web_config_session, app, config, &engine_handle).await {
@@ -1167,18 +1177,18 @@ async fn run_event_loop(
                         status,
                         error,
                     } => {
-                        // Only force full repaint for error/interrupted states
-                        // where child processes may have corrupted the terminal
-                        // (scroll region, origin mode). Normal Completed turns
-                        // use the incremental diff renderer — the state changes
-                        // (tool finalization, is_loading → false, status
-                        // string update) are all pure data mutations the diff
-                        // renderer handles cleanly without a clear-then-redraw
-                        // flash.
+                        // Always force full repaint for error/interrupted
+                        // states where child processes may have corrupted the
+                        // terminal. For Completed turns, throttle to periodic
+                        // resets: the incremental diff renderer handles normal
+                        // state transitions, but a periodic full reset keeps
+                        // ratatui's buffer model in sync with terminal reality.
                         if !matches!(
                             status,
                             crate::core::events::TurnOutcomeStatus::Completed
-                        ) {
+                        ) || draws_since_last_full_repaint
+                            >= PERIODIC_FULL_REPAINT_EVERY_N
+                        {
                             force_terminal_repaint = true;
                         }
                         // Finalize any in-flight tool group. Cancellation
@@ -1853,8 +1863,15 @@ async fn run_event_loop(
             None
         };
         if app.needs_redraw && draw_wait.is_none() {
+            let was_full_repaint = force_terminal_repaint;
             draw_app_frame_inner(terminal, app, force_terminal_repaint)?;
             force_terminal_repaint = false;
+            if was_full_repaint {
+                draws_since_last_full_repaint = 0;
+            } else {
+                draws_since_last_full_repaint =
+                    draws_since_last_full_repaint.saturating_add(1);
+            }
             frame_rate_limiter.mark_emitted(Instant::now());
             app.needs_redraw = false;
         }
@@ -6213,10 +6230,6 @@ fn draw_app_frame_inner(
     }
     let _ = terminal.backend_mut().flush();
     result
-}
-
-fn draw_app_frame(terminal: &mut AppTerminal, app: &mut App) -> Result<()> {
-    draw_app_frame_inner(terminal, app, false)
 }
 
 /// Pull the latest snapshot of cells / revisions / render options into the
