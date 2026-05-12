@@ -82,9 +82,9 @@ jobs:
             sleep 15
           done
           sudo apt-get install -y libdbus-1-dev pkg-config pandoc
-      - name: Install macOS system dependencies
-        if: runner.os == 'macOS'
-        run: brew install pandoc
+      - name: Install Windows system dependencies
+        if: runner.os == 'Windows'
+        run: choco install pandoc --no-progress
       - uses: Swatinem/rust-cache@v2
       - name: Run tests
         run: cargo test --workspace --all-features --locked
