@@ -816,9 +816,7 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CmdModelDescription => "Switch or view current model",
         MessageId::CmdModelsDescription => "List available models from API",
         MessageId::CmdNetworkDescription => "Manage network allow and deny rules",
-        MessageId::CmdNoteDescription => {
-            "Append note to persistent notes file (.deepseek/notes.md)"
-        }
+        MessageId::CmdNoteDescription => "Add, list, edit, or remove workspace notes",
         MessageId::CmdThemeDescription => "Toggle between dark and light theme",
         MessageId::CmdProviderDescription => {
             "Switch or view the active LLM backend (deepseek | nvidia-nim | ollama)"
@@ -1157,7 +1155,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::CmdModelDescription => "現在のモデルを切り替え・確認",
         MessageId::CmdModelsDescription => "API から利用可能なモデルを一覧表示",
         MessageId::CmdNetworkDescription => "ネットワーク許可・拒否ルールを管理",
-        MessageId::CmdNoteDescription => "永続ノートファイル（.deepseek/notes.md）に追記",
+        MessageId::CmdNoteDescription => "ワークスペースノートの追加、一覧、編集、削除",
         MessageId::CmdThemeDescription => "テーマ（ダーク/ライト）を切り替え",
         MessageId::CmdProviderDescription => {
             "現在の LLM バックエンドを切り替え・確認（deepseek | nvidia-nim | ollama）"
@@ -1476,7 +1474,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CmdModelDescription => "切换或查看当前模型",
         MessageId::CmdModelsDescription => "列出 API 中可用的模型",
         MessageId::CmdNetworkDescription => "管理网络允许和拒绝规则",
-        MessageId::CmdNoteDescription => "将笔记追加到持久笔记文件（.deepseek/notes.md）",
+        MessageId::CmdNoteDescription => "添加、列出、编辑或删除工作区笔记",
         MessageId::CmdThemeDescription => "在浅色和深色主题之间切换",
         MessageId::CmdProviderDescription => {
             "切换或查看当前 LLM 后端（deepseek | nvidia-nim | ollama）"
@@ -1781,9 +1779,7 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::CmdModelDescription => "Trocar ou exibir o modelo atual",
         MessageId::CmdModelsDescription => "Listar os modelos disponíveis pela API",
         MessageId::CmdNetworkDescription => "Gerenciar regras de rede permitidas e bloqueadas",
-        MessageId::CmdNoteDescription => {
-            "Adicionar nota ao arquivo persistente (.deepseek/notes.md)"
-        }
+        MessageId::CmdNoteDescription => "Adicionar, listar, editar ou remover notas do workspace",
         MessageId::CmdThemeDescription => "Alternar entre o tema claro e escuro",
         MessageId::CmdProviderDescription => {
             "Trocar ou exibir o backend LLM ativo (deepseek | nvidia-nim | ollama)"

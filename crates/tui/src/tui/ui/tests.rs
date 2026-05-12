@@ -11,23 +11,66 @@ use crate::tui::history::{
 };
 use crate::tui::views::{ModalView, ViewAction};
 use crate::working_set::Workspace;
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::MutexGuard;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
-#[test]
-fn format_resume_hint_uses_canonical_resume_command() {
-    assert_eq!(
-        format_resume_hint(Some("019dd9d6-4f44-7c83-9863-59674a12b827")),
-        Some("To continue this session, execute deepseek run --continue".to_string())
-    );
+struct ConfigPathEnvGuard {
+    _tmp: TempDir,
+    previous: Option<OsString>,
+    _lock: MutexGuard<'static, ()>,
+}
+
+impl ConfigPathEnvGuard {
+    fn new() -> Self {
+        let lock = crate::test_support::lock_test_env();
+        let tmp = TempDir::new().expect("config tempdir");
+        let config_path = tmp.path().join(".deepseek").join("config.toml");
+        std::fs::create_dir_all(config_path.parent().expect("config parent")).expect("config dir");
+        let previous = std::env::var_os("DEEPSEEK_CONFIG_PATH");
+        // Safety: test-only environment mutation guarded by a global mutex.
+        unsafe {
+            std::env::set_var("DEEPSEEK_CONFIG_PATH", &config_path);
+        }
+        Self {
+            _tmp: tmp,
+            previous,
+            _lock: lock,
+        }
+    }
+}
+
+impl Drop for ConfigPathEnvGuard {
+    fn drop(&mut self) {
+        // Safety: test-only environment mutation guarded by a global mutex.
+        unsafe {
+            if let Some(previous) = self.previous.take() {
+                std::env::set_var("DEEPSEEK_CONFIG_PATH", previous);
+            } else {
+                std::env::remove_var("DEEPSEEK_CONFIG_PATH");
+            }
+        }
+    }
 }
 
 #[test]
-fn format_resume_hint_omits_missing_session_id() {
-    assert_eq!(format_resume_hint(None), None);
-    assert_eq!(format_resume_hint(Some("   ")), None);
+fn resume_hint_uses_canonical_resume_command() {
+    assert_eq!(
+        resume_hint_text(),
+        "To continue this session, execute deepseek run --continue"
+    );
+    assert!(should_show_resume_hint(Some(
+        "019dd9d6-4f44-7c83-9863-59674a12b827"
+    )));
+}
+
+#[test]
+fn resume_hint_omits_missing_session_id() {
+    assert!(!should_show_resume_hint(None));
+    assert!(!should_show_resume_hint(Some("   ")));
 }
 
 #[test]
@@ -1019,6 +1062,30 @@ fn create_test_app() -> App {
     App::new(options, &Config::default())
 }
 
+fn create_test_options() -> TuiOptions {
+    TuiOptions {
+        model: "deepseek-v4-pro".to_string(),
+        workspace: PathBuf::from("."),
+        config_path: None,
+        config_profile: None,
+        allow_shell: false,
+        use_alt_screen: true,
+        use_mouse_capture: false,
+        use_bracketed_paste: true,
+        max_subagents: 1,
+        skills_dir: PathBuf::from("."),
+        memory_path: PathBuf::from("memory.md"),
+        notes_path: PathBuf::from("notes.txt"),
+        mcp_config_path: PathBuf::from("mcp.json"),
+        use_memory: false,
+        start_in_agent_mode: false,
+        skip_onboarding: false,
+        yolo: false,
+        resume_session_id: None,
+        initial_input: None,
+    }
+}
+
 fn text_message(role: &str, text: &str) -> Message {
     Message {
         role: role.to_string(),
@@ -1149,6 +1216,7 @@ async fn drain_web_config_events_applies_draft_without_closing_session() {
 
 #[tokio::test]
 async fn drain_web_config_events_closes_session_after_commit() {
+    let _config_env = ConfigPathEnvGuard::new();
     let mut app = create_test_app();
     let mut config = Config::default();
     let engine = mock_engine_handle();
@@ -2916,17 +2984,20 @@ fn active_rlm_task_entries_surface_foreground_rlm_work() {
 }
 
 #[test]
-fn details_shortcut_modifiers_accept_plain_shift_and_alt_only() {
-    assert!(details_shortcut_modifiers(KeyModifiers::NONE));
-    assert!(details_shortcut_modifiers(KeyModifiers::SHIFT));
-    assert!(details_shortcut_modifiers(KeyModifiers::ALT));
-    assert!(details_shortcut_modifiers(
-        KeyModifiers::ALT | KeyModifiers::SHIFT
-    ));
-    assert!(!details_shortcut_modifiers(KeyModifiers::CONTROL));
-    assert!(!details_shortcut_modifiers(
+fn alt_nav_modifiers_require_alt_and_exclude_ctrl_super() {
+    // v0.8.30 — transcript-nav shortcuts (`Alt+G`, `Alt+[`, etc.) require
+    // Alt, allow Shift for capital-letter forms, and block Ctrl/Super so
+    // they don't collide with clipboard / window shortcuts. Bare and
+    // Shift-only modifiers fall through to text insertion now.
+    assert!(!alt_nav_modifiers(KeyModifiers::NONE));
+    assert!(!alt_nav_modifiers(KeyModifiers::SHIFT));
+    assert!(alt_nav_modifiers(KeyModifiers::ALT));
+    assert!(alt_nav_modifiers(KeyModifiers::ALT | KeyModifiers::SHIFT));
+    assert!(!alt_nav_modifiers(KeyModifiers::CONTROL));
+    assert!(!alt_nav_modifiers(
         KeyModifiers::ALT | KeyModifiers::CONTROL
     ));
+    assert!(!alt_nav_modifiers(KeyModifiers::ALT | KeyModifiers::SUPER));
 }
 
 #[test]
@@ -3881,6 +3952,42 @@ fn flush_active_cell_finalizes_unclosed_thinking_block() {
 }
 
 #[test]
+fn open_thinking_pager_finds_thinking_in_active_cell() {
+    // After ThinkingComplete fires, the finalized thinking entry stays in
+    // `app.active_cell` with `streaming = false` until the active cell is
+    // flushed to history (end-of-turn, or when an assistant text arrives).
+    // During that window the transcript still renders the
+    // "thinking collapsed; press Ctrl+O for full text" affordance from
+    // `render_thinking`, so the handler must reach across the virtual
+    // transcript — not just `app.history` — or the promise is a lie.
+    // Regression guard for the v0.8.29 affordance/handler mismatch.
+    let mut app = create_test_app();
+    let _ = ensure_streaming_thinking_active_entry(&mut app);
+    append_streaming_thinking(&mut app, 0, "deliberating");
+    let finalized = finalize_streaming_thinking_active_entry(&mut app, Some(1.2), "");
+    assert!(finalized);
+    assert!(
+        app.history.is_empty(),
+        "thinking entry stays in active_cell until flush"
+    );
+    let active = app.active_cell.as_ref().expect("active cell present");
+    assert!(matches!(
+        active.entries().first(),
+        Some(HistoryCell::Thinking {
+            streaming: false,
+            ..
+        })
+    ));
+
+    assert!(open_thinking_pager(&mut app));
+    assert_eq!(
+        app.view_stack.top_kind(),
+        Some(ModalKind::Pager),
+        "pager must open for thinking entries still in active_cell"
+    );
+}
+
+#[test]
 fn engine_error_finalizes_active_thinking_block() {
     use crate::error_taxonomy::StreamError;
 
@@ -4564,9 +4671,12 @@ fn checklist_write_renders_dedicated_card() {
 #[test]
 fn history_arrow_handles_empty_input() {
     let mut app = create_test_app();
+    // Explicitly disable arrows-scroll so this test covers the
+    // history-navigation path regardless of the mouse-capture default.
+    app.composer_arrows_scroll = false;
     app.input_history.push("previous prompt".to_string());
 
-    // Default: empty composer Up navigates input history (#1117).
+    // With arrows-scroll off: empty composer Up navigates input history (#1117).
     assert!(handle_composer_history_arrow(
         &mut app,
         KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
@@ -4579,6 +4689,9 @@ fn history_arrow_handles_empty_input() {
 #[test]
 fn history_arrow_handles_whitespace_input() {
     let mut app = create_test_app();
+    // Explicitly disable arrows-scroll so this test covers the
+    // history-navigation path regardless of the mouse-capture default.
+    app.composer_arrows_scroll = false;
     app.input = "   ".to_string();
     app.cursor_position = app.input.chars().count();
     app.input_history.push("previous prompt".to_string());
@@ -4655,6 +4768,56 @@ fn composer_arrows_scroll_nonempty_still_navigates_history() {
         false,
     ));
     assert_eq!(app.input, "previous prompt");
+}
+
+// #1443: when mouse capture is off (e.g. Windows CMD), arrow-scroll
+// must default to true so mouse-wheel events (sent as arrow keys by
+// the terminal) scroll the transcript rather than cycling history.
+#[test]
+fn composer_arrows_scroll_defaults_true_without_mouse_capture() {
+    let options = TuiOptions {
+        use_mouse_capture: false,
+        ..create_test_options()
+    };
+    let app = App::new(options, &Config::default());
+    assert!(
+        app.composer_arrows_scroll,
+        "arrows-scroll must default to true when mouse capture is off"
+    );
+}
+
+#[test]
+fn composer_arrows_scroll_defaults_false_with_mouse_capture() {
+    let options = TuiOptions {
+        use_mouse_capture: true,
+        ..create_test_options()
+    };
+    let app = App::new(options, &Config::default());
+    assert!(
+        !app.composer_arrows_scroll,
+        "arrows-scroll must default to false when mouse capture is on"
+    );
+}
+
+#[test]
+fn composer_arrows_scroll_config_overrides_default() {
+    let config = Config {
+        tui: Some(crate::config::TuiConfig {
+            composer_arrows_scroll: Some(false),
+            ..Default::default()
+        }),
+        ..Config::default()
+    };
+    // Even with mouse_capture off, explicit config=false wins.
+    let options = TuiOptions {
+        use_mouse_capture: false,
+        ..create_test_options()
+    };
+    let app = App::new(options, &config);
+    assert!(
+        !app.composer_arrows_scroll,
+        "explicit config=false must override the mouse-capture-derived default"
+    );
 }
 
 #[test]
@@ -4801,4 +4964,59 @@ fn subagent_completion_notification_can_include_elapsed_summary() {
 
     assert!(msg.contains("deepseek: sub-agent agent_live complete"));
     assert!(msg.contains("deepseek: sub-agent complete (1m 5s)"));
+}
+
+#[test]
+fn sanitize_stream_chunk_keeps_printable_and_drops_control_bytes() {
+    // `sanitize_stream_chunk` is the per-chunk filter every piece of
+    // streaming text goes through (assistant content, thinking
+    // content, tool results, web-search snippets). Pin both
+    // invariants:
+    //
+    // 1. preserve user-visible whitespace (newline / tab) — collapsing
+    //    those would mangle code blocks and tool output;
+    // 2. drop terminal-escape-friendly control bytes — a chunk
+    //    containing `\u{1b}[2J` (clear screen) or `\u{8}` (backspace)
+    //    must not reach the renderer.
+    let cleaned = super::sanitize_stream_chunk("hello\tworld\n");
+    assert_eq!(cleaned, "hello\tworld\n", "tabs and newlines must survive");
+
+    // ESC + CSI sequence: only the printable letters/digits survive.
+    let cleaned = super::sanitize_stream_chunk("text\u{1b}[2Jmore");
+    assert_eq!(cleaned, "text[2Jmore", "ESC byte must be filtered");
+
+    // Bell, backspace, vertical tab, form feed — all are control
+    // characters that aren't `\n` or `\t`. Drop them.
+    let cleaned = super::sanitize_stream_chunk("a\u{7}b\u{8}c\u{b}d\u{c}e");
+    assert_eq!(cleaned, "abcde");
+
+    // Carriage return is also a control char; today's renderer expects
+    // unix newlines, so CR is filtered out. Pin so a future CRLF-mode
+    // change has to update this test intentionally.
+    let cleaned = super::sanitize_stream_chunk("line1\r\nline2");
+    assert_eq!(cleaned, "line1\nline2");
+}
+
+#[test]
+fn sanitize_stream_chunk_preserves_unicode() {
+    // Non-ASCII Unicode is not control — CJK, emoji, accented Latin
+    // all pass through untouched.
+    let cjk = "\u{4f60}\u{597d}\u{ff0c}DeepSeek";
+    assert_eq!(super::sanitize_stream_chunk(cjk), cjk);
+
+    let emoji_and_accents = "caf\u{e9} \u{1f680} build";
+    assert_eq!(
+        super::sanitize_stream_chunk(emoji_and_accents),
+        emoji_and_accents,
+    );
+}
+
+#[test]
+fn sanitize_stream_chunk_handles_empty_and_whitespace() {
+    assert_eq!(super::sanitize_stream_chunk(""), "");
+    assert_eq!(super::sanitize_stream_chunk("   "), "   ");
+    // A chunk that's purely control bytes shrinks to empty — caller
+    // branches that skip empty chunks handle the result, so the
+    // filter doesn't need to inject a placeholder.
+    assert_eq!(super::sanitize_stream_chunk("\u{1b}\u{7}\u{8}"), "");
 }

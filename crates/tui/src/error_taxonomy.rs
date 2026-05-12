@@ -475,3 +475,260 @@ impl fmt::Display for StreamError {
 }
 
 impl std::error::Error for StreamError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn classify(msg: &str) -> ErrorCategory {
+        classify_error_message(msg)
+    }
+
+    #[test]
+    fn invalid_input_catches_context_overflow_phrasings() {
+        // Provider phrasing varies: DeepSeek/OpenAI/Anthropic/etc each
+        // surface context-overflow as a slightly different string.
+        // The classifier needs all of them on the same branch.
+        for msg in [
+            "This model's maximum context length is 1000000 tokens",
+            "Error: context_length_exceeded",
+            "Your prompt is too long for the current model",
+            "You requested 100000 tokens but the maximum is 65536",
+            "request exceeds context window",
+        ] {
+            assert_eq!(
+                classify(msg),
+                ErrorCategory::InvalidInput,
+                "expected InvalidInput for `{msg}`",
+            );
+        }
+    }
+
+    #[test]
+    fn rate_limit_catches_429_and_quota_phrasings() {
+        for msg in [
+            "Rate limit reached for gpt-4",
+            "Too Many Requests",
+            "HTTP 429 from upstream",
+            "Your quota has been exceeded",
+        ] {
+            assert_eq!(
+                classify(msg),
+                ErrorCategory::RateLimit,
+                "expected RateLimit for `{msg}`",
+            );
+        }
+    }
+
+    #[test]
+    fn timeout_catches_both_spellings() {
+        assert_eq!(classify("connection timeout"), ErrorCategory::Timeout);
+        assert_eq!(
+            classify("request timed out after 30s"),
+            ErrorCategory::Timeout
+        );
+    }
+
+    #[test]
+    fn authentication_beats_authorization_when_api_key_phrasing_is_used() {
+        // "api key" landing on Authentication (not Authorization) keeps
+        // the operator-facing message correct: the user needs to fix
+        // their key, not their permissions.
+        for msg in [
+            "Invalid API key provided",
+            "Authentication failed",
+            "401 Unauthorized",
+        ] {
+            assert_eq!(
+                classify(msg),
+                ErrorCategory::Authentication,
+                "expected Authentication for `{msg}`",
+            );
+        }
+    }
+
+    #[test]
+    fn authorization_catches_forbidden_and_denied() {
+        for msg in [
+            "403 Forbidden",
+            "Permission denied for resource",
+            "Tool 'edit_file' denied by user",
+        ] {
+            assert_eq!(
+                classify(msg),
+                ErrorCategory::Authorization,
+                "expected Authorization for `{msg}`",
+            );
+        }
+    }
+
+    #[test]
+    fn network_catches_dns_connection_5xx() {
+        for msg in [
+            "Network is unreachable",
+            "Connection reset by peer",
+            "DNS resolution failed for api.deepseek.com",
+            "503 Service Unavailable",
+            "Upstream returned 502 Bad Gateway",
+            "Service temporarily unavailable",
+        ] {
+            assert_eq!(
+                classify(msg),
+                ErrorCategory::Network,
+                "expected Network for `{msg}`",
+            );
+        }
+        // Edge-case precedence: "504 Gateway Timeout" mentions both
+        // a 504 status code AND the word "timeout". The classifier
+        // picks Timeout, which is correct — the operator-actionable
+        // category for a 504 is "wait and retry" (Timeout semantics)
+        // rather than "DNS / connection broken" (Network semantics).
+        assert_eq!(
+            classify("504 Gateway Timeout"),
+            ErrorCategory::Timeout,
+            "504 with the literal word `timeout` resolves as Timeout, not Network"
+        );
+    }
+
+    #[test]
+    fn parse_catches_syntax_and_malformed_json() {
+        for msg in [
+            "Failed to parse response JSON",
+            "Syntax error in tool arguments",
+            "Malformed event from stream",
+        ] {
+            assert_eq!(
+                classify(msg),
+                ErrorCategory::Parse,
+                "expected Parse for `{msg}`",
+            );
+        }
+    }
+
+    #[test]
+    fn state_catches_not_found_and_unavailable() {
+        for msg in [
+            "Session not found",
+            "Model is unavailable for this provider",
+            "Endpoint not available in this region",
+        ] {
+            assert_eq!(
+                classify(msg),
+                ErrorCategory::State,
+                "expected State for `{msg}`",
+            );
+        }
+    }
+
+    #[test]
+    fn tool_is_a_low_priority_catchall_for_tool_keyword() {
+        // The Tool branch is the last keyword check before falling
+        // through to Internal. Anything mentioning "tool" that didn't
+        // match an earlier category should land here.
+        assert_eq!(
+            classify("Tool returned non-zero exit status"),
+            ErrorCategory::Tool,
+        );
+    }
+
+    #[test]
+    fn unknown_messages_fall_through_to_internal() {
+        for msg in [
+            "Something exploded",
+            "panic at the disco",
+            "u-200 something happened",
+            "",
+        ] {
+            assert_eq!(
+                classify(msg),
+                ErrorCategory::Internal,
+                "expected Internal for `{msg}`",
+            );
+        }
+    }
+
+    #[test]
+    fn classifier_is_case_insensitive() {
+        // The function lowercases internally — every category must
+        // match regardless of input casing.
+        assert_eq!(classify("RATE LIMIT EXCEEDED"), ErrorCategory::RateLimit);
+        assert_eq!(classify("TimeOut"), ErrorCategory::Timeout);
+        assert_eq!(classify("UNAUTHORIZED"), ErrorCategory::Authentication);
+    }
+
+    #[test]
+    fn precedence_invalid_input_beats_tool() {
+        // A "context length" tool error should classify as
+        // InvalidInput, not Tool — InvalidInput is the more actionable
+        // category (the user needs to shorten their prompt; "tool
+        // failure" wouldn't tell them that).
+        assert_eq!(
+            classify("tool returned: maximum context length is 1000000"),
+            ErrorCategory::InvalidInput,
+        );
+    }
+
+    #[test]
+    fn precedence_timeout_beats_network() {
+        // A timeout that mentions a network call should still classify
+        // as Timeout — the retry policy for timeouts is gentler than
+        // for outright network failures.
+        assert_eq!(
+            classify("network call timed out after 30s"),
+            ErrorCategory::Timeout,
+        );
+    }
+
+    #[test]
+    fn precedence_rate_limit_beats_authentication() {
+        // 429 messages sometimes mention "api" or "auth" tokens, but
+        // RateLimit's retry semantics (back off + retry) are what the
+        // operator actually wants.
+        assert_eq!(
+            classify("Rate limit on your API quota exceeded"),
+            ErrorCategory::RateLimit,
+        );
+    }
+
+    #[test]
+    fn classifier_handles_unicode_safely() {
+        // Unicode shouldn't trip the lowercase step or the keyword
+        // scan — Chinese/Japanese error messages from
+        // OpenAI-compatible providers go through the same path.
+        assert_eq!(
+            classify("\u{8d85}\u{51fa}\u{6700}\u{5927}\u{4e0a}\u{4e0b}\u{6587} context length"),
+            ErrorCategory::InvalidInput,
+        );
+        // Pure-Chinese messages with no keyword match land on Internal.
+        assert_eq!(
+            classify("\u{4e0d}\u{77e5}\u{9053}\u{600e}\u{4e48}\u{56de}\u{4e8b}"),
+            ErrorCategory::Internal,
+        );
+    }
+
+    #[test]
+    fn error_envelope_display_includes_severity_code_message() {
+        let env = ErrorEnvelope::new(
+            ErrorCategory::Network,
+            ErrorSeverity::Warning,
+            true,
+            "net_transient",
+            "DNS resolution failed",
+        );
+        assert_eq!(
+            format!("{env}"),
+            "[warning] net_transient: DNS resolution failed"
+        );
+    }
+
+    #[test]
+    fn error_category_display_round_trips_via_snake_case() {
+        // The snake_case labels are what crosses the wire / hits logs;
+        // pin them so a future rename doesn't silently shift consumer
+        // contracts.
+        assert_eq!(format!("{}", ErrorCategory::Network), "network");
+        assert_eq!(format!("{}", ErrorCategory::RateLimit), "rate_limit");
+        assert_eq!(format!("{}", ErrorCategory::InvalidInput), "invalid_input");
+        assert_eq!(format!("{}", ErrorSeverity::Critical), "critical");
+    }
+}

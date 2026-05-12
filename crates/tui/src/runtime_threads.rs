@@ -3,6 +3,13 @@
 //! This module keeps DeepSeek-only execution while exposing Codex-like lifecycle
 //! semantics (threads, turns, items, interrupt/steer, and replayable events).
 
+// Background-task runtime — runs alongside the TUI. Raw stdio prints
+// here would still land in the alt-screen on whichever terminal the
+// foreground TUI happens to own. Route everything through `tracing::*`
+// instead — see `runtime_log` for the rationale.
+#![deny(clippy::print_stdout)]
+#![deny(clippy::print_stderr)]
+
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};

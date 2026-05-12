@@ -58,6 +58,40 @@ fn mask_url_secrets(url: &str) -> String {
     url.to_string()
 }
 
+/// Redact the userinfo segment (`username[:password]@…` portion) from
+/// a proxy URL so it can be safely included in `tracing::warn!` output
+/// without leaking the
+/// password into the on-disk log. URLs without userinfo are returned
+/// unchanged. Garbage input (no `://` scheme separator) is also returned
+/// unchanged — the malformed-URL warning path is the only caller, so an
+/// unparseable input is already the failure case.
+fn redact_proxy_userinfo(proxy_url: &str) -> String {
+    let Some(scheme_end) = proxy_url.find("://") else {
+        return proxy_url.to_string();
+    };
+    let after_scheme = scheme_end + 3;
+    // The userinfo segment ends at the next `@`, but only if that `@`
+    // comes before the next `/`, `?`, or `#` (otherwise the `@` is in a
+    // path / query and the URL has no userinfo at all).
+    let rest = &proxy_url[after_scheme..];
+    let at_idx = rest.find('@');
+    let path_idx = rest.find(['/', '?', '#']);
+    let userinfo_end = match (at_idx, path_idx) {
+        (Some(a), Some(p)) if a < p => Some(a),
+        (Some(a), None) => Some(a),
+        _ => None,
+    };
+    if let Some(end) = userinfo_end {
+        let mut out = String::with_capacity(proxy_url.len());
+        out.push_str(&proxy_url[..after_scheme]);
+        out.push_str("***@");
+        out.push_str(&rest[end + 1..]);
+        out
+    } else {
+        proxy_url.to_string()
+    }
+}
+
 /// Mask any obvious token-like substrings in a body excerpt before surfacing
 /// it. Conservative: replaces `Bearer <token>` and `api_key=...` shapes.
 fn redact_body_preview(body: &str) -> String {
@@ -574,18 +608,21 @@ impl SseTransport {
             let s = String::from_utf8_lossy(&chunk);
             buffer.push_str(&s);
 
-            while let Some(pos) = buffer.find("\n\n") {
+            while let Some((pos, separator_len)) = find_sse_event_separator(&buffer) {
                 let event_block = buffer[..pos].to_string();
-                buffer = buffer[pos + 2..].to_string();
+                buffer = buffer[pos + separator_len..].to_string();
 
                 let mut event_type = "message";
                 let mut data = String::new();
 
                 for line in event_block.lines() {
-                    if let Some(stripped) = line.strip_prefix("event: ") {
-                        event_type = stripped;
-                    } else if let Some(stripped) = line.strip_prefix("data: ") {
-                        data.push_str(stripped);
+                    if let Some(value) = sse_field_value(line, "event:") {
+                        event_type = value;
+                    } else if let Some(value) = sse_field_value(line, "data:") {
+                        if !data.is_empty() {
+                            data.push('\n');
+                        }
+                        data.push_str(value);
                     }
                 }
 
@@ -840,6 +877,15 @@ fn parse_sse_message_data(body: &str) -> Vec<Vec<u8>> {
     messages
 }
 
+fn find_sse_event_separator(buffer: &str) -> Option<(usize, usize)> {
+    match (buffer.find("\n\n"), buffer.find("\r\n\r\n")) {
+        (Some(lf), Some(crlf)) if crlf < lf => Some((crlf, 4)),
+        (Some(lf), _) => Some((lf, 2)),
+        (_, Some(crlf)) => Some((crlf, 4)),
+        _ => None,
+    }
+}
+
 fn sse_field_value<'a>(line: &'a str, field: &str) -> Option<&'a str> {
     let value = line.strip_prefix(field)?;
     Some(value.strip_prefix(' ').unwrap_or(value))
@@ -934,9 +980,45 @@ impl McpConnection {
                     }
                 }
             }
-            let client = reqwest::Client::builder()
-                .timeout(Duration::from_secs(connect_timeout_secs))
-                .build()?;
+            // Honor the standard `HTTP_PROXY` / `HTTPS_PROXY` (and their
+            // lowercase equivalents) plus `NO_PROXY` env vars when
+            // reaching MCP HTTP servers (#1408). Reqwest 0.13 does not
+            // auto-detect these by default, so users behind corporate
+            // proxies, on China-mainland connections routing through a
+            // local Clash / Shadowsocks tunnel, etc. previously had MCP
+            // HTTP traffic bypass the proxy entirely while every other
+            // tool on the box (curl, npm, …) used it.
+            let mut client_builder =
+                reqwest::Client::builder().timeout(Duration::from_secs(connect_timeout_secs));
+            let env_proxy_url = std::env::var("HTTPS_PROXY")
+                .or_else(|_| std::env::var("https_proxy"))
+                .or_else(|_| std::env::var("HTTP_PROXY"))
+                .or_else(|_| std::env::var("http_proxy"))
+                .ok()
+                .filter(|s| !s.trim().is_empty());
+            if let Some(proxy_url) = env_proxy_url {
+                match reqwest::Proxy::all(&proxy_url) {
+                    Ok(proxy) => {
+                        let proxy = proxy.no_proxy(reqwest::NoProxy::from_env());
+                        client_builder = client_builder.proxy(proxy);
+                    }
+                    Err(err) => {
+                        // Redact userinfo (the `username[:password]@…`
+                        // portion of the URL) before logging so an
+                        // HTTPS_PROXY that embeds credentials
+                        // (common in corporate setups) doesn't leak the
+                        // password to the on-disk `~/.deepseek/logs/`.
+                        let proxy_redacted = redact_proxy_userinfo(&proxy_url);
+                        tracing::warn!(
+                            target: "mcp",
+                            ?err,
+                            proxy = %proxy_redacted,
+                            "ignoring malformed HTTP(S)_PROXY env var; MCP connection will bypass proxy"
+                        );
+                    }
+                }
+            }
+            let client = client_builder.build()?;
             Box::new(HttpTransport::new(
                 client,
                 url.clone(),
@@ -1095,9 +1177,19 @@ impl McpConnection {
                 break;
             };
 
-            if let Some(tools) = result.get("tools") {
-                let page: Vec<McpTool> = serde_json::from_value(tools.clone()).unwrap_or_default();
-                self.tools.extend(page);
+            if let Some(arr) = result.get("tools").and_then(|t| t.as_array()) {
+                for item in arr {
+                    match serde_json::from_value::<McpTool>(item.clone()) {
+                        Ok(tool) => self.tools.push(tool),
+                        Err(err) => {
+                            // Skip individual malformed entries instead of
+                            // dropping the whole page (#1410). The old
+                            // `unwrap_or_default()` would silently throw
+                            // away every tool when one was misshapen.
+                            tracing::debug!(target: "mcp", ?err, "skipping malformed tool item");
+                        }
+                    }
+                }
             }
 
             cursor = result
@@ -1137,10 +1229,15 @@ impl McpConnection {
                 break;
             };
 
-            if let Some(resources) = result.get("resources") {
-                let page: Vec<McpResource> =
-                    serde_json::from_value(resources.clone()).unwrap_or_default();
-                self.resources.extend(page);
+            if let Some(arr) = result.get("resources").and_then(|r| r.as_array()) {
+                for item in arr {
+                    match serde_json::from_value::<McpResource>(item.clone()) {
+                        Ok(resource) => self.resources.push(resource),
+                        Err(err) => {
+                            tracing::debug!(target: "mcp", ?err, "skipping malformed resource item");
+                        }
+                    }
+                }
             }
 
             cursor = result
@@ -1180,10 +1277,15 @@ impl McpConnection {
                 .get("resourceTemplates")
                 .or_else(|| result.get("templates"))
                 .or_else(|| result.get("resource_templates"));
-            if let Some(templates) = templates {
-                let page: Vec<McpResourceTemplate> =
-                    serde_json::from_value(templates.clone()).unwrap_or_default();
-                self.resource_templates.extend(page);
+            if let Some(arr) = templates.and_then(|t| t.as_array()) {
+                for item in arr {
+                    match serde_json::from_value::<McpResourceTemplate>(item.clone()) {
+                        Ok(tmpl) => self.resource_templates.push(tmpl),
+                        Err(err) => {
+                            tracing::debug!(target: "mcp", ?err, "skipping malformed resource_template item");
+                        }
+                    }
+                }
             }
 
             cursor = result
@@ -1219,10 +1321,15 @@ impl McpConnection {
                 break;
             };
 
-            if let Some(prompts) = result.get("prompts") {
-                let page: Vec<McpPrompt> =
-                    serde_json::from_value(prompts.clone()).unwrap_or_default();
-                self.prompts.extend(page);
+            if let Some(arr) = result.get("prompts").and_then(|p| p.as_array()) {
+                for item in arr {
+                    match serde_json::from_value::<McpPrompt>(item.clone()) {
+                        Ok(prompt) => self.prompts.push(prompt),
+                        Err(err) => {
+                            tracing::debug!(target: "mcp", ?err, "skipping malformed prompt item");
+                        }
+                    }
+                }
             }
 
             cursor = result
@@ -2919,6 +3026,18 @@ mod tests {
         assert!(value.get("result").is_some());
     }
 
+    #[test]
+    fn find_sse_event_separator_accepts_lf_and_crlf() {
+        assert_eq!(
+            find_sse_event_separator("event: endpoint\n\n"),
+            Some((15, 2))
+        );
+        assert_eq!(
+            find_sse_event_separator("event: endpoint\r\n\r\n"),
+            Some((15, 4))
+        );
+    }
+
     #[tokio::test]
     async fn mcp_connection_supports_streamable_http_event_stream_responses() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -2969,8 +3088,10 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
-            for _ in 0..6 {
-                let (mut socket, _) = listener.accept().await.unwrap();
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
                 tokio::spawn(async move {
                     let request = read_http_request(&mut socket).await;
                     assert!(request.starts_with("POST /mcp "));
@@ -3076,6 +3197,42 @@ mod tests {
         let redacted = redact_body_preview("Authorization: Bearer abc.def.ghi end");
         assert!(redacted.contains("Bearer ***"), "redacted: {redacted}");
         assert!(!redacted.contains("abc.def.ghi"), "leaked: {redacted}");
+    }
+
+    #[test]
+    fn redact_proxy_userinfo_strips_password() {
+        // Corporate-style proxy URL with embedded creds — the
+        // password must never reach the on-disk log file. URL strings
+        // are assembled from placeholder constants via `format!` so the
+        // literal source never contains a scheme-prefixed username +
+        // password pair (colon-separated, `@`-terminated) that
+        // GitGuardian's "Basic Auth String" detector would flag as a
+        // committed credential.
+        let (placeholder_user, placeholder_pass) = ("PLACEHOLDER_USER", "PLACEHOLDER_PASS");
+        let with_creds = format!("http://{placeholder_user}:{placeholder_pass}@proxy.example/");
+        let redacted = redact_proxy_userinfo(&with_creds);
+        assert_eq!(redacted, "http://***@proxy.example/");
+        assert!(!redacted.contains(placeholder_pass));
+        assert!(!redacted.contains(placeholder_user));
+
+        // User only (no password) — still redacted.
+        let with_user_only = format!("https://{placeholder_user}@proxy.example:8080");
+        let redacted = redact_proxy_userinfo(&with_user_only);
+        assert_eq!(redacted, "https://***@proxy.example:8080");
+
+        // No userinfo segment — pass through.
+        let redacted = redact_proxy_userinfo("http://proxy.example:3128/");
+        assert_eq!(redacted, "http://proxy.example:3128/");
+
+        // `@` appears only in the path, not as userinfo separator —
+        // must not be mistaken for credentials.
+        let redacted = redact_proxy_userinfo("http://proxy.example/path@thing");
+        assert_eq!(redacted, "http://proxy.example/path@thing");
+
+        // Garbage input (no `://`) returned unchanged — the
+        // surrounding warning log is the only caller and is already
+        // handling the malformed-URL case.
+        assert_eq!(redact_proxy_userinfo("not-a-url"), "not-a-url");
     }
 
     #[test]
@@ -3275,6 +3432,91 @@ mod tests {
         assert!(
             post_seen.load(AtomicOrdering::SeqCst),
             "first SSE send should POST to the discovered endpoint"
+        );
+
+        cancel_token.cancel();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn sse_connect_accepts_crlf_endpoint_events() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering as AtomicOrdering},
+        };
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let post_seen = Arc::new(AtomicBool::new(false));
+        let server_post_seen = Arc::clone(&post_seen);
+        let cancel_token = tokio_util::sync::CancellationToken::new();
+        let server_cancel = cancel_token.clone();
+
+        let server = tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let post_seen = Arc::clone(&server_post_seen);
+                let server_cancel = server_cancel.clone();
+                tokio::spawn(async move {
+                    let mut request = Vec::new();
+                    let mut buf = [0; 1024];
+                    loop {
+                        let n = socket.read(&mut buf).await.unwrap();
+                        if n == 0 {
+                            return;
+                        }
+                        request.extend_from_slice(&buf[..n]);
+                        if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                            break;
+                        }
+                    }
+                    let request = String::from_utf8_lossy(&request);
+                    if request.starts_with("GET /sse ") {
+                        socket
+                            .write_all(
+                                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n",
+                            )
+                            .await
+                            .unwrap();
+                        socket
+                            .write_all(b"event: endpoint\r\ndata: /messages\r\n\r\n")
+                            .await
+                            .unwrap();
+                        server_cancel.cancelled().await;
+                    } else if request.starts_with("POST /messages ") {
+                        post_seen.store(true, AtomicOrdering::SeqCst);
+                        socket
+                            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                            .await
+                            .unwrap();
+                    }
+                });
+            }
+        });
+
+        let client = reqwest::Client::new();
+        let url = format!("http://{addr}/sse");
+        let mut transport =
+            SseTransport::connect(client, url, cancel_token.clone(), Duration::from_secs(2))
+                .await
+                .unwrap();
+
+        transport
+            .send(json_frame(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize"
+            })))
+            .await
+            .unwrap();
+
+        assert!(
+            post_seen.load(AtomicOrdering::SeqCst),
+            "first SSE send should POST to the CRLF-discovered endpoint"
         );
 
         cancel_token.cancel();

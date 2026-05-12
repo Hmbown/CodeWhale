@@ -382,6 +382,12 @@ fn parse_duckduckgo_results(html: &str, max_results: usize) -> Vec<WebSearchEntr
         });
     }
 
+    if is_likely_spam_results(&results) {
+        // Same defence as the Bing path (#964): a DDG fallback page can
+        // also serve a single-domain stuffed result set when the upstream
+        // is degraded. Drop rather than mislead the model.
+        return Vec::new();
+    }
     results
 }
 
@@ -420,7 +426,58 @@ fn parse_bing_results(html: &str, max_results: usize) -> Vec<WebSearchEntry> {
         });
     }
 
+    if is_likely_spam_results(&results) {
+        // Bing's scraping endpoint occasionally serves a stuffed page
+        // where the same low-quality domain owns most of the b_algo
+        // entries — #964 reported eight in a row from
+        // `astralia.forumgratuit.org` for unrelated queries. Treat the
+        // batch as "no results" so the caller surfaces a clean failure
+        // message instead of routing the model toward junk.
+        return Vec::new();
+    }
     results
+}
+
+/// Heuristic spam detector for scraped SERP HTML (#964).
+///
+/// Returns `true` when one root domain owns at least 60% of the result
+/// set and there are at least three results. A real-world top-five page
+/// from Google/Bing/DDG mixes domains; a result page dominated by one
+/// host is almost always SEO spam or a bot-detection-stuffed substitute.
+fn is_likely_spam_results(results: &[WebSearchEntry]) -> bool {
+    if results.len() < 3 {
+        return false;
+    }
+    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for r in results {
+        if let Some(host) = root_domain(&r.url) {
+            *counts.entry(host).or_insert(0) += 1;
+        }
+    }
+    let Some(&max) = counts.values().max() else {
+        return false;
+    };
+    // 60% threshold: 3-of-5, 4-of-6, 5-of-8 all trip; 2-of-5 doesn't.
+    max * 5 >= results.len() * 3
+}
+
+/// Extract the registrable root domain (eTLD+1 approximation) from a URL
+/// so spam detection groups `astralia.forumgratuit.org` with
+/// `russia.forumgratuit.org`. Returns lowercase host minus the leftmost
+/// label, or the bare host when there are only two labels.
+fn root_domain(url: &str) -> Option<String> {
+    let after_scheme = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
+    let host = after_scheme.split(['/', '?', '#']).next()?;
+    let host = host.split('@').next_back()?;
+    let host = host.split(':').next()?.to_ascii_lowercase();
+    if host.is_empty() {
+        return None;
+    }
+    let labels: Vec<&str> = host.split('.').filter(|s| !s.is_empty()).collect();
+    if labels.len() <= 2 {
+        return Some(host);
+    }
+    Some(labels[labels.len().saturating_sub(2)..].join("."))
 }
 
 fn normalize_url(href: &str) -> String {
@@ -564,8 +621,112 @@ fn extract_query_param(url: &str, key: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_html_entities, extract_search_query, optional_search_max_results};
+    use super::{
+        WebSearchEntry, decode_html_entities, extract_search_query, is_likely_spam_results,
+        optional_search_max_results, root_domain,
+    };
     use serde_json::json;
+
+    fn entry(url: &str) -> WebSearchEntry {
+        WebSearchEntry {
+            title: "x".into(),
+            url: url.into(),
+            snippet: None,
+        }
+    }
+
+    #[test]
+    fn root_domain_strips_subdomain_keeps_two_labels() {
+        assert_eq!(
+            root_domain("https://astralia.forumgratuit.org/path/page").as_deref(),
+            Some("forumgratuit.org"),
+        );
+        assert_eq!(
+            root_domain("http://www.example.com/").as_deref(),
+            Some("example.com"),
+        );
+        assert_eq!(
+            root_domain("https://example.com").as_deref(),
+            Some("example.com")
+        );
+    }
+
+    #[test]
+    fn root_domain_handles_port_and_userinfo() {
+        assert_eq!(
+            root_domain("http://user:pass@blog.example.com:8080/x").as_deref(),
+            Some("example.com"),
+        );
+    }
+
+    #[test]
+    fn root_domain_returns_none_for_garbage() {
+        assert!(
+            root_domain("not-a-url").as_deref().is_some(),
+            "bare token is treated as host"
+        );
+        assert!(root_domain("https:///path").is_none());
+    }
+
+    #[test]
+    fn spam_detector_flags_single_domain_dominance() {
+        // #964 reproduction: 5/5 results from the same low-quality host.
+        let r = vec![
+            entry("https://astralia.forumgratuit.org/page1"),
+            entry("https://russia.forumgratuit.org/page2"),
+            entry("https://other.forumgratuit.org/page3"),
+            entry("https://hello.forumgratuit.org/page4"),
+            entry("https://world.forumgratuit.org/page5"),
+        ];
+        assert!(is_likely_spam_results(&r));
+    }
+
+    #[test]
+    fn spam_detector_passes_diverse_serp() {
+        // A normal SERP mixes domains; nothing flagged.
+        let r = vec![
+            entry("https://example.com/a"),
+            entry("https://wikipedia.org/b"),
+            entry("https://stackoverflow.com/c"),
+            entry("https://reddit.com/d"),
+            entry("https://example.com/e"),
+        ];
+        assert!(!is_likely_spam_results(&r));
+    }
+
+    #[test]
+    fn spam_detector_passes_short_result_set() {
+        // Two results from the same domain isn't enough signal — false
+        // positives on legitimate two-link answers (docs + homepage)
+        // would hurt more than letting them through.
+        let r = vec![
+            entry("https://example.com/a"),
+            entry("https://example.com/b"),
+        ];
+        assert!(!is_likely_spam_results(&r));
+    }
+
+    #[test]
+    fn spam_detector_threshold_is_sixty_percent() {
+        // 3-of-5 same domain trips the 60% threshold.
+        let r3of5 = vec![
+            entry("https://spam.example.com/a"),
+            entry("https://spam.example.com/b"),
+            entry("https://spam.example.com/c"),
+            entry("https://other.com/d"),
+            entry("https://third.com/e"),
+        ];
+        assert!(is_likely_spam_results(&r3of5));
+        // 2-of-5 does NOT trip the threshold.
+        let r2of5 = vec![
+            entry("https://spam.example.com/a"),
+            entry("https://spam.example.com/b"),
+            entry("https://other.com/c"),
+            entry("https://third.com/d"),
+            entry("https://fourth.com/e"),
+        ];
+        assert!(!is_likely_spam_results(&r2of5));
+    }
 
     #[test]
     fn decode_html_entities_handles_named_entities() {
@@ -632,5 +793,79 @@ mod tests {
         let err = extract_search_query(&json!({"max_results": 2}))
             .expect_err("missing query should fail");
         assert!(format!("{err}").contains("missing required field 'query'"));
+    }
+
+    #[test]
+    fn optional_max_results_prefers_top_level_value() {
+        // Top-level `max_results` wins over the array-form sibling
+        // because callers using the array form usually copy-paste it
+        // wholesale and then tweak the outer max_results afterwards.
+        assert_eq!(
+            optional_search_max_results(
+                &json!({"query": "x", "max_results": 8, "search_query": [{"q": "y", "max_results": 2}]})
+            ),
+            8,
+        );
+    }
+
+    #[test]
+    fn optional_max_results_falls_back_to_array_form() {
+        // When only the array form sets max_results, that value is the
+        // one that should reach the caller. This is the path V4 uses
+        // when it emits the structured `search_query: [{…}]` shape.
+        assert_eq!(
+            optional_search_max_results(&json!({"search_query": [{"q": "y", "max_results": 3}]})),
+            3,
+        );
+    }
+
+    #[test]
+    fn optional_max_results_uses_default_when_neither_set() {
+        // No explicit bound anywhere → the DEFAULT (currently 5)
+        // applies, so the model can't accidentally pull MAX_RESULTS
+        // worth of bandwidth just by omitting the field.
+        assert_eq!(optional_search_max_results(&json!({"query": "x"})), 5);
+        assert_eq!(
+            optional_search_max_results(&json!({"search_query": [{"q": "y"}]})),
+            5,
+        );
+    }
+
+    #[test]
+    fn optional_max_results_only_reads_first_array_entry() {
+        // Sub-search support is a future feature; for now the array
+        // entries beyond the first are ignored. Pin so a future
+        // multi-query implementation has to update this test
+        // intentionally rather than silently start fanning out.
+        assert_eq!(
+            optional_search_max_results(
+                &json!({"search_query": [{"q": "first", "max_results": 1}, {"q": "second", "max_results": 9}]})
+            ),
+            1,
+        );
+    }
+
+    #[test]
+    fn extract_search_query_trims_whitespace_from_array_form_q_alias() {
+        // The "trimmed" contract is part of the helper's invariant —
+        // a model sometimes pads `q` with newlines from a heredoc.
+        let q = extract_search_query(&json!({"search_query": [{"q": "  deepseek tui  "}]}))
+            .expect("array form should parse with trim");
+        assert_eq!(q, "deepseek tui");
+    }
+
+    #[test]
+    fn extract_search_query_rejects_empty_query() {
+        // A "" query lands in extract_search_query → propagates as
+        // missing_field rather than a confusing engine error a few
+        // layers down. Lock the failure mode.
+        for body in [json!({"query": ""}), json!({"q": "   "}), json!({})] {
+            let err = extract_search_query(&body).expect_err("empty query must reject");
+            let msg = format!("{err}");
+            assert!(
+                msg.contains("missing required field 'query'") || msg.contains("Query"),
+                "expected query-missing error, got `{msg}`"
+            );
+        }
     }
 }

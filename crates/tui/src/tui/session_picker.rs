@@ -2,6 +2,7 @@
 
 use std::cell::Cell;
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Local};
 use crossterm::event::{KeyCode, KeyEvent};
@@ -39,6 +40,7 @@ enum SortMode {
 }
 
 pub struct SessionPickerView {
+    /// Every session loaded from disk. The picker filters from this set.
     sessions: Vec<SessionMetadata>,
     filtered: Vec<SessionMetadata>,
     selected: usize,
@@ -51,10 +53,21 @@ pub struct SessionPickerView {
     current_preview: Vec<String>,
     confirm_delete: bool,
     status: Option<String>,
+    /// Canonical workspace path used as the per-project scope filter
+    /// (#1395). `None` opts out of scoping (e.g. when the caller can't
+    /// resolve a workspace).
+    workspace_scope: Option<PathBuf>,
+    /// When `true`, the picker shows sessions from every workspace; when
+    /// `false`, only sessions whose recorded `workspace` matches the
+    /// canonicalised `workspace_scope`.
+    show_all_workspaces: bool,
 }
 
 impl SessionPickerView {
-    pub fn new() -> Self {
+    /// Construct a picker scoped to `workspace`. Sessions belonging to
+    /// other workspaces are hidden by default — press `a` inside the
+    /// picker to expand to all workspaces (#1395).
+    pub fn new(workspace: &Path) -> Self {
         let sessions = SessionManager::default_location()
             .and_then(|manager| manager.list_sessions())
             .unwrap_or_default();
@@ -72,10 +85,37 @@ impl SessionPickerView {
             current_preview: Vec::new(),
             confirm_delete: false,
             status: None,
+            workspace_scope: Some(canonical_or_self(workspace.to_path_buf())),
+            show_all_workspaces: false,
         };
         view.apply_sort_and_filter();
         view.refresh_preview();
         view
+    }
+
+    fn matches_workspace_scope(&self, session: &SessionMetadata) -> bool {
+        if self.show_all_workspaces {
+            return true;
+        }
+        match self.workspace_scope.as_deref() {
+            None => true,
+            Some(scope) => canonical_or_self(session.workspace.clone()) == scope,
+        }
+    }
+
+    /// Flip between current-workspace-only and all-workspaces view
+    /// (#1395). Used by the `a` keybinding inside the picker; also
+    /// callable from tests.
+    pub fn toggle_all_workspaces(&mut self) {
+        self.show_all_workspaces = !self.show_all_workspaces;
+        let label = if self.show_all_workspaces {
+            "showing sessions from every workspace"
+        } else {
+            "scoped to this workspace"
+        };
+        self.status = Some(label.to_string());
+        self.selected = 0;
+        self.apply_sort_and_filter();
     }
 
     fn apply_sort_and_filter(&mut self) {
@@ -94,16 +134,15 @@ impl SessionPickerView {
         }
 
         let query = self.search_input.trim().to_ascii_lowercase();
-        if query.is_empty() {
-            self.filtered = self.sessions.clone();
-        } else {
-            self.filtered = self
-                .sessions
-                .iter()
-                .filter(|session| fuzzy_match(&query, session))
-                .cloned()
-                .collect();
-        }
+        self.filtered = self
+            .sessions
+            .iter()
+            .filter(|session| {
+                self.matches_workspace_scope(session)
+                    && (query.is_empty() || fuzzy_match(&query, session))
+            })
+            .cloned()
+            .collect();
 
         if self.selected >= self.filtered.len() {
             self.selected = 0;
@@ -312,6 +351,15 @@ impl ModalView for SessionPickerView {
             }
             KeyCode::Char('s') | KeyCode::Char('S') => {
                 self.cycle_sort();
+                ViewAction::None
+            }
+            // `a`/`A` toggles the per-workspace scope filter (#1395). The
+            // picker defaults to showing only sessions for the current
+            // workspace so Ctrl+R never restores a different project's
+            // history by surprise; press `a` to broaden to every saved
+            // session.
+            KeyCode::Char('a') | KeyCode::Char('A') => {
+                self.toggle_all_workspaces();
                 ViewAction::None
             }
             KeyCode::Char('d') | KeyCode::Char('D') => {
@@ -562,6 +610,14 @@ fn truncate(text: &str, width: u16) -> String {
     out
 }
 
+/// Best-effort canonicalisation of a path so two recordings of the same
+/// workspace match even when one is symlinked or relative. Falls back to
+/// the input path when canonicalisation fails (e.g. for a deleted dir or
+/// during tests with tmp paths that have already been cleaned up).
+fn canonical_or_self(path: PathBuf) -> PathBuf {
+    std::fs::canonicalize(&path).unwrap_or(path)
+}
+
 fn fuzzy_match(query: &str, session: &SessionMetadata) -> bool {
     let haystack = format!(
         "{} {} {}",
@@ -615,6 +671,86 @@ mod tests {
         }
     }
 
+    fn test_session_in(idx: usize, title: &str, workspace: &str) -> SessionMetadata {
+        let mut s = test_session(idx, title);
+        s.workspace = std::path::PathBuf::from(workspace);
+        s
+    }
+
+    fn picker_with(sessions: Vec<SessionMetadata>, scope: Option<&str>) -> SessionPickerView {
+        let workspace_scope = scope.map(PathBuf::from);
+        let mut view = SessionPickerView {
+            sessions: sessions.clone(),
+            filtered: sessions,
+            selected: 0,
+            list_scroll: Cell::new(0),
+            list_visible_rows: Cell::new(8),
+            search_input: String::new(),
+            search_mode: false,
+            sort_mode: SortMode::Recent,
+            preview_cache: HashMap::new(),
+            current_preview: Vec::new(),
+            confirm_delete: false,
+            status: None,
+            workspace_scope,
+            show_all_workspaces: false,
+        };
+        view.apply_sort_and_filter();
+        view
+    }
+
+    #[test]
+    fn workspace_scope_filters_sessions_to_current_project() {
+        // #1395 reproduction: Ctrl+R in project B must not surface sessions
+        // from project A.
+        let sessions = vec![
+            test_session_in(1, "project-a chat", "/tmp/project-a"),
+            test_session_in(2, "project-b chat", "/tmp/project-b"),
+            test_session_in(3, "another project-a chat", "/tmp/project-a"),
+        ];
+        let view = picker_with(sessions, Some("/tmp/project-b"));
+        assert_eq!(view.filtered.len(), 1, "only project-b session should show");
+        assert_eq!(view.filtered[0].title, "project-b chat");
+    }
+
+    #[test]
+    fn workspace_scope_toggle_a_expands_to_all_workspaces() {
+        let sessions = vec![
+            test_session_in(1, "a", "/tmp/project-a"),
+            test_session_in(2, "b", "/tmp/project-b"),
+            test_session_in(3, "c", "/tmp/project-c"),
+        ];
+        let mut view = picker_with(sessions, Some("/tmp/project-b"));
+        assert_eq!(view.filtered.len(), 1);
+
+        view.toggle_all_workspaces();
+        assert_eq!(view.filtered.len(), 3, "after toggle, every session shows");
+        assert!(view.show_all_workspaces);
+        assert!(
+            view.status
+                .as_deref()
+                .map(|s| s.contains("every workspace"))
+                .unwrap_or(false),
+            "status should announce the new mode, got {:?}",
+            view.status
+        );
+
+        view.toggle_all_workspaces();
+        assert_eq!(view.filtered.len(), 1, "toggling back restores the scope");
+    }
+
+    #[test]
+    fn workspace_scope_none_means_show_all() {
+        // An unscoped picker (no workspace) lists everything — matches the
+        // pre-#1395 behaviour for any caller that opts out.
+        let sessions = vec![
+            test_session_in(1, "a", "/tmp/project-a"),
+            test_session_in(2, "b", "/tmp/project-b"),
+        ];
+        let view = picker_with(sessions, None);
+        assert_eq!(view.filtered.len(), 2);
+    }
+
     #[test]
     fn build_list_lines_truncates_to_list_pane_width() {
         let sessions = vec![test_session(
@@ -654,6 +790,8 @@ mod tests {
             current_preview: Vec::new(),
             confirm_delete: false,
             status: None,
+            workspace_scope: None,
+            show_all_workspaces: true,
         };
 
         view.selected = 6;

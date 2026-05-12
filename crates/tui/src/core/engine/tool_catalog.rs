@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::time::Duration;
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::models::Tool;
 use crate::tools::spec::{ToolError, ToolResult, required_str};
@@ -390,6 +390,7 @@ pub(super) fn missing_tool_error_message(tool_name: &str, catalog: &[Tool]) -> S
     )
 }
 
+#[cfg(test)]
 pub(super) fn maybe_activate_requested_deferred_tool(
     tool_name: &str,
     catalog: &[Tool],
@@ -404,6 +405,144 @@ pub(super) fn maybe_activate_requested_deferred_tool(
     }
 
     active_tools.insert(tool_name.to_string())
+}
+
+pub(super) fn maybe_hydrate_requested_deferred_tool(
+    tool_name: &str,
+    tool_input: &Value,
+    catalog: &[Tool],
+    active_tools_at_batch_start: &HashSet<String>,
+    hydrated_tools_this_batch: &mut HashSet<String>,
+) -> Option<ToolResult> {
+    let def = catalog.iter().find(|def| def.name == tool_name)?;
+
+    if !def.defer_loading.unwrap_or(false) || active_tools_at_batch_start.contains(tool_name) {
+        return None;
+    }
+
+    hydrated_tools_this_batch.insert(tool_name.to_string());
+    Some(deferred_tool_schema_hydration_result(def, tool_input))
+}
+
+fn deferred_tool_schema_hydration_result(tool: &Tool, tool_input: &Value) -> ToolResult {
+    let expected = schema_field_lines(tool);
+    let received = received_field_names(tool_input);
+    let corrections = likely_field_corrections(&tool.name, &received);
+
+    let expected_text = if expected.is_empty() {
+        "  (no declared fields)".to_string()
+    } else {
+        expected
+            .iter()
+            .map(|field| format!("  {field}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let received_text = if received.is_empty() {
+        "  (none)".to_string()
+    } else {
+        format!("  {}", received.join(", "))
+    };
+    let correction_text = if corrections.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n\nLikely correction:\n{}",
+            corrections
+                .iter()
+                .map(|field| format!("  {field}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    };
+
+    ToolResult::success(format!(
+        "Tool `{}` was deferred and has now been loaded.\n\nExpected schema:\n{}\n\nReceived fields:\n{}{}\n\nThe tool was not executed. Retry the same operation with the loaded schema.",
+        tool.name, expected_text, received_text, correction_text
+    ))
+    .with_metadata(json!({
+        "event": "tool.schema_hydrated",
+        "tool": tool.name,
+        "executed": false,
+        "retry_required": true,
+        "reason": "deferred_tool_first_use",
+    }))
+}
+
+fn schema_field_lines(tool: &Tool) -> Vec<String> {
+    let mut required = Vec::new();
+    if let Some(items) = tool.input_schema.get("required").and_then(Value::as_array) {
+        for item in items {
+            if let Some(field) = item.as_str() {
+                required.push(field.to_string());
+            }
+        }
+    }
+
+    let Some(properties) = tool
+        .input_schema
+        .get("properties")
+        .and_then(Value::as_object)
+    else {
+        return required;
+    };
+
+    let mut fields = Vec::new();
+    let mut seen = HashSet::new();
+    for field in &required {
+        if let Some(schema) = properties.get(field) {
+            fields.push(format!("{field}: {}", schema_type_label(schema)));
+            seen.insert(field.as_str());
+        } else {
+            fields.push(field.clone());
+        }
+    }
+    for (field, schema) in properties {
+        if seen.contains(field.as_str()) {
+            continue;
+        }
+        fields.push(format!("{field}: {} (optional)", schema_type_label(schema)));
+    }
+    fields
+}
+
+fn schema_type_label(schema: &Value) -> String {
+    schema
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("value")
+        .to_string()
+}
+
+fn received_field_names(input: &Value) -> Vec<String> {
+    let mut fields = input
+        .as_object()
+        .map(|object| object.keys().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    fields.sort();
+    fields
+}
+
+fn likely_field_corrections(tool_name: &str, received: &[String]) -> Vec<String> {
+    if tool_name != "edit_file" {
+        return Vec::new();
+    }
+
+    let has = |name: &str| received.iter().any(|field| field == name);
+    let mut corrections = Vec::new();
+    if has("old_string") {
+        corrections.push("old_string -> search".to_string());
+    } else if has("old_str") {
+        corrections.push("old_str -> search".to_string());
+    }
+    if has("new_string") {
+        corrections.push("new_string -> replace".to_string());
+    } else if has("new_str") {
+        corrections.push("new_str -> replace".to_string());
+    } else if has("replacement") {
+        corrections.push("replacement -> replace".to_string());
+    }
+    corrections
 }
 
 pub(super) fn execute_tool_search(

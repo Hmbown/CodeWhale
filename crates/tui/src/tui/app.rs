@@ -369,6 +369,66 @@ fn sanitize_api_key_text(text: &str) -> String {
     text.chars().filter(|c| !c.is_control()).collect()
 }
 
+fn strip_raw_mouse_report_runs(input: &str, cursor: usize) -> Option<(String, usize)> {
+    let chars: Vec<char> = input.chars().collect();
+    let mut output = String::with_capacity(input.len());
+    let mut new_cursor = 0usize;
+    let mut changed = false;
+    let mut index = 0usize;
+
+    while index < chars.len() {
+        if is_raw_mouse_report_run_char(chars[index]) {
+            let start = index;
+            while index < chars.len() && is_raw_mouse_report_run_char(chars[index]) {
+                index += 1;
+            }
+            let run = &chars[start..index];
+            if looks_like_raw_mouse_report_run(run) {
+                changed = true;
+                continue;
+            }
+            for (offset, ch) in run.iter().copied().enumerate() {
+                if start + offset < cursor {
+                    new_cursor += 1;
+                }
+                output.push(ch);
+            }
+            continue;
+        }
+
+        if index < cursor {
+            new_cursor += 1;
+        }
+        output.push(chars[index]);
+        index += 1;
+    }
+
+    changed.then(|| {
+        let cursor = new_cursor.min(char_count(&output));
+        (output, cursor)
+    })
+}
+
+fn is_raw_mouse_report_run_char(ch: char) -> bool {
+    matches!(ch, '\x1b' | '[' | '<' | ';' | ':' | 'M' | 'm') || ch.is_ascii_digit()
+}
+
+fn looks_like_raw_mouse_report_run(run: &[char]) -> bool {
+    if run.len() < 5 {
+        return false;
+    }
+    let has_separator = run.iter().any(|ch| matches!(ch, ';' | ':'));
+    let terminators = run.iter().filter(|ch| matches!(ch, 'M' | 'm')).count();
+    if !has_separator || terminators == 0 {
+        return false;
+    }
+    has_sgr_mouse_marker(run) || terminators >= 2
+}
+
+fn has_sgr_mouse_marker(run: &[char]) -> bool {
+    run.windows(2).any(|window| window == ['[', '<'])
+}
+
 const MAX_SUBMITTED_INPUT_CHARS: usize = 16_000;
 const MAX_DRAFT_HISTORY: usize = 50;
 
@@ -726,7 +786,10 @@ pub struct App {
     pub use_alt_screen: bool,
     pub use_mouse_capture: bool,
     /// When true, plain Up/Down on an empty composer scroll the transcript
-    /// instead of navigating input history (#1117 opt-in).
+    /// instead of navigating input history.  Defaults to `true` when mouse
+    /// capture is off: terminals that convert mouse-wheel events to arrow-key
+    /// sequences (e.g. Windows CMD without `WT_SESSION`) get page-scrolling
+    /// without any explicit config (#1443).
     pub composer_arrows_scroll: bool,
     pub use_bracketed_paste: bool,
     pub use_paste_burst_detection: bool,
@@ -747,6 +810,11 @@ pub struct App {
     /// until the footer widget consumes it.
     #[allow(dead_code)]
     pub fancy_animations: bool,
+    /// Header status-indicator chip mode. One of `"whale"` (default, cycles
+    /// 🐳→🐋 frames keyed off `turn_started_at`), `"dots"` (geometric ◌
+    /// frames), or `"off"` (chip hidden entirely). Loaded from settings;
+    /// changed via `/config status_indicator <whale|dots|off>`.
+    pub status_indicator: String,
     pub show_thinking: bool,
     pub verbose_transcript: bool,
     pub show_tool_details: bool,
@@ -1164,6 +1232,7 @@ impl App {
         let calm_mode = settings.calm_mode;
         let low_motion = settings.low_motion;
         let fancy_animations = settings.fancy_animations;
+        let status_indicator = settings.status_indicator.clone();
         let show_thinking = settings.show_thinking;
         let show_tool_details = settings.show_tool_details;
         let ui_locale = resolve_locale(&settings.locale);
@@ -1356,6 +1425,7 @@ impl App {
             calm_mode,
             low_motion,
             fancy_animations,
+            status_indicator,
             show_thinking,
             verbose_transcript: false,
             show_tool_details,
@@ -1482,7 +1552,7 @@ impl App {
                 .tui
                 .as_ref()
                 .and_then(|tui| tui.composer_arrows_scroll)
-                .unwrap_or(false),
+                .unwrap_or(!use_mouse_capture),
         }
     }
 
@@ -2537,6 +2607,7 @@ impl App {
         let byte_index = byte_index_at_char(&self.input, cursor);
         self.input.insert_str(byte_index, text);
         self.cursor_position = cursor + char_count(text);
+        self.strip_raw_mouse_reports_from_input();
         self.slash_menu_hidden = false;
         self.mention_menu_hidden = false;
         self.mention_menu_selected = 0;
@@ -2798,10 +2869,23 @@ impl App {
         let byte_index = byte_index_at_char(&self.input, cursor);
         self.input.insert(byte_index, c);
         self.cursor_position = cursor + 1;
+        self.strip_raw_mouse_reports_from_input();
         self.slash_menu_hidden = false;
         self.mention_menu_hidden = false;
         self.mention_menu_selected = 0;
         self.needs_redraw = true;
+    }
+
+    fn strip_raw_mouse_reports_from_input(&mut self) {
+        if !self.use_mouse_capture {
+            return;
+        }
+        if let Some((input, cursor_position)) =
+            strip_raw_mouse_report_runs(&self.input, self.cursor_position)
+        {
+            self.input = input;
+            self.cursor_position = cursor_position;
+        }
     }
 
     pub fn delete_char(&mut self) {
@@ -4039,6 +4123,59 @@ mod tests {
     fn test_trust_mode_follows_yolo_on_startup() {
         let app = App::new(test_options(true), &Config::default());
         assert!(app.trust_mode);
+    }
+
+    #[test]
+    fn composer_strips_raw_sgr_mouse_report_when_mouse_capture_is_enabled() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.use_mouse_capture = true;
+
+        app.insert_str("[<35;44;18M");
+
+        assert_eq!(app.input, "");
+        assert_eq!(app.cursor_position, 0);
+    }
+
+    #[test]
+    fn composer_strips_corrupted_mouse_report_burst() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.use_mouse_capture = true;
+        app.insert_str("draft ");
+        let leaked = "43;19M[<35;44;18M[<35;45;18M5;46;18M;48;18M";
+
+        app.insert_str(leaked);
+
+        assert_eq!(app.input, "draft ");
+        assert_eq!(app.cursor_position, "draft ".chars().count());
+    }
+
+    #[test]
+    fn composer_keeps_mouse_like_text_when_mouse_capture_is_disabled() {
+        let mut app = App::new(test_options(false), &Config::default());
+
+        app.insert_str("[<35;44;18M");
+
+        assert_eq!(app.input, "[<35;44;18M");
+    }
+
+    #[test]
+    fn composer_keeps_normal_bracket_text_with_mouse_capture_enabled() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.use_mouse_capture = true;
+
+        app.insert_str("Use [<tag>] normally");
+
+        assert_eq!(app.input, "Use [<tag>] normally");
+    }
+
+    #[test]
+    fn composer_keeps_coordinate_like_text_with_mouse_capture_enabled() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.use_mouse_capture = true;
+
+        app.insert_str("Size 12;34M");
+
+        assert_eq!(app.input, "Size 12;34M");
     }
 
     #[test]

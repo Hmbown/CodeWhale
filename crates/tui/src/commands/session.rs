@@ -202,7 +202,7 @@ pub fn export(app: &mut App, path: Option<&str>) -> CommandResult {
 pub fn sessions(app: &mut App, arg: Option<&str>) -> CommandResult {
     let trimmed = arg.unwrap_or("").trim();
     if trimmed.is_empty() {
-        app.view_stack.push(SessionPickerView::new());
+        app.view_stack.push(SessionPickerView::new(&app.workspace));
         return CommandResult::ok();
     }
 
@@ -211,7 +211,7 @@ pub fn sessions(app: &mut App, arg: Option<&str>) -> CommandResult {
     match action.as_str() {
         "prune" => prune(app, parts.next()),
         "show" | "list" | "picker" => {
-            app.view_stack.push(SessionPickerView::new());
+            app.view_stack.push(SessionPickerView::new(&app.workspace));
             CommandResult::ok()
         }
         _ => CommandResult::error(format!(

@@ -916,6 +916,9 @@ mod tests {
     /// tool headers with multiple decorative spans) and report the memory
     /// consumed by `rail_prefix_widths`. This is informational — the assertion
     /// only fails if the per-line overhead exceeds a generous bound.
+    // Test prints memory-overhead diagnostics — runs in `cargo test`, never
+    // inside the TUI alt-screen, so the module-level deny doesn't apply.
+    #[allow(clippy::print_stderr)]
     #[test]
     fn rail_prefix_widths_memory_overhead_complex_session() {
         let mut cells: Vec<HistoryCell> = Vec::new();

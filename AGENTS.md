@@ -12,6 +12,12 @@ This file provides context for AI assistants working on this project.
 - Run (canonical): `deepseek` — use the **`deepseek` binary**, not `deepseek-tui`. The dispatcher delegates to the TUI for interactive use and is the supported entry point for every flow (`deepseek`, `deepseek -p "..."`, `deepseek doctor`, `deepseek mcp …`, etc.).
 - Run from source: `cargo run --bin deepseek` (or `cargo run -p deepseek-tui-cli`).
 - Local dev shorthand: after `cargo build --release`, run `./target/release/deepseek`.
+- **Two binaries, two installs.** `deepseek` (the CLI dispatcher, `crates/cli`) and `deepseek-tui` (the TUI runtime, `crates/tui`) ship as **separate executables**. The dispatcher resolves and spawns `deepseek-tui` as a sibling on PATH for interactive use, so installing only the CLI leaves the TUI stale and your fix won't appear to run. Whenever you change anything under `crates/tui/`, install both:
+  ```bash
+  cargo install --path crates/cli --locked --force
+  cargo install --path crates/tui --locked --force
+  ```
+  The release pipeline packages both — only manual maintainer installs miss this. If a fix you just made "isn't taking effect," check `stat -f '%Sm' ~/.cargo/bin/deepseek-tui` before reaching for `tracing::debug!`.
 
 ### Build Dependencies
 - **Rust** 1.88+ (the workspace declares `rust-version = "1.88"` because we

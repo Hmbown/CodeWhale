@@ -226,6 +226,24 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
     if use_alt_screen {
         execute!(stdout, EnterAlternateScreen)?;
     }
+    // Initialize the file-backed TUI log and (on Unix) redirect raw stderr
+    // away from the alt-screen for the lifetime of this guard. Any
+    // `eprintln!`, panic message, or third-party stderr write that would
+    // otherwise leak into the alt-screen buffer and shift ratatui's
+    // diff-renderer view (the "scroll demon" reported in #1085) now lands
+    // in `~/.deepseek/logs/tui-YYYY-MM-DD.log` instead. The guard is held
+    // until the function returns; dropping it (after `LeaveAlternateScreen`
+    // below) restores the original stderr fd so shutdown messages reach
+    // the user's terminal. We accept the init failing (e.g., read-only
+    // `$HOME`) and continue without the redirect rather than refusing to
+    // start the TUI.
+    let _tui_log_guard = match crate::runtime_log::init() {
+        Ok(guard) => Some(guard),
+        Err(err) => {
+            tracing::warn!(target: "runtime_log", ?err, "TUI log init failed; stderr leaks may render as scroll-demon");
+            None
+        }
+    };
     // Mouse capture, bracketed paste, focus events, and the Kitty
     // keyboard-protocol escape-disambiguation flag (#442). Single source
     // of truth shared with the FocusGained recovery path and
@@ -444,21 +462,27 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
     terminal.show_cursor()?;
     drop(terminal);
 
-    if result.is_ok()
-        && let Some(hint) = format_resume_hint(app.current_session_id.as_deref())
-    {
-        println!("{hint}");
+    if result.is_ok() && should_show_resume_hint(app.current_session_id.as_deref()) {
+        // Printed AFTER `LeaveAlternateScreen` / `drop(terminal)` above,
+        // so we're back on the primary screen — this is the one
+        // legitimate stdout write in the TUI module tree. The
+        // module-level `#![deny(clippy::print_stdout)]` would otherwise
+        // refuse it.
+        #[allow(clippy::print_stdout)]
+        {
+            println!("{}", resume_hint_text());
+        }
     }
 
     result
 }
 
-fn format_resume_hint(session_id: Option<&str>) -> Option<String> {
-    let session_id = session_id?.trim();
-    if session_id.is_empty() {
-        return None;
-    }
-    Some("To continue this session, execute deepseek run --continue".to_string())
+fn should_show_resume_hint(session_id: Option<&str>) -> bool {
+    session_id.is_some_and(|id| !id.trim().is_empty())
+}
+
+fn resume_hint_text() -> &'static str {
+    "To continue this session, execute deepseek run --continue"
 }
 
 fn terminal_probe_timeout(config: &Config) -> Duration {
@@ -2206,21 +2230,19 @@ async fn run_event_loop(
                     continue;
                 }
                 KeyCode::Char('l')
-                    if key.modifiers.is_empty()
+                    if alt_nav_modifiers(key.modifiers)
                         && app.input.is_empty()
                         && open_pager_for_last_message(app) =>
                 {
                     continue;
                 }
-                KeyCode::Char('v') | KeyCode::Char('V')
-                    if details_shortcut_modifiers(key.modifiers)
-                        && app.input.is_empty()
-                        && open_tool_details_pager(app) =>
-                {
-                    continue;
-                }
+                // Bare `v` / `V` no longer opens the tool-details pager — that
+                // path is owned exclusively by `Alt+V` at the lower arm, so
+                // the letter `v` is freely usable as the first character of
+                // a message. `details_shortcut_modifiers` previously allowed
+                // empty/Shift here, eating the keystroke on empty composers.
                 KeyCode::Char('o')
-                    if key.modifiers == KeyModifiers::CONTROL
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
                         && app.input.is_empty()
                         && open_thinking_pager(app) =>
                 {
@@ -2299,7 +2321,11 @@ async fn run_event_loop(
                     continue;
                 }
                 KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    app.view_stack.push(SessionPickerView::new());
+                    // Scope the picker to the current workspace so Ctrl+R
+                    // never restores a different project's history by
+                    // surprise (#1395). Press `a` inside the picker to
+                    // broaden to every saved session.
+                    app.view_stack.push(SessionPickerView::new(&app.workspace));
                     continue;
                 }
                 KeyCode::Char('c') | KeyCode::Char('C') if is_copy_shortcut(&key) => {
@@ -2363,76 +2389,78 @@ async fn run_event_loop(
                     app.mention_menu_hidden = true;
                     app.mention_menu_selected = 0;
                 }
-                KeyCode::Esc => match next_escape_action(app, slash_menu_open) {
-                    EscapeAction::CloseSlashMenu => {
-                        // A popup-style action wins over backtrack — clear
-                        // any prime so a stale Primed state can't jump us
-                        // straight into Selecting on the next Esc.
-                        app.backtrack.reset();
-                        app.close_slash_menu();
-                    }
-                    EscapeAction::CancelRequest => {
-                        app.backtrack.reset();
-                        engine_handle.cancel();
-                        app.is_loading = false;
-                        app.dispatch_started_at = None;
-                        app.streaming_state.reset();
-                        // Optimistically halt the wave + working label —
-                        // engine's TurnComplete will resync with the real
-                        // outcome. Fixes #5a (wave kept animating after Esc).
-                        app.runtime_turn_status = None;
-                        // Finalize any in-flight tool entries optimistically so
-                        // the composer regains focus and the footer's "tool ...
-                        // · X active" chip clears immediately rather than
-                        // waiting for the engine's TurnComplete echo to drain.
-                        // Idempotent with the TurnComplete handler that runs
-                        // when the engine actually echoes the cancel (#243).
-                        // Background sub-agents continue running — they are
-                        // tracked via `subagent_cache` independently of the
-                        // foreground turn.
-                        app.finalize_active_cell_as_interrupted();
-                        app.finalize_streaming_assistant_as_interrupted();
-                        app.status_message = Some("Request cancelled".to_string());
-                    }
-                    EscapeAction::DiscardQueuedDraft => {
-                        app.backtrack.reset();
-                        app.queued_draft = None;
-                        app.status_message = Some("Stopped editing queued message".to_string());
-                    }
-                    EscapeAction::ClearInput => {
-                        app.backtrack.reset();
-                        app.edit_in_progress = false;
-                        app.clear_input_recoverable();
-                    }
-                    EscapeAction::Noop => {
-                        // Nothing else cares about this Esc — route it
-                        // through the backtrack state machine. While
-                        // streaming or with the live transcript already
-                        // open, fall through silently (#133 acceptance:
-                        // "during streaming Esc-Esc is a silent no-op").
-                        if app.is_loading
-                            || app.view_stack.top_kind() == Some(ModalKind::LiveTranscript)
-                        {
-                            continue;
+                KeyCode::Esc => {
+                    match next_escape_action(app, slash_menu_open) {
+                        EscapeAction::CloseSlashMenu => {
+                            // A popup-style action wins over backtrack — clear
+                            // any prime so a stale Primed state can't jump us
+                            // straight into Selecting on the next Esc.
+                            app.backtrack.reset();
+                            app.close_slash_menu();
                         }
-                        let total = count_user_history_cells(app);
-                        match app.backtrack.handle_esc(total) {
-                            crate::tui::backtrack::EscEffect::None => {}
-                            crate::tui::backtrack::EscEffect::Prime => {
-                                app.status_message =
-                                    Some("Press Esc again to backtrack".to_string());
-                                app.needs_redraw = true;
+                        EscapeAction::CancelRequest => {
+                            app.backtrack.reset();
+                            engine_handle.cancel();
+                            app.is_loading = false;
+                            app.dispatch_started_at = None;
+                            app.streaming_state.reset();
+                            // Optimistically halt the wave + working label —
+                            // engine's TurnComplete will resync with the real
+                            // outcome. Fixes #5a (wave kept animating after Esc).
+                            app.runtime_turn_status = None;
+                            // Finalize any in-flight tool entries optimistically so
+                            // the composer regains focus and the footer's "tool ...
+                            // · X active" chip clears immediately rather than
+                            // waiting for the engine's TurnComplete echo to drain.
+                            // Idempotent with the TurnComplete handler that runs
+                            // when the engine actually echoes the cancel (#243).
+                            // Background sub-agents continue running — they are
+                            // tracked via `subagent_cache` independently of the
+                            // foreground turn.
+                            app.finalize_active_cell_as_interrupted();
+                            app.finalize_streaming_assistant_as_interrupted();
+                            app.status_message = Some("Request cancelled".to_string());
+                        }
+                        EscapeAction::DiscardQueuedDraft => {
+                            app.backtrack.reset();
+                            app.queued_draft = None;
+                            app.status_message = Some("Stopped editing queued message".to_string());
+                        }
+                        EscapeAction::ClearInput => {
+                            app.backtrack.reset();
+                            app.edit_in_progress = false;
+                            app.clear_input_recoverable();
+                        }
+                        EscapeAction::Noop => {
+                            // Nothing else cares about this Esc — route it
+                            // through the backtrack state machine. While
+                            // streaming or with the live transcript already
+                            // open, fall through silently (#133 acceptance:
+                            // "during streaming Esc-Esc is a silent no-op").
+                            if app.is_loading
+                                || app.view_stack.top_kind() == Some(ModalKind::LiveTranscript)
+                            {
+                                continue;
                             }
-                            crate::tui::backtrack::EscEffect::Cancel => {
-                                app.status_message = Some("Backtrack canceled".to_string());
-                                app.needs_redraw = true;
-                            }
-                            crate::tui::backtrack::EscEffect::OpenOverlay => {
-                                open_backtrack_overlay(app);
+                            let total = count_user_history_cells(app);
+                            match app.backtrack.handle_esc(total) {
+                                crate::tui::backtrack::EscEffect::None => {}
+                                crate::tui::backtrack::EscEffect::Prime => {
+                                    app.status_message =
+                                        Some("Press Esc again to backtrack".to_string());
+                                    app.needs_redraw = true;
+                                }
+                                crate::tui::backtrack::EscEffect::Cancel => {
+                                    app.status_message = Some("Backtrack canceled".to_string());
+                                    app.needs_redraw = true;
+                                }
+                                crate::tui::backtrack::EscEffect::OpenOverlay => {
+                                    open_backtrack_overlay(app);
+                                }
                             }
                         }
                     }
-                },
+                }
                 KeyCode::Up if key.modifiers.contains(KeyModifiers::SUPER) => {
                     app.scroll_up(app.viewport.last_transcript_visible.max(3));
                 }
@@ -2541,8 +2569,19 @@ async fn run_event_loop(
                 KeyCode::BackTab => {
                     app.cycle_effort();
                 }
+                // Transcript-nav shortcuts now require Alt, leaving the bare
+                // letters free to insert as text. Before v0.8.30, bare `g`,
+                // `G`, `[`, `]`, `?`, `l`, and `v` on an empty composer were
+                // hijacked for navigation — typing "good" yielded "ood" with
+                // no whale and no warning. The Alt-prefixed shortcuts mirror
+                // the Alt+R / Alt+V / Alt+C pattern already in use. Shift is
+                // permitted so capital-letter forms (e.g. `Alt+Shift+G` for
+                // bottom) work; Ctrl/Super are blocked so the bindings don't
+                // collide with platform clipboard / window shortcuts.
                 KeyCode::Char('g')
-                    if key.modifiers.is_empty() && app.input.is_empty() && !slash_menu_open =>
+                    if alt_nav_modifiers(key.modifiers)
+                        && app.input.is_empty()
+                        && !slash_menu_open =>
                 {
                     if let Some(anchor) =
                         TranscriptScroll::anchor_for(app.viewport.transcript_cache.line_meta(), 0)
@@ -2551,14 +2590,14 @@ async fn run_event_loop(
                     }
                 }
                 KeyCode::Char('G')
-                    if (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT)
+                    if alt_nav_modifiers(key.modifiers)
                         && app.input.is_empty()
                         && !slash_menu_open =>
                 {
                     app.scroll_to_bottom();
                 }
                 KeyCode::Char('[')
-                    if key.modifiers.is_empty()
+                    if alt_nav_modifiers(key.modifiers)
                         && app.input.is_empty()
                         && !slash_menu_open
                         && !jump_to_adjacent_tool_cell(app, SearchDirection::Backward) =>
@@ -2566,20 +2605,19 @@ async fn run_event_loop(
                     app.status_message = Some("No previous tool output".to_string());
                 }
                 KeyCode::Char(']')
-                    if key.modifiers.is_empty()
+                    if alt_nav_modifiers(key.modifiers)
                         && app.input.is_empty()
                         && !slash_menu_open
                         && !jump_to_adjacent_tool_cell(app, SearchDirection::Forward) =>
                 {
                     app.status_message = Some("No next tool output".to_string());
                 }
-                // `?` opens the searchable help overlay (#93). Gated on the
-                // composer being empty so typing `?` mid-question is treated
-                // as text. `Shift` is permitted because US layouts produce
-                // `?` as `Shift+/`. Help-modal toggling lives next to the
-                // F1 / Ctrl+/ branch above; here we only open.
+                // `Alt+?` opens the searchable help overlay (#93). F1 and
+                // Ctrl+/ are also bound; bare `?` is reserved as text input
+                // so users can start a message with "?" without losing the
+                // first character.
                 KeyCode::Char('?')
-                    if (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT)
+                    if alt_nav_modifiers(key.modifiers)
                         && app.input.is_empty()
                         && !slash_menu_open =>
                 {
@@ -5637,7 +5675,11 @@ fn render(f: &mut Frame, app: &mut App) {
             sanitized_prompt_tokens,
         )
         .with_reasoning_effort(Some(&effort_label))
-        .with_provider(provider_label);
+        .with_provider(provider_label)
+        .with_status_indicator(crate::tui::widgets::header_status_indicator_frame(
+            app.turn_started_at,
+            &app.status_indicator,
+        ));
         let header_widget = HeaderWidget::new(header_data);
         let buf = f.buffer_mut();
         header_widget.render(chunks[0], buf);
@@ -6845,11 +6887,11 @@ fn render_footer(f: &mut Frame, area: Rect, app: &mut App) {
 
     // Animate the spacer between the left status line and the right-hand
     // chips whenever a turn is live: model loading/streaming, compacting, or
-    // sub-agents in flight. Honors the `low_motion` setting — calm terminals
-    // get the plain whitespace gap. Strip frame counter ticks every 150 ms
-    // (crest A advances every 4 ticks ≈ 600 ms, B every 6 ticks ≈ 900 ms,
-    // jitter every 17 ticks ≈ 2.5 s). Dot-pulse counter ticks every 400 ms
-    // so `working` → `working...` reads at a calm pace.
+    // sub-agents in flight. The spout strip is gated on `fancy_animations`
+    // (the "do I want a whale at all" knob); `low_motion` now governs only
+    // streaming pacing (typewriter vs upstream), not the spout. Dot-pulse
+    // counter ticks every 400 ms so `working` → `working...` reads at a
+    // calm pace regardless of motion mode.
     if footer_working_strip_active(app) {
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -6864,12 +6906,15 @@ fn render_footer(f: &mut Frame, area: Rect, app: &mut App) {
             .unwrap_or_else(|| crate::tui::widgets::footer_working_label(dot_frame, app.ui_locale));
         props.state_color = palette::DEEPSEEK_SKY;
 
-        // Spout drift: only animate when low_motion is off. The textual
-        // `working...` pulse stays even in low-motion mode so the user still
-        // sees that something is happening.
-        if !app.low_motion {
-            let strip_frame = now_ms;
-            props.working_strip_frame = Some(strip_frame);
+        // Water-spout frame source: wall-clock milliseconds. The sine-wave
+        // math in `footer_working_strip_glyph_at` was tuned for this cadence
+        // (`t = frame / 1000.0`, primary term × 8.0 ≈ 1.3 Hz at 1 ms ticks),
+        // so frame must advance at ~1000 units/sec to produce the intended
+        // animation feel. `fancy_animations = false` hides the strip
+        // entirely; the textual `working...` pulse still keeps a heartbeat
+        // regardless.
+        if app.fancy_animations {
+            props.working_strip_frame = Some(now_ms);
         }
     } else if props.state_label == "ready"
         && let Some(label) = selected_detail_footer_label(app)
@@ -8465,8 +8510,16 @@ fn open_pager_for_last_message(app: &mut App) -> bool {
 
 /// Open a pager showing the full thinking block. Targets the cell at the
 /// current selection if it's a Thinking cell; otherwise falls back to the
-/// most recent Thinking cell in history. Bound to Ctrl+O so users can read
-/// reasoning content that's been collapsed in calm-mode rendering.
+/// most recent Thinking cell across the virtual transcript (history +
+/// in-flight `active_cell`). Bound to Ctrl+O so users can read reasoning
+/// content that's been collapsed in calm-mode rendering.
+///
+/// The virtual-index lookup matters: after `ThinkingComplete` fires the
+/// finalized thinking entry sits in `active_cell` with `streaming = false`
+/// until the active cell flushes to history. During that window the
+/// transcript already renders the "thinking collapsed; press Ctrl+O for
+/// full text" affordance, so the handler must address active-cell entries
+/// or the affordance becomes a lie.
 fn open_thinking_pager(app: &mut App) -> bool {
     let selected_cell = app
         .viewport
@@ -8482,23 +8535,18 @@ fn open_thinking_pager(app: &mut App) -> bool {
         })
         .filter(|&idx| {
             matches!(
-                app.history.get(idx),
+                app.cell_at_virtual_index(idx),
                 Some(crate::tui::history::HistoryCell::Thinking { .. })
             )
         });
 
     let target_idx = selected_cell.or_else(|| {
-        app.history
-            .iter()
-            .enumerate()
-            .rev()
-            .find_map(|(idx, cell)| {
-                if matches!(cell, crate::tui::history::HistoryCell::Thinking { .. }) {
-                    Some(idx)
-                } else {
-                    None
-                }
-            })
+        (0..app.virtual_cell_count()).rev().find(|&idx| {
+            matches!(
+                app.cell_at_virtual_index(idx),
+                Some(crate::tui::history::HistoryCell::Thinking { .. })
+            )
+        })
     });
 
     let Some(idx) = target_idx else {
@@ -8506,13 +8554,18 @@ fn open_thinking_pager(app: &mut App) -> bool {
         return true;
     };
 
-    let cell = &app.history[idx];
     let width = app
         .viewport
         .last_transcript_area
         .map(|area| area.width)
         .unwrap_or(80);
-    let text = history_cell_to_text(cell, width);
+    let text = {
+        let Some(cell) = app.cell_at_virtual_index(idx) else {
+            app.status_message = Some("No thinking blocks to expand".to_string());
+            return true;
+        };
+        history_cell_to_text(cell, width)
+    };
     app.view_stack.push(PagerView::from_text(
         "Thinking",
         &text,
@@ -8774,12 +8827,20 @@ fn tool_details_shortcut_label() -> &'static str {
     }
 }
 
-fn details_shortcut_modifiers(modifiers: KeyModifiers) -> bool {
-    modifiers.is_empty()
-        || modifiers == KeyModifiers::SHIFT
-        || (modifiers.contains(KeyModifiers::ALT)
-            && !modifiers.contains(KeyModifiers::CONTROL)
-            && !modifiers.contains(KeyModifiers::SUPER))
+/// Modifier predicate for the v0.8.30 family of `Alt+<letter>` transcript-
+/// nav shortcuts (`Alt+G` / `Alt+Shift+G` / `Alt+[` / `Alt+]` / `Alt+?` /
+/// `Alt+L` / `Alt+V`). Requires `Alt` and disallows `Ctrl` / `Super` so the
+/// bindings don't collide with platform clipboard / window-management
+/// shortcuts. `Shift` is permitted so the capital-letter forms work on
+/// any keyboard layout that produces them as `Alt+Shift+key`.
+///
+/// Plain `Char` events (no modifier, or modifier=`Shift` alone for the
+/// uppercase form) fall through to text insertion, which is the whole
+/// point — typing "good morning" no longer eats the first `g`.
+fn alt_nav_modifiers(modifiers: KeyModifiers) -> bool {
+    modifiers.contains(KeyModifiers::ALT)
+        && !modifiers.contains(KeyModifiers::CONTROL)
+        && !modifiers.contains(KeyModifiers::SUPER)
 }
 
 fn is_macos_option_v_legacy_key(key: &KeyEvent) -> bool {

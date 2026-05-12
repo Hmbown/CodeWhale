@@ -192,51 +192,93 @@ deepseek --provider ollama --model deepseek-coder:1.3b
 
 ---
 
-## v0.8.27 新功能
+## v0.8.29 新功能
 
-优化版本：17 个社区 PR + 一轮针对 v0.8.26 发布后 24-48 小时内用户报告
-问题的集中修复。[完整更新日志](CHANGELOG.md)。
+维护版本，核心是修复 v0.8.27 / v0.8.28 引入的"滚动幽灵"回归
+（#1085 类问题）和 Ctrl+R 会话恢复跨项目泄漏的问题（#1395），
+外加 25 个社区 PR。[完整更新日志](CHANGELOG.md)。
 
-- **跨终端闪烁修复**（Ghostty / VSCode 终端 / Win10 conhost；v0.8.26
-  发布后报告最多的回归问题 — #1119、#1260、#1295、#1352、#1356、
-  #1363、#1366）。视口重置序列移除了破坏性的 `2J/3J`，由 alt-screen
-  和差分渲染处理重绘，不再闪烁。
-- **长输出文字不再溢出右边缘** (#1344、#1351)。段落和代码块在字符
-  边界对超长词进行硬断行 — 与 v0.8.25 表格单元格修复保持一致。
-- **Pager 复制功能** 通过 `c` 或 `y` 键 (#1354) — 所有全屏 pager
-  (`Alt+V` 工具详情、`Ctrl+O` 思考内容、shell-job / task / MCP
-  管理器) 都支持应用内复制键。
-- **上下文感知的 Ctrl+C** (#1337、#1367) — 选中文本→复制（匹配
-  Windows 系统约定）、正在生成→中断、空闲→两次按键确认退出。
-  `Cmd+C` / `Ctrl+Shift+C` 行为不变。
-- **MCP pool 在 `mcp.json` 变化时自动重载** (#1267 part 2) — 编辑
-  配置后不再需要手动 `/mcp reload`。每次工具调用前做轻量级
-  mtime + 内容哈希检查；网络文件系统粗粒度 mtime 不会造成抖动。
-- **模型可调用的 `notify` 工具** (#1322) — 用于"长任务完成"提醒的
-  桌面通知。沿用现有 `[notifications].method` 配置；设为 off
-  时静默无操作。
-- **新手引导界面在所选语言中渲染** — 第二步选择简体中文 / 日本語 /
-  Português (Brasil) 后，后续步骤全部使用该语言。对避免 IME 频繁
-  切换的 CJK 用户特别有用。
-- **粘贴体验重构** — 大粘贴在粘贴时立即转换为 `@paste-…md`
-  （在发送前可见，避免"自动发送了一个我没授权的 @mention"的意外）；
-  粘贴突发检测在终端支持 bracketed paste 后自动停用；短 CJK 内容
-  粘贴的尾部换行不再触发自动发送 (#1302，感谢 **@reidliu41**
-  PR #1342)。
-- **`/skills <prefix>`** 按名称前缀过滤本地技能列表 (#1318) — 在
-  v0.8.26 的行间距改进 (#1328 来自 **@reidliu41**) 基础上。
-- **`/skills --remote` 错误诊断提示** (#1329) — 拉取注册表失败时，
-  错误链末尾会附加一行提示，指出最可能的原因（DNS / TLS / 拒绝 /
-  4xx / 429 / 超时）。
-- **17 个社区 PR 落地** — `/mode` 统一命令、`/status` 诊断、
-  `/feedback`、会话产物元数据、子代理结果自报告、全局 AGENTS.md
-  回退、`--yolo` CLI→TUI 传递、`composer_arrows_scroll`、会话成本
-  持久化、provider 感知模型选择器 + 持久化、HTTP User-Agent、
-  HTTP-400 配额重试、显式隐藏文件补全、Windows 鼠标捕获文档、
-  README zh-CN 同步、工具输出渲染性能 + 卡片栏、测试覆盖扩展。
-  感谢 **@reidliu41**、**@THINKER-ONLY**、**@manaskarra**、
-  **@fuleinist**、**@lbcheng888**、**@imkingjh999**、**@dst1213**、
-  **@SamhandsomeLee**、**@Oliver-ZPLiu**、**@whtis**、**@tuohai666**。
+- **"滚动幽灵"彻底修复**（#1085 回归）。并行子代理运行
+  `exec_shell` 时，alt-screen 会被滚动出 ratatui 差分渲染器的
+  视野，header 上方出现越来越大的空白带。三层防护一并上线：
+  写入 `~/.deepseek/logs/tui-YYYY-MM-DD.log` 的 `tracing-subscriber`、
+  alt-screen 生命周期内的 fd 级 stderr 重定向（Unix `dup2`）、
+  以及 `tools/`、`core/`、`tui/`、`network_policy.rs`、
+  `runtime_threads.rs` 模块的
+  `#![deny(clippy::print_stdout, clippy::print_stderr)]`。今后在
+  这些模块新增 `eprintln!` 会被 CI 拒绝。
+- **Ctrl+R 会话恢复改为按当前工作区过滤**（#1395，PR #1397，
+  来自 **@linzhiqin2003**）— 此前列出磁盘上所有会话，导致
+  在项目 B 打开 DeepSeek-TUI 时按下 Ctrl+R 可能恢复项目 A 的
+  历史记录。
+- **运行时版本号直接显示在 header 中。** Header 右侧集群在
+  provider / effort / Live / context 之后增加一个 `v0.8.29`
+  小标签，在终端宽度紧张时最先收起。
+- **MCP HTTP 传输现在尊重 HTTP(S)_PROXY**（#1408，来自
+  **@hlx98007**）— 公司出口代理、国内 Clash / Shadowsocks 代理
+  现在能正确应用于 MCP HTTP 连接，跟 box 上的其他工具
+  （curl、npm、git 等）保持一致。同时支持 `NO_PROXY`。
+- **MCP 发现接受不规范条目**（PR #1410，来自 **@Liu-Vince**）—
+  一个错误的 tool / resource / prompt 条目不再让整页丢失；
+  错误条目被跳过，目录的其余部分正常返回。
+- **MCP SSE 接受 CRLF 分隔的 endpoint 事件**（#1309，PR #1358，
+  来自 **@reidliu41**）— FastMCP / uvicorn 风格的 SSE 流不再因
+  只等待 LF 分隔符而超时。
+- **输入框会忽略泄漏的鼠标报告字节**（#1418，PR #1421，来自
+  **@reidliu41**）— 某些 SSH / IDE 终端链路把 `[<35;44;18M`
+  这类鼠标报告泄漏到 stdin 时，不再把输入区域填满。
+- **Footer 芯片会遵守可用宽度**（#1357，PR #1417，来自
+  **@Wenjunyun123**）— 窄终端下，过长的 cache / aux 芯片会先
+  收起，而不是挤压左侧状态或 composer 区域。
+- **笔记管理斜杠命令**（PR #1407，来自 **@reidliu41**）—
+  `/note add`、`/note list` 等命令在 TUI 内提供持久笔记功能。
+- **全局 `~/.deepseek/AGENTS.md` 与项目 AGENTS.md 合并**
+  （#1157，PR #1399，来自 **@linzhiqin2003**）— 此前工作区
+  自带 AGENTS.md 会完全遮蔽全局基准，现在分层叠加。
+- **语言指令：thinking 跟随用户消息语言**（#1118，PR #1398，
+  来自 **@linzhiqin2003**）— 此前项目上下文推断的 `lang`
+  字段可能压制最新用户消息的语言，导致中文对话出现英文 thinking。
+- **网络搜索过滤垃圾 SERP**（#964，PR #1396，来自
+  **@linzhiqin2003**）— Bing / DDG 回退路径丢弃污染快速查找
+  结果的 SEO 农场域名。
+- **Auto 路由识别 CJK 调试 / 搜索关键词**（PR #1401、#1402，
+  来自 **@linzhiqin2003**）— `--model auto` 和推理强度选择器
+  现在能正确路由中文 / 日文技术查询，此前会回退到通用基准。
+- **Deferred tools 首次执行前会先加载 schema**（#1419，PR #1429，
+  来自 **@SamhandsomeLee**）— `edit_file` 等延迟加载工具现在会先
+  展示期望字段并要求模型重试，而不是执行模型猜测出来的参数名。
+- **DeepSeek 公开别名会正确回放 thinking-mode 工具轮次**（PR #1428，
+  来自 **@Beltran12138**）— `deepseek-chat` 和
+  `deepseek-reasoner` 现在与显式 V4 模型 ID 一样触发
+  `reasoning_content` replay，避免工具调用后的第二轮 400。
+- **技能补全收敛到 `/skill` 下**（#1437，PR #1442，来自
+  **@reidliu41**）— 本地技能很多时不会再挤满根级 `/` 命令菜单。
+- **`edit_file` 拒绝无变化替换**（PR #1460，来自
+  **@xiluoduyu**）— `search` / `replace` 完全相同时会直接返回
+  清晰的参数错误，而不是生成空 diff。
+- **Windows 终端布局使用宽度稳定的字形**（#1314，PR #1465，来自
+  **@CrepuscularIRIS**）— header 和文件树不再依赖 cmd /
+  PowerShell 容易误判宽度的 SMP emoji。
+- **Ghostty 默认启用低动态渲染**（#1445，PR #1468，来自
+  **@CrepuscularIRIS**）— 受影响终端无需手动配置即可避开动画闪烁。
+- **Docker buildx provenance 的 EPERM 失败会给出提示**（#1449，
+  PR #1469，来自 **@CrepuscularIRIS**）— macOS shell 输出命中
+  受限 metadata 写入失败时，会提示 provenance 相关开关。
+- **Windows CMD 的鼠标滚轮回退会滚动 transcript**（#1443，
+  PR #1471，来自 **@CrepuscularIRIS**）— 关闭 mouse capture 时，
+  被终端映射成 Up / Down 的滚轮事件不再循环 composer 历史。
+- **`sync-cnb.yml` 工作流加固** — 显式 `permissions: contents:
+  read`、`actions/checkout` v3 → v4、触发器收紧到 `main` +
+  `v*` 标签（不再镜像 feature 分支）。
+- **新增 +438 LOC 测试覆盖** — `error_taxonomy`、
+  `parse_pages_arg`、Web 搜索优先级、`sanitize_stream_chunk`
+  控制字节过滤（PR #1403–#1406，来自 **@linzhiqin2003**）。
+
+感谢本周期落地 10 个 PR 的 **@linzhiqin2003**、落地 5 个 PR 的
+**@reidliu41**、落地 4 个 PR 的 **@CrepuscularIRIS**，以及
+**@SamhandsomeLee**、**@Beltran12138**、**@Wenjunyun123**、
+**@hlx98007**、**@Liu-Vince**、**@xiluoduyu**，和报告 #1395 的
+**@shenxiaodaosanhua**。
 
 ---
 

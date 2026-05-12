@@ -574,7 +574,7 @@ fn paths_equivalent(lhs: &Path, rhs: &Path) -> bool {
 fn find_git_root(path: &Path) -> Option<PathBuf> {
     let mut current = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     loop {
-        if current.join(".git").exists() {
+        if is_git_metadata_entry(&current.join(".git")) {
             return Some(current);
         }
         match current.parent() {
@@ -582,6 +582,16 @@ fn find_git_root(path: &Path) -> Option<PathBuf> {
             _ => return None,
         }
     }
+}
+
+fn is_git_metadata_entry(path: &Path) -> bool {
+    if path.is_dir() {
+        return path.join("HEAD").is_file();
+    }
+
+    fs::read_to_string(path)
+        .map(|content| content.trim_start().starts_with("gitdir:"))
+        .unwrap_or(false)
 }
 
 /// Resolve the default session directory path (`~/.deepseek/sessions`).
@@ -1067,6 +1077,31 @@ mod tests {
     }
 
     #[test]
+    fn latest_session_for_workspace_ignores_invalid_parent_git_marker() {
+        let tmp = tempdir().expect("tempdir");
+        let manager = SessionManager::new(tmp.path().join("sessions")).expect("new");
+        let workspace_a = tmp.path().join("aa").join("aaa");
+        let workspace_b = tmp.path().join("bb").join("bbb");
+        fs::create_dir_all(&workspace_a).expect("mkdir workspace a");
+        fs::create_dir_all(&workspace_b).expect("mkdir workspace b");
+        fs::create_dir_all(tmp.path().join(".git")).expect("mkdir invalid git marker");
+
+        write_session_record(
+            &manager,
+            "current-workspace",
+            &workspace_a,
+            Utc::now() - chrono::Duration::minutes(10),
+        );
+        write_session_record(&manager, "other-workspace", &workspace_b, Utc::now());
+
+        let scoped = manager
+            .get_latest_session_for_workspace(&workspace_a)
+            .expect("latest for workspace")
+            .expect("scoped latest");
+        assert_eq!(scoped.id, "current-workspace");
+    }
+
+    #[test]
     fn latest_session_for_workspace_matches_same_git_repository() {
         let tmp = tempdir().expect("tempdir");
         let manager = SessionManager::new(tmp.path().join("sessions")).expect("new");
@@ -1075,6 +1110,7 @@ mod tests {
         let repo_crate = repo.join("crates").join("server");
         let other_repo = tmp.path().join("other").join("project");
         fs::create_dir_all(repo.join(".git")).expect("mkdir .git");
+        fs::write(repo.join(".git").join("HEAD"), "ref: refs/heads/main\n").expect("write HEAD");
         fs::create_dir_all(&repo_app).expect("mkdir repo app");
         fs::create_dir_all(&repo_crate).expect("mkdir repo crate");
         fs::create_dir_all(&other_repo).expect("mkdir other repo");

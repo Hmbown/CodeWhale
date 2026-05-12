@@ -2413,8 +2413,7 @@ fn base_url_is_custom_for_provider(provider: ApiProvider, base_url: &str) -> boo
 }
 
 fn provider_preserves_custom_base_url_model(provider: ApiProvider, base_url: &str) -> bool {
-    matches!(provider, ApiProvider::Openrouter)
-        && base_url_is_custom_for_provider(provider, base_url)
+    base_url_is_custom_for_provider(provider, base_url)
 }
 
 fn model_for_provider(provider: ApiProvider, normalized: String) -> String {
@@ -5414,7 +5413,9 @@ model = "deepseek-v4-pro"
         assert_eq!(config.api_provider(), ApiProvider::NvidiaNim);
         assert_eq!(config.deepseek_api_key()?, "nim-table-key");
         assert_eq!(config.deepseek_base_url(), "https://nim-table.example/v1");
-        assert_eq!(config.default_model(), DEFAULT_NVIDIA_NIM_MODEL);
+        // Custom base URL preserves the user-specified model name; normalisation
+        // is skipped because the gateway expects the model name as-provided.
+        assert_eq!(config.default_model(), "deepseek-v4-pro");
         Ok(())
     }
 
