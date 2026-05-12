@@ -144,7 +144,9 @@ impl ToolSpec for PandocConvertTool {
         // gated on resolve_pandoc(), but a concurrent uninstall between
         // catalog build and the model's call should produce a clear
         // error rather than the cryptic "program not found" from raw
-        // Command::spawn.
+        // Command::spawn. Input validation above intentionally runs first
+        // so tests and users get deterministic schema/actionable errors
+        // even on machines without pandoc installed.
         let pandoc = crate::dependencies::resolve_pandoc().ok_or_else(|| {
             ToolError::execution_failed(
                 "pandoc_convert: pandoc binary not found on PATH. \
