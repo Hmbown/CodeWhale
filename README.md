@@ -433,6 +433,7 @@ Key environment variables:
 | `DEEPSEEK_PROVIDER` | `deepseek` (default), `nvidia-nim`, `openai`, `openrouter`, `novita`, `fireworks`, `sglang`, `vllm`, `ollama` |
 | `DEEPSEEK_PROFILE` | Config profile name |
 | `DEEPSEEK_MEMORY` | Set to `on` to enable user memory |
+| `DEEPSEEK_ALLOW_INSECURE_HTTP=1` | Allow non-local `http://` API base URLs on trusted networks |
 | `NVIDIA_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY` / `NOVITA_API_KEY` / `FIREWORKS_API_KEY` / `SGLANG_API_KEY` / `VLLM_API_KEY` / `OLLAMA_API_KEY` | Provider auth |
 | `OPENAI_BASE_URL` / `OPENAI_MODEL` | Generic OpenAI-compatible endpoint and model ID |
 | `SGLANG_BASE_URL` | Self-hosted SGLang endpoint |

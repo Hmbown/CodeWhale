@@ -368,16 +368,12 @@ impl Settings {
             self.low_motion = true;
             self.fancy_animations = false;
         }
-        // VS Code (TERM_PROGRAM=vscode, #1356) and Ghostty (TERM_PROGRAM=ghostty,
-        // #1445) both produce visible flicker at 120 FPS: VS Code's compositor
-        // cannot keep pace; Ghostty's GPU compositor flash-renders each full-screen
-        // repaint. Drop to the 30 FPS low-motion cap for both automatically.
+        // VS Code (TERM_PROGRAM=vscode, #1356), Ghostty (TERM_PROGRAM=ghostty,
+        // #1445), and a few VTE terminals (#1470) produce visible flicker at
+        // 120 FPS. Drop to the 30 FPS low-motion cap for them automatically.
         // Like NO_ANIMATIONS above, this unconditionally overrides any
         // disk-loaded value — consistent precedence: env signals always win.
-        if matches!(
-            std::env::var("TERM_PROGRAM").as_deref(),
-            Ok("vscode") | Ok("ghostty")
-        ) {
+        if terminal_env_forces_low_motion() {
             self.low_motion = true;
             self.fancy_animations = false;
         }
@@ -836,6 +832,21 @@ fn normalize_synchronized_output(value: &str) -> &str {
     }
 }
 
+fn terminal_env_forces_low_motion() -> bool {
+    if matches!(
+        std::env::var("TERM_PROGRAM").as_deref(),
+        Ok("vscode") | Ok("ghostty")
+    ) {
+        return true;
+    }
+
+    // Tilix and Terminator are VTE-based terminals reported with visible
+    // full-screen flicker on redraw-heavy sessions (#1470). Both export
+    // stable session identifiers, while TERM_PROGRAM is often absent.
+    std::env::var_os("TILIX_ID").is_some_and(|v| !v.is_empty())
+        || std::env::var_os("TERMINATOR_UUID").is_some_and(|v| !v.is_empty())
+}
+
 /// Returns `true` when the active terminal is Ptyxis (the new default
 /// terminal on Ubuntu 26.04). Used by [`Settings::apply_env_overrides`]
 /// to flip `synchronized_output` from `auto` to `off` so DEC mode 2026
@@ -1182,6 +1193,8 @@ mod tests {
         let prev = std::env::var_os("TERM_PROGRAM");
         let prev_ssh_client = std::env::var_os("SSH_CLIENT");
         let prev_ssh_tty = std::env::var_os("SSH_TTY");
+        let prev_tilix_id = std::env::var_os("TILIX_ID");
+        let prev_terminator_uuid = std::env::var_os("TERMINATOR_UUID");
         // SAFETY: serialised by the guard. Clear SSH_* so a real
         // SSH session running the test suite doesn't make this
         // assertion trivially fail — the SSH path is exercised
@@ -1189,6 +1202,8 @@ mod tests {
         unsafe {
             std::env::remove_var("SSH_CLIENT");
             std::env::remove_var("SSH_TTY");
+            std::env::remove_var("TILIX_ID");
+            std::env::remove_var("TERMINATOR_UUID");
         }
         for program in ["iTerm.app", "Apple_Terminal", "WezTerm", "xterm-256color"] {
             // SAFETY: serialised by the guard.
@@ -1213,6 +1228,60 @@ mod tests {
             }
             if let Some(v) = prev_ssh_tty {
                 std::env::set_var("SSH_TTY", v);
+            }
+            if let Some(v) = prev_tilix_id {
+                std::env::set_var("TILIX_ID", v);
+            }
+            if let Some(v) = prev_terminator_uuid {
+                std::env::set_var("TERMINATOR_UUID", v);
+            }
+        }
+    }
+
+    #[test]
+    fn tilix_and_terminator_env_force_low_motion_on() {
+        let _g = term_program_test_guard();
+        let prev_term_program = std::env::var_os("TERM_PROGRAM");
+        let prev_tilix_id = std::env::var_os("TILIX_ID");
+        let prev_terminator_uuid = std::env::var_os("TERMINATOR_UUID");
+
+        for (var, val) in [
+            ("TILIX_ID", "d5b5b5d6-tilix-session"),
+            ("TERMINATOR_UUID", "urn:uuid:terminator-session"),
+        ] {
+            // SAFETY: serialised by the guard.
+            unsafe {
+                std::env::remove_var("TERM_PROGRAM");
+                std::env::remove_var("TILIX_ID");
+                std::env::remove_var("TERMINATOR_UUID");
+                std::env::set_var(var, val);
+            }
+            let mut settings = Settings::default();
+            assert!(!settings.low_motion, "default is animated");
+            settings.apply_env_overrides();
+            assert!(
+                settings.low_motion,
+                "{var} must enable low_motion to prevent VTE flicker (#1470)"
+            );
+            assert!(
+                !settings.fancy_animations,
+                "{var} must disable fancy_animations"
+            );
+        }
+
+        // SAFETY: cleanup under the guard.
+        unsafe {
+            match prev_term_program {
+                Some(v) => std::env::set_var("TERM_PROGRAM", v),
+                None => std::env::remove_var("TERM_PROGRAM"),
+            }
+            match prev_tilix_id {
+                Some(v) => std::env::set_var("TILIX_ID", v),
+                None => std::env::remove_var("TILIX_ID"),
+            }
+            match prev_terminator_uuid {
+                Some(v) => std::env::set_var("TERMINATOR_UUID", v),
+                None => std::env::remove_var("TERMINATOR_UUID"),
             }
         }
     }

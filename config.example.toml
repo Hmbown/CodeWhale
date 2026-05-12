@@ -178,7 +178,10 @@ max_subagents = 10 # optional (1-20)
 # base_url = "https://integrate.api.nvidia.com/v1"
 # model = "deepseek-ai/deepseek-v4-pro"     # or deepseek-ai/deepseek-v4-flash
 
-# Generic OpenAI-compatible endpoint
+# Generic OpenAI-compatible endpoint. Use the built-in `openai` provider for
+# third-party gateways; do not invent a custom provider name. For non-local
+# http:// gateways, launch with DEEPSEEK_ALLOW_INSECURE_HTTP=1 only on a
+# trusted network.
 [providers.openai]
 # api_key = "YOUR_OPENAI_COMPATIBLE_API_KEY"
 # base_url = "https://api.openai.com/v1"

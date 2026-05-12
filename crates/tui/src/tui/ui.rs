@@ -6027,6 +6027,11 @@ fn render(f: &mut Frame, app: &mut App) {
             crate::config::ApiProvider::Vllm => Some("vLLM"),
             crate::config::ApiProvider::Ollama => Some("Ollama"),
         };
+        let status_indicator_started_at = if app.low_motion {
+            None
+        } else {
+            app.turn_started_at
+        };
         let header_data = HeaderData::new(
             app.mode,
             &model_label,
@@ -6043,7 +6048,7 @@ fn render(f: &mut Frame, app: &mut App) {
         .with_reasoning_effort(Some(&effort_label))
         .with_provider(provider_label)
         .with_status_indicator(crate::tui::widgets::header_status_indicator_frame(
-            app.turn_started_at,
+            status_indicator_started_at,
             &app.status_indicator,
         ));
         let header_widget = HeaderWidget::new(header_data);

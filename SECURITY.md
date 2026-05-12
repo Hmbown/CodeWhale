@@ -17,10 +17,13 @@ Check the [releases page](https://github.com/Hmbown/DeepSeek-TUI/releases) for t
 
 **Do not open a public GitHub issue for security vulnerabilities.**
 
-Report privately via one of:
+Report privately via:
 
-- **Email**: [hmbown.dev@gmail.com](mailto:hmbown.dev@gmail.com) — include `[SECURITY]` in the subject line
 - **GitHub private advisory**: [github.com/Hmbown/DeepSeek-TUI/security/advisories/new](https://github.com/Hmbown/DeepSeek-TUI/security/advisories/new)
+
+Do not send undisclosed vulnerability details through public issues, discussion
+threads, or personal maintainer email. Use the private advisory flow until a
+project-domain security address is published.
 
 Include in your report:
 

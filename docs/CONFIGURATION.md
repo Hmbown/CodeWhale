@@ -79,6 +79,35 @@ self-hosted and can run without an API key by default. Ollama defaults to
 `http://localhost:11434/v1` and sends model tags such as `deepseek-coder:1.3b`
 or `qwen2.5-coder:7b` unchanged.
 
+### Custom OpenAI-Compatible Gateways
+
+For a third-party service that implements the OpenAI Chat Completions API, use
+the built-in `openai` provider name and point its provider table at the gateway:
+
+```toml
+provider = "openai"
+default_text_model = "your-model-id"
+
+[providers.openai]
+api_key = "YOUR_OPENAI_COMPATIBLE_API_KEY"
+base_url = "https://your-gateway.example/v1"
+```
+
+Do not invent a custom provider name; `provider` must be one of the known
+providers listed above. Put the endpoint under `[providers.openai]`, not the
+legacy top-level `base_url`, so the OpenAI-compatible provider receives it.
+`default_text_model` is the model ID sent to the gateway; if you keep several
+provider tables in one config, `[providers.openai].model` can be used as the
+OpenAI-provider-specific override.
+
+Local HTTP endpoints such as Ollama, SGLang, and vLLM are allowed by default
+when they use localhost or loopback addresses. For a non-local `http://`
+gateway, launch with `DEEPSEEK_ALLOW_INSECURE_HTTP=1` only on a trusted network:
+
+```bash
+DEEPSEEK_ALLOW_INSECURE_HTTP=1 deepseek
+```
+
 Third-party OpenAI-compatible gateways that need extra request headers can set
 `http_headers = { "X-Model-Provider-Id" = "your-model-provider" }` at the top
 level or under a provider table such as `[providers.deepseek]`. When configured,
