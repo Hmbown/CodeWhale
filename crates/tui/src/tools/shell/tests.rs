@@ -744,10 +744,14 @@ fn test_macos_provenance_not_triggered_on_unrelated_eperm() {
     assert!(!looks_like_macos_provenance_failure(&result));
 }
 
-// Regression test for #828: shell spawns an orphaned background subprocess
-// (simulating `nohup curl`) that keeps the pipe write-end open after the shell
-// exits. collect_output() must not block indefinitely — it kills the whole
-// process group first, allowing reader threads to get EOF and exit.
+// Regression test for #828 (and likely #1435): shell spawns an orphaned
+// background subprocess (simulating `nohup curl`) that keeps the pipe
+// write-end open after the shell exits. collect_output() must not block
+// indefinitely — it kills the whole process group first, allowing reader
+// threads to get EOF and exit.  Issue #1435 reported TUI session termination
+// after "(reasoning omitted)" appeared during a background-execution task;
+// the symptom is consistent with the same list_jobs() → poll() →
+// collect_output() event-loop stall, though the causal link is inferred.
 #[cfg(unix)]
 #[test]
 fn test_orphaned_subprocess_does_not_block_collect_output() {
