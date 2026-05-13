@@ -24,6 +24,22 @@ const TOOL_SEARCH_REGEX_NAME: &str = "tool_search_tool_regex";
 const TOOL_SEARCH_REGEX_TYPE: &str = "tool_search_tool_regex_20251119";
 pub(super) const TOOL_SEARCH_BM25_NAME: &str = "tool_search_tool_bm25";
 const TOOL_SEARCH_BM25_TYPE: &str = "tool_search_tool_bm25_20251119";
+pub(super) const AGENT_MODE_PRELOADED_TOOLS: &[&str] = &[
+    "apply_patch",
+    "edit_file",
+    "exec_interact",
+    "exec_shell",
+    "exec_shell_interact",
+    "exec_shell_wait",
+    "exec_wait",
+    "git_blame",
+    "git_diff",
+    "git_log",
+    "git_show",
+    "git_status",
+    "run_tests",
+    "write_file",
+];
 
 pub(super) fn is_tool_search_tool(name: &str) -> bool {
     matches!(name, TOOL_SEARCH_REGEX_NAME | TOOL_SEARCH_BM25_NAME)
@@ -39,24 +55,8 @@ pub(super) fn should_default_defer_tool(name: &str, mode: AppMode) -> bool {
     // the core edit/git/test surfaces stay loaded from turn one instead of
     // growing the model-visible tool catalog mid-session. Plan mode remains
     // read-only and does not register write/exec tools.
-    let always_loaded_in_agent_mode = matches!(mode, AppMode::Agent)
-        && matches!(
-            name,
-            "apply_patch"
-                | "edit_file"
-                | "exec_shell"
-                | "exec_shell_wait"
-                | "exec_shell_interact"
-                | "exec_wait"
-                | "exec_interact"
-                | "git_blame"
-                | "git_diff"
-                | "git_log"
-                | "git_show"
-                | "git_status"
-                | "run_tests"
-                | "write_file"
-        );
+    let always_loaded_in_agent_mode =
+        matches!(mode, AppMode::Agent) && AGENT_MODE_PRELOADED_TOOLS.contains(&name);
     if always_loaded_in_agent_mode {
         return false;
     }

@@ -1,5 +1,6 @@
 use super::*;
 
+use crate::core::engine::tool_catalog::AGENT_MODE_PRELOADED_TOOLS;
 use crate::models::SystemBlock;
 use crate::test_support::lock_test_env;
 use crate::tools::spec::ToolCapability;
@@ -342,17 +343,7 @@ fn non_yolo_mode_retains_default_defer_policy() {
 
 #[test]
 fn agent_mode_preloads_core_coding_toolset() {
-    for name in [
-        "write_file",
-        "edit_file",
-        "apply_patch",
-        "git_status",
-        "git_diff",
-        "git_show",
-        "git_log",
-        "git_blame",
-        "run_tests",
-    ] {
+    for &name in AGENT_MODE_PRELOADED_TOOLS {
         assert!(
             !should_default_defer_tool(name, AppMode::Agent),
             "{name} should stay loaded in Agent mode to avoid DeepSeek prefix churn",
@@ -362,35 +353,15 @@ fn agent_mode_preloads_core_coding_toolset() {
 
 #[test]
 fn initial_active_tools_include_core_coding_toolset_in_agent_mode() {
-    let catalog = build_model_tool_catalog(
-        vec![
-            api_tool("write_file"),
-            api_tool("edit_file"),
-            api_tool("apply_patch"),
-            api_tool("git_status"),
-            api_tool("git_diff"),
-            api_tool("git_show"),
-            api_tool("git_log"),
-            api_tool("git_blame"),
-            api_tool("run_tests"),
-            api_tool("project_map"),
-        ],
-        vec![],
-        AppMode::Agent,
-    );
+    let mut native_tools: Vec<Tool> = AGENT_MODE_PRELOADED_TOOLS
+        .iter()
+        .map(|&name| api_tool(name))
+        .collect();
+    native_tools.push(api_tool("project_map"));
+    let catalog = build_model_tool_catalog(native_tools, vec![], AppMode::Agent);
 
     let active = initial_active_tools(&catalog);
-    for name in [
-        "write_file",
-        "edit_file",
-        "apply_patch",
-        "git_status",
-        "git_diff",
-        "git_show",
-        "git_log",
-        "git_blame",
-        "run_tests",
-    ] {
+    for &name in AGENT_MODE_PRELOADED_TOOLS {
         assert!(
             active.contains(name),
             "{name} should be active from turn one in Agent mode",
