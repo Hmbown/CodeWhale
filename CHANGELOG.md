@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Plain Windows PowerShell / ConHost rendering is calmer.** When no modern
+  Windows terminal marker is present (`WT_SESSION`, `TERM_PROGRAM`,
+  `ConEmuPID`, WezTerm/Alacritty markers, etc.), startup now treats the host
+  as flicker-sensitive: `low_motion` is enabled, fancy animations are disabled,
+  and `synchronized_output = "auto"` resolves to off. This avoids the rapid
+  repaint path that makes PowerShell appear to flash during streaming and
+  turn completion while leaving Windows Terminal and other marked hosts on
+  their existing rendering path.
+
 ## [0.8.33] - 2026-05-12
 
 A sub-agent and RLM renovation release. The model-facing delegation
