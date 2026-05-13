@@ -110,9 +110,13 @@ fn tool_result_is_noisy(tool_name: &str) -> bool {
     matches!(
         tool_name,
         "read_file"
+            | "shell_command"
             | "exec_shell"
             | "exec_shell_wait"
             | "exec_shell_interact"
+            | "exec_wait"
+            | "exec_interact"
+            | "run_tests"
             | "fetch_url"
             | "multi_tool_use.parallel"
             | "web_search"

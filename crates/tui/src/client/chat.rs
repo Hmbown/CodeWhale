@@ -494,7 +494,6 @@ pub(crate) const CACHE_WARMUP_USER_TAIL: &str = "请只回复 OK";
 const TOOL_RESULT_SENT_CHAR_BUDGET: usize = 12_000;
 const TOOL_RESULT_HEAD_CHARS: usize = 4_000;
 const TOOL_RESULT_TAIL_CHARS: usize = 4_000;
-const STALE_TOOL_RESULT_HISTORY_WINDOW: usize = 1;
 const STALE_TOOL_RESULT_SENT_CHAR_BUDGET: usize = 4_000;
 const STALE_TOOL_RESULT_HEAD_CHARS: usize = 1_500;
 const STALE_TOOL_RESULT_TAIL_CHARS: usize = 900;
@@ -848,8 +847,7 @@ struct ToolReplayLimits {
     tail_chars: usize,
 }
 
-fn tool_result_replay_limits(tool_name: &str, age_from_end: usize) -> ToolReplayLimits {
-    let is_stale = age_from_end >= STALE_TOOL_RESULT_HISTORY_WINDOW;
+fn tool_result_replay_limits(tool_name: &str, is_stale: bool) -> ToolReplayLimits {
     if !is_stale {
         return ToolReplayLimits {
             sent_char_budget: TOOL_RESULT_SENT_CHAR_BUDGET,
@@ -866,30 +864,10 @@ fn tool_result_replay_limits(tool_name: &str, age_from_end: usize) -> ToolReplay
         };
     }
 
-    if matches!(
-        tool_name,
-        "shell_command"
-            | "exec_shell"
-            | "exec_shell_wait"
-            | "exec_shell_interact"
-            | "exec_wait"
-            | "exec_interact"
-            | "run_tests"
-            | "fetch_url"
-            | "multi_tool_use.parallel"
-            | "web_search"
-    ) {
-        return ToolReplayLimits {
-            sent_char_budget: STALE_TOOL_RESULT_SENT_CHAR_BUDGET,
-            head_chars: STALE_TOOL_RESULT_HEAD_CHARS,
-            tail_chars: STALE_TOOL_RESULT_TAIL_CHARS,
-        };
-    }
-
     ToolReplayLimits {
-        sent_char_budget: TOOL_RESULT_SENT_CHAR_BUDGET,
-        head_chars: TOOL_RESULT_HEAD_CHARS,
-        tail_chars: TOOL_RESULT_TAIL_CHARS,
+        sent_char_budget: STALE_TOOL_RESULT_SENT_CHAR_BUDGET,
+        head_chars: STALE_TOOL_RESULT_HEAD_CHARS,
+        tail_chars: STALE_TOOL_RESULT_TAIL_CHARS,
     }
 }
 
@@ -960,7 +938,7 @@ fn compact_tool_result_for_wire(
     input: &Value,
     content: &str,
     message_label: &str,
-    age_from_end: usize,
+    is_stale: bool,
     seen_tool_results: &mut HashMap<String, SeenToolResult>,
 ) -> WireToolResult {
     let original_chars = content.chars().count();
@@ -1015,7 +993,7 @@ fn compact_tool_result_for_wire(
         }
     }
 
-    let limits = tool_result_replay_limits(tool_name, age_from_end);
+    let limits = tool_result_replay_limits(tool_name, is_stale);
 
     if original_chars <= limits.sent_char_budget {
         return WireToolResult {
@@ -1118,17 +1096,9 @@ fn build_chat_messages_with_reasoning(
     let mut pending_tool_calls: HashMap<String, PendingToolCallInfo> = HashMap::new();
     let mut seen_tool_results: HashMap<String, SeenToolResult> = HashMap::new();
     let mut last_full_turn_meta: Option<LastFullTurnMeta> = None;
-    let total_tool_results: usize = messages
+    let last_assistant_index = messages
         .iter()
-        .map(|message| {
-            message
-                .content
-                .iter()
-                .filter(|block| matches!(block, ContentBlock::ToolResult { .. }))
-                .count()
-        })
-        .sum();
-    let mut emitted_tool_results: usize = 0;
+        .rposition(|message| message.role.as_str() == "assistant");
 
     if let Some(instructions) = system_to_instructions(system.cloned())
         && !instructions.trim().is_empty()
@@ -1291,17 +1261,16 @@ fn build_chat_messages_with_reasoning(
             } else {
                 for (tool_id, content, message_label) in tool_results {
                     if let Some(tool_info) = pending_tool_calls.remove(&tool_id) {
-                        let age_from_end = total_tool_results
-                            .saturating_sub(emitted_tool_results.saturating_add(1));
+                        let is_stale =
+                            last_assistant_index.is_some_and(|last_idx| message_index < last_idx);
                         let wire_result = compact_tool_result_for_wire(
                             &tool_info.tool_name,
                             &tool_info.input,
                             &content,
                             &message_label,
-                            age_from_end,
+                            is_stale,
                             &mut seen_tool_results,
                         );
-                        emitted_tool_results = emitted_tool_results.saturating_add(1);
                         let mut tool_msg = json!({
                             "role": "tool",
                             "tool_call_id": tool_id,
@@ -2849,6 +2818,68 @@ mod stream_decoder_tests {
             stale_sent.contains("cargo test --lib"),
             "stale shell replay should still keep the command: {stale_sent}"
         );
+    }
+
+    #[test]
+    fn request_builder_keeps_parallel_current_turn_tool_results_fresh() {
+        let first_output = format!(
+            "{}\n{}\n{}",
+            "A".repeat(7_000),
+            "mid".repeat(800),
+            "Z".repeat(7_000)
+        );
+        let second_output = format!(
+            "{}\n{}\n{}",
+            "B".repeat(7_000),
+            "new".repeat(800),
+            "Y".repeat(7_000)
+        );
+        let messages = vec![
+            Message {
+                role: "assistant".to_string(),
+                content: vec![
+                    ContentBlock::ToolUse {
+                        id: "tool-1".to_string(),
+                        name: "shell_command".to_string(),
+                        input: json!({"command": "cargo test --lib"}),
+                        caller: None,
+                    },
+                    ContentBlock::ToolUse {
+                        id: "tool-2".to_string(),
+                        name: "shell_command".to_string(),
+                        input: json!({"command": "cargo test --lib"}),
+                        caller: None,
+                    },
+                ],
+            },
+            tool_result_message("tool-1", &first_output),
+            tool_result_message("tool-2", &second_output),
+        ];
+
+        let built = build_chat_messages(None, &messages, "deepseek-v4-flash");
+        let first_sent = tool_message_content(&built, 0);
+        let second_sent = tool_message_content(&built, 1);
+
+        assert_eq!(
+            first_sent.len(),
+            second_sent.len(),
+            "parallel tool results in the active turn should stay on the same fresh replay budget\nfirst={}\nsecond={}",
+            first_sent.len(),
+            second_sent.len()
+        );
+        assert!(
+            first_sent.len() > STALE_TOOL_RESULT_SENT_CHAR_BUDGET,
+            "active-turn tool result unexpectedly fell onto stale compaction budget: {}",
+            first_sent.len()
+        );
+    }
+
+    #[test]
+    fn stale_unknown_tool_results_use_compact_default_budget() {
+        let limits = tool_result_replay_limits("custom_large_output_tool", true);
+        assert_eq!(limits.sent_char_budget, STALE_TOOL_RESULT_SENT_CHAR_BUDGET);
+        assert_eq!(limits.head_chars, STALE_TOOL_RESULT_HEAD_CHARS);
+        assert_eq!(limits.tail_chars, STALE_TOOL_RESULT_TAIL_CHARS);
     }
 
     #[test]

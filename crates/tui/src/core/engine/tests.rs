@@ -810,6 +810,20 @@ fn v4_large_tool_outputs_are_compacted_before_they_bloat_tail() {
 }
 
 #[test]
+fn v4_large_shell_outputs_use_noisy_compaction_limits() {
+    let content = "0123456789abcdef\n".repeat(1_800);
+    let output = ToolResult::success(content.clone());
+
+    let v4_context = compact_tool_result_for_context("deepseek-v4-pro", "shell_command", &output);
+    assert!(
+        v4_context.contains("output compacted to protect context"),
+        "large shell output should be compacted with noisy-tool limits: {}",
+        &v4_context[..v4_context.len().min(300)]
+    );
+    assert!(v4_context.len() < content.len());
+}
+
+#[test]
 fn subagent_results_are_summarized_before_parent_context_insertion() {
     let long_result = "verified detail\n".repeat(1_000);
     let output = ToolResult::success(
