@@ -1386,11 +1386,38 @@ impl Engine {
                             });
                             continue;
                         }
+                        if let Some(err) = self.check_file_policy(&plan.name, &plan.input) {
+                            emit_tool_audit(json!({
+                                "event": "tool.file_policy_denied",
+                                "tool_id": plan.id.clone(),
+                                "tool_name": plan.name.clone(),
+                                "error": err.to_string(),
+                            }));
+                            let result = Err(err);
+                            let _ = self
+                                .tx_event
+                                .send(Event::ToolCallComplete {
+                                    id: plan.id.clone(),
+                                    name: plan.name.clone(),
+                                    result: result.clone(),
+                                })
+                                .await;
+                            outcomes[plan.index] = Some(ToolExecOutcome {
+                                index: plan.index,
+                                id: plan.id,
+                                name: plan.name,
+                                input: plan.input,
+                                started_at: Instant::now(),
+                                result,
+                            });
+                            continue;
+                        }
                         let registry = tool_registry;
                         let lock = tool_exec_lock.clone();
                         let mcp_pool = mcp_pool.clone();
                         let tx_event = self.tx_event.clone();
                         let session_id = self.session.id.clone();
+                        let file_policy = self.file_policy.clone();
                         let started_at = Instant::now();
 
                         tool_tasks.push(async move {
@@ -1404,6 +1431,7 @@ impl Engine {
                                 registry,
                                 mcp_pool,
                                 None,
+                                file_policy,
                             )
                             .await;
 
@@ -1645,7 +1673,7 @@ impl Engine {
                         }
 
                         // Handle approval flow: returns (result_override, context_override)
-                        let (result_override, context_override): (
+                        let (mut result_override, context_override): (
                             Option<Result<ToolResult, ToolError>>,
                             Option<crate::tools::ToolContext>,
                         ) = if plan.approval_required {
@@ -1722,6 +1750,18 @@ impl Engine {
                             (None, None)
                         };
 
+                        if result_override.is_none()
+                            && let Some(err) = self.check_file_policy(&tool_name, &tool_input)
+                        {
+                            emit_tool_audit(json!({
+                                "event": "tool.file_policy_denied",
+                                "tool_id": tool_id.clone(),
+                                "tool_name": tool_name.clone(),
+                                "error": err.to_string(),
+                            }));
+                            result_override = Some(Err(err));
+                        }
+
                         // Per-tool snapshot for surgical undo (#384): capture workspace
                         // state before file-modifying tools execute so `/undo` can
                         // revert the most recent write_file/edit_file/apply_patch.
@@ -1754,6 +1794,7 @@ impl Engine {
                                 tool_registry,
                                 mcp_pool.clone(),
                                 context_override,
+                                self.file_policy.clone(),
                             )
                             .await
                         };

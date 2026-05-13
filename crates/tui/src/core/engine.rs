@@ -331,6 +331,8 @@ pub struct Engine {
     /// Diagnostics collected during the current step's tool calls. Drained
     /// and forwarded as a synthetic user message before the next API call.
     pending_lsp_blocks: Vec<crate::lsp::DiagnosticBlock>,
+    /// File access policy loaded from `~/.deepseek/execpolicy.toml`.
+    file_policy: Option<Arc<crate::execpolicy::ExecPolicyConfig>>,
 }
 
 // === Internal tool helpers ===
@@ -395,6 +397,40 @@ impl Engine {
             return message;
         }
         format!("{message}\n\n{hint}")
+    }
+
+    /// Check a file-tool call against the loaded file policy.
+    /// Returns `Some(ToolError)` when the call should be blocked.
+    fn check_file_policy(
+        &self,
+        tool_name: &str,
+        tool_input: &serde_json::Value,
+    ) -> Option<ToolError> {
+        let policy = self.file_policy.as_ref()?;
+        Self::evaluate_file_policy(policy, tool_name, tool_input)
+    }
+
+    /// Stand-alone file-policy evaluator so `execute_tool_with_lock` can reuse
+    /// the same guard in paths that do not have `&self`.
+    pub(super) fn evaluate_file_policy(
+        policy: &crate::execpolicy::ExecPolicyConfig,
+        tool_name: &str,
+        tool_input: &serde_json::Value,
+    ) -> Option<ToolError> {
+        if !crate::execpolicy::is_file_tool(tool_name) {
+            return None;
+        }
+
+        for path in crate::execpolicy::extract_file_paths(tool_input, tool_name) {
+            if let crate::execpolicy::ExecPolicyDecision::Deny(reason) =
+                policy.evaluate_file(tool_name, &path)
+            {
+                return Some(ToolError::permission_denied(format!(
+                    "File policy blocked: {reason}"
+                )));
+            }
+        }
+        None
     }
 
     /// Create a new engine with the given configuration
@@ -536,6 +572,15 @@ impl Engine {
             })
             .map(std::sync::Arc::from);
 
+        let file_policy = if config.features.enabled(Feature::FilePolicy) {
+            crate::execpolicy::load_default_policy()
+                .ok()
+                .flatten()
+                .map(Arc::new)
+        } else {
+            None
+        };
+
         let mut engine = Engine {
             config,
             deepseek_client,
@@ -564,6 +609,7 @@ impl Engine {
             pending_lsp_blocks: Vec::new(),
             workshop_vars,
             sandbox_backend,
+            file_policy,
         };
         engine.rehydrate_latest_canonical_state();
 

@@ -319,6 +319,7 @@ web_search = true # enables canonical web.run plus the compatibility web_search 
 apply_patch = true
 mcp = true
 exec_policy = true
+file_policy = true
 # vision_model = false  # enable vision model for image_analyze tool
 
 # ─────────────────────────────────────────────────────────────────────────────────

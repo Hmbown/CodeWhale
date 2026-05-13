@@ -24,5 +24,6 @@ pub use rule::Rule;
 pub use rule::RuleMatch;
 pub use rule::RuleRef;
 pub use rules::{
-    ExecPolicyConfig, ExecPolicyDecision, default_execpolicy_path, load_default_policy,
+    ExecPolicyConfig, ExecPolicyDecision, default_execpolicy_path, extract_file_path,
+    extract_file_paths, is_file_tool, load_default_policy,
 };

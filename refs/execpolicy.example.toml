@@ -1,0 +1,27 @@
+# Example execpolicy.toml with command and file rules.
+#
+# Place this at ~/.deepseek/execpolicy.toml and adjust paths for your project.
+
+[rules.safe]
+allow = ["git status", "git log *", "cargo check"]
+deny = ["git push --force", "rm -rf /"]
+
+[file.read_file]
+allow = ["README.md", "docs/**/*.md", "src/**/*.rs"]
+deny = [".env", "**/*.key", "**/*.pem", "**/id_rsa"]
+
+[file.write_file]
+allow = ["src/**/*.rs", "tests/**/*.rs", "*.md"]
+deny = [".env", "**/*.key", "**/*.pem", "**/secrets.*"]
+
+[file.edit_file]
+allow = ["src/**/*.rs", "tests/**/*.rs", "*.md"]
+deny = [".env", "**/*.key", "**/*.pem", "**/secrets.*"]
+
+[file.apply_patch]
+allow = ["src/**/*.rs", "tests/**/*.rs", "*.md"]
+deny = [".env", "**/*.key", "**/*.pem", "**/secrets.*"]
+
+[file.default]
+allow = ["*"]
+deny = [".env", "**/*.key", "**/*.pem", "**/id_rsa", "**/secrets.*"]
