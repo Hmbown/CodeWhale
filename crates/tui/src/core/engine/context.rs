@@ -53,11 +53,11 @@ const TOOL_RESULT_CONTEXT_SOFT_LIMIT_CHARS: usize = 2_000;
 /// Snippet length kept when compacting tool output for model context.
 const TOOL_RESULT_CONTEXT_SNIPPET_CHARS: usize = 900;
 /// Hard cap for tool output inserted into a large-context model.
-const LARGE_CONTEXT_TOOL_RESULT_HARD_LIMIT_CHARS: usize = 180_000;
+const LARGE_CONTEXT_TOOL_RESULT_HARD_LIMIT_CHARS: usize = 96_000;
 /// Soft cap for known noisy tools inserted into a large-context model.
-const LARGE_CONTEXT_TOOL_RESULT_SOFT_LIMIT_CHARS: usize = 60_000;
+const LARGE_CONTEXT_TOOL_RESULT_SOFT_LIMIT_CHARS: usize = 24_000;
 /// Snippet length kept when compacting large-context tool output.
-const LARGE_CONTEXT_TOOL_RESULT_SNIPPET_CHARS: usize = 40_000;
+const LARGE_CONTEXT_TOOL_RESULT_SNIPPET_CHARS: usize = 12_000;
 /// Context window size at which tool output limits can be relaxed.
 const LARGE_CONTEXT_WINDOW_TOKENS: u32 = 500_000;
 /// Max chars to keep from metadata-provided output summaries.
@@ -109,9 +109,11 @@ fn summarize_text_head_tail(text: &str, limit: usize) -> String {
 fn tool_result_is_noisy(tool_name: &str) -> bool {
     matches!(
         tool_name,
-        "exec_shell"
+        "read_file"
+            | "exec_shell"
             | "exec_shell_wait"
             | "exec_shell_interact"
+            | "fetch_url"
             | "multi_tool_use.parallel"
             | "web_search"
     )

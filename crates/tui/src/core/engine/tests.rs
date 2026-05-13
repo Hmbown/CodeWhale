@@ -796,17 +796,17 @@ fn internal_context_budget_unaffected_by_api_request_cap() {
 }
 
 #[test]
-fn v4_tool_outputs_keep_large_file_reads_in_context() {
-    let content = "0123456789abcdef\n".repeat(2_000);
+fn v4_large_tool_outputs_are_compacted_before_they_bloat_tail() {
+    let content = "0123456789abcdef\n".repeat(5_000);
     let output = ToolResult::success(content.clone());
 
-    let v4_context = compact_tool_result_for_context("deepseek-v4-pro", "exec_shell", &output);
-    assert_eq!(v4_context, content.trim());
-
-    let legacy_context =
-        compact_tool_result_for_context("deepseek-v3.2-128k", "exec_shell", &output);
-    assert!(legacy_context.contains("output compacted to protect context"));
-    assert!(legacy_context.len() < v4_context.len());
+    let v4_context = compact_tool_result_for_context("deepseek-v4-pro", "read_file", &output);
+    assert!(
+        v4_context.contains("output compacted to protect context"),
+        "large V4 tool output should now be compacted: {}",
+        &v4_context[..v4_context.len().min(300)]
+    );
+    assert!(v4_context.len() < content.len());
 }
 
 #[test]

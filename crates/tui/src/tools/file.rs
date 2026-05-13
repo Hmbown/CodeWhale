@@ -100,7 +100,16 @@ impl ToolSpec for ReadFileTool {
         // explicit range — otherwise an explicit `start_line = 5` on a
         // tiny file would silently ignore the request.
         if !explicit_range && total_lines <= SMALL_FILE_LINES && total_bytes <= SMALL_FILE_BYTES {
-            return Ok(ToolResult::success(contents));
+            return Ok(
+                ToolResult::success(contents).with_metadata(read_file_result_metadata(
+                    path_str,
+                    total_lines,
+                    (total_lines > 0).then_some((1, total_lines)),
+                    false,
+                    None,
+                    format!("Read {path_str} (full file, {total_lines} lines)"),
+                )),
+            );
         }
 
         let start_line = match input.get("start_line").and_then(Value::as_u64) {
@@ -133,7 +142,16 @@ impl ToolSpec for ReadFileTool {
                  [NO CONTENT] start_line {start_line} is beyond total_lines {total_lines}.\n\
                  </file>"
             );
-            return Ok(ToolResult::success(output));
+            return Ok(ToolResult::success(output).with_metadata(read_file_result_metadata(
+                path_str,
+                total_lines,
+                None,
+                false,
+                None,
+                format!(
+                    "Read {path_str}: start_line {start_line} is beyond total_lines {total_lines}"
+                ),
+            )));
         }
 
         let lines: Vec<&str> = contents.lines().collect();
@@ -184,8 +202,51 @@ impl ToolSpec for ReadFileTool {
         }
         output.push_str("</file>");
 
-        Ok(ToolResult::success(output))
+        let summary = if truncated_by_lines {
+            format!(
+                "Read {path_str} lines {shown_first}-{shown_last} of {total_lines}; next_start_line={next_start}"
+            )
+        } else {
+            format!("Read {path_str} lines {shown_first}-{shown_last} of {total_lines}")
+        };
+
+        Ok(
+            ToolResult::success(output).with_metadata(read_file_result_metadata(
+                path_str,
+                total_lines,
+                Some((shown_first, shown_last)),
+                truncated,
+                truncated_by_lines.then_some(next_start),
+                summary,
+            )),
+        )
     }
+}
+
+fn read_file_result_metadata(
+    path: &str,
+    total_lines: usize,
+    shown_lines: Option<(usize, usize)>,
+    truncated: bool,
+    next_start_line: Option<usize>,
+    summary: String,
+) -> Value {
+    let mut obj = serde_json::Map::new();
+    obj.insert("summary".to_string(), Value::String(summary));
+    obj.insert("path".to_string(), Value::String(path.to_string()));
+    obj.insert("total_lines".to_string(), json!(total_lines));
+    obj.insert(
+        "shown_lines".to_string(),
+        Value::String(match shown_lines {
+            Some((start, end)) => format!("{start}-{end}"),
+            None => "none".to_string(),
+        }),
+    );
+    obj.insert("truncated".to_string(), json!(truncated));
+    if let Some(next_start_line) = next_start_line {
+        obj.insert("next_start_line".to_string(), json!(next_start_line));
+    }
+    Value::Object(obj)
 }
 
 /// Detect a PDF by extension OR by sniffing the `%PDF-` magic bytes.
@@ -862,6 +923,22 @@ mod tests {
             "lines past max_lines must be excluded"
         );
         assert!(result.content.contains("truncated=\"true\""));
+        let metadata = result
+            .metadata
+            .as_ref()
+            .expect("range results should stamp replay metadata");
+        assert_eq!(
+            metadata.get("path").and_then(Value::as_str),
+            Some("ranged.txt")
+        );
+        assert_eq!(
+            metadata.get("shown_lines").and_then(Value::as_str),
+            Some("3-6")
+        );
+        assert_eq!(
+            metadata.get("truncated").and_then(Value::as_bool),
+            Some(true)
+        );
     }
 
     #[tokio::test]
