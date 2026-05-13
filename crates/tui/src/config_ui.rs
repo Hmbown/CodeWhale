@@ -66,6 +66,7 @@ pub struct SettingsSection {
     pub composer_density: ComposerDensityValue,
     pub composer_border: bool,
     pub transcript_spacing: TranscriptSpacingValue,
+    pub status_indicator: StatusIndicatorValue,
     pub default_mode: DefaultModeValue,
     #[schemars(range(min = 10, max = 50))]
     pub sidebar_width: u16,
@@ -218,6 +219,14 @@ pub enum ReasoningEffortValue {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum StatusIndicatorValue {
+    Whale,
+    Dots,
+    Off,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum StatusItemValue {
     Mode,
     Model,
@@ -277,6 +286,7 @@ pub fn build_document(app: &App, config: &Config) -> Result<ConfigUiDocument> {
             composer_density: settings.composer_density.as_str().into(),
             composer_border: settings.composer_border,
             transcript_spacing: settings.transcript_spacing.as_str().into(),
+            status_indicator: settings.status_indicator.as_str().into(),
             default_mode: settings.default_mode.as_str().into(),
             sidebar_width: settings.sidebar_width_percent,
             sidebar_focus: settings.sidebar_focus.as_str().into(),
@@ -445,6 +455,10 @@ pub fn apply_document(
         (
             "transcript_spacing",
             doc.settings.transcript_spacing.as_setting(),
+        ),
+        (
+            "status_indicator",
+            doc.settings.status_indicator.as_setting(),
         ),
         ("default_mode", doc.settings.default_mode.as_setting()),
         ("sidebar_width", &doc.settings.sidebar_width.to_string()),
@@ -794,6 +808,32 @@ impl From<&str> for DefaultModeValue {
             AppMode::Agent => Self::Agent,
             AppMode::Plan => Self::Plan,
             AppMode::Yolo => Self::Yolo,
+        }
+    }
+}
+
+impl StatusIndicatorValue {
+    fn as_setting(self) -> &'static str {
+        match self {
+            Self::Whale => "whale",
+            Self::Dots => "dots",
+            Self::Off => "off",
+        }
+    }
+}
+
+impl From<&str> for StatusIndicatorValue {
+    fn from(value: &str) -> Self {
+        // Permissive aliases mirror `Settings::normalize_status_indicator`,
+        // so a TOML file with `status_indicator = "🐳"` or `"none"`
+        // resolves to the canonical enum variant.
+        match value.trim().to_ascii_lowercase().as_str() {
+            "dots" | "dot" => Self::Dots,
+            "off" | "none" | "hidden" | "false" => Self::Off,
+            // Default to whale for "whale", aliases, and anything unknown
+            // (we'd rather restore the historic indicator than silently
+            // hide it on a typo).
+            _ => Self::Whale,
         }
     }
 }

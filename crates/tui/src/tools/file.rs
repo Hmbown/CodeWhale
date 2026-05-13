@@ -331,6 +331,12 @@ impl ToolSpec for EditFileTool {
         let search = required_str(&input, "search")?;
         let replace = required_str(&input, "replace")?;
 
+        if search == replace {
+            return Err(ToolError::invalid_input(
+                "search and replace are identical, no change intended",
+            ));
+        }
+
         let file_path = context.resolve_path(path_str)?;
 
         let contents = fs::read_to_string(&file_path).map_err(|e| {
@@ -460,6 +466,58 @@ mod tests {
 
         assert!(result.success);
         assert_eq!(result.content, "hello world");
+    }
+
+    #[test]
+    fn parse_pages_arg_accepts_single_page() {
+        assert_eq!(parse_pages_arg("3"), Some((3, 3)));
+        assert_eq!(parse_pages_arg("  7  "), Some((7, 7)));
+    }
+
+    #[test]
+    fn parse_pages_arg_accepts_range() {
+        assert_eq!(parse_pages_arg("1-5"), Some((1, 5)));
+        assert_eq!(parse_pages_arg("10-20"), Some((10, 20)));
+        // Whitespace around either side of the dash is tolerated so
+        // hand-typed `pages: "1 - 5"` still works.
+        assert_eq!(parse_pages_arg(" 1 - 5 "), Some((1, 5)));
+    }
+
+    #[test]
+    fn parse_pages_arg_rejects_invalid_ranges() {
+        // Caller would otherwise feed `pdftotext -f 5 -l 1`, which
+        // prints nothing — fail loudly so the model can re-issue.
+        assert!(parse_pages_arg("5-1").is_none(), "end < start must reject");
+        // 0-indexed pages aren't a thing in pdftotext; reject so the
+        // caller doesn't get a confusing "no output" silent fail.
+        assert!(
+            parse_pages_arg("0").is_none(),
+            "zero single-page must reject"
+        );
+        assert!(parse_pages_arg("0-3").is_none(), "zero start must reject");
+        // Empty / whitespace-only / non-numeric inputs must reject.
+        assert!(parse_pages_arg("").is_none());
+        assert!(parse_pages_arg("   ").is_none());
+        assert!(parse_pages_arg("abc").is_none());
+        assert!(parse_pages_arg("3.5").is_none(), "floats must reject");
+    }
+
+    #[test]
+    fn parse_pages_arg_rejects_half_open_ranges() {
+        // Half-open ranges like `1-` or `-5` are almost certainly a
+        // typo for `1-N`/`N` rather than intentional input. Reject
+        // them rather than silently extending to u32::MAX or 0.
+        assert!(parse_pages_arg("1-").is_none());
+        assert!(parse_pages_arg("-5").is_none());
+        assert!(parse_pages_arg("-").is_none());
+    }
+
+    #[test]
+    fn parse_pages_arg_rejects_negative_numbers() {
+        // u32::parse on a negative literal returns Err, so the
+        // function reports `None` rather than wrapping into a giant
+        // positive number — defensive but worth pinning.
+        assert!(parse_pages_arg("-3-5").is_none());
     }
 
     #[tokio::test]
@@ -662,6 +720,36 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn test_edit_file_rejects_identical_search_and_replace() {
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+
+        let test_file = tmp.path().join("same.txt");
+        fs::write(&test_file, "a := \"foo\"").expect("write");
+
+        let tool = EditFileTool;
+        let result = tool
+            .execute(
+                json!({
+                    "path": "same.txt",
+                    "search": "a := \"foo\"",
+                    "replace": "a := \"foo\""
+                }),
+                &ctx,
+            )
+            .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("search and replace are identical"),
+            "error must explain the no-op input: {err}"
+        );
+        let unchanged = fs::read_to_string(&test_file).expect("read");
+        assert_eq!(unchanged, "a := \"foo\"");
     }
 
     /// #157 — When the model uses `replacement` instead of `replace`,

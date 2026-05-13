@@ -141,6 +141,7 @@ fn show_single_setting(app: &App, key: &str) -> CommandResult {
         "transcript_spacing" | "spacing" => {
             Some(spacing_display(app.transcript_spacing).to_string())
         }
+        "status_indicator" | "indicator" => Some(app.status_indicator.clone()),
         "cost_currency" | "currency" => Some(
             match app.cost_currency {
                 crate::pricing::CostCurrency::Usd => "usd",
@@ -398,6 +399,10 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
         }
         "low_motion" | "motion" => {
             app.low_motion = settings.low_motion;
+            app.needs_redraw = true;
+        }
+        "status_indicator" | "indicator" => {
+            app.status_indicator = settings.status_indicator.clone();
             app.needs_redraw = true;
         }
         "show_thinking" | "thinking" => {
@@ -714,21 +719,7 @@ fn expand_tilde(raw: &str) -> String {
 pub fn auto_model_heuristic(input: &str, _current_model: &str) -> String {
     let len = input.chars().count();
     let lower = input.to_lowercase();
-    let complex_keywords = [
-        "refactor",
-        "architecture",
-        "design",
-        "debug",
-        "security",
-        "review",
-        "audit",
-        "migrate",
-        "optimize",
-        "rewrite",
-        "implement",
-        "analyze",
-    ];
-    if complex_keywords.iter().any(|kw| lower.contains(kw)) {
+    if COMPLEX_KEYWORDS.iter().any(|kw| lower.contains(kw)) {
         return "deepseek-v4-pro".to_string();
     }
     // Short messages → Flash
@@ -742,6 +733,55 @@ pub fn auto_model_heuristic(input: &str, _current_model: &str) -> String {
     // Default to Flash for cost savings
     "deepseek-v4-flash".to_string()
 }
+
+/// Keywords that escalate `auto`-mode model selection to
+/// `deepseek-v4-pro`. The Latin entries are lowercase (the caller
+/// lowercases the message); CJK has no case so the literal form
+/// matches as-is.
+///
+/// Without the CJK entries, a Chinese-speaking user typing
+/// "帮我重构这个模块" or "审计安全漏洞" silently fell through to the
+/// short/long-message threshold and usually landed on Flash even
+/// for tasks that obviously need Pro-grade reasoning.
+const COMPLEX_KEYWORDS: &[&str] = &[
+    // English (unchanged from the original list).
+    "refactor",
+    "architecture",
+    "design",
+    "debug",
+    "security",
+    "review",
+    "audit",
+    "migrate",
+    "optimize",
+    "rewrite",
+    "implement",
+    "analyze",
+    // Simplified Chinese.
+    "\u{91cd}\u{6784}", // 重构
+    "\u{67b6}\u{6784}", // 架构
+    "\u{8bbe}\u{8ba1}", // 设计
+    "\u{8c03}\u{8bd5}", // 调试
+    "\u{5b89}\u{5168}", // 安全
+    "\u{5ba1}\u{67e5}", // 审查
+    "\u{5ba1}\u{8ba1}", // 审计
+    "\u{8fc1}\u{79fb}", // 迁移
+    "\u{4f18}\u{5316}", // 优化
+    "\u{91cd}\u{5199}", // 重写
+    "\u{5b9e}\u{73b0}", // 实现
+    "\u{5206}\u{6790}", // 分析
+    // Traditional Chinese variants where they differ.
+    "\u{91cd}\u{69cb}", // 重構
+    "\u{67b6}\u{69cb}", // 架構
+    "\u{8a2d}\u{8a08}", // 設計
+    "\u{8abf}\u{8a66}", // 調試
+    "\u{5be9}\u{67e5}", // 審查
+    "\u{5be9}\u{8a08}", // 審計
+    "\u{9077}\u{79fb}", // 遷移
+    "\u{512a}\u{5316}", // 優化
+    "\u{91cd}\u{5beb}", // 重寫
+    "\u{5be6}\u{73fe}", // 實現
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AutoRouteRecommendation {
@@ -1257,6 +1297,60 @@ mod tests {
         // Note: This test may fail in environments where settings can't be saved
         // The important thing is that the model is updated
         assert_eq!(app.model, "deepseek-v4-flash");
+    }
+
+    #[test]
+    fn auto_model_heuristic_chinese_keywords_route_to_pro() {
+        // Without these keywords, a Chinese user typing
+        // "帮我重构这个模块" (37 chars in chars().count() terms after
+        // the leading helper text) fell through to the short-message
+        // Flash branch even though the intent is obviously Pro-tier.
+        for msg in [
+            "\u{5e2e}\u{6211}\u{91cd}\u{6784}\u{8fd9}\u{4e2a}\u{6a21}\u{5757}", // 帮我重构这个模块
+            "\u{8bbe}\u{8ba1}\u{6570}\u{636e}\u{5e93}\u{67b6}\u{6784}",         // 设计数据库架构
+            "\u{8c03}\u{8bd5}\u{5d29}\u{6e83}\u{95ee}\u{9898}",                 // 调试崩溃问题
+            "\u{5ba1}\u{8ba1}\u{5b89}\u{5168}\u{6f0f}\u{6d1e}",                 // 审计安全漏洞
+            "\u{8fc1}\u{79fb}\u{5230}\u{65b0}\u{6846}\u{67b6}",                 // 迁移到新框架
+            "\u{4f18}\u{5316}\u{6027}\u{80fd}\u{74f6}\u{9888}",                 // 优化性能瓶颈
+            "\u{5206}\u{6790}\u{8fd9}\u{6bb5}\u{4ee3}\u{7801}",                 // 分析这段代码
+        ] {
+            assert_eq!(
+                auto_model_heuristic(msg, "auto"),
+                "deepseek-v4-pro",
+                "expected Pro for `{msg}`",
+            );
+        }
+    }
+
+    #[test]
+    fn auto_model_heuristic_traditional_chinese_keywords_route_to_pro() {
+        for msg in [
+            "\u{8acb}\u{91cd}\u{69cb}\u{6b64}\u{6a21}\u{7d44}", // 請重構此模組
+            "\u{67b6}\u{69cb}\u{8a2d}\u{8a08}",                 // 架構設計
+            "\u{4ee3}\u{78bc}\u{8abf}\u{8a66}",                 // 代碼調試
+            "\u{5be9}\u{8a08}\u{6f0f}\u{6d1e}",                 // 審計漏洞
+            "\u{9077}\u{79fb}\u{5230}\u{65b0}\u{67b6}\u{69cb}", // 遷移到新架構
+            "\u{512a}\u{5316}\u{6027}\u{80fd}",                 // 優化性能
+            "\u{91cd}\u{5beb}\u{4ee3}\u{78bc}",                 // 重寫代碼
+            "\u{5be6}\u{73fe}\u{65b0}\u{529f}\u{80fd}",         // 實現新功能
+        ] {
+            assert_eq!(
+                auto_model_heuristic(msg, "auto"),
+                "deepseek-v4-pro",
+                "expected Pro for `{msg}`",
+            );
+        }
+    }
+
+    #[test]
+    fn auto_model_heuristic_short_chinese_chat_stays_on_flash() {
+        // Sanity: a short non-keyword Chinese message still falls
+        // through to the cost-saving Flash branch.
+        // "你好" (2 chars) — well under the 100-char Flash floor.
+        assert_eq!(
+            auto_model_heuristic("\u{4f60}\u{597d}", "auto"),
+            "deepseek-v4-flash",
+        );
     }
 
     #[test]

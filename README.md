@@ -225,61 +225,106 @@ deepseek --provider ollama --model deepseek-coder:1.3b
 
 ---
 
-## What's New In v0.8.27
+## What's New In v0.8.29
 
-A polish release: 17 community PRs plus a focused user-issue sweep
-over the 24–48 hours after v0.8.26 shipped. [Full changelog](CHANGELOG.md).
+A maintenance release anchored by a v0.8.27 / v0.8.28 regression fix
+plus 25 community PRs. [Full changelog](CHANGELOG.md).
 
-- **Cross-terminal flicker fixed** on Ghostty / VSCode terminal /
-  Win10 conhost (the most-reported v0.8.26 regression — #1119, #1260,
-  #1295, #1352, #1356, #1363, #1366). Dropped destructive `2J/3J`
-  from the viewport-reset sequence; alt-screen + diff rendering
-  handle repaints without flicker.
-- **Long output text no longer overflows the right edge** (#1344,
-  #1351). Paragraphs and code blocks hard-break overlong words at
-  character boundaries — matches the v0.8.25 table-cell fix.
-- **Pager copy-out** via `c` or `y` (#1354) — every full-screen pager
-  (`Alt+V` tool details, `Ctrl+O` thinking, shell-job / task / MCP
-  managers) accepts an in-app copy keybinding.
-- **Context-sensitive Ctrl+C** (#1337, #1367) — selection→copy on
-  Windows (matches OS convention), turn-active→cancel, idle→arm-exit
-  with a 2s confirmation window. `Cmd+C` / `Ctrl+Shift+C` continue
-  to copy unchanged.
-- **MCP pool auto-reloads on `mcp.json` change** (#1267 part 2) —
-  no more manual `/mcp reload` after editing config. Cheap mtime +
-  content-hash check on each tool invocation; networked filesystems
-  with coarse mtime granularity don't churn.
-- **Model-callable `notify` tool** (#1322) — desktop notification
-  for "long task done" pings. Honors your existing
-  `[notifications].method` config; silent no-op when off.
-- **Onboarding screens render in the selected language** — pick
-  简体中文 / 日本語 / Português (Brasil) at step 2 and the rest of
-  the flow follows. Particularly nice for CJK-IME users avoiding
-  English typing during setup.
-- **Paste UX rebuilt** — large pastes get the `@paste-…md`
-  treatment immediately (visible before submit, no "auto-sent an
-  @mention I didn't authorize" surprise); paste-burst auto-disables
-  on terminals where bracketed paste works; short CJK pastes no
-  longer auto-submit on the trailing newline (#1302, thanks
-  **@reidliu41** PR #1342).
-- **`/skills <prefix>`** filters the local skills list (#1318) — on
-  top of v0.8.26's inter-row spacing (#1328 from **@reidliu41**).
-- **`/skills --remote` diagnostic hints** (#1329) — when fetching
-  the registry fails, the error chain now ends with a one-line
-  hint pointing at the most likely cause (DNS / TLS / refused /
-  4xx / 429 / timeout).
-- **17 community PRs landed** — `/mode` unification, `/status`
-  diagnostics, `/feedback`, session artifact metadata, subagent
-  self-report compaction, global AGENTS.md fallback, `--yolo`
-  CLI→TUI propagation, `composer_arrows_scroll`, session cost
-  persistence, provider-aware model picker + persistence, HTTP
-  User-Agent header, HTTP-400 quota retry, explicit hidden file
-  completions, Windows mouse-capture docs, README zh-CN sync,
-  tool-output render perf + card-rail, expanded test coverage.
-  Thanks to **@reidliu41**, **@THINKER-ONLY**, **@manaskarra**,
-  **@fuleinist**, **@lbcheng888**, **@imkingjh999**, **@dst1213**,
-  **@SamhandsomeLee**, **@Oliver-ZPLiu**, **@whtis**,
-  **@tuohai666**.
+- **Scroll demon, gone for good** (#1085 regression). Parallel sub-
+  agents running `exec_shell` would scroll the alt-screen out from
+  under ratatui's diff renderer, leaving a blank band growing above
+  the header. Three layers of defence now: a `tracing-subscriber`
+  writing to `~/.deepseek/logs/tui-YYYY-MM-DD.log`, an fd-level
+  `dup2` stderr redirect for the alt-screen lifetime (Unix), and
+  module-level `#![deny(clippy::print_stdout, clippy::print_stderr)]`
+  on the TUI runtime modules. New `eprintln!`s inside `tools/`,
+  `core/`, `tui/`, `network_policy.rs`, or `runtime_threads.rs` now
+  fail CI.
+- **Ctrl+R session restore is workspace-scoped** (#1395, PR #1397 from
+  **@linzhiqin2003**) — previously listed every saved session on disk,
+  which meant Project A's history could leak into Project B.
+- **Runtime version visible in the header.** A discreet `v0.8.29`
+  chip sits in the header's right cluster alongside the provider /
+  effort / Live / context chips. Drops first under tight terminal
+  width.
+- **MCP HTTP transport honors HTTP(S)_PROXY** (#1408 from
+  **@hlx98007**) — corporate / Clash / Shadowsocks proxies now apply
+  to MCP HTTP connections, matching every other tool on the box.
+  `NO_PROXY` honored.
+- **MCP discovery survives malformed items** (#1410 from
+  **@Liu-Vince**) — one bad tool / resource / prompt entry no
+  longer drops the whole page; the malformed entry is skipped and
+  the rest of the catalogue surfaces normally.
+- **MCP SSE accepts CRLF-framed endpoint events** (#1309, PR #1358
+  from **@reidliu41**) — FastMCP / uvicorn streams no longer time
+  out waiting for LF-only event separators.
+- **Composer ignores leaked mouse-report bytes** (#1418, PR #1421
+  from **@reidliu41**) — terminal chains that leak `[<35;44;18M`
+  style mouse reports into stdin no longer fill the input area.
+- **Footer chips respect the available width** (#1357, PR #1417 from
+  **@Wenjunyun123**) — long cache / aux chips drop before crowding
+  the left status line or composer area on narrow terminals.
+- **Note management commands** (PR #1407 from **@reidliu41**) —
+  `/note add`, `/note list`, and friends for persistent maintainer
+  notes inside the TUI.
+- **`/init`-style global AGENTS.md merges with project AGENTS.md**
+  (#1157, PR #1399 from **@linzhiqin2003**) — your `~/.deepseek/
+  AGENTS.md` baseline now layers under the workspace's own
+  AGENTS.md instead of being shadowed.
+- **Language directive: thinking matches the user's message language**
+  (#1118, PR #1398 from **@linzhiqin2003**) — `reasoning_content`
+  follows the latest user message language, not the project context's
+  inferred `lang`.
+- **Web search filters spam-stuffed SERPs** (#964, PR #1396 from
+  **@linzhiqin2003**) — Bing / DDG fallback paths drop the
+  generated-content / SEO-farm domains that were poisoning quick
+  lookups.
+- **Auto routing recognises CJK debug / search keywords** (PRs #1401
+  and #1402 from **@linzhiqin2003**) — `--model auto` and the
+  reasoning-effort picker correctly route Chinese / Japanese
+  technical queries instead of falling through to the generic
+  baseline.
+- **Deferred tools hydrate schemas before first execution** (#1419,
+  PR #1429 from **@SamhandsomeLee**) — `edit_file` and other
+  deferred tools now load, show their expected fields, and ask the
+  model to retry instead of executing guessed argument names.
+- **DeepSeek aliases replay thinking-mode tool turns** (PR #1428
+  from **@Beltran12138**) — `deepseek-chat` and
+  `deepseek-reasoner` now get the same `reasoning_content` replay
+  treatment as explicit V4 model IDs, avoiding second-turn 400s
+  after tool calls.
+- **Skill completions stay under `/skill`** (#1437, PR #1442 from
+  **@reidliu41**) — large local skill collections no longer crowd
+  the root slash-command menu.
+- **`edit_file` rejects no-op replacements** (PR #1460 from
+  **@xiluoduyu**) — identical `search` / `replace` values now fail
+  validation instead of returning an empty diff.
+- **Windows terminal layout gets width-stable glyphs** (#1314,
+  PR #1465 from **@CrepuscularIRIS**) — header and file-tree icons
+  no longer rely on SMP emoji that cmd / PowerShell can mismeasure.
+- **Ghostty uses low-motion rendering by default** (#1445, PR #1468
+  from **@CrepuscularIRIS**) — affected terminals avoid animation
+  flicker without manual config.
+- **Docker buildx provenance EPERM failures get a hint** (#1449,
+  PR #1469 from **@CrepuscularIRIS**) — macOS shell output points at
+  the provenance flag when that restricted metadata write fails.
+- **Windows CMD mouse-wheel fallback scrolls the transcript**
+  (#1443, PR #1471 from **@CrepuscularIRIS**) — wheel events mapped
+  to Up / Down no longer cycle composer history when mouse capture
+  is off.
+- **Sync-to-CNB workflow hardened** — explicit `permissions:
+  contents: read`, narrowed trigger to `main` + `v*` tags (no longer
+  mirrors feature branches), `actions/checkout` bumped v3 → v4.
+- **+438 LOC of new test coverage** for `error_taxonomy`,
+  `parse_pages_arg`, web-search precedence, and
+  `sanitize_stream_chunk` control-byte filtering (PRs #1403-#1406
+  from **@linzhiqin2003**).
+
+Thanks to **@linzhiqin2003** (10 landings this cycle),
+**@reidliu41** (5 landings), **@CrepuscularIRIS** (4 landings),
+**@SamhandsomeLee**, **@Beltran12138**, **@Wenjunyun123**,
+**@hlx98007**, **@Liu-Vince**, **@xiluoduyu**, and
+**@shenxiaodaosanhua** for the bug report.
 
 ---
 

@@ -225,7 +225,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo {
         name: "note",
         aliases: &[],
-        usage: "/note <text>",
+        usage: "/note [add|list|show|edit|remove|clear|path]",
         description_id: MessageId::CmdNoteDescription,
     },
     CommandInfo {
@@ -854,7 +854,9 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::tui::app::{App, AppAction, TuiOptions};
-    use std::path::PathBuf;
+    use std::ffi::OsString;
+    use std::path::{Path, PathBuf};
+    use std::sync::MutexGuard;
 
     fn create_test_app() -> App {
         let options = TuiOptions {
@@ -1017,16 +1019,53 @@ mod tests {
         assert!(deepseek_result.action.is_none());
     }
 
+    struct ConfigPathGuard {
+        previous: Option<OsString>,
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    impl ConfigPathGuard {
+        fn new(config_path: &Path) -> Self {
+            let lock = crate::test_support::lock_test_env();
+            let previous = std::env::var_os("DEEPSEEK_CONFIG_PATH");
+            // Safety: test-only environment mutation guarded by a global mutex.
+            unsafe {
+                std::env::set_var("DEEPSEEK_CONFIG_PATH", config_path);
+            }
+            Self {
+                previous,
+                _lock: lock,
+            }
+        }
+    }
+
+    impl Drop for ConfigPathGuard {
+        fn drop(&mut self) {
+            // Safety: test-only environment mutation guarded by a global mutex.
+            unsafe {
+                if let Some(previous) = self.previous.take() {
+                    std::env::set_var("DEEPSEEK_CONFIG_PATH", previous);
+                } else {
+                    std::env::remove_var("DEEPSEEK_CONFIG_PATH");
+                }
+            }
+        }
+    }
+
     /// Build an App scoped to an isolated tempdir so dispatch-side-effects
-    /// (e.g. `/init` writing AGENTS.md, `/export` writing chat transcripts)
-    /// don't pollute the repo working tree when the smoke tests run.
-    fn create_isolated_test_app() -> (App, tempfile::TempDir) {
+    /// (e.g. `/init` writing AGENTS.md, `/export` writing chat transcripts,
+    /// `/logout` clearing credentials) don't pollute the repo working tree or
+    /// the developer's real config when the smoke tests run.
+    fn create_isolated_test_app() -> (App, tempfile::TempDir, ConfigPathGuard) {
         let tmpdir = tempfile::TempDir::new().expect("tempdir for smoke test");
         let workspace = tmpdir.path().to_path_buf();
+        let config_path = workspace.join(".deepseek").join("config.toml");
+        std::fs::create_dir_all(config_path.parent().expect("config parent")).expect("config dir");
+        let guard = ConfigPathGuard::new(&config_path);
         let options = TuiOptions {
             model: "deepseek-v4-pro".to_string(),
             workspace: workspace.clone(),
-            config_path: None,
+            config_path: Some(config_path),
             config_profile: None,
             allow_shell: false,
             use_alt_screen: true,
@@ -1045,7 +1084,7 @@ mod tests {
             initial_input: None,
         };
         let app = App::new(options, &Config::default());
-        (app, tmpdir)
+        (app, tmpdir, guard)
     }
 
     /// Smoke test: every entry in `COMMANDS` must dispatch to a real handler.
@@ -1091,7 +1130,7 @@ mod tests {
             if skip_in_dispatch_smoke(command.name) {
                 continue;
             }
-            let (mut app, tmpdir) = create_isolated_test_app();
+            let (mut app, tmpdir, _guard) = create_isolated_test_app();
             let invocation = invocation_for(command.name, command.name, tmpdir.path());
             let result = execute(&invocation, &mut app);
             if let Some(msg) = &result.message {
@@ -1113,7 +1152,7 @@ mod tests {
                 continue;
             }
             for alias in command.aliases {
-                let (mut app, tmpdir) = create_isolated_test_app();
+                let (mut app, tmpdir, _guard) = create_isolated_test_app();
                 let invocation = invocation_for(command.name, alias, tmpdir.path());
                 let result = execute(&invocation, &mut app);
                 if let Some(msg) = &result.message {

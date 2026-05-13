@@ -168,9 +168,10 @@ pub const DIFF_DELETED: Color = Color::Rgb(255, 116, 116);
 pub const ACCENT_REASONING_LIVE: Color = AMBER_DIM;
 pub const ACCENT_TOOL_LIVE: Color = SKY;
 pub const ACCENT_TOOL_ISSUE: Color = Color::Rgb(224, 126, 112);
-pub const TEXT_TOOL_SUMMARY: Color = Color::Rgb(166, 155, 140);
-pub const TEXT_TOOL_SUMMARY_DIM: Color = Color::Rgb(136, 126, 112);
+pub const TEXT_TOOL_SUMMARY: Color = Color::Rgb(160, 160, 160);
+pub const TEXT_TOOL_SUMMARY_DIM: Color = Color::Rgb(112, 112, 112);
 pub const TEXT_TOOL_OUTPUT: Color = Color::White;
+pub const TEXT_MARKDOWN_CODE: Color = Color::Rgb(190, 196, 255);
 #[allow(dead_code)]
 pub const ACCENT_PRIMARY: Color = BLUE;
 #[allow(dead_code)]
@@ -353,6 +354,8 @@ pub fn adapt_fg_for_palette_mode(color: Color, _bg: Color, mode: PaletteMode) ->
         LIGHT_TEXT_HINT
     } else if color == TEXT_SOFT || color == TEXT_TOOL_OUTPUT {
         LIGHT_TEXT_SOFT
+    } else if color == TEXT_MARKDOWN_CODE {
+        Color::Rgb(67, 56, 202)
     } else if color == BORDER_COLOR {
         LIGHT_BORDER
     } else if color == TEXT_ACCENT || color == DEEPSEEK_SKY || color == ACCENT_TOOL_LIVE {

@@ -416,9 +416,7 @@ pub fn render_parsed_tagged(
 
         match &parsed.blocks[i] {
             Block::Heading { text, .. } => {
-                let style = Style::default()
-                    .fg(palette::DEEPSEEK_SKY)
-                    .add_modifier(Modifier::BOLD);
+                let style = base_style.add_modifier(Modifier::BOLD);
                 out.extend(render_wrapped_line_tagged(text, width, style, false, false));
             }
             Block::HeadingRule => {
@@ -440,7 +438,7 @@ pub fn render_parsed_tagged(
                 });
             }
             Block::ListItem { bullet, text } => {
-                let bullet_style = Style::default().fg(palette::DEEPSEEK_SKY);
+                let bullet_style = base_style;
                 out.extend(
                     render_list_line(bullet, text, width, bullet_style, base_style)
                         .into_iter()
@@ -747,9 +745,7 @@ fn render_line_with_links(
 fn parse_inline_spans(line: &str, base_style: Style, link_style: Style) -> Vec<(String, Style)> {
     let bold_style = base_style.add_modifier(Modifier::BOLD);
     let italic_style = base_style.add_modifier(Modifier::ITALIC);
-    let code_style = base_style
-        .add_modifier(Modifier::ITALIC)
-        .bg(palette::SURFACE_ELEVATED);
+    let code_style = base_style.fg(palette::TEXT_MARKDOWN_CODE);
     let strike_style = base_style.add_modifier(Modifier::CROSSED_OUT);
     let mut out = Vec::new();
     let mut rest = line;
@@ -1192,7 +1188,7 @@ fn push_word_breaking_chars(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::style::Style;
+    use ratatui::style::{Color, Modifier, Style};
 
     #[test]
     fn render_markdown_matches_parse_then_render() {
@@ -1438,6 +1434,48 @@ mod tests {
             "bold markers leaked into output: {text:?}"
         );
         assert!(text.contains("Rust"), "bold content missing: {text:?}");
+    }
+
+    #[test]
+    fn summary_markdown_uses_white_hierarchy_and_lavender_code() {
+        let src =
+            "# PASS import_use\n\n1. **Relocation 引擎**: `cold_compile_source_to_object` 已收敛";
+        let lines = render_markdown(src, 80, Style::default().fg(Color::White));
+
+        let heading = lines[0]
+            .spans
+            .iter()
+            .find(|span| span.content == "PASS import_use")
+            .expect("heading text span");
+        assert_eq!(heading.style.fg, Some(Color::White));
+        assert!(heading.style.add_modifier.contains(Modifier::BOLD));
+
+        let list = lines
+            .iter()
+            .find(|line| line.spans.iter().any(|span| span.content == "1. "))
+            .expect("numbered list line");
+        let bullet = list
+            .spans
+            .iter()
+            .find(|span| span.content == "1. ")
+            .expect("numbered list marker");
+        assert_eq!(bullet.style.fg, Some(Color::White));
+
+        let bold = list
+            .spans
+            .iter()
+            .find(|span| span.content == "Relocation")
+            .expect("bold summary span");
+        assert_eq!(bold.style.fg, Some(Color::White));
+        assert!(bold.style.add_modifier.contains(Modifier::BOLD));
+
+        let code = list
+            .spans
+            .iter()
+            .find(|span| span.content == "cold_compile_source_to_object")
+            .expect("inline code span");
+        assert_eq!(code.style.fg, Some(palette::TEXT_MARKDOWN_CODE));
+        assert_eq!(code.style.bg, None);
     }
 
     #[test]

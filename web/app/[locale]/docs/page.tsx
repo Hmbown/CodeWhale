@@ -117,7 +117,7 @@ export default async function DocsPage({ params }: { params: Promise<{ locale: s
                     { group: "搜索", tools: "grep_files · file_search · web_search · fetch_url" },
                     { group: "Shell", tools: "exec_shell · exec_shell_wait · exec_shell_interact" },
                     { group: "Git / 诊断 / 测试", tools: "git_status · git_diff · diagnostics · run_tests" },
-                    { group: "子 Agent", tools: "agent_spawn · agent_wait · agent_result · agent_cancel · agent_list · agent_send_input · agent_resume · agent_assign" },
+                    { group: "子 Agent", tools: "agent_spawn · agent_wait · agent_result · agent_cancel · agent_list · agent_send_input · resume_agent · agent_assign" },
                     { group: "递归 LM", tools: "rlm——沙箱 Python REPL，内置 llm_query()/rlm_query() 用于长文本分块处理" },
                     { group: "MCP", tools: "mcp_<server>_<tool>——从 ~/.deepseek/mcp.json 自动注册" },
                   ].map((row) => (
@@ -344,7 +344,7 @@ command = "~/.deepseek/hooks/pre.sh"        # / message_submit / mode_change / o
                     { group: "Search", tools: "grep_files · file_search · web_search · fetch_url" },
                     { group: "Shell", tools: "exec_shell · exec_shell_wait · exec_shell_interact" },
                     { group: "Git / diag / test", tools: "git_status · git_diff · diagnostics · run_tests" },
-                    { group: "Sub-agents", tools: "agent_spawn · agent_wait · agent_result · agent_cancel · agent_list · agent_send_input · agent_resume · agent_assign" },
+                    { group: "Sub-agents", tools: "agent_spawn · agent_wait · agent_result · agent_cancel · agent_list · agent_send_input · resume_agent · agent_assign" },
                     { group: "Recursive LM", tools: "rlm — sandboxed Python REPL with llm_query()/rlm_query() for chunked processing of long inputs" },
                     { group: "MCP", tools: "mcp_<server>_<tool> — auto-registered from ~/.deepseek/mcp.json" },
                   ].map((row) => (

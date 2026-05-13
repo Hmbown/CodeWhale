@@ -270,7 +270,7 @@ impl HistoryCell {
                     lines.truncate(TOOL_CARD_SUMMARY_LINES);
                     lines.push(details_affordance_line(
                         "Alt+V for details",
-                        Style::default().fg(palette::TEXT_MUTED).italic(),
+                        Style::default().fg(palette::TEXT_TOOL_SUMMARY).italic(),
                     ));
                 }
                 lines
@@ -2228,7 +2228,7 @@ fn render_command_mode(command: &str, width: u16, mode: RenderMode) -> Vec<Line<
         if count >= cap {
             lines.push(details_affordance_line(
                 "command clipped; Alt+V for details",
-                Style::default().fg(palette::TEXT_MUTED),
+                Style::default().fg(palette::TEXT_TOOL_SUMMARY),
             ));
             break;
         }
@@ -2411,7 +2411,7 @@ fn render_preserved_output_mode(
             if omitted > 0 {
                 lines.push(details_affordance_line(
                     &format!("{omitted} lines omitted; Alt+V for details"),
-                    Style::default().fg(palette::TEXT_MUTED),
+                    Style::default().fg(palette::TEXT_TOOL_SUMMARY),
                 ));
             }
         }
@@ -2767,7 +2767,7 @@ fn system_label_style() -> Style {
 }
 
 fn message_body_style() -> Style {
-    Style::default().fg(palette::TEXT_PRIMARY)
+    Style::default().fg(Color::White)
 }
 
 fn system_body_style() -> Style {
@@ -2884,13 +2884,14 @@ fn render_tool_header_with_family_and_summary(
     ];
 
     if let Some(summary) = summary {
+        let summary_style = tool_header_summary_style(family);
         spans.push(Span::styled(
             "(",
             Style::default().fg(palette::TEXT_TOOL_SUMMARY_DIM),
         ));
         spans.push(Span::styled(
             truncate_text(&summary, TOOL_HEADER_SUMMARY_LIMIT),
-            Style::default().fg(palette::TEXT_TOOL_SUMMARY),
+            summary_style,
         ));
         spans.push(Span::styled(
             ")",
@@ -2902,6 +2903,13 @@ fn render_tool_header_with_family_and_summary(
     }
 
     Line::from(spans)
+}
+
+fn tool_header_summary_style(family: crate::tui::widgets::tool_card::ToolFamily) -> Style {
+    match family {
+        crate::tui::widgets::tool_card::ToolFamily::Run => tool_value_style(),
+        _ => Style::default().fg(palette::TEXT_TOOL_SUMMARY),
+    }
 }
 
 fn normalize_header_summary(summary: &str) -> Option<String> {
@@ -3183,15 +3191,16 @@ fn looks_like_file_path(s: &str) -> bool {
 mod tests {
     use super::{
         ASSISTANT_GLYPH, ExecCell, ExecSource, GenericToolCell, HistoryCell, PlanStep,
-        PlanUpdateCell, REASONING_CURSOR, REASONING_OPENER, REASONING_RAIL, TOOL_RUNNING_SYMBOLS,
-        TOOL_STATUS_SYMBOL_MS, ToolCell, ToolStatus, TranscriptRenderOptions, USER_GLYPH,
-        assistant_label_style_for, extract_reasoning_summary, render_thinking,
-        render_tool_header_with_family_and_summary, running_status_label_with_elapsed,
+        PlanUpdateCell, REASONING_CURSOR, REASONING_OPENER, REASONING_RAIL, RenderMode,
+        TOOL_OUTPUT_LINE_LIMIT, TOOL_RUNNING_SYMBOLS, TOOL_STATUS_SYMBOL_MS, ToolCell, ToolStatus,
+        TranscriptRenderOptions, USER_GLYPH, assistant_label_style_for, extract_reasoning_summary,
+        render_thinking, render_tool_header_with_family_and_summary, render_tool_output_mode,
+        running_status_label_with_elapsed,
     };
     use crate::deepseek_theme::Theme;
     use crate::models::{ContentBlock, Message};
     use crate::palette;
-    use ratatui::style::Modifier;
+    use ratatui::style::{Color, Modifier};
     use std::time::{Duration, Instant};
 
     // ---- elapsed-seconds badge for long-running tools ----
@@ -3832,6 +3841,39 @@ mod tests {
     }
 
     #[test]
+    fn assistant_summary_body_uses_pure_white_markdown() {
+        let cell = HistoryCell::Assistant {
+            content: "1. **Relocation 引擎**: `cold_compile_source_to_object` 已收敛".to_string(),
+            streaming: false,
+        };
+        let lines = cell.lines(120);
+        let line = &lines[0];
+
+        let bullet = line
+            .spans
+            .iter()
+            .find(|span| span.content == "1. ")
+            .expect("numbered list marker");
+        assert_eq!(bullet.style.fg, Some(Color::White));
+
+        let bold = line
+            .spans
+            .iter()
+            .find(|span| span.content == "Relocation")
+            .expect("bold span");
+        assert_eq!(bold.style.fg, Some(Color::White));
+        assert!(bold.style.add_modifier.contains(Modifier::BOLD));
+
+        let code = line
+            .spans
+            .iter()
+            .find(|span| span.content == "cold_compile_source_to_object")
+            .expect("inline code span");
+        assert_eq!(code.style.fg, Some(palette::TEXT_MARKDOWN_CODE));
+        assert_eq!(code.style.bg, None);
+    }
+
+    #[test]
     fn assistant_code_block_lines_do_not_get_transcript_rail() {
         let cell = HistoryCell::Assistant {
             content: "SQL:\n```sql\nSELECT\nFROM customers\n```".to_string(),
@@ -4164,7 +4206,7 @@ mod tests {
     }
 
     #[test]
-    fn tool_header_summary_keeps_claude_code_gray() {
+    fn run_tool_header_command_uses_pure_white() {
         let header = render_tool_header_with_family_and_summary(
             crate::tui::widgets::tool_card::ToolFamily::Run,
             Some("cd /tmp && ls"),
@@ -4178,11 +4220,25 @@ mod tests {
             header.spans[2].style.fg,
             Some(palette::TEXT_TOOL_SUMMARY_DIM)
         );
-        assert_eq!(header.spans[3].style.fg, Some(palette::TEXT_TOOL_SUMMARY));
+        assert_eq!(header.spans[3].style.fg, Some(Color::White));
         assert_eq!(
             header.spans[4].style.fg,
             Some(palette::TEXT_TOOL_SUMMARY_DIM)
         );
+    }
+
+    #[test]
+    fn non_command_tool_header_summary_uses_neutral_gray() {
+        let header = render_tool_header_with_family_and_summary(
+            crate::tui::widgets::tool_card::ToolFamily::Find,
+            Some("TODO"),
+            "done",
+            ToolStatus::Success,
+            None,
+            true,
+        );
+
+        assert_eq!(header.spans[3].style.fg, Some(palette::TEXT_TOOL_SUMMARY));
     }
 
     // === Theme parity tests ===
@@ -4689,6 +4745,49 @@ mod tests {
         assert!(live_text.contains("Alt+V for details"));
         assert!(live_text.contains("line 00"));
         assert!(live_text.contains("line 23"));
+    }
+
+    #[test]
+    fn tool_output_omission_affordance_uses_summary_color() {
+        let output = (0..24usize)
+            .map(|i| format!("line {i:02}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let rendered =
+            render_tool_output_mode(&output, 80, TOOL_OUTPUT_LINE_LIMIT, RenderMode::Live);
+
+        let omitted = rendered
+            .iter()
+            .find(|line| {
+                line.spans
+                    .iter()
+                    .any(|span| span.content.contains("lines omitted"))
+            })
+            .expect("omission affordance");
+        let text_span = omitted
+            .spans
+            .iter()
+            .find(|span| span.content.contains("lines omitted"))
+            .expect("omission text span");
+
+        assert_eq!(text_span.style.fg, Some(palette::TEXT_TOOL_SUMMARY));
+    }
+
+    #[test]
+    fn tool_output_body_uses_pure_white() {
+        let rendered = render_tool_output_mode(
+            "compile ok\nnext step ready",
+            80,
+            TOOL_OUTPUT_LINE_LIMIT,
+            RenderMode::Live,
+        );
+
+        let body_span = rendered[0]
+            .spans
+            .iter()
+            .find(|span| span.content == "compile ok")
+            .expect("tool output body span");
+        assert_eq!(body_span.style.fg, Some(Color::White));
     }
 
     #[test]

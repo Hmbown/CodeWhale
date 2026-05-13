@@ -5,6 +5,284 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.30] - 2026-05-11
+
+A "tighten what we shipped" release. Bare single-letter keystrokes
+(`g`, `G`, `[`, `]`, `?`, `l`, `v`) no longer get eaten as transcript-
+nav shortcuts when the composer is empty — every one of them is now
+freely usable as the first character of a message. The water-spout
+animation in the footer is decoupled from `low_motion` so typewriter
+mode no longer hides the wave, and the v0.3.5-era 🐳→🐋 cycling
+indicator is back next to the effort chip after a long detour through
+geometric dots. Plus a handful of provider, shell, and config fixes
+that surfaced during v0.8.29 testing.
+
+### Added
+
+- **The whale is back.** Restored the `🐳 → 🐳. → 🐳.. → 🐳... → 🐋 → 🐋.
+  → 🐋.. → 🐋... → 🐋.. → 🐋. → 🐳..` cycling status indicator that
+  originally shipped in v0.3.5 and silently disappeared in commit
+  `1a04659a9` (the "smoother TUI streaming" pass, which swapped the
+  12-frame whale sequence for a 6-frame geometric `◍ ◉ ◌` ring) and then
+  was deleted outright in `f4dbf828c` (footer-polish commit). The chip
+  renders in the header status cluster, immediately before the
+  reasoning-effort chip — exactly where long-time users remember it.
+  Idle frame is a steady 🐳; the cycle advances every 420 ms keyed off
+  `App::turn_started_at`, so the breaching whale shows up halfway
+  through any active turn.
+
+  Configurable via the new `status_indicator` setting:
+  - `whale` (default) — the historical cycling whale.
+  - `dots` — the geometric `◍ ◉ ◌` frames from the dots era.
+  - `off` — hide the chip entirely.
+
+  Set via `/config status_indicator <whale|dots|off>` or in
+  `settings.toml`.
+
+### Changed
+
+- **Transcript-nav single-letter shortcuts now require `Alt`.** Before
+  v0.8.30, pressing a bare `g`, `G`, `[`, `]`, `?`, `l`, or `v` with an
+  empty composer hijacked the keystroke for transcript navigation — so
+  typing "good morning" produced "ood morning" with no warning, and the
+  v0.8.29 spot-fix at `c13ddb04d` (gg double-tap) only suppressed the
+  scroll, not the lost character. The bindings are now uniformly
+  `Alt+<key>`, mirroring `Alt+R` (history search) and `Alt+V` (tool
+  details) which already followed this pattern:
+
+  | Old (bare) | New (`Alt+…`) | What it does |
+  |---|---|---|
+  | `gg` (double-tap) | `Alt+G` | scroll transcript to top |
+  | `G` or `Shift+G` | `Alt+Shift+G` | scroll transcript to bottom |
+  | `[` | `Alt+[` | jump to previous tool output |
+  | `]` | `Alt+]` | jump to next tool output |
+  | `?` | `Alt+?` | open the searchable help overlay (F1 / `Ctrl+/` also bound) |
+  | `l` | `Alt+L` | open pager for last message |
+  | `v` / `V` | `Alt+V` | open tool-details pager |
+
+  Plain letters are now always inserted into the composer as text. The
+  `App::transcript_pending_g` field from the v0.8.29 half-fix is removed;
+  the unified `alt_nav_modifiers` predicate replaces the per-key
+  `is_empty()` checks.
+
+### Fixed
+
+- **`low_motion = true` no longer hides the footer water-spout** when
+  `fancy_animations = true`. The spout-strip animation in the footer was
+  hard-gated on `!low_motion`, collapsing two unrelated concerns —
+  streaming pacing and footer animation — onto one flag. The two are now
+  orthogonal: `low_motion` governs only streaming pacing (typewriter vs.
+  upstream cadence), and `fancy_animations` alone decides whether the
+  water-spout strip renders. The wave itself is unchanged from prior
+  releases (wall-clock-driven sine, same cadence as v0.8.29).
+- **Custom-base-URL providers preserve the user's model name** (#857
+  class). Only OpenRouter was previously whitelisted; Sglang, Novita,
+  Fireworks, Vllm, Ollama, and NvidiaNim users hitting custom gateways
+  with a bare model name were getting HTTP 400s because the dispatcher
+  rewrote the model identifier. Now any provider with a user-set
+  `base_url` is treated as a custom endpoint and passes the model name
+  through unchanged.
+- **`exec_shell` no longer freezes the TUI when a background subprocess
+  outlives its parent shell** (#828, cherry-picked from PR #1475 by
+  **@CrepuscularIRIS / autoghclaw**). Orphaned children that kept the
+  pipe write-end open made `handle.join()` in `collect_output` block
+  indefinitely; every transcript-rendering tick that called
+  `list_jobs()` then hung the UI. The collector now kills the process
+  group before joining the reader threads, and the previously dead
+  `cleanup()` is now wired to drop completed jobs older than an hour.
+
+## [0.8.29] - 2026-05-11
+
+A maintenance release anchored by a regression fix for the
+"scroll demon" (#1085 class, re-introduced by v0.8.27's flicker
+patch) and a wrong-project session-restore bug (#1395). Plus 25
+community PRs covering MCP transport, prompt steering, auto-routing
+language coverage, web-search SERP filtering, and broad test
+coverage additions.
+
+### Fixed
+
+- **Scroll demon — alt-screen no longer drifts under parallel
+  sub-agent load** (#1085 regression). The v0.8.27 flicker fix
+  dropped the `\x1b[2J\x1b[3J` deep-clear from the viewport-reset
+  path, which had been silently masking three `eprintln!` sites
+  inside the sub-agent and network-policy modules. Each leak
+  scrolled the alt-screen up by one row while ratatui's diff
+  renderer remained convinced its model matched reality. Three
+  layers of defence now ship together: a `tracing-subscriber`
+  writing to `~/.deepseek/logs/tui-YYYY-MM-DD.log`, an fd-level
+  `dup2` stderr redirect for the alt-screen lifetime (Unix only;
+  Windows follow-up tracked), and module-level
+  `#![deny(clippy::print_stdout, clippy::print_stderr)]` on
+  `tools/`, `core/`, `tui/`, `runtime_threads.rs`, and
+  `network_policy.rs`. The three known leak sites
+  (`subagent::persist_state_best_effort`,
+  `subagent::new_shared_subagent_manager`, `network_policy::record`)
+  now route through `tracing::warn!` with structured fields.
+- **`Ctrl+R` session-restore picker is workspace-scoped** (#1395,
+  PR #1397 from **@linzhiqin2003**). `SessionPickerView::new`
+  previously listed every saved session on disk sorted globally —
+  so opening DeepSeek-TUI in Project B and pressing `Ctrl+R` could
+  hand back Project A's last conversation. The picker now filters
+  by current workspace, with a fallback hint when no in-workspace
+  sessions exist.
+- **MCP discovery survives malformed items** (PR #1410 from
+  **@Liu-Vince**). The `tools/list`, `resources/list`,
+  `resources/templates/list`, and `prompts/list` walks previously
+  did `serde_json::from_value::<Vec<…>>(…).unwrap_or_default()`,
+  which silently discarded the entire page when any single entry
+  was misshapen. Each list now iterates per-item, skipping
+  malformed entries with a `tracing::debug!` instead of dropping
+  the rest of the catalogue. Composes with the v0.8.x pagination
+  loop landed for #1256.
+- **MCP SSE transport accepts CRLF-framed endpoint events** (#1309,
+  PR #1358 from **@reidliu41**). FastMCP / uvicorn-style SSE
+  streams using `\r\n\r\n` separators now discover the endpoint and
+  send initialization requests instead of timing out while waiting
+  for an LF-only event boundary.
+- **Composer ignores leaked SGR mouse-report bursts** (#1418,
+  PR #1421 from **@reidliu41**). Some SSH / IDE terminal chains
+  leak fragments like `[<35;44;18M` into stdin while mouse capture
+  is enabled; the composer now filters those bursts at the insertion
+  boundary without stripping ordinary coordinate-like typed text.
+- **Footer right-cluster chips can no longer crowd the left status
+  line** (#1357, PR #1417 from **@Wenjunyun123**). The footer now
+  reserves visible space for the left status before selecting cache /
+  aux chips, dropping oversized right-side chips instead of pushing
+  the row over the available terminal width.
+- **Web search drops spam-stuffed SERPs** (#964, PR #1396 from
+  **@linzhiqin2003**). The Bing / DDG fallback paths now filter
+  the SEO-farm domains that were poisoning quick lookups.
+- **Language directive: `reasoning_content` follows the user's
+  message language** (#1118, PR #1398 from **@linzhiqin2003**) —
+  previously the project context's inferred `lang` could override
+  the latest user message, leading to English thinking for a
+  Chinese turn.
+- **Deferred tools hydrate their schema before first execution**
+  (#1419, PR #1429 from **@SamhandsomeLee**). When the model asks
+  for a deferred tool such as `edit_file` before seeing its schema,
+  the engine now loads the tool, returns a non-executed hydration
+  result with the expected fields, and requires a retry instead of
+  executing guessed argument names. Common `edit_file` aliases such
+  as `old_string -> search` and `new_string -> replace` are called
+  out in the retry hint.
+- **DeepSeek public aliases replay thinking-mode tool turns**
+  (PR #1428 from **@Beltran12138**). `deepseek-chat` and
+  `deepseek-reasoner` now classify as V4 reasoning models for
+  `reasoning_content` replay, preventing second-turn HTTP 400s
+  after tool calls when users keep the onboarding default model
+  alias.
+- **`Ctrl+O` expands thinking blocks still in flight.**
+  Two compounding bugs were making the "thinking collapsed; press
+  Ctrl+O for full text" affordance a lie. (1) `open_thinking_pager`
+  only searched `app.history`, but after `ThinkingComplete` the
+  finalized thinking entry sits in `app.active_cell` with
+  `streaming = false` until the active cell flushes at end-of-turn;
+  during that window the handler surfaced "No thinking blocks to
+  expand" while the affordance pointed at the live entry. Routed
+  through the existing `cell_at_virtual_index` / `virtual_cell_count`
+  resolver that `open_tool_details_pager` already uses, so
+  selection-based and most-recent lookups both reach in-flight
+  entries. (2) The keybinding guard required `key.modifiers ==
+  KeyModifiers::CONTROL` (exact match), so any extra modifier bit
+  set by the terminal — Shift while a native-selection bypass was
+  active, Caps Lock indicator on some keyboard layouts — silently
+  fell through to the `$EDITOR` arm and did nothing visible on an
+  empty composer. Relaxed to `contains(KeyModifiers::CONTROL)` to
+  match the existing Ctrl+P / Ctrl+B pattern. Regression-guarded by
+  `open_thinking_pager_finds_thinking_in_active_cell`.
+- **Skill completions no longer flood the top-level slash menu**
+  (#1437, PR #1442 from **@reidliu41**). Installed skills now
+  complete under `/skill <name>` while the root `/` menu stays
+  focused on built-in commands.
+- **`edit_file` rejects no-op replacements** (PR #1460 from
+  **@xiluoduyu**). Identical `search` / `replace` arguments now
+  fail fast with a clear validation error instead of producing an
+  empty diff that can trap the model in retry loops.
+- **Windows-terminal glyph widths are stable** (#1314, PR #1465
+  from **@CrepuscularIRIS**). SMP emoji in the header and file tree
+  were replaced with BMP-width-safe symbols / text so cmd,
+  PowerShell, WezTerm, and Alacritty do not mismeasure rows.
+- **Ghostty defaults to low-motion rendering** (#1445, PR #1468
+  from **@CrepuscularIRIS**). `TERM_PROGRAM=ghostty` now receives
+  the same animation cap as VS Code terminals to avoid redraw
+  flicker on affected setups.
+- **Docker buildx provenance permission failures get an actionable
+  hint** (#1449, PR #1469 from **@CrepuscularIRIS**). macOS shell
+  outputs matching the restricted provenance metadata failure now
+  include guidance to disable provenance for that build.
+- **Windows CMD mouse-wheel fallback scrolls the transcript**
+  (#1443, PR #1471 from **@CrepuscularIRIS**). When mouse capture is
+  off, composer arrow-scroll defaults on so terminal wheel events
+  mapped to Up / Down do not cycle composer history.
+
+### Added
+
+- **MCP HTTP transport honors `HTTP(S)_PROXY` / `NO_PROXY`** (#1408
+  from **@hlx98007**). Reqwest 0.13 does not auto-detect proxy env
+  vars by default, so MCP HTTP connections were bypassing the
+  proxy that every other tool on the box (curl, npm, git, …) was
+  using. Connections behind corporate egress proxies and
+  China-mainland Clash / Shadowsocks tunnels now work transparently.
+  Malformed `HTTPS_PROXY` values log a `tracing::warn!` and the
+  connection proceeds without a proxy rather than failing the MCP
+  attach.
+- **Note management slash commands** (PR #1407 from
+  **@reidliu41**). `/note add`, `/note list`, and friends for
+  persistent maintainer-style notes inside the TUI, backed by
+  `~/.deepseek/notes/`.
+- **Header surfaces the runtime version chip.** A `v0.8.29` tag
+  sits in the header's right cluster after the provider / effort /
+  Live / context chips. Styled with `palette::TEXT_HINT` so it
+  reads behind the streaming indicators. Drops first under tight
+  terminal width.
+- **Global `~/.deepseek/AGENTS.md` now merges with project
+  AGENTS.md** (#1157, PR #1399 from **@linzhiqin2003**) instead of
+  being shadowed when a workspace ships its own.
+- **Auto-routing recognises CJK debug / search keywords** (PRs
+  #1401 and #1402 from **@linzhiqin2003**) — `--model auto` and
+  the reasoning-effort picker correctly route Chinese / Japanese
+  technical queries that previously fell through to the generic
+  baseline.
+
+### Security
+
+- **`sync-cnb.yml` workflow hardened** (CodeQL finding from
+  v0.8.28). Adds explicit `permissions: contents: read`
+  (least-privilege), bumps `actions/checkout` v3 → v4, and
+  narrows the trigger from `on: [push]` to `on: push.branches:
+  [main]` + `tags: ['v*']`. Feature branches no longer mirror to
+  CNB; only `main` and tagged releases do.
+- **Post-exit resume hint avoids session-id taint.** The TUI now
+  checks whether a session exists separately from the constant
+  resume-hint text it prints after leaving the alt-screen, resolving
+  the `rust/cleartext-logging` CodeQL alert without reintroducing
+  scroll-demon stdout writes.
+
+### Internal
+
+- **+438 LOC of new test coverage** across four PRs from
+  **@linzhiqin2003**: `error_taxonomy::classify_error_message`
+  and Display impls (#1403), `parse_pages_arg` edge cases (#1404),
+  `optional_search_max_results` precedence (#1405), and
+  `sanitize_stream_chunk` control-byte filtering (#1406).
+- **`runtime_log` module** ships with a regression test pinning
+  the `HOME` / `USERPROFILE` / `dirs::home_dir()` resolution
+  order, holding the process-wide `test_support::lock_test_env()`
+  lock for env-mutation safety.
+- **Header rendering** gains two regression tests
+  (`header_renders_version_chip_when_width_allows` and
+  `narrow_header_drops_version_chip_before_dropping_mode`)
+  pinning the version chip's cascade priority.
+- **Workspace/session test isolation** tightened (PR #1431 from
+  **@reidliu41**). Git-root detection ignores invalid parent `.git`
+  markers, env-mutating tests share the crate-wide test lock, and
+  the streamable HTTP MCP mock server stays alive for the full test.
+- **Config-mutating smoke tests now isolate `DEEPSEEK_CONFIG_PATH`.**
+  The command registry and web-config commit tests no longer rewrite
+  the developer's real `~/.deepseek/config.toml` while validating
+  release candidates locally.
+
 ## [0.8.28] - 2026-05-10
 
 A maintenance release bundling four streaming / approvals / cache
@@ -2917,7 +3195,35 @@ Welcome — and thank you.
 - Hooks system and config profiles
 - Example skills and launch assets
 
-[Unreleased]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.30...HEAD
+[0.8.30]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.29...v0.8.30
+[0.8.29]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.28...v0.8.29
+[0.8.28]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.27...v0.8.28
+[0.8.27]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.26...v0.8.27
+[0.8.26]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.25...v0.8.26
+[0.8.25]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.24...v0.8.25
+[0.8.24]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.23...v0.8.24
+[0.8.23]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.22...v0.8.23
+[0.8.22]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.21...v0.8.22
+[0.8.21]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.20...v0.8.21
+[0.8.20]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.19...v0.8.20
+[0.8.19]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.18...v0.8.19
+[0.8.18]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.17...v0.8.18
+[0.8.17]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.16...v0.8.17
+[0.8.16]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.15...v0.8.16
+[0.8.15]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.13...v0.8.15
+[0.8.13]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.12...v0.8.13
+[0.8.12]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.11...v0.8.12
+[0.8.11]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.10...v0.8.11
+[0.8.10]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.8...v0.8.10
+[0.8.8]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.7...v0.8.8
+[0.8.7]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.6...v0.8.7
+[0.8.6]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.5...v0.8.6
+[0.8.5]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.4...v0.8.5
+[0.8.4]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.3...v0.8.4
+[0.8.3]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.2...v0.8.3
+[0.8.2]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.1...v0.8.2
+[0.8.1]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.7.9...v0.8.0
 [0.7.9]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.7.8...v0.7.9
 [0.7.8]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.7.7...v0.7.8

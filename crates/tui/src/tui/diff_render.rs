@@ -6,7 +6,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::palette;
 
-const LINE_NUMBER_WIDTH: usize = 4;
+const MIN_LINE_NUMBER_WIDTH: usize = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiffFileSummary {
@@ -21,6 +21,8 @@ pub fn render_diff(diff: &str, width: u16) -> Vec<Line<'static>> {
     let mut old_line: Option<usize> = None;
     let mut new_line: Option<usize> = None;
     let summaries = summarize_diff(diff);
+    let line_number_width = diff_line_number_width(diff);
+    let show_file_headers = summaries.len() > 1;
 
     if !summaries.is_empty() {
         lines.extend(render_diff_summary(&summaries, width));
@@ -30,7 +32,7 @@ pub fn render_diff(diff: &str, width: u16) -> Vec<Line<'static>> {
     for raw in diff.lines() {
         if raw.starts_with("diff --git ") {
             let path = parse_diff_git_path(raw).unwrap_or_else(|| "<file>".to_string());
-            if current_file.as_deref() != Some(&path) {
+            if show_file_headers && current_file.as_deref() != Some(&path) {
                 current_file = Some(path.clone());
                 lines.extend(render_file_header(&path, width));
             }
@@ -64,6 +66,7 @@ pub fn render_diff(diff: &str, width: u16) -> Vec<Line<'static>> {
                     .bg(palette::DIFF_ADDED_BG),
                 Style::default().fg(Color::White).bg(palette::DIFF_ADDED_BG),
                 true,
+                line_number_width,
             ));
             if let Some(line) = new_line.as_mut() {
                 *line = line.saturating_add(1);
@@ -85,6 +88,7 @@ pub fn render_diff(diff: &str, width: u16) -> Vec<Line<'static>> {
                     .fg(Color::White)
                     .bg(palette::DIFF_DELETED_BG),
                 true,
+                line_number_width,
             ));
             if let Some(line) = old_line.as_mut() {
                 *line = line.saturating_add(1);
@@ -100,8 +104,9 @@ pub fn render_diff(diff: &str, width: u16) -> Vec<Line<'static>> {
                 new_line,
                 ' ',
                 Style::default().fg(palette::TEXT_TOOL_SUMMARY_DIM),
-                Style::default().fg(palette::TEXT_PRIMARY),
+                Style::default().fg(Color::White),
                 false,
+                line_number_width,
             ));
             if let Some(line) = old_line.as_mut() {
                 *line = line.saturating_add(1);
@@ -258,7 +263,7 @@ fn render_diff_summary(summaries: &[DiffFileSummary], width: u16) -> Vec<Line<'s
             if deleted == 1 { "" } else { "s" },
         ),
         Style::default()
-            .fg(palette::TEXT_PRIMARY)
+            .fg(Color::White)
             .add_modifier(Modifier::BOLD),
         width,
     ));
@@ -275,6 +280,33 @@ fn parse_hunk_header(line: &str) -> Option<(usize, usize)> {
     let old_start = old.split(',').next()?.parse::<usize>().ok()?;
     let new_start = new.split(',').next()?.parse::<usize>().ok()?;
     Some((old_start, new_start))
+}
+
+fn diff_line_number_width(diff: &str) -> usize {
+    let mut max_line = 0usize;
+    for raw in diff.lines().filter(|line| line.starts_with("@@")) {
+        let parts: Vec<&str> = raw.split_whitespace().collect();
+        if parts.len() < 3 {
+            continue;
+        }
+        if let Some((start, count)) = parse_hunk_range(parts[1].trim_start_matches('-')) {
+            max_line = max_line.max(start.saturating_add(count.saturating_sub(1)));
+        }
+        if let Some((start, count)) = parse_hunk_range(parts[2].trim_start_matches('+')) {
+            max_line = max_line.max(start.saturating_add(count.saturating_sub(1)));
+        }
+    }
+    max_line.to_string().len().max(MIN_LINE_NUMBER_WIDTH)
+}
+
+fn parse_hunk_range(range: &str) -> Option<(usize, usize)> {
+    let mut parts = range.split(',');
+    let start = parts.next()?.parse::<usize>().ok()?;
+    let count = parts
+        .next()
+        .map(|value| value.parse::<usize>().ok())
+        .unwrap_or(Some(1))?;
+    Some((start, count))
 }
 
 fn render_header_line(line: &str, width: u16) -> Vec<Line<'static>> {
@@ -298,8 +330,10 @@ fn render_diff_line(
     prefix_style: Style,
     content_style: Style,
     fill_to_width: bool,
+    line_number_width: usize,
 ) -> Vec<Line<'static>> {
-    let prefix = format_line_numbers(old_line, new_line, marker);
+    let prefix = format_line_number(old_line, new_line, marker, line_number_width);
+    let continuation_prefix = format_line_number(None, None, marker, line_number_width);
     let prefix_width = prefix.width();
     let available = width.saturating_sub(prefix_width as u16).max(1) as usize;
     let wrapped = wrap_code_text(content, available);
@@ -318,7 +352,7 @@ fn render_diff_line(
             ]));
         } else {
             out.push(Line::from(vec![
-                Span::styled(" ".repeat(prefix_width), prefix_style),
+                Span::styled(continuation_prefix.clone(), prefix_style),
                 Span::styled(chunk, content_style),
             ]));
         }
@@ -331,24 +365,21 @@ fn render_diff_line(
     out
 }
 
-fn format_line_numbers(old_line: Option<usize>, new_line: Option<usize>, marker: char) -> String {
-    let old = old_line
-        .map(|value| {
-            format!(
-                "{value:>LINE_NUMBER_WIDTH$}",
-                LINE_NUMBER_WIDTH = LINE_NUMBER_WIDTH
-            )
-        })
-        .unwrap_or_else(|| " ".repeat(LINE_NUMBER_WIDTH));
-    let new = new_line
-        .map(|value| {
-            format!(
-                "{value:>LINE_NUMBER_WIDTH$}",
-                LINE_NUMBER_WIDTH = LINE_NUMBER_WIDTH
-            )
-        })
-        .unwrap_or_else(|| " ".repeat(LINE_NUMBER_WIDTH));
-    format!("{old} {new} {marker} ")
+fn format_line_number(
+    old_line: Option<usize>,
+    new_line: Option<usize>,
+    marker: char,
+    line_number_width: usize,
+) -> String {
+    let line = match marker {
+        '+' => new_line,
+        '-' => old_line,
+        _ => new_line.or(old_line),
+    };
+    let number = line
+        .map(|value| format!("{value:>line_number_width$}"))
+        .unwrap_or_else(|| " ".repeat(line_number_width));
+    format!("{number} {marker} ")
 }
 
 fn wrap_with_style(text: &str, style: Style, width: u16) -> Vec<Line<'static>> {
@@ -494,19 +525,22 @@ diff --git a/src/a.rs b/src/a.rs
         let rendered = render_diff(diff, 80);
         let text = rendered.iter().map(line_text).collect::<Vec<_>>();
         assert!(text[0].contains("Added 1 line, removed 1 line"));
-        assert!(text.iter().any(|line| line.contains("src/a.rs")));
         assert!(
-            text.iter().any(|line| line.contains(" + new")),
+            !text.iter().any(|line| line.contains("── src/a.rs")),
+            "single-file diff should not add an extra file divider: {text:?}"
+        );
+        assert!(
+            text.iter().any(|line| line.contains("   2 + new")),
             "added line should carry + gutter: {text:?}"
         );
         assert!(
-            text.iter().any(|line| line.contains(" - old")),
+            text.iter().any(|line| line.contains("   2 - old")),
             "deleted line should carry - gutter: {text:?}"
         );
 
         let added = rendered
             .iter()
-            .find(|line| line_text(line).contains(" + new"))
+            .find(|line| line_text(line).contains("   2 + new"))
             .expect("added line");
         assert_eq!(added.spans[0].style.bg, Some(palette::DIFF_ADDED_BG));
         assert_eq!(added.spans[0].style.fg, Some(palette::DIFF_ADDED));
@@ -515,7 +549,7 @@ diff --git a/src/a.rs b/src/a.rs
 
         let deleted = rendered
             .iter()
-            .find(|line| line_text(line).contains(" - old"))
+            .find(|line| line_text(line).contains("   2 - old"))
             .expect("deleted line");
         assert_eq!(deleted.spans[0].style.bg, Some(palette::DIFF_DELETED_BG));
         assert_eq!(deleted.spans[0].style.fg, Some(palette::DIFF_DELETED));
@@ -538,12 +572,48 @@ diff --git a/src/a.rs b/src/a.rs
         let rendered = render_diff(diff, 80);
         let text = rendered.iter().map(line_text).collect::<Vec<_>>();
         assert!(
-            text.iter().any(|line| line.contains("-     --counter;")),
+            text.iter()
+                .any(|line| line.contains("   1 -     --counter;")),
             "deleted code indentation/operator prefix should survive: {text:?}"
         );
         assert!(
-            text.iter().any(|line| line.contains("+     ++counter;")),
+            text.iter()
+                .any(|line| line.contains("   1 +     ++counter;")),
             "added code indentation/operator prefix should survive: {text:?}"
+        );
+    }
+
+    #[test]
+    fn render_diff_uses_single_dynamic_line_number_gutter() {
+        let diff = "\
+diff --git a/src/a.rs b/src/a.rs
+--- a/src/a.rs
++++ b/src/a.rs
+@@ -15350,2 +15351,2 @@
+-old value that is long enough to wrap when the viewport is narrow
++new value that is long enough to wrap when the viewport is narrow
+";
+
+        let rendered = render_diff(diff, 48);
+        let text = rendered.iter().map(line_text).collect::<Vec<_>>();
+
+        assert!(
+            text.iter()
+                .any(|line| line.starts_with("15350 - old value")),
+            "deleted line should use one old line-number column: {text:?}"
+        );
+        assert!(
+            text.iter()
+                .any(|line| line.starts_with("15351 + new value")),
+            "added line should use one new line-number column: {text:?}"
+        );
+        assert!(
+            text.iter().any(|line| line.starts_with("      - ")),
+            "wrapped deleted continuation should repeat the marker with blank number: {text:?}"
+        );
+        assert!(
+            text.iter().all(|line| !line.starts_with("15350 15351")),
+            "old/new double gutter must not render: {text:?}"
         );
     }
 }

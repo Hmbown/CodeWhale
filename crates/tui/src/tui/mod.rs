@@ -1,5 +1,14 @@
 //! Terminal UI (TUI) module for `DeepSeek` CLI.
 
+// The rendering layer runs inside the alt-screen. Raw stdio prints
+// produce the scroll demon (see `runtime_log` for full context). Use
+// `tracing::*` for diagnostics — `runtime_log` captures it to disk.
+// `ui::run_event_loop` legitimately prints a post-exit resume hint
+// AFTER `LeaveAlternateScreen`; that single site uses
+// `#[allow(clippy::print_stdout)]` locally.
+#![deny(clippy::print_stdout)]
+#![deny(clippy::print_stderr)]
+
 // === Submodules ===
 
 pub mod active_cell;

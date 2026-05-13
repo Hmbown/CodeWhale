@@ -1097,8 +1097,7 @@ fn base_url_is_custom_for_provider(provider: ProviderKind, base_url: &str) -> bo
 }
 
 fn provider_preserves_custom_base_url_model(provider: ProviderKind, base_url: &str) -> bool {
-    matches!(provider, ProviderKind::Openrouter)
-        && base_url_is_custom_for_provider(provider, base_url)
+    base_url_is_custom_for_provider(provider, base_url)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -2245,6 +2244,25 @@ mod tests {
 
         assert_eq!(resolved.provider, ProviderKind::Openrouter);
         assert_eq!(resolved.base_url, "https://gateway.example.com/v1");
+        assert_eq!(resolved.model, "DeepSeek-V4-Pro");
+    }
+
+    #[test]
+    fn fireworks_custom_base_url_preserves_provider_model() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        let mut config = ConfigToml {
+            provider: ProviderKind::Fireworks,
+            ..ConfigToml::default()
+        };
+        config.providers.fireworks.base_url = Some("https://my-gateway.example/v1".to_string());
+        config.providers.fireworks.model = Some("DeepSeek-V4-Pro".to_string());
+
+        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::Fireworks);
+        assert_eq!(resolved.base_url, "https://my-gateway.example/v1");
+        // Custom base URL skips provider-specific model prefixing.
         assert_eq!(resolved.model, "DeepSeek-V4-Pro");
     }
 

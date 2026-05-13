@@ -394,7 +394,7 @@ If you are upgrading from older releases:
   It is visible in `/config` and can be changed from the TUI. The new path is
   used immediately by `/mcp`, but rebuilding the model-visible MCP tool pool
   requires restarting the TUI.
-- `notes_path` (string, optional): defaults to `~/.deepseek/notes.txt` and is used by the `note` tool.
+- `notes_path` (string, optional): defaults to `~/.deepseek/notes.txt` and is used by the model-visible `note` tool.
 - `[memory].enabled` (bool, optional): defaults to `false`. When `true`,
   the TUI loads the user memory file into a `<user_memory>` prompt block,
   enables `# foo` quick-capture in the composer, surfaces the `/memory`
@@ -462,6 +462,27 @@ If you are upgrading from older releases:
 - `tui.osc8_links` (bool, optional, default `true`): emit OSC 8 escape sequences around URLs in transcript output so terminals that support them (iTerm2, Terminal.app 13+, Ghostty, Kitty, WezTerm, Alacritty, recent gnome-terminal/konsole) render them as Cmd+click hyperlinks. Terminals without OSC 8 support render the plain URL and ignore the escape. Set `false` for terminals that misrender the sequence; selection/clipboard output always strips the escapes.
 - `hooks` (optional): lifecycle hooks configuration (see `config.example.toml`).
 - `features.*` (optional): feature flag overrides (see below).
+
+### Workspace notes
+
+`/note` manages a simple notes file in the current workspace at
+`.deepseek/notes.md`. Existing `/note <text>` usage still appends a note.
+The management forms are:
+
+| Command | Action |
+|---|---|
+| `/note <text>` | Append a note (legacy shorthand) |
+| `/note add <text>` | Append a note explicitly |
+| `/note list` | List notes with temporary 1-based numbers |
+| `/note show <n>` | Show the full note at number `n` |
+| `/note edit <n> <text>` | Replace note `n` with new text |
+| `/note remove <n>` | Delete note `n`; `rm` and `delete` are aliases |
+| `/note clear` | Empty the workspace notes file |
+| `/note path` | Show the resolved workspace notes path |
+
+The numbers shown by `/note list` are not stored in the file; they are derived
+from the current order each time notes are read. This keeps the file format
+compatible with the existing `---`-separated notes.
 
 ### User memory
 

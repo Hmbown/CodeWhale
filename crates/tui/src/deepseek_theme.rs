@@ -70,7 +70,7 @@ impl Theme {
             // for content (#63 follow-up: panels rendered as empty boxes even
             // when "No todos" / "No active plan" should have shown).
             section_padding: Padding::horizontal(1),
-            tool_title_color: palette::TEXT_SOFT,
+            tool_title_color: Color::White,
             tool_value_color: Color::White,
             tool_label_color: palette::TEXT_DIM,
             tool_running_accent: palette::ACCENT_TOOL_LIVE,
@@ -181,7 +181,7 @@ mod tests {
         assert_eq!(theme.section_border_color, palette::BORDER_COLOR);
         assert_eq!(theme.section_bg, palette::DEEPSEEK_INK);
         assert_eq!(theme.section_title_color, palette::DEEPSEEK_BLUE);
-        assert_eq!(theme.tool_title_color, palette::TEXT_SOFT);
+        assert_eq!(theme.tool_title_color, Color::White);
         assert_eq!(theme.tool_value_color, Color::White);
         assert_eq!(theme.tool_label_color, palette::TEXT_DIM);
         assert_eq!(theme.tool_running_accent, palette::ACCENT_TOOL_LIVE);
