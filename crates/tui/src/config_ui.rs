@@ -442,46 +442,6 @@ pub fn apply_document(
     for (key, value) in [
         ("model", doc.runtime.model.as_str()),
         ("approval_mode", doc.runtime.approval_mode.as_setting()),
-        ("auto_compact", bool_str(doc.settings.auto_compact)),
-        ("calm_mode", bool_str(doc.settings.calm_mode)),
-        ("low_motion", bool_str(doc.settings.low_motion)),
-        ("fancy_animations", bool_str(doc.settings.fancy_animations)),
-        (
-            "paste_burst_detection",
-            bool_str(doc.settings.paste_burst_detection),
-        ),
-        ("show_thinking", bool_str(doc.settings.show_thinking)),
-        (
-            "show_tool_details",
-            bool_str(doc.settings.show_tool_details),
-        ),
-        ("locale", doc.settings.locale.as_setting()),
-        ("theme", doc.settings.theme.as_setting()),
-        (
-            "background_color",
-            doc.settings
-                .background_color
-                .as_deref()
-                .unwrap_or("default"),
-        ),
-        (
-            "composer_density",
-            doc.settings.composer_density.as_setting(),
-        ),
-        ("composer_border", bool_str(doc.settings.composer_border)),
-        (
-            "transcript_spacing",
-            doc.settings.transcript_spacing.as_setting(),
-        ),
-        (
-            "status_indicator",
-            doc.settings.status_indicator.as_setting(),
-        ),
-        ("default_mode", doc.settings.default_mode.as_setting()),
-        ("sidebar_width", &doc.settings.sidebar_width.to_string()),
-        ("sidebar_focus", doc.settings.sidebar_focus.as_setting()),
-        ("max_history", &doc.settings.max_history.to_string()),
-        ("cost_currency", doc.settings.cost_currency.as_setting()),
         ("mcp_config_path", doc.config.mcp_config_path.as_str()),
     ] {
         let result = commands::set_config_value(app, key, value, persist);
@@ -498,39 +458,7 @@ pub fn apply_document(
         }
     }
 
-    for (key, value) in theme_color_update_values(&doc.settings.theme_colors) {
-        let result = commands::set_config_value(app, key, value, persist);
-        if result.is_error {
-            bail!(
-                "{}",
-                result
-                    .message
-                    .unwrap_or_else(|| "theme color update failed".to_string())
-            );
-        }
-        if let Some(message) = result.message {
-            notes.push(message);
-        }
-    }
-
-    // default_model is only applied when persisting (it controls the model
-    // for future sessions).  Processing it in the main loop would overwrite
-    // the runtime model the user just chose when persist=false (#346-fix).
-    if persist {
-        let default_model_val = doc.settings.default_model.as_deref().unwrap_or("default");
-        let result = commands::set_config_value(app, "default_model", default_model_val, true);
-        if result.is_error {
-            bail!(
-                "{}",
-                result
-                    .message
-                    .unwrap_or_else(|| "default_model update failed".to_string())
-            );
-        }
-        if let Some(message) = result.message {
-            notes.push(message);
-        }
-    }
+    apply_settings_document(&doc, app, persist, &mut notes)?;
 
     apply_reasoning_effort(app, config, doc.config.reasoning_effort, persist)?;
     let requires_engine_sync = app.compaction_config() != previous_compaction
@@ -567,6 +495,143 @@ pub fn apply_document(
         final_message,
         requires_engine_sync,
     })
+}
+
+fn apply_settings_document(
+    doc: &ConfigUiDocument,
+    app: &mut App,
+    persist: bool,
+    notes: &mut Vec<String>,
+) -> Result<()> {
+    let mut settings = match Settings::load() {
+        Ok(settings) => settings,
+        Err(err) if !persist => {
+            app.status_message = Some(format!(
+                "Settings unavailable; applying session-only override ({err})"
+            ));
+            Settings::default()
+        }
+        Err(err) => bail!("Failed to load settings: {err}"),
+    };
+
+    let sidebar_width = doc.settings.sidebar_width.to_string();
+    let max_history = doc.settings.max_history.to_string();
+    for (key, value) in [
+        ("auto_compact", bool_str(doc.settings.auto_compact)),
+        ("calm_mode", bool_str(doc.settings.calm_mode)),
+        ("low_motion", bool_str(doc.settings.low_motion)),
+        ("fancy_animations", bool_str(doc.settings.fancy_animations)),
+        (
+            "paste_burst_detection",
+            bool_str(doc.settings.paste_burst_detection),
+        ),
+        ("show_thinking", bool_str(doc.settings.show_thinking)),
+        (
+            "show_tool_details",
+            bool_str(doc.settings.show_tool_details),
+        ),
+        ("locale", doc.settings.locale.as_setting()),
+        ("theme", doc.settings.theme.as_setting()),
+        (
+            "background_color",
+            doc.settings
+                .background_color
+                .as_deref()
+                .unwrap_or("default"),
+        ),
+        (
+            "composer_density",
+            doc.settings.composer_density.as_setting(),
+        ),
+        ("composer_border", bool_str(doc.settings.composer_border)),
+        (
+            "transcript_spacing",
+            doc.settings.transcript_spacing.as_setting(),
+        ),
+        (
+            "status_indicator",
+            doc.settings.status_indicator.as_setting(),
+        ),
+        ("default_mode", doc.settings.default_mode.as_setting()),
+        ("sidebar_width", sidebar_width.as_str()),
+        ("sidebar_focus", doc.settings.sidebar_focus.as_setting()),
+        ("max_history", max_history.as_str()),
+        ("cost_currency", doc.settings.cost_currency.as_setting()),
+    ] {
+        settings
+            .set(key, value)
+            .with_context(|| format!("config update failed for {key}"))?;
+    }
+
+    for (key, value) in theme_color_update_values(&doc.settings.theme_colors) {
+        settings
+            .set(key, value)
+            .with_context(|| format!("theme color update failed for {key}"))?;
+    }
+
+    // default_model is only applied when persisting (it controls the model
+    // for future sessions). Applying it session-only would overwrite the
+    // runtime model the user just chose when persist=false (#346-fix).
+    if persist {
+        settings
+            .set(
+                "default_model",
+                doc.settings.default_model.as_deref().unwrap_or("default"),
+            )
+            .context("default_model update failed")?;
+        settings.save().context("Failed to save settings")?;
+        notes.push("Settings saved".to_string());
+    } else {
+        notes.push("Settings updated for this session".to_string());
+    }
+
+    sync_app_settings(app, &settings, persist);
+    Ok(())
+}
+
+fn sync_app_settings(app: &mut App, settings: &Settings, include_default_model: bool) {
+    app.auto_compact = settings.auto_compact;
+    app.calm_mode = settings.calm_mode;
+    app.low_motion = settings.low_motion;
+    app.fancy_animations = settings.fancy_animations;
+    app.use_paste_burst_detection = settings.paste_burst_detection;
+    if !app.use_paste_burst_detection {
+        app.paste_burst.clear_after_explicit_paste();
+    }
+    app.show_thinking = settings.show_thinking;
+    app.show_tool_details = settings.show_tool_details;
+    app.ui_locale = resolve_locale(&settings.locale);
+    app.ui_theme = crate::palette::ui_theme_from_settings_with_overrides(
+        &settings.theme,
+        settings.background_color.as_deref(),
+        &settings.theme_colors.as_overrides(),
+    );
+    app.cost_currency = crate::pricing::CostCurrency::from_setting(&settings.cost_currency)
+        .unwrap_or(crate::pricing::CostCurrency::Usd);
+    app.composer_density = ComposerDensity::from_setting(&settings.composer_density);
+    app.composer_border = settings.composer_border;
+    app.transcript_spacing = TranscriptSpacing::from_setting(&settings.transcript_spacing);
+    app.status_indicator = settings.status_indicator.clone();
+    app.set_mode(AppMode::from_setting(&settings.default_mode));
+    app.max_input_history = settings.max_input_history;
+    app.sidebar_width_percent = settings.sidebar_width_percent;
+    app.set_sidebar_focus(SidebarFocus::from_setting(&settings.sidebar_focus));
+
+    if include_default_model && let Some(ref model) = settings.default_model {
+        app.auto_model = model.trim().eq_ignore_ascii_case("auto");
+        app.model.clone_from(model);
+        app.last_effective_model = None;
+        if app.auto_model {
+            app.reasoning_effort = ReasoningEffort::Auto;
+            app.last_effective_reasoning_effort = None;
+        }
+        app.update_model_compaction_budget();
+        app.session.last_prompt_tokens = None;
+        app.session.last_completion_tokens = None;
+    }
+
+    app.mark_history_updated();
+    app.needs_redraw = true;
 }
 
 pub fn parse_document(value: Value) -> Result<ConfigUiDocument> {
