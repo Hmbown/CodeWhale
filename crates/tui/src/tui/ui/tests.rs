@@ -130,30 +130,93 @@ fn recover_terminal_modes_runs_without_panic_on_windows() {
 }
 
 // On Windows crossterm's PushKeyboardEnhancementFlags never writes bytes
-// (is_ansi_code_supported() == false), so the fix writes the escape
-// directly. Verify the direct path emits the expected Kitty keyboard
-// protocol sequence so the Windows fix for #1359 is not accidentally reverted.
+// (is_ansi_code_supported() == false), so the fix for #1359 writes the
+// escape directly. The follow-up fix for #1559 gates that write on a
+// known-supported host so legacy conhost / standalone PowerShell — where
+// crossterm's console-API reader can't decode the disambiguated Esc back
+// to `KeyCode::Esc` — falls back to the legacy keyboard path.
 #[cfg(windows)]
 #[test]
-fn push_keyboard_flags_writes_kitty_push_sequence_on_windows() {
+fn push_keyboard_flags_writes_kitty_push_sequence_on_supported_host() {
     let mut buf: Vec<u8> = Vec::new();
-    push_keyboard_enhancement_flags(&mut buf);
+    push_keyboard_enhancement_flags_windows_with(&mut buf, true);
     let seq = String::from_utf8_lossy(&buf);
     assert!(
         seq.contains("\x1b[>1u"),
-        "push_keyboard_enhancement_flags must write kitty push (\\x1b[>1u) on Windows (#1359); got: {seq:?}"
+        "push must emit kitty push (\\x1b[>1u) when host is supported (#1359); got: {seq:?}"
     );
 }
 
 #[cfg(windows)]
 #[test]
-fn pop_keyboard_flags_writes_kitty_pop_sequence_on_windows() {
+fn pop_keyboard_flags_writes_kitty_pop_sequence_on_supported_host() {
     let mut buf: Vec<u8> = Vec::new();
-    pop_keyboard_enhancement_flags(&mut buf);
+    pop_keyboard_enhancement_flags_windows_with(&mut buf, true);
     let seq = String::from_utf8_lossy(&buf);
     assert!(
         seq.contains("\x1b[<1u"),
-        "pop_keyboard_enhancement_flags must write kitty pop (\\x1b[<1u) on Windows (#1359); got: {seq:?}"
+        "pop must emit kitty pop (\\x1b[<1u) when host is supported (#1359); got: {seq:?}"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn push_keyboard_flags_skipped_on_legacy_windows_host() {
+    let mut buf: Vec<u8> = Vec::new();
+    push_keyboard_enhancement_flags_windows_with(&mut buf, false);
+    assert!(
+        buf.is_empty(),
+        "push must not emit any bytes on legacy conhost / PowerShell (#1559); got: {:?}",
+        String::from_utf8_lossy(&buf)
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn pop_keyboard_flags_skipped_on_legacy_windows_host() {
+    let mut buf: Vec<u8> = Vec::new();
+    pop_keyboard_enhancement_flags_windows_with(&mut buf, false);
+    assert!(
+        buf.is_empty(),
+        "pop must not emit any bytes on legacy conhost / PowerShell (#1559); got: {:?}",
+        String::from_utf8_lossy(&buf)
+    );
+}
+
+// Host detection: positive signals advertise Kitty support; absence falls
+// back to the legacy keyboard path. Mirrors the env-driven detection used
+// for default mouse capture (#1169).
+#[cfg(windows)]
+#[test]
+fn windows_kitty_keyboard_supported_detects_known_hosts() {
+    assert!(
+        windows_kitty_keyboard_supported_with(Some("session-guid"), None),
+        "WT_SESSION must advertise Windows Terminal as Kitty-supported"
+    );
+    assert!(
+        windows_kitty_keyboard_supported_with(None, Some("vscode")),
+        "TERM_PROGRAM=vscode must advertise VSCode terminal as Kitty-supported"
+    );
+    assert!(
+        windows_kitty_keyboard_supported_with(None, Some("VSCODE")),
+        "TERM_PROGRAM matching is case-insensitive"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_kitty_keyboard_unsupported_for_legacy_hosts() {
+    assert!(
+        !windows_kitty_keyboard_supported_with(None, None),
+        "bare conhost / PowerShell must not advertise Kitty support (#1559)"
+    );
+    assert!(
+        !windows_kitty_keyboard_supported_with(None, Some("Apple_Terminal")),
+        "unknown TERM_PROGRAM must default to unsupported on Windows"
+    );
+    assert!(
+        !windows_kitty_keyboard_supported_with(Some(""), Some("")),
+        "empty env values are treated as absent"
     );
 }
 

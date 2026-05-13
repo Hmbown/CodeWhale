@@ -7180,21 +7180,12 @@ fn reset_terminal_viewport(terminal: &mut AppTerminal, sync_output_enabled: bool
 }
 
 fn push_keyboard_enhancement_flags<W: Write>(writer: &mut W) {
-    // crossterm's PushKeyboardEnhancementFlags command unconditionally
-    // returns Unsupported on Windows (is_ansi_code_supported() == false), so
-    // the ANSI escape is written directly on that platform. Modern Windows
-    // terminals (VSCode integrated terminal, Windows Terminal ≥1.17) honour
-    // the kitty keyboard protocol; terminals that do not silently discard it.
     #[cfg(windows)]
     {
-        let flags = KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES.bits();
-        if let Err(err) = write!(writer, "\x1b[>{}u", flags).and_then(|()| writer.flush()) {
-            tracing::debug!(
-                target: "kitty_keyboard",
-                ?err,
-                "PushKeyboardEnhancementFlags direct write failed on Windows"
-            );
-        }
+        push_keyboard_enhancement_flags_windows_with(
+            writer,
+            windows_kitty_keyboard_supported_from_env(),
+        );
         return;
     }
     #[cfg(not(windows))]
@@ -7211,26 +7202,109 @@ fn push_keyboard_enhancement_flags<W: Write>(writer: &mut W) {
 }
 
 pub(crate) fn pop_keyboard_enhancement_flags<W: Write>(writer: &mut W) {
-    // Mirror of push_keyboard_enhancement_flags: crossterm's
-    // PopKeyboardEnhancementFlags also has is_ansi_code_supported() == false
-    // on Windows, so write the pop escape directly to restore the terminal to
-    // its pre-launch keyboard mode.
     // pub(crate) so the panic hook in main.rs and external_editor.rs can
     // also call the Windows-aware path instead of using the raw crossterm
     // execute!() macro which silently no-ops on Windows.
     #[cfg(windows)]
     {
-        if let Err(err) = write!(writer, "\x1b[<1u").and_then(|()| writer.flush()) {
-            tracing::debug!(
-                target: "kitty_keyboard",
-                ?err,
-                "PopKeyboardEnhancementFlags direct write failed on Windows"
-            );
-        }
+        pop_keyboard_enhancement_flags_windows_with(
+            writer,
+            windows_kitty_keyboard_supported_from_env(),
+        );
         return;
     }
     #[cfg(not(windows))]
     let _ = execute!(writer, PopKeyboardEnhancementFlags);
+}
+
+/// Windows-only: write the Kitty keyboard protocol push escape directly when
+/// `kitty_supported` is true, otherwise do nothing.
+///
+/// crossterm's `PushKeyboardEnhancementFlags` command always reports
+/// `is_ansi_code_supported() == false` on Windows, so #1359 (Shift+Enter in
+/// the composer) is fixed by writing the escape directly. The follow-up bug
+/// (#1559) is that on legacy conhost / standalone PowerShell, enabling the
+/// Kitty protocol breaks Esc and other keys: the terminal partially honours
+/// the protocol and emits the disambiguated `\x1b[27u` form for Esc, but
+/// crossterm's Windows console-API reader does not decode that back to
+/// `KeyCode::Esc`. The leading `\x1b` is consumed and the trailing `[27u`
+/// surfaces as four printable keystrokes typed into whichever input has
+/// focus (the help overlay's filter, in the original report). Gate the push
+/// on a positive signal from the host so the protocol is only enabled where
+/// it is known to round-trip cleanly.
+#[cfg(windows)]
+fn push_keyboard_enhancement_flags_windows_with<W: Write>(writer: &mut W, kitty_supported: bool) {
+    if !kitty_supported {
+        tracing::debug!(
+            target: "kitty_keyboard",
+            "kitty keyboard protocol push skipped on Windows: host did not advertise support (#1559)"
+        );
+        return;
+    }
+    let flags = KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES.bits();
+    if let Err(err) = write!(writer, "\x1b[>{}u", flags).and_then(|()| writer.flush()) {
+        tracing::debug!(
+            target: "kitty_keyboard",
+            ?err,
+            "PushKeyboardEnhancementFlags direct write failed on Windows"
+        );
+    }
+}
+
+/// Windows-only mirror of [`push_keyboard_enhancement_flags_windows_with`].
+/// Skip the pop when we never pushed — emitting `\x1b[<1u` against a legacy
+/// console that never entered Kitty mode is harmless on Windows Terminal but
+/// still wastes a write and could surface as visible bytes on a host that
+/// doesn't recognise the sequence.
+#[cfg(windows)]
+fn pop_keyboard_enhancement_flags_windows_with<W: Write>(writer: &mut W, kitty_supported: bool) {
+    if !kitty_supported {
+        return;
+    }
+    if let Err(err) = write!(writer, "\x1b[<1u").and_then(|()| writer.flush()) {
+        tracing::debug!(
+            target: "kitty_keyboard",
+            ?err,
+            "PopKeyboardEnhancementFlags direct write failed on Windows"
+        );
+    }
+}
+
+/// Windows-only: detect whether the host terminal is known to handle the
+/// Kitty keyboard protocol round-trip cleanly. Stays conservative — only
+/// terminals explicitly listed are treated as supported. This mirrors the
+/// host-detection pattern already used for default mouse capture in
+/// [`crate::main::default_mouse_capture_enabled`].
+///
+/// Supported:
+/// - `WT_SESSION` — Windows Terminal (≥1.17 disambiguates Esc and Shift+Enter).
+/// - `TERM_PROGRAM=vscode` — VSCode integrated terminal (xterm.js Kitty support).
+///
+/// Skipped (Esc/Shift+Enter fall back to legacy console behaviour):
+/// - Standalone PowerShell / conhost — no advertised Kitty support.
+/// - Anything else without a positive signal.
+#[cfg(windows)]
+fn windows_kitty_keyboard_supported_from_env() -> bool {
+    let wt_session = std::env::var("WT_SESSION").ok();
+    let term_program = std::env::var("TERM_PROGRAM").ok();
+    windows_kitty_keyboard_supported_with(wt_session.as_deref(), term_program.as_deref())
+}
+
+#[cfg(windows)]
+fn windows_kitty_keyboard_supported_with(
+    wt_session: Option<&str>,
+    term_program: Option<&str>,
+) -> bool {
+    if wt_session.is_some_and(|s| !s.is_empty()) {
+        return true;
+    }
+    matches!(
+        term_program
+            .filter(|s| !s.is_empty())
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("vscode")
+    )
 }
 
 /// Re-establish terminal mode flags. Idempotent and best-effort: each
