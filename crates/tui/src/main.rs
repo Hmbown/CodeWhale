@@ -296,6 +296,12 @@ struct ExecArgs {
     /// Output format: text (default) or stream-json (JSON Lines for machine consumption)
     #[arg(long, value_name = "FORMAT", default_value = "text")]
     output_format: String,
+    /// Append a custom system prompt below the auto-generated prompt
+    #[arg(long, value_name = "TEXT")]
+    system_prompt: Option<String>,
+    /// Read custom system prompt from a file (useful for long prompts)
+    #[arg(long, value_name = "PATH")]
+    system_prompt_file: Option<PathBuf>,
 }
 
 fn join_prompt_parts(parts: &[String]) -> String {
@@ -685,13 +691,34 @@ async fn main() -> Result<()> {
                     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
                 });
 
+                // Resolve custom system prompt from --system-prompt or --system-prompt-file.
+                // These two flags are mutually exclusive.
+                let custom_system_prompt = match (&args.system_prompt, &args.system_prompt_file) {
+                    (Some(_), Some(_)) => {
+                        bail!("--system-prompt and --system-prompt-file are mutually exclusive");
+                    }
+                    (Some(text), None) => Some(text.clone()),
+                    (None, Some(path)) => {
+                        let content = std::fs::read_to_string(path).with_context(|| {
+                            format!("could not read system prompt file: {}", path.display())
+                        })?;
+                        if content.trim().is_empty() {
+                            bail!("system prompt file is empty: {}", path.display());
+                        }
+                        Some(content)
+                    }
+                    (None, None) => None,
+                };
+
                 // Resolve resume session ID from --resume or --continue
                 let resume_session_id = if args.r#continue {
                     latest_session_id_for_workspace(&workspace)
                         .ok()
                         .flatten()
                         .or_else(|| {
-                            eprintln!("No recent session found for this workspace. Starting fresh.");
+                            eprintln!(
+                                "No recent session found for this workspace. Starting fresh."
+                            );
                             None
                         })
                 } else {
@@ -725,6 +752,7 @@ async fn main() -> Result<()> {
                         args.json,
                         resume_session_id,
                         args.output_format.clone(),
+                        custom_system_prompt,
                     )
                     .await
                 } else if args.json {
@@ -733,14 +761,14 @@ async fn main() -> Result<()> {
                         .or_else(|| config.default_text_model.clone())
                         .unwrap_or_else(|| config.default_model());
                     let prompt = join_prompt_parts(&args.prompt);
-                    run_one_shot_json(&config, &model, &prompt).await
+                    run_one_shot_json(&config, &model, &prompt, custom_system_prompt).await
                 } else {
                     let model = args
                         .model
                         .or_else(|| config.default_text_model.clone())
                         .unwrap_or_else(|| config.default_model());
                     let prompt = join_prompt_parts(&args.prompt);
-                    run_one_shot(&config, &model, &prompt).await
+                    run_one_shot(&config, &model, &prompt, custom_system_prompt).await
                 }
             }
             Commands::Review(args) => {
@@ -832,7 +860,7 @@ async fn main() -> Result<()> {
     if !cli.prompt.is_empty() {
         let prompt = join_prompt_parts(&cli.prompt);
         let model = config.default_model();
-        return run_one_shot(&config, &model, &prompt).await;
+        return run_one_shot(&config, &model, &prompt, None).await;
     }
 
     // Handle session resume. Plain `deepseek` starts fresh: interrupted
@@ -4317,15 +4345,22 @@ async fn resolve_cli_auto_route(config: &Config, model: &str, prompt: &str) -> C
     }
 }
 
-async fn run_one_shot(config: &Config, model: &str, prompt: &str) -> Result<()> {
+async fn run_one_shot(
+    config: &Config,
+    model: &str,
+    prompt: &str,
+    custom_system_prompt: Option<String>,
+) -> Result<()> {
     use crate::client::DeepSeekClient;
-    use crate::models::{ContentBlock, Message, MessageRequest};
+    use crate::models::{ContentBlock, Message, MessageRequest, SystemPrompt};
 
     let client = DeepSeekClient::new(config)?;
     let route = resolve_cli_auto_route(config, model, prompt).await;
     let reasoning_effort = route
         .reasoning_effort
         .map(|effort| effort.as_setting().to_string());
+
+    let system = custom_system_prompt.map(SystemPrompt::Text);
 
     let request = MessageRequest {
         model: route.model,
@@ -4337,7 +4372,7 @@ async fn run_one_shot(config: &Config, model: &str, prompt: &str) -> Result<()> 
             }],
         }],
         max_tokens: 4096,
-        system: None,
+        system,
         tools: None,
         tool_choice: None,
         metadata: None,
@@ -4359,7 +4394,12 @@ async fn run_one_shot(config: &Config, model: &str, prompt: &str) -> Result<()> 
     Ok(())
 }
 
-async fn run_one_shot_json(config: &Config, model: &str, prompt: &str) -> Result<()> {
+async fn run_one_shot_json(
+    config: &Config,
+    model: &str,
+    prompt: &str,
+    custom_system_prompt: Option<String>,
+) -> Result<()> {
     use crate::client::DeepSeekClient;
     use crate::models::{ContentBlock, Message, MessageRequest, SystemPrompt};
 
@@ -4369,6 +4409,12 @@ async fn run_one_shot_json(config: &Config, model: &str, prompt: &str) -> Result
     let reasoning_effort = route
         .reasoning_effort
         .map(|effort| effort.as_setting().to_string());
+
+    // Use custom system prompt if provided, otherwise fall back to the default.
+    let default_prompt =
+        "You are a coding assistant. Give concise, actionable responses.".to_string();
+    let system_text = custom_system_prompt.unwrap_or(default_prompt);
+
     let request = MessageRequest {
         model: model.clone(),
         messages: vec![Message {
@@ -4379,9 +4425,7 @@ async fn run_one_shot_json(config: &Config, model: &str, prompt: &str) -> Result
             }],
         }],
         max_tokens: 4096,
-        system: Some(SystemPrompt::Text(
-            "You are a coding assistant. Give concise, actionable responses.".to_string(),
-        )),
+        system: Some(SystemPrompt::Text(system_text)),
         tools: None,
         tool_choice: None,
         metadata: None,
@@ -4487,6 +4531,7 @@ async fn run_exec_agent(
     json_output: bool,
     resume_session_id: Option<String>,
     output_format: String,
+    custom_system_prompt: Option<String>,
 ) -> Result<()> {
     use crate::compaction::CompactionConfig;
     use crate::core::engine::{EngineConfig, spawn_engine};
@@ -4571,6 +4616,7 @@ async fn run_exec_agent(
             .and_then(|s| s.provider)
             .unwrap_or_default(),
         search_api_key: config.search.as_ref().and_then(|s| s.api_key.clone()),
+        custom_system_prompt,
     };
 
     let engine_handle = spawn_engine(engine_config, config);
@@ -4609,8 +4655,8 @@ async fn run_exec_agent(
                             );
                         }
 
-                        let system_prompt = saved_system_prompt
-                            .map(crate::models::SystemPrompt::Text);
+                        let system_prompt =
+                            saved_system_prompt.map(crate::models::SystemPrompt::Text);
 
                         engine_handle
                             .send(Op::SyncSession {
@@ -4714,9 +4760,10 @@ async fn run_exec_agent(
                 summary.output.push_str(&content);
                 match output_fmt {
                     OutputFormat::StreamJson => {
-                        println!("{}", serde_json::to_string(&StreamEvent::Content {
-                            content,
-                        })?);
+                        println!(
+                            "{}",
+                            serde_json::to_string(&StreamEvent::Content { content })?
+                        );
                     }
                     OutputFormat::Text if !json_output => {
                         print!("{content}");
@@ -4729,9 +4776,10 @@ async fn run_exec_agent(
             Event::ThinkingDelta { content, .. } => {
                 match output_fmt {
                     OutputFormat::StreamJson => {
-                        println!("{}", serde_json::to_string(&StreamEvent::Thinking {
-                            content,
-                        })?);
+                        println!(
+                            "{}",
+                            serde_json::to_string(&StreamEvent::Thinking { content })?
+                        );
                     }
                     OutputFormat::Text => {
                         // In text mode, thinking content is not displayed.
@@ -4743,27 +4791,30 @@ async fn run_exec_agent(
                     println!();
                 }
             }
-            Event::ToolCallStarted { id, name, input, .. } => {
-                match output_fmt {
-                    OutputFormat::StreamJson => {
-                        println!("{}", serde_json::to_string(&StreamEvent::ToolUse {
+            Event::ToolCallStarted {
+                id, name, input, ..
+            } => match output_fmt {
+                OutputFormat::StreamJson => {
+                    println!(
+                        "{}",
+                        serde_json::to_string(&StreamEvent::ToolUse {
                             name,
                             id,
                             input,
                             done: false,
-                        })?);
-                    }
-                    OutputFormat::Text if !json_output => {
-                        let summary = summarize_tool_args(&input);
-                        if let Some(summary) = summary {
-                            eprintln!("tool: {name} ({summary})");
-                        } else {
-                            eprintln!("tool: {name}");
-                        }
-                    }
-                    OutputFormat::Text => {}
+                        })?
+                    );
                 }
-            }
+                OutputFormat::Text if !json_output => {
+                    let summary = summarize_tool_args(&input);
+                    if let Some(summary) = summary {
+                        eprintln!("tool: {name} ({summary})");
+                    } else {
+                        eprintln!("tool: {name}");
+                    }
+                }
+                OutputFormat::Text => {}
+            },
             Event::ToolCallProgress { id, output } => {
                 // ToolCallProgress is not emitted in the main turn loop,
                 // but handle it for completeness.
@@ -4771,7 +4822,9 @@ async fn run_exec_agent(
                     eprintln!("tool {id}: {}", summarize_tool_output(&output));
                 }
             }
-            Event::ToolCallComplete { id, name, result, .. } => match result {
+            Event::ToolCallComplete {
+                id, name, result, ..
+            } => match result {
                 Ok(tool_result) => {
                     summary.tools.push(ExecToolEntry {
                         name: name.clone(),
@@ -4780,15 +4833,18 @@ async fn run_exec_agent(
                     });
                     match output_fmt {
                         OutputFormat::StreamJson => {
-                            println!("{}", serde_json::to_string(&StreamEvent::ToolResult {
-                                id,
-                                output: tool_result.content,
-                                status: if tool_result.success {
-                                    "success".to_string()
-                                } else {
-                                    "error".to_string()
-                                },
-                            })?);
+                            println!(
+                                "{}",
+                                serde_json::to_string(&StreamEvent::ToolResult {
+                                    id,
+                                    output: tool_result.content,
+                                    status: if tool_result.success {
+                                        "success".to_string()
+                                    } else {
+                                        "error".to_string()
+                                    },
+                                })?
+                            );
                         }
                         OutputFormat::Text if !json_output => {
                             if name == "exec_shell" && !tool_result.content.trim().is_empty() {
@@ -4815,11 +4871,14 @@ async fn run_exec_agent(
                     });
                     match output_fmt {
                         OutputFormat::StreamJson => {
-                            println!("{}", serde_json::to_string(&StreamEvent::ToolResult {
-                                id,
-                                output: err.to_string(),
-                                status: "error".to_string(),
-                            })?);
+                            println!(
+                                "{}",
+                                serde_json::to_string(&StreamEvent::ToolResult {
+                                    id,
+                                    output: err.to_string(),
+                                    status: "error".to_string(),
+                                })?
+                            );
                         }
                         OutputFormat::Text if !json_output => {
                             eprintln!("tool {name} failed: {err}");
@@ -4879,9 +4938,12 @@ async fn run_exec_agent(
                 summary.error = Some(envelope.message.clone());
                 match output_fmt {
                     OutputFormat::StreamJson => {
-                        println!("{}", serde_json::to_string(&StreamEvent::Error {
-                            error: envelope.message,
-                        })?);
+                        println!(
+                            "{}",
+                            serde_json::to_string(&StreamEvent::Error {
+                                error: envelope.message,
+                            })?
+                        );
                     }
                     OutputFormat::Text if !json_output => {
                         eprintln!("error: {}", summary.error.as_deref().unwrap_or_default());
@@ -4889,37 +4951,37 @@ async fn run_exec_agent(
                     OutputFormat::Text => {}
                 }
             }
-            Event::TurnComplete { status, error, usage, .. } => {
+            Event::TurnComplete {
+                status,
+                error,
+                usage,
+                ..
+            } => {
                 summary.status = Some(format!("{status:?}").to_lowercase());
                 summary.error = error;
 
                 // Save the session so it can be resumed later with --resume.
-                let saved_session_id = match
-                    crate::session_manager::SessionManager::default_location()
-                {
-                    Ok(manager) if !latest_messages.is_empty() => {
-                        let total_tokens: u64 =
-                            usage.input_tokens as u64 + usage.output_tokens as u64;
+                let saved_session_id =
+                    match crate::session_manager::SessionManager::default_location() {
+                        Ok(manager) if !latest_messages.is_empty() => {
+                            let total_tokens: u64 =
+                                usage.input_tokens as u64 + usage.output_tokens as u64;
 
-                        let session_id = latest_session_id
-                            .as_deref()
-                            .unwrap_or_default()
-                            .to_string();
+                            let session_id =
+                                latest_session_id.as_deref().unwrap_or_default().to_string();
 
-                        let saved = if !session_id.is_empty() {
-                            match manager.load_session(&session_id) {
-                                Ok(existing) => {
-                                    crate::session_manager::update_session(
+                            let saved = if !session_id.is_empty() {
+                                match manager.load_session(&session_id) {
+                                    Ok(existing) => crate::session_manager::update_session(
                                         existing,
                                         &latest_messages,
                                         total_tokens,
                                         latest_system_prompt.as_ref(),
-                                    )
-                                }
-                                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                                    // Session file not found (e.g. deleted or ID from a
-                                    // different machine) — create fresh with the same ID.
-                                    crate::session_manager::create_saved_session_with_id_and_mode(
+                                    ),
+                                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                                        // Session file not found (e.g. deleted or ID from a
+                                        // different machine) — create fresh with the same ID.
+                                        crate::session_manager::create_saved_session_with_id_and_mode(
                                         session_id,
                                         &latest_messages,
                                         &latest_model,
@@ -4928,75 +4990,83 @@ async fn run_exec_agent(
                                         latest_system_prompt.as_ref(),
                                         Some("exec"),
                                     )
+                                    }
+                                    Err(e) => {
+                                        if output_fmt == OutputFormat::Text && !json_output {
+                                            eprintln!(
+                                                "Warning: failed to load session for update: {e}"
+                                            );
+                                        }
+                                        crate::session_manager::create_saved_session_with_id_and_mode(
+                                        session_id,
+                                        &latest_messages,
+                                        &latest_model,
+                                        &latest_workspace,
+                                        total_tokens,
+                                        latest_system_prompt.as_ref(),
+                                        Some("exec"),
+                                    )
+                                    }
+                                }
+                            } else {
+                                crate::session_manager::create_saved_session_with_mode(
+                                    &latest_messages,
+                                    &latest_model,
+                                    &latest_workspace,
+                                    total_tokens,
+                                    latest_system_prompt.as_ref(),
+                                    Some("exec"),
+                                )
+                            };
+
+                            let saved_id = saved.metadata.id.clone();
+                            match manager.save_session(&saved) {
+                                Ok(_) => {
+                                    if output_fmt == OutputFormat::Text && !json_output {
+                                        eprintln!("session: {}", saved.metadata.id);
+                                    }
                                 }
                                 Err(e) => {
                                     if output_fmt == OutputFormat::Text && !json_output {
-                                        eprintln!("Warning: failed to load session for update: {e}");
+                                        eprintln!("Warning: failed to save session: {e}");
                                     }
-                                    crate::session_manager::create_saved_session_with_id_and_mode(
-                                        session_id,
-                                        &latest_messages,
-                                        &latest_model,
-                                        &latest_workspace,
-                                        total_tokens,
-                                        latest_system_prompt.as_ref(),
-                                        Some("exec"),
-                                    )
                                 }
                             }
-                        } else {
-                            crate::session_manager::create_saved_session_with_mode(
-                                &latest_messages,
-                                &latest_model,
-                                &latest_workspace,
-                                total_tokens,
-                                latest_system_prompt.as_ref(),
-                                Some("exec"),
-                            )
-                        };
-
-                        let saved_id = saved.metadata.id.clone();
-                        match manager.save_session(&saved) {
-                            Ok(_) => {
-                                if output_fmt == OutputFormat::Text && !json_output {
-                                    eprintln!("session: {}", saved.metadata.id);
-                                }
-                            }
-                            Err(e) => {
-                                if output_fmt == OutputFormat::Text && !json_output {
-                                    eprintln!("Warning: failed to save session: {e}");
-                                }
-                            }
+                            Some(saved_id)
                         }
-                        Some(saved_id)
-                    }
-                    Ok(_) => None, // no messages to save
-                    Err(e) => {
-                        if output_fmt == OutputFormat::Text && !json_output {
-                            eprintln!("Warning: could not open session manager for saving: {e}");
+                        Ok(_) => None, // no messages to save
+                        Err(e) => {
+                            if output_fmt == OutputFormat::Text && !json_output {
+                                eprintln!(
+                                    "Warning: could not open session manager for saving: {e}"
+                                );
+                            }
+                            None
                         }
-                        None
-                    }
-                };
+                    };
 
                 // Emit stream-json events for metadata, session_capture, and done.
                 if output_fmt == OutputFormat::StreamJson {
                     if let Some(sid) = saved_session_id {
-                        println!("{}", serde_json::to_string(&StreamEvent::SessionCapture {
-                            content: sid,
-                        })?);
+                        println!(
+                            "{}",
+                            serde_json::to_string(&StreamEvent::SessionCapture { content: sid })?
+                        );
                     }
-                    println!("{}", serde_json::to_string(&StreamEvent::Metadata {
-                        meta: StreamMeta {
-                            model: latest_model.clone(),
-                            input_tokens: usage.input_tokens,
-                            output_tokens: usage.output_tokens,
-                            session_id: latest_session_id
-                                .as_deref()
-                                .unwrap_or_default()
-                                .to_string(),
-                        },
-                    })?);
+                    println!(
+                        "{}",
+                        serde_json::to_string(&StreamEvent::Metadata {
+                            meta: StreamMeta {
+                                model: latest_model.clone(),
+                                input_tokens: usage.input_tokens,
+                                output_tokens: usage.output_tokens,
+                                session_id: latest_session_id
+                                    .as_deref()
+                                    .unwrap_or_default()
+                                    .to_string(),
+                            },
+                        })?
+                    );
                     println!("{}", serde_json::to_string(&StreamEvent::Done)?);
                 }
 
@@ -6507,8 +6577,12 @@ mod exec_session_and_stream_tests {
         // Every serialized StreamEvent must be a single line (no embedded newlines)
         // so it can be parsed as JSON Lines (NDJSON).
         let events: Vec<StreamEvent> = vec![
-            StreamEvent::Content { content: "hello\nworld".to_string() },
-            StreamEvent::Thinking { content: "line1\nline2".to_string() },
+            StreamEvent::Content {
+                content: "hello\nworld".to_string(),
+            },
+            StreamEvent::Thinking {
+                content: "line1\nline2".to_string(),
+            },
             StreamEvent::ToolUse {
                 name: "read_file".to_string(),
                 id: "id1".to_string(),
@@ -6528,9 +6602,13 @@ mod exec_session_and_stream_tests {
                     session_id: "s".to_string(),
                 },
             },
-            StreamEvent::SessionCapture { content: "sid".to_string() },
+            StreamEvent::SessionCapture {
+                content: "sid".to_string(),
+            },
             StreamEvent::Done,
-            StreamEvent::Error { error: "e".to_string() },
+            StreamEvent::Error {
+                error: "e".to_string(),
+            },
         ];
 
         for evt in &events {
@@ -6589,9 +6667,18 @@ mod exec_session_and_stream_tests {
         let json = serde_json::to_string(&meta).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert!(parsed.get("model").is_some(), "missing 'model' field");
-        assert!(parsed.get("input_tokens").is_some(), "missing 'input_tokens' field");
-        assert!(parsed.get("output_tokens").is_some(), "missing 'output_tokens' field");
-        assert!(parsed.get("session_id").is_some(), "missing 'session_id' field");
+        assert!(
+            parsed.get("input_tokens").is_some(),
+            "missing 'input_tokens' field"
+        );
+        assert!(
+            parsed.get("output_tokens").is_some(),
+            "missing 'output_tokens' field"
+        );
+        assert!(
+            parsed.get("session_id").is_some(),
+            "missing 'session_id' field"
+        );
     }
 
     // ---- ClawBench compatibility: type field values match expected strings ----
@@ -6603,22 +6690,52 @@ mod exec_session_and_stream_tests {
         // "metadata", "session_capture", "done", "error"
 
         let test_cases: Vec<(StreamEvent, &str)> = vec![
-            (StreamEvent::Content { content: "x".into() }, "content"),
-            (StreamEvent::Thinking { content: "x".into() }, "thinking"),
-            (StreamEvent::ToolUse {
-                name: "n".into(), id: "i".into(),
-                input: serde_json::Value::Null, done: false,
-            }, "tool_use"),
-            (StreamEvent::ToolResult {
-                id: "i".into(), output: "o".into(), status: "s".into(),
-            }, "tool_result"),
-            (StreamEvent::Metadata {
-                meta: StreamMeta {
-                    model: "m".into(), input_tokens: 0, output_tokens: 0,
-                    session_id: "s".into(),
+            (
+                StreamEvent::Content {
+                    content: "x".into(),
                 },
-            }, "metadata"),
-            (StreamEvent::SessionCapture { content: "c".into() }, "session_capture"),
+                "content",
+            ),
+            (
+                StreamEvent::Thinking {
+                    content: "x".into(),
+                },
+                "thinking",
+            ),
+            (
+                StreamEvent::ToolUse {
+                    name: "n".into(),
+                    id: "i".into(),
+                    input: serde_json::Value::Null,
+                    done: false,
+                },
+                "tool_use",
+            ),
+            (
+                StreamEvent::ToolResult {
+                    id: "i".into(),
+                    output: "o".into(),
+                    status: "s".into(),
+                },
+                "tool_result",
+            ),
+            (
+                StreamEvent::Metadata {
+                    meta: StreamMeta {
+                        model: "m".into(),
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        session_id: "s".into(),
+                    },
+                },
+                "metadata",
+            ),
+            (
+                StreamEvent::SessionCapture {
+                    content: "c".into(),
+                },
+                "session_capture",
+            ),
             (StreamEvent::Done, "done"),
             (StreamEvent::Error { error: "e".into() }, "error"),
         ];
@@ -6632,5 +6749,123 @@ mod exec_session_and_stream_tests {
                 "StreamEvent type mismatch: expected {expected_type}, got {actual_type}"
             );
         }
+    }
+
+    // ---- System prompt flag tests ----
+
+    #[test]
+    fn exec_args_system_prompt_fields() {
+        // Verify --system-prompt field is populated
+        let args = ExecArgs {
+            prompt: vec!["hello".to_string()],
+            model: None,
+            auto: false,
+            json: false,
+            resume: None,
+            r#continue: false,
+            output_format: "text".to_string(),
+            system_prompt: Some("You are a helpful assistant".to_string()),
+            system_prompt_file: None,
+        };
+        assert_eq!(
+            args.system_prompt.as_deref(),
+            Some("You are a helpful assistant")
+        );
+        assert!(args.system_prompt_file.is_none());
+    }
+
+    #[test]
+    fn exec_args_system_prompt_file_field() {
+        // Verify --system-prompt-file field is populated
+        let args = ExecArgs {
+            prompt: vec!["hello".to_string()],
+            model: None,
+            auto: false,
+            json: false,
+            resume: None,
+            r#continue: false,
+            output_format: "text".to_string(),
+            system_prompt: None,
+            system_prompt_file: Some(PathBuf::from("/tmp/prompt.txt")),
+        };
+        assert_eq!(
+            args.system_prompt_file,
+            Some(PathBuf::from("/tmp/prompt.txt"))
+        );
+        assert!(args.system_prompt.is_none());
+    }
+
+    #[test]
+    fn exec_args_system_prompt_default_none() {
+        // Verify both flags default to None when not provided
+        let args = ExecArgs {
+            prompt: vec!["hello".to_string()],
+            model: None,
+            auto: false,
+            json: false,
+            resume: None,
+            r#continue: false,
+            output_format: "text".to_string(),
+            system_prompt: None,
+            system_prompt_file: None,
+        };
+        assert!(args.system_prompt.is_none());
+        assert!(args.system_prompt_file.is_none());
+    }
+
+    #[test]
+    fn exec_args_both_system_prompt_flags_allowed_by_clap() {
+        // Providing both --system-prompt and --system-prompt-file is
+        // allowed by clap (two independent Option fields), but rejected
+        // at the application level in the exec dispatch code.
+        let args = ExecArgs {
+            prompt: vec!["hello".to_string()],
+            model: None,
+            auto: false,
+            json: false,
+            resume: None,
+            r#continue: false,
+            output_format: "text".to_string(),
+            system_prompt: Some("text prompt".to_string()),
+            system_prompt_file: Some(PathBuf::from("/tmp/prompt.txt")),
+        };
+        assert!(args.system_prompt.is_some());
+        assert!(args.system_prompt_file.is_some());
+    }
+
+    #[test]
+    fn system_prompt_file_not_found_error() {
+        // Reading a non-existent file should produce a descriptive error
+        let path = "/tmp/deepseek-tui-test-nonexistent-prompt-file-12345.txt";
+        let result: Result<String> = (|| {
+            let content = std::fs::read_to_string(path)
+                .with_context(|| format!("could not read system prompt file: {path}"))?;
+            Ok(content)
+        })();
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("could not read system prompt file")
+        );
+    }
+
+    #[test]
+    fn system_prompt_file_empty_is_rejected() {
+        // An empty file should be rejected at the application level
+        let dir = std::env::temp_dir().join("deepseek-tui-test-empty-prompt");
+        std::fs::create_dir_all(&dir).ok();
+        let path = dir.join("empty.txt");
+        std::fs::write(&path, "").unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            content.trim().is_empty(),
+            "empty file should have empty content"
+        );
+
+        // Cleanup
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

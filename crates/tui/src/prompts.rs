@@ -28,6 +28,10 @@ pub struct PromptSessionContext<'a> {
     /// to the system prompt instructing the model to respond in
     /// the resolved session locale.
     pub translation_enabled: bool,
+    /// Custom system prompt injected via `--system-prompt` /
+    /// `--system-prompt-file` on the exec subcommand. Appended
+    /// below the volatile-content boundary, after goal_objective.
+    pub custom_system_prompt: Option<&'a str>,
 }
 
 /// Conventional location for the structured session-handoff artifact (#32).
@@ -541,6 +545,7 @@ pub fn system_prompt_for_mode_with_context_and_skills(
             project_context_pack_enabled: true,
             locale_tag: "en",
             translation_enabled: false,
+            custom_system_prompt: None,
         },
     )
 }
@@ -713,6 +718,18 @@ pub fn system_prompt_for_mode_with_context_skills_session_and_approval(
         );
     }
 
+    // 6d. Custom system prompt from --system-prompt / --system-prompt-file
+    // (exec mode). Placed below the volatile boundary, after goal_objective,
+    // so it doesn't disrupt the prefix cache for static layers.
+    if let Some(custom) = session_context.custom_system_prompt
+        && !custom.trim().is_empty()
+    {
+        full_prompt = format!(
+            "{full_prompt}\n\n## Custom Instructions\n\n<custom_system_prompt>\n{}\n</custom_system_prompt>",
+            custom.trim()
+        );
+    }
+
     // 7. Previous-session handoff (file-backed, rewritten by `/compact`).
     if let Some(handoff_block) = load_handoff_block(workspace) {
         full_prompt = format!("{full_prompt}\n\n{handoff_block}");
@@ -857,6 +874,7 @@ mod tests {
                 project_context_pack_enabled: false,
                 locale_tag: "zh-Hans",
                 translation_enabled: false,
+                custom_system_prompt: None,
             },
             ApprovalMode::Suggest,
         ) {
@@ -926,6 +944,7 @@ mod tests {
                 project_context_pack_enabled: false,
                 locale_tag: "zh-Hans",
                 translation_enabled: false,
+                custom_system_prompt: None,
             },
             ApprovalMode::Suggest,
         ) {
@@ -970,6 +989,7 @@ mod tests {
                 project_context_pack_enabled: false,
                 locale_tag: "en",
                 translation_enabled: false,
+                custom_system_prompt: None,
             },
             ApprovalMode::Suggest,
         ) {
@@ -1059,6 +1079,7 @@ mod tests {
                 project_context_pack_enabled: true,
                 locale_tag: "ja",
                 translation_enabled: false,
+                custom_system_prompt: None,
             },
         ) {
             SystemPrompt::Text(text) => text,
@@ -1085,6 +1106,7 @@ mod tests {
                 project_context_pack_enabled: false,
                 locale_tag: "en",
                 translation_enabled: false,
+                custom_system_prompt: None,
             },
         ) {
             SystemPrompt::Text(text) => text,
@@ -1112,6 +1134,7 @@ mod tests {
                 project_context_pack_enabled: true,
                 locale_tag: "en",
                 translation_enabled: false,
+                custom_system_prompt: None,
             },
         ) {
             SystemPrompt::Text(text) => text,
@@ -1306,6 +1329,7 @@ mod tests {
                 project_context_pack_enabled: true,
                 locale_tag: "en",
                 translation_enabled: false,
+                custom_system_prompt: None,
             },
         ) {
             SystemPrompt::Text(text) => text,
@@ -1339,6 +1363,7 @@ mod tests {
                 project_context_pack_enabled: true,
                 locale_tag: "en",
                 translation_enabled: false,
+                custom_system_prompt: None,
             },
         ) {
             SystemPrompt::Text(text) => text,
@@ -1707,6 +1732,115 @@ mod tests {
         assert!(
             prompt.contains(&extra.display().to_string()),
             "instructions block must annotate its source path"
+        );
+    }
+
+    #[test]
+    fn custom_system_prompt_injected_below_volatile_boundary() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = PromptSessionContext {
+            user_memory_block: None,
+            goal_objective: None,
+            project_context_pack_enabled: false,
+            locale_tag: "en",
+            translation_enabled: false,
+            custom_system_prompt: Some("You must respond in JSON format."),
+        };
+        let result = system_prompt_for_mode_with_context_skills_session_and_approval(
+            AppMode::Agent,
+            tmp.path(),
+            None,
+            None,
+            None,
+            ctx,
+            ApprovalMode::Suggest,
+        );
+        let prompt = match result {
+            SystemPrompt::Text(t) => t,
+            SystemPrompt::Blocks(_) => panic!("expected text system prompt"),
+        };
+        assert!(
+            prompt.contains(
+                "<custom_system_prompt>\nYou must respond in JSON format.\n</custom_system_prompt>"
+            ),
+            "custom system prompt must be wrapped in <custom_system_prompt> tags"
+        );
+        assert!(
+            prompt.contains("## Custom Instructions"),
+            "custom system prompt must have a ## Custom Instructions heading"
+        );
+        // Verify it appears after the session goal section (volatile boundary)
+        // goal_objective is None so there's no Session Goal section; verify
+        // custom instructions is present near the end, after the compact template
+        let compact_pos = prompt.find(COMPACT_TEMPLATE).unwrap();
+        let custom_pos = prompt.find("## Custom Instructions");
+        assert!(
+            custom_pos > Some(compact_pos),
+            "custom system prompt must appear after the compact template (volatile boundary)"
+        );
+    }
+
+    #[test]
+    fn custom_system_prompt_none_produces_no_custom_block() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = PromptSessionContext {
+            user_memory_block: None,
+            goal_objective: None,
+            project_context_pack_enabled: false,
+            locale_tag: "en",
+            translation_enabled: false,
+            custom_system_prompt: None,
+        };
+        let result = system_prompt_for_mode_with_context_skills_session_and_approval(
+            AppMode::Agent,
+            tmp.path(),
+            None,
+            None,
+            None,
+            ctx,
+            ApprovalMode::Suggest,
+        );
+        let prompt = match result {
+            SystemPrompt::Text(t) => t,
+            SystemPrompt::Blocks(_) => panic!("expected text system prompt"),
+        };
+        assert!(
+            !prompt.contains("<custom_system_prompt>"),
+            "no <custom_system_prompt> tag when custom_system_prompt is None"
+        );
+        assert!(
+            !prompt.contains("## Custom Instructions"),
+            "no Custom Instructions heading when custom_system_prompt is None"
+        );
+    }
+
+    #[test]
+    fn custom_system_prompt_empty_is_ignored() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = PromptSessionContext {
+            user_memory_block: None,
+            goal_objective: None,
+            project_context_pack_enabled: false,
+            locale_tag: "en",
+            translation_enabled: false,
+            custom_system_prompt: Some("   "),
+        };
+        let result = system_prompt_for_mode_with_context_skills_session_and_approval(
+            AppMode::Agent,
+            tmp.path(),
+            None,
+            None,
+            None,
+            ctx,
+            ApprovalMode::Suggest,
+        );
+        let prompt = match result {
+            SystemPrompt::Text(t) => t,
+            SystemPrompt::Blocks(_) => panic!("expected text system prompt"),
+        };
+        assert!(
+            !prompt.contains("<custom_system_prompt>"),
+            "whitespace-only custom system prompt should be ignored"
         );
     }
 }

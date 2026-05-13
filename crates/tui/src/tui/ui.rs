@@ -639,6 +639,7 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
             .and_then(|s| s.provider)
             .unwrap_or_default(),
         search_api_key: config.search.as_ref().and_then(|s| s.api_key.clone()),
+        custom_system_prompt: None,
     }
 }
 
@@ -4297,6 +4298,7 @@ async fn dispatch_user_message(
                 project_context_pack_enabled: config.project_context_pack_enabled(),
                 locale_tag: app.ui_locale.tag(),
                 translation_enabled: app.translation_enabled,
+                custom_system_prompt: None,
             },
         ),
     );

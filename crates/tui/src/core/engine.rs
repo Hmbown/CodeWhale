@@ -166,6 +166,11 @@ pub struct EngineConfig {
     pub search_provider: crate::config::SearchProvider,
     /// API key for Tavily or Bocha. `None` for DuckDuckGo.
     pub search_api_key: Option<String>,
+    /// Custom system prompt injected via `--system-prompt` / `--system-prompt-file`
+    /// on the exec subcommand. Appended below the volatile-content boundary
+    /// in the system prompt so it doesn't disrupt the prefix cache for static
+    /// layers. `None` when no custom prompt is provided.
+    pub custom_system_prompt: Option<String>,
 }
 
 impl Default for EngineConfig {
@@ -206,6 +211,7 @@ impl Default for EngineConfig {
             workshop: None,
             search_provider: crate::config::SearchProvider::default(),
             search_api_key: None,
+            custom_system_prompt: None,
         }
     }
 }
@@ -466,6 +472,7 @@ impl Engine {
                     project_context_pack_enabled: config.project_context_pack_enabled,
                     locale_tag: &config.locale_tag,
                     translation_enabled: config.translation_enabled,
+                    custom_system_prompt: config.custom_system_prompt.as_deref(),
                 },
                 session.approval_mode,
             );
@@ -776,6 +783,16 @@ impl Engine {
                     };
                     self.session.rebuild_working_set();
                     self.rehydrate_latest_canonical_state();
+                    // When a custom system prompt is configured (e.g. via
+                    // --system-prompt on exec), Op::SyncSession's wholesale
+                    // overwrite of session.system_prompt would lose the custom
+                    // block. Clear the hash gate and rebuild via
+                    // refresh_system_prompt() so the PromptSessionContext
+                    // pipeline re-injects the custom block.
+                    if self.config.custom_system_prompt.is_some() {
+                        self.session.last_system_prompt_hash = None;
+                        self.refresh_system_prompt(AppMode::Agent);
+                    }
                     self.emit_session_updated().await;
                     let _ = self
                         .tx_event
@@ -1910,6 +1927,7 @@ impl Engine {
                 project_context_pack_enabled: self.config.project_context_pack_enabled,
                 locale_tag: &self.config.locale_tag,
                 translation_enabled: self.config.translation_enabled,
+                custom_system_prompt: self.config.custom_system_prompt.as_deref(),
             },
             self.session.approval_mode,
         );
