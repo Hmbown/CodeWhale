@@ -34,20 +34,30 @@ pub(super) fn should_default_defer_tool(name: &str, mode: AppMode) -> bool {
         return false;
     }
 
-    // Shell exec tools are kept active in Agent so the model can run
-    // verification commands (build/test/git/cargo) without first having to
-    // discover them through ToolSearch. Plan mode does not register shell
-    // execution tools.
-    let always_loaded_in_action_modes = matches!(mode, AppMode::Agent)
+    // DeepSeek cache hits depend on replaying the same full prompt prefix.
+    // In Agent mode, the common coding loop is read -> edit -> diff/test, so
+    // the core edit/git/test surfaces stay loaded from turn one instead of
+    // growing the model-visible tool catalog mid-session. Plan mode remains
+    // read-only and does not register write/exec tools.
+    let always_loaded_in_agent_mode = matches!(mode, AppMode::Agent)
         && matches!(
             name,
-            "exec_shell"
+            "apply_patch"
+                | "edit_file"
+                | "exec_shell"
                 | "exec_shell_wait"
                 | "exec_shell_interact"
                 | "exec_wait"
                 | "exec_interact"
+                | "git_blame"
+                | "git_diff"
+                | "git_log"
+                | "git_show"
+                | "git_status"
+                | "run_tests"
+                | "write_file"
         );
-    if always_loaded_in_action_modes {
+    if always_loaded_in_agent_mode {
         return false;
     }
 

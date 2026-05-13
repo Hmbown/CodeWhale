@@ -341,6 +341,68 @@ fn non_yolo_mode_retains_default_defer_policy() {
 }
 
 #[test]
+fn agent_mode_preloads_core_coding_toolset() {
+    for name in [
+        "write_file",
+        "edit_file",
+        "apply_patch",
+        "git_status",
+        "git_diff",
+        "git_show",
+        "git_log",
+        "git_blame",
+        "run_tests",
+    ] {
+        assert!(
+            !should_default_defer_tool(name, AppMode::Agent),
+            "{name} should stay loaded in Agent mode to avoid DeepSeek prefix churn",
+        );
+    }
+}
+
+#[test]
+fn initial_active_tools_include_core_coding_toolset_in_agent_mode() {
+    let catalog = build_model_tool_catalog(
+        vec![
+            api_tool("write_file"),
+            api_tool("edit_file"),
+            api_tool("apply_patch"),
+            api_tool("git_status"),
+            api_tool("git_diff"),
+            api_tool("git_show"),
+            api_tool("git_log"),
+            api_tool("git_blame"),
+            api_tool("run_tests"),
+            api_tool("project_map"),
+        ],
+        vec![],
+        AppMode::Agent,
+    );
+
+    let active = initial_active_tools(&catalog);
+    for name in [
+        "write_file",
+        "edit_file",
+        "apply_patch",
+        "git_status",
+        "git_diff",
+        "git_show",
+        "git_log",
+        "git_blame",
+        "run_tests",
+    ] {
+        assert!(
+            active.contains(name),
+            "{name} should be active from turn one in Agent mode",
+        );
+    }
+    assert!(
+        !active.contains("project_map"),
+        "rare tools should remain deferred so the preload set stays scoped",
+    );
+}
+
+#[test]
 fn model_tool_catalog_applies_native_and_mcp_deferral() {
     let catalog = build_model_tool_catalog(
         vec![
