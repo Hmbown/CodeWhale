@@ -4815,6 +4815,7 @@ fn composer_arrows_scroll_defaults_true_without_mouse_capture() {
 }
 
 #[test]
+#[cfg(not(windows))]
 fn composer_arrows_scroll_defaults_false_with_mouse_capture() {
     let options = TuiOptions {
         use_mouse_capture: true,
@@ -4824,6 +4825,23 @@ fn composer_arrows_scroll_defaults_false_with_mouse_capture() {
     assert!(
         !app.composer_arrows_scroll,
         "arrows-scroll must default to false when mouse capture is on"
+    );
+}
+
+// #1255: on Windows mouse capture may be enabled but the terminal still
+// maps wheel events to arrow keys, so arrows-scroll defaults on there
+// regardless of mouse-capture state.
+#[test]
+#[cfg(windows)]
+fn composer_arrows_scroll_defaults_true_with_mouse_capture_on_windows() {
+    let options = TuiOptions {
+        use_mouse_capture: true,
+        ..create_test_options()
+    };
+    let app = App::new(options, &Config::default());
+    assert!(
+        app.composer_arrows_scroll,
+        "arrows-scroll must default to true on Windows even when mouse capture is on"
     );
 }
 

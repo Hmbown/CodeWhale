@@ -1567,7 +1567,7 @@ impl App {
                 .tui
                 .as_ref()
                 .and_then(|tui| tui.composer_arrows_scroll)
-                .unwrap_or(!use_mouse_capture),
+                .unwrap_or(cfg!(windows) || !use_mouse_capture),
         }
     }
 
