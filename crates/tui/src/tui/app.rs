@@ -203,8 +203,7 @@ impl ReasoningEffort {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SidebarFocus {
     Auto,
-    Plan,
-    Todos,
+    Work,
     Tasks,
     Agents,
     Context,
@@ -250,8 +249,7 @@ impl SidebarFocus {
     #[must_use]
     pub fn from_setting(value: &str) -> Self {
         match value.trim().to_ascii_lowercase().as_str() {
-            "plan" => Self::Plan,
-            "todos" => Self::Todos,
+            "work" | "plan" | "todos" => Self::Work,
             "tasks" => Self::Tasks,
             "agents" | "subagents" | "sub-agents" => Self::Agents,
             "context" | "session" => Self::Context,
@@ -264,8 +262,7 @@ impl SidebarFocus {
     pub fn as_setting(self) -> &'static str {
         match self {
             Self::Auto => "auto",
-            Self::Plan => "plan",
-            Self::Todos => "todos",
+            Self::Work => "work",
             Self::Tasks => "tasks",
             Self::Agents => "agents",
             Self::Context => "context",
@@ -1264,14 +1261,8 @@ impl App {
         let sidebar_focus = SidebarFocus::from_setting(&settings.sidebar_focus);
         let max_input_history = settings.max_input_history;
         let use_paste_burst_detection = settings.paste_burst_detection;
-        let mut ui_theme = palette::UiTheme::detect();
-        if let Some(background) = settings
-            .background_color
-            .as_deref()
-            .and_then(palette::parse_hex_rgb_color)
-        {
-            ui_theme = ui_theme.with_background_color(background);
-        }
+        let ui_theme =
+            palette::ui_theme_from_settings(&settings.theme, settings.background_color.as_deref());
         let model = settings
             .provider_models
             .as_ref()
@@ -2592,10 +2583,12 @@ impl App {
 
     /// Handle terminal resize event.
     pub fn handle_resize(&mut self, _width: u16, _height: u16) {
+        let preserved_scroll = (!self.viewport.transcript_scroll.is_at_tail())
+            .then_some(self.viewport.last_transcript_top);
         self.viewport.transcript_cache = TranscriptViewCache::new();
 
-        if !self.viewport.transcript_scroll.is_at_tail() {
-            self.viewport.transcript_scroll = TranscriptScroll::to_bottom();
+        if let Some(top) = preserved_scroll {
+            self.viewport.transcript_scroll = TranscriptScroll::at_line(top);
         }
 
         self.viewport.pending_scroll_delta = 0;
@@ -4027,19 +4020,6 @@ pub enum AppAction {
     },
     /// Send a message to the AI (normal chat mode).
     SendMessage(String),
-    /// Run a Recursive Language Model (RLM) turn — Algorithm 1 from
-    /// Zhang et al. (arXiv:2512.24601). The prompt is stored in the REPL;
-    /// the root LLM only sees metadata.
-    Rlm {
-        /// The user's prompt — stored in REPL, NOT in LLM context.
-        prompt: String,
-        /// Model for the root LLM.
-        model: String,
-        /// Model for sub-LLM (llm_query) calls.
-        child_model: String,
-        /// Recursion budget for `sub_rlm()` calls.
-        max_depth: u32,
-    },
     ListSubAgents,
     FetchModels,
     CacheWarmup,
@@ -4151,7 +4131,9 @@ mod tests {
             notes_path: PathBuf::from("notes.txt"),
             mcp_config_path: PathBuf::from("mcp.json"),
             use_memory: false,
-            start_in_agent_mode: yolo,
+            // Keep unit tests independent from the developer's saved
+            // `default_mode` setting.
+            start_in_agent_mode: true,
             skip_onboarding: false,
             yolo,
             resume_session_id: None,
@@ -4163,6 +4145,18 @@ mod tests {
     fn test_trust_mode_follows_yolo_on_startup() {
         let app = App::new(test_options(true), &Config::default());
         assert!(app.trust_mode);
+    }
+
+    #[test]
+    fn sidebar_focus_accepts_work_and_maps_legacy_trackers_to_work() {
+        assert_eq!(SidebarFocus::from_setting("auto"), SidebarFocus::Auto);
+        assert_eq!(SidebarFocus::from_setting("work"), SidebarFocus::Work);
+        assert_eq!(SidebarFocus::from_setting("plan"), SidebarFocus::Work);
+        assert_eq!(SidebarFocus::from_setting("todos"), SidebarFocus::Work);
+        assert_eq!(SidebarFocus::from_setting("tasks"), SidebarFocus::Tasks);
+        assert_eq!(SidebarFocus::from_setting("agents"), SidebarFocus::Agents);
+        assert_eq!(SidebarFocus::from_setting("context"), SidebarFocus::Context);
+        assert_eq!(SidebarFocus::Work.as_setting(), "work");
     }
 
     #[test]
@@ -4445,7 +4439,6 @@ mod tests {
     #[test]
     fn test_cycle_mode_transitions() {
         let mut app = App::new(test_options(false), &Config::default());
-        // Default mode should be Agent based on settings
         let initial_mode = app.mode;
         app.cycle_mode();
         // Mode should have changed
@@ -4600,6 +4593,32 @@ mod tests {
         // Just verify scroll methods can be called without panic
         app.scroll_up(5);
         app.scroll_down(3);
+    }
+
+    #[test]
+    fn resize_preserves_scrolled_transcript_position() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.viewport.transcript_scroll = TranscriptScroll::at_line(42);
+        app.viewport.last_transcript_top = 42;
+        app.viewport.pending_scroll_delta = 5;
+
+        app.handle_resize(120, 40);
+
+        let meta = vec![TranscriptLineMeta::Spacer; 240];
+        let (_, top) = app.viewport.transcript_scroll.resolve_top(&meta, 200);
+        assert_eq!(top, 42);
+        assert_eq!(app.viewport.pending_scroll_delta, 0);
+    }
+
+    #[test]
+    fn resize_keeps_tail_state_when_user_was_at_tail() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.viewport.transcript_scroll = TranscriptScroll::to_bottom();
+        app.viewport.last_transcript_top = 42;
+
+        app.handle_resize(120, 40);
+
+        assert!(app.viewport.transcript_scroll.is_at_tail());
     }
 
     #[test]

@@ -6,7 +6,7 @@
 use super::diff_format::make_unified_diff;
 use super::spec::{
     ApprovalRequirement, ToolCapability, ToolContext, ToolError, ToolResult, ToolSpec,
-    lsp_diagnostics_for_paths, optional_str, required_str,
+    lsp_diagnostics_for_paths, optional_bool, optional_str, required_str,
 };
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -473,7 +473,7 @@ impl ToolSpec for EditFileTool {
     }
 
     fn description(&self) -> &'static str {
-        "Replace text in a single file via exact search/replace. Use this instead of `sed -i` in `exec_shell` for one unambiguous in-place edit. `search` must match exactly, including whitespace and indentation. Returns a compact unified diff, not the full file. For structural, multi-block, or cross-file changes, use `apply_patch` or `write_file` instead."
+        "Replace text in a single file via exact search/replace. Use this instead of `sed -i` in `exec_shell` for one unambiguous in-place edit. `search` matches exactly by default, including whitespace and indentation; set `fuzz: true` to tolerate leading-indentation differences. Returns a compact unified diff, not the full file. For structural, multi-block, or cross-file changes, use `apply_patch` or `write_file` instead."
     }
 
     fn input_schema(&self) -> Value {
@@ -491,6 +491,10 @@ impl ToolSpec for EditFileTool {
                 "replace": {
                     "type": "string",
                     "description": "Text to replace with"
+                },
+                "fuzz": {
+                    "type": "boolean",
+                    "description": "When true, tolerate leading whitespace differences on each searched line (default false)"
                 }
             },
             "required": ["path", "search", "replace"]
@@ -513,6 +517,7 @@ impl ToolSpec for EditFileTool {
         let path_str = required_str(&input, "path")?;
         let search = required_str(&input, "search")?;
         let replace = required_str(&input, "replace")?;
+        let fuzz = optional_bool(&input, "fuzz", false);
 
         if search == replace {
             return Err(ToolError::invalid_input(
@@ -527,14 +532,36 @@ impl ToolSpec for EditFileTool {
         })?;
 
         let count = contents.matches(search).count();
-        if count == 0 {
+        let (updated, count, fuzz_used) = if count == 0 && fuzz {
+            let matches = leading_whitespace_fuzzy_matches(&contents, search);
+            match matches.as_slice() {
+                [] => {
+                    return Err(ToolError::execution_failed(format!(
+                        "Search string not found in {}",
+                        file_path.display()
+                    )));
+                }
+                [(start, end)] => {
+                    let mut updated = contents.clone();
+                    updated.replace_range(*start..*end, replace);
+                    (updated, 1, true)
+                }
+                _ => {
+                    return Err(ToolError::execution_failed(format!(
+                        "Fuzzy search matched {} locations in {}; refine search text",
+                        matches.len(),
+                        file_path.display()
+                    )));
+                }
+            }
+        } else if count == 0 {
             return Err(ToolError::execution_failed(format!(
                 "Search string not found in {}",
                 file_path.display()
             )));
-        }
-
-        let updated = contents.replace(search, replace);
+        } else {
+            (contents.replace(search, replace), count, false)
+        };
 
         fs::write(&file_path, &updated).map_err(|e| {
             ToolError::execution_failed(format!("Failed to write {}: {}", file_path.display(), e))
@@ -549,7 +576,12 @@ impl ToolSpec for EditFileTool {
                  Verify the result with read_file before proceeding."
             )
         } else {
-            format!("Replaced 1 occurrence in {display}")
+            let fuzz_note = if fuzz_used {
+                " (fuzzy indentation match)"
+            } else {
+                ""
+            };
+            format!("Replaced 1 occurrence in {display}{fuzz_note}")
         };
         let body = if diff.is_empty() {
             format!("{summary}\n(no textual changes)")
@@ -567,6 +599,52 @@ impl ToolSpec for EditFileTool {
 
         Ok(ToolResult::success(full_body))
     }
+}
+
+fn strip_line_leading_whitespace_with_map(input: &str) -> (String, Vec<usize>) {
+    let mut normalized = String::with_capacity(input.len());
+    let mut byte_map = Vec::with_capacity(input.len());
+    let mut at_line_start = true;
+    for (idx, ch) in input.char_indices() {
+        if at_line_start && matches!(ch, ' ' | '\t') {
+            continue;
+        }
+        normalized.push(ch);
+        for _ in 0..ch.len_utf8() {
+            byte_map.push(idx);
+        }
+        at_line_start = ch == '\n';
+    }
+    (normalized, byte_map)
+}
+
+fn line_start_before(input: &str, idx: usize) -> usize {
+    input[..idx]
+        .rfind('\n')
+        .map_or(0, |newline| newline.saturating_add(1))
+}
+
+fn leading_whitespace_fuzzy_matches(contents: &str, search: &str) -> Vec<(usize, usize)> {
+    let (normalized_contents, byte_map) = strip_line_leading_whitespace_with_map(contents);
+    let (normalized_search, _) = strip_line_leading_whitespace_with_map(search);
+    if normalized_search.is_empty() {
+        return Vec::new();
+    }
+
+    let mut matches = Vec::new();
+    let mut cursor = 0;
+    while let Some(rel_idx) = normalized_contents[cursor..].find(&normalized_search) {
+        let norm_start = cursor + rel_idx;
+        let norm_end = norm_start + normalized_search.len();
+        let Some(&mapped_start) = byte_map.get(norm_start) else {
+            break;
+        };
+        let original_start = line_start_before(contents, mapped_start);
+        let original_end = byte_map.get(norm_end).copied().unwrap_or(contents.len());
+        matches.push((original_start, original_end));
+        cursor = norm_start.saturating_add(1);
+    }
+    matches
 }
 
 // === ListDirTool ===
@@ -1203,6 +1281,41 @@ mod tests {
         assert!(result.success);
         assert!(result.content.contains("Replaced 1 occurrence"));
         assert!(!result.content.contains("multiple matches were replaced"));
+    }
+
+    #[tokio::test]
+    async fn test_edit_file_fuzz_tolerates_leading_whitespace() {
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+
+        let test_file = tmp.path().join("fuzzy.txt");
+        fs::write(
+            &test_file,
+            "fn main() {\n    if true {\n        let value = 1;\n    }\n}\n",
+        )
+        .expect("write");
+
+        let tool = EditFileTool;
+        let result = tool
+            .execute(
+                json!({
+                    "path": "fuzzy.txt",
+                    "search": "if true {\n    let value = 1;\n}",
+                    "replace": "    if true {\n        let value = 2;\n    }",
+                    "fuzz": true
+                }),
+                &ctx,
+            )
+            .await
+            .expect("execute");
+
+        assert!(result.success);
+        assert!(result.content.contains("fuzzy indentation match"));
+        let edited = fs::read_to_string(&test_file).expect("read");
+        assert_eq!(
+            edited,
+            "fn main() {\n    if true {\n        let value = 2;\n    }\n}\n"
+        );
     }
 
     #[tokio::test]

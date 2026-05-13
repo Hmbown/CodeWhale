@@ -58,7 +58,11 @@ pub(super) fn should_default_defer_tool(name: &str, mode: AppMode) -> bool {
             | "grep_files"
             | "file_search"
             | "diagnostics"
-            | "rlm"
+            | "rlm_open"
+            | "rlm_eval"
+            | "rlm_configure"
+            | "rlm_close"
+            | "handle_read"
             | "recall_archive"
             | "notify"
             | MULTI_TOOL_PARALLEL_NAME

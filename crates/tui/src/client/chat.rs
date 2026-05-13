@@ -685,7 +685,7 @@ fn split_system_layers(content: &str) -> Vec<(String, PromptLayerStability, &str
         ("Skills", "## Skills"),
         ("Context management", "## Context Management"),
         ("Compact template", "## Compact"),
-        ("Previous session handoff", "## Previous Session Handoff"),
+        ("Previous session relay", "## Previous Session Relay"),
     ];
 
     let mut starts: Vec<(usize, &str)> = markers
@@ -706,7 +706,7 @@ fn split_system_layers(content: &str) -> Vec<(String, PromptLayerStability, &str
 
     for (i, (start, name)) in starts.iter().enumerate() {
         let end = starts.get(i + 1).map_or(content.len(), |(idx, _)| *idx);
-        let stability = if *name == "Previous session handoff" {
+        let stability = if *name == "Previous session relay" {
             PromptLayerStability::Dynamic
         } else if is_static_base_layer(name) {
             PromptLayerStability::Static

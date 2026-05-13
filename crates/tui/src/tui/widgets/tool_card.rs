@@ -69,7 +69,7 @@ pub fn tool_family_for_title(title: &str) -> ToolFamily {
 }
 
 /// Map an arbitrary tool name (as exposed to the model — e.g. `read_file`,
-/// `apply_patch`, `agent_spawn`) to a family. Used by `GenericToolCell`
+/// `apply_patch`, `agent_open`) to a family. Used by `GenericToolCell`
 /// where the `tool_family_for_title` shortcut isn't enough because every
 /// generic cell shares the title `"Tool"`.
 #[must_use]
@@ -79,8 +79,8 @@ pub fn tool_family_for_name(name: &str) -> ToolFamily {
         "edit_file" | "apply_patch" | "write_file" => ToolFamily::Patch,
         "exec_shell" | "exec_shell_wait" | "exec_shell_interact" => ToolFamily::Run,
         "grep_files" | "file_search" | "web_search" | "fetch_url" => ToolFamily::Find,
-        "agent_spawn" => ToolFamily::Delegate,
-        "rlm" => ToolFamily::Rlm,
+        "agent_open" | "agent_eval" | "agent_close" | "agent_spawn" => ToolFamily::Delegate,
+        "rlm_open" | "rlm_eval" | "rlm_configure" | "rlm_close" | "rlm" => ToolFamily::Rlm,
         _ => ToolFamily::Generic,
     }
 }
@@ -217,8 +217,8 @@ mod tests {
         assert_eq!(tool_family_for_name("apply_patch"), ToolFamily::Patch);
         assert_eq!(tool_family_for_name("exec_shell"), ToolFamily::Run);
         assert_eq!(tool_family_for_name("grep_files"), ToolFamily::Find);
-        assert_eq!(tool_family_for_name("agent_spawn"), ToolFamily::Delegate);
-        assert_eq!(tool_family_for_name("rlm"), ToolFamily::Rlm);
+        assert_eq!(tool_family_for_name("agent_open"), ToolFamily::Delegate);
+        assert_eq!(tool_family_for_name("rlm_eval"), ToolFamily::Rlm);
         assert_eq!(
             tool_family_for_name("totally_new_tool"),
             ToolFamily::Generic

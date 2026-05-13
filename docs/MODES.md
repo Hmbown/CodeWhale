@@ -18,7 +18,7 @@ Run `/mode` to open the mode picker, or switch directly with `/mode agent`,
 - **Agent**: multi-step tool use. Approvals for shell and paid tools (file writes are allowed without a prompt).
 - **YOLO**: enables shell + trust mode and auto-approves all tools. Use only in trusted repos.
 
-All three modes have access to the `rlm` tool. Inside its Python REPL, `llm_query_batched` fans out 1–16 cheap parallel child calls pinned to `deepseek-v4-flash`. The model reaches for it when work is decomposable.
+All three modes have access to persistent RLM sessions through `rlm_open`, `rlm_eval`, `rlm_configure`, and `rlm_close`. Inside an RLM Python REPL, `sub_query_batch` fans out 1-16 cheap parallel child calls pinned to `deepseek-v4-flash`. The model reaches for it when work is too large or repetitive for the parent transcript.
 
 ## Compatibility Notes
 
@@ -78,6 +78,9 @@ See `MCP.md`.
 Run `deepseek --help` for the canonical list. Common flags:
 
 - `-p, --prompt <TEXT>`: one-shot prompt mode (prints and exits)
+- `deepseek exec --output-format stream-json <PROMPT>`: emit one JSON object per line for harnesses and backend wrappers
+- `deepseek exec --resume <ID|PREFIX> <PROMPT>` / `--session-id <ID|PREFIX>`: continue a saved session non-interactively
+- `deepseek exec --continue <PROMPT>`: continue the most recent saved session for this workspace non-interactively
 - `--model <MODEL>`: when using the `deepseek` facade, forward a DeepSeek model override to the TUI
 - `--workspace <DIR>`: workspace root for file tools
 - `--yolo`: start in YOLO mode

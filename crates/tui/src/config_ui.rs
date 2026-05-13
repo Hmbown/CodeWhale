@@ -199,8 +199,7 @@ pub enum CostCurrencyValue {
 #[serde(rename_all = "snake_case")]
 pub enum SidebarFocusValue {
     Auto,
-    Plan,
-    Todos,
+    Work,
     Tasks,
     Agents,
     Context,
@@ -724,8 +723,7 @@ impl SidebarFocusValue {
     fn as_setting(self) -> &'static str {
         match self {
             Self::Auto => "auto",
-            Self::Plan => "plan",
-            Self::Todos => "todos",
+            Self::Work => "work",
             Self::Tasks => "tasks",
             Self::Agents => "agents",
             Self::Context => "context",
@@ -842,8 +840,7 @@ impl From<&str> for SidebarFocusValue {
     fn from(value: &str) -> Self {
         match SidebarFocus::from_setting(value) {
             SidebarFocus::Auto => Self::Auto,
-            SidebarFocus::Plan => Self::Plan,
-            SidebarFocus::Todos => Self::Todos,
+            SidebarFocus::Work => Self::Work,
             SidebarFocus::Tasks => Self::Tasks,
             SidebarFocus::Agents => Self::Agents,
             SidebarFocus::Context => Self::Context,
@@ -919,7 +916,9 @@ mod tests {
             notes_path: PathBuf::from("notes.txt"),
             mcp_config_path: PathBuf::from("mcp.json"),
             use_memory: false,
-            start_in_agent_mode: false,
+            // Keep this fixture independent from the developer's saved
+            // `default_mode` setting.
+            start_in_agent_mode: true,
             skip_onboarding: true,
             yolo: false,
             resume_session_id: None,

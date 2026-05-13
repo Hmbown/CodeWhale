@@ -17,6 +17,12 @@
 
 use std::time::{Duration, Instant};
 
+const TRACKPAD_EVENT_WINDOW: Duration = Duration::from_millis(35);
+const WHEEL_LINES_PER_TICK: i32 = 3;
+const TRACKPAD_BASE_LINES_PER_TICK: i32 = 1;
+const TRACKPAD_MID_LINES_PER_TICK: i32 = 2;
+const TRACKPAD_MAX_LINES_PER_TICK: i32 = 3;
+
 // === Transcript Line Metadata ===
 
 /// Metadata describing how rendered transcript lines map to history cells.
@@ -203,7 +209,8 @@ impl ScrollDirection {
 #[derive(Debug, Default)]
 pub struct MouseScrollState {
     last_event_at: Option<Instant>,
-    pending_lines: i32,
+    last_direction: Option<ScrollDirection>,
+    rapid_same_direction_ticks: u8,
 }
 
 /// A computed scroll delta from user input.
@@ -222,17 +229,37 @@ impl MouseScrollState {
     /// Process a scroll event and return the resulting delta.
     pub fn on_scroll(&mut self, direction: ScrollDirection) -> ScrollUpdate {
         let now = Instant::now();
+        self.on_scroll_at(direction, now)
+    }
+
+    fn on_scroll_at(&mut self, direction: ScrollDirection, now: Instant) -> ScrollUpdate {
         let is_trackpad = self
             .last_event_at
-            .is_some_and(|last| now.duration_since(last) < Duration::from_millis(35));
+            .is_some_and(|last| now.saturating_duration_since(last) < TRACKPAD_EVENT_WINDOW);
+        let same_direction = self.last_direction == Some(direction);
+
         self.last_event_at = Some(now);
+        self.last_direction = Some(direction);
 
-        let lines_per_tick = if is_trackpad { 1 } else { 3 };
-        self.pending_lines += direction.sign() * lines_per_tick;
+        let lines_per_tick = if is_trackpad {
+            if same_direction {
+                self.rapid_same_direction_ticks = self.rapid_same_direction_ticks.saturating_add(1);
+            } else {
+                self.rapid_same_direction_ticks = 1;
+            }
+            match self.rapid_same_direction_ticks {
+                0..=2 => TRACKPAD_BASE_LINES_PER_TICK,
+                3..=5 => TRACKPAD_MID_LINES_PER_TICK,
+                _ => TRACKPAD_MAX_LINES_PER_TICK,
+            }
+        } else {
+            self.rapid_same_direction_ticks = 0;
+            WHEEL_LINES_PER_TICK
+        };
 
-        let delta = self.pending_lines;
-        self.pending_lines = 0;
-        ScrollUpdate { delta_lines: delta }
+        ScrollUpdate {
+            delta_lines: direction.sign() * lines_per_tick,
+        }
     }
 }
 
@@ -432,5 +459,91 @@ mod tests {
         let (state, top) = TranscriptScroll::to_bottom().resolve_top(&meta, max_start);
         assert!(state.is_at_tail());
         assert_eq!(top, max_start);
+    }
+
+    #[test]
+    fn mouse_scroll_single_wheel_tick_moves_three_lines() {
+        let mut state = MouseScrollState::new();
+        let start = Instant::now();
+
+        assert_eq!(
+            state.on_scroll_at(ScrollDirection::Down, start).delta_lines,
+            3
+        );
+        assert_eq!(
+            state.on_scroll_at(ScrollDirection::Up, start).delta_lines,
+            -1,
+            "same timestamp is treated as a rapid precise input"
+        );
+    }
+
+    #[test]
+    fn mouse_scroll_rapid_same_direction_accelerates_but_caps() {
+        let mut state = MouseScrollState::new();
+        let start = Instant::now();
+
+        let deltas = [
+            state.on_scroll_at(ScrollDirection::Down, start).delta_lines,
+            state
+                .on_scroll_at(ScrollDirection::Down, start + Duration::from_millis(10))
+                .delta_lines,
+            state
+                .on_scroll_at(ScrollDirection::Down, start + Duration::from_millis(20))
+                .delta_lines,
+            state
+                .on_scroll_at(ScrollDirection::Down, start + Duration::from_millis(30))
+                .delta_lines,
+            state
+                .on_scroll_at(ScrollDirection::Down, start + Duration::from_millis(40))
+                .delta_lines,
+            state
+                .on_scroll_at(ScrollDirection::Down, start + Duration::from_millis(50))
+                .delta_lines,
+            state
+                .on_scroll_at(ScrollDirection::Down, start + Duration::from_millis(60))
+                .delta_lines,
+            state
+                .on_scroll_at(ScrollDirection::Down, start + Duration::from_millis(70))
+                .delta_lines,
+        ];
+
+        assert_eq!(deltas, [3, 1, 1, 2, 2, 2, 3, 3]);
+    }
+
+    #[test]
+    fn mouse_scroll_direction_change_resets_acceleration() {
+        let mut state = MouseScrollState::new();
+        let start = Instant::now();
+
+        for step in 0..8 {
+            let _ = state.on_scroll_at(
+                ScrollDirection::Down,
+                start + Duration::from_millis(step * 10),
+            );
+        }
+
+        assert_eq!(
+            state
+                .on_scroll_at(ScrollDirection::Up, start + Duration::from_millis(90))
+                .delta_lines,
+            -1
+        );
+    }
+
+    #[test]
+    fn mouse_scroll_slow_gap_resets_to_wheel_tick() {
+        let mut state = MouseScrollState::new();
+        let start = Instant::now();
+
+        assert_eq!(
+            state.on_scroll_at(ScrollDirection::Down, start).delta_lines,
+            3
+        );
+        assert_eq!(
+            state
+                .on_scroll_at(ScrollDirection::Down, start + Duration::from_millis(100))
+                .delta_lines,
+            3
+        );
     }
 }

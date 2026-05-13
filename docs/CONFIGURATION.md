@@ -77,7 +77,10 @@ through unchanged for OpenAI-compatible gateways. `atlascloud` defaults to
 `deepseek-ai/deepseek-v4-flash` as its default model. SGLang, vLLM, and Ollama are
 self-hosted and can run without an API key by default. Ollama defaults to
 `http://localhost:11434/v1` and sends model tags such as `deepseek-coder:1.3b`
-or `qwen2.5-coder:7b` unchanged.
+or `qwen2.5-coder:7b` unchanged. Self-hosted providers and loopback custom
+URLs (`localhost`, `127.0.0.1`, `[::1]`, `0.0.0.0`) do not read the secret store
+unless API-key auth is explicitly requested; use an env var or config-file key
+when a local server does require bearer auth.
 
 Third-party OpenAI-compatible gateways that need extra request headers can set
 `http_headers = { "X-Model-Provider-Id" = "your-model-provider" }` at the top
@@ -295,7 +298,10 @@ replacement compaction. You can inspect or update these from the TUI with
 
 Common settings keys:
 
-- `theme` (default, dark, light, whale)
+- `theme` (`system`, `dark`, `light`, `grayscale`; default `system`):
+  `system` follows terminal background detection, `dark`/`light` use the
+  DeepSeek palettes, and `grayscale` is the low-opinion black/white theme.
+  Aliases such as `whale`, `mono`, and `black-white` are accepted.
 - `auto_compact` (on/off, default off)
 - `paste_burst_detection` (on/off, default on): fallback rapid-key paste
   detection for terminals that do not emit bracketed-paste events. This is
@@ -316,6 +322,10 @@ Common settings keys:
   context panel, `/cost`, `/tokens`, and long-turn notification summaries. The
   aliases `rmb` and `yuan` normalize to `cny`.
 - `default_mode` (agent, plan, yolo; legacy `normal` is accepted and normalized to `agent`)
+- `sidebar_focus` (`auto`, `work`, `tasks`, `agents`, `context`; default
+  `auto`): selects the right sidebar focus. `auto` prioritizes Work, Tasks,
+  Agents, then optional Context, and uses Work as the single quiet empty state.
+  Legacy `plan` and `todos` values are accepted and normalized to `work`.
 - `max_history` (number of submitted input history entries; cleared drafts are
   also kept locally for composer history search)
 - `default_model` (model name override)
@@ -392,8 +402,8 @@ If you are upgrading from older releases:
 - `managed_config_path` (string, optional): managed config file loaded after user/env config.
 - `requirements_path` (string, optional): requirements file used to enforce allowed approval/sandbox values.
 - `max_subagents` (int, optional): defaults to `10` and is clamped to `1..=20`.
-- `subagents.*` (optional): per-role/type model defaults for `agent_spawn` and
-  related sub-agent tools. Explicit tool `model` values win, then role/type
+- `subagents.*` (optional): per-role/type model defaults for `agent_open` and
+  related persistent sub-agent sessions. Explicit tool `model` values win, then role/type
   overrides, then the parent runtime model. Supported convenience keys are
   `default_model`, `worker_model`, `explorer_model`, `awaiter_model`,
   `review_model`, `custom_model`, and `max_concurrent`. The

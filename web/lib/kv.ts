@@ -6,7 +6,7 @@ import type { CuratedDispatch } from "./types";
 
 const MEM = new Map<string, string>();
 
-interface KVNamespace {
+export interface KVNamespace {
   get(key: string): Promise<string | null>;
   put(key: string, value: string, opts?: { expirationTtl?: number }): Promise<void>;
   list(opts?: { prefix?: string; limit?: number }): Promise<{ keys: { name: string }[] }>;
@@ -53,9 +53,13 @@ export async function getDispatch(): Promise<CuratedDispatch | null> {
 
 export async function putDispatch(d: CuratedDispatch): Promise<void> {
   const env = await getEnv();
+  await putDispatchWithKv(env.CURATED_KV, d);
+}
+
+export async function putDispatchWithKv(kv: KVNamespace | undefined, d: CuratedDispatch): Promise<void> {
   const value = JSON.stringify(d);
-  if (env.CURATED_KV) {
-    await env.CURATED_KV.put("dispatch:latest", value, { expirationTtl: 60 * 60 * 24 * 7 });
+  if (kv) {
+    await kv.put("dispatch:latest", value, { expirationTtl: 60 * 60 * 24 * 7 });
   } else {
     MEM.set("dispatch:latest", value);
   }

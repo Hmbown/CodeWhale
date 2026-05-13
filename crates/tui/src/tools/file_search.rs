@@ -8,6 +8,8 @@ use ignore::WalkBuilder;
 use serde::Serialize;
 use serde_json::{Value, json};
 
+use crate::tools::search::matches_glob;
+
 use super::spec::{
     ApprovalRequirement, ToolCapability, ToolContext, ToolError, ToolResult, ToolSpec,
     optional_str, optional_u64, required_str,
@@ -52,6 +54,11 @@ impl ToolSpec for FileSearchTool {
                     "type": "array",
                     "items": { "type": "string" },
                     "description": "Optional list of file extensions to include (e.g. [\"rs\", \"md\"])."
+                },
+                "exclude": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Optional glob patterns to exclude, matching grep_files' convention (e.g. [\"target/**\", \"*.lock\"])."
                 }
             },
             "required": ["query"]
@@ -79,7 +86,8 @@ impl ToolSpec for FileSearchTool {
         };
 
         let extensions = parse_extensions(&input);
-        let matches = search_files(query, &base_path, extensions, limit)?;
+        let exclude_patterns = parse_exclude_patterns(&input);
+        let matches = search_files(query, &base_path, extensions, exclude_patterns, limit)?;
         ToolResult::json(&matches).map_err(|e| ToolError::execution_failed(e.to_string()))
     }
 }
@@ -107,10 +115,37 @@ fn parse_extensions(input: &Value) -> Vec<String> {
     out
 }
 
+fn parse_exclude_patterns(input: &Value) -> Vec<String> {
+    if let Some(values) = input.get("exclude").and_then(Value::as_array) {
+        return values
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .filter(|pattern| !pattern.is_empty())
+            .map(ToOwned::to_owned)
+            .collect();
+    }
+
+    [
+        "target/**",
+        "node_modules/**",
+        ".git/**",
+        "DerivedData/**",
+        "dist/**",
+        "build/**",
+        "*.lock",
+        "*.plist",
+    ]
+    .into_iter()
+    .map(ToOwned::to_owned)
+    .collect()
+}
+
 fn search_files(
     query: &str,
     base_path: &Path,
     extensions: Vec<String>,
+    exclude_patterns: Vec<String>,
     limit: usize,
 ) -> Result<Vec<FileSearchMatch>, ToolError> {
     if !base_path.exists() {
@@ -137,15 +172,19 @@ fn search_files(
         }
 
         let path = entry.path();
-        if !extensions.is_empty() && !extension_matches(path, &extensions) {
-            continue;
-        }
-
         let rel_path = path
             .strip_prefix(base_path)
             .unwrap_or(path)
             .to_string_lossy()
-            .to_string();
+            .replace('\\', "/");
+        if should_exclude(&rel_path, &exclude_patterns) {
+            continue;
+        }
+
+        if !extensions.is_empty() && !extension_matches(path, &extensions) {
+            continue;
+        }
+
         let name = file_name(path);
 
         let score = match score_match(&query_norm, &rel_path, &name) {
@@ -165,6 +204,12 @@ fn search_files(
         results.truncate(limit);
     }
     Ok(results)
+}
+
+fn should_exclude(rel_path: &str, exclude_patterns: &[String]) -> bool {
+    exclude_patterns
+        .iter()
+        .any(|pattern| matches_glob(rel_path, pattern))
 }
 
 fn extension_matches(path: &Path, extensions: &[String]) -> bool {
@@ -321,6 +366,46 @@ mod tests {
         assert!(result.success);
         assert!(result.content.contains("main.rs"));
         assert!(!result.content.contains("notes.md"));
+    }
+
+    #[tokio::test]
+    async fn test_file_search_exclude_filter() {
+        let tmp = tempdir().expect("tempdir");
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("fixtures")).expect("mkdir");
+        std::fs::write(root.join("fixtures").join("needle.txt"), "no\n").expect("write");
+        std::fs::write(root.join("needle.txt"), "yes\n").expect("write");
+
+        let ctx = ToolContext::new(root.to_path_buf());
+        let tool = FileSearchTool;
+        let result = tool
+            .execute(json!({"query": "needle", "exclude": ["fixtures/**"]}), &ctx)
+            .await
+            .expect("execute");
+
+        assert!(result.success);
+        assert!(result.content.contains("\"path\": \"needle.txt\""));
+        assert!(!result.content.contains("fixtures/needle.txt"));
+    }
+
+    #[tokio::test]
+    async fn test_file_search_default_excludes_build_artifacts() {
+        let tmp = tempdir().expect("tempdir");
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("target")).expect("mkdir");
+        std::fs::write(root.join("target").join("needle.txt"), "no\n").expect("write");
+        std::fs::write(root.join("needle.txt"), "yes\n").expect("write");
+
+        let ctx = ToolContext::new(root.to_path_buf());
+        let tool = FileSearchTool;
+        let result = tool
+            .execute(json!({"query": "needle"}), &ctx)
+            .await
+            .expect("execute");
+
+        assert!(result.success);
+        assert!(result.content.contains("\"path\": \"needle.txt\""));
+        assert!(!result.content.contains("target/needle.txt"));
     }
 
     #[tokio::test]

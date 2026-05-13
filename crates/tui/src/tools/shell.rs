@@ -1586,6 +1586,7 @@ async fn execute_foreground_via_background(
     command: &str,
     timeout_ms: u64,
     stdin_data: Option<&str>,
+    tty: bool,
     policy_override: Option<ExecutionSandboxPolicy>,
     extra_env: HashMap<String, String>,
 ) -> Result<ShellResult> {
@@ -1602,7 +1603,7 @@ async fn execute_foreground_via_background(
             timeout_ms,
             true,
             stdin_data,
-            false,
+            tty,
             policy_override,
             extra_env,
         )?
@@ -1706,6 +1707,10 @@ impl ToolSpec for ExecShellTool {
                 "tty": {
                     "type": "boolean",
                     "description": "Allocate a pseudo-terminal for interactive programs (implies background)"
+                },
+                "combined_output": {
+                    "type": "boolean",
+                    "description": "Capture stdout and stderr as one chronological PTY stream (default false). In foreground mode, waits for completion; in background mode, implies tty."
                 }
             },
             "required": ["command"]
@@ -1733,7 +1738,8 @@ impl ToolSpec for ExecShellTool {
         let timeout_ms = optional_u64(&input, "timeout_ms", 120_000).min(600_000);
         let background = optional_bool(&input, "background", false);
         let interactive = optional_bool(&input, "interactive", false);
-        let tty = optional_bool(&input, "tty", false);
+        let combined_output = optional_bool(&input, "combined_output", false);
+        let tty = optional_bool(&input, "tty", false) || (combined_output && background);
         let stdin_data = input
             .get("stdin")
             .or_else(|| input.get("input"))
@@ -1746,9 +1752,9 @@ impl ToolSpec for ExecShellTool {
                 "Interactive commands cannot run in background mode.",
             ));
         }
-        if interactive && tty {
+        if interactive && (tty || combined_output) {
             return Ok(ToolResult::error(
-                "Interactive mode cannot be combined with TTY sessions.",
+                "Interactive mode cannot be combined with TTY or combined_output sessions.",
             ));
         }
         if interactive && stdin_data.is_some() {
@@ -1969,6 +1975,7 @@ impl ToolSpec for ExecShellTool {
                 command,
                 timeout_ms,
                 stdin_data.as_deref(),
+                combined_output,
                 policy_override,
                 extra_env,
             )
@@ -2067,6 +2074,7 @@ impl ToolSpec for ExecShellTool {
                     "stderr_summary": stderr_summary,
                     "safety_level": format!("{:?}", safety.level),
                     "interactive": interactive,
+                    "combined_output": combined_output,
                     "canceled": was_cancelled,
                     "execpolicy": execpolicy_decision.as_ref().map(|decision| match decision {
                         ExecPolicyDecision::Allow => json!({

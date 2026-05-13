@@ -30,7 +30,7 @@ pub struct PromptSessionContext<'a> {
     pub translation_enabled: bool,
 }
 
-/// Conventional location for the structured session-handoff artifact (#32).
+/// Conventional location for the structured session relay artifact (#32).
 /// A previous session writes it on exit / `/compact`; the next session reads
 /// it back on startup and prepends it to the system prompt so a fresh agent
 /// doesn't have to re-discover open blockers from scratch.
@@ -157,7 +157,7 @@ fn render_instructions_block(paths: &[PathBuf]) -> Option<String> {
     }
 }
 
-/// Read the workspace-local handoff artifact, if present, and format it as a
+/// Read the workspace-local relay artifact, if present, and format it as a
 /// system-prompt block. Returns `None` when the file is absent or empty so
 /// callers can keep the default-uncluttered prompt for fresh workspaces.
 fn load_handoff_block(workspace: &Path) -> Option<String> {
@@ -168,7 +168,7 @@ fn load_handoff_block(workspace: &Path) -> Option<String> {
         return None;
     }
     Some(format!(
-        "## Previous Session Handoff\n\nThe previous session in this workspace left a handoff at `{}`. Consider it the first artifact to read on this turn — open blockers, in-flight changes, and recent decisions live there. Update or rewrite it before exiting if state changes materially.\n\n{}",
+        "## Previous Session Relay\n\nThe previous session in this workspace left a relay artifact at `{}`. Consider it the first artifact to read on this turn — open blockers, in-flight changes, and recent decisions live there. Update or rewrite it before exiting if state changes materially.\n\n{}",
         HANDOFF_RELATIVE_PATH, trimmed
     ))
 }
@@ -354,7 +354,7 @@ pub const AUTO_APPROVAL: &str = include_str!("prompts/approvals/auto.md");
 pub const SUGGEST_APPROVAL: &str = include_str!("prompts/approvals/suggest.md");
 pub const NEVER_APPROVAL: &str = include_str!("prompts/approvals/never.md");
 
-/// Compaction handoff template — written into the system prompt so the
+/// Compaction relay template — written into the system prompt so the
 /// model knows the format to use when writing `.deepseek/handoff.md`.
 pub const COMPACT_TEMPLATE: &str = include_str!("prompts/compact.md");
 
@@ -514,11 +514,11 @@ pub fn system_prompt_for_mode_with_context(
 ///   2. project context / fallback (workspace-static)
 ///   3. skills block (skills-dir-static)
 ///   4. `## Context Management` (compile-time constant, Agent/Yolo only)
-///   5. compaction handoff template (compile-time constant)
-///   6. handoff block — file-backed; rewritten by `/compact` and on exit
+///   5. compaction relay template (compile-time constant)
+///   6. relay block — file-backed; rewritten by `/compact` and on exit
 ///
 /// Anything appended after a volatile block forfeits the cache for the rest
-/// of the request. New blocks belong above the handoff boundary unless they
+/// of the request. New blocks belong above the relay boundary unless they
 /// themselves are turn-volatile. Working-set metadata is now injected into the
 /// latest user message as per-turn metadata instead of this system prompt.
 pub fn system_prompt_for_mode_with_context_and_skills(
@@ -668,7 +668,7 @@ pub fn system_prompt_for_mode_with_context_skills_session_and_approval(
         );
     }
 
-    // 5. Compaction handoff template — so the model knows the format to use
+    // 5. Compaction relay template — so the model knows the format to use
     //    when writing `.deepseek/handoff.md` on exit / `/compact`.
     full_prompt.push_str("\n\n");
     full_prompt.push_str(COMPACT_TEMPLATE);
@@ -694,7 +694,7 @@ pub fn system_prompt_for_mode_with_context_skills_session_and_approval(
     // 6b. User memory block (#489). Placed below the volatile boundary
     // because memory entries are editable mid-session via `/memory` or
     // `# foo` quick-add. When they change, they only invalidate the
-    // trailing handoff block — the static prefix above stays cached.
+    // trailing relay block — the static prefix above stays cached.
     if let Some(memory_block) = session_context.user_memory_block
         && !memory_block.trim().is_empty()
     {
@@ -713,7 +713,7 @@ pub fn system_prompt_for_mode_with_context_skills_session_and_approval(
         );
     }
 
-    // 7. Previous-session handoff (file-backed, rewritten by `/compact`).
+    // 7. Previous-session relay (file-backed, rewritten by `/compact`).
     if let Some(handoff_block) = load_handoff_block(workspace) {
         full_prompt = format!("{full_prompt}\n\n{handoff_block}");
     }
@@ -775,9 +775,9 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
-    /// Discriminator unique to the injected handoff block (not present in the
+    /// Discriminator unique to the injected relay block (not present in the
     /// agent prompt's own discussion of the convention).
-    const HANDOFF_BLOCK_MARKER: &str = "left a handoff at `.deepseek/handoff.md`";
+    const HANDOFF_BLOCK_MARKER: &str = "left a relay artifact at `.deepseek/handoff.md`";
 
     #[test]
     fn render_environment_block_lists_supplied_locale_and_workspace() {
@@ -1120,7 +1120,7 @@ mod tests {
         assert!(prompt.contains("<project_context_pack>"));
         assert!(
             prompt.find("<project_context_pack>").expect("pack")
-                < prompt.find("## Previous Session Handoff").expect("handoff")
+                < prompt.find("## Previous Session Relay").expect("relay")
         );
     }
 
@@ -1132,7 +1132,7 @@ mod tests {
         std::fs::create_dir_all(&handoff_dir).unwrap();
         std::fs::write(
             handoff_dir.join("handoff.md"),
-            "# Session handoff — prior\n\n## Active task\nFinish #32.\n\n## Open blockers\n- [ ] write the basic version\n",
+            "# Session relay — prior\n\n## Active task\nFinish #32.\n\n## Open blockers\n- [ ] write the basic version\n",
         )
         .unwrap();
 
@@ -1278,7 +1278,7 @@ mod tests {
             SystemPrompt::Text(text) => text,
             SystemPrompt::Blocks(_) => panic!("expected text system prompt"),
         };
-        assert!(prompt.contains("## Compaction Handoff"));
+        assert!(prompt.contains("## Compaction Relay"));
         // #429: structured Markdown template. Goal/Constraints/Progress
         // (Done/InProgress/Blocked)/Key Decisions/Next step.
         assert!(prompt.contains("### Goal"));
@@ -1313,7 +1313,7 @@ mod tests {
         };
 
         let goal_pos = prompt.find("<session_goal>").expect("goal block");
-        let compact_pos = prompt.find("## Compaction Handoff").expect("compact block");
+        let compact_pos = prompt.find("## Compaction Relay").expect("compact block");
 
         assert!(prompt.contains("Fix transcript corruption"));
         // Session goal is volatile content — it lives below the
@@ -1353,7 +1353,7 @@ mod tests {
     fn tool_selection_guide_avoids_defensive_tool_suppression() {
         let prompt = compose_prompt(AppMode::Agent, Personality::Calm);
         assert!(prompt.contains("Tool Selection Guide"));
-        assert!(prompt.contains("Use `agent_result`"));
+        assert!(prompt.contains("Use `agent_eval`"));
         assert!(
             !prompt.contains("When NOT to use certain tools"),
             "the system prompt should steer tool choice without training the model to avoid available tools"
@@ -1430,6 +1430,62 @@ mod tests {
             !prompt.contains("When NOT to use RLM"),
             "RLM guidance should explain fit and verification without telling the model to avoid the tool"
         );
+    }
+
+    #[test]
+    fn workspace_orientation_guidance_present() {
+        let prompt = compose_prompt(AppMode::Agent, Personality::Calm);
+        assert!(prompt.contains("Workspace Orientation"));
+        assert!(prompt.contains("canonical project root"));
+        assert!(prompt.contains("AGENTS.md"));
+        assert!(prompt.contains("explore` / `explorer"));
+    }
+
+    #[test]
+    fn prompt_uses_persistent_agent_and_rlm_surface() {
+        let prompt = compose_prompt(AppMode::Agent, Personality::Calm);
+        for tool in [
+            "agent_open",
+            "agent_eval",
+            "agent_close",
+            "rlm_open",
+            "rlm_eval",
+            "rlm_configure",
+            "rlm_close",
+            "handle_read",
+        ] {
+            assert!(
+                prompt.contains(tool),
+                "prompt should mention new persistent tool `{tool}`"
+            );
+        }
+        for retired in [
+            "agent_spawn",
+            "agent_wait",
+            "agent_result",
+            "agent_send_input",
+            "agent_assign",
+            "agent_resume",
+            "agent_list",
+            "spawn_agent",
+            "delegate_to_agent",
+            "send_input",
+            "close_agent",
+        ] {
+            assert!(
+                !prompt.contains(retired),
+                "prompt should not advertise retired sub-agent tool `{retired}`"
+            );
+        }
+    }
+
+    #[test]
+    fn prompt_documents_fork_context_prefix_cache_contract() {
+        let prompt = compose_prompt(AppMode::Agent, Personality::Calm);
+        assert!(prompt.contains("fork_context: true"));
+        assert!(prompt.contains("byte-identical"));
+        assert!(prompt.contains("DeepSeek prefix-cache reuse"));
+        assert!(prompt.contains("Fresh sessions are the default"));
     }
 
     #[test]
@@ -1541,7 +1597,7 @@ mod tests {
     #[test]
     fn system_prompt_with_handoff_file_is_byte_stable_when_file_is_unchanged() {
         // If `.deepseek/handoff.md` hasn't moved between two builds, the
-        // rendered prompt must produce identical bytes. The handoff block
+        // rendered prompt must produce identical bytes. The relay block
         // lands below the static boundary in
         // `system_prompt_for_mode_with_context_and_skills`.
         let tmp = tempdir().expect("tempdir");
@@ -1550,7 +1606,7 @@ mod tests {
         std::fs::create_dir_all(&handoff_dir).unwrap();
         std::fs::write(
             handoff_dir.join("handoff.md"),
-            "# Session handoff\n\n## Active task\nFinish #280.\n\n## Open blockers\n- [ ] none\n",
+            "# Session relay\n\n## Active task\nFinish #280.\n\n## Open blockers\n- [ ] none\n",
         )
         .unwrap();
 
@@ -1567,15 +1623,15 @@ mod tests {
             &a,
             &b,
         );
-        assert!(a.contains(HANDOFF_BLOCK_MARKER), "handoff must be embedded");
-        assert!(a.contains("Finish #280."), "handoff body must be present");
+        assert!(a.contains(HANDOFF_BLOCK_MARKER), "relay must be embedded");
+        assert!(a.contains("Finish #280."), "relay body must be present");
     }
 
     #[test]
     fn handoff_appears_after_static_blocks_without_working_set() {
-        // Cache-prefix invariant: the handoff block must come after static
-        // `## Context Management` and the compaction handoff template
-        // (`## Compaction Handoff`). Working-set metadata is per-turn user
+        // Cache-prefix invariant: the relay block must come after static
+        // `## Context Management` and the compaction relay template
+        // (`## Compaction Relay`). Working-set metadata is per-turn user
         // metadata now, not a system-prompt tail block.
         let tmp = tempdir().expect("tempdir");
         let workspace = tmp.path();
@@ -1594,11 +1650,11 @@ mod tests {
             .find("## Context Management")
             .expect("Context Management section present in Agent mode");
         let compact_pos = prompt
-            .find("## Compaction Handoff")
-            .expect("compaction handoff template present");
+            .find("## Compaction Relay")
+            .expect("compaction relay template present");
         let handoff_pos = prompt
             .find(HANDOFF_BLOCK_MARKER)
-            .expect("handoff block present when fixture file exists");
+            .expect("relay block present when fixture file exists");
         assert!(
             !prompt.contains("## Repo Working Set"),
             "working-set summary must stay out of the system prompt"
@@ -1606,11 +1662,11 @@ mod tests {
 
         assert!(
             context_pos < handoff_pos,
-            "## Context Management must precede the handoff block"
+            "## Context Management must precede the relay block"
         );
         assert!(
             compact_pos < handoff_pos,
-            "## Compaction Handoff must precede the handoff block"
+            "## Compaction Relay must precede the relay block"
         );
     }
 

@@ -12,18 +12,30 @@ pub const DEEPSEEK_INK_RGB: (u8, u8, u8) = (11, 21, 38);
 pub const DEEPSEEK_SLATE_RGB: (u8, u8, u8) = (18, 28, 46);
 pub const DEEPSEEK_RED_RGB: (u8, u8, u8) = (226, 80, 96);
 
-pub const LIGHT_SURFACE_RGB: (u8, u8, u8) = (248, 250, 252); // #F8FAFC
-pub const LIGHT_PANEL_RGB: (u8, u8, u8) = (241, 245, 249); // #F1F5F9
-pub const LIGHT_ELEVATED_RGB: (u8, u8, u8) = (226, 232, 240); // #E2E8F0
-pub const LIGHT_REASONING_RGB: (u8, u8, u8) = (254, 243, 199); // #FEF3C7
-pub const LIGHT_SUCCESS_RGB: (u8, u8, u8) = (220, 252, 231); // #DCFCE7
-pub const LIGHT_ERROR_RGB: (u8, u8, u8) = (254, 226, 226); // #FEE2E2
+pub const LIGHT_SURFACE_RGB: (u8, u8, u8) = (246, 248, 251); // #F6F8FB
+pub const LIGHT_PANEL_RGB: (u8, u8, u8) = (236, 242, 248); // #ECF2F8
+pub const LIGHT_ELEVATED_RGB: (u8, u8, u8) = (219, 229, 240); // #DBE5F0
+pub const LIGHT_REASONING_RGB: (u8, u8, u8) = (255, 246, 214); // #FFF6D6
+pub const LIGHT_SUCCESS_RGB: (u8, u8, u8) = (223, 247, 231); // #DFF7E7
+pub const LIGHT_ERROR_RGB: (u8, u8, u8) = (254, 229, 229); // #FEE5E5
 pub const LIGHT_TEXT_BODY_RGB: (u8, u8, u8) = (15, 23, 42); // #0F172A
 pub const LIGHT_TEXT_MUTED_RGB: (u8, u8, u8) = (51, 65, 85); // #334155
-pub const LIGHT_TEXT_HINT_RGB: (u8, u8, u8) = (71, 85, 105); // #475569
+pub const LIGHT_TEXT_HINT_RGB: (u8, u8, u8) = (100, 116, 139); // #64748B
 pub const LIGHT_TEXT_SOFT_RGB: (u8, u8, u8) = (30, 41, 59); // #1E293B
-pub const LIGHT_BORDER_RGB: (u8, u8, u8) = (71, 85, 105); // #475569
-pub const LIGHT_SELECTION_RGB: (u8, u8, u8) = (219, 234, 254); // #DBEAFE
+pub const LIGHT_BORDER_RGB: (u8, u8, u8) = (139, 161, 184); // #8BA1B8
+pub const LIGHT_SELECTION_RGB: (u8, u8, u8) = (207, 224, 247); // #CFE0F7
+pub const GRAYSCALE_SURFACE_RGB: (u8, u8, u8) = (10, 10, 10); // #0A0A0A
+pub const GRAYSCALE_PANEL_RGB: (u8, u8, u8) = (18, 18, 18); // #121212
+pub const GRAYSCALE_ELEVATED_RGB: (u8, u8, u8) = (31, 31, 31); // #1F1F1F
+pub const GRAYSCALE_REASONING_RGB: (u8, u8, u8) = (38, 38, 38); // #262626
+pub const GRAYSCALE_SUCCESS_RGB: (u8, u8, u8) = (34, 34, 34); // #222222
+pub const GRAYSCALE_ERROR_RGB: (u8, u8, u8) = (42, 42, 42); // #2A2A2A
+pub const GRAYSCALE_TEXT_BODY_RGB: (u8, u8, u8) = (236, 236, 236); // #ECECEC
+pub const GRAYSCALE_TEXT_MUTED_RGB: (u8, u8, u8) = (180, 180, 180); // #B4B4B4
+pub const GRAYSCALE_TEXT_HINT_RGB: (u8, u8, u8) = (138, 138, 138); // #8A8A8A
+pub const GRAYSCALE_TEXT_SOFT_RGB: (u8, u8, u8) = (220, 220, 220); // #DCDCDC
+pub const GRAYSCALE_BORDER_RGB: (u8, u8, u8) = (96, 96, 96); // #606060
+pub const GRAYSCALE_SELECTION_RGB: (u8, u8, u8) = (62, 62, 62); // #3E3E3E
 
 // New semantic colors
 pub const BORDER_COLOR_RGB: (u8, u8, u8) = (42, 74, 127); // #2A4A7F
@@ -106,6 +118,66 @@ pub const LIGHT_SELECTION_BG: Color = Color::Rgb(
     LIGHT_SELECTION_RGB.1,
     LIGHT_SELECTION_RGB.2,
 );
+pub const GRAYSCALE_SURFACE: Color = Color::Rgb(
+    GRAYSCALE_SURFACE_RGB.0,
+    GRAYSCALE_SURFACE_RGB.1,
+    GRAYSCALE_SURFACE_RGB.2,
+);
+pub const GRAYSCALE_PANEL: Color = Color::Rgb(
+    GRAYSCALE_PANEL_RGB.0,
+    GRAYSCALE_PANEL_RGB.1,
+    GRAYSCALE_PANEL_RGB.2,
+);
+pub const GRAYSCALE_ELEVATED: Color = Color::Rgb(
+    GRAYSCALE_ELEVATED_RGB.0,
+    GRAYSCALE_ELEVATED_RGB.1,
+    GRAYSCALE_ELEVATED_RGB.2,
+);
+pub const GRAYSCALE_REASONING: Color = Color::Rgb(
+    GRAYSCALE_REASONING_RGB.0,
+    GRAYSCALE_REASONING_RGB.1,
+    GRAYSCALE_REASONING_RGB.2,
+);
+pub const GRAYSCALE_SUCCESS: Color = Color::Rgb(
+    GRAYSCALE_SUCCESS_RGB.0,
+    GRAYSCALE_SUCCESS_RGB.1,
+    GRAYSCALE_SUCCESS_RGB.2,
+);
+pub const GRAYSCALE_ERROR: Color = Color::Rgb(
+    GRAYSCALE_ERROR_RGB.0,
+    GRAYSCALE_ERROR_RGB.1,
+    GRAYSCALE_ERROR_RGB.2,
+);
+pub const GRAYSCALE_TEXT_BODY: Color = Color::Rgb(
+    GRAYSCALE_TEXT_BODY_RGB.0,
+    GRAYSCALE_TEXT_BODY_RGB.1,
+    GRAYSCALE_TEXT_BODY_RGB.2,
+);
+pub const GRAYSCALE_TEXT_MUTED: Color = Color::Rgb(
+    GRAYSCALE_TEXT_MUTED_RGB.0,
+    GRAYSCALE_TEXT_MUTED_RGB.1,
+    GRAYSCALE_TEXT_MUTED_RGB.2,
+);
+pub const GRAYSCALE_TEXT_HINT: Color = Color::Rgb(
+    GRAYSCALE_TEXT_HINT_RGB.0,
+    GRAYSCALE_TEXT_HINT_RGB.1,
+    GRAYSCALE_TEXT_HINT_RGB.2,
+);
+pub const GRAYSCALE_TEXT_SOFT: Color = Color::Rgb(
+    GRAYSCALE_TEXT_SOFT_RGB.0,
+    GRAYSCALE_TEXT_SOFT_RGB.1,
+    GRAYSCALE_TEXT_SOFT_RGB.2,
+);
+pub const GRAYSCALE_BORDER: Color = Color::Rgb(
+    GRAYSCALE_BORDER_RGB.0,
+    GRAYSCALE_BORDER_RGB.1,
+    GRAYSCALE_BORDER_RGB.2,
+);
+pub const GRAYSCALE_SELECTION_BG: Color = Color::Rgb(
+    GRAYSCALE_SELECTION_RGB.0,
+    GRAYSCALE_SELECTION_RGB.1,
+    GRAYSCALE_SELECTION_RGB.2,
+);
 
 pub const TEXT_BODY: Color = Color::Rgb(226, 232, 240); // #E2E8F0
 pub const TEXT_SECONDARY: Color = Color::Rgb(177, 190, 207); // #B1BECF
@@ -177,6 +249,7 @@ pub const COMPOSER_BG: Color = DEEPSEEK_SLATE;
 pub enum PaletteMode {
     Dark,
     Light,
+    Grayscale,
 }
 
 impl PaletteMode {
@@ -278,12 +351,37 @@ pub const LIGHT_UI_THEME: UiTheme = UiTheme {
     border: LIGHT_BORDER,
 };
 
+pub const GRAYSCALE_UI_THEME: UiTheme = UiTheme {
+    name: "grayscale",
+    mode: PaletteMode::Grayscale,
+    surface_bg: GRAYSCALE_SURFACE,
+    panel_bg: GRAYSCALE_PANEL,
+    elevated_bg: GRAYSCALE_ELEVATED,
+    composer_bg: GRAYSCALE_PANEL,
+    selection_bg: GRAYSCALE_SELECTION_BG,
+    header_bg: GRAYSCALE_SURFACE,
+    footer_bg: GRAYSCALE_SURFACE,
+    mode_agent: GRAYSCALE_TEXT_SOFT,
+    mode_yolo: GRAYSCALE_TEXT_BODY,
+    mode_plan: GRAYSCALE_TEXT_MUTED,
+    status_ready: GRAYSCALE_TEXT_MUTED,
+    status_working: GRAYSCALE_TEXT_SOFT,
+    status_warning: GRAYSCALE_TEXT_BODY,
+    text_dim: GRAYSCALE_TEXT_HINT,
+    text_hint: GRAYSCALE_TEXT_HINT,
+    text_muted: GRAYSCALE_TEXT_MUTED,
+    text_body: GRAYSCALE_TEXT_BODY,
+    text_soft: GRAYSCALE_TEXT_SOFT,
+    border: GRAYSCALE_BORDER,
+};
+
 impl UiTheme {
     #[must_use]
     pub fn for_mode(mode: PaletteMode) -> Self {
         match mode {
             PaletteMode::Dark => UI_THEME,
             PaletteMode::Light => LIGHT_UI_THEME,
+            PaletteMode::Grayscale => GRAYSCALE_UI_THEME,
         }
     }
 
@@ -293,12 +391,53 @@ impl UiTheme {
     }
 
     #[must_use]
+    pub fn from_setting(value: &str) -> Option<Self> {
+        match normalize_theme_name(value)? {
+            "system" => Some(Self::detect()),
+            "dark" => Some(Self::for_mode(PaletteMode::Dark)),
+            "light" => Some(Self::for_mode(PaletteMode::Light)),
+            "grayscale" => Some(Self::for_mode(PaletteMode::Grayscale)),
+            _ => None,
+        }
+    }
+
+    #[must_use]
     pub fn with_background_color(mut self, color: Color) -> Self {
         self.surface_bg = color;
         self.header_bg = color;
         self.footer_bg = color;
         self
     }
+}
+
+#[must_use]
+pub fn normalize_theme_name(value: &str) -> Option<&'static str> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "" | "auto" | "system" | "default" => Some("system"),
+        "dark" | "whale" | "whale-dark" => Some("dark"),
+        "light" | "whale-light" => Some("light"),
+        "grayscale" | "greyscale" | "gray" | "grey" | "mono" | "monochrome" | "black-white"
+        | "black_and_white" | "blackwhite" | "bw" | "b&w" => Some("grayscale"),
+        _ => None,
+    }
+}
+
+#[must_use]
+pub fn theme_label_for_mode(mode: PaletteMode) -> &'static str {
+    match mode {
+        PaletteMode::Dark => "dark",
+        PaletteMode::Light => "light",
+        PaletteMode::Grayscale => "grayscale",
+    }
+}
+
+#[must_use]
+pub fn ui_theme_from_settings(theme: &str, background_color: Option<&str>) -> UiTheme {
+    let mut ui_theme = UiTheme::from_setting(theme).unwrap_or_else(UiTheme::detect);
+    if let Some(background) = background_color.and_then(parse_hex_rgb_color) {
+        ui_theme = ui_theme.with_background_color(background);
+    }
+    ui_theme
 }
 
 #[must_use]
@@ -329,10 +468,23 @@ pub fn hex_rgb_string(color: Color) -> Option<String> {
 
 #[must_use]
 pub fn adapt_fg_for_palette_mode(color: Color, _bg: Color, mode: PaletteMode) -> Color {
-    if mode == PaletteMode::Dark {
-        return color;
+    match mode {
+        PaletteMode::Dark => color,
+        PaletteMode::Light => adapt_fg_for_light_palette(color),
+        PaletteMode::Grayscale => adapt_fg_for_grayscale_palette(color),
     }
+}
 
+#[must_use]
+pub fn adapt_bg_for_palette_mode(color: Color, mode: PaletteMode) -> Color {
+    match mode {
+        PaletteMode::Dark => color,
+        PaletteMode::Light => adapt_bg_for_light_palette(color),
+        PaletteMode::Grayscale => adapt_bg_for_grayscale_palette(color),
+    }
+}
+
+fn adapt_fg_for_light_palette(color: Color) -> Color {
     if color == TEXT_BODY || color == SELECTION_TEXT || color == Color::White {
         LIGHT_TEXT_BODY
     } else if color == TEXT_SECONDARY || color == TEXT_MUTED {
@@ -358,12 +510,7 @@ pub fn adapt_fg_for_palette_mode(color: Color, _bg: Color, mode: PaletteMode) ->
     }
 }
 
-#[must_use]
-pub fn adapt_bg_for_palette_mode(color: Color, mode: PaletteMode) -> Color {
-    if mode == PaletteMode::Dark {
-        return color;
-    }
-
+fn adapt_bg_for_light_palette(color: Color) -> Color {
     if color == DEEPSEEK_INK || color == BACKGROUND_DARK {
         LIGHT_SURFACE
     } else if color == DEEPSEEK_SLATE
@@ -392,6 +539,150 @@ pub fn adapt_bg_for_palette_mode(color: Color, mode: PaletteMode) -> Color {
     } else {
         color
     }
+}
+
+fn adapt_fg_for_grayscale_palette(color: Color) -> Color {
+    if color == Color::Reset {
+        return color;
+    }
+    if color == TEXT_BODY
+        || color == SELECTION_TEXT
+        || color == LIGHT_TEXT_BODY
+        || color == Color::White
+        || color == DEEPSEEK_RED
+        || color == STATUS_ERROR
+        || color == MODE_YOLO
+    {
+        GRAYSCALE_TEXT_BODY
+    } else if color == TEXT_SOFT
+        || color == TEXT_TOOL_OUTPUT
+        || color == LIGHT_TEXT_SOFT
+        || color == TEXT_ACCENT
+        || color == DEEPSEEK_SKY
+        || color == DEEPSEEK_BLUE
+        || color == ACCENT_TOOL_LIVE
+        || color == STATUS_SUCCESS
+        || color == STATUS_INFO
+        || color == MODE_AGENT
+    {
+        GRAYSCALE_TEXT_SOFT
+    } else if color == TEXT_SECONDARY
+        || color == TEXT_MUTED
+        || color == LIGHT_TEXT_MUTED
+        || color == TEXT_REASONING
+        || color == ACCENT_REASONING_LIVE
+        || color == STATUS_WARNING
+        || color == MODE_PLAN
+        || color == USER_BODY
+        || color == LIGHT_USER_BODY
+        || color == DIFF_ADDED
+    {
+        GRAYSCALE_TEXT_MUTED
+    } else if color == TEXT_HINT
+        || color == TEXT_DIM
+        || color == LIGHT_TEXT_HINT
+        || color == BORDER_COLOR
+        || color == LIGHT_BORDER
+        || color == ACCENT_TOOL_ISSUE
+    {
+        GRAYSCALE_TEXT_HINT
+    } else {
+        match color {
+            Color::Black => GRAYSCALE_TEXT_BODY,
+            Color::Gray | Color::DarkGray => GRAYSCALE_TEXT_HINT,
+            Color::Red
+            | Color::LightRed
+            | Color::Green
+            | Color::LightGreen
+            | Color::Yellow
+            | Color::LightYellow
+            | Color::Blue
+            | Color::LightBlue
+            | Color::Magenta
+            | Color::LightMagenta
+            | Color::Cyan
+            | Color::LightCyan => GRAYSCALE_TEXT_SOFT,
+            Color::Rgb(r, g, b) => grayscale_fg_from_luma(luma(r, g, b)),
+            Color::Indexed(_) => color,
+            _ => color,
+        }
+    }
+}
+
+fn adapt_bg_for_grayscale_palette(color: Color) -> Color {
+    if color == Color::Reset {
+        return color;
+    }
+    if color == DEEPSEEK_INK || color == BACKGROUND_DARK || color == LIGHT_SURFACE {
+        GRAYSCALE_SURFACE
+    } else if color == DEEPSEEK_SLATE
+        || color == COMPOSER_BG
+        || color == SURFACE_PANEL
+        || color == SURFACE_TOOL
+        || color == LIGHT_PANEL
+    {
+        GRAYSCALE_PANEL
+    } else if color == SURFACE_ELEVATED
+        || color == SURFACE_TOOL_ACTIVE
+        || color == LIGHT_ELEVATED
+        || color == SELECTION_BG
+        || color == LIGHT_SELECTION_BG
+    {
+        GRAYSCALE_ELEVATED
+    } else if color == SURFACE_REASONING
+        || color == SURFACE_REASONING_TINT
+        || color == SURFACE_REASONING_ACTIVE
+        || color == LIGHT_REASONING
+    {
+        GRAYSCALE_REASONING
+    } else if color == SURFACE_SUCCESS || color == DIFF_ADDED_BG || color == LIGHT_SUCCESS {
+        GRAYSCALE_SUCCESS
+    } else if color == SURFACE_ERROR || color == DIFF_DELETED_BG || color == LIGHT_ERROR {
+        GRAYSCALE_ERROR
+    } else {
+        match color {
+            Color::Black => GRAYSCALE_SURFACE,
+            Color::White | Color::Gray => GRAYSCALE_ELEVATED,
+            Color::DarkGray => GRAYSCALE_PANEL,
+            Color::Red
+            | Color::LightRed
+            | Color::Green
+            | Color::LightGreen
+            | Color::Yellow
+            | Color::LightYellow
+            | Color::Blue
+            | Color::LightBlue
+            | Color::Magenta
+            | Color::LightMagenta
+            | Color::Cyan
+            | Color::LightCyan => GRAYSCALE_ELEVATED,
+            Color::Rgb(r, g, b) => grayscale_bg_from_luma(luma(r, g, b)),
+            Color::Indexed(_) => color,
+            _ => color,
+        }
+    }
+}
+
+fn grayscale_fg_from_luma(luma: u8) -> Color {
+    match luma {
+        0..=95 => GRAYSCALE_TEXT_HINT,
+        96..=155 => GRAYSCALE_TEXT_MUTED,
+        156..=215 => GRAYSCALE_TEXT_SOFT,
+        _ => GRAYSCALE_TEXT_BODY,
+    }
+}
+
+fn grayscale_bg_from_luma(luma: u8) -> Color {
+    match luma {
+        0..=28 => GRAYSCALE_SURFACE,
+        29..=95 => GRAYSCALE_PANEL,
+        96..=185 => GRAYSCALE_ELEVATED,
+        _ => GRAYSCALE_REASONING,
+    }
+}
+
+fn luma(r: u8, g: u8, b: u8) -> u8 {
+    (((u16::from(r) * 299) + (u16::from(g) * 587) + (u16::from(b) * 114)) / 1000) as u8
 }
 
 // === Color depth + brightness helpers (v0.6.6 UI redesign) ===
@@ -652,12 +943,15 @@ fn rgb_to_ansi256(r: u8, g: u8, b: u8) -> u8 {
 mod tests {
     use super::{
         ACCENT_REASONING_LIVE, ColorDepth, DEEPSEEK_INK, DEEPSEEK_RED, DEEPSEEK_SKY,
-        DEEPSEEK_SLATE, LIGHT_PANEL, LIGHT_REASONING, LIGHT_SURFACE, LIGHT_TEXT_BODY,
-        LIGHT_TEXT_HINT, LIGHT_UI_THEME, PaletteMode, SURFACE_REASONING, SURFACE_REASONING_TINT,
-        TEXT_BODY, TEXT_HINT, TEXT_REASONING, TEXT_TOOL_OUTPUT, UI_THEME, adapt_bg,
-        adapt_bg_for_palette_mode, adapt_color, adapt_fg_for_palette_mode, blend, nearest_ansi16,
-        normalize_hex_rgb_color, parse_hex_rgb_color, pulse_brightness, reasoning_surface_tint,
-        rgb_to_ansi256,
+        DEEPSEEK_SLATE, GRAYSCALE_BORDER, GRAYSCALE_ELEVATED, GRAYSCALE_PANEL, GRAYSCALE_REASONING,
+        GRAYSCALE_SURFACE, GRAYSCALE_TEXT_BODY, GRAYSCALE_TEXT_HINT, GRAYSCALE_TEXT_SOFT,
+        GRAYSCALE_UI_THEME, LIGHT_BORDER, LIGHT_ELEVATED, LIGHT_PANEL, LIGHT_REASONING,
+        LIGHT_SURFACE, LIGHT_TEXT_BODY, LIGHT_TEXT_HINT, LIGHT_UI_THEME, PaletteMode,
+        SURFACE_REASONING, SURFACE_REASONING_TINT, TEXT_BODY, TEXT_HINT, TEXT_REASONING,
+        TEXT_TOOL_OUTPUT, UI_THEME, adapt_bg, adapt_bg_for_palette_mode, adapt_color,
+        adapt_fg_for_palette_mode, blend, nearest_ansi16, normalize_hex_rgb_color,
+        normalize_theme_name, parse_hex_rgb_color, pulse_brightness, reasoning_surface_tint,
+        rgb_to_ansi256, theme_label_for_mode, ui_theme_from_settings,
     };
     use ratatui::style::Color;
 
@@ -681,6 +975,36 @@ mod tests {
         assert_eq!(theme, LIGHT_UI_THEME);
         assert_eq!(theme.surface_bg, LIGHT_SURFACE);
         assert_eq!(theme.text_body, LIGHT_TEXT_BODY);
+    }
+
+    #[test]
+    fn ui_theme_selects_grayscale_variant() {
+        let theme = super::UiTheme::for_mode(PaletteMode::Grayscale);
+        assert_eq!(theme, GRAYSCALE_UI_THEME);
+        assert_eq!(theme.surface_bg, GRAYSCALE_SURFACE);
+        assert_eq!(theme.panel_bg, GRAYSCALE_PANEL);
+        assert_eq!(theme.text_body, GRAYSCALE_TEXT_BODY);
+    }
+
+    #[test]
+    fn theme_names_normalize_common_grayscale_aliases() {
+        assert_eq!(normalize_theme_name("system"), Some("system"));
+        assert_eq!(normalize_theme_name("default"), Some("system"));
+        assert_eq!(normalize_theme_name("whale"), Some("dark"));
+        assert_eq!(normalize_theme_name("black-white"), Some("grayscale"));
+        assert_eq!(normalize_theme_name("mono"), Some("grayscale"));
+        assert_eq!(normalize_theme_name("solarized"), None);
+        assert_eq!(theme_label_for_mode(PaletteMode::Grayscale), "grayscale");
+    }
+
+    #[test]
+    fn light_palette_has_quiet_layer_separation() {
+        assert_eq!(LIGHT_SURFACE, Color::Rgb(246, 248, 251));
+        assert_eq!(LIGHT_PANEL, Color::Rgb(236, 242, 248));
+        assert_eq!(LIGHT_ELEVATED, Color::Rgb(219, 229, 240));
+        assert_eq!(LIGHT_BORDER, Color::Rgb(139, 161, 184));
+        assert_ne!(LIGHT_SURFACE, LIGHT_PANEL);
+        assert_ne!(LIGHT_PANEL, LIGHT_ELEVATED);
     }
 
     #[test]
@@ -736,6 +1060,46 @@ mod tests {
             adapt_fg_for_palette_mode(TEXT_HINT, LIGHT_SURFACE, PaletteMode::Light),
             LIGHT_TEXT_HINT
         );
+    }
+
+    #[test]
+    fn grayscale_palette_maps_brand_hues_to_neutral_roles() {
+        assert_eq!(
+            adapt_bg_for_palette_mode(DEEPSEEK_INK, PaletteMode::Grayscale),
+            GRAYSCALE_SURFACE
+        );
+        assert_eq!(
+            adapt_bg_for_palette_mode(DEEPSEEK_SLATE, PaletteMode::Grayscale),
+            GRAYSCALE_PANEL
+        );
+        assert_eq!(
+            adapt_bg_for_palette_mode(SURFACE_REASONING, PaletteMode::Grayscale),
+            GRAYSCALE_REASONING
+        );
+        assert_eq!(
+            adapt_fg_for_palette_mode(DEEPSEEK_SKY, GRAYSCALE_SURFACE, PaletteMode::Grayscale),
+            GRAYSCALE_TEXT_SOFT
+        );
+        assert_eq!(
+            adapt_fg_for_palette_mode(DEEPSEEK_RED, GRAYSCALE_SURFACE, PaletteMode::Grayscale),
+            GRAYSCALE_TEXT_BODY
+        );
+        assert_eq!(
+            adapt_fg_for_palette_mode(TEXT_HINT, GRAYSCALE_SURFACE, PaletteMode::Grayscale),
+            GRAYSCALE_TEXT_HINT
+        );
+    }
+
+    #[test]
+    fn ui_theme_from_settings_applies_theme_and_background() {
+        let theme = ui_theme_from_settings("grayscale", Some("#111111"));
+        assert_eq!(theme.mode, PaletteMode::Grayscale);
+        assert_eq!(theme.surface_bg, Color::Rgb(17, 17, 17));
+        assert_eq!(theme.header_bg, Color::Rgb(17, 17, 17));
+        assert_eq!(theme.footer_bg, Color::Rgb(17, 17, 17));
+        assert_eq!(theme.panel_bg, GRAYSCALE_PANEL);
+        assert_eq!(theme.elevated_bg, GRAYSCALE_ELEVATED);
+        assert_eq!(theme.border, GRAYSCALE_BORDER);
     }
 
     #[test]

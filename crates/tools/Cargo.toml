@@ -9,7 +9,7 @@ description = "Tool invocation lifecycle, schema validation, and scheduler paral
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
-deepseek-protocol = { path = "../protocol", version = "0.8.32" }
+deepseek-protocol = { path = "../protocol", version = "0.8.33" }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

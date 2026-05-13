@@ -128,6 +128,15 @@ enum Commands {
     /// Bootstrap MCP config and/or skills directories.
     Setup(TuiPassthroughArgs),
     /// Run the DeepSeek TUI non-interactive agent command.
+    #[command(after_help = "\
+Common forwarded flags:
+  --auto                           Enable agentic mode with tool access
+  --json                           Emit summary JSON
+  --resume <SESSION_ID>            Resume a previous session by ID or prefix
+  --session-id <SESSION_ID>        Resume a previous session by ID or prefix
+  --continue                       Continue the most recent session for this workspace
+  --output-format <FORMAT>         Output format: text or stream-json
+")]
     Exec(TuiPassthroughArgs),
     /// Run a DeepSeek-powered code review over a git diff.
     Review(TuiPassthroughArgs),
@@ -2654,6 +2663,18 @@ mod tests {
                 ],
             ),
             ("sandbox", vec!["check"]),
+            (
+                "exec",
+                vec![
+                    "--auto",
+                    "--json",
+                    "--resume",
+                    "--session-id",
+                    "--continue",
+                    "--output-format",
+                    "stream-json",
+                ],
+            ),
             (
                 "app-server",
                 vec!["--host", "--port", "--config", "--stdio"],

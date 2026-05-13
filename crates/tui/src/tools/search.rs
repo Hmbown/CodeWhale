@@ -213,15 +213,36 @@ impl ToolSpec for GrepFilesTool {
             }
         }
 
-        // Build result
+        let matches_json: Vec<Value> = results
+            .iter()
+            .map(|item| grep_match_to_json(item, context_lines))
+            .collect();
+
+        // Build result. When context_lines == 1, return the single context
+        // line as a string instead of a one-item array. That keeps the common
+        // "show just the adjacent line" case easy for model callers to read.
         let result = json!({
-            "matches": results,
+            "matches": matches_json,
             "total_matches": total_matches,
             "files_searched": files_searched,
             "truncated": total_matches > max_results,
         });
 
         ToolResult::json(&result).map_err(|e| ToolError::execution_failed(e.to_string()))
+    }
+}
+
+fn grep_match_to_json(item: &GrepMatch, context_lines: usize) -> Value {
+    if context_lines == 1 {
+        json!({
+            "file": item.file,
+            "line_number": item.line_number,
+            "line": item.line,
+            "context_before": item.context_before.first().cloned().unwrap_or_default(),
+            "context_after": item.context_after.first().cloned().unwrap_or_default(),
+        })
+    } else {
+        json!(item)
     }
 }
 
@@ -315,7 +336,7 @@ fn should_include(path: &str, patterns: &[String]) -> bool {
 
 /// Simple glob pattern matching
 /// Supports: * (any chars), ** (any path), ? (single char)
-fn matches_glob(path: &str, pattern: &str) -> bool {
+pub(crate) fn matches_glob(path: &str, pattern: &str) -> bool {
     // Handle ** for any path
     if pattern.contains("**") {
         let parts: Vec<&str> = pattern.split("**").collect();
@@ -502,6 +523,34 @@ mod tests {
         assert!(result.success);
         assert!(result.content.contains("line2")); // context before
         assert!(result.content.contains("line4")); // context after
+
+        let parsed: Value = serde_json::from_str(&result.content).unwrap();
+        let matches = parsed["matches"].as_array().unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0]["context_before"], "line2");
+        assert_eq!(matches[0]["context_after"], "line4");
+        assert!(matches[0]["context_before"].is_string());
+        assert!(matches[0]["context_after"].is_string());
+    }
+
+    #[tokio::test]
+    async fn test_grep_files_multi_line_context_remains_arrays() {
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+
+        fs::write(tmp.path().join("test.txt"), "a\nb\nMATCH\nd\ne\n").expect("write");
+
+        let tool = GrepFilesTool;
+        let result = tool
+            .execute(json!({"pattern": "MATCH", "context_lines": 2}), &ctx)
+            .await
+            .expect("execute");
+
+        let parsed: Value = serde_json::from_str(&result.content).unwrap();
+        let matches = parsed["matches"].as_array().unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0]["context_before"], json!(["a", "b"]));
+        assert_eq!(matches[0]["context_after"], json!(["d", "e"]));
     }
 
     #[tokio::test]

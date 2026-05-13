@@ -1,7 +1,7 @@
 ## Mode: agent
 
-Read-only tools (reads, searches, `rlm`, agent status queries, git inspection) run silently.
-Any write, patch, shell execution, sub-agent spawn, or CSV batch operation will ask for approval first.
+Read-only tools (reads, searches, persistent RLM session tools, agent status queries, git inspection) run silently.
+Any write, patch, shell execution, sub-agent session open, or CSV batch operation will ask for approval first.
 
 Before requesting approval for writes, lay out your work with `checklist_write` so the user can see what
 you intend to do and approve with context. Complex changes should also get an `update_plan` first.
@@ -9,7 +9,7 @@ Decomposition builds trust — a clear plan gets faster approvals.
 
 ## Sub-agent completion sentinel
 
-When you spawn a sub-agent via `agent_spawn`, the child runs independently.
+When you open a sub-agent via `agent_open`, the child runs independently.
 You will receive a `<deepseek:subagent.done>` element in the transcript when it finishes.
 Read its `summary` field and integrate the work — do not re-do what the child already did.
-You can also call `agent_result` to pull the full structured result.
+You can also call `agent_eval` with the agent name or id to pull the current structured projection or transcript handle.

@@ -32,6 +32,8 @@ mod status;
 mod task;
 mod user_commands;
 
+use std::fmt::Write as _;
+
 use crate::localization::{Locale, MessageId, tr};
 use crate::tui::app::{App, AppAction};
 
@@ -205,6 +207,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         description_id: MessageId::CmdSubagentsDescription,
     },
     CommandInfo {
+        name: "agent",
+        aliases: &[],
+        usage: "/agent [N] <task>",
+        description_id: MessageId::CmdAgentDescription,
+    },
+    CommandInfo {
         name: "links",
         aliases: &["dashboard", "api"],
         usage: "/links",
@@ -296,6 +304,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         description_id: MessageId::CmdCompactDescription,
     },
     CommandInfo {
+        name: "relay",
+        aliases: &["batonpass", "接力"],
+        usage: "/relay [focus]",
+        description_id: MessageId::CmdRelayDescription,
+    },
+    CommandInfo {
         name: "context",
         aliases: &["ctx"],
         usage: "/context",
@@ -341,7 +355,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo {
         name: "theme",
         aliases: &[],
-        usage: "/theme",
+        usage: "/theme [dark|light|grayscale|system]",
         description_id: MessageId::CmdThemeDescription,
     },
     CommandInfo {
@@ -482,7 +496,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo {
         name: "rlm",
         aliases: &["recursive"],
-        usage: "/rlm <prompt>",
+        usage: "/rlm [N] <file_or_text>",
         description_id: MessageId::CmdRlmDescription,
     },
     // Debug/cost command
@@ -534,6 +548,7 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "stash" | "park" => stash::stash(app, arg),
         "hooks" | "hook" => hooks::hooks(app, arg),
         "subagents" | "agents" => core::subagents(app),
+        "agent" => agent(app, arg),
         "links" | "dashboard" | "api" => core::deepseek_links(app),
         "feedback" => feedback::feedback(app, arg),
         "home" | "stats" | "overview" => core::home_dashboard(app),
@@ -551,6 +566,7 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "sessions" | "resume" => session::sessions(app, arg),
         "load" => session::load(app, arg),
         "compact" => session::compact(app),
+        "relay" | "batonpass" | "接力" => relay(app, arg),
         "cycles" => cycle::list_cycles(app),
         "cycle" => cycle::show_cycle(app, arg),
         "recall" => cycle::recall_archive(app, arg),
@@ -562,7 +578,7 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "status" => status::status(app),
         "statusline" => config::status_line(app),
         "mode" => config::mode(app, arg),
-        "theme" => config::theme(app),
+        "theme" => config::theme(app, arg),
         "verbose" => config::verbose(app, arg),
         "trust" => config::trust(app, arg),
         "logout" => config::logout(app),
@@ -686,49 +702,220 @@ pub use config::{
 /// in the REPL as the `PROMPT` variable. The root LLM will only see
 /// metadata about the REPL state, never the prompt text directly.
 pub fn rlm(app: &mut App, arg: Option<&str>) -> CommandResult {
-    let prompt = match arg {
+    let (max_depth, target) = match parse_depth_prefixed_arg(arg, 1) {
+        Ok(parsed) => parsed,
+        Err(message) => return CommandResult::error(message),
+    };
+    let target = match target {
         Some(p) if !p.trim().is_empty() => p.trim().to_string(),
         _ => {
             return CommandResult::error(
-                "Usage: /rlm <prompt>\n\n\
-                 Process a prompt using a Recursive Language Model (RLM).\n\
-                 The prompt is stored in a REPL and the model writes code\n\
-                 to decompose and process it recursively."
+                "Usage: /rlm [N] <file_or_text>\n\n\
+                 Opens a persistent RLM context with sub_rlm depth N (0-3, default 1)."
                     .to_string(),
             );
         }
     };
 
-    // Sanity-check: RLM is most useful for longer prompts.
-    if prompt.len() < 50 {
-        return CommandResult::message(
-            "Tip: RLM is designed for processing LONG prompts (>100 chars). \
-             For short queries, just type the message directly."
-                .to_string(),
+    let source_arg = if resolves_to_existing_file(app, &target) {
+        format!(r#"file_path: "{target}""#)
+    } else {
+        format!("content: {:?}", target)
+    };
+    let message = format!(
+        "Open and use a persistent RLM session for this request. Call `rlm_open` with name `slash_rlm` and {source_arg}. Then call `rlm_configure` with `sub_rlm_max_depth: {max_depth}`. Use `rlm_eval` to inspect the context through `peek`, `search`, and `chunk`, and call `finalize(...)` from the REPL when ready. If a `var_handle` is returned, use `handle_read` for bounded slices or projections before answering."
+    );
+
+    CommandResult::with_message_and_action(
+        format!("Opening persistent RLM context at depth {max_depth}..."),
+        AppAction::SendMessage(message),
+    )
+}
+
+/// Open a persistent sub-agent session from a slash command.
+pub fn agent(_app: &mut App, arg: Option<&str>) -> CommandResult {
+    let (max_depth, task) = match parse_depth_prefixed_arg(arg, 1) {
+        Ok(parsed) => parsed,
+        Err(message) => return CommandResult::error(message),
+    };
+    let task = match task {
+        Some(task) if !task.trim().is_empty() => task.trim().to_string(),
+        _ => {
+            return CommandResult::error(
+                "Usage: /agent [N] <task>\n\n\
+                 Opens a persistent sub-agent session with recursive agent depth N (0-3, default 1).",
+            );
+        }
+    };
+    let message = format!(
+        "Open a persistent sub-agent session for this task. Call `agent_open` with name `slash_agent`, `prompt: {:?}`, and `max_depth: {max_depth}`. Use `agent_eval` to wait for the next terminal/current projection and `handle_read` on the returned transcript_handle if you need more detail. Verify any claimed side effects before reporting success.",
+        task
+    );
+    CommandResult::with_message_and_action(
+        format!("Opening persistent sub-agent at depth {max_depth}..."),
+        AppAction::SendMessage(message),
+    )
+}
+
+/// Ask the active model to write a compact relay artifact for the next thread.
+///
+/// The visible command is `/relay` (with `/接力` for Chinese users), but the
+/// durable file path remains `.deepseek/handoff.md` for compatibility with
+/// existing sessions and startup prompt loading.
+pub fn relay(app: &mut App, arg: Option<&str>) -> CommandResult {
+    let focus = arg.map(str::trim).filter(|value| !value.is_empty());
+    let message = build_relay_instruction(app, focus);
+    CommandResult::with_message_and_action(
+        "Preparing session relay at .deepseek/handoff.md...",
+        AppAction::SendMessage(message),
+    )
+}
+
+fn build_relay_instruction(app: &App, focus: Option<&str>) -> String {
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "Create a compact session relay (接力) for a future DeepSeek TUI thread."
+    );
+    let _ = writeln!(out);
+    let _ = writeln!(out, "Write or update `.deepseek/handoff.md`.");
+    let _ = writeln!(
+        out,
+        "Keep the existing file path for compatibility, but title the artifact `# Session relay`."
+    );
+    let _ = writeln!(out);
+    let _ = writeln!(out, "Current session snapshot:");
+    let _ = writeln!(out, "- Workspace: {}", app.workspace.display());
+    let _ = writeln!(out, "- Mode: {}", app.mode.label());
+    let _ = writeln!(out, "- Model: {}", app.model_display_label());
+    if let Some(focus) = focus {
+        let _ = writeln!(out, "- Requested relay focus: {focus}");
+    }
+    if let Some(goal) = app.goal.goal_objective.as_deref() {
+        let _ = writeln!(out, "- Goal: {goal}");
+    }
+    if let Some(budget) = app.goal.goal_token_budget {
+        let _ = writeln!(out, "- Goal token budget: {budget}");
+    }
+    if app.cycle_count > 0 {
+        let _ = writeln!(out, "- Cycle count: {}", app.cycle_count);
+    }
+
+    if let Ok(todos) = app.todos.try_lock() {
+        let snapshot = todos.snapshot();
+        if !snapshot.items.is_empty() {
+            let _ = writeln!(
+                out,
+                "\nWork checklist (primary progress surface, {}% complete):",
+                snapshot.completion_pct
+            );
+            for item in snapshot.items {
+                let _ = writeln!(
+                    out,
+                    "- #{} [{}] {}",
+                    item.id,
+                    item.status.as_str(),
+                    item.content
+                );
+            }
+        }
+    } else {
+        let _ = writeln!(
+            out,
+            "\nWork checklist: unavailable because the checklist is busy."
         );
     }
 
-    let model = app.model.clone();
-    let child_model = "deepseek-v4-flash".to_string();
-    // Paper experiments use depth=1 (one level of `sub_rlm`); we default to
-    // depth=2 so the model can recurse twice if it chooses to.
-    let max_depth: u32 = 2;
+    if let Ok(plan) = app.plan_state.try_lock() {
+        let snapshot = plan.snapshot();
+        if snapshot.explanation.is_some() || !snapshot.items.is_empty() {
+            let _ = writeln!(out, "\nOptional strategy metadata from update_plan:");
+            if let Some(explanation) = snapshot.explanation.as_deref() {
+                let _ = writeln!(out, "- Explanation: {explanation}");
+            }
+            for item in snapshot.items {
+                let _ = writeln!(out, "- [{}] {}", plan_status_label(&item.status), item.step);
+            }
+        }
+    } else {
+        let _ = writeln!(
+            out,
+            "\nStrategy metadata: unavailable because plan state is busy."
+        );
+    }
 
-    CommandResult::with_message_and_action(
-        format!(
-            "Starting RLM turn for {} chars of prompt using {} (child={}, depth={})...",
-            prompt.len(),
-            model,
-            child_model,
-            max_depth,
-        ),
-        AppAction::Rlm {
-            prompt,
-            model,
-            child_model,
-            max_depth,
-        },
-    )
+    let _ = writeln!(
+        out,
+        "\nBefore writing, inspect the current transcript context and any live tool evidence you need. Do not invent test results, file changes, blockers, or decisions."
+    );
+    let _ = writeln!(
+        out,
+        "\nUse this compact structure:\n\
+         # Session relay\n\
+         \n\
+         ## Goal\n\
+         [the user's objective and any explicit constraints]\n\
+         \n\
+         ## Current work\n\
+         [the active Work checklist item, progress, and what is mid-flight]\n\
+         \n\
+         ## Files and state\n\
+         [changed files, important paths, sub-agents/RLM sessions, commands run]\n\
+         \n\
+         ## Decisions\n\
+         [why key choices were made]\n\
+         \n\
+         ## Verification\n\
+         [what passed, what failed, what was not run]\n\
+         \n\
+         ## Next action\n\
+         [one concrete action for the next thread]"
+    );
+    let _ = writeln!(
+        out,
+        "\nKeep it under about 900 words unless the session genuinely needs more. After writing, report the path and the single next action."
+    );
+    out
+}
+
+fn plan_status_label(status: &crate::tools::plan::StepStatus) -> &'static str {
+    match status {
+        crate::tools::plan::StepStatus::Pending => "pending",
+        crate::tools::plan::StepStatus::InProgress => "in_progress",
+        crate::tools::plan::StepStatus::Completed => "completed",
+    }
+}
+
+fn parse_depth_prefixed_arg(
+    arg: Option<&str>,
+    default_depth: u32,
+) -> Result<(u32, Option<&str>), String> {
+    let Some(raw) = arg.map(str::trim).filter(|raw| !raw.is_empty()) else {
+        return Ok((default_depth, None));
+    };
+    let mut parts = raw.splitn(2, char::is_whitespace);
+    let first = parts.next().unwrap_or_default();
+    if first.chars().all(|ch| ch.is_ascii_digit()) {
+        let depth: u32 = first
+            .parse()
+            .map_err(|_| "Depth must be an integer from 0 to 3".to_string())?;
+        if depth > 3 {
+            return Err("Depth must be between 0 and 3".to_string());
+        }
+        Ok((depth, parts.next().map(str::trim)))
+    } else {
+        Ok((default_depth, Some(raw)))
+    }
+}
+
+fn resolves_to_existing_file(app: &App, input: &str) -> bool {
+    let path = std::path::Path::new(input);
+    let candidate = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        app.workspace.join(path)
+    };
+    candidate.is_file()
 }
 
 /// Get command info by name or alias
@@ -862,6 +1049,8 @@ fn suggest_command_names(input: &str, limit: usize) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::config::Config;
+    use crate::tools::plan::{PlanItemArg, StepStatus, UpdatePlanArgs};
+    use crate::tools::todo::TodoStatus;
     use crate::tui::app::{App, AppAction, TuiOptions};
     use std::ffi::OsString;
     use std::path::{Path, PathBuf};
@@ -908,6 +1097,101 @@ mod tests {
             .find(|cmd| cmd.name == "links")
             .expect("links command should exist");
         assert_eq!(links.aliases, &["dashboard", "api"]);
+    }
+
+    #[test]
+    fn rlm_slash_command_routes_to_persistent_tool_instruction() {
+        let mut app = create_test_app();
+        let result = execute("/rlm 2 inspect this long corpus", &mut app);
+        assert!(!result.is_error);
+        assert!(result.message.as_deref().unwrap_or("").contains("depth 2"));
+        let Some(AppAction::SendMessage(message)) = result.action else {
+            panic!("expected SendMessage action");
+        };
+        assert!(message.contains("rlm_open"));
+        assert!(message.contains("rlm_configure"));
+        assert!(message.contains("sub_rlm_max_depth: 2"));
+    }
+
+    #[test]
+    fn agent_slash_command_routes_to_persistent_tool_instruction() {
+        let mut app = create_test_app();
+        let result = execute("/agent 0 inspect the parser", &mut app);
+        assert!(!result.is_error);
+        let Some(AppAction::SendMessage(message)) = result.action else {
+            panic!("expected SendMessage action");
+        };
+        assert!(message.contains("agent_open"));
+        assert!(message.contains("max_depth: 0"));
+    }
+
+    #[test]
+    fn relay_slash_command_routes_to_session_relay_instruction() {
+        let mut app = create_test_app();
+        app.goal.goal_objective = Some("Unify the work surface".to_string());
+        app.goal.goal_token_budget = Some(12_000);
+        app.cycle_count = 2;
+        {
+            let mut todos = app.todos.try_lock().expect("todo lock");
+            todos.add("inspect workspace".to_string(), TodoStatus::Completed);
+            todos.add("patch relay command".to_string(), TodoStatus::InProgress);
+        }
+        {
+            let mut plan = app.plan_state.try_lock().expect("plan lock");
+            plan.update(UpdatePlanArgs {
+                explanation: Some("RLM-style strategy".to_string()),
+                plan: vec![PlanItemArg {
+                    step: "keep checklist primary".to_string(),
+                    status: StepStatus::InProgress,
+                }],
+            });
+        }
+
+        let result = execute("/relay verify install", &mut app);
+        assert!(!result.is_error);
+        assert!(
+            result
+                .message
+                .as_deref()
+                .unwrap_or_default()
+                .contains(".deepseek/handoff.md")
+        );
+        let Some(AppAction::SendMessage(message)) = result.action else {
+            panic!("expected SendMessage action");
+        };
+        assert!(message.contains("session relay"));
+        assert!(message.contains("接力"));
+        assert!(message.contains("Write or update `.deepseek/handoff.md`"));
+        assert!(message.contains("# Session relay"));
+        assert!(message.contains("Requested relay focus: verify install"));
+        assert!(message.contains("Goal: Unify the work surface"));
+        assert!(message.contains("Goal token budget: 12000"));
+        assert!(message.contains("Cycle count: 2"));
+        assert!(message.contains("Work checklist (primary progress surface, 50% complete)"));
+        assert!(message.contains("#1 [completed] inspect workspace"));
+        assert!(message.contains("#2 [in_progress] patch relay command"));
+        assert!(message.contains("Optional strategy metadata from update_plan"));
+        assert!(message.contains("Explanation: RLM-style strategy"));
+        assert!(message.contains("[in_progress] keep checklist primary"));
+    }
+
+    #[test]
+    fn relay_command_has_bilingual_aliases() {
+        let relay = COMMANDS
+            .iter()
+            .find(|cmd| cmd.name == "relay")
+            .expect("relay command should exist");
+        assert_eq!(relay.aliases, &["batonpass", "接力"]);
+        assert!(relay.description_for(Locale::ZhHans).contains("接力"));
+        assert!(relay.description_for(Locale::ZhHant).contains("接力"));
+
+        let mut app = create_test_app();
+        let result = execute("/接力 next hand", &mut app);
+        assert!(!result.is_error);
+        let Some(AppAction::SendMessage(message)) = result.action else {
+            panic!("expected SendMessage action");
+        };
+        assert!(message.contains("Requested relay focus: next hand"));
     }
 
     #[test]

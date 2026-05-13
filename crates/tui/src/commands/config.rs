@@ -120,6 +120,9 @@ fn show_single_setting(app: &App, key: &str) -> CommandResult {
         }
         "approval_mode" | "approval" => Some(app.approval_mode.label().to_string()),
         "locale" | "language" => Some(locale_display(app.ui_locale).to_string()),
+        "theme" | "ui_theme" => {
+            Some(crate::palette::theme_label_for_mode(app.ui_theme.mode).to_string())
+        }
         "background_color" | "background" | "bg" => {
             crate::palette::hex_rgb_string(app.ui_theme.surface_bg)
                 .or_else(|| Some("(default)".to_string()))
@@ -418,13 +421,11 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
             app.ui_locale = resolve_locale(&settings.locale);
             app.needs_redraw = true;
         }
-        "background_color" | "background" | "bg" => {
-            let base_theme = crate::palette::UiTheme::detect();
-            app.ui_theme = settings
-                .background_color
-                .as_deref()
-                .and_then(crate::palette::parse_hex_rgb_color)
-                .map_or(base_theme, |color| base_theme.with_background_color(color));
+        "theme" | "ui_theme" | "background_color" | "background" | "bg" => {
+            app.ui_theme = crate::palette::ui_theme_from_settings(
+                &settings.theme,
+                settings.background_color.as_deref(),
+            );
             app.needs_redraw = true;
         }
         "cost_currency" | "currency" => {
@@ -487,6 +488,7 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
     let display_value = match key.as_str() {
         "default_mode" | "mode" => settings.default_mode.clone(),
         "cost_currency" | "currency" => settings.cost_currency.clone(),
+        "theme" | "ui_theme" => settings.theme.clone(),
         "background_color" | "background" | "bg" => settings
             .background_color
             .clone()
@@ -580,22 +582,34 @@ fn mode_display_name(mode: AppMode) -> &'static str {
     }
 }
 
-/// Toggle between dark and light theme.
-pub fn theme(app: &mut App) -> CommandResult {
-    let new_theme = match app.ui_theme.mode {
-        crate::palette::PaletteMode::Dark => {
-            crate::palette::UiTheme::for_mode(crate::palette::PaletteMode::Light)
+/// Switch the runtime theme. `/set theme <value> --save` persists it.
+pub fn theme(app: &mut App, arg: Option<&str>) -> CommandResult {
+    let requested = match arg.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) => {
+            let Some(theme) = crate::palette::normalize_theme_name(value) else {
+                return CommandResult::error("Usage: /theme [dark|light|grayscale|system]");
+            };
+            theme
         }
-        crate::palette::PaletteMode::Light => {
-            crate::palette::UiTheme::for_mode(crate::palette::PaletteMode::Dark)
-        }
+        None => match app.ui_theme.mode {
+            crate::palette::PaletteMode::Dark => "light",
+            crate::palette::PaletteMode::Light => "grayscale",
+            crate::palette::PaletteMode::Grayscale => "dark",
+        },
     };
-    app.ui_theme = new_theme;
-    let label = match new_theme.mode {
-        crate::palette::PaletteMode::Dark => "dark",
-        crate::palette::PaletteMode::Light => "light",
-    };
-    CommandResult::message(format!("Theme switched to {label}."))
+
+    let background = Settings::load()
+        .ok()
+        .and_then(|settings| settings.background_color);
+    app.ui_theme = crate::palette::ui_theme_from_settings(requested, background.as_deref());
+    app.needs_redraw = true;
+
+    let label = crate::palette::theme_label_for_mode(app.ui_theme.mode);
+    if requested == "system" {
+        CommandResult::message(format!("Theme switched to system ({label})."))
+    } else {
+        CommandResult::message(format!("Theme switched to {label}."))
+    }
 }
 
 /// Manage workspace-level trust and the per-path allowlist.
@@ -1178,6 +1192,9 @@ mod tests {
     #[test]
     fn test_mode_yolo_sets_all_flags() {
         let mut app = create_test_app();
+        // Switch to Agent first to guarantee a clean starting state regardless of
+        // user settings on the host machine.
+        let _ = mode(&mut app, Some("agent"));
         let result = mode(&mut app, Some("yolo"));
         assert!(result.message.unwrap().contains("Switched to YOLO mode"));
         assert!(app.allow_shell);
@@ -1444,6 +1461,54 @@ mod tests {
     }
 
     #[test]
+    fn theme_command_accepts_grayscale_arg() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "deepseek-tui-theme-command-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root).unwrap();
+        let _guard = EnvGuard::new(&temp_root);
+
+        let mut app = create_test_app();
+        let result = theme(&mut app, Some("grayscale"));
+
+        assert_eq!(result.message.unwrap(), "Theme switched to grayscale.");
+        assert_eq!(app.ui_theme.mode, crate::palette::PaletteMode::Grayscale);
+        assert!(app.needs_redraw);
+    }
+
+    #[test]
+    fn set_theme_save_updates_live_app_and_persists() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "deepseek-tui-theme-save-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root).unwrap();
+        let _guard = EnvGuard::new(&temp_root);
+
+        let mut app = create_test_app();
+        let result = set_config(&mut app, Some("theme grayscale --save"));
+        let msg = result.message.unwrap();
+
+        assert_eq!(msg, "theme = grayscale (saved)");
+        assert_eq!(app.ui_theme.mode, crate::palette::PaletteMode::Grayscale);
+
+        let settings_path = Settings::path().unwrap();
+        let saved = fs::read_to_string(settings_path).unwrap();
+        assert!(saved.contains("theme = \"grayscale\""));
+    }
+
+    #[test]
     fn test_set_approval_mode_valid_values() {
         let mut app = create_test_app();
         // Test auto
@@ -1497,7 +1562,8 @@ mod tests {
     #[test]
     fn test_trust_on_enables_flag() {
         let mut app = create_test_app();
-        assert!(!app.trust_mode);
+        // Normalize trust state regardless of user settings on the host machine.
+        app.trust_mode = false;
         let result = trust(&mut app, Some("on"));
         let msg = result.message.expect("message");
         assert!(msg.contains("Workspace trust mode enabled"));

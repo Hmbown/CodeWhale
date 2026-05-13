@@ -1960,6 +1960,8 @@ impl RuntimeThreadManager {
                 active_thread_id: Some(thread.id.clone()),
                 shell_manager: None,
                 hook_executor: None,
+                handle_store: crate::tools::handle::new_shared_handle_store(),
+                rlm_sessions: crate::rlm::session::new_shared_rlm_session_store(),
             },
             subagent_model_overrides: self.config.subagent_model_overrides(),
             memory_enabled: self.config.memory_enabled(),

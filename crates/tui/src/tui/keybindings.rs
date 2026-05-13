@@ -242,7 +242,7 @@ pub const KEYBINDINGS: &[KeybindingEntry] = &[
         section: KeybindingSection::Modes,
     },
     KeybindingEntry {
-        chord: "Alt+! / Alt+@ / Alt+# / Alt+4 / Alt+$ / Alt+0",
+        chord: "Alt+! / Alt+@ / Alt+# / Alt+$ / Alt+0",
         description_id: crate::localization::MessageId::KbFocusSidebar,
         section: KeybindingSection::Modes,
     },
@@ -332,6 +332,23 @@ mod tests {
                 .iter()
                 .any(|entry| entry.chord.contains('?') && entry.section == KeybindingSection::Help),
             "`?` must remain documented as the help-toggle chord"
+        );
+    }
+
+    #[test]
+    fn ctrl_o_help_copy_matches_activity_detail_behavior() {
+        let ctrl_o = KEYBINDINGS
+            .iter()
+            .find(|entry| entry.chord == "Ctrl+O")
+            .expect("Ctrl+O keybinding should be documented");
+
+        assert_eq!(
+            ctrl_o.description_id,
+            crate::localization::MessageId::KbThinkingPager
+        );
+        assert_eq!(
+            crate::localization::tr(crate::localization::Locale::En, ctrl_o.description_id,),
+            "Open Activity Detail"
         );
     }
 

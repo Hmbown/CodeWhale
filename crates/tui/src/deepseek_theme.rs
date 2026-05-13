@@ -23,6 +23,7 @@ use crate::tui::history::ToolStatus;
 pub enum Variant {
     Dark,
     Light,
+    Grayscale,
 }
 
 /// Centralized visual tokens for sidebar, plan, and tool rendering.
@@ -67,7 +68,7 @@ impl Theme {
             section_bg: palette::DEEPSEEK_INK,
             section_title_color: palette::DEEPSEEK_BLUE,
             // Horizontal padding only. `Padding::uniform(1)` ate two rows of
-            // each sidebar panel — for compact terminals where Plan/Todos/Tasks
+            // each sidebar panel — for compact terminals where Work/Tasks/Agents
             // get ~3 rows total via the 25% layout split, that left zero rows
             // for content (#63 follow-up: panels rendered as empty boxes even
             // when "No todos" / "No active plan" should have shown).
@@ -113,11 +114,38 @@ impl Theme {
         }
     }
 
+    /// Neutral black/white tokens for users who want minimal brand color.
+    #[must_use]
+    pub const fn grayscale() -> Self {
+        Self {
+            variant: Variant::Grayscale,
+            section_borders: Borders::ALL,
+            section_border_type: BorderType::Plain,
+            section_border_color: palette::GRAYSCALE_BORDER,
+            section_bg: palette::GRAYSCALE_PANEL,
+            section_title_color: palette::GRAYSCALE_TEXT_SOFT,
+            section_padding: Padding::horizontal(1),
+            tool_title_color: palette::GRAYSCALE_TEXT_SOFT,
+            tool_value_color: palette::GRAYSCALE_TEXT_MUTED,
+            tool_label_color: palette::GRAYSCALE_TEXT_HINT,
+            tool_running_accent: palette::GRAYSCALE_TEXT_SOFT,
+            tool_success_accent: palette::GRAYSCALE_TEXT_HINT,
+            tool_failed_accent: palette::GRAYSCALE_TEXT_BODY,
+            plan_progress_color: palette::GRAYSCALE_TEXT_SOFT,
+            plan_summary_color: palette::GRAYSCALE_TEXT_MUTED,
+            plan_explanation_color: palette::GRAYSCALE_TEXT_HINT,
+            plan_pending_color: palette::GRAYSCALE_TEXT_MUTED,
+            plan_in_progress_color: palette::GRAYSCALE_TEXT_BODY,
+            plan_completed_color: palette::GRAYSCALE_TEXT_SOFT,
+        }
+    }
+
     #[must_use]
     pub const fn for_palette_mode(mode: PaletteMode) -> Self {
         match mode {
             PaletteMode::Dark => Self::dark(),
             PaletteMode::Light => Self::light(),
+            PaletteMode::Grayscale => Self::grayscale(),
         }
     }
 
@@ -199,6 +227,17 @@ mod tests {
         assert_eq!(theme.tool_title_color, palette::LIGHT_TEXT_SOFT);
         assert_eq!(theme.tool_value_color, palette::LIGHT_TEXT_MUTED);
         assert_eq!(theme.plan_summary_color, palette::LIGHT_TEXT_MUTED);
+    }
+
+    #[test]
+    fn grayscale_theme_uses_neutral_tokens() {
+        let theme = Theme::for_palette_mode(crate::palette::PaletteMode::Grayscale);
+        assert_eq!(theme.variant, Variant::Grayscale);
+        assert_eq!(theme.section_bg, palette::GRAYSCALE_PANEL);
+        assert_eq!(theme.section_border_color, palette::GRAYSCALE_BORDER);
+        assert_eq!(theme.tool_running_accent, palette::GRAYSCALE_TEXT_SOFT);
+        assert_eq!(theme.tool_failed_accent, palette::GRAYSCALE_TEXT_BODY);
+        assert_eq!(theme.plan_summary_color, palette::GRAYSCALE_TEXT_MUTED);
     }
 
     #[test]

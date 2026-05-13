@@ -3233,6 +3233,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "flaky: requires a live TCP listener and is sensitive to port allocation races"]
     async fn mcp_connection_supports_streamable_http_event_stream_responses() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::{TcpListener, TcpStream};

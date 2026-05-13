@@ -97,6 +97,17 @@ impl ToolSpec for RevertTurnTool {
                     )
                 })?
                 .clone();
+            if repo
+                .work_tree_matches_snapshot(&target.id)
+                .map_err(|e| format!("Snapshot comparison failed: {e}"))?
+            {
+                return Err(format!(
+                    "NoSnapshotForTurn: target '{}' ({}) already matches the current workspace. \
+                     Revert operates at completed turn boundaries; there is no distinct later snapshot to restore.",
+                    target.label,
+                    short_sha(target.id.as_str()),
+                ));
+            }
             repo.restore(&target.id)
                 .map_err(|e| format!("Restore failed: {e}"))?;
             Ok(format!(
@@ -187,6 +198,24 @@ mod tests {
         let ctx = ToolContext::new(workspace);
         let r = tool.execute(json!({"turn_offset": 0}), &ctx).await;
         assert!(r.is_err());
+    }
+
+    #[tokio::test]
+    async fn revert_turn_rejects_snapshot_matching_current_workspace() {
+        let tmp = tempdir().unwrap();
+        let workspace = tmp.path().join("ws");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let _guard = scoped_home(tmp.path());
+
+        let repo = SnapshotRepo::open_or_init(&workspace).unwrap();
+        std::fs::write(workspace.join("a.txt"), b"unchanged").unwrap();
+        repo.snapshot("pre-turn:1").unwrap();
+
+        let tool = RevertTurnTool;
+        let ctx = ToolContext::new(workspace);
+        let r = tool.execute(json!({}), &ctx).await.expect("execute");
+        assert!(!r.success);
+        assert!(r.content.contains("NoSnapshotForTurn"), "{}", r.content);
     }
 
     #[tokio::test]

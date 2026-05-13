@@ -7,6 +7,7 @@
 //! (`format = "markdown"`); pass `format = "raw"` to keep the bytes intact
 //! when the model wants to do its own parsing.
 
+use super::handle::query_jsonpath;
 use super::spec::{
     ApprovalRequirement, ToolCapability, ToolContext, ToolError, ToolResult, ToolSpec, optional_u64,
 };
@@ -15,6 +16,7 @@ use async_trait::async_trait;
 use regex::Regex;
 use serde::Serialize;
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -73,9 +75,12 @@ impl Format {
 struct FetchResponse {
     url: String,
     status: u16,
+    headers: BTreeMap<String, String>,
     content_type: String,
     content: String,
     truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fields: Option<BTreeMap<String, Vec<Value>>>,
 }
 
 pub struct FetchUrlTool;
@@ -110,6 +115,11 @@ impl ToolSpec for FetchUrlTool {
                 "timeout_ms": {
                     "type": "integer",
                     "description": "Request timeout in milliseconds (default 15,000; max 60,000)."
+                },
+                "fields": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Optional JSONPath projections for JSON responses. Supports $, .field, [index], [*], and ['field']; returns matches under `fields`."
                 }
             },
             "required": ["url"]
@@ -146,6 +156,7 @@ impl ToolSpec for FetchUrlTool {
         let max_bytes = optional_u64(&input, "max_bytes", DEFAULT_MAX_BYTES).min(HARD_MAX_BYTES);
         let timeout_ms =
             optional_u64(&input, "timeout_ms", DEFAULT_TIMEOUT_MS).min(HARD_MAX_TIMEOUT_MS);
+        let requested_fields = parse_fields(&input)?;
         let mut current_url = reqwest::Url::parse(&url)
             .map_err(|e| ToolError::invalid_input(format!("invalid URL: {e}")))?;
         let mut redirects_followed = 0usize;
@@ -202,6 +213,7 @@ impl ToolSpec for FetchUrlTool {
             .and_then(|v| v.to_str().ok())
             .unwrap_or("application/octet-stream")
             .to_string();
+        let headers = response_headers(resp.headers());
 
         let bytes = resp
             .bytes()
@@ -216,6 +228,7 @@ impl ToolSpec for FetchUrlTool {
         };
 
         let body_text = String::from_utf8_lossy(usable).to_string();
+        let fields = project_json_fields(&body_text, &content_type, &requested_fields)?;
         let processed = match format {
             Format::Raw => body_text,
             Format::Text | Format::Markdown => {
@@ -230,9 +243,11 @@ impl ToolSpec for FetchUrlTool {
         let response = FetchResponse {
             url: final_url,
             status: status.as_u16(),
+            headers,
             content_type,
             content: processed,
             truncated,
+            fields,
         };
 
         if !status.is_success() {
@@ -386,6 +401,66 @@ fn validate_dns_resolved_ip(
     )))
 }
 
+fn parse_fields(input: &Value) -> Result<Vec<String>, ToolError> {
+    let Some(values) = input.get("fields") else {
+        return Ok(Vec::new());
+    };
+    let Some(values) = values.as_array() else {
+        return Err(ToolError::invalid_input("`fields` must be an array"));
+    };
+    let mut fields = Vec::new();
+    for value in values {
+        let Some(field) = value.as_str() else {
+            return Err(ToolError::invalid_input(
+                "`fields` entries must be JSONPath strings",
+            ));
+        };
+        let field = field.trim();
+        if !field.is_empty() {
+            fields.push(field.to_string());
+        }
+    }
+    Ok(fields)
+}
+
+fn response_headers(headers: &reqwest::header::HeaderMap) -> BTreeMap<String, String> {
+    headers
+        .iter()
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|value| (name.as_str().to_ascii_lowercase(), value.to_string()))
+        })
+        .collect()
+}
+
+fn project_json_fields(
+    body_text: &str,
+    content_type: &str,
+    fields: &[String],
+) -> Result<Option<BTreeMap<String, Vec<Value>>>, ToolError> {
+    if fields.is_empty() {
+        return Ok(None);
+    }
+    if !content_type.to_ascii_lowercase().contains("json") {
+        return Err(ToolError::invalid_input(
+            "`fields` can only be used with JSON responses",
+        ));
+    }
+    let body_json: Value = serde_json::from_str(body_text).map_err(|e| {
+        ToolError::execution_failed(format!("response body is not valid JSON for `fields`: {e}"))
+    })?;
+    let mut out = BTreeMap::new();
+    for field in fields {
+        let matches = query_jsonpath(&body_json, field).map_err(|e| {
+            ToolError::invalid_input(format!("invalid JSONPath `{field}` in `fields`: {e}"))
+        })?;
+        out.insert(field.clone(), matches);
+    }
+    Ok(Some(out))
+}
+
 /// Strip `<script>` / `<style>` blocks, drop remaining tags, and collapse
 /// whitespace. Good enough for "let the model read this page" — not a full
 /// HTML-to-Markdown converter.
@@ -451,6 +526,31 @@ mod tests {
         assert_eq!(Format::parse(Some("raw")).unwrap(), Format::Raw);
         assert_eq!(Format::parse(None).unwrap(), Format::Markdown);
         assert!(Format::parse(Some("yaml")).is_err());
+    }
+
+    #[test]
+    fn project_json_fields_returns_requested_jsonpath_matches() {
+        let fields = vec!["$.items[*].name".to_string(), "$.count".to_string()];
+        let projected = project_json_fields(
+            r#"{"items":[{"name":"alpha"},{"name":"beta"}],"count":2}"#,
+            "application/json",
+            &fields,
+        )
+        .expect("project")
+        .expect("some");
+
+        assert_eq!(
+            projected.get("$.items[*].name").unwrap(),
+            &vec![json!("alpha"), json!("beta")]
+        );
+        assert_eq!(projected.get("$.count").unwrap(), &vec![json!(2)]);
+    }
+
+    #[test]
+    fn project_json_fields_rejects_non_json_content_type() {
+        let fields = vec!["$.name".to_string()];
+        let err = project_json_fields("{}", "text/plain", &fields).expect_err("must reject");
+        assert!(format!("{err}").contains("JSON responses"));
     }
 
     #[tokio::test]

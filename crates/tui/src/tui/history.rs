@@ -309,7 +309,7 @@ impl HistoryCell {
     /// Render the cell in transcript mode: full content, no caps, no
     /// "Alt+V for details" affordances.
     ///
-    /// Use this for the pager (`v` / `Ctrl+O`), clipboard exports, and any
+    /// Use this for full-detail pagers, clipboard exports, and any
     /// surface that wants the complete body rather than the live summary.
     /// For most variants (User / Assistant / System) this matches `lines()`;
     /// `Thinking` and `Tool` are where the live and transcript surfaces
@@ -1247,19 +1247,21 @@ impl GenericToolCell {
             return lines;
         }
 
-        // Issue #409: `agent_spawn` already gets a dedicated `DelegateCard`
+        // Issue #409: sub-agent open already gets a dedicated `DelegateCard`
         // that owns the live action tree, status, and final summary. The
         // generic tool block for the same call duplicates that signal at
         // 3-4 lines per spawn — N parallel spawns multiply the noise. In
         // live mode, render one compact summary line and let the
         // DelegateCard be the source of truth. Transcript mode keeps the
         // full block so session replay remains complete.
-        if matches!(mode, RenderMode::Live) && self.name == "agent_spawn" {
+        if matches!(mode, RenderMode::Live)
+            && matches!(self.name.as_str(), "agent_open" | "agent_spawn")
+        {
             return self.render_agent_spawn_compact(low_motion);
         }
 
         let mut lines = Vec::new();
-        // Map the actual tool name (e.g. `agent_spawn`, `apply_patch`) to a
+        // Map the actual tool name (e.g. `agent_open`, `apply_patch`) to a
         // family rather than the catch-all `"Tool"` title — this is what
         // gives a `GenericToolCell` the right verb glyph (◐ delegate, ⋮⋮
         // fanout, etc.) instead of falling back to the neutral bullet.
@@ -1343,13 +1345,13 @@ impl GenericToolCell {
         wrap_card_rail(lines)
     }
 
-    /// Render `agent_spawn` as a single compact summary line for live
+    /// Render `agent_open`/legacy `agent_spawn` as a single compact summary line for live
     /// mode (#409). The companion `DelegateCard` already carries the
     /// live action tree, status, and final summary; this line is just
     /// the pointer that says "a spawn happened, here's the agent id".
     ///
     /// Output shape (header):
-    ///   `◐ delegate · agent_spawn  agent-abc12  [running]`
+    ///   `◐ delegate · agent_open  agent-abc12  [running]`
     /// Falls back to a placeholder when the spawn is still pending and
     /// no agent id has been assigned yet.
     fn render_agent_spawn_compact(&self, low_motion: bool) -> Vec<Line<'static>> {
@@ -1438,7 +1440,7 @@ fn render_spillover_annotation(path: &std::path::Path, width: u16) -> Line<'stat
     ])
 }
 
-/// Pull the `agent_id` field out of an `agent_spawn` tool output. The
+/// Pull the `agent_id` field out of a sub-agent open tool output. The
 /// tool emits structured JSON shaped like
 /// `{"agent_id": "agent-abc12", "nickname": "...", "model": "..."}` so we
 /// look for the `agent_id` key and return its string value.
@@ -2009,8 +2011,20 @@ pub fn output_is_image(output: &str) -> bool {
     .any(|ext| lower.contains(ext))
 }
 
+#[allow(dead_code)] // Kept for compatibility/tests; live view uses explicit summaries only.
 #[must_use]
 pub fn extract_reasoning_summary(text: &str) -> Option<String> {
+    extract_explicit_reasoning_summary(text).or_else(|| {
+        let fallback = text.trim();
+        if fallback.is_empty() {
+            None
+        } else {
+            Some(fallback.to_string())
+        }
+    })
+}
+
+fn extract_explicit_reasoning_summary(text: &str) -> Option<String> {
     let mut lines = text.lines().peekable();
     while let Some(line) = lines.next() {
         let trimmed = line.trim();
@@ -2042,12 +2056,7 @@ pub fn extract_reasoning_summary(text: &str) -> Option<String> {
             };
         }
     }
-    let fallback = text.trim();
-    if fallback.is_empty() {
-        None
-    } else {
-        Some(fallback.to_string())
-    }
+    None
 }
 
 fn render_thinking(
@@ -2092,6 +2101,7 @@ fn render_thinking(
     lines.push(Line::from(header_spans));
 
     let content_width = width.saturating_sub(3).max(1);
+    let mut collapsed_without_explicit_summary = false;
     let body_text = if collapsed {
         if streaming {
             // #861 RC4 / #1324: during streaming we don't yet have a
@@ -2102,7 +2112,13 @@ fn render_thinking(
             // staring at an empty placeholder.
             content.to_string()
         } else {
-            extract_reasoning_summary(content).unwrap_or_else(|| content.trim().to_string())
+            match extract_explicit_reasoning_summary(content) {
+                Some(summary) => summary,
+                None => {
+                    collapsed_without_explicit_summary = true;
+                    String::new()
+                }
+            }
         }
     } else {
         content.to_string()
@@ -2156,13 +2172,13 @@ fn render_thinking(
             // knows there's more above and how to reach it.
             truncated
         } else {
-            truncated || body_text.trim() != content.trim()
+            collapsed_without_explicit_summary || truncated || body_text.trim() != content.trim()
         };
     if needs_affordance {
         let label = if streaming {
-            "thinking continues; press Ctrl+O for full text"
+            "More reasoning in Ctrl+O"
         } else {
-            "thinking collapsed; press Ctrl+O for full text"
+            "Full reasoning in Ctrl+O"
         };
         lines.push(Line::from(vec![
             Span::styled(REASONING_RAIL.to_string(), rail_style),
@@ -3646,7 +3662,7 @@ mod tests {
             .iter()
             .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
             .collect::<String>();
-        assert!(text.contains("thinking collapsed; press Ctrl+O for full text"));
+        assert!(text.contains("Full reasoning in Ctrl+O"));
         assert!(text.contains("thinking"));
     }
 
@@ -3694,7 +3710,7 @@ mod tests {
             .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
             .collect::<String>();
         assert!(
-            text.contains("thinking continues; press Ctrl+O for full text"),
+            text.contains("More reasoning in Ctrl+O"),
             "streaming-truncation affordance missing, got: {text}"
         );
         // The most recent line must be the visible tail (head dropped).
@@ -4274,10 +4290,10 @@ mod tests {
 
     // === display_lines (lines_with_options) vs transcript_lines parity ===
     //
-    // These lock the contract for CX#8: live view compresses thinking and
-    // caps tool output, transcript view shows the full body. Both surfaces
-    // must contain the first paragraph / first line of the underlying
-    // content so users never lose the lede.
+    // These lock the contract for CX#8: live view keeps reasoning compact
+    // and caps tool output, transcript view shows the full body. Completed
+    // reasoning without an explicit Summary stays out of the main flow so it
+    // cannot masquerade as user text.
 
     fn line_text(line: &ratatui::text::Line<'static>) -> String {
         line.spans
@@ -4293,8 +4309,9 @@ mod tests {
     #[test]
     fn long_thinking_display_is_shorter_than_transcript() {
         // Build a multi-paragraph thinking body so the live view has
-        // something to compress. The first paragraph is the lede; both
-        // surfaces must keep it.
+        // something to compress. Without an explicit Summary block, the
+        // live surface should show status + affordance only; Ctrl+O remains
+        // the path to the full body.
         let body = "First paragraph lede.\n\
                     Second sentence of the first paragraph.\n\n\
                     Second paragraph: deeper analysis follows.\n\
@@ -4329,12 +4346,12 @@ mod tests {
         let transcript_text = lines_text(&transcript);
 
         assert!(
-            live_text.contains("First paragraph lede"),
-            "live thinking must keep the lede: {live_text}"
-        );
-        assert!(
             transcript_text.contains("First paragraph lede"),
             "transcript thinking must keep the lede"
+        );
+        assert!(
+            !live_text.contains("First paragraph lede"),
+            "live thinking must not show raw completed reasoning: {live_text}"
         );
         assert!(
             transcript_text.contains("Fourth paragraph"),
@@ -4345,19 +4362,20 @@ mod tests {
             "live thinking must drop the tail when collapsed"
         );
         assert!(
-            live_text.contains("press Ctrl+O for full text"),
+            live_text.contains("Full reasoning in Ctrl+O"),
             "live thinking must offer the pager affordance"
         );
         assert!(
-            !transcript_text.contains("press Ctrl+O for full text"),
+            !transcript_text.contains("Full reasoning in Ctrl+O"),
             "transcript thinking must not include the live affordance"
         );
     }
 
     #[test]
-    fn short_thinking_display_equals_transcript() {
-        // A single-line thinking body has nothing to compress; live and
-        // transcript surfaces should agree.
+    fn completed_thinking_without_summary_stays_out_of_live_view() {
+        // Even a short completed reasoning body can read like the user's
+        // prompt when rendered inline. Keep it in transcript/detail surfaces
+        // and show the Ctrl+O affordance in the main flow.
         let cell = HistoryCell::Thinking {
             content: "One brief reasoning step.".to_string(),
             streaming: false,
@@ -4376,13 +4394,17 @@ mod tests {
         let live_text = lines_text(&live);
         let transcript_text = lines_text(&transcript);
 
-        assert_eq!(
-            live_text, transcript_text,
-            "short thinking must render identically on both surfaces"
+        assert!(
+            !live_text.contains("One brief reasoning step."),
+            "live thinking must hide raw completed reasoning: {live_text}"
         );
         assert!(
-            !live_text.contains("press Ctrl+O for full text"),
-            "short thinking must not show the collapse affordance"
+            transcript_text.contains("One brief reasoning step."),
+            "transcript thinking must keep the full reasoning body"
+        );
+        assert!(
+            live_text.contains("Full reasoning in Ctrl+O"),
+            "live thinking must offer the detail affordance"
         );
     }
 

@@ -533,6 +533,7 @@ fn turn_tool_registry_builder_keeps_plan_mode_read_only_for_files() {
     assert!(registry.contains("update_plan"));
     assert!(registry.contains("task_list"));
     assert!(registry.contains("task_read"));
+    assert!(registry.contains("handle_read"));
     assert!(registry.contains("recall_archive"));
 
     let plan_state_tools = [
@@ -827,7 +828,7 @@ fn subagent_results_are_summarized_before_parent_context_insertion() {
         .to_string(),
     );
 
-    let context = compact_tool_result_for_context("deepseek-v4-pro", "agent_result", &output);
+    let context = compact_tool_result_for_context("deepseek-v4-pro", "agent_eval", &output);
 
     assert!(context.contains("[sub-agent result summarized for parent context]"));
     assert!(context.contains("agent_1234abcd (explore) status=Completed"));
@@ -837,6 +838,7 @@ fn subagent_results_are_summarized_before_parent_context_insertion() {
     assert!(context.contains("self-report"));
     assert!(context.contains("verify side effects"));
     assert!(context.contains("read_file") && context.contains("list_dir"));
+    assert!(context.contains("handle_read"));
 }
 
 #[test]

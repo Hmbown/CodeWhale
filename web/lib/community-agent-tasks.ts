@@ -1,6 +1,6 @@
 import { fetchFeed, fetchRepoStats } from "@/lib/github";
 import { curate } from "@/lib/deepseek";
-import { putDispatch } from "@/lib/kv";
+import { putDispatchWithKv } from "@/lib/kv";
 import {
   agentChat,
   TRIAGE_PROMPT,
@@ -32,6 +32,8 @@ export interface AgentEnv {
   MAINTAINER_GITHUB_PAT?: string;
 }
 
+const CRON_STATUS_TTL = 60 * 60 * 24 * 14;
+
 function dsEnv(env: AgentEnv): DeepSeekEnv {
   return {
     baseUrl: env.DEEPSEEK_BASE_URL ?? process.env.DEEPSEEK_BASE_URL,
@@ -49,10 +51,29 @@ export async function runCurate(env: AgentEnv): Promise<Record<string, unknown>>
       fetchFeed(env.GITHUB_TOKEN, 30),
     ]);
     const dispatch = await curate(env.DEEPSEEK_API_KEY, stats, feed, dsEnv(env));
-    await putDispatch(dispatch);
-    return { ok: true, headline: dispatch.headline };
+    await putDispatchWithKv(env.CURATED_KV, dispatch);
+    await env.CURATED_KV?.put(
+      "cron:curate:last",
+      JSON.stringify({
+        ok: true,
+        generatedAt: dispatch.generatedAt,
+        headline: dispatch.headline,
+      }),
+      { expirationTtl: CRON_STATUS_TTL }
+    );
+    return { ok: true, headline: dispatch.headline, stored: env.CURATED_KV ? "kv" : "memory" };
   } catch (e) {
-    return { ok: false, error: String(e) };
+    const error = String(e);
+    await env.CURATED_KV?.put(
+      "cron:curate:last",
+      JSON.stringify({
+        ok: false,
+        generatedAt: new Date().toISOString(),
+        error,
+      }),
+      { expirationTtl: CRON_STATUS_TTL }
+    );
+    return { ok: false, error };
   }
 }
 

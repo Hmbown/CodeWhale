@@ -850,15 +850,6 @@ impl Engine {
                 Op::CompactContext => {
                     self.handle_manual_compaction().await;
                 }
-                Op::Rlm {
-                    content,
-                    model,
-                    child_model,
-                    max_depth,
-                } => {
-                    self.handle_rlm(content, model, child_model, max_depth)
-                        .await;
-                }
                 Op::EditLastTurn { new_message } => {
                     // #383: /edit — remove the last user+assistant exchange
                     // from the session, then re-send with the new content.
@@ -1335,100 +1326,6 @@ impl Engine {
                 usage: zero_usage,
                 status: turn_status,
                 error: turn_error,
-            })
-            .await;
-    }
-
-    /// Handle a Recursive Language Model (RLM) query — Algorithm 1 from
-    /// Zhang et al. (arXiv:2512.24601).
-    ///
-    /// The prompt is stored as PROMPT in a REPL variable. The root LLM
-    /// only sees metadata about the REPL state, never the prompt text
-    /// directly. The model generates Python code, which is executed by
-    /// the REPL. When FINAL() is called, the loop ends.
-    async fn handle_rlm(
-        &mut self,
-        content: String,
-        model: String,
-        child_model: String,
-        max_depth: u32,
-    ) {
-        use crate::rlm::turn::run_rlm_turn;
-
-        let Some(ref client) = self.deepseek_client else {
-            let err = self
-                .deepseek_client_error
-                .as_deref()
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| "API client not configured".to_string());
-            let _ = self
-                .tx_event
-                .send(Event::error(ErrorEnvelope::fatal_auth(format!(
-                    "RLM error: {err}"
-                ))))
-                .await;
-            return;
-        };
-
-        let _ = self
-            .tx_event
-            .send(Event::status("RLM turn started".to_string()))
-            .await;
-
-        let result = run_rlm_turn(
-            client,
-            model,
-            content,
-            child_model,
-            self.tx_event.clone(),
-            max_depth,
-        )
-        .await;
-
-        let has_error = result.error.is_some();
-        if let Some(ref err) = result.error {
-            let _ = self
-                .tx_event
-                .send(Event::error(ErrorEnvelope::tool(format!(
-                    "RLM error: {err}"
-                ))))
-                .await;
-        }
-
-        if !result.answer.is_empty() {
-            // Add the final answer as an assistant message in the session.
-            self.add_session_message(crate::models::Message {
-                role: "assistant".to_string(),
-                content: vec![crate::models::ContentBlock::Text {
-                    text: result.answer.clone(),
-                    cache_control: None,
-                }],
-            })
-            .await;
-
-            let _ = self
-                .tx_event
-                .send(Event::MessageDelta {
-                    index: 0,
-                    content: result.answer.clone(),
-                })
-                .await;
-            let _ = self
-                .tx_event
-                .send(Event::MessageComplete { index: 0 })
-                .await;
-        }
-
-        let _ = self
-            .tx_event
-            .send(Event::TurnComplete {
-                usage: result.usage,
-                status: if has_error {
-                    crate::core::events::TurnOutcomeStatus::Failed
-                } else {
-                    crate::core::events::TurnOutcomeStatus::Completed
-                },
-                error: result.error,
             })
             .await;
     }

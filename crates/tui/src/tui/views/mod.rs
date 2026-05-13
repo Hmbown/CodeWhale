@@ -611,6 +611,13 @@ impl ConfigView {
             },
             ConfigRow {
                 section: ConfigSection::Display,
+                key: "theme".to_string(),
+                value: settings.theme.clone(),
+                editable: true,
+                scope: ConfigScope::Saved,
+            },
+            ConfigRow {
+                section: ConfigSection::Display,
                 key: "locale".to_string(),
                 value: settings.locale.clone(),
                 editable: true,
@@ -1040,11 +1047,12 @@ fn config_hint_for_key(key: &str) -> &'static str {
         | "composer_border"
         | "paste_burst_detection" => "on/off, true/false, yes/no, 1/0",
         "composer_density" | "transcript_spacing" => "compact | comfortable | spacious",
+        "theme" => "system | dark | light | grayscale",
         "locale" => "auto | en | ja | zh-Hans | pt-BR",
         "background_color" => "#RRGGBB | default",
         "default_mode" => "agent | plan | yolo",
         "sidebar_width" => "10..=50",
-        "sidebar_focus" => "auto | plan | todos | tasks | agents",
+        "sidebar_focus" => "auto | work | tasks | agents | context",
         "max_history" => "integer (0 allowed)",
         "default_model" => "deepseek-v4-pro | deepseek-v4-flash | deepseek-* | none/default",
         "mcp_config_path" => "path to mcp.json",
@@ -1516,7 +1524,10 @@ fn live_subagent_result(
     role: Option<&str>,
 ) -> SubAgentResult {
     SubAgentResult {
+        name: agent_id.to_string(),
         agent_id: agent_id.to_string(),
+        context_mode: "fresh".to_string(),
+        fork_context: false,
         agent_type,
         assignment: SubAgentAssignment {
             objective: summarize_tool_output(objective),
@@ -1938,7 +1949,10 @@ mod tests {
 
     fn manager_agent(id: &str, status: SubAgentStatus) -> SubAgentResult {
         SubAgentResult {
+            name: id.to_string(),
             agent_id: id.to_string(),
+            context_mode: "fresh".to_string(),
+            fork_context: false,
             agent_type: SubAgentType::Explore,
             assignment: SubAgentAssignment {
                 objective: "read the docs".to_string(),
@@ -2061,6 +2075,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(keys.contains(&"model"));
         assert!(keys.contains(&"approval_mode"));
+        assert!(keys.contains(&"theme"));
         assert!(keys.contains(&"locale"));
         assert!(keys.contains(&"background_color"));
         assert!(keys.contains(&"auto_compact"));

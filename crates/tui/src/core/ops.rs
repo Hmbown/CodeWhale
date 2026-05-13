@@ -75,21 +75,6 @@ pub enum Op {
     /// Run context compaction immediately.
     CompactContext,
 
-    /// Run a Recursive Language Model (RLM) turn per Algorithm 1 of
-    /// Zhang et al. (arXiv:2512.24601). The prompt is stored in the REPL
-    /// as `context`; the root LLM only sees metadata.
-    Rlm {
-        /// The user's prompt — stored in REPL, NOT in the LLM context.
-        content: String,
-        /// The model to use for root LLM calls.
-        model: String,
-        /// The model to use for sub-LLM (llm_query) calls.
-        child_model: String,
-        /// Recursion budget for `sub_rlm()` calls. Paper experiments use
-        /// depth=1; defaults set by the `/rlm` command.
-        max_depth: u32,
-    },
-
     /// Edit the last user message: remove the last user+assistant exchange
     /// from the session, then re-send with the new content.
     #[allow(dead_code)]

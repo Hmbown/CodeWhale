@@ -545,6 +545,8 @@ mod tests {
     #[test]
     fn model_reset_same_model_keeps_turn_cache_history() {
         let mut app = create_test_app();
+        app.auto_model = false;
+        app.model = "deepseek-v4-pro".to_string();
         app.push_turn_cache_record(TurnCacheRecord {
             input_tokens: 100,
             output_tokens: 25,

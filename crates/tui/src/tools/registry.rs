@@ -660,15 +660,22 @@ impl ToolRegistryBuilder {
         self.with_tool(Arc::new(RevertTurnTool))
     }
 
-    /// Include the RLM tool (`rlm`). Runs the full recursive language-model
-    /// loop on a long input (file or inline content); the long input never
-    /// enters the calling model's context window. The Python REPL exposes
-    /// `llm_query` / `llm_query_batched` / `rlm_query` / `rlm_query_batched`
-    /// helpers for sub-LLM work — that's where parallel fan-out belongs.
+    /// Include persistent RLM session tools.
     #[must_use]
-    pub fn with_rlm_tool(self, client: Option<DeepSeekClient>, root_model: String) -> Self {
-        use super::rlm::RlmTool;
-        self.with_tool(Arc::new(RlmTool::new(client, root_model)))
+    pub fn with_rlm_tool(self, client: Option<DeepSeekClient>, _root_model: String) -> Self {
+        use super::rlm::{RlmCloseTool, RlmConfigureTool, RlmEvalTool, RlmOpenTool};
+        self.with_tool(Arc::new(RlmOpenTool))
+            .with_tool(Arc::new(RlmEvalTool::new(client)))
+            .with_tool(Arc::new(RlmConfigureTool))
+            .with_tool(Arc::new(RlmCloseTool))
+    }
+
+    /// Include `handle_read`, the bounded projection reader for symbolic
+    /// `var_handle` payloads.
+    #[must_use]
+    pub fn with_handle_tools(self) -> Self {
+        use super::handle::HandleReadTool;
+        self.with_tool(Arc::new(HandleReadTool))
     }
 
     /// Include the review tool.
@@ -769,6 +776,7 @@ impl ToolRegistryBuilder {
             .with_test_runner_tool()
             .with_validation_tools()
             .with_tool_result_retrieval_tool()
+            .with_handle_tools()
             .with_runtime_task_tools()
             .with_revert_turn_tool()
             .with_pandoc_tools()
@@ -840,51 +848,14 @@ impl ToolRegistryBuilder {
         manager: super::subagent::SharedSubAgentManager,
         runtime: super::subagent::SubAgentRuntime,
     ) -> Self {
-        use super::subagent::{
-            AgentAssignTool, AgentCancelTool, AgentCloseTool, AgentListTool, AgentResultTool,
-            AgentResumeTool, AgentSendInputTool, AgentSpawnTool, AgentWaitTool,
-            DelegateToAgentTool,
-        };
+        use super::subagent::{AgentCloseTool, AgentEvalTool, AgentOpenTool};
 
-        self.with_tool(Arc::new(AgentSpawnTool::new(
+        self.with_tool(Arc::new(AgentOpenTool::new(
             manager.clone(),
             runtime.clone(),
         )))
-        .with_tool(Arc::new(AgentSpawnTool::with_name(
-            manager.clone(),
-            runtime.clone(),
-            "spawn_agent",
-        )))
-        .with_tool(Arc::new(DelegateToAgentTool::new(
-            manager.clone(),
-            runtime.clone(),
-        )))
-        .with_tool(Arc::new(AgentResultTool::new(manager.clone())))
-        .with_tool(Arc::new(AgentSendInputTool::new(
-            manager.clone(),
-            "send_input",
-        )))
-        .with_tool(Arc::new(AgentAssignTool::new(
-            manager.clone(),
-            "agent_assign",
-        )))
-        .with_tool(Arc::new(AgentAssignTool::new(
-            manager.clone(),
-            "assign_agent",
-        )))
-        .with_tool(Arc::new(AgentWaitTool::new(manager.clone(), "wait")))
-        .with_tool(Arc::new(AgentSendInputTool::new(
-            manager.clone(),
-            "agent_send_input",
-        )))
-        .with_tool(Arc::new(AgentWaitTool::new(manager.clone(), "agent_wait")))
-        .with_tool(Arc::new(AgentResumeTool::new(
-            manager.clone(),
-            runtime.clone(),
-        )))
-        .with_tool(Arc::new(AgentCloseTool::new(manager.clone())))
-        .with_tool(Arc::new(AgentCancelTool::new(manager.clone())))
-        .with_tool(Arc::new(AgentListTool::new(manager)))
+        .with_tool(Arc::new(AgentEvalTool::new(manager.clone())))
+        .with_tool(Arc::new(AgentCloseTool::new(manager)))
     }
 
     /// Build the registry with the given context.

@@ -16,7 +16,9 @@ use tokio_util::sync::CancellationToken;
 use crate::features::Features;
 use crate::lsp::LspManager;
 use crate::network_policy::NetworkPolicyDecider;
+use crate::rlm::session::{SharedRlmSessionStore, new_shared_rlm_session_store};
 use crate::sandbox::backend::SandboxBackend;
+use crate::tools::handle::{SharedHandleStore, new_shared_handle_store};
 use crate::tools::shell::{SharedShellManager, new_shared_shell_manager};
 #[allow(unused_imports)]
 pub use deepseek_tools::{
@@ -30,7 +32,7 @@ pub use deepseek_tools::{
 /// contexts keep working. Tools that need durable task/automation state fail
 /// closed with a clear "not available" error when the relevant service is not
 /// attached.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct RuntimeToolServices {
     pub shell_manager: Option<SharedShellManager>,
     pub task_manager: Option<crate::task_manager::SharedTaskManager>,
@@ -42,6 +44,27 @@ pub struct RuntimeToolServices {
     /// tool-side hook events. `None` outside the live engine — test
     /// contexts that don't care about hooks get a no-op.
     pub hook_executor: Option<std::sync::Arc<crate::hooks::HookExecutor>>,
+    /// Per-session backing store for `var_handle` payloads. Cloned tool
+    /// contexts share this Arc so handles survive across turns.
+    pub handle_store: SharedHandleStore,
+    /// Per-session persistent RLM kernels, keyed by caller-chosen context name.
+    pub rlm_sessions: SharedRlmSessionStore,
+}
+
+impl Default for RuntimeToolServices {
+    fn default() -> Self {
+        Self {
+            shell_manager: None,
+            task_manager: None,
+            automations: None,
+            task_data_dir: None,
+            active_task_id: None,
+            active_thread_id: None,
+            hook_executor: None,
+            handle_store: new_shared_handle_store(),
+            rlm_sessions: new_shared_rlm_session_store(),
+        }
+    }
 }
 
 impl std::fmt::Debug for RuntimeToolServices {
@@ -54,6 +77,8 @@ impl std::fmt::Debug for RuntimeToolServices {
             .field("active_task_id", &self.active_task_id)
             .field("active_thread_id", &self.active_thread_id)
             .field("hook_executor", &self.hook_executor.is_some())
+            .field("handle_store", &true)
+            .field("rlm_sessions", &true)
             .finish()
     }
 }

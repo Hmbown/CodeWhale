@@ -283,7 +283,7 @@ impl FanoutCard {
         let mut lines = Vec::with_capacity(3);
         let header_status = self.aggregate_status();
         let title = format!("{} ({} workers)", self.kind, self.workers.len());
-        let family = if self.kind == "rlm" {
+        let family = if matches!(self.kind.as_str(), "rlm_open" | "rlm_eval" | "rlm") {
             ToolFamily::Rlm
         } else {
             ToolFamily::Fanout

@@ -6,7 +6,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
-use clap::{Args, CommandFactory, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{Shell, generate};
 use dotenvy::dotenv;
 use tempfile::NamedTempFile;
@@ -100,7 +100,8 @@ fn configure_windows_console_utf8() {}
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "deepseek",
+    name = "deepseek-tui",
+    bin_name = "deepseek-tui",
     author,
     version = env!("DEEPSEEK_BUILD_VERSION"),
     about = "DeepSeek TUI/CLI for DeepSeek models",
@@ -285,12 +286,49 @@ struct ExecArgs {
     #[arg(long, default_value_t = false)]
     auto: bool,
     /// Emit machine-readable JSON output
-    #[arg(long, default_value_t = false)]
+    #[arg(long, default_value_t = false, conflicts_with = "output_format")]
     json: bool,
+    /// Resume a previous session by ID or prefix
+    #[arg(long, value_name = "SESSION_ID", conflicts_with_all = ["session_id", "continue_session"])]
+    resume: Option<String>,
+    /// Resume a previous session by ID or prefix
+    #[arg(long = "session-id", value_name = "SESSION_ID", conflicts_with_all = ["resume", "continue_session"])]
+    session_id: Option<String>,
+    /// Continue the most recent session for this workspace
+    #[arg(long = "continue", default_value_t = false, conflicts_with_all = ["resume", "session_id"])]
+    continue_session: bool,
+    /// Output format for exec mode
+    #[arg(long, value_enum, default_value_t = ExecOutputFormat::Text)]
+    output_format: ExecOutputFormat,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum ExecOutputFormat {
+    Text,
+    #[value(name = "stream-json")]
+    StreamJson,
 }
 
 fn join_prompt_parts(parts: &[String]) -> String {
     parts.join(" ")
+}
+
+fn resolve_exec_resume_session_id(args: &ExecArgs, workspace: &Path) -> Result<Option<String>> {
+    if let Some(id) = args.resume.as_ref().or(args.session_id.as_ref()) {
+        return Ok(Some(id.clone()));
+    }
+    if !args.continue_session {
+        return Ok(None);
+    }
+    latest_session_id_for_workspace(workspace)?.map_or_else(
+        || {
+            bail!(
+                "No saved sessions found for workspace {}. Use `deepseek sessions` to list sessions, or pass `deepseek exec --resume <SESSION_ID> ...`.",
+                workspace.display()
+            )
+        },
+        |id| Ok(Some(id)),
+    )
 }
 
 #[derive(Args, Debug, Clone, Default)]
@@ -674,13 +712,19 @@ async fn main() -> Result<()> {
                 let config = load_config_from_cli(&cli)?;
                 let model = args
                     .model
+                    .clone()
                     .or_else(|| config.default_text_model.clone())
                     .unwrap_or_else(|| config.default_model());
                 let prompt = join_prompt_parts(&args.prompt);
-                if args.auto || cli.yolo {
-                    let workspace = cli.workspace.clone().unwrap_or_else(|| {
-                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-                    });
+                let workspace = cli.workspace.clone().unwrap_or_else(|| {
+                    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                });
+                let resume_session_id = resolve_exec_resume_session_id(&args, &workspace)?;
+                let needs_engine = args.auto
+                    || cli.yolo
+                    || resume_session_id.is_some()
+                    || args.output_format == ExecOutputFormat::StreamJson;
+                if needs_engine {
                     let max_subagents = cli.max_subagents.map_or_else(
                         || config.max_subagents(),
                         |value| value.clamp(1, MAX_SUBAGENTS),
@@ -692,9 +736,11 @@ async fn main() -> Result<()> {
                         &prompt,
                         workspace,
                         max_subagents,
-                        true,
+                        auto_mode,
                         auto_mode,
                         args.json,
+                        resume_session_id,
+                        args.output_format,
                     )
                     .await
                 } else if args.json {
@@ -4379,6 +4425,95 @@ async fn run_one_shot_json(config: &Config, model: &str, prompt: &str) -> Result
     Ok(())
 }
 
+#[derive(serde::Serialize)]
+struct ExecStreamMeta {
+    model: String,
+    input_tokens: u32,
+    output_tokens: u32,
+    session_id: String,
+    status: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(tag = "type")]
+enum ExecStreamEvent {
+    #[serde(rename = "content")]
+    Content { content: String },
+    #[serde(rename = "tool_use")]
+    ToolUse {
+        name: String,
+        id: String,
+        input: serde_json::Value,
+    },
+    #[serde(rename = "tool_result")]
+    ToolResult {
+        id: String,
+        output: String,
+        status: String,
+    },
+    #[serde(rename = "session_capture")]
+    SessionCapture { content: String },
+    #[serde(rename = "metadata")]
+    Metadata { meta: ExecStreamMeta },
+    #[serde(rename = "done")]
+    Done,
+    #[serde(rename = "error")]
+    Error { error: String },
+}
+
+fn emit_exec_stream_event(event: &ExecStreamEvent) -> Result<()> {
+    println!("{}", serde_json::to_string(event)?);
+    Ok(())
+}
+
+fn persist_exec_session(
+    messages: &[Message],
+    model: &str,
+    workspace: &Path,
+    system_prompt: &Option<SystemPrompt>,
+    session_id: Option<&str>,
+    total_tokens: u64,
+) -> Result<String> {
+    let manager =
+        SessionManager::default_location().context("could not open session manager for save")?;
+    let saved = if let Some(id) = session_id.filter(|id| !id.trim().is_empty()) {
+        match manager.load_session(id) {
+            Ok(existing) => session_manager::update_session(
+                existing,
+                messages,
+                total_tokens,
+                system_prompt.as_ref(),
+            ),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                session_manager::create_saved_session_with_id_and_mode(
+                    id.to_string(),
+                    messages,
+                    model,
+                    workspace,
+                    total_tokens,
+                    system_prompt.as_ref(),
+                    Some("exec"),
+                )
+            }
+            Err(err) => return Err(err).context("could not load existing exec session"),
+        }
+    } else {
+        session_manager::create_saved_session_with_mode(
+            messages,
+            model,
+            workspace,
+            total_tokens,
+            system_prompt.as_ref(),
+            Some("exec"),
+        )
+    };
+    let id = saved.metadata.id.clone();
+    manager
+        .save_session(&saved)
+        .context("could not save exec session")?;
+    Ok(id)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_exec_agent(
     config: &Config,
@@ -4389,6 +4524,8 @@ async fn run_exec_agent(
     auto_approve: bool,
     trust_mode: bool,
     json_output: bool,
+    resume_session_id: Option<String>,
+    output_format: ExecOutputFormat,
 ) -> Result<()> {
     use crate::compaction::CompactionConfig;
     use crate::core::engine::{EngineConfig, spawn_engine};
@@ -4482,6 +4619,37 @@ async fn run_exec_agent(
         AppMode::Agent
     };
 
+    let mut loaded_session_id = None;
+    if let Some(session_id) = resume_session_id.as_deref() {
+        let manager = SessionManager::default_location()
+            .context("could not open session manager for exec resume")?;
+        let saved = manager
+            .load_session_by_prefix(session_id)
+            .with_context(|| format!("could not load session '{session_id}'"))?;
+        let saved_id = saved.metadata.id.clone();
+        if saved.metadata.workspace != workspace && output_format == ExecOutputFormat::Text {
+            eprintln!(
+                "Warning: session {} was created in a different workspace ({}). Resuming anyway.",
+                truncate_id(&saved_id),
+                saved.metadata.workspace.display(),
+            );
+        }
+
+        engine_handle
+            .send(Op::SyncSession {
+                session_id: Some(saved_id.clone()),
+                messages: saved.messages,
+                system_prompt: saved.system_prompt.map(SystemPrompt::Text),
+                model: saved.metadata.model,
+                workspace: saved.metadata.workspace,
+            })
+            .await?;
+        loaded_session_id = Some(saved_id.clone());
+        if output_format == ExecOutputFormat::Text && !json_output {
+            eprintln!("resumed session: {saved_id}");
+        }
+    }
+
     engine_handle
         .send(Op::SendMessage {
             content: prompt.to_string(),
@@ -4525,10 +4693,18 @@ async fn run_exec_agent(
     }
     let mut summary = ExecSummary {
         mode: "agent".to_string(),
-        model: effective_model,
+        model: effective_model.clone(),
         prompt: prompt.to_string(),
         ..ExecSummary::default()
     };
+
+    let should_persist_session =
+        resume_session_id.is_some() || output_format == ExecOutputFormat::StreamJson;
+    let mut latest_session_id = loaded_session_id;
+    let mut latest_messages: Vec<Message> = Vec::new();
+    let mut latest_system_prompt: Option<SystemPrompt> = None;
+    let mut latest_model = effective_model;
+    let mut latest_workspace = workspace.clone();
 
     let mut stdout = io::stdout();
     let mut ends_with_newline = false;
@@ -4545,71 +4721,115 @@ async fn run_exec_agent(
         match event {
             Event::MessageDelta { content, .. } => {
                 summary.output.push_str(&content);
-                if !json_output {
+                if output_format == ExecOutputFormat::StreamJson {
+                    emit_exec_stream_event(&ExecStreamEvent::Content { content })?;
+                } else if !json_output {
                     print!("{content}");
                     stdout.flush()?;
                 }
-                ends_with_newline = content.ends_with('\n');
+                ends_with_newline = summary.output.ends_with('\n');
             }
-            Event::MessageComplete { .. } if !json_output && !ends_with_newline => {
+            Event::MessageComplete { .. }
+                if output_format == ExecOutputFormat::Text
+                    && !json_output
+                    && !ends_with_newline =>
+            {
                 println!();
             }
-            Event::ToolCallStarted { name, input, .. } if !json_output => {
-                let summary = summarize_tool_args(&input);
-                if let Some(summary) = summary {
-                    eprintln!("tool: {name} ({summary})");
-                } else {
-                    eprintln!("tool: {name}");
+            Event::ThinkingDelta { .. } => {
+                // Exec stream-json intentionally omits reasoning deltas; the
+                // TUI transcript retains its existing Activity Detail surface.
+            }
+            Event::ToolCallStarted { id, name, input } => {
+                if output_format == ExecOutputFormat::StreamJson {
+                    emit_exec_stream_event(&ExecStreamEvent::ToolUse { name, id, input })?;
+                } else if !json_output {
+                    let summary = summarize_tool_args(&input);
+                    if let Some(summary) = summary {
+                        eprintln!("tool: {name} ({summary})");
+                    } else {
+                        eprintln!("tool: {name}");
+                    }
                 }
             }
-            Event::ToolCallProgress { id, output } if !json_output => {
+            Event::ToolCallProgress { id, output }
+                if output_format == ExecOutputFormat::Text && !json_output =>
+            {
                 eprintln!("tool {id}: {}", summarize_tool_output(&output));
             }
-            Event::ToolCallComplete { name, result, .. } => match result {
+            Event::ToolCallComplete {
+                id, name, result, ..
+            } => match result {
                 Ok(output) => {
                     summary.tools.push(ExecToolEntry {
                         name: name.clone(),
                         success: output.success,
                         output: output.content.clone(),
                     });
-                    if name == "exec_shell" && !output.content.trim().is_empty() {
-                        if !json_output {
+                    if output_format == ExecOutputFormat::StreamJson {
+                        emit_exec_stream_event(&ExecStreamEvent::ToolResult {
+                            id,
+                            output: output.content,
+                            status: if output.success {
+                                "success".to_string()
+                            } else {
+                                "error".to_string()
+                            },
+                        })?;
+                    } else if !json_output {
+                        if name == "exec_shell" && !output.content.trim().is_empty() {
                             eprintln!("tool {name} completed");
                             eprintln!(
                                 "--- stdout/stderr ---\n{}\n---------------------",
                                 output.content
                             );
+                        } else {
+                            eprintln!(
+                                "tool {name} completed: {}",
+                                summarize_tool_output(&output.content)
+                            );
                         }
-                    } else if !json_output {
-                        eprintln!(
-                            "tool {name} completed: {}",
-                            summarize_tool_output(&output.content)
-                        );
                     }
                 }
                 Err(err) => {
+                    let error_text = err.to_string();
                     summary.tools.push(ExecToolEntry {
                         name: name.clone(),
                         success: false,
-                        output: err.to_string(),
+                        output: error_text.clone(),
                     });
-                    if !json_output {
+                    if output_format == ExecOutputFormat::StreamJson {
+                        emit_exec_stream_event(&ExecStreamEvent::ToolResult {
+                            id,
+                            output: error_text,
+                            status: "error".to_string(),
+                        })?;
+                    } else if !json_output {
                         eprintln!("tool {name} failed: {err}");
                     }
                 }
             },
-            Event::AgentSpawned { id, prompt } => {
+            Event::AgentSpawned { id, prompt }
+                if output_format == ExecOutputFormat::Text && !json_output =>
+            {
                 eprintln!("sub-agent {id} spawned: {}", summarize_tool_output(&prompt));
             }
-            Event::AgentProgress { id, status } => {
+            Event::AgentProgress { id, status }
+                if output_format == ExecOutputFormat::Text && !json_output =>
+            {
                 eprintln!("sub-agent {id}: {status}");
             }
-            Event::AgentComplete { id, result } => {
+            Event::AgentComplete { id, result }
+                if output_format == ExecOutputFormat::Text && !json_output =>
+            {
                 eprintln!(
                     "sub-agent {id} completed: {}",
                     summarize_tool_output(&result)
                 );
             }
+            Event::AgentSpawned { .. }
+            | Event::AgentProgress { .. }
+            | Event::AgentComplete { .. } => {}
             Event::ApprovalRequired { id, .. } => {
                 if auto_approve {
                     let _ = engine_handle.approve_tool_call(id).await;
@@ -4624,11 +4844,15 @@ async fn run_exec_agent(
                 ..
             } => {
                 if auto_approve {
-                    eprintln!("sandbox denied {tool_name}: {denial_reason} (auto-elevating)");
+                    if output_format == ExecOutputFormat::Text && !json_output {
+                        eprintln!("sandbox denied {tool_name}: {denial_reason} (auto-elevating)");
+                    }
                     let policy = crate::sandbox::SandboxPolicy::DangerFullAccess;
                     let _ = engine_handle.retry_tool_with_policy(tool_id, policy).await;
                 } else {
-                    eprintln!("sandbox denied {tool_name}: {denial_reason}");
+                    if output_format == ExecOutputFormat::Text && !json_output {
+                        eprintln!("sandbox denied {tool_name}: {denial_reason}");
+                    }
                     let _ = engine_handle.deny_tool_call(tool_id).await;
                 }
             }
@@ -4637,15 +4861,80 @@ async fn run_exec_agent(
                 recoverable: _,
             } => {
                 summary.error = Some(envelope.message.clone());
-                if !json_output {
+                if output_format == ExecOutputFormat::StreamJson {
+                    emit_exec_stream_event(&ExecStreamEvent::Error {
+                        error: envelope.message,
+                    })?;
+                } else if !json_output {
                     eprintln!("error: {}", envelope.message);
                 }
             }
-            Event::TurnComplete { status, error, .. } => {
+            Event::TurnComplete {
+                status,
+                error,
+                usage,
+                ..
+            } => {
                 summary.status = Some(format!("{status:?}").to_lowercase());
                 summary.error = error;
+                let saved_session_id = if should_persist_session && !latest_messages.is_empty() {
+                    match persist_exec_session(
+                        &latest_messages,
+                        &latest_model,
+                        &latest_workspace,
+                        &latest_system_prompt,
+                        latest_session_id.as_deref(),
+                        u64::from(usage.input_tokens) + u64::from(usage.output_tokens),
+                    ) {
+                        Ok(id) => {
+                            if output_format == ExecOutputFormat::Text && !json_output {
+                                eprintln!("session: {id}");
+                            }
+                            Some(id)
+                        }
+                        Err(err) => {
+                            if output_format == ExecOutputFormat::Text && !json_output {
+                                eprintln!("warning: failed to save exec session: {err}");
+                            }
+                            latest_session_id.clone()
+                        }
+                    }
+                } else {
+                    latest_session_id.clone()
+                };
+
+                if output_format == ExecOutputFormat::StreamJson {
+                    if let Some(id) = saved_session_id.as_ref() {
+                        emit_exec_stream_event(&ExecStreamEvent::SessionCapture {
+                            content: id.clone(),
+                        })?;
+                    }
+                    emit_exec_stream_event(&ExecStreamEvent::Metadata {
+                        meta: ExecStreamMeta {
+                            model: latest_model.clone(),
+                            input_tokens: usage.input_tokens,
+                            output_tokens: usage.output_tokens,
+                            session_id: saved_session_id.unwrap_or_default(),
+                            status: summary.status.clone(),
+                        },
+                    })?;
+                    emit_exec_stream_event(&ExecStreamEvent::Done)?;
+                }
                 let _ = engine_handle.send(Op::Shutdown).await;
                 break;
+            }
+            Event::SessionUpdated {
+                session_id,
+                messages,
+                system_prompt,
+                model,
+                workspace,
+            } => {
+                latest_session_id = Some(session_id);
+                latest_messages = messages;
+                latest_system_prompt = system_prompt;
+                latest_model = model;
+                latest_workspace = workspace;
             }
             _ => {}
         }
@@ -4844,6 +5133,11 @@ mod terminal_mode_tests {
     }
 
     #[test]
+    fn companion_binary_reports_its_own_name() {
+        assert_eq!(Cli::command().get_name(), "deepseek-tui");
+    }
+
+    #[test]
     fn exec_accepts_split_prompt_words_for_windows_cmd_shims() {
         let cli = parse_cli(&["deepseek", "exec", "hello", "world"]);
         let Some(Commands::Exec(args)) = cli.command else {
@@ -4862,6 +5156,76 @@ mod terminal_mode_tests {
 
         assert!(args.json);
         assert_eq!(args.prompt, vec!["hello", "world"]);
+    }
+
+    #[test]
+    fn exec_accepts_resume_session_flags_for_harnesses() {
+        let cli = parse_cli(&[
+            "deepseek",
+            "exec",
+            "--resume",
+            "abc123",
+            "--output-format",
+            "stream-json",
+            "follow up",
+        ]);
+        let Some(Commands::Exec(args)) = cli.command else {
+            panic!("expected exec command");
+        };
+
+        assert_eq!(args.resume.as_deref(), Some("abc123"));
+        assert_eq!(args.output_format, ExecOutputFormat::StreamJson);
+        assert_eq!(args.prompt, vec!["follow up"]);
+    }
+
+    #[test]
+    fn exec_accepts_session_id_alias() {
+        let cli = parse_cli(&["deepseek", "exec", "--session-id", "abc123", "follow up"]);
+        let Some(Commands::Exec(args)) = cli.command else {
+            panic!("expected exec command");
+        };
+
+        assert_eq!(args.session_id.as_deref(), Some("abc123"));
+        assert_eq!(args.output_format, ExecOutputFormat::Text);
+    }
+
+    #[test]
+    fn exec_accepts_continue_for_latest_workspace_session() {
+        let cli = parse_cli(&["deepseek", "exec", "--continue", "follow up"]);
+        let Some(Commands::Exec(args)) = cli.command else {
+            panic!("expected exec command");
+        };
+
+        assert!(args.continue_session);
+    }
+
+    #[test]
+    fn exec_json_conflicts_with_stream_json_output() {
+        let err = Cli::try_parse_from([
+            "deepseek",
+            "exec",
+            "--json",
+            "--output-format",
+            "stream-json",
+            "hello",
+        ])
+        .expect_err("json summary and stream-json must not mix");
+
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn exec_stream_events_are_json_lines() {
+        let event = ExecStreamEvent::ToolResult {
+            id: "call_1".to_string(),
+            output: "line 1\nline 2".to_string(),
+            status: "success".to_string(),
+        };
+
+        let json = serde_json::to_string(&event).expect("serializes");
+        assert!(!json.contains('\n'));
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid json");
+        assert_eq!(parsed["type"], "tool_result");
     }
 
     #[test]

@@ -208,6 +208,18 @@ mod tests {
     }
 
     #[test]
+    fn grayscale_palette_maps_hued_cells_before_depth_adaptation() {
+        let mut cell = Cell::default();
+        cell.set_fg(palette::DEEPSEEK_SKY);
+        cell.set_bg(palette::DEEPSEEK_INK);
+
+        adapt_cell_colors(&mut cell, ColorDepth::TrueColor, PaletteMode::Grayscale);
+
+        assert_eq!(cell.fg, palette::GRAYSCALE_TEXT_SOFT);
+        assert_eq!(cell.bg, palette::GRAYSCALE_SURFACE);
+    }
+
+    #[test]
     fn backend_palette_mode_can_follow_runtime_theme_changes() {
         let writer = SharedWriter::default();
         let mut backend = ColorCompatBackend::new(writer, ColorDepth::TrueColor, PaletteMode::Dark);
@@ -215,5 +227,7 @@ mod tests {
         assert_eq!(backend.palette_mode, PaletteMode::Dark);
         backend.set_palette_mode(PaletteMode::Light);
         assert_eq!(backend.palette_mode, PaletteMode::Light);
+        backend.set_palette_mode(PaletteMode::Grayscale);
+        assert_eq!(backend.palette_mode, PaletteMode::Grayscale);
     }
 }

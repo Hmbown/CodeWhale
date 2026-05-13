@@ -674,8 +674,13 @@ pub fn create_saved_session_with_id_and_mode(
         .find(|m| m.role == "user")
         .and_then(|m| {
             m.content.iter().find_map(|block| match block {
-                ContentBlock::Text { text, .. } if !text.starts_with("<turn_meta>") => {
-                    Some(truncate_title(text, 50))
+                ContentBlock::Text { text, .. } => {
+                    let prompt = extract_user_prompt(text);
+                    if prompt.is_empty() {
+                        None
+                    } else {
+                        Some(truncate_title(prompt, 50))
+                    }
                 }
                 _ => None,
             })
@@ -881,6 +886,51 @@ pub fn truncate_id(id: &str) -> &str {
     id.get(..8).unwrap_or(id)
 }
 
+/// Strip a leading `<turn_meta>...</turn_meta>` block from saved user text.
+///
+/// Older sessions can have turn metadata prefixed to the first user message.
+/// The session picker and generated session titles should show the user's
+/// prompt, not the cache/debug envelope.
+pub(crate) fn extract_user_prompt(raw: &str) -> &str {
+    let trimmed = raw.trim_start();
+    let Some(after_open) = trimmed.strip_prefix("<turn_meta>") else {
+        return trimmed;
+    };
+    if let Some(close_pos) = after_open.find("</turn_meta>") {
+        return after_open[close_pos + "</turn_meta>".len()..].trim_start();
+    }
+    after_open.trim_start()
+}
+
+/// Clean a stored title for display, falling back to a neutral label.
+pub(crate) fn extract_title(raw: &str) -> &str {
+    let title = extract_user_prompt(raw);
+    if title.is_empty() { "Session" } else { title }
+}
+
+/// Strip common inline thinking/reasoning XML sections from saved assistant
+/// text before it is shown in session previews.
+pub(crate) fn strip_thinking_tags(text: &str) -> String {
+    if !text.contains("<think") && !text.contains("<thinking") && !text.contains("<reasoning") {
+        return text.to_string();
+    }
+
+    let tags = ["think", "thinking", "reasoning"];
+    let mut result = text.to_string();
+    for tag in tags {
+        let open = format!("<{tag}>");
+        let close = format!("</{tag}>");
+        while let Some(start) = result.find(&open) {
+            let Some(end) = result[start..].find(&close) else {
+                break;
+            };
+            let end_abs = start + end + close.len();
+            result.replace_range(start..end_abs, "");
+        }
+    }
+    result
+}
+
 /// Truncate a string to create a title (character-safe for UTF-8)
 fn truncate_title(s: &str, max_len: usize) -> String {
     let s = s.trim();
@@ -898,7 +948,7 @@ fn truncate_title(s: &str, max_len: usize) -> String {
 /// Format a session for display in a picker
 pub fn format_session_line(meta: &SessionMetadata) -> String {
     let age = format_age(&meta.updated_at);
-    let truncated_title = truncate_title(&meta.title, 40);
+    let truncated_title = truncate_title(extract_title(&meta.title), 40);
 
     format!(
         "{} | {} | {} msgs | {}",
@@ -1248,6 +1298,41 @@ mod tests {
             "This is a very lo..."
         );
         assert_eq!(truncate_title("Line 1\nLine 2", 50), "Line 1");
+    }
+
+    #[test]
+    fn extract_user_prompt_strips_turn_meta_prefix() {
+        assert_eq!(
+            extract_user_prompt("<turn_meta>{\"cache\":\"x\"}</turn_meta>\nReal prompt"),
+            "Real prompt"
+        );
+        assert_eq!(extract_user_prompt("  Real prompt"), "Real prompt");
+        assert_eq!(
+            extract_user_prompt("<turn_meta>{\"unterminated\":true}\nReal prompt"),
+            "{\"unterminated\":true}\nReal prompt"
+        );
+    }
+
+    #[test]
+    fn create_saved_session_uses_prompt_after_turn_meta_for_title() {
+        let tmp = tempdir().expect("tempdir");
+        let messages = vec![make_test_message(
+            "user",
+            "<turn_meta>{\"cache\":\"x\"}</turn_meta>\nFix the session picker history pane",
+        )];
+        let session = create_saved_session(&messages, "test-model", tmp.path(), 100, None);
+        assert_eq!(
+            session.metadata.title,
+            "Fix the session picker history pane"
+        );
+    }
+
+    #[test]
+    fn strip_thinking_tags_removes_common_inline_blocks() {
+        let text = "Before <think>private</think> middle <reasoning>hidden</reasoning> after";
+        let cleaned = strip_thinking_tags(text);
+        assert_eq!(cleaned, "Before  middle  after");
+        assert_eq!(strip_thinking_tags("plain answer"), "plain answer");
     }
 
     #[test]

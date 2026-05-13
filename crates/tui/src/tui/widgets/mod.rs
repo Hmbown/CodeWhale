@@ -55,6 +55,10 @@ pub struct ChatWidget {
     scrollbar: Option<TranscriptScrollbar>,
     jump_to_latest_button: Option<Rect>,
     background: Color,
+    scroll_track: Color,
+    scroll_thumb: Color,
+    jump_border: Color,
+    jump_arrow: Color,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -68,6 +72,10 @@ impl ChatWidget {
     pub fn new(app: &mut App, area: Rect) -> Self {
         let content_area = area;
         let background = app.ui_theme.surface_bg;
+        let scroll_track = app.ui_theme.border;
+        let scroll_thumb = app.ui_theme.status_working;
+        let jump_border = app.ui_theme.border;
+        let jump_arrow = app.ui_theme.status_working;
         let visible_lines = content_area.height as usize;
         let render_options = app.transcript_render_options();
 
@@ -85,6 +93,10 @@ impl ChatWidget {
                 scrollbar: None,
                 jump_to_latest_button: None,
                 background,
+                scroll_track,
+                scroll_thumb,
+                jump_border,
+                jump_arrow,
             };
         }
 
@@ -294,6 +306,10 @@ impl ChatWidget {
             scrollbar,
             jump_to_latest_button,
             background,
+            scroll_track,
+            scroll_thumb,
+            jump_border,
+            jump_arrow,
         }
     }
 }
@@ -339,14 +355,20 @@ impl Renderable for ChatWidget {
                 .begin_symbol(None)
                 .end_symbol(None)
                 .track_symbol(Some("│"))
-                .track_style(Style::default().fg(palette::BORDER_COLOR))
+                .track_style(Style::default().fg(self.scroll_track))
                 .thumb_symbol("┃")
-                .thumb_style(Style::default().fg(palette::DEEPSEEK_SKY))
+                .thumb_style(Style::default().fg(self.scroll_thumb))
                 .render(area, buf, &mut state);
         }
 
         if let Some(button_area) = self.jump_to_latest_button {
-            render_jump_to_latest_button(button_area, buf, self.background);
+            render_jump_to_latest_button(
+                button_area,
+                buf,
+                self.background,
+                self.jump_border,
+                self.jump_arrow,
+            );
         }
     }
 
@@ -378,21 +400,25 @@ fn jump_to_latest_button_rect(area: Rect, has_scrollbar: bool) -> Option<Rect> {
     })
 }
 
-fn render_jump_to_latest_button(area: Rect, buf: &mut Buffer, background: Color) {
+fn render_jump_to_latest_button(
+    area: Rect,
+    buf: &mut Buffer,
+    background: Color,
+    border: Color,
+    arrow: Color,
+) {
     Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(palette::BORDER_COLOR))
+        .border_style(Style::default().fg(border))
         .style(Style::default().bg(background))
         .render(area, buf);
 
     let arrow_x = area.x.saturating_add(1);
     let arrow_y = area.y.saturating_add(1);
-    buf[(arrow_x, arrow_y)].set_symbol("↓").set_style(
-        Style::default()
-            .fg(palette::DEEPSEEK_SKY)
-            .add_modifier(Modifier::BOLD),
-    );
+    buf[(arrow_x, arrow_y)]
+        .set_symbol("↓")
+        .set_style(Style::default().fg(arrow).add_modifier(Modifier::BOLD));
 }
 
 pub struct ComposerWidget<'a> {
@@ -2929,6 +2955,57 @@ mod tests {
         assert_eq!(button.width, 3);
         assert_eq!(button.height, 3);
         assert_eq!(buf[(button.x + 1, button.y + 1)].symbol(), "↓");
+    }
+
+    #[test]
+    fn chat_widget_uses_light_theme_scroll_chrome() {
+        let mut app = create_test_app();
+        app.ui_theme = palette::LIGHT_UI_THEME;
+        app.use_mouse_capture = true;
+        for i in 0..120 {
+            app.add_message(HistoryCell::User {
+                content: format!("user message {i}"),
+            });
+        }
+        app.viewport.transcript_scroll = TranscriptScroll::at_line(0);
+
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 8,
+        };
+        let mut buf = Buffer::empty(area);
+        let widget = ChatWidget::new(&mut app, area);
+        widget.render(area, &mut buf);
+
+        let mut saw_track = false;
+        let mut saw_thumb = false;
+        for y in 0..area.height {
+            let cell = &buf[(area.width - 1, y)];
+            match cell.symbol() {
+                "│" => {
+                    saw_track = true;
+                    assert_eq!(cell.fg, palette::LIGHT_UI_THEME.border);
+                }
+                "┃" => {
+                    saw_thumb = true;
+                    assert_eq!(cell.fg, palette::LIGHT_UI_THEME.status_working);
+                }
+                _ => {}
+            }
+        }
+        assert!(saw_track, "scrollbar track should render");
+        assert!(saw_thumb, "scrollbar thumb should render");
+
+        let button = app
+            .viewport
+            .jump_to_latest_button_area
+            .expect("button appears when transcript is not at tail");
+        assert_eq!(
+            buf[(button.x + 1, button.y + 1)].fg,
+            palette::LIGHT_UI_THEME.status_working
+        );
     }
 
     #[test]

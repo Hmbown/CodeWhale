@@ -403,6 +403,29 @@ async fn test_exec_shell_metadata_includes_summaries() {
     assert!(meta.get("stdout_truncated").is_some());
 }
 
+#[cfg(not(windows))]
+#[tokio::test]
+async fn test_exec_shell_combined_output_uses_single_stream() {
+    let tmp = tempdir().expect("tempdir");
+    let ctx = ToolContext::new(tmp.path());
+    let tool = ExecShellTool;
+    let command = "printf 'out\\n'; printf 'err\\n' >&2";
+
+    let result = tool
+        .execute(json!({"command": command, "combined_output": true}), &ctx)
+        .await
+        .expect("execute");
+    assert!(result.success, "{}", result.content);
+    assert!(result.content.contains("out"), "{}", result.content);
+    assert!(result.content.contains("err"), "{}", result.content);
+
+    let meta = result.metadata.expect("metadata");
+    assert_eq!(
+        meta.get("combined_output").and_then(Value::as_bool),
+        Some(true)
+    );
+}
+
 #[tokio::test]
 async fn test_exec_shell_foreground_timeout_guides_background_rerun() {
     let tmp = tempdir().expect("tempdir");

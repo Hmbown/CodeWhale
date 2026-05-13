@@ -7,7 +7,7 @@ Current boundary note (v0.8.6):
 - Other workspace crates are being split out incrementally, but they are not yet the sole runtime source of truth.
 - The LSP subsystem (`crates/tui/src/lsp/`) is fully wired into the engine's post-tool-execution path
   (`core/engine/lsp_hooks.rs`), providing inline diagnostics after every edit_file/apply_patch/write_file.
-- The swarm agent system was removed in v0.8.5 in favour of sub-agents (agent_spawn) and RLM (rlm_query).
+- The swarm agent system was removed in v0.8.5. The active v0.8.33 orchestration surface is persistent sub-agent sessions (`agent_open` / `agent_eval` / `agent_close`) and persistent RLM sessions (`rlm_open` / `rlm_eval` / `rlm_configure` / `rlm_close`).
   No model-visible swarm tool remains in the active codebase.
 
 ## High-Level Overview
@@ -129,9 +129,9 @@ drives turns through Chat Completions.
   - `github.rs` - Read-only GitHub context and guarded comment/closure tools backed by `gh`
   - `automation.rs` - Model-visible scheduling tools over `AutomationManager`
   - `plan.rs` - Planning tools
-  - `subagent.rs` - Sub-agent spawning (replaces the removed `agent_swarm` surface)
+  - `subagent.rs` - Persistent sub-agent sessions (replaces the removed `agent_swarm` surface)
   - `spec.rs` - Tool specifications
-  - `rlm.rs` - Recursive Language Model (RLM) tool — sandboxed Python REPL with `llm_query()` helpers
+  - `rlm.rs` - Persistent Recursive Language Model (RLM) sessions — sandboxed Python REPLs with semantic helper calls and `var_handle` output support
 
 ### Extension Systems
 

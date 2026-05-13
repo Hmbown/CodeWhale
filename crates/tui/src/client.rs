@@ -1752,7 +1752,7 @@ mod tests {
             ],
             max_tokens: 1024,
             system: Some(SystemPrompt::Text(
-                "Base policy\n\n<project_instructions source=\"AGENTS.md\">\nStable project rules\n</project_instructions>\n\n## Previous Session Handoff\n\nDynamic handoff"
+                "Base policy\n\n<project_instructions source=\"AGENTS.md\">\nStable project rules\n</project_instructions>\n\n## Previous Session Relay\n\nDynamic relay"
                     .to_string(),
             )),
             tools: None,
@@ -1788,7 +1788,7 @@ mod tests {
             .and_then(Value::as_str)
             .expect("warmup system prompt");
         assert!(system.contains("Stable project rules"));
-        assert!(!system.contains("Dynamic handoff"));
+        assert!(!system.contains("Dynamic relay"));
         assert!(
             !wire
                 .iter()

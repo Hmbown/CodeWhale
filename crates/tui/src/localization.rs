@@ -256,6 +256,7 @@ pub enum MessageId {
     CmdHelpDescription,
     CmdHomeDescription,
     CmdHooksDescription,
+    CmdAgentDescription,
     CmdGoalDescription,
     CmdInitDescription,
     CmdJobsDescription,
@@ -273,6 +274,7 @@ pub enum MessageId {
     CmdProviderDescription,
     CmdQueueDescription,
     CmdRecallDescription,
+    CmdRelayDescription,
     CmdRenameDescription,
     CmdRestoreDescription,
     CmdRetryDescription,
@@ -485,6 +487,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CmdHelpDescription,
     MessageId::CmdHomeDescription,
     MessageId::CmdHooksDescription,
+    MessageId::CmdAgentDescription,
     MessageId::CmdInitDescription,
     MessageId::CmdJobsDescription,
     MessageId::CmdLinksDescription,
@@ -500,6 +503,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CmdProviderDescription,
     MessageId::CmdQueueDescription,
     MessageId::CmdRecallDescription,
+    MessageId::CmdRelayDescription,
     MessageId::CmdRenameDescription,
     MessageId::CmdRestoreDescription,
     MessageId::CmdRetryDescription,
@@ -898,6 +902,9 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CmdHelpDescription => "Show help information",
         MessageId::CmdHomeDescription => "Show home dashboard with stats and quick actions",
         MessageId::CmdHooksDescription => "List configured lifecycle hooks (read-only)",
+        MessageId::CmdAgentDescription => {
+            "Open a persistent sub-agent session: /agent [0-3] <task>"
+        }
         MessageId::CmdGoalDescription => "Set a session goal with optional token budget",
         MessageId::CmdInitDescription => "Generate AGENTS.md for project",
         MessageId::CmdLspDescription => "Toggle LSP diagnostics on or off",
@@ -915,23 +922,22 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CmdModelsDescription => "List available models from API",
         MessageId::CmdNetworkDescription => "Manage network allow and deny rules",
         MessageId::CmdNoteDescription => "Add, list, edit, or remove workspace notes",
-        MessageId::CmdThemeDescription => "Toggle between dark and light theme",
+        MessageId::CmdThemeDescription => "Switch theme: dark, light, grayscale, or system",
         MessageId::CmdProviderDescription => {
             "Switch or view the active LLM backend (deepseek | nvidia-nim | ollama)"
         }
         MessageId::CmdQueueDescription => "View or edit queued messages",
         MessageId::CmdRecallDescription => "Search prior cycle archives (BM25 over message text)",
+        MessageId::CmdRelayDescription => "Create a session relay (接力) for a fresh thread",
         MessageId::CmdRenameDescription => "Rename the current session",
         MessageId::CmdRestoreDescription => {
             "Roll back the workspace to a prior pre/post-turn snapshot. With no arg, lists recent snapshots."
         }
         MessageId::CmdRetryDescription => "Retry the last request",
         MessageId::CmdReviewDescription => "Run a structured code review on a file, diff, or PR",
-        MessageId::CmdRlmDescription => {
-            "Recursive Language Model (RLM) turn — store the prompt in a Python REPL and let the model write code to process it, with `llm_query()` / `sub_rlm()` for sub-LLM calls."
-        }
+        MessageId::CmdRlmDescription => "Open a persistent RLM context: /rlm [0-3] <file_or_text>",
         MessageId::CmdSaveDescription => "Save session to file",
-        MessageId::CmdSessionsDescription => "Open session picker",
+        MessageId::CmdSessionsDescription => "Open session history picker",
         MessageId::CmdSettingsDescription => "Show persistent settings",
         MessageId::CmdSkillDescription => {
             "Activate a skill, or install/update/uninstall/trust a community skill"
@@ -1055,7 +1061,7 @@ fn english(id: MessageId) -> &'static str {
             "Open details for the selected tool or message (when input is empty)"
         }
         MessageId::KbToolDetailsPager => "Open tool-details pager",
-        MessageId::KbThinkingPager => "Open thinking pager",
+        MessageId::KbThinkingPager => "Open Activity Detail",
         MessageId::KbLiveTranscript => "Open live transcript overlay (sticky-tail auto-scroll)",
         MessageId::KbBacktrackMessage => {
             "Backtrack to a previous user message (Left/Right step, Enter to rewind)"
@@ -1065,7 +1071,7 @@ fn english(id: MessageId) -> &'static str {
         }
         MessageId::KbJumpPlanAgentYolo => "Jump directly to Plan / Agent / YOLO mode",
         MessageId::KbAltJumpPlanAgentYolo => "Alternative jump to Plan / Agent / YOLO mode",
-        MessageId::KbFocusSidebar => "Focus Plan / Todos / Tasks / Agents / Auto sidebar",
+        MessageId::KbFocusSidebar => "Focus Work / Tasks / Agents / Context / Auto sidebar",
         MessageId::KbTogglePlanAgent => "Toggle between Plan and Agent modes",
         MessageId::KbSessionPicker => "Open the session picker",
         MessageId::KbPasteAttach => "Paste text or attach a clipboard image",
@@ -1185,6 +1191,7 @@ fn translation(locale: Locale, id: MessageId) -> Option<&'static str> {
 
 fn traditional_chinese(id: MessageId) -> Option<&'static str> {
     Some(match id {
+        MessageId::CmdRelayDescription => "為新執行緒建立會話接力摘要",
         MessageId::CmdTranslateDescription => "切換輸出翻譯為目前系統語言的開關狀態",
         MessageId::CmdTranslateOff => "輸出翻譯已關閉（顯示原始模型輸出）",
         MessageId::CmdTranslateOn => "輸出翻譯已開啟：模型回覆將以繁體中文顯示",
@@ -1268,6 +1275,9 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::CmdHooksDescription => {
             "設定済みのライフサイクルフックを一覧表示（読み取り専用）"
         }
+        MessageId::CmdAgentDescription => {
+            "永続サブエージェントセッションを開く: /agent [0-3] <task>"
+        }
         MessageId::CmdGoalDescription => "トークンバジェット付きのセッション目標を設定",
         MessageId::CmdInitDescription => "プロジェクト用に AGENTS.md を生成",
         MessageId::CmdLspDescription => "LSP 診断のオン・オフを切り替え",
@@ -1285,7 +1295,9 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::CmdModelsDescription => "API から利用可能なモデルを一覧表示",
         MessageId::CmdNetworkDescription => "ネットワーク許可・拒否ルールを管理",
         MessageId::CmdNoteDescription => "ワークスペースノートの追加、一覧、編集、削除",
-        MessageId::CmdThemeDescription => "テーマ（ダーク/ライト）を切り替え",
+        MessageId::CmdThemeDescription => {
+            "テーマを切り替え（ダーク/ライト/グレースケール/システム）"
+        }
         MessageId::CmdProviderDescription => {
             "現在の LLM バックエンドを切り替え・確認（deepseek | nvidia-nim | ollama）"
         }
@@ -1293,17 +1305,16 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::CmdRecallDescription => {
             "過去のサイクルアーカイブを検索（メッセージ本文への BM25 検索）"
         }
+        MessageId::CmdRelayDescription => "新しいスレッド用のセッションリレー（接力）を作成",
         MessageId::CmdRenameDescription => "現在のセッションの名前を変更",
         MessageId::CmdRestoreDescription => {
             "ワークスペースを以前のターン前/後スナップショットへロールバック。引数なしで最近のスナップショットを一覧表示。"
         }
         MessageId::CmdRetryDescription => "直前のリクエストを再試行",
         MessageId::CmdReviewDescription => "ファイル・diff・PR に対して構造化コードレビューを実行",
-        MessageId::CmdRlmDescription => {
-            "再帰言語モデル（RLM）ターン — プロンプトを Python REPL に格納し、モデルが処理コードを記述。サブ LLM 呼び出しは `llm_query()` / `sub_rlm()`。"
-        }
+        MessageId::CmdRlmDescription => "永続 RLM コンテキストを開く: /rlm [0-3] <file_or_text>",
         MessageId::CmdSaveDescription => "セッションをファイルに保存",
-        MessageId::CmdSessionsDescription => "セッションピッカーを開く",
+        MessageId::CmdSessionsDescription => "セッション履歴ピッカーを開く",
         MessageId::CmdSettingsDescription => "永続化された設定を表示",
         MessageId::CmdSkillDescription => {
             "スキルを有効化、またはコミュニティスキルをインストール／更新／アンインストール／信頼"
@@ -1424,7 +1435,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
             "選択中のツールまたはメッセージの詳細を開く（入力が空の時）"
         }
         MessageId::KbToolDetailsPager => "ツール詳細のページャーを開く",
-        MessageId::KbThinkingPager => "思考内容のページャーを開く",
+        MessageId::KbThinkingPager => "Activity Detail を開く",
         MessageId::KbLiveTranscript => "ライブ会話履歴オーバーレイを開く（自動追尾スクロール）",
         MessageId::KbBacktrackMessage => {
             "前のユーザーメッセージに戻る（左右でステップ、Enter で巻き戻し）"
@@ -1434,7 +1445,9 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         }
         MessageId::KbJumpPlanAgentYolo => "Plan / Agent / YOLO モードに直接ジャンプ",
         MessageId::KbAltJumpPlanAgentYolo => "Plan / Agent / YOLO モードへの代替ジャンプ",
-        MessageId::KbFocusSidebar => "Plan / Todos / Tasks / Agents / Auto サイドバーにフォーカス",
+        MessageId::KbFocusSidebar => {
+            "Work / Tasks / Agents / Context / Auto サイドバーにフォーカス"
+        }
         MessageId::KbTogglePlanAgent => "Plan モードと Agent モードを切り替え",
         MessageId::KbSessionPicker => "セッションピッカーを開く",
         MessageId::KbPasteAttach => "テキストを貼り付けまたはクリップボード画像を添付",
@@ -1605,6 +1618,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CmdHelpDescription => "显示帮助信息",
         MessageId::CmdHomeDescription => "显示主页面板，含统计与快捷操作",
         MessageId::CmdHooksDescription => "列出已配置的生命周期钩子（只读）",
+        MessageId::CmdAgentDescription => "打开持久子代理会话：/agent [0-3] <task>",
         MessageId::CmdGoalDescription => "设置带有可选令牌预算的会话目标",
         MessageId::CmdInitDescription => "为项目生成 AGENTS.md",
         MessageId::CmdLspDescription => "切换 LSP 诊断的开启或关闭",
@@ -1620,23 +1634,22 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CmdModelsDescription => "列出 API 中可用的模型",
         MessageId::CmdNetworkDescription => "管理网络允许和拒绝规则",
         MessageId::CmdNoteDescription => "添加、列出、编辑或删除工作区笔记",
-        MessageId::CmdThemeDescription => "在浅色和深色主题之间切换",
+        MessageId::CmdThemeDescription => "切换主题：深色、浅色、灰度或系统",
         MessageId::CmdProviderDescription => {
             "切换或查看当前 LLM 后端（deepseek | nvidia-nim | ollama）"
         }
         MessageId::CmdQueueDescription => "查看或编辑已排队的消息",
         MessageId::CmdRecallDescription => "搜索此前的循环归档（基于消息文本的 BM25 检索）",
+        MessageId::CmdRelayDescription => "为新线程创建会话接力摘要",
         MessageId::CmdRenameDescription => "重命名当前会话",
         MessageId::CmdRestoreDescription => {
             "将工作区回滚到此前的轮次前/后快照。不带参数时列出最近的快照。"
         }
         MessageId::CmdRetryDescription => "重试上一次请求",
         MessageId::CmdReviewDescription => "对文件、diff 或 PR 进行结构化代码审查",
-        MessageId::CmdRlmDescription => {
-            "递归语言模型（RLM）轮次 —— 将提示词存入 Python REPL，让模型编写代码进行处理；可用 `llm_query()` / `sub_rlm()` 调用子 LLM。"
-        }
+        MessageId::CmdRlmDescription => "打开持久 RLM 上下文：/rlm [0-3] <file_or_text>",
         MessageId::CmdSaveDescription => "将会话保存到文件",
-        MessageId::CmdSessionsDescription => "打开会话选择器",
+        MessageId::CmdSessionsDescription => "打开会话历史选择器",
         MessageId::CmdSettingsDescription => "显示持久化设置",
         MessageId::CmdSkillDescription => "激活技能，或安装/更新/卸载/信任社区技能",
         MessageId::CmdSkillsDescription => {
@@ -1741,7 +1754,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::KbLastMessagePager => "打开最后一条消息的分页器（输入框为空时）",
         MessageId::KbSelectedDetails => "打开选中工具或消息的详情（输入框为空时）",
         MessageId::KbToolDetailsPager => "打开工具详情分页器",
-        MessageId::KbThinkingPager => "打开思考内容分页器",
+        MessageId::KbThinkingPager => "打开 Activity Detail",
         MessageId::KbLiveTranscript => "打开实时对话覆盖层（自动滚动尾随）",
         MessageId::KbBacktrackMessage => "回退到之前的用户消息（左右键步进，Enter 回退）",
         MessageId::KbCompleteCycleModes => {
@@ -1749,7 +1762,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         }
         MessageId::KbJumpPlanAgentYolo => "直接跳转到 Plan / Agent / YOLO 模式",
         MessageId::KbAltJumpPlanAgentYolo => "替代快捷键跳转到 Plan / Agent / YOLO 模式",
-        MessageId::KbFocusSidebar => "聚焦 Plan / 待办 / 任务 / 代理 / 代理 / 自动侧边栏",
+        MessageId::KbFocusSidebar => "聚焦 Work / 任务 / 代理 / Context / 自动侧边栏",
         MessageId::KbTogglePlanAgent => "在 Plan 和 Agent 模式之间切换",
         MessageId::KbSessionPicker => "打开会话选择器",
         MessageId::KbPasteAttach => "粘贴文本或附加剪贴板图片",
@@ -1918,6 +1931,9 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::CmdHooksDescription => {
             "Listar hooks de ciclo de vida configurados (somente leitura)"
         }
+        MessageId::CmdAgentDescription => {
+            "Abrir uma sessão persistente de sub-agente: /agent [0-3] <task>"
+        }
         MessageId::CmdGoalDescription => {
             "Definir uma meta de sessão com orçamento de tokens opcional"
         }
@@ -1939,7 +1955,7 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::CmdModelsDescription => "Listar os modelos disponíveis pela API",
         MessageId::CmdNetworkDescription => "Gerenciar regras de rede permitidas e bloqueadas",
         MessageId::CmdNoteDescription => "Adicionar, listar, editar ou remover notas do workspace",
-        MessageId::CmdThemeDescription => "Alternar entre o tema claro e escuro",
+        MessageId::CmdThemeDescription => "Alternar tema: escuro, claro, tons de cinza ou sistema",
         MessageId::CmdProviderDescription => {
             "Trocar ou exibir o backend LLM ativo (deepseek | nvidia-nim | ollama)"
         }
@@ -1947,6 +1963,7 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::CmdRecallDescription => {
             "Buscar arquivos de ciclos anteriores (BM25 sobre o texto das mensagens)"
         }
+        MessageId::CmdRelayDescription => "Criar um relay da sessão para um novo thread",
         MessageId::CmdRenameDescription => "Renomear a sessão atual",
         MessageId::CmdRestoreDescription => {
             "Reverter o workspace a um snapshot pré/pós-turno anterior. Sem argumento, lista os snapshots recentes."
@@ -1956,10 +1973,10 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
             "Executar uma revisão de código estruturada em um arquivo, diff ou PR"
         }
         MessageId::CmdRlmDescription => {
-            "Turno do Recursive Language Model (RLM) — guarda o prompt em um REPL Python e deixa o modelo escrever o código que o processa; use `llm_query()` / `sub_rlm()` para chamadas a sub-LLMs."
+            "Abrir um contexto RLM persistente: /rlm [0-3] <file_or_text>"
         }
         MessageId::CmdSaveDescription => "Salvar a sessão em arquivo",
-        MessageId::CmdSessionsDescription => "Abrir o seletor de sessões",
+        MessageId::CmdSessionsDescription => "Abrir seletor de histórico de sessões",
         MessageId::CmdSettingsDescription => "Exibir as configurações persistidas",
         MessageId::CmdSkillDescription => {
             "Ativar uma skill, ou instalar/atualizar/desinstalar/confiar em uma skill da comunidade"
@@ -2090,7 +2107,7 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
             "Abrir detalhes da ferramenta ou mensagem selecionada (quando entrada vazia)"
         }
         MessageId::KbToolDetailsPager => "Abrir paginador de detalhes da ferramenta",
-        MessageId::KbThinkingPager => "Abrir paginador de raciocínio",
+        MessageId::KbThinkingPager => "Abrir Activity Detail",
         MessageId::KbLiveTranscript => "Abrir sobreposição de transcrição ao vivo (auto-scroll)",
         MessageId::KbBacktrackMessage => {
             "Retroceder para mensagem anterior do usuário (esquerda/direita, Enter para rebobinar)"
@@ -2100,7 +2117,7 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         }
         MessageId::KbJumpPlanAgentYolo => "Pular direto para modo Plan / Agent / YOLO",
         MessageId::KbAltJumpPlanAgentYolo => "Salto alternativo para modo Plan / Agent / YOLO",
-        MessageId::KbFocusSidebar => "Focar barra lateral Plan / Todos / Tasks / Agents / Auto",
+        MessageId::KbFocusSidebar => "Focar barra lateral Work / Tasks / Agents / Context / Auto",
         MessageId::KbTogglePlanAgent => "Alternar entre modos Plan e Agent",
         MessageId::KbSessionPicker => "Abrir seletor de sessões",
         MessageId::KbPasteAttach => "Colar texto ou anexar imagem da área de transferência",

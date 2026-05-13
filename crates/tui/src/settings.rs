@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{expand_path, normalize_model_name};
 use crate::localization::normalize_configured_locale;
-use crate::palette::normalize_hex_rgb_color;
+use crate::palette::{normalize_hex_rgb_color, normalize_theme_name};
 
 // ============================================================================
 // TuiPrefs — ~/.deepseek/tui.toml
@@ -28,7 +28,7 @@ use crate::palette::normalize_hex_rgb_color;
 /// # Example `~/.deepseek/tui.toml`
 ///
 /// ```toml
-/// theme    = "dark"        # "dark" | "light" | "system"
+/// theme    = "dark"        # "system" | "dark" | "light" | "grayscale"
 /// font_size = 14
 ///
 /// [keybinds]
@@ -43,7 +43,8 @@ use crate::palette::normalize_hex_rgb_color;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TuiPrefs {
-    /// UI colour theme: `"dark"` | `"light"` | `"system"`. Default `"dark"`.
+    /// UI colour theme: `"dark"` | `"light"` | `"grayscale"` | `"system"`.
+    /// Default `"dark"`.
     pub theme: String,
     /// Terminal font size hint forwarded to supporting front-ends (e.g. the
     /// Tauri shell). `0` means "use terminal default". Default `0`.
@@ -149,14 +150,13 @@ impl TuiPrefs {
     /// surface a helpful message rather than silently ignoring a typo.
     pub fn validate(&mut self) -> Result<()> {
         let theme = self.theme.trim().to_ascii_lowercase();
-        match theme.as_str() {
-            "dark" | "light" | "system" => {
-                self.theme = theme;
-            }
-            other => {
-                anyhow::bail!("Invalid tui.toml theme '{other}': expected dark, light, or system.");
-            }
-        }
+        let Some(theme) = normalize_theme_name(&theme) else {
+            anyhow::bail!(
+                "Invalid tui.toml theme '{}': expected system, dark, light, or grayscale.",
+                self.theme
+            );
+        };
+        self.theme = theme.to_string();
         Ok(())
     }
 }
@@ -195,6 +195,8 @@ pub struct Settings {
     pub show_tool_details: bool,
     /// UI locale: auto, en, ja, zh-Hans, pt-BR
     pub locale: String,
+    /// UI theme: system, dark, light, grayscale
+    pub theme: String,
     /// Optional main TUI background color as a 6-digit hex RGB value.
     pub background_color: Option<String>,
     /// Composer layout density: compact, comfortable, spacious
@@ -211,7 +213,7 @@ pub struct Settings {
     pub default_mode: String,
     /// Sidebar width as percentage of terminal width
     pub sidebar_width_percent: u16,
-    /// Sidebar focus mode: auto, plan, todos, tasks, agents, context
+    /// Sidebar focus mode: auto, work, tasks, agents, context
     pub sidebar_focus: String,
     /// Enable the session-context panel (#504). Shows working set, tokens,
     /// cost, MCP/LSP status, cycle count, and memory info.
@@ -287,6 +289,7 @@ impl Default for Settings {
             show_thinking: true,
             show_tool_details: true,
             locale: "auto".to_string(),
+            theme: "system".to_string(),
             background_color: None,
             composer_density: "comfortable".to_string(),
             composer_border: true,
@@ -350,6 +353,7 @@ impl Settings {
             s.locale = normalize_configured_locale(&s.locale)
                 .unwrap_or("en")
                 .to_string();
+            s.theme = normalize_settings_theme(&s.theme).to_string();
             s.background_color = normalize_optional_background_color(s.background_color.as_deref());
             s.default_model = s.default_model.as_deref().and_then(normalize_default_model);
             s
@@ -474,6 +478,14 @@ impl Settings {
                 };
                 self.locale = locale.to_string();
             }
+            "theme" | "ui_theme" => {
+                let Some(theme) = normalize_theme_name(value) else {
+                    anyhow::bail!(
+                        "Failed to update setting: invalid theme '{value}'. Expected: system, dark, light, grayscale."
+                    );
+                };
+                self.theme = theme.to_string();
+            }
             "background_color" | "background" | "bg" => {
                 self.background_color = normalize_background_color_setting(value)?;
             }
@@ -555,13 +567,13 @@ impl Settings {
             "sidebar_focus" | "focus" => {
                 let normalized = match value.trim().to_ascii_lowercase().as_str() {
                     "auto" => "auto",
-                    "plan" => "plan",
-                    "todos" => "todos",
+                    "work" | "plan" | "todos" => "work",
                     "tasks" => "tasks",
                     "agents" | "subagents" | "sub-agents" => "agents",
+                    "context" | "session" => "context",
                     _ => {
                         anyhow::bail!(
-                            "Failed to update setting: invalid sidebar focus '{value}'. Expected: auto, plan, todos, tasks, agents."
+                            "Failed to update setting: invalid sidebar focus '{value}'. Expected: auto, work, tasks, agents, context."
                         )
                     }
                 };
@@ -631,6 +643,7 @@ impl Settings {
         lines.push(format!("  show_thinking:      {}", self.show_thinking));
         lines.push(format!("  show_tool_details:  {}", self.show_tool_details));
         lines.push(format!("  locale:            {}", self.locale));
+        lines.push(format!("  theme:             {}", self.theme));
         lines.push(format!(
             "  background_color:   {}",
             self.background_color.as_deref().unwrap_or("(default)")
@@ -700,6 +713,7 @@ impl Settings {
                 "locale",
                 "UI locale and default model language: auto, en, ja, zh-Hans, pt-BR",
             ),
+            ("theme", "UI theme: system, dark, light, grayscale"),
             (
                 "background_color",
                 "Main TUI background color: #RRGGBB or default",
@@ -732,7 +746,7 @@ impl Settings {
             ("sidebar_width", "Sidebar width percentage: 10-50"),
             (
                 "sidebar_focus",
-                "Sidebar focus: auto, plan, todos, tasks, agents",
+                "Sidebar focus: auto, work, tasks, agents, context",
             ),
             ("cost_currency", "Cost display currency: usd, cny"),
             ("max_history", "Max input history entries"),
@@ -836,6 +850,10 @@ fn normalize_synchronized_output(value: &str) -> &str {
     }
 }
 
+fn normalize_settings_theme(value: &str) -> &'static str {
+    normalize_theme_name(value).unwrap_or("system")
+}
+
 /// Returns `true` when the active terminal is Ptyxis (the new default
 /// terminal on Ubuntu 26.04). Used by [`Settings::apply_env_overrides`]
 /// to flip `synchronized_output` from `auto` to `off` so DEC mode 2026
@@ -886,8 +904,7 @@ fn normalize_background_color_setting(value: &str) -> Result<Option<String>> {
 
 fn normalize_sidebar_focus(value: &str) -> &str {
     match value.trim().to_ascii_lowercase().as_str() {
-        "plan" => "plan",
-        "todos" => "todos",
+        "work" | "plan" | "todos" => "work",
         "tasks" => "tasks",
         "agents" | "subagents" | "sub-agents" => "agents",
         "context" | "session" => "context",
@@ -969,6 +986,26 @@ mod tests {
     }
 
     #[test]
+    fn theme_normalizes_supported_values_and_rejects_unknowns() {
+        let mut settings = Settings::default();
+        assert_eq!(settings.theme, "system");
+
+        settings.set("theme", "grayscale").expect("set grayscale");
+        assert_eq!(settings.theme, "grayscale");
+
+        settings.set("ui_theme", "black-white").expect("set alias");
+        assert_eq!(settings.theme, "grayscale");
+
+        settings.set("theme", "whale").expect("set dark alias");
+        assert_eq!(settings.theme, "dark");
+
+        let err = settings
+            .set("theme", "solarized")
+            .expect_err("unknown theme should fail");
+        assert!(err.to_string().contains("invalid theme"));
+    }
+
+    #[test]
     fn background_color_normalizes_hex_and_accepts_default() {
         let mut settings = Settings::default();
         settings
@@ -1006,6 +1043,28 @@ mod tests {
             .set("cost_currency", "eur")
             .expect_err("unsupported currency");
         assert!(err.to_string().contains("invalid cost currency"));
+    }
+
+    #[test]
+    fn sidebar_focus_accepts_work_values_and_legacy_aliases() {
+        let mut settings = Settings::default();
+
+        settings.set("sidebar_focus", "work").expect("set work");
+        assert_eq!(settings.sidebar_focus, "work");
+
+        settings.set("focus", "plan").expect("legacy plan alias");
+        assert_eq!(settings.sidebar_focus, "work");
+
+        settings.set("focus", "todos").expect("legacy todos alias");
+        assert_eq!(settings.sidebar_focus, "work");
+
+        settings.set("focus", "context").expect("context focus");
+        assert_eq!(settings.sidebar_focus, "context");
+
+        let err = settings
+            .set("sidebar_focus", "classic")
+            .expect_err("classic is not a supported public focus");
+        assert!(err.to_string().contains("invalid sidebar focus"));
     }
 
     #[test]
@@ -1536,7 +1595,7 @@ mod tests {
 
     #[test]
     fn tui_prefs_validate_accepts_known_themes() {
-        for theme in ["dark", "light", "system"] {
+        for theme in ["dark", "light", "system", "grayscale"] {
             let mut prefs = TuiPrefs {
                 theme: theme.to_string(),
                 ..TuiPrefs::default()
@@ -1551,11 +1610,13 @@ mod tests {
     #[test]
     fn tui_prefs_validate_normalises_theme_case() {
         let mut prefs = TuiPrefs {
-            theme: "DARK".to_string(),
+            theme: "MONO".to_string(),
             ..TuiPrefs::default()
         };
-        prefs.validate().expect("DARK should normalise to dark");
-        assert_eq!(prefs.theme, "dark");
+        prefs
+            .validate()
+            .expect("MONO should normalise to grayscale");
+        assert_eq!(prefs.theme, "grayscale");
     }
 
     #[test]
@@ -1568,6 +1629,10 @@ mod tests {
             .validate()
             .expect_err("solarized is not a valid theme");
         assert!(err.to_string().contains("Invalid tui.toml theme"));
+        assert!(
+            err.to_string()
+                .contains("expected system, dark, light, or grayscale")
+        );
     }
 
     #[test]
