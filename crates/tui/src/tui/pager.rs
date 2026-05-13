@@ -482,6 +482,16 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
 
     for word in text.split_whitespace() {
         let word_width = word.width();
+        // Hard-break words wider than the available column width so CJK runs
+        // without whitespace never overflow the right edge (#1344/#1351 pattern).
+        if word_width > width {
+            if !current.is_empty() {
+                lines.push(std::mem::take(&mut current));
+                current_width = 0;
+            }
+            push_word_breaking_chars(word, width, &mut current, &mut current_width, &mut lines);
+            continue;
+        }
         let additional = if current.is_empty() {
             word_width
         } else {
@@ -508,6 +518,24 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
     }
 
     lines
+}
+
+fn push_word_breaking_chars(
+    word: &str,
+    width: usize,
+    current: &mut String,
+    current_width: &mut usize,
+    lines: &mut Vec<String>,
+) {
+    for ch in word.chars() {
+        let cw = ch.width().unwrap_or(1);
+        if *current_width + cw > width && *current_width > 0 {
+            lines.push(std::mem::take(current));
+            *current_width = 0;
+        }
+        current.push(ch);
+        *current_width += cw;
+    }
 }
 
 #[cfg(test)]
@@ -885,5 +913,24 @@ mod tests {
             found_highlight,
             "expected a Yellow/DarkGray highlight cell on the matched-line text columns"
         );
+    }
+
+    #[test]
+    fn wrap_text_breaks_cjk_overflow() {
+        // A CJK run with no whitespace should be hard-broken at column width.
+        // Each CJK character is 2 display columns wide, so a width-8 column
+        // fits at most 4 characters per line.
+        let cjk = "这是一段没有空格的中文文本";
+        let lines = wrap_text(cjk, 8);
+        for line in &lines {
+            assert!(
+                line.width() <= 8,
+                "line width {} exceeds 8: {line:?}",
+                line.width()
+            );
+        }
+        // All characters must be present across all lines.
+        let rejoined: String = lines.concat();
+        assert_eq!(rejoined, cjk);
     }
 }
