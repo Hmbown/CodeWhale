@@ -185,7 +185,7 @@ pub const TEXT_HINT: Color = Color::Rgb(135, 151, 171); // #8797AB
 pub const TEXT_ACCENT: Color = DEEPSEEK_SKY;
 pub const SELECTION_TEXT: Color = Color::White;
 pub const TEXT_SOFT: Color = Color::Rgb(217, 226, 238); // #D9E2EE
-pub const TEXT_REASONING: Color = Color::Rgb(211, 170, 112); // #D3AA70
+pub const TEXT_REASONING: Color = Color::Rgb(186, 199, 215); // #BAC7D7
 
 // Compatibility aliases for existing call sites.
 pub const TEXT_PRIMARY: Color = TEXT_BODY;
@@ -209,10 +209,10 @@ pub const STATUS_NEUTRAL: Color = Color::Rgb(160, 160, 160); // #A0A0A0
 pub const SURFACE_PANEL: Color = Color::Rgb(21, 33, 52); // #152134
 #[allow(dead_code)]
 pub const SURFACE_ELEVATED: Color = Color::Rgb(28, 42, 64); // #1C2A40
-pub const SURFACE_REASONING: Color = Color::Rgb(54, 44, 26); // #362C1A
-pub const SURFACE_REASONING_TINT: Color = Color::Rgb(16, 24, 37); // #101825
+pub const SURFACE_REASONING: Color = Color::Rgb(20, 32, 50); // #142032
+pub const SURFACE_REASONING_TINT: Color = Color::Rgb(12, 22, 39); // #0C1627
 #[allow(dead_code)]
-pub const SURFACE_REASONING_ACTIVE: Color = Color::Rgb(68, 53, 28); // #44351C
+pub const SURFACE_REASONING_ACTIVE: Color = Color::Rgb(29, 48, 73); // #1D3049
 #[allow(dead_code)]
 pub const SURFACE_TOOL: Color = Color::Rgb(24, 39, 60); // #18273C
 #[allow(dead_code)]
@@ -224,7 +224,7 @@ pub const SURFACE_ERROR: Color = Color::Rgb(63, 27, 36); // #3F1B24
 pub const DIFF_ADDED_BG: Color = Color::Rgb(18, 52, 38); // #123426 dark green tint
 pub const DIFF_DELETED_BG: Color = Color::Rgb(52, 22, 28); // #34161C dark red tint
 pub const DIFF_ADDED: Color = Color::Rgb(87, 199, 133); // #57C785
-pub const ACCENT_REASONING_LIVE: Color = Color::Rgb(224, 153, 72); // #E09948
+pub const ACCENT_REASONING_LIVE: Color = Color::Rgb(133, 184, 234); // #85B8EA
 pub const ACCENT_TOOL_LIVE: Color = Color::Rgb(133, 184, 234); // #85B8EA
 pub const ACCENT_TOOL_ISSUE: Color = Color::Rgb(192, 143, 153); // #C08F99
 pub const TEXT_TOOL_OUTPUT: Color = Color::Rgb(191, 205, 220); // #BFCEDC
@@ -301,6 +301,29 @@ pub struct UiTheme {
     pub text_body: Color,
     pub text_soft: Color,
     pub border: Color,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct UiThemeColorOverrides<'a> {
+    pub surface_bg: Option<&'a str>,
+    pub panel_bg: Option<&'a str>,
+    pub elevated_bg: Option<&'a str>,
+    pub composer_bg: Option<&'a str>,
+    pub selection_bg: Option<&'a str>,
+    pub header_bg: Option<&'a str>,
+    pub footer_bg: Option<&'a str>,
+    pub mode_agent: Option<&'a str>,
+    pub mode_yolo: Option<&'a str>,
+    pub mode_plan: Option<&'a str>,
+    pub status_ready: Option<&'a str>,
+    pub status_working: Option<&'a str>,
+    pub status_warning: Option<&'a str>,
+    pub text_dim: Option<&'a str>,
+    pub text_hint: Option<&'a str>,
+    pub text_muted: Option<&'a str>,
+    pub text_body: Option<&'a str>,
+    pub text_soft: Option<&'a str>,
+    pub border: Option<&'a str>,
 }
 
 pub const UI_THEME: UiTheme = UiTheme {
@@ -408,6 +431,30 @@ impl UiTheme {
         self.footer_bg = color;
         self
     }
+
+    #[must_use]
+    pub fn with_color_overrides(mut self, overrides: &UiThemeColorOverrides<'_>) -> Self {
+        apply_optional_color(&mut self.surface_bg, overrides.surface_bg);
+        apply_optional_color(&mut self.panel_bg, overrides.panel_bg);
+        apply_optional_color(&mut self.elevated_bg, overrides.elevated_bg);
+        apply_optional_color(&mut self.composer_bg, overrides.composer_bg);
+        apply_optional_color(&mut self.selection_bg, overrides.selection_bg);
+        apply_optional_color(&mut self.header_bg, overrides.header_bg);
+        apply_optional_color(&mut self.footer_bg, overrides.footer_bg);
+        apply_optional_color(&mut self.mode_agent, overrides.mode_agent);
+        apply_optional_color(&mut self.mode_yolo, overrides.mode_yolo);
+        apply_optional_color(&mut self.mode_plan, overrides.mode_plan);
+        apply_optional_color(&mut self.status_ready, overrides.status_ready);
+        apply_optional_color(&mut self.status_working, overrides.status_working);
+        apply_optional_color(&mut self.status_warning, overrides.status_warning);
+        apply_optional_color(&mut self.text_dim, overrides.text_dim);
+        apply_optional_color(&mut self.text_hint, overrides.text_hint);
+        apply_optional_color(&mut self.text_muted, overrides.text_muted);
+        apply_optional_color(&mut self.text_body, overrides.text_body);
+        apply_optional_color(&mut self.text_soft, overrides.text_soft);
+        apply_optional_color(&mut self.border, overrides.border);
+        self
+    }
 }
 
 #[must_use]
@@ -433,11 +480,26 @@ pub fn theme_label_for_mode(mode: PaletteMode) -> &'static str {
 
 #[must_use]
 pub fn ui_theme_from_settings(theme: &str, background_color: Option<&str>) -> UiTheme {
+    ui_theme_from_settings_with_overrides(theme, background_color, &UiThemeColorOverrides::default())
+}
+
+#[must_use]
+pub fn ui_theme_from_settings_with_overrides(
+    theme: &str,
+    background_color: Option<&str>,
+    overrides: &UiThemeColorOverrides<'_>,
+) -> UiTheme {
     let mut ui_theme = UiTheme::from_setting(theme).unwrap_or_else(UiTheme::detect);
     if let Some(background) = background_color.and_then(parse_hex_rgb_color) {
         ui_theme = ui_theme.with_background_color(background);
     }
-    ui_theme
+    ui_theme.with_color_overrides(overrides)
+}
+
+fn apply_optional_color(slot: &mut Color, value: Option<&str>) {
+    if let Some(color) = value.and_then(parse_hex_rgb_color) {
+        *slot = color;
+    }
 }
 
 #[must_use]
@@ -497,8 +559,10 @@ fn adapt_fg_for_light_palette(color: Color) -> Color {
         LIGHT_BORDER
     } else if color == TEXT_ACCENT || color == DEEPSEEK_SKY || color == ACCENT_TOOL_LIVE {
         DEEPSEEK_BLUE
-    } else if color == TEXT_REASONING || color == ACCENT_REASONING_LIVE {
-        Color::Rgb(146, 64, 14)
+    } else if color == TEXT_REASONING {
+        LIGHT_TEXT_MUTED
+    } else if color == ACCENT_REASONING_LIVE {
+        DEEPSEEK_BLUE
     } else if color == ACCENT_TOOL_ISSUE {
         Color::Rgb(159, 18, 57)
     } else if color == DIFF_ADDED {
@@ -948,10 +1012,11 @@ mod tests {
         GRAYSCALE_UI_THEME, LIGHT_BORDER, LIGHT_ELEVATED, LIGHT_PANEL, LIGHT_REASONING,
         LIGHT_SURFACE, LIGHT_TEXT_BODY, LIGHT_TEXT_HINT, LIGHT_UI_THEME, PaletteMode,
         SURFACE_REASONING, SURFACE_REASONING_TINT, TEXT_BODY, TEXT_HINT, TEXT_REASONING,
-        TEXT_TOOL_OUTPUT, UI_THEME, adapt_bg, adapt_bg_for_palette_mode, adapt_color,
-        adapt_fg_for_palette_mode, blend, nearest_ansi16, normalize_hex_rgb_color,
+        TEXT_TOOL_OUTPUT, UI_THEME, UiThemeColorOverrides, adapt_bg, adapt_bg_for_palette_mode,
+        adapt_color, adapt_fg_for_palette_mode, blend, nearest_ansi16, normalize_hex_rgb_color,
         normalize_theme_name, parse_hex_rgb_color, pulse_brightness, reasoning_surface_tint,
         rgb_to_ansi256, theme_label_for_mode, ui_theme_from_settings,
+        ui_theme_from_settings_with_overrides,
     };
     use ratatui::style::Color;
 
@@ -1008,10 +1073,10 @@ mod tests {
     }
 
     #[test]
-    fn dark_palette_uses_soft_body_text_and_warm_reasoning() {
+    fn dark_palette_uses_soft_body_text_and_calm_reasoning() {
         assert_eq!(TEXT_BODY, Color::Rgb(226, 232, 240));
-        assert_eq!(TEXT_REASONING, Color::Rgb(211, 170, 112));
-        assert_eq!(ACCENT_REASONING_LIVE, Color::Rgb(224, 153, 72));
+        assert_eq!(TEXT_REASONING, Color::Rgb(186, 199, 215));
+        assert_eq!(ACCENT_REASONING_LIVE, Color::Rgb(133, 184, 234));
         assert_ne!(TEXT_REASONING, TEXT_TOOL_OUTPUT);
         assert_ne!(TEXT_BODY, Color::White);
     }
@@ -1100,6 +1165,24 @@ mod tests {
         assert_eq!(theme.panel_bg, GRAYSCALE_PANEL);
         assert_eq!(theme.elevated_bg, GRAYSCALE_ELEVATED);
         assert_eq!(theme.border, GRAYSCALE_BORDER);
+    }
+
+    #[test]
+    fn ui_theme_from_settings_applies_custom_color_overrides() {
+        let overrides = UiThemeColorOverrides {
+            panel_bg: Some("#202124"),
+            text_body: Some("#f8f8f2"),
+            status_warning: Some("#ffb86c"),
+            border: Some("#6272a4"),
+            ..UiThemeColorOverrides::default()
+        };
+        let theme = ui_theme_from_settings_with_overrides("dark", Some("#101010"), &overrides);
+
+        assert_eq!(theme.surface_bg, Color::Rgb(16, 16, 16));
+        assert_eq!(theme.panel_bg, Color::Rgb(32, 33, 36));
+        assert_eq!(theme.text_body, Color::Rgb(248, 248, 242));
+        assert_eq!(theme.status_warning, Color::Rgb(255, 184, 108));
+        assert_eq!(theme.border, Color::Rgb(98, 114, 164));
     }
 
     #[test]

@@ -8,11 +8,12 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::config::{expand_path, normalize_model_name};
 use crate::localization::normalize_configured_locale;
-use crate::palette::{normalize_hex_rgb_color, normalize_theme_name};
+use crate::palette::{UiThemeColorOverrides, normalize_hex_rgb_color, normalize_theme_name};
 
 // ============================================================================
 // TuiPrefs — ~/.deepseek/tui.toml
@@ -84,6 +85,145 @@ pub struct KeybindPrefs {
     /// Key to toggle the sidebar.
     /// Default: `"ctrl+b"`.
     pub toggle_sidebar: Option<String>,
+}
+
+/// Optional semantic colour overrides for the active TUI theme.
+///
+/// Each value accepts `#RRGGBB`, `RRGGBB`, or `default`/`none` to clear it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(default)]
+pub struct ThemeColorSettings {
+    pub surface: Option<String>,
+    pub panel: Option<String>,
+    pub elevated: Option<String>,
+    pub composer: Option<String>,
+    pub selection: Option<String>,
+    pub header: Option<String>,
+    pub footer: Option<String>,
+    pub mode_agent: Option<String>,
+    pub mode_yolo: Option<String>,
+    pub mode_plan: Option<String>,
+    pub status_ready: Option<String>,
+    pub status_working: Option<String>,
+    pub status_warning: Option<String>,
+    pub text_dim: Option<String>,
+    pub text_hint: Option<String>,
+    pub text_muted: Option<String>,
+    pub text_body: Option<String>,
+    pub text_soft: Option<String>,
+    pub border: Option<String>,
+}
+
+impl ThemeColorSettings {
+    pub fn normalize(&mut self) {
+        self.surface = normalize_optional_hex_color(self.surface.as_deref());
+        self.panel = normalize_optional_hex_color(self.panel.as_deref());
+        self.elevated = normalize_optional_hex_color(self.elevated.as_deref());
+        self.composer = normalize_optional_hex_color(self.composer.as_deref());
+        self.selection = normalize_optional_hex_color(self.selection.as_deref());
+        self.header = normalize_optional_hex_color(self.header.as_deref());
+        self.footer = normalize_optional_hex_color(self.footer.as_deref());
+        self.mode_agent = normalize_optional_hex_color(self.mode_agent.as_deref());
+        self.mode_yolo = normalize_optional_hex_color(self.mode_yolo.as_deref());
+        self.mode_plan = normalize_optional_hex_color(self.mode_plan.as_deref());
+        self.status_ready = normalize_optional_hex_color(self.status_ready.as_deref());
+        self.status_working = normalize_optional_hex_color(self.status_working.as_deref());
+        self.status_warning = normalize_optional_hex_color(self.status_warning.as_deref());
+        self.text_dim = normalize_optional_hex_color(self.text_dim.as_deref());
+        self.text_hint = normalize_optional_hex_color(self.text_hint.as_deref());
+        self.text_muted = normalize_optional_hex_color(self.text_muted.as_deref());
+        self.text_body = normalize_optional_hex_color(self.text_body.as_deref());
+        self.text_soft = normalize_optional_hex_color(self.text_soft.as_deref());
+        self.border = normalize_optional_hex_color(self.border.as_deref());
+    }
+
+    pub fn as_overrides(&self) -> UiThemeColorOverrides<'_> {
+        UiThemeColorOverrides {
+            surface_bg: self.surface.as_deref(),
+            panel_bg: self.panel.as_deref(),
+            elevated_bg: self.elevated.as_deref(),
+            composer_bg: self.composer.as_deref(),
+            selection_bg: self.selection.as_deref(),
+            header_bg: self.header.as_deref(),
+            footer_bg: self.footer.as_deref(),
+            mode_agent: self.mode_agent.as_deref(),
+            mode_yolo: self.mode_yolo.as_deref(),
+            mode_plan: self.mode_plan.as_deref(),
+            status_ready: self.status_ready.as_deref(),
+            status_working: self.status_working.as_deref(),
+            status_warning: self.status_warning.as_deref(),
+            text_dim: self.text_dim.as_deref(),
+            text_hint: self.text_hint.as_deref(),
+            text_muted: self.text_muted.as_deref(),
+            text_body: self.text_body.as_deref(),
+            text_soft: self.text_soft.as_deref(),
+            border: self.border.as_deref(),
+        }
+    }
+
+    fn set_slot(&mut self, slot: ThemeColorSlot, value: &str) -> Result<()> {
+        let color = normalize_theme_color_setting(slot.setting_name(), value)?;
+        match slot {
+            ThemeColorSlot::Surface => self.surface = color,
+            ThemeColorSlot::Panel => self.panel = color,
+            ThemeColorSlot::Elevated => self.elevated = color,
+            ThemeColorSlot::Composer => self.composer = color,
+            ThemeColorSlot::Selection => self.selection = color,
+            ThemeColorSlot::Header => self.header = color,
+            ThemeColorSlot::Footer => self.footer = color,
+            ThemeColorSlot::ModeAgent => self.mode_agent = color,
+            ThemeColorSlot::ModeYolo => self.mode_yolo = color,
+            ThemeColorSlot::ModePlan => self.mode_plan = color,
+            ThemeColorSlot::StatusReady => self.status_ready = color,
+            ThemeColorSlot::StatusWorking => self.status_working = color,
+            ThemeColorSlot::StatusWarning => self.status_warning = color,
+            ThemeColorSlot::TextDim => self.text_dim = color,
+            ThemeColorSlot::TextHint => self.text_hint = color,
+            ThemeColorSlot::TextMuted => self.text_muted = color,
+            ThemeColorSlot::TextBody => self.text_body = color,
+            ThemeColorSlot::TextSoft => self.text_soft = color,
+            ThemeColorSlot::Border => self.border = color,
+        }
+        Ok(())
+    }
+
+    fn summary(&self) -> String {
+        let mut parts = Vec::new();
+        for slot in ThemeColorSlot::ALL {
+            if let Some(value) = self.slot_value(slot) {
+                parts.push(format!("{}={value}", slot.setting_name()));
+            }
+        }
+        if parts.is_empty() {
+            "(default)".to_string()
+        } else {
+            parts.join(", ")
+        }
+    }
+
+    fn slot_value(&self, slot: ThemeColorSlot) -> Option<&str> {
+        match slot {
+            ThemeColorSlot::Surface => self.surface.as_deref(),
+            ThemeColorSlot::Panel => self.panel.as_deref(),
+            ThemeColorSlot::Elevated => self.elevated.as_deref(),
+            ThemeColorSlot::Composer => self.composer.as_deref(),
+            ThemeColorSlot::Selection => self.selection.as_deref(),
+            ThemeColorSlot::Header => self.header.as_deref(),
+            ThemeColorSlot::Footer => self.footer.as_deref(),
+            ThemeColorSlot::ModeAgent => self.mode_agent.as_deref(),
+            ThemeColorSlot::ModeYolo => self.mode_yolo.as_deref(),
+            ThemeColorSlot::ModePlan => self.mode_plan.as_deref(),
+            ThemeColorSlot::StatusReady => self.status_ready.as_deref(),
+            ThemeColorSlot::StatusWorking => self.status_working.as_deref(),
+            ThemeColorSlot::StatusWarning => self.status_warning.as_deref(),
+            ThemeColorSlot::TextDim => self.text_dim.as_deref(),
+            ThemeColorSlot::TextHint => self.text_hint.as_deref(),
+            ThemeColorSlot::TextMuted => self.text_muted.as_deref(),
+            ThemeColorSlot::TextBody => self.text_body.as_deref(),
+            ThemeColorSlot::TextSoft => self.text_soft.as_deref(),
+            ThemeColorSlot::Border => self.border.as_deref(),
+        }
+    }
 }
 
 #[allow(dead_code)] // see TuiPrefs note above; deferred to a later settings pass (#657).
@@ -199,6 +339,8 @@ pub struct Settings {
     pub theme: String,
     /// Optional main TUI background color as a 6-digit hex RGB value.
     pub background_color: Option<String>,
+    /// Optional semantic color overrides applied on top of the selected theme.
+    pub theme_colors: ThemeColorSettings,
     /// Composer layout density: compact, comfortable, spacious
     pub composer_density: String,
     /// Show a border around the composer input area
@@ -291,6 +433,7 @@ impl Default for Settings {
             locale: "auto".to_string(),
             theme: "system".to_string(),
             background_color: None,
+            theme_colors: ThemeColorSettings::default(),
             composer_density: "comfortable".to_string(),
             composer_border: true,
             composer_vim_mode: "normal".to_string(),
@@ -312,6 +455,10 @@ impl Default for Settings {
 }
 
 impl Settings {
+    pub fn is_theme_color_key(key: &str) -> bool {
+        ThemeColorSlot::from_key(key).is_some()
+    }
+
     /// Get the settings file path
     pub fn path() -> Result<PathBuf> {
         // Allow tests to override the settings directory via the same env var
@@ -355,6 +502,7 @@ impl Settings {
                 .to_string();
             s.theme = normalize_settings_theme(&s.theme).to_string();
             s.background_color = normalize_optional_background_color(s.background_color.as_deref());
+            s.theme_colors.normalize();
             s.default_model = s.default_model.as_deref().and_then(normalize_default_model);
             s
         };
@@ -445,6 +593,11 @@ impl Settings {
 
     /// Set a single setting by key
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        if let Some(slot) = ThemeColorSlot::from_key(key) {
+            self.theme_colors.set_slot(slot, value)?;
+            return Ok(());
+        }
+
         match key {
             "auto_compact" | "compact" => {
                 self.auto_compact = parse_bool(value)?;
@@ -648,6 +801,10 @@ impl Settings {
             "  background_color:   {}",
             self.background_color.as_deref().unwrap_or("(default)")
         ));
+        lines.push(format!(
+            "  theme_colors:       {}",
+            self.theme_colors.summary()
+        ));
         lines.push(format!("  composer_density:   {}", self.composer_density));
         lines.push(format!("  composer_border:    {}", self.composer_border));
         lines.push(format!("  composer_vim_mode:  {}", self.composer_vim_mode));
@@ -717,6 +874,10 @@ impl Settings {
             (
                 "background_color",
                 "Main TUI background color: #RRGGBB or default",
+            ),
+            (
+                "theme_colors.<role>",
+                "Custom theme color override: #RRGGBB or default (roles: surface, panel, elevated, composer, selection, header, footer, mode_agent, mode_yolo, mode_plan, status_ready, status_working, status_warning, text_dim, text_hint, text_muted, text_body, text_soft, border)",
             ),
             (
                 "composer_density",
@@ -902,6 +1063,131 @@ fn normalize_background_color_setting(value: &str) -> Result<Option<String>> {
     })
 }
 
+fn normalize_optional_hex_color(value: Option<&str>) -> Option<String> {
+    value.and_then(|raw| normalize_theme_color_setting("theme color", raw).ok().flatten())
+}
+
+fn normalize_theme_color_setting(setting: &str, value: &str) -> Result<Option<String>> {
+    let trimmed = value.trim();
+    if trimmed.is_empty()
+        || matches!(
+            trimmed.to_ascii_lowercase().as_str(),
+            "default" | "none" | "reset" | "off"
+        )
+    {
+        return Ok(None);
+    }
+    normalize_hex_rgb_color(trimmed).map(Some).ok_or_else(|| {
+        anyhow::anyhow!(
+            "Failed to update setting: invalid {setting} '{value}'. Expected #RRGGBB, RRGGBB, or default."
+        )
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ThemeColorSlot {
+    Surface,
+    Panel,
+    Elevated,
+    Composer,
+    Selection,
+    Header,
+    Footer,
+    ModeAgent,
+    ModeYolo,
+    ModePlan,
+    StatusReady,
+    StatusWorking,
+    StatusWarning,
+    TextDim,
+    TextHint,
+    TextMuted,
+    TextBody,
+    TextSoft,
+    Border,
+}
+
+impl ThemeColorSlot {
+    const ALL: [Self; 19] = [
+        Self::Surface,
+        Self::Panel,
+        Self::Elevated,
+        Self::Composer,
+        Self::Selection,
+        Self::Header,
+        Self::Footer,
+        Self::ModeAgent,
+        Self::ModeYolo,
+        Self::ModePlan,
+        Self::StatusReady,
+        Self::StatusWorking,
+        Self::StatusWarning,
+        Self::TextDim,
+        Self::TextHint,
+        Self::TextMuted,
+        Self::TextBody,
+        Self::TextSoft,
+        Self::Border,
+    ];
+
+    fn from_key(key: &str) -> Option<Self> {
+        let normalized = key.trim().to_ascii_lowercase().replace('-', "_");
+        let role = normalized
+            .strip_prefix("theme_colors.")
+            .or_else(|| normalized.strip_prefix("theme_color."))
+            .or_else(|| normalized.strip_prefix("theme_colors_"))
+            .or_else(|| normalized.strip_prefix("theme_color_"))
+            .or_else(|| normalized.strip_prefix("theme_"))?;
+        let role = role.strip_suffix("_color").unwrap_or(role);
+        match role {
+            "surface" | "surface_bg" | "background" | "background_color" => Some(Self::Surface),
+            "panel" | "panel_bg" => Some(Self::Panel),
+            "elevated" | "elevated_bg" => Some(Self::Elevated),
+            "composer" | "composer_bg" => Some(Self::Composer),
+            "selection" | "selection_bg" => Some(Self::Selection),
+            "header" | "header_bg" => Some(Self::Header),
+            "footer" | "footer_bg" => Some(Self::Footer),
+            "mode_agent" | "agent" => Some(Self::ModeAgent),
+            "mode_yolo" | "yolo" => Some(Self::ModeYolo),
+            "mode_plan" | "plan" => Some(Self::ModePlan),
+            "status_ready" | "ready" => Some(Self::StatusReady),
+            "status_working" | "working" => Some(Self::StatusWorking),
+            "status_warning" | "warning" => Some(Self::StatusWarning),
+            "text_dim" | "dim" => Some(Self::TextDim),
+            "text_hint" | "hint" => Some(Self::TextHint),
+            "text_muted" | "muted" => Some(Self::TextMuted),
+            "text_body" | "body" => Some(Self::TextBody),
+            "text_soft" | "soft" => Some(Self::TextSoft),
+            "border" => Some(Self::Border),
+            _ => None,
+        }
+    }
+
+    fn setting_name(self) -> &'static str {
+        match self {
+            Self::Surface => "surface",
+            Self::Panel => "panel",
+            Self::Elevated => "elevated",
+            Self::Composer => "composer",
+            Self::Selection => "selection",
+            Self::Header => "header",
+            Self::Footer => "footer",
+            Self::ModeAgent => "mode_agent",
+            Self::ModeYolo => "mode_yolo",
+            Self::ModePlan => "mode_plan",
+            Self::StatusReady => "status_ready",
+            Self::StatusWorking => "status_working",
+            Self::StatusWarning => "status_warning",
+            Self::TextDim => "text_dim",
+            Self::TextHint => "text_hint",
+            Self::TextMuted => "text_muted",
+            Self::TextBody => "text_body",
+            Self::TextSoft => "text_soft",
+            Self::Border => "border",
+        }
+    }
+}
+
 fn normalize_sidebar_focus(value: &str) -> &str {
     match value.trim().to_ascii_lowercase().as_str() {
         "work" | "plan" | "todos" => "work",
@@ -1026,6 +1312,35 @@ mod tests {
             .set("background_color", "#123")
             .expect_err("short hex should fail");
         assert!(err.to_string().contains("invalid background_color"));
+    }
+
+    #[test]
+    fn theme_color_overrides_normalize_and_reset() {
+        let mut settings = Settings::default();
+        settings
+            .set("theme_colors.panel", "#202124")
+            .expect("set panel");
+        settings
+            .set("theme_text_body_color", "F8F8F2")
+            .expect("set body");
+
+        assert_eq!(settings.theme_colors.panel.as_deref(), Some("#202124"));
+        assert_eq!(settings.theme_colors.text_body.as_deref(), Some("#f8f8f2"));
+        assert!(Settings::is_theme_color_key("theme_colors.panel"));
+
+        settings
+            .set("theme_colors.panel", "default")
+            .expect("reset panel");
+        assert_eq!(settings.theme_colors.panel, None);
+    }
+
+    #[test]
+    fn theme_color_overrides_reject_invalid_hex() {
+        let mut settings = Settings::default();
+        let err = settings
+            .set("theme_colors.border", "#12")
+            .expect_err("short hex should fail");
+        assert!(err.to_string().contains("invalid border"));
     }
 
     #[test]

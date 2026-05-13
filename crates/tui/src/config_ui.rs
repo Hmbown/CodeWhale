@@ -13,7 +13,7 @@ use serde_json::Value;
 use crate::commands;
 use crate::config::{Config, StatusItem, normalize_model_name};
 use crate::localization::{normalize_configured_locale, resolve_locale};
-use crate::settings::Settings;
+use crate::settings::{Settings, ThemeColorSettings};
 use crate::tui::app::{
     App, AppMode, ComposerDensity, ReasoningEffort, SidebarFocus, TranscriptSpacing,
 };
@@ -58,11 +58,17 @@ pub struct SettingsSection {
     pub show_thinking: bool,
     pub show_tool_details: bool,
     pub locale: UiLocale,
+    pub theme: ThemeValue,
     #[schemars(
         title = "Background color",
         description = "Main TUI background color as #RRGGBB"
     )]
     pub background_color: Option<String>,
+    #[schemars(
+        title = "Theme color overrides",
+        description = "Optional semantic theme colors as #RRGGBB. Leave empty to use the selected preset."
+    )]
+    pub theme_colors: ThemeColorSettings,
     pub composer_density: ComposerDensityValue,
     pub composer_border: bool,
     pub transcript_spacing: TranscriptSpacingValue,
@@ -162,6 +168,15 @@ pub enum UiLocale {
     #[serde(rename = "pt-BR")]
     #[schemars(rename = "pt-BR")]
     PtBr,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ThemeValue {
+    System,
+    Dark,
+    Light,
+    Grayscale,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -281,7 +296,9 @@ pub fn build_document(app: &App, config: &Config) -> Result<ConfigUiDocument> {
             show_thinking: settings.show_thinking,
             show_tool_details: settings.show_tool_details,
             locale: UiLocale::from_setting(&settings.locale)?,
+            theme: ThemeValue::from_setting(&settings.theme)?,
             background_color: settings.background_color.clone(),
+            theme_colors: settings.theme_colors.clone(),
             composer_density: settings.composer_density.as_str().into(),
             composer_border: settings.composer_border,
             transcript_spacing: settings.transcript_spacing.as_str().into(),
@@ -439,6 +456,7 @@ pub fn apply_document(
             bool_str(doc.settings.show_tool_details),
         ),
         ("locale", doc.settings.locale.as_setting()),
+        ("theme", doc.settings.theme.as_setting()),
         (
             "background_color",
             doc.settings
@@ -473,6 +491,21 @@ pub fn apply_document(
                 result
                     .message
                     .unwrap_or_else(|| "config update failed".to_string())
+            );
+        }
+        if let Some(message) = result.message {
+            notes.push(message);
+        }
+    }
+
+    for (key, value) in theme_color_update_values(&doc.settings.theme_colors) {
+        let result = commands::set_config_value(app, key, value, persist);
+        if result.is_error {
+            bail!(
+                "{}",
+                result
+                    .message
+                    .unwrap_or_else(|| "theme color update failed".to_string())
             );
         }
         if let Some(message) = result.message {
@@ -636,6 +669,60 @@ fn parse_status_items(items: &[StatusItemValue]) -> Vec<StatusItem> {
     items.iter().copied().map(Into::into).collect()
 }
 
+fn theme_color_update_values(colors: &ThemeColorSettings) -> Vec<(&'static str, &str)> {
+    vec![
+        ("theme_colors.surface", colors.surface.as_deref().unwrap_or("default")),
+        ("theme_colors.panel", colors.panel.as_deref().unwrap_or("default")),
+        (
+            "theme_colors.elevated",
+            colors.elevated.as_deref().unwrap_or("default"),
+        ),
+        (
+            "theme_colors.composer",
+            colors.composer.as_deref().unwrap_or("default"),
+        ),
+        (
+            "theme_colors.selection",
+            colors.selection.as_deref().unwrap_or("default"),
+        ),
+        ("theme_colors.header", colors.header.as_deref().unwrap_or("default")),
+        ("theme_colors.footer", colors.footer.as_deref().unwrap_or("default")),
+        (
+            "theme_colors.mode_agent",
+            colors.mode_agent.as_deref().unwrap_or("default"),
+        ),
+        (
+            "theme_colors.mode_yolo",
+            colors.mode_yolo.as_deref().unwrap_or("default"),
+        ),
+        (
+            "theme_colors.mode_plan",
+            colors.mode_plan.as_deref().unwrap_or("default"),
+        ),
+        (
+            "theme_colors.status_ready",
+            colors.status_ready.as_deref().unwrap_or("default"),
+        ),
+        (
+            "theme_colors.status_working",
+            colors.status_working.as_deref().unwrap_or("default"),
+        ),
+        (
+            "theme_colors.status_warning",
+            colors.status_warning.as_deref().unwrap_or("default"),
+        ),
+        ("theme_colors.text_dim", colors.text_dim.as_deref().unwrap_or("default")),
+        ("theme_colors.text_hint", colors.text_hint.as_deref().unwrap_or("default")),
+        (
+            "theme_colors.text_muted",
+            colors.text_muted.as_deref().unwrap_or("default"),
+        ),
+        ("theme_colors.text_body", colors.text_body.as_deref().unwrap_or("default")),
+        ("theme_colors.text_soft", colors.text_soft.as_deref().unwrap_or("default")),
+        ("theme_colors.border", colors.border.as_deref().unwrap_or("default")),
+    ]
+}
+
 impl ApprovalModeValue {
     fn as_setting(self) -> &'static str {
         match self {
@@ -666,6 +753,28 @@ impl UiLocale {
             Some("pt-BR") => Ok(Self::PtBr),
             Some(other) => bail!("unsupported locale '{other}'"),
             None => bail!("invalid locale '{value}'"),
+        }
+    }
+}
+
+impl ThemeValue {
+    fn as_setting(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::Dark => "dark",
+            Self::Light => "light",
+            Self::Grayscale => "grayscale",
+        }
+    }
+
+    fn from_setting(value: &str) -> Result<Self> {
+        match crate::palette::normalize_theme_name(value) {
+            Some("system") => Ok(Self::System),
+            Some("dark") => Ok(Self::Dark),
+            Some("light") => Ok(Self::Light),
+            Some("grayscale") => Ok(Self::Grayscale),
+            Some(other) => bail!("unsupported theme '{other}'"),
+            None => bail!("invalid theme '{value}'"),
         }
     }
 }
@@ -1027,6 +1136,57 @@ background_color = "#1A1B26"
     }
 
     #[test]
+    fn build_document_reflects_theme_and_color_overrides_from_settings() {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let temp_root = std::env::temp_dir().join(format!(
+            "deepseek-config-ui-theme-colors-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(temp_root.join(".deepseek")).expect("config dir");
+        let config_path = temp_root.join(".deepseek").join("config.toml");
+        fs::write(&config_path, "").expect("seed config");
+        fs::write(
+            temp_root.join(".deepseek").join("settings.toml"),
+            r##"
+theme = "grayscale"
+
+[theme_colors]
+panel = "#202124"
+text_body = "F8F8F2"
+"##,
+        )
+        .expect("seed settings");
+
+        let old_config_path = std::env::var_os("DEEPSEEK_CONFIG_PATH");
+        unsafe {
+            std::env::set_var("DEEPSEEK_CONFIG_PATH", &config_path);
+        }
+
+        let app = app();
+        let config = Config::default();
+        let doc = build_document(&app, &config).expect("document");
+
+        assert_eq!(doc.settings.theme, ThemeValue::Grayscale);
+        assert_eq!(doc.settings.theme_colors.panel.as_deref(), Some("#202124"));
+        assert_eq!(
+            doc.settings.theme_colors.text_body.as_deref(),
+            Some("#f8f8f2")
+        );
+        unsafe {
+            if let Some(value) = old_config_path {
+                std::env::set_var("DEEPSEEK_CONFIG_PATH", value);
+            } else {
+                std::env::remove_var("DEEPSEEK_CONFIG_PATH");
+            }
+        }
+    }
+
+    #[test]
     fn schema_contains_typed_enums() {
         let schema = build_schema();
         let approval_mode = &schema["$defs"]["ApprovalModeValue"]["enum"];
@@ -1038,6 +1198,11 @@ background_color = "#1A1B26"
         assert_eq!(
             locale,
             &serde_json::json!(["auto", "en", "ja", "zh-Hans", "pt-BR"])
+        );
+        let theme = &schema["$defs"]["ThemeValue"]["enum"];
+        assert_eq!(
+            theme,
+            &serde_json::json!(["system", "dark", "light", "grayscale"])
         );
     }
 

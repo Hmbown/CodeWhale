@@ -318,6 +318,13 @@ Common settings keys:
 - `background_color` (`#RRGGBB`, `RRGGBB`, or `default`): optional main TUI
   background color applied to the root, header, transcript, and footer
   surfaces while preserving panel contrast.
+- `[theme_colors]`: optional per-role color overrides layered on top of the
+  selected preset. Each value accepts `#RRGGBB`, `RRGGBB`, or `default`. Roles
+  include `surface`, `panel`, `elevated`, `composer`, `selection`, `header`,
+  `footer`, `mode_agent`, `mode_yolo`, `mode_plan`, `status_ready`,
+  `status_working`, `status_warning`, `text_dim`, `text_hint`, `text_muted`,
+  `text_body`, `text_soft`, and `border`. The same roles can be changed live
+  with `/set theme_colors.<role> #RRGGBB --save`.
 - `cost_currency` (`usd`, `cny`; default `usd`): currency used by the footer,
   context panel, `/cost`, `/tokens`, and long-turn notification summaries. The
   aliases `rmb` and `yuan` normalize to `cny`.

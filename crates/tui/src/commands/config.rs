@@ -422,9 +422,10 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
             app.needs_redraw = true;
         }
         "theme" | "ui_theme" | "background_color" | "background" | "bg" => {
-            app.ui_theme = crate::palette::ui_theme_from_settings(
+            app.ui_theme = crate::palette::ui_theme_from_settings_with_overrides(
                 &settings.theme,
                 settings.background_color.as_deref(),
+                &settings.theme_colors.as_overrides(),
             );
             app.needs_redraw = true;
         }
@@ -482,6 +483,14 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
         "sidebar_focus" | "focus" => {
             app.set_sidebar_focus(SidebarFocus::from_setting(&settings.sidebar_focus));
         }
+        _ if Settings::is_theme_color_key(&key) => {
+            app.ui_theme = crate::palette::ui_theme_from_settings_with_overrides(
+                &settings.theme,
+                settings.background_color.as_deref(),
+                &settings.theme_colors.as_overrides(),
+            );
+            app.needs_redraw = true;
+        }
         _ => {}
     }
 
@@ -493,6 +502,7 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
             .background_color
             .clone()
             .unwrap_or_else(|| "default".to_string()),
+        _ if Settings::is_theme_color_key(&key) => value.to_string(),
         _ => value.to_string(),
     };
 
@@ -598,10 +608,12 @@ pub fn theme(app: &mut App, arg: Option<&str>) -> CommandResult {
         },
     };
 
-    let background = Settings::load()
-        .ok()
-        .and_then(|settings| settings.background_color);
-    app.ui_theme = crate::palette::ui_theme_from_settings(requested, background.as_deref());
+    let settings = Settings::load().unwrap_or_default();
+    app.ui_theme = crate::palette::ui_theme_from_settings_with_overrides(
+        requested,
+        settings.background_color.as_deref(),
+        &settings.theme_colors.as_overrides(),
+    );
     app.needs_redraw = true;
 
     let label = crate::palette::theme_label_for_mode(app.ui_theme.mode);

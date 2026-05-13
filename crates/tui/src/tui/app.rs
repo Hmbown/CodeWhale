@@ -1259,8 +1259,11 @@ impl App {
         let sidebar_focus = SidebarFocus::from_setting(&settings.sidebar_focus);
         let max_input_history = settings.max_input_history;
         let use_paste_burst_detection = settings.paste_burst_detection;
-        let ui_theme =
-            palette::ui_theme_from_settings(&settings.theme, settings.background_color.as_deref());
+        let ui_theme = palette::ui_theme_from_settings_with_overrides(
+            &settings.theme,
+            settings.background_color.as_deref(),
+            &settings.theme_colors.as_overrides(),
+        );
         let model = settings
             .provider_models
             .as_ref()
