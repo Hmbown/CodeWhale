@@ -339,6 +339,10 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
     let config = &mut config;
     let mut app = App::new(options.clone(), config);
 
+    // Sync the provider resolved by App::new (which reads settings.default_provider)
+    // back into config so that DeepSeekClient and Engine use the correct provider.
+    config.provider = Some(app.api_provider.as_str().to_string());
+
     // Load existing session if resuming.
     if let Some(ref session_id) = options.resume_session_id
         && let Ok(manager) = SessionManager::default_location()
@@ -3804,6 +3808,7 @@ async fn dispatch_user_message(
         cwd.clone(),
     );
     let content = queued_message_content_for_app(app, &message, cwd);
+
     let message_index = app.api_messages.len();
     app.system_prompt = Some(
         prompts::system_prompt_for_mode_with_context_skills_and_session(
@@ -5847,7 +5852,14 @@ async fn handle_view_events(
                 .await;
             }
             ViewEvent::ProviderPickerApplied { provider } => {
-                switch_provider(app, engine_handle, config, provider, None).await;
+                // Preserve the current model when re-selecting the same provider
+                // so the model picker choice (e.g. flash) is not lost.
+                let model_override = if app.api_provider == provider {
+                    Some(app.model.clone())
+                } else {
+                    None
+                };
+                switch_provider(app, engine_handle, config, provider, model_override).await;
             }
             ViewEvent::ProviderPickerApiKeySubmitted { provider, api_key } => {
                 apply_provider_picker_api_key(app, engine_handle, config, provider, api_key).await;

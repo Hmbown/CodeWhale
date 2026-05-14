@@ -17,6 +17,10 @@ use crate::audit::log_sensitive_event;
 use crate::features::{Features, FeaturesToml, is_known_feature_key};
 use crate::hooks::HooksConfig;
 
+fn default_true_opt() -> Option<bool> {
+    Some(true)
+}
+
 pub const DEFAULT_MAX_SUBAGENTS: usize = 10;
 pub const MAX_SUBAGENTS: usize = 20;
 pub const DEFAULT_TEXT_MODEL: &str = "deepseek-v4-pro";
@@ -827,6 +831,20 @@ pub struct AutoConfig {
     pub cost_saving: Option<bool>,
 }
 
+/// Per-model context tuning.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Deserialize)]
+pub struct PerModelContextConfig {
+    #[serde(default)]
+    pub l1_threshold: Option<usize>,
+    #[serde(default)]
+    pub l2_threshold: Option<usize>,
+    #[serde(default)]
+    pub l3_threshold: Option<usize>,
+    #[serde(default)]
+    pub cycle_threshold: Option<usize>,
+}
+
 /// Resolved CLI configuration, including defaults and environment overrides.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Config {
@@ -967,6 +985,10 @@ pub struct VisionModelConfig {
     /// Base URL for the vision model API. Defaults to OpenAI.
     #[serde(default)]
     pub base_url: Option<String>,
+    /// Whether to request bounding-box primitives from the vision model.
+    /// Defaults to `true`.
+    #[serde(default = "default_true_opt")]
+    pub primitives: Option<bool>,
 }
 
 /// `[runtime_api]` table — knobs for the local HTTP/SSE daemon.

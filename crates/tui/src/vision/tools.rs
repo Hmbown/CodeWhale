@@ -1,71 +1,24 @@
 //! `image_analyze` tool — analyze images using a dedicated vision model.
 
 use std::path::{Component, Path};
-use std::time::Duration;
 
 use async_trait::async_trait;
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde_json::{Value, json};
 
+use super::bridge;
 use crate::config::VisionModelConfig;
-use crate::llm_client::{LlmError, RetryConfig, with_retry};
 use crate::tools::spec::{
     ToolCapability, ToolContext, ToolError, ToolResult, ToolSpec, required_str,
 };
 
 pub struct ImageAnalyzeTool {
     config: VisionModelConfig,
-    client: reqwest::Client,
 }
 
 impl ImageAnalyzeTool {
     #[must_use]
     pub fn new(config: VisionModelConfig) -> Self {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(120))
-            .build()
-            .expect("Failed to build HTTP client");
-        Self { config, client }
-    }
-
-    async fn read_image_file(path: &Path) -> Result<(String, String), ToolError> {
-        let bytes = tokio::fs::read(path)
-            .await
-            .map_err(|e| ToolError::execution_failed(format!("Failed to read image file: {e}")))?;
-
-        let mime_type = Self::detect_mime_type(path)?;
-        let base64_data = BASE64.encode(&bytes);
-        Ok((base64_data, mime_type))
-    }
-
-    fn detect_mime_type(path: &Path) -> Result<String, ToolError> {
-        let extension = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_lowercase();
-
-        match extension.as_str() {
-            "png" => Ok("image/png".to_string()),
-            "jpg" | "jpeg" => Ok("image/jpeg".to_string()),
-            "gif" => Ok("image/gif".to_string()),
-            "webp" => Ok("image/webp".to_string()),
-            "bmp" => Ok("image/bmp".to_string()),
-            _ => Err(ToolError::execution_failed(format!(
-                "Unsupported image format: {extension}"
-            ))),
-        }
-    }
-
-    fn base_url(&self) -> String {
-        self.config
-            .base_url
-            .clone()
-            .unwrap_or_else(|| "https://api.openai.com/v1".to_string())
-    }
-
-    fn api_key(&self) -> String {
-        self.config.api_key.clone().unwrap_or_default()
+        Self { config }
     }
 }
 
@@ -77,6 +30,7 @@ impl ToolSpec for ImageAnalyzeTool {
 
     fn description(&self) -> &str {
         "Analyze an image using the configured vision model. \
+         Returns a structured description with object bounding boxes (0–1000 normalised coordinates). \
          Supports PNG, JPEG, GIF, WebP, and BMP formats."
     }
 
@@ -109,110 +63,65 @@ impl ToolSpec for ImageAnalyzeTool {
             .unwrap_or("Describe this image in detail.");
 
         let image_path_buf = Path::new(image_path);
-        if image_path_buf.components().any(|c| {
-            matches!(
-                c,
-                Component::Prefix(_) | Component::RootDir | Component::ParentDir
-            )
-        }) {
-            return Err(ToolError::execution_failed(
-                "image_path must be a relative path within the workspace and cannot escape it.",
-            ));
-        }
-        let resolved_path = context.workspace.join(image_path_buf);
-        let (image_data, mime_type) = Self::read_image_file(&resolved_path).await?;
-
-        let payload = json!({
-            "model": self.config.model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": format!("data:{};base64,{}", mime_type, image_data)
-                            }
-                        }
-                    ]
-                }
-            ],
-            "max_tokens": 4096,
-            "temperature": 0.7
-        });
-
-        let url = format!("{}/chat/completions", self.base_url());
-        let api_key = self.api_key();
-
-        let retry_config = RetryConfig {
-            max_retries: 3,
-            initial_delay: 1.0,
-            max_delay: 30.0,
-            enabled: true,
-            ..Default::default()
+        let resolved_path = if image_path_buf.is_absolute() {
+            image_path_buf.to_path_buf()
+        } else {
+            if image_path_buf
+                .components()
+                .any(|c| matches!(c, Component::ParentDir))
+            {
+                return Err(ToolError::execution_failed(
+                    "image_path must be an absolute path or a relative path within the workspace.",
+                ));
+            }
+            context.workspace.join(image_path_buf)
         };
 
-        let response = with_retry(
-            &retry_config,
-            || {
-                let client = self.client.clone();
-                let url = url.clone();
-                let api_key = api_key.clone();
-                let payload = payload.clone();
-                async move {
-                    let response = client
-                        .post(&url)
-                        .header("Content-Type", "application/json")
-                        .header("Authorization", format!("Bearer {}", api_key))
-                        .json(&payload)
-                        .send()
-                        .await
-                        .map_err(|e| LlmError::from_reqwest(&e))?;
-
-                    let status = response.status();
-                    if !status.is_success() {
-                        let error_text = response
-                            .text()
-                            .await
-                            .unwrap_or_else(|_| "Unknown error".to_string());
-                        return Err(LlmError::from_http_response(status.as_u16(), &error_text));
-                    }
-                    Ok(response)
-                }
-            },
-            None,
-        )
-        .await
-        .map_err(|e| ToolError::execution_failed(format!("Vision API request failed: {e}")))?;
-
-        let json: Value = response
-            .json()
+        let mime = bridge::mime_type_for_path(&resolved_path).ok_or_else(|| {
+            ToolError::execution_failed(format!(
+                "Unsupported image format: {}",
+                resolved_path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("?")
+            ))
+        })?;
+        let bytes = tokio::fs::read(&resolved_path)
             .await
-            .map_err(|e| ToolError::execution_failed(format!("Failed to parse response: {e}")))?;
+            .map_err(|e| ToolError::execution_failed(format!("Failed to read image: {e}")))?;
+        let data_url = bridge::build_data_url(mime, &bytes);
 
-        let content = json
-            .get("choices")
-            .and_then(|c| c.get(0))
-            .and_then(|c| c.get("message"))
-            .and_then(|m| m.get("content"))
-            .and_then(|c| c.as_str())
-            .unwrap_or("")
-            .to_string();
+        let api_key = self.config.api_key.clone().unwrap_or_default();
+        let base_url = self
+            .config
+            .base_url
+            .clone()
+            .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
 
-        let model = json
-            .get("model")
-            .and_then(|m| m.as_str())
-            .unwrap_or(&self.config.model)
-            .to_string();
+        let params = bridge::VisionAnalysisParams {
+            api_key: &api_key,
+            base_url: &base_url,
+            model: &self.config.model,
+            max_tokens: 8192,
+            temperature: 0.0,
+            timeout_secs: 120,
+            image_data_url: &data_url,
+            user_question: Some(prompt),
+            primitives: self.config.primitives.unwrap_or(true),
+        };
 
-        let result = json!({
-            "analysis": content,
-            "model": model,
-        });
+        let analysis = bridge::run_vision_analysis(params)
+            .await
+            .map_err(|e| ToolError::execution_failed(format!("Vision analysis failed: {e}")))?;
 
-        ToolResult::json(&result)
-            .map_err(|e| ToolError::execution_failed(format!("Failed to serialize result: {e}")))
+        let context_text = bridge::format_vision_context(&analysis);
+
+        ToolResult::json(&json!({
+            "analysis": context_text,
+            "model": self.config.model,
+            "primitives_count": analysis.primitives.len(),
+        }))
+        .map_err(|e| ToolError::execution_failed(format!("Failed to serialize result: {e}")))
     }
 }
 
@@ -226,6 +135,7 @@ mod tests {
             model: "test-vision-model".to_string(),
             api_key: Some("test-key".to_string()),
             base_url: Some("https://example.invalid/v1".to_string()),
+            primitives: None,
         }
     }
 
@@ -236,53 +146,27 @@ mod tests {
         assert!(tool.capabilities().contains(&ToolCapability::ReadOnly));
     }
 
-    #[test]
-    fn mime_type_detection_covers_common_formats() {
-        for (ext, expected) in [
-            ("png", "image/png"),
-            ("PNG", "image/png"),
-            ("jpg", "image/jpeg"),
-            ("jpeg", "image/jpeg"),
-            ("gif", "image/gif"),
-            ("webp", "image/webp"),
-            ("bmp", "image/bmp"),
-        ] {
-            let path = std::path::PathBuf::from(format!("test.{ext}"));
-            let mime = ImageAnalyzeTool::detect_mime_type(&path)
-                .unwrap_or_else(|_| panic!("must detect {ext}"));
-            assert_eq!(mime, expected);
-        }
-    }
-
-    #[test]
-    fn mime_type_detection_rejects_unsupported_extension() {
-        let path = std::path::PathBuf::from("test.svg");
-        let err = ImageAnalyzeTool::detect_mime_type(&path)
-            .expect_err("svg is intentionally out of scope for vision tool");
-        assert!(err.to_string().contains("Unsupported image format"));
-    }
-
     #[tokio::test]
-    async fn execute_rejects_absolute_path() {
-        // Trust-boundary pin: image_path must stay inside the workspace
-        // — an absolute path or a `..`-traversing path must reject
-        // before any base64 / API call.
+    async fn execute_accepts_absolute_path() {
         let tmp = tempdir().expect("tempdir");
         let ctx = ToolContext::new(tmp.path().to_path_buf());
         let tool = ImageAnalyzeTool::new(fake_config());
-        let outside_workspace = if cfg!(windows) {
-            r"C:\Windows\System32\drivers\etc\hosts"
-        } else {
-            "/etc/hosts"
-        };
-        let err = tool
-            .execute(json!({"image_path": outside_workspace}), &ctx)
-            .await
-            .expect_err("absolute path must reject");
+        // Absolute path is accepted (it will fail at file-read, not at validation)
+        let abs = tmp.path().join("test.png");
+        std::fs::write(&abs, b"\x89PNG\r\n").unwrap();
+        let result = tool
+            .execute(json!({"image_path": abs.to_str().unwrap()}), &ctx)
+            .await;
+        // Should not error on path validation — may fail on API call, but that's fine
         assert!(
-            err.to_string()
-                .contains("relative path within the workspace"),
-            "error must call out the workspace boundary; got {err}"
+            result.is_ok()
+                || !result
+                    .as_ref()
+                    .unwrap_err()
+                    .to_string()
+                    .contains("relative path"),
+            "absolute path must not be rejected by path validation; got {:?}",
+            result.as_ref().map_err(|e| e.to_string())
         );
     }
 

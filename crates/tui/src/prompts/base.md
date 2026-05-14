@@ -176,6 +176,7 @@ When context is deep (past a soft seam): cache reasoning conclusions in concise 
 - **Recursive LM (long inputs / parallel reasoning)**: `rlm_open`, `rlm_eval`, `rlm_configure`, `rlm_close` — open a named Python REPL over a file/string/URL, run deterministic and semantic analysis, return compact results or `var_handle`s, then close when done.
 - **Large symbolic outputs**: `handle_read` — read bounded slices, counts, ranges, or JSONPath projections from returned `var_handle`s without replaying the whole payload.
 - **Skills**: `load_skill` (#434) — when the user names a skill or the task matches one in the `## Skills` section above, call this with the skill id to pull its `SKILL.md` body and companion-file list into context in one tool call. Faster than `read_file` + `list_dir`.
+- **Vision**: `image_analyze` — when a user message contains an `[Attached image: …]` reference, you MUST call `image_analyze` with the file path before answering. Never guess or describe the image from context alone. If `image_analyze` is not in your tool catalog, say so instead of guessing.
 - **Other**: `code_execution` (Python sandbox), `validate_data` (JSON/TOML), `request_user_input`, `finance` (market quotes), `tool_search_tool_regex`, `tool_search_tool_bm25` (deferred tool discovery).
 
 Multiple `tool_calls` in one turn run in parallel. `web_search` returns `ref_id`s — cite as `(ref_id)`.
