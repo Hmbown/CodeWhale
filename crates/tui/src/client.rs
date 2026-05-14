@@ -849,11 +849,15 @@ pub(super) fn apply_reasoning_effort(
             | ApiProvider::DeepseekCN
             | ApiProvider::Openrouter
             | ApiProvider::Novita
-            | ApiProvider::Fireworks
             | ApiProvider::Sglang
             | ApiProvider::Vllm => {
                 body["reasoning_effort"] = json!("high");
                 body["thinking"] = json!({ "type": "enabled" });
+            }
+            // Fireworks enforces strict OpenAI schema; sending both
+            // `thinking` and `reasoning_effort` causes HTTP 400.
+            ApiProvider::Fireworks => {
+                body["reasoning_effort"] = json!("high");
             }
             ApiProvider::Openai | ApiProvider::Ollama => {}
             ApiProvider::NvidiaNim => {
@@ -868,11 +872,13 @@ pub(super) fn apply_reasoning_effort(
             | ApiProvider::DeepseekCN
             | ApiProvider::Openrouter
             | ApiProvider::Novita
-            | ApiProvider::Fireworks
             | ApiProvider::Sglang
             | ApiProvider::Vllm => {
                 body["reasoning_effort"] = json!("max");
                 body["thinking"] = json!({ "type": "enabled" });
+            }
+            ApiProvider::Fireworks => {
+                body["reasoning_effort"] = json!("max");
             }
             ApiProvider::Openai | ApiProvider::Ollama => {}
             ApiProvider::NvidiaNim => {
@@ -1781,6 +1787,32 @@ mod tests {
             body.pointer("/chat_template_kwargs/reasoning_effort")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn reasoning_effort_fireworks_omits_thinking_field() {
+        let mut body = json!({});
+        apply_reasoning_effort(&mut body, Some("max"), ApiProvider::Fireworks);
+
+        assert_eq!(
+            body.get("reasoning_effort").and_then(Value::as_str),
+            Some("max")
+        );
+        // Fireworks enforces strict OpenAI schema; sending `thinking`
+        // alongside `reasoning_effort` returns HTTP 400.
+        assert!(body.get("thinking").is_none());
+    }
+
+    #[test]
+    fn reasoning_effort_fireworks_high_omits_thinking_field() {
+        let mut body = json!({});
+        apply_reasoning_effort(&mut body, Some("high"), ApiProvider::Fireworks);
+
+        assert_eq!(
+            body.get("reasoning_effort").and_then(Value::as_str),
+            Some("high")
+        );
+        assert!(body.get("thinking").is_none());
     }
 
     #[test]

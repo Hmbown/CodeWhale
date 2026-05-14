@@ -1305,12 +1305,8 @@ pub(super) fn tool_to_chat(tool: &Tool) -> Value {
             "parameters": tool.input_schema,
         }
     });
-    if let Some(allowed_callers) = &tool.allowed_callers {
-        value["allowed_callers"] = json!(allowed_callers);
-    }
-    if let Some(defer_loading) = tool.defer_loading {
-        value["defer_loading"] = json!(defer_loading);
-    }
+    // allowed_callers and defer_loading are Anthropic deferred-tool fields;
+    // OpenAI-compat endpoints reject them as extra properties.
     if let Some(input_examples) = &tool.input_examples {
         value["input_examples"] = json!(input_examples);
     }
@@ -2613,5 +2609,69 @@ mod stream_decoder_tests {
         assert!(tool_layers[1].sent_chars < 200);
         assert!(!tool_layers[1].truncated);
         assert!(tool_layers[1].deduplicated);
+    }
+}
+
+#[cfg(test)]
+mod tool_serializer_tests {
+    use super::*;
+    use crate::models::Tool;
+    use serde_json::json;
+
+    fn make_tool(allowed_callers: Option<Vec<String>>, defer_loading: Option<bool>) -> Tool {
+        Tool {
+            tool_type: None,
+            name: "example_tool".to_string(),
+            description: "A test tool".to_string(),
+            input_schema: json!({"type": "object", "properties": {}}),
+            allowed_callers,
+            defer_loading,
+            input_examples: None,
+            strict: None,
+            cache_control: None,
+        }
+    }
+
+    #[test]
+    fn tool_to_chat_omits_allowed_callers() {
+        let tool = make_tool(Some(vec!["direct".to_string()]), None);
+        let value = tool_to_chat(&tool);
+        assert!(
+            value.get("allowed_callers").is_none(),
+            "allowed_callers must not be sent to OpenAI-compat endpoints; got {value}"
+        );
+    }
+
+    #[test]
+    fn tool_to_chat_omits_defer_loading() {
+        let tool = make_tool(None, Some(true));
+        let value = tool_to_chat(&tool);
+        assert!(
+            value.get("defer_loading").is_none(),
+            "defer_loading must not be sent to OpenAI-compat endpoints; got {value}"
+        );
+    }
+
+    #[test]
+    fn tool_to_chat_omits_both_anthropic_fields_when_set() {
+        let tool = make_tool(Some(vec!["direct".to_string()]), Some(false));
+        let value = tool_to_chat(&tool);
+        assert!(value.get("allowed_callers").is_none());
+        assert!(value.get("defer_loading").is_none());
+    }
+
+    #[test]
+    fn tool_to_chat_preserves_name_description_parameters() {
+        let tool = make_tool(Some(vec!["direct".to_string()]), Some(true));
+        let value = tool_to_chat(&tool);
+        assert_eq!(
+            value.pointer("/function/name").and_then(Value::as_str),
+            Some("example_tool")
+        );
+        assert_eq!(
+            value.pointer("/function/description").and_then(Value::as_str),
+            Some("A test tool")
+        );
+        assert!(value.get("type").is_some());
     }
 }
