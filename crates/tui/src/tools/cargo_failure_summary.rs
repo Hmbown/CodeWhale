@@ -102,6 +102,16 @@ pub(crate) fn summarize_cargo_failure(
     }
 
     let kind = classify_failure(&failing_tests, &primary_errors, test_result.as_deref());
+    if !has_actionable_signal(
+        &failing_tests,
+        &error_codes,
+        &primary_errors,
+        &panic_locations,
+        test_result.as_deref(),
+        final_error.as_deref(),
+    ) {
+        return None;
+    }
     let summary = build_summary(
         &kind,
         &failing_tests,
@@ -125,20 +135,33 @@ pub(crate) fn summarize_cargo_failure(
 }
 
 fn looks_like_cargo_command(command: &str) -> bool {
-    let lower = command.to_ascii_lowercase();
-    [
-        "cargo test",
-        "cargo check",
-        "cargo build",
-        "cargo clippy",
-        "cargo run",
-        "cargo t",
-        "cargo c",
-        "cargo b",
-        "cargo r",
-    ]
-    .iter()
-    .any(|cmd| lower.contains(cmd))
+    let Some(tokens) = shlex::split(command) else {
+        return false;
+    };
+
+    let mut expect_command = true;
+    for (idx, raw_token) in tokens.iter().enumerate() {
+        let token = normalize_shell_token(raw_token);
+        if token.is_empty() {
+            continue;
+        }
+        if is_shell_separator(token) {
+            expect_command = true;
+            continue;
+        }
+        if !expect_command {
+            continue;
+        }
+        if looks_like_env_assignment(token) {
+            continue;
+        }
+        if is_cargo_binary(token) {
+            return cargo_subcommand(&tokens[idx + 1..]).is_some();
+        }
+        expect_command = false;
+    }
+
+    false
 }
 
 fn parse_failed_test_line(line: &str) -> Option<String> {
@@ -180,6 +203,22 @@ fn classify_failure(
     }
 }
 
+fn has_actionable_signal(
+    failing_tests: &[String],
+    error_codes: &[String],
+    primary_errors: &[String],
+    panic_locations: &[String],
+    test_result: Option<&str>,
+    final_error: Option<&str>,
+) -> bool {
+    !failing_tests.is_empty()
+        || !error_codes.is_empty()
+        || !primary_errors.is_empty()
+        || !panic_locations.is_empty()
+        || test_result.is_some()
+        || final_error.is_some()
+}
+
 fn build_summary(
     kind: &CargoFailureKind,
     failing_tests: &[String],
@@ -210,6 +249,87 @@ fn build_summary(
         lines.push(line.to_string());
     }
     truncate_chars(&lines.join("\n"), MAX_SUMMARY_CHARS)
+}
+
+fn normalize_shell_token(token: &str) -> &str {
+    token.trim_matches(|ch| matches!(ch, '(' | ')' | '{' | '}'))
+}
+
+fn is_shell_separator(token: &str) -> bool {
+    matches!(token, "&&" | "||" | ";" | "|")
+}
+
+fn looks_like_env_assignment(token: &str) -> bool {
+    let Some((name, _)) = token.split_once('=') else {
+        return false;
+    };
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
+        && !name.as_bytes()[0].is_ascii_digit()
+}
+
+fn is_cargo_binary(token: &str) -> bool {
+    let name = token.rsplit(['/', '\\']).next().unwrap_or(token);
+    name.eq_ignore_ascii_case("cargo") || name.eq_ignore_ascii_case("cargo.exe")
+}
+
+fn cargo_subcommand(tokens: &[String]) -> Option<&str> {
+    let mut idx = 0;
+    while let Some(raw_token) = tokens.get(idx) {
+        let token = normalize_shell_token(raw_token);
+        if token.is_empty() {
+            idx += 1;
+            continue;
+        }
+        if is_shell_separator(token) {
+            return None;
+        }
+        if token.starts_with('+') {
+            idx += 1;
+            continue;
+        }
+        if token.starts_with('-') {
+            if cargo_global_flag_takes_value(token) {
+                idx += 2;
+            } else {
+                idx += 1;
+            }
+            continue;
+        }
+        return is_supported_cargo_subcommand(token).then_some(token);
+    }
+    None
+}
+
+fn cargo_global_flag_takes_value(token: &str) -> bool {
+    if token.contains('=') {
+        return false;
+    }
+    matches!(
+        token,
+        "--color"
+            | "--config"
+            | "-C"
+            | "--jobs"
+            | "-j"
+            | "--lockfile-path"
+            | "--manifest-path"
+            | "--message-format"
+            | "--package"
+            | "-p"
+            | "--target"
+            | "--target-dir"
+            | "-Z"
+    )
+}
+
+fn is_supported_cargo_subcommand(token: &str) -> bool {
+    matches!(
+        token,
+        "test" | "check" | "build" | "clippy" | "run" | "t" | "c" | "b" | "r"
+    )
 }
 
 fn push_unique_limited(target: &mut Vec<String>, value: String) {
@@ -290,6 +410,45 @@ error: could not compile `demo` (lib) due to 1 previous error
         assert_eq!(
             summary.primary_errors,
             vec!["error: cannot find value `missing` in this scope"]
+        );
+    }
+
+    #[test]
+    fn recognizes_tokenized_cargo_invocations() {
+        assert!(
+            summarize_cargo_failure(
+                "cargo +nightly --manifest-path demo/Cargo.toml test",
+                "test tests::fails ... FAILED\n",
+                "",
+                Some(101),
+            )
+            .is_some()
+        );
+        assert!(
+            summarize_cargo_failure(
+                "DEMO=1 cargo --locked run",
+                "",
+                "error: process didn't exit successfully\n",
+                Some(101),
+            )
+            .is_some()
+        );
+        assert!(
+            summarize_cargo_failure(
+                "echo cargo test && false",
+                "test tests::fails ... FAILED\n",
+                "",
+                Some(1),
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn skips_generic_cargo_failure_without_actionable_signal() {
+        assert!(
+            summarize_cargo_failure("cargo test", "build failed", "command failed", Some(1))
+                .is_none()
         );
     }
 

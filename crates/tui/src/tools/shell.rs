@@ -1523,7 +1523,6 @@ fn attach_cargo_failure_summary(
     if let Some(summary) =
         summarize_cargo_failure(command, &result.stdout, &result.stderr, result.exit_code)
     {
-        metadata["summary"] = json!(summary.summary);
         metadata["cargo_failure_summary"] = summary.to_metadata_value();
     }
 }

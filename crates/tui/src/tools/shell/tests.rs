@@ -404,10 +404,56 @@ fn shell_delta_result_includes_cargo_failure_summary() {
         json!("test_failure")
     );
     assert!(
-        metadata["summary"]
+        metadata["cargo_failure_summary"]["summary"]
             .as_str()
             .unwrap()
             .contains("Failing tests: tests::fails")
+    );
+    assert!(
+        metadata["summary"]
+            .as_str()
+            .unwrap()
+            .contains("error: test failed")
+    );
+}
+
+#[test]
+fn shell_delta_result_keeps_existing_summary_for_generic_cargo_failure() {
+    let tmp = tempdir().expect("tempdir");
+    let ctx = ToolContext::new(tmp.path());
+    let result = ShellResult {
+        task_id: None,
+        status: ShellStatus::Failed,
+        exit_code: Some(1),
+        stdout: "build failed".to_string(),
+        stderr: "command failed without structured cargo diagnostics".to_string(),
+        duration_ms: 12,
+        stdout_len: 0,
+        stderr_len: 0,
+        stdout_omitted: 0,
+        stderr_omitted: 0,
+        stdout_truncated: false,
+        stderr_truncated: false,
+        sandboxed: false,
+        sandbox_type: None,
+        sandbox_denied: false,
+    };
+
+    let tool_result = build_shell_delta_tool_result(
+        ShellDeltaResult {
+            command: "cargo test".to_string(),
+            result,
+            stdout_total_len: 0,
+            stderr_total_len: 0,
+        },
+        &ctx,
+    );
+
+    let metadata = tool_result.metadata.expect("metadata");
+    assert!(metadata.get("cargo_failure_summary").is_none());
+    assert_eq!(
+        metadata["summary"],
+        json!("command failed without structured cargo diagnostics")
     );
 }
 
