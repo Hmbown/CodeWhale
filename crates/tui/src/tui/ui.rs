@@ -311,6 +311,12 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
     // sequence is received. Terminals that do not understand it silently
     // ignore it.
     recover_terminal_modes(&mut stdout, use_mouse_capture, use_bracketed_paste);
+    let mut cleanup_guard = TerminalCleanupGuard {
+        use_alt_screen,
+        use_mouse_capture,
+        use_bracketed_paste,
+        defused: false,
+    };
     let color_depth = palette::ColorDepth::detect();
     let palette_mode = palette::PaletteMode::detect();
     tracing::debug!(
@@ -523,6 +529,7 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
     persistence_actor::persist(PersistRequest::ClearCheckpoint);
     persistence_actor::persist(PersistRequest::Shutdown);
 
+    cleanup_guard.defused = true;
     pop_keyboard_enhancement_flags(terminal.backend_mut());
     execute!(terminal.backend_mut(), DisableFocusChange)?;
     disable_raw_mode()?;
@@ -569,6 +576,36 @@ fn terminal_probe_timeout(config: &Config) -> Duration {
         .unwrap_or(DEFAULT_TERMINAL_PROBE_TIMEOUT_MS)
         .clamp(100, 5_000);
     Duration::from_millis(timeout_ms)
+}
+
+struct TerminalCleanupGuard {
+    use_alt_screen: bool,
+    use_mouse_capture: bool,
+    use_bracketed_paste: bool,
+    defused: bool,
+}
+
+impl Drop for TerminalCleanupGuard {
+    fn drop(&mut self) {
+        if self.defused {
+            return;
+        }
+
+        let mut stdout = io::stdout();
+        pop_keyboard_enhancement_flags(&mut stdout);
+        let _ = execute!(stdout, DisableFocusChange);
+        let _ = disable_raw_mode();
+        if self.use_alt_screen {
+            let _ = execute!(stdout, LeaveAlternateScreen);
+        }
+        if self.use_mouse_capture {
+            let _ = execute!(stdout, DisableMouseCapture);
+        }
+        if self.use_bracketed_paste {
+            let _ = execute!(stdout, DisableBracketedPaste);
+        }
+        let _ = execute!(stdout, crossterm::cursor::Show);
+    }
 }
 
 /// Recognise composer input that is a `# foo` memory quick-add (#492).
