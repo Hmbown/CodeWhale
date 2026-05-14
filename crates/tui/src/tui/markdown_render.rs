@@ -497,9 +497,7 @@ fn render_line_with_links(
             for ch in word.text.chars() {
                 let cw = ch.width().unwrap_or(1);
                 if chunk_w + cw > width && chunk_w > 0 {
-                    lines.push(Line::from(vec![word.span_for(std::mem::take(
-                        &mut chunk,
-                    ))]));
+                    lines.push(Line::from(vec![word.span_for(std::mem::take(&mut chunk))]));
                     chunk_w = 0;
                 }
                 chunk.push(ch);
@@ -663,7 +661,11 @@ fn parse_inline_spans(line: &str, base_style: Style, link_style: Style) -> Vec<I
                         Some(url.to_string()),
                     ));
                 } else {
-                    out.push(InlineToken::new(format!("{text} ({url})"), link_style, None));
+                    out.push(InlineToken::new(
+                        format!("{text} ({url})"),
+                        link_style,
+                        None,
+                    ));
                 }
                 rest = &after_bracket[paren_end + 1..];
                 continue;
@@ -1287,7 +1289,9 @@ mod tests {
             "expected each wrapped URL chunk to reopen the full OSC 8 target; got {joined:?}"
         );
         assert!(
-            !joined.contains("\x1b]8;;https://raw.githubusercontent.com/Hmbown/deepseek-skills/main/inde\x1b\\"),
+            !joined.contains(
+                "\x1b]8;;https://raw.githubusercontent.com/Hmbown/deepseek-skills/main/inde\x1b\\"
+            ),
             "wrapped link must not expose a truncated OSC 8 target: {joined:?}"
         );
     }
@@ -1486,7 +1490,9 @@ mod tests {
     }
 
     fn render_paragraph_for_test(text: &str, width: usize) -> Vec<Line<'static>> {
-        with_osc8(false, || render_line_with_links(text, width, Style::default(), Style::default()))
+        with_osc8(false, || {
+            render_line_with_links(text, width, Style::default(), Style::default())
+        })
     }
 
     #[test]
