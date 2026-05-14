@@ -1987,7 +1987,7 @@ use self::dispatch::{
 };
 use self::loop_guard::{AttemptDecision, LoopGuard, OutcomeDecision};
 #[cfg(test)]
-use self::lsp_hooks::{edited_paths_for_tool, parse_patch_paths};
+use self::lsp_hooks::edited_paths_for_tool;
 #[cfg(test)]
 use self::streaming::TOOL_CALL_START_MARKERS;
 use self::streaming::{
