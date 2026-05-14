@@ -1592,10 +1592,17 @@ fn todos_window_start(items: &[TodoItem], max_items: usize) -> usize {
     if max_items >= items.len() {
         return 0;
     }
-    let Some(active_idx) = items
+    // Anchor on the in-progress item; if none, anchor on the first
+    // non-completed item so the user sees what's left to do.
+    let active_idx = items
         .iter()
         .position(|item| item.status == TodoStatus::InProgress)
-    else {
+        .or_else(|| {
+            items
+                .iter()
+                .position(|item| item.status != TodoStatus::Completed)
+        });
+    let Some(active_idx) = active_idx else {
         return 0;
     };
     active_idx
