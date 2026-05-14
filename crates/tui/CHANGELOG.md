@@ -43,6 +43,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `composer_arrows_scroll` now defaults on for Windows terminals even when
   mouse capture is enabled, so wheel events that arrive as arrow keys scroll the
   transcript instead of cycling composer history (#1578).
+- **Plain Windows PowerShell / ConHost uses calmer rendering.** Unmarked
+  legacy Windows console hosts now automatically enable low-motion rendering,
+  disable fancy animations, and resolve `synchronized_output = "auto"` to off
+  so streaming redraws do not overlap or visibly flicker (#1590).
 
 ### Thanks
 
@@ -53,7 +57,9 @@ switching fixes harvested from #1642. Thanks to **Photo
 ([@eng2007](https://github.com/eng2007))** for the provider-aware `/model`
 picker catalog work harvested from #1201. Thanks to
 **[@kunpeng-ai-lab](https://github.com/kunpeng-ai-lab)** for the Windows
-composer scroll fix harvested from #1578.
+composer scroll fix harvested from #1578, and **WuMing
+([@asdfg314284230](https://github.com/asdfg314284230))** for the Windows
+PowerShell flicker fix harvested from #1591.
 
 ## [0.8.37] - 2026-05-14
 

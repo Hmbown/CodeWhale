@@ -327,16 +327,16 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
     let backend = ColorCompatBackend::new(stdout, color_depth, palette_mode);
     let mut terminal = Terminal::new(backend)?;
     // At this point Settings hasn't loaded yet, so we can't read the
-    // user's `synchronized_output` knob. Use the same env-based Ptyxis
-    // detection that `Settings::apply_env_overrides` uses, so the
+    // user's `synchronized_output` knob. Use the same env-based terminal
+    // quirk detection that `Settings::apply_env_overrides` uses, so the
     // startup viewport reset matches what every later draw will do on
-    // this terminal. A user who has explicitly set
-    // `synchronized_output = "on"` to override Ptyxis detection will
-    // get sync wrap from the main draw loop onward; the one-time
-    // startup viewport reset stays opt-out for them, which is the safe
-    // default because the cost is at most brief tearing on the first
-    // frame.
-    let sync_output_at_init = !crate::settings::detected_ptyxis_terminal();
+    // flicker-sensitive hosts. A user who has explicitly set
+    // `synchronized_output = "on"` to override detection will get sync wrap
+    // from the main draw loop onward; the one-time startup viewport reset
+    // stays opt-out for them, which is the safe default because the cost is
+    // at most brief tearing on the first frame.
+    let sync_output_at_init = !crate::settings::detected_ptyxis_terminal()
+        && !crate::settings::detected_legacy_windows_console_host();
     reset_terminal_viewport(&mut terminal, sync_output_at_init)?;
     let event_broker = EventBroker::new();
 

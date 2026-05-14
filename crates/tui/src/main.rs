@@ -2398,6 +2398,13 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
         );
         any_quirk = true;
     }
+    if crate::settings::detected_legacy_windows_console_host() {
+        println!(
+            "  {} legacy Windows console host → low_motion + fancy_animations=false + synchronized_output=off (auto)",
+            "•".truecolor(sky_r, sky_g, sky_b)
+        );
+        any_quirk = true;
+    }
     if !any_quirk {
         println!(
             "  {} no env-driven terminal-quirk overrides active",
