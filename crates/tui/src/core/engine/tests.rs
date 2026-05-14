@@ -2254,6 +2254,15 @@ fn edited_paths_for_apply_patch_with_diff_text_extracts_paths() {
 }
 
 #[test]
+fn edited_paths_for_apply_patch_with_invalid_diff_returns_empty() {
+    let input = json!({
+        "patch": "@@ -1 +1 @@\n-old\n+new\n"
+    });
+    let paths = edited_paths_for_tool("apply_patch", &input);
+    assert!(paths.is_empty());
+}
+
+#[test]
 fn edited_paths_for_unknown_tool_returns_empty() {
     let input = json!({ "path": "irrelevant.rs" });
     let paths = edited_paths_for_tool("read_file", &input);

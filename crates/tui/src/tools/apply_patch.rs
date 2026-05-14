@@ -447,16 +447,12 @@ fn preflight_changes(changes_value: &Value) -> Result<ApplyPatchPreflight, ToolE
 }
 
 fn apply_patch_preflight_metadata(preflight: &ApplyPatchPreflight) -> Value {
-    json!({
-        "event": "apply_patch.preflight",
-        "touched_files": preflight.touched_files,
-        "files_total": preflight.files_total,
-        "hunks_total": preflight.hunks_total,
-        "creates": preflight.creates,
-        "deletes": preflight.deletes,
-        "path_override": preflight.path_override,
-        "header_path_mismatch": preflight.header_path_mismatch,
-    })
+    let mut metadata =
+        serde_json::to_value(preflight).expect("ApplyPatchPreflight should serialize");
+    if let Some(object) = metadata.as_object_mut() {
+        object.insert("event".to_string(), json!("apply_patch.preflight"));
+    }
+    metadata
 }
 
 /// Parse a unified diff into hunks
@@ -1420,6 +1416,22 @@ diff --git a/same.txt b/same.txt
             result.metadata.as_ref().unwrap()["touched_files"],
             json!(["test.txt"])
         );
+        assert!(
+            result
+                .metadata
+                .as_ref()
+                .unwrap()
+                .get("header_path_mismatch")
+                .is_none()
+        );
+        assert!(
+            result
+                .metadata
+                .as_ref()
+                .unwrap()
+                .get("path_override")
+                .is_some()
+        );
         let patch_result = parse_patch_result(result);
         assert_eq!(patch_result.touched_files, vec!["test.txt"]);
         assert_eq!(patch_result.hunks_applied, 1);
@@ -1506,6 +1518,12 @@ diff --git a/same.txt b/same.txt
             .expect("execute");
 
         assert!(result.success);
+        let metadata = result.metadata.as_ref().expect("metadata");
+        assert_eq!(metadata["event"], "apply_patch.preflight");
+        assert_eq!(metadata["touched_files"], json!(["one.txt", "two.txt"]));
+        assert_eq!(metadata["files_total"], 2);
+        assert_eq!(metadata["hunks_total"], 0);
+        assert!(metadata.get("path_override").is_none());
         let patch_result = parse_patch_result(result);
         let mut touched = patch_result.touched_files.clone();
         touched.sort();
@@ -1552,6 +1570,12 @@ diff --git a/b.txt b/b.txt
             .expect("execute");
 
         assert!(result.success);
+        let metadata = result.metadata.as_ref().expect("metadata");
+        assert_eq!(metadata["event"], "apply_patch.preflight");
+        assert_eq!(metadata["touched_files"], json!(["a.txt", "b.txt"]));
+        assert_eq!(metadata["files_total"], 2);
+        assert_eq!(metadata["hunks_total"], 2);
+        assert!(metadata.get("path_override").is_none());
         let patch_result = parse_patch_result(result);
         let mut touched = patch_result.touched_files.clone();
         touched.sort();
@@ -1667,6 +1691,13 @@ diff --git a/b.txt b/b.txt
             .execute(json!({"path": "override.txt", "patch": patch}), &ctx)
             .await
             .expect("execute");
+        let metadata = result.metadata.as_ref().expect("metadata");
+        assert!(
+            metadata["header_path_mismatch"]
+                .as_str()
+                .unwrap()
+                .contains("headers reference `other.txt`")
+        );
         let patch_result = parse_patch_result(result);
         assert!(
             patch_result
