@@ -12,6 +12,7 @@ pub mod apply_patch;
 pub mod approval_cache;
 pub mod arg_repair;
 pub mod automation;
+pub mod cargo_failure_summary;
 pub mod diagnostics;
 pub mod diff_format;
 pub mod file;

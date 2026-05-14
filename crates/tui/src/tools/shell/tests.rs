@@ -367,6 +367,51 @@ fn shell_delta_result_surfaces_network_restricted_hint() {
 }
 
 #[test]
+fn shell_delta_result_includes_cargo_failure_summary() {
+    let tmp = tempdir().expect("tempdir");
+    let ctx = ToolContext::new(tmp.path());
+    let result = ShellResult {
+        task_id: None,
+        status: ShellStatus::Failed,
+        exit_code: Some(101),
+        stdout: "running 1 test\ntest tests::fails ... FAILED\n\nfailures:\n\n---- tests::fails stdout ----\nthread 'tests::fails' panicked at src/lib.rs:7:9:\nboom\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; finished in 0.00s\n".to_string(),
+        stderr: "error: test failed, to rerun pass `--lib`".to_string(),
+        duration_ms: 12,
+        stdout_len: 0,
+        stderr_len: 0,
+        stdout_omitted: 0,
+        stderr_omitted: 0,
+        stdout_truncated: false,
+        stderr_truncated: false,
+        sandboxed: false,
+        sandbox_type: None,
+        sandbox_denied: false,
+    };
+
+    let tool_result = build_shell_delta_tool_result(
+        ShellDeltaResult {
+            command: "cargo test".to_string(),
+            result,
+            stdout_total_len: 0,
+            stderr_total_len: 0,
+        },
+        &ctx,
+    );
+
+    let metadata = tool_result.metadata.expect("metadata");
+    assert_eq!(
+        metadata["cargo_failure_summary"]["kind"],
+        json!("test_failure")
+    );
+    assert!(
+        metadata["summary"]
+            .as_str()
+            .unwrap()
+            .contains("Failing tests: tests::fails")
+    );
+}
+
+#[test]
 fn test_summarize_output_strips_truncation_note() {
     let long_output = "x".repeat(60_000);
     let (truncated, _meta) = truncate_with_meta(&long_output);
