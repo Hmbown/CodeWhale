@@ -74,7 +74,9 @@ pub fn tokens(app: &mut App) -> CommandResult {
         .replace("{total}", &app.session.total_tokens.to_string())
         .replace(
             "{cost}",
-            &app.format_cost_amount_precise(app.session_cost_for_currency(app.cost_currency)),
+            &app.format_cost_amount_precise(
+                app.displayed_session_cost_for_currency(app.cost_currency),
+            ),
         )
         .replace("{api_messages}", &message_count.to_string())
         .replace("{chat_messages}", &chat_count.to_string())
@@ -84,10 +86,9 @@ pub fn tokens(app: &mut App) -> CommandResult {
 
 /// Show session cost breakdown
 pub fn cost(app: &mut App) -> CommandResult {
-    let report = tr(app.ui_locale, MessageId::CmdCostReport).replace(
-        "{cost}",
-        &app.format_cost_amount_precise(app.session_cost_for_currency(app.cost_currency)),
-    );
+    let total = app.displayed_session_cost_for_currency(app.cost_currency);
+    let report = tr(app.ui_locale, MessageId::CmdCostReport)
+        .replace("{cost}", &app.format_cost_amount_precise(total));
     CommandResult::message(report)
 }
 
@@ -450,6 +451,7 @@ mod tests {
         };
         let mut app = App::new(options, &Config::default());
         app.ui_locale = crate::localization::Locale::En;
+        app.cost_currency = crate::pricing::CostCurrency::Usd;
         app.api_provider = crate::config::ApiProvider::Deepseek;
         app
     }

@@ -532,24 +532,47 @@ impl ToolSpec for EditFileTool {
         })?;
 
         let count = contents.matches(search).count();
-        let (updated, count, fuzz_used) = if count == 0 && fuzz {
-            let matches = leading_whitespace_fuzzy_matches(&contents, search);
-            match matches.as_slice() {
-                [] => {
-                    return Err(ToolError::execution_failed(format!(
-                        "Search string not found in {}",
-                        file_path.display()
-                    )));
-                }
+        let (updated, count, fuzz_kind) = if count == 0 && fuzz {
+            // First fallback: tolerate indentation differences.
+            let indent_matches = leading_whitespace_fuzzy_matches(&contents, search);
+            match indent_matches.as_slice() {
                 [(start, end)] => {
                     let mut updated = contents.clone();
                     updated.replace_range(*start..*end, replace);
-                    (updated, 1, true)
+                    (updated, 1, Some("indentation"))
+                }
+                [] => {
+                    // Second fallback: tolerate typographic-punctuation
+                    // drift (smart quotes, em-dashes, NBSP). Picks up the
+                    // copy-paste failure mode where a browser/chat client
+                    // silently substituted Unicode punctuation in for the
+                    // ASCII the file actually contains.
+                    let punct_matches = punctuation_normalized_matches(&contents, search);
+                    match punct_matches.as_slice() {
+                        [] => {
+                            return Err(ToolError::execution_failed(format!(
+                                "Search string not found in {}",
+                                file_path.display()
+                            )));
+                        }
+                        [(start, end)] => {
+                            let mut updated = contents.clone();
+                            updated.replace_range(*start..*end, replace);
+                            (updated, 1, Some("punctuation"))
+                        }
+                        _ => {
+                            return Err(ToolError::execution_failed(format!(
+                                "Fuzzy punctuation search matched {} locations in {}; refine search text",
+                                punct_matches.len(),
+                                file_path.display()
+                            )));
+                        }
+                    }
                 }
                 _ => {
                     return Err(ToolError::execution_failed(format!(
                         "Fuzzy search matched {} locations in {}; refine search text",
-                        matches.len(),
+                        indent_matches.len(),
                         file_path.display()
                     )));
                 }
@@ -560,7 +583,7 @@ impl ToolSpec for EditFileTool {
                 file_path.display()
             )));
         } else {
-            (contents.replace(search, replace), count, false)
+            (contents.replace(search, replace), count, None)
         };
 
         fs::write(&file_path, &updated).map_err(|e| {
@@ -576,10 +599,13 @@ impl ToolSpec for EditFileTool {
                  Verify the result with read_file before proceeding."
             )
         } else {
-            let fuzz_note = if fuzz_used {
-                " (fuzzy indentation match)"
-            } else {
-                ""
+            let fuzz_note = match fuzz_kind {
+                Some("indentation") => " (fuzzy indentation match)",
+                Some("punctuation") => {
+                    " (fuzzy punctuation match — typographic quotes/dashes normalized)"
+                }
+                Some(other) => other,
+                None => "",
             };
             format!("Replaced 1 occurrence in {display}{fuzz_note}")
         };
@@ -640,6 +666,68 @@ fn leading_whitespace_fuzzy_matches(contents: &str, search: &str) -> Vec<(usize,
             break;
         };
         let original_start = line_start_before(contents, mapped_start);
+        let original_end = byte_map.get(norm_end).copied().unwrap_or(contents.len());
+        matches.push((original_start, original_end));
+        cursor = norm_start.saturating_add(1);
+    }
+    matches
+}
+
+/// Normalize typographic punctuation to its ASCII counterpart:
+///
+/// * `"` `"` / U+201C U+201D → `"`
+/// * `'` `'` / U+2018 U+2019 → `'`
+/// * `–` `—` / U+2013 U+2014 → `-`
+/// * U+00A0 (non-breaking space) → ASCII space
+///
+/// Returns the normalized string plus a byte-map sized to
+/// `normalized.len()` whose i-th entry is the original byte offset of
+/// the character that produced normalized byte i. Used to recover the
+/// original-byte range after finding a match in normalized space.
+fn punctuation_normalized_with_map(input: &str) -> (String, Vec<usize>) {
+    let mut normalized = String::with_capacity(input.len());
+    let mut byte_map = Vec::with_capacity(input.len());
+    for (idx, ch) in input.char_indices() {
+        let replacement: Option<char> = match ch {
+            '\u{201C}' | '\u{201D}' => Some('"'),
+            '\u{2018}' | '\u{2019}' => Some('\''),
+            '\u{2013}' | '\u{2014}' => Some('-'),
+            '\u{00A0}' => Some(' '),
+            _ => None,
+        };
+        let written = replacement.unwrap_or(ch);
+        normalized.push(written);
+        for _ in 0..written.len_utf8() {
+            byte_map.push(idx);
+        }
+    }
+    (normalized, byte_map)
+}
+
+/// Try to find `search` inside `contents` after normalizing typographic
+/// punctuation in both. Catches the copy-paste failure mode where a
+/// browser, word processor, or chat client silently converted ASCII
+/// quotes/dashes to their Unicode "pretty" forms.
+fn punctuation_normalized_matches(contents: &str, search: &str) -> Vec<(usize, usize)> {
+    let (norm_contents, byte_map) = punctuation_normalized_with_map(contents);
+    let (norm_search, _) = punctuation_normalized_with_map(search);
+    if norm_search.is_empty() {
+        return Vec::new();
+    }
+    // If normalization didn't change anything, the exact-match pass
+    // already considered this case — skip to avoid double-reporting.
+    if norm_contents == contents && norm_search == search {
+        return Vec::new();
+    }
+
+    let mut matches = Vec::new();
+    let mut cursor = 0;
+    while let Some(rel_idx) = norm_contents[cursor..].find(&norm_search) {
+        let norm_start = cursor + rel_idx;
+        let norm_end = norm_start + norm_search.len();
+        let Some(&original_start) = byte_map.get(norm_start) else {
+            break;
+        };
         let original_end = byte_map.get(norm_end).copied().unwrap_or(contents.len());
         matches.push((original_start, original_end));
         cursor = norm_start.saturating_add(1);
@@ -1316,6 +1404,72 @@ mod tests {
             edited,
             "fn main() {\n    if true {\n        let value = 2;\n    }\n}\n"
         );
+    }
+
+    #[tokio::test]
+    async fn test_edit_file_fuzz_tolerates_smart_quote_substitution() {
+        // The file on disk has ASCII quotes. The search comes from a
+        // browser paste with curly quotes. Exact match fails; the
+        // punctuation-normalized fallback should still land the edit.
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+
+        let test_file = tmp.path().join("smart.rs");
+        fs::write(&test_file, "let s = \"hello world\";\n").expect("write");
+
+        let tool = EditFileTool;
+        let result = tool
+            .execute(
+                json!({
+                    "path": "smart.rs",
+                    // \u{201C} \u{201D} are the curly double-quote pair.
+                    "search": "let s = \u{201C}hello world\u{201D};",
+                    "replace": "let s = \"hello universe\";",
+                    "fuzz": true
+                }),
+                &ctx,
+            )
+            .await
+            .expect("execute");
+
+        assert!(result.success, "fuzzy punctuation edit should succeed");
+        assert!(
+            result.content.contains("fuzzy punctuation match"),
+            "expected punctuation-fuzz note, got: {}",
+            result.content
+        );
+        let edited = fs::read_to_string(&test_file).expect("read");
+        assert_eq!(edited, "let s = \"hello universe\";\n");
+    }
+
+    #[tokio::test]
+    async fn test_edit_file_fuzz_tolerates_em_dash_and_nbsp() {
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+
+        let test_file = tmp.path().join("dash.md");
+        // File has an ASCII hyphen and ASCII space.
+        fs::write(&test_file, "alpha - beta\n").expect("write");
+
+        let tool = EditFileTool;
+        let result = tool
+            .execute(
+                json!({
+                    "path": "dash.md",
+                    // Search uses em-dash + NBSP, common after a copy-paste
+                    // from a styled document.
+                    "search": "alpha\u{00A0}\u{2014}\u{00A0}beta",
+                    "replace": "alpha - gamma",
+                    "fuzz": true
+                }),
+                &ctx,
+            )
+            .await
+            .expect("execute");
+
+        assert!(result.success);
+        let edited = fs::read_to_string(&test_file).expect("read");
+        assert_eq!(edited, "alpha - gamma\n");
     }
 
     #[tokio::test]

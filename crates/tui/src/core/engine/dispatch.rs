@@ -51,6 +51,11 @@ pub(super) struct ToolExecutionPlan {
     pub(super) guard_result: Option<ToolResult>,
 }
 
+pub(super) enum ToolExecutionBatch {
+    Parallel(Vec<ToolExecutionPlan>),
+    Serial(Box<ToolExecutionPlan>),
+}
+
 #[derive(Debug, serde::Serialize)]
 pub(super) struct ParallelToolResultEntry {
     pub(super) tool_name: String,
@@ -265,11 +270,40 @@ pub(super) fn parse_parallel_tool_calls(
 
 // === Dispatch policy ==================================================
 
+#[cfg(test)]
 pub(super) fn should_parallelize_tool_batch(plans: &[ToolExecutionPlan]) -> bool {
-    !plans.is_empty()
-        && plans.iter().all(|plan| {
-            plan.read_only && plan.supports_parallel && !plan.approval_required && !plan.interactive
-        })
+    !plans.is_empty() && plans.iter().all(tool_plan_is_parallel_safe)
+}
+
+pub(super) fn tool_plan_is_parallel_safe(plan: &ToolExecutionPlan) -> bool {
+    plan.read_only && plan.supports_parallel && !plan.approval_required && !plan.interactive
+}
+
+pub(super) fn plan_tool_execution_batches(
+    plans: Vec<ToolExecutionPlan>,
+) -> Vec<ToolExecutionBatch> {
+    let mut batches = Vec::new();
+    let mut parallel_chunk = Vec::new();
+
+    for plan in plans {
+        if tool_plan_is_parallel_safe(&plan) {
+            parallel_chunk.push(plan);
+            continue;
+        }
+
+        if !parallel_chunk.is_empty() {
+            batches.push(ToolExecutionBatch::Parallel(std::mem::take(
+                &mut parallel_chunk,
+            )));
+        }
+        batches.push(ToolExecutionBatch::Serial(Box::new(plan)));
+    }
+
+    if !parallel_chunk.is_empty() {
+        batches.push(ToolExecutionBatch::Parallel(parallel_chunk));
+    }
+
+    batches
 }
 
 pub(super) fn should_stop_after_plan_tool(

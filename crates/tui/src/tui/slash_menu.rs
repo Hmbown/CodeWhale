@@ -48,6 +48,7 @@ pub fn apply_slash_menu_selection(
         && !command.ends_with(' ')
         && !command.contains(char::is_whitespace)
         && let Some(info) = commands::get_command_info(command.trim_start_matches('/'))
+        && info.name != "change"
         && (info.usage.contains('<') || info.usage.contains('['))
     {
         command.push(' ');

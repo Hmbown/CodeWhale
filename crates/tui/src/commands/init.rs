@@ -15,25 +15,23 @@ pub fn init(app: &mut App) -> CommandResult {
     // Ensure .deepseek/ is gitignored if we're inside a git repo.
     ensure_deepseek_gitignored(workspace);
 
-    // Check if AGENTS.md already exists
+    // Check if AGENTS.md already exists — update it in place rather than refusing.
     let agents_path = workspace.join("AGENTS.md");
-    if agents_path.exists() {
-        return CommandResult::message(format!(
-            "AGENTS.md already exists at {}. Delete it first to reinitialize.",
-            agents_path.display()
-        ));
-    }
+    let already_exists = agents_path.exists();
 
     // Detect project type and generate appropriate content
     let content = generate_project_doc(workspace);
 
     // Write the file
     match std::fs::write(&agents_path, &content) {
-        Ok(()) => CommandResult::message(format!(
-            "Created AGENTS.md at {}\n\nEdit this file to customize agent behavior for your project.",
-            agents_path.display()
-        )),
-        Err(e) => CommandResult::error(format!("Failed to create AGENTS.md: {e}")),
+        Ok(()) => {
+            let verb = if already_exists { "Updated" } else { "Created" };
+            CommandResult::message(format!(
+                "{verb} AGENTS.md at {}\n\nEdit this file to customize agent behavior for your project.",
+                agents_path.display()
+            ))
+        }
+        Err(e) => CommandResult::error(format!("Failed to write AGENTS.md: {e}")),
     }
 }
 
@@ -257,18 +255,19 @@ mod tests {
     }
 
     #[test]
-    fn test_init_is_noop_if_exists() {
+    fn test_init_updates_if_exists() {
         let tmpdir = TempDir::new().unwrap();
         let mut app = create_test_app_with_tmpdir(&tmpdir);
-        // Create file first
-        std::fs::write(tmpdir.path().join("AGENTS.md"), "existing").unwrap();
+        // Create file first with stale content
+        let agents_path = tmpdir.path().join("AGENTS.md");
+        std::fs::write(&agents_path, "existing stale content").unwrap();
         let result = init(&mut app);
-        assert!(
-            !result.is_error,
-            "existing AGENTS.md is an idempotent no-op, not an error"
-        );
+        assert!(!result.is_error);
         assert!(result.message.is_some());
-        assert!(result.message.unwrap().contains("already exists"));
+        assert!(result.message.unwrap().contains("Updated AGENTS.md"));
+        let new_content = std::fs::read_to_string(&agents_path).unwrap();
+        assert!(new_content.contains("# Project Instructions"));
+        assert!(!new_content.contains("existing stale content"));
     }
 
     #[test]

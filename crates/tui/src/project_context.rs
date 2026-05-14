@@ -11,7 +11,7 @@
 //! The loaded content is injected into the system prompt to give the agent
 //! context about the project's conventions, structure, and requirements.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -33,9 +33,9 @@ const GLOBAL_AGENTS_RELATIVE_PATH: &[&str] = &[".deepseek", "AGENTS.md"];
 /// Maximum size for project context files (to prevent loading huge files)
 const MAX_CONTEXT_SIZE: usize = 100 * 1024; // 100KB
 const PACK_README_MAX_CHARS: usize = 4_000;
-const PACK_MAX_ENTRIES: usize = 400;
-const PACK_MAX_SOURCE_FILES: usize = 80;
-const PACK_MAX_CONFIG_FILES: usize = 80;
+const PACK_MAX_ENTRIES: usize = 220;
+const PACK_MAX_SOURCE_FILES: usize = 60;
+const PACK_MAX_CONFIG_FILES: usize = 60;
 const PACK_MAX_DEPTH: usize = 4;
 const PACK_IGNORED_DIRS: &[&str] = &[
     ".git",
@@ -50,6 +50,13 @@ const PACK_IGNORED_DIRS: &[&str] = &[
     ".vscode",
     ".pytest_cache",
     ".DS_Store",
+];
+const PACK_ALLOWED_HIDDEN_DIRS: &[&str] = &[".github"];
+const PACK_ALLOWED_HIDDEN_FILES: &[&str] = &[".editorconfig", ".gitattributes", ".gitignore"];
+const PACK_IGNORED_FILE_NAMES: &[&str] = &[".DS_Store"];
+const PACK_IGNORED_FILE_EXTENSIONS: &[&str] = &[
+    "7z", "avif", "db", "gif", "gz", "ico", "jpeg", "jpg", "log", "mov", "mp3", "mp4", "pdf",
+    "png", "sqlite", "tar", "tgz", "wav", "webp", "zip",
 ];
 
 // === Errors ===
@@ -197,36 +204,68 @@ fn collect_pack_entries(root: &Path, dir: &Path, depth: usize, out: &mut Vec<Str
         return;
     }
 
-    let Ok(read_dir) = fs::read_dir(dir) else {
-        return;
-    };
-    let mut children = read_dir.filter_map(Result::ok).collect::<Vec<_>>();
-    children.sort_by_key(|entry| entry.path());
+    let mut queue = VecDeque::new();
+    queue.push_back((dir.to_path_buf(), depth));
 
-    for entry in children {
-        if out.len() >= PACK_MAX_ENTRIES {
-            break;
-        }
-        let path = entry.path();
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        if file_type.is_dir() && PACK_IGNORED_DIRS.contains(&name) {
+    while let Some((current_dir, current_depth)) = queue.pop_front() {
+        if current_depth > PACK_MAX_DEPTH || out.len() >= PACK_MAX_ENTRIES {
             continue;
         }
 
-        if let Some(relative) = relative_slash_path(root, &path) {
-            if file_type.is_dir() {
-                out.push(format!("{relative}/"));
-                collect_pack_entries(root, &path, depth + 1, out);
-            } else if file_type.is_file() {
-                out.push(relative);
+        let Ok(read_dir) = fs::read_dir(&current_dir) else {
+            continue;
+        };
+        let mut children = read_dir.filter_map(Result::ok).collect::<Vec<_>>();
+        children.sort_by_key(|entry| entry.path());
+
+        for entry in children {
+            if out.len() >= PACK_MAX_ENTRIES {
+                break;
+            }
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() && should_ignore_pack_dir(name) {
+                continue;
+            }
+            if file_type.is_file() && should_ignore_pack_file(name) {
+                continue;
+            }
+
+            if let Some(relative) = relative_slash_path(root, &path) {
+                if file_type.is_dir() {
+                    out.push(format!("{relative}/"));
+                    if current_depth < PACK_MAX_DEPTH {
+                        queue.push_back((path, current_depth + 1));
+                    }
+                } else if file_type.is_file() {
+                    out.push(relative);
+                }
             }
         }
     }
+}
+
+fn should_ignore_pack_dir(name: &str) -> bool {
+    PACK_IGNORED_DIRS.contains(&name)
+        || (name.starts_with('.') && !PACK_ALLOWED_HIDDEN_DIRS.contains(&name))
+}
+
+fn should_ignore_pack_file(name: &str) -> bool {
+    if name.starts_with('.') && !PACK_ALLOWED_HIDDEN_FILES.contains(&name) {
+        return true;
+    }
+    if PACK_IGNORED_FILE_NAMES.contains(&name) {
+        return true;
+    }
+    let Some((_, ext)) = name.rsplit_once('.') else {
+        return false;
+    };
+    PACK_IGNORED_FILE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str())
 }
 
 fn relative_slash_path(root: &Path, path: &Path) -> Option<String> {
@@ -862,6 +901,82 @@ mod tests {
         assert!(
             first.find("\"src/a.rs\"").expect("a before z")
                 < first.find("\"src/z.rs\"").expect("z")
+        );
+    }
+
+    #[test]
+    fn project_context_pack_ignores_agent_state_and_binary_noise() {
+        let tmp = tempdir().expect("tempdir");
+        fs::create_dir_all(tmp.path().join("src")).expect("mkdir src");
+        fs::write(tmp.path().join("src").join("main.rs"), "fn main() {}").expect("write src");
+        fs::write(tmp.path().join(".DS_Store"), "noise").expect("write ds store");
+        fs::write(tmp.path().join("paper.pdf"), "not a real pdf").expect("write pdf");
+        fs::create_dir_all(tmp.path().join(".deepseek").join("state")).expect("mkdir state");
+        fs::write(
+            tmp.path()
+                .join(".deepseek")
+                .join("state")
+                .join("subagents.v1.json"),
+            "{}",
+        )
+        .expect("write state");
+        fs::create_dir_all(tmp.path().join(".playwright-mcp")).expect("mkdir playwright");
+        fs::write(
+            tmp.path().join(".playwright-mcp").join("trace.log"),
+            "noise",
+        )
+        .expect("write log");
+        fs::create_dir_all(tmp.path().join(".agents").join("skills").join("demo"))
+            .expect("mkdir skills");
+        fs::write(
+            tmp.path()
+                .join(".agents")
+                .join("skills")
+                .join("demo")
+                .join("SKILL.md"),
+            "skill body",
+        )
+        .expect("write skill");
+        fs::create_dir_all(tmp.path().join(".github").join("workflows")).expect("mkdir workflows");
+        fs::write(
+            tmp.path().join(".github").join("workflows").join("ci.yml"),
+            "name: ci",
+        )
+        .expect("write workflow");
+
+        let pack = generate_project_context_pack(tmp.path()).expect("pack");
+
+        assert!(pack.contains("\"src/main.rs\""), "{pack}");
+        assert!(pack.contains("\".github/\""), "{pack}");
+        assert!(pack.contains("\".github/workflows/ci.yml\""), "{pack}");
+        assert!(!pack.contains(".deepseek"), "{pack}");
+        assert!(!pack.contains(".playwright-mcp"), "{pack}");
+        assert!(!pack.contains(".agents"), "{pack}");
+        assert!(!pack.contains(".DS_Store"), "{pack}");
+        assert!(!pack.contains("paper.pdf"), "{pack}");
+        assert!(!pack.contains("trace.log"), "{pack}");
+    }
+
+    #[test]
+    fn project_context_pack_keeps_later_top_level_dirs_under_budget() {
+        let tmp = tempdir().expect("tempdir");
+        let noisy = tmp.path().join("aaa-many-files");
+        fs::create_dir_all(&noisy).expect("mkdir noisy");
+        for i in 0..(PACK_MAX_ENTRIES + 20) {
+            fs::write(noisy.join(format!("file-{i:03}.rs")), "fn f() {}").expect("write noisy");
+        }
+        fs::create_dir_all(tmp.path().join("zzz-important")).expect("mkdir important");
+        fs::write(
+            tmp.path().join("zzz-important").join("main.rs"),
+            "fn important() {}",
+        )
+        .expect("write important");
+
+        let pack = generate_project_context_pack(tmp.path()).expect("pack");
+
+        assert!(
+            pack.contains("\"zzz-important/\""),
+            "breadth-first packing should keep later top-level directories visible:\n{pack}"
         );
     }
 

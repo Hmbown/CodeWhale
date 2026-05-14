@@ -691,6 +691,26 @@ fn test_subagent_tool_registry_reports_unavailable_tools() {
     );
 }
 
+#[test]
+fn test_review_agent_tools_exclude_agent_spawn() {
+    let tmp = tempdir().expect("tempdir");
+    let mut runtime = stub_runtime();
+    runtime.context = ToolContext::new(tmp.path().to_path_buf());
+    // None = full parent tool inheritance (the default for builtin types).
+    let registry = SubAgentToolRegistry::new(
+        runtime,
+        None,
+        Arc::new(Mutex::new(TodoList::new())),
+        Arc::new(Mutex::new(PlanState::default())),
+    );
+    let tools = registry.tools_for_model(&SubAgentType::Review);
+    let names: Vec<_> = tools.iter().map(|t| t.name.as_str()).collect();
+    assert!(
+        !names.contains(&"agent_spawn"),
+        "Review agent must not have agent_spawn; tools: {names:?}"
+    );
+}
+
 #[tokio::test]
 async fn test_wait_for_result_reports_timeout_when_still_running() {
     let manager = Arc::new(RwLock::new(SubAgentManager::new(PathBuf::from("."), 2)));

@@ -624,6 +624,91 @@ impl SnapshotRepo {
         Ok(removed)
     }
 
+    /// Keep only the latest `max_count` snapshots, dropping older ones.
+    ///
+    /// Uses `commit-tree` with no `-p` to create a true orphan commit at
+    /// the eldest survivor's tree, preserving its label.  The old chain
+    /// has zero refs after gc and is physically reclaimed.
+    /// Keep only the latest `max_count` snapshots by rebuilding the
+    /// survivor chain as orphan commits.  Each survivor's tree and label
+    /// are preserved — only the parent chain to older snapshots is cut.
+    /// Old objects become unreachable and gc reclaims them.
+    pub fn prune_keep_last_n(&self, max_count: usize) -> io::Result<usize> {
+        let snapshots = self.list(usize::MAX)?;
+        if snapshots.len() <= max_count {
+            return Ok(0);
+        }
+        let keep = max_count;
+        let removed = snapshots.len() - keep;
+        // snapshots are newest-first: [0..keep-1] are the survivors.
+        // Rebuild the chain from oldest survivor → newest, each as a
+        // commit-tree with the original tree but no link to the old chain.
+        let mut prev_sha: Option<String> = None;
+
+        for i in (0..keep).rev() {
+            let s = &snapshots[i];
+            let tree = run_git(
+                &self.git_dir,
+                &self.work_tree,
+                &["rev-parse", &format!("{}^{{tree}}", s.id.as_str())],
+            )?;
+            if !tree.status.success() {
+                return Err(io_other(format!(
+                    "rev-parse {}^{{tree}} failed: {}",
+                    s.id.as_str(),
+                    String::from_utf8_lossy(&tree.stderr).trim()
+                )));
+            }
+            let tree_hash = String::from_utf8_lossy(&tree.stdout).trim().to_string();
+
+            let mut args = vec![
+                "commit-tree".to_string(),
+                "-m".to_string(),
+                s.label.clone(),
+                tree_hash,
+            ];
+            if let Some(ref p) = prev_sha {
+                args.push("-p".to_string());
+                args.push(p.clone());
+            }
+            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+            let newc = run_git(&self.git_dir, &self.work_tree, &arg_refs)?;
+            if !newc.status.success() {
+                return Err(io_other(format!(
+                    "commit-tree failed: {}",
+                    String::from_utf8_lossy(&newc.stderr).trim()
+                )));
+            }
+            let new_sha = String::from_utf8_lossy(&newc.stdout).trim().to_string();
+            prev_sha = Some(new_sha);
+        }
+
+        if let Some(final_sha) = prev_sha {
+            let up = run_git(
+                &self.git_dir,
+                &self.work_tree,
+                &["update-ref", "HEAD", &final_sha],
+            )?;
+            if !up.status.success() {
+                return Err(io_other(format!(
+                    "update-ref HEAD failed: {}",
+                    String::from_utf8_lossy(&up.stderr).trim()
+                )));
+            }
+        }
+        let _ = run_git(
+            &self.git_dir,
+            &self.work_tree,
+            &["reflog", "expire", "--expire=now", "--all"],
+        );
+        let _ = run_git(
+            &self.git_dir,
+            &self.work_tree,
+            &["gc", "--prune=now", "--quiet"],
+        );
+        Ok(removed)
+    }
+
     /// Drop unreachable loose objects left behind by interrupted or
     /// orphaned side-repo operations.
     pub fn prune_unreachable_objects(&self) -> io::Result<()> {
@@ -1058,6 +1143,62 @@ mod tests {
         let list = repo.list(10).unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].label, "turn:1");
+    }
+
+    #[test]
+    fn prune_keep_last_n_keeps_latest_and_gc_reclaims_rest() {
+        let tmp = tempdir().unwrap();
+        let (repo, _home) = make_repo(tmp.path());
+
+        for i in 0..3 {
+            std::fs::write(repo.work_tree().join("f.txt"), format!("v{i}")).unwrap();
+            repo.snapshot(&format!("turn:{i}")).unwrap();
+            std::thread::sleep(Duration::from_millis(1100));
+        }
+
+        assert_eq!(repo.list(usize::MAX).unwrap().len(), 3);
+
+        let removed = repo.prune_keep_last_n(1).unwrap();
+        assert_eq!(removed, 2);
+
+        let remaining = repo.list(usize::MAX).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].label, "turn:2");
+
+        // New snapshot starts a clean chain (not appending to old).
+        std::fs::write(repo.work_tree().join("f.txt"), "fresh").unwrap();
+        repo.snapshot("turn:new").unwrap();
+        assert_eq!(repo.list(usize::MAX).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn prune_keep_last_n_preserves_multiple_snapshots_in_order() {
+        let tmp = tempdir().unwrap();
+        let (repo, _home) = make_repo(tmp.path());
+
+        for i in 0..4 {
+            std::fs::write(repo.work_tree().join("f.txt"), format!("v{i}")).unwrap();
+            repo.snapshot(&format!("turn:{i}")).unwrap();
+            std::thread::sleep(Duration::from_millis(1100));
+        }
+
+        assert_eq!(repo.list(usize::MAX).unwrap().len(), 4);
+
+        let removed = repo.prune_keep_last_n(2).unwrap();
+        assert_eq!(removed, 2);
+
+        let remaining = repo.list(usize::MAX).unwrap();
+        assert_eq!(remaining.len(), 2);
+        // Should be newest-first: turn:3 (newest), turn:2 (second newest)
+        assert_eq!(remaining[0].label, "turn:3");
+        assert_eq!(remaining[1].label, "turn:2");
+
+        // New snapshot continues the chain.
+        std::fs::write(repo.work_tree().join("f.txt"), "fresh").unwrap();
+        repo.snapshot("turn:new").unwrap();
+        let after = repo.list(usize::MAX).unwrap();
+        assert_eq!(after.len(), 3);
+        assert_eq!(after[0].label, "turn:new");
     }
 
     #[test]

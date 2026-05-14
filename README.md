@@ -3,6 +3,7 @@
 > Terminal coding agent for DeepSeek V4. It runs from the `deepseek` command, streams reasoning blocks, edits local workspaces with approval gates, and includes an auto mode that chooses both model and thinking level per turn.
 
 [简体中文 README](README.zh-CN.md)
+[日本語 README](README.ja-JP.md)
 
 ## Install
 
@@ -61,10 +62,12 @@ It is built around DeepSeek V4 (`deepseek-v4-pro` / `deepseek-v4-flash`), includ
 - **Thinking-mode streaming** — see DeepSeek reasoning blocks as the model works
 - **Full tool suite** — file ops, shell execution, git, web search/browse, apply-patch, sub-agents, MCP servers
 - **1M-token context** — context tracking, manual or configured compaction, and prefix-cache telemetry
+- **Prefix-cache stability tracking** — a footer chip surfaces how stable the cached prefix has been across recent turns so cost-busting edits are visible before they land
 - **Three modes** — Plan (read-only explore), Agent (interactive with approval), YOLO (auto-approved)
 - **Reasoning-effort tiers** — cycle through `off → high → max` with `Shift + Tab`
 - **Session save/resume** — checkpoint and resume long-running sessions
 - **Workspace rollback** — side-git pre/post-turn snapshots with `/restore` and `revert_turn`, without touching your repo's `.git`
+- **OS-level sandbox** — Seatbelt on macOS, Landlock on Linux, Job Objects on Windows; shell commands run with workspace-scoped filesystem access only
 - **Durable task queue** — background tasks can survive restarts
 - **HTTP/SSE runtime API** — `deepseek serve --http` for headless agent workflows
 - **MCP protocol** — connect to Model Context Protocol servers for extended tooling; please see [docs/MCP.md](docs/MCP.md)
@@ -72,8 +75,10 @@ It is built around DeepSeek V4 (`deepseek-v4-pro` / `deepseek-v4-flash`), includ
 - **LSP diagnostics** — inline error/warning surfacing after every edit via rust-analyzer, pyright, typescript-language-server, gopls, clangd
 - **User memory** — optional persistent note file injected into the system prompt for cross-session preferences
 - **Localized UI** — `en`, `ja`, `zh-Hans`, `pt-BR` with auto-detection
-- **Live cost tracking** — per-turn and session-level token usage and cost estimates; cache hit/miss breakdown
-- **Skills system** — composable, installable instruction packs from GitHub with no backend service required
+- **Live cost tracking** — per-turn and session-level token usage and cost estimates; cache hit/miss breakdown; CNY display when the session locale is `zh-Hans`
+- **Skills system** — composable, installable instruction packs from GitHub; ships with a bundled starter set (`skill-creator`, `mcp-builder`, `plugin-creator`, `v4-best-practices`, `documents`, `presentations`, `spreadsheets`, `pdf`, `feishu`, `skill-installer`, `delegate`) so `/skills` is useful from first launch
+- **Terminal-native notifications** — OSC 9 (iTerm2/WezTerm/Ghostty), OSC 99 (Kitty), OSC 777 (Ghostty), plus desktop notification fallback
+- **Built-in theme picker** — Catppuccin, Tokyo Night, Dracula, Gruvbox alongside the original light/dark palettes; switch live with `/theme`
 
 ---
 
@@ -236,52 +241,27 @@ deepseek --provider ollama --model deepseek-coder:1.3b
 
 ---
 
-## What's New In v0.8.33
+## What's New In v0.8.35
 
-A sub-agent and RLM renovation release. The model-facing delegation
-surface is now session-oriented: `rlm_open` / `rlm_eval` /
-`rlm_configure` / `rlm_close` for persistent RLM work, `agent_open` /
-`agent_eval` / `agent_close` for named sub-agent sessions, and
-`handle_read` for bounded retrieval from large results. Six tool
-papercuts fixed, two community PRs landed, and the sidebar gets a
-cleaner "Work" tab. [Full changelog](CHANGELOG.md).
+A post-release cleanup branch for the `v0.8.34` line. It keeps the
+model-facing surface stable while trimming first-turn context, clarifying
+context-pressure behavior, and reducing sidebar noise during long runs.
+[Full changelog](CHANGELOG.md).
 
-- **Persistent RLM sessions.** RLM work now uses `rlm_open` /
-  `rlm_eval` / `rlm_close` with bounded REPL helpers (`peek`,
-  `search`, `chunk`, `sub_query`, `sub_query_batch`, `finalize`)
-  — the model drives the REPL through tool calls instead of a
-  foreground loop.
-- **Fork-aware sub-agent sessions.** `agent_open` supports named
-  sessions, `fork_context` for prompt-cache-friendly perspective
-  fanout, and bounded recursive depth. Sub-agent results and
-  transcripts can be parked behind `var_handle` references.
-- **Shared `handle_read` tool.** Large structured results (RLM
-  finals, sub-agent transcripts, tool artifacts) return typed handles
-  with slice, range, count, and JSONPath projections — the model
-  reads back only what it needs.
-- **Text selection now works during streaming.** The loading-state
-  mouse filter drops inert move events but allows transcript and
-  scrollbar drags to continue — the known issue from v0.8.32 is
-  resolved.
-- **Grayscale theme.** Use `/theme grayscale` for a quiet black/white
-  palette, or `/set theme grayscale --save` to make it the saved default.
-- **Session history picker.** `/sessions` and `Ctrl+R` now put full
-  session history on the left, the session list on the right, number keys
-  `1`-`9` open visible histories, and `PgUp` / `PgDn` scroll history.
-- **Six tool papercuts fixed.** `file_search` safer excludes;
-  `grep_files` returns clean strings; `fetch_url` JSON field
-  projection and headers; `edit_file` indentation fuzz;
-  `exec_shell` merged stdout/stderr; `revert_turn` rejects no-ops.
-- **CLI reasoning-effort honoured** on `--reasoning-effort high`
-  non-auto exec routes (PR #1511 from **@h3c-hexin**).
-- **Sidebar "Work" tab.** The former "Plan" / "Todos" tabs are now
-  one "Work" panel for the active checklist, consistent across Plan,
-  Agent, and YOLO modes.
-- **`/relay` command with CJK aliases** (`/接力`) for structured
-  multi-session handoff prompts.
-
-Thanks to **@reidliu41** and **@h3c-hexin** for community
-contributions in this release.
+- **First-turn context is leaner.** Hidden tool/cache state is excluded
+  from the generated project pack, and `/context` now names prompt layers
+  instead of showing one opaque blob.
+- **Prompt rules are de-conflicted.** Useful `deepseek` diagnostics are
+  allowed, simple one-step work no longer forces checklist ceremony, and
+  sustained sessions consistently suggest `/compact` around 60%.
+- **Automatic compaction stays conservative.** The 80% threshold remains
+  an opt-in hard guardrail so DeepSeek V4 prefix-cache behavior is not
+  disturbed by default.
+- **The Tasks sidebar settles down.** Completed live-tool rows expire
+  after a short linger, and very old running shell rows collapse instead
+  of filling the right rail.
+- **`auto_compact` help is honest.** Settings now report the real default:
+  off.
 
 ---
 
@@ -347,6 +327,10 @@ The first ACP slice supports new sessions and prompt responses through your
 existing DeepSeek config/API key. Tool-backed editing and checkpoint replay are
 not exposed through ACP yet.
 
+Community-maintained adapter: [acp-deepseek-adapter](https://github.com/rockeverm3m/acp-deepseek-adapter)
+bridges `deepseek exec --auto` to `cc-connect` for users who need tool-backed
+ACP workflows outside the built-in Zed slice.
+
 ### Keyboard Shortcuts
 
 | Key | Action |
@@ -370,9 +354,9 @@ Full shortcut catalog: [docs/KEYBINDINGS.md](docs/KEYBINDINGS.md).
 
 | Mode | Behavior |
 | --- | --- |
-| **Plan** 🔍 | Read-only investigation — model explores and proposes a plan (`update_plan` + `checklist_write`) before making changes |
-| **Agent** 🤖 | Default interactive mode — multi-step tool use with approval gates; model outlines work via `checklist_write` |
-| **YOLO** ⚡ | Auto-approve all tools in a trusted workspace; still maintains plan and checklist for visibility |
+| **Plan** 🔍 | Read-only investigation — model explores and proposes a plan before making changes; multi-step investigations use `checklist_write` |
+| **Agent** 🤖 | Default interactive mode — multi-step tool use with approval gates; substantial work is tracked with `checklist_write` |
+| **YOLO** ⚡ | Auto-approve all tools in a trusted workspace; multi-step work still keeps a visible checklist |
 
 ---
 
@@ -392,6 +376,7 @@ Key environment variables:
 | `DEEPSEEK_PROVIDER` | `deepseek` (default), `nvidia-nim`, `openai`, `openrouter`, `novita`, `fireworks`, `sglang`, `vllm`, `ollama` |
 | `DEEPSEEK_PROFILE` | Config profile name |
 | `DEEPSEEK_MEMORY` | Set to `on` to enable user memory |
+| `DEEPSEEK_ALLOW_INSECURE_HTTP=1` | Allow non-local `http://` API base URLs on trusted networks |
 | `NVIDIA_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY` / `NOVITA_API_KEY` / `FIREWORKS_API_KEY` / `SGLANG_API_KEY` / `VLLM_API_KEY` / `OLLAMA_API_KEY` | Provider auth |
 | `OPENAI_BASE_URL` / `OPENAI_MODEL` | Generic OpenAI-compatible endpoint and model ID |
 | `SGLANG_BASE_URL` | Self-hosted SGLang endpoint |
@@ -445,6 +430,13 @@ Instructions for the agent go here.
 ```
 
 Commands: `/skills` (list), `/skill <name>` (activate), `/skill new` (scaffold), `/skill install github:<owner>/<repo>` (community), `/skill update` / `uninstall` / `trust`. Community installs from GitHub require no backend service. Installed skills appear in the model-visible session context; the agent can auto-select relevant skills via the `load_skill` tool when your task matches their descriptions.
+
+First launch also installs bundled system skills for common workflows:
+`skill-creator`, `delegate`, `v4-best-practices`, `plugin-creator`,
+`skill-installer`, `mcp-builder`, `documents`, `presentations`,
+`spreadsheets`, `pdf`, and `feishu`. These live under
+`~/.deepseek/skills` and are versioned so new bundles are added on upgrade
+without recreating skills the user deliberately deleted.
 
 ---
 
@@ -521,6 +513,7 @@ This project ships with help from a growing community of contributors:
 - **[THINKER-ONLY](https://github.com/THINKER-ONLY)** — OpenRouter and custom-endpoint model-ID preservation (#1066)
 - **[Jefsky](https://github.com/Jefsky)** — DeepSeek endpoint correction report (#1079, #1084)
 - **[wlon](https://github.com/wlon)** — NVIDIA NIM provider API-key preference diagnosis (#1081)
+- **[Horace Liu](https://github.com/liuhq)** — Nix package support and install documentation (#1173)
 
 ---
 

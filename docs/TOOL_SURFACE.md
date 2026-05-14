@@ -15,7 +15,7 @@ chosen over the available shell equivalent. Companion to `crates/tui/src/prompts
   for the same backing operation are a model trap — the LLM will alternate
   between them and the cache hit rate suffers.
 
-## Current surface (v0.8.33)
+## Current surface (v0.8.35)
 
 ### File operations
 
@@ -138,7 +138,7 @@ Large logs and command outputs should be artifacts with compact summaries in the
 
 ### Sub-agents
 
-v0.8.33 begins moving large tool outputs toward symbolic handles: tools return
+v0.8.33 began moving large tool outputs toward symbolic handles: tools return
 small `var_handle` objects, and `handle_read` retrieves bounded slices, counts,
 or JSON projections from the backing environment. This keeps the parent
 transcript small while preserving a recovery path to the full payload.
@@ -224,7 +224,7 @@ slots.
 
 ## Removed legacy aliases and surfaces
 
-v0.8.33 removes the old model-facing sub-agent fan-out surface from active
+v0.8.33 removed the old model-facing sub-agent fan-out surface from active
 prompting and tool catalogs. Do not use these names in new active guidance:
 `agent_spawn`, `agent_wait`, `agent_result`, `agent_send_input`,
 `agent_assign`, `agent_resume`, `agent_list`, `spawn_agent`,
@@ -269,7 +269,7 @@ rg -n '"handle_read"|"rlm_open"|"rlm_eval"|"rlm_configure"|"rlm_close"|"agent_op
 rg -n 'handle_read|rlm_open|rlm_eval|rlm_configure|rlm_close|agent_open|agent_eval|agent_close' docs crates/tui/src/prompts crates/tui/src/tools
 ```
 
-The canonical v0.8.33 live names are:
+The canonical v0.8.35 live names are:
 
 - `handle_read`
 - `rlm_open`, `rlm_eval`, `rlm_configure`, `rlm_close`

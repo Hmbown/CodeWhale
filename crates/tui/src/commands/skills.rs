@@ -110,12 +110,62 @@ pub fn list_skills(app: &mut App, arg: Option<&str>) -> CommandResult {
         format!("Available skills ({}):\n", registry.len())
     };
     output.push_str("─────────────────────────────\n");
-    for (idx, skill) in filtered.iter().enumerate() {
-        if idx > 0 {
-            output.push('\n');
+
+    if prefix.is_some() {
+        // Filtered view: keep the flat list — the user already narrowed.
+        for (idx, skill) in filtered.iter().enumerate() {
+            if idx > 0 {
+                output.push('\n');
+            }
+            let _ = writeln!(output, "  /{} - {}", skill.name, skill.description);
         }
-        let _ = writeln!(output, "  /{} - {}", skill.name, skill.description);
+    } else {
+        // Unfiltered view: partition into user-created and built-in so a
+        // workspace skill at the top of the list isn't pushed off-screen
+        // by 10+ bundled descriptions. User skills always render with
+        // their full description; bundled skills render compactly when
+        // numerous so the whole menu fits in a typical terminal viewport.
+        let (user_skills, bundled_skills): (
+            Vec<&&crate::skills::Skill>,
+            Vec<&&crate::skills::Skill>,
+        ) = filtered
+            .iter()
+            .partition(|s| !crate::skills::is_bundled_skill_name(&s.name));
+
+        if !user_skills.is_empty() {
+            let _ = writeln!(output, "Your skills ({}):", user_skills.len());
+            for skill in &user_skills {
+                let _ = writeln!(output, "  /{} - {}", skill.name, skill.description);
+            }
+            if !bundled_skills.is_empty() {
+                output.push('\n');
+            }
+        }
+
+        if !bundled_skills.is_empty() {
+            let _ = writeln!(output, "Built-in skills ({}):", bundled_skills.len());
+            // When there are user skills to surface, keep built-ins compact
+            // (single-line names list) so they never crowd the viewport.
+            // When there are no user skills, render full descriptions —
+            // there is nothing else competing for space and the user is
+            // likely getting their first look at the catalog.
+            if user_skills.is_empty() {
+                for skill in &bundled_skills {
+                    let _ = writeln!(output, "  /{} - {}", skill.name, skill.description);
+                }
+            } else {
+                let names: Vec<String> = bundled_skills
+                    .iter()
+                    .map(|s| format!("/{}", s.name))
+                    .collect();
+                output.push_str("  ");
+                output.push_str(&names.join(", "));
+                output.push('\n');
+                output.push_str("  (run /skills <name> for details on a built-in)\n");
+            }
+        }
     }
+
     let _ = write!(
         output,
         "\nUse /skill <name> to run a skill\nSkills location: {}{}",
@@ -817,7 +867,7 @@ mod tests {
     }
 
     #[test]
-    fn test_list_skills_separates_entries_with_blank_line() {
+    fn test_list_skills_renders_user_skills_under_your_skills_section() {
         let tmpdir = TempDir::new().unwrap();
         let _home = IsolatedHome::new(&tmpdir);
         create_skill_dir(
@@ -834,15 +884,22 @@ mod tests {
         let mut app = create_test_app_with_tmpdir(&tmpdir);
         let result = list_skills(&mut app, None);
         let msg = result.message.unwrap();
+
+        // User-created skills must appear in their own section so they
+        // stay visible even when many bundled skills are installed.
+        let section = msg
+            .find("Your skills")
+            .expect("user skills section header missing");
         let alpha = msg.find("/alpha-skill").expect("alpha skill should render");
         let beta = msg.find("/beta-skill").expect("beta skill should render");
-        let (first, second) = if alpha < beta {
-            (alpha, beta)
-        } else {
-            (beta, alpha)
-        };
-
-        assert!(msg[first..second].contains("\n\n"), "got: {msg}");
+        assert!(
+            alpha > section,
+            "alpha-skill should follow the header: {msg}"
+        );
+        assert!(beta > section, "beta-skill should follow the header: {msg}");
+        // Each entry on its own line with the description inline.
+        assert!(msg.contains("/alpha-skill - First skill"), "got: {msg}");
+        assert!(msg.contains("/beta-skill - Second skill"), "got: {msg}");
     }
 
     #[test]

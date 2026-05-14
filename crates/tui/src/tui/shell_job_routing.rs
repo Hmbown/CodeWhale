@@ -64,7 +64,7 @@ pub(super) fn format_shell_job_list(jobs: &[ShellJobSnapshot]) -> String {
         }
     }
     lines.push(
-        "Controls: /jobs show <id>, /jobs poll <id>, /jobs wait <id>, /jobs stdin <id> <input>, /jobs cancel <id>."
+        "Controls: /jobs show <id>, /jobs poll <id>, /jobs wait <id>, /jobs stdin <id> <input>, /jobs cancel <id>, /jobs cancel-all."
             .to_string(),
     );
     lines.join("\n")

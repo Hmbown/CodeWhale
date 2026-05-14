@@ -140,7 +140,7 @@ crates/
 ```
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the live data flow across
-these crates and [DEPENDENCY_GRAPH.md](DEPENDENCY_GRAPH.md) for build ordering.
+these crates, including the bottom-up build order.
 
 ## Submitting Changes
 

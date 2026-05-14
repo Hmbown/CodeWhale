@@ -451,94 +451,149 @@ pub(super) fn maybe_hydrate_requested_deferred_tool(
     Some(deferred_tool_schema_hydration_result(def, tool_input))
 }
 
+#[cfg(test)]
+pub(super) fn preflight_requested_deferred_tool(
+    tool_name: &str,
+    tool_input: &Value,
+    catalog: &[Tool],
+    active_tools: &mut HashSet<String>,
+) -> Option<ToolResult> {
+    let active_tools_at_batch_start = active_tools.clone();
+    let mut hydrated_tools_this_batch = HashSet::new();
+    let result = maybe_hydrate_requested_deferred_tool(
+        tool_name,
+        tool_input,
+        catalog,
+        &active_tools_at_batch_start,
+        &mut hydrated_tools_this_batch,
+    );
+    active_tools.extend(hydrated_tools_this_batch);
+    result
+}
+
 fn deferred_tool_schema_hydration_result(tool: &Tool, tool_input: &Value) -> ToolResult {
-    let expected = schema_field_lines(tool);
+    let expected = schema_fields(&tool.input_schema);
+    let required = schema_required_fields(&tool.input_schema);
     let received = received_field_names(tool_input);
-    let corrections = likely_field_corrections(&tool.name, &received);
+    let missing = required
+        .iter()
+        .filter(|field| !received.contains(field))
+        .cloned()
+        .collect::<Vec<_>>();
+    let unexpected = received
+        .iter()
+        .filter(|field| !expected.iter().any(|expected| &expected.name == *field))
+        .cloned()
+        .collect::<Vec<_>>();
+    let corrections = likely_field_corrections(&received, &expected, &tool.name);
 
-    let expected_text = if expected.is_empty() {
-        "  (no declared fields)".to_string()
+    let mut lines = vec![
+        format!("Tool `{}` was deferred and has now been loaded.", tool.name),
+        String::new(),
+        "The tool was not executed. Retry with the loaded schema.".to_string(),
+        String::new(),
+        "Expected fields:".to_string(),
+    ];
+    if expected.is_empty() {
+        lines.push("  (none)".to_string());
     } else {
-        expected
-            .iter()
-            .map(|field| format!("  {field}"))
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-    let received_text = if received.is_empty() {
-        "  (none)".to_string()
+        for field in &expected {
+            let required_marker = if required.contains(&field.name) {
+                " required"
+            } else {
+                ""
+            };
+            lines.push(format!(
+                "  {}: {}{}",
+                field.name, field.kind, required_marker
+            ));
+        }
+    }
+    lines.push(String::new());
+    lines.push("Received fields:".to_string());
+    if received.is_empty() {
+        lines.push("  (none)".to_string());
     } else {
-        format!("  {}", received.join(", "))
-    };
-    let correction_text = if corrections.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "\n\nLikely correction:\n{}",
-            corrections
-                .iter()
-                .map(|field| format!("  {field}"))
-                .collect::<Vec<_>>()
-                .join("\n")
-        )
-    };
+        lines.push(format!("  {}", received.join(", ")));
+    }
+    if !missing.is_empty() {
+        lines.push(String::new());
+        lines.push("Missing required fields:".to_string());
+        lines.push(format!("  {}", missing.join(", ")));
+    }
+    if !unexpected.is_empty() {
+        lines.push(String::new());
+        lines.push("Unexpected fields:".to_string());
+        lines.push(format!("  {}", unexpected.join(", ")));
+    }
+    if !corrections.is_empty() {
+        lines.push(String::new());
+        lines.push("Likely corrections:".to_string());
+        for correction in &corrections {
+            lines.push(format!("  {correction}"));
+        }
+    }
 
-    ToolResult::success(format!(
-        "Tool `{}` was deferred and has now been loaded.\n\nExpected schema:\n{}\n\nReceived fields:\n{}{}\n\nThe tool was not executed. Retry the same operation with the loaded schema.",
-        tool.name, expected_text, received_text, correction_text
-    ))
-    .with_metadata(json!({
+    ToolResult::success(lines.join("\n")).with_metadata(json!({
         "event": "tool.schema_hydrated",
         "tool": tool.name,
         "executed": false,
         "retry_required": true,
         "reason": "deferred_tool_first_use",
+        "deferred_tool_loaded": true,
+        "tool_name": tool.name,
+        "expected_fields": expected.iter().map(|field| field.name.clone()).collect::<Vec<_>>(),
+        "received_fields": received,
+        "missing_required_fields": missing,
+        "unexpected_fields": unexpected,
+        "likely_corrections": corrections,
     }))
 }
 
-fn schema_field_lines(tool: &Tool) -> Vec<String> {
-    let mut required = Vec::new();
-    if let Some(items) = tool.input_schema.get("required").and_then(Value::as_array) {
-        for item in items {
-            if let Some(field) = item.as_str() {
-                required.push(field.to_string());
-            }
-        }
-    }
+#[derive(Debug, Clone)]
+struct SchemaField {
+    name: String,
+    kind: String,
+}
 
-    let Some(properties) = tool
-        .input_schema
-        .get("properties")
-        .and_then(Value::as_object)
-    else {
-        return required;
+fn schema_fields(schema: &Value) -> Vec<SchemaField> {
+    let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
+        return Vec::new();
     };
-
-    let mut fields = Vec::new();
-    let mut seen = HashSet::new();
-    for field in &required {
-        if let Some(schema) = properties.get(field) {
-            fields.push(format!("{field}: {}", schema_type_label(schema)));
-            seen.insert(field.as_str());
-        } else {
-            fields.push(field.clone());
-        }
-    }
-    for (field, schema) in properties {
-        if seen.contains(field.as_str()) {
-            continue;
-        }
-        fields.push(format!("{field}: {} (optional)", schema_type_label(schema)));
-    }
+    let mut fields = properties
+        .iter()
+        .map(|(name, spec)| SchemaField {
+            name: name.clone(),
+            kind: schema_type_label(spec),
+        })
+        .collect::<Vec<_>>();
+    fields.sort_by(|a, b| a.name.cmp(&b.name));
     fields
 }
 
-fn schema_type_label(schema: &Value) -> String {
-    schema
-        .get("type")
-        .and_then(Value::as_str)
-        .unwrap_or("value")
-        .to_string()
+fn schema_required_fields(schema: &Value) -> Vec<String> {
+    let mut required = schema
+        .get("required")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|value| value.as_str().map(str::to_string))
+        .collect::<Vec<_>>();
+    required.sort();
+    required
+}
+
+fn schema_type_label(spec: &Value) -> String {
+    let Some(kind) = spec.get("type").and_then(Value::as_str) else {
+        return "value".to_string();
+    };
+    if let Some(values) = spec.get("enum").and_then(Value::as_array) {
+        let labels = values.iter().filter_map(Value::as_str).collect::<Vec<_>>();
+        if !labels.is_empty() {
+            return format!("{kind} ({})", labels.join(" | "));
+        }
+    }
+    kind.to_string()
 }
 
 fn received_field_names(input: &Value) -> Vec<String> {
@@ -550,24 +605,32 @@ fn received_field_names(input: &Value) -> Vec<String> {
     fields
 }
 
-fn likely_field_corrections(tool_name: &str, received: &[String]) -> Vec<String> {
-    if tool_name != "edit_file" {
-        return Vec::new();
-    }
-
-    let has = |name: &str| received.iter().any(|field| field == name);
+fn likely_field_corrections(
+    received: &[String],
+    expected: &[SchemaField],
+    tool_name: &str,
+) -> Vec<String> {
+    let has_expected = |name: &str| expected.iter().any(|field| field.name == name);
+    let has_received = |name: &str| received.iter().any(|field| field == name);
     let mut corrections = Vec::new();
-    if has("old_string") {
+
+    if has_received("old_string") && has_expected("search") {
         corrections.push("old_string -> search".to_string());
-    } else if has("old_str") {
+    } else if has_received("old_str") && has_expected("search") {
         corrections.push("old_str -> search".to_string());
     }
-    if has("new_string") {
+    if has_received("new_string") && has_expected("replace") {
         corrections.push("new_string -> replace".to_string());
-    } else if has("new_str") {
+    } else if has_received("new_str") && has_expected("replace") {
         corrections.push("new_str -> replace".to_string());
-    } else if has("replacement") {
+    } else if has_received("replacement") && has_expected("replace") {
         corrections.push("replacement -> replace".to_string());
+    }
+    if tool_name == "checklist_update" && has_received("todos") {
+        corrections.push(
+            "Use checklist_write to replace the full list, or retry checklist_update with id and status."
+                .to_string(),
+        );
     }
     corrections
 }

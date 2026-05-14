@@ -263,7 +263,9 @@ fn deepseek_context_window_hint(model_lower: &str) -> Option<u32> {
 /// Derive a compaction token threshold from model context window.
 ///
 /// Keeps headroom for tool outputs and assistant completion by defaulting to 80%
-/// of known context windows.
+/// of known context windows. This is the hard automatic compaction threshold
+/// used only when `auto_compact` is enabled; model-facing guidance still
+/// suggests manual `/compact` earlier (~60%) during sustained work.
 #[must_use]
 pub fn compaction_threshold_for_model(model: &str) -> usize {
     let Some(window) = context_window_for_model(model) else {
@@ -279,7 +281,7 @@ pub fn compaction_threshold_for_model(model: &str) -> usize {
 /// Replacement-style compaction rewrites the stable prefix, which works against
 /// DeepSeek V4 prefix-cache economics. Reasoning effort must not lower V4's
 /// automatic replacement threshold; V4-family models use the same late
-/// 80%-of-window guard as `compaction_threshold_for_model`.
+/// 80%-of-window hard guard as `compaction_threshold_for_model`.
 #[must_use]
 pub fn compaction_threshold_for_model_and_effort(
     model: &str,

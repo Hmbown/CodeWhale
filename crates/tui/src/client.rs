@@ -1085,7 +1085,8 @@ pub(crate) fn build_cache_warmup_request(request: &MessageRequest) -> MessageReq
 mod tests {
     use super::*;
     use crate::client::chat::{
-        build_chat_messages, build_chat_messages_for_request, count_reasoning_replay_chars,
+        build_chat_messages, build_chat_messages_for_request,
+        build_chat_messages_for_request_and_provider, count_reasoning_replay_chars,
         parse_chat_message, parse_sse_chunk, sanitize_thinking_mode_messages, tool_to_chat,
         tool_to_chat_for_base_url,
     };
@@ -1255,6 +1256,62 @@ mod tests {
             assistant.get("reasoning_content").and_then(Value::as_str),
             Some("plan"),
             "thinking-mode models keep reasoning_content while still in the current turn"
+        );
+    }
+
+    #[test]
+    fn generic_openai_provider_drops_deepseek_reasoning_content() {
+        let request = MessageRequest {
+            model: "deepseek-v4-pro".to_string(),
+            messages: vec![Message {
+                role: "assistant".to_string(),
+                content: vec![
+                    ContentBlock::Thinking {
+                        thinking: "plan".to_string(),
+                    },
+                    ContentBlock::Text {
+                        text: "done".to_string(),
+                        cache_control: None,
+                    },
+                ],
+            }],
+            max_tokens: 16,
+            system: None,
+            tools: None,
+            tool_choice: None,
+            metadata: None,
+            thinking: None,
+            reasoning_effort: Some("max".to_string()),
+            stream: None,
+            temperature: None,
+            top_p: None,
+        };
+
+        let deepseek =
+            build_chat_messages_for_request_and_provider(&request, ApiProvider::Deepseek);
+        let native_assistant = deepseek
+            .iter()
+            .find(|value| value.get("role").and_then(Value::as_str) == Some("assistant"))
+            .expect("assistant message");
+        assert_eq!(
+            native_assistant
+                .get("reasoning_content")
+                .and_then(Value::as_str),
+            Some("plan")
+        );
+
+        let openai = build_chat_messages_for_request_and_provider(&request, ApiProvider::Openai);
+        let generic_assistant = openai
+            .iter()
+            .find(|value| value.get("role").and_then(Value::as_str) == Some("assistant"))
+            .expect("assistant message");
+        assert_eq!(
+            generic_assistant.get("content").and_then(Value::as_str),
+            Some("done")
+        );
+        assert!(
+            generic_assistant.get("reasoning_content").is_none(),
+            "generic OpenAI-compatible providers reject DeepSeek-only reasoning_content (#1542)"
         );
     }
 
@@ -2529,9 +2586,13 @@ mod tests {
             ]
         });
 
-        let approx_tokens =
-            sanitize_thinking_mode_messages(&mut body, "deepseek-v4-pro", Some("max"))
-                .expect("multi-turn thinking-mode conversation should report replay tokens");
+        let approx_tokens = sanitize_thinking_mode_messages(
+            &mut body,
+            "deepseek-v4-pro",
+            Some("max"),
+            ApiProvider::Deepseek,
+        )
+        .expect("multi-turn thinking-mode conversation should report replay tokens");
         // ~4 chars/token; 46 bytes of reasoning -> 11 tokens.
         assert_eq!(approx_tokens, 11);
 
@@ -2564,7 +2625,12 @@ mod tests {
                 { "role": "user", "content": "hi" }
             ]
         });
-        let result = sanitize_thinking_mode_messages(&mut body, "deepseek-v4-flash", None);
+        let result = sanitize_thinking_mode_messages(
+            &mut body,
+            "deepseek-v4-flash",
+            None,
+            ApiProvider::Deepseek,
+        );
         // reasoning_effort is None → no thinking injection, result is None
         assert!(result.is_none());
     }
@@ -2587,11 +2653,52 @@ mod tests {
             ]
         });
 
-        sanitize_thinking_mode_messages(&mut body, "deepseek-v4-pro", Some("max"));
+        sanitize_thinking_mode_messages(
+            &mut body,
+            "deepseek-v4-pro",
+            Some("max"),
+            ApiProvider::Deepseek,
+        );
 
         let chars = count_reasoning_replay_chars(&body);
         // "(reasoning omitted)" is 19 bytes.
         assert_eq!(chars, 19);
+    }
+
+    #[test]
+    fn sanitize_thinking_mode_skips_generic_openai_provider() {
+        let mut body = json!({
+            "model": "deepseek-v4-pro",
+            "messages": [
+                { "role": "user", "content": "hi" },
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{ "id": "1", "type": "function" }]
+                }
+            ]
+        });
+
+        let result = sanitize_thinking_mode_messages(
+            &mut body,
+            "deepseek-v4-pro",
+            Some("max"),
+            ApiProvider::Openai,
+        );
+
+        assert!(result.is_none());
+        let assistant = body["messages"]
+            .as_array()
+            .and_then(|messages| {
+                messages
+                    .iter()
+                    .find(|message| message["role"] == "assistant")
+            })
+            .expect("assistant message");
+        assert!(
+            assistant.get("reasoning_content").is_none(),
+            "generic OpenAI-compatible provider payload must not get reasoning_content (#1542)"
+        );
     }
 
     #[test]
@@ -2610,7 +2717,12 @@ mod tests {
             ]
         });
 
-        sanitize_thinking_mode_messages(&mut body, "deepseek-v4-pro", Some("max"));
+        sanitize_thinking_mode_messages(
+            &mut body,
+            "deepseek-v4-pro",
+            Some("max"),
+            ApiProvider::Deepseek,
+        );
 
         let messages = body["messages"].as_array().unwrap();
         let assistant = messages

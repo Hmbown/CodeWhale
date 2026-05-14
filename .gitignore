@@ -92,3 +92,7 @@ apps/
 # Maintainer-internal design notes (trade-secret material, never published)
 .private/
 lessons.md
+
+# direnv
+.envrc
+.direnv

@@ -12,7 +12,7 @@ use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -427,7 +427,6 @@ impl BackgroundShell {
     }
 
     /// Kill the process
-    #[allow(dead_code)]
     fn kill(&mut self) -> Result<()> {
         if let Some(ref mut child) = self.child {
             child.kill().context("Failed to kill process")?;
@@ -602,6 +601,11 @@ impl ShellManager {
     #[allow(dead_code)]
     pub fn is_sandbox_available(&mut self) -> bool {
         self.sandbox_manager.is_available()
+    }
+
+    #[allow(dead_code)]
+    pub fn default_workspace(&self) -> &Path {
+        &self.default_workspace
     }
 
     /// Execute a shell command with the configured sandbox policy.
@@ -1250,7 +1254,6 @@ impl ShellManager {
     }
 
     /// Kill a running background process
-    #[allow(dead_code)]
     pub fn kill(&mut self, task_id: &str) -> Result<ShellResult> {
         let shell = self
             .processes

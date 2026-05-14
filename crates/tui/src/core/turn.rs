@@ -174,13 +174,20 @@ pub fn post_turn_snapshot(workspace: &Path, turn_seq: u64, cap_bytes: u64) -> Op
 
 fn snapshot_with_label(workspace: &Path, label: &str, cap_bytes: u64) -> Option<String> {
     match SnapshotRepo::open_or_init_with_cap(workspace, cap_bytes) {
-        Ok(repo) => match repo.snapshot(label) {
-            Ok(id) => Some(id.0),
-            Err(e) => {
-                tracing::warn!(target: "snapshot", "snapshot '{label}' failed: {e}");
-                None
+        Ok(repo) => {
+            let id = match repo.snapshot(label) {
+                Ok(id) => Some(id.0),
+                Err(e) => {
+                    tracing::warn!(target: "snapshot", "snapshot '{label}' failed: {e}");
+                    return None;
+                }
+            };
+            // Prune oldest snapshots to cap disk usage (#1112).
+            if let Err(e) = repo.prune_keep_last_n(crate::snapshot::DEFAULT_MAX_SNAPSHOTS) {
+                tracing::warn!(target: "snapshot", "snapshot prune failed: {e}");
             }
-        },
+            id
+        }
         Err(e) => {
             tracing::warn!(target: "snapshot", "snapshot repo init failed: {e}");
             None

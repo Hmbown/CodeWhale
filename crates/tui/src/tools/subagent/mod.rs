@@ -3412,7 +3412,7 @@ async fn run_subagent(
             unavailable_tools.join(", ")
         ));
     }
-    let tools = tool_registry.tools_for_model();
+    let tools = tool_registry.tools_for_model(&agent_type);
     if let Some(mb) = runtime.mailbox.as_ref() {
         let _ = mb.send(MailboxMessage::started(&agent_id, agent_type.clone()));
     }
@@ -4538,14 +4538,27 @@ impl SubAgentToolRegistry {
         }
     }
 
-    fn tools_for_model(&self) -> Vec<Tool> {
+    fn tools_for_model(&self, agent_type: &SubAgentType) -> Vec<Tool> {
+        let disallowed = match agent_type {
+            // Review agents should not spawn sub-agents (#1489).
+            SubAgentType::Review => &["agent_spawn"][..],
+            _ => &[][..],
+        };
         let api_tools = self.registry.to_api_tools();
-        match &self.allowed_tools {
+        let filtered = match &self.allowed_tools {
             None => api_tools,
             Some(list) => api_tools
                 .into_iter()
                 .filter(|tool| list.contains(&tool.name))
-                .collect(),
+                .collect::<Vec<_>>(),
+        };
+        if disallowed.is_empty() {
+            filtered
+        } else {
+            filtered
+                .into_iter()
+                .filter(|tool| !disallowed.contains(&tool.name.as_str()))
+                .collect()
         }
     }
 

@@ -53,6 +53,7 @@ pub(super) fn handle_tool_call_started(
         // starts in a single ExploringCell entry.
         let active = app.active_cell.as_mut().expect("active_cell just ensured");
         let entry_idx = active.ensure_exploring();
+        app.active_tool_entry_completed_at.remove(&entry_idx);
         let inner = active
             .append_to_exploring(
                 id.clone(),
@@ -281,6 +282,7 @@ fn push_active_tool_cell(
     }
     let active = app.active_cell.as_mut().expect("active_cell just ensured");
     let entry_idx = active.push_tool(tool_id.to_string(), cell);
+    app.active_tool_entry_completed_at.remove(&entry_idx);
     let virtual_index = app.history.len() + entry_idx;
     register_tool_cell(app, tool_id, tool_name, input, virtual_index);
     app.mark_history_updated();
@@ -490,6 +492,7 @@ pub(super) fn handle_tool_call_complete(
                 }
             }
         }
+        refresh_active_tool_completion_timestamp(app, cell_index);
         return;
     }
 
@@ -646,6 +649,7 @@ pub(super) fn handle_tool_call_complete(
         if let Some(active) = app.active_cell.as_mut() {
             active.bump_revision();
         }
+        refresh_active_tool_completion_timestamp(app, cell_index);
     }
 
     // #455 (observer-only): fire `tool_call_after` hooks once the
@@ -665,6 +669,46 @@ pub(super) fn handle_tool_call_complete(
             .with_tool_name(name)
             .with_tool_result(&result_text, success, None);
         let _ = app.execute_hooks(HookEvent::ToolCallAfter, &context);
+    }
+}
+
+fn refresh_active_tool_completion_timestamp(app: &mut App, cell_index: usize) {
+    if cell_index < app.history.len() {
+        return;
+    }
+    let entry_idx = cell_index - app.history.len();
+    let Some(cell) = app.cell_at_virtual_index(cell_index) else {
+        app.active_tool_entry_completed_at.remove(&entry_idx);
+        return;
+    };
+
+    if history_cell_has_running_tool(cell) {
+        app.active_tool_entry_completed_at.remove(&entry_idx);
+    } else {
+        app.active_tool_entry_completed_at
+            .entry(entry_idx)
+            .or_insert_with(Instant::now);
+    }
+}
+
+fn history_cell_has_running_tool(cell: &HistoryCell) -> bool {
+    let HistoryCell::Tool(tool) = cell else {
+        return false;
+    };
+    match tool {
+        ToolCell::Exec(exec) => exec.status == ToolStatus::Running,
+        ToolCell::Exploring(explore) => explore
+            .entries
+            .iter()
+            .any(|entry| entry.status == ToolStatus::Running),
+        ToolCell::PlanUpdate(plan) => plan.status == ToolStatus::Running,
+        ToolCell::PatchSummary(patch) => patch.status == ToolStatus::Running,
+        ToolCell::Review(review) => review.status == ToolStatus::Running,
+        ToolCell::DiffPreview(_) => false,
+        ToolCell::Mcp(mcp) => mcp.status == ToolStatus::Running,
+        ToolCell::ViewImage(_) => false,
+        ToolCell::WebSearch(search) => search.status == ToolStatus::Running,
+        ToolCell::Generic(generic) => generic.status == ToolStatus::Running,
     }
 }
 

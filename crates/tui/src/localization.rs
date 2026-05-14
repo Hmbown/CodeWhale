@@ -38,6 +38,7 @@ pub enum Locale {
     ZhHans,
     ZhHant,
     PtBr,
+    Es419,
 }
 
 impl Locale {
@@ -48,6 +49,7 @@ impl Locale {
             Self::ZhHans => "zh-Hans",
             Self::ZhHant => "zh-Hant",
             Self::PtBr => "pt-BR",
+            Self::Es419 => "es-419",
         }
     }
 
@@ -58,6 +60,7 @@ impl Locale {
             Self::ZhHans => "Simplified Chinese (简体中文)",
             Self::ZhHant => "Traditional Chinese (繁體中文)",
             Self::PtBr => "Brazilian Portuguese (Português do Brasil)",
+            Self::Es419 => "Latin American Spanish (Español latinoamericano)",
         }
     }
 
@@ -104,12 +107,27 @@ impl Locale {
                 fallback: "en",
                 coverage: LocaleCoverage::V076Core,
             },
+            Self::Es419 => LocaleSpec {
+                tag: "es-419",
+                display_name: "Spanish (Latin America)",
+                script: "Latin",
+                direction: TextDirection::Ltr,
+                fallback: "en",
+                coverage: LocaleCoverage::V076Core,
+            },
         }
     }
 
     #[allow(dead_code)]
     pub fn shipped() -> &'static [Self] {
-        &[Self::En, Self::Ja, Self::ZhHans, Self::ZhHant, Self::PtBr]
+        &[
+            Self::En,
+            Self::Ja,
+            Self::ZhHans,
+            Self::ZhHant,
+            Self::PtBr,
+            Self::Es419,
+        ]
     }
 }
 
@@ -180,14 +198,6 @@ pub const PLANNED_QA_LOCALES: &[LocaleSpec] = &[
         coverage: LocaleCoverage::PlannedQa,
     },
     LocaleSpec {
-        tag: "es-419",
-        display_name: "Spanish (Latin America)",
-        script: "Latin",
-        direction: TextDirection::Ltr,
-        fallback: "en",
-        coverage: LocaleCoverage::PlannedQa,
-    },
-    LocaleSpec {
         tag: "fr",
         display_name: "French",
         script: "Latin",
@@ -241,6 +251,7 @@ pub enum MessageId {
     CmdChangeHeader,
     CmdChangeTranslationQueued,
     CmdChangeTranslationUnavailable,
+    CmdChangePreviousVersion,
     CmdClearDescription,
     CmdCompactDescription,
     CmdConfigDescription,
@@ -303,6 +314,7 @@ pub enum MessageId {
     CmdTrustDescription,
     CmdLspDescription,
     CmdShareDescription,
+    CmdWorkspaceDescription,
     CmdUndoDescription,
     CmdVerboseDescription,
     CmdCacheAdvice,
@@ -332,6 +344,7 @@ pub enum MessageId {
     KbScrollTranscript,
     KbNavigateHistory,
     KbScrollTranscriptAlt,
+    KbBrowseHistory,
     KbScrollPage,
     KbJumpTopBottom,
     KbJumpTopBottomEmpty,
@@ -532,6 +545,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CmdTrustDescription,
     MessageId::CmdLspDescription,
     MessageId::CmdShareDescription,
+    MessageId::CmdWorkspaceDescription,
     MessageId::CmdUndoDescription,
     MessageId::CmdVerboseDescription,
     MessageId::CmdCacheAdvice,
@@ -543,6 +557,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CmdChangeHeader,
     MessageId::CmdChangeTranslationQueued,
     MessageId::CmdChangeTranslationUnavailable,
+    MessageId::CmdChangePreviousVersion,
     MessageId::CmdCostReport,
     MessageId::CmdTokensCacheBoth,
     MessageId::CmdTokensCacheHitOnly,
@@ -565,6 +580,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::KbScrollTranscript,
     MessageId::KbNavigateHistory,
     MessageId::KbScrollTranscriptAlt,
+    MessageId::KbBrowseHistory,
     MessageId::KbScrollPage,
     MessageId::KbJumpTopBottom,
     MessageId::KbJumpTopBottomEmpty,
@@ -681,6 +697,7 @@ pub fn thinking_translation_placeholder(locale: Locale) -> &'static str {
         Locale::ZhHans => "正在思考，完成后翻译为简体中文...",
         Locale::ZhHant => "正在思考，完成後翻譯為繁體中文...",
         Locale::PtBr => "Pensando; traduzindo ao concluir...",
+        Locale::Es419 => "Pensando; traduciendo al finalizar...",
     }
 }
 
@@ -691,6 +708,7 @@ pub fn thinking_translation_in_progress(locale: Locale) -> &'static str {
         Locale::ZhHans => "正在翻译思考内容...",
         Locale::ZhHant => "正在翻譯思考內容...",
         Locale::PtBr => "Traduzindo o conteúdo de raciocínio...",
+        Locale::Es419 => "Traduciendo el contenido de razonamiento...",
     }
 }
 
@@ -701,6 +719,7 @@ pub fn thinking_translation_complete(locale: Locale) -> &'static str {
         Locale::ZhHans => "思考内容翻译完成",
         Locale::ZhHant => "思考內容翻譯完成",
         Locale::PtBr => "Tradução do raciocínio concluída",
+        Locale::Es419 => "Traducción del razonamiento completada",
     }
 }
 
@@ -711,6 +730,7 @@ pub fn thinking_translation_failed(locale: Locale) -> &'static str {
         Locale::ZhHans => "思考内容翻译失败",
         Locale::ZhHant => "思考內容翻譯失敗",
         Locale::PtBr => "Falha ao traduzir o raciocínio",
+        Locale::Es419 => "Falló la traducción del razonamiento",
     }
 }
 
@@ -721,6 +741,7 @@ pub fn hidden_translation_failed(locale: Locale) -> &'static str {
         Locale::ZhHans => "翻译失败，原文已隐藏。",
         Locale::ZhHant => "翻譯失敗，原文已隱藏。",
         Locale::PtBr => "A tradução falhou; o texto original está oculto.",
+        Locale::Es419 => "La traducción falló; el texto original está oculto.",
     }
 }
 
@@ -827,6 +848,9 @@ fn parse_locale(value: &str) -> Option<Locale> {
     if value.starts_with("pt") || value == "br" {
         return Some(Locale::PtBr);
     }
+    if value.starts_with("es") {
+        return Some(Locale::Es419);
+    }
     None
 }
 
@@ -886,6 +910,9 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CmdChangeTranslationUnavailable => {
             "English release notes are shown below. Translation is unavailable because the current session has no API key or is offline."
         }
+        MessageId::CmdChangePreviousVersion => {
+            "Previous version: {version} — run `/change {version}` to view it"
+        }
         MessageId::CmdClearDescription => "Clear conversation history",
         MessageId::CmdCompactDescription => {
             "Trigger context compaction to free up space (legacy; v0.6.6 prefers cycle restart)"
@@ -924,7 +951,7 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CmdModelsDescription => "List available models from API",
         MessageId::CmdNetworkDescription => "Manage network allow and deny rules",
         MessageId::CmdNoteDescription => "Add, list, edit, or remove workspace notes",
-        MessageId::CmdThemeDescription => "Switch theme: dark, light, grayscale, or system",
+        MessageId::CmdThemeDescription => "Switch theme or open the theme picker",
         MessageId::CmdProviderDescription => {
             "Switch or view the active LLM backend (deepseek | nvidia-nim | ollama)"
         }
@@ -972,6 +999,7 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CmdTrustDescription => {
             "Manage workspace trust and per-path allowlist (`/trust add <path>`, `/trust list`, `/trust on|off`)"
         }
+        MessageId::CmdWorkspaceDescription => "Show or switch the current workspace",
         MessageId::CmdUndoDescription => "Remove last message pair",
         MessageId::CmdVerboseDescription => "Toggle full live thinking in the transcript",
         MessageId::CmdCacheAdvice => {
@@ -1036,6 +1064,7 @@ fn english(id: MessageId) -> &'static str {
             "Scroll transcript, navigate input history, or select composer attachments"
         }
         MessageId::KbNavigateHistory => "Navigate input history",
+        MessageId::KbBrowseHistory => "Browse conversation history",
         MessageId::KbScrollTranscriptAlt => "Scroll transcript",
         MessageId::KbScrollPage => "Scroll transcript by page",
         MessageId::KbJumpTopBottom => "Jump to top / bottom of transcript",
@@ -1188,6 +1217,7 @@ fn translation(locale: Locale, id: MessageId) -> Option<&'static str> {
         Locale::ZhHans => chinese_simplified(id),
         Locale::ZhHant => traditional_chinese(id),
         Locale::PtBr => portuguese_brazil(id),
+        Locale::Es419 => spanish_latin_america(id),
     }
 }
 
@@ -1255,6 +1285,9 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         }
         MessageId::CmdChangeTranslationUnavailable => {
             "英語のリリースノートを以下に表示します。現在のセッションに API キーがないかオフラインのため、翻訳は利用できません。"
+        }
+        MessageId::CmdChangePreviousVersion => {
+            "前のバージョン: {version} — `/change {version}` で表示"
         }
         MessageId::CmdClearDescription => "会話履歴をクリア",
         MessageId::CmdCompactDescription => {
@@ -1348,6 +1381,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::CmdTrustDescription => {
             "ワークスペースの信頼設定とパス別許可リストを管理（`/trust add <path>`、`/trust list`、`/trust on|off`）"
         }
+        MessageId::CmdWorkspaceDescription => "現在のワークスペースを表示または切り替え",
         MessageId::CmdUndoDescription => "最後のメッセージ対を削除",
         MessageId::CmdVerboseDescription => "ライブ思考表示の詳細モードを切り替え",
         MessageId::CmdCacheAdvice => {
@@ -1411,6 +1445,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
             "会話履歴をスクロール、入力履歴を移動、または添付ファイルを選択"
         }
         MessageId::KbNavigateHistory => "入力履歴を移動",
+        MessageId::KbBrowseHistory => "会話履歴を閲覧",
         MessageId::KbScrollTranscriptAlt => "会話履歴をスクロール",
         MessageId::KbScrollPage => "ページ単位で会話履歴をスクロール",
         MessageId::KbJumpTopBottom => "会話履歴の先頭/末尾へジャンプ",
@@ -1604,6 +1639,9 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CmdChangeTranslationUnavailable => {
             "下面显示英文发布说明。当前会话没有 API Key 或处于离线状态，无法翻译。"
         }
+        MessageId::CmdChangePreviousVersion => {
+            "上一个版本: {version} —— 输入 `/change {version}` 查看"
+        }
         MessageId::CmdClearDescription => "清除对话历史",
         MessageId::CmdCompactDescription => {
             "触发上下文压缩以释放空间（旧版命令；v0.6.6 起建议改用循环重启）"
@@ -1678,6 +1716,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CmdTrustDescription => {
             "管理工作区信任与按路径的白名单（`/trust add <path>`、`/trust list`、`/trust on|off`）"
         }
+        MessageId::CmdWorkspaceDescription => "显示或切换当前工作空间",
         MessageId::CmdUndoDescription => "移除最后一组消息对",
         MessageId::CmdVerboseDescription => "切换实时思考内容的完整显示",
         MessageId::CmdCacheAdvice => {
@@ -1735,6 +1774,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         }
         MessageId::KbScrollTranscript => "滚动对话记录、浏览输入历史或选择附件",
         MessageId::KbNavigateHistory => "浏览输入历史",
+        MessageId::KbBrowseHistory => "浏览对话历史",
         MessageId::KbScrollTranscriptAlt => "滚动对话记录",
         MessageId::KbScrollPage => "按页滚动对话记录",
         MessageId::KbJumpTopBottom => "跳转到对话顶部/底部",
@@ -1912,6 +1952,9 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::CmdChangeTranslationUnavailable => {
             "As notas de versao em ingles aparecem abaixo. A traducao esta indisponivel porque a sessao atual nao tem chave de API ou esta offline."
         }
+        MessageId::CmdChangePreviousVersion => {
+            "Versão anterior: {version} — execute `/change {version}` para visualizar"
+        }
         MessageId::CmdClearDescription => "Limpar o histórico da conversa",
         MessageId::CmdCompactDescription => {
             "Compactar o contexto para liberar espaço (legado; a v0.6.6 prefere o reinício de ciclo)"
@@ -2016,6 +2059,7 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::CmdTrustDescription => {
             "Gerenciar a confiança do workspace e a allowlist por caminho (`/trust add <path>`, `/trust list`, `/trust on|off`)"
         }
+        MessageId::CmdWorkspaceDescription => "Mostrar ou trocar o workspace atual",
         MessageId::CmdUndoDescription => "Remover o último par de mensagens",
         MessageId::CmdVerboseDescription => "Alternar pensamento ao vivo completo no transcript",
         MessageId::CmdCacheAdvice => {
@@ -2079,6 +2123,7 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
             "Rolar transcrição, navegar histórico de entrada ou selecionar anexos do compositor"
         }
         MessageId::KbNavigateHistory => "Navegar histórico de entrada",
+        MessageId::KbBrowseHistory => "Navegar histórico da conversa",
         MessageId::KbScrollTranscriptAlt => "Rolar transcrição",
         MessageId::KbScrollPage => "Rolar transcrição por página",
         MessageId::KbJumpTopBottom => "Pular para topo / fim da transcrição",
@@ -2236,6 +2281,392 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
     })
 }
 
+fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
+    Some(match id {
+        MessageId::ComposerPlaceholder => "Escribe una tarea o usa /.",
+        MessageId::HistorySearchPlaceholder => "Buscar en el historial de prompts...",
+        MessageId::HistorySearchTitle => "Búsqueda en el historial",
+        MessageId::HistoryHintMove => "Arriba/Abajo mover",
+        MessageId::HistoryHintAccept => "Enter aceptar",
+        MessageId::HistoryHintRestore => "Esc restaurar",
+        MessageId::HistoryNoMatches => "  Sin resultados",
+        MessageId::ConfigTitle => "Configuración de la sesión",
+        MessageId::ConfigModalTitle => " Config ",
+        MessageId::ConfigSearchPlaceholder => "escribe para filtrar",
+        MessageId::ConfigNoSettings => "  No hay configuraciones disponibles.",
+        MessageId::ConfigNoMatchesPrefix => "  Ninguna configuración coincide con ",
+        MessageId::ConfigFilteredSettings => "  Configuraciones filtradas",
+        MessageId::ConfigShowing => "  Mostrando",
+        MessageId::ConfigFooterDefault => {
+            " escribir=filtrar, Arriba/Abajo=seleccionar, Enter/e=editar, Esc/q=cerrar "
+        }
+        MessageId::ConfigFooterScrollable => {
+            " escribir=filtrar, Arriba/Abajo=seleccionar, Enter/e=editar, PgUp/PgDn=desplazar, Esc/q=cerrar "
+        }
+        MessageId::ConfigFooterFiltered => {
+            " escribir=filtrar, Backspace=borrar, Ctrl+U/Esc=limpiar, Enter=editar "
+        }
+        MessageId::HelpTitle => "Ayuda",
+        MessageId::HelpFilterPlaceholder => "Escribe para filtrar",
+        MessageId::HelpFilterPrefix => "Filtro: ",
+        MessageId::HelpNoMatches => "  Sin resultados.",
+        MessageId::HelpSlashCommands => "Comandos con barra",
+        MessageId::HelpKeybindings => "Atajos de teclado",
+        MessageId::HelpFooterTypeFilter => " escribir para filtrar ",
+        MessageId::HelpFooterMove => "  Arriba/Abajo mover ",
+        MessageId::HelpFooterJump => " PgUp/PgDn saltar ",
+        MessageId::HelpFooterClose => " Esc cerrar ",
+        MessageId::CmdAnchorDescription => {
+            "Fijar un dato que sobrevive a la compactación (inyectado automáticamente en el contexto)"
+        }
+        MessageId::CmdAttachDescription => {
+            "Adjuntar imagen o video; usa @ruta para archivos de texto o directorios"
+        }
+        MessageId::CmdCacheDescription => {
+            "Mostrar estadísticas de hit/miss del caché de prefijo DeepSeek en las últimas N rondas"
+        }
+        MessageId::CmdChangeDescription => "Mostrar la entrada más reciente del changelog",
+        MessageId::CmdChangeHeader => "Changelog más reciente",
+        MessageId::CmdChangeTranslationQueued => {
+            "Las notas de la versión en inglés se muestran abajo. Se solicitará una versión traducida a continuación; si el proveedor no está disponible, este texto en inglés será el fallback."
+        }
+        MessageId::CmdChangeTranslationUnavailable => {
+            "Las notas de la versión en inglés se muestran abajo. La traducción no está disponible porque la sesión actual no tiene clave de API o está offline."
+        }
+        MessageId::CmdChangePreviousVersion => {
+            "Versión anterior: {version} — ejecuta `/change {version}` para verla"
+        }
+        MessageId::CmdClearDescription => "Limpiar el historial de la conversación",
+        MessageId::CmdCompactDescription => {
+            "Compactar el contexto para liberar espacio (heredado; v0.6.6 prefiere reinicio de ciclo)"
+        }
+        MessageId::CmdConfigDescription => "Abrir el editor interactivo de configuración",
+        MessageId::CmdContextDescription => "Abrir el inspector compacto de contexto de la sesión",
+        MessageId::CmdCostDescription => "Mostrar el desglose de costo de la sesión",
+        MessageId::CmdCycleDescription => {
+            "Mostrar el resumen de continuidad de un ciclo específico"
+        }
+        MessageId::CmdCyclesDescription => {
+            "Listar las transferencias de checkpoint-restart de esta sesión"
+        }
+        MessageId::CmdDiffDescription => "Mostrar cambios en archivos desde el inicio de la sesión",
+        MessageId::CmdEditDescription => "Revisar y reenviar el último mensaje",
+        MessageId::CmdExitDescription => "Salir de la aplicación",
+        MessageId::CmdExportDescription => "Exportar la conversación a markdown",
+        MessageId::CmdFeedbackDescription => "Generar una URL de feedback en GitHub",
+        MessageId::CmdHelpDescription => "Mostrar información de ayuda",
+        MessageId::CmdHomeDescription => {
+            "Mostrar el panel inicial con estadísticas y acciones rápidas"
+        }
+        MessageId::CmdHooksDescription => {
+            "Listar hooks de ciclo de vida configurados (solo lectura)"
+        }
+        MessageId::CmdAgentDescription => {
+            "Abrir una sesión persistente de sub-agente: /agent [0-3] <tarea>"
+        }
+        MessageId::CmdGoalDescription => {
+            "Definir una meta de sesión con presupuesto de tokens opcional"
+        }
+        MessageId::CmdInitDescription => "Generar AGENTS.md para el proyecto",
+        MessageId::CmdLspDescription => "Alternar diagnóstico LSP encendido o apagado",
+        MessageId::CmdShareDescription => "Exportar la sesión actual como una URL web compartible",
+        MessageId::CmdJobsDescription => {
+            "Inspeccionar y controlar trabajos de shell en segundo plano"
+        }
+        MessageId::CmdLinksDescription => "Mostrar enlaces del panel y documentación de DeepSeek",
+        MessageId::CmdLoadDescription => "Cargar la sesión desde un archivo",
+        MessageId::CmdLogoutDescription => "Limpiar la clave de API y volver a la configuración",
+        MessageId::CmdMcpDescription => "Abrir o gestionar servidores MCP",
+        MessageId::CmdMemoryDescription => {
+            "Inspeccionar o gestionar el archivo persistente de memoria del usuario"
+        }
+        MessageId::CmdModeDescription => {
+            "Alternar modo o abrir selector: /mode [agent|plan|yolo|1|2|3]"
+        }
+        MessageId::CmdModelDescription => "Cambiar o mostrar el modelo actual",
+        MessageId::CmdModelsDescription => "Listar los modelos disponibles por la API",
+        MessageId::CmdNetworkDescription => "Gestionar reglas de red permitidas y bloqueadas",
+        MessageId::CmdNoteDescription => "Agregar nota al archivo persistente (.deepseek/notes.md)",
+        MessageId::CmdThemeDescription => "Alternar entre tema claro y oscuro",
+        MessageId::CmdProviderDescription => {
+            "Cambiar o mostrar el backend LLM activo (deepseek | nvidia-nim | ollama)"
+        }
+        MessageId::CmdQueueDescription => "Ver o editar mensajes en cola",
+        MessageId::CmdRecallDescription => {
+            "Buscar archivos de ciclos anteriores (BM25 sobre el texto de los mensajes)"
+        }
+        MessageId::CmdRelayDescription => "Crear un relay de sesión (接力) para un hilo nuevo",
+        MessageId::CmdRenameDescription => "Renombrar la sesión actual",
+        MessageId::CmdRestoreDescription => {
+            "Revertir el workspace a un snapshot pre/post-turno anterior. Sin argumento, lista los snapshots recientes."
+        }
+        MessageId::CmdRetryDescription => "Repetir la última solicitud",
+        MessageId::CmdReviewDescription => {
+            "Ejecutar una revisión de código estructurada en un archivo, diff o PR"
+        }
+        MessageId::CmdRlmDescription => {
+            "Turno del Recursive Language Model (RLM) — guarda el prompt en un REPL Python y deja que el modelo escriba el código que lo procesa; usa `llm_query()` / `sub_rlm()` para llamadas a sub-LLMs."
+        }
+        MessageId::CmdSaveDescription => "Guardar la sesión en archivo",
+        MessageId::CmdSessionsDescription => "Abrir el selector de sesiones",
+        MessageId::CmdSettingsDescription => "Mostrar las configuraciones persistidas",
+        MessageId::CmdSkillDescription => {
+            "Activar una skill, o instalar/actualizar/desinstalar/confiar en una skill de la comunidad"
+        }
+        MessageId::CmdSkillsDescription => {
+            "Listar skills locales (filtra con `/skills <prefijo>`; --remote navega el registro curado)"
+        }
+        MessageId::CmdStashDescription => {
+            "Estacionar o restaurar borrador del compositor (Ctrl+S estaciona, /stash list|pop)"
+        }
+        MessageId::CmdStatusDescription => "Mostrar el estado de la sesión en ejecución",
+        MessageId::CmdStatuslineDescription => {
+            "Configurar qué elementos aparecen en el pie de página"
+        }
+        MessageId::CmdSubagentsDescription => "Listar el estado de los sub-agentes",
+        MessageId::CmdSwarmDescription => {
+            "Ejecutar turno fanout multi-agente (sequential | mixture | distill | deliberate)"
+        }
+        MessageId::CmdSystemDescription => "Mostrar el prompt de sistema actual",
+        MessageId::CmdTaskDescription => "Gestionar tareas en segundo plano",
+        MessageId::CmdTokensDescription => "Mostrar el uso de tokens de la sesión",
+        MessageId::CmdTranslateDescription => {
+            "Activar o desactivar la traducción de salida al idioma actual del sistema"
+        }
+        MessageId::CmdTranslateOff => {
+            "Traducción de salida desactivada (se muestra la salida original del modelo)"
+        }
+        MessageId::CmdTranslateOn => {
+            "Traducción de salida activada: las respuestas del modelo se mostrarán en el idioma del sistema"
+        }
+        MessageId::TranslationInProgress => "Traduciendo la salida del asistente...",
+        MessageId::TranslationComplete => "Traducción completada",
+        MessageId::TranslationFailed => "Traducción fallida",
+        MessageId::CmdTrustDescription => {
+            "Gestionar la confianza del workspace y la lista de paths permitidos (`/trust add <ruta>`, `/trust list`, `/trust on|off`)"
+        }
+        MessageId::CmdWorkspaceDescription => "Mostrar o cambiar el workspace actual",
+        MessageId::CmdUndoDescription => "Eliminar el último par de mensajes",
+        MessageId::CmdVerboseDescription => {
+            "Alternar pensamiento en vivo completo en la transcripción"
+        }
+        MessageId::CmdCacheAdvice => {
+            "Tasas de hit/miss arriba del ~70% a partir del tercer turno indican un prefijo de caché estable;\n\
+             valores menores en sesiones largas sugieren inestabilidad en el prefijo, vale investigar (#263)."
+        }
+        MessageId::CmdCacheFootnote => {
+            "* miss inferido a partir de entrada − hit cuando el proveedor no lo reporta por separado.\n"
+        }
+        MessageId::CmdCacheHeader => {
+            "Telemetría del caché — últimos {count} de {total} turno(s) (modelo: {model})\n"
+        }
+        MessageId::CmdCacheNoData => {
+            "Historial del caché: ningún turno registrado todavía.\n\n\
+             DeepSeek expone `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` en cada turno \
+             de la API donde el modelo lo soporta (familia V4). Ejecuta un turno y prueba /cache de nuevo."
+        }
+        MessageId::CmdCacheTotals => {
+            "Σ entrada: {sum_in}   Σ hit: {sum_hit}   Σ miss: {sum_miss}   tasa promedio de hit: {avg}\n"
+        }
+        MessageId::CmdCostReport => {
+            "Costo de la sesión:\n\
+             ─────────────────────────────\n\
+             Total aproximado: {cost}\n\n\
+             Las estimaciones de costo son aproximadas y usan la telemetría de uso del proveedor cuando está disponible.\n\n\
+             Precios de la API DeepSeek:\n\
+             ─────────────────────────────\n\
+             Los detalles de precio no están configurados en esta CLI."
+        }
+        MessageId::CmdTokensCacheBoth => "{hit} hit / {miss} miss",
+        MessageId::CmdTokensCacheHitOnly => "{hit} hit / miss no reportado",
+        MessageId::CmdTokensCacheMissOnly => "hit no reportado / {miss} miss",
+        MessageId::CmdTokensContextUnknownWindow => "~{estimated} / ventana desconocida",
+        MessageId::CmdTokensContextWithWindow => "~{used} / {window} ({percent}%)",
+        MessageId::FooterAgentSingular => "1 sub-agente",
+        MessageId::FooterAgentsPlural => "{count} sub-agentes",
+        MessageId::FooterPressCtrlCAgain => "Presiona Ctrl+C de nuevo para salir",
+        MessageId::FooterWorking => "trabajando",
+        MessageId::HelpSectionActions => "Acciones",
+        MessageId::HelpSectionClipboard => "Portapapeles",
+        MessageId::HelpSectionEditing => "Edición de entrada",
+        MessageId::HelpSectionHelp => "Ayuda",
+        MessageId::HelpSectionModes => "Modos",
+        MessageId::HelpSectionNavigation => "Navegación",
+        MessageId::HelpSectionSessions => "Sesiones",
+        MessageId::CmdTokensNotReported => "no reportado",
+        MessageId::CmdTokensReport => {
+            "Uso de tokens:\n\
+             ─────────────────────────────\n\
+             Contexto activo:           {active}\n\
+             Última entrada de API:     {input} (telemetría por turno; puede contar el mismo prefijo varias veces en rondas con herramientas)\n\
+             Última salida de API:      {output}\n\
+             Hit/miss del caché:        {cache} (solo para telemetría/costo)\n\
+             Tokens acumulados:         {total} (telemetría de uso de la sesión)\n\
+             Costo aproximado:          {cost}\n\
+             Mensajes de API:           {api_messages}\n\
+             Mensajes del chat:         {chat_messages}\n\
+             Modelo:                    {model}"
+        }
+        MessageId::KbScrollTranscript => {
+            "Desplazar transcripción, navegar historial de entrada o seleccionar adjuntos del compositor"
+        }
+        MessageId::KbNavigateHistory => "Navegar historial de entrada",
+        MessageId::KbBrowseHistory => "Explorar historial de conversación",
+        MessageId::KbScrollTranscriptAlt => "Desplazar transcripción",
+        MessageId::KbScrollPage => "Desplazar transcripción por página",
+        MessageId::KbJumpTopBottom => "Saltar al inicio / fin de la transcripción",
+        MessageId::KbJumpTopBottomEmpty => "Saltar al inicio / fin (cuando la entrada está vacía)",
+        MessageId::KbJumpToolBlocks => "Saltar entre bloques de salida de herramientas",
+        MessageId::KbMoveCursor => "Mover cursor en el compositor",
+        MessageId::KbJumpLineStartEnd => "Saltar al inicio / fin de la línea",
+        MessageId::KbDeleteChar => {
+            "Eliminar carácter antes / después del cursor, o quitar adjunto seleccionado"
+        }
+        MessageId::KbClearDraft => "Limpiar borrador actual",
+        MessageId::KbStashDraft => "Estacionar borrador actual (`/stash pop` restaura)",
+        MessageId::KbSearchHistory => "Buscar historial de prompts y recuperar borradores locales",
+        MessageId::KbInsertNewline => "Insertar nueva línea en el compositor",
+        MessageId::KbSendDraft => "Enviar borrador actual",
+        MessageId::KbCloseMenu => {
+            "Cerrar menú, cancelar solicitud, descartar borrador o limpiar entrada"
+        }
+        MessageId::KbCancelOrExit => "Cancelar solicitud o salir cuando está inactivo",
+        MessageId::KbShellControls => "Abrir controles de shell para comando en primer plano",
+        MessageId::KbExitEmpty => "Salir cuando la entrada está vacía",
+        MessageId::KbCommandPalette => "Abrir paleta de comandos",
+        MessageId::KbFuzzyFilePicker => {
+            "Abrir selector de archivo fuzzy (inserta @ruta al presionar Enter)"
+        }
+        MessageId::KbCompactInspector => "Abrir inspector compacto de contexto de la sesión",
+        MessageId::KbLastMessagePager => {
+            "Abrir paginador para el último mensaje (cuando la entrada está vacía)"
+        }
+        MessageId::KbSelectedDetails => {
+            "Abrir detalles de la herramienta o mensaje seleccionado (cuando la entrada está vacía)"
+        }
+        MessageId::KbToolDetailsPager => "Abrir paginador de detalles de la herramienta",
+        MessageId::KbThinkingPager => "Abrir paginador de razonamiento",
+        MessageId::KbLiveTranscript => "Abrir superposición de transcripción en vivo (auto-scroll)",
+        MessageId::KbBacktrackMessage => {
+            "Retroceder al mensaje anterior del usuario (izquierda/derecha, Enter para rebobinar)"
+        }
+        MessageId::KbCompleteCycleModes => {
+            "Completar /command, encolar follow-up, ciclar modos; Shift+Tab cicla esfuerzo de razonamiento"
+        }
+        MessageId::KbJumpPlanAgentYolo => "Saltar directo a modo Plan / Agent / YOLO",
+        MessageId::KbAltJumpPlanAgentYolo => "Salto alternativo a modo Plan / Agent / YOLO",
+        MessageId::KbFocusSidebar => "Enfocar barra lateral Plan / Todos / Tasks / Agents / Auto",
+        MessageId::KbTogglePlanAgent => "Alternar entre modos Plan y Agent",
+        MessageId::KbSessionPicker => "Abrir selector de sesiones",
+        MessageId::KbPasteAttach => "Pegar texto o adjuntar imagen del portapapeles",
+        MessageId::KbCopySelection => "Copiar selección actual (Cmd+C en macOS)",
+        MessageId::KbContextMenu => {
+            "Abrir acciones de contexto para pegar, selección, detalles, contexto y ayuda"
+        }
+        MessageId::KbAttachPath => "Agregar archivo o directorio local al contexto",
+        MessageId::KbHelpOverlay => {
+            "Abrir esta superposición de ayuda (cuando la entrada está vacía)"
+        }
+        MessageId::KbToggleHelp => "Alternar superposición de ayuda",
+        MessageId::KbToggleHelpSlash => "Alternar superposición de ayuda",
+        MessageId::HelpUsageLabel => "Uso:",
+        MessageId::HelpAliasesLabel => "Alias:",
+        MessageId::SettingsTitle => "Configuraciones:",
+        MessageId::SettingsConfigFile => "Archivo de configuración:",
+        MessageId::ClearConversation => "Conversación limpia",
+        MessageId::ClearConversationBusy => {
+            "Conversación limpia (estado del plan ocupado; ejecuta /clear de nuevo si es necesario)"
+        }
+        MessageId::ModelChanged => "Modelo cambiado: {old} \u{2192} {new}",
+        MessageId::LinksTitle => "Enlaces de DeepSeek:",
+        MessageId::LinksDashboard => "Panel:",
+        MessageId::LinksDocs => "Documentación:",
+        MessageId::LinksTip => "Tip: las claves de API están disponibles en la consola del panel.",
+        MessageId::SubagentsFetching => "Obteniendo estado de los sub-agentes...",
+        MessageId::HelpUnknownCommand => "Comando desconocido: {topic}",
+        MessageId::HomeDashboardTitle => "Panel Inicial de DeepSeek TUI",
+        MessageId::HomeModel => "Modelo:",
+        MessageId::HomeMode => "Modo:",
+        MessageId::HomeWorkspace => "Workspace:",
+        MessageId::HomeHistory => "Historial:",
+        MessageId::HomeTokens => "Tokens:",
+        MessageId::HomeQueued => "En cola:",
+        MessageId::HomeSubagents => "Sub-agentes:",
+        MessageId::HomeSkill => "Skill:",
+        MessageId::HomeQuickActions => "Acciones Rápidas",
+        MessageId::HomeQuickLinks => "/links      - Enlaces del panel y API",
+        MessageId::HomeQuickSkills => "/skills      - Listar skills disponibles",
+        MessageId::HomeQuickConfig => "/config      - Abrir editor interactivo de configuración",
+        MessageId::HomeQuickSettings => "/settings    - Mostrar configuraciones persistentes",
+        MessageId::HomeQuickModel => "/model       - Alternar o visualizar modelo",
+        MessageId::HomeQuickSubagents => "/subagents   - Listar estado de los sub-agentes",
+        MessageId::HomeQuickTaskList => "/task list   - Mostrar fila de tareas en segundo plano",
+        MessageId::HomeQuickHelp => "/help        - Mostrar ayuda",
+        MessageId::HomeModeTips => "Tips de Modo",
+        MessageId::HomeAgentModeTip => "Modo Agent - Usar herramientas para tareas autónomas",
+        MessageId::HomeAgentModeReviewTip => {
+            "  Usa Ctrl+X para revisar en modo Plan antes de ejecutar"
+        }
+        MessageId::HomeAgentModeYoloTip => {
+            "  Escribe /mode yolo para habilitar acceso total a las herramientas"
+        }
+        MessageId::HomeYoloModeTip => "Modo YOLO - Acceso total a herramientas, sin aprobaciones",
+        MessageId::HomeYoloModeCaution => "  ¡Ten cuidado con operaciones destructivas!",
+        MessageId::HomePlanModeTip => "Modo Plan - Planear antes de implementar",
+        MessageId::HomePlanModeChecklistTip => {
+            "  Usa /mode plan para crear checklists estructurados"
+        }
+        MessageId::OnboardLanguageTitle => "Elige el idioma",
+        MessageId::OnboardLanguageBlurb => {
+            "Elige el idioma de la interfaz. Puedes cambiarlo en cualquier momento con `/settings set locale <etiqueta>`."
+        }
+        MessageId::OnboardLanguageFooter => {
+            "Presiona 1-5 para elegir, o Enter para mantener la configuración actual"
+        }
+        MessageId::OnboardApiKeyTitle => "Conecta tu clave de API DeepSeek",
+        MessageId::OnboardApiKeyStep1 => {
+            "Paso 1.  Abre https://platform.deepseek.com/api_keys y crea una clave."
+        }
+        MessageId::OnboardApiKeyStep2 => "Paso 2.  Pégala abajo y presiona Enter.",
+        MessageId::OnboardApiKeySavedHint => {
+            "Guardada en ~/.deepseek/config.toml para funcionar en cualquier carpeta."
+        }
+        MessageId::OnboardApiKeyFormatHint => {
+            "Pega la clave completa tal como fue emitida (sin espacios ni saltos de línea)."
+        }
+        MessageId::OnboardApiKeyPlaceholder => "(pega la clave acá)",
+        MessageId::OnboardApiKeyLabel => "Clave: ",
+        MessageId::OnboardApiKeyFooter => "Enter para guardar, Esc para volver.",
+        MessageId::OnboardTrustTitle => "Confiar en el directorio",
+        MessageId::OnboardTrustQuestion => "¿Confías en el contenido de este directorio?",
+        MessageId::OnboardTrustLocationPrefix => "Estás en ",
+        MessageId::OnboardTrustRiskHint => {
+            "Trabajar con contenido no confiable aumenta el riesgo de inyección de prompt."
+        }
+        MessageId::OnboardTrustEffectHint => {
+            "Confiar en este directorio lo registra en la configuración global y habilita el modo workspace confiable."
+        }
+        MessageId::OnboardTrustFooterPrefix => "Presiona ",
+        MessageId::OnboardTrustFooterMiddle => " para confiar y continuar, ",
+        MessageId::OnboardTrustFooterSuffix => " para salir",
+        MessageId::OnboardTipsTitle => "Empieza simple",
+        MessageId::OnboardTipsLine1 => {
+            "Escribe la tarea en lenguaje natural. Usa /help o Ctrl+K para comandos."
+        }
+        MessageId::OnboardTipsLine2 => {
+            "El composer inferior es multilínea: Enter envía, Alt+Enter o Ctrl+J agrega una nueva línea."
+        }
+        MessageId::OnboardTipsLine3 => {
+            "Cambia de modo solo cuando el trabajo cambie: Plan para revisar antes, Agent para ejecución, YOLO para auto-aprobación."
+        }
+        MessageId::OnboardTipsLine4 => {
+            "Ctrl+R retoma sesiones anteriores, y Esc cancela el borrador o superposición actual."
+        }
+        MessageId::OnboardTipsFooterEnter => "Presiona Enter",
+        MessageId::OnboardTipsFooterAction => " para abrir el workspace",
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2254,6 +2685,8 @@ mod tests {
         assert_eq!(normalize_configured_locale("zh_HK.UTF-8"), Some("zh-Hant"));
         assert_eq!(normalize_configured_locale("pt"), Some("pt-BR"));
         assert_eq!(normalize_configured_locale("pt-PT"), Some("pt-BR"));
+        assert_eq!(normalize_configured_locale("es"), Some("es-419"));
+        assert_eq!(normalize_configured_locale("es-MX"), Some("es-419"));
     }
 
     #[test]

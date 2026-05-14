@@ -415,6 +415,7 @@ fn command_runs_directly(name: &str) -> bool {
             | "trust"
             | "logout"
             | "tokens"
+            | "change"
             | "system"
             | "context"
             | "undo"
@@ -958,6 +959,26 @@ mod tests {
         assert!(matches!(
             &model.action,
             CommandPaletteAction::InsertText { text } if text == "/model "
+        ));
+    }
+
+    #[test]
+    fn command_palette_runs_change_without_requiring_version() {
+        let entries = build_entries(
+            Locale::En,
+            Path::new("."),
+            Path::new("."),
+            Path::new("mcp.json"),
+            None,
+        );
+        let change = entries
+            .iter()
+            .find(|entry| entry.section == PaletteSection::Command && entry.label == "/change")
+            .expect("change command entry");
+
+        assert!(matches!(
+            &change.action,
+            CommandPaletteAction::ExecuteCommand { command } if command == "/change"
         ));
     }
 

@@ -50,6 +50,7 @@ pub struct SessionPickerView {
     list_scroll: Cell<usize>,
     list_visible_rows: Cell<usize>,
     history_scroll: Cell<usize>,
+    history_pinned_to_latest: Cell<bool>,
     history_visible_rows: Cell<usize>,
     search_input: String,
     search_mode: bool,
@@ -84,6 +85,7 @@ impl SessionPickerView {
             list_scroll: Cell::new(0),
             list_visible_rows: Cell::new(8),
             history_scroll: Cell::new(0),
+            history_pinned_to_latest: Cell::new(true),
             history_visible_rows: Cell::new(12),
             search_input: String::new(),
             search_mode: false,
@@ -205,26 +207,35 @@ impl SessionPickerView {
     }
 
     fn scroll_history(&self, delta: isize) {
-        let max_scroll = self
-            .current_preview
-            .len()
-            .saturating_sub(self.history_visible_rows.get().max(1));
+        let max_scroll =
+            max_history_scroll_for(&self.current_preview, self.history_visible_rows.get());
         let current = self.history_scroll.get();
         let next = if delta.is_negative() {
             current.saturating_sub(delta.unsigned_abs())
         } else {
             current.saturating_add(delta as usize)
         };
-        self.history_scroll.set(next.min(max_scroll));
+        let next = next.min(max_scroll);
+        self.history_scroll.set(next);
+        self.history_pinned_to_latest.set(next == max_scroll);
     }
 
     fn ensure_history_scroll_in_bounds(&self) {
-        let max_scroll = self
-            .current_preview
-            .len()
-            .saturating_sub(self.history_visible_rows.get().max(1));
-        self.history_scroll
-            .set(self.history_scroll.get().min(max_scroll));
+        let max_scroll =
+            max_history_scroll_for(&self.current_preview, self.history_visible_rows.get());
+        if self.history_pinned_to_latest.get() {
+            self.history_scroll.set(max_scroll);
+        } else {
+            self.history_scroll
+                .set(self.history_scroll.get().min(max_scroll));
+        }
+    }
+
+    fn scroll_history_to_latest(&self) {
+        let max_scroll =
+            max_history_scroll_for(&self.current_preview, self.history_visible_rows.get());
+        self.history_scroll.set(max_scroll);
+        self.history_pinned_to_latest.set(true);
     }
 
     fn ensure_selected_visible(&self) {
@@ -303,13 +314,13 @@ impl SessionPickerView {
     fn refresh_preview(&mut self) {
         let Some(session) = self.selected_session() else {
             self.current_preview = vec!["No sessions found.".to_string()];
-            self.history_scroll.set(0);
+            self.scroll_history_to_latest();
             return;
         };
 
         if let Some(lines) = self.preview_cache.get(&session.id) {
             self.current_preview = lines.clone();
-            self.history_scroll.set(0);
+            self.scroll_history_to_latest();
             return;
         }
 
@@ -317,7 +328,7 @@ impl SessionPickerView {
             Ok(manager) => manager,
             Err(_) => {
                 self.current_preview = vec!["Failed to open sessions directory.".to_string()];
-                self.history_scroll.set(0);
+                self.scroll_history_to_latest();
                 return;
             }
         };
@@ -326,7 +337,7 @@ impl SessionPickerView {
             Ok(saved) => saved,
             Err(_) => {
                 self.current_preview = vec!["Failed to load session preview.".to_string()];
-                self.history_scroll.set(0);
+                self.scroll_history_to_latest();
                 return;
             }
         };
@@ -335,7 +346,7 @@ impl SessionPickerView {
         self.preview_cache
             .insert(session.id.clone(), preview.clone());
         self.current_preview = preview;
-        self.history_scroll.set(0);
+        self.scroll_history_to_latest();
     }
 }
 
@@ -503,11 +514,15 @@ impl ModalView for SessionPickerView {
 
         let history_inner = modal_block(" History (PgUp/PgDn) ").inner(history_area);
         self.update_history_viewport(history_inner.height as usize);
-        let preview_lines = format_preview(&self.current_preview);
+        let visible_preview = visible_preview_lines(
+            &self.current_preview,
+            self.history_scroll.get(),
+            history_inner.height as usize,
+        );
+        let preview_lines = format_preview(&visible_preview);
 
         let preview = Paragraph::new(preview_lines)
             .block(modal_block(" History (PgUp/PgDn) "))
-            .scroll((self.history_scroll.get().min(u16::MAX as usize) as u16, 0))
             .wrap(Wrap { trim: false });
         preview.render(history_area, buf);
     }
@@ -711,6 +726,53 @@ fn format_preview(lines: &[String]) -> Vec<Line<'static>> {
     out
 }
 
+fn preview_body_start(lines: &[String], visible_rows: usize) -> Option<usize> {
+    let visible_rows = visible_rows.max(1);
+    let body_start = lines
+        .iter()
+        .position(|line| line.is_empty())
+        .map(|idx| idx + 1)?;
+    (body_start < visible_rows).then_some(body_start)
+}
+
+fn max_history_scroll_for(lines: &[String], visible_rows: usize) -> usize {
+    let visible_rows = visible_rows.max(1);
+    let Some(body_start) = preview_body_start(lines, visible_rows) else {
+        return lines.len().saturating_sub(visible_rows);
+    };
+    let body_visible_rows = visible_rows.saturating_sub(body_start).max(1);
+    lines
+        .len()
+        .saturating_sub(body_start)
+        .saturating_sub(body_visible_rows)
+}
+
+fn visible_preview_lines(lines: &[String], scroll: usize, visible_rows: usize) -> Vec<String> {
+    let visible_rows = visible_rows.max(1);
+    let max_scroll = max_history_scroll_for(lines, visible_rows);
+    let scroll = scroll.min(max_scroll);
+    let Some(body_start) = preview_body_start(lines, visible_rows) else {
+        return lines
+            .iter()
+            .skip(scroll)
+            .take(visible_rows)
+            .cloned()
+            .collect();
+    };
+
+    let body_visible_rows = visible_rows.saturating_sub(body_start).max(1);
+    let mut out = Vec::with_capacity(visible_rows);
+    out.extend(lines.iter().take(body_start).cloned());
+    out.extend(
+        lines
+            .iter()
+            .skip(body_start + scroll)
+            .take(body_visible_rows)
+            .cloned(),
+    );
+    out
+}
+
 fn format_relative_time(dt: &DateTime<chrono::Utc>) -> String {
     let now = chrono::Utc::now();
     let duration = now.signed_duration_since(*dt);
@@ -842,6 +904,7 @@ mod tests {
             list_scroll: Cell::new(0),
             list_visible_rows: Cell::new(8),
             history_scroll: Cell::new(0),
+            history_pinned_to_latest: Cell::new(true),
             history_visible_rows: Cell::new(12),
             search_input: String::new(),
             search_mode: false,
@@ -1007,6 +1070,56 @@ mod tests {
     }
 
     #[test]
+    fn history_preview_keeps_header_while_scrolling_transcript() {
+        let lines = vec![
+            "Title: version".to_string(),
+            "Updated: 2026-05-14 01:02".to_string(),
+            "Messages: 100 | Model: auto".to_string(),
+            "Mode: agent".to_string(),
+            String::new(),
+            "USER: oldest prompt".to_string(),
+            "ASSISTANT: oldest answer".to_string(),
+            "USER: middle prompt".to_string(),
+            "ASSISTANT: middle answer".to_string(),
+            "USER: newest prompt".to_string(),
+            "ASSISTANT: newest answer".to_string(),
+        ];
+
+        let max_scroll = max_history_scroll_for(&lines, 8);
+        assert_eq!(max_scroll, 3);
+
+        let rendered = visible_preview_lines(&lines, max_scroll, 8).join("\n");
+        assert!(rendered.contains("Title: version"));
+        assert!(rendered.contains("Updated: 2026-05-14 01:02"));
+        assert!(!rendered.contains("oldest prompt"));
+        assert!(rendered.contains("newest prompt"));
+        assert!(rendered.contains("newest answer"));
+    }
+
+    #[test]
+    fn history_refresh_starts_at_latest_transcript_messages() {
+        let mut view = picker_with(vec![test_session(1, "first")], None);
+        view.current_preview = vec![
+            "Title: first".to_string(),
+            "Updated: 2026-05-14 01:02".to_string(),
+            "Messages: 10 | Model: auto".to_string(),
+            String::new(),
+            "line 0".to_string(),
+            "line 1".to_string(),
+            "line 2".to_string(),
+            "line 3".to_string(),
+            "line 4".to_string(),
+            "line 5".to_string(),
+        ];
+        view.history_visible_rows.set(6);
+
+        view.scroll_history_to_latest();
+
+        assert_eq!(view.history_scroll.get(), 4);
+        assert!(view.history_pinned_to_latest.get());
+    }
+
+    #[test]
     fn build_preview_lines_shows_full_clean_history() {
         let messages = vec![
             text_message(
@@ -1047,6 +1160,7 @@ mod tests {
             list_scroll: Cell::new(0),
             list_visible_rows: Cell::new(3),
             history_scroll: Cell::new(0),
+            history_pinned_to_latest: Cell::new(true),
             history_visible_rows: Cell::new(12),
             search_input: String::new(),
             search_mode: false,

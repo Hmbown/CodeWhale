@@ -107,7 +107,7 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
                 href={isZh ? "/zh/install" : "/install"}
                 className="flex-1 sm:flex-none text-center px-5 py-3 bg-ink text-paper font-mono text-sm uppercase tracking-wider hover:bg-indigo transition-colors"
               >
-                {isZh ? "30 秒完成安装 →" : "Install in 30 seconds →"}
+                {isZh ? "立即安装 →" : "Install →"}
               </Link>
               <Link
                 href="https://github.com/Hmbown/deepseek-tui"
@@ -143,7 +143,7 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
           <div className="lg:col-span-4">
             <div className="hairline-t hairline-b hairline-l hairline-r bg-paper p-5 relative">
               <div className="absolute -top-3 left-4 bg-paper px-2 eyebrow">
-                {isZh ? "最快安装 · 一行搞定" : "quickest path · 一行安装"}
+                {isZh ? "开始使用 · 一行安装" : "get started · 开始使用"}
               </div>
               <pre className="code-block mt-2">
                 {isZh ? (
@@ -205,16 +205,16 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
           <div className="lg:col-span-7">
             <article className="space-y-5">
               <h3 className="font-display text-3xl leading-tight">
-                {dispatch.headline}
+                {isZh && dispatch.headlineZh ? dispatch.headlineZh : dispatch.headline}
               </h3>
               <p className={`${isZh ? "text-ink-soft leading-[1.9] tracking-wide text-[1.02rem]" : "text-ink-soft leading-relaxed text-[1.02rem]"}`}>
-                {dispatch.summary}
+                {isZh && dispatch.summaryZh ? dispatch.summaryZh : dispatch.summary}
               </p>
 
               <div className="hairline-t pt-5">
                 <div className="eyebrow mb-3">{isZh ? "要点" : "Highlights · 要点"}</div>
                 <ul className="divide-y divide-paper-line/40 hairline-t hairline-b">
-                  {dispatch.highlights.map((h, i) => (
+                  {(isZh && dispatch.highlightsZh ? dispatch.highlightsZh : dispatch.highlights).map((h, i) => (
                     <li key={i} className="py-3 flex items-start gap-4">
                       <span className="font-mono text-[0.7rem] text-indigo uppercase tracking-widest pt-1 w-20 shrink-0">
                         {h.tag}
@@ -230,11 +230,11 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
                 </ul>
               </div>
 
-              {dispatch.movers.length > 0 && (
+              {(isZh && dispatch.moversZh ? dispatch.moversZh : dispatch.movers).length > 0 && (
                 <div className="pt-2">
                   <div className="eyebrow mb-3">{isZh ? "进展" : "Movers · 进展"}</div>
                   <ul className="space-y-2">
-                    {dispatch.movers.map((m) => (
+                    {(isZh && dispatch.moversZh ? dispatch.moversZh : dispatch.movers).map((m) => (
                       <li key={m.number} className="flex items-baseline gap-3 text-sm">
                         <span className="font-mono text-indigo tabular">#{m.number}</span>
                         <Link href={m.href} className="font-medium hover:text-indigo">{m.title}</Link>
@@ -295,7 +295,7 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
                   <div className="eyebrow mb-3">02 · 沙箱保护</div>
                   <h3 className="font-display text-xl mb-3">三种模式，一套审批</h3>
                   <p className="text-sm text-ink-soft leading-[1.9]">
-                    Plan 只读，Agent 询问，YOLO 自动。沙箱：{facts.sandboxBackends.join("、")}。
+                    Plan 只读调查，Agent 按需审批，YOLO 自动批准。沙箱：seatbelt (macOS)、landlock (Linux)；Windows 受限令牌。
                   </p>
                 </div>
                 <div className="p-6">
@@ -319,7 +319,7 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
                   <div className="eyebrow mb-3">02 · 沙箱保护</div>
                   <h3 className="font-display text-xl mb-3">Three modes, one approval system</h3>
                   <p className="text-sm text-ink-soft leading-relaxed">
-                    Plan reads, Agent asks, YOLO doesn&apos;t. Sandboxed via {facts.sandboxBackends.join(", ")}.
+                    Plan reads, Agent requests approval for risky ops, YOLO auto-approves. Sandboxed via seatbelt (macOS), landlock (Linux); Windows restricted tokens.
                   </p>
                 </div>
                 <div className="p-6">
@@ -395,8 +395,8 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
             </h2>
             <p className={`mt-5 text-paper-deep/80 ${isZh ? "leading-[1.9]" : "leading-relaxed"}`}>
               {isZh
-                ? "无 CLA，无赞助商锁定。维护者亲自阅读每一条内容——通常在一天内回复。议题在公开环境下分类。版本从 main 分支发布。"
-                : "No CLA. No sponsor lockouts. The maintainer reads everything personally — usually within a day. Issues triaged in the open. Releases cut from main."}
+                ? "无 CLA，无赞助商锁定。维护者亲自阅读每一条内容。议题在公开环境下分类。版本从 main 分支发布。"
+                : "No CLA. No sponsor lockouts. The maintainer reads everything personally. Issues triaged in the open. Releases cut from main."}
             </p>
           </div>
 

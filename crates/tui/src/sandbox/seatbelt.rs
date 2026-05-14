@@ -194,6 +194,22 @@ fn generate_policy(policy: &SandboxPolicy, cwd: &Path) -> String {
         }
     }
 
+    // npm cache (#1267): npx-based MCP servers write to ~/.npm when downloading
+    // packages on first run. Without write access the npx subprocess fails
+    // immediately with "Stdio transport closed", making all stdio MCP servers
+    // broken on macOS under the default workspace-write policy.
+    // Read access is always allowed; write access mirrors the cargo pattern —
+    // granted for all policies that allow any write, skipped for ReadOnly.
+    // Skipped entirely when neither `NPM_CONFIG_CACHE` nor `HOME` is set.
+    if resolve_npm_cache_dir().is_some() {
+        full_policy.push_str("\n\n; npm cache (~/.npm) — npx package downloads\n");
+        full_policy.push_str(r#"(allow file-read* (subpath (param "NPM_CACHE_DIR")))"#);
+        if !matches!(policy, SandboxPolicy::ReadOnly) {
+            full_policy.push('\n');
+            full_policy.push_str(r#"(allow file-write* (subpath (param "NPM_CACHE_DIR")))"#);
+        }
+    }
+
     full_policy
 }
 
@@ -209,6 +225,18 @@ fn resolve_cargo_home() -> Option<PathBuf> {
     }
     let home = std::env::var("HOME").ok()?;
     Some(PathBuf::from(home).join(".cargo"))
+}
+
+/// Resolve the npm cache directory — `NPM_CONFIG_CACHE` if set, else `$HOME/.npm`.
+/// Returns `None` only on hosts where neither env var is set.
+fn resolve_npm_cache_dir() -> Option<PathBuf> {
+    if let Ok(explicit) = std::env::var("NPM_CONFIG_CACHE")
+        && !explicit.trim().is_empty()
+    {
+        return Some(PathBuf::from(explicit));
+    }
+    let home = std::env::var("HOME").ok()?;
+    Some(PathBuf::from(home).join(".npm"))
 }
 
 /// Generate the write access portion of the Seatbelt policy.
@@ -311,6 +339,17 @@ fn generate_params(policy: &SandboxPolicy, cwd: &Path) -> Vec<(String, PathBuf)>
         ));
         params.push(("CARGO_HOME_GIT".to_string(), canonical_home.join("git")));
         params.push(("CARGO_HOME".to_string(), canonical_home));
+    }
+
+    // npm cache (#1267): paired with the policy lines emitted by
+    // `generate_policy` when `resolve_npm_cache_dir()` succeeds. Both helpers
+    // use the same fallback chain so the policy text and the -DKEY=VALUE
+    // params stay in sync.
+    if let Some(npm_cache) = resolve_npm_cache_dir() {
+        let canonical = npm_cache
+            .canonicalize()
+            .unwrap_or_else(|_| npm_cache.clone());
+        params.push(("NPM_CACHE_DIR".to_string(), canonical));
     }
 
     params
@@ -510,6 +549,104 @@ mod tests {
             match saved_cargo {
                 Some(v) => std::env::set_var("CARGO_HOME", v),
                 None => std::env::remove_var("CARGO_HOME"),
+            }
+        }
+    }
+
+    /// #1267: npx MCP servers write to ~/.npm on first run; the seatbelt must
+    /// allow writes to the npm cache directory. Both the policy text and the
+    /// param table must be in sync — emitting one without the other makes
+    /// sandbox-exec refuse to load the profile.
+    #[test]
+    fn test_npm_cache_paths_emitted_in_policy_and_params_when_home_set() {
+        let _guard = crate::test_support::lock_test_env();
+
+        let saved_home = std::env::var_os("HOME");
+        let saved_npm = std::env::var_os("NPM_CONFIG_CACHE");
+        // SAFETY: HOME/NPM_CONFIG_CACHE are process-global; lock_test_env
+        // serializes mutations here, and we always restore the prior value.
+        unsafe {
+            std::env::set_var("HOME", "/tmp/seatbelt-npm-test");
+            std::env::remove_var("NPM_CONFIG_CACHE");
+        }
+
+        let policy = SandboxPolicy::default();
+        let cwd = Path::new("/tmp/test");
+
+        let policy_text = generate_policy(&policy, cwd);
+        assert!(
+            policy_text.contains(r#"(allow file-read* (subpath (param "NPM_CACHE_DIR")))"#),
+            "npm cache read rule missing from policy"
+        );
+        assert!(
+            policy_text.contains(r#"(allow file-write* (subpath (param "NPM_CACHE_DIR")))"#),
+            "npm cache write rule missing from default policy"
+        );
+
+        let params = generate_params(&policy, cwd);
+        assert!(
+            params.iter().any(|(k, _)| k == "NPM_CACHE_DIR"),
+            "NPM_CACHE_DIR param missing"
+        );
+
+        // ReadOnly policy: read access allowed, write access must be absent.
+        let read_only_text = generate_policy(&SandboxPolicy::ReadOnly, cwd);
+        assert!(
+            read_only_text.contains(r#"(allow file-read* (subpath (param "NPM_CACHE_DIR")))"#),
+            "read-only mode should allow reading the npm cache"
+        );
+        assert!(
+            !read_only_text.contains(r#"(allow file-write* (subpath (param "NPM_CACHE_DIR")))"#),
+            "read-only mode must NOT grant write access to the npm cache"
+        );
+
+        // Restore.
+        // SAFETY: restoring the prior values the test stashed at entry.
+        unsafe {
+            match saved_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+            match saved_npm {
+                Some(v) => std::env::set_var("NPM_CONFIG_CACHE", v),
+                None => std::env::remove_var("NPM_CONFIG_CACHE"),
+            }
+        }
+    }
+
+    /// #1267: if neither `NPM_CONFIG_CACHE` nor `HOME` is set, the npm lines
+    /// and their param must both be omitted.
+    #[test]
+    fn test_npm_cache_skipped_when_no_env() {
+        let _guard = crate::test_support::lock_test_env();
+
+        let saved_home = std::env::var_os("HOME");
+        let saved_npm = std::env::var_os("NPM_CONFIG_CACHE");
+        // SAFETY: HOME/NPM_CONFIG_CACHE are process-global; lock_test_env
+        // serializes mutations here and we restore the prior values before returning.
+        unsafe {
+            std::env::remove_var("HOME");
+            std::env::remove_var("NPM_CONFIG_CACHE");
+        }
+
+        let policy = SandboxPolicy::default();
+        let cwd = Path::new("/tmp/test");
+        let policy_text = generate_policy(&policy, cwd);
+        let params = generate_params(&policy, cwd);
+
+        assert!(!policy_text.contains("NPM_CACHE_DIR"));
+        assert!(!params.iter().any(|(k, _)| k == "NPM_CACHE_DIR"));
+
+        // Restore.
+        // SAFETY: restoring the prior values the test stashed at entry.
+        unsafe {
+            match saved_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+            match saved_npm {
+                Some(v) => std::env::set_var("NPM_CONFIG_CACHE", v),
+                None => std::env::remove_var("NPM_CONFIG_CACHE"),
             }
         }
     }

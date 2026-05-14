@@ -2,6 +2,8 @@ use super::*;
 use crate::config::{ApiProvider, Config};
 use crate::config_ui::{self, WebConfigSession, WebConfigSessionEvent};
 use crate::core::engine::mock_engine_handle;
+use crate::tui::active_cell::ActiveCell;
+use crate::tui::app::ToolDetailRecord;
 use crate::tui::file_mention::{
     apply_mention_menu_selection, find_file_mention_completions, partial_file_mention_at_cursor,
     try_autocomplete_file_mention, user_request_with_file_mentions, visible_mention_menu_entries,
@@ -11,6 +13,7 @@ use crate::tui::history::{
 };
 use crate::tui::views::{ModalView, ViewAction};
 use crate::working_set::Workspace;
+use std::collections::HashSet;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::Command;
@@ -972,38 +975,39 @@ fn mouse_events_do_not_mutate_transcript_behind_modal() {
 
 #[test]
 fn copy_shortcut_accepts_cmd_and_ctrl_shift_only() {
-    assert!(is_copy_shortcut(&KeyEvent::new(
+    assert!(crate::tui::key_shortcuts::is_copy_shortcut(&KeyEvent::new(
         KeyCode::Char('c'),
         KeyModifiers::SUPER,
     )));
-    assert!(is_copy_shortcut(&KeyEvent::new(
+    assert!(crate::tui::key_shortcuts::is_copy_shortcut(&KeyEvent::new(
         KeyCode::Char('c'),
         KeyModifiers::CONTROL | KeyModifiers::SHIFT,
     )));
-    assert!(!is_copy_shortcut(&KeyEvent::new(
-        KeyCode::Char('c'),
-        KeyModifiers::CONTROL,
-    )));
+    assert!(!crate::tui::key_shortcuts::is_copy_shortcut(
+        &KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL,)
+    ));
 }
 
 #[test]
 fn file_tree_shortcut_does_not_steal_plain_ctrl_e() {
-    assert!(!is_file_tree_toggle_shortcut(&KeyEvent::new(
-        KeyCode::Char('e'),
-        KeyModifiers::CONTROL,
-    )));
-    assert!(is_file_tree_toggle_shortcut(&KeyEvent::new(
-        KeyCode::Char('E'),
-        KeyModifiers::CONTROL,
-    )));
-    assert!(is_file_tree_toggle_shortcut(&KeyEvent::new(
-        KeyCode::Char('e'),
-        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
-    )));
-    assert!(is_file_tree_toggle_shortcut(&KeyEvent::new(
-        KeyCode::Char('E'),
-        KeyModifiers::SUPER | KeyModifiers::SHIFT,
-    )));
+    assert!(!crate::tui::key_shortcuts::is_file_tree_toggle_shortcut(
+        &KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL,)
+    ));
+    assert!(crate::tui::key_shortcuts::is_file_tree_toggle_shortcut(
+        &KeyEvent::new(KeyCode::Char('E'), KeyModifiers::CONTROL,)
+    ));
+    assert!(crate::tui::key_shortcuts::is_file_tree_toggle_shortcut(
+        &KeyEvent::new(
+            KeyCode::Char('e'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        )
+    ));
+    assert!(crate::tui::key_shortcuts::is_file_tree_toggle_shortcut(
+        &KeyEvent::new(
+            KeyCode::Char('E'),
+            KeyModifiers::SUPER | KeyModifiers::SHIFT,
+        )
+    ));
 }
 
 #[test]
@@ -1055,11 +1059,13 @@ fn transcript_scroll_percent_is_clamped_and_relative() {
 #[test]
 fn parse_git_status_path_handles_simple_and_renamed_entries() {
     assert_eq!(
-        parse_git_status_path(" M crates/tui/src/tui/ui.rs"),
+        crate::tui::file_picker_relevance::parse_git_status_path(" M crates/tui/src/tui/ui.rs"),
         Some("crates/tui/src/tui/ui.rs".to_string())
     );
     assert_eq!(
-        parse_git_status_path("R  old name.rs -> crates/tui/src/tui/file_picker.rs"),
+        crate::tui::file_picker_relevance::parse_git_status_path(
+            "R  old name.rs -> crates/tui/src/tui/file_picker.rs"
+        ),
         Some("crates/tui/src/tui/file_picker.rs".to_string())
     );
 }
@@ -1074,7 +1080,7 @@ fn workspace_file_candidate_normalizes_absolute_and_line_suffixed_paths() {
 
     let raw = format!("\"{}:42\",", path.display());
     assert_eq!(
-        workspace_file_candidate(&raw, root),
+        crate::tui::file_picker_relevance::workspace_file_candidate(&raw, root),
         Some("src/lib.rs".to_string())
     );
 }
@@ -1090,7 +1096,7 @@ fn tool_path_relevance_extracts_paths_from_command_text() {
     let mut relevance = crate::tui::file_picker::FilePickerRelevance::default();
     let mut seen = HashSet::new();
     let mut budget = 16;
-    mark_tool_paths_from_text(
+    crate::tui::file_picker_relevance::mark_tool_paths_from_text(
         "sed -n '1,20p' src/zeta.rs",
         root,
         &mut seen,
@@ -1126,7 +1132,11 @@ fn create_test_app() -> App {
         resume_session_id: None,
         initial_input: None,
     };
-    App::new(options, &Config::default())
+    let mut app = App::new(options, &Config::default());
+    // Pin locale and currency for deterministic tests regardless of host locale.
+    app.cost_currency = crate::pricing::CostCurrency::Usd;
+    app.ui_locale = crate::localization::Locale::En;
+    app
 }
 
 fn create_test_options() -> TuiOptions {
@@ -1197,7 +1207,7 @@ fn apply_loaded_session_restores_dangling_user_tail_as_retry_draft() {
         "finish the Qthresh proof bundle",
     )]);
 
-    let recovered = apply_loaded_session(&mut app, &session);
+    let recovered = apply_loaded_session(&mut app, &Config::default(), &session);
 
     assert!(recovered);
     assert!(app.api_messages.is_empty());
@@ -1248,7 +1258,7 @@ fn apply_loaded_session_resets_unpersisted_telemetry() {
     let mut session = saved_session_with_messages(vec![text_message("assistant", "ready")]);
     session.metadata.total_tokens = 500;
 
-    let recovered = apply_loaded_session(&mut app, &session);
+    let recovered = apply_loaded_session(&mut app, &Config::default(), &session);
 
     assert!(!recovered);
     assert_eq!(app.session.total_tokens, 500);
@@ -1266,6 +1276,76 @@ fn apply_loaded_session_resets_unpersisted_telemetry() {
     assert_eq!(app.session.last_prompt_cache_miss_tokens, None);
     assert_eq!(app.session.last_reasoning_replay_tokens, None);
     assert!(app.session.turn_cache_history.is_empty());
+}
+
+#[tokio::test]
+async fn apply_loaded_session_resets_workspace_runtime_state() {
+    let mut app = create_test_app();
+    let config = Config::default();
+    let old_shell_manager = app
+        .runtime_services
+        .shell_manager
+        .as_ref()
+        .expect("shell manager")
+        .clone();
+    let old_context_cell = app.workspace_context_cell.clone();
+    app.workspace_context = Some("old workspace context".to_string());
+    if let Ok(mut cell) = old_context_cell.lock() {
+        *cell = Some("old workspace context".to_string());
+    }
+    app.workspace_context_refreshed_at = Some(Instant::now());
+    app.file_tree = Some(crate::tui::file_tree::FileTreeState::new(
+        PathBuf::from(".").as_path(),
+    ));
+
+    let mut session = saved_session_with_messages(vec![text_message("assistant", "ready")]);
+    session.metadata.workspace = TempDir::new().expect("temp dir").path().to_path_buf();
+
+    let recovered = apply_loaded_session(&mut app, &config, &session);
+
+    assert!(!recovered);
+    assert_eq!(app.workspace, session.metadata.workspace);
+    assert!(app.workspace_context.is_none());
+    assert!(app.workspace_context_refreshed_at.is_none());
+    assert!(app.file_tree.is_none());
+    assert!(old_context_cell.lock().expect("context cell").is_none());
+    let new_shell_manager = app
+        .runtime_services
+        .shell_manager
+        .as_ref()
+        .expect("shell manager")
+        .clone();
+    assert!(!std::sync::Arc::ptr_eq(
+        &old_shell_manager,
+        &new_shell_manager
+    ));
+    assert_eq!(
+        new_shell_manager
+            .lock()
+            .expect("shell manager")
+            .default_workspace(),
+        session.metadata.workspace.as_path()
+    );
+    assert!(app.runtime_services.hook_executor.is_some());
+}
+
+#[test]
+fn apply_loaded_session_updates_current_workspace_display() {
+    let mut app = create_test_app();
+    let config = Config::default();
+    let workspace = TempDir::new().expect("temp dir");
+    let mut session = saved_session_with_messages(vec![text_message("assistant", "ready")]);
+    session.metadata.workspace = workspace.path().to_path_buf();
+
+    let recovered = apply_loaded_session(&mut app, &config, &session);
+    let result = commands::execute("/workspace", &mut app);
+
+    assert!(!recovered);
+    assert_eq!(
+        result.message,
+        Some(format!("Current workspace: {}", workspace.path().display()))
+    );
+    assert!(result.action.is_none());
 }
 
 #[tokio::test]
@@ -1372,7 +1452,7 @@ fn active_tool_status_label_summarizes_live_tool_group() {
     assert!(label.contains("run cargo test"));
     assert!(label.contains("1 active"));
     assert!(label.contains("1 done"));
-    assert!(label.contains(tool_details_shortcut_label()));
+    assert!(label.contains(crate::tui::key_shortcuts::tool_details_shortcut_label()));
 }
 
 #[test]
@@ -1683,7 +1763,7 @@ fn fixed_model_auto_thinking_skips_auto_model_router() {
     app.reasoning_effort = ReasoningEffort::Auto;
 
     assert!(
-        !should_resolve_auto_model_selection(&app),
+        !crate::tui::auto_router::should_resolve_auto_model_selection(&app),
         "fixed-model auto thinking must stay local instead of starting a hidden router request"
     );
 }
@@ -1695,7 +1775,7 @@ fn auto_model_still_uses_auto_model_router() {
     app.reasoning_effort = ReasoningEffort::Auto;
 
     assert!(
-        should_resolve_auto_model_selection(&app),
+        crate::tui::auto_router::should_resolve_auto_model_selection(&app),
         "auto model still needs the router to choose the concrete model"
     );
 }
@@ -2537,16 +2617,32 @@ fn apply_slash_menu_selection_appends_space_for_arg_commands() {
             name: "/model".to_string(),
             description: String::new(),
             is_skill: false,
+            alias_hint: None,
         },
         crate::tui::widgets::SlashMenuEntry {
             name: "/settings".to_string(),
             description: String::new(),
             is_skill: false,
+            alias_hint: None,
         },
     ];
     app.slash_menu_selected = 0;
     assert!(apply_slash_menu_selection(&mut app, &entries, true));
     assert_eq!(app.input, "/model ");
+}
+
+#[test]
+fn apply_slash_menu_selection_keeps_change_executable_without_version() {
+    let mut app = create_test_app();
+    let entries = vec![crate::tui::widgets::SlashMenuEntry {
+        name: "/change".to_string(),
+        description: String::new(),
+        is_skill: false,
+        alias_hint: None,
+    }];
+
+    assert!(apply_slash_menu_selection(&mut app, &entries, true));
+    assert_eq!(app.input, "/change");
 }
 
 #[test]
@@ -2556,6 +2652,7 @@ fn apply_slash_menu_selection_uses_skill_command_form() {
         name: "/skill search-files".to_string(),
         description: "Search files".to_string(),
         is_skill: true,
+        alias_hint: None,
     }];
 
     assert!(apply_slash_menu_selection(&mut app, &entries, true));
@@ -2583,12 +2680,12 @@ fn workspace_context_refresh_is_deferred_while_ui_is_busy() {
     app.workspace = repo.path().to_path_buf();
 
     let now = Instant::now();
-    refresh_workspace_context_if_needed(&mut app, now, false);
+    crate::tui::workspace_context::refresh_if_needed(&mut app, now, false);
 
     assert!(app.workspace_context.is_none());
     assert!(app.workspace_context_refreshed_at.is_none());
 
-    refresh_workspace_context_if_needed(&mut app, now, true);
+    crate::tui::workspace_context::refresh_if_needed(&mut app, now, true);
 
     let context = app
         .workspace_context
@@ -2605,7 +2702,7 @@ fn workspace_context_refresh_respects_ttl_before_requerying_git() {
     app.workspace = repo.path().to_path_buf();
 
     let start = Instant::now();
-    refresh_workspace_context_if_needed(&mut app, start, true);
+    crate::tui::workspace_context::refresh_if_needed(&mut app, start, true);
     let initial = app
         .workspace_context
         .clone()
@@ -2613,12 +2710,12 @@ fn workspace_context_refresh_respects_ttl_before_requerying_git() {
 
     std::fs::write(repo.path().join("dirty.txt"), "dirty").expect("write dirty marker");
 
-    let before_ttl = start + Duration::from_secs(WORKSPACE_CONTEXT_REFRESH_SECS - 1);
-    refresh_workspace_context_if_needed(&mut app, before_ttl, true);
+    let before_ttl = start + Duration::from_secs(crate::tui::workspace_context::REFRESH_SECS - 1);
+    crate::tui::workspace_context::refresh_if_needed(&mut app, before_ttl, true);
     assert_eq!(app.workspace_context.as_deref(), Some(initial.as_str()));
 
-    let after_ttl = start + Duration::from_secs(WORKSPACE_CONTEXT_REFRESH_SECS);
-    refresh_workspace_context_if_needed(&mut app, after_ttl, true);
+    let after_ttl = start + Duration::from_secs(crate::tui::workspace_context::REFRESH_SECS);
+    crate::tui::workspace_context::refresh_if_needed(&mut app, after_ttl, true);
     let refreshed = app
         .workspace_context
         .as_deref()
@@ -2692,24 +2789,24 @@ async fn numeric_plan_choice_still_queues_follow_up_when_busy() {
 #[test]
 fn api_key_validation_warns_without_blocking_unusual_formats() {
     assert!(matches!(
-        validate_api_key_for_onboarding(""),
-        ApiKeyValidation::Reject(_)
+        crate::tui::onboarding::validate_api_key_for_onboarding(""),
+        crate::tui::onboarding::ApiKeyValidation::Reject(_)
     ));
     assert!(matches!(
-        validate_api_key_for_onboarding("sk short"),
-        ApiKeyValidation::Reject(_)
+        crate::tui::onboarding::validate_api_key_for_onboarding("sk short"),
+        crate::tui::onboarding::ApiKeyValidation::Reject(_)
     ));
     assert!(matches!(
-        validate_api_key_for_onboarding("short-key"),
-        ApiKeyValidation::Accept { warning: Some(_) }
+        crate::tui::onboarding::validate_api_key_for_onboarding("short-key"),
+        crate::tui::onboarding::ApiKeyValidation::Accept { warning: Some(_) }
     ));
     assert!(matches!(
-        validate_api_key_for_onboarding("averylongkeywithoutdash123456"),
-        ApiKeyValidation::Accept { warning: Some(_) }
+        crate::tui::onboarding::validate_api_key_for_onboarding("averylongkeywithoutdash123456"),
+        crate::tui::onboarding::ApiKeyValidation::Accept { warning: Some(_) }
     ));
     assert!(matches!(
-        validate_api_key_for_onboarding("sk-valid-format-1234567890"),
-        ApiKeyValidation::Accept { warning: None }
+        crate::tui::onboarding::validate_api_key_for_onboarding("sk-valid-format-1234567890"),
+        crate::tui::onboarding::ApiKeyValidation::Accept { warning: None }
     ));
 }
 
@@ -2721,7 +2818,7 @@ fn onboarding_after_api_key_save_does_not_repeat_language_step() {
     app.trust_mode = true;
     app.status_message = Some("saved".to_string());
 
-    advance_onboarding_after_language(&mut app);
+    crate::tui::onboarding::advance_onboarding_after_language(&mut app);
 
     assert_eq!(app.onboarding, OnboardingState::Tips);
     assert_eq!(app.status_message, None);
@@ -2736,7 +2833,7 @@ fn onboarding_after_api_key_save_routes_to_trust_when_needed() {
     app.onboarding_needs_api_key = false;
     app.trust_mode = false;
 
-    advance_onboarding_after_language(&mut app);
+    crate::tui::onboarding::advance_onboarding_after_language(&mut app);
 
     assert_eq!(app.onboarding, OnboardingState::TrustDirectory);
 }
@@ -2744,15 +2841,17 @@ fn onboarding_after_api_key_save_routes_to_trust_when_needed() {
 #[test]
 fn api_key_paste_shortcut_is_not_plain_text_input() {
     let ctrl_v = KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL);
-    assert!(is_paste_shortcut(&ctrl_v));
-    assert!(!is_text_input_key(&ctrl_v));
+    assert!(crate::tui::key_shortcuts::is_paste_shortcut(&ctrl_v));
+    assert!(!crate::tui::key_shortcuts::is_text_input_key(&ctrl_v));
 
     let legacy_ctrl_v = KeyEvent::new(KeyCode::Char('\u{16}'), KeyModifiers::NONE);
-    assert!(is_paste_shortcut(&legacy_ctrl_v));
-    assert!(!is_text_input_key(&legacy_ctrl_v));
+    assert!(crate::tui::key_shortcuts::is_paste_shortcut(&legacy_ctrl_v));
+    assert!(!crate::tui::key_shortcuts::is_text_input_key(
+        &legacy_ctrl_v
+    ));
 
     let shifted = KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT);
-    assert!(is_text_input_key(&shifted));
+    assert!(crate::tui::key_shortcuts::is_text_input_key(&shifted));
 }
 
 #[test]
@@ -2900,8 +2999,8 @@ fn detail_target_prefers_visible_tool_card() {
     assert_eq!(detail_target_cell_index(&app), Some(1));
     let expected = format!(
         "{} Activity: file_search · {} raw",
-        activity_shortcut_label(),
-        tool_details_shortcut_label()
+        crate::tui::key_shortcuts::activity_shortcut_label(),
+        crate::tui::key_shortcuts::tool_details_shortcut_label()
     );
     assert_eq!(
         selected_detail_footer_label(&app).as_deref(),
@@ -2937,14 +3036,16 @@ fn activity_footer_hint_surfaces_visible_thinking_without_raw_tool_hint() {
 #[test]
 fn macos_option_v_glyph_is_treated_as_details_shortcut_only_on_macos() {
     let option_v = KeyEvent::new(KeyCode::Char('\u{221A}'), KeyModifiers::NONE);
-    assert!(is_macos_option_v_legacy_key_for_platform(&option_v, true));
-    assert!(!is_macos_option_v_legacy_key_for_platform(&option_v, false));
+    assert!(crate::tui::key_shortcuts::is_macos_option_v_legacy_key_for_platform(&option_v, true));
+    assert!(
+        !crate::tui::key_shortcuts::is_macos_option_v_legacy_key_for_platform(&option_v, false)
+    );
 
     let modified = KeyEvent::new(KeyCode::Char('\u{221A}'), KeyModifiers::SHIFT);
-    assert!(!is_macos_option_v_legacy_key_for_platform(&modified, true));
+    assert!(!crate::tui::key_shortcuts::is_macos_option_v_legacy_key_for_platform(&modified, true));
 
     let plain_v = KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE);
-    assert!(!is_macos_option_v_legacy_key_for_platform(&plain_v, true));
+    assert!(!crate::tui::key_shortcuts::is_macos_option_v_legacy_key_for_platform(&plain_v, true));
 }
 
 #[test]
@@ -3120,31 +3221,43 @@ fn alt_nav_modifiers_require_alt_and_exclude_ctrl_super() {
     // Alt, allow Shift for capital-letter forms, and block Ctrl/Super so
     // they don't collide with clipboard / window shortcuts. Bare and
     // Shift-only modifiers fall through to text insertion now.
-    assert!(!alt_nav_modifiers(KeyModifiers::NONE));
-    assert!(!alt_nav_modifiers(KeyModifiers::SHIFT));
-    assert!(alt_nav_modifiers(KeyModifiers::ALT));
-    assert!(alt_nav_modifiers(KeyModifiers::ALT | KeyModifiers::SHIFT));
-    assert!(!alt_nav_modifiers(KeyModifiers::CONTROL));
-    assert!(!alt_nav_modifiers(
+    assert!(!crate::tui::key_shortcuts::alt_nav_modifiers(
+        KeyModifiers::NONE
+    ));
+    assert!(!crate::tui::key_shortcuts::alt_nav_modifiers(
+        KeyModifiers::SHIFT
+    ));
+    assert!(crate::tui::key_shortcuts::alt_nav_modifiers(
+        KeyModifiers::ALT
+    ));
+    assert!(crate::tui::key_shortcuts::alt_nav_modifiers(
+        KeyModifiers::ALT | KeyModifiers::SHIFT
+    ));
+    assert!(!crate::tui::key_shortcuts::alt_nav_modifiers(
+        KeyModifiers::CONTROL
+    ));
+    assert!(!crate::tui::key_shortcuts::alt_nav_modifiers(
         KeyModifiers::ALT | KeyModifiers::CONTROL
     ));
-    assert!(!alt_nav_modifiers(KeyModifiers::ALT | KeyModifiers::SUPER));
+    assert!(!crate::tui::key_shortcuts::alt_nav_modifiers(
+        KeyModifiers::ALT | KeyModifiers::SUPER
+    ));
 }
 
 #[test]
 fn ctrl_h_is_treated_as_terminal_backspace() {
-    assert!(is_ctrl_h_backspace(&KeyEvent::new(
-        KeyCode::Char('h'),
-        KeyModifiers::CONTROL
-    )));
-    assert!(!is_ctrl_h_backspace(&KeyEvent::new(
-        KeyCode::Char('h'),
-        KeyModifiers::NONE
-    )));
-    assert!(!is_ctrl_h_backspace(&KeyEvent::new(
-        KeyCode::Char('h'),
-        KeyModifiers::CONTROL | KeyModifiers::ALT
-    )));
+    assert!(crate::tui::key_shortcuts::is_ctrl_h_backspace(
+        &KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL)
+    ));
+    assert!(!crate::tui::key_shortcuts::is_ctrl_h_backspace(
+        &KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE)
+    ));
+    assert!(!crate::tui::key_shortcuts::is_ctrl_h_backspace(
+        &KeyEvent::new(
+            KeyCode::Char('h'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT
+        )
+    ));
 }
 
 #[test]
@@ -3509,7 +3622,7 @@ fn apply_loaded_session_restores_artifact_registry() {
         storage_path: PathBuf::from("/tmp/tool_outputs/call-big.txt"),
     });
 
-    let recovered = apply_loaded_session(&mut app, &session);
+    let recovered = apply_loaded_session(&mut app, &Config::default(), &session);
 
     assert!(!recovered);
     assert_eq!(app.session_artifacts, session.artifacts);
@@ -3972,8 +4085,8 @@ fn thinking_then_tools_share_active_cell_until_text_flushes() {
     let mut app = create_test_app();
 
     // 1. Thinking starts and streams a delta.
-    let thinking_idx = ensure_streaming_thinking_active_entry(&mut app);
-    append_streaming_thinking(&mut app, thinking_idx, "planning the read");
+    let thinking_idx = crate::tui::streaming_thinking::ensure_active_entry(&mut app);
+    crate::tui::streaming_thinking::append(&mut app, thinking_idx, "planning the read");
     assert!(
         app.history.is_empty(),
         "thinking must not write into history mid-turn"
@@ -4014,7 +4127,7 @@ fn thinking_then_tools_share_active_cell_until_text_flushes() {
     ));
 
     // 3. Thinking finalizes — entry stays in active cell, just stops streaming.
-    let finalized = finalize_streaming_thinking_active_entry(&mut app, Some(1.5), "");
+    let finalized = crate::tui::streaming_thinking::finalize_active_entry(&mut app, Some(1.5), "");
     assert!(finalized, "finalizer reports it touched the active cell");
     let HistoryCell::Thinking {
         streaming,
@@ -4063,8 +4176,8 @@ fn flush_active_cell_finalizes_unclosed_thinking_block() {
     // assistant text arrives, `flush_active_cell` must still stop the
     // spinner so the migrated history cell isn't perpetually streaming.
     let mut app = create_test_app();
-    let _ = ensure_streaming_thinking_active_entry(&mut app);
-    append_streaming_thinking(&mut app, 0, "incomplete");
+    let _ = crate::tui::streaming_thinking::ensure_active_entry(&mut app);
+    crate::tui::streaming_thinking::append(&mut app, 0, "incomplete");
 
     app.flush_active_cell();
 
@@ -4092,9 +4205,9 @@ fn open_thinking_pager_finds_thinking_in_active_cell() {
     // transcript — not just `app.history` — or the promise is a lie.
     // Regression guard for the v0.8.29 affordance/handler mismatch.
     let mut app = create_test_app();
-    let _ = ensure_streaming_thinking_active_entry(&mut app);
-    append_streaming_thinking(&mut app, 0, "deliberating");
-    let finalized = finalize_streaming_thinking_active_entry(&mut app, Some(1.2), "");
+    let _ = crate::tui::streaming_thinking::ensure_active_entry(&mut app);
+    crate::tui::streaming_thinking::append(&mut app, 0, "deliberating");
+    let finalized = crate::tui::streaming_thinking::finalize_active_entry(&mut app, Some(1.2), "");
     assert!(finalized);
     assert!(
         app.history.is_empty(),
@@ -4245,7 +4358,7 @@ fn engine_error_finalizes_active_thinking_block() {
     use crate::error_taxonomy::StreamError;
 
     let mut app = create_test_app();
-    let entry_idx = ensure_streaming_thinking_active_entry(&mut app);
+    let entry_idx = crate::tui::streaming_thinking::ensure_active_entry(&mut app);
     app.thinking_started_at = Some(Instant::now());
     app.streaming_state.start_thinking(0, None);
     app.streaming_state.push_content(0, "partial reasoning");
@@ -4285,7 +4398,7 @@ fn message_complete_drain_preserves_thinking_when_thinking_complete_lost() {
     // remainder of `MessageComplete` reads it.
     let mut app = create_test_app();
 
-    let _ = ensure_streaming_thinking_active_entry(&mut app);
+    let _ = crate::tui::streaming_thinking::ensure_active_entry(&mut app);
     app.thinking_started_at = Some(Instant::now());
     app.streaming_state.start_thinking(0, None);
     app.streaming_state.push_content(0, "deep reasoning text");
@@ -4304,8 +4417,8 @@ fn message_complete_drain_preserves_thinking_when_thinking_complete_lost() {
     // Mirror the head of `EngineEvent::MessageComplete` — the new defensive
     // drain installed by the #861 RC3 fix.
     if app.streaming_thinking_active_entry.is_some() {
-        let _ = finalize_current_streaming_thinking(&mut app);
-        stash_reasoning_buffer_into_last_reasoning(&mut app);
+        let _ = crate::tui::streaming_thinking::finalize_current(&mut app);
+        crate::tui::streaming_thinking::stash_reasoning_buffer_into_last_reasoning(&mut app);
     }
 
     assert!(
@@ -4328,9 +4441,9 @@ fn second_thinking_block_appends_new_entry_in_same_active_cell() {
     // the SAME active cell rather than flush the first group prematurely.
     let mut app = create_test_app();
 
-    let _ = ensure_streaming_thinking_active_entry(&mut app);
-    append_streaming_thinking(&mut app, 0, "first plan");
-    let _ = finalize_streaming_thinking_active_entry(&mut app, Some(0.5), "");
+    let _ = crate::tui::streaming_thinking::ensure_active_entry(&mut app);
+    crate::tui::streaming_thinking::append(&mut app, 0, "first plan");
+    let _ = crate::tui::streaming_thinking::finalize_active_entry(&mut app, Some(0.5), "");
 
     handle_tool_call_started(
         &mut app,
@@ -4340,12 +4453,12 @@ fn second_thinking_block_appends_new_entry_in_same_active_cell() {
     );
 
     // Second Thinking block.
-    let second_idx = ensure_streaming_thinking_active_entry(&mut app);
+    let second_idx = crate::tui::streaming_thinking::ensure_active_entry(&mut app);
     assert_eq!(
         second_idx, 2,
         "second thinking entry follows the tool entry"
     );
-    append_streaming_thinking(&mut app, second_idx, "second plan");
+    crate::tui::streaming_thinking::append(&mut app, second_idx, "second plan");
 
     let active = app.active_cell.as_ref().expect("active cell present");
     assert_eq!(active.entry_count(), 3);
@@ -4365,14 +4478,14 @@ fn second_thinking_block_appends_new_entry_in_same_active_cell() {
 fn new_thinking_block_drains_pending_tail_from_previous_block() {
     let mut app = create_test_app();
 
-    assert!(!start_streaming_thinking_block(&mut app));
+    assert!(!crate::tui::streaming_thinking::start_block(&mut app));
     let first_idx = app
         .streaming_thinking_active_entry
         .expect("first thinking entry active");
     app.reasoning_buffer.push_str("first tail");
     app.streaming_state.push_content(0, "first tail");
 
-    assert!(start_streaming_thinking_block(&mut app));
+    assert!(crate::tui::streaming_thinking::start_block(&mut app));
     let second_idx = app
         .streaming_thinking_active_entry
         .expect("second thinking entry active");
@@ -5093,7 +5206,7 @@ fn notification_settings_tui_always_keeps_configured_method_no_threshold() {
     };
 
     let (method, threshold, include_summary) =
-        super::notification_settings(&config).expect("notification should be enabled");
+        crate::tui::notifications::settings(&config).expect("notification should be enabled");
     assert_eq!(method, crate::tui::notifications::Method::Bel);
     assert_eq!(threshold, Duration::ZERO);
     assert!(include_summary);
@@ -5109,7 +5222,7 @@ fn notification_settings_tui_never_disables_notifications() {
         ..Config::default()
     };
 
-    assert!(super::notification_settings(&config).is_none());
+    assert!(crate::tui::notifications::settings(&config).is_none());
 }
 
 #[test]
@@ -5124,7 +5237,7 @@ fn notification_settings_no_tui_override_uses_notifications_block() {
     };
 
     let (method, threshold, include_summary) =
-        super::notification_settings(&config).expect("notification should be enabled");
+        crate::tui::notifications::settings(&config).expect("notification should be enabled");
     assert_eq!(method, crate::tui::notifications::Method::Osc9);
     assert_eq!(threshold, Duration::from_secs(45));
     assert!(!include_summary);
@@ -5133,7 +5246,7 @@ fn notification_settings_no_tui_override_uses_notifications_block() {
 #[test]
 fn completed_turn_notification_uses_streaming_text() {
     let app = create_test_app();
-    let msg = super::completed_turn_notification_message(
+    let msg = crate::tui::notifications::completed_turn_message(
         &app,
         "Hello there.\n\nWhat's next?",
         false,
@@ -5168,16 +5281,26 @@ fn completed_turn_notification_falls_back_to_latest_assistant_message() {
         }],
     });
 
-    let msg =
-        super::completed_turn_notification_message(&app, "", false, Duration::from_secs(75), None);
+    let msg = crate::tui::notifications::completed_turn_message(
+        &app,
+        "",
+        false,
+        Duration::from_secs(75),
+        None,
+    );
     assert_eq!(msg, "Latest reply");
 }
 
 #[test]
 fn completed_turn_notification_falls_back_to_default_when_empty() {
     let app = create_test_app();
-    let msg =
-        super::completed_turn_notification_message(&app, "", false, Duration::from_secs(5), None);
+    let msg = crate::tui::notifications::completed_turn_message(
+        &app,
+        "",
+        false,
+        Duration::from_secs(5),
+        None,
+    );
     assert_eq!(msg, "deepseek: turn complete");
 }
 
@@ -5185,7 +5308,7 @@ fn completed_turn_notification_falls_back_to_default_when_empty() {
 fn completed_turn_notification_truncates_long_text() {
     let app = create_test_app();
     let long = "a".repeat(500);
-    let msg = super::completed_turn_notification_message(
+    let msg = crate::tui::notifications::completed_turn_message(
         &app,
         &long,
         false,
@@ -5199,7 +5322,7 @@ fn completed_turn_notification_truncates_long_text() {
 
 #[test]
 fn subagent_completion_notification_uses_summary_line_not_sentinel() {
-    let msg = super::subagent_completion_notification_message(
+    let msg = crate::tui::notifications::subagent_completion_message(
         "agent_live",
         "Finished the docs audit.\n<deepseek:subagent.done>{}</deepseek:subagent.done>",
         false,
@@ -5212,7 +5335,7 @@ fn subagent_completion_notification_uses_summary_line_not_sentinel() {
 
 #[test]
 fn subagent_completion_notification_can_include_elapsed_summary() {
-    let msg = super::subagent_completion_notification_message(
+    let msg = crate::tui::notifications::subagent_completion_message(
         "agent_live",
         "",
         true,

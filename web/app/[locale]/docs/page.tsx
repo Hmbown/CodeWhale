@@ -117,8 +117,8 @@ export default async function DocsPage({ params }: { params: Promise<{ locale: s
                     { group: "搜索", tools: "grep_files · file_search · web_search · fetch_url" },
                     { group: "Shell", tools: "exec_shell · exec_shell_wait · exec_shell_interact" },
                     { group: "Git / 诊断 / 测试", tools: "git_status · git_diff · diagnostics · run_tests" },
-                    { group: "子 Agent", tools: "agent_spawn · agent_wait · agent_result · agent_cancel · agent_list · agent_send_input · resume_agent · agent_assign" },
-                    { group: "递归 LM", tools: "rlm——沙箱 Python REPL，内置 llm_query()/rlm_query() 用于长文本分块处理" },
+                    { group: "子 Agent", tools: "agent_open · agent_eval · agent_close —— 持久会话，并行执行，通过 var_handle 读取大结果" },
+                    { group: "递归 LM (RLM)", tools: "rlm_open · rlm_eval · rlm_configure · rlm_close —— 沙箱 Python REPL，内置 peek/search/chunk/sub_query_batch 等辅助函数" },
                     { group: "MCP", tools: "mcp_<server>_<tool>——从 ~/.deepseek/mcp.json 自动注册" },
                   ].map((row) => (
                     <div key={row.group} className="grid md:grid-cols-12 gap-0 hairline-t py-3 px-4 hover:bg-paper-deep transition-colors min-w-0">
@@ -162,10 +162,9 @@ export default async function DocsPage({ params }: { params: Promise<{ locale: s
                 </h2>
                 <pre className="code-block mt-5">
 {`# ~/.deepseek/config.toml
-[api]
-key = "sk-..."
+api_key = "sk-..."
 base_url = "https://api.deepseek.com"
-model = "${facts.defaultModel ?? "deepseek-v4-pro"}"      # 默认模型；deepseek-v4-flash 用于快速 / 子智能体
+default_text_model = "${facts.defaultModel ?? "deepseek-v4-pro"}"  # 默认模型；deepseek-v4-flash 用于快速 / 子智能体
 
 [ui]
 default_mode = "agent"                      # plan | agent | yolo
@@ -344,8 +343,8 @@ command = "~/.deepseek/hooks/pre.sh"        # / message_submit / mode_change / o
                     { group: "Search", tools: "grep_files · file_search · web_search · fetch_url" },
                     { group: "Shell", tools: "exec_shell · exec_shell_wait · exec_shell_interact" },
                     { group: "Git / diag / test", tools: "git_status · git_diff · diagnostics · run_tests" },
-                    { group: "Sub-agents", tools: "agent_spawn · agent_wait · agent_result · agent_cancel · agent_list · agent_send_input · resume_agent · agent_assign" },
-                    { group: "Recursive LM", tools: "rlm — sandboxed Python REPL with llm_query()/rlm_query() for chunked processing of long inputs" },
+                    { group: "Sub-agents", tools: "agent_open · agent_eval · agent_close — persistent sessions, parallel execution, bounded result retrieval via var_handle" },
+                    { group: "Recursive LM (RLM)", tools: "rlm_open · rlm_eval · rlm_configure · rlm_close — sandboxed Python REPL with peek/search/chunk/sub_query_batch helpers" },
                     { group: "MCP", tools: "mcp_<server>_<tool> — auto-registered from ~/.deepseek/mcp.json" },
                   ].map((row) => (
                     <div key={row.group} className="grid md:grid-cols-12 gap-0 hairline-t py-3 px-4 hover:bg-paper-deep transition-colors min-w-0">
@@ -387,10 +386,9 @@ command = "~/.deepseek/hooks/pre.sh"        # / message_submit / mode_change / o
                 </h2>
                 <pre className="code-block mt-5">
 {`# ~/.deepseek/config.toml
-[api]
-key = "sk-..."
+api_key = "sk-..."
 base_url = "https://api.deepseek.com"
-model = "${facts.defaultModel ?? "deepseek-v4-pro"}"      # default; deepseek-v4-flash is the fast / sub-agent option
+default_text_model = "${facts.defaultModel ?? "deepseek-v4-pro"}"  # default; deepseek-v4-flash is the fast / sub-agent option
 
 [ui]
 default_mode = "agent"                      # plan | agent | yolo

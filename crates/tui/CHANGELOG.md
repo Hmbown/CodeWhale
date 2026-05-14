@@ -7,6 +7,132 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.35] - 2026-05-13
+
+A post-0.8.34 cleanup release focused on prompt hygiene, context-pressure
+guidance, and keeping the next release branch clearly separated from the
+already-published v0.8.34 tag.
+
+> **Note on v0.8.34 contributor credits:** Horace Liu ([@liuhq](https://github.com/liuhq))
+> contributed Nix package support and install documentation in the v0.8.34
+> cycle but was inadvertently omitted from that release's changelog. The
+> README contributor list and this note correct the record.
+
+### Changed
+
+- **First-turn prompt context is leaner and easier to audit.** The
+  generated project context pack now ignores hidden tool/cache state,
+  balances top-level directories before descending, and `/context`
+  shows named prompt layers instead of a single opaque system blob.
+- **Model-visible prompt policy de-conflicted.** The base and mode
+  prompts no longer forbid useful `deepseek` CLI diagnostics, no
+  longer require checklists for simple one-step work, and align
+  long-session compaction guidance around the 60% suggestion threshold.
+- **Context-pressure guidance now has one split rule.** Manual
+  `/compact` suggestions start around 60% during sustained work, while
+  automatic replacement compaction remains an opt-in hard guardrail near
+  80% so DeepSeek V4 prefix-cache economics stay intact.
+- **The Tasks sidebar now ages out stale live-tool noise.** Completed
+  active tool rows linger briefly and then leave the right rail; very old
+  running shell rows collapse to a single row instead of occupying the
+  whole Tasks panel.
+
+### Fixed
+
+- **`auto_compact` settings help now reports the real default**, which
+  has been off since v0.8.11 to avoid unnecessary cache-prefix rewrites.
+
+## [0.8.34] - 2026-05-13
+
+A polish, terminal-protocol, and internal-cleanup release. The model-facing
+surface is stable; this cycle focused on prefix-cache stability metrics,
+broader terminal protocol coverage, bundled skills, and shrinking the
+mega-files that had grown around the agent loop and TUI.
+
+### Added
+
+- **Prefix-cache stability tracking.** A footer chip surfaces how stable
+  the cached prefix has been across recent turns (inspired by Reasonix),
+  so users can spot cache-busting edits before cost climbs.
+- **Bundled DeepSeek-native workflow skills.** A starter set of skills
+  ships in-binary so a fresh install has a usable `/skills` catalog
+  without external assets.
+- **Native Kitty + Ghostty notification protocols.** `OSC 99` (Kitty)
+  and `OSC 777` (Ghostty) are now first-class alongside the existing
+  desktop notification fallback.
+- **Theme picker with more presets.** Catppuccin, Tokyo Night, Dracula,
+  and Gruvbox join the built-in palette set; `/theme` now shows a
+  live picker.
+- **Chunked parallel-safe tool execution.** The engine batches
+  side-effect-free tool calls into a chunked dispatch so independent
+  reads/searches finish in one turn instead of serialising round-trip
+  by round-trip.
+- **Cancel-all shell jobs.** A single action stops every running
+  background shell command instead of cancelling them one-by-one.
+- **`edit_file` tolerates typographic punctuation drift.** When the
+  exact-match and leading-whitespace-fuzzy passes both fail and
+  `fuzz: true` is set, the tool retries with smart quotes (`"`/`"` →
+  `"`, `'`/`'` → `'`), en/em-dashes (`–`/`—` → `-`), and non-breaking
+  spaces (U+00A0 → space) normalized to ASCII. Catches the copy-paste
+  failure mode where a browser or chat client substituted Unicode
+  punctuation for the ASCII the file actually contains.
+
+### Changed
+
+- **`crates/tui/src/tui/ui.rs` split into focused modules.** The
+  former 10k-line single-file TUI dispatcher is decomposed into smaller
+  modules with clearer responsibilities so reviewing a UI change does
+  not require holding the entire surface in head.
+- **`crates/tui/src/core/engine.rs` reduced.** Helper clusters moved
+  into the existing `core/engine/` submodule directory next to the
+  turn loop and tool execution code, making the agent-loop core
+  easier to read end-to-end.
+- **Structured tracing on tool dispatch.** Tool entry, exit, duration,
+  and result/error are emitted through `tracing` events so
+  `RUST_LOG=engine.tool_execution=debug` produces a coherent timeline
+  instead of scattered ad-hoc prints.
+- **`/init` updates `AGENTS.md` in place** instead of refusing when
+  the file already exists, so adding new project guidance does not
+  require manual stitching.
+- **Reasoning tokens included in cost calculations**, and the cost
+  display auto-switches to CNY when the session locale is `zh-Hans`.
+- **Stale repo-root development docs removed.** `TAKEOVER_PROMPT.md`
+  (v0.8.6 era), `PROMPT_ANALYSIS.md`, and the redundant
+  `DEPENDENCY_GRAPH.md` no longer ship in releases; `docs/ARCHITECTURE.md`
+  remains the canonical crate-layout reference.
+
+### Fixed
+
+- **Auth keys checked against the saved provider on startup**, so a
+  stored DeepSeek key is no longer rejected after switching providers
+  mid-session.
+- **Auto router skipped for decisive local routes**, removing an
+  extra model round-trip on prompts the dispatcher can route directly.
+- **Reasoning content stripped for generic providers** that do not
+  understand the `reasoning_content` field, preventing HTTP 400s when
+  pointing at an OpenAI-compatible gateway that lacks DeepSeek
+  thinking semantics.
+- **`FocusGained` debounced** so terminals (Tabby) that emit rapid
+  focus events no longer trigger a repaint flicker loop.
+- **MCP HTTP transport defaults `Accept: application/json,
+  text/event-stream`** and persists `Mcp-Session-Id` across requests,
+  matching the spec for resumable streams.
+- **Shell output tail preserved when truncating**, so the last lines
+  of a long command output (usually the error trailer) survive the
+  in-transcript summary.
+- **Prefix cache preserved while pruning tool results.** Old
+  side-effect tool payloads no longer invalidate the prefix that
+  the next turn would otherwise reuse.
+- **Review sub-agents prevented from spawning further sub-agents**
+  (#1489), keeping recursive depth bounded.
+- **Help overlay closes cleanly** and repaints without a stale frame.
+- **Pinyin `/skills` alias dispatched correctly** so Chinese-locale
+  users reach the same surface.
+- **VTE flicker terminals get reduced motion** by default to avoid
+  thrashing on terminals that mishandle frequent partial redraws.
+- **Composer border no longer shows the derived session title**, keeping
+  the composer chrome reserved for editor and mode state.
+
 ## [0.8.33] - 2026-05-12
 
 A sub-agent and RLM renovation release. The model-facing delegation
@@ -3979,7 +4105,9 @@ Welcome — and thank you.
 - Hooks system and config profiles
 - Example skills and launch assets
 
-[Unreleased]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.33...HEAD
+[Unreleased]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.35...HEAD
+[0.8.35]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.34...v0.8.35
+[0.8.34]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.33...v0.8.34
 [0.8.33]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.32...v0.8.33
 [0.8.32]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.31...v0.8.32
 [0.8.31]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.30...v0.8.31

@@ -11,7 +11,9 @@ use crate::llm_client::LlmClient;
 use crate::localization::resolve_locale;
 use crate::models::{ContentBlock, Message, MessageRequest, MessageResponse, SystemPrompt};
 use crate::settings::Settings;
-use crate::tui::app::{App, AppAction, AppMode, OnboardingState, ReasoningEffort, SidebarFocus};
+use crate::tui::app::{
+    App, AppAction, AppMode, OnboardingState, ReasoningEffort, SidebarFocus, VimMode,
+};
 use crate::tui::approval::ApprovalMode;
 use anyhow::Result;
 
@@ -88,6 +90,7 @@ fn show_single_setting(app: &App, key: &str) -> CommandResult {
             crate::localization::Locale::ZhHant => "zh-Hant",
             crate::localization::Locale::Ja => "ja",
             crate::localization::Locale::PtBr => "pt-BR",
+            crate::localization::Locale::Es419 => "es-419",
         }
     }
     fn density_display(d: crate::tui::app::ComposerDensity) -> &'static str {
@@ -131,21 +134,73 @@ fn show_single_setting(app: &App, key: &str) -> CommandResult {
             Some(if app.auto_compact { "true" } else { "false" }.to_string())
         }
         "calm_mode" | "calm" => Some(if app.calm_mode { "true" } else { "false" }.to_string()),
+        "low_motion" | "motion" => Some(if app.low_motion { "true" } else { "false" }.to_string()),
+        "fancy_animations" | "fancy" | "animations" => Some(
+            if app.fancy_animations {
+                "true"
+            } else {
+                "false"
+            }
+            .to_string(),
+        ),
+        "bracketed_paste" | "paste" => Some(
+            if app.use_bracketed_paste {
+                "true"
+            } else {
+                "false"
+            }
+            .to_string(),
+        ),
+        "paste_burst_detection" | "paste_burst" => Some(
+            if app.use_paste_burst_detection {
+                "true"
+            } else {
+                "false"
+            }
+            .to_string(),
+        ),
         "show_thinking" | "thinking" => {
             Some(if app.show_thinking { "true" } else { "false" }.to_string())
         }
+        "show_tool_details" | "tool_details" => Some(
+            if app.show_tool_details {
+                "true"
+            } else {
+                "false"
+            }
+            .to_string(),
+        ),
         "mode" | "default_mode" => Some(app.mode.as_setting().to_string()),
         "max_history" | "history" => Some(app.max_input_history.to_string()),
         "sidebar_width" | "sidebar" => Some(app.sidebar_width_percent.to_string()),
         "sidebar_focus" | "focus" => Some(app.sidebar_focus.as_setting().to_string()),
+        "context_panel" | "context" | "session_panel" => {
+            Some(if app.context_panel { "true" } else { "false" }.to_string())
+        }
         "composer_density" | "composer" => Some(density_display(app.composer_density).to_string()),
         "composer_border" | "border" => {
             Some(if app.composer_border { "true" } else { "false" }.to_string())
         }
+        "composer_vim_mode" | "vim_mode" | "vim" => Some(
+            if app.composer.vim_enabled {
+                "vim"
+            } else {
+                "normal"
+            }
+            .to_string(),
+        ),
         "transcript_spacing" | "spacing" => {
             Some(spacing_display(app.transcript_spacing).to_string())
         }
         "status_indicator" | "indicator" => Some(app.status_indicator.clone()),
+        "synchronized_output" | "sync_output" | "sync" => Some(
+            if app.synchronized_output_enabled {
+                "on"
+            } else {
+                "off"
+            }
+            .to_string(),
+        ),
         "cost_currency" | "currency" => Some(
             match app.cost_currency {
                 crate::pricing::CostCurrency::Usd => "usd",
@@ -153,6 +208,14 @@ fn show_single_setting(app: &App, key: &str) -> CommandResult {
             }
             .to_string(),
         ),
+        "default_model" => Settings::load().ok().map(|settings| {
+            settings
+                .default_model
+                .unwrap_or_else(|| "(default)".to_string())
+        }),
+        "prefer_external_pdftotext" | "external_pdftotext" | "pdftotext" => Settings::load()
+            .ok()
+            .map(|settings| settings.prefer_external_pdftotext.to_string()),
         _ => {
             let known = Settings::available_settings()
                 .iter()
@@ -405,8 +468,20 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
             app.low_motion = settings.low_motion;
             app.needs_redraw = true;
         }
+        "fancy_animations" | "fancy" | "animations" => {
+            app.fancy_animations = settings.fancy_animations;
+            app.needs_redraw = true;
+        }
+        "bracketed_paste" | "paste" => {
+            app.use_bracketed_paste = settings.bracketed_paste;
+            app.needs_redraw = true;
+        }
         "status_indicator" | "indicator" => {
             app.status_indicator = settings.status_indicator.clone();
+            app.needs_redraw = true;
+        }
+        "synchronized_output" | "sync_output" | "sync" => {
+            app.synchronized_output_enabled = settings.synchronized_output_enabled();
             app.needs_redraw = true;
         }
         "show_thinking" | "thinking" => {
@@ -419,9 +494,12 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
         }
         "locale" | "language" => {
             app.ui_locale = resolve_locale(&settings.locale);
+            app.mark_history_updated();
             app.needs_redraw = true;
         }
         "theme" | "ui_theme" | "background_color" | "background" | "bg" => {
+            app.theme_id = crate::palette::ThemeId::from_name(&settings.theme)
+                .unwrap_or(crate::palette::ThemeId::System);
             app.ui_theme = crate::palette::ui_theme_from_settings(
                 &settings.theme,
                 settings.background_color.as_deref(),
@@ -440,6 +518,16 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
         }
         "composer_border" | "border" => {
             app.composer_border = settings.composer_border;
+            app.needs_redraw = true;
+        }
+        "composer_vim_mode" | "vim_mode" | "vim" => {
+            app.composer.vim_enabled = settings.composer_vim_mode == "vim";
+            app.composer.vim_mode = if app.composer.vim_enabled {
+                VimMode::Normal
+            } else {
+                VimMode::Insert
+            };
+            app.composer.vim_pending_d = false;
             app.needs_redraw = true;
         }
         "paste_burst_detection" | "paste_burst" => {
@@ -482,6 +570,10 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
         "sidebar_focus" | "focus" => {
             app.set_sidebar_focus(SidebarFocus::from_setting(&settings.sidebar_focus));
         }
+        "context_panel" | "context" | "session_panel" => {
+            app.context_panel = settings.context_panel;
+            app.needs_redraw = true;
+        }
         _ => {}
     }
 
@@ -489,10 +581,12 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
         "default_mode" | "mode" => settings.default_mode.clone(),
         "cost_currency" | "currency" => settings.cost_currency.clone(),
         "theme" | "ui_theme" => settings.theme.clone(),
+        "synchronized_output" | "sync_output" | "sync" => settings.synchronized_output.clone(),
         "background_color" | "background" | "bg" => settings
             .background_color
             .clone()
             .unwrap_or_else(|| "default".to_string()),
+        "composer_vim_mode" | "vim_mode" | "vim" => settings.composer_vim_mode.clone(),
         _ => value.to_string(),
     };
 
@@ -582,33 +676,14 @@ fn mode_display_name(mode: AppMode) -> &'static str {
     }
 }
 
-/// Switch the runtime theme. `/set theme <value> --save` persists it.
+/// `/theme [name]` — with no argument, open the interactive picker (arrow
+/// keys, live preview, Enter to persist, Esc to revert). With an argument,
+/// route through `set_config_value("theme", ...)` so the apply + save flow is
+/// shared with `/config`.
 pub fn theme(app: &mut App, arg: Option<&str>) -> CommandResult {
-    let requested = match arg.map(str::trim).filter(|value| !value.is_empty()) {
-        Some(value) => {
-            let Some(theme) = crate::palette::normalize_theme_name(value) else {
-                return CommandResult::error("Usage: /theme [dark|light|grayscale|system]");
-            };
-            theme
-        }
-        None => match app.ui_theme.mode {
-            crate::palette::PaletteMode::Dark => "light",
-            crate::palette::PaletteMode::Light => "grayscale",
-            crate::palette::PaletteMode::Grayscale => "dark",
-        },
-    };
-
-    let background = Settings::load()
-        .ok()
-        .and_then(|settings| settings.background_color);
-    app.ui_theme = crate::palette::ui_theme_from_settings(requested, background.as_deref());
-    app.needs_redraw = true;
-
-    let label = crate::palette::theme_label_for_mode(app.ui_theme.mode);
-    if requested == "system" {
-        CommandResult::message(format!("Theme switched to system ({label})."))
-    } else {
-        CommandResult::message(format!("Theme switched to {label}."))
+    match arg.map(str::trim).filter(|s| !s.is_empty()) {
+        None => CommandResult::action(AppAction::OpenThemePicker),
+        Some(name) => set_config_value(app, "theme", name, true),
     }
 }
 
@@ -732,21 +807,82 @@ fn expand_tilde(raw: &str) -> String {
 /// Messages with complex keywords → Pro.
 /// Default → Flash (cost savings).
 pub fn auto_model_heuristic(input: &str, _current_model: &str) -> String {
+    auto_model_heuristic_with_bias(input, _current_model, false)
+}
+
+/// `auto_model_heuristic` parameterised by the `[auto] cost_saving` opt-in
+/// (#1207). When `cost_saving` is `true` the keyword set drops the borderline
+/// triggers (`implement`, `analyze`) and the long-message length threshold
+/// goes from 500 to 1000 — both shifts let "looks involved but might be a
+/// one-liner" requests stay on Flash unless they actually look agentic.
+pub fn auto_model_heuristic_with_bias(
+    input: &str,
+    _current_model: &str,
+    cost_saving: bool,
+) -> String {
+    auto_model_heuristic_selection_with_bias(input, _current_model, cost_saving).model
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AutoModelHeuristicConfidence {
+    Decisive,
+    Ambiguous,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AutoModelHeuristicSelection {
+    model: String,
+    confidence: AutoModelHeuristicConfidence,
+}
+
+fn auto_model_heuristic_selection_with_bias(
+    input: &str,
+    _current_model: &str,
+    cost_saving: bool,
+) -> AutoModelHeuristicSelection {
     let len = input.chars().count();
     let lower = input.to_lowercase();
-    if COMPLEX_KEYWORDS.iter().any(|kw| lower.contains(kw)) {
-        return "deepseek-v4-pro".to_string();
+    let borderline_pro_keywords: &[&str] = &[
+        "implement",
+        "analyze",
+        "\u{5b9e}\u{73b0}", // 实现
+        "\u{5206}\u{6790}", // 分析
+        "\u{5be6}\u{73fe}", // 實現
+    ];
+    let strong_match = COMPLEX_KEYWORDS
+        .iter()
+        .any(|kw| !borderline_pro_keywords.contains(kw) && lower.contains(kw));
+    let borderline_match = borderline_pro_keywords.iter().any(|kw| lower.contains(kw));
+    let pro_match = strong_match || (!cost_saving && borderline_match);
+    if pro_match {
+        return AutoModelHeuristicSelection {
+            model: "deepseek-v4-pro".to_string(),
+            confidence: AutoModelHeuristicConfidence::Decisive,
+        };
     }
     // Short messages → Flash
     if len < 100 {
-        return "deepseek-v4-flash".to_string();
+        return AutoModelHeuristicSelection {
+            model: "deepseek-v4-flash".to_string(),
+            confidence: AutoModelHeuristicConfidence::Decisive,
+        };
     }
-    // Long complex requests → Pro
-    if len > 500 {
-        return "deepseek-v4-pro".to_string();
+    // Long complex requests → Pro. Cost-saving raises the threshold so that
+    // long-but-routine requests (pasted logs, CSV-style data) don't escalate.
+    let long_threshold = if cost_saving { 1_000 } else { 500 };
+    if len > long_threshold {
+        return AutoModelHeuristicSelection {
+            model: "deepseek-v4-pro".to_string(),
+            confidence: AutoModelHeuristicConfidence::Decisive,
+        };
     }
-    // Default to Flash for cost savings
-    "deepseek-v4-flash".to_string()
+    // Grey-zone default branch: Flash is the deterministic fallback, but the
+    // Flash router can still add value here because there was no strong local
+    // signal.
+    AutoModelHeuristicSelection {
+        model: "deepseek-v4-flash".to_string(),
+        confidence: AutoModelHeuristicConfidence::Ambiguous,
+    }
 }
 
 /// Keywords that escalate `auto`-mode model selection to
@@ -836,6 +972,16 @@ tool-heavy work, ambiguous requests, or anything that benefits from deeper reaso
 Use thinking off only for trivial no-tool answers, high for ordinary reasoning, and max for \
 agentic, coding, multi-file, release, architecture, debugging, security, tool-heavy, or uncertain work.";
 
+/// Bias appended to the auto-router's system prompt when the user opts in to
+/// `[auto] cost_saving = true` (#1207). Reverses the default tie-breaker for
+/// genuinely ambiguous requests so Pro is reserved for tasks that clearly
+/// require it; ordinary tweaks, config edits, and short reads stay on Flash.
+pub const AUTO_MODEL_ROUTER_COST_SAVING_ADDENDUM: &str = "\
+\n\nCost-saving mode is ON. Prefer deepseek-v4-flash for any request that is \
+not unmistakably agentic, multi-step, architecture/design, security review, \
+debugging, or otherwise clearly out of Flash's capability. Resolve ambiguous \
+cases in favour of deepseek-v4-flash, not deepseek-v4-pro.";
+
 /// Parse the Flash router's JSON-only response.
 ///
 /// The runtime treats classifier output as untrusted: only known V4 model IDs
@@ -898,6 +1044,13 @@ pub async fn resolve_auto_route_with_flash(
     selected_model_mode: &str,
     selected_thinking_mode: &str,
 ) -> AutoRouteSelection {
+    let cost_saving = config.auto_cost_saving();
+    let heuristic =
+        auto_model_heuristic_selection_with_bias(latest_request, selected_model_mode, cost_saving);
+    if heuristic.confidence == AutoModelHeuristicConfidence::Decisive {
+        return auto_route_from_heuristic(latest_request, heuristic);
+    }
+
     match auto_route_flash_recommendation(
         config,
         latest_request,
@@ -912,13 +1065,16 @@ pub async fn resolve_auto_route_with_flash(
             reasoning_effort: recommendation.reasoning_effort,
             source: AutoRouteSource::FlashRouter,
         },
-        Ok(None) | Err(_) => fallback_auto_route(latest_request, selected_model_mode),
+        Ok(None) | Err(_) => auto_route_from_heuristic(latest_request, heuristic),
     }
 }
 
-fn fallback_auto_route(latest_request: &str, selected_model_mode: &str) -> AutoRouteSelection {
+fn auto_route_from_heuristic(
+    latest_request: &str,
+    heuristic: AutoModelHeuristicSelection,
+) -> AutoRouteSelection {
     AutoRouteSelection {
-        model: auto_model_heuristic(latest_request, selected_model_mode),
+        model: heuristic.model,
         reasoning_effort: Some(normalize_auto_route_effort(crate::auto_reasoning::select(
             false,
             latest_request,
@@ -939,6 +1095,10 @@ async fn auto_route_flash_recommendation(
     }
 
     let client = DeepSeekClient::new(config)?;
+    let mut router_system = AUTO_MODEL_ROUTER_SYSTEM_PROMPT.to_string();
+    if config.auto_cost_saving() {
+        router_system.push_str(AUTO_MODEL_ROUTER_COST_SAVING_ADDENDUM);
+    }
     let request = MessageRequest {
         model: "deepseek-v4-flash".to_string(),
         messages: vec![Message {
@@ -954,9 +1114,7 @@ async fn auto_route_flash_recommendation(
             }],
         }],
         max_tokens: 96,
-        system: Some(SystemPrompt::Text(
-            AUTO_MODEL_ROUTER_SYSTEM_PROMPT.to_string(),
-        )),
+        system: Some(SystemPrompt::Text(router_system)),
         tools: None,
         tool_choice: None,
         metadata: None,
@@ -1371,6 +1529,47 @@ mod tests {
     }
 
     #[test]
+    fn auto_heuristic_selection_marks_short_and_complex_routes_decisive() {
+        let short = auto_model_heuristic_selection_with_bias("yes", "auto", false);
+        assert_eq!(short.model, "deepseek-v4-flash");
+        assert_eq!(
+            short.confidence,
+            AutoModelHeuristicConfidence::Decisive,
+            "trivial replies should skip the Flash router"
+        );
+
+        let complex = auto_model_heuristic_selection_with_bias(
+            "Please review the auth migration",
+            "auto",
+            false,
+        );
+        assert_eq!(complex.model, "deepseek-v4-pro");
+        assert_eq!(
+            complex.confidence,
+            AutoModelHeuristicConfidence::Decisive,
+            "strong complexity keywords should skip the Flash router"
+        );
+    }
+
+    #[test]
+    fn auto_heuristic_selection_leaves_default_branch_ambiguous_for_router() {
+        let request =
+            "Please update the configuration notes so each option has a clearer label. ".repeat(3);
+        assert!(
+            (100..500).contains(&request.chars().count()),
+            "test request must stay in the default grey zone"
+        );
+
+        let selection = auto_model_heuristic_selection_with_bias(&request, "auto", false);
+        assert_eq!(selection.model, "deepseek-v4-flash");
+        assert_eq!(
+            selection.confidence,
+            AutoModelHeuristicConfidence::Ambiguous,
+            "only the grey-zone default branch should invoke the Flash router"
+        );
+    }
+
+    #[test]
     fn auto_route_recommendation_parses_strict_json() {
         let rec =
             parse_auto_route_recommendation(r#"{"model":"deepseek-v4-pro","thinking":"max"}"#)
@@ -1407,6 +1606,85 @@ mod tests {
             parse_auto_route_recommendation(r#"{"model":"some-other-model","thinking":"max"}"#,)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn auto_heuristic_default_routes_implement_to_pro() {
+        // Default (no cost-saving): "implement" is one of the borderline
+        // keywords that escalates to Pro.
+        assert_eq!(
+            auto_model_heuristic_with_bias("Please implement a binary search", "auto", false),
+            "deepseek-v4-pro"
+        );
+    }
+
+    #[test]
+    fn auto_heuristic_cost_saving_keeps_borderline_keywords_on_flash() {
+        // Cost-saving: "implement" / "analyze" are no longer enough to escalate.
+        assert_eq!(
+            auto_model_heuristic_with_bias("Please implement a binary search", "auto", true),
+            "deepseek-v4-flash"
+        );
+        assert_eq!(
+            auto_model_heuristic_with_bias("analyze this snippet", "auto", true),
+            "deepseek-v4-flash"
+        );
+    }
+
+    #[test]
+    fn auto_heuristic_strong_keywords_still_route_to_pro_under_cost_saving() {
+        // Cost-saving must NOT swallow obviously Pro-grade work.
+        for kw in [
+            "refactor",
+            "architecture",
+            "design",
+            "debug",
+            "security",
+            "review",
+            "audit",
+            "migrate",
+            "optimize",
+            "rewrite",
+        ] {
+            let req = format!("Please {kw} this module");
+            assert_eq!(
+                auto_model_heuristic_with_bias(&req, "auto", true),
+                "deepseek-v4-pro",
+                "expected Pro for strong keyword `{kw}` even in cost-saving mode"
+            );
+        }
+    }
+
+    #[test]
+    fn auto_heuristic_cost_saving_raises_long_message_threshold() {
+        // 600-char request is "long" by default (>500) → Pro,
+        // but stays Flash under cost-saving (threshold 1000).
+        let body = "filler sentence. ".repeat(40); // ~680 chars
+        assert_eq!(
+            auto_model_heuristic_with_bias(&body, "auto", false),
+            "deepseek-v4-pro"
+        );
+        assert_eq!(
+            auto_model_heuristic_with_bias(&body, "auto", true),
+            "deepseek-v4-flash"
+        );
+    }
+
+    #[test]
+    fn config_auto_cost_saving_defaults_to_false() {
+        let cfg = crate::config::Config::default();
+        assert!(!cfg.auto_cost_saving());
+    }
+
+    #[test]
+    fn config_auto_cost_saving_reads_table() {
+        let cfg = crate::config::Config {
+            auto: Some(crate::config::AutoConfig {
+                cost_saving: Some(true),
+            }),
+            ..Default::default()
+        };
+        assert!(cfg.auto_cost_saving());
     }
 
     #[test]
@@ -1477,7 +1755,8 @@ mod tests {
         let mut app = create_test_app();
         let result = theme(&mut app, Some("grayscale"));
 
-        assert_eq!(result.message.unwrap(), "Theme switched to grayscale.");
+        assert_eq!(result.message.unwrap(), "theme = grayscale (saved)");
+        assert_eq!(app.theme_id, crate::palette::ThemeId::Grayscale);
         assert_eq!(app.ui_theme.mode, crate::palette::PaletteMode::Grayscale);
         assert!(app.needs_redraw);
     }

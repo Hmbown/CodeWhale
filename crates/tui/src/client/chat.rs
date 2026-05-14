@@ -56,6 +56,7 @@ fn stream_idle_timeout() -> Duration {
     Duration::from_secs(secs)
 }
 
+use crate::config::ApiProvider;
 use crate::llm_client::StreamEventBox;
 use crate::logging;
 use crate::models::{
@@ -75,7 +76,7 @@ impl DeepSeekClient {
         &self,
         request: &MessageRequest,
     ) -> Result<MessageResponse> {
-        let messages = build_chat_messages_for_request(request);
+        let messages = build_chat_messages_for_request_and_provider(request, self.api_provider);
         let mut body = json!({
             "model": request.model,
             "messages": messages,
@@ -145,7 +146,7 @@ impl DeepSeekClient {
         request: MessageRequest,
     ) -> Result<StreamEventBox> {
         // Try true SSE streaming via chat completions (widely supported)
-        let messages = build_chat_messages_for_request(&request);
+        let messages = build_chat_messages_for_request_and_provider(&request, self.api_provider);
         let mut body = json!({
             "model": request.model,
             "messages": messages,
@@ -193,6 +194,7 @@ impl DeepSeekClient {
             &mut body,
             &request.model,
             request.reasoning_effort.as_deref(),
+            self.api_provider,
         );
 
         let url = api_url(&self.base_url, "chat/completions");
@@ -412,8 +414,16 @@ pub(super) fn build_chat_messages(
     )
 }
 
+#[cfg(test)]
 pub(super) fn build_chat_messages_for_request(request: &MessageRequest) -> Vec<Value> {
     PromptBuilder::for_request(request).build()
+}
+
+pub(super) fn build_chat_messages_for_request_and_provider(
+    request: &MessageRequest,
+    provider: ApiProvider,
+) -> Vec<Value> {
+    PromptBuilder::for_request(request).build_for_provider(provider)
 }
 
 pub(crate) fn inspect_prompt_for_request(request: &MessageRequest) -> PromptInspection {
@@ -441,12 +451,27 @@ impl<'a> PromptBuilder<'a> {
         }
     }
 
+    #[cfg(test)]
     fn build(self) -> Vec<Value> {
         build_chat_messages_with_reasoning(
             self.system,
             self.messages,
             self.model,
             should_replay_reasoning_content(self.model, self.reasoning_effort),
+            false,
+        )
+    }
+
+    fn build_for_provider(self, provider: ApiProvider) -> Vec<Value> {
+        build_chat_messages_with_reasoning(
+            self.system,
+            self.messages,
+            self.model,
+            should_replay_reasoning_content_for_provider(
+                provider,
+                self.model,
+                self.reasoning_effort,
+            ),
             false,
         )
     }
@@ -1445,8 +1470,9 @@ pub(super) fn sanitize_thinking_mode_messages(
     body: &mut Value,
     model: &str,
     effort: Option<&str>,
+    provider: ApiProvider,
 ) -> Option<u32> {
-    if !should_replay_reasoning_content(model, effort) {
+    if !should_replay_reasoning_content_for_provider(provider, model, effort) {
         return None;
     }
     let messages = body.get_mut("messages").and_then(Value::as_array_mut)?;
@@ -1602,6 +1628,29 @@ fn should_replay_reasoning_content(model: &str, effort: Option<&str>) -> bool {
     }
 
     requires_reasoning_content(model)
+}
+
+fn should_replay_reasoning_content_for_provider(
+    provider: ApiProvider,
+    model: &str,
+    effort: Option<&str>,
+) -> bool {
+    if !provider_accepts_reasoning_content(provider) {
+        return false;
+    }
+    should_replay_reasoning_content(model, effort)
+}
+
+fn provider_accepts_reasoning_content(provider: ApiProvider) -> bool {
+    matches!(
+        provider,
+        ApiProvider::Deepseek
+            | ApiProvider::DeepseekCN
+            | ApiProvider::Openrouter
+            | ApiProvider::Novita
+            | ApiProvider::Fireworks
+            | ApiProvider::Sglang
+    )
 }
 
 fn has_deepseek_r_series_marker(model_lower: &str) -> bool {

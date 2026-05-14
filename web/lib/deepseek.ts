@@ -54,13 +54,21 @@ You receive: repo stats and a list of recently updated issues, PRs, and releases
 Output a single JSON object — no prose around it — matching this exact shape:
 
 {
-  "headline": "string — one short editorial headline summarising the project's pulse this period (max ~70 chars)",
-  "summary": "string — 2-3 sentences in a calm, factual editorial voice. No marketing fluff. No emoji.",
+  "headline": "string — English editorial headline (max ~70 chars)",
+  "summary": "string — 2-3 English sentences, calm factual editorial voice",
   "highlights": [
     { "title": "string", "href": "string", "tag": "shipped|merged|opened|discussion|release", "blurb": "one sentence, max ~120 chars" }
   ],
   "movers": [
-    { "number": 123, "title": "string", "href": "string", "reason": "one short clause explaining why it matters" }
+    { "number": 123, "title": "string", "href": "string", "reason": "one short clause" }
+  ],
+  "headlineZh": "string — Chinese (zh-CN) editorial headline, rewritten natively, not translated",
+  "summaryZh": "string — 2-3 Chinese sentences, native zh-CN prose",
+  "highlightsZh": [
+    { "title": "string — zh-CN native", "href": "string", "tag": "shipped|merged|opened|discussion|release", "blurb": "zh-CN one sentence" }
+  ],
+  "moversZh": [
+    { "number": 123, "title": "string — zh-CN", "href": "string", "reason": "zh-CN clause" }
   ]
 }
 
@@ -68,8 +76,10 @@ Rules:
 - Pick 3-5 highlights and 3-5 movers from the actual provided items. Never invent.
 - Prefer items with discussion, merged PRs, recent releases, or labelled "good first issue".
 - Tone: like a small-paper editor — measured, specific, never breathless.
-- Never use words like "exciting", "amazing", "powerful", "revolutionary".
-- href must be the html_url provided.`;
+- Never use words like "exciting", "amazing", "powerful", "revolutionary" (or Chinese equivalents like 令人兴奋, 强大无比, 革命性).
+- href must be the html_url provided.
+- The zh-CN fields must be native Chinese prose — not a direct translation of the English fields. Write them as a Chinese-speaking maintainer would.
+- zh-CN uses full-width punctuation in CJK sentences (。，、).`;
 
 export async function curate(
   apiKey: string,
@@ -127,5 +137,7 @@ function sanitizeDispatch(d: Omit<CuratedDispatch, "generatedAt">): Omit<Curated
     ...d,
     highlights: (d.highlights ?? []).map((h) => ({ ...h, href: safeHref(h.href) })),
     movers: (d.movers ?? []).map((m) => ({ ...m, href: safeHref(m.href) })),
+    highlightsZh: (d.highlightsZh ?? []).map((h) => ({ ...h, href: safeHref(h.href) })),
+    moversZh: (d.moversZh ?? []).map((m) => ({ ...m, href: safeHref(m.href) })),
   };
 }

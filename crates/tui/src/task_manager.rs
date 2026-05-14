@@ -701,6 +701,7 @@ pub type SharedTaskManager = Arc<TaskManager>;
 
 pub struct TaskManager {
     cfg: TaskManagerConfig,
+    default_workspace: Mutex<PathBuf>,
     executor: Arc<dyn TaskExecutor>,
     tasks_dir: PathBuf,
     artifacts_dir: PathBuf,
@@ -766,8 +767,10 @@ impl TaskManager {
         let (tasks, queue) = load_state(&tasks_dir, &queue_path)?;
 
         let cancel_token = CancellationToken::new();
+        let default_workspace = cfg.default_workspace.clone();
         let manager = Arc::new(Self {
             cfg,
+            default_workspace: Mutex::new(default_workspace),
             executor,
             tasks_dir,
             artifacts_dir,
@@ -810,6 +813,15 @@ impl TaskManager {
         self.cancel_token.is_cancelled()
     }
 
+    pub async fn set_default_workspace(&self, workspace: PathBuf) {
+        let mut default_workspace = self.default_workspace.lock().await;
+        *default_workspace = workspace;
+    }
+
+    pub async fn default_workspace(&self) -> PathBuf {
+        self.default_workspace.lock().await.clone()
+    }
+
     /// Enqueue a new task.
     pub async fn add_task(&self, req: NewTaskRequest) -> Result<TaskRecord> {
         let prompt = req.prompt.trim().to_string();
@@ -822,9 +834,10 @@ impl TaskManager {
             id: format!("task_{}", &Uuid::new_v4().to_string()[..8]),
             prompt,
             model: req.model.unwrap_or_else(|| self.cfg.default_model.clone()),
-            workspace: req
-                .workspace
-                .unwrap_or_else(|| self.cfg.default_workspace.clone()),
+            workspace: match req.workspace {
+                Some(workspace) => workspace,
+                None => self.default_workspace().await,
+            },
             mode: req.mode.unwrap_or_else(|| self.cfg.default_mode.clone()),
             allow_shell: req.allow_shell.unwrap_or(self.cfg.allow_shell),
             trust_mode: req.trust_mode.unwrap_or(self.cfg.trust_mode),
@@ -1762,6 +1775,24 @@ mod tests {
         assert_eq!(loaded.status, TaskStatus::Completed);
         assert!(!loaded.timeline.is_empty());
         assert_eq!(loaded.checklist.items[0].content, "read fixture");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn default_workspace_updates_for_future_tasks() -> Result<()> {
+        let root = std::env::temp_dir().join(format!("deepseek-task-test-{}", Uuid::new_v4()));
+        let new_workspace =
+            std::env::temp_dir().join(format!("deepseek-workspace-{}", Uuid::new_v4()));
+        let manager =
+            TaskManager::start_with_executor(test_config(root), Arc::new(MockExecutor)).await?;
+
+        manager.set_default_workspace(new_workspace.clone()).await;
+        let task = manager
+            .add_task(NewTaskRequest::from_prompt("test workspace default"))
+            .await?;
+
+        assert_eq!(manager.default_workspace().await, new_workspace);
+        assert_eq!(task.workspace, new_workspace);
         Ok(())
     }
 

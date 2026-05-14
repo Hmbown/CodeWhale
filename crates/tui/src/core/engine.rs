@@ -274,103 +274,8 @@ pub struct EngineHandle {
     tx_steer: mpsc::Sender<String>,
 }
 
-impl EngineHandle {
-    /// Send an operation to the engine
-    pub async fn send(&self, op: Op) -> Result<()> {
-        self.tx_op.send(op).await?;
-        Ok(())
-    }
-
-    /// Cancel the current request (user-initiated path — keeps the
-    /// public `cancel()` signature stable). Equivalent to
-    /// `cancel_with_reason(CancelReason::User)`.
-    pub fn cancel(&self) {
-        self.cancel_with_reason(CancelReason::User);
-    }
-
-    /// Cancel the current request and latch the reason so downstream
-    /// "request cancelled" error messages can name a cause.
-    pub fn cancel_with_reason(&self, reason: CancelReason) {
-        match self.cancel_reason.lock() {
-            Ok(mut slot) => *slot = Some(reason),
-            Err(poisoned) => *poisoned.into_inner() = Some(reason),
-        }
-        match self.cancel_token.lock() {
-            Ok(token) => token.cancel(),
-            Err(poisoned) => poisoned.into_inner().cancel(),
-        }
-    }
-
-    /// Check if a request is currently cancelled
-    #[must_use]
-    #[allow(dead_code)]
-    pub fn is_cancelled(&self) -> bool {
-        match self.cancel_token.lock() {
-            Ok(token) => token.is_cancelled(),
-            Err(poisoned) => poisoned.into_inner().is_cancelled(),
-        }
-    }
-
-    /// Approve a pending tool call
-    pub async fn approve_tool_call(&self, id: impl Into<String>) -> Result<()> {
-        self.tx_approval
-            .send(ApprovalDecision::Approved { id: id.into() })
-            .await?;
-        Ok(())
-    }
-
-    /// Deny a pending tool call
-    pub async fn deny_tool_call(&self, id: impl Into<String>) -> Result<()> {
-        self.tx_approval
-            .send(ApprovalDecision::Denied { id: id.into() })
-            .await?;
-        Ok(())
-    }
-
-    /// Retry a tool call with an elevated sandbox policy.
-    pub async fn retry_tool_with_policy(
-        &self,
-        id: impl Into<String>,
-        policy: crate::sandbox::SandboxPolicy,
-    ) -> Result<()> {
-        self.tx_approval
-            .send(ApprovalDecision::RetryWithPolicy {
-                id: id.into(),
-                policy,
-            })
-            .await?;
-        Ok(())
-    }
-
-    /// Submit a response for request_user_input.
-    pub async fn submit_user_input(
-        &self,
-        id: impl Into<String>,
-        response: UserInputResponse,
-    ) -> Result<()> {
-        self.tx_user_input
-            .send(UserInputDecision::Submitted {
-                id: id.into(),
-                response,
-            })
-            .await?;
-        Ok(())
-    }
-
-    /// Cancel a request_user_input prompt.
-    pub async fn cancel_user_input(&self, id: impl Into<String>) -> Result<()> {
-        self.tx_user_input
-            .send(UserInputDecision::Cancelled { id: id.into() })
-            .await?;
-        Ok(())
-    }
-
-    /// Steer an in-flight turn with additional user input.
-    pub async fn steer(&self, content: impl Into<String>) -> Result<()> {
-        self.tx_steer.send(content.into()).await?;
-        Ok(())
-    }
-}
+// `impl EngineHandle { ... }` moved to `engine/handle.rs` so the
+// mailbox API can be reviewed independently of the engine internals.
 
 // === Engine ===
 
@@ -544,6 +449,18 @@ impl Engine {
         let stable_prompt = Some(system_prompt);
         session.last_system_prompt_hash = Some(system_prompt_hash(stable_prompt.as_ref()));
         session.system_prompt = stable_prompt;
+
+        // Initialize prefix-cache stability monitor (lazy-pin).
+        // The system prompt is available now but the tool catalog isn't
+        // fully built until the first turn, so we start unpinned. The
+        // first `check_and_update` call in the turn loop will pin the
+        // fingerprint automatically.
+        let _ = session.prefix_stability.get_or_insert_with(|| {
+            // Use the tool registry's spec names for fingerprinting.
+            // At this point tool spec builders may not be registered yet,
+            // so we start with None — fingerprint will pin on first request.
+            crate::prefix_cache::PrefixStabilityManager::new_unpinned()
+        });
 
         let subagent_manager =
             new_shared_subagent_manager(config.workspace.clone(), config.max_subagents);
@@ -2032,6 +1949,7 @@ pub(crate) fn mock_engine_handle() -> MockEngineHandle {
 mod approval;
 mod capacity_flow;
 mod context;
+mod handle;
 pub(crate) use context::compact_tool_result_for_context;
 use context::{
     COMPACTION_SUMMARY_MARKER, MAX_CONTEXT_RECOVERY_ATTEMPTS, MIN_RECENT_MESSAGES_TO_KEEP,
@@ -2049,12 +1967,14 @@ mod tool_setup;
 mod turn_loop;
 
 use self::approval::{ApprovalDecision, ApprovalResult, UserInputDecision};
+#[cfg(test)]
+use self::dispatch::should_parallelize_tool_batch;
 use self::dispatch::{
-    ParallelToolResult, ParallelToolResultEntry, ToolExecGuard, ToolExecOutcome, ToolExecutionPlan,
-    caller_allowed_for_tool, caller_type_for_tool_use, final_tool_input, format_tool_error,
-    mcp_tool_approval_description, mcp_tool_is_parallel_safe, mcp_tool_is_read_only,
-    parse_parallel_tool_calls, parse_tool_input, should_force_update_plan_first,
-    should_parallelize_tool_batch, should_stop_after_plan_tool,
+    ParallelToolResult, ParallelToolResultEntry, ToolExecGuard, ToolExecOutcome,
+    ToolExecutionBatch, ToolExecutionPlan, caller_allowed_for_tool, caller_type_for_tool_use,
+    final_tool_input, format_tool_error, mcp_tool_approval_description, mcp_tool_is_parallel_safe,
+    mcp_tool_is_read_only, parse_parallel_tool_calls, parse_tool_input,
+    plan_tool_execution_batches, should_force_update_plan_first, should_stop_after_plan_tool,
 };
 use self::loop_guard::{AttemptDecision, LoopGuard, OutcomeDecision};
 #[cfg(test)]
@@ -2076,7 +1996,8 @@ use self::tool_catalog::{
 };
 #[cfg(test)]
 use self::tool_catalog::{
-    TOOL_SEARCH_BM25_NAME, maybe_activate_requested_deferred_tool, should_default_defer_tool,
+    TOOL_SEARCH_BM25_NAME, maybe_activate_requested_deferred_tool,
+    preflight_requested_deferred_tool, should_default_defer_tool,
 };
 use self::tool_execution::emit_tool_audit;
 use self::tool_setup::sandbox_policy_for_mode;

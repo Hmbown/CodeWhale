@@ -80,7 +80,7 @@ export function Footer({ locale = "en" }: { locale?: Locale }) {
             <div>
               <div className="font-display text-xl font-semibold">DeepSeek TUI</div>
               <div className="font-cjk text-[0.7rem] text-ink-mute tracking-widest">
-                {isZh ? "深度求索 · 终端智能体" : "深度求索 · 终端代理"}
+                {isZh ? "深度求索 · 终端智能体" : "深度求索 · 终端智能体"}
               </div>
             </div>
           </div>

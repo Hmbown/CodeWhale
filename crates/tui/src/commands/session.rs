@@ -39,7 +39,7 @@ pub fn save(app: &mut App, path: Option<&str>) -> CommandResult {
         app.system_prompt.as_ref(),
         Some(app.mode.label()),
     );
-    session.metadata.cost = session_cost_snapshot(app);
+    app.sync_cost_to_metadata(&mut session.metadata);
     session.artifacts = app.session_artifacts.clone();
 
     let sessions_dir = save_path

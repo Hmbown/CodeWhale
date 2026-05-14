@@ -704,6 +704,10 @@ mod tests {
         app.model = "deepseek-v4-flash".to_string();
         app.auto_model = false;
         app.api_provider = crate::config::ApiProvider::Deepseek;
+        // Same for theme: tests below assert against the default dark palette,
+        // but App::new honors saved settings.toml values on the host machine.
+        app.theme_id = crate::palette::ThemeId::Whale;
+        app.ui_theme = crate::palette::UI_THEME;
         app
     }
 

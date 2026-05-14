@@ -4,6 +4,7 @@
 
 use crate::cycle_manager::CycleBriefing;
 use crate::models::{Message, SystemPrompt, Usage};
+use crate::prefix_cache::PrefixStabilityManager;
 use crate::project_context::{ProjectContext, load_project_context_with_parents};
 use crate::tui::approval::ApprovalMode;
 use crate::working_set::WorkingSet;
@@ -82,6 +83,11 @@ pub struct Session {
     /// Briefings produced at past cycle boundaries, in chronological order.
     /// Bounded growth: one entry per cycle, briefing capped at ~3,000 tokens.
     pub cycle_briefings: Vec<CycleBriefing>,
+
+    /// Prefix-cache stability monitor (inspired by Reasonix's Pillar 1).
+    /// Tracks the immutable prefix fingerprint and detects drift across turns.
+    /// Set during engine construction; None until the first system prompt assembly.
+    pub prefix_stability: Option<PrefixStabilityManager>,
 }
 
 /// Cumulative usage statistics for a session.
@@ -155,6 +161,7 @@ impl Session {
             cycle_count: 0,
             current_cycle_started: Utc::now(),
             cycle_briefings: Vec::new(),
+            prefix_stability: None,
         }
     }
 

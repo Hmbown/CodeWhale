@@ -58,14 +58,7 @@ fn rename_with_manager(
         u64::from(app.session.total_tokens),
         app.system_prompt.as_ref(),
     );
-    session.metadata.cost = SessionCostSnapshot {
-        session_cost_usd: app.session.session_cost,
-        session_cost_cny: app.session.session_cost_cny,
-        subagent_cost_usd: app.session.subagent_cost,
-        subagent_cost_cny: app.session.subagent_cost_cny,
-        displayed_cost_high_water_usd: app.session.displayed_cost_high_water,
-        displayed_cost_high_water_cny: app.session.displayed_cost_high_water_cny,
-    };
+    app.sync_cost_to_metadata(&mut session.metadata);
     session.metadata.title = new_title.to_string();
 
     match manager.save_session(&session) {

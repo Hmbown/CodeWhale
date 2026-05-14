@@ -246,6 +246,10 @@ impl ModalView for HelpView {
     fn handle_key(&mut self, key: KeyEvent) -> ViewAction {
         match key.code {
             KeyCode::Esc => ViewAction::Close,
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                ViewAction::Close
+            }
+            KeyCode::Char('q') | KeyCode::Char('Q') if self.query.is_empty() => ViewAction::Close,
             KeyCode::Up => {
                 self.move_selection(-1);
                 ViewAction::None
@@ -574,6 +578,26 @@ mod tests {
         let mut view = HelpView::new();
         let action = view.handle_key(key(KeyCode::Esc));
         assert!(matches!(action, ViewAction::Close));
+    }
+
+    #[test]
+    fn ctrl_c_closes_overlay() {
+        let mut view = HelpView::new();
+        let action = view.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(matches!(action, ViewAction::Close));
+    }
+
+    #[test]
+    fn q_closes_empty_filter_but_types_when_filtering() {
+        let mut view = HelpView::new();
+        let action = view.handle_key(key(KeyCode::Char('q')));
+        assert!(matches!(action, ViewAction::Close));
+
+        let mut view = HelpView::new();
+        type_filter(&mut view, "mod");
+        let action = view.handle_key(key(KeyCode::Char('q')));
+        assert!(matches!(action, ViewAction::None));
+        assert_eq!(view.query, "modq");
     }
 
     #[test]

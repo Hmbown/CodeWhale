@@ -47,6 +47,7 @@ mod memory;
 mod models;
 mod network_policy;
 mod palette;
+mod prefix_cache;
 mod pricing;
 mod project_context;
 mod project_doc;
@@ -3067,7 +3068,7 @@ fn fork_session(session_id: Option<String>, last: bool, workspace: &Path) -> Res
         saved.metadata.total_tokens,
         system_prompt.as_ref(),
     );
-    forked.metadata.cost = saved.metadata.cost;
+    forked.metadata.copy_cost_from(&saved.metadata);
     forked.context_references = saved.context_references.clone();
     forked.goal_state_json = saved.goal_state_json.clone();
     forked.todos_json = saved.todos_json.clone();

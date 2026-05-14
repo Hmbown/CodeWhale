@@ -7,8 +7,14 @@ pub const THRESHOLDS: [(f32, &str); 3] = [
         0.9,
         "Context at 90%: stop and write relay to .deepseek/handoff.md now",
     ),
-    (0.8, "Context at 80%: draft relay to .deepseek/handoff.md"),
-    (0.7, "Context at 70%: consider wrapping current sub-task"),
+    (
+        0.8,
+        "Context at 80%: urgent hard-limit pressure; compact or write relay now",
+    ),
+    (
+        0.6,
+        "Context at 60%: prepare relay or suggest /compact for sustained work",
+    ),
 ];
 #[allow(dead_code)]
 pub fn threshold_message(ratio: f32) -> Option<&'static str> {

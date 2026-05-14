@@ -94,6 +94,11 @@ pub const KEYBINDINGS: &[KeybindingEntry] = &[
         section: KeybindingSection::Navigation,
     },
     KeybindingEntry {
+        chord: "Shift+↑ / Shift+↓",
+        description_id: crate::localization::MessageId::KbBrowseHistory,
+        section: KeybindingSection::Navigation,
+    },
+    KeybindingEntry {
         chord: "PgUp / PgDn",
         description_id: crate::localization::MessageId::KbScrollPage,
         section: KeybindingSection::Navigation,

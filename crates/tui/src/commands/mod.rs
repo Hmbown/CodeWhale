@@ -143,37 +143,37 @@ pub const COMMANDS: &[CommandInfo] = &[
     // Core commands
     CommandInfo {
         name: "anchor",
-        aliases: &[],
+        aliases: &["maodian"],
         usage: "/anchor <text> | /anchor list | /anchor remove <n>",
         description_id: MessageId::CmdAnchorDescription,
     },
     CommandInfo {
         name: "help",
-        aliases: &["?"],
+        aliases: &["?", "bangzhu", "帮助"],
         usage: "/help [command]",
         description_id: MessageId::CmdHelpDescription,
     },
     CommandInfo {
         name: "clear",
-        aliases: &[],
+        aliases: &["qingping"],
         usage: "/clear",
         description_id: MessageId::CmdClearDescription,
     },
     CommandInfo {
         name: "exit",
-        aliases: &["quit", "q"],
+        aliases: &["quit", "q", "tuichu"],
         usage: "/exit",
         description_id: MessageId::CmdExitDescription,
     },
     CommandInfo {
         name: "model",
-        aliases: &[],
+        aliases: &["moxing"],
         usage: "/model [name]",
         description_id: MessageId::CmdModelDescription,
     },
     CommandInfo {
         name: "models",
-        aliases: &[],
+        aliases: &["moxingliebiao"],
         usage: "/models",
         description_id: MessageId::CmdModelsDescription,
     },
@@ -197,25 +197,25 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "hooks",
-        aliases: &["hook"],
+        aliases: &["hook", "gouzi"],
         usage: "/hooks [list|events]",
         description_id: MessageId::CmdHooksDescription,
     },
     CommandInfo {
         name: "subagents",
-        aliases: &["agents"],
+        aliases: &["agents", "zhinengti"],
         usage: "/subagents",
         description_id: MessageId::CmdSubagentsDescription,
     },
     CommandInfo {
         name: "agent",
-        aliases: &[],
+        aliases: &["daili"],
         usage: "/agent [N] <task>",
         description_id: MessageId::CmdAgentDescription,
     },
     CommandInfo {
         name: "links",
-        aliases: &["dashboard", "api"],
+        aliases: &["dashboard", "api", "lianjie"],
         usage: "/links",
         description_id: MessageId::CmdLinksDescription,
     },
@@ -227,9 +227,15 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "home",
-        aliases: &["stats", "overview"],
+        aliases: &["stats", "overview", "zhuye", "shouye"],
         usage: "/home",
         description_id: MessageId::CmdHomeDescription,
+    },
+    CommandInfo {
+        name: "workspace",
+        aliases: &["cwd"],
+        usage: "/workspace [path]",
+        description_id: MessageId::CmdWorkspaceDescription,
     },
     CommandInfo {
         name: "note",
@@ -245,7 +251,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "attach",
-        aliases: &["image", "media"],
+        aliases: &["image", "media", "fujian"],
         usage: "/attach <path>",
         description_id: MessageId::CmdAttachDescription,
     },
@@ -257,7 +263,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "jobs",
-        aliases: &["job"],
+        aliases: &["job", "zuoye"],
         usage: "/jobs [list|show <id>|poll <id>|wait <id>|stdin <id> <input>|cancel <id>]",
         description_id: MessageId::CmdJobsDescription,
     },
@@ -276,7 +282,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     // Session commands
     CommandInfo {
         name: "rename",
-        aliases: &[],
+        aliases: &["gaiming", "chongmingming"],
         usage: "/rename <new title>",
         description_id: MessageId::CmdRenameDescription,
     },
@@ -294,13 +300,13 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "load",
-        aliases: &[],
+        aliases: &["jiazai"],
         usage: "/load [path]",
         description_id: MessageId::CmdLoadDescription,
     },
     CommandInfo {
         name: "compact",
-        aliases: &[],
+        aliases: &["yasuo"],
         usage: "/compact",
         description_id: MessageId::CmdCompactDescription,
     },
@@ -318,7 +324,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "cycles",
-        aliases: &[],
+        aliases: &["zhouqi"],
         usage: "/cycles",
         description_id: MessageId::CmdCyclesDescription,
     },
@@ -336,7 +342,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "export",
-        aliases: &[],
+        aliases: &["daochu"],
         usage: "/export [path]",
         description_id: MessageId::CmdExportDescription,
     },
@@ -349,14 +355,14 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "mode",
-        aliases: &[],
+        aliases: &["jihua", "zidong"],
         usage: "/mode [agent|plan|yolo|1|2|3]",
         description_id: MessageId::CmdModeDescription,
     },
     CommandInfo {
         name: "theme",
         aliases: &[],
-        usage: "/theme [dark|light|grayscale|system]",
+        usage: "/theme [name]",
         description_id: MessageId::CmdThemeDescription,
     },
     CommandInfo {
@@ -367,7 +373,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "trust",
-        aliases: &[],
+        aliases: &["xinren"],
         usage: "/trust [on|off|add <path>|remove <path>|list]",
         description_id: MessageId::CmdTrustDescription,
     },
@@ -392,7 +398,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "system",
-        aliases: &[],
+        aliases: &["xitong"],
         usage: "/system",
         description_id: MessageId::CmdSystemDescription,
     },
@@ -411,7 +417,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo {
         name: "change",
         aliases: &[],
-        usage: "/change",
+        usage: "/change [version]",
         description_id: MessageId::CmdChangeDescription,
     },
     CommandInfo {
@@ -422,7 +428,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "retry",
-        aliases: &[],
+        aliases: &["chongshi"],
         usage: "/retry",
         description_id: MessageId::CmdRetryDescription,
     },
@@ -446,7 +452,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "goal",
-        aliases: &[],
+        aliases: &["mubiao"],
         usage: "/goal [objective] [budget: N]",
         description_id: MessageId::CmdGoalDescription,
     },
@@ -477,19 +483,19 @@ pub const COMMANDS: &[CommandInfo] = &[
     // Skills commands
     CommandInfo {
         name: "skills",
-        aliases: &[],
+        aliases: &["jinengliebiao"],
         usage: "/skills [--remote|sync|<prefix>]",
         description_id: MessageId::CmdSkillsDescription,
     },
     CommandInfo {
         name: "skill",
-        aliases: &[],
+        aliases: &["jineng"],
         usage: "/skill <name|install <spec>|update <name>|uninstall <name>|trust <name>>",
         description_id: MessageId::CmdSkillDescription,
     },
     CommandInfo {
         name: "review",
-        aliases: &[],
+        aliases: &["shencha"],
         usage: "/review <target>",
         description_id: MessageId::CmdReviewDescription,
     },
@@ -502,7 +508,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     // RLM command
     CommandInfo {
         name: "rlm",
-        aliases: &["recursive"],
+        aliases: &["recursive", "digui"],
         usage: "/rlm [N] <file_or_text>",
         description_id: MessageId::CmdRlmDescription,
     },
@@ -516,7 +522,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     // Profile switching (#390)
     CommandInfo {
         name: "profile",
-        aliases: &[],
+        aliases: &["dangan"],
         usage: "/profile <name>",
         description_id: MessageId::CmdHelpDescription, // reuse for now
     },
@@ -544,40 +550,41 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
     // Match command or alias
     match command {
         // Core commands
-        "anchor" => anchor::anchor(app, arg),
-        "help" | "?" => core::help(app, arg),
-        "clear" => core::clear(app),
-        "exit" | "quit" | "q" => core::exit(),
-        "model" => core::model(app, arg),
-        "models" => core::models(app),
+        "anchor" | "maodian" => anchor::anchor(app, arg),
+        "help" | "?" | "bangzhu" | "帮助" => core::help(app, arg),
+        "clear" | "qingping" => core::clear(app),
+        "exit" | "quit" | "q" | "tuichu" => core::exit(),
+        "model" | "moxing" => core::model(app, arg),
+        "models" | "moxingliebiao" => core::models(app),
         "provider" => provider::provider(app, arg),
         "queue" | "queued" => queue::queue(app, arg),
         "stash" | "park" => stash::stash(app, arg),
-        "hooks" | "hook" => hooks::hooks(app, arg),
-        "subagents" | "agents" => core::subagents(app),
-        "agent" => agent(app, arg),
-        "links" | "dashboard" | "api" => core::deepseek_links(app),
+        "hooks" | "hook" | "gouzi" => hooks::hooks(app, arg),
+        "subagents" | "agents" | "zhinengti" => core::subagents(app),
+        "agent" | "daili" => agent(app, arg),
+        "links" | "dashboard" | "api" | "lianjie" => core::deepseek_links(app),
         "feedback" => feedback::feedback(app, arg),
-        "home" | "stats" | "overview" => core::home_dashboard(app),
+        "home" | "stats" | "overview" | "zhuye" | "shouye" => core::home_dashboard(app),
+        "workspace" | "cwd" => core::workspace_switch(app, arg),
         "note" => note::note(app, arg),
         "memory" => memory::memory(app, arg),
-        "attach" | "image" | "media" => attachment::attach(app, arg),
+        "attach" | "image" | "media" | "fujian" => attachment::attach(app, arg),
         "task" | "tasks" => task::task(app, arg),
-        "jobs" | "job" => jobs::jobs(app, arg),
+        "jobs" | "job" | "zuoye" => jobs::jobs(app, arg),
         "mcp" => mcp::mcp(app, arg),
         "network" => network::network(app, arg),
 
         // Session commands
-        "rename" => rename::rename(app, arg),
+        "rename" | "gaiming" | "chongmingming" => rename::rename(app, arg),
         "save" => session::save(app, arg),
         "sessions" | "resume" => session::sessions(app, arg),
-        "load" => session::load(app, arg),
-        "compact" => session::compact(app),
         "relay" | "batonpass" | "接力" => relay(app, arg),
-        "cycles" => cycle::list_cycles(app),
+        "load" | "jiazai" => session::load(app, arg),
+        "compact" | "yasuo" => session::compact(app),
+        "cycles" | "zhouqi" => cycle::list_cycles(app),
         "cycle" => cycle::show_cycle(app, arg),
         "recall" => cycle::recall_archive(app, arg),
-        "export" => session::export(app, arg),
+        "export" | "daochu" => session::export(app, arg),
 
         // Config commands
         "config" => config::config_command(app, arg),
@@ -585,9 +592,11 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "status" => status::status(app),
         "statusline" => config::status_line(app),
         "mode" => config::mode(app, arg),
+        "jihua" => config::mode(app, Some("plan")),
+        "zidong" => config::mode(app, Some("yolo")),
         "theme" => config::theme(app, arg),
         "verbose" => config::verbose(app, arg),
-        "trust" => config::trust(app, arg),
+        "trust" | "xinren" => config::trust(app, arg),
         "logout" => config::logout(app),
 
         // Debug commands
@@ -597,8 +606,8 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "cache" => debug::cache(app, arg),
 
         // ChangeLog command
-        "change" => change::change(app),
-        "system" => debug::system_prompt(app),
+        "change" => change::change(app, arg),
+        "system" | "xitong" => debug::system_prompt(app),
         "context" | "ctx" => debug::context(app),
         "edit" => debug::edit(app),
         "diff" => debug::diff(app),
@@ -617,26 +626,26 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
                 result
             }
         }
-        "retry" => debug::retry(app),
+        "retry" | "chongshi" => debug::retry(app),
 
         // Project commands
         "init" => init::init(app),
         "lsp" => config::lsp_command(app, arg),
         "share" => share::share(app, arg),
-        "goal" => goal::goal(app, arg),
+        "goal" | "mubiao" => goal::goal(app, arg),
         "recap" => recap::recap(app, arg),
 
         // Skills commands
-        "skills" => skills::list_skills(app, arg),
-        "skill" => skills::run_skill(app, arg),
-        "review" => review::review(app, arg),
+        "skills" | "jinengliebiao" => skills::list_skills(app, arg),
+        "skill" | "jineng" => skills::run_skill(app, arg),
+        "review" | "shencha" => review::review(app, arg),
         "restore" => restore::restore(app, arg),
 
         // Profile switch (#390)
-        "profile" => core::profile_switch(app, arg),
+        "profile" | "dangan" => core::profile_switch(app, arg),
 
         // RLM command
-        "rlm" | "recursive" => rlm(app, arg),
+        "rlm" | "recursive" | "digui" => rlm(app, arg),
 
         // Legacy command migrations (kept out of registry/autocomplete intentionally).
         "set" => CommandResult::error(
@@ -1063,6 +1072,7 @@ mod tests {
     use std::ffi::OsString;
     use std::path::{Path, PathBuf};
     use std::sync::MutexGuard;
+    use tempfile::tempdir;
 
     fn create_test_app() -> App {
         let options = TuiOptions {
@@ -1104,7 +1114,7 @@ mod tests {
             .iter()
             .find(|cmd| cmd.name == "links")
             .expect("links command should exist");
-        assert_eq!(links.aliases, &["dashboard", "api"]);
+        assert_eq!(links.aliases, &["dashboard", "api", "lianjie"]);
     }
 
     #[test]
@@ -1289,12 +1299,23 @@ mod tests {
     #[test]
     fn execute_links_and_aliases_return_links_message() {
         let mut app = create_test_app();
-        for cmd in ["/links", "/dashboard", "/api"] {
+        for cmd in ["/links", "/dashboard", "/api", "/lianjie"] {
             let result = execute(cmd, &mut app);
             let msg = result.message.expect("links commands should return text");
             assert!(msg.contains("https://platform.deepseek.com"));
             assert!(result.action.is_none());
         }
+    }
+
+    #[test]
+    fn execute_workspace_alias_switches_workspace() {
+        let dir = tempdir().expect("temp dir");
+        let mut app = create_test_app();
+        let result = execute(&format!("/cwd {}", dir.path().display()), &mut app);
+        assert!(matches!(
+            result.action,
+            Some(AppAction::SwitchWorkspace { workspace }) if workspace == dir.path().canonicalize().unwrap()
+        ));
     }
 
     #[test]

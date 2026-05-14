@@ -2,6 +2,10 @@
 
 /// Maximum output size before truncation (30KB like Claude Code).
 const MAX_OUTPUT_SIZE: usize = 30_000;
+/// Head bytes preserved for large shell/test output. The matching tail budget
+/// keeps final errors and test summaries visible without a second command.
+const TRUNCATED_HEAD_BYTES: usize = 22_000;
+const TRUNCATED_TAIL_BYTES: usize = MAX_OUTPUT_SIZE - TRUNCATED_HEAD_BYTES;
 /// Limits for summary strings in tool metadata.
 const SUMMARY_MAX_LINES: usize = 3;
 const SUMMARY_MAX_CHARS: usize = 240;
@@ -30,22 +34,31 @@ pub(crate) fn truncate_with_meta(output: &str) -> (String, TruncationMeta) {
         );
     }
 
-    let cut_index = char_boundary_at_or_before(output, MAX_OUTPUT_SIZE);
-    let head = &output[..cut_index];
-    let tail = &output[cut_index..];
-    let omitted = original_len.saturating_sub(cut_index);
-    let note =
-        format!("...\n\n[Output truncated at {MAX_OUTPUT_SIZE} bytes. {omitted} bytes omitted.]");
+    let head_end = char_boundary_at_or_before(output, TRUNCATED_HEAD_BYTES);
+    let tail_start =
+        char_boundary_at_or_after(output, original_len.saturating_sub(TRUNCATED_TAIL_BYTES));
+    let head = &output[..head_end];
+    let omitted_middle = &output[head_end..tail_start];
+    let tail = &output[tail_start..];
+    let omitted = omitted_middle.len();
+    let note = format!(
+        "...\n\n[Output truncated: showing first {head_bytes} bytes and last {tail_bytes} bytes. {omitted} bytes omitted.]",
+        head_bytes = head.len(),
+        tail_bytes = tail.len(),
+    );
 
-    // Preserve high-signal summary lines from the tail (cargo test results,
-    // rustc errors, panics, completion markers). Without this the agent
-    // re-runs `cargo test | tail` repeatedly to find pass/fail (#242).
+    // Preserve high-signal summary lines from the omitted middle (cargo test
+    // results, rustc errors, panics, completion markers). The raw tail is
+    // already included below; these snippets keep earlier failures visible
+    // without re-running `cargo test | tail` repeatedly (#242/#1450).
     let mut combined = format!("{head}{note}");
-    let preserved = collect_summary_lines(tail);
+    let preserved = collect_summary_lines(omitted_middle);
     if !preserved.is_empty() {
-        combined.push_str("\n\n[Preserved summary lines from omitted tail]\n");
+        combined.push_str("\n\n[Preserved summary lines from omitted middle]\n");
         combined.push_str(&preserved.join("\n"));
     }
+    combined.push_str("\n\n[Output tail]\n");
+    combined.push_str(tail);
 
     (
         combined,
@@ -147,8 +160,21 @@ fn char_boundary_at_or_before(text: &str, max_bytes: usize) -> usize {
     last_end.min(text.len())
 }
 
+fn char_boundary_at_or_after(text: &str, min_bytes: usize) -> usize {
+    if min_bytes >= text.len() {
+        return text.len();
+    }
+    if text.is_char_boundary(min_bytes) {
+        return min_bytes;
+    }
+    text.char_indices()
+        .map(|(idx, _)| idx)
+        .find(|&idx| idx > min_bytes)
+        .unwrap_or(text.len())
+}
+
 fn strip_truncation_note(text: &str) -> &str {
-    text.split_once("\n\n[Output truncated at")
+    text.split_once("\n\n[Output truncated")
         .map_or(text, |(prefix, _)| prefix)
 }
 
@@ -228,6 +254,27 @@ mod tests {
         let (truncated, _meta) = truncate_with_meta(&head);
         assert!(truncated.contains("failures:"), "must preserve failures:");
         assert!(truncated.contains("FAILED"), "must preserve FAILED");
+    }
+
+    #[test]
+    fn truncation_includes_raw_tail_for_shell_output() {
+        let mut output = String::new();
+        output.push_str("head-marker\n");
+        output.push_str(&"middle noise\n".repeat(3_000));
+        output.push_str("tail-marker: final compiler error\n");
+
+        let (truncated, meta) = truncate_with_meta(&output);
+
+        assert!(meta.truncated, "expected truncation");
+        assert!(truncated.contains("head-marker"));
+        assert!(
+            truncated.contains("[Output tail]"),
+            "tail section should be explicit: {truncated}"
+        );
+        assert!(
+            truncated.contains("tail-marker: final compiler error"),
+            "raw tail must remain visible"
+        );
     }
 
     #[test]

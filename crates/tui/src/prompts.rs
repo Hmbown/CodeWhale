@@ -358,6 +358,14 @@ pub const NEVER_APPROVAL: &str = include_str!("prompts/approvals/never.md");
 /// model knows the format to use when writing `.deepseek/handoff.md`.
 pub const COMPACT_TEMPLATE: &str = include_str!("prompts/compact.md");
 
+/// Memory hygiene guidance — appended to the system prompt only when the
+/// session has a non-empty user-memory block. Steers the model toward
+/// writing durable memories as declarative facts ("User prefers concise
+/// responses") rather than imperatives ("Always respond concisely"),
+/// because imperatives get re-read as directives in later sessions and
+/// can override the user's current request (#725).
+pub const MEMORY_GUIDANCE: &str = include_str!("prompts/memory_guidance.md");
+
 // ── Legacy prompt constants (kept for backwards compatibility) ────────
 
 /// Legacy base prompt (agent.txt — now decomposed into base.md + overlays).
@@ -656,7 +664,7 @@ pub fn system_prompt_for_mode_with_context_skills_session_and_approval(
              1. Use `/compact` to summarize earlier context and free up space\n\
              2. The system will preserve important information (files you're working on, recent messages, tool results)\n\
              3. After compaction, you'll see a summary of what was discussed and can continue seamlessly\n\n\
-             If you notice context is getting long (>80%), proactively suggest using `/compact` to the user.\n\n\
+             If you notice context is getting long (>60% during sustained work), proactively suggest using `/compact` to the user.\n\n\
              ### Prompt-cache awareness\n\n\
              DeepSeek caches the longest *byte-stable prefix* of every request and charges roughly 100× less for cache-hit tokens than miss tokens. The system prompt above is layered most-static-first specifically so the prefix stays stable turn-over-turn. To keep cache hits high:\n\
              - **Working set location:** the current repo working set is stored on new user messages inside a `<turn_meta>` block. Treat it as high-priority turn metadata, not as a stable system-prompt section.\n\
@@ -698,7 +706,7 @@ pub fn system_prompt_for_mode_with_context_skills_session_and_approval(
     if let Some(memory_block) = session_context.user_memory_block
         && !memory_block.trim().is_empty()
     {
-        full_prompt = format!("{full_prompt}\n\n{memory_block}");
+        full_prompt = format!("{full_prompt}\n\n{memory_block}\n\n{MEMORY_GUIDANCE}");
     }
 
     // 6c. Current session goal. Also volatile: users set / change goals
@@ -746,28 +754,6 @@ pub fn build_system_prompt(base: &str, project_context: Option<&ProjectContext>)
     SystemPrompt::Text(full_prompt)
 }
 
-// ── Legacy functions for backwards compatibility ──────────────────────
-
-pub fn base_system_prompt() -> SystemPrompt {
-    SystemPrompt::Text(BASE_PROMPT.trim().to_string())
-}
-
-pub fn normal_system_prompt() -> SystemPrompt {
-    system_prompt_for_mode(AppMode::Agent)
-}
-
-pub fn agent_system_prompt() -> SystemPrompt {
-    system_prompt_for_mode(AppMode::Agent)
-}
-
-pub fn yolo_system_prompt() -> SystemPrompt {
-    system_prompt_for_mode(AppMode::Yolo)
-}
-
-pub fn plan_system_prompt() -> SystemPrompt {
-    system_prompt_for_mode(AppMode::Plan)
-}
-
 #[cfg(test)]
 mod tests {
     // Don't assert on prose. If you wouldn't fail a code review for
@@ -778,6 +764,44 @@ mod tests {
     /// Discriminator unique to the injected relay block (not present in the
     /// agent prompt's own discussion of the convention).
     const HANDOFF_BLOCK_MARKER: &str = "left a relay artifact at `.deepseek/handoff.md`";
+
+    #[test]
+    fn base_prompt_carries_execution_discipline_block() {
+        // The XML-tagged execution-discipline block is the contract —
+        // verify each section name is present so reviewers can't quietly
+        // strip the rules that herd V4 toward acting instead of narrating.
+        for tag in [
+            "<tool_persistence>",
+            "<mandatory_tool_use>",
+            "<act_dont_ask>",
+            "<verification>",
+            "<missing_context>",
+        ] {
+            assert!(
+                BASE_PROMPT.contains(tag),
+                "BASE_PROMPT missing required tag {tag}"
+            );
+        }
+        assert!(
+            BASE_PROMPT.contains("Tool-use enforcement"),
+            "BASE_PROMPT missing the tool-use enforcement clause"
+        );
+    }
+
+    #[test]
+    fn execution_discipline_is_at_the_end_for_cache_stability() {
+        // DeepSeek's prefix cache keys on a leading byte-stable run, so
+        // the new sections must be appended, not interleaved earlier.
+        let body = BASE_PROMPT;
+        let persistence_at = body
+            .find("<tool_persistence>")
+            .expect("tool_persistence anchor present");
+        let language_at = body.find("## Language").expect("Language anchor present");
+        assert!(
+            language_at < persistence_at,
+            "execution-discipline block must come after the early sections"
+        );
+    }
 
     #[test]
     fn render_environment_block_lists_supplied_locale_and_workspace() {
@@ -1067,6 +1091,71 @@ mod tests {
         assert!(prompt.contains("## Environment"));
         assert!(prompt.contains("- lang: ja"));
         assert!(prompt.contains("- deepseek_version:"));
+    }
+
+    #[test]
+    fn memory_guidance_carries_paired_examples() {
+        // The fragment is the contract — verify the verbatim ✓ / ✗
+        // pair is present so V4 has both shapes to imitate.
+        assert!(MEMORY_GUIDANCE.contains("declarative facts"));
+        assert!(MEMORY_GUIDANCE.contains(" ✓"));
+        assert!(MEMORY_GUIDANCE.contains(" ✗"));
+        assert!(MEMORY_GUIDANCE.contains("Imperative"));
+    }
+
+    #[test]
+    fn memory_guidance_absent_when_no_memory_block() {
+        let tmp = tempdir().expect("tempdir");
+        let prompt = match system_prompt_for_mode_with_context_skills_and_session(
+            AppMode::Agent,
+            tmp.path(),
+            None,
+            None,
+            None,
+            PromptSessionContext {
+                user_memory_block: None,
+                goal_objective: None,
+                project_context_pack_enabled: false,
+                locale_tag: "en",
+                translation_enabled: false,
+            },
+        ) {
+            SystemPrompt::Text(text) => text,
+            SystemPrompt::Blocks(_) => panic!("expected text system prompt"),
+        };
+        assert!(
+            !prompt.contains("Memory Hygiene"),
+            "memory guidance must not leak into sessions without a memory block"
+        );
+    }
+
+    #[test]
+    fn memory_guidance_appended_after_memory_block() {
+        let tmp = tempdir().expect("tempdir");
+        let block = "## User Memory\n\n- prefers Rust\n";
+        let prompt = match system_prompt_for_mode_with_context_skills_and_session(
+            AppMode::Agent,
+            tmp.path(),
+            None,
+            None,
+            None,
+            PromptSessionContext {
+                user_memory_block: Some(block),
+                goal_objective: None,
+                project_context_pack_enabled: false,
+                locale_tag: "en",
+                translation_enabled: false,
+            },
+        ) {
+            SystemPrompt::Text(text) => text,
+            SystemPrompt::Blocks(_) => panic!("expected text system prompt"),
+        };
+        let mem_at = prompt.find("User Memory").expect("user memory present");
+        let guide_at = prompt.find("Memory Hygiene").expect("guidance present");
+        assert!(
+            mem_at < guide_at,
+            "guidance must come after the user memory block"
+        );
     }
 
     #[test]

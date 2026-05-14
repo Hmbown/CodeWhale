@@ -28,6 +28,19 @@ use crate::utils::write_atomic;
 
 /// Bytes of a non-2xx response body to surface in connection errors.
 const ERROR_BODY_PREVIEW_BYTES: usize = 200;
+const MCP_HTTP_ACCEPT: &str = "application/json, text/event-stream";
+
+fn with_default_mcp_http_headers(
+    request: reqwest::RequestBuilder,
+    json_body: bool,
+) -> reqwest::RequestBuilder {
+    let request = request.header(ACCEPT, MCP_HTTP_ACCEPT);
+    if json_body {
+        request.header(CONTENT_TYPE, "application/json")
+    } else {
+        request
+    }
+}
 
 fn validate_mcp_config_path(path: &Path) -> Result<()> {
     if path.as_os_str().is_empty() {
@@ -625,12 +638,15 @@ impl SseTransport {
         tx: tokio::sync::mpsc::UnboundedSender<SseInbound>,
         cancel_token: tokio_util::sync::CancellationToken,
     ) -> Result<()> {
-        let response = client.get(&url).send().await.with_context(|| {
-            format!(
-                "MCP SSE connect failed (transport=http url={})",
-                mask_url_secrets(&url),
-            )
-        })?;
+        let response = with_default_mcp_http_headers(client.get(&url), false)
+            .send()
+            .await
+            .with_context(|| {
+                format!(
+                    "MCP SSE connect failed (transport=http url={})",
+                    mask_url_secrets(&url),
+                )
+            })?;
         let status = response.status();
         if !status.is_success() {
             let body_excerpt = bounded_body_excerpt(response, ERROR_BODY_PREVIEW_BYTES).await;
@@ -827,11 +843,7 @@ impl StreamableHttpTransport {
     }
 
     async fn send(&mut self, msg: Vec<u8>) -> std::result::Result<(), StreamableSendError> {
-        let mut request = self
-            .client
-            .post(&self.url)
-            .header(ACCEPT, "application/json, text/event-stream")
-            .header(CONTENT_TYPE, "application/json");
+        let mut request = with_default_mcp_http_headers(self.client.post(&self.url), true);
         // Apply user-configured custom headers. Skip:
         //   * empty / whitespace-only keys (would produce reqwest builder
         //     errors mid-request and abort the whole connection);
@@ -983,10 +995,7 @@ impl McpTransport for SseTransport {
             .endpoint_url
             .as_ref()
             .context("SSE endpoint not yet discovered")?;
-        let response = self
-            .client
-            .post(endpoint)
-            .header(CONTENT_TYPE, "application/json")
+        let response = with_default_mcp_http_headers(self.client.post(endpoint), true)
             .body(msg)
             .send()
             .await?;
@@ -2735,6 +2744,43 @@ mod tests {
         assert!(!is_safe_custom_header("accept", "text/plain"));
         assert!(!is_safe_custom_header("Content-Type", "text/plain"));
         assert!(!is_safe_custom_header("CONTENT-TYPE", "x/y"));
+    }
+
+    #[test]
+    fn default_mcp_http_get_accepts_json_and_event_stream() {
+        let client = reqwest::Client::new();
+        let request =
+            with_default_mcp_http_headers(client.get("https://example.invalid/mcp"), false)
+                .build()
+                .unwrap();
+        assert_eq!(
+            request.headers().get(ACCEPT).and_then(|v| v.to_str().ok()),
+            Some(MCP_HTTP_ACCEPT)
+        );
+        assert!(
+            request.headers().get(CONTENT_TYPE).is_none(),
+            "SSE GET requests should not advertise a JSON request body"
+        );
+    }
+
+    #[test]
+    fn default_mcp_http_post_accepts_json_and_event_stream() {
+        let client = reqwest::Client::new();
+        let request =
+            with_default_mcp_http_headers(client.post("https://example.invalid/mcp"), true)
+                .build()
+                .unwrap();
+        assert_eq!(
+            request.headers().get(ACCEPT).and_then(|v| v.to_str().ok()),
+            Some(MCP_HTTP_ACCEPT)
+        );
+        assert_eq!(
+            request
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok()),
+            Some("application/json")
+        );
     }
 
     #[test]

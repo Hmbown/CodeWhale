@@ -54,8 +54,11 @@ pub fn jobs(_app: &mut App, args: Option<&str>) -> CommandResult {
             })),
             None => CommandResult::error("Usage: /jobs cancel <id>"),
         },
+        "cancel-all" | "kill-all" | "stop-all" => {
+            CommandResult::action(AppAction::ShellJob(ShellJobAction::CancelAll))
+        }
         _ => CommandResult::error(
-            "Usage: /jobs [list|show <id>|poll <id>|wait <id>|stdin <id> <input>|close-stdin <id>|cancel <id>]",
+            "Usage: /jobs [list|show <id>|poll <id>|wait <id>|stdin <id> <input>|close-stdin <id>|cancel <id>|cancel-all]",
         ),
     }
 }
@@ -108,6 +111,12 @@ mod tests {
             send.action,
             Some(AppAction::ShellJob(ShellJobAction::SendStdin { id, input, close: false }))
                 if id == "shell_abcd" && input == "y"
+        ));
+
+        let cancel_all = jobs(&mut app, Some("cancel-all"));
+        assert!(matches!(
+            cancel_all.action,
+            Some(AppAction::ShellJob(ShellJobAction::CancelAll))
         ));
     }
 }

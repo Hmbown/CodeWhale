@@ -160,3 +160,129 @@ pub fn needs_trust(workspace: &Path) -> bool {
 pub fn mark_trusted(workspace: &Path) -> anyhow::Result<PathBuf> {
     crate::config::save_workspace_trust(workspace)
 }
+
+// ── API key validation and state-machine transitions ─────────────────
+
+/// Result of inspecting an API-key string entered during onboarding.
+///
+/// `Accept` always lets the user proceed; the optional `warning` is shown
+/// as a non-blocking status message (short keys, unusual formats, etc.).
+/// `Reject` blocks the keystroke flow until the user fixes the input.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ApiKeyValidation {
+    Accept { warning: Option<String> },
+    Reject(String),
+}
+
+/// Validate an API key entered during onboarding. Whitespace-only or
+/// whitespace-containing keys are rejected; short or hyphen-less keys
+/// are accepted with a warning so unusual provider key formats still
+/// work.
+#[must_use]
+pub fn validate_api_key_for_onboarding(api_key: &str) -> ApiKeyValidation {
+    let trimmed = api_key.trim();
+    if trimmed.is_empty() {
+        return ApiKeyValidation::Reject("API key cannot be empty.".to_string());
+    }
+    if trimmed.contains(char::is_whitespace) {
+        return ApiKeyValidation::Reject(
+            "API key appears malformed (contains whitespace).".to_string(),
+        );
+    }
+    if trimmed.len() < 16 {
+        return ApiKeyValidation::Accept {
+            warning: Some(
+                "API key looks short. Double-check it, but unusual formats are allowed."
+                    .to_string(),
+            ),
+        };
+    }
+    if !trimmed.contains('-') {
+        return ApiKeyValidation::Accept {
+            warning: Some(
+                "API key format looks unusual. Check that the full key was copied.".to_string(),
+            ),
+        };
+    }
+    ApiKeyValidation::Accept { warning: None }
+}
+
+/// Welcome → Language transition. Clears the status message bar.
+pub fn advance_onboarding_from_welcome(app: &mut App) {
+    app.status_message = None;
+    app.onboarding = OnboardingState::Language;
+}
+
+/// Language → next step. Routes to ApiKey when the session lacks a key,
+/// to TrustDirectory when the workspace is untrusted, otherwise to Tips.
+pub fn advance_onboarding_after_language(app: &mut App) {
+    app.status_message = None;
+    if app.onboarding_needs_api_key {
+        app.onboarding = OnboardingState::ApiKey;
+    } else if !app.trust_mode && needs_trust(&app.workspace) {
+        app.onboarding = OnboardingState::TrustDirectory;
+    } else {
+        app.onboarding = OnboardingState::Tips;
+    }
+}
+
+/// Re-validate the current `api_key_input` and project the result onto
+/// `app.status_message`. `show_empty_error` reports the "cannot be empty"
+/// message even when the input has not been touched yet (used right
+/// before submission); otherwise an empty input clears the status bar.
+pub fn sync_api_key_validation_status(app: &mut App, show_empty_error: bool) {
+    if app.api_key_input.trim().is_empty() && !show_empty_error {
+        app.status_message = None;
+        return;
+    }
+
+    match validate_api_key_for_onboarding(&app.api_key_input) {
+        ApiKeyValidation::Accept { warning } => {
+            app.status_message = warning;
+        }
+        ApiKeyValidation::Reject(message) => {
+            app.status_message = Some(message);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_rejects_empty_or_whitespace() {
+        assert!(matches!(
+            validate_api_key_for_onboarding(""),
+            ApiKeyValidation::Reject(_)
+        ));
+        assert!(matches!(
+            validate_api_key_for_onboarding("   "),
+            ApiKeyValidation::Reject(_)
+        ));
+        assert!(matches!(
+            validate_api_key_for_onboarding("sk live abc"),
+            ApiKeyValidation::Reject(_)
+        ));
+    }
+
+    #[test]
+    fn validate_warns_on_short_or_no_hyphen_keys_but_accepts() {
+        match validate_api_key_for_onboarding("abc123") {
+            ApiKeyValidation::Accept { warning: Some(_) } => {}
+            _ => panic!("expected accept-with-warning"),
+        }
+        match validate_api_key_for_onboarding("abcdefghijklmnop") {
+            ApiKeyValidation::Accept { warning: Some(_) } => {}
+            _ => panic!("expected accept-with-warning"),
+        }
+    }
+
+    #[test]
+    fn validate_accepts_well_formed_key() {
+        assert_eq!(
+            validate_api_key_for_onboarding("sk-1234567890abcdef"),
+            ApiKeyValidation::Accept { warning: None }
+        );
+    }
+}
