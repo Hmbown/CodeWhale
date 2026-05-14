@@ -182,9 +182,11 @@ fn push_canonical_json(value: &Value, out: &mut String) {
         }
         Value::Array(items) => {
             out.push('[');
-            for item in items {
+            for (index, item) in items.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
                 push_canonical_json(item, out);
-                out.push(',');
             }
             out.push(']');
         }
@@ -193,13 +195,15 @@ fn push_canonical_json(value: &Value, out: &mut String) {
             entries.sort_by_key(|(key, _)| *key);
 
             out.push('{');
-            for (key, value) in entries {
+            for (index, (key, value)) in entries.into_iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
                 let encoded_key =
                     serde_json::to_string(key).expect("serializing an object key cannot fail");
                 out.push_str(&encoded_key);
                 out.push(':');
                 push_canonical_json(value, out);
-                out.push(',');
             }
             out.push('}');
         }
@@ -330,5 +334,18 @@ mod tests {
         let key_a = build_approval_key("write_file", &json!({"path": "a.txt", "content": "x"}));
         let key_b = build_approval_key("write_file", &json!({"content": "x", "path": "a.txt"}));
         assert_eq!(key_a, key_b);
+    }
+
+    #[test]
+    fn canonical_json_omits_trailing_commas() {
+        let mut canonical = String::new();
+        push_canonical_json(&json!({"b": [true, false], "a": {"x": 1}}), &mut canonical);
+
+        assert_eq!(
+            canonical,
+            r#"{"a":{"x":number:1},"b":[bool:true,bool:false]}"#
+        );
+        assert!(!canonical.contains(",]"));
+        assert!(!canonical.contains(",}"));
     }
 }
