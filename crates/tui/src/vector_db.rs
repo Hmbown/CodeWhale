@@ -714,7 +714,6 @@ mod lance {
         // ── Code index operations (Tier 4) ──
 
         /// Store a code chunk with its embedding.
-        #[allow(dead_code)]
         pub async fn store_code_chunk(
             &self,
             id: &str,
@@ -748,7 +747,6 @@ mod lance {
         }
 
         /// Search code chunks by semantic similarity to `query`.
-        #[allow(dead_code)]
         pub async fn search_code(
             &self,
             query: &str,
@@ -1135,7 +1133,6 @@ impl VectorDbService {
     }
 
     /// Store a code chunk into the code_index table (Tier 4).
-    #[allow(dead_code)]
     pub async fn store_code_chunk(
         &self,
         id: &str,
@@ -1151,11 +1148,40 @@ impl VectorDbService {
                 .await;
         }
         // No-op in keyword mode; code indexing requires embeddings.
+        #[allow(unused_variables)]
+        {
+            let _ = (id, file_path, chunk_index, content, project);
+        }
         Ok(())
     }
 
+    /// Index a file into the code_index table (Tier 4).
+    ///
+    /// Splits the file content into overlapping chunks (~2000 chars each)
+    /// and stores each one with its embedding. Called after `write_file` and
+    /// `edit_file` to keep the code index up-to-date.
+    ///
+    /// Best-effort: errors are logged but never propagated — a failed index
+    /// write still returns successfully so the tool result is not affected.
+    pub async fn index_file(&self, file_path: &str, content: &str, project: &str) {
+        let chunks = chunk_content(content, 2000);
+        for (i, chunk) in chunks.iter().enumerate() {
+            let id = format!("{file_path}:chunk_{i}");
+            if let Err(e) = self
+                .store_code_chunk(&id, file_path, i as i32, chunk, project)
+                .await
+            {
+                tracing::warn!(
+                    file_path = %file_path,
+                    chunk = i,
+                    error = %e,
+                    "index_file: failed to store code chunk"
+                );
+            }
+        }
+    }
+
     /// Search code chunks by semantic similarity (Tier 4).
-    #[allow(dead_code)]
     pub async fn search_code(
         &self,
         query: &str,
@@ -1165,8 +1191,54 @@ impl VectorDbService {
         if let Some(ref lance) = self.lance {
             return lance.search_code(query, k).await;
         }
+        let _ = (query, k);
         Ok(Vec::new())
     }
+}
+
+/// Split content into overlapping chunks for code indexing.
+///
+/// Chunks are split at newline boundaries and kept at roughly `chunk_size`
+/// characters each. Adjacent chunks overlap by ~10% to preserve cross-chunk
+/// semantic context.
+fn chunk_content(content: &str, chunk_size: usize) -> Vec<String> {
+    let overlap = chunk_size / 10;
+    let lines: Vec<&str> = content.lines().collect();
+    let mut chunks: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut line_idx = 0usize;
+
+    while line_idx < lines.len() {
+        current.clear();
+        let mut char_count = 0usize;
+        while line_idx < lines.len() && char_count < chunk_size {
+            if !current.is_empty() {
+                current.push('\n');
+                char_count += 1;
+            }
+            current.push_str(lines[line_idx]);
+            char_count += lines[line_idx].len();
+            line_idx += 1;
+        }
+        if !current.is_empty() {
+            chunks.push(current.clone());
+        }
+        // Back up for overlap
+        if line_idx < lines.len() {
+            let mut back_chars = 0usize;
+            let mut back_lines = 0usize;
+            for past_line in lines[..line_idx].iter().rev() {
+                back_chars += past_line.len() + 1; // +1 for newline
+                back_lines += 1;
+                if back_chars >= overlap {
+                    break;
+                }
+            }
+            line_idx = line_idx.saturating_sub(back_lines);
+        }
+    }
+
+    chunks
 }
 
 // ---------------------------------------------------------------------------

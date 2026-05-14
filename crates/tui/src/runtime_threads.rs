@@ -1982,6 +1982,17 @@ impl RuntimeThreadManager {
                 .and_then(|s| s.provider)
                 .unwrap_or_default(),
             search_api_key: self.config.search.as_ref().and_then(|s| s.api_key.clone()),
+            verbatim_window_turns: self
+                .config
+                .context
+                .verbatim_window_turns
+                .unwrap_or(crate::vector_db::DEFAULT_VERBATIM_WINDOW_TURNS),
+            vector_memory_enabled: self.config.vector_memory_enabled(),
+            vector_memory_path: self.config.vector_memory_path(),
+            vector_memory_dim: self.config.vector_memory_dim(),
+            max_memory_items: 1000,
+            min_similarity_score: 0.4,
+            code_index_enabled: false,
         };
 
         let engine = spawn_engine(engine_cfg, &self.config);

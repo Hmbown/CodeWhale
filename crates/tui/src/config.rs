@@ -521,6 +521,24 @@ impl SnapshotsConfig {
     }
 }
 
+/// Vector memory / semantic search configuration (#vector-memory).
+///
+/// Stores conversation summaries and user memories in LanceDB for
+/// retrieval-augmented context. Default is enabled when the `vector-memory`
+/// feature is compiled in; set `enabled = false` to explicitly disable.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct VectorMemoryConfig {
+    /// Master enable. Default: `true` when the `vector-memory` feature is
+    /// compiled in, `false` otherwise.
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    /// Directory for the LanceDB database. Default:
+    /// `~/.deepseek/vector_memory/`.
+    pub path: Option<String>,
+    /// Embedding dimension. Default: `384` (all-MiniLM-L6-v2).
+    pub dim: Option<usize>,
+}
+
 /// Search provider enumeration — selects which backend `web_search` uses.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -908,6 +926,12 @@ pub struct Config {
     /// `DEEPSEEK_MEMORY=on` is set.
     #[serde(default)]
     pub memory: Option<MemoryConfig>,
+
+    /// Vector memory / semantic search (#vector-memory). Stores conversation
+    /// summaries and user memories in LanceDB for retrieval-augmented context.
+    /// Default is enabled when the `vector-memory` feature is compiled in.
+    #[serde(default)]
+    pub vector_memory: Option<VectorMemoryConfig>,
 
     /// Tunables for `--model auto` (#1207). When absent, the auto router
     /// keeps its existing balanced behaviour.
@@ -1675,6 +1699,53 @@ impl Config {
             .unwrap_or(false)
     }
 
+    /// Whether the vector memory feature is enabled.
+    ///
+    /// Default is `true` when the `vector-memory` feature flag is compiled
+    /// in; `false` otherwise. Setting `[vector_memory] enabled = false` in
+    /// config.toml explicitly disables it.
+    #[must_use]
+    pub fn vector_memory_enabled(&self) -> bool {
+        #[cfg(feature = "vector-memory")]
+        {
+            self.vector_memory
+                .as_ref()
+                .and_then(|v| v.enabled)
+                .unwrap_or(true)
+        }
+        #[cfg(not(feature = "vector-memory"))]
+        {
+            false
+        }
+    }
+
+    /// Resolve the vector memory database path.
+    #[must_use]
+    pub fn vector_memory_path(&self) -> PathBuf {
+        #[cfg(feature = "vector-memory")]
+        {
+            self.vector_memory
+                .as_ref()
+                .and_then(|v| v.path.as_deref())
+                .map(expand_path)
+                .or_else(default_vector_memory_path)
+                .unwrap_or_else(|| PathBuf::from("/tmp/lancedb"))
+        }
+        #[cfg(not(feature = "vector-memory"))]
+        {
+            PathBuf::from("/tmp/lancedb")
+        }
+    }
+
+    /// Resolve the embedding dimension for vector memory.
+    #[must_use]
+    pub fn vector_memory_dim(&self) -> usize {
+        self.vector_memory
+            .as_ref()
+            .and_then(|v| v.dim)
+            .unwrap_or(384)
+    }
+
     /// Return the configured vision model config, inheriting api_key from main config.
     #[must_use]
     pub fn vision_model_config(&self) -> Option<VisionModelConfig> {
@@ -2066,6 +2137,11 @@ fn default_notes_path() -> Option<PathBuf> {
 
 fn default_memory_path() -> Option<PathBuf> {
     effective_home_dir().map(|home| home.join(".deepseek").join("memory.md"))
+}
+
+#[allow(dead_code)]
+fn default_vector_memory_path() -> Option<PathBuf> {
+    effective_home_dir().map(|home| home.join(".deepseek").join("vector_memory"))
 }
 
 // === Environment Overrides ===
@@ -2734,6 +2810,7 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
         snapshots: override_cfg.snapshots.or(base.snapshots),
         search: override_cfg.search.or(base.search),
         memory: override_cfg.memory.or(base.memory),
+        vector_memory: override_cfg.vector_memory.or(base.vector_memory),
         auto: override_cfg.auto.or(base.auto),
         lsp: override_cfg.lsp.or(base.lsp),
         context: ContextConfig {

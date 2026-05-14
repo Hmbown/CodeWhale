@@ -96,6 +96,18 @@ memory_path = "~/.deepseek/memory.md"
 # tools_file = "./tools.json"
 
 # ─────────────────────────────────────────────────────────────────────────────────
+# Vector Memory — semantic search over conversation history and user memories
+# ─────────────────────────────────────────────────────────────────────────────────
+# Stores conversation summaries and durable memories in LanceDB for
+# retrieval-augmented context. Requires the `vector-memory` feature flag
+# (enabled by default in release builds). When disabled, falls back to an
+# in-memory keyword matcher with JSON persistence.
+[vector_memory]
+# enabled = true              # master enable (default: true when feature compiled in)
+# path = "~/.deepseek/vector_memory"  # LanceDB database directory
+# dim = 384                   # embedding dimension (all-MiniLM-L6-v2, 384)
+
+# ─────────────────────────────────────────────────────────────────────────────────
 # Security
 # ─────────────────────────────────────────────────────────────────────────────────
 allow_shell = true

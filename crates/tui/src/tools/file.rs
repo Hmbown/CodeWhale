@@ -436,6 +436,18 @@ impl ToolSpec for WriteFileTool {
             ToolError::execution_failed(format!("Failed to write {}: {}", file_path.display(), e))
         })?;
 
+        // Index the file for code search (Tier 4). Best-effort: a failed
+        // index write does not affect the tool result.
+        if let Some(ref vdb) = context.vector_db {
+            let project = context
+                .workspace
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            let fp = file_path.to_string_lossy();
+            vdb.index_file(&fp, file_content, &project).await;
+        }
+
         let display = file_path.display().to_string();
         let diff = make_unified_diff(&display, &prior_contents, file_content);
         let summary = if existed_before {
@@ -589,6 +601,17 @@ impl ToolSpec for EditFileTool {
         fs::write(&file_path, &updated).map_err(|e| {
             ToolError::execution_failed(format!("Failed to write {}: {}", file_path.display(), e))
         })?;
+
+        // Index the file for code search (Tier 4). Best-effort.
+        if let Some(ref vdb) = context.vector_db {
+            let project = context
+                .workspace
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            let fp = file_path.to_string_lossy();
+            vdb.index_file(&fp, &updated, &project).await;
+        }
 
         let display = file_path.display().to_string();
         let diff = make_unified_diff(&display, &contents, &updated);
