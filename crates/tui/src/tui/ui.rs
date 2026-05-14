@@ -3385,8 +3385,13 @@ fn apply_alt_4_shortcut(app: &mut App, _modifiers: KeyModifiers) {
 
 fn apply_alt_0_shortcut(app: &mut App, modifiers: KeyModifiers) {
     if modifiers.contains(KeyModifiers::CONTROL) {
-        app.set_sidebar_focus(SidebarFocus::Hidden);
-        app.status_message = Some("Sidebar hidden".to_string());
+        if app.sidebar_focus == SidebarFocus::Hidden {
+            app.set_sidebar_focus(SidebarFocus::Auto);
+            app.status_message = Some("Sidebar focus: auto".to_string());
+        } else {
+            app.set_sidebar_focus(SidebarFocus::Hidden);
+            app.status_message = Some("Sidebar hidden".to_string());
+        }
     } else {
         app.set_sidebar_focus(SidebarFocus::Auto);
         app.status_message = Some("Sidebar focus: auto".to_string());

@@ -13,7 +13,7 @@
 //! | `apply_patch`  | `patch:<hash of file paths>`             |
 //! | `exec_shell`   | `shell:<command prefix (first 3 tokens)>` |
 //! | `fetch_url`    | `net:<hostname>`                         |
-//! | everything else| `tool:<tool_name>`                       |
+//! | everything else| `tool:<tool_name>:<hash of input>`       |
 //!
 //! The cache is **session‑keyed**: entries carry an
 //! `ApprovedForSession` flag. When true, the approval is reused for the
@@ -136,7 +136,10 @@ pub fn build_approval_key(tool_name: &str, input: &serde_json::Value) -> Approva
             let host = parse_host(input);
             format!("net:{host}")
         }
-        _ => format!("tool:{tool_name}"),
+        _ => {
+            let input_hash = hash_json_input(input);
+            format!("tool:{tool_name}:{input_hash}")
+        }
     };
     ApprovalKey(fingerprint)
 }
@@ -187,6 +190,17 @@ fn hash_patch_paths(input: &serde_json::Value) -> String {
     for path in &paths {
         path.hash(&mut hasher);
     }
+    format!("{:x}", hasher.finish())
+}
+
+fn hash_json_input(input: &serde_json::Value) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    serde_json::to_string(input)
+        .unwrap_or_default()
+        .hash(&mut hasher);
     format!("{:x}", hasher.finish())
 }
 
@@ -271,10 +285,18 @@ mod tests {
     }
 
     #[test]
-    fn generic_tool_uses_tool_name() {
+    fn generic_tool_keys_include_arguments() {
         let key_a = build_approval_key("read_file", &json!({"path": "a.txt"}));
         let key_b = build_approval_key("read_file", &json!({"path": "b.txt"}));
+        assert_ne!(key_a, key_b);
+        assert!(key_a.0.starts_with("tool:read_file:"));
+    }
+
+    #[test]
+    fn generic_tool_same_arguments_reuse_key() {
+        let input = json!({"path": "a.txt"});
+        let key_a = build_approval_key("edit_file", &input);
+        let key_b = build_approval_key("edit_file", &input);
         assert_eq!(key_a, key_b);
-        assert_eq!(key_a.0, "tool:read_file");
     }
 }

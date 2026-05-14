@@ -525,8 +525,10 @@ impl SnapshotsConfig {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SearchProvider {
-    /// DuckDuckGo HTML scraping with Bing fallback. No API key needed.
+    /// Bing HTML scraping. No API key needed.
     #[default]
+    Bing,
+    /// DuckDuckGo HTML scraping with Bing fallback. No API key needed.
     #[serde(alias = "duckduckgo")]
     DuckDuckGo,
     /// Tavily AI Search API (<https://tavily.com>). Requires api_key.
@@ -539,6 +541,7 @@ impl SearchProvider {
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Bing => "bing",
             Self::DuckDuckGo => "duckduckgo",
             Self::Tavily => "tavily",
             Self::Bocha => "bocha",
@@ -549,10 +552,10 @@ impl SearchProvider {
 /// Web search provider configuration (`[search]` table in config.toml).
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct SearchConfig {
-    /// Search provider: `duckduckgo` | `tavily` | `bocha`. Default: `duckduckgo`.
+    /// Search provider: `bing` | `duckduckgo` | `tavily` | `bocha`. Default: `bing`.
     #[serde(default)]
     pub provider: Option<SearchProvider>,
-    /// API key for Tavily or Bocha. Not required for DuckDuckGo.
+    /// API key for Tavily or Bocha. Not required for Bing or DuckDuckGo.
     #[serde(default)]
     pub api_key: Option<String>,
 }
@@ -905,9 +908,9 @@ pub struct Config {
     #[serde(default)]
     pub snapshots: Option<SnapshotsConfig>,
 
-    /// Web search provider configuration. When absent, defaults to DuckDuckGo
-    /// with Bing fallback. Set `provider` to `tavily` or `bocha` and provide
-    /// an `api_key` to use those services instead.
+    /// Web search provider configuration. When absent, defaults to Bing.
+    /// Set `provider` to `duckduckgo`, `tavily`, or `bocha` to use those
+    /// services instead; Tavily and Bocha also require an `api_key`.
     #[serde(default)]
     pub search: Option<SearchConfig>,
 
@@ -3466,6 +3469,27 @@ mod tests {
         assert_eq!(runtime.proxy, ["github.com", ".githubusercontent.com"]);
         assert!(runtime.trusts_proxy_fakeip_host("github.com"));
         assert!(runtime.trusts_proxy_fakeip_host("raw.githubusercontent.com"));
+    }
+
+    #[test]
+    fn search_provider_defaults_to_bing() {
+        assert_eq!(SearchProvider::default(), SearchProvider::Bing);
+    }
+
+    #[test]
+    fn explicit_duckduckgo_search_provider_is_preserved() {
+        let config: Config = toml::from_str(
+            r#"
+            [search]
+            provider = "duckduckgo"
+            "#,
+        )
+        .expect("search config");
+
+        assert_eq!(
+            config.search.and_then(|search| search.provider),
+            Some(SearchProvider::DuckDuckGo)
+        );
     }
 
     struct EnvGuard {

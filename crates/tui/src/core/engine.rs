@@ -162,9 +162,9 @@ pub struct EngineConfig {
     pub strict_tool_mode: bool,
     /// Workshop / large-tool-output routing (#548). `None` disables routing.
     pub workshop: Option<crate::tools::large_output_router::WorkshopConfig>,
-    /// Which search backend `web_search` should use. Default: DuckDuckGo.
+    /// Which search backend `web_search` should use. Default: Bing.
     pub search_provider: crate::config::SearchProvider,
-    /// API key for Tavily or Bocha. `None` for DuckDuckGo.
+    /// API key for Tavily or Bocha. `None` for Bing or DuckDuckGo.
     pub search_api_key: Option<String>,
 }
 

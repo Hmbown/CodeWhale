@@ -220,12 +220,14 @@ max_subagents = 10 # optional (1-20)
 # ─────────────────────────────────────────────────────────────────────────────────
 # Web Search Provider
 # ─────────────────────────────────────────────────────────────────────────────────
-# Choose which backend `web_search` uses. Default is DuckDuckGo HTML scraping
-# with Bing fallback — no API key needed but may be blocked in some regions.
+# Choose which backend `web_search` uses. Default is Bing HTML scraping — no
+# API key needed. DuckDuckGo remains selectable and still falls back to Bing
+# when its HTML endpoint returns a bot challenge or no parseable results.
 # Switch to Tavily or Bocha for reliable search in mainland China.
 #
 # [search]
-# provider = "duckduckgo"   # duckduckgo | tavily | bocha
+# provider = "bing"         # bing | duckduckgo | tavily | bocha
+#                            # duckduckgo: HTML scrape with Bing fallback
 #                            # tavily: https://tavily.com — AI search, needs api_key
 #                            # bocha:  https://bochaai.com — 博查AI搜索，国内友好，需api_key
 # api_key = "tvly-YOUR_KEY"  # required for tavily and bocha

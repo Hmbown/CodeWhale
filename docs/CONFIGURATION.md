@@ -620,6 +620,18 @@ You can also override features for a single run:
 
 Use `deepseek-tui features list` to inspect known flags and their effective state.
 
+## Web Search Provider
+
+`web_search` uses Bing by default and does not require an API key. DuckDuckGo
+remains selectable for users who explicitly want it, and Tavily or Bocha can be
+selected when an API-backed provider is preferred.
+
+```toml
+[search]
+provider = "bing" # bing | duckduckgo | tavily | bocha
+# api_key = "tvly-YOUR_KEY" # required for tavily and bocha
+```
+
 ## Local Media Attachments
 
 Use `@path/to/file` in the composer to add local text file or directory context

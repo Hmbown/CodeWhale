@@ -15,7 +15,7 @@ use crate::tui::ui::{
     active_foreground_shell_running, context_usage_snapshot, selected_detail_footer_label,
     status_color,
 };
-use crate::tui::ui_text::truncate_line_to_width;
+use crate::tui::ui_text::{concise_shell_command_label, truncate_line_to_width};
 use crate::tui::widgets::{FooterProps, FooterToast, FooterWidget, Renderable};
 use crate::tui::workspace_context;
 
@@ -265,7 +265,7 @@ fn collect_active_tool_status(cell: &HistoryCell, snapshot: &mut ActiveToolStatu
     };
     match tool {
         ToolCell::Exec(exec) => snapshot.record(
-            format!("run {}", one_line_summary(&exec.command, 80)),
+            concise_shell_command_label(&exec.command, 80),
             exec.status,
             exec.started_at,
         ),

@@ -35,7 +35,7 @@ chosen over the available shell equivalent. Companion to `crates/tui/src/prompts
 |---|---|
 | `grep_files` | Regex search file contents within the workspace; structured matches + context lines. Pure-Rust (`regex` crate), no `rg`/`grep` shell-out. |
 | `file_search` | Fuzzy-match filenames (not contents). Use when you know roughly the name. |
-| `web_search` | DuckDuckGo (with Bing fallback); ranked snippets + `ref_id` for citation. |
+| `web_search` | Bing by default; DuckDuckGo, Tavily, and Bocha are selectable in config. Ranked snippets + `ref_id` for citation. |
 | `fetch_url` | Direct HTTP GET on a known URL. Faster than `web_search` when the link is already known. HTML stripped to text by default. |
 
 ### Shell
