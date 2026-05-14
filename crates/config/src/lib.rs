@@ -2148,8 +2148,8 @@ mod tests {
         ] {
             assert_eq!(ProviderKind::parse(alias), Some(ProviderKind::Deepseek));
 
-            let parsed: ConfigToml = toml::from_str(&format!("provider = \"{alias}\""))
-                .expect("legacy provider alias");
+            let parsed: ConfigToml =
+                toml::from_str(&format!("provider = \"{alias}\"")).expect("legacy provider alias");
             assert_eq!(parsed.provider, ProviderKind::Deepseek);
         }
     }
