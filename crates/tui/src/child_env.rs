@@ -169,6 +169,14 @@ fn is_allowed_parent_env_key(key: &OsStr) -> bool {
             | "EXTENSIONSDKDIR"
             | "DEVENVDIR"
             | "VISUALSTUDIOVERSION"
+            // Standard proxy variables are needed by shell tasks in
+            // corporate and WSL environments where direct internet egress is
+            // blocked. They intentionally exclude token/API-key-shaped vars.
+            | "HTTP_PROXY"
+            | "HTTPS_PROXY"
+            | "NO_PROXY"
+            | "ALL_PROXY"
+            | "FTP_PROXY"
     ) || normalized.starts_with("LC_")
 }
 
@@ -321,6 +329,27 @@ mod tests {
             assert!(
                 is_allowed_mcp_env_key(OsStr::new(key)),
                 "MCP allowlist should include proxy key {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn child_env_allowlist_includes_proxy_keys_either_case() {
+        for key in [
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "NO_PROXY",
+            "ALL_PROXY",
+            "FTP_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "no_proxy",
+            "all_proxy",
+            "ftp_proxy",
+        ] {
+            assert!(
+                is_allowed_parent_env_key(OsStr::new(key)),
+                "child env allowlist should include proxy key {key}"
             );
         }
     }
