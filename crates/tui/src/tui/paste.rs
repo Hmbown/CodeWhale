@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use super::app::App;
+use super::app::{App, looks_like_slash_command_input};
 use super::paste_burst::CharDecision;
 
 /// Process a key in the context of paste-burst detection. Returns `true`
@@ -122,7 +122,7 @@ fn apply_paste_burst_retro_capture(
 }
 
 fn in_command_context(app: &App) -> bool {
-    app.input.starts_with('/')
+    looks_like_slash_command_input(&app.input)
 }
 
 #[cfg(test)]

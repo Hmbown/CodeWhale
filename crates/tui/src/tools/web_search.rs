@@ -1,11 +1,11 @@
-//! Web search tool backed by multiple providers: DuckDuckGo (HTML scrape
-//! with Bing fallback), Tavily API, and Bocha (博查) API.
+//! Web search tool backed by multiple providers: Bing HTML scrape, DuckDuckGo
+//! (HTML scrape with Bing fallback), Tavily API, and Bocha (博查) API.
 //!
 //! This is the primary web search surface for agents. For browsing workflows
 //! (page open, click, screenshot) use a direct URL approach instead.
 //!
 //! Set `[search]` in config.toml to switch providers:
-//!   provider = "tavily"  # requires api_key
+//!   provider = "duckduckgo"  # or tavily/bocha
 //!   api_key = "tvly-..."
 
 use super::spec::{
@@ -124,7 +124,7 @@ impl ToolSpec for WebSearchTool {
     }
 
     fn description(&self) -> &'static str {
-        "Search the web and return ranked results with URLs and snippets. Default backend is DuckDuckGo (with Bing fallback); set `[search] provider = \"tavily\" | \"bocha\"` in config.toml to switch backends. Use this instead of scraping search engines with `curl` in `exec_shell`. For a known canonical URL, prefer `fetch_url` directly."
+        "Search the web and return ranked results with URLs and snippets. Default backend is Bing; set `[search] provider = \"duckduckgo\" | \"tavily\" | \"bocha\"` in config.toml to switch backends. Use this instead of scraping search engines with `curl` in `exec_shell`. For a known canonical URL, prefer `fetch_url` directly."
     }
 
     fn input_schema(&self) -> Value {
@@ -181,7 +181,8 @@ impl ToolSpec for WebSearchTool {
         let max_results = max_results.clamp(1, MAX_RESULTS);
         let timeout_ms = optional_u64(&input, "timeout_ms", DEFAULT_TIMEOUT_MS).min(60_000);
 
-        // Dispatch to the configured search provider.
+        // Dispatch to the configured API-backed search providers before
+        // building the HTML-scraping client used by Bing/DuckDuckGo.
         match context.search_provider {
             SearchProvider::Tavily => {
                 let decider = context.network_policy.as_ref();
@@ -197,18 +198,10 @@ impl ToolSpec for WebSearchTool {
                     .run_bocha_search(&query, max_results, timeout_ms, context)
                     .await;
             }
-            SearchProvider::DuckDuckGo => {
-                // fall through to existing DuckDuckGo + Bing fallback logic
-            }
+            SearchProvider::Bing | SearchProvider::DuckDuckGo => {}
         }
 
-        // Per-domain network policy gate (#135). The "host" for web search is
-        // the upstream search engine domain — DuckDuckGo first, Bing on
-        // fallback. We gate DuckDuckGo here; Bing is gated separately inside
-        // `run_bing_search` so a deny on one engine doesn't block the other.
         let decider = context.network_policy.as_ref();
-        check_policy(decider, DUCKDUCKGO_HOST)?;
-
         let client = reqwest::Client::builder()
             .timeout(Duration::from_millis(timeout_ms))
             .user_agent(USER_AGENT)
@@ -216,6 +209,18 @@ impl ToolSpec for WebSearchTool {
             .map_err(|e| {
                 ToolError::execution_failed(format!("Failed to build HTTP client: {e}"))
             })?;
+
+        if matches!(context.search_provider, SearchProvider::Bing) {
+            check_policy(decider, BING_HOST)?;
+            let results = run_bing_search(&client, &query, max_results).await?;
+            return search_tool_result(query, "bing", results, None);
+        }
+
+        // Per-domain network policy gate (#135). The "host" for web search is
+        // the upstream search engine domain — DuckDuckGo first, Bing on
+        // fallback. We gate DuckDuckGo here; Bing is gated separately inside
+        // the fallback path so a deny on one engine doesn't block the other.
+        check_policy(decider, DUCKDUCKGO_HOST)?;
 
         let encoded = url_encode(&query);
         let url = format!("https://html.duckduckgo.com/html/?q={encoded}");
@@ -244,7 +249,7 @@ impl ToolSpec for WebSearchTool {
         }
 
         let mut results = parse_duckduckgo_results(&body, max_results);
-        let mut source = "duckduckgo".to_string();
+        let mut source = "duckduckgo";
         let mut message_suffix = None;
         if results.is_empty() {
             let duckduckgo_blocked = is_duckduckgo_challenge(&body);
@@ -254,7 +259,7 @@ impl ToolSpec for WebSearchTool {
             match run_bing_search(&client, &query, max_results).await {
                 Ok(fallback_results) if !fallback_results.is_empty() => {
                     results = fallback_results;
-                    source = "bing".to_string();
+                    source = "bing";
                     message_suffix = Some(if duckduckgo_blocked {
                         "DuckDuckGo returned a bot challenge; used Bing fallback"
                     } else {
@@ -274,24 +279,34 @@ impl ToolSpec for WebSearchTool {
                 Ok(_) | Err(_) => {}
             }
         }
-        let message = if results.is_empty() {
-            "No results found".to_string()
-        } else if let Some(suffix) = message_suffix {
-            format!("Found {} result(s). {suffix}", results.len())
-        } else {
-            format!("Found {} result(s)", results.len())
-        };
 
-        let response = WebSearchResponse {
-            query,
-            source,
-            count: results.len(),
-            message,
-            results,
-        };
-
-        ToolResult::json(&response).map_err(|e| ToolError::execution_failed(e.to_string()))
+        search_tool_result(query, source, results, message_suffix)
     }
+}
+
+fn search_tool_result(
+    query: String,
+    source: &'static str,
+    results: Vec<WebSearchEntry>,
+    message_suffix: Option<&str>,
+) -> Result<ToolResult, ToolError> {
+    let message = if results.is_empty() {
+        "No results found".to_string()
+    } else if let Some(suffix) = message_suffix {
+        format!("Found {} result(s). {suffix}", results.len())
+    } else {
+        format!("Found {} result(s)", results.len())
+    };
+
+    let response = WebSearchResponse {
+        query,
+        source: source.to_string(),
+        count: results.len(),
+        message,
+        results,
+    };
+
+    ToolResult::json(&response).map_err(|e| ToolError::execution_failed(e.to_string()))
 }
 
 impl WebSearchTool {
@@ -591,16 +606,16 @@ async fn run_bing_search(
         .header("Accept-Language", "en-US,en;q=0.9")
         .send()
         .await
-        .map_err(|e| ToolError::execution_failed(format!("Bing fallback request failed: {e}")))?;
+        .map_err(|e| ToolError::execution_failed(format!("Bing search request failed: {e}")))?;
 
     let status = resp.status();
     let body = resp.text().await.map_err(|e| {
-        ToolError::execution_failed(format!("Failed to read Bing fallback response: {e}"))
+        ToolError::execution_failed(format!("Failed to read Bing search response: {e}"))
     })?;
 
     if !status.is_success() {
         return Err(ToolError::execution_failed(format!(
-            "Bing fallback failed: HTTP {}",
+            "Bing search failed: HTTP {}",
             status.as_u16()
         )));
     }

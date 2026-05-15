@@ -69,6 +69,49 @@ impl Drop for ConfigPathEnvGuard {
     }
 }
 
+struct SettingsHomeGuard {
+    _tmp: TempDir,
+    previous_home: Option<OsString>,
+    previous_userprofile: Option<OsString>,
+    _lock: MutexGuard<'static, ()>,
+}
+
+impl SettingsHomeGuard {
+    fn new() -> Self {
+        let lock = crate::test_support::lock_test_env();
+        let tmp = TempDir::new().expect("settings tempdir");
+        let previous_home = std::env::var_os("HOME");
+        let previous_userprofile = std::env::var_os("USERPROFILE");
+        // Safety: test-only environment mutation guarded by a global mutex.
+        unsafe {
+            std::env::set_var("HOME", tmp.path());
+            std::env::set_var("USERPROFILE", tmp.path());
+        }
+        Self {
+            _tmp: tmp,
+            previous_home,
+            previous_userprofile,
+            _lock: lock,
+        }
+    }
+}
+
+impl Drop for SettingsHomeGuard {
+    fn drop(&mut self) {
+        // Safety: test-only environment mutation guarded by a global mutex.
+        unsafe {
+            match self.previous_home.take() {
+                Some(previous) => std::env::set_var("HOME", previous),
+                None => std::env::remove_var("HOME"),
+            }
+            match self.previous_userprofile.take() {
+                Some(previous) => std::env::set_var("USERPROFILE", previous),
+                None => std::env::remove_var("USERPROFILE"),
+            }
+        }
+    }
+}
+
 #[test]
 fn resume_hint_uses_canonical_resume_command() {
     assert_eq!(
@@ -84,6 +127,18 @@ fn resume_hint_uses_canonical_resume_command() {
 fn resume_hint_omits_missing_session_id() {
     assert!(!should_show_resume_hint(None));
     assert!(!should_show_resume_hint(Some("   ")));
+}
+
+#[test]
+fn plain_mcp_show_refreshes_discovery_counts() {
+    use crate::tui::app::McpUiAction;
+
+    assert!(mcp_ui_action_refreshes_discovery(&McpUiAction::Show));
+    assert!(mcp_ui_action_refreshes_discovery(&McpUiAction::Validate));
+    assert!(mcp_ui_action_refreshes_discovery(&McpUiAction::Reload));
+    assert!(!mcp_ui_action_refreshes_discovery(&McpUiAction::Init {
+        force: false,
+    }));
 }
 
 #[test]
@@ -153,8 +208,8 @@ fn push_keyboard_flags_writes_kitty_push_sequence_on_windows() {
     push_keyboard_enhancement_flags(&mut buf);
     let seq = String::from_utf8_lossy(&buf);
     assert!(
-        seq.contains("\x1b[>1u"),
-        "push_keyboard_enhancement_flags must write kitty push (\\x1b[>1u) on Windows (#1359); got: {seq:?}"
+        seq.contains("\x1b[>0u"),
+        "push_keyboard_enhancement_flags must write kitty probe (\\x1b[>0u) on Windows (#1599); got: {seq:?}"
     );
 }
 
@@ -1459,10 +1514,38 @@ fn active_tool_status_label_summarizes_live_tool_group() {
 
     let label = active_tool_status_label(&app).expect("status label");
 
-    assert!(label.contains("run cargo test"));
+    assert!(label.contains("cargo test"));
     assert!(label.contains("1 active"));
     assert!(label.contains("1 done"));
     assert!(label.contains(crate::tui::key_shortcuts::tool_details_shortcut_label()));
+}
+
+#[test]
+fn active_tool_status_label_strips_shell_wrappers_from_ci_polling() {
+    let mut app = create_test_app();
+    app.turn_started_at = Some(Instant::now() - Duration::from_secs(5));
+    let mut active = ActiveCell::new();
+    active.push_tool(
+        "exec-1",
+        HistoryCell::Tool(ToolCell::Exec(ExecCell {
+            command: "cd /tmp/repo && sleep 15 && gh pr checks 1611 --repo Hmbown/DeepSeek-TUI"
+                .to_string(),
+            status: ToolStatus::Running,
+            output: None,
+            started_at: app.turn_started_at,
+            duration_ms: None,
+            source: ExecSource::Assistant,
+            interaction: None,
+            output_summary: None,
+        })),
+    );
+    app.active_cell = Some(active);
+
+    let label = active_tool_status_label(&app).expect("status label");
+
+    assert!(label.contains("gh pr checks 1611"), "label: {label}");
+    assert!(!label.contains("cd /tmp"), "label: {label}");
+    assert!(!label.contains("sleep 15"), "label: {label}");
 }
 
 #[test]
@@ -1605,6 +1688,42 @@ async fn model_change_update_syncs_engine_model_before_compaction() {
         }
         other => panic!("expected SetCompaction, got {other:?}"),
     }
+}
+
+#[test]
+fn saved_default_provider_syncs_back_to_runtime_config() {
+    let _home = SettingsHomeGuard::new();
+    let settings = crate::settings::Settings {
+        default_provider: Some("ollama".to_string()),
+        ..Default::default()
+    };
+    settings.save().expect("save settings");
+
+    let mut config = Config::default();
+    assert_eq!(config.api_provider(), ApiProvider::Deepseek);
+
+    let app = App::new(create_test_options(), &config);
+    assert_eq!(app.api_provider, ApiProvider::Ollama);
+
+    sync_config_provider_from_app(&mut config, &app);
+
+    assert_eq!(config.api_provider(), ApiProvider::Ollama);
+}
+
+#[test]
+fn provider_picker_reselecting_active_provider_preserves_current_model() {
+    let mut app = create_test_app();
+    app.api_provider = ApiProvider::Ollama;
+    app.model = "deepseek-coder-v2:16b".to_string();
+
+    assert_eq!(
+        provider_picker_model_override(&app, ApiProvider::Ollama).as_deref(),
+        Some("deepseek-coder-v2:16b")
+    );
+    assert_eq!(
+        provider_picker_model_override(&app, ApiProvider::Deepseek),
+        None
+    );
 }
 
 #[tokio::test]
@@ -1880,6 +1999,17 @@ fn ctrl_alt_0_hides_sidebar() {
 
     assert_eq!(app.sidebar_focus, SidebarFocus::Hidden);
     assert_eq!(app.status_message.as_deref(), Some("Sidebar hidden"));
+}
+
+#[test]
+fn ctrl_alt_0_restores_auto_sidebar_when_already_hidden() {
+    let mut app = create_test_app();
+    app.sidebar_focus = SidebarFocus::Hidden;
+
+    apply_alt_0_shortcut(&mut app, KeyModifiers::ALT | KeyModifiers::CONTROL);
+
+    assert_eq!(app.sidebar_focus, SidebarFocus::Auto);
+    assert_eq!(app.status_message.as_deref(), Some("Sidebar focus: auto"));
 }
 
 #[test]
@@ -4950,18 +5080,17 @@ fn render_footer_from_with_default_items_renders_mode_and_model() {
 }
 
 #[test]
-fn default_footer_includes_prefix_stability_before_cache() {
+fn default_footer_keeps_prefix_stability_opt_in() {
     let items = crate::config::StatusItem::default_footer();
-    let prefix = items
-        .iter()
-        .position(|item| *item == crate::config::StatusItem::PrefixStability)
-        .expect("default footer includes prefix stability");
-    let cache = items
-        .iter()
-        .position(|item| *item == crate::config::StatusItem::Cache)
-        .expect("default footer includes cache");
 
-    assert!(prefix < cache);
+    assert!(
+        !items.contains(&crate::config::StatusItem::PrefixStability),
+        "prefix stability is a diagnostic chip and should not crowd the default footer"
+    );
+    assert!(
+        items.contains(&crate::config::StatusItem::Cache),
+        "default footer should still include provider-reported cache hit rate"
+    );
 }
 
 #[test]
@@ -4972,7 +5101,7 @@ fn render_footer_from_prefix_stability_item_renders_cache_slot_chip() {
 
     let props = render_footer_from(&app, &[crate::config::StatusItem::PrefixStability], None);
 
-    assert_eq!(spans_text(&props.cache), "P 100%");
+    assert_eq!(spans_text(&props.cache), "cache prefix 100%");
 }
 
 #[test]
@@ -4993,7 +5122,7 @@ fn render_footer_from_preserves_prefix_then_cache_order() {
         None,
     );
 
-    assert!(spans_text(&props.cache).starts_with("P 100%  Cache: 90.0% hit"));
+    assert!(spans_text(&props.cache).starts_with("cache prefix 100%  Cache: 90.0% hit"));
 }
 
 #[test]
@@ -5277,15 +5406,16 @@ fn composer_arrows_scroll_defaults_true_without_mouse_capture() {
 }
 
 #[test]
-fn composer_arrows_scroll_defaults_false_with_mouse_capture() {
+fn composer_arrows_scroll_defaults_follow_platform_with_mouse_capture() {
     let options = TuiOptions {
         use_mouse_capture: true,
         ..create_test_options()
     };
     let app = App::new(options, &Config::default());
-    assert!(
-        !app.composer_arrows_scroll,
-        "arrows-scroll must default to false when mouse capture is on"
+    assert_eq!(
+        app.composer_arrows_scroll,
+        cfg!(windows),
+        "arrows-scroll should default to true on Windows and false on other platforms when mouse capture is on"
     );
 }
 

@@ -2,6 +2,7 @@
 
 use std::io::{self, Stdout, Write};
 use std::path::PathBuf;
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -11,7 +12,6 @@ use crossterm::{
     event::{
         self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
         EnableFocusChange, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
-        KeyboardEnhancementFlags,
     },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -20,7 +20,9 @@ use crossterm::{
 // PushKeyboardEnhancementFlags / PopKeyboardEnhancementFlags commands are
 // never referenced, so the imports are gated to avoid -D warnings failures.
 #[cfg(not(windows))]
-use crossterm::event::{PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags};
+use crossterm::event::{
+    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+};
 use ratatui::{
     Frame, Terminal,
     layout::{Constraint, Direction, Layout, Rect, Size},
@@ -103,6 +105,7 @@ use super::app::{
     App, AppAction, AppMode, IDLE_TURN_THRESHOLD, MAX_AUTO_CONTINUE_TURNS, OnboardingState,
     QueuedMessage, ReasoningEffort, STUCK_THRESHOLD, SidebarFocus, StatusToastLevel,
     SubmitDisposition, TaskPanelEntry, TuiOptions,
+    looks_like_slash_command_input,
 };
 use super::approval::{
     ApprovalMode, ApprovalRequest, ApprovalView, ElevationRequest, ElevationView, ReviewDecision,
@@ -308,6 +311,12 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
     // sequence is received. Terminals that do not understand it silently
     // ignore it.
     recover_terminal_modes(&mut stdout, use_mouse_capture, use_bracketed_paste);
+    let mut cleanup_guard = TerminalCleanupGuard {
+        use_alt_screen,
+        use_mouse_capture,
+        use_bracketed_paste,
+        defused: false,
+    };
     let color_depth = palette::ColorDepth::detect();
     let palette_mode = palette::PaletteMode::detect();
     tracing::debug!(
@@ -318,16 +327,16 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
     let backend = ColorCompatBackend::new(stdout, color_depth, palette_mode);
     let mut terminal = Terminal::new(backend)?;
     // At this point Settings hasn't loaded yet, so we can't read the
-    // user's `synchronized_output` knob. Use the same env-based Ptyxis
-    // detection that `Settings::apply_env_overrides` uses, so the
+    // user's `synchronized_output` knob. Use the same env-based terminal
+    // quirk detection that `Settings::apply_env_overrides` uses, so the
     // startup viewport reset matches what every later draw will do on
-    // this terminal. A user who has explicitly set
-    // `synchronized_output = "on"` to override Ptyxis detection will
-    // get sync wrap from the main draw loop onward; the one-time
-    // startup viewport reset stays opt-out for them, which is the safe
-    // default because the cost is at most brief tearing on the first
-    // frame.
-    let sync_output_at_init = !crate::settings::detected_ptyxis_terminal();
+    // flicker-sensitive hosts. A user who has explicitly set
+    // `synchronized_output = "on"` to override detection will get sync wrap
+    // from the main draw loop onward; the one-time startup viewport reset
+    // stays opt-out for them, which is the safe default because the cost is
+    // at most brief tearing on the first frame.
+    let sync_output_at_init = !crate::settings::detected_ptyxis_terminal()
+        && !crate::settings::detected_legacy_windows_console_host();
     reset_terminal_viewport(&mut terminal, sync_output_at_init)?;
     let event_broker = EventBroker::new();
 
@@ -336,6 +345,7 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
     let mut config = config.clone();
     let config = &mut config;
     let mut app = App::new(options.clone(), config);
+    sync_config_provider_from_app(config, &app);
 
     // Load existing session if resuming.
     if let Some(ref session_id) = options.resume_session_id
@@ -457,7 +467,19 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
 
     // Spawn the Engine - it will handle all API communication
     let engine_handle = spawn_engine(engine_config, config);
-    let translation_client = Arc::new(DeepSeekClient::new(config)?);
+    // The translation client is optional: it never crashes the TUI on
+    // startup, even when the API key is missing, the base URL is malformed,
+    // or the network is unavailable.
+    // Translations are skipped with a logged warning until a key is saved.
+    let translation_client = match DeepSeekClient::new(config) {
+        Ok(client) => Some(Arc::new(client)),
+        Err(err) => {
+            if app.onboarding == OnboardingState::None {
+                tracing::warn!("Translation client initialization failed: {err}");
+            }
+            None
+        }
+    };
 
     if !app.api_messages.is_empty() {
         let _ = engine_handle
@@ -508,6 +530,7 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
     persistence_actor::persist(PersistRequest::ClearCheckpoint);
     persistence_actor::persist(PersistRequest::Shutdown);
 
+    cleanup_guard.defused = true;
     pop_keyboard_enhancement_flags(terminal.backend_mut());
     execute!(terminal.backend_mut(), DisableFocusChange)?;
     disable_raw_mode()?;
@@ -554,6 +577,36 @@ fn terminal_probe_timeout(config: &Config) -> Duration {
         .unwrap_or(DEFAULT_TERMINAL_PROBE_TIMEOUT_MS)
         .clamp(100, 5_000);
     Duration::from_millis(timeout_ms)
+}
+
+struct TerminalCleanupGuard {
+    use_alt_screen: bool,
+    use_mouse_capture: bool,
+    use_bracketed_paste: bool,
+    defused: bool,
+}
+
+impl Drop for TerminalCleanupGuard {
+    fn drop(&mut self) {
+        if self.defused {
+            return;
+        }
+
+        let mut stdout = io::stdout();
+        pop_keyboard_enhancement_flags(&mut stdout);
+        let _ = execute!(stdout, DisableFocusChange);
+        let _ = disable_raw_mode();
+        if self.use_alt_screen {
+            let _ = execute!(stdout, LeaveAlternateScreen);
+        }
+        if self.use_mouse_capture {
+            let _ = execute!(stdout, DisableMouseCapture);
+        }
+        if self.use_bracketed_paste {
+            let _ = execute!(stdout, DisableBracketedPaste);
+        }
+        let _ = execute!(stdout, crossterm::cursor::Show);
+    }
 }
 
 /// Recognise composer input that is a `# foo` memory quick-add (#492).
@@ -736,7 +789,7 @@ async fn run_event_loop(
     mut engine_handle: EngineHandle,
     task_manager: SharedTaskManager,
     event_broker: &EventBroker,
-    translation_client: Arc<DeepSeekClient>,
+    translation_client: Option<Arc<DeepSeekClient>>,
 ) -> Result<()> {
     // Track streaming state
     let mut current_streaming_text = String::new();
@@ -954,6 +1007,7 @@ async fn run_event_loop(
                         if app.translation_enabled
                             && !current_streaming_text.is_empty()
                             && crate::tui::translation::needs_translation(&current_streaming_text)
+                            && let Some(translation_client) = translation_client.as_ref()
                         {
                             app.status_message = Some(
                                 crate::localization::tr(
@@ -1046,6 +1100,7 @@ async fn run_event_loop(
                             }
                             if !original_thinking.is_empty()
                                 && crate::tui::translation::needs_translation(&original_thinking)
+                                && let Some(translation_client) = translation_client.as_ref()
                             {
                                 app.status_message = Some(
                                     crate::localization::thinking_translation_in_progress(
@@ -3170,7 +3225,7 @@ async fn run_event_loop(
                         && !key.modifiers.contains(KeyModifiers::ALT) =>
                 {
                     if let Some(input) = app.submit_input() {
-                        if input.starts_with('/') {
+                        if looks_like_slash_command_input(&input) {
                             if execute_command_input(
                                 terminal,
                                 app,
@@ -3219,7 +3274,7 @@ async fn run_event_loop(
                 // #382: Ctrl+Enter forces a steer into the current turn.
                 KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     if let Some(input) = app.submit_input() {
-                        if input.starts_with('/') {
+                        if looks_like_slash_command_input(&input) {
                             if execute_command_input(
                                 terminal,
                                 app,
@@ -3270,7 +3325,7 @@ async fn run_event_loop(
                     // to the legacy submit path.
                     if slash_menu_open
                         && !slash_menu_entries.is_empty()
-                        && app.input.starts_with('/')
+                        && looks_like_slash_command_input(&app.input)
                         && apply_slash_menu_selection(app, &slash_menu_entries, false)
                     {
                         app.close_slash_menu();
@@ -3290,7 +3345,7 @@ async fn run_event_loop(
                             handle_memory_quick_add(app, &input, config);
                             continue;
                         }
-                        if input.starts_with('/') {
+                        if looks_like_slash_command_input(&input) {
                             if execute_command_input(
                                 terminal,
                                 app,
@@ -3593,8 +3648,13 @@ fn apply_alt_4_shortcut(app: &mut App, _modifiers: KeyModifiers) {
 
 fn apply_alt_0_shortcut(app: &mut App, modifiers: KeyModifiers) {
     if modifiers.contains(KeyModifiers::CONTROL) {
-        app.set_sidebar_focus(SidebarFocus::Hidden);
-        app.status_message = Some("Sidebar hidden".to_string());
+        if app.sidebar_focus == SidebarFocus::Hidden {
+            app.set_sidebar_focus(SidebarFocus::Auto);
+            app.status_message = Some("Sidebar focus: auto".to_string());
+        } else {
+            app.set_sidebar_focus(SidebarFocus::Hidden);
+            app.status_message = Some("Sidebar hidden".to_string());
+        }
     } else {
         app.set_sidebar_focus(SidebarFocus::Auto);
         app.status_message = Some("Sidebar focus: auto".to_string());
@@ -4422,6 +4482,14 @@ async fn switch_provider(
     }
 }
 
+fn sync_config_provider_from_app(config: &mut Config, app: &App) {
+    config.provider = Some(app.api_provider.as_str().to_string());
+}
+
+fn provider_picker_model_override(app: &App, provider: ApiProvider) -> Option<String> {
+    (app.api_provider == provider).then(|| app.model.clone())
+}
+
 fn open_text_pager(app: &mut App, title: String, content: String) {
     let width = app
         .viewport
@@ -4660,8 +4728,33 @@ async fn apply_command_result(
             }
             AppAction::OpenModelPicker => {
                 if app.view_stack.top_kind() != Some(ModalKind::ModelPicker) {
-                    app.view_stack
-                        .push(crate::tui::model_picker::ModelPickerView::new(app));
+                    app.status_message =
+                        Some(format!("Fetching {} models...", app.api_provider.as_str()));
+                    let picker = match fetch_available_models(config).await {
+                        Ok(models) if !models.is_empty() => {
+                            app.status_message = Some(format!("Found {} model(s)", models.len()));
+                            crate::tui::model_picker::ModelPickerView::new_with_models(app, models)
+                        }
+                        Ok(_) => {
+                            app.status_message = Some(format!(
+                                "{} returned no models; showing defaults",
+                                app.api_provider.as_str()
+                            ));
+                            crate::tui::model_picker::ModelPickerView::new(app)
+                        }
+                        Err(error) => {
+                            app.add_message(HistoryCell::System {
+                                content: format!(
+                                    "Failed to fetch {} models: {error}. Showing built-in defaults.",
+                                    app.api_provider.as_str()
+                                ),
+                            });
+                            app.status_message =
+                                Some("Model fetch failed; showing defaults".to_string());
+                            crate::tui::model_picker::ModelPickerView::new(app)
+                        }
+                    };
+                    app.view_stack.push(picker);
                 }
             }
             AppAction::OpenProviderPicker => {
@@ -4860,29 +4953,9 @@ async fn apply_command_result(
     Ok(false)
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 fn open_external_url(url: &str) -> Result<()> {
-    #[cfg(target_os = "macos")]
-    let mut command = {
-        let mut command = Command::new("open");
-        command.arg(url);
-        command
-    };
-    #[cfg(target_os = "linux")]
-    let mut command = {
-        let mut command = Command::new("xdg-open");
-        command.arg(url);
-        command
-    };
-    #[cfg(target_os = "windows")]
-    let mut command = {
-        let mut command = Command::new("cmd");
-        command.args(["/C", "start", "", url]);
-        command
-    };
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-    return Err(anyhow::anyhow!(
-        "browser opening is unsupported on this platform"
-    ));
+    let mut command = external_url_command(url);
 
     let status = command
         .stdout(Stdio::null())
@@ -4895,6 +4968,34 @@ fn open_external_url(url: &str) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+fn open_external_url(_url: &str) -> Result<()> {
+    Err(anyhow::anyhow!(
+        "browser opening is unsupported on this platform"
+    ))
+}
+
+#[cfg(target_os = "macos")]
+fn external_url_command(url: &str) -> Command {
+    let mut command = Command::new("open");
+    command.arg(url);
+    command
+}
+
+#[cfg(target_os = "linux")]
+fn external_url_command(url: &str) -> Command {
+    let mut command = Command::new("xdg-open");
+    command.arg(url);
+    command
+}
+
+#[cfg(target_os = "windows")]
+fn external_url_command(url: &str) -> Command {
+    let mut command = Command::new("cmd");
+    command.args(["/C", "start", "", url]);
+    command
 }
 
 fn apply_workspace_runtime_state(app: &mut App, config: &Config, workspace: PathBuf) {
@@ -4973,10 +5074,7 @@ async fn handle_mcp_ui_action(
     let path = app.mcp_config_path.clone();
     let mut changed = false;
     let mut message = None;
-    let discover = matches!(
-        action,
-        crate::tui::app::McpUiAction::Validate | crate::tui::app::McpUiAction::Reload
-    );
+    let discover = mcp_ui_action_refreshes_discovery(&action);
 
     let action_result = match action {
         crate::tui::app::McpUiAction::Show => Ok(()),
@@ -5072,6 +5170,15 @@ async fn handle_mcp_ui_action(
         }
         Err(err) => add_mcp_message(app, format!("MCP snapshot failed: {err}")),
     }
+}
+
+fn mcp_ui_action_refreshes_discovery(action: &crate::tui::app::McpUiAction) -> bool {
+    matches!(
+        action,
+        crate::tui::app::McpUiAction::Show
+            | crate::tui::app::McpUiAction::Validate
+            | crate::tui::app::McpUiAction::Reload
+    )
 }
 
 fn handle_shell_job_action(app: &mut App, action: crate::tui::app::ShellJobAction) {
@@ -5712,7 +5819,6 @@ fn draw_app_frame_inner(
     let result = (|| -> Result<()> {
         if full_repaint {
             terminal.backend_mut().write_all(TERMINAL_ORIGIN_RESET)?;
-            terminal.backend_mut().flush()?;
             terminal.clear()?;
         }
         terminal.draw(|f| render(f, app))?;
@@ -6059,7 +6165,8 @@ async fn handle_view_events(
                 .await;
             }
             ViewEvent::ProviderPickerApplied { provider } => {
-                switch_provider(app, engine_handle, config, provider, None).await;
+                let model_override = provider_picker_model_override(app, provider);
+                switch_provider(app, engine_handle, config, provider, model_override).await;
             }
             ViewEvent::ProviderPickerApiKeySubmitted { provider, api_key } => {
                 apply_provider_picker_api_key(app, engine_handle, config, provider, api_key).await;
@@ -6551,7 +6658,6 @@ fn reset_terminal_viewport(terminal: &mut AppTerminal, sync_output_enabled: bool
 
     let result = (|| -> Result<()> {
         terminal.backend_mut().write_all(TERMINAL_ORIGIN_RESET)?;
-        terminal.backend_mut().flush()?;
         terminal.clear()?;
         Ok(())
     })();
@@ -6569,11 +6675,12 @@ fn push_keyboard_enhancement_flags<W: Write>(writer: &mut W) {
     // returns Unsupported on Windows (is_ansi_code_supported() == false), so
     // the ANSI escape is written directly on that platform. Modern Windows
     // terminals (VSCode integrated terminal, Windows Terminal ≥1.17) honour
-    // the kitty keyboard protocol; terminals that do not silently discard it.
+    // the kitty keyboard protocol but crossterm's event reader does not
+    // decode CSI u sequences on Windows (issue #1599). Write \033[>0u to
+    // probe the protocol without enabling any flags — Enter stays as \n.
     #[cfg(windows)]
     {
-        let flags = KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES.bits();
-        if let Err(err) = write!(writer, "\x1b[>{}u", flags).and_then(|()| writer.flush()) {
+        if let Err(err) = write!(writer, "\x1b[>0u").and_then(|()| writer.flush()) {
             tracing::debug!(
                 target: "kitty_keyboard",
                 ?err,
@@ -6616,6 +6723,23 @@ pub(crate) fn pop_keyboard_enhancement_flags<W: Write>(writer: &mut W) {
     }
     #[cfg(not(windows))]
     let _ = execute!(writer, PopKeyboardEnhancementFlags);
+}
+
+/// Best-effort terminal restoration for emergency exit paths
+/// (panic hook, signal handlers). Mirrors the normal teardown in
+/// `run_event_loop` but tolerates any subset of modes not actually being
+/// active — every step is discarded on failure so a half-initialized TUI
+/// (e.g. SIGINT during startup before `EnterAlternateScreen`) still gets
+/// raw mode + kitty keyboard flags cleared, which is what causes the
+/// `^[[>5u` shell pollution reported in #1583.
+pub fn emergency_restore_terminal() {
+    let mut stdout = std::io::stdout();
+    pop_keyboard_enhancement_flags(&mut stdout);
+    let _ = execute!(stdout, DisableFocusChange);
+    let _ = execute!(stdout, DisableBracketedPaste);
+    let _ = execute!(stdout, DisableMouseCapture);
+    let _ = disable_raw_mode();
+    let _ = execute!(stdout, LeaveAlternateScreen);
 }
 
 /// Re-establish terminal mode flags. Idempotent and best-effort: each

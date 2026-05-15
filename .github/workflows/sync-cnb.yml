@@ -5,9 +5,10 @@ name: Sync to CNB
 # releases from the Tencent-hosted mirror.
 #
 # Triggers:
-#   * push to main      → mirrors that commit to CNB main
-#   * tag matching v*   → mirrors that tag to CNB
-#   * workflow_dispatch → manual fallback if either of the above fails
+#   * push to main              → mirrors that commit to CNB main
+#   * tag matching v*           → mirrors that tag to CNB
+#   * Tencent release branches  → mirrors Feishu/Lighthouse setup branches
+#   * workflow_dispatch         → manual fallback if any of the above fails
 #
 # Why the rewrite (v0.8.31):
 #   The previous implementation used the opaque tencentcom/git-sync Docker
@@ -22,7 +23,10 @@ name: Sync to CNB
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - 'work/v*-feishu-*'
+      - 'work/v*-lighthouse*'
     tags: ['v*']
   workflow_dispatch: {}
 
@@ -105,9 +109,10 @@ jobs:
             # was actually behind GitHub.
             push_with_retry "main" HEAD:refs/heads/main --force
           else
-            # workflow_dispatch from a non-main branch — push that branch
-            # too, but never force. Useful for testing the mirror against
-            # a feature branch before merging.
+            # Tencent release-candidate branches are first-class CNB
+            # sources for Lighthouse/Feishu bootstrap. Mirror the triggering
+            # branch exactly so the CNB clone path stays the default even
+            # before the branch has merged to main or become a release tag.
             BRANCH="${GITHUB_REF#refs/heads/}"
-            push_with_retry "branch ${BRANCH}" "HEAD:refs/heads/${BRANCH}"
+            push_with_retry "branch ${BRANCH}" "HEAD:refs/heads/${BRANCH}" --force
           fi

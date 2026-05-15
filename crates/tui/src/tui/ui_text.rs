@@ -43,6 +43,85 @@ pub(crate) fn truncate_line_to_width(text: &str, max_width: usize) -> String {
     out
 }
 
+pub(crate) fn concise_shell_command_label(command: &str, max_width: usize) -> String {
+    let normalized = normalize_shell_text(command);
+    if let Some(label) = gh_command_label(&normalized) {
+        return truncate_line_to_width(&label, max_width);
+    }
+
+    let segment = actionable_shell_segment(&normalized).unwrap_or_else(|| normalized.clone());
+    truncate_line_to_width(&segment, max_width)
+}
+
+fn normalize_shell_text(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn actionable_shell_segment(command: &str) -> Option<String> {
+    command
+        .replace("&&", "\n")
+        .replace("||", "\n")
+        .replace('|', "\n")
+        .split(['\n', ';'])
+        .map(str::trim)
+        .find(|segment| {
+            !segment.is_empty()
+                && !segment.starts_with("cd ")
+                && !segment.starts_with("sleep ")
+                && !segment.starts_with("export ")
+                && *segment != "true"
+                && *segment != ":"
+        })
+        .map(str::to_string)
+}
+
+fn gh_command_label(command: &str) -> Option<String> {
+    let tokens: Vec<String> = command
+        .split_whitespace()
+        .map(|token| {
+            token
+                .trim_matches(|ch: char| matches!(ch, '\'' | '"' | '(' | ')' | ';' | ','))
+                .to_string()
+        })
+        .filter(|token| !token.is_empty())
+        .collect();
+
+    for index in 0..tokens.len() {
+        let token = tokens[index].as_str();
+        if token != "gh" && !token.ends_with("/gh") {
+            continue;
+        }
+        let Some(area) = tokens.get(index + 1).map(String::as_str) else {
+            continue;
+        };
+        let Some(action) = tokens.get(index + 2).map(String::as_str) else {
+            continue;
+        };
+        if !matches!(area, "pr" | "run") {
+            continue;
+        }
+        if !matches!(
+            action,
+            "checks" | "view" | "status" | "list" | "watch" | "rerun"
+        ) {
+            continue;
+        }
+
+        let mut label = format!("gh {area} {action}");
+        if let Some(target) = tokens
+            .iter()
+            .skip(index + 3)
+            .map(String::as_str)
+            .find(|token| !token.starts_with('-') && *token != "&&" && *token != ";")
+        {
+            label.push(' ');
+            label.push_str(target);
+        }
+        return Some(label);
+    }
+    None
+}
+
 pub(super) fn history_cell_to_text(cell: &HistoryCell, width: u16) -> String {
     cell.transcript_lines(width)
         .into_iter()
@@ -171,5 +250,20 @@ mod tests {
     fn slice_text_truncates_at_end() {
         let text = "ab";
         assert_eq!(slice_text(text, 1, 5), "b");
+    }
+
+    #[test]
+    fn concise_shell_command_label_prefers_gh_pr_checks_over_wrappers() {
+        let label = concise_shell_command_label(
+            "cd /tmp/repo && sleep 15 && gh pr checks 1611 --repo Hmbown/DeepSeek-TUI",
+            80,
+        );
+        assert_eq!(label, "gh pr checks 1611");
+    }
+
+    #[test]
+    fn concise_shell_command_label_falls_back_to_actionable_segment() {
+        let label = concise_shell_command_label("cd /tmp/repo && cargo test --workspace", 80);
+        assert_eq!(label, "cargo test --workspace");
     }
 }

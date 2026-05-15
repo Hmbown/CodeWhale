@@ -5,6 +5,136 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Update guidance is clearer on the website.** The homepage and install page
+  now surface `deepseek update` while keeping package-manager update paths
+  visible for Homebrew, npm, and Cargo installs.
+- **README setup docs are current again.** The English, Simplified Chinese,
+  and Japanese READMEs now use the current Docker volume/workspace invocation,
+  document update paths, list the current provider/model switching surface, and
+  send release-specific feature notes back to the changelog.
+
+### Fixed
+
+- **OpenAI-compatible providers receive stricter request bodies.** Fireworks
+  requests now use `reasoning_effort` without the DeepSeek/Anthropic-style
+  top-level `thinking` field, and chat tool schemas no longer include
+  Anthropic-only metadata such as `allowed_callers`, `defer_loading`, or
+  `input_examples` (#1592).
+- **pnpm global installs no longer hang in optional postinstall.** pnpm
+  postinstall now skips install-time binary downloads and leaves the existing
+  runtime downloader to verify or fetch binaries on first run (#1637).
+- **Terminal modes are restored on early TUI exits.** A cleanup guard now
+  restores raw mode, alternate screen, focus events, mouse capture, bracketed
+  paste, keyboard flags, and cursor visibility if startup returns early after
+  terminal initialization (#1593, #1582).
+- **Wrapped OSC 8 links keep their full target.** Long clickable URLs now
+  reopen the original full link target on each wrapped visual chunk instead of
+  exposing truncated hyperlink targets (#1577).
+- **Provider-selected models survive startup and picker reselects.** The
+  `/model` picker now uses live provider model catalogs when available, saved
+  default providers sync into the runtime config before the first request, and
+  reselecting the active provider from the picker keeps the current model
+  instead of falling back to the provider default (#1632).
+- **Windows wheel-as-arrow scrolling works with mouse capture enabled.**
+  `composer_arrows_scroll` now defaults on for Windows terminals even when
+  mouse capture is enabled, so wheel events that arrive as arrow keys scroll the
+  transcript instead of cycling composer history (#1578).
+- **Plain Windows PowerShell / ConHost uses calmer rendering.** Unmarked
+  legacy Windows console hosts now automatically enable low-motion rendering,
+  disable fancy animations, and resolve `synchronized_output = "auto"` to off
+  so streaming redraws do not overlap or visibly flicker (#1590).
+
+### Thanks
+
+Thanks to **DC ([@duanchao-lab](https://github.com/duanchao-lab))** for the
+terminal cleanup-guard idea harvested from #1630, and **imkingjh999
+([@imkingjh999](https://github.com/imkingjh999))** for the provider/model
+switching fixes harvested from #1642. Thanks to **Photo
+([@eng2007](https://github.com/eng2007))** for the provider-aware `/model`
+picker catalog work harvested from #1201. Thanks to
+**[@kunpeng-ai-lab](https://github.com/kunpeng-ai-lab)** for the Windows
+composer scroll fix harvested from #1578, and **WuMing
+([@asdfg314284230](https://github.com/asdfg314284230))** for the Windows
+PowerShell flicker fix harvested from #1591.
+
+## [0.8.37] - 2026-05-14
+
+### Added
+
+- **Tencent Lighthouse + Feishu/Lark bridge setup.** Added a `/opt/whalebro`
+  Lighthouse runbook, systemd deploy assets, a long-connection Feishu/Lark
+  bridge, a bridge config validator, and a VPS doctor for runtime, Node,
+  binaries, env, systemd, and localhost health checks.
+- **Tencent Cloud remote-first onboarding.** Documented the CNB + Lighthouse +
+  Feishu/Lark + optional EdgeOne teaching path and added non-active CNB deploy
+  templates for a future Lighthouse deploy button. Feishu/Lighthouse branches
+  are now mirrored to CNB for Tencent-first bootstrap.
+- **Homebrew tap automation is release-gated.** The release workflow can update
+  `Hmbown/homebrew-deepseek-tui` from the checksum manifest when a tap token is
+  configured, and skips cleanly before downloading release assets when no tap
+  token exists.
+
+### Changed
+
+- **Bing is the default `web_search` backend.** DuckDuckGo remains selectable
+  with `[search] provider = "duckduckgo"` and keeps its Bing fallback path.
+
+### Fixed
+
+- **First-run onboarding stays usable without an API key.** Missing-key startup
+  no longer aborts the TUI before onboarding can collect provider settings.
+- **Streamable HTTP MCP sessions keep their server-issued session ID.** Custom
+  headers also apply to GET preflight requests, fixing authenticated MCP
+  servers that require both.
+- **DeepSeek model completions use canonical IDs.** Alias completions now
+  resolve to stable DeepSeek model names before being written to config.
+- **Terminal and child-process reliability is tighter.** Signal shutdown now
+  restores the terminal, child tasks preserve proxy environment variables, and
+  Windows Enter / CSI-u input handling avoids the prior event mismatch.
+- **Long terminal text wraps instead of overflowing.** Streaming output, diff
+  rendering, and the pager now hard-wrap overlong no-whitespace and CJK runs.
+- **Release and platform edges are safer.** The TUI no longer trips the Windows
+  Instant-underflow test path, unsupported desktop targets compile the external
+  URL opener, and legacy DeepSeek CN provider aliases deserialize to the
+  canonical DeepSeek provider.
+- **Footer diagnostics are less cryptic.** Prefix-cache stability is no longer
+  shown in the default footer, and the opt-in `/statusline` chip now says
+  `cache prefix 100%` instead of the ambiguous `P 100%`.
+- **Feishu/Lark bridge dependency installs are locked and audited.** The
+  bridge now ships a package lock, installs with `npm ci` on Lighthouse when
+  available, and overrides the Lark SDK's transitive `axios` dependency to a
+  patched line.
+- **China-friendly update fallback.** `deepseek update` now supports mirrored
+  release assets through `DEEPSEEK_TUI_RELEASE_BASE_URL` plus
+  `DEEPSEEK_TUI_VERSION`, and its network-failure hints point users behind
+  GitHub-blocking networks to the CNB `cargo install --git` path for both
+  shipped binaries.
+- **CNB is the default Tencent release-candidate mirror.** The CNB sync
+  workflow now mirrors Feishu/Lighthouse release branches, so Tencent
+  Lighthouse bootstrap can use CNB before the release branch merges.
+
+### Thanks
+
+Thanks to **ZzzPL ([@Oliver-ZPLiu](https://github.com/Oliver-ZPLiu))** for
+the MCP Streamable HTTP and Homebrew automation fixes (#1643, #1631),
+**Reid ([@reidliu41](https://github.com/reidliu41))** for CI, streaming wrap,
+and model-completion fixes (#1603, #1628, #1601), **MidoriKurage
+([@mdrkrg](https://github.com/mdrkrg))** for the onboarding crash fix (#1598),
+**Gordon ([@gordonlu](https://github.com/gordonlu))** for the Windows Enter /
+CSI-u fix (#1612), **Aitensa ([@Aitensa](https://github.com/Aitensa))** for
+the CJK diff/pager wrap fix (#1622), **qiyan233
+([@qiyan233](https://github.com/qiyan233))** for legacy DeepSeek CN provider
+aliases (#1645), **jieshu666 ([@jieshu666](https://github.com/jieshu666))**
+for the repaint-flicker reduction (#1563), **Vishnu
+([@Vishnu1837](https://github.com/Vishnu1837))** for terminal restoration on
+signals (#1586), and **axobase001
+([@axobase001](https://github.com/axobase001))** for proxy environment
+preservation in child tasks (#1608).
+
 ## [0.8.36] - 2026-05-14
 
 ### Added
@@ -4128,7 +4258,8 @@ Welcome — and thank you.
 - Hooks system and config profiles
 - Example skills and launch assets
 
-[Unreleased]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.35...HEAD
+[Unreleased]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.37...HEAD
+[0.8.37]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.36...v0.8.37
 [0.8.36]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.35...v0.8.36
 [0.8.35]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.34...v0.8.35
 [0.8.34]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.33...v0.8.34

@@ -36,6 +36,8 @@ jobs:
           done
           sudo apt-get install -y libdbus-1-dev pkg-config
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: false
       - name: Format check
         run: cargo fmt --all -- --check
       - name: Compile check
@@ -149,6 +151,8 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: false
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         run: |
@@ -328,6 +332,48 @@ jobs:
             ## Changelog
 
             See [CHANGELOG.md](https://github.com/Hmbown/DeepSeek-TUI/blob/main/CHANGELOG.md) for the full notes for this release.
+
+  homebrew:
+    needs: [release, resolve]
+    if: ${{ !cancelled() && needs.release.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check Homebrew tap token
+        id: homebrew-token
+        env:
+          TOKEN: ${{ secrets.HOMEBREW_TAP_PAT || secrets.RELEASE_TAG_PAT }}
+        run: |
+          if [ -z "${TOKEN:-}" ]; then
+            echo "No Homebrew tap token configured; skipping tap update."
+            echo "available=false" >> "${GITHUB_OUTPUT}"
+          else
+            echo "available=true" >> "${GITHUB_OUTPUT}"
+          fi
+      # Checkout main (not the tag) so the release-infra script is always
+      # available, even for tags created before this workflow was added.
+      - uses: actions/checkout@v4
+        if: steps.homebrew-token.outputs.available == 'true'
+        with:
+          ref: main
+      - name: Download checksum manifest
+        if: steps.homebrew-token.outputs.available == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download ${{ needs.resolve.outputs.tag }} \
+            --repo ${{ github.repository }} \
+            --pattern 'deepseek-artifacts-sha256.txt' \
+            --dir /tmp
+      - name: Update Homebrew tap
+        if: steps.homebrew-token.outputs.available == 'true'
+        env:
+          TAG: ${{ needs.resolve.outputs.tag }}
+          MANIFEST: /tmp/deepseek-artifacts-sha256.txt
+          TAP_REPO: Hmbown/homebrew-deepseek-tui
+          TOKEN: ${{ secrets.HOMEBREW_TAP_PAT || secrets.RELEASE_TAG_PAT }}
+        run: bash .github/scripts/update-homebrew-tap.sh
 
 # npm publish is intentionally not automated. The npm account requires 2FA OTP
 # on every publish, and a granular automation token that bypasses 2FA has not

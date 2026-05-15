@@ -83,6 +83,17 @@ pub(crate) fn resolve_skills_dir(
     global_skills_dir.to_path_buf()
 }
 
+pub(crate) fn looks_like_slash_command_input(input: &str) -> bool {
+    let Some(rest) = input.trim_start().strip_prefix('/') else {
+        return false;
+    };
+    let Some(command) = rest.split_whitespace().next() else {
+        return rest.is_empty();
+    };
+
+    !command.contains('/')
+}
+
 fn initial_onboarding_state(
     skip_onboarding: bool,
     was_onboarded: bool,
@@ -1352,6 +1363,14 @@ impl std::ops::DerefMut for App {
 
 // === App State ===
 
+fn default_composer_arrows_scroll(use_mouse_capture: bool) -> bool {
+    default_composer_arrows_scroll_for_platform(use_mouse_capture, cfg!(windows))
+}
+
+fn default_composer_arrows_scroll_for_platform(use_mouse_capture: bool, is_windows: bool) -> bool {
+    is_windows || !use_mouse_capture
+}
+
 impl App {
     /// Cap on the session turn-cache history. Holds enough turns to debug a long
     /// session without being so large the on-screen `/cache` table wraps.
@@ -1765,7 +1784,7 @@ impl App {
                 .tui
                 .as_ref()
                 .and_then(|tui| tui.composer_arrows_scroll)
-                .unwrap_or(!use_mouse_capture),
+                .unwrap_or_else(|| default_composer_arrows_scroll(use_mouse_capture)),
             session_title: None,
         }
     }
@@ -3800,7 +3819,7 @@ impl App {
         // sees the @mention in the composer before submission.
         self.consolidate_large_input_if_oversized();
         let input = self.input.clone();
-        if !input.starts_with('/') {
+        if !looks_like_slash_command_input(&input) {
             self.input_history.push(input.clone());
             if self.max_input_history == 0 {
                 self.input_history.clear();
@@ -4487,6 +4506,21 @@ mod tests {
         }
     }
 
+    #[test]
+    fn composer_arrows_scroll_default_is_true_without_mouse_capture() {
+        assert!(default_composer_arrows_scroll_for_platform(false, false));
+    }
+
+    #[test]
+    fn composer_arrows_scroll_default_is_false_with_mouse_capture_on_non_windows() {
+        assert!(!default_composer_arrows_scroll_for_platform(true, false));
+    }
+
+    #[test]
+    fn composer_arrows_scroll_default_is_true_on_windows_even_with_mouse_capture() {
+        assert!(default_composer_arrows_scroll_for_platform(true, true));
+    }
+
     struct EnvVarGuard {
         key: &'static str,
         previous: Option<OsString>,
@@ -4573,6 +4607,29 @@ mod tests {
     }
 
     #[test]
+    fn slash_command_classifier_treats_absolute_path_as_message() {
+        assert!(looks_like_slash_command_input("/"));
+        assert!(looks_like_slash_command_input("/help"));
+        assert!(looks_like_slash_command_input("/model deepseek-v4-pro"));
+        assert!(!looks_like_slash_command_input(
+            "/usr/lib/x86_64-linux-gnu/ 是标准路径吗？"
+        ));
+    }
+
+    #[test]
+    fn submit_input_records_absolute_slash_path_as_message_history() {
+        let mut app = App::new(test_options(false), &Config::default());
+        let input = "/usr/lib/x86_64-linux-gnu/ 是标准路径吗？";
+        app.input = input.to_string();
+        app.cursor_position = input.chars().count();
+
+        let submitted = app.submit_input().expect("expected submitted input");
+
+        assert_eq!(submitted, input);
+        assert_eq!(app.input_history.last().map(String::as_str), Some(input));
+    }
+
+    #[test]
     fn composer_strips_raw_sgr_mouse_report_when_mouse_capture_is_enabled() {
         let mut app = App::new(test_options(false), &Config::default());
         app.use_mouse_capture = true;
@@ -4625,11 +4682,103 @@ mod tests {
         assert_eq!(app.input, "Size 12;34M");
     }
 
+    // initial_onboarding_state tests
+    // These pin the logic that decides whether the TUI shows the
+    // onboarding flow (Welcome → Language → ApiKey → …) or goes
+    // straight to the chat view.  Getting this wrong either locks
+    // first-run users out of the API-key prompt or nags returning
+    // users whose key is already configured.
+
+    #[test]
+    fn skip_onboarding_suppresses_all_onboarding_states() {
+        assert_eq!(
+            initial_onboarding_state(true, false, true, true),
+            OnboardingState::None
+        );
+        assert_eq!(
+            initial_onboarding_state(true, true, true, true),
+            OnboardingState::None
+        );
+    }
+
+    #[test]
+    fn fully_configured_returning_user_skips_onboarding() {
+        assert_eq!(
+            initial_onboarding_state(false, true, false, false),
+            OnboardingState::None
+        );
+    }
+
+    #[test]
+    fn returning_user_missing_api_key_goes_to_api_key_screen() {
+        assert_eq!(
+            initial_onboarding_state(false, true, true, false),
+            OnboardingState::ApiKey
+        );
+        // workspace trust doesn't affect the api-key gate
+        assert_eq!(
+            initial_onboarding_state(false, true, true, true),
+            OnboardingState::ApiKey
+        );
+    }
+
+    #[test]
+    fn first_run_user_always_starts_at_welcome() {
+        assert_eq!(
+            initial_onboarding_state(false, false, false, false),
+            OnboardingState::Welcome
+        );
+        assert_eq!(
+            initial_onboarding_state(false, false, true, false),
+            OnboardingState::Welcome
+        );
+        assert_eq!(
+            initial_onboarding_state(false, false, false, true),
+            OnboardingState::Welcome
+        );
+    }
+
+    #[test]
+    fn onboarding_workspace_trust_gate_only_fires_for_onboarded_user() {
+        assert!(onboarding_is_workspace_trust_gate(false, true, false, true));
+        assert!(!onboarding_is_workspace_trust_gate(true, true, false, true));
+        assert!(!onboarding_is_workspace_trust_gate(false, true, true, true));
+        assert!(!onboarding_is_workspace_trust_gate(
+            false, false, false, true
+        ));
+    }
+
     #[test]
     fn onboarded_user_still_gets_workspace_trust_prompt_when_needed() {
         assert_eq!(
             initial_onboarding_state(false, true, false, true),
             OnboardingState::TrustDirectory
+        );
+    }
+
+    // App::new tests: missing key is detected
+
+    #[test]
+    fn app_new_detects_missing_api_key_with_default_config() {
+        // Config::default() carries no api_key and the test runner
+        // should not have DEEPSEEK_API_KEY in its environment.
+        let app = App::new(test_options(false), &Config::default());
+        assert!(
+            app.onboarding_needs_api_key,
+            "default config (no key) must set onboarding_needs_api_key"
+        );
+    }
+
+    #[test]
+    fn app_new_with_explicit_api_key_does_not_trigger_onboarding() {
+        let config = Config {
+            api_key: Some("sk-test-onboarding-key".to_string()),
+            ..Config::default()
+        };
+        let app = App::new(test_options(false), &config);
+        assert!(
+            !app.onboarding_needs_api_key,
+            "explicit config.api_key must satisfy the onboarding check"
         );
     }
 

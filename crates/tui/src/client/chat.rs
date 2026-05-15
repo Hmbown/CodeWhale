@@ -1396,15 +1396,6 @@ pub(super) fn tool_to_chat(tool: &Tool) -> Value {
             "parameters": tool.input_schema,
         }
     });
-    if let Some(allowed_callers) = &tool.allowed_callers {
-        value["allowed_callers"] = json!(allowed_callers);
-    }
-    if let Some(defer_loading) = tool.defer_loading {
-        value["defer_loading"] = json!(defer_loading);
-    }
-    if let Some(input_examples) = &tool.input_examples {
-        value["input_examples"] = json!(input_examples);
-    }
     if let Some(strict) = tool.strict
         && let Some(function) = value.get_mut("function")
     {

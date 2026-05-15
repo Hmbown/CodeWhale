@@ -2,7 +2,7 @@ import type { FeedItem, RepoStats } from "./types";
 
 const REPO = process.env.GITHUB_REPO ?? "Hmbown/deepseek-tui";
 const GH = "https://api.github.com";
-const MIN_KNOWN_CONTRIBUTORS = 69;
+const MIN_KNOWN_CONTRIBUTORS = 91;
 
 function headers(token?: string): HeadersInit {
   const h: Record<string, string> = {

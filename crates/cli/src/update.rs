@@ -13,6 +13,11 @@ use std::io::Write;
 
 const CHECKSUM_MANIFEST_ASSET: &str = "deepseek-artifacts-sha256.txt";
 const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/Hmbown/DeepSeek-TUI/releases/latest";
+const CNB_REPO_URL: &str = "https://cnb.cool/deepseek-tui.com/DeepSeek-TUI";
+const RELEASE_BASE_URL_ENV: &str = "DEEPSEEK_TUI_RELEASE_BASE_URL";
+const LEGACY_RELEASE_BASE_URL_ENV: &str = "DEEPSEEK_RELEASE_BASE_URL";
+const UPDATE_VERSION_ENV: &str = "DEEPSEEK_TUI_VERSION";
+const LEGACY_UPDATE_VERSION_ENV: &str = "DEEPSEEK_VERSION";
 const UPDATE_USER_AGENT: &str = "deepseek-tui-updater";
 
 /// Run the self-update workflow.
@@ -25,7 +30,7 @@ pub fn run_update() -> Result<()> {
     println!("Current binary: {}", current_exe.display());
 
     // Step 1: Fetch latest release metadata
-    let release = fetch_latest_release()?;
+    let release = fetch_latest_release().with_context(update_network_fallback_hint)?;
     let latest_tag = &release.tag_name;
     println!("Latest release: {latest_tag}");
 
@@ -33,8 +38,14 @@ pub fn run_update() -> Result<()> {
     let checksum_manifest = match select_checksum_manifest_asset(&release) {
         Some(checksum_asset) => {
             println!("Downloading {}...", checksum_asset.name);
-            let checksum_bytes = download_url(&checksum_asset.browser_download_url)
-                .with_context(|| format!("failed to download {}", checksum_asset.name))?;
+            let checksum_bytes =
+                download_url(&checksum_asset.browser_download_url).with_context(|| {
+                    format!(
+                        "failed to download {}\n{}",
+                        checksum_asset.name,
+                        update_network_fallback_hint()
+                    )
+                })?;
             let checksum_text = std::str::from_utf8(&checksum_bytes)
                 .with_context(|| format!("{} is not valid UTF-8", checksum_asset.name))?;
             Some(parse_checksum_manifest(checksum_text)?)
@@ -63,8 +74,13 @@ pub fn run_update() -> Result<()> {
         })?;
 
         println!("Downloading {}...", asset.name);
-        let bytes = download_url(&asset.browser_download_url)
-            .with_context(|| format!("failed to download {}", asset.name))?;
+        let bytes = download_url(&asset.browser_download_url).with_context(|| {
+            format!(
+                "failed to download {}\n{}",
+                asset.name,
+                update_network_fallback_hint()
+            )
+        })?;
 
         if let Some(checksums) = &checksum_manifest {
             let expected = checksums
@@ -176,6 +192,15 @@ fn release_asset_stem_for_prefix(prefix: &str, os: &str, rust_arch: &str) -> Str
     format!("{prefix}-{os}-{arch}")
 }
 
+fn release_asset_name_for_prefix(prefix: &str, os: &str, rust_arch: &str) -> String {
+    let stem = release_asset_stem_for_prefix(prefix, os, rust_arch);
+    if os == "windows" {
+        format!("{stem}.exe")
+    } else {
+        stem
+    }
+}
+
 #[cfg(test)]
 fn release_asset_stem_for(current_exe: &Path, os: &str, rust_arch: &str) -> String {
     let prefix = binary_prefix_for_exe(current_exe);
@@ -272,7 +297,72 @@ fn update_http_client() -> Result<reqwest::blocking::Client> {
 
 /// Fetch the latest release metadata from GitHub.
 fn fetch_latest_release() -> Result<Release> {
+    if let Some(base_url) = release_base_url_from_env() {
+        let version = update_version_from_env().unwrap_or_else(|| env!("CARGO_PKG_VERSION").into());
+        return Ok(release_from_mirror_base_url(
+            &base_url,
+            &version,
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+        ));
+    }
     fetch_latest_release_from_url(LATEST_RELEASE_URL)
+}
+
+fn release_base_url_from_env() -> Option<String> {
+    std::env::var(RELEASE_BASE_URL_ENV)
+        .ok()
+        .or_else(|| std::env::var(LEGACY_RELEASE_BASE_URL_ENV).ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn update_version_from_env() -> Option<String> {
+    std::env::var(UPDATE_VERSION_ENV)
+        .ok()
+        .or_else(|| std::env::var(LEGACY_UPDATE_VERSION_ENV).ok())
+        .map(|value| value.trim().trim_start_matches('v').to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn release_from_mirror_base_url(
+    base_url: &str,
+    version: &str,
+    os: &str,
+    rust_arch: &str,
+) -> Release {
+    let tag_name = format!("v{}", version.trim_start_matches('v'));
+    let mut assets = vec![Asset {
+        name: CHECKSUM_MANIFEST_ASSET.to_string(),
+        browser_download_url: mirror_asset_url(base_url, CHECKSUM_MANIFEST_ASSET),
+    }];
+
+    for prefix in ["deepseek", "deepseek-tui"] {
+        let name = release_asset_name_for_prefix(prefix, os, rust_arch);
+        assets.push(Asset {
+            browser_download_url: mirror_asset_url(base_url, &name),
+            name,
+        });
+    }
+
+    Release { tag_name, assets }
+}
+
+fn mirror_asset_url(base_url: &str, asset_name: &str) -> String {
+    format!("{}/{}", base_url.trim_end_matches('/'), asset_name)
+}
+
+fn update_network_fallback_hint() -> String {
+    format!(
+        "GitHub release downloads may be blocked or slow on this network.\n\
+         For mainland China, use one of these fallback paths:\n\
+           1. Source build from the CNB mirror, installing both shipped binaries:\n\
+              cargo install --git {CNB_REPO_URL} --tag vX.Y.Z deepseek-tui-cli --locked --force\n\
+              cargo install --git {CNB_REPO_URL} --tag vX.Y.Z deepseek-tui --locked --force\n\
+           2. Use a binary asset mirror:\n\
+              {RELEASE_BASE_URL_ENV}=https://<mirror>/<release-assets>/ {UPDATE_VERSION_ENV}=X.Y.Z deepseek update\n\
+         The mirror directory must contain {CHECKSUM_MANIFEST_ASSET} and the platform binaries."
+    )
 }
 
 fn fetch_latest_release_from_url(url: &str) -> Result<Release> {
@@ -682,6 +772,66 @@ E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  *deepseek-wind
             release_asset_stem_for(Path::new("/usr/local/bin/deepseek-tui"), "macos", "aarch64");
         let asset = select_platform_asset(&release, &stem).expect("TUI platform asset");
         assert_eq!(asset.name, "deepseek-tui-macos-arm64");
+    }
+
+    #[test]
+    fn mirror_release_uses_base_url_and_platform_assets() {
+        let release = release_from_mirror_base_url(
+            "https://mirror.example/releases/v0.8.36/",
+            "0.8.36",
+            "linux",
+            "x86_64",
+        );
+
+        assert_eq!(release.tag_name, "v0.8.36");
+        assert_eq!(release.assets[0].name, CHECKSUM_MANIFEST_ASSET);
+        assert_eq!(
+            release.assets[0].browser_download_url,
+            "https://mirror.example/releases/v0.8.36/deepseek-artifacts-sha256.txt"
+        );
+
+        let dispatcher =
+            select_platform_asset(&release, "deepseek-linux-x64").expect("dispatcher asset");
+        assert_eq!(
+            dispatcher.browser_download_url,
+            "https://mirror.example/releases/v0.8.36/deepseek-linux-x64"
+        );
+        let tui = select_platform_asset(&release, "deepseek-tui-linux-x64").expect("tui asset");
+        assert_eq!(
+            tui.browser_download_url,
+            "https://mirror.example/releases/v0.8.36/deepseek-tui-linux-x64"
+        );
+    }
+
+    #[test]
+    fn mirror_release_uses_windows_exe_asset_names() {
+        let release = release_from_mirror_base_url(
+            "https://mirror.example/releases/v0.8.36",
+            "v0.8.36",
+            "windows",
+            "x86_64",
+        );
+
+        assert_eq!(release.tag_name, "v0.8.36");
+        assert!(
+            select_platform_asset(&release, "deepseek-windows-x64")
+                .is_some_and(|asset| asset.name == "deepseek-windows-x64.exe")
+        );
+        assert!(
+            select_platform_asset(&release, "deepseek-tui-windows-x64")
+                .is_some_and(|asset| asset.name == "deepseek-tui-windows-x64.exe")
+        );
+    }
+
+    #[test]
+    fn update_fallback_hint_points_china_users_to_cnb_and_asset_mirrors() {
+        let hint = update_network_fallback_hint();
+
+        assert!(hint.contains(CNB_REPO_URL), "{hint}");
+        assert!(hint.contains(RELEASE_BASE_URL_ENV), "{hint}");
+        assert!(hint.contains(UPDATE_VERSION_ENV), "{hint}");
+        assert!(hint.contains("deepseek-tui-cli"), "{hint}");
+        assert!(hint.contains("deepseek-tui --locked"), "{hint}");
     }
 
     fn serve_http_once(

@@ -1,0 +1,88 @@
+# CNB is a one-way mirror from GitHub. Keep this file source-controlled here;
+# CNB-side edits will be overwritten by the GitHub -> CNB sync workflow.
+
+main:
+  push:
+    - docker:
+        image: node:22-bookworm
+      stages:
+        - name: feishu bridge tests
+          script: |
+            set -euo pipefail
+            cd integrations/feishu-bridge
+            npm ci
+            npm run check
+            npm test
+
+    - docker:
+        image: rust:1.88-bookworm
+      stages:
+        - name: release version check
+          script: |
+            set -euo pipefail
+            apt-get update
+            apt-get install -y git libdbus-1-dev nodejs pkg-config
+            ./scripts/release/check-versions.sh
+
+$:
+  tag_push:
+    - docker:
+        image: rust:1.88-bookworm
+      stages:
+        - name: build linux x64 release assets
+          script: |
+            set -euo pipefail
+
+            apt-get update
+            apt-get install -y git libdbus-1-dev nodejs pkg-config
+
+            ./scripts/release/check-versions.sh
+            cargo build --release --locked -p deepseek-tui-cli -p deepseek-tui
+
+            mkdir -p target/cnb-release
+            cp target/release/deepseek target/cnb-release/deepseek-linux-x64
+            cp target/release/deepseek-tui target/cnb-release/deepseek-tui-linux-x64
+            strip target/cnb-release/deepseek-linux-x64 target/cnb-release/deepseek-tui-linux-x64 || true
+
+            (
+              cd target/cnb-release
+              sha256sum deepseek-linux-x64 deepseek-tui-linux-x64 \
+                > deepseek-artifacts-sha256.txt
+            )
+
+            tag_name="${CNB_BRANCH:-}"
+            if [ -z "$tag_name" ]; then
+              tag_name="$(git describe --tags --exact-match 2>/dev/null || true)"
+            fi
+            version="${tag_name#v}"
+            commit_sha="${CNB_COMMIT:-$(git rev-parse HEAD)}"
+            {
+              echo "# ${tag_name:-CNB release}"
+              echo
+              awk -v version="${version}" '
+                index($0, "## [" version "]") == 1 { in_section = 1; next }
+                in_section && /^## \[/ { exit }
+                in_section { print }
+              ' CHANGELOG.md
+              echo
+              echo "Built by CNB from ${commit_sha}."
+              echo
+              echo "Assets:"
+              echo "- deepseek-linux-x64"
+              echo "- deepseek-tui-linux-x64"
+              echo "- deepseek-artifacts-sha256.txt"
+            } > target/cnb-release/CNB_RELEASE.md
+
+        - name: create cnb release
+          type: git:release
+          options:
+            descriptionFromFile: target/cnb-release/CNB_RELEASE.md
+            latest: true
+
+        - name: upload linux x64 release assets
+          image: cnbcool/attachments:latest
+          settings:
+            attachments:
+              - target/cnb-release/deepseek-linux-x64
+              - target/cnb-release/deepseek-tui-linux-x64
+              - target/cnb-release/deepseek-artifacts-sha256.txt

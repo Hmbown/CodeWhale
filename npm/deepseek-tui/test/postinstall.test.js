@@ -24,6 +24,33 @@ test("optional mode only changes install-time defaults", () => {
   assert.equal(_internal.defaultStallMs("runtime", { DEEPSEEK_TUI_OPTIONAL_INSTALL: "1" }), 30_000);
 });
 
+test("pnpm optional postinstall skips install-time download", () => {
+  assert.equal(
+    _internal.shouldSkipOptionalPostinstall("install", ["--optional"], {
+      npm_config_user_agent: "pnpm/10.11.0 npm/? node/v22.15.0 win32 x64",
+    }),
+    true,
+  );
+  assert.equal(
+    _internal.shouldSkipOptionalPostinstall("runtime", ["--optional"], {
+      npm_config_user_agent: "pnpm/10.11.0 npm/? node/v22.15.0 win32 x64",
+    }),
+    false,
+  );
+  assert.equal(
+    _internal.shouldSkipOptionalPostinstall("install", [], {
+      npm_config_user_agent: "pnpm/10.11.0 npm/? node/v22.15.0 win32 x64",
+    }),
+    false,
+  );
+  assert.equal(
+    _internal.shouldSkipOptionalPostinstall("install", ["--optional"], {
+      npm_config_user_agent: "npm/11.3.0 node/v22.15.0 win32 x64",
+    }),
+    false,
+  );
+});
+
 test("optional install only swallows retryable download failures", () => {
   const socketHangUp = new Error("socket hang up");
   assert.equal(

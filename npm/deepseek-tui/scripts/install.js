@@ -103,6 +103,18 @@ function isInstallContext(context) {
   return context === "install";
 }
 
+function isPnpmUserAgent(env = process.env) {
+  return String(env.npm_config_user_agent || "").toLowerCase().includes("pnpm/");
+}
+
+function shouldSkipOptionalPostinstall(
+  context,
+  argv = process.argv.slice(2),
+  env = process.env,
+) {
+  return isInstallContext(context) && isOptionalInstall(argv, env) && isPnpmUserAgent(env);
+}
+
 // Optional install only relaxes npm postinstall behavior. Runtime downloads
 // keep the normal retry/timeout budget so first-run recovery stays resilient.
 function defaultTimeoutMs(context = "runtime", env = process.env) {
@@ -1089,6 +1101,12 @@ async function run(options = {}) {
   if (process.env.DEEPSEEK_TUI_DISABLE_INSTALL === "1" || process.env.DEEPSEEK_DISABLE_INSTALL === "1") {
     return;
   }
+  if (shouldSkipOptionalPostinstall(context)) {
+    logInfo(
+      "pnpm optional postinstall detected; skipping install-time download. The binary will be checked on first run.",
+    );
+    return;
+  }
   const version = resolvePackageVersion();
   const repo = resolveRepo();
   const paths = binaryPaths();
@@ -1129,6 +1147,7 @@ module.exports = {
     isOptionalInstall,
     adoptExistingBinaryIfValid,
     shouldIgnoreInstallFailure,
+    shouldSkipOptionalPostinstall,
     defaultTimeoutMs,
     defaultStallMs,
     ensureBinary,

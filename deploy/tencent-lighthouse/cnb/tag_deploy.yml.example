@@ -1,0 +1,16 @@
+# Example CNB deployment environment.
+# Copy to .cnb/tag_deploy.yml only after the Lighthouse deploy target is ready.
+
+environments:
+  - name: lighthouse-hk
+    description: Deploy DeepSeek TUI to Tencent Lighthouse Hong Kong.
+    env:
+      name: lighthouse-hk
+    button:
+      - name: Deploy Lighthouse
+        description: Update /opt/whalebro/deepseek-tui, restart services, and run the Lighthouse doctor.
+        event: web_trigger_lighthouse
+        isDefault: true
+        permissions:
+          roles:
+            - master
