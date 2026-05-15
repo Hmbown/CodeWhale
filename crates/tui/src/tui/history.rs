@@ -6,7 +6,7 @@ use std::time::Instant;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use serde_json::Value;
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::deepseek_theme::active_theme;
 use crate::models::{ContentBlock, Message};
@@ -25,7 +25,7 @@ const TOOL_TEXT_LIMIT: usize = 180;
 const TOOL_HEADER_SUMMARY_LIMIT: usize = 56;
 const TOOL_OUTPUT_HEAD_LINES: usize = 2;
 const TOOL_OUTPUT_TAIL_LINES: usize = 2;
-const TOOL_RUNNING_SYMBOLS: [&str; 4] = ["·", "◦", "•", "◦"];
+const TOOL_RUNNING_SYMBOLS: [&str; 4] = ["✻", "✽", "✶", "✽"];
 // Spinner cadence per glyph. The status-animation tick (UI_STATUS_ANIMATION_MS
 // = 360 ms) fires every two glyphs, so a full 4-glyph "heartbeat" lands in
 // ~2.88 s — fast enough that the user sees motion within a few hundred ms of
@@ -33,18 +33,18 @@ const TOOL_RUNNING_SYMBOLS: [&str; 4] = ["·", "◦", "•", "◦"];
 const TOOL_STATUS_SYMBOL_MS: u64 = 720;
 /// Visual marker for the user role at the start of their message line. Solid
 /// vertical bar — no animation; user input is a finished thing.
-const USER_GLYPH: &str = "\u{258E}"; // ▎
+const USER_GLYPH: &str = ">";
 /// Visual marker for the assistant role. Solid bullet that pulses at 2s
 /// cycle while the response is streaming, holds full brightness when idle.
-const ASSISTANT_GLYPH: &str = "\u{25CF}"; // ●
+const ASSISTANT_GLYPH: &str = "\u{273B}"; // ✻
 /// Transcript body left rail. Solid 1/8 block (`▏`) followed by a space —
 /// used as a visual left-margin anchor for continuation lines, tool-card
 /// detail rows, and affordance lines. Dimmed so it guides the eye without
 /// competing with content.
-const TRANSCRIPT_RAIL: &str = "\u{258F} "; // ▏ + space
+const TRANSCRIPT_RAIL: &str = "  \u{23BF} "; // ⎿ + space
 /// Reasoning header opener. Replaces the spinner glyph on thinking cells —
 /// reasoning is a slow exhale, not a tool spin.
-const REASONING_OPENER: &str = "\u{2026}"; // …
+const REASONING_OPENER: &str = "\u{273B}"; // ✻
 /// Reasoning body left rail. Dashed (`╎`) instead of the solid `▏` block to
 /// visually separate reasoning from message body and tool output.
 const REASONING_RAIL: &str = "\u{254E} "; // ╎ + space
@@ -53,16 +53,17 @@ const REASONING_RAIL: &str = "\u{254E} "; // ╎ + space
 const REASONING_CURSOR: &str = "\u{258E}"; // ▎
 const TOOL_CARD_SUMMARY_LINES: usize = 4;
 const THINKING_SUMMARY_LINE_LIMIT: usize = 4;
-const TOOL_DONE_SYMBOL: &str = "•";
-const TOOL_FAILED_SYMBOL: &str = "•";
+const TOOL_DONE_SYMBOL: &str = "\u{23FA}"; // ⏺
+const TOOL_FAILED_SYMBOL: &str = "\u{23FA}"; // ⏺
 
 /// Render mode controlling whether tool/thinking cells render their compact
-/// "live" form (with caps and collapsed reasoning) or their full transcript
-/// form (uncapped, suitable for the pager / clipboard / message export).
+/// "live" form (with capped output and collapsed reasoning) or their full
+/// transcript form (uncapped, suitable for the pager / clipboard / message
+/// export).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenderMode {
     /// Live in-stream view: thinking is collapsed to a summary, tool output is
-    /// truncated with a "Alt+V for details" affordance.
+    /// shown with a Claude-style head/tail preview when very long.
     Live,
     /// Full transcript view: every line of reasoning and tool output is
     /// emitted, no caps, no affordance.
@@ -150,6 +151,8 @@ impl SubAgentCell {
 pub struct TranscriptRenderOptions {
     pub show_thinking: bool,
     pub verbose: bool,
+    /// Legacy config compatibility. Tool cards stay visible in the main
+    /// transcript; long outputs still use the live head/tail preview.
     pub show_tool_details: bool,
     pub calm_mode: bool,
     pub low_motion: bool,
@@ -261,24 +264,13 @@ impl HistoryCell {
                 !options.verbose,
                 options.low_motion,
             ),
-            HistoryCell::Tool(cell) if !options.show_tool_details => {
-                let mut lines = cell.lines_with_motion(width, options.low_motion);
-                if lines.len() > 2 {
-                    lines.truncate(2);
-                    lines.push(details_affordance_line(
-                        "details hidden",
-                        Style::default().fg(palette::TEXT_MUTED).italic(),
-                    ));
-                }
-                lines
-            }
             HistoryCell::Tool(cell) if options.calm_mode => {
                 let mut lines = cell.lines_with_motion(width, options.low_motion);
                 if lines.len() > TOOL_CARD_SUMMARY_LINES {
                     lines.truncate(TOOL_CARD_SUMMARY_LINES);
                     lines.push(details_affordance_line(
                         "Alt+V for details",
-                        Style::default().fg(palette::TEXT_MUTED).italic(),
+                        Style::default().fg(palette::TEXT_TOOL_SUMMARY).italic(),
                     ));
                 }
                 lines
@@ -712,7 +704,7 @@ impl ExecCell {
                 Style::default().fg(palette::TEXT_MUTED),
                 width,
             ));
-        } else {
+        } else if matches!(mode, RenderMode::Transcript) {
             lines.extend(render_command_mode(&self.command, width, mode));
         }
 
@@ -748,7 +740,7 @@ impl ExecCell {
             ));
         }
 
-        wrap_card_rail(lines)
+        clamp_tool_block_lines(lines, width)
     }
 }
 
@@ -1278,12 +1270,14 @@ impl GenericToolCell {
             None,
             low_motion,
         ));
-        lines.extend(render_compact_kv(
-            "name",
-            &self.name,
-            tool_value_style(),
-            width,
-        ));
+        if matches!(mode, RenderMode::Transcript) {
+            lines.extend(render_compact_kv(
+                "name",
+                &self.name,
+                tool_value_style(),
+                width,
+            ));
+        }
 
         // Prefer per-prompt rows over the generic args summary when the tool
         // exposes a list of child prompts. One row per child with a `[i]`
@@ -1342,7 +1336,7 @@ impl GenericToolCell {
                 lines.push(render_spillover_annotation(path, width));
             }
         }
-        wrap_card_rail(lines)
+        clamp_tool_block_lines(lines, width)
     }
 
     /// Render `agent_open`/legacy `agent_spawn` as a single compact summary line for live
@@ -1672,11 +1666,11 @@ fn render_checklist_change_card(
 
 fn checklist_status_marker(status: &str) -> (&'static str, Color) {
     match status.to_ascii_lowercase().as_str() {
-        "completed" | "done" => ("\u{2611}", palette::STATUS_SUCCESS), // ☑
+        "completed" | "done" => ("\u{2611}", palette::DEEPSEEK_BLUE), // ☑
         "in_progress" | "inprogress" | "running" => ("\u{25D0}", palette::DEEPSEEK_SKY), // ◐
-        "blocked" | "failed" => ("\u{2717}", palette::STATUS_ERROR),   // ✗
+        "blocked" | "failed" => ("\u{2717}", palette::STATUS_ERROR),  // ✗
         "cancelled" | "canceled" | "skipped" => ("\u{2298}", palette::TEXT_MUTED), // ⊘
-        _ => ("\u{2610}", palette::TEXT_MUTED),                        // ☐ pending
+        _ => ("\u{2610}", palette::TEXT_MUTED),                       // ☐ pending
     }
 }
 
@@ -2250,7 +2244,7 @@ fn render_command_mode(command: &str, width: u16, mode: RenderMode) -> Vec<Line<
         if count >= cap {
             lines.push(details_affordance_line(
                 "command clipped; Alt+V for details",
-                Style::default().fg(palette::TEXT_MUTED),
+                Style::default().fg(palette::TEXT_TOOL_SUMMARY),
             ));
             break;
         }
@@ -2286,29 +2280,65 @@ fn render_compact_kv(label: &str, value: &str, style: Style, width: u16) -> Vec<
     render_card_detail_line(Some(label.trim_end_matches(':')), value, style, width)
 }
 
-/// Wrap rendered tool-card lines with card-rail glyphs (╭ │ ╰).
-/// First non-empty line gets `╭`, middle lines get `│`, last line gets `╰`.
-/// Single-line cards get a single `─` prefix.
-fn wrap_card_rail(mut lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
-    let n = lines.len();
-    if n == 0 {
-        return lines;
-    }
-    if n == 1 {
-        lines[0].spans.insert(0, Span::raw("─ "));
-        return lines;
-    }
-    for (i, line) in lines.iter_mut().enumerate() {
-        let rail = if i == 0 {
-            "\u{256D} " // ╭
-        } else if i == n - 1 {
-            "\u{2570} " // ╰
-        } else {
-            "\u{2502} " // │
-        };
-        line.spans.insert(0, Span::raw(rail));
+/// Clamp rendered tool-call rows to the target width.
+///
+/// Claude-style transcript rendering does not draw a box around tool calls:
+/// the header carries the tool identity, and body rows use the lightweight
+/// `⎿` detail prefix.
+fn clamp_tool_block_lines(mut lines: Vec<Line<'static>>, width: u16) -> Vec<Line<'static>> {
+    for line in &mut lines {
+        clamp_line_to_width(line, width);
     }
     lines
+}
+
+fn clamp_line_to_width(line: &mut Line<'static>, width: u16) {
+    let mut remaining = usize::from(width);
+    let mut clamped = Vec::with_capacity(line.spans.len());
+    for span in line.spans.drain(..) {
+        if remaining == 0 {
+            break;
+        }
+        let span_width = UnicodeWidthStr::width(span.content.as_ref());
+        if span_width <= remaining {
+            remaining = remaining.saturating_sub(span_width);
+            clamped.push(span);
+            continue;
+        }
+        let content = truncate_to_display_width(span.content.as_ref(), remaining);
+        if !content.is_empty() {
+            clamped.push(Span::styled(content, span.style));
+        }
+        break;
+    }
+    line.spans = clamped;
+}
+
+fn truncate_to_display_width(text: &str, max_width: usize) -> String {
+    if max_width == 0 {
+        return String::new();
+    }
+    if UnicodeWidthStr::width(text) <= max_width {
+        return text.to_string();
+    }
+    if max_width == 1 {
+        return "\u{2026}".to_string();
+    }
+
+    let suffix = "\u{2026}";
+    let mut out = String::new();
+    let mut used = 0usize;
+    let budget = max_width.saturating_sub(UnicodeWidthStr::width(suffix));
+    for ch in text.chars() {
+        let ch_width = ch.width().unwrap_or(0);
+        if used + ch_width > budget {
+            break;
+        }
+        out.push(ch);
+        used += ch_width;
+    }
+    out.push_str(suffix);
+    out
 }
 
 fn render_tool_output_mode(
@@ -2317,7 +2347,7 @@ fn render_tool_output_mode(
     line_limit: usize,
     mode: RenderMode,
 ) -> Vec<Line<'static>> {
-    render_preserved_output_mode(output, width, line_limit, mode, "result")
+    render_preserved_output_mode(output, width, line_limit, mode, "")
 }
 
 fn review_severity_color(severity: &str) -> Color {
@@ -2344,7 +2374,7 @@ fn render_exec_output_mode(
     line_limit: usize,
     mode: RenderMode,
 ) -> Vec<Line<'static>> {
-    render_preserved_output_mode(output, width, line_limit, mode, "output")
+    render_preserved_output_mode(output, width, line_limit, mode, "")
 }
 
 #[derive(Debug, Clone)]
@@ -2377,7 +2407,11 @@ fn render_preserved_output_mode(
         for (idx, row) in all_lines.iter().enumerate() {
             render_output_row(
                 &mut lines,
-                if idx == 0 { Some(first_label) } else { None },
+                if idx == 0 && !first_label.is_empty() {
+                    Some(first_label)
+                } else {
+                    None
+                },
                 row,
                 width,
             );
@@ -2393,7 +2427,7 @@ fn render_preserved_output_mode(
             if omitted > 0 {
                 lines.push(details_affordance_line(
                     &format!("{omitted} lines omitted; Alt+V for details"),
-                    Style::default().fg(palette::TEXT_MUTED),
+                    Style::default().fg(palette::TEXT_TOOL_SUMMARY),
                 ));
             }
         }
@@ -2401,7 +2435,7 @@ fn render_preserved_output_mode(
         let row = &all_lines[idx];
         render_output_row(
             &mut lines,
-            if rendered_idx == 0 {
+            if rendered_idx == 0 && !first_label.is_empty() {
                 Some(first_label)
             } else {
                 None
@@ -2719,14 +2753,14 @@ fn truncate_text(text: &str, max_len: usize) -> String {
 }
 
 fn user_label_style() -> Style {
-    Style::default().fg(palette::TEXT_MUTED)
+    Style::default().fg(palette::TEXT_SOFT)
 }
 
 fn user_body_style() -> Style {
     Style::default().fg(palette::USER_BODY)
 }
 
-/// Style for the assistant glyph (`●`). When the cell is streaming and
+/// Style for the assistant glyph (`✻`). When the cell is streaming and
 /// motion is allowed, the foreground pulses on a 2s cycle between 30% and
 /// 100% brightness — the only deliberately animated element in a calm
 /// transcript. When idle (or low_motion is on) it sits at the full DeepSeek
@@ -2737,9 +2771,9 @@ fn assistant_label_style_for(streaming: bool, low_motion: bool) -> Style {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
-        palette::pulse_brightness(palette::DEEPSEEK_SKY, now_ms)
+        palette::pulse_brightness(palette::ACCENT_TOOL_LIVE, now_ms)
     } else {
-        palette::DEEPSEEK_SKY
+        palette::ACCENT_TOOL_LIVE
     };
     Style::default().fg(color)
 }
@@ -2749,7 +2783,7 @@ fn system_label_style() -> Style {
 }
 
 fn message_body_style() -> Style {
-    Style::default().fg(palette::TEXT_PRIMARY)
+    Style::default().fg(Color::White)
 }
 
 fn system_body_style() -> Style {
@@ -2853,32 +2887,45 @@ fn render_tool_header_with_family_and_summary(
         state.to_string()
     };
 
-    let glyph = crate::tui::widgets::tool_card::family_glyph(family);
     let verb = crate::tui::widgets::tool_card::family_label(family);
+
+    let summary = summary.and_then(normalize_header_summary);
 
     let mut spans = vec![
         Span::styled(
             format!("{} ", status_symbol(started_at, status, low_motion)),
             Style::default().fg(tool_state_color(status)),
         ),
-        Span::styled(
-            format!("{glyph} "),
-            Style::default().fg(tool_state_color(status)),
-        ),
         Span::styled(verb.to_string(), tool_title_style()),
-        Span::styled(" ", Style::default()),
-        Span::styled(state_owned, tool_status_style(status)),
     ];
 
-    if let Some(summary) = summary.and_then(normalize_header_summary) {
-        spans.push(Span::styled(" · ", Style::default().fg(palette::TEXT_DIM)));
+    if let Some(summary) = summary {
+        let summary_style = tool_header_summary_style(family);
+        spans.push(Span::styled(
+            "(",
+            Style::default().fg(palette::TEXT_TOOL_SUMMARY_DIM),
+        ));
         spans.push(Span::styled(
             truncate_text(&summary, TOOL_HEADER_SUMMARY_LIMIT),
-            Style::default().fg(palette::TEXT_MUTED),
+            summary_style,
         ));
+        spans.push(Span::styled(
+            ")",
+            Style::default().fg(palette::TEXT_TOOL_SUMMARY_DIM),
+        ));
+    } else {
+        spans.push(Span::styled(" ", Style::default()));
+        spans.push(Span::styled(state_owned, tool_status_style(status)));
     }
 
     Line::from(spans)
+}
+
+fn tool_header_summary_style(family: crate::tui::widgets::tool_card::ToolFamily) -> Style {
+    match family {
+        crate::tui::widgets::tool_card::ToolFamily::Run => tool_value_style(),
+        _ => Style::default().fg(palette::TEXT_TOOL_SUMMARY),
+    }
 }
 
 fn normalize_header_summary(summary: &str) -> Option<String> {
@@ -3160,15 +3207,16 @@ fn looks_like_file_path(s: &str) -> bool {
 mod tests {
     use super::{
         ASSISTANT_GLYPH, ExecCell, ExecSource, GenericToolCell, HistoryCell, PlanStep,
-        PlanUpdateCell, REASONING_CURSOR, REASONING_OPENER, REASONING_RAIL, TOOL_RUNNING_SYMBOLS,
-        TOOL_STATUS_SYMBOL_MS, ToolCell, ToolStatus, TranscriptRenderOptions, USER_GLYPH,
-        assistant_label_style_for, extract_reasoning_summary, render_thinking,
+        PlanUpdateCell, REASONING_CURSOR, REASONING_OPENER, REASONING_RAIL, RenderMode,
+        TOOL_OUTPUT_LINE_LIMIT, TOOL_RUNNING_SYMBOLS, TOOL_STATUS_SYMBOL_MS, ToolCell, ToolStatus,
+        TranscriptRenderOptions, USER_GLYPH, assistant_label_style_for, extract_reasoning_summary,
+        render_thinking, render_tool_header_with_family_and_summary, render_tool_output_mode,
         running_status_label_with_elapsed,
     };
     use crate::deepseek_theme::Theme;
     use crate::models::{ContentBlock, Message};
     use crate::palette;
-    use ratatui::style::Modifier;
+    use ratatui::style::{Color, Modifier};
     use std::time::{Duration, Instant};
 
     // ---- elapsed-seconds badge for long-running tools ----
@@ -3356,14 +3404,15 @@ mod tests {
         // One header line, no details/args/output expansion.
         assert_eq!(lines.len(), 1, "expected exactly 1 line, got {:?}", lines);
         let rendered: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
-        // Header carries the agent id and the running status.
+        // Header carries the agent id; running status is carried by the
+        // animated status glyph, matching the Claude-style compact row.
         assert!(
             rendered.contains("agent-abc12"),
             "expected agent id in header: {rendered:?}"
         );
         assert!(
-            rendered.contains("running"),
-            "expected status in header: {rendered:?}"
+            !rendered.contains("running"),
+            "status text should not clutter the compact row: {rendered:?}"
         );
         // No verbose `args:` / `name:` rows.
         assert!(
@@ -3752,9 +3801,8 @@ mod tests {
             },
         );
 
-        // Index 0 is card-rail glyph (╭); the animated symbol is at index 1.
-        let animated_symbol = animated[0].spans[1].content.trim();
-        let low_motion_symbol = low_motion[0].spans[1].content.trim();
+        let animated_symbol = animated[0].spans[0].content.trim();
+        let low_motion_symbol = low_motion[0].spans[0].content.trim();
 
         // low_motion always pins to the first (static) frame.
         assert_eq!(low_motion_symbol, TOOL_RUNNING_SYMBOLS[0]);
@@ -3806,6 +3854,39 @@ mod tests {
             "assistant label dropped: {visible:?}"
         );
         assert!(visible.contains("ready"));
+    }
+
+    #[test]
+    fn assistant_summary_body_uses_pure_white_markdown() {
+        let cell = HistoryCell::Assistant {
+            content: "1. **Relocation 引擎**: `cold_compile_source_to_object` 已收敛".to_string(),
+            streaming: false,
+        };
+        let lines = cell.lines(120);
+        let line = &lines[0];
+
+        let bullet = line
+            .spans
+            .iter()
+            .find(|span| span.content == "1. ")
+            .expect("numbered list marker");
+        assert_eq!(bullet.style.fg, Some(Color::White));
+
+        let bold = line
+            .spans
+            .iter()
+            .find(|span| span.content == "Relocation")
+            .expect("bold span");
+        assert_eq!(bold.style.fg, Some(Color::White));
+        assert!(bold.style.add_modifier.contains(Modifier::BOLD));
+
+        let code = line
+            .spans
+            .iter()
+            .find(|span| span.content == "cold_compile_source_to_object")
+            .expect("inline code span");
+        assert_eq!(code.style.fg, Some(palette::TEXT_MARKDOWN_CODE));
+        assert_eq!(code.style.bg, None);
     }
 
     #[test]
@@ -3911,11 +3992,11 @@ mod tests {
     #[test]
     fn assistant_glyph_holds_full_brightness_when_idle() {
         // Idle (streaming=false) and low_motion both pin the colour to the
-        // source sky — pulse only fires when actively streaming.
+        // source accent — pulse only fires when actively streaming.
         let idle = assistant_label_style_for(false, false);
         let low_motion = assistant_label_style_for(true, true);
-        assert_eq!(idle.fg, Some(palette::DEEPSEEK_SKY));
-        assert_eq!(low_motion.fg, Some(palette::DEEPSEEK_SKY));
+        assert_eq!(idle.fg, Some(palette::ACCENT_TOOL_LIVE));
+        assert_eq!(low_motion.fg, Some(palette::ACCENT_TOOL_LIVE));
     }
 
     #[test]
@@ -3929,8 +4010,8 @@ mod tests {
         let mut saw_dimmed = false;
         for _ in 0..50 {
             if let Some(Color::Rgb(_, _, b)) = assistant_label_style_for(true, false).fg {
-                let Color::Rgb(_, _, src_b) = palette::DEEPSEEK_SKY else {
-                    panic!("DEEPSEEK_SKY must be RGB");
+                let Color::Rgb(_, _, src_b) = palette::ACCENT_TOOL_LIVE else {
+                    panic!("ACCENT_TOOL_LIVE must be RGB");
                 };
                 if b < src_b {
                     saw_dimmed = true;
@@ -3945,10 +4026,10 @@ mod tests {
         );
     }
 
-    // === Tool-card verb-glyph tests (v0.6.6 UI redesign) ===
+    // === Tool-card label tests (Claude-style transcript) ===
 
     #[test]
-    fn exec_cell_header_uses_run_verb_glyph_and_label() {
+    fn exec_cell_header_uses_bash_label() {
         let cell = ExecCell {
             command: "ls".to_string(),
             status: ToolStatus::Success,
@@ -3966,10 +4047,13 @@ mod tests {
             .map(|s| s.content.as_ref())
             .collect::<String>();
         assert!(
-            visible.contains('\u{25B6}'),
-            "Run glyph `▶` present: {visible:?}"
+            visible.contains("\u{23FA} Bash(ls)"),
+            "Bash call label present: {visible:?}"
         );
-        assert!(visible.contains(" run "), "verb label `run`: {visible:?}");
+        assert!(
+            !visible.contains(" done "),
+            "done state is implicit: {visible:?}"
+        );
         // Old literal title must be gone.
         assert!(
             !visible.contains("Shell"),
@@ -3996,9 +4080,9 @@ mod tests {
             .iter()
             .map(|s| s.content.as_ref())
             .collect::<String>();
-        assert!(visible.contains("run running"));
+        assert!(!visible.contains("Bash running"));
         assert!(
-            visible.contains("cargo test --workspace --all-features"),
+            visible.contains("Bash(cargo test --workspace --all-features)"),
             "header should expose command target: {visible:?}"
         );
     }
@@ -4021,14 +4105,10 @@ mod tests {
             .iter()
             .map(|s| s.content.as_ref())
             .collect::<String>();
-        // agent_spawn → Delegate family (◐ delegate).
+        // agent_spawn → Task family in Claude-style compact transcript.
         assert!(
-            header_visible.contains('\u{25D0}'),
-            "Delegate glyph `◐`: {header_visible:?}"
-        );
-        assert!(
-            header_visible.contains(" delegate "),
-            "verb label `delegate`: {header_visible:?}"
+            header_visible.contains("Task("),
+            "Task label: {header_visible:?}"
         );
     }
 
@@ -4051,10 +4131,7 @@ mod tests {
             .map(|s| s.content.as_ref())
             .collect::<String>();
 
-        assert!(
-            header_visible.contains(" rlm "),
-            "RLM card should identify RLM work: {header_visible:?}"
-        );
+        assert!(header_visible.contains("RLM(compare source trees)"));
         assert!(
             !header_visible.contains("swarm"),
             "RLM card must not use removed swarm wording: {header_visible:?}"
@@ -4144,6 +4221,42 @@ mod tests {
         );
     }
 
+    #[test]
+    fn run_tool_header_command_uses_pure_white() {
+        let header = render_tool_header_with_family_and_summary(
+            crate::tui::widgets::tool_card::ToolFamily::Run,
+            Some("cd /tmp && ls"),
+            "done",
+            ToolStatus::Success,
+            None,
+            true,
+        );
+
+        assert_eq!(
+            header.spans[2].style.fg,
+            Some(palette::TEXT_TOOL_SUMMARY_DIM)
+        );
+        assert_eq!(header.spans[3].style.fg, Some(Color::White));
+        assert_eq!(
+            header.spans[4].style.fg,
+            Some(palette::TEXT_TOOL_SUMMARY_DIM)
+        );
+    }
+
+    #[test]
+    fn non_command_tool_header_summary_uses_neutral_gray() {
+        let header = render_tool_header_with_family_and_summary(
+            crate::tui::widgets::tool_card::ToolFamily::Find,
+            Some("TODO"),
+            "done",
+            ToolStatus::Success,
+            None,
+            true,
+        );
+
+        assert_eq!(header.spans[3].style.fg, Some(palette::TEXT_TOOL_SUMMARY));
+    }
+
     // === Theme parity tests ===
     //
     // These lock the visible color/style choices for one plan cell and one
@@ -4175,17 +4288,12 @@ mod tests {
 
         let lines = cell.lines_with_motion(80, true);
 
-        // Header: "<spinner> <family-glyph> <verb> <state>" (v0.6.6 layout).
-        // PlanUpdate has no canonical family yet, so it falls into the
-        // Generic bullet glyph + "tool" verb. The shape and colour wiring
-        // is what matters for the theme parity; the verb text moves with
-        // the redesign.
-        // PlanUpdate does NOT use card-rail wrapping (separate render path).
+        // Header: "<spinner> Tool <state>".
+        // PlanUpdate uses its own lightweight render path.
         let header = &lines[0];
         let symbol_span = &header.spans[0];
-        let glyph_span = &header.spans[1];
-        let title_span = &header.spans[2];
-        let state_span = &header.spans[4];
+        let title_span = &header.spans[1];
+        let state_span = &header.spans[3];
 
         assert_eq!(
             symbol_span.style.fg,
@@ -4193,14 +4301,9 @@ mod tests {
             "running header symbol should use the dark theme running accent"
         );
         assert_eq!(
-            glyph_span.style.fg,
-            Some(theme.tool_running_accent),
-            "family glyph rides the same status colour as the spinner"
-        );
-        assert_eq!(
             title_span.content.as_ref(),
-            "tool",
-            "PlanUpdate routes to Generic family → 'tool' verb",
+            "Tool",
+            "PlanUpdate routes to Generic family → 'Tool' label",
         );
         assert_eq!(title_span.style.fg, Some(theme.tool_title_color));
         assert!(
@@ -4239,9 +4342,9 @@ mod tests {
                     .collect::<String>()
             })
             .collect::<Vec<_>>();
-        assert_eq!(visible[1].trim_end(), "▏ done: scan repo");
-        assert_eq!(visible[2].trim_end(), "▏ live: extract theme");
-        assert_eq!(visible[3].trim_end(), "▏ next: land tests");
+        assert_eq!(visible[1].trim_end(), "  ⎿ done: scan repo");
+        assert_eq!(visible[2].trim_end(), "  ⎿ live: extract theme");
+        assert_eq!(visible[3].trim_end(), "  ⎿ next: land tests");
     }
 
     #[test]
@@ -4261,31 +4364,28 @@ mod tests {
         let lines = cell.lines_with_motion(80, true);
 
         let header = &lines[0];
-        let symbol_span = &header.spans[1];
-        let glyph_span = &header.spans[2];
-        let title_span = &header.spans[3];
-        let state_span = &header.spans[5];
+        let symbol_span = &header.spans[0];
+        let title_span = &header.spans[1];
 
         assert_eq!(
             symbol_span.style.fg,
             Some(theme.tool_failed_accent),
             "failed exec header symbol should use the dark theme failed accent"
         );
-        // ExecCell is family Run → glyph `▶ ` and verb `run`.
-        assert!(
-            glyph_span.content.starts_with('\u{25B6}'),
-            "Run family glyph: {:?}",
-            glyph_span.content
-        );
         assert_eq!(
             title_span.content.as_ref(),
-            "run",
-            "ExecCell routes to Run family → 'run' verb",
+            "Bash",
+            "ExecCell routes to Run family → 'Bash' label",
         );
         assert_eq!(title_span.style.fg, Some(theme.tool_title_color));
         assert!(title_span.style.add_modifier.contains(Modifier::BOLD));
-        assert_eq!(state_span.content.as_ref(), "issue");
-        assert_eq!(state_span.style.fg, Some(theme.tool_failed_accent));
+        let visible: String = header
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert!(visible.contains("Bash(false)"));
+        assert!(!visible.contains(" issue"));
     }
 
     // === display_lines (lines_with_options) vs transcript_lines parity ===
@@ -4410,7 +4510,7 @@ mod tests {
 
     #[test]
     fn tool_exec_live_caps_output_transcript_does_not() {
-        // Live mode renders head+tail with card-rail wrapping and "Alt+V" affordance.
+        // Live mode renders head+tail with a lightweight "Alt+V" affordance.
         // Transcript mode emits the full output uncapped.
         let total_output_lines = 30usize;
         let output = (0..total_output_lines)
@@ -4611,7 +4711,37 @@ mod tests {
     }
 
     #[test]
-    fn generic_tool_output_live_renders_card_rail() {
+    fn show_tool_details_false_keeps_tool_call_and_result_visible() {
+        let cell = HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
+            name: "exec_shell".to_string(),
+            status: ToolStatus::Success,
+            input_summary: Some("command: cargo test".to_string()),
+            output: Some("compile ok\nunit ok".to_string()),
+            prompts: None,
+            spillover_path: None,
+            output_summary: None,
+            is_diff: false,
+        }));
+
+        let rendered = cell.lines_with_options(
+            80,
+            TranscriptRenderOptions {
+                show_tool_details: false,
+                low_motion: true,
+                ..TranscriptRenderOptions::default()
+            },
+        );
+        let text = lines_text(&rendered);
+
+        assert!(text.contains("Bash(cargo test)"), "{text}");
+        assert!(text.contains("compile ok"), "{text}");
+        assert!(text.contains("unit ok"), "{text}");
+        assert!(!text.contains("name: exec_shell"), "{text}");
+        assert!(!text.contains("details hidden"), "{text}");
+    }
+
+    #[test]
+    fn generic_tool_output_live_renders_lightweight_block() {
         let output = (0..24usize)
             .map(|i| format!("line {i:02}"))
             .collect::<Vec<_>>()
@@ -4630,18 +4760,60 @@ mod tests {
         let live_text =
             lines_text(&cell.lines_with_options(80, TranscriptRenderOptions::default()));
 
-        // Card-rail wrapping: first line starts with ╭, last with ╰.
-        assert!(
-            live_text.starts_with('\u{256D}'),
-            "live view must start with card-rail top glyph ╭: {live_text}"
-        );
+        assert!(live_text.starts_with('\u{23FA}'), "{live_text}");
+        assert!(!live_text.contains('\u{256D}'), "{live_text}");
+        assert!(!live_text.contains('\u{2570}'), "{live_text}");
+        assert!(!live_text.contains("output:"), "{live_text}");
         assert!(live_text.contains("Alt+V for details"));
         assert!(live_text.contains("line 00"));
         assert!(live_text.contains("line 23"));
     }
 
     #[test]
-    fn tool_output_live_preserves_error_card_rail() {
+    fn tool_output_omission_affordance_uses_summary_color() {
+        let output = (0..24usize)
+            .map(|i| format!("line {i:02}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let rendered =
+            render_tool_output_mode(&output, 80, TOOL_OUTPUT_LINE_LIMIT, RenderMode::Live);
+
+        let omitted = rendered
+            .iter()
+            .find(|line| {
+                line.spans
+                    .iter()
+                    .any(|span| span.content.contains("lines omitted"))
+            })
+            .expect("omission affordance");
+        let text_span = omitted
+            .spans
+            .iter()
+            .find(|span| span.content.contains("lines omitted"))
+            .expect("omission text span");
+
+        assert_eq!(text_span.style.fg, Some(palette::TEXT_TOOL_SUMMARY));
+    }
+
+    #[test]
+    fn tool_output_body_uses_pure_white() {
+        let rendered = render_tool_output_mode(
+            "compile ok\nnext step ready",
+            80,
+            TOOL_OUTPUT_LINE_LIMIT,
+            RenderMode::Live,
+        );
+
+        let body_span = rendered[0]
+            .spans
+            .iter()
+            .find(|span| span.content == "compile ok")
+            .expect("tool output body span");
+        assert_eq!(body_span.style.fg, Some(Color::White));
+    }
+
+    #[test]
+    fn tool_output_live_preserves_error_preview() {
         let output = [
             "start",
             "still starting",

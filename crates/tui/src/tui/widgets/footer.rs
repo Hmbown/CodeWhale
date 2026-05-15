@@ -13,7 +13,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Paragraph, Widget},
 };
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::localization::{Locale, MessageId, tr};
 use crate::palette;
@@ -76,61 +76,92 @@ pub struct FooterProps {
     /// Optional toast that, when present, replaces the left status line.
     pub toast: Option<FooterToast>,
     /// When `Some(frame_idx)`, the gap between the left status line and the
-    /// right-hand chips is filled with an animated water-spout strip keyed
-    /// off `frame_idx` (deterministic given the frame). `None` keeps the gap
-    /// as plain whitespace, which is the idle/ready state.
+    /// right-hand chips is filled with a compact DeepSeek whale mark keyed off
+    /// `frame_idx` (deterministic given the frame). `None` keeps the gap as
+    /// plain whitespace, which is the idle/ready state.
     pub working_strip_frame: Option<u64>,
 }
 
-const WAVE_GLYPHS: [char; 8] = [
-    '\u{2581}', // ▁
-    '\u{2582}', // ▂
-    '\u{2583}', // ▃
-    '\u{2584}', // ▄
-    '\u{2585}', // ▅
-    '\u{2586}', // ▆
-    '\u{2587}', // ▇
-    '\u{2588}', // █
+const WORKING_STRIP_WHALE: char = '\u{1F40B}';
+const WORKING_STRIP_WAKE: char = '~';
+const WORKING_STRIP_BUBBLE: char = '\u{00B7}';
+const WORKING_STRIP_GLYPHS: [char; 3] = [
+    WORKING_STRIP_BUBBLE,
+    WORKING_STRIP_WAKE,
+    WORKING_STRIP_WHALE,
 ];
+const WORKING_STRIP_FRAME_MS: u64 = 80;
+const WORKING_STRIP_ENTRY_PADDING: isize = 5;
+const WORKING_STRIP_EXIT_PADDING: isize = 3;
 
-/// One frame of the footer's live-work wave animation. `col` is the cell
-/// index inside the strip, `width` the strip's total width, `frame` the raw
-/// millisecond counter. Returns the glyph that should appear in that cell on
-/// that frame.
+fn working_strip_whale_width() -> isize {
+    WORKING_STRIP_WHALE.width().unwrap_or(2).max(1) as isize
+}
+
+fn footer_working_strip_head(width: usize, frame: u64) -> isize {
+    let whale_width = working_strip_whale_width();
+    let cycle =
+        width as isize + WORKING_STRIP_ENTRY_PADDING + whale_width + WORKING_STRIP_EXIT_PADDING;
+    let tick = (frame / WORKING_STRIP_FRAME_MS) as isize;
+    (tick % cycle.max(1)) - WORKING_STRIP_ENTRY_PADDING
+}
+
+/// One frame of the footer's live-work whale animation. `col` is a display
+/// column inside the strip, `width` the strip's total display width, `frame`
+/// the raw millisecond counter. Returns the glyph that should start in that
+/// column on that frame.
 ///
-/// Visual: a full-width phase-shifted wave made from one-cell block-height
-/// glyphs. The earlier crest-pair animation only changed when rounded crest
-/// positions crossed a terminal cell boundary; at an 80 ms repaint cadence it
-/// read as visible hops. Sampling a few moving sine components gives every
-/// repaint a new surface while keeping the math deterministic for tests.
+/// Visual: a sparse `~~·🐋·~~` mark swims through otherwise empty space. The
+/// whale is DeepSeek's recognizable cue; the builder below is width-aware so
+/// the double-width glyph does not push the footer's right-hand chips.
 #[must_use]
 pub fn footer_working_strip_glyph_at(col: usize, width: usize, frame: u64) -> char {
     if width == 0 {
         return ' ';
     }
 
-    let t = frame as f64 / 1000.0;
-    let x = col as f64;
+    let head = footer_working_strip_head(width, frame);
+    let whale_width = working_strip_whale_width();
+    let col = col as isize;
+    let whale_fully_visible = head >= 0 && head + whale_width <= width as isize;
 
-    let primary = (x * 0.52 - t * 8.0).sin();
-    let swell = (x * 0.18 + t * 3.1).sin() * 0.35;
-    let shimmer = (x * 1.35 - t * 11.0).sin() * 0.12;
-    let value = ((primary + swell + shimmer) / 1.47).clamp(-1.0, 1.0);
-    let normalized = (value + 1.0) * 0.5;
-    let idx = (normalized * (WAVE_GLYPHS.len() - 1) as f64).round() as usize;
-    WAVE_GLYPHS[idx.min(WAVE_GLYPHS.len() - 1)]
+    if whale_fully_visible && col == head {
+        return WORKING_STRIP_GLYPHS[2];
+    }
+    if whale_fully_visible && (head..head + whale_width).contains(&col) {
+        return ' ';
+    }
+
+    let offset = col - head;
+    if offset == -3 || offset == -2 || offset == whale_width + 1 || offset == whale_width + 2 {
+        WORKING_STRIP_GLYPHS[1]
+    } else if offset == -1 || offset == whale_width {
+        WORKING_STRIP_GLYPHS[0]
+    } else {
+        ' '
+    }
 }
 
-/// Build the per-frame live-work wave string of `width` characters. Empty string
-/// when width is 0. The result is the same visual width as requested (one
-/// char per column for the selected block-height glyphs) and is safe to drop
-/// into a `Span` between the footer's left and right segments.
+/// Build the per-frame live-work whale string of `width` display cells. Empty
+/// string when width is 0. The result is the same visual width as requested and
+/// is safe to drop into a `Span` between the footer's left and right segments.
 #[must_use]
 pub fn footer_working_strip_string(width: usize, frame: u64) -> String {
     let mut out = String::with_capacity(width * 4);
-    for col in 0..width {
-        out.push(footer_working_strip_glyph_at(col, width, frame));
+    let head = footer_working_strip_head(width, frame);
+    let whale_width = working_strip_whale_width();
+    let whale_fully_visible = head >= 0 && head + whale_width <= width as isize;
+    let mut col = 0isize;
+    while col < width as isize {
+        if whale_fully_visible && col == head {
+            out.push(WORKING_STRIP_WHALE);
+            col += whale_width;
+        } else {
+            out.push(footer_working_strip_glyph_at(col as usize, width, frame));
+            col += 1;
+        }
     }
+    debug_assert_eq!(UnicodeWidthStr::width(out.as_str()), width);
     out
 }
 
@@ -366,7 +397,7 @@ impl FooterWidget {
     /// chooses one of (`mode · model · cost · status`, `mode · model · cost`,
     /// `mode · model`, `mode`) and renders that single line within
     /// `max_width`. Cost lives between model and status so the eye finds
-    /// "what's this run going to cost me" without scanning past the wave.
+    /// "what's this run going to cost me" without scanning past animation.
     fn status_line_spans(&self, max_width: usize) -> Vec<Span<'static>> {
         if max_width == 0 {
             return Vec::new();
@@ -577,8 +608,8 @@ impl Renderable for FooterWidget {
         let left_width = span_width(&left_spans);
         let spacer_width = available_width.saturating_sub(left_width + right_width);
 
-        // When a turn is in flight, fill the gap with a thin animated water-
-        // spout strip; otherwise the gap stays as plain whitespace.
+        // When a turn is in flight, fill the gap with a compact DeepSeek
+        // whale animation; otherwise the gap stays as plain whitespace.
         let spacer_span = match self.props.working_strip_frame {
             Some(frame) if spacer_width > 0 => Span::styled(
                 footer_working_strip_string(spacer_width, frame),
@@ -1017,12 +1048,16 @@ mod tests {
 
     #[test]
     fn working_strip_string_width_matches_request() {
-        // The strip must produce exactly `width` characters per frame —
-        // otherwise the spacer math in `FooterWidget::render` would
-        // mis-align the right-hand chips. Each wave glyph is one cell wide.
+        // The strip must produce exactly `width` display cells per frame —
+        // otherwise the spacer math in `FooterWidget::render` would mis-align
+        // the right-hand chips. The whale glyph can be double-width.
         for width in [0usize, 1, 8, 60, 200] {
             let s = super::footer_working_strip_string(width, 7);
-            assert_eq!(s.chars().count(), width, "width {width} mismatch");
+            assert_eq!(
+                unicode_width::UnicodeWidthStr::width(s.as_str()),
+                width,
+                "width {width} mismatch: {s:?}"
+            );
         }
     }
 
@@ -1040,7 +1075,7 @@ mod tests {
     #[test]
     fn working_strip_renders_glyphs_only_when_frame_is_some() {
         // Idle: spacer is plain whitespace. Active: spacer contains the
-        // wave animation glyphs and visibly differs from the idle render.
+        // whale animation glyphs and visibly differs from the idle render.
         let app = make_app();
         let mut props = idle_props_for(&app);
 
@@ -1061,7 +1096,7 @@ mod tests {
         assert!(
             active
                 .chars()
-                .any(|glyph| super::WAVE_GLYPHS.contains(&glyph)),
+                .any(|glyph| super::WORKING_STRIP_GLYPHS.contains(&glyph)),
             "active strip must contain at least one animation glyph: {active:?}",
         );
     }
@@ -1071,29 +1106,37 @@ mod tests {
         let width = 60;
         let f0 = super::footer_working_strip_string(width, 0);
         let f80 = super::footer_working_strip_string(width, 80);
-        let changed = f0
-            .chars()
-            .zip(f80.chars())
-            .filter(|(before, after)| before != after)
-            .count();
+        let width0 = unicode_width::UnicodeWidthStr::width(f0.as_str());
+        let width80 = unicode_width::UnicodeWidthStr::width(f80.as_str());
+        assert_eq!(width0, width);
+        assert_eq!(width80, width);
         assert!(
-            changed > width / 4,
-            "expected the wave to drift across one 80ms repaint; changed {changed}/{width}"
+            f0 != f80,
+            "expected the DeepSeek whale to move one step per repaint"
         );
     }
 
     #[test]
-    fn working_strip_renders_multiple_wave_heights() {
-        let s = super::footer_working_strip_string(60, 0);
+    fn working_strip_uses_deepseek_whale_marker() {
+        let s = super::footer_working_strip_string(60, 400);
         let mut distinct = Vec::new();
         for glyph in s.chars() {
-            if super::WAVE_GLYPHS.contains(&glyph) && !distinct.contains(&glyph) {
+            if super::WORKING_STRIP_GLYPHS.contains(&glyph) && !distinct.contains(&glyph) {
                 distinct.push(glyph);
             }
         }
+        let visible_cells: usize = s
+            .chars()
+            .filter(|glyph| !glyph.is_whitespace())
+            .map(|glyph| unicode_width::UnicodeWidthChar::width(glyph).unwrap_or(0))
+            .sum();
         assert!(
-            distinct.len() >= 5,
-            "expected several wave heights, saw {distinct:?}",
+            distinct.contains(&super::WORKING_STRIP_WHALE),
+            "expected the DeepSeek whale glyph, saw {distinct:?}",
+        );
+        assert!(
+            visible_cells <= 8,
+            "whale animation should stay compact, saw {visible_cells} visible cells",
         );
     }
 

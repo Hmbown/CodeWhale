@@ -1,10 +1,8 @@
 //! Whale/DeepSeek terminal theme tokens.
 //!
 //! A small, deliberately flat module that names the color, border, and
-//! padding choices the TUI is already making. All values match the dark
-//! palette previously hard-coded against [`crate::palette`]; a single
-//! source-of-truth change here can swap the skin later. Visible output
-//! is not changed by introducing this module.
+//! padding choices used by DeepSeek-flavored tool, plan, and sidebar
+//! rendering.
 //!
 //! The only consumers today are the plan and tool cell renderers in
 //! [`crate::tui::history`] and the sidebar section chrome in
@@ -57,7 +55,7 @@ pub struct Theme {
 }
 
 impl Theme {
-    /// The current dark theme. Visible output today uses these values.
+    /// The current dark DeepSeek theme.
     #[must_use]
     pub const fn dark() -> Self {
         Self {
@@ -73,18 +71,18 @@ impl Theme {
             // for content (#63 follow-up: panels rendered as empty boxes even
             // when "No todos" / "No active plan" should have shown).
             section_padding: Padding::horizontal(1),
-            tool_title_color: palette::TEXT_SOFT,
-            tool_value_color: palette::TEXT_MUTED,
+            tool_title_color: Color::White,
+            tool_value_color: Color::White,
             tool_label_color: palette::TEXT_DIM,
             tool_running_accent: palette::ACCENT_TOOL_LIVE,
-            tool_success_accent: palette::TEXT_DIM,
-            tool_failed_accent: palette::ACCENT_TOOL_ISSUE,
-            plan_progress_color: palette::STATUS_SUCCESS,
+            tool_success_accent: palette::STATUS_SUCCESS,
+            tool_failed_accent: palette::STATUS_ERROR,
+            plan_progress_color: palette::DEEPSEEK_BLUE,
             plan_summary_color: palette::TEXT_MUTED,
             plan_explanation_color: palette::TEXT_DIM,
             plan_pending_color: palette::TEXT_MUTED,
-            plan_in_progress_color: palette::STATUS_WARNING,
-            plan_completed_color: palette::STATUS_SUCCESS,
+            plan_in_progress_color: palette::DEEPSEEK_SKY,
+            plan_completed_color: palette::DEEPSEEK_BLUE,
         }
     }
 
@@ -100,16 +98,16 @@ impl Theme {
             section_title_color: palette::DEEPSEEK_BLUE,
             section_padding: Padding::horizontal(1),
             tool_title_color: palette::LIGHT_TEXT_SOFT,
-            tool_value_color: palette::LIGHT_TEXT_MUTED,
+            tool_value_color: palette::LIGHT_TEXT_BODY,
             tool_label_color: palette::LIGHT_TEXT_HINT,
             tool_running_accent: palette::DEEPSEEK_BLUE,
-            tool_success_accent: palette::LIGHT_TEXT_HINT,
-            tool_failed_accent: palette::DEEPSEEK_RED,
+            tool_success_accent: palette::STATUS_SUCCESS,
+            tool_failed_accent: palette::STATUS_ERROR,
             plan_progress_color: palette::DEEPSEEK_BLUE,
             plan_summary_color: palette::LIGHT_TEXT_MUTED,
             plan_explanation_color: palette::LIGHT_TEXT_HINT,
             plan_pending_color: palette::LIGHT_TEXT_MUTED,
-            plan_in_progress_color: Color::Rgb(180, 83, 9),
+            plan_in_progress_color: palette::DEEPSEEK_SKY,
             plan_completed_color: palette::DEEPSEEK_BLUE,
         }
     }
@@ -197,6 +195,7 @@ mod tests {
     use super::{Theme, Variant, active_theme};
     use crate::palette;
     use crate::tui::history::ToolStatus;
+    use ratatui::style::Color;
 
     #[test]
     fn active_theme_returns_dark() {
@@ -210,12 +209,12 @@ mod tests {
         assert_eq!(theme.section_border_color, palette::BORDER_COLOR);
         assert_eq!(theme.section_bg, palette::DEEPSEEK_INK);
         assert_eq!(theme.section_title_color, palette::DEEPSEEK_BLUE);
-        assert_eq!(theme.tool_title_color, palette::TEXT_SOFT);
-        assert_eq!(theme.tool_value_color, palette::TEXT_MUTED);
+        assert_eq!(theme.tool_title_color, Color::White);
+        assert_eq!(theme.tool_value_color, Color::White);
         assert_eq!(theme.tool_label_color, palette::TEXT_DIM);
         assert_eq!(theme.tool_running_accent, palette::ACCENT_TOOL_LIVE);
-        assert_eq!(theme.tool_success_accent, palette::TEXT_DIM);
-        assert_eq!(theme.tool_failed_accent, palette::ACCENT_TOOL_ISSUE);
+        assert_eq!(theme.tool_success_accent, palette::STATUS_SUCCESS);
+        assert_eq!(theme.tool_failed_accent, palette::STATUS_ERROR);
     }
 
     #[test]
@@ -225,7 +224,7 @@ mod tests {
         assert_eq!(theme.section_bg, palette::LIGHT_PANEL);
         assert_eq!(theme.section_border_color, palette::LIGHT_BORDER);
         assert_eq!(theme.tool_title_color, palette::LIGHT_TEXT_SOFT);
-        assert_eq!(theme.tool_value_color, palette::LIGHT_TEXT_MUTED);
+        assert_eq!(theme.tool_value_color, palette::LIGHT_TEXT_BODY);
         assert_eq!(theme.plan_summary_color, palette::LIGHT_TEXT_MUTED);
     }
 

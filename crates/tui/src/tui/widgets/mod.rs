@@ -49,6 +49,8 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const SEND_FLASH_DURATION: Duration = Duration::from_millis(500);
 const COMPOSER_PANEL_HEIGHT: u16 = 2;
+const COMPOSER_PROMPT: &str = "> ";
+const COMPOSER_CONTINUATION: &str = "  ";
 const JUMP_TO_LATEST_BUTTON_WIDTH: u16 = 3;
 const JUMP_TO_LATEST_BUTTON_HEIGHT: u16 = 3;
 
@@ -492,7 +494,9 @@ impl<'a> ComposerWidget<'a> {
 
     fn inner_area(&self, area: Rect) -> Rect {
         if self.has_panel(area) {
-            Block::default().borders(Borders::ALL).inner(area)
+            Block::default()
+                .borders(Borders::TOP | Borders::BOTTOM)
+                .inner(area)
         } else {
             area
         }
@@ -508,6 +512,14 @@ impl<'a> ComposerWidget<'a> {
 
     fn max_height_cap(&self) -> u16 {
         composer_max_height(self.app.composer_density)
+    }
+
+    fn prompt_width(&self) -> usize {
+        if self.app.is_history_search_active() {
+            0
+        } else {
+            COMPOSER_PROMPT.width()
+        }
     }
 }
 
@@ -532,10 +544,13 @@ impl Renderable for ComposerWidget<'_> {
         let menu_lines_for_budget = self.active_menu_reserved_rows().max(menu_lines);
         let input_rows_budget =
             composer_input_rows_budget(inner_area.height, menu_lines_for_budget);
-        let content_width = usize::from(inner_area.width.max(1));
+        let prompt_width = self.prompt_width();
+        let content_width = usize::from(inner_area.width.max(1))
+            .saturating_sub(prompt_width)
+            .max(1);
         let (visible_lines, _cursor_row, _cursor_col) =
             layout_input(input_text, input_cursor, content_width, input_rows_budget);
-        let is_draft_mode = input_text.contains('\n') || visible_lines.len() > 1;
+        let _is_draft_mode = input_text.contains('\n') || visible_lines.len() > 1;
         if has_panel {
             let border_color = if input_text.trim().is_empty() {
                 palette::BORDER_COLOR
@@ -623,18 +638,8 @@ impl Renderable for ComposerWidget<'_> {
             };
 
             let mut block = Block::default()
-                .title(Line::from(Span::styled(
-                    if self.app.is_history_search_active() {
-                        self.app
-                            .tr(crate::localization::MessageId::HistorySearchTitle)
-                    } else if is_draft_mode {
-                        "Draft"
-                    } else {
-                        "Composer"
-                    },
-                    Style::default().fg(palette::TEXT_MUTED),
-                )))
-                .borders(Borders::ALL)
+                .borders(Borders::TOP | Borders::BOTTOM)
+                .border_type(BorderType::Plain)
                 .border_style(Style::default().fg(border_color))
                 .style(background);
             // Top-right corner: keep only editor state here. Session titles
@@ -670,16 +675,41 @@ impl Renderable for ComposerWidget<'_> {
                 self.app
                     .tr(crate::localization::MessageId::ComposerPlaceholder)
             };
-            input_lines.push(Line::from(Span::styled(
-                placeholder,
-                Style::default().fg(palette::TEXT_MUTED).italic(),
-            )));
-        } else {
-            for line in &visible_lines {
+            if prompt_width > 0 {
+                input_lines.push(Line::from(vec![
+                    Span::styled(
+                        COMPOSER_PROMPT,
+                        Style::default().fg(self.mode_color()).bold(),
+                    ),
+                    Span::styled(
+                        placeholder,
+                        Style::default().fg(palette::TEXT_MUTED).italic(),
+                    ),
+                ]));
+            } else {
                 input_lines.push(Line::from(Span::styled(
-                    line.clone(),
-                    Style::default().fg(palette::TEXT_PRIMARY),
+                    placeholder,
+                    Style::default().fg(palette::TEXT_MUTED).italic(),
                 )));
+            }
+        } else {
+            for (idx, line) in visible_lines.iter().enumerate() {
+                if prompt_width > 0 {
+                    let prompt = if idx == 0 {
+                        COMPOSER_PROMPT
+                    } else {
+                        COMPOSER_CONTINUATION
+                    };
+                    input_lines.push(Line::from(vec![
+                        Span::styled(prompt, Style::default().fg(self.mode_color()).bold()),
+                        Span::styled(line.clone(), Style::default().fg(palette::TEXT_PRIMARY)),
+                    ]));
+                } else {
+                    input_lines.push(Line::from(Span::styled(
+                        line.clone(),
+                        Style::default().fg(palette::TEXT_PRIMARY),
+                    )));
+                }
             }
         }
 
@@ -970,6 +1000,7 @@ impl Renderable for ComposerWidget<'_> {
     }
 
     fn desired_height(&self, width: u16) -> u16 {
+        let width = width.saturating_sub(u16::try_from(self.prompt_width()).unwrap_or(u16::MAX));
         composer_height(
             self.app.composer_display_input(),
             width,
@@ -984,7 +1015,10 @@ impl Renderable for ComposerWidget<'_> {
         let inner_area = self.inner_area(area);
         let input_text = self.app.composer_display_input();
         let input_cursor = self.app.composer_display_cursor();
-        let content_width = usize::from(inner_area.width.max(1));
+        let prompt_width = self.prompt_width();
+        let content_width = usize::from(inner_area.width.max(1))
+            .saturating_sub(prompt_width)
+            .max(1);
         // Match the render path's locked-budget calculation so the cursor
         // lands on the same row the input is drawn on.
         let input_rows_budget =
@@ -1009,6 +1043,7 @@ impl Renderable for ComposerWidget<'_> {
         let cursor_x = area
             .x
             .saturating_add(inner_area.x.saturating_sub(area.x))
+            .saturating_add(u16::try_from(prompt_width).unwrap_or(u16::MAX))
             .saturating_add(u16::try_from(cursor_col).unwrap_or(u16::MAX));
         let cursor_y = area
             .y
@@ -1925,6 +1960,32 @@ fn build_empty_state_lines(app: &App, area: Rect) -> Vec<Line<'static>> {
     let inset = " ".repeat(left_padding);
 
     let body = vec![
+        Line::from(vec![
+            Span::raw(inset.clone()),
+            Span::styled("✻", Style::default().fg(palette::ACCENT_TOOL_LIVE).bold()),
+            Span::styled(
+                " Welcome to DeepSeek TUI!",
+                Style::default().fg(palette::TEXT_PRIMARY).bold(),
+            ),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::raw(inset.clone()),
+            Span::styled(
+                "/help",
+                Style::default().fg(palette::ACCENT_TOOL_LIVE).bold(),
+            ),
+            Span::styled(" for help, ", Style::default().fg(palette::TEXT_MUTED)),
+            Span::styled(
+                "/init",
+                Style::default().fg(palette::ACCENT_TOOL_LIVE).bold(),
+            ),
+            Span::styled(
+                " to analyze this project",
+                Style::default().fg(palette::TEXT_MUTED),
+            ),
+        ]),
+        Line::from(""),
         Line::from(Span::styled(
             format!("{inset}>_ DeepSeek TUI (v{})", env!("CARGO_PKG_VERSION")),
             Style::default().fg(palette::DEEPSEEK_BLUE).bold(),
@@ -1959,7 +2020,7 @@ fn composer_top_padding(content_lines: usize, rows_budget: usize) -> usize {
 
 /// Placeholder text shown when the composer input is empty.
 #[cfg(test)]
-const COMPOSER_PLACEHOLDER: &str = "Write a task or use /.";
+const COMPOSER_PLACEHOLDER: &str = "Try \"fix lint errors\"";
 
 /// How many visual rows the empty-input placeholder occupies after wrapping.
 #[cfg(test)]
@@ -2001,11 +2062,7 @@ fn composer_height(
     } else {
         0
     };
-    let content_width = if has_panel {
-        usize::from(width.saturating_sub(2).max(1))
-    } else {
-        usize::from(width.max(1))
-    };
+    let content_width = usize::from(width.max(1));
     let mut line_count = wrap_input_lines(input, content_width).len();
     if line_count == 0 {
         line_count = 1;
@@ -2700,13 +2757,13 @@ mod tests {
             height: 5,
         };
 
-        // inner_area: {x:1, y:1, w:38, h:3}  (borders shrink by 1 each side)
+        // inner_area: {x:0, y:1, w:40, h:3}  (top/bottom borders only)
         // input_rows_budget = 3
-        // placeholder_visual_lines(38) = 1  (placeholder is 22 chars, fits in 38)
+        // prompt_width = 2, placeholder_visual_lines(38) = 1
         // top_padding = 3 - clamp(1, 1, 3) = 2
-        // cursor_x = 0 + (1-0) + 0 = 1
+        // cursor_x = 0 + (0-0) + 2 + 0 = 2
         // cursor_y = 0 + (1-0) + (2+0) = 3
-        assert_eq!(widget.cursor_pos(area), Some((1, 3)));
+        assert_eq!(widget.cursor_pos(area), Some((2, 3)));
     }
 
     #[test]
@@ -2725,14 +2782,14 @@ mod tests {
             height: 5,
         };
 
-        // inner_area: {x:1, y:1, w:12, h:3}
+        // inner_area: {x:0, y:1, w:14, h:3}
         // input_rows_budget = 3
-        // placeholder_visual_lines(12) = 2  ("Write a task" / " or use /.")
+        // prompt_width = 2, placeholder_visual_lines(12) = 2
         // top_padding = 3 - clamp(2, 1, 3) = 1
-        // cursor_x = 0 + (1-0) + 0 = 1
+        // cursor_x = 0 + (0-0) + 2 + 0 = 2
         // cursor_y = 0 + (1-0) + (1+0) = 2
         assert_eq!(placeholder_visual_lines(12), 2);
-        assert_eq!(widget.cursor_pos(area), Some((1, 2)));
+        assert_eq!(widget.cursor_pos(area), Some((2, 2)));
     }
 
     #[test]
@@ -2827,7 +2884,7 @@ mod tests {
             height: 3,
         };
 
-        assert_eq!(widget.cursor_pos(area), Some((0, 2)));
+        assert_eq!(widget.cursor_pos(area), Some((2, 2)));
     }
 
     #[test]
@@ -2925,17 +2982,8 @@ mod tests {
                     .iter()
                     .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
                     .sum();
-                // Card-rail prefix (╭/│/╰ + space) adds 2 chars.
-                let rail_adjust = if line.spans.first().is_some_and(|s| {
-                    let c = s.content.as_ref();
-                    c == "\u{256D} " || c == "\u{2502} " || c == "\u{2570} "
-                }) {
-                    2usize
-                } else {
-                    0
-                };
                 assert!(
-                    visual.saturating_sub(rail_adjust) <= usize::from(width),
+                    visual <= usize::from(width),
                     "line {idx} at width {width} has visual width {visual} > {width}"
                 );
             }

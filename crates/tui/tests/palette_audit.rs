@@ -1,8 +1,9 @@
 //! Palette audit tests to prevent color drift.
 //!
 //! These tests ensure that deprecated colors (like DEEPSEEK_AQUA) are not used
-//! directly in user-visible code. The palette should only use DeepSeek brand
-//! colors: blue, sky, red (plus neutral shades).
+//! directly in user-visible code. The dark palette intentionally follows a
+//! DeepSeek whale-blue theme, while legacy DeepSeek names remain as
+//! compatibility aliases.
 
 use std::fs;
 use std::path::Path;
@@ -133,14 +134,14 @@ fn audit_no_direct_aqua_usage() {
 }
 
 #[test]
-fn verify_status_success_uses_sky() {
+fn verify_status_success_uses_semantic_green() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let palette_path = Path::new(manifest_dir).join("src/palette.rs");
     let content = fs::read_to_string(&palette_path).expect("Failed to read palette.rs");
 
     assert!(
-        content.contains("pub const STATUS_SUCCESS: Color = DEEPSEEK_SKY;"),
-        "STATUS_SUCCESS should use DEEPSEEK_SKY, not DEEPSEEK_AQUA"
+        content.contains("pub const STATUS_SUCCESS: Color = GREEN;"),
+        "STATUS_SUCCESS should use the Claude Code-style green token"
     );
 }
 
@@ -151,16 +152,20 @@ fn verify_brand_colors_defined() {
     let content = fs::read_to_string(&palette_path).expect("Failed to read palette.rs");
 
     assert!(
-        content.contains("DEEPSEEK_BLUE_RGB: (u8, u8, u8) = (53, 120, 229);"),
-        "DEEPSEEK_BLUE should be #3578E5"
+        content.contains("pub const BLUE_RGB: (u8, u8, u8) = (66, 153, 255);"),
+        "BLUE should be the DeepSeek primary accent"
     );
     assert!(
-        content.contains("DEEPSEEK_SKY_RGB: (u8, u8, u8) = (106, 174, 242);"),
-        "DEEPSEEK_SKY should be #6AAEF2"
+        content.contains("pub const AMBER_RGB: (u8, u8, u8) = (91, 196, 255);"),
+        "AMBER is kept as a legacy semantic slot but should be DeepSeek cyan"
     );
     assert!(
-        content.contains("DEEPSEEK_RED_RGB: (u8, u8, u8) = (226, 80, 96);"),
-        "DEEPSEEK_RED should be #E25060"
+        content.contains("pub const SKY_RGB: (u8, u8, u8) = (91, 216, 255);"),
+        "SKY should be the DeepSeek bright highlight"
+    );
+    assert!(
+        content.contains("pub const RED_RGB: (u8, u8, u8) = (255, 95, 95);"),
+        "RED should match Claude Code-style tool failure"
     );
 }
 
