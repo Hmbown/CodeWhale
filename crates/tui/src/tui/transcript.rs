@@ -262,18 +262,8 @@ impl TranscriptViewCache {
             // Arc::make_mut would deep-clone only on write; since we just
             // rebuilt `lines` from scratch we always need the owned data.
             // Deref is zero-cost and gives us &[Line].
-            let rendered_line_count = cached.lines.len();
             for (line_in_cell, line) in cached.lines.iter().enumerate() {
-                let final_line = line_with_group_rail(
-                    line,
-                    tool_group_rail(
-                        self.per_cell.as_slice(),
-                        cell_index,
-                        line_in_cell,
-                        rendered_line_count,
-                    ),
-                    usize::from(self.width),
-                );
+                let final_line = line_without_group_rail(line, usize::from(self.width));
                 self.rail_prefix_widths
                     .push(compute_rail_prefix_width(&final_line));
                 self.lines.push(final_line);
@@ -357,61 +347,9 @@ fn spacer_rows_between(
     }
 }
 
-fn tool_group_rail(
-    cells: &[CachedCell],
-    cell_index: usize,
-    line_in_cell: usize,
-    rendered_line_count: usize,
-) -> Option<crate::tui::widgets::tool_card::CardRail> {
-    let cached = cells.get(cell_index)?;
-    if !cached.is_tool_groupable || rendered_line_count == 0 {
-        return None;
-    }
-
-    let previous_is_tool = cell_index
-        .checked_sub(1)
-        .and_then(|idx| cells.get(idx))
-        .is_some_and(|cell| cell.is_tool_groupable && !cell.is_empty);
-    let next_is_tool = cells
-        .get(cell_index + 1)
-        .is_some_and(|cell| cell.is_tool_groupable && !cell.is_empty);
-    let first_line_in_group = !previous_is_tool && line_in_cell == 0;
-    let last_line_in_group = !next_is_tool && line_in_cell + 1 == rendered_line_count;
-
-    let rail = match (first_line_in_group, last_line_in_group) {
-        (true, true) if rendered_line_count == 1 => {
-            crate::tui::widgets::tool_card::CardRail::Single
-        }
-        (true, _) => crate::tui::widgets::tool_card::CardRail::Top,
-        (_, true) => crate::tui::widgets::tool_card::CardRail::Bottom,
-        _ => crate::tui::widgets::tool_card::CardRail::Middle,
-    };
-    Some(rail)
-}
-
-fn line_with_group_rail(
-    line: &Line<'static>,
-    rail: Option<crate::tui::widgets::tool_card::CardRail>,
-    max_width: usize,
-) -> Line<'static> {
-    let Some(rail) = rail else {
-        return line.clone();
-    };
-    let glyph = crate::tui::widgets::tool_card::rail_glyph(rail);
-    if glyph.is_empty() {
-        let mut rendered = line.clone();
-        rendered.spans = truncate_spans_to_width(rendered.spans, max_width);
-        return rendered;
-    }
-
+fn line_without_group_rail(line: &Line<'static>, max_width: usize) -> Line<'static> {
     let mut rendered = line.clone();
-    let mut spans = Vec::with_capacity(rendered.spans.len() + 1);
-    spans.push(Span::styled(
-        format!("{glyph} "),
-        Style::default().fg(crate::palette::TEXT_DIM),
-    ));
-    spans.extend(rendered.spans);
-    rendered.spans = truncate_spans_to_width(spans, max_width);
+    rendered.spans = truncate_spans_to_width(rendered.spans, max_width);
     rendered
 }
 
@@ -864,7 +802,7 @@ mod tests {
     }
 
     #[test]
-    fn adjacent_tool_cells_render_as_one_railed_group() {
+    fn adjacent_tool_cells_render_without_outer_group_rail() {
         let cells = vec![exec_tool_cell("cargo test"), exec_tool_cell("cargo clippy")];
         let revisions = vec![1u64, 1];
         let mut cache = TranscriptViewCache::new();
@@ -873,20 +811,12 @@ mod tests {
         let lines = plain_lines(&cache);
 
         assert!(
-            lines
-                .first()
-                .is_some_and(|line| line.starts_with("\u{256D} ")),
-            "first tool line should open the shared rail: {lines:?}"
-        );
-        assert!(
-            lines.iter().any(|line| line.starts_with("\u{2502} ")),
-            "middle tool lines should continue the shared rail: {lines:?}"
-        );
-        assert!(
-            lines
-                .last()
-                .is_some_and(|line| line.starts_with("\u{2570} ")),
-            "last tool line should close the shared rail: {lines:?}"
+            lines.iter().all(|line| {
+                !line.starts_with("\u{256D} ")
+                    && !line.starts_with("\u{2502} ")
+                    && !line.starts_with("\u{2570} ")
+            }),
+            "tool calls should not render an outer rail: {lines:?}"
         );
         assert!(
             !lines.iter().any(String::is_empty),

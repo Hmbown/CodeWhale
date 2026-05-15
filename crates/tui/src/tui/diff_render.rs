@@ -55,18 +55,21 @@ pub fn render_diff(diff: &str, width: u16) -> Vec<Line<'static>> {
         }
 
         if let Some(content) = raw.strip_prefix('+') {
+            let line_ctx = LineNumberContext {
+                old: old_line,
+                new: new_line,
+                marker: '+',
+                width: line_number_width,
+            };
             lines.extend(render_diff_line(
                 content,
                 width,
-                old_line,
-                new_line,
-                '+',
+                &line_ctx,
                 Style::default()
                     .fg(palette::DIFF_ADDED)
                     .bg(palette::DIFF_ADDED_BG),
                 Style::default().fg(Color::White).bg(palette::DIFF_ADDED_BG),
                 true,
-                line_number_width,
             ));
             if let Some(line) = new_line.as_mut() {
                 *line = line.saturating_add(1);
@@ -75,12 +78,16 @@ pub fn render_diff(diff: &str, width: u16) -> Vec<Line<'static>> {
         }
 
         if let Some(content) = raw.strip_prefix('-') {
+            let line_ctx = LineNumberContext {
+                old: old_line,
+                new: new_line,
+                marker: '-',
+                width: line_number_width,
+            };
             lines.extend(render_diff_line(
                 content,
                 width,
-                old_line,
-                new_line,
-                '-',
+                &line_ctx,
                 Style::default()
                     .fg(palette::DIFF_DELETED)
                     .bg(palette::DIFF_DELETED_BG),
@@ -88,7 +95,6 @@ pub fn render_diff(diff: &str, width: u16) -> Vec<Line<'static>> {
                     .fg(Color::White)
                     .bg(palette::DIFF_DELETED_BG),
                 true,
-                line_number_width,
             ));
             if let Some(line) = old_line.as_mut() {
                 *line = line.saturating_add(1);
@@ -97,16 +103,19 @@ pub fn render_diff(diff: &str, width: u16) -> Vec<Line<'static>> {
         }
 
         if let Some(content) = raw.strip_prefix(' ') {
+            let line_ctx = LineNumberContext {
+                old: old_line,
+                new: new_line,
+                marker: ' ',
+                width: line_number_width,
+            };
             lines.extend(render_diff_line(
                 content,
                 width,
-                old_line,
-                new_line,
-                ' ',
+                &line_ctx,
                 Style::default().fg(palette::TEXT_TOOL_SUMMARY_DIM),
                 Style::default().fg(Color::White),
                 false,
-                line_number_width,
             ));
             if let Some(line) = old_line.as_mut() {
                 *line = line.saturating_add(1);
@@ -321,19 +330,23 @@ fn render_hunk_header(line: &str, width: u16) -> Vec<Line<'static>> {
     wrap_with_style(line, style, width)
 }
 
+struct LineNumberContext {
+    old: Option<usize>,
+    new: Option<usize>,
+    marker: char,
+    width: usize,
+}
+
 fn render_diff_line(
     content: &str,
     width: u16,
-    old_line: Option<usize>,
-    new_line: Option<usize>,
-    marker: char,
+    line_ctx: &LineNumberContext,
     prefix_style: Style,
     content_style: Style,
     fill_to_width: bool,
-    line_number_width: usize,
 ) -> Vec<Line<'static>> {
-    let prefix = format_line_number(old_line, new_line, marker, line_number_width);
-    let continuation_prefix = format_line_number(None, None, marker, line_number_width);
+    let prefix = format_line_number(line_ctx.old, line_ctx.new, line_ctx.marker, line_ctx.width);
+    let continuation_prefix = format_line_number(None, None, line_ctx.marker, line_ctx.width);
     let prefix_width = prefix.width();
     let available = width.saturating_sub(prefix_width as u16).max(1) as usize;
     let wrapped = wrap_code_text(content, available);

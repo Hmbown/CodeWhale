@@ -2624,9 +2624,17 @@ fn diff_line_style(text: &str) -> Option<Style> {
     if trimmed.starts_with("@@") {
         Some(Style::default().fg(palette::DEEPSEEK_BLUE))
     } else if trimmed.starts_with('+') && !trimmed.starts_with("+++") {
-        Some(Style::default().fg(palette::DIFF_ADDED))
+        Some(
+            Style::default()
+                .fg(palette::DIFF_ADDED)
+                .bg(palette::DIFF_ADDED_BG),
+        )
     } else if trimmed.starts_with('-') && !trimmed.starts_with("---") {
-        Some(Style::default().fg(palette::STATUS_ERROR))
+        Some(
+            Style::default()
+                .fg(palette::DIFF_DELETED)
+                .bg(palette::DIFF_DELETED_BG),
+        )
     } else {
         None
     }
@@ -2961,6 +2969,10 @@ fn render_card_detail_line(
     width: u16,
 ) -> Vec<Line<'static>> {
     let label_text = label.map(|text| format!("{text}:"));
+    let row_bg = value_style.bg;
+    let rail_style = style_with_optional_bg(Style::default().fg(palette::TEXT_DIM), row_bg);
+    let label_style = style_with_optional_bg(tool_detail_label_style(), row_bg);
+    let spacer_style = style_with_optional_bg(Style::default(), row_bg);
     let prefix_width = UnicodeWidthStr::width(TRANSCRIPT_RAIL)
         + label_text.as_deref().map_or(0, UnicodeWidthStr::width)
         + usize::from(label.is_some());
@@ -2968,23 +2980,23 @@ fn render_card_detail_line(
 
     let mut lines = Vec::new();
     for (idx, part) in wrap_text(value, content_width).into_iter().enumerate() {
-        let mut spans = vec![Span::styled(
-            TRANSCRIPT_RAIL.to_string(),
-            Style::default().fg(palette::TEXT_DIM),
-        )];
+        let mut spans = vec![Span::styled(TRANSCRIPT_RAIL.to_string(), rail_style)];
         if idx == 0 {
             if let Some(label_text) = label_text.as_deref() {
-                spans.push(Span::styled(
-                    label_text.to_string(),
-                    tool_detail_label_style(),
-                ));
-                spans.push(Span::raw(" "));
+                spans.push(Span::styled(label_text.to_string(), label_style));
+                spans.push(Span::styled(" ", spacer_style));
             }
         } else if let Some(label_text) = label_text.as_deref() {
-            spans.push(Span::raw(
+            spans.push(Span::styled(
                 " ".repeat(UnicodeWidthStr::width(label_text) + 1),
+                spacer_style,
             ));
         }
+        let part = if row_bg.is_some() {
+            pad_to_display_width(&part, content_width)
+        } else {
+            part
+        };
         spans.push(Span::styled(part, value_style));
         lines.push(Line::from(spans));
     }
@@ -3007,6 +3019,22 @@ fn render_card_detail_line_single(
     }
     spans.push(Span::styled(value.to_string(), value_style));
     Line::from(spans)
+}
+
+fn pad_to_display_width(text: &str, width: usize) -> String {
+    let current = UnicodeWidthStr::width(text);
+    if current >= width {
+        text.to_string()
+    } else {
+        format!("{text}{}", " ".repeat(width - current))
+    }
+}
+
+fn style_with_optional_bg(style: Style, bg: Option<Color>) -> Style {
+    match bg {
+        Some(color) => style.bg(color),
+        None => style,
+    }
 }
 
 fn tool_title_style() -> Style {
@@ -4810,6 +4838,45 @@ mod tests {
             .find(|span| span.content == "compile ok")
             .expect("tool output body span");
         assert_eq!(body_span.style.fg, Some(Color::White));
+    }
+
+    #[test]
+    fn diff_like_tool_output_rows_use_full_line_background() {
+        let rendered = render_tool_output_mode(
+            "+ added value\n- removed value",
+            32,
+            TOOL_OUTPUT_LINE_LIMIT,
+            RenderMode::Live,
+        );
+
+        let added = &rendered[0];
+        let added_text = added
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert_eq!(
+            unicode_width::UnicodeWidthStr::width(added_text.as_str()),
+            32
+        );
+        assert_eq!(added.spans[0].style.bg, Some(palette::DIFF_ADDED_BG));
+        let added_value = added
+            .spans
+            .iter()
+            .find(|span| span.content.starts_with("+ added value"))
+            .expect("added diff span");
+        assert_eq!(added_value.style.fg, Some(palette::DIFF_ADDED));
+        assert_eq!(added_value.style.bg, Some(palette::DIFF_ADDED_BG));
+
+        let deleted = &rendered[1];
+        let deleted_value = deleted
+            .spans
+            .iter()
+            .find(|span| span.content.starts_with("- removed value"))
+            .expect("deleted diff span");
+        assert_eq!(deleted.spans[0].style.bg, Some(palette::DIFF_DELETED_BG));
+        assert_eq!(deleted_value.style.fg, Some(palette::DIFF_DELETED));
+        assert_eq!(deleted_value.style.bg, Some(palette::DIFF_DELETED_BG));
     }
 
     #[test]
