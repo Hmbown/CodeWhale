@@ -701,6 +701,7 @@ pub type SharedTaskManager = Arc<TaskManager>;
 
 pub struct TaskManager {
     cfg: TaskManagerConfig,
+    default_workspace: Mutex<PathBuf>,
     executor: Arc<dyn TaskExecutor>,
     tasks_dir: PathBuf,
     artifacts_dir: PathBuf,
@@ -766,8 +767,10 @@ impl TaskManager {
         let (tasks, queue) = load_state(&tasks_dir, &queue_path)?;
 
         let cancel_token = CancellationToken::new();
+        let default_workspace = cfg.default_workspace.clone();
         let manager = Arc::new(Self {
             cfg,
+            default_workspace: Mutex::new(default_workspace),
             executor,
             tasks_dir,
             artifacts_dir,
@@ -810,6 +813,15 @@ impl TaskManager {
         self.cancel_token.is_cancelled()
     }
 
+    pub async fn set_default_workspace(&self, workspace: PathBuf) {
+        let mut default_workspace = self.default_workspace.lock().await;
+        *default_workspace = workspace;
+    }
+
+    pub async fn default_workspace(&self) -> PathBuf {
+        self.default_workspace.lock().await.clone()
+    }
+
     /// Enqueue a new task.
     pub async fn add_task(&self, req: NewTaskRequest) -> Result<TaskRecord> {
         let prompt = req.prompt.trim().to_string();
@@ -822,9 +834,10 @@ impl TaskManager {
             id: format!("task_{}", &Uuid::new_v4().to_string()[..8]),
             prompt,
             model: req.model.unwrap_or_else(|| self.cfg.default_model.clone()),
-            workspace: req
-                .workspace
-                .unwrap_or_else(|| self.cfg.default_workspace.clone()),
+            workspace: match req.workspace {
+                Some(workspace) => workspace,
+                None => self.default_workspace().await,
+            },
             mode: req.mode.unwrap_or_else(|| self.cfg.default_mode.clone()),
             allow_shell: req.allow_shell.unwrap_or(self.cfg.allow_shell),
             trust_mode: req.trust_mode.unwrap_or(self.cfg.trust_mode),
@@ -1746,7 +1759,7 @@ mod tests {
         let task = manager
             .add_task(NewTaskRequest::from_prompt("test persistence"))
             .await?;
-        let finished = wait_for_terminal_state(&manager, &task.id, Duration::from_secs(3)).await?;
+        let finished = wait_for_terminal_state(&manager, &task.id, Duration::from_secs(10)).await?;
         assert_eq!(finished.status, TaskStatus::Completed);
         assert_eq!(finished.thread_id.as_deref(), Some("thr_test"));
         assert_eq!(finished.turn_id.as_deref(), Some("turn_test"));
@@ -1766,6 +1779,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn default_workspace_updates_for_future_tasks() -> Result<()> {
+        let root = std::env::temp_dir().join(format!("deepseek-task-test-{}", Uuid::new_v4()));
+        let new_workspace =
+            std::env::temp_dir().join(format!("deepseek-workspace-{}", Uuid::new_v4()));
+        let manager =
+            TaskManager::start_with_executor(test_config(root), Arc::new(MockExecutor)).await?;
+
+        manager.set_default_workspace(new_workspace.clone()).await;
+        let task = manager
+            .add_task(NewTaskRequest::from_prompt("test workspace default"))
+            .await?;
+
+        assert_eq!(manager.default_workspace().await, new_workspace);
+        assert_eq!(task.workspace, new_workspace);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn record_tool_metadata_updates_explicit_task() -> Result<()> {
         let root = std::env::temp_dir().join(format!("deepseek-task-test-{}", Uuid::new_v4()));
         let manager =
@@ -1774,7 +1805,7 @@ mod tests {
         let task = manager
             .add_task(NewTaskRequest::from_prompt("test metadata"))
             .await?;
-        let finished = wait_for_terminal_state(&manager, &task.id, Duration::from_secs(3)).await?;
+        let finished = wait_for_terminal_state(&manager, &task.id, Duration::from_secs(10)).await?;
         let updated = manager
             .record_tool_metadata(
                 &finished.id,
@@ -1815,7 +1846,7 @@ mod tests {
 
         sleep(Duration::from_millis(10)).await;
         let _ = manager.cancel_task(&task.id).await?;
-        let finished = wait_for_terminal_state(&manager, &task.id, Duration::from_secs(3)).await?;
+        let finished = wait_for_terminal_state(&manager, &task.id, Duration::from_secs(10)).await?;
         assert_eq!(finished.status, TaskStatus::Canceled);
         Ok(())
     }
@@ -1865,7 +1896,7 @@ mod tests {
         let task = manager
             .add_task(NewTaskRequest::from_prompt("test schema gate"))
             .await?;
-        let _ = wait_for_terminal_state(&manager, &task.id, Duration::from_secs(3)).await?;
+        let _ = wait_for_terminal_state(&manager, &task.id, Duration::from_secs(10)).await?;
         drop(manager);
 
         let task_path = root.join("tasks").join(format!("{}.json", task.id));

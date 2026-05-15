@@ -195,7 +195,9 @@ fn calculate_turn_cost_from_usage_with_pricing(pricing: CurrencyPricing, usage: 
     let hit_cost = (hit_tokens as f64 / 1_000_000.0) * pricing.input_cache_hit_per_million;
     let miss_cost = ((miss_tokens.saturating_add(uncategorized_input)) as f64 / 1_000_000.0)
         * pricing.input_cache_miss_per_million;
-    let output_cost = (usage.output_tokens as f64 / 1_000_000.0) * pricing.output_per_million;
+    let reasoning = usage.reasoning_tokens.unwrap_or(0);
+    let effective_output = usage.output_tokens.saturating_add(reasoning);
+    let output_cost = (effective_output as f64 / 1_000_000.0) * pricing.output_per_million;
     hit_cost + miss_cost + output_cost
 }
 

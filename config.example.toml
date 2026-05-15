@@ -16,10 +16,10 @@
 # `/provider sglang`, `/provider vllm`, `/provider ollama`) toggle without having to
 # re-enter keys. Top-level `api_key` / `base_url` are still read as DeepSeek
 # defaults when `[providers.deepseek]` is absent (backward compatibility).
-provider = "deepseek" # deepseek | deepseek-cn | nvidia-nim | openai | openrouter | novita | fireworks | sglang | vllm | ollama
+provider = "deepseek" # deepseek | deepseek-cn | nvidia-nim | openai | atlascloud | openrouter | novita | fireworks | sglang | vllm | ollama
 api_key = "YOUR_DEEPSEEK_API_KEY" # must be non-empty
 base_url = "https://api.deepseek.com/beta"
-# provider = "deepseek-cn"                       # mainland China preset (official https://api.deepseek.com)
+# provider = "deepseek-cn"                       # legacy alias (official host is still https://api.deepseek.com)
 # base_url = "https://api.deepseek.com"         # opt out of DeepSeek beta features
 # Optional custom model request headers for OpenAI-compatible gateways.
 # Authorization and Content-Type are managed by the client and cannot be overridden here.
@@ -34,6 +34,7 @@ base_url = "https://api.deepseek.com/beta"
 #   deepseek-ai/deepseek-v4-pro   — NVIDIA NIM-hosted Pro model ID
 #   deepseek-ai/deepseek-v4-flash — NVIDIA NIM-hosted Flash model ID
 #   gpt-4.1                         — default generic OpenAI-compatible model ID
+#   deepseek-ai/deepseek-v4-flash   — default AtlasCloud model ID
 #   accounts/fireworks/models/deepseek-v4-pro — Fireworks AI Pro model ID
 #   deepseek-ai/DeepSeek-V4-Pro    — SGLang self-hosted Pro model ID
 #   deepseek-ai/DeepSeek-V4-Flash  — SGLang self-hosted Flash model ID
@@ -177,11 +178,20 @@ max_subagents = 10 # optional (1-20)
 # base_url = "https://integrate.api.nvidia.com/v1"
 # model = "deepseek-ai/deepseek-v4-pro"     # or deepseek-ai/deepseek-v4-flash
 
-# Generic OpenAI-compatible endpoint
+# Generic OpenAI-compatible endpoint. Use the built-in `openai` provider for
+# third-party gateways; do not invent a custom provider name. For non-local
+# http:// gateways, launch with DEEPSEEK_ALLOW_INSECURE_HTTP=1 only on a
+# trusted network.
 [providers.openai]
 # api_key = "YOUR_OPENAI_COMPATIBLE_API_KEY"
 # base_url = "https://api.openai.com/v1"
 # model = "gpt-4.1"
+
+# AtlasCloud OpenAI-compatible endpoint (https://www.atlascloud.ai/docs/models/llm)
+[providers.atlascloud]
+# api_key = "YOUR_ATLASCLOUD_API_KEY"
+# base_url = "https://api.atlascloud.ai/v1"
+# model = "deepseek-ai/deepseek-v4-flash"
 
 # Fireworks AI-hosted DeepSeek V4 (https://fireworks.ai)
 [providers.fireworks]
@@ -206,6 +216,27 @@ max_subagents = 10 # optional (1-20)
 # api_key = "OPTIONAL_OLLAMA_TOKEN"
 # base_url = "http://localhost:11434/v1"
 # model = "deepseek-coder:1.3b"             # or any local Ollama tag
+
+# ─────────────────────────────────────────────────────────────────────────────────
+# Web Search Provider
+# ─────────────────────────────────────────────────────────────────────────────────
+# Choose which backend `web_search` uses. Default is Bing HTML scraping — no
+# API key needed. DuckDuckGo remains selectable and still falls back to Bing
+# when its HTML endpoint returns a bot challenge or no parseable results.
+# Switch to Tavily or Bocha for reliable search in mainland China.
+#
+# [search]
+# provider = "bing"         # bing | duckduckgo | tavily | bocha
+#                            # duckduckgo: HTML scrape with Bing fallback
+#                            # tavily: https://tavily.com — AI search, needs api_key
+#                            # bocha:  https://bochaai.com — 博查AI搜索，国内友好，需api_key
+# api_key = "tvly-YOUR_KEY"  # required for tavily and bocha
+#                            # WARNING: treat config.toml like a secret file when
+#                            # storing API keys. Use env vars or `auth set` instead.
+#
+# Env-var overrides:
+#   DEEPSEEK_SEARCH_PROVIDER → search.provider
+#   DEEPSEEK_SEARCH_API_KEY  → search.api_key
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Network Policy (#135)
@@ -278,6 +309,18 @@ web_search = true # enables canonical web.run plus the compatibility web_search 
 apply_patch = true
 mcp = true
 exec_policy = true
+# vision_model = false  # enable vision model for image_analyze tool
+
+# ─────────────────────────────────────────────────────────────────────────────────
+# Vision Model Configuration (optional)
+# ─────────────────────────────────────────────────────────────────────────────────
+# Uses an OpenAI-compatible vision model API for the `image_analyze` tool.
+# api_key inherits from the main config if not specified.
+#
+# [vision_model]
+# model = "gemini-3.1-flash-lite-preview"  # Required: vision-capable model ID
+# api_key = "YOUR_API_KEY"                 # Optional: defaults to main api_key
+# base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"  # Optional
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Retry Configuration
@@ -414,6 +457,15 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 # [snapshots]
 # enabled = true        # Snapshot workspace pre/post each turn for /restore
 # max_age_days = 7      # Older snapshots pruned at session start
+# max_workspace_gb = 2  # Snapshots self-disable on first init when the
+#                         # non-excluded workspace exceeds this size in GB
+#                         # (v0.8.32). Default 2 GB protects against running
+#                         # deepseek-tui in directories with hundreds of GB
+#                         # of datasets / model weights / docker dumps where
+#                         # `git add -A` would hang the TUI for hours. Set
+#                         # to 0 to disable the cap (v0.8.31 behaviour);
+#                         # raise to a higher number for legitimate large
+#                         # monorepos.
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # LSP Diagnostics (post-edit) (#136)

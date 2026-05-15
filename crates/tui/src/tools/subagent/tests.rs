@@ -7,7 +7,10 @@ fn make_assignment() -> SubAgentAssignment {
 
 fn make_snapshot(status: SubAgentStatus) -> SubAgentResult {
     SubAgentResult {
+        name: "agent_test".to_string(),
         agent_id: "agent_test".to_string(),
+        context_mode: "fresh".to_string(),
+        fork_context: false,
         agent_type: SubAgentType::General,
         assignment: make_assignment(),
         model: "deepseek-v4-flash".to_string(),
@@ -25,6 +28,10 @@ fn message_text(message: &Message) -> &str {
         Some(ContentBlock::Text { text, .. }) => text.as_str(),
         other => panic!("expected text content block, got {other:?}"),
     }
+}
+
+fn estimate_tool_description_tokens_conservative(text: &str) -> usize {
+    text.chars().count().div_ceil(3)
 }
 
 #[test]
@@ -150,6 +157,66 @@ fn test_implementer_and_verifier_have_distinct_prompts() {
 }
 
 #[test]
+fn test_agent_type_prompts_include_shared_output_contract_once() {
+    for (agent_type, marker) in [
+        (SubAgentType::General, "general-purpose sub-agent"),
+        (SubAgentType::Explore, "exploration sub-agent"),
+        (SubAgentType::Plan, "planning sub-agent"),
+        (SubAgentType::Review, "code review sub-agent"),
+        (SubAgentType::Implementer, "implementation sub-agent"),
+        (SubAgentType::Verifier, "verification sub-agent"),
+        (SubAgentType::Custom, "custom sub-agent"),
+    ] {
+        let prompt = agent_type.system_prompt();
+        assert!(prompt.contains(marker));
+        assert_eq!(
+            prompt.matches("## Output contract (mandatory)").count(),
+            1,
+            "{agent_type:?} prompt should include the shared output contract exactly once"
+        );
+        assert!(prompt.contains("### SUMMARY") && prompt.contains("### BLOCKERS"));
+    }
+}
+
+#[test]
+fn explore_prompt_orients_before_searching() {
+    let prompt = SubAgentType::Explore.system_prompt();
+    assert!(prompt.contains("role: `explore`"));
+    assert!(prompt.contains("AGENTS.md/README"));
+    assert!(prompt.contains("workspace/project root"));
+    assert!(prompt.contains("compressed reconnaissance"));
+}
+
+#[test]
+fn agent_open_description_explains_fresh_vs_forked_context_and_trust_model() {
+    let tmp = tempdir().expect("tempdir");
+    let manager = new_shared_subagent_manager(tmp.path().to_path_buf(), 1);
+    let tool = AgentOpenTool::new(manager, stub_runtime());
+    let description = tool.description();
+
+    assert!(description.contains("fresh child with an independent prefill"));
+    assert!(description.contains("fork_context=true"));
+    assert!(description.contains("byte-identically"));
+    assert!(description.contains("DeepSeek can reuse its prefix cache"));
+    assert!(description.contains("Sub-agent results are self-reports"));
+    assert!(
+        estimate_tool_description_tokens_conservative(description) <= 1024,
+        "agent_open description exceeds the conservative 1024-token budget"
+    );
+}
+
+#[test]
+fn new_session_tools_use_open_eval_close_names() {
+    let manager = Arc::new(RwLock::new(SubAgentManager::new(PathBuf::from("."), 1)));
+    assert_eq!(
+        AgentOpenTool::new(manager.clone(), stub_runtime()).name(),
+        "agent_open"
+    );
+    assert_eq!(AgentEvalTool::new(manager.clone()).name(), "agent_eval");
+    assert_eq!(AgentCloseTool::new(manager).name(), "agent_close");
+}
+
+#[test]
 fn test_implementer_allowed_tools_include_writes() {
     // Implementer is the write-heavy role; the deprecated
     // `allowed_tools()` advisory list should reflect that the role
@@ -229,6 +296,66 @@ fn test_parse_spawn_request_accepts_fork_context() {
     });
     let parsed = parse_spawn_request(&input).expect("spawn request should parse");
     assert!(parsed.fork_context);
+}
+
+#[test]
+fn test_parse_spawn_request_accepts_session_name_for_agent_open() {
+    let input = json!({
+        "name": "review.parser",
+        "prompt": "inspect parser",
+        "fork_context": true,
+        "max_depth": 0
+    });
+    let parsed = parse_spawn_request(&input).expect("open request should parse");
+    assert_eq!(parsed.session_name.as_deref(), Some("review.parser"));
+    assert!(parsed.fork_context);
+    assert_eq!(parsed.max_depth, Some(0));
+}
+
+#[test]
+fn test_parse_spawn_request_rejects_invalid_session_name() {
+    let input = json!({
+        "name": "bad name",
+        "prompt": "inspect parser"
+    });
+    let err = parse_spawn_request(&input).expect_err("space in name should fail");
+    assert!(err.to_string().contains("name must not contain whitespace"));
+}
+
+#[test]
+fn test_parse_spawn_request_rejects_out_of_range_max_depth() {
+    let input = json!({
+        "name": "review.parser",
+        "prompt": "inspect parser",
+        "max_depth": 4
+    });
+    let err = parse_spawn_request(&input).expect_err("max_depth should be capped at schema range");
+    assert!(
+        err.to_string()
+            .contains("max_depth must be between 0 and 3")
+    );
+}
+
+#[tokio::test]
+async fn session_projection_exposes_forked_prefix_cache_contract() {
+    let mut snapshot = make_snapshot(SubAgentStatus::Running);
+    snapshot.name = "fanout_review".to_string();
+    snapshot.context_mode = "forked".to_string();
+    snapshot.fork_context = true;
+
+    let ctx = ToolContext::new(".");
+    let projection = subagent_session_projection(snapshot, false, &ctx).await;
+
+    assert_eq!(projection.name, "fanout_review");
+    assert_eq!(projection.context_mode, "forked");
+    assert!(projection.fork_context);
+    assert_eq!(projection.prefix_cache.mode, "forked");
+    assert_eq!(
+        projection.prefix_cache.parent_prefix,
+        "preserved_byte_identical_when_available"
+    );
+    assert_eq!(projection.transcript_handle.kind, "var_handle");
+    assert_eq!(projection.transcript_handle.name, "transcript");
 }
 
 #[test]
@@ -367,23 +494,6 @@ fn test_parse_assign_request_requires_update_fields() {
         err.to_string().contains(
             "Provide at least one of objective, role/agent_role, message/input, or items"
         )
-    );
-}
-
-#[test]
-fn test_send_input_schema_does_not_require_message_field() {
-    let manager = Arc::new(RwLock::new(SubAgentManager::new(PathBuf::from("."), 1)));
-    let schema = AgentSendInputTool::new(manager, "send_input").input_schema();
-    let required = schema
-        .get("required")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    assert!(
-        !required
-            .iter()
-            .any(|entry| entry.as_str().is_some_and(|name| name == "message")),
-        "send_input schema should allow items-only payloads"
     );
 }
 
@@ -578,6 +688,26 @@ fn test_subagent_tool_registry_reports_unavailable_tools() {
     assert_eq!(
         registry.unavailable_allowed_tools(),
         vec!["missing_tool".to_string()]
+    );
+}
+
+#[test]
+fn test_review_agent_tools_exclude_agent_spawn() {
+    let tmp = tempdir().expect("tempdir");
+    let mut runtime = stub_runtime();
+    runtime.context = ToolContext::new(tmp.path().to_path_buf());
+    // None = full parent tool inheritance (the default for builtin types).
+    let registry = SubAgentToolRegistry::new(
+        runtime,
+        None,
+        Arc::new(Mutex::new(TodoList::new())),
+        Arc::new(Mutex::new(PlanState::default())),
+    );
+    let tools = registry.tools_for_model(&SubAgentType::Review);
+    let names: Vec<_> = tools.iter().map(|t| t.name.as_str()).collect();
+    assert!(
+        !names.contains(&"agent_spawn"),
+        "Review agent must not have agent_spawn; tools: {names:?}"
     );
 }
 
@@ -823,83 +953,6 @@ fn test_interrupted_status_name_and_summary() {
     assert!(summarize_subagent_result(&snapshot).contains(SUBAGENT_RESTART_REASON));
 }
 
-// === Deprecation notice tests ===
-
-/// Helper: build a plain ToolResult with a JSON payload.
-fn make_plain_result(payload: serde_json::Value) -> crate::tools::spec::ToolResult {
-    crate::tools::spec::ToolResult::json(&payload).expect("json result")
-}
-
-#[test]
-fn test_wrap_with_deprecation_notice_adds_deprecation_block() {
-    let result = make_plain_result(json!({"agent_id": "abc"}));
-    let wrapped = wrap_with_deprecation_notice(result, "spawn_agent", "agent_spawn");
-
-    let meta = wrapped.metadata.expect("metadata should be present");
-    let dep = &meta["_deprecation"];
-    assert_eq!(dep["this_tool"], "spawn_agent");
-    assert_eq!(dep["use_instead"], "agent_spawn");
-    assert_eq!(dep["removed_in"], DEPRECATION_REMOVAL_VERSION);
-    assert!(
-        dep["message"]
-            .as_str()
-            .unwrap_or("")
-            .contains("spawn_agent")
-    );
-}
-
-#[test]
-fn test_wrap_with_deprecation_notice_preserves_existing_metadata() {
-    let result = make_plain_result(json!({"agent_id": "abc"}))
-        .with_metadata(json!({"status": "Running", "snapshot": {}}));
-    let wrapped = wrap_with_deprecation_notice(result, "close_agent", "agent_cancel");
-
-    let meta = wrapped.metadata.expect("metadata should be present");
-    // Existing metadata key must survive.
-    assert_eq!(meta["status"], "Running");
-    // Deprecation block must be present alongside.
-    assert_eq!(meta["_deprecation"]["this_tool"], "close_agent");
-    assert_eq!(meta["_deprecation"]["use_instead"], "agent_cancel");
-}
-
-#[test]
-fn test_canonical_agent_send_input_has_no_deprecation() {
-    let manager = Arc::new(RwLock::new(SubAgentManager::new(PathBuf::from("."), 1)));
-    // The canonical name "agent_send_input" must NOT receive a deprecation notice.
-    // We verify this by inspecting the tool's name — the deprecation branch
-    // only fires when name == "send_input".
-    let tool = AgentSendInputTool::new(manager.clone(), "agent_send_input");
-    assert_eq!(tool.name(), "agent_send_input");
-
-    let alias = AgentSendInputTool::new(manager, "send_input");
-    assert_eq!(alias.name(), "send_input");
-}
-
-#[test]
-fn test_wrap_with_deprecation_notice_all_alias_mappings() {
-    let cases = [
-        ("spawn_agent", "agent_spawn"),
-        ("delegate_to_agent", "agent_spawn"),
-        ("close_agent", "agent_cancel"),
-        ("send_input", "agent_send_input"),
-    ];
-
-    for (alias, canonical) in cases {
-        let result = make_plain_result(json!({"ok": true}));
-        let wrapped = wrap_with_deprecation_notice(result, alias, canonical);
-        let meta = wrapped.metadata.expect("metadata for alias {alias}");
-        assert_eq!(meta["_deprecation"]["this_tool"], alias, "alias={alias}");
-        assert_eq!(
-            meta["_deprecation"]["use_instead"], canonical,
-            "alias={alias}"
-        );
-        assert_eq!(
-            meta["_deprecation"]["removed_in"], DEPRECATION_REMOVAL_VERSION,
-            "alias={alias}"
-        );
-    }
-}
-
 // === v0.6.6 — sub-agent authority unification ===
 
 #[test]
@@ -1023,6 +1076,11 @@ fn subagent_done_sentinel_format_is_well_formed() {
     assert_eq!(parsed["agent_id"], "agent_xyz");
     assert_eq!(parsed["status"], "completed");
     assert_eq!(parsed["agent_type"], "general");
+    assert_eq!(parsed["summary_location"], "previous_line");
+    assert_eq!(parsed["details"], "agent_eval");
+    assert!(parsed.get("summary").is_none());
+    assert!(parsed.get("duration_ms").is_none());
+    assert!(parsed.get("steps").is_none());
 }
 
 #[test]
@@ -1034,7 +1092,9 @@ fn subagent_failed_sentinel_format_is_well_formed() {
     let parsed: serde_json::Value = serde_json::from_str(inner).expect("inner JSON parses");
     assert_eq!(parsed["agent_id"], "agent_zzz");
     assert_eq!(parsed["status"], "failed");
-    assert_eq!(parsed["error"], "boom");
+    assert_eq!(parsed["error_location"], "previous_line");
+    assert_eq!(parsed["details"], "agent_eval");
+    assert!(parsed.get("error").is_none());
 }
 
 #[test]
@@ -1680,5 +1740,9 @@ fn subagent_completion_payload_carries_existing_sentinel_format() {
     assert!(
         second.contains("\"agent_id\":\"agent_test\""),
         "sentinel JSON includes agent_id"
+    );
+    assert!(
+        !second.contains("Found three errors."),
+        "sentinel should not duplicate the human summary line"
     );
 }

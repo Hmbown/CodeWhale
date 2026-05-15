@@ -17,14 +17,21 @@ const ASSET_MATRIX = {
   },
 };
 
+// HarmonyPC (openharmony) is an x86_64 Linux-compatible environment; map it to
+// the linux binary family so npm install succeeds without a separate build target.
+const PLATFORM_ALIASES = {
+  openharmony: "linux",
+};
+
 function detectBinaryNames() {
-  const platform = os.platform();
+  const rawPlatform = os.platform();
+  const platform = PLATFORM_ALIASES[rawPlatform] || rawPlatform;
   const arch = os.arch();
   const defaults = ASSET_MATRIX[platform];
   if (!defaults) {
     const supported = Object.keys(ASSET_MATRIX).map(p => `'${p}'`).join(', ');
     throw new Error(
-      `Unsupported platform: ${platform}. Supported platforms: ${supported}.\n\n` +
+      `Unsupported platform: ${rawPlatform}. Supported platforms: ${supported}.\n\n` +
       unsupportedBuildHint(),
     );
   }

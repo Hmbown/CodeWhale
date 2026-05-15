@@ -15,8 +15,8 @@
     "cf-typegen": "wrangler types"
   },
   "dependencies": {
-    "mermaid": "^11.14.0",
-    "next": "^15.5.16",
+    "mermaid": "^11.15.0",
+    "next": "^15.5.18",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
@@ -27,7 +27,7 @@
     "@types/react-dom": "^19.0.3",
     "autoprefixer": "^10.4.20",
     "eslint": "^9.39.4",
-    "eslint-config-next": "^15.5.16",
+    "eslint-config-next": "^15.5.18",
     "postcss": "^8.5.14",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.3",

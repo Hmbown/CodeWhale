@@ -1,0 +1,118 @@
+name: Sync to CNB
+
+# Mirror commits and release tags to cnb.cool/deepseek-tui.com/DeepSeek-TUI
+# so users behind GitHub-blocking networks can fetch the source and tagged
+# releases from the Tencent-hosted mirror.
+#
+# Triggers:
+#   * push to main              → mirrors that commit to CNB main
+#   * tag matching v*           → mirrors that tag to CNB
+#   * Tencent release branches  → mirrors Feishu/Lighthouse setup branches
+#   * workflow_dispatch         → manual fallback if any of the above fails
+#
+# Why the rewrite (v0.8.31):
+#   The previous implementation used the opaque tencentcom/git-sync Docker
+#   action, which discovered every local ref via fetch-depth: 0 and tried
+#   to push them all — including dependabot/* branches that GitHub had
+#   locally. Those follow-on pushes ran without the configured credential
+#   helper in scope and failed with
+#     `fatal: could not read Username for 'https://cnb.cool'`
+#   No concurrency block meant the main-push and tag-push workflow runs
+#   that auto-tag.yml fires within seconds of each other raced. About
+#   half of recent runs failed for those two reasons combined.
+
+on:
+  push:
+    branches:
+      - main
+      - 'work/v*-feishu-*'
+      - 'work/v*-lighthouse*'
+    tags: ['v*']
+  workflow_dispatch: {}
+
+# Serialize runs so the back-to-back main-push + tag-push from auto-tag.yml
+# don't race each other rebasing onto CNB. cancel-in-progress: false so
+# every commit actually arrives — we'd rather queue than drop.
+concurrency:
+  group: cnb-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Push triggering ref to CNB
+        env:
+          CNB_TOKEN: ${{ secrets.CNB_GIT_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -z "${CNB_TOKEN:-}" ]; then
+            echo "::error::CNB_GIT_TOKEN secret is not set; cannot push to CNB." >&2
+            exit 1
+          fi
+
+          # URL-encode any '%' in the token so basic-auth doesn't break on
+          # special characters. CNB tokens are typically alphanumeric so
+          # this is belt-and-suspenders.
+          ENCODED_TOKEN="$(printf '%s' "${CNB_TOKEN}" | python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.stdin.read(), safe=""))')"
+          REMOTE_URL="https://cnb:${ENCODED_TOKEN}@cnb.cool/deepseek-tui.com/DeepSeek-TUI.git"
+          # Use a masked alias so the token never appears in log lines.
+          git remote add cnb "${REMOTE_URL}"
+
+          # Push with retry on transient failures (CNB rate-limits, DNS
+          # blips, etc.). Args after `kind` are forwarded to `git push`
+          # so callers can pass `--force-with-lease`, multiple refspecs,
+          # etc. without quoting them into one string.
+          push_with_retry() {
+            local kind="$1"
+            shift
+            local attempt
+            for attempt in 1 2 3; do
+              echo "Attempt ${attempt}: pushing ${kind} to CNB"
+              if git push cnb "$@" 2>&1; then
+                echo "Successfully pushed ${kind} to CNB"
+                return 0
+              fi
+              if [ "${attempt}" -lt 3 ]; then
+                sleep $((attempt * 5))
+              fi
+            done
+            echo "::error::Failed to push ${kind} to CNB after 3 attempts" >&2
+            return 1
+          }
+
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+            # Release tags may be repointed while rebuilding a failed
+            # publish attempt. CNB is a one-way mirror, so force the tag
+            # there to match GitHub instead of failing on "already exists".
+            push_with_retry "tag ${TAG}" "+refs/tags/${TAG}:refs/tags/${TAG}"
+          elif [[ "${GITHUB_REF}" == refs/heads/main ]]; then
+            # Plain --force. The CNB mirror is one-way by design —
+            # nothing else pushes to it, so there's no contributor work
+            # to protect against. `--force-with-lease` would be safer
+            # in a multi-writer scenario, but in our setup the lease
+            # check requires `refs/remotes/cnb/main` to exist in the
+            # runner's local clone, which it never does (we add `cnb`
+            # as a fresh remote in this step and don't fetch first).
+            # That made the lease check spuriously fail with
+            # `! [rejected] HEAD -> main (stale info)` even when CNB
+            # was actually behind GitHub.
+            push_with_retry "main" HEAD:refs/heads/main --force
+          else
+            # Tencent release-candidate branches are first-class CNB
+            # sources for Lighthouse/Feishu bootstrap. Mirror the triggering
+            # branch exactly so the CNB clone path stays the default even
+            # before the branch has merged to main or become a release tag.
+            BRANCH="${GITHUB_REF#refs/heads/}"
+            push_with_retry "branch ${BRANCH}" "HEAD:refs/heads/${BRANCH}" --force
+          fi

@@ -20,7 +20,7 @@
 //! key just changed; revision bumps invalidate only the cells that mutated;
 //! cells that didn't change reuse their existing wrap.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
@@ -66,6 +66,11 @@ struct CellSnapshot {
     cell: HistoryCell,
 }
 
+struct FlattenedTranscript {
+    lines: Vec<Line<'static>>,
+    highlighted_range: Option<(usize, usize)>,
+}
+
 pub struct LiveTranscriptOverlay {
     /// Latest cell snapshots (history + active). Refreshed via
     /// `refresh_from_app` immediately before each render so streaming
@@ -79,20 +84,23 @@ pub struct LiveTranscriptOverlay {
     /// Sticky-tail flag: when `true`, refresh re-pins scroll to the bottom.
     /// Flipped to `false` when the user scrolls up; flipped back to `true`
     /// when they scroll past the last visible line.
-    sticky_to_bottom: bool,
+    sticky_to_bottom: Cell<bool>,
     /// Current top-of-viewport line offset into the flattened line list.
-    scroll: usize,
+    scroll: Cell<usize>,
     /// Visible content height from the last render. Used by paging keys
     /// before the next render frame populates a fresh value.
-    last_visible_height: RefCell<usize>,
+    last_visible_height: Cell<usize>,
     /// Last total line count after wrapping; cached so `handle_key` can
     /// clamp scroll without re-wrapping. Updated by `render`.
-    last_total_lines: RefCell<usize>,
+    last_total_lines: Cell<usize>,
     /// Pending `gg` second keystroke for Vim-style jump-to-top.
     pending_g: bool,
     /// Render mode — `Tail` is the live-stream mode; `BacktrackPreview`
     /// highlights the selected user message (#133).
     mode: Mode,
+    /// Set when a backtrack selection changes. The next render pins the
+    /// selected cell into view once we know the wrapped line range.
+    preview_pin_pending: Cell<bool>,
 }
 
 impl LiveTranscriptOverlay {
@@ -102,12 +110,13 @@ impl LiveTranscriptOverlay {
             snapshots: Vec::new(),
             options: TranscriptRenderOptions::default(),
             cache: RefCell::new(TranscriptCache::new()),
-            sticky_to_bottom: true,
-            scroll: 0,
-            last_visible_height: RefCell::new(0),
-            last_total_lines: RefCell::new(0),
+            sticky_to_bottom: Cell::new(true),
+            scroll: Cell::new(0),
+            last_visible_height: Cell::new(0),
+            last_total_lines: Cell::new(0),
             pending_g: false,
             mode: Mode::Tail,
+            preview_pin_pending: Cell::new(false),
         }
     }
 
@@ -118,7 +127,8 @@ impl LiveTranscriptOverlay {
     /// highlight overlay does.
     pub fn set_backtrack_preview(&mut self, selected_idx: usize) {
         self.mode = Mode::BacktrackPreview { selected_idx };
-        self.sticky_to_bottom = false;
+        self.sticky_to_bottom.set(false);
+        self.preview_pin_pending.set(true);
     }
 
     /// Return the overlay to live-tail mode (used when backtrack is
@@ -126,7 +136,8 @@ impl LiveTranscriptOverlay {
     #[allow(dead_code)] // exposed for callers that retain an overlay across a backtrack cancel; current UI just pops the view.
     pub fn set_tail_mode(&mut self) {
         self.mode = Mode::Tail;
-        self.sticky_to_bottom = true;
+        self.sticky_to_bottom.set(true);
+        self.preview_pin_pending.set(false);
     }
 
     /// For tests + UI: current mode.
@@ -179,9 +190,10 @@ impl LiveTranscriptOverlay {
     /// first line and reverse-video styling on every line so the eye
     /// snaps to them at a glance. The decoration is applied *after* the
     /// cache lookup so toggling preview mode never invalidates wraps.
-    fn flatten(&self, width: u16) -> Vec<Line<'static>> {
+    fn flatten(&self, width: u16) -> FlattenedTranscript {
         let width = width.max(1);
         let mut out: Vec<Line<'static>> = Vec::new();
+        let mut highlighted_range = None;
 
         // Pre-compute which cell index (in `self.snapshots`) is the one
         // the user has selected via Esc-Esc. We walk snapshots backwards
@@ -217,16 +229,24 @@ impl LiveTranscriptOverlay {
             };
 
             if Some(cell_idx) == highlighted_cell_idx {
+                let start = out.len();
                 out.extend(decorate_highlight(lines));
+                let end = out.len();
+                if end > start {
+                    highlighted_range = Some((start, end));
+                }
             } else {
                 out.extend(lines);
             }
         }
-        out
+        FlattenedTranscript {
+            lines: out,
+            highlighted_range,
+        }
     }
 
     fn page_height(&self) -> usize {
-        let cached = *self.last_visible_height.borrow();
+        let cached = self.last_visible_height.get();
         if cached == 0 { 10 } else { cached }
     }
 
@@ -235,33 +255,38 @@ impl LiveTranscriptOverlay {
     }
 
     fn max_scroll(&self) -> usize {
-        let total = *self.last_total_lines.borrow();
+        let total = self.last_total_lines.get();
         let visible = self.page_height();
         total.saturating_sub(visible)
     }
 
     fn scroll_up(&mut self, amount: usize) {
-        self.scroll = self.scroll.saturating_sub(amount);
+        self.scroll.set(self.scroll.get().saturating_sub(amount));
         // Any upward motion exits sticky-tail; explicit user intent.
-        self.sticky_to_bottom = false;
+        self.sticky_to_bottom.set(false);
+        self.preview_pin_pending.set(false);
     }
 
     fn scroll_down(&mut self, amount: usize) {
         let max = self.max_scroll();
-        self.scroll = (self.scroll + amount).min(max);
-        if self.scroll >= max {
-            self.sticky_to_bottom = true;
+        let scroll = self.scroll.get().saturating_add(amount).min(max);
+        self.scroll.set(scroll);
+        self.preview_pin_pending.set(false);
+        if scroll >= max && matches!(self.mode, Mode::Tail) {
+            self.sticky_to_bottom.set(true);
         }
     }
 
     fn jump_to_top(&mut self) {
-        self.scroll = 0;
-        self.sticky_to_bottom = false;
+        self.scroll.set(0);
+        self.sticky_to_bottom.set(false);
+        self.preview_pin_pending.set(false);
     }
 
     fn jump_to_bottom(&mut self) {
-        self.scroll = self.max_scroll();
-        self.sticky_to_bottom = true;
+        self.scroll.set(self.max_scroll());
+        self.sticky_to_bottom.set(matches!(self.mode, Mode::Tail));
+        self.preview_pin_pending.set(false);
     }
 
     /// For tests: snapshot count.
@@ -273,13 +298,13 @@ impl LiveTranscriptOverlay {
     /// For tests: whether sticky-tail is currently armed.
     #[cfg(test)]
     pub fn is_sticky(&self) -> bool {
-        self.sticky_to_bottom
+        self.sticky_to_bottom.get()
     }
 
     /// For tests: current scroll offset.
     #[cfg(test)]
     pub fn scroll_offset(&self) -> usize {
-        self.scroll
+        self.scroll.get()
     }
 }
 
@@ -315,6 +340,26 @@ fn decorate_highlight(mut lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
         first.spans.insert(0, marker);
     }
     lines
+}
+
+fn scroll_to_show_range(
+    current: usize,
+    start: usize,
+    end: usize,
+    visible_height: usize,
+    max_scroll: usize,
+) -> usize {
+    if visible_height == 0 {
+        return 0;
+    }
+    let end = end.max(start.saturating_add(1));
+    if start < current {
+        start.min(max_scroll)
+    } else if end > current.saturating_add(visible_height) {
+        end.saturating_sub(visible_height).min(max_scroll)
+    } else {
+        current.min(max_scroll)
+    }
 }
 
 impl ModalView for LiveTranscriptOverlay {
@@ -461,23 +506,36 @@ impl ModalView for LiveTranscriptOverlay {
         // Compute inner content height once: borders eat 1 row top + 1 bottom,
         // padding eats 1 more on each side.
         let visible_height = popup_area.height.saturating_sub(4) as usize;
-        *self.last_visible_height.borrow_mut() = visible_height;
+        self.last_visible_height.set(visible_height);
 
         // Wrap content using the per-cell cache; subtract padding from width
         // so wrapped lines fit between the inner edges.
         let content_width = popup_width.saturating_sub(4);
-        let lines = self.flatten(content_width);
-        *self.last_total_lines.borrow_mut() = lines.len();
+        let flattened = self.flatten(content_width);
+        let lines = flattened.lines;
+        self.last_total_lines.set(lines.len());
 
         let max_scroll = lines.len().saturating_sub(visible_height);
         // Sticky-tail: every render re-pins scroll to the bottom unless the
         // user has explicitly scrolled away. Without this, streaming new
         // content would push the visible window backwards as `scroll` stays
         // fixed against a growing total.
-        let scroll = if self.sticky_to_bottom {
+        let scroll = if self.sticky_to_bottom.get() {
+            self.scroll.set(max_scroll);
             max_scroll
+        } else if self.preview_pin_pending.replace(false) {
+            let next = flattened
+                .highlighted_range
+                .map(|(start, end)| {
+                    scroll_to_show_range(self.scroll.get(), start, end, visible_height, max_scroll)
+                })
+                .unwrap_or_else(|| self.scroll.get().min(max_scroll));
+            self.scroll.set(next);
+            next
         } else {
-            self.scroll.min(max_scroll)
+            let next = self.scroll.get().min(max_scroll);
+            self.scroll.set(next);
+            next
         };
         let end = (scroll + visible_height).min(lines.len());
         let visible_lines: Vec<Line<'static>> = if lines.is_empty() {
@@ -495,7 +553,7 @@ impl ModalView for LiveTranscriptOverlay {
                 selected_idx + 1
             ),
             Mode::Tail => {
-                if self.sticky_to_bottom {
+                if self.sticky_to_bottom.get() {
                     " Live transcript (tailing) ".to_string()
                 } else {
                     " Live transcript (paused) ".to_string()
@@ -560,6 +618,17 @@ mod tests {
             .collect();
     }
 
+    fn buffer_text(buf: &Buffer) -> String {
+        let mut out = String::new();
+        for y in 0..buf.area.height {
+            for x in 0..buf.area.width {
+                out.push_str(buf[(x, y)].symbol());
+            }
+            out.push('\n');
+        }
+        out
+    }
+
     #[test]
     fn new_overlay_starts_sticky() {
         let v = LiveTranscriptOverlay::new();
@@ -577,8 +646,8 @@ mod tests {
         );
         prime_layout(&mut v, 10);
         // Force scroll non-zero so scroll_up actually moves.
-        v.scroll = 5;
-        v.sticky_to_bottom = true;
+        v.scroll.set(5);
+        v.sticky_to_bottom.set(true);
         let _ = v.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
         assert!(!v.is_sticky(), "scrolling up must release the sticky tail");
     }
@@ -592,8 +661,8 @@ mod tests {
         );
         prime_layout(&mut v, 10);
         // Drop out of sticky mode by scrolling up.
-        v.scroll = 10;
-        v.sticky_to_bottom = false;
+        v.scroll.set(10);
+        v.sticky_to_bottom.set(false);
         let _ = v.handle_key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
         assert!(
             v.is_sticky(),
@@ -609,12 +678,12 @@ mod tests {
             (0..50).map(|i| user(&format!("line {i}"))).collect(),
         );
         prime_layout(&mut v, 10);
-        v.sticky_to_bottom = false;
+        v.sticky_to_bottom.set(false);
         // PageDown once should not re-arm since we're not yet at the tail.
         let _ = v.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
         // Now jump explicitly to bottom and verify re-arm.
-        v.scroll = 0;
-        v.sticky_to_bottom = false;
+        v.scroll.set(0);
+        v.sticky_to_bottom.set(false);
         let _ = v.handle_key(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE));
         assert!(v.is_sticky());
     }
@@ -782,6 +851,36 @@ mod tests {
             }
             assert!(any_content, "preview render must produce visible content");
         }
+    }
+
+    #[test]
+    fn backtrack_preview_opens_near_latest_user_not_transcript_start() {
+        let mut v = LiveTranscriptOverlay::new();
+        let mut cells = Vec::new();
+        for i in 0..12 {
+            cells.push(user(&format!("user {i}")));
+            cells.push(assistant(&format!("assistant {i}"), false));
+        }
+        install_snapshots(&mut v, cells);
+
+        v.set_backtrack_preview(0);
+        let area = Rect::new(0, 0, 48, 10);
+        let mut buf = Buffer::empty(area);
+        v.render(area, &mut buf);
+        let rendered = buffer_text(&buf);
+
+        assert!(
+            v.scroll_offset() > 0,
+            "preview should pin near the selected recent turn, got top offset 0"
+        );
+        assert!(
+            rendered.contains("user 11"),
+            "latest user turn should be visible after opening preview: {rendered}"
+        );
+        assert!(
+            !rendered.contains("user 0"),
+            "preview must not open at the oldest transcript line: {rendered}"
+        );
     }
 
     #[test]

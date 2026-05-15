@@ -3,6 +3,7 @@
 > **面向 [DeepSeek V4](https://platform.deepseek.com) 的终端原生编程智能体：100 万 token 上下文、思考模式流式推理、前缀缓存感知。自包含 Rust 二进制发布——开箱即带 MCP 客户端、沙箱和持久化任务队列。**
 
 [English README](README.md)
+[日本語 README](README.ja-JP.md)
 
 ## 安装
 
@@ -28,18 +29,37 @@ brew install deepseek-tui
 #    覆盖 Linux x64/ARM64、macOS x64/ARM64、Windows x64
 
 # 5. Docker —— 预构建发布镜像。
+docker volume create deepseek-tui-home
 docker run --rm -it \
-  -e DEEPSEEK_API_KEY \
+  -e DEEPSEEK_API_KEY="$DEEPSEEK_API_KEY" \
+  -v deepseek-tui-home:/home/deepseek/.deepseek \
   -v "$PWD:/workspace" \
+  -w /workspace \
   ghcr.io/hmbown/deepseek-tui:latest
 ```
 
 > 中国大陆访问较慢时，npm 可加 `--registry=https://registry.npmmirror.com`，
 > 或使用下方的 [Cargo 镜像](#中国大陆--镜像友好安装)。
+>
+> 下载安全：官方二进制只发布在
+> `https://github.com/Hmbown/DeepSeek-TUI/releases`。手动下载时请校验
+> SHA-256 manifest，并避免相似仓库名或搜索结果里的镜像站。详见
+> [下载安全与校验](docs/INSTALL.md#2-download-safety-and-checksums)。
+
+已经安装过？按你的安装方式更新：
+
+```bash
+deepseek update                         # release 二进制更新器
+npm install -g deepseek-tui@latest      # npm 包装器
+brew update && brew upgrade deepseek-tui
+cargo install deepseek-tui-cli --locked --force
+cargo install deepseek-tui     --locked --force
+```
 
 [![CI](https://github.com/Hmbown/DeepSeek-TUI/actions/workflows/ci.yml/badge.svg)](https://github.com/Hmbown/DeepSeek-TUI/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/deepseek-tui)](https://www.npmjs.com/package/deepseek-tui)
 [![crates.io](https://img.shields.io/crates/v/deepseek-tui-cli?label=crates.io)](https://crates.io/crates/deepseek-tui-cli)
+[DeepWiki project index](https://deepwiki.com/Hmbown/DeepSeek-TUI)
 
 ![DeepSeek TUI 截图](assets/screenshot.png)
 
@@ -53,10 +73,12 @@ DeepSeek TUI 是一个完全运行在终端里的编程智能体。它让 DeepSe
 
 ### 主要功能
 
-- **原生 RLM**（`rlm_query`）—— 利用现有 API 客户端并行调度 1-16 个低成本 `deepseek-v4-flash` 子任务，用于批量分析和并行推理
+- **Auto 模式** —— `--model auto` / `/model auto` 每轮自动选择模型和推理强度
+- **原生 RLM**（`rlm_open`/`rlm_eval`）—— 持久化 REPL 会话用于批量分析；使用带界面的辅助函数（`peek`、`search`、`chunk`、`sub_query_batch`）运行低成本 `deepseek-v4-flash` 子任务
 - **思考模式流式输出** —— 实时观察模型在解决问题时的思维链展开
 - **完整工具集** —— 文件操作、shell 执行、git、网页搜索/浏览、apply-patch、子智能体、MCP 服务器
-- **100 万 token 上下文** —— 上下文接近上限时自动智能压缩，支持前缀缓存感知以降低成本
+- **100 万 token 上下文** —— 上下文跟踪、手动或配置驱动的压缩，以及前缀缓存遥测
+- **前缀缓存稳定性跟踪** —— 可选 `/statusline` footer chip 显示最近轮次缓存前缀的稳定程度
 - **三种交互模式** —— Plan（只读探索）、Agent（带审批的默认交互）、YOLO（可信工作区自动批准）
 - **推理强度档位** —— 用 `Shift+Tab` 在 `off → high → max` 之间切换
 - **会话保存和恢复** —— 长任务的断点续作
@@ -67,8 +89,10 @@ DeepSeek TUI 是一个完全运行在终端里的编程智能体。它让 DeepSe
 - **LSP 诊断** —— 每次编辑后通过 rust-analyzer、pyright、typescript-language-server、gopls、clangd 提供内联错误/警告
 - **用户记忆** —— 可选的持久化笔记文件注入系统提示，实现跨会话偏好保持
 - **多语言 UI** —— 支持 `en`、`ja`、`zh-Hans`、`pt-BR`，支持自动检测
-- **实时成本跟踪** —— 按轮次和会话统计 token 用量与成本估算，含缓存命中/未命中明细
-- **技能系统** —— 可通过 GitHub 安装的组合式指令包，无需后端服务
+- **实时成本跟踪** —— 按轮次和会话统计 token 用量与成本估算，含缓存命中/未命中明细；简体中文 locale 下显示 CNY
+- **技能系统** —— 可通过 GitHub 安装的组合式指令包；首次启动自带 `skill-creator`、`mcp-builder`、`documents`、`presentations`、`spreadsheets`、`pdf`、`feishu` 等 starter skills
+- **终端原生通知** —— OSC 9、OSC 99、OSC 777，以及桌面通知兜底
+- **内置主题选择器** —— Catppuccin、Tokyo Night、Dracula、Gruvbox 和原有亮/暗色主题，可用 `/theme` 实时切换
 
 ---
 
@@ -78,6 +102,17 @@ DeepSeek TUI 是一个完全运行在终端里的编程智能体。它让 DeepSe
 
 详见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
+### 子智能体：并发后台执行
+
+DeepSeek TUI 可以同时调度多个子智能体并行运行——类似于并发任务队列：
+
+- **非阻塞启动。** `agent_open` 立即返回。子智能体获得独立的上下文和工具注册表，独立运行。父进程继续工作。
+- **后台执行。** 子智能体并发运行（默认上限 10，可配置至 20）。引擎管理线程池——无需轮询循环。
+- **完成通知。** 子智能体完成后，运行时发送结构化的 `<deepseek:subagent.done>` 事件，包含摘要、证据列表和执行指标。父模型读取 `summary` 字段并整合结果。
+- **按需读取结果。** 大型对话记录暂存为 `var_handle` 引用。模型通过 `handle_read` 按切片、范围或 JSONPath 投影读取——保持父上下文精简。
+
+详见 [docs/SUBAGENTS.md](docs/SUBAGENTS.md)。
+
 ---
 
 ## 快速开始
@@ -85,7 +120,7 @@ DeepSeek TUI 是一个完全运行在终端里的编程智能体。它让 DeepSe
 ```bash
 npm install -g deepseek-tui
 deepseek --version
-deepseek
+deepseek --model auto
 ```
 
 预构建二进制覆盖 **Linux x64**、**Linux ARM64**（v0.8.8 起）、**macOS x64**、**macOS ARM64** 和 **Windows x64**。其他目标平台（musl、riscv64、FreeBSD 等）请见下方的[从源码安装](#从源码安装)或 [docs/INSTALL.md](docs/INSTALL.md)。
@@ -97,6 +132,7 @@ deepseek
 ```bash
 deepseek auth set --provider deepseek   # 保存到 ~/.deepseek/config.toml
 
+deepseek auth status                    # 显示当前活跃的凭证来源
 export DEEPSEEK_API_KEY="YOUR_KEY"      # 环境变量方式；需要在非交互式 shell 中使用请放入 ~/.zshenv
 deepseek
 
@@ -104,6 +140,31 @@ deepseek doctor                          # 验证安装
 ```
 
 > 轮换或移除密钥：`deepseek auth clear --provider deepseek`。
+
+### 腾讯云 / CNB 远程优先路径
+
+如果你想要一个长期在线、可从手机控制的工作区，推荐使用腾讯云原生路径：
+CNB 镜像/源码，腾讯云 Lighthouse 香港实例，飞书/Lark 长连接桥接，
+以及可选的 EdgeOne 公网 HTTPS 边缘。运行时 API 必须绑定在 localhost；
+不要通过 EdgeOne 暴露 `/v1/*`。
+
+先看 [docs/TENCENT_CLOUD_REMOTE_FIRST.md](docs/TENCENT_CLOUD_REMOTE_FIRST.md)，
+再按 [docs/TENCENT_LIGHTHOUSE_HK.md](docs/TENCENT_LIGHTHOUSE_HK.md) 配置服务器。
+
+### Auto 模式
+
+使用 `deepseek --model auto` 或 `/model auto` 让 DeepSeek TUI 自行决定每轮需要多少模型和推理能力。
+
+Auto 模式同时控制两个设置：
+
+- 模型：`deepseek-v4-flash` 或 `deepseek-v4-pro`
+- 推理强度：`off`、`high` 或 `max`
+
+在真实请求发出之前，应用会先用关闭推理的 `deepseek-v4-flash` 进行一次小型路由调用。路由器审视最新请求和最近的上下文，然后为真实请求选定具体的模型和推理强度。简短/简单的轮次保持在 Flash + 关闭推理；编码、调试、发布、架构、安全审查或模糊的多步骤任务可升级到 Pro 和/或更高推理强度。
+
+`auto` 是 DeepSeek TUI 本地行为。上游 API 永远不会收到 `model: "auto"`，它只会收到为当前轮次选定的具体模型和推理强度设置。TUI 会显示选定的路由，成本跟踪按实际运行的模型计费。如果路由调用失败或返回无效答案，应用会回退到本地启发式规则。子智能体会继承 auto 模式，除非你为它们指定了显式模型。
+
+需要可重复基准测试、严格控制成本上限或特定提供商/模型映射时，请使用固定模型或固定推理强度。
 
 ### Linux ARM64（HarmonyOS 轻薄本、openEuler、Kylin、树莓派、Graviton 等）
 
@@ -175,9 +236,25 @@ cargo install --path crates/tui --locked   # 提供 `deepseek-tui`
 deepseek auth set --provider nvidia-nim --api-key "YOUR_NVIDIA_API_KEY"
 deepseek --provider nvidia-nim
 
+# AtlasCloud
+deepseek auth set --provider atlascloud --api-key "YOUR_ATLASCLOUD_API_KEY"
+deepseek --provider atlascloud
+
+# OpenRouter
+deepseek auth set --provider openrouter --api-key "YOUR_OPENROUTER_API_KEY"
+deepseek --provider openrouter --model deepseek/deepseek-v4-pro
+
+# Novita
+deepseek auth set --provider novita --api-key "YOUR_NOVITA_API_KEY"
+deepseek --provider novita --model deepseek/deepseek-v4-pro
+
 # Fireworks
 deepseek auth set --provider fireworks --api-key "YOUR_FIREWORKS_API_KEY"
 deepseek --provider fireworks --model deepseek-v4-pro
+
+# 通用 OpenAI 兼容端点
+deepseek auth set --provider openai --api-key "YOUR_OPENAI_COMPATIBLE_API_KEY"
+OPENAI_BASE_URL="https://openai-compatible.example/v4" deepseek --provider openai --model glm-5
 
 # 自托管 SGLang
 SGLANG_BASE_URL="http://localhost:30000/v1" deepseek --provider sglang --model deepseek-v4-flash
@@ -190,35 +267,17 @@ ollama pull deepseek-coder:1.3b
 deepseek --provider ollama --model deepseek-coder:1.3b
 ```
 
+在 TUI 内，`/provider` 打开提供方选择器，`/model` 打开模型选择器。
+`/provider openrouter` 和 `/model <id>` 可直接切换；`/models` 会列出
+API 返回的实时模型。`/model` 选择器会优先使用当前提供方的实时模型
+目录，不可用时再回退到 provider-aware 默认模型列表。
+
 ---
 
-## v0.8.26 新功能
+## 版本说明
 
-安全 + 优化版本。[完整更新日志](CHANGELOG.md)。
-
-- **安全加固** — 强化了 `fetch_url` 网络目标验证（GHSA-88gh-2526-gfrr）
-  并收紧了 `task_create` 子代理的默认权限（GHSA-72w5-pf8h-xfp4）。
-  感谢 **@JafarAkhondali** 和 **@47Cid** 的负责任的披露。
-- **代码块边栏字符从复制内容中剥离** (#1212，感谢 **Oliver-ZPLiu
-  (@Oliver-ZPLiu)**) — `▏` 不再泄漏到剪贴板或拖拽选择中。
-- **拖拽选择可超出视口边缘自动滚动** (#1163，感谢 **Oliver-ZPLiu
-  (@Oliver-ZPLiu)**)。
-- **MCP stdio 服务器捕获 stderr** — 运行中的服务器诊断信息现在可用。
-- **Windows Terminal 默认开启鼠标捕获** (#1169，感谢 **Giggitycountless
-  (@Giggitycountless)**)。
-- **`/clear` 重置 Todos 侧边栏**（感谢 **Giggitycountless
-  (@Giggitycountless)**）、**提示预算截断时保持技能可见**（感谢 **hhhaiai
-  (@hhhaiai)**）、**`/skills` 列表间距修复** 以及 **base URL 覆盖传递到
-  provider**（感谢 **reidliu41 (@reidliu41)**）、**WSL2 轮次启动超时
-  修复**（感谢 **michaeltse321 (@michaeltse321)**）、**自动将
-  `.deepseek/` 添加到 `.gitignore`**（感谢 **Giggitycountless
-  (@Giggitycountless)**）、**错误单元格渲染时禁用 markdown**（感谢
-  **douglarek (@douglarek)**）、**MCP 工具排序稳定化** (#1319)、
-  **非 DeepSeek provider 使用根 `base_url` 时输出配置警告** (#1308)。
-
-⚠️ **已知问题（沿用至 v0.8.27）**：Windows 10 conhost 闪烁（#1260、
-#1251）、按轮次快照（尚无写感知跳过）、非 WT 终端鼠标选择跨入侧边栏
-(#1169)。
+每个版本的具体变更见 [CHANGELOG.md](CHANGELOG.md)。README 只保留当前
+安装方式、核心工作流、模型提供方配置、运行时接口和扩展入口。
 
 ---
 
@@ -227,7 +286,10 @@ deepseek --provider ollama --model deepseek-coder:1.3b
 ```bash
 deepseek                                       # 交互式 TUI
 deepseek "explain this function"              # 一次性提示
+deepseek exec --auto --output-format stream-json "fix this bug" # 面向后端集成的 NDJSON 流
+deepseek exec --resume <SESSION_ID> "follow up" # 继续非交互会话
 deepseek --model deepseek-v4-flash "summarize" # 指定模型
+deepseek --model auto "fix this bug"          # 自动选择模型 + 推理强度
 deepseek --yolo                                # 自动批准工具
 deepseek auth set --provider deepseek         # 保存 API key
 deepseek doctor                                # 检查配置和连接
@@ -240,12 +302,47 @@ deepseek resume --last                         # 恢复最近会话
 deepseek resume <SESSION_ID>                   # 按 UUID 恢复指定会话
 deepseek fork <SESSION_ID>                     # 在指定轮次分叉会话
 deepseek serve --http                          # HTTP/SSE API 服务
-deepseek pr <N>                                # 获取 PR 并预填审查提示
+deepseek serve --acp                           # Zed/自定义智能体的 ACP stdio 适配器
+deepseek run pr <N>                            # 获取 PR 并预填审查提示
 deepseek mcp list                              # 列出已配置 MCP 服务器
 deepseek mcp validate                          # 校验 MCP 配置和连接
 deepseek mcp-server                            # 启动 dispatcher MCP stdio 服务器
 deepseek update                                # 检查并应用二进制更新
 ```
+
+Docker 镜像发布在 GHCR 上：
+
+```bash
+docker volume create deepseek-tui-home
+
+docker run --rm -it \
+  -e DEEPSEEK_API_KEY="$DEEPSEEK_API_KEY" \
+  -v deepseek-tui-home:/home/deepseek/.deepseek \
+  -v "$PWD:/workspace" \
+  -w /workspace \
+  ghcr.io/hmbown/deepseek-tui:latest
+```
+
+固定 tag、本地构建、volume 权限和非交互管道用法见 [docs/DOCKER.md](docs/DOCKER.md)。
+
+### Zed / ACP
+
+DeepSeek 可作为自定义 Agent Client Protocol 服务器运行，供 Zed 等编辑器通过 stdio 调用本地 ACP 智能体。在 Zed 中添加自定义智能体服务器：
+
+```json
+{
+  "agent_servers": {
+    "DeepSeek": {
+      "type": "custom",
+      "command": "deepseek",
+      "args": ["serve", "--acp"],
+      "env": {}
+    }
+  }
+}
+```
+
+首个 ACP 切片支持通过现有 DeepSeek 配置/API 密钥创建新会话和提示响应。工具支持的编辑和检查点回放尚未通过 ACP 暴露。
 
 ### 常用快捷键
 
@@ -286,13 +383,23 @@ deepseek update                                # 检查并应用二进制更新
 |---|---|
 | `DEEPSEEK_API_KEY` | DeepSeek API key |
 | `DEEPSEEK_BASE_URL` | API base URL |
+| `DEEPSEEK_HTTP_HEADERS` | 可选模型请求头，例如 `X-Model-Provider-Id=your-model-provider` |
 | `DEEPSEEK_MODEL` | 默认模型 |
-| `DEEPSEEK_PROVIDER` | `deepseek`（默认）、`nvidia-nim`、`fireworks`、`sglang`、`vllm`、`ollama` |
+| `DEEPSEEK_STREAM_IDLE_TIMEOUT_SECS` | 流式响应空闲超时秒数，默认 `300`，限制在 `1..=3600` |
+| `DEEPSEEK_PROVIDER` | `deepseek`（默认）、`nvidia-nim`、`openai`、`openrouter`、`novita`、`atlascloud`、`fireworks`、`sglang`、`vllm`、`ollama` |
 | `DEEPSEEK_PROFILE` | 配置 profile 名称 |
 | `DEEPSEEK_MEMORY` | 设为 `on` 启用用户记忆 |
-| `NVIDIA_API_KEY` / `FIREWORKS_API_KEY` / `SGLANG_API_KEY` / `VLLM_API_KEY` / `OLLAMA_API_KEY` | 提供商认证 |
+| `DEEPSEEK_ALLOW_INSECURE_HTTP=1` | 在可信网络上允许非本机 `http://` API base URL |
+| `NVIDIA_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY` / `NOVITA_API_KEY` / `ATLASCLOUD_API_KEY` / `FIREWORKS_API_KEY` / `SGLANG_API_KEY` / `VLLM_API_KEY` / `OLLAMA_API_KEY` | 提供商认证 |
+| `OPENAI_BASE_URL` / `OPENAI_MODEL` | 通用 OpenAI 兼容端点和模型 ID |
+| `ATLASCLOUD_BASE_URL` / `ATLASCLOUD_MODEL` | AtlasCloud 端点和模型覆盖 |
+| `OPENROUTER_BASE_URL` | OpenRouter 端点覆盖 |
+| `NOVITA_BASE_URL` | Novita 端点覆盖 |
+| `FIREWORKS_BASE_URL` | Fireworks 端点覆盖 |
 | `SGLANG_BASE_URL` | 自托管 SGLang 端点 |
+| `SGLANG_MODEL` | 自托管 SGLang 模型 ID |
 | `VLLM_BASE_URL` | 自托管 vLLM 端点 |
+| `VLLM_MODEL` | 自托管 vLLM 模型 ID |
 | `OLLAMA_BASE_URL` | 自托管 Ollama 端点 |
 | `OLLAMA_MODEL` | 自托管 Ollama 模型标签 |
 | `NO_ANIMATIONS=1` | 启动时强制无障碍模式 |
@@ -376,6 +483,10 @@ description: 当 DeepSeek 需要遵循我的自定义工作流时使用这个技
 | [MCP.md](docs/MCP.md) | Model Context Protocol 集成 |
 | [RUNTIME_API.md](docs/RUNTIME_API.md) | HTTP/SSE API 服务 |
 | [INSTALL.md](docs/INSTALL.md) | 各平台安装指南 |
+| [DOCKER.md](docs/DOCKER.md) | GHCR 镜像、volume 和 Docker 用法 |
+| [CNB_MIRROR.md](docs/CNB_MIRROR.md) | CNB 镜像和中国大陆友好安装说明 |
+| [TENCENT_CLOUD_REMOTE_FIRST.md](docs/TENCENT_CLOUD_REMOTE_FIRST.md) | 腾讯云/CNB/Lighthouse/飞书远程优先路径 |
+| [TENCENT_LIGHTHOUSE_HK.md](docs/TENCENT_LIGHTHOUSE_HK.md) | 腾讯云 Lighthouse 香港实例配置 |
 | [MEMORY.md](docs/MEMORY.md) | 用户记忆功能指南 |
 | [SUBAGENTS.md](docs/SUBAGENTS.md) | 子智能体角色分类与生命周期 |
 | [KEYBINDINGS.md](docs/KEYBINDINGS.md) | 完整快捷键目录 |
@@ -388,6 +499,11 @@ description: 当 DeepSeek 需要遵循我的自定义工作流时使用这个技
 ---
 
 ## 致谢
+
+- **[DeepSeek](https://github.com/deepseek-ai)** — 感谢 DeepSeek 提供模型与支持，让每一次交互成为可能。
+- **[DataWhale](https://github.com/datawhalechina)** — 感谢 DataWhale 的支持，并欢迎我们加入“鲸兄弟”大家庭。
+- **[OpenWarp](https://github.com/zerx-lab/warp)** — 感谢 OpenWarp 优先支持 DeepSeek TUI，并一起打磨更好的终端智能体体验。
+- **[Open Design](https://github.com/nexu-io/open-design)** — 感谢 Open Design 对面向设计的智能体工作流提供支持与协作。
 
 本项目由不断壮大的贡献者社区共同打造：
 
@@ -426,7 +542,7 @@ description: 当 DeepSeek 需要遵循我的自定义工作流时使用这个技
 - **Unic (YuniqueUnic)** — 基于 schema 的配置 UI（TUI + web）
 - **Jason** — SSRF 安全加固
 - **[axobase001](https://github.com/axobase001)** — 快照孤儿文件清理、npm 安装守卫、会话遥测修复、模型作用域缓存清理、符号链接技能支持，以及 npm 镜像逃生路径指引 (#975, #1032, #1047, #1049, #1052, #1019, #1051, #1056)
-- **[MengZ-super](https://github.com/MengZ-super)** — `/theme` 深色/浅色主题切换命令和 SSE gzip/brotli 解压支持 (#1057, #1061)
+- **[MengZ-super](https://github.com/MengZ-super)** — `/theme` 命令基础和 SSE gzip/brotli 解压支持 (#1057, #1061)
 - **[DI-HUO-MING-YI](https://github.com/DI-HUO-MING-YI)** — Plan 模式只读沙箱安全修复 (#1077)
 - **[bevis-wong](https://github.com/bevis-wong)** — 粘贴-回车自动提交问题的精确复现 (#1073)
 - **[Duducoco](https://github.com/Duducoco)** 和 **[AlphaGogoo](https://github.com/AlphaGogoo)** — 技能斜杠菜单和 `/skills` 覆盖范围修复 (#1068, #1083)

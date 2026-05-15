@@ -103,6 +103,53 @@ pub fn spillover_path(id: &str) -> Option<PathBuf> {
     Some(spillover_root()?.join(format!("{sanitised}.txt")))
 }
 
+/// Resolve the spillover-file path for a SHA256 content hash. Separate
+/// namespace (`sha_<hex>.txt`) from the tool-call-id files so the two
+/// reference systems (engine-side spillover + wire-side dedup) can
+/// co-exist in one directory without collisions. `sha` must be the
+/// raw 64-char lowercase hex digest — case-insensitive matching is
+/// done by the caller.
+#[must_use]
+pub fn sha_spillover_path(sha: &str) -> Option<PathBuf> {
+    let sha = sha.trim().to_ascii_lowercase();
+    if !is_valid_sha256(&sha) {
+        return None;
+    }
+    Some(spillover_root()?.join(format!("sha_{sha}.txt")))
+}
+
+/// True when `s` is a 64-character lowercase ASCII hex string. Used
+/// to detect bare SHA refs the model might pass to retrieval and to
+/// validate input to [`sha_spillover_path`].
+#[must_use]
+pub fn is_valid_sha256(s: &str) -> bool {
+    s.len() == 64
+        && s.chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+}
+
+/// Write content to the SHA-addressed spillover file. Idempotent —
+/// the same hash always maps to the same path, and the file's bytes
+/// are a function of the hash. Skips the write if the file already
+/// exists (which is the common case for the wire dedup, since the
+/// second sighting writes the same content that the first did).
+pub fn write_sha_spillover(sha: &str, content: &str) -> io::Result<PathBuf> {
+    let path = sha_spillover_path(sha).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "sha must be a 64-char lowercase hex digest",
+        )
+    })?;
+    if path.exists() {
+        return Ok(path);
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    crate::utils::write_atomic(&path, content.as_bytes())?;
+    Ok(path)
+}
+
 /// Write `content` to the spillover file for `id`. Creates the
 /// parent directory if needed. Returns the resolved path on success.
 ///
@@ -225,17 +272,55 @@ pub const SPILLOVER_HEAD_BYTES: usize = 32 * 1024;
 /// Error results (`success == false`) are skipped: error messages
 /// are typically short, and turning them into a "see file" pointer
 /// would just hide the error from the model's reasoning.
+#[allow(dead_code)]
 pub fn apply_spillover(result: &mut ToolResult, tool_id: &str) -> Option<PathBuf> {
+    apply_spillover_inner(result, tool_id, None)
+}
+
+/// Apply spillover and emit a session-scoped artifact reference.
+///
+/// The legacy `~/.deepseek/tool_outputs/<tool-id>.txt` file is still written
+/// so `retrieve_tool_result ref=<tool-id>` keeps working during the
+/// transition. The canonical artifact content is also written under
+/// `~/.deepseek/sessions/<session-id>/artifacts/`, and the inline tool result
+/// becomes a fixed-format artifact reference block.
+pub fn apply_spillover_with_artifact(
+    result: &mut ToolResult,
+    tool_id: &str,
+    tool_name: &str,
+    session_id: &str,
+) -> Option<PathBuf> {
+    apply_spillover_inner(
+        result,
+        tool_id,
+        Some(ArtifactSpilloverContext {
+            tool_name,
+            session_id,
+        }),
+    )
+}
+
+struct ArtifactSpilloverContext<'a> {
+    tool_name: &'a str,
+    session_id: &'a str,
+}
+
+fn apply_spillover_inner(
+    result: &mut ToolResult,
+    tool_id: &str,
+    artifact_context: Option<ArtifactSpilloverContext<'_>>,
+) -> Option<PathBuf> {
     if !result.success {
         return None;
     }
     if result.content.len() <= SPILLOVER_THRESHOLD_BYTES {
         return None;
     }
-    let total = result.content.len();
+    let original_content = result.content.clone();
+    let total = original_content.len();
     let outcome = match maybe_spillover(
         tool_id,
-        &result.content,
+        &original_content,
         SPILLOVER_THRESHOLD_BYTES,
         SPILLOVER_HEAD_BYTES,
     ) {
@@ -253,19 +338,91 @@ pub fn apply_spillover(result: &mut ToolResult, tool_id: &str) -> Option<PathBuf
     };
     let (head, path) = outcome;
     let path_str = path.display().to_string();
-    let footer = format!(
-        "\n\n[Output truncated: {head_kib} KiB of {total_kib} KiB shown. \
-         Full output saved to {path_str}. Use \
-         `retrieve_tool_result ref={tool_id} mode=tail` or \
-         `retrieve_tool_result ref={tool_id} mode=query query=<text>` \
-         if you need the elided output.]",
-        head_kib = head.len() / 1024,
-        total_kib = total / 1024,
-    );
-    result.content = format!("{head}{footer}");
+
+    let mut artifact_path = None;
+    if let Some(context) = artifact_context {
+        let artifact_id = crate::artifacts::artifact_id_for_tool_call(tool_id);
+        match crate::artifacts::write_session_artifact(
+            context.session_id,
+            &artifact_id,
+            &original_content,
+        ) {
+            Ok((absolute_path, relative_path)) => {
+                let record = crate::artifacts::record_tool_output_artifact(
+                    context.session_id,
+                    tool_id,
+                    context.tool_name,
+                    relative_path.clone(),
+                    &original_content,
+                );
+                let transcript_ref = crate::artifacts::TranscriptArtifactRef::from(&record);
+                result.content = crate::artifacts::render_transcript_artifact_ref(&transcript_ref);
+                artifact_path = Some((absolute_path, relative_path, record));
+            }
+            Err(err) => {
+                tracing::warn!(
+                    target: "spillover",
+                    ?err,
+                    tool_id,
+                    "session artifact write failed; falling back to legacy spillover footer"
+                );
+            }
+        }
+    }
+
+    if artifact_path.is_none() {
+        let footer = format!(
+            "\n\n[Output truncated: {head_kib} KiB of {total_kib} KiB shown. \
+             Full output saved to {path_str}. Use \
+             `retrieve_tool_result ref={tool_id} mode=tail` or \
+             `retrieve_tool_result ref={tool_id} mode=query query=<text>` \
+             if you need the elided output.]",
+            head_kib = head.len() / 1024,
+            total_kib = total / 1024,
+        );
+        result.content = format!("{head}{footer}");
+    }
+
     let metadata = result.metadata.get_or_insert_with(|| serde_json::json!({}));
     if let Some(obj) = metadata.as_object_mut() {
-        obj.insert("spillover_path".into(), serde_json::Value::String(path_str));
+        if let Some((absolute_path, relative_path, record)) = artifact_path.as_ref() {
+            obj.insert(
+                "spillover_path".into(),
+                serde_json::Value::String(absolute_path.display().to_string()),
+            );
+            obj.insert(
+                "legacy_spillover_path".into(),
+                serde_json::Value::String(path_str),
+            );
+            obj.insert(
+                "artifact_id".into(),
+                serde_json::Value::String(record.id.clone()),
+            );
+            obj.insert(
+                "artifact_session_id".into(),
+                serde_json::Value::String(record.session_id.clone()),
+            );
+            obj.insert(
+                "artifact_relative_path".into(),
+                serde_json::Value::String(crate::artifacts::format_artifact_relative_path(
+                    relative_path,
+                )),
+            );
+            obj.insert(
+                "artifact_path".into(),
+                serde_json::Value::String(absolute_path.display().to_string()),
+            );
+            obj.insert(
+                "artifact_byte_size".into(),
+                serde_json::Value::Number(serde_json::Number::from(record.byte_size)),
+            );
+            obj.insert(
+                "artifact_preview".into(),
+                serde_json::Value::String(record.preview.clone()),
+            );
+        } else {
+            obj.insert("spillover_path".into(), serde_json::Value::String(path_str));
+        }
     } else {
         // Pre-existing metadata that wasn't a JSON object (rare,
         // possibly an array). Replace with an object so we can
@@ -274,13 +431,52 @@ pub fn apply_spillover(result: &mut ToolResult, tool_id: &str) -> Option<PathBuf
         let prior = std::mem::replace(metadata, serde_json::json!({}));
         if let Some(obj) = metadata.as_object_mut() {
             obj.insert("_prior".into(), prior);
-            obj.insert(
-                "spillover_path".into(),
-                serde_json::Value::String(path.display().to_string()),
-            );
+            if let Some((absolute_path, relative_path, record)) = artifact_path.as_ref() {
+                obj.insert(
+                    "spillover_path".into(),
+                    serde_json::Value::String(absolute_path.display().to_string()),
+                );
+                obj.insert(
+                    "legacy_spillover_path".into(),
+                    serde_json::Value::String(path.display().to_string()),
+                );
+                obj.insert(
+                    "artifact_id".into(),
+                    serde_json::Value::String(record.id.clone()),
+                );
+                obj.insert(
+                    "artifact_session_id".into(),
+                    serde_json::Value::String(record.session_id.clone()),
+                );
+                obj.insert(
+                    "artifact_relative_path".into(),
+                    serde_json::Value::String(crate::artifacts::format_artifact_relative_path(
+                        relative_path,
+                    )),
+                );
+                obj.insert(
+                    "artifact_path".into(),
+                    serde_json::Value::String(absolute_path.display().to_string()),
+                );
+                obj.insert(
+                    "artifact_byte_size".into(),
+                    serde_json::Value::Number(serde_json::Number::from(record.byte_size)),
+                );
+                obj.insert(
+                    "artifact_preview".into(),
+                    serde_json::Value::String(record.preview.clone()),
+                );
+            } else {
+                obj.insert(
+                    "spillover_path".into(),
+                    serde_json::Value::String(path.display().to_string()),
+                );
+            }
         }
     }
-    Some(path)
+    artifact_path
+        .map(|(absolute_path, _, _)| absolute_path)
+        .or(Some(path))
 }
 
 /// Sanitise a tool call id for use as a filename. Keeps ASCII
@@ -299,32 +495,44 @@ fn sanitise_id(id: &str) -> Option<String> {
     }
 }
 
-/// Override the spillover root for tests so they don't pollute the
-/// user's real `~/.deepseek/` directory. Wraps the body with a
-/// temporary `HOME` override that gets restored on drop.
+/// Override the storage roots for tests so they don't pollute the
+/// user's real `~/.deepseek/` directory. This uses explicit test hooks instead
+/// of `$HOME` because Windows home-dir resolution can ignore environment
+/// overrides and return the runner profile directory.
 #[cfg(test)]
 fn with_test_home<F, R>(home: &Path, f: F) -> R
 where
     F: FnOnce() -> R,
 {
-    // SAFETY: tests in this module serialize through `TEST_GUARD`
-    // because they share process-wide `$HOME`. Without the guard,
-    // parallel tests could observe each other's overrides.
-    let prior = std::env::var_os("HOME");
-    // SAFETY: caller holds the test guard.
-    unsafe {
-        std::env::set_var("HOME", home);
+    let _artifact_guard = crate::artifacts::TEST_ARTIFACT_SESSIONS_GUARD
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+
+    struct StorageRootOverride {
+        prior_spillover: Option<PathBuf>,
+        prior_artifacts: Option<PathBuf>,
     }
-    let out = f();
-    // SAFETY: caller holds the test guard.
-    unsafe {
-        if let Some(p) = prior {
-            std::env::set_var("HOME", p);
-        } else {
-            std::env::remove_var("HOME");
+
+    impl Drop for StorageRootOverride {
+        fn drop(&mut self) {
+            set_test_spillover_root(self.prior_spillover.take());
+            crate::artifacts::set_test_artifact_sessions_root(self.prior_artifacts.take());
         }
     }
-    out
+
+    // Tests in this module serialize spillover through `TEST_GUARD`; the
+    // artifact guard above protects the session-artifact root shared with
+    // artifacts.rs tests.
+    let prior_spillover =
+        set_test_spillover_root(Some(home.join(".deepseek").join(SPILLOVER_DIR_NAME)));
+    let prior_artifacts = crate::artifacts::set_test_artifact_sessions_root(Some(
+        home.join(".deepseek").join("sessions"),
+    ));
+    let _restore = StorageRootOverride {
+        prior_spillover,
+        prior_artifacts,
+    };
+    f()
 }
 
 #[cfg(test)]
@@ -332,13 +540,42 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
-    /// Tests in this module serialize through this guard because
-    /// they mutate process-global `$HOME`. Without it, cargo's
-    /// parallel runner would observe interleaved overrides.
+    /// Tests in this module serialize through this guard because they mutate
+    /// process-global test storage roots. Without it, cargo's parallel runner
+    /// would observe interleaved overrides.
     fn setup() -> std::sync::MutexGuard<'static, ()> {
         super::TEST_SPILLOVER_GUARD
             .lock()
             .unwrap_or_else(|e| e.into_inner())
+    }
+
+    #[test]
+    fn with_test_home_overrides_storage_roots_without_home_resolution() {
+        let _g = setup();
+        let tmp = tempdir().unwrap();
+
+        with_test_home(tmp.path(), || {
+            assert_eq!(
+                spillover_root().as_deref(),
+                Some(tmp.path().join(".deepseek").join("tool_outputs").as_path())
+            );
+            assert_eq!(
+                crate::artifacts::session_artifact_absolute_path(
+                    "session-123",
+                    &PathBuf::from("artifacts").join("art_call-big.txt")
+                )
+                .as_deref(),
+                Some(
+                    tmp.path()
+                        .join(".deepseek")
+                        .join("sessions")
+                        .join("session-123")
+                        .join("artifacts")
+                        .join("art_call-big.txt")
+                        .as_path()
+                )
+            );
+        });
     }
 
     #[test]
@@ -569,6 +806,65 @@ mod tests {
                 .and_then(serde_json::Value::as_str)
                 .expect("spillover_path key present");
             assert_eq!(stamped, path.display().to_string());
+        });
+    }
+
+    #[test]
+    fn apply_spillover_with_artifact_writes_session_file_and_ref_block() {
+        let _g = setup();
+        let tmp = tempdir().unwrap();
+        with_test_home(tmp.path(), || {
+            let big = "checking crate ... error[E0425]: cannot find value\n".repeat(4_000);
+            let mut result = ToolResult::success(big.clone());
+            let path =
+                apply_spillover_with_artifact(&mut result, "call-big", "exec_shell", "session-123")
+                    .expect("should spill");
+
+            let session_artifact = tmp
+                .path()
+                .join(".deepseek")
+                .join("sessions")
+                .join("session-123")
+                .join("artifacts")
+                .join("art_call-big.txt");
+            assert_eq!(path, session_artifact);
+            assert_eq!(fs::read_to_string(&session_artifact).unwrap(), big);
+            assert!(
+                tmp.path()
+                    .join(".deepseek/tool_outputs/call-big.txt")
+                    .exists(),
+                "legacy spillover file should remain during transition"
+            );
+
+            assert!(result.content.starts_with("[artifact: exec_shell]"));
+            assert!(result.content.contains("id:           art_call-big"));
+            assert!(result.content.contains("tool_call_id: call-big"));
+            assert!(
+                result
+                    .content
+                    .contains("path:         artifacts/art_call-big.txt")
+            );
+            assert!(!result.content.contains("Output truncated:"));
+
+            let metadata = result.metadata.expect("metadata stamped");
+            assert_eq!(
+                metadata
+                    .get("artifact_id")
+                    .and_then(serde_json::Value::as_str),
+                Some("art_call-big")
+            );
+            assert_eq!(
+                metadata
+                    .get("artifact_relative_path")
+                    .and_then(serde_json::Value::as_str),
+                Some("artifacts/art_call-big.txt")
+            );
+            assert_eq!(
+                metadata
+                    .get("artifact_session_id")
+                    .and_then(serde_json::Value::as_str),
+                Some("session-123")
+            );
         });
     }
 

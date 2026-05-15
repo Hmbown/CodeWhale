@@ -130,10 +130,14 @@ fn add_optional_usage(total: Option<u32>, delta: Option<u32>) -> Option<u32> {
 
 /// Take a `pre-turn:<seq>` workspace snapshot.
 ///
+/// `cap_bytes` is the workspace-size ceiling that gates first-init
+/// (passed through to [`SnapshotRepo::open_or_init_with_cap`]); pass
+/// `0` to disable the cap.
+///
 /// Returns the snapshot SHA on success, `None` on any error. Errors are
 /// logged at WARN; the turn loop must not block on this.
-pub fn pre_turn_snapshot(workspace: &Path, turn_seq: u64) -> Option<String> {
-    snapshot_with_label(workspace, &format!("pre-turn:{turn_seq}"))
+pub fn pre_turn_snapshot(workspace: &Path, turn_seq: u64, cap_bytes: u64) -> Option<String> {
+    snapshot_with_label(workspace, &format!("pre-turn:{turn_seq}"), cap_bytes)
 }
 
 /// Take a `tool:<call_id>` workspace snapshot, taken before executing a
@@ -144,25 +148,32 @@ pub fn pre_turn_snapshot(workspace: &Path, turn_seq: u64) -> Option<String> {
 ///
 /// Returns the snapshot SHA on success, `None` on any error. Errors are
 /// logged at WARN and are non-fatal.
-pub fn pre_tool_snapshot(workspace: &Path, call_id: &str) -> Option<String> {
-    snapshot_with_label(workspace, &format!("tool:{call_id}"))
+pub fn pre_tool_snapshot(workspace: &Path, call_id: &str, cap_bytes: u64) -> Option<String> {
+    snapshot_with_label(workspace, &format!("tool:{call_id}"), cap_bytes)
 }
 
 /// Take a `post-turn:<seq>` workspace snapshot. Same failure model as
 /// [`pre_turn_snapshot`].
-pub fn post_turn_snapshot(workspace: &Path, turn_seq: u64) -> Option<String> {
-    snapshot_with_label(workspace, &format!("post-turn:{turn_seq}"))
+pub fn post_turn_snapshot(workspace: &Path, turn_seq: u64, cap_bytes: u64) -> Option<String> {
+    snapshot_with_label(workspace, &format!("post-turn:{turn_seq}"), cap_bytes)
 }
 
-fn snapshot_with_label(workspace: &Path, label: &str) -> Option<String> {
-    match SnapshotRepo::open_or_init(workspace) {
-        Ok(repo) => match repo.snapshot(label) {
-            Ok(id) => Some(id.0),
-            Err(e) => {
-                tracing::warn!(target: "snapshot", "snapshot '{label}' failed: {e}");
-                None
+fn snapshot_with_label(workspace: &Path, label: &str, cap_bytes: u64) -> Option<String> {
+    match SnapshotRepo::open_or_init_with_cap(workspace, cap_bytes) {
+        Ok(repo) => {
+            let id = match repo.snapshot(label) {
+                Ok(id) => Some(id.0),
+                Err(e) => {
+                    tracing::warn!(target: "snapshot", "snapshot '{label}' failed: {e}");
+                    return None;
+                }
+            };
+            // Prune oldest snapshots to cap disk usage (#1112).
+            if let Err(e) = repo.prune_keep_last_n(crate::snapshot::DEFAULT_MAX_SNAPSHOTS) {
+                tracing::warn!(target: "snapshot", "snapshot prune failed: {e}");
             }
-        },
+            id
+        }
         Err(e) => {
             tracing::warn!(target: "snapshot", "snapshot repo init failed: {e}");
             None

@@ -64,7 +64,7 @@ pub fn restore(app: &mut App, arg: Option<&str>) -> CommandResult {
     if !(app.yolo || app.trust_mode) {
         return CommandResult::message(format!(
             "Refusing to restore snapshot #{n} ('{}') outside trusted mode.\n\
-             Run `/trust on` or `/yolo` first, then re-run `/restore {n}`.",
+             Run `/trust on` or `/mode yolo` first, then re-run `/restore {n}`.",
             snapshots[n - 1].label,
         ));
     }

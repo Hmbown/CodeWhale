@@ -14,10 +14,15 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const cfgPath = join(__dirname, "..", "wrangler.jsonc");
 const raw = readFileSync(cfgPath, "utf-8");
 
-// Parse JSONC (strip comments, trailing commas)
+// Parse JSONC (strip comments, trailing commas).
+// Use a two-pass approach to avoid mangling URLs: first strip
+// line comments that look like comments (preceded by whitespace
+// or comma, not part of ://), then strip block comments.
 const stripped = raw
-  .replace(/\/\/.*$/gm, "")   // line comments
-  .replace(/\/\*[\s\S]*?\*\//g, ""); // block comments
+  .replace(/(^|[,\s])\/\/[^\n]*/gm, "$1")  // line comments (skips :// in URLs)
+  .replace(/\/\*[\s\S]*?\*\//g, "")          // block comments
+  .replace(/,\s*}/g, "}")                    // trailing commas
+  .replace(/,\s*]/g, "]");
 const cfg = JSON.parse(stripped);
 
 const nss = cfg.kv_namespaces;

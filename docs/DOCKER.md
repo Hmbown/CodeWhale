@@ -17,6 +17,8 @@ docker volume create deepseek-tui-home
 docker run --rm -it \
   -e DEEPSEEK_API_KEY="$DEEPSEEK_API_KEY" \
   -v deepseek-tui-home:/home/deepseek/.deepseek \
+  -v "$PWD:/workspace" \
+  -w /workspace \
   ghcr.io/hmbown/deepseek-tui:latest
 ```
 
@@ -26,8 +28,13 @@ Use a pinned release tag for reproducible installs:
 docker run --rm -it \
   -e DEEPSEEK_API_KEY="$DEEPSEEK_API_KEY" \
   -v deepseek-tui-home:/home/deepseek/.deepseek \
-  ghcr.io/hmbown/deepseek-tui:v0.8.20
+  -v "$PWD:/workspace" \
+  -w /workspace \
+  ghcr.io/hmbown/deepseek-tui:vX.Y.Z
 ```
+
+Replace `vX.Y.Z` with a tag from
+[GitHub Releases](https://github.com/Hmbown/DeepSeek-TUI/releases).
 
 ## Local build
 
@@ -43,6 +50,8 @@ Then run it with the same Docker-managed data volume:
 docker run --rm -it \
   -e DEEPSEEK_API_KEY="$DEEPSEEK_API_KEY" \
   -v deepseek-tui-home:/home/deepseek/.deepseek \
+  -v "$PWD:/workspace" \
+  -w /workspace \
   deepseek-tui
 ```
 

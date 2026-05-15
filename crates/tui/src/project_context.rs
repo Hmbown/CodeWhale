@@ -11,7 +11,7 @@
 //! The loaded content is injected into the system prompt to give the agent
 //! context about the project's conventions, structure, and requirements.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -26,12 +26,16 @@ const PROJECT_CONTEXT_FILES: &[&str] = &[
     ".deepseek/instructions.md",
 ];
 
+/// User-level project instructions loaded as a fallback when the workspace and
+/// its parents do not define project context.
+const GLOBAL_AGENTS_RELATIVE_PATH: &[&str] = &[".deepseek", "AGENTS.md"];
+
 /// Maximum size for project context files (to prevent loading huge files)
 const MAX_CONTEXT_SIZE: usize = 100 * 1024; // 100KB
 const PACK_README_MAX_CHARS: usize = 4_000;
-const PACK_MAX_ENTRIES: usize = 400;
-const PACK_MAX_SOURCE_FILES: usize = 80;
-const PACK_MAX_CONFIG_FILES: usize = 80;
+const PACK_MAX_ENTRIES: usize = 220;
+const PACK_MAX_SOURCE_FILES: usize = 60;
+const PACK_MAX_CONFIG_FILES: usize = 60;
 const PACK_MAX_DEPTH: usize = 4;
 const PACK_IGNORED_DIRS: &[&str] = &[
     ".git",
@@ -46,6 +50,13 @@ const PACK_IGNORED_DIRS: &[&str] = &[
     ".vscode",
     ".pytest_cache",
     ".DS_Store",
+];
+const PACK_ALLOWED_HIDDEN_DIRS: &[&str] = &[".github"];
+const PACK_ALLOWED_HIDDEN_FILES: &[&str] = &[".editorconfig", ".gitattributes", ".gitignore"];
+const PACK_IGNORED_FILE_NAMES: &[&str] = &[".DS_Store"];
+const PACK_IGNORED_FILE_EXTENSIONS: &[&str] = &[
+    "7z", "avif", "db", "gif", "gz", "ico", "jpeg", "jpg", "log", "mov", "mp3", "mp4", "pdf",
+    "png", "sqlite", "tar", "tgz", "wav", "webp", "zip",
 ];
 
 // === Errors ===
@@ -193,36 +204,68 @@ fn collect_pack_entries(root: &Path, dir: &Path, depth: usize, out: &mut Vec<Str
         return;
     }
 
-    let Ok(read_dir) = fs::read_dir(dir) else {
-        return;
-    };
-    let mut children = read_dir.filter_map(Result::ok).collect::<Vec<_>>();
-    children.sort_by_key(|entry| entry.path());
+    let mut queue = VecDeque::new();
+    queue.push_back((dir.to_path_buf(), depth));
 
-    for entry in children {
-        if out.len() >= PACK_MAX_ENTRIES {
-            break;
-        }
-        let path = entry.path();
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        if file_type.is_dir() && PACK_IGNORED_DIRS.contains(&name) {
+    while let Some((current_dir, current_depth)) = queue.pop_front() {
+        if current_depth > PACK_MAX_DEPTH || out.len() >= PACK_MAX_ENTRIES {
             continue;
         }
 
-        if let Some(relative) = relative_slash_path(root, &path) {
-            if file_type.is_dir() {
-                out.push(format!("{relative}/"));
-                collect_pack_entries(root, &path, depth + 1, out);
-            } else if file_type.is_file() {
-                out.push(relative);
+        let Ok(read_dir) = fs::read_dir(&current_dir) else {
+            continue;
+        };
+        let mut children = read_dir.filter_map(Result::ok).collect::<Vec<_>>();
+        children.sort_by_key(|entry| entry.path());
+
+        for entry in children {
+            if out.len() >= PACK_MAX_ENTRIES {
+                break;
+            }
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() && should_ignore_pack_dir(name) {
+                continue;
+            }
+            if file_type.is_file() && should_ignore_pack_file(name) {
+                continue;
+            }
+
+            if let Some(relative) = relative_slash_path(root, &path) {
+                if file_type.is_dir() {
+                    out.push(format!("{relative}/"));
+                    if current_depth < PACK_MAX_DEPTH {
+                        queue.push_back((path, current_depth + 1));
+                    }
+                } else if file_type.is_file() {
+                    out.push(relative);
+                }
             }
         }
     }
+}
+
+fn should_ignore_pack_dir(name: &str) -> bool {
+    PACK_IGNORED_DIRS.contains(&name)
+        || (name.starts_with('.') && !PACK_ALLOWED_HIDDEN_DIRS.contains(&name))
+}
+
+fn should_ignore_pack_file(name: &str) -> bool {
+    if name.starts_with('.') && !PACK_ALLOWED_HIDDEN_FILES.contains(&name) {
+        return true;
+    }
+    if PACK_IGNORED_FILE_NAMES.contains(&name) {
+        return true;
+    }
+    let Some((_, ext)) = name.rsplit_once('.') else {
+        return false;
+    };
+    PACK_IGNORED_FILE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str())
 }
 
 fn relative_slash_path(root: &Path, path: &Path) -> Option<String> {
@@ -351,6 +394,13 @@ pub fn load_project_context(workspace: &Path) -> ProjectContext {
 ///
 /// This allows for monorepo setups where a root AGENTS.md applies to all subdirectories.
 pub fn load_project_context_with_parents(workspace: &Path) -> ProjectContext {
+    load_project_context_with_parents_and_home(workspace, dirs::home_dir().as_deref())
+}
+
+fn load_project_context_with_parents_and_home(
+    workspace: &Path,
+    home_dir: Option<&Path>,
+) -> ProjectContext {
     let mut ctx = load_project_context(workspace);
 
     // If no context found in workspace, check parent directories
@@ -370,13 +420,45 @@ pub fn load_project_context_with_parents(workspace: &Path) -> ProjectContext {
         }
     }
 
+    // Always check `~/.deepseek/AGENTS.md` so user-wide preferences
+    // travel into every session (#1157). When both global and project
+    // instructions exist, the global block prepends the project's so
+    // workspace overrides win the last word; when only global exists,
+    // it continues to serve as the fallback. `source_path` keeps
+    // pointing at the more-specific source (project > global) for
+    // display purposes.
+    if let Some(global_ctx) = load_global_agents_context(workspace, home_dir) {
+        ctx.warnings.extend(global_ctx.warnings.iter().cloned());
+        if let Some(global_text) = global_ctx.instructions {
+            match ctx.instructions.take() {
+                Some(project_text) => {
+                    ctx.instructions = Some(merge_global_and_project_instructions(
+                        &global_text,
+                        global_ctx.source_path.as_deref(),
+                        &project_text,
+                    ));
+                    // Leave `ctx.source_path` pointing at the project /
+                    // parent file — that's the location the user might
+                    // want to edit when something looks wrong.
+                }
+                None => {
+                    ctx.instructions = Some(global_text);
+                    ctx.source_path = global_ctx.source_path;
+                }
+            }
+        }
+    }
+
     // Auto-generate .deepseek/instructions.md when no context file exists anywhere.
     // This avoids the per-turn filesystem scan fallback in prompts.rs that
     // breaks KV prefix cache stability.
     if !ctx.has_instructions()
         && let Some(generated) = auto_generate_context(workspace)
     {
+        let mut warnings = std::mem::take(&mut ctx.warnings);
         ctx = load_project_context(workspace);
+        warnings.extend(ctx.warnings.iter().cloned());
+        ctx.warnings = warnings;
         if !ctx.has_instructions() {
             // Loaded from the file we just wrote — use the generated content
             // directly as a last resort (shouldn't normally happen).
@@ -386,6 +468,49 @@ pub fn load_project_context_with_parents(workspace: &Path) -> ProjectContext {
     }
 
     ctx
+}
+
+/// Combine `~/.deepseek/AGENTS.md` (global, user-wide preferences) with a
+/// project-local AGENTS.md/CLAUDE.md/instructions.md. Global comes first
+/// so workspace-specific rules can override it — the model reads in
+/// declared order. Each block is wrapped in a labelled fence so the
+/// model can tell which level any rule comes from when the two sets
+/// disagree (#1157).
+fn merge_global_and_project_instructions(
+    global: &str,
+    global_source: Option<&Path>,
+    project: &str,
+) -> String {
+    let global_label = global_source
+        .map(|p| format!("<!-- global: {} -->", p.display()))
+        .unwrap_or_else(|| "<!-- global -->".to_string());
+    format!(
+        "{global_label}\n{}\n\n<!-- project (overrides global where they conflict) -->\n{}",
+        global.trim_end(),
+        project.trim_start(),
+    )
+}
+
+fn load_global_agents_context(workspace: &Path, home_dir: Option<&Path>) -> Option<ProjectContext> {
+    let home = home_dir?;
+    let mut path = home.to_path_buf();
+    for component in GLOBAL_AGENTS_RELATIVE_PATH {
+        path.push(component);
+    }
+
+    if !(path.exists() && path.is_file()) {
+        return None;
+    }
+
+    let mut ctx = ProjectContext::empty(workspace.to_path_buf());
+    match load_context_file(&path) {
+        Ok(content) => {
+            ctx.instructions = Some(content);
+            ctx.source_path = Some(path);
+        }
+        Err(error) => ctx.warnings.push(error.to_string()),
+    }
+    Some(ctx)
 }
 
 /// Generate a context file from project tree + summary and write it to
@@ -776,6 +901,198 @@ mod tests {
         assert!(
             first.find("\"src/a.rs\"").expect("a before z")
                 < first.find("\"src/z.rs\"").expect("z")
+        );
+    }
+
+    #[test]
+    fn project_context_pack_ignores_agent_state_and_binary_noise() {
+        let tmp = tempdir().expect("tempdir");
+        fs::create_dir_all(tmp.path().join("src")).expect("mkdir src");
+        fs::write(tmp.path().join("src").join("main.rs"), "fn main() {}").expect("write src");
+        fs::write(tmp.path().join(".DS_Store"), "noise").expect("write ds store");
+        fs::write(tmp.path().join("paper.pdf"), "not a real pdf").expect("write pdf");
+        fs::create_dir_all(tmp.path().join(".deepseek").join("state")).expect("mkdir state");
+        fs::write(
+            tmp.path()
+                .join(".deepseek")
+                .join("state")
+                .join("subagents.v1.json"),
+            "{}",
+        )
+        .expect("write state");
+        fs::create_dir_all(tmp.path().join(".playwright-mcp")).expect("mkdir playwright");
+        fs::write(
+            tmp.path().join(".playwright-mcp").join("trace.log"),
+            "noise",
+        )
+        .expect("write log");
+        fs::create_dir_all(tmp.path().join(".agents").join("skills").join("demo"))
+            .expect("mkdir skills");
+        fs::write(
+            tmp.path()
+                .join(".agents")
+                .join("skills")
+                .join("demo")
+                .join("SKILL.md"),
+            "skill body",
+        )
+        .expect("write skill");
+        fs::create_dir_all(tmp.path().join(".github").join("workflows")).expect("mkdir workflows");
+        fs::write(
+            tmp.path().join(".github").join("workflows").join("ci.yml"),
+            "name: ci",
+        )
+        .expect("write workflow");
+
+        let pack = generate_project_context_pack(tmp.path()).expect("pack");
+
+        assert!(pack.contains("\"src/main.rs\""), "{pack}");
+        assert!(pack.contains("\".github/\""), "{pack}");
+        assert!(pack.contains("\".github/workflows/ci.yml\""), "{pack}");
+        assert!(!pack.contains(".deepseek"), "{pack}");
+        assert!(!pack.contains(".playwright-mcp"), "{pack}");
+        assert!(!pack.contains(".agents"), "{pack}");
+        assert!(!pack.contains(".DS_Store"), "{pack}");
+        assert!(!pack.contains("paper.pdf"), "{pack}");
+        assert!(!pack.contains("trace.log"), "{pack}");
+    }
+
+    #[test]
+    fn project_context_pack_keeps_later_top_level_dirs_under_budget() {
+        let tmp = tempdir().expect("tempdir");
+        let noisy = tmp.path().join("aaa-many-files");
+        fs::create_dir_all(&noisy).expect("mkdir noisy");
+        for i in 0..(PACK_MAX_ENTRIES + 20) {
+            fs::write(noisy.join(format!("file-{i:03}.rs")), "fn f() {}").expect("write noisy");
+        }
+        fs::create_dir_all(tmp.path().join("zzz-important")).expect("mkdir important");
+        fs::write(
+            tmp.path().join("zzz-important").join("main.rs"),
+            "fn important() {}",
+        )
+        .expect("write important");
+
+        let pack = generate_project_context_pack(tmp.path()).expect("pack");
+
+        assert!(
+            pack.contains("\"zzz-important/\""),
+            "breadth-first packing should keep later top-level directories visible:\n{pack}"
+        );
+    }
+
+    #[test]
+    fn test_load_global_agents_when_project_has_no_context() {
+        let workspace = tempdir().expect("workspace tempdir");
+        let home = tempdir().expect("home tempdir");
+        let global_dir = home.path().join(".deepseek");
+        fs::create_dir(&global_dir).expect("mkdir .deepseek");
+        let global_agents = global_dir.join("AGENTS.md");
+        fs::write(&global_agents, "Global instructions").expect("write global agents");
+
+        let ctx = load_project_context_with_parents_and_home(workspace.path(), Some(home.path()));
+
+        assert!(ctx.has_instructions());
+        assert!(
+            ctx.instructions
+                .as_ref()
+                .unwrap()
+                .contains("Global instructions")
+        );
+        assert_eq!(ctx.source_path, Some(global_agents));
+    }
+
+    #[test]
+    fn test_local_and_global_agents_merge_when_both_exist() {
+        // #1157: when both `~/.deepseek/AGENTS.md` and a project AGENTS.md
+        // exist, the prompt should carry user-wide preferences AND the
+        // project's overrides — not silently drop the global file.
+        let workspace = tempdir().expect("workspace tempdir");
+        fs::write(workspace.path().join("AGENTS.md"), "Local instructions")
+            .expect("write local agents");
+
+        let home = tempdir().expect("home tempdir");
+        let global_dir = home.path().join(".deepseek");
+        fs::create_dir(&global_dir).expect("mkdir .deepseek");
+        fs::write(global_dir.join("AGENTS.md"), "Global instructions")
+            .expect("write global agents");
+
+        let ctx = load_project_context_with_parents_and_home(workspace.path(), Some(home.path()));
+
+        assert!(ctx.has_instructions());
+        let instructions = ctx.instructions.as_ref().unwrap();
+        assert!(
+            instructions.contains("Global instructions"),
+            "global block missing from merged instructions:\n{instructions}"
+        );
+        assert!(
+            instructions.contains("Local instructions"),
+            "project block missing from merged instructions:\n{instructions}"
+        );
+        // Global block precedes the project block so project rules read
+        // last and win "last word" precedence with the model.
+        let global_at = instructions.find("Global instructions").unwrap();
+        let local_at = instructions.find("Local instructions").unwrap();
+        assert!(
+            global_at < local_at,
+            "global block must come before project block, got global={global_at} local={local_at}"
+        );
+        // The merged block is labelled so the model can tell the layers
+        // apart when it needs to explain which rule it followed.
+        assert!(
+            instructions.contains("project (overrides global where they conflict)"),
+            "expected labelled separator between global and project blocks"
+        );
+        // `source_path` keeps pointing at the more-specific file so the
+        // user knows where to edit the workspace-level override.
+        assert_eq!(ctx.source_path, Some(workspace.path().join("AGENTS.md")));
+    }
+
+    #[test]
+    fn test_global_agents_only_no_project_unchanged_fallback() {
+        // Sanity: when only the global file exists, the historical
+        // fallback behaviour is preserved — no merge framing leaks in.
+        let workspace = tempdir().expect("workspace tempdir");
+        let home = tempdir().expect("home tempdir");
+        let global_dir = home.path().join(".deepseek");
+        fs::create_dir(&global_dir).expect("mkdir .deepseek");
+        let global_agents = global_dir.join("AGENTS.md");
+        fs::write(&global_agents, "Just the global instructions").expect("write global agents");
+
+        let ctx = load_project_context_with_parents_and_home(workspace.path(), Some(home.path()));
+
+        assert!(ctx.has_instructions());
+        let instructions = ctx.instructions.as_ref().unwrap();
+        assert!(instructions.contains("Just the global instructions"));
+        assert!(
+            !instructions.contains("project (overrides global"),
+            "merge-framing label should not appear when there's nothing to merge"
+        );
+        assert_eq!(ctx.source_path, Some(global_agents));
+    }
+
+    #[test]
+    fn test_invalid_global_agents_warns_and_falls_back_to_generated_context() {
+        let workspace = tempdir().expect("workspace tempdir");
+        let home = tempdir().expect("home tempdir");
+        let global_dir = home.path().join(".deepseek");
+        fs::create_dir(&global_dir).expect("mkdir .deepseek");
+        fs::write(global_dir.join("AGENTS.md"), "   \n  ").expect("write empty global agents");
+
+        let ctx = load_project_context_with_parents_and_home(workspace.path(), Some(home.path()));
+
+        assert!(
+            ctx.warnings
+                .iter()
+                .any(|warning| warning.contains("Context file") && warning.contains("is empty")),
+            "expected empty global AGENTS.md warning, got {:?}",
+            ctx.warnings
+        );
+        assert!(ctx.has_instructions());
+        assert!(
+            ctx.instructions
+                .as_ref()
+                .unwrap()
+                .contains("Project Structure (Auto-generated)")
         );
     }
 }

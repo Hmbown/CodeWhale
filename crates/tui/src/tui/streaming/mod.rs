@@ -10,7 +10,7 @@
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use std::time::Instant;
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::palette;
 
@@ -184,6 +184,9 @@ fn wrap_line(line: &str, width: usize) -> Vec<String> {
     if line.is_empty() {
         return vec![String::new()];
     }
+    if width == 0 {
+        return vec![line.to_string()];
+    }
 
     let mut result = Vec::new();
     let mut current_line = String::new();
@@ -191,6 +194,21 @@ fn wrap_line(line: &str, width: usize) -> Vec<String> {
 
     for word in line.split_whitespace() {
         let word_width = word.width();
+
+        if word_width > width {
+            if !current_line.is_empty() {
+                result.push(std::mem::take(&mut current_line));
+                current_width = 0;
+            }
+            push_word_breaking_chars(
+                word,
+                width,
+                &mut current_line,
+                &mut current_width,
+                &mut result,
+            );
+            continue;
+        }
 
         if current_width == 0 {
             // First word on line
@@ -217,6 +235,24 @@ fn wrap_line(line: &str, width: usize) -> Vec<String> {
         vec![String::new()]
     } else {
         result
+    }
+}
+
+fn push_word_breaking_chars(
+    word: &str,
+    width: usize,
+    current_line: &mut String,
+    current_width: &mut usize,
+    result: &mut Vec<String>,
+) {
+    for ch in word.chars() {
+        let ch_width = ch.width().unwrap_or(1);
+        if *current_width + ch_width > width && *current_width > 0 {
+            result.push(std::mem::take(current_line));
+            *current_width = 0;
+        }
+        current_line.push(ch);
+        *current_width += ch_width;
     }
 }
 
@@ -521,6 +557,7 @@ impl StreamingState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use unicode_width::UnicodeWidthStr;
 
     #[test]
     fn test_commit_complete_lines() {
@@ -550,6 +587,26 @@ mod tests {
     fn test_wrap_line() {
         let result = wrap_line("This is a long line that should be wrapped", 20);
         assert!(result.len() > 1);
+    }
+
+    #[test]
+    fn wrap_line_breaks_no_whitespace_cjk_text() {
+        let text = "这是一个没有任何空格的中文长段落".repeat(12);
+        let result = wrap_line(&text, 40);
+
+        assert!(result.len() > 1);
+        assert!(result.iter().all(|line| line.width() <= 40));
+        assert_eq!(result.join(""), text);
+    }
+
+    #[test]
+    fn wrap_line_breaks_first_overlong_word() {
+        let text = "x".repeat(120);
+        let result = wrap_line(&text, 40);
+
+        assert_eq!(result.len(), 3);
+        assert!(result.iter().all(|line| line.width() <= 40));
+        assert_eq!(result.join(""), text);
     }
 
     #[test]

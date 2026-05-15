@@ -11,6 +11,7 @@ import {
 } from "@/lib/community-agent-tasks";
 import { runFactsDrift } from "@/lib/facts-drift";
 import { runLinkCheck, runSemanticDrift } from "@/lib/content-watch";
+import { safeEqual } from "@/lib/community-agent";
 
 export const dynamic = "force-dynamic";
 
@@ -37,8 +38,8 @@ export async function GET(req: Request) {
     );
   }
 
-  const auth = req.headers.get("x-cron-secret");
-  if (auth !== env.CRON_SECRET) {
+  const auth = req.headers.get("x-cron-secret") ?? "";
+  if (!(await safeEqual(auth, env.CRON_SECRET))) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
@@ -56,6 +57,8 @@ export async function GET(req: Request) {
   const agentEnv: AgentEnv = {
     CURATED_KV: env.CURATED_KV,
     DEEPSEEK_API_KEY: env.DEEPSEEK_API_KEY,
+    DEEPSEEK_BASE_URL: env.DEEPSEEK_BASE_URL ?? process.env.DEEPSEEK_BASE_URL,
+    DEEPSEEK_MODEL: env.DEEPSEEK_MODEL ?? process.env.DEEPSEEK_MODEL,
     GITHUB_TOKEN: env.GITHUB_TOKEN,
     CRON_SECRET: env.CRON_SECRET,
     GITHUB_REPO: env.GITHUB_REPO,

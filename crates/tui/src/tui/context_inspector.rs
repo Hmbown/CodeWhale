@@ -22,6 +22,70 @@ const CONTEXT_CRITICAL_THRESHOLD_PERCENT: f64 = 95.0;
 const MAX_REFERENCE_ROWS: usize = 12;
 const MAX_TOOL_ROWS: usize = 8;
 
+const SYSTEM_LAYER_MARKERS: &[(&str, &str, PromptLayerKind)] = &[
+    (
+        "Project context",
+        "<project_instructions",
+        PromptLayerKind::Static,
+    ),
+    (
+        "Project context pack",
+        "## Project Context Pack",
+        PromptLayerKind::Static,
+    ),
+    ("Environment", "## Environment", PromptLayerKind::Static),
+    ("Skills", "## Skills", PromptLayerKind::Static),
+    (
+        "Context management",
+        "## Context Management",
+        PromptLayerKind::Static,
+    ),
+    ("Compact template", "## Compact", PromptLayerKind::Static),
+    (
+        "Configured instructions",
+        "<instructions ",
+        PromptLayerKind::Dynamic,
+    ),
+    ("User memory", "## User Memory", PromptLayerKind::Dynamic),
+    (
+        "Current session goal",
+        "## Current Session Goal",
+        PromptLayerKind::Dynamic,
+    ),
+    (
+        "Previous session relay",
+        "## Previous Session Relay",
+        PromptLayerKind::Dynamic,
+    ),
+    (
+        "Volatile working set",
+        WORKING_SET_MARKER,
+        PromptLayerKind::Dynamic,
+    ),
+];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PromptLayerKind {
+    Static,
+    Dynamic,
+}
+
+impl PromptLayerKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Static => "cache-friendly",
+            Self::Dynamic => "changes by session/turn",
+        }
+    }
+}
+
+#[derive(Debug)]
+struct PromptTextLayer<'a> {
+    name: &'static str,
+    kind: PromptLayerKind,
+    body: &'a str,
+}
+
 #[must_use]
 pub fn build_context_inspector_text(app: &App) -> String {
     let mut out = String::new();
@@ -146,13 +210,27 @@ fn push_system_prompt_structure(out: &mut String, app: &App) {
             );
         }
         Some(SystemPrompt::Text(text)) => {
-            // Single text blob — stable/volatile not distinguishable
-            let has_working = text.contains(WORKING_SET_MARKER);
-            if has_working {
+            let layers = split_text_prompt_layers(text);
+            if layers.len() > 1
+                || layers
+                    .first()
+                    .is_some_and(|layer| layer.name != "System prompt")
+            {
                 let _ = writeln!(
                     out,
-                    "  Single text blob (~{total_est} tokens) [contains working-set marker — structure unclear]"
+                    "  Text prompt layers: {} layer(s), ~{total_est} tokens",
+                    layers.len()
                 );
+                for layer in layers {
+                    let tokens = text_tokens(layer.body);
+                    let _ = writeln!(
+                        out,
+                        "  - {}: ~{} tokens [{}]",
+                        layer.name,
+                        tokens,
+                        layer.kind.label()
+                    );
+                }
             } else {
                 let _ = writeln!(
                     out,
@@ -171,6 +249,42 @@ fn push_system_prompt_structure(out: &mut String, app: &App) {
         "  Tip: Stable prefix blocks are DeepSeek V4 prefix-cache eligible. \
         Volatile working-set changes break the cache only for the tail."
     );
+}
+
+fn split_text_prompt_layers(text: &str) -> Vec<PromptTextLayer<'_>> {
+    let mut starts = SYSTEM_LAYER_MARKERS
+        .iter()
+        .filter_map(|(name, marker, kind)| text.find(marker).map(|idx| (idx, *name, *kind)))
+        .collect::<Vec<_>>();
+    starts.sort_by_key(|(idx, _, _)| *idx);
+
+    let Some((first_idx, _, _)) = starts.first().copied() else {
+        return vec![PromptTextLayer {
+            name: "System prompt",
+            kind: PromptLayerKind::Static,
+            body: text.trim(),
+        }];
+    };
+
+    let mut layers = Vec::new();
+    if first_idx > 0 {
+        layers.push(PromptTextLayer {
+            name: "Global system prefix",
+            kind: PromptLayerKind::Static,
+            body: text[..first_idx].trim(),
+        });
+    }
+
+    for (i, (start, name, kind)) in starts.iter().enumerate() {
+        let end = starts.get(i + 1).map_or(text.len(), |(idx, _, _)| *idx);
+        layers.push(PromptTextLayer {
+            name,
+            kind: *kind,
+            body: text[*start..end].trim(),
+        });
+    }
+
+    layers
 }
 
 fn push_references(out: &mut String, references: &[SessionContextReference]) {
@@ -453,15 +567,33 @@ mod tests {
     }
 
     #[test]
-    fn inspector_text_prompt_shows_single_blob() {
+    fn inspector_text_prompt_shows_layer_map() {
         let mut app = test_app();
         app.system_prompt = Some(SystemPrompt::Text(
-            "You are DeepSeek TUI.\n## Repo Working Set\nsrc/".to_string(),
+            "You are DeepSeek TUI.\n\n<project_instructions source=\"AGENTS.md\">\nRules\n</project_instructions>\n\n## Project Context Pack\n{}\n\n## Environment\n- lang: en\n\n## Skills\n- rust\n\n## Context Management\nKeep compact\n\n## Compact\nTemplate\n\n## Repo Working Set\nsrc/".to_string(),
         ));
 
         let text = build_context_inspector_text(&app);
         assert!(text.contains("System Prompt Structure"));
+        assert!(text.contains("Text prompt layers"));
+        assert!(text.contains("Global system prefix"));
+        assert!(text.contains("Project context"));
+        assert!(text.contains("Project context pack"));
+        assert!(text.contains("Environment"));
+        assert!(text.contains("Skills"));
+        assert!(text.contains("Context management"));
+        assert!(text.contains("Compact template"));
+        assert!(text.contains("Volatile working set"));
+        assert!(text.contains("changes by session/turn"));
+    }
+
+    #[test]
+    fn inspector_text_prompt_without_markers_shows_single_blob() {
+        let mut app = test_app();
+        app.system_prompt = Some(SystemPrompt::Text("You are DeepSeek TUI.".to_string()));
+
+        let text = build_context_inspector_text(&app);
         assert!(text.contains("Single text blob"));
-        assert!(text.contains("working-set marker"));
+        assert!(text.contains("stable prefix only"));
     }
 }

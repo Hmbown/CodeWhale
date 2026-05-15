@@ -21,7 +21,8 @@
   ],
   "vars": {
     "GITHUB_REPO": "Hmbown/deepseek-tui",
-    "DEEPSEEK_MODEL": "deepseek-v4-flash"
+    "DEEPSEEK_MODEL": "deepseek-v4-flash",
+    "DEEPSEEK_BASE_URL": "https://gateway.ai.cloudflare.com/v1/cf50f793171d7cb3b2ce23368b69cdcb/deepseek-tui-web/deepseek"
   },
   "triggers": {
     "crons": [

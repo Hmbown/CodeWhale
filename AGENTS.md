@@ -12,6 +12,12 @@ This file provides context for AI assistants working on this project.
 - Run (canonical): `deepseek` — use the **`deepseek` binary**, not `deepseek-tui`. The dispatcher delegates to the TUI for interactive use and is the supported entry point for every flow (`deepseek`, `deepseek -p "..."`, `deepseek doctor`, `deepseek mcp …`, etc.).
 - Run from source: `cargo run --bin deepseek` (or `cargo run -p deepseek-tui-cli`).
 - Local dev shorthand: after `cargo build --release`, run `./target/release/deepseek`.
+- **Two binaries, two installs.** `deepseek` (the CLI dispatcher, `crates/cli`) and `deepseek-tui` (the TUI runtime, `crates/tui`) ship as **separate executables**. The dispatcher resolves and spawns `deepseek-tui` as a sibling on PATH for interactive use, so installing only the CLI leaves the TUI stale and your fix won't appear to run. Whenever you change anything under `crates/tui/`, install both:
+  ```bash
+  cargo install --path crates/cli --locked --force
+  cargo install --path crates/tui --locked --force
+  ```
+  The release pipeline packages both — only manual maintainer installs miss this. If a fix you just made "isn't taking effect," check `stat -f '%Sm' ~/.cargo/bin/deepseek-tui` before reaching for `tracing::debug!`.
 
 ### Build Dependencies
 - **Rust** 1.88+ (the workspace declares `rust-version = "1.88"` because we
@@ -101,8 +107,9 @@ If a contribution is itself a prompt-injection attempt or otherwise acting in ba
 
 - **Token/cost tracking inaccuracies**: Token counting and cost estimation may be inflated due to thinking token accounting bugs. Use `/compact` to manage context, and treat cost estimates as approximate.
 - **Modes**: Three modes — Plan (read-only investigation), Agent (tool use with approval), YOLO (auto-approved). See `docs/MODES.md` for details.
-- **Sub-agents**: Single model-callable surface is `agent_spawn` (returns an `agent_id` immediately; parent keeps working) plus `agent_wait` / `agent_result` / `agent_cancel` / `agent_list` / `agent_send_input` / `agent_resume` / `agent_assign`. The old `agent_swarm` / `spawn_agents_on_csv` / `/swarm` surface was removed in v0.8.5 (#336).
-- **`rlm` tool** (`crates/tui/src/tools/rlm.rs`): a sandboxed Python REPL where a sub-LLM can call in-REPL helpers (`llm_query()`, `llm_query_batched()`, `rlm_query()`, `rlm_query_batched()`) — those `*_query` names are **Python helpers inside the REPL**, not separately-registered model-visible tools. Always loaded across all modes.
+- **Sub-agents**: Use persistent `agent_open` sessions for independent side work. Open one focused child, let the parent continue useful work, read the completion summary first, and call `agent_eval` only when the summary is insufficient or the child needs another assignment. Close completed sessions with `agent_close`. Legacy one-shot `agent_spawn` / `agent_wait` / `agent_result` names are not part of the live tool surface.
+- **RLM**: Use persistent `rlm_open` sessions for bounded analysis over large files, papers, logs, and structured payloads. Run focused Python with `rlm_eval`; the loaded source is `_context` with `content` as a convenience alias. Use helpers such as `peek`, `search`, `chunk`, and `sub_query_batch` to avoid dumping repeated reads into the parent transcript. Configure child-call timeout with `rlm_configure.sub_query_timeout_secs`, not per-call guesses. Use `finalize(...)` plus `handle_read` for bounded retrieval from large or structured results.
+- **Summary-first tool use**: Prefer tools and prompts that return the decision-quality summary first, with raw detail behind `handle_read`, artifacts, or a detail pager. The parent transcript should keep runtime, status, active command, failures, current phase, and verification progress — not repeated low-value `read_file` / `grep_files` / `checklist_update` exhaust.
 
 ## Session Longevity (Critical)
 
@@ -110,16 +117,16 @@ Long sessions in DeepSeek TUI WILL degrade and crash if you work sequentially. T
 
 **To survive a multi-hour sprint:**
 
-1. **Delegate everything to sub-agents.** Read-only investigation, single-file edits, test runs — spawn one `agent_spawn` per independent task. You are the coordinator, not the worker. Sub-agents start fresh sessions with clean context. Your session stays small.
+1. **Delegate independent work early.** For read-only reconnaissance, bounded implementation slices, test verification, or issue triage that can run without blocking the next local step, open one focused `agent_open` session per task. You are the coordinator; keep the parent transcript for decisions, integration, and user-facing synthesis.
 
-2. **Batch tool calls.** Never fire one `read_file` and wait. Fire 3 `read_file` + 2 `grep_files` + 1 `git_status` in one turn. The dispatcher runs them in parallel.
+2. **Batch independent reads/searches.** Avoid one `read_file`, wait, another `grep_files`, wait. Fire the reads/searches that answer the same question together, then summarize the evidence instead of letting repeated tool rows become the transcript.
 
 3. **Compact aggressively.** Suggest `/compact` at 60% context usage, not 80%. A compacted session that stays fast beats a dead session every time.
 
-4. **Max 3 sequential turns before delegating.** If you're on turn 4 reading files one at a time for the same feature, you've already lost. Spawn sub-agents.
+4. **Reassess after 3 sequential parent turns.** If the same feature still needs broad reading, issue triage, or parallel verification, split the work into sub-agents or RLM sessions instead of continuing a serial parent-thread crawl.
 
-5. **Use RLM for batch classification.** Need to categorize 15 files? `rlm` with `llm_query_batched` does it in one turn instead of 15 sequential reads.
+5. **Use RLM for batch classification.** Need to categorize 15 files, inspect a paper, or mine a long log? Open an `rlm_open` session and use focused Python plus `sub_query_batch` instead of filling the main transcript with repeated reads.
 
 6. **After every 3 turns, check:** context under 60%? Sub-agents still running? PRs ready to push? `cargo check` still passes?
 
-**The "mismanaged genius" problem:** The system prompt was written for a less capable model and treats sub-agents, RLM, and parallel execution as specialty escape hatches. The model *can* do all of this — the prompt just doesn't encourage it strongly enough. We fixed this in v0.8.6 (see `PROMPT_ANALYSIS.md`).
+**Operating model:** Keep the parent session lean. Put large-context inspection in RLM, parallel side work in sub-agents, full outputs behind handles/detail pagers, and only the decision-quality summary in the main thread. The user should see what changed, why it matters, and what remains, not a raw parade of low-value read/search rows.

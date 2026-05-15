@@ -15,7 +15,7 @@ chosen over the available shell equivalent. Companion to `crates/tui/src/prompts
   for the same backing operation are a model trap — the LLM will alternate
   between them and the cache hit rate suffers.
 
-## Current surface (v0.7.5)
+## Current surface (v0.8.35)
 
 ### File operations
 
@@ -27,6 +27,7 @@ chosen over the available shell equivalent. Companion to `crates/tui/src/prompts
 | `edit_file` | Search-and-replace inside a single file. Cheaper than a full rewrite. |
 | `apply_patch` | Apply a unified diff. The right tool for multi-hunk edits. |
 | `retrieve_tool_result` | Read summaries or slices of prior large tool outputs spilled to `~/.deepseek/tool_outputs/`; use `summary`, `head`, `tail`, `lines`, or `query` instead of replaying the whole result. |
+| `handle_read` | Read bounded projections from `var_handle` payloads held by live tool environments. This is the foundation for RLM sessions, sub-agent transcripts, and other large symbolic payloads. |
 
 ### Search
 
@@ -34,7 +35,7 @@ chosen over the available shell equivalent. Companion to `crates/tui/src/prompts
 |---|---|
 | `grep_files` | Regex search file contents within the workspace; structured matches + context lines. Pure-Rust (`regex` crate), no `rg`/`grep` shell-out. |
 | `file_search` | Fuzzy-match filenames (not contents). Use when you know roughly the name. |
-| `web_search` | DuckDuckGo (with Bing fallback); ranked snippets + `ref_id` for citation. |
+| `web_search` | Bing by default; DuckDuckGo, Tavily, and Bocha are selectable in config. Ranked snippets + `ref_id` for citation. |
 | `fetch_url` | Direct HTTP GET on a known URL. Faster than `web_search` when the link is already known. HTML stripped to text by default. |
 
 ### Shell
@@ -137,18 +138,72 @@ Large logs and command outputs should be artifacts with compact summaries in the
 
 ### Sub-agents
 
-`agent_spawn` plus the supporting tools (`agent_result` / `wait` / `send_input` /
-`agent_assign` / `agent_cancel` / `resume_agent` / `agent_list`).
+v0.8.33 began moving large tool outputs toward symbolic handles: tools return
+small `var_handle` objects, and `handle_read` retrieves bounded slices, counts,
+or JSON projections from the backing environment. This keeps the parent
+transcript small while preserving a recovery path to the full payload.
+
+The active model-facing sub-agent surface is persistent and intentionally small:
+
+| Tool | Niche |
+|---|---|
+| `agent_open` | Open a named sub-agent session for independent work. Returns a session projection immediately so the parent can keep coordinating. |
+| `agent_eval` | Send follow-up input, block for completion, or fetch the current projection/transcript handle for an existing session. |
+| `agent_close` | Cancel or release a sub-agent session by name or id. |
+
 See `agent.txt` for the delegation protocol and
 [`SUBAGENTS.md`](SUBAGENTS.md) for the role taxonomy
 (`general` / `explore` / `plan` / `review` / `implementer` /
 `verifier` / `custom`).
 
-`agent_spawn` defaults to a fresh child conversation. Pass
-`fork_context: true` for continuation-style work that should inherit the
-parent's system prompt and message prefix for DeepSeek prefix-cache reuse.
-The deprecated `delegate_to_agent` compatibility wrapper routes through
-`agent_spawn` and defaults `fork_context` to true.
+`agent_open` defaults to a fresh child conversation. Pass
+`fork_context: true` for continuation-style work or multi-perspective reviews
+that should inherit the parent's context. In fork mode, the runtime preserves
+the parent prefill/prompt prefix byte-identically where available so DeepSeek's
+prefix cache can be reused, then appends the child role instructions and task.
+
+### Recursive LM sessions
+
+RLM is now persistent as well:
+
+| Tool | Niche |
+|---|---|
+| `rlm_open` | Open a named Python REPL over a file, inline content, or URL. |
+| `rlm_eval` | Run bounded Python against that session, using deterministic code and in-REPL semantic helpers such as `sub_query_batch`. |
+| `rlm_configure` | Adjust output feedback, child-query timeout/depth, and session-sharing settings. |
+| `rlm_close` | Shut down the Python runtime and return final session stats. |
+
+Large RLM outputs should come back as `var_handle`s. Use `handle_read` for
+bounded text slices, line ranges, counts, or JSONPath projections instead of
+replaying the full value into the parent transcript.
+
+Inside `rlm_eval`, the loaded source is available as `_context`; `content` is
+also bound as a convenience alias because agents naturally reach for it during
+Python analysis. The shorter `context` and `ctx` names are intentionally not
+bound so user variables can use them without colliding with the bootstrap.
+
+Child-call timeouts are session policy: use `rlm_configure` with
+`sub_query_timeout_secs` before running a large fan-out. The helpers
+`sub_query`, `sub_query_batch`, `sub_query_map`, and `sub_rlm` accept a
+`timeout_secs` keyword for compatibility with common agent guesses, but the
+effective timeout remains configured at the RLM session level.
+
+`finalize(value, confidence=...)` preserves JSON-serializable values. Strings
+become text handles; dicts, lists, numbers, booleans, and null become JSON
+handles that `handle_read` can project with JSONPath.
+
+### Session relay
+
+`/relay [focus]` asks the current agent to write `.deepseek/handoff.md` as a
+compact `# Session relay` artifact for the next thread. The filename remains
+for compatibility with existing prompt loading and older sessions; the visible
+mental model is relay / 接力.
+
+Aliases: `/batonpass`, `/接力`.
+
+Use it before a long break, compaction, or moving work to a fresh session. The
+relay should preserve the goal, current Work checklist item, changed files,
+decisions, verification state, and one concrete next action.
 
 ### Parallel fan-out: cost-class caps
 
@@ -157,55 +212,73 @@ reflect very different cost classes:
 
 | Tool | What each child does | Wall-clock | Token cost | Cap |
 |---|---|---|---|---|
-| `agent_spawn` | Full sub-agent loop (planning, tool calls, multi-turn streaming, can spawn children) | minutes | thousands of tokens | 10 in flight by default (`[subagents].max_concurrent`, hard ceiling 20) |
-| `rlm` helper `llm_query_batched` | One-shot non-streaming Chat Completions calls pinned to `deepseek-v4-flash` | seconds | ~hundreds of tokens | 16 per call |
+| `agent_open` | Full sub-agent loop (planning, tool calls, multi-turn streaming, can open children) | minutes | thousands of tokens | 10 in flight by default (`[subagents].max_concurrent`, hard ceiling 20) |
+| `rlm_eval` helper `sub_query_batch` | One-shot non-streaming Chat Completions calls pinned to `deepseek-v4-flash` inside a live RLM session | seconds | ~hundreds of tokens | 16 per call |
 
 The caps appear in each tool's description and error messages so the model
 (and the user) can choose the right tool for the job. If one sub-agent is
-enough but you need parallel lookups, prefer `rlm` with `llm_query_batched`; if each task needs
-its own tool-carrying agent loop, use `agent_spawn` (and cancel completed
-ones to free slots).
+enough but you need parallel semantic lookups over the same loaded context,
+prefer `rlm_eval` with `sub_query_batch`; if each task needs its own
+tool-carrying agent loop, use `agent_open` and close completed sessions to free
+slots.
 
-## Recently consolidated (v0.5.1)
+## Removed legacy aliases and surfaces
 
-Removed from the prompt as duplicates of equivalent tools (the underlying
-dispatchers still resolve them, so existing sessions don't break — they just
-no longer pollute the model's tool list):
+v0.8.33 removed the old model-facing sub-agent fan-out surface from active
+prompting and tool catalogs. Do not use these names in new active guidance:
+`agent_spawn`, `agent_wait`, `agent_result`, `agent_send_input`,
+`agent_assign`, `agent_resume`, `agent_list`, `spawn_agent`,
+`delegate_to_agent`, `send_input`, and `close_agent`.
 
-- `spawn_agent` → use `agent_spawn`.
-- `close_agent` → use `agent_cancel`.
-- `assign_agent` → use `agent_assign`.
+The old one-shot `rlm` model-facing tool is also replaced by persistent
+`rlm_open` / `rlm_eval` / `rlm_configure` / `rlm_close` sessions.
 
-## Deprecation schedule (v0.6.2 → v0.8.0)
-
-The alias tools below still execute successfully but now attach a
-`_deprecation` block to every result they return. Models should migrate to
-the canonical name before v0.8.0, when the aliases will be removed.
-
-| Deprecated alias | Canonical name | Warning since | Removal |
-|---|---|---|---|
-| `spawn_agent` | `agent_spawn` | v0.6.2 | v0.8.0 |
-| `delegate_to_agent` | `agent_spawn` | v0.6.2 | v0.8.0 |
-| `close_agent` | `agent_cancel` | v0.6.2 | v0.8.0 |
-| `send_input` | `agent_send_input` | v0.6.2 | v0.8.0 |
-
-The `_deprecation` block shape:
+Historical compatibility results may include a `_deprecation` block shaped
+like this:
 
 ```json
 {
   "_deprecation": {
     "this_tool": "spawn_agent",
-    "use_instead": "agent_spawn",
-    "removed_in": "0.8.0",
-    "message": "Tool 'spawn_agent' is deprecated; switch to 'agent_spawn' before v0.8.0."
+    "use_instead": "agent_open",
+    "removed_in": "0.8.33",
+    "message": "Tool 'spawn_agent' is deprecated; switch to 'agent_open'."
   }
 }
 ```
 
-This block is merged into the tool result's `metadata` object alongside any
-other metadata keys (e.g. `status`, `timed_out`) so it does not displace
-existing metadata.  A one-line deprecation warning is also emitted to the
-audit log at `tracing::warn` level every time an alias is invoked.
+This is a legacy/compatibility note, not the active recommended surface.
+
+## Release smoke: verify the live names
+
+When validating a release, verify the model-visible registry names directly.
+Do not grep random handler function names; handler names are allowed to drift
+while the registry contract stays stable.
+
+Version smoke:
+
+```bash
+deepseek --version
+deepseek-tui --version
+```
+
+Tool-surface smoke:
+
+```bash
+rg -n '"handle_read"|"rlm_open"|"rlm_eval"|"rlm_configure"|"rlm_close"|"agent_open"|"agent_eval"|"agent_close"' crates/tui/src
+rg -n 'handle_read|rlm_open|rlm_eval|rlm_configure|rlm_close|agent_open|agent_eval|agent_close' docs crates/tui/src/prompts crates/tui/src/tools
+```
+
+The canonical v0.8.35 live names are:
+
+- `handle_read`
+- `rlm_open`, `rlm_eval`, `rlm_configure`, `rlm_close`
+- `agent_open`, `agent_eval`, `agent_close`
+
+The registry should not actively advertise the legacy one-shot names
+`agent_spawn`, `agent_wait`, `agent_result`, or the old foreground `rlm` tool
+outside legacy/removal notes. Historical changelog entries and compatibility
+code may still mention them.
 
 ## Why we don't ship a single `bash` tool
 

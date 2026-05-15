@@ -26,6 +26,8 @@ pub const DEFAULT_NVIDIA_NIM_FLASH_MODEL: &str = "deepseek-ai/deepseek-v4-flash"
 pub const DEFAULT_NVIDIA_NIM_BASE_URL: &str = "https://integrate.api.nvidia.com/v1";
 pub const DEFAULT_OPENAI_MODEL: &str = "gpt-4.1";
 pub const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+pub const DEFAULT_ATLASCLOUD_MODEL: &str = "deepseek-ai/deepseek-v4-flash";
+pub const DEFAULT_ATLASCLOUD_BASE_URL: &str = "https://api.atlascloud.ai/v1";
 pub const DEFAULT_OPENROUTER_MODEL: &str = "deepseek/deepseek-v4-pro";
 pub const DEFAULT_OPENROUTER_FLASH_MODEL: &str = "deepseek/deepseek-v4-flash";
 pub const DEFAULT_OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
@@ -58,6 +60,7 @@ pub const COMMON_DEEPSEEK_MODELS: &[&str] = &[
     "deepseek/deepseek-v4-pro",
     "deepseek/deepseek-v4-flash",
 ];
+pub const OFFICIAL_DEEPSEEK_MODELS: &[&str] = &["deepseek-v4-pro", "deepseek-v4-flash"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -66,6 +69,7 @@ pub enum ApiProvider {
     DeepseekCN,
     NvidiaNim,
     Openai,
+    Atlascloud,
     Openrouter,
     Novita,
     Fireworks,
@@ -84,6 +88,7 @@ impl ApiProvider {
             }
             "nvidia" | "nvidia-nim" | "nvidia_nim" | "nim" => Some(Self::NvidiaNim),
             "openai" | "open-ai" => Some(Self::Openai),
+            "atlascloud" | "atlas-cloud" | "atlas_cloud" | "atlas" => Some(Self::Atlascloud),
             "openrouter" | "open_router" => Some(Self::Openrouter),
             "novita" => Some(Self::Novita),
             "fireworks" | "fireworks-ai" => Some(Self::Fireworks),
@@ -101,6 +106,7 @@ impl ApiProvider {
             Self::DeepseekCN => "deepseek-cn",
             Self::NvidiaNim => "nvidia-nim",
             Self::Openai => "openai",
+            Self::Atlascloud => "atlascloud",
             Self::Openrouter => "openrouter",
             Self::Novita => "novita",
             Self::Fireworks => "fireworks",
@@ -118,6 +124,7 @@ impl ApiProvider {
             Self::DeepseekCN => "DeepSeek (legacy alias)",
             Self::NvidiaNim => "NVIDIA NIM",
             Self::Openai => "OpenAI-compatible",
+            Self::Atlascloud => "AtlasCloud",
             Self::Openrouter => "OpenRouter",
             Self::Novita => "Novita AI",
             Self::Fireworks => "Fireworks AI",
@@ -134,6 +141,7 @@ impl ApiProvider {
             Self::Deepseek,
             Self::NvidiaNim,
             Self::Openai,
+            Self::Atlascloud,
             Self::Openrouter,
             Self::Novita,
             Self::Fireworks,
@@ -205,7 +213,7 @@ pub enum RequestPayloadMode {
 /// in the API payload (after normalization / provider-specific mapping).
 #[must_use]
 pub fn provider_capability(provider: ApiProvider, resolved_model: &str) -> ProviderCapability {
-    if matches!(provider, ApiProvider::Openai) {
+    if matches!(provider, ApiProvider::Openai | ApiProvider::Atlascloud) {
         return ProviderCapability {
             provider,
             resolved_model: resolved_model.to_string(),
@@ -344,6 +352,60 @@ pub fn normalize_model_name(model: &str) -> Option<String> {
     None
 }
 
+fn canonical_official_deepseek_model_id(model: &str) -> Option<&'static str> {
+    match model.trim().to_ascii_lowercase().as_str() {
+        "deepseek-v4-pro"
+        | "deepseek-v4pro"
+        | "deepseek-ai/deepseek-v4-pro"
+        | "deepseek-ai/deepseek-v4pro"
+        | "deepseek/deepseek-v4-pro"
+        | "deepseek/deepseek-v4pro" => Some("deepseek-v4-pro"),
+        "deepseek-v4-flash"
+        | "deepseek-v4flash"
+        | "deepseek-ai/deepseek-v4-flash"
+        | "deepseek-ai/deepseek-v4flash"
+        | "deepseek/deepseek-v4-flash"
+        | "deepseek/deepseek-v4flash" => Some("deepseek-v4-flash"),
+        _ => None,
+    }
+}
+
+/// Normalize a model selected through the TUI for the active provider.
+///
+/// Official DeepSeek endpoints require bare model IDs. Provider-prefixed
+/// aliases are valid for some compatible backends, but sending them to
+/// DeepSeek's own API causes a 400. Keep the generic normalizer permissive for
+/// config/back-compat, and canonicalize only when the active provider is known.
+#[must_use]
+pub fn normalize_model_name_for_provider(provider: ApiProvider, model: &str) -> Option<String> {
+    let normalized = normalize_model_name(model)?;
+    if matches!(provider, ApiProvider::Deepseek | ApiProvider::DeepseekCN)
+        && let Some(canonical) = canonical_official_deepseek_model_id(&normalized)
+    {
+        return Some(canonical.to_string());
+    }
+    if let Some(canonical) = canonical_official_deepseek_model_id(&normalized) {
+        return Some(model_for_provider(provider, canonical.to_string()));
+    }
+    Some(normalized)
+}
+
+#[must_use]
+pub fn model_completion_names_for_provider(provider: ApiProvider) -> Vec<&'static str> {
+    match provider {
+        ApiProvider::Deepseek | ApiProvider::DeepseekCN => OFFICIAL_DEEPSEEK_MODELS.to_vec(),
+        ApiProvider::NvidiaNim => vec![DEFAULT_NVIDIA_NIM_MODEL, DEFAULT_NVIDIA_NIM_FLASH_MODEL],
+        ApiProvider::Openrouter => vec![DEFAULT_OPENROUTER_MODEL, DEFAULT_OPENROUTER_FLASH_MODEL],
+        ApiProvider::Novita => vec![DEFAULT_NOVITA_MODEL, DEFAULT_NOVITA_FLASH_MODEL],
+        ApiProvider::Fireworks => vec![DEFAULT_FIREWORKS_MODEL],
+        ApiProvider::Sglang => vec![DEFAULT_SGLANG_MODEL, DEFAULT_SGLANG_FLASH_MODEL],
+        ApiProvider::Vllm => vec![DEFAULT_VLLM_MODEL, DEFAULT_VLLM_FLASH_MODEL],
+        ApiProvider::Openai | ApiProvider::Atlascloud | ApiProvider::Ollama => {
+            OFFICIAL_DEEPSEEK_MODELS.to_vec()
+        }
+    }
+}
+
 // === Types ===
 
 /// Raw retry configuration loaded from config files.
@@ -388,6 +450,12 @@ pub struct TuiConfig {
     /// - `Never` — suppress all turn-completion notifications.
     /// - Unset (default) — fall back to the `[notifications]` defaults.
     pub notification_condition: Option<NotificationCondition>,
+    /// When `true`, plain Up/Down on an empty composer scroll the
+    /// transcript instead of recalling input history.  Useful for
+    /// terminals that map trackpad gestures to arrow keys.  Default:
+    /// `false` (plain arrows always navigate input history, #1117).
+    #[serde(default)]
+    pub composer_arrows_scroll: Option<bool>,
 }
 
 /// High-level notification trigger override. See
@@ -405,15 +473,18 @@ pub enum NotificationCondition {
 #[derive(Debug, Clone, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum NotificationMethod {
-    /// Auto-detect: OSC 9 for iTerm.app / Ghostty / WezTerm; BEL on
-    /// macOS / Linux otherwise; on Windows the fallback is `Off`
-    /// because BEL maps to the system error chime there (#583).
+    /// Auto-detect: picks the best protocol for the current terminal
+    /// (OSC 9, Kitty OSC 99, Ghostty OSC 777, or Bel).
     #[default]
     Auto,
     /// OSC 9 escape.
     Osc9,
     /// Plain BEL character.
     Bel,
+    /// Kitty notification protocol (OSC 99).
+    Kitty,
+    /// Ghostty notification protocol (OSC 777).
+    Ghostty,
     /// Disable notifications.
     Off,
 }
@@ -426,10 +497,12 @@ fn default_threshold_secs() -> u64 {
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct NotificationsConfig {
     /// Delivery method: `auto` | `osc9` | `bel` | `off`. Default: `auto`.
-    /// `auto` resolves to OSC 9 in iTerm.app / Ghostty / WezTerm; on
-    /// macOS / Linux it falls back to BEL, and on Windows it falls
-    /// back to `Off` so the post-turn notification doesn't ring the
-    /// system error chime (#583).
+    /// `auto` resolves to OSC 9 for iTerm.app / Ghostty / WezTerm / Cmux
+    /// (detected via `$TERM_PROGRAM` then `$LC_TERMINAL`); on macOS / Linux
+    /// it falls back to BEL, and on Windows it falls back to `Off` so the
+    /// post-turn notification doesn't ring the system error chime (#583).
+    /// Use `method = "osc9"` explicitly when your terminal is OSC-9 capable
+    /// but sets neither env var (e.g. Cmux without `LC_TERMINAL`).
     #[serde(default)]
     pub method: NotificationMethod,
     /// Only notify when the turn took at least this many seconds. Default: 30.
@@ -449,6 +522,10 @@ fn default_snapshot_max_age_days() -> u64 {
     crate::snapshot::DEFAULT_MAX_AGE.as_secs() / (24 * 60 * 60)
 }
 
+fn default_snapshot_max_workspace_gb() -> u64 {
+    crate::snapshot::DEFAULT_MAX_WORKSPACE_BYTES_FOR_SNAPSHOT / (1024 * 1024 * 1024)
+}
+
 /// Workspace side-git snapshot configuration (#137).
 #[derive(Debug, Clone, Deserialize)]
 pub struct SnapshotsConfig {
@@ -458,6 +535,14 @@ pub struct SnapshotsConfig {
     /// Prune side-git snapshots older than this many days at session boot.
     #[serde(default = "default_snapshot_max_age_days")]
     pub max_age_days: u64,
+    /// Maximum non-excluded workspace size (in GB) before the snapshot
+    /// feature self-disables on first use. Set to `0` to disable the cap
+    /// and snapshot regardless of size (the v0.8.31 behavior). The walk
+    /// honors `.gitignore` and the snapshot module's built-in excludes
+    /// (`node_modules/`, `target/`, ...) so the measured size reflects
+    /// what would actually land in a snapshot commit.
+    #[serde(default = "default_snapshot_max_workspace_gb")]
+    pub max_workspace_gb: u64,
 }
 
 impl Default for SnapshotsConfig {
@@ -465,6 +550,7 @@ impl Default for SnapshotsConfig {
         Self {
             enabled: default_snapshots_enabled(),
             max_age_days: default_snapshot_max_age_days(),
+            max_workspace_gb: default_snapshot_max_workspace_gb(),
         }
     }
 }
@@ -490,16 +576,56 @@ impl SnapshotsConfig {
     }
 }
 
+/// Search provider enumeration — selects which backend `web_search` uses.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchProvider {
+    /// Bing HTML scraping. No API key needed.
+    #[default]
+    Bing,
+    /// DuckDuckGo HTML scraping with Bing fallback. No API key needed.
+    #[serde(alias = "duckduckgo")]
+    DuckDuckGo,
+    /// Tavily AI Search API (<https://tavily.com>). Requires api_key.
+    Tavily,
+    /// Bocha AI Search API (<https://bochaai.com>). Requires api_key.
+    Bocha,
+}
+
+impl SearchProvider {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Bing => "bing",
+            Self::DuckDuckGo => "duckduckgo",
+            Self::Tavily => "tavily",
+            Self::Bocha => "bocha",
+        }
+    }
+}
+
+/// Web search provider configuration (`[search]` table in config.toml).
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct SearchConfig {
+    /// Search provider: `bing` | `duckduckgo` | `tavily` | `bocha`. Default: `bing`.
+    #[serde(default)]
+    pub provider: Option<SearchProvider>,
+    /// API key for Tavily or Bocha. Not required for Bing or DuckDuckGo.
+    #[serde(default)]
+    pub api_key: Option<String>,
+}
+
 /// One configurable footer item.
 ///
 /// Order in the user's `Vec<StatusItem>` is preserved: items in the left
 /// cluster (`Mode`, `Model`, `Cost`, `Status`) render in the order given;
-/// right-cluster chips (`Coherence`, `Agents`, `ReasoningReplay`, `Cache`,
-/// `ContextPercent`, `GitBranch`, `LastToolElapsed`, `RateLimit`) likewise
-/// honour ordering inside their cluster. The split between left and right is
-/// deliberate — left holds steady identity (mode/model/cost), right holds
-/// transient signals — so we route each variant to the correct side rather
-/// than letting users reorder across the spacer.
+/// right-cluster chips (`Coherence`, `Agents`, `ReasoningReplay`,
+/// `PrefixStability`, `Cache`, `ContextPercent`, `GitBranch`,
+/// `LastToolElapsed`, `RateLimit`) likewise honour ordering inside their
+/// cluster. The split between left and right is deliberate — left holds steady
+/// identity (mode/model/cost), right holds transient signals — so we route
+/// each variant to the correct side rather than letting users reorder across
+/// the spacer.
 ///
 /// Variants without a current data source (`RateLimit`, `LastToolElapsed`)
 /// are intentionally exposed today so the picker is forward-compatible; they
@@ -522,6 +648,8 @@ pub enum StatusItem {
     Agents,
     /// Reasoning-replay token count ("rsn 12.3k").
     ReasoningReplay,
+    /// Prefix stability ("cache prefix 100%").
+    PrefixStability,
     /// Cache hit rate ("cache 73%").
     Cache,
     /// Context-window utilisation percent ("48%").
@@ -535,9 +663,10 @@ pub enum StatusItem {
 }
 
 impl StatusItem {
-    /// Default footer composition matching v0.6.6 behaviour exactly. Used when
-    /// `tui.status_items` is missing from `config.toml` so upgraders see the
-    /// same footer they had before.
+    /// Default footer composition for the always-on status line. Used when
+    /// `tui.status_items` is missing from `config.toml` so upgraders see a
+    /// concise footer by default; diagnostic chips remain available via
+    /// `/statusline` without crowding the main UI.
     #[must_use]
     pub fn default_footer() -> Vec<StatusItem> {
         vec![
@@ -563,6 +692,7 @@ impl StatusItem {
             StatusItem::Coherence => "coherence",
             StatusItem::Agents => "agents",
             StatusItem::ReasoningReplay => "reasoning_replay",
+            StatusItem::PrefixStability => "prefix_stability",
             StatusItem::Cache => "cache",
             StatusItem::ContextPercent => "context_percent",
             StatusItem::GitBranch => "git_branch",
@@ -582,6 +712,7 @@ impl StatusItem {
             StatusItem::Coherence => "Coherence interventions",
             StatusItem::Agents => "Sub-agents in flight",
             StatusItem::ReasoningReplay => "Reasoning replay tokens",
+            StatusItem::PrefixStability => "Prefix stability",
             StatusItem::Cache => "Prompt cache hit rate",
             StatusItem::ContextPercent => "Context window %",
             StatusItem::GitBranch => "Git branch",
@@ -602,6 +733,7 @@ impl StatusItem {
             StatusItem::Coherence => "shown only when the engine intervenes",
             StatusItem::Agents => "agents or RLM work in progress",
             StatusItem::ReasoningReplay => "thinking tokens replayed each turn",
+            StatusItem::PrefixStability => "whether system/tools stayed cacheable",
             StatusItem::Cache => "% of prompt served from cache",
             StatusItem::ContextPercent => "tokens used / model context window",
             StatusItem::GitBranch => "current workspace branch",
@@ -621,6 +753,7 @@ impl StatusItem {
             StatusItem::Coherence,
             StatusItem::Agents,
             StatusItem::ReasoningReplay,
+            StatusItem::PrefixStability,
             StatusItem::Cache,
             StatusItem::ContextPercent,
             StatusItem::GitBranch,
@@ -737,6 +870,18 @@ pub struct SubagentsConfig {
     pub max_concurrent: Option<usize>,
 }
 
+/// `[auto]` table — knobs for the `--model auto` / `/model auto` router.
+///
+/// `cost_saving` (#1207): when `true`, the auto-mode router prefers
+/// `deepseek-v4-flash` for ambiguous requests, only escalating to
+/// `deepseek-v4-pro` when the task clearly benefits from deeper reasoning.
+/// Default is `false` (balanced — match the existing routing voice).
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct AutoConfig {
+    #[serde(default)]
+    pub cost_saving: Option<bool>,
+}
+
 /// Resolved CLI configuration, including defaults and environment overrides.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Config {
@@ -770,6 +915,7 @@ pub struct Config {
     pub allow_shell: Option<bool>,
     pub approval_policy: Option<String>,
     pub sandbox_mode: Option<String>,
+    pub yolo: Option<bool>,
     /// External sandbox backend: `"none"` or `"opensandbox"`.
     /// When set, exec_shell routes commands through the backend's HTTP API
     /// instead of spawning a local process.
@@ -817,11 +963,22 @@ pub struct Config {
     #[serde(default)]
     pub snapshots: Option<SnapshotsConfig>,
 
+    /// Web search provider configuration. When absent, defaults to Bing.
+    /// Set `provider` to `duckduckgo`, `tavily`, or `bocha` to use those
+    /// services instead; Tavily and Bocha also require an `api_key`.
+    #[serde(default)]
+    pub search: Option<SearchConfig>,
+
     /// User-level memory file (#489). Default behaviour is **opt-in**:
     /// loading + injection happens only when `[memory] enabled = true` or
     /// `DEEPSEEK_MEMORY=on` is set.
     #[serde(default)]
     pub memory: Option<MemoryConfig>,
+
+    /// Tunables for `--model auto` (#1207). When absent, the auto router
+    /// keeps its existing balanced behaviour.
+    #[serde(default)]
+    pub auto: Option<AutoConfig>,
 
     /// Post-edit LSP diagnostics injection (#136). When absent, the engine
     /// applies the defaults documented in [`LspConfigToml`].
@@ -847,6 +1004,24 @@ pub struct Config {
     /// default threshold of 4 096 tokens applies and routing is active.
     #[serde(default)]
     pub workshop: Option<crate::tools::large_output_router::WorkshopConfig>,
+
+    /// Vision model configuration for the `image_analyze` tool.
+    #[serde(default)]
+    pub vision_model: Option<VisionModelConfig>,
+}
+
+/// Vision model configuration for the `image_analyze` tool.
+/// Uses an OpenAI-compatible vision model API.
+#[derive(Debug, Clone, Deserialize)]
+pub struct VisionModelConfig {
+    /// Model identifier (e.g., "gemini-3.1-flash-lite-preview").
+    pub model: String,
+    /// API key for the vision model. Inherits from main config if not specified.
+    #[serde(default)]
+    pub api_key: Option<String>,
+    /// Base URL for the vision model API. Defaults to OpenAI.
+    #[serde(default)]
+    pub base_url: Option<String>,
 }
 
 /// `[runtime_api]` table — knobs for the local HTTP/SSE daemon.
@@ -1017,6 +1192,8 @@ pub struct ProvidersConfig {
     #[serde(default)]
     pub openai: ProviderConfig,
     #[serde(default)]
+    pub atlascloud: ProviderConfig,
+    #[serde(default)]
     pub openrouter: ProviderConfig,
     #[serde(default)]
     pub novita: ProviderConfig,
@@ -1048,6 +1225,18 @@ struct RequirementsFile {
 // === Config Loading ===
 
 impl Config {
+    /// Return `true` if the `[auto] cost_saving = true` opt-in is set
+    /// (#1207). When true, the auto-mode router biases toward
+    /// `deepseek-v4-flash` for ambiguous requests instead of escalating to
+    /// `deepseek-v4-pro`. Default: `false` (balanced behaviour).
+    #[must_use]
+    pub fn auto_cost_saving(&self) -> bool {
+        self.auto
+            .as_ref()
+            .and_then(|a| a.cost_saving)
+            .unwrap_or(false)
+    }
+
     /// Load configuration from disk and merge with environment overrides.
     ///
     /// # Examples
@@ -1116,6 +1305,7 @@ impl Config {
         }
         let table = match provider {
             ApiProvider::Openai => "providers.openai",
+            ApiProvider::Atlascloud => "providers.atlascloud",
             ApiProvider::Openrouter => "providers.openrouter",
             ApiProvider::Novita => "providers.novita",
             ApiProvider::Fireworks => "providers.fireworks",
@@ -1138,7 +1328,7 @@ impl Config {
             && ApiProvider::parse(provider).is_none()
         {
             anyhow::bail!(
-                "Invalid provider '{provider}': expected deepseek, deepseek-cn, nvidia-nim, openai, openrouter, novita, fireworks, sglang, vllm, or ollama."
+                "Invalid provider '{provider}': expected deepseek, deepseek-cn, nvidia-nim, openai, atlascloud, openrouter, novita, fireworks, sglang, vllm, or ollama."
             );
         }
         if let Some(ref key) = self.api_key
@@ -1255,6 +1445,7 @@ impl Config {
             ApiProvider::DeepseekCN => &providers.deepseek_cn,
             ApiProvider::NvidiaNim => &providers.nvidia_nim,
             ApiProvider::Openai => &providers.openai,
+            ApiProvider::Atlascloud => &providers.atlascloud,
             ApiProvider::Openrouter => &providers.openrouter,
             ApiProvider::Novita => &providers.novita,
             ApiProvider::Fireworks => &providers.fireworks,
@@ -1318,6 +1509,7 @@ impl Config {
             ApiProvider::Deepseek | ApiProvider::DeepseekCN => DEFAULT_TEXT_MODEL,
             ApiProvider::NvidiaNim => DEFAULT_NVIDIA_NIM_MODEL,
             ApiProvider::Openai => DEFAULT_OPENAI_MODEL,
+            ApiProvider::Atlascloud => DEFAULT_ATLASCLOUD_MODEL,
             ApiProvider::Openrouter => DEFAULT_OPENROUTER_MODEL,
             ApiProvider::Novita => DEFAULT_NOVITA_MODEL,
             ApiProvider::Fireworks => DEFAULT_FIREWORKS_MODEL,
@@ -1347,6 +1539,7 @@ impl Config {
                 .filter(|base| base.contains("integrate.api.nvidia.com"))
                 .cloned(),
             ApiProvider::Openai
+            | ApiProvider::Atlascloud
             | ApiProvider::Openrouter
             | ApiProvider::Novita
             | ApiProvider::Fireworks
@@ -1360,6 +1553,7 @@ impl Config {
                 ApiProvider::DeepseekCN => DEFAULT_DEEPSEEKCN_BASE_URL,
                 ApiProvider::NvidiaNim => DEFAULT_NVIDIA_NIM_BASE_URL,
                 ApiProvider::Openai => DEFAULT_OPENAI_BASE_URL,
+                ApiProvider::Atlascloud => DEFAULT_ATLASCLOUD_BASE_URL,
                 ApiProvider::Openrouter => DEFAULT_OPENROUTER_BASE_URL,
                 ApiProvider::Novita => DEFAULT_NOVITA_BASE_URL,
                 ApiProvider::Fireworks => DEFAULT_FIREWORKS_BASE_URL,
@@ -1391,6 +1585,7 @@ impl Config {
             ApiProvider::Deepseek | ApiProvider::DeepseekCN => "deepseek",
             ApiProvider::NvidiaNim => "nvidia-nim",
             ApiProvider::Openai => "openai",
+            ApiProvider::Atlascloud => "atlascloud",
             ApiProvider::Openrouter => "openrouter",
             ApiProvider::Novita => "novita",
             ApiProvider::Fireworks => "fireworks",
@@ -1428,6 +1623,10 @@ impl Config {
             return Ok(value);
         }
 
+        if base_url_uses_local_host(&self.deepseek_base_url()) {
+            return Ok(String::new());
+        }
+
         match provider {
             ApiProvider::Deepseek | ApiProvider::DeepseekCN => anyhow::bail!(
                 "DeepSeek API key not found.\n\
@@ -1450,6 +1649,10 @@ impl Config {
             ApiProvider::Openai => anyhow::bail!(
                 "OpenAI-compatible API key not found. Run 'deepseek auth set --provider openai', \
                  set OPENAI_API_KEY, or add [providers.openai] api_key in ~/.deepseek/config.toml."
+            ),
+            ApiProvider::Atlascloud => anyhow::bail!(
+                "AtlasCloud API key not found. Run 'deepseek auth set --provider atlascloud', \
+                 set ATLASCLOUD_API_KEY, or add [providers.atlascloud] api_key in ~/.deepseek/config.toml."
             ),
             ApiProvider::Openrouter => anyhow::bail!(
                 "OpenRouter API key not found. Run 'deepseek auth set --provider openrouter', \
@@ -1536,6 +1739,16 @@ impl Config {
             .as_ref()
             .and_then(|m| m.enabled)
             .unwrap_or(false)
+    }
+
+    /// Return the configured vision model config, inheriting api_key from main config.
+    #[must_use]
+    pub fn vision_model_config(&self) -> Option<VisionModelConfig> {
+        let mut config = self.vision_model.clone()?;
+        if config.api_key.is_none() {
+            config.api_key = self.api_key.clone();
+        }
+        Some(config)
     }
 
     #[must_use]
@@ -1988,6 +2201,13 @@ fn apply_env_overrides(config: &mut Config) {
                     .ollama
                     .base_url = Some(value);
             }
+            ApiProvider::Atlascloud => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .atlascloud
+                    .base_url = Some(value);
+            }
         }
     }
     if matches!(config.api_provider(), ApiProvider::NvidiaNim)
@@ -2012,6 +2232,16 @@ fn apply_env_overrides(config: &mut Config) {
             .providers
             .get_or_insert_with(ProvidersConfig::default)
             .openai
+            .base_url = Some(value);
+    }
+    if matches!(config.api_provider(), ApiProvider::Atlascloud)
+        && let Ok(value) = std::env::var("ATLASCLOUD_BASE_URL")
+        && !value.trim().is_empty()
+    {
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .atlascloud
             .base_url = Some(value);
     }
     if matches!(config.api_provider(), ApiProvider::Openrouter)
@@ -2081,6 +2311,7 @@ fn apply_env_overrides(config: &mut Config) {
             ApiProvider::DeepseekCN => &mut providers.deepseek_cn,
             ApiProvider::NvidiaNim => &mut providers.nvidia_nim,
             ApiProvider::Openai => &mut providers.openai,
+            ApiProvider::Atlascloud => &mut providers.atlascloud,
             ApiProvider::Openrouter => &mut providers.openrouter,
             ApiProvider::Novita => &mut providers.novita,
             ApiProvider::Fireworks => &mut providers.fireworks,
@@ -2119,6 +2350,15 @@ fn apply_env_overrides(config: &mut Config) {
     }
     if matches!(config.api_provider(), ApiProvider::Openai)
         && let Ok(value) = std::env::var("OPENAI_MODEL")
+    {
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .openai
+            .model = Some(value);
+    }
+    if matches!(config.api_provider(), ApiProvider::Atlascloud)
+        && let Ok(value) = std::env::var("ATLASCLOUD_MODEL")
     {
         config.default_text_model = Some(value);
     }
@@ -2162,6 +2402,9 @@ fn apply_env_overrides(config: &mut Config) {
     }
     if let Ok(value) = std::env::var("DEEPSEEK_SANDBOX_MODE") {
         config.sandbox_mode = Some(value);
+    }
+    if let Ok(value) = std::env::var("DEEPSEEK_YOLO") {
+        config.yolo = Some(value == "1" || value.eq_ignore_ascii_case("true"));
     }
     if let Ok(value) = std::env::var("DEEPSEEK_SANDBOX_BACKEND") {
         config.sandbox_backend = Some(value);
@@ -2366,8 +2609,11 @@ fn normalize_model_for_provider(provider: ApiProvider, model: &str) -> Option<St
     normalize_model_name(model).map(|normalized| model_for_provider(provider, normalized))
 }
 
-fn provider_passes_model_through(provider: ApiProvider) -> bool {
-    matches!(provider, ApiProvider::Openai | ApiProvider::Ollama)
+pub(crate) fn provider_passes_model_through(provider: ApiProvider) -> bool {
+    matches!(
+        provider,
+        ApiProvider::Openai | ApiProvider::Atlascloud | ApiProvider::Ollama
+    )
 }
 
 fn provider_entry_uses_custom_base_url(provider: ApiProvider, entry: &ProviderConfig) -> bool {
@@ -2383,6 +2629,7 @@ fn default_base_url_for_provider(provider: ApiProvider) -> &'static str {
         ApiProvider::DeepseekCN => DEFAULT_DEEPSEEKCN_BASE_URL,
         ApiProvider::NvidiaNim => DEFAULT_NVIDIA_NIM_BASE_URL,
         ApiProvider::Openai => DEFAULT_OPENAI_BASE_URL,
+        ApiProvider::Atlascloud => DEFAULT_ATLASCLOUD_BASE_URL,
         ApiProvider::Openrouter => DEFAULT_OPENROUTER_BASE_URL,
         ApiProvider::Novita => DEFAULT_NOVITA_BASE_URL,
         ApiProvider::Fireworks => DEFAULT_FIREWORKS_BASE_URL,
@@ -2397,8 +2644,30 @@ fn base_url_is_custom_for_provider(provider: ApiProvider, base_url: &str) -> boo
 }
 
 fn provider_preserves_custom_base_url_model(provider: ApiProvider, base_url: &str) -> bool {
-    matches!(provider, ApiProvider::Openrouter)
-        && base_url_is_custom_for_provider(provider, base_url)
+    base_url_is_custom_for_provider(provider, base_url)
+}
+
+fn base_url_uses_local_host(base_url: &str) -> bool {
+    let Some(host) = base_url_host(base_url) else {
+        return false;
+    };
+    let host = host.trim_matches(['[', ']']).to_ascii_lowercase();
+    if matches!(host.as_str(), "localhost" | "0.0.0.0") {
+        return true;
+    }
+    host.parse::<std::net::IpAddr>()
+        .is_ok_and(|addr| addr.is_loopback() || addr.is_unspecified())
+}
+
+fn base_url_host(base_url: &str) -> Option<&str> {
+    let without_scheme = base_url
+        .split_once("://")
+        .map_or(base_url, |(_, rest)| rest);
+    let authority = without_scheme.split('/').next()?.rsplit('@').next()?;
+    if let Some(rest) = authority.strip_prefix('[') {
+        return rest.split_once(']').map(|(host, _)| host);
+    }
+    authority.split(':').next().filter(|host| !host.is_empty())
 }
 
 fn model_for_provider(provider: ApiProvider, normalized: String) -> String {
@@ -2502,11 +2771,13 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
         mcp_config_path: override_cfg.mcp_config_path.or(base.mcp_config_path),
         notes_path: override_cfg.notes_path.or(base.notes_path),
         memory_path: override_cfg.memory_path.or(base.memory_path),
+        vision_model: override_cfg.vision_model.or(base.vision_model),
         // #454: project's instructions array replaces user's array
         // wholesale. The typical "merge" pattern is for users who want
         // both — they list `~/global.md` inside the project array.
         instructions: override_cfg.instructions.or(base.instructions),
         allow_shell: override_cfg.allow_shell.or(base.allow_shell),
+        yolo: override_cfg.yolo.or(base.yolo),
         approval_policy: override_cfg.approval_policy.or(base.approval_policy),
         sandbox_mode: override_cfg.sandbox_mode.or(base.sandbox_mode),
         sandbox_backend: override_cfg.sandbox_backend.or(base.sandbox_backend),
@@ -2527,7 +2798,9 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
         network: override_cfg.network.or(base.network),
         skills: override_cfg.skills.or(base.skills),
         snapshots: override_cfg.snapshots.or(base.snapshots),
+        search: override_cfg.search.or(base.search),
         memory: override_cfg.memory.or(base.memory),
+        auto: override_cfg.auto.or(base.auto),
         lsp: override_cfg.lsp.or(base.lsp),
         context: ContextConfig {
             enabled: override_cfg.context.enabled.or(base.context.enabled),
@@ -2586,6 +2859,7 @@ fn merge_providers(
             deepseek_cn: merge_provider_config(base.deepseek_cn, override_cfg.deepseek_cn),
             nvidia_nim: merge_provider_config(base.nvidia_nim, override_cfg.nvidia_nim),
             openai: merge_provider_config(base.openai, override_cfg.openai),
+            atlascloud: merge_provider_config(base.atlascloud, override_cfg.atlascloud),
             openrouter: merge_provider_config(base.openrouter, override_cfg.openrouter),
             novita: merge_provider_config(base.novita, override_cfg.novita),
             fireworks: merge_provider_config(base.fireworks, override_cfg.fireworks),
@@ -2988,6 +3262,9 @@ pub fn active_provider_has_env_api_key(config: &Config) -> bool {
                 || std::env::var("NVIDIA_NIM_API_KEY").is_ok_and(|k| !k.trim().is_empty())
         }
         ApiProvider::Openai => std::env::var("OPENAI_API_KEY").is_ok_and(|k| !k.trim().is_empty()),
+        ApiProvider::Atlascloud => {
+            std::env::var("ATLASCLOUD_API_KEY").is_ok_and(|k| !k.trim().is_empty())
+        }
         ApiProvider::Openrouter => {
             std::env::var("OPENROUTER_API_KEY").is_ok_and(|k| !k.trim().is_empty())
         }
@@ -3015,6 +3292,7 @@ pub fn has_api_key_for(config: &Config, provider: ApiProvider) -> bool {
         ApiProvider::Deepseek | ApiProvider::DeepseekCN => "DEEPSEEK_API_KEY",
         ApiProvider::NvidiaNim => "NVIDIA_API_KEY",
         ApiProvider::Openai => "OPENAI_API_KEY",
+        ApiProvider::Atlascloud => "ATLASCLOUD_API_KEY",
         ApiProvider::Openrouter => "OPENROUTER_API_KEY",
         ApiProvider::Novita => "NOVITA_API_KEY",
         ApiProvider::Fireworks => "FIREWORKS_API_KEY",
@@ -3036,6 +3314,10 @@ pub fn has_api_key_for(config: &Config, provider: ApiProvider) -> bool {
         provider,
         ApiProvider::Sglang | ApiProvider::Vllm | ApiProvider::Ollama
     ) {
+        return true;
+    }
+
+    if provider == config.api_provider() && base_url_uses_local_host(&config.deepseek_base_url()) {
         return true;
     }
 
@@ -3083,6 +3365,7 @@ pub fn save_api_key_for(provider: ApiProvider, api_key: &str) -> Result<PathBuf>
         }
         ApiProvider::NvidiaNim => "providers.nvidia_nim",
         ApiProvider::Openai => "providers.openai",
+        ApiProvider::Atlascloud => "providers.atlascloud",
         ApiProvider::Openrouter => "providers.openrouter",
         ApiProvider::Novita => "providers.novita",
         ApiProvider::Fireworks => "providers.fireworks",
@@ -3117,6 +3400,7 @@ pub fn save_api_key_for(provider: ApiProvider, api_key: &str) -> Result<PathBuf>
         }
         ApiProvider::NvidiaNim => "nvidia_nim",
         ApiProvider::Openai => "openai",
+        ApiProvider::Atlascloud => "atlascloud",
         ApiProvider::Openrouter => "openrouter",
         ApiProvider::Novita => "novita",
         ApiProvider::Fireworks => "fireworks",
@@ -3242,6 +3526,27 @@ mod tests {
         assert!(runtime.trusts_proxy_fakeip_host("raw.githubusercontent.com"));
     }
 
+    #[test]
+    fn search_provider_defaults_to_bing() {
+        assert_eq!(SearchProvider::default(), SearchProvider::Bing);
+    }
+
+    #[test]
+    fn explicit_duckduckgo_search_provider_is_preserved() {
+        let config: Config = toml::from_str(
+            r#"
+            [search]
+            provider = "duckduckgo"
+            "#,
+        )
+        .expect("search config");
+
+        assert_eq!(
+            config.search.and_then(|search| search.provider),
+            Some(SearchProvider::DuckDuckGo)
+        );
+    }
+
     struct EnvGuard {
         home: Option<OsString>,
         userprofile: Option<OsString>,
@@ -3261,6 +3566,9 @@ mod tests {
         openai_api_key: Option<OsString>,
         openai_base_url: Option<OsString>,
         openai_model: Option<OsString>,
+        atlascloud_api_key: Option<OsString>,
+        atlascloud_base_url: Option<OsString>,
+        atlascloud_model: Option<OsString>,
         openrouter_api_key: Option<OsString>,
         openrouter_base_url: Option<OsString>,
         novita_api_key: Option<OsString>,
@@ -3301,6 +3609,9 @@ mod tests {
             let openai_api_key_prev = env::var_os("OPENAI_API_KEY");
             let openai_base_url_prev = env::var_os("OPENAI_BASE_URL");
             let openai_model_prev = env::var_os("OPENAI_MODEL");
+            let atlascloud_api_key_prev = env::var_os("ATLASCLOUD_API_KEY");
+            let atlascloud_base_url_prev = env::var_os("ATLASCLOUD_BASE_URL");
+            let atlascloud_model_prev = env::var_os("ATLASCLOUD_MODEL");
             let openrouter_api_key_prev = env::var_os("OPENROUTER_API_KEY");
             let openrouter_base_url_prev = env::var_os("OPENROUTER_BASE_URL");
             let novita_api_key_prev = env::var_os("NOVITA_API_KEY");
@@ -3336,6 +3647,9 @@ mod tests {
                 env::remove_var("OPENAI_API_KEY");
                 env::remove_var("OPENAI_BASE_URL");
                 env::remove_var("OPENAI_MODEL");
+                env::remove_var("ATLASCLOUD_API_KEY");
+                env::remove_var("ATLASCLOUD_BASE_URL");
+                env::remove_var("ATLASCLOUD_MODEL");
                 env::remove_var("OPENROUTER_API_KEY");
                 env::remove_var("OPENROUTER_BASE_URL");
                 env::remove_var("NOVITA_API_KEY");
@@ -3371,6 +3685,9 @@ mod tests {
                 openai_api_key: openai_api_key_prev,
                 openai_base_url: openai_base_url_prev,
                 openai_model: openai_model_prev,
+                atlascloud_api_key: atlascloud_api_key_prev,
+                atlascloud_base_url: atlascloud_base_url_prev,
+                atlascloud_model: atlascloud_model_prev,
                 openrouter_api_key: openrouter_api_key_prev,
                 openrouter_base_url: openrouter_base_url_prev,
                 novita_api_key: novita_api_key_prev,
@@ -3415,6 +3732,9 @@ mod tests {
                 Self::restore_var("OPENAI_API_KEY", self.openai_api_key.take());
                 Self::restore_var("OPENAI_BASE_URL", self.openai_base_url.take());
                 Self::restore_var("OPENAI_MODEL", self.openai_model.take());
+                Self::restore_var("ATLASCLOUD_API_KEY", self.atlascloud_api_key.take());
+                Self::restore_var("ATLASCLOUD_BASE_URL", self.atlascloud_base_url.take());
+                Self::restore_var("ATLASCLOUD_MODEL", self.atlascloud_model.take());
                 Self::restore_var("OPENROUTER_API_KEY", self.openrouter_api_key.take());
                 Self::restore_var("OPENROUTER_BASE_URL", self.openrouter_base_url.take());
                 Self::restore_var("NOVITA_API_KEY", self.novita_api_key.take());
@@ -4235,6 +4555,41 @@ api_key = "old-openrouter-key"
     }
 
     #[test]
+    fn normalize_model_name_for_provider_canonicalizes_deepseek_api_variants() {
+        assert_eq!(
+            normalize_model_name_for_provider(ApiProvider::Deepseek, "deepseek-ai/DeepSeek-V4-Pro")
+                .as_deref(),
+            Some("deepseek-v4-pro")
+        );
+        assert_eq!(
+            normalize_model_name_for_provider(ApiProvider::Deepseek, "deepseek/deepseek-v4-flash")
+                .as_deref(),
+            Some("deepseek-v4-flash")
+        );
+    }
+
+    #[test]
+    fn normalize_model_name_for_provider_keeps_provider_specific_ids() {
+        assert_eq!(
+            normalize_model_name_for_provider(ApiProvider::NvidiaNim, "deepseek-v4-pro").as_deref(),
+            Some(DEFAULT_NVIDIA_NIM_MODEL)
+        );
+        assert_eq!(
+            normalize_model_name_for_provider(ApiProvider::Openrouter, "deepseek-v4-flash")
+                .as_deref(),
+            Some(DEFAULT_OPENROUTER_FLASH_MODEL)
+        );
+    }
+
+    #[test]
+    fn model_completion_names_for_deepseek_api_are_deduplicated_bare_ids() {
+        assert_eq!(
+            model_completion_names_for_provider(ApiProvider::Deepseek),
+            vec!["deepseek-v4-pro", "deepseek-v4-flash"]
+        );
+    }
+
+    #[test]
     fn normalize_model_name_rejects_invalid_or_non_deepseek_ids() {
         assert!(normalize_model_name("gpt-4o").is_none());
         assert!(normalize_model_name("deepseek v4").is_none());
@@ -4354,6 +4709,20 @@ api_key = "old-openrouter-key"
 
         assert_eq!(config.api_provider(), ApiProvider::Deepseek);
         assert_eq!(config.deepseek_base_url(), "https://api.deepseek.com");
+    }
+
+    #[test]
+    fn loopback_deepseek_base_url_runs_without_api_key() -> Result<()> {
+        let _lock = lock_test_env();
+        let config = Config {
+            base_url: Some("http://127.0.0.1:8000/v1".to_string()),
+            ..Default::default()
+        };
+
+        assert_eq!(config.api_provider(), ApiProvider::Deepseek);
+        assert!(has_api_key(&config));
+        assert_eq!(config.deepseek_api_key()?, "");
+        Ok(())
     }
 
     #[test]
@@ -4644,6 +5013,50 @@ http_headers = { "X-Model-Provider-Id" = "from-file" }
         assert_eq!(config.api_provider(), ApiProvider::Openai);
         assert_eq!(config.default_model(), DEFAULT_OPENAI_MODEL);
         assert_eq!(config.deepseek_base_url(), DEFAULT_OPENAI_BASE_URL);
+        Ok(())
+    }
+
+    #[test]
+    fn atlascloud_provider_uses_documented_defaults() -> Result<()> {
+        let config = Config {
+            provider: Some("atlascloud".to_string()),
+            ..Default::default()
+        };
+
+        config.validate()?;
+        assert_eq!(config.api_provider(), ApiProvider::Atlascloud);
+        assert_eq!(config.default_model(), DEFAULT_ATLASCLOUD_MODEL);
+        assert_eq!(config.deepseek_base_url(), DEFAULT_ATLASCLOUD_BASE_URL);
+        Ok(())
+    }
+
+    #[test]
+    fn atlascloud_env_overrides_provider_base_url_and_model() -> Result<()> {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "deepseek-tui-atlascloud-env-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
+
+        unsafe {
+            env::set_var("DEEPSEEK_PROVIDER", "atlascloud");
+            env::set_var("ATLASCLOUD_API_KEY", "atlascloud-env-key");
+            env::set_var("ATLASCLOUD_BASE_URL", "https://api.atlascloud.ai/v1");
+            env::set_var("ATLASCLOUD_MODEL", "deepseek-ai/deepseek-v4-flash");
+        }
+
+        let config = Config::load(None, None)?;
+        assert_eq!(config.api_provider(), ApiProvider::Atlascloud);
+        assert_eq!(config.deepseek_api_key()?, "atlascloud-env-key");
+        assert_eq!(config.deepseek_base_url(), "https://api.atlascloud.ai/v1");
+        assert_eq!(config.default_model(), "deepseek-ai/deepseek-v4-flash");
         Ok(())
     }
 
@@ -5272,6 +5685,7 @@ api_key = "novita-table-key"
         ));
         fs::create_dir_all(&temp_root)?;
         let _guard = EnvGuard::new(&temp_root);
+        unsafe { std::env::set_var("DEEPSEEK_SECRET_BACKEND", "local") };
 
         let path = save_api_key_for(ApiProvider::Openrouter, "or-saved-key")?;
         let contents = fs::read_to_string(&path)?;
@@ -5350,6 +5764,7 @@ api_key = "novita-table-key"
         ));
         fs::create_dir_all(&temp_root)?;
         let _guard = EnvGuard::new(&temp_root);
+        unsafe { std::env::set_var("DEEPSEEK_SECRET_BACKEND", "local") };
 
         let path = save_api_key_for(ApiProvider::DeepseekCN, "cn-saved-key")?;
         let contents = fs::read_to_string(&path)?;
@@ -5395,7 +5810,9 @@ model = "deepseek-v4-pro"
         assert_eq!(config.api_provider(), ApiProvider::NvidiaNim);
         assert_eq!(config.deepseek_api_key()?, "nim-table-key");
         assert_eq!(config.deepseek_base_url(), "https://nim-table.example/v1");
-        assert_eq!(config.default_model(), DEFAULT_NVIDIA_NIM_MODEL);
+        // Custom base URL preserves the user-specified model name; normalisation
+        // is skipped because the gateway expects the model name as-provided.
+        assert_eq!(config.default_model(), "deepseek-v4-pro");
         Ok(())
     }
 
@@ -5596,6 +6013,22 @@ model = "deepseek-ai/deepseek-v4-pro"
     #[test]
     fn provider_capability_openai_custom_model_is_chat_completions_without_thinking() {
         let cap = provider_capability(ApiProvider::Openai, "glm-5");
+        assert_eq!(
+            cap.context_window,
+            crate::models::LEGACY_DEEPSEEK_CONTEXT_WINDOW_TOKENS
+        );
+        assert_eq!(cap.max_output, 4096);
+        assert!(!cap.thinking_supported);
+        assert!(!cap.cache_telemetry_supported);
+        assert_eq!(
+            cap.request_payload_mode,
+            RequestPayloadMode::ChatCompletions
+        );
+    }
+
+    #[test]
+    fn provider_capability_atlascloud_custom_model_is_chat_completions_without_thinking() {
+        let cap = provider_capability(ApiProvider::Atlascloud, "deepseek-ai/deepseek-v4-flash");
         assert_eq!(
             cap.context_window,
             crate::models::LEGACY_DEEPSEEK_CONTEXT_WINDOW_TOKENS

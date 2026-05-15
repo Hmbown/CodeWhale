@@ -9,6 +9,11 @@
 //! - `session`: Session state management
 //! - `turn`: Turn context and tracking
 
+// Engine code runs inside the TUI alt-screen — see `runtime_log` for why
+// raw stdio prints must not appear here. Use `tracing::*` instead.
+#![deny(clippy::print_stdout)]
+#![deny(clippy::print_stderr)]
+
 pub mod capacity;
 pub mod capacity_memory;
 pub mod coherence;

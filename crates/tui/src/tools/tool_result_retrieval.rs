@@ -36,7 +36,7 @@ impl ToolSpec for RetrieveToolResultTool {
     }
 
     fn description(&self) -> &'static str {
-        "Retrieve a previously spilled large tool result from ~/.deepseek/tool_outputs by tool call id, filename, or spillover path. Supports summary, head, tail, lines, and query modes so you can fetch only the needed historical output."
+        "Retrieve a previously spilled large tool result. Accepts a tool_call_id (`call_abc123`), artifact id (`art_call_abc123`), SHA reference (`sha:<64-hex>` or bare 64-hex from `<TOOL_RESULT_REF>`), relative filename (`call_abc123.txt`, `artifacts/art_call_abc123.txt`), or absolute path under ~/.deepseek. Modes: summary, head, tail, lines, query."
     }
 
     fn input_schema(&self) -> Value {
@@ -45,7 +45,7 @@ impl ToolSpec for RetrieveToolResultTool {
             "properties": {
                 "ref": {
                     "type": "string",
-                    "description": "Tool call id, tool_result:<id>, spillover filename, or absolute spillover path."
+                    "description": "Tool call id, artifact id (`art_<id>`), SHA ref (`sha:<64-hex>`), spillover filename, or absolute path under ~/.deepseek."
                 },
                 "mode": {
                     "type": "string",
@@ -97,7 +97,7 @@ impl ToolSpec for RetrieveToolResultTool {
         true
     }
 
-    async fn execute(&self, input: Value, _context: &ToolContext) -> Result<ToolResult, ToolError> {
+    async fn execute(&self, input: Value, context: &ToolContext) -> Result<ToolResult, ToolError> {
         let reference = required_str(&input, "ref")?.trim();
         if reference.is_empty() {
             return Err(ToolError::invalid_input("ref cannot be empty"));
@@ -112,7 +112,7 @@ impl ToolSpec for RetrieveToolResultTool {
             1,
             HARD_MAX_BYTES,
         );
-        let path = resolve_spillover_reference(reference)?;
+        let path = resolve_spillover_reference(reference, &context.state_namespace)?;
         let content = fs::read_to_string(&path).map_err(|err| {
             ToolError::execution_failed(format!("failed to read {}: {err}", path.display()))
         })?;
@@ -139,53 +139,222 @@ impl ToolSpec for RetrieveToolResultTool {
     }
 }
 
-fn resolve_spillover_reference(reference: &str) -> Result<PathBuf, ToolError> {
+/// Resolve a tool-result ref to a concrete file path.
+///
+/// Accepts six shapes:
+/// 1. `tool_call_id` — legacy spillover form, `<id>.txt` under `tool_outputs/`.
+/// 2. `art_<id>` — current artifact id, written by `apply_spillover_with_artifact`.
+///    Tries the session artifact directory first, falls back to `<id>.txt`
+///    (stripping the `art_` prefix) so old + new naming both work.
+/// 3. `sha:<64-hex>` or bare 64-hex — content-addressed wire dedup, `sha_<hex>.txt`.
+/// 4. `tool_result:<x>` — `<x>` is any of the above after the prefix.
+/// 5. `artifacts/<file>.txt` or `<file>.txt` — relative paths.
+/// 6. Absolute paths under `~/.deepseek/`.
+///
+/// The error message on a miss enumerates which forms were tried so the
+/// model can correct course without a second blind guess.
+fn resolve_spillover_reference(reference: &str, session_id: &str) -> Result<PathBuf, ToolError> {
     let root = crate::tools::truncate::spillover_root()
         .ok_or_else(|| ToolError::execution_failed("could not resolve ~/.deepseek/tool_outputs"))?;
-    let root_canonical = root.canonicalize().map_err(|err| {
-        ToolError::execution_failed(format!(
-            "spillover directory {} is not readable: {err}",
-            root.display()
-        ))
-    })?;
+    let root_canonical = root.canonicalize().ok();
+
+    // Resolve the session's `artifacts/` directory.
+    // `session_artifact_absolute_path(sid, p)` returns
+    // `~/.deepseek/sessions/<sid>/<p>` — so passing the literal
+    // `ARTIFACTS_DIR_NAME` ("artifacts") gets us the real artifacts
+    // root. An earlier draft passed `Path::new(".")` and took
+    // `.parent()`, which landed one directory too high (`<sid>` instead
+    // of `<sid>/artifacts`) and silently broke every bare `art_<id>`
+    // ref — only the legacy-spillover fallback survived. The test
+    // `resolves_art_prefix_to_legacy_spillover_id` masked it because
+    // it ONLY wrote a legacy spillover file. The new test
+    // `resolves_art_prefix_via_session_artifacts` exercises the real
+    // path.
+    let session_artifacts_root = if !session_id.is_empty() {
+        crate::artifacts::session_artifact_absolute_path(
+            session_id,
+            std::path::Path::new(crate::artifacts::ARTIFACTS_DIR_NAME),
+        )
+    } else {
+        None
+    };
+    let session_artifacts_root_canonical = session_artifacts_root
+        .as_ref()
+        .and_then(|p| p.canonicalize().ok());
 
     let trimmed = reference.trim();
-    let stripped = trimmed.strip_prefix("tool_result:").unwrap_or(trimmed);
-    let raw_path = PathBuf::from(stripped);
+    let stripped = trimmed
+        .strip_prefix("tool_result:")
+        .unwrap_or(trimmed)
+        .trim();
 
-    let candidate = if raw_path.is_absolute() {
-        raw_path
-    } else if stripped.ends_with(".txt")
-        || stripped.contains('/')
-        || (std::path::MAIN_SEPARATOR != '/' && stripped.contains(std::path::MAIN_SEPARATOR))
-    {
-        root.join(stripped)
-    } else {
-        crate::tools::truncate::spillover_path(stripped).ok_or_else(|| {
-            ToolError::invalid_input(format!("invalid spilled tool-result ref `{reference}`"))
-        })?
+    let mut tried: Vec<PathBuf> = Vec::new();
+    let try_path = |candidate: PathBuf, tried: &mut Vec<PathBuf>| -> Option<PathBuf> {
+        // Always record what we tried so the `not_found` diagnostic
+        // can enumerate every candidate, even ones whose
+        // `canonicalize` returns ENOENT. Models otherwise saw the
+        // useless "(no valid candidates derived from ref)" line.
+        tried.push(candidate.clone());
+
+        // Reject symlinks at the leaf BEFORE canonicalizing so an
+        // attacker who can write under `<sid>/artifacts/` cannot
+        // plant a symlink to `/etc/passwd` and read it back through
+        // `retrieve_tool_result`. canonicalize() would happily
+        // follow such a link and then pass the `starts_with(root)`
+        // check because of the resolved-then-compare order. The
+        // legacy `~/.deepseek/tool_outputs/` dir is engine-only and
+        // never carried this concern; session artifact dirs hold
+        // arbitrary tool output and need the guard.
+        if let Ok(meta) = std::fs::symlink_metadata(&candidate)
+            && meta.file_type().is_symlink()
+        {
+            return None;
+        }
+
+        let canonical = candidate.canonicalize().ok()?;
+        if !canonical.is_file() {
+            return None;
+        }
+        let inside_legacy = root_canonical
+            .as_ref()
+            .is_some_and(|root| canonical.starts_with(root));
+        let inside_session = session_artifacts_root_canonical
+            .as_ref()
+            .is_some_and(|root| canonical.starts_with(root));
+        if inside_legacy || inside_session {
+            Some(canonical)
+        } else {
+            None
+        }
     };
 
-    let canonical = candidate.canonicalize().map_err(|err| {
-        ToolError::execution_failed(format!(
-            "spilled tool result `{reference}` was not found at {}: {err}",
-            candidate.display()
-        ))
-    })?;
-
-    if !canonical.starts_with(&root_canonical) {
-        return Err(ToolError::invalid_input(format!(
-            "ref `{reference}` does not point inside {}",
-            root_canonical.display()
-        )));
-    }
-    if !canonical.is_file() {
-        return Err(ToolError::invalid_input(format!(
-            "ref `{reference}` does not point to a spillover file"
-        )));
+    // Form 1/3: absolute path. Validate it lives under one of the allowed roots.
+    let raw_path = PathBuf::from(stripped);
+    if raw_path.is_absolute() {
+        if let Some(found) = try_path(raw_path.clone(), &mut tried) {
+            return Ok(found);
+        }
+        return Err(not_found(
+            reference,
+            &tried,
+            &root,
+            session_artifacts_root.as_deref(),
+        ));
     }
 
-    Ok(canonical)
+    // Form 4: `sha:<hex>` prefix or bare 64-hex SHA → SHA-addressed file.
+    let sha_candidate = stripped
+        .strip_prefix("sha:")
+        .or_else(|| stripped.strip_prefix("sha_"))
+        .unwrap_or(stripped)
+        .trim();
+    if crate::tools::truncate::is_valid_sha256(&sha_candidate.to_ascii_lowercase())
+        && let Some(p) = crate::tools::truncate::sha_spillover_path(sha_candidate)
+        && let Some(found) = try_path(p, &mut tried)
+    {
+        return Ok(found);
+    }
+
+    // Form 5: relative path with separator or `.txt` suffix.
+    let looks_like_path = stripped.ends_with(".txt")
+        || stripped.contains('/')
+        || (std::path::MAIN_SEPARATOR != '/' && stripped.contains(std::path::MAIN_SEPARATOR));
+    if looks_like_path {
+        // Try legacy spillover root.
+        if let Some(found) = try_path(root.join(stripped), &mut tried) {
+            return Ok(found);
+        }
+        // Session artifact roots point directly at `<sid>/artifacts/`.
+        // Strip an optional leading `artifacts/` segment from transcript
+        // paths before joining.
+        if let Some(sa_root) = session_artifacts_root.as_ref() {
+            let rel = stripped.strip_prefix("artifacts/").unwrap_or(stripped);
+            if let Some(found) = try_path(sa_root.join(rel), &mut tried) {
+                return Ok(found);
+            }
+        }
+        return Err(not_found(
+            reference,
+            &tried,
+            &root,
+            session_artifacts_root.as_deref(),
+        ));
+    }
+
+    // Form 1: bare id → legacy `tool_outputs/<id>.txt`.
+    if let Some(p) = crate::tools::truncate::spillover_path(stripped)
+        && let Some(found) = try_path(p, &mut tried)
+    {
+        return Ok(found);
+    }
+    // Form 2: `art_<id>` → strip prefix and try both:
+    //   a) session artifacts dir at `artifacts/art_<id>.txt`
+    //   b) legacy spillover at `<id>.txt`
+    if let Some(stripped_art) = stripped.strip_prefix("art_") {
+        if let Some(sa_root) = session_artifacts_root.as_ref() {
+            let session_file = sa_root.join(format!("art_{stripped_art}.txt"));
+            if let Some(found) = try_path(session_file, &mut tried) {
+                return Ok(found);
+            }
+        }
+        if let Some(p) = crate::tools::truncate::spillover_path(stripped_art)
+            && let Some(found) = try_path(p, &mut tried)
+        {
+            return Ok(found);
+        }
+    }
+    // Form 2b: maybe the model passed the bare id but the artifact lives
+    // under the session artifacts dir. Try `artifacts/art_<id>.txt`.
+    if let Some(sa_root) = session_artifacts_root.as_ref() {
+        let session_file = sa_root.join(format!("art_{stripped}.txt"));
+        if let Some(found) = try_path(session_file, &mut tried) {
+            return Ok(found);
+        }
+    }
+
+    Err(not_found(
+        reference,
+        &tried,
+        &root,
+        session_artifacts_root.as_deref(),
+    ))
+}
+
+/// Format a "ref didn't resolve" error with enough detail for the
+/// caller to choose a valid reference form on the next attempt.
+fn not_found(
+    reference: &str,
+    tried: &[PathBuf],
+    legacy_root: &std::path::Path,
+    session_artifacts_root: Option<&std::path::Path>,
+) -> ToolError {
+    let tried_list = if tried.is_empty() {
+        "(no valid candidates derived from ref)".to_string()
+    } else {
+        tried
+            .iter()
+            .map(|p| format!("  - {}", p.display()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let session_hint = session_artifacts_root
+        .map(|p| format!("\nsession artifacts root: {}", p.display()))
+        .unwrap_or_default();
+    ToolError::execution_failed(format!(
+        "spilled tool result `{reference}` not found. Tried:\n{tried_list}\n\
+         spillover root: {legacy}{session}\n\
+         Accepted ref forms: \
+         (a) `<tool_call_id>` for legacy spillover, \
+         (b) `art_<tool_call_id>` for session artifacts, \
+         (c) `sha:<64-hex>` or bare 64-hex from a <TOOL_RESULT_REF> block, \
+         (d) `artifacts/art_<id>.txt` or `<id>.txt` relative paths. \
+         If the source was a `<TOOL_RESULT_REF sha=\"...\" />` block, copy the \
+         sha value and pass it as `ref=sha:<value>`. \
+         If the source was an [artifact ...] block, pass the `id:` field \
+         (the `art_<id>` form) directly.",
+        legacy = legacy_root.display(),
+        session = session_hint,
+    ))
 }
 
 fn build_summary_payload(
@@ -619,9 +788,170 @@ mod tests {
 
         let err = execute_tool(json!({"ref": outside.display().to_string()})).unwrap_err();
 
+        // The new resolver classifies anything that fails to live under
+        // an approved root as "not found" so we don't accidentally
+        // leak whether an outside path exists on disk.
+        let msg = err.to_string();
         assert!(
-            err.to_string().contains("does not point inside"),
-            "unexpected error: {err}"
+            msg.contains("not found"),
+            "expected `not found` diagnostic, got: {msg}"
         );
+    }
+
+    #[test]
+    fn resolves_sha_reference_from_wire_dedup() {
+        // A SHA-keyed lookup — emulates what happens when the model
+        // sees a `<TOOL_RESULT_REF sha="..." />` block and passes the
+        // SHA to retrieve_tool_result.
+        let _lock = test_lock();
+        let tmp = tempdir().unwrap();
+        let _guard = set_spillover_root(tmp.path().join("tool_outputs"));
+        let body = "checking crate ... error[E0425]: cannot find value\n".repeat(80);
+        let sha = {
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(body.as_bytes());
+            format!("{:x}", hasher.finalize())
+        };
+        crate::tools::truncate::write_sha_spillover(&sha, &body).unwrap();
+
+        // Form: `sha:<hex>`
+        let result = execute_tool(json!({"ref": format!("sha:{sha}")})).unwrap();
+        assert!(result.success, "sha:<hex> form should resolve");
+
+        // Form: bare 64-hex
+        let result = execute_tool(json!({"ref": &sha})).unwrap();
+        assert!(result.success, "bare 64-hex form should resolve");
+    }
+
+    #[test]
+    fn resolves_art_prefix_to_legacy_spillover_id() {
+        // The model commonly sees `id: art_call_xyz` in artifact
+        // ref blocks. retrieve_tool_result should strip the `art_`
+        // prefix and find the legacy `<id>.txt` file if no
+        // session-artifact equivalent exists.
+        let _lock = test_lock();
+        let tmp = tempdir().unwrap();
+        let _guard = set_spillover_root(tmp.path().join("tool_outputs"));
+        crate::tools::truncate::write_spillover("call_xyz", "line1\nline2\nline3").unwrap();
+
+        let result = execute_tool(json!({"ref": "art_call_xyz"})).unwrap();
+        assert!(result.success, "art_ prefix should resolve to legacy id");
+    }
+
+    #[test]
+    fn not_found_error_lists_tried_candidates_and_accepted_forms() {
+        let _lock = test_lock();
+        let tmp = tempdir().unwrap();
+        let _guard = set_spillover_root(tmp.path().join("tool_outputs"));
+        fs::create_dir_all(tmp.path().join("tool_outputs")).unwrap();
+
+        let err = execute_tool(json!({"ref": "definitely_missing_id"})).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("not found"), "got: {msg}");
+        assert!(
+            msg.contains("sha:"),
+            "diagnostic should mention sha form: {msg}"
+        );
+        assert!(
+            msg.contains("art_<tool_call_id>"),
+            "diagnostic should mention art form: {msg}"
+        );
+        assert!(
+            msg.contains("tool_outputs"),
+            "tried list should include the legacy spillover candidate: {msg}"
+        );
+        assert!(
+            !msg.contains("(no valid candidates derived from ref)"),
+            "tried list should not be empty: {msg}"
+        );
+    }
+
+    #[test]
+    fn resolves_art_prefix_via_session_artifacts() {
+        let _lock = test_lock();
+        let tmp = tempdir().unwrap();
+        let _spill_guard = set_spillover_root(tmp.path().join("tool_outputs"));
+        let _art_guard = {
+            let prior = crate::artifacts::set_test_artifact_sessions_root(Some(
+                tmp.path().join("sessions"),
+            ));
+            scopeguard_for_test(prior)
+        };
+        let session_id = "session-abc";
+        let body = "this is the canonical session artifact body, not a legacy file";
+        crate::artifacts::write_session_artifact(session_id, "art_call_real", body).unwrap();
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let workspace_tmp = tempdir().unwrap();
+        let ctx = ToolContext::new(workspace_tmp.path()).with_state_namespace(session_id);
+        let result = runtime
+            .block_on(RetrieveToolResultTool.execute(json!({"ref": "art_call_real"}), &ctx))
+            .expect("art_<id> should resolve via session artifacts");
+        assert!(result.success);
+        let payload: Value = serde_json::from_str(&result.content).unwrap();
+        assert!(
+            payload
+                .to_string()
+                .contains("canonical session artifact body"),
+            "summary should pull from session artifact, got: {}",
+            payload
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlink_inside_session_artifacts() {
+        let _lock = test_lock();
+        let tmp = tempdir().unwrap();
+        let _spill_guard = set_spillover_root(tmp.path().join("tool_outputs"));
+        let _art_guard = {
+            let prior = crate::artifacts::set_test_artifact_sessions_root(Some(
+                tmp.path().join("sessions"),
+            ));
+            scopeguard_for_test(prior)
+        };
+        let session_id = "session-xyz";
+        // Plant a sensitive file outside the artifact dir.
+        let secret = tmp.path().join("secret.txt");
+        fs::write(&secret, "do not leak").unwrap();
+        // Create the artifact dir, then drop a symlink inside it
+        // pointing at the secret.
+        let art_dir = tmp
+            .path()
+            .join("sessions")
+            .join(session_id)
+            .join("artifacts");
+        fs::create_dir_all(&art_dir).unwrap();
+        std::os::unix::fs::symlink(&secret, art_dir.join("art_evil.txt")).unwrap();
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let workspace_tmp = tempdir().unwrap();
+        let ctx = ToolContext::new(workspace_tmp.path()).with_state_namespace(session_id);
+        let result =
+            runtime.block_on(RetrieveToolResultTool.execute(json!({"ref": "art_evil"}), &ctx));
+        let err = result.expect_err("symlink artifact must not resolve");
+        assert!(
+            err.to_string().contains("not found"),
+            "expected `not found`, got: {err}"
+        );
+    }
+
+    struct ArtifactRootGuard {
+        prior: Option<PathBuf>,
+    }
+    impl Drop for ArtifactRootGuard {
+        fn drop(&mut self) {
+            crate::artifacts::set_test_artifact_sessions_root(self.prior.take());
+        }
+    }
+    fn scopeguard_for_test(prior: Option<PathBuf>) -> ArtifactRootGuard {
+        ArtifactRootGuard { prior }
     }
 }

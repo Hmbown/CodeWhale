@@ -24,8 +24,18 @@ async function checkAuth(req: Request, env: CommunityAgentEnv): Promise<{ ok: bo
   return { ok: true };
 }
 
+const ALLOWED_ACTIONS = new Set(["post", "discard"]);
+const ALLOWED_ORIGINS = new Set(["https://deepseek-tui.com", "https://www.deepseek-tui.com"]);
+const MAX_BODY_BYTES = 65_536;
+
 export async function POST(req: Request) {
   const env = await getAgentEnv();
+
+  const origin = req.headers.get("origin");
+  if (origin && !ALLOWED_ORIGINS.has(origin)) {
+    return NextResponse.json({ error: "forbidden origin" }, { status: 403 });
+  }
+
   const auth = await checkAuth(req, env);
   if (!auth.ok) {
     return NextResponse.json(
@@ -34,11 +44,25 @@ export async function POST(req: Request) {
     );
   }
 
+  const contentLength = Number(req.headers.get("content-length") ?? "0");
+  if (contentLength > MAX_BODY_BYTES) {
+    return NextResponse.json({ error: "payload too large" }, { status: 413 });
+  }
+
   const body = await req.json() as { action: string; draftKey: string; editedBody?: string; lang?: "en" | "zh" };
   const { action, draftKey, editedBody, lang } = body;
 
-  if (!draftKey) {
-    return NextResponse.json({ error: "missing draftKey" }, { status: 400 });
+  if (!ALLOWED_ACTIONS.has(action)) {
+    return NextResponse.json({ error: "unknown action" }, { status: 400 });
+  }
+  if (typeof draftKey !== "string" || !draftKey || draftKey.length > 256) {
+    return NextResponse.json({ error: "missing or invalid draftKey" }, { status: 400 });
+  }
+  if (editedBody !== undefined && (typeof editedBody !== "string" || editedBody.length > MAX_BODY_BYTES)) {
+    return NextResponse.json({ error: "editedBody too long" }, { status: 413 });
+  }
+  if (lang !== undefined && lang !== "en" && lang !== "zh") {
+    return NextResponse.json({ error: "invalid lang" }, { status: 400 });
   }
 
   const draft = await getDraft(env.CURATED_KV, draftKey);
@@ -92,5 +116,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true, action: "posted" });
   }
 
+  // ALLOWED_ACTIONS guard above means this is unreachable.
   return NextResponse.json({ error: "unknown action" }, { status: 400 });
 }

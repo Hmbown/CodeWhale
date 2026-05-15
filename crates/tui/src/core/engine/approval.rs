@@ -49,6 +49,21 @@ pub(super) enum ApprovalResult {
 }
 
 impl Engine {
+    /// Format a cancellation suffix when the engine knows the cause.
+    /// Some internal cancellation paths still use the raw token while
+    /// #1541 is open; those keep the legacy message without a guessed
+    /// reason.
+    fn cancel_reason_suffix(&self) -> String {
+        let reason = match self.cancel_reason.lock() {
+            Ok(slot) => *slot,
+            Err(poisoned) => *poisoned.into_inner(),
+        };
+        match reason {
+            Some(reason) => format!(" (reason: {})", reason.describe()),
+            None => String::new(),
+        }
+    }
+
     pub(super) async fn await_tool_approval(
         &mut self,
         tool_id: &str,
@@ -56,14 +71,18 @@ impl Engine {
         loop {
             tokio::select! {
                 _ = self.cancel_token.cancelled() => {
+                    let suffix = self.cancel_reason_suffix();
                     return Err(ToolError::execution_failed(
-                        "Request cancelled while awaiting approval".to_string(),
+                        format!("Request cancelled while awaiting approval{suffix}"),
                     ));
                 }
                 decision = self.rx_approval.recv() => {
                     let Some(decision) = decision else {
                         return Err(ToolError::execution_failed(
-                            "Approval channel closed".to_string(),
+                            "Approval channel closed — engine is shutting down. \
+                             The approval modal can no longer reach the engine; \
+                             this is typically a teardown race, not a user action."
+                                .to_string(),
                         ));
                     };
                     match decision {
@@ -99,8 +118,9 @@ impl Engine {
         loop {
             tokio::select! {
                 _ = self.cancel_token.cancelled() => {
+                    let suffix = self.cancel_reason_suffix();
                     return Err(ToolError::execution_failed(
-                        "Request cancelled while awaiting user input".to_string(),
+                        format!("Request cancelled while awaiting user input{suffix}"),
                     ));
                 }
                 decision = self.rx_user_input.recv() => {

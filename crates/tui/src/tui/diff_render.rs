@@ -2,7 +2,7 @@
 
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::palette;
 
@@ -357,6 +357,14 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
 
     for word in text.split_whitespace() {
         let word_width = word.width();
+        if word_width > width {
+            if !current.is_empty() {
+                lines.push(std::mem::take(&mut current));
+                current_width = 0;
+            }
+            push_word_breaking_chars(word, width, &mut current, &mut current_width, &mut lines);
+            continue;
+        }
         let additional = if current.is_empty() {
             word_width
         } else {
@@ -383,6 +391,24 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
     }
 
     lines
+}
+
+fn push_word_breaking_chars(
+    word: &str,
+    width: usize,
+    current: &mut String,
+    current_width: &mut usize,
+    lines: &mut Vec<String>,
+) {
+    for ch in word.chars() {
+        let char_width = ch.width().unwrap_or(1);
+        if *current_width + char_width > width && *current_width > 0 {
+            lines.push(std::mem::take(current));
+            *current_width = 0;
+        }
+        current.push(ch);
+        *current_width += char_width;
+    }
 }
 
 #[cfg(test)]
@@ -449,5 +475,17 @@ diff --git a/src/a.rs b/src/a.rs
             text.iter().any(|line| line.contains(" - old")),
             "deleted line should carry - gutter: {text:?}"
         );
+    }
+
+    #[test]
+    fn wrap_text_breaks_overlong_cjk_runs() {
+        let text = "这是一个非常长的中文字符串".repeat(10);
+        let lines = wrap_text(&text, 16);
+
+        for line in &lines {
+            assert!(line.width() <= 16, "line {line:?} exceeds width 16");
+        }
+
+        assert_eq!(lines.join(""), text);
     }
 }

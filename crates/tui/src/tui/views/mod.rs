@@ -13,6 +13,7 @@ use crate::tui::approval::{ElevationOption, ReviewDecision};
 use crate::tui::history::{HistoryCell, SubAgentCell, summarize_tool_output};
 use crate::tui::widgets::agent_card::AgentLifecycle;
 
+pub mod mode_picker;
 pub mod status_picker;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,8 +31,11 @@ pub enum ModalKind {
     Config,
     ModelPicker,
     ProviderPicker,
+    ModePicker,
     FilePicker,
     StatusPicker,
+    FeedbackPicker,
+    ThemePicker,
     ContextMenu,
     ShellControl,
 }
@@ -150,6 +154,10 @@ pub enum ViewEvent {
         provider: crate::config::ApiProvider,
         api_key: String,
     },
+    /// Emitted by the `/mode` picker when the user chooses a mode.
+    ModeSelected {
+        mode: crate::tui::app::AppMode,
+    },
     /// Emitted by the `/statusline` picker every time the user toggles an
     /// item (live preview) and once more on Enter (final). The handler
     /// updates `app.status_items` immediately and persists on `final_save`
@@ -180,6 +188,14 @@ pub enum ViewEvent {
     },
     ShellControlBackground,
     ShellControlCancel,
+    /// Emitted by the pager (`c` / `y`) to copy its body to the system
+    /// clipboard. The host handler writes via `app.clipboard` and surfaces a
+    /// status message — modal views cannot reach `app` directly. `label` is
+    /// the noun shown in the success / failure status (e.g. "Pager content").
+    CopyToClipboard {
+        text: String,
+        label: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -596,6 +612,13 @@ impl ConfigView {
             },
             ConfigRow {
                 section: ConfigSection::Display,
+                key: "theme".to_string(),
+                value: settings.theme.clone(),
+                editable: true,
+                scope: ConfigScope::Saved,
+            },
+            ConfigRow {
+                section: ConfigSection::Display,
                 key: "locale".to_string(),
                 value: settings.locale.clone(),
                 editable: true,
@@ -627,6 +650,13 @@ impl ConfigView {
             },
             ConfigRow {
                 section: ConfigSection::Display,
+                key: "fancy_animations".to_string(),
+                value: settings.fancy_animations.to_string(),
+                editable: true,
+                scope: ConfigScope::Saved,
+            },
+            ConfigRow {
+                section: ConfigSection::Display,
                 key: "show_thinking".to_string(),
                 value: settings.show_thinking.to_string(),
                 editable: true,
@@ -636,6 +666,27 @@ impl ConfigView {
                 section: ConfigSection::Display,
                 key: "show_tool_details".to_string(),
                 value: settings.show_tool_details.to_string(),
+                editable: true,
+                scope: ConfigScope::Saved,
+            },
+            ConfigRow {
+                section: ConfigSection::Display,
+                key: "status_indicator".to_string(),
+                value: settings.status_indicator.clone(),
+                editable: true,
+                scope: ConfigScope::Saved,
+            },
+            ConfigRow {
+                section: ConfigSection::Display,
+                key: "synchronized_output".to_string(),
+                value: settings.synchronized_output.clone(),
+                editable: true,
+                scope: ConfigScope::Saved,
+            },
+            ConfigRow {
+                section: ConfigSection::Display,
+                key: "cost_currency".to_string(),
+                value: settings.cost_currency.clone(),
                 editable: true,
                 scope: ConfigScope::Saved,
             },
@@ -662,6 +713,20 @@ impl ConfigView {
             },
             ConfigRow {
                 section: ConfigSection::Composer,
+                key: "composer_vim_mode".to_string(),
+                value: settings.composer_vim_mode.clone(),
+                editable: true,
+                scope: ConfigScope::Saved,
+            },
+            ConfigRow {
+                section: ConfigSection::Composer,
+                key: "bracketed_paste".to_string(),
+                value: settings.bracketed_paste.to_string(),
+                editable: true,
+                scope: ConfigScope::Saved,
+            },
+            ConfigRow {
+                section: ConfigSection::Composer,
                 key: "paste_burst_detection".to_string(),
                 value: settings.paste_burst_detection.to_string(),
                 editable: true,
@@ -682,6 +747,13 @@ impl ConfigView {
                 scope: ConfigScope::Saved,
             },
             ConfigRow {
+                section: ConfigSection::Sidebar,
+                key: "context_panel".to_string(),
+                value: settings.context_panel.to_string(),
+                editable: true,
+                scope: ConfigScope::Saved,
+            },
+            ConfigRow {
                 section: ConfigSection::History,
                 key: "auto_compact".to_string(),
                 value: settings.auto_compact.to_string(),
@@ -692,6 +764,13 @@ impl ConfigView {
                 section: ConfigSection::History,
                 key: "max_history".to_string(),
                 value: settings.max_input_history.to_string(),
+                editable: true,
+                scope: ConfigScope::Saved,
+            },
+            ConfigRow {
+                section: ConfigSection::Mcp,
+                key: "prefer_external_pdftotext".to_string(),
+                value: settings.prefer_external_pdftotext.to_string(),
                 editable: true,
                 scope: ConfigScope::Saved,
             },
@@ -1025,11 +1104,12 @@ fn config_hint_for_key(key: &str) -> &'static str {
         | "composer_border"
         | "paste_burst_detection" => "on/off, true/false, yes/no, 1/0",
         "composer_density" | "transcript_spacing" => "compact | comfortable | spacious",
+        "theme" => "system | dark | light | grayscale",
         "locale" => "auto | en | ja | zh-Hans | pt-BR",
         "background_color" => "#RRGGBB | default",
         "default_mode" => "agent | plan | yolo",
         "sidebar_width" => "10..=50",
-        "sidebar_focus" => "auto | plan | todos | tasks | agents",
+        "sidebar_focus" => "auto | work | tasks | agents | context | hidden",
         "max_history" => "integer (0 allowed)",
         "default_model" => "deepseek-v4-pro | deepseek-v4-flash | deepseek-* | none/default",
         "mcp_config_path" => "path to mcp.json",
@@ -1501,7 +1581,10 @@ fn live_subagent_result(
     role: Option<&str>,
 ) -> SubAgentResult {
     SubAgentResult {
+        name: agent_id.to_string(),
         agent_id: agent_id.to_string(),
+        context_mode: "fresh".to_string(),
+        fork_context: false,
         agent_type,
         assignment: SubAgentAssignment {
             objective: summarize_tool_output(objective),
@@ -1877,6 +1960,7 @@ mod tests {
     };
     use crate::config::Config;
     use crate::localization::Locale;
+    use crate::settings::Settings;
     use crate::tools::subagent::{
         SubAgentAssignment, SubAgentResult, SubAgentStatus, SubAgentType,
     };
@@ -1923,7 +2007,10 @@ mod tests {
 
     fn manager_agent(id: &str, status: SubAgentStatus) -> SubAgentResult {
         SubAgentResult {
+            name: id.to_string(),
             agent_id: id.to_string(),
+            context_mode: "fresh".to_string(),
+            fork_context: false,
             agent_type: SubAgentType::Explore,
             assignment: SubAgentAssignment {
                 objective: "read the docs".to_string(),
@@ -2046,12 +2133,33 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(keys.contains(&"model"));
         assert!(keys.contains(&"approval_mode"));
+        assert!(keys.contains(&"theme"));
         assert!(keys.contains(&"locale"));
         assert!(keys.contains(&"background_color"));
+        assert!(keys.contains(&"fancy_animations"));
+        assert!(keys.contains(&"status_indicator"));
+        assert!(keys.contains(&"synchronized_output"));
         assert!(keys.contains(&"auto_compact"));
         assert!(keys.contains(&"composer_border"));
+        assert!(keys.contains(&"composer_vim_mode"));
+        assert!(keys.contains(&"bracketed_paste"));
+        assert!(keys.contains(&"context_panel"));
+        assert!(keys.contains(&"cost_currency"));
+        assert!(keys.contains(&"prefer_external_pdftotext"));
         assert!(keys.contains(&"mcp_config_path"));
         assert!(view.rows.iter().all(|row| row.editable));
+    }
+
+    #[test]
+    fn config_view_exposes_all_available_saved_settings() {
+        let app = create_test_app();
+        let view = ConfigView::new_for_app(&app);
+        let keys: std::collections::HashSet<&str> =
+            view.rows.iter().map(|row| row.key.as_str()).collect();
+
+        for (key, _) in Settings::available_settings() {
+            assert!(keys.contains(key), "missing native config row for {key}");
+        }
     }
 
     #[test]
@@ -2065,7 +2173,7 @@ mod tests {
         assert_eq!(visible_section_labels(&view), vec!["Sidebar"]);
         assert_eq!(
             visible_row_keys(&view),
-            vec!["sidebar_width", "sidebar_focus"]
+            vec!["sidebar_width", "sidebar_focus", "context_panel"]
         );
         assert_eq!(view.rows[view.selected].key, "sidebar_width");
     }
@@ -2159,7 +2267,7 @@ mod tests {
         let app = create_test_app();
         let mut view = ConfigView::new_for_app(&app);
 
-        type_filter(&mut view, "mcp");
+        type_filter(&mut view, "mcp_config");
         assert_eq!(visible_row_keys(&view), vec!["mcp_config_path"]);
 
         let start = view.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));

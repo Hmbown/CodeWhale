@@ -1,0 +1,21 @@
+[Unit]
+Description=DeepSeek Feishu/Lark Phone Bridge
+Wants=network-online.target deepseek-runtime.service
+After=network-online.target deepseek-runtime.service
+
+[Service]
+Type=simple
+User=deepseek
+Group=deepseek
+WorkingDirectory=/opt/deepseek/bridge
+EnvironmentFile=/etc/deepseek/feishu-bridge.env
+ExecStart=/usr/bin/node /opt/deepseek/bridge/src/index.mjs
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/deepseek-feishu-bridge
+
+[Install]
+WantedBy=multi-user.target

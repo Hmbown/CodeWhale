@@ -193,8 +193,15 @@ impl PasteBurst {
     ) -> Option<RetroGrab> {
         let start_byte = retro_start_index(before, retro_chars);
         let grabbed = before[start_byte..].to_string();
-        let looks_pastey =
-            grabbed.chars().any(char::is_whitespace) || grabbed.chars().count() >= 16;
+        // Short CJK first-line pastes (e.g. "请联网搜索：" copied from a web
+        // chat) used to fail the heuristic — no whitespace and under the
+        // 16-char threshold meant the trailing pasted newline fell through
+        // as a real Enter and submitted the first line on its own.
+        // Treating any non-ASCII run as paste-like fixes this without
+        // false-firing on ASCII typing (#1302, PR #1342 from @reidliu41).
+        let looks_pastey = grabbed.chars().any(char::is_whitespace)
+            || !grabbed.is_ascii()
+            || grabbed.chars().count() >= 16;
         if looks_pastey {
             self.begin_with_retro_grabbed(grabbed.clone(), now);
             Some(RetroGrab {

@@ -18,7 +18,7 @@ use ratatui::{
 
 use crate::deepseek_theme::Theme;
 use crate::palette;
-use crate::tui::ui::truncate_line_to_width;
+use crate::tui::ui_text::truncate_line_to_width;
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -333,14 +333,12 @@ pub fn render_file_tree(
             } else {
                 "  "
             };
-            let icon = if entry.is_dir {
-                "\u{1F4C1} "
-            } else {
-                "\u{1F4C4} "
-            }; // 📁 / 📄
+            // No separate icon: the ▼/▶ expand marker already signals dirs,
+            // and SMP emoji (📁/📄, U+1F4C1/U+1F4C4) render at inconsistent
+            // column widths across terminals, breaking layout. See issue #1314.
 
             // Build the display text.
-            let raw = format!("{indent}{expand_marker}{icon}{}", entry.name);
+            let raw = format!("{indent}{expand_marker}{}", entry.name);
             let display = truncate_line_to_width(&raw, content_width.max(1));
 
             let style = if is_selected {

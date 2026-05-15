@@ -5,10 +5,12 @@
 
 mod anchor;
 mod attachment;
+mod change;
 mod config;
 mod core;
 mod cycle;
 mod debug;
+mod feedback;
 mod goal;
 mod hooks;
 mod init;
@@ -26,8 +28,11 @@ mod session;
 pub mod share;
 mod skills;
 mod stash;
+mod status;
 mod task;
 mod user_commands;
+
+use std::fmt::Write as _;
 
 use crate::localization::{Locale, MessageId, tr};
 use crate::tui::app::{App, AppAction};
@@ -137,37 +142,37 @@ pub const COMMANDS: &[CommandInfo] = &[
     // Core commands
     CommandInfo {
         name: "anchor",
-        aliases: &[],
+        aliases: &["maodian"],
         usage: "/anchor <text> | /anchor list | /anchor remove <n>",
         description_id: MessageId::CmdAnchorDescription,
     },
     CommandInfo {
         name: "help",
-        aliases: &["?"],
+        aliases: &["?", "bangzhu", "帮助"],
         usage: "/help [command]",
         description_id: MessageId::CmdHelpDescription,
     },
     CommandInfo {
         name: "clear",
-        aliases: &[],
+        aliases: &["qingping"],
         usage: "/clear",
         description_id: MessageId::CmdClearDescription,
     },
     CommandInfo {
         name: "exit",
-        aliases: &["quit", "q"],
+        aliases: &["quit", "q", "tuichu"],
         usage: "/exit",
         description_id: MessageId::CmdExitDescription,
     },
     CommandInfo {
         name: "model",
-        aliases: &[],
+        aliases: &["moxing"],
         usage: "/model [name]",
         description_id: MessageId::CmdModelDescription,
     },
     CommandInfo {
         name: "models",
-        aliases: &[],
+        aliases: &["moxingliebiao"],
         usage: "/models",
         description_id: MessageId::CmdModelsDescription,
     },
@@ -191,32 +196,50 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "hooks",
-        aliases: &["hook"],
+        aliases: &["hook", "gouzi"],
         usage: "/hooks [list|events]",
         description_id: MessageId::CmdHooksDescription,
     },
     CommandInfo {
         name: "subagents",
-        aliases: &["agents"],
+        aliases: &["agents", "zhinengti"],
         usage: "/subagents",
         description_id: MessageId::CmdSubagentsDescription,
     },
     CommandInfo {
+        name: "agent",
+        aliases: &["daili"],
+        usage: "/agent [N] <task>",
+        description_id: MessageId::CmdAgentDescription,
+    },
+    CommandInfo {
         name: "links",
-        aliases: &["dashboard", "api"],
+        aliases: &["dashboard", "api", "lianjie"],
         usage: "/links",
         description_id: MessageId::CmdLinksDescription,
     },
     CommandInfo {
+        name: "feedback",
+        aliases: &[],
+        usage: "/feedback [bug|feature|security]",
+        description_id: MessageId::CmdFeedbackDescription,
+    },
+    CommandInfo {
         name: "home",
-        aliases: &["stats", "overview"],
+        aliases: &["stats", "overview", "zhuye", "shouye"],
         usage: "/home",
         description_id: MessageId::CmdHomeDescription,
     },
     CommandInfo {
+        name: "workspace",
+        aliases: &["cwd"],
+        usage: "/workspace [path]",
+        description_id: MessageId::CmdWorkspaceDescription,
+    },
+    CommandInfo {
         name: "note",
         aliases: &[],
-        usage: "/note <text>",
+        usage: "/note [add|list|show|edit|remove|clear|path]",
         description_id: MessageId::CmdNoteDescription,
     },
     CommandInfo {
@@ -227,7 +250,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "attach",
-        aliases: &["image", "media"],
+        aliases: &["image", "media", "fujian"],
         usage: "/attach <path>",
         description_id: MessageId::CmdAttachDescription,
     },
@@ -239,7 +262,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "jobs",
-        aliases: &["job"],
+        aliases: &["job", "zuoye"],
         usage: "/jobs [list|show <id>|poll <id>|wait <id>|stdin <id> <input>|cancel <id>]",
         description_id: MessageId::CmdJobsDescription,
     },
@@ -258,7 +281,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     // Session commands
     CommandInfo {
         name: "rename",
-        aliases: &[],
+        aliases: &["gaiming", "chongmingming"],
         usage: "/rename <new title>",
         description_id: MessageId::CmdRenameDescription,
     },
@@ -276,15 +299,21 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "load",
-        aliases: &[],
+        aliases: &["jiazai"],
         usage: "/load [path]",
         description_id: MessageId::CmdLoadDescription,
     },
     CommandInfo {
         name: "compact",
-        aliases: &[],
+        aliases: &["yasuo"],
         usage: "/compact",
         description_id: MessageId::CmdCompactDescription,
+    },
+    CommandInfo {
+        name: "relay",
+        aliases: &["batonpass", "接力"],
+        usage: "/relay [focus]",
+        description_id: MessageId::CmdRelayDescription,
     },
     CommandInfo {
         name: "context",
@@ -294,7 +323,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "cycles",
-        aliases: &[],
+        aliases: &["zhouqi"],
         usage: "/cycles",
         description_id: MessageId::CmdCyclesDescription,
     },
@@ -312,7 +341,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "export",
-        aliases: &[],
+        aliases: &["daochu"],
         usage: "/export [path]",
         description_id: MessageId::CmdExportDescription,
     },
@@ -324,27 +353,15 @@ pub const COMMANDS: &[CommandInfo] = &[
         description_id: MessageId::CmdConfigDescription,
     },
     CommandInfo {
-        name: "yolo",
-        aliases: &[],
-        usage: "/yolo",
-        description_id: MessageId::CmdYoloDescription,
-    },
-    CommandInfo {
-        name: "agent",
-        aliases: &[],
-        usage: "/agent",
-        description_id: MessageId::CmdAgentDescription,
-    },
-    CommandInfo {
-        name: "plan",
-        aliases: &[],
-        usage: "/plan",
-        description_id: MessageId::CmdPlanDescription,
+        name: "mode",
+        aliases: &["jihua", "zidong"],
+        usage: "/mode [agent|plan|yolo|1|2|3]",
+        description_id: MessageId::CmdModeDescription,
     },
     CommandInfo {
         name: "theme",
         aliases: &[],
-        usage: "/theme",
+        usage: "/theme [name]",
         description_id: MessageId::CmdThemeDescription,
     },
     CommandInfo {
@@ -355,7 +372,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "trust",
-        aliases: &[],
+        aliases: &["xinren"],
         usage: "/trust [on|off|add <path>|remove <path>|list]",
         description_id: MessageId::CmdTrustDescription,
     },
@@ -373,8 +390,14 @@ pub const COMMANDS: &[CommandInfo] = &[
         description_id: MessageId::CmdTokensDescription,
     },
     CommandInfo {
+        name: "translate",
+        aliases: &["translation", "transale"],
+        usage: "/translate",
+        description_id: MessageId::CmdTranslateDescription,
+    },
+    CommandInfo {
         name: "system",
-        aliases: &[],
+        aliases: &["xitong"],
         usage: "/system",
         description_id: MessageId::CmdSystemDescription,
     },
@@ -391,6 +414,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         description_id: MessageId::CmdDiffDescription,
     },
     CommandInfo {
+        name: "change",
+        aliases: &[],
+        usage: "/change [version]",
+        description_id: MessageId::CmdChangeDescription,
+    },
+    CommandInfo {
         name: "undo",
         aliases: &[],
         usage: "/undo",
@@ -398,7 +427,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "retry",
-        aliases: &[],
+        aliases: &["chongshi"],
         usage: "/retry",
         description_id: MessageId::CmdRetryDescription,
     },
@@ -422,7 +451,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "goal",
-        aliases: &[],
+        aliases: &["mubiao"],
         usage: "/goal [objective] [budget: N]",
         description_id: MessageId::CmdGoalDescription,
     },
@@ -433,27 +462,33 @@ pub const COMMANDS: &[CommandInfo] = &[
         description_id: MessageId::CmdSettingsDescription,
     },
     CommandInfo {
+        name: "status",
+        aliases: &[],
+        usage: "/status",
+        description_id: MessageId::CmdStatusDescription,
+    },
+    CommandInfo {
         name: "statusline",
-        aliases: &["status"],
+        aliases: &[],
         usage: "/statusline",
         description_id: MessageId::CmdStatuslineDescription,
     },
     // Skills commands
     CommandInfo {
         name: "skills",
-        aliases: &[],
-        usage: "/skills [--remote|sync]",
+        aliases: &["jinengliebiao"],
+        usage: "/skills [--remote|sync|<prefix>]",
         description_id: MessageId::CmdSkillsDescription,
     },
     CommandInfo {
         name: "skill",
-        aliases: &[],
+        aliases: &["jineng"],
         usage: "/skill <name|install <spec>|update <name>|uninstall <name>|trust <name>>",
         description_id: MessageId::CmdSkillDescription,
     },
     CommandInfo {
         name: "review",
-        aliases: &[],
+        aliases: &["shencha"],
         usage: "/review <target>",
         description_id: MessageId::CmdReviewDescription,
     },
@@ -466,8 +501,8 @@ pub const COMMANDS: &[CommandInfo] = &[
     // RLM command
     CommandInfo {
         name: "rlm",
-        aliases: &["recursive"],
-        usage: "/rlm <prompt>",
+        aliases: &["recursive", "digui"],
+        usage: "/rlm [N] <file_or_text>",
         description_id: MessageId::CmdRlmDescription,
     },
     // Debug/cost command
@@ -480,7 +515,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     // Profile switching (#390)
     CommandInfo {
         name: "profile",
-        aliases: &[],
+        aliases: &["dangan"],
         usage: "/profile <name>",
         description_id: MessageId::CmdHelpDescription, // reuse for now
     },
@@ -508,55 +543,64 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
     // Match command or alias
     match command {
         // Core commands
-        "anchor" => anchor::anchor(app, arg),
-        "help" | "?" => core::help(app, arg),
-        "clear" => core::clear(app),
-        "exit" | "quit" | "q" => core::exit(),
-        "model" => core::model(app, arg),
-        "models" => core::models(app),
+        "anchor" | "maodian" => anchor::anchor(app, arg),
+        "help" | "?" | "bangzhu" | "帮助" => core::help(app, arg),
+        "clear" | "qingping" => core::clear(app),
+        "exit" | "quit" | "q" | "tuichu" => core::exit(),
+        "model" | "moxing" => core::model(app, arg),
+        "models" | "moxingliebiao" => core::models(app),
         "provider" => provider::provider(app, arg),
         "queue" | "queued" => queue::queue(app, arg),
         "stash" | "park" => stash::stash(app, arg),
-        "hooks" | "hook" => hooks::hooks(app, arg),
-        "subagents" | "agents" => core::subagents(app),
-        "links" | "dashboard" | "api" => core::deepseek_links(app),
-        "home" | "stats" | "overview" => core::home_dashboard(app),
+        "hooks" | "hook" | "gouzi" => hooks::hooks(app, arg),
+        "subagents" | "agents" | "zhinengti" => core::subagents(app),
+        "agent" | "daili" => agent(app, arg),
+        "links" | "dashboard" | "api" | "lianjie" => core::deepseek_links(app),
+        "feedback" => feedback::feedback(app, arg),
+        "home" | "stats" | "overview" | "zhuye" | "shouye" => core::home_dashboard(app),
+        "workspace" | "cwd" => core::workspace_switch(app, arg),
         "note" => note::note(app, arg),
         "memory" => memory::memory(app, arg),
-        "attach" | "image" | "media" => attachment::attach(app, arg),
+        "attach" | "image" | "media" | "fujian" => attachment::attach(app, arg),
         "task" | "tasks" => task::task(app, arg),
-        "jobs" | "job" => jobs::jobs(app, arg),
+        "jobs" | "job" | "zuoye" => jobs::jobs(app, arg),
         "mcp" => mcp::mcp(app, arg),
         "network" => network::network(app, arg),
 
         // Session commands
-        "rename" => rename::rename(app, arg),
+        "rename" | "gaiming" | "chongmingming" => rename::rename(app, arg),
         "save" => session::save(app, arg),
         "sessions" | "resume" => session::sessions(app, arg),
-        "load" => session::load(app, arg),
-        "compact" => session::compact(app),
-        "cycles" => cycle::list_cycles(app),
+        "relay" | "batonpass" | "接力" => relay(app, arg),
+        "load" | "jiazai" => session::load(app, arg),
+        "compact" | "yasuo" => session::compact(app),
+        "cycles" | "zhouqi" => cycle::list_cycles(app),
         "cycle" => cycle::show_cycle(app, arg),
         "recall" => cycle::recall_archive(app, arg),
-        "export" => session::export(app, arg),
+        "export" | "daochu" => session::export(app, arg),
 
         // Config commands
         "config" => config::config_command(app, arg),
         "settings" => config::show_settings(app),
-        "statusline" | "status" => config::status_line(app),
-        "yolo" => config::yolo(app),
-        "agent" => config::agent_mode(app),
-        "plan" => config::plan_mode(app),
-        "theme" => config::theme(app),
+        "status" => status::status(app),
+        "statusline" => config::status_line(app),
+        "mode" => config::mode(app, arg),
+        "jihua" => config::mode(app, Some("plan")),
+        "zidong" => config::mode(app, Some("yolo")),
+        "theme" => config::theme(app, arg),
         "verbose" => config::verbose(app, arg),
-        "trust" => config::trust(app, arg),
+        "trust" | "xinren" => config::trust(app, arg),
         "logout" => config::logout(app),
 
         // Debug commands
+        "translate" | "translation" | "transale" => core::translate(app),
         "tokens" => debug::tokens(app),
         "cost" => debug::cost(app),
         "cache" => debug::cache(app, arg),
-        "system" => debug::system_prompt(app),
+
+        // ChangeLog command
+        "change" => change::change(app, arg),
+        "system" | "xitong" => debug::system_prompt(app),
         "context" | "ctx" => debug::context(app),
         "edit" => debug::edit(app),
         "diff" => debug::diff(app),
@@ -575,31 +619,30 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
                 result
             }
         }
-        "retry" => debug::retry(app),
+        "retry" | "chongshi" => debug::retry(app),
 
         // Project commands
         "init" => init::init(app),
         "lsp" => config::lsp_command(app, arg),
         "share" => share::share(app, arg),
-        "goal" => goal::goal(app, arg),
+        "goal" | "mubiao" => goal::goal(app, arg),
 
         // Skills commands
-        "skills" => skills::list_skills(app, arg),
-        "skill" => skills::run_skill(app, arg),
-        "review" => review::review(app, arg),
+        "skills" | "jinengliebiao" => skills::list_skills(app, arg),
+        "skill" | "jineng" => skills::run_skill(app, arg),
+        "review" | "shencha" => review::review(app, arg),
         "restore" => restore::restore(app, arg),
 
         // Profile switch (#390)
-        "profile" => core::profile_switch(app, arg),
+        "profile" | "dangan" => core::profile_switch(app, arg),
 
         // RLM command
-        "rlm" | "recursive" => rlm(app, arg),
+        "rlm" | "recursive" | "digui" => rlm(app, arg),
 
         // Legacy command migrations (kept out of registry/autocomplete intentionally).
         "set" => CommandResult::error(
             "The /set command was retired. Use /config to edit settings and /settings to inspect current values.",
         ),
-        "normal" => config::normal_mode(app),
         "deepseek" => CommandResult::error(
             "The /deepseek command was renamed. Use /links (aliases: /dashboard, /api).",
         ),
@@ -647,6 +690,10 @@ pub fn persist_root_string_key(key: &str, value: &str) -> anyhow::Result<std::pa
     config::persist_root_string_key(key, value)
 }
 
+pub fn switch_mode(app: &mut App, mode: crate::tui::app::AppMode) -> String {
+    config::switch_mode(app, mode)
+}
+
 /// Auto-select a model based on request complexity.
 pub fn auto_model_heuristic(input: &str, current_model: &str) -> String {
     config::auto_model_heuristic(input, current_model)
@@ -664,49 +711,220 @@ pub use config::{
 /// in the REPL as the `PROMPT` variable. The root LLM will only see
 /// metadata about the REPL state, never the prompt text directly.
 pub fn rlm(app: &mut App, arg: Option<&str>) -> CommandResult {
-    let prompt = match arg {
+    let (max_depth, target) = match parse_depth_prefixed_arg(arg, 1) {
+        Ok(parsed) => parsed,
+        Err(message) => return CommandResult::error(message),
+    };
+    let target = match target {
         Some(p) if !p.trim().is_empty() => p.trim().to_string(),
         _ => {
             return CommandResult::error(
-                "Usage: /rlm <prompt>\n\n\
-                 Process a prompt using a Recursive Language Model (RLM).\n\
-                 The prompt is stored in a REPL and the model writes code\n\
-                 to decompose and process it recursively."
+                "Usage: /rlm [N] <file_or_text>\n\n\
+                 Opens a persistent RLM context with sub_rlm depth N (0-3, default 1)."
                     .to_string(),
             );
         }
     };
 
-    // Sanity-check: RLM is most useful for longer prompts.
-    if prompt.len() < 50 {
-        return CommandResult::message(
-            "Tip: RLM is designed for processing LONG prompts (>100 chars). \
-             For short queries, just type the message directly."
-                .to_string(),
+    let source_arg = if resolves_to_existing_file(app, &target) {
+        format!(r#"file_path: "{target}""#)
+    } else {
+        format!("content: {:?}", target)
+    };
+    let message = format!(
+        "Open and use a persistent RLM session for this request. Call `rlm_open` with name `slash_rlm` and {source_arg}. Then call `rlm_configure` with `sub_rlm_max_depth: {max_depth}`. Use `rlm_eval` to inspect the context through `peek`, `search`, and `chunk`, and call `finalize(...)` from the REPL when ready. If a `var_handle` is returned, use `handle_read` for bounded slices or projections before answering."
+    );
+
+    CommandResult::with_message_and_action(
+        format!("Opening persistent RLM context at depth {max_depth}..."),
+        AppAction::SendMessage(message),
+    )
+}
+
+/// Open a persistent sub-agent session from a slash command.
+pub fn agent(_app: &mut App, arg: Option<&str>) -> CommandResult {
+    let (max_depth, task) = match parse_depth_prefixed_arg(arg, 1) {
+        Ok(parsed) => parsed,
+        Err(message) => return CommandResult::error(message),
+    };
+    let task = match task {
+        Some(task) if !task.trim().is_empty() => task.trim().to_string(),
+        _ => {
+            return CommandResult::error(
+                "Usage: /agent [N] <task>\n\n\
+                 Opens a persistent sub-agent session with recursive agent depth N (0-3, default 1).",
+            );
+        }
+    };
+    let message = format!(
+        "Open a persistent sub-agent session for this task. Call `agent_open` with name `slash_agent`, `prompt: {:?}`, and `max_depth: {max_depth}`. Use `agent_eval` to wait for the next terminal/current projection and `handle_read` on the returned transcript_handle if you need more detail. Verify any claimed side effects before reporting success.",
+        task
+    );
+    CommandResult::with_message_and_action(
+        format!("Opening persistent sub-agent at depth {max_depth}..."),
+        AppAction::SendMessage(message),
+    )
+}
+
+/// Ask the active model to write a compact relay artifact for the next thread.
+///
+/// The visible command is `/relay` (with `/接力` for Chinese users), but the
+/// durable file path remains `.deepseek/handoff.md` for compatibility with
+/// existing sessions and startup prompt loading.
+pub fn relay(app: &mut App, arg: Option<&str>) -> CommandResult {
+    let focus = arg.map(str::trim).filter(|value| !value.is_empty());
+    let message = build_relay_instruction(app, focus);
+    CommandResult::with_message_and_action(
+        "Preparing session relay at .deepseek/handoff.md...",
+        AppAction::SendMessage(message),
+    )
+}
+
+fn build_relay_instruction(app: &App, focus: Option<&str>) -> String {
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "Create a compact session relay (接力) for a future DeepSeek TUI thread."
+    );
+    let _ = writeln!(out);
+    let _ = writeln!(out, "Write or update `.deepseek/handoff.md`.");
+    let _ = writeln!(
+        out,
+        "Keep the existing file path for compatibility, but title the artifact `# Session relay`."
+    );
+    let _ = writeln!(out);
+    let _ = writeln!(out, "Current session snapshot:");
+    let _ = writeln!(out, "- Workspace: {}", app.workspace.display());
+    let _ = writeln!(out, "- Mode: {}", app.mode.label());
+    let _ = writeln!(out, "- Model: {}", app.model_display_label());
+    if let Some(focus) = focus {
+        let _ = writeln!(out, "- Requested relay focus: {focus}");
+    }
+    if let Some(goal) = app.goal.goal_objective.as_deref() {
+        let _ = writeln!(out, "- Goal: {goal}");
+    }
+    if let Some(budget) = app.goal.goal_token_budget {
+        let _ = writeln!(out, "- Goal token budget: {budget}");
+    }
+    if app.cycle_count > 0 {
+        let _ = writeln!(out, "- Cycle count: {}", app.cycle_count);
+    }
+
+    if let Ok(todos) = app.todos.try_lock() {
+        let snapshot = todos.snapshot();
+        if !snapshot.items.is_empty() {
+            let _ = writeln!(
+                out,
+                "\nWork checklist (primary progress surface, {}% complete):",
+                snapshot.completion_pct
+            );
+            for item in snapshot.items {
+                let _ = writeln!(
+                    out,
+                    "- #{} [{}] {}",
+                    item.id,
+                    item.status.as_str(),
+                    item.content
+                );
+            }
+        }
+    } else {
+        let _ = writeln!(
+            out,
+            "\nWork checklist: unavailable because the checklist is busy."
         );
     }
 
-    let model = app.model.clone();
-    let child_model = "deepseek-v4-flash".to_string();
-    // Paper experiments use depth=1 (one level of `sub_rlm`); we default to
-    // depth=2 so the model can recurse twice if it chooses to.
-    let max_depth: u32 = 2;
+    if let Ok(plan) = app.plan_state.try_lock() {
+        let snapshot = plan.snapshot();
+        if snapshot.explanation.is_some() || !snapshot.items.is_empty() {
+            let _ = writeln!(out, "\nOptional strategy metadata from update_plan:");
+            if let Some(explanation) = snapshot.explanation.as_deref() {
+                let _ = writeln!(out, "- Explanation: {explanation}");
+            }
+            for item in snapshot.items {
+                let _ = writeln!(out, "- [{}] {}", plan_status_label(&item.status), item.step);
+            }
+        }
+    } else {
+        let _ = writeln!(
+            out,
+            "\nStrategy metadata: unavailable because plan state is busy."
+        );
+    }
 
-    CommandResult::with_message_and_action(
-        format!(
-            "Starting RLM turn for {} chars of prompt using {} (child={}, depth={})...",
-            prompt.len(),
-            model,
-            child_model,
-            max_depth,
-        ),
-        AppAction::Rlm {
-            prompt,
-            model,
-            child_model,
-            max_depth,
-        },
-    )
+    let _ = writeln!(
+        out,
+        "\nBefore writing, inspect the current transcript context and any live tool evidence you need. Do not invent test results, file changes, blockers, or decisions."
+    );
+    let _ = writeln!(
+        out,
+        "\nUse this compact structure:\n\
+         # Session relay\n\
+         \n\
+         ## Goal\n\
+         [the user's objective and any explicit constraints]\n\
+         \n\
+         ## Current work\n\
+         [the active Work checklist item, progress, and what is mid-flight]\n\
+         \n\
+         ## Files and state\n\
+         [changed files, important paths, sub-agents/RLM sessions, commands run]\n\
+         \n\
+         ## Decisions\n\
+         [why key choices were made]\n\
+         \n\
+         ## Verification\n\
+         [what passed, what failed, what was not run]\n\
+         \n\
+         ## Next action\n\
+         [one concrete action for the next thread]"
+    );
+    let _ = writeln!(
+        out,
+        "\nKeep it under about 900 words unless the session genuinely needs more. After writing, report the path and the single next action."
+    );
+    out
+}
+
+fn plan_status_label(status: &crate::tools::plan::StepStatus) -> &'static str {
+    match status {
+        crate::tools::plan::StepStatus::Pending => "pending",
+        crate::tools::plan::StepStatus::InProgress => "in_progress",
+        crate::tools::plan::StepStatus::Completed => "completed",
+    }
+}
+
+fn parse_depth_prefixed_arg(
+    arg: Option<&str>,
+    default_depth: u32,
+) -> Result<(u32, Option<&str>), String> {
+    let Some(raw) = arg.map(str::trim).filter(|raw| !raw.is_empty()) else {
+        return Ok((default_depth, None));
+    };
+    let mut parts = raw.splitn(2, char::is_whitespace);
+    let first = parts.next().unwrap_or_default();
+    if first.chars().all(|ch| ch.is_ascii_digit()) {
+        let depth: u32 = first
+            .parse()
+            .map_err(|_| "Depth must be an integer from 0 to 3".to_string())?;
+        if depth > 3 {
+            return Err("Depth must be between 0 and 3".to_string());
+        }
+        Ok((depth, parts.next().map(str::trim)))
+    } else {
+        Ok((default_depth, Some(raw)))
+    }
+}
+
+fn resolves_to_existing_file(app: &App, input: &str) -> bool {
+    let path = std::path::Path::new(input);
+    let candidate = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        app.workspace.join(path)
+    };
+    candidate.is_file()
 }
 
 /// Get command info by name or alias
@@ -840,8 +1058,13 @@ fn suggest_command_names(input: &str, limit: usize) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::config::Config;
+    use crate::tools::plan::{PlanItemArg, StepStatus, UpdatePlanArgs};
+    use crate::tools::todo::TodoStatus;
     use crate::tui::app::{App, AppAction, TuiOptions};
-    use std::path::PathBuf;
+    use std::ffi::OsString;
+    use std::path::{Path, PathBuf};
+    use std::sync::MutexGuard;
+    use tempfile::tempdir;
 
     fn create_test_app() -> App {
         let options = TuiOptions {
@@ -883,7 +1106,102 @@ mod tests {
             .iter()
             .find(|cmd| cmd.name == "links")
             .expect("links command should exist");
-        assert_eq!(links.aliases, &["dashboard", "api"]);
+        assert_eq!(links.aliases, &["dashboard", "api", "lianjie"]);
+    }
+
+    #[test]
+    fn rlm_slash_command_routes_to_persistent_tool_instruction() {
+        let mut app = create_test_app();
+        let result = execute("/rlm 2 inspect this long corpus", &mut app);
+        assert!(!result.is_error);
+        assert!(result.message.as_deref().unwrap_or("").contains("depth 2"));
+        let Some(AppAction::SendMessage(message)) = result.action else {
+            panic!("expected SendMessage action");
+        };
+        assert!(message.contains("rlm_open"));
+        assert!(message.contains("rlm_configure"));
+        assert!(message.contains("sub_rlm_max_depth: 2"));
+    }
+
+    #[test]
+    fn agent_slash_command_routes_to_persistent_tool_instruction() {
+        let mut app = create_test_app();
+        let result = execute("/agent 0 inspect the parser", &mut app);
+        assert!(!result.is_error);
+        let Some(AppAction::SendMessage(message)) = result.action else {
+            panic!("expected SendMessage action");
+        };
+        assert!(message.contains("agent_open"));
+        assert!(message.contains("max_depth: 0"));
+    }
+
+    #[test]
+    fn relay_slash_command_routes_to_session_relay_instruction() {
+        let mut app = create_test_app();
+        app.goal.goal_objective = Some("Unify the work surface".to_string());
+        app.goal.goal_token_budget = Some(12_000);
+        app.cycle_count = 2;
+        {
+            let mut todos = app.todos.try_lock().expect("todo lock");
+            todos.add("inspect workspace".to_string(), TodoStatus::Completed);
+            todos.add("patch relay command".to_string(), TodoStatus::InProgress);
+        }
+        {
+            let mut plan = app.plan_state.try_lock().expect("plan lock");
+            plan.update(UpdatePlanArgs {
+                explanation: Some("RLM-style strategy".to_string()),
+                plan: vec![PlanItemArg {
+                    step: "keep checklist primary".to_string(),
+                    status: StepStatus::InProgress,
+                }],
+            });
+        }
+
+        let result = execute("/relay verify install", &mut app);
+        assert!(!result.is_error);
+        assert!(
+            result
+                .message
+                .as_deref()
+                .unwrap_or_default()
+                .contains(".deepseek/handoff.md")
+        );
+        let Some(AppAction::SendMessage(message)) = result.action else {
+            panic!("expected SendMessage action");
+        };
+        assert!(message.contains("session relay"));
+        assert!(message.contains("接力"));
+        assert!(message.contains("Write or update `.deepseek/handoff.md`"));
+        assert!(message.contains("# Session relay"));
+        assert!(message.contains("Requested relay focus: verify install"));
+        assert!(message.contains("Goal: Unify the work surface"));
+        assert!(message.contains("Goal token budget: 12000"));
+        assert!(message.contains("Cycle count: 2"));
+        assert!(message.contains("Work checklist (primary progress surface, 50% complete)"));
+        assert!(message.contains("#1 [completed] inspect workspace"));
+        assert!(message.contains("#2 [in_progress] patch relay command"));
+        assert!(message.contains("Optional strategy metadata from update_plan"));
+        assert!(message.contains("Explanation: RLM-style strategy"));
+        assert!(message.contains("[in_progress] keep checklist primary"));
+    }
+
+    #[test]
+    fn relay_command_has_bilingual_aliases() {
+        let relay = COMMANDS
+            .iter()
+            .find(|cmd| cmd.name == "relay")
+            .expect("relay command should exist");
+        assert_eq!(relay.aliases, &["batonpass", "接力"]);
+        assert!(relay.description_for(Locale::ZhHans).contains("接力"));
+        assert!(relay.description_for(Locale::ZhHant).contains("接力"));
+
+        let mut app = create_test_app();
+        let result = execute("/接力 next hand", &mut app);
+        assert!(!result.is_error);
+        let Some(AppAction::SendMessage(message)) = result.action else {
+            panic!("expected SendMessage action");
+        };
+        assert!(message.contains("Requested relay focus: next hand"));
     }
 
     #[test]
@@ -973,12 +1291,23 @@ mod tests {
     #[test]
     fn execute_links_and_aliases_return_links_message() {
         let mut app = create_test_app();
-        for cmd in ["/links", "/dashboard", "/api"] {
+        for cmd in ["/links", "/dashboard", "/api", "/lianjie"] {
             let result = execute(cmd, &mut app);
             let msg = result.message.expect("links commands should return text");
             assert!(msg.contains("https://platform.deepseek.com"));
             assert!(result.action.is_none());
         }
+    }
+
+    #[test]
+    fn execute_workspace_alias_switches_workspace() {
+        let dir = tempdir().expect("temp dir");
+        let mut app = create_test_app();
+        let result = execute(&format!("/cwd {}", dir.path().display()), &mut app);
+        assert!(matches!(
+            result.action,
+            Some(AppAction::SwitchWorkspace { workspace }) if workspace == dir.path().canonicalize().unwrap()
+        ));
     }
 
     #[test]
@@ -1004,16 +1333,53 @@ mod tests {
         assert!(deepseek_result.action.is_none());
     }
 
+    struct ConfigPathGuard {
+        previous: Option<OsString>,
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    impl ConfigPathGuard {
+        fn new(config_path: &Path) -> Self {
+            let lock = crate::test_support::lock_test_env();
+            let previous = std::env::var_os("DEEPSEEK_CONFIG_PATH");
+            // Safety: test-only environment mutation guarded by a global mutex.
+            unsafe {
+                std::env::set_var("DEEPSEEK_CONFIG_PATH", config_path);
+            }
+            Self {
+                previous,
+                _lock: lock,
+            }
+        }
+    }
+
+    impl Drop for ConfigPathGuard {
+        fn drop(&mut self) {
+            // Safety: test-only environment mutation guarded by a global mutex.
+            unsafe {
+                if let Some(previous) = self.previous.take() {
+                    std::env::set_var("DEEPSEEK_CONFIG_PATH", previous);
+                } else {
+                    std::env::remove_var("DEEPSEEK_CONFIG_PATH");
+                }
+            }
+        }
+    }
+
     /// Build an App scoped to an isolated tempdir so dispatch-side-effects
-    /// (e.g. `/init` writing AGENTS.md, `/export` writing chat transcripts)
-    /// don't pollute the repo working tree when the smoke tests run.
-    fn create_isolated_test_app() -> (App, tempfile::TempDir) {
+    /// (e.g. `/init` writing AGENTS.md, `/export` writing chat transcripts,
+    /// `/logout` clearing credentials) don't pollute the repo working tree or
+    /// the developer's real config when the smoke tests run.
+    fn create_isolated_test_app() -> (App, tempfile::TempDir, ConfigPathGuard) {
         let tmpdir = tempfile::TempDir::new().expect("tempdir for smoke test");
         let workspace = tmpdir.path().to_path_buf();
+        let config_path = workspace.join(".deepseek").join("config.toml");
+        std::fs::create_dir_all(config_path.parent().expect("config parent")).expect("config dir");
+        let guard = ConfigPathGuard::new(&config_path);
         let options = TuiOptions {
             model: "deepseek-v4-pro".to_string(),
             workspace: workspace.clone(),
-            config_path: None,
+            config_path: Some(config_path),
             config_profile: None,
             allow_shell: false,
             use_alt_screen: true,
@@ -1032,7 +1398,7 @@ mod tests {
             initial_input: None,
         };
         let app = App::new(options, &Config::default());
-        (app, tmpdir)
+        (app, tmpdir, guard)
     }
 
     /// Smoke test: every entry in `COMMANDS` must dispatch to a real handler.
@@ -1078,7 +1444,7 @@ mod tests {
             if skip_in_dispatch_smoke(command.name) {
                 continue;
             }
-            let (mut app, tmpdir) = create_isolated_test_app();
+            let (mut app, tmpdir, _guard) = create_isolated_test_app();
             let invocation = invocation_for(command.name, command.name, tmpdir.path());
             let result = execute(&invocation, &mut app);
             if let Some(msg) = &result.message {
@@ -1100,7 +1466,7 @@ mod tests {
                 continue;
             }
             for alias in command.aliases {
-                let (mut app, tmpdir) = create_isolated_test_app();
+                let (mut app, tmpdir, _guard) = create_isolated_test_app();
                 let invocation = invocation_for(command.name, alias, tmpdir.path());
                 let result = execute(&invocation, &mut app);
                 if let Some(msg) = &result.message {

@@ -244,6 +244,7 @@ pub enum Event {
     /// text block, and that assistant message still has to be persisted for
     /// later `reasoning_content` replay.
     SessionUpdated {
+        session_id: String,
         messages: Vec<Message>,
         system_prompt: Option<SystemPrompt>,
         model: String,
@@ -259,6 +260,24 @@ pub enum Event {
         denial_reason: String,
         blocked_network: bool,
         blocked_write: bool,
+    },
+
+    // === Prefix-Cache Stability Events ===
+    /// The prefix (system prompt + tool specs) changed between turns,
+    /// which invalidates DeepSeek's KV prefix cache. Carries diagnostics
+    /// for the TUI to surface.
+    PrefixCacheChange {
+        /// Human-readable description of what changed.
+        description: String,
+        /// Whether the system prompt component changed.
+        system_prompt_changed: bool,
+        /// Whether the tool set component changed.
+        tools_changed: bool,
+        /// Overall prefix stability percentage (100 = fully stable).
+        stability_pct: u32,
+        /// True when the prefix actually changed (cache invalidated).
+        /// False for routine stable-check heartbeats.
+        changed: bool,
     },
 }
 

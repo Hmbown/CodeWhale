@@ -19,8 +19,8 @@ Check the [releases page](https://github.com/Hmbown/DeepSeek-TUI/releases) for t
 
 Report privately via one of:
 
-- **Email**: [hmbown.dev@gmail.com](mailto:hmbown.dev@gmail.com) — include `[SECURITY]` in the subject line
 - **GitHub private advisory**: [github.com/Hmbown/DeepSeek-TUI/security/advisories/new](https://github.com/Hmbown/DeepSeek-TUI/security/advisories/new)
+- **Email**: [security@deepseek-tui.com](mailto:security@deepseek-tui.com) — include `[SECURITY]` in the subject line
 
 Include in your report:
 

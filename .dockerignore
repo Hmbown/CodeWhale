@@ -53,6 +53,7 @@ venv/
 /website/
 /*.md
 !/README.md
+!/CHANGELOG.md
 
 # Assets (screenshots, etc.)
 /assets/

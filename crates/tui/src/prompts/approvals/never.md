@@ -3,7 +3,7 @@
 All write operations are blocked. You can read, search, and investigate, but you cannot modify the workspace.
 
 This is a read-only mode. Use it to:
-- Build thorough plans with `update_plan` and `checklist_write`.
+- Build thorough plans with `checklist_write` and, for complex initiatives, `update_plan`.
 - Investigate codebases, trace logic, and gather context.
 - Spawn read-only sub-agents for parallel exploration.
 

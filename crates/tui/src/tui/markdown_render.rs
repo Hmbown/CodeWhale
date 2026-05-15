@@ -438,17 +438,21 @@ fn render_line_with_links(
 
     // Flatten inline tokens into (word, style) pairs preserving inter-token spaces.
     let tokens = parse_inline_spans(line, base_style, link_style);
-    let mut words: Vec<(String, Style)> = Vec::new();
-    for (text, style) in tokens {
+    let mut words: Vec<InlineToken> = Vec::new();
+    for token in tokens {
         let mut first = true;
-        for part in text.split(' ') {
+        for part in token.text.split(' ') {
             if !first {
                 // The space consumed by split — attach as a plain space word
                 // so the wrap loop can decide whether to keep or break it.
-                words.push((" ".to_string(), style));
+                words.push(InlineToken::new(" ".to_string(), token.style, None));
             }
             if !part.is_empty() {
-                words.push((part.to_string(), style));
+                words.push(InlineToken::new(
+                    part.to_string(),
+                    token.style,
+                    token.link_url.clone(),
+                ));
             }
             first = false;
         }
@@ -458,14 +462,50 @@ fn render_line_with_links(
     let mut current_spans: Vec<Span> = Vec::new();
     let mut current_width = 0usize;
 
-    for (word, style) in words {
-        let ww = word.width();
-        if word == " " {
+    for word in words {
+        let ww = word.text.width();
+        if word.text == " " {
             // Space: emit only if we're mid-line and it fits; otherwise drop
             // (it's a potential wrap point, not content).
             if !current_spans.is_empty() && current_width < width {
                 current_spans.push(Span::raw(" "));
                 current_width += 1;
+            }
+            continue;
+        }
+        // If the word itself is wider than an entire line, hard-break it at
+        // character boundaries so wrapping always makes progress (#1344,
+        // #1351). Without this, long URLs / paths / hashes were placed on
+        // their own line whole and silently overflowed the right edge of
+        // the transcript.
+        if ww > width && width > 0 {
+            // Flush the in-progress line first.
+            if !current_spans.is_empty() {
+                if let Some(last) = current_spans.last()
+                    && last.content.as_ref() == " "
+                {
+                    current_spans.pop();
+                }
+                lines.push(Line::from(std::mem::take(&mut current_spans)));
+                current_width = 0;
+            }
+            // Char-break the word into width-sized chunks. Each full chunk
+            // becomes its own line; the final partial chunk continues the
+            // current line so the next word can pack onto it.
+            let mut chunk = String::new();
+            let mut chunk_w = 0usize;
+            for ch in word.text.chars() {
+                let cw = ch.width().unwrap_or(1);
+                if chunk_w + cw > width && chunk_w > 0 {
+                    lines.push(Line::from(vec![word.span_for(std::mem::take(&mut chunk))]));
+                    chunk_w = 0;
+                }
+                chunk.push(ch);
+                chunk_w += cw;
+            }
+            if !chunk.is_empty() {
+                current_spans.push(word.span_for(chunk));
+                current_width = chunk_w;
             }
             continue;
         }
@@ -481,7 +521,7 @@ fn render_line_with_links(
             current_spans = Vec::new();
             current_width = 0;
         }
-        current_spans.push(Span::styled(word, style));
+        current_spans.push(word.into_span());
         current_width += ww;
     }
 
@@ -494,9 +534,47 @@ fn render_line_with_links(
     lines
 }
 
+#[derive(Clone)]
+struct InlineToken {
+    text: String,
+    style: Style,
+    link_url: Option<String>,
+}
+
+impl InlineToken {
+    fn new(text: String, style: Style, link_url: Option<String>) -> Self {
+        Self {
+            text,
+            style,
+            link_url,
+        }
+    }
+
+    fn span_for(&self, text: String) -> Span<'static> {
+        let content = match &self.link_url {
+            Some(url) if osc8::enabled() => osc8::wrap_link(url, &text),
+            _ => text,
+        };
+        Span::styled(content, self.style)
+    }
+
+    fn into_span(self) -> Span<'static> {
+        let Self {
+            text,
+            style,
+            link_url,
+        } = self;
+        let content = match link_url {
+            Some(url) if osc8::enabled() => osc8::wrap_link(&url, &text),
+            _ => text,
+        };
+        Span::styled(content, style)
+    }
+}
+
 /// Parse an entire line into (text, style) segments, handling **bold**,
 /// *italic*, `code`, ~~strikethrough~~, `[text](url)` links, and bare URLs.
-fn parse_inline_spans(line: &str, base_style: Style, link_style: Style) -> Vec<(String, Style)> {
+fn parse_inline_spans(line: &str, base_style: Style, link_style: Style) -> Vec<InlineToken> {
     let bold_style = base_style.add_modifier(Modifier::BOLD);
     let italic_style = base_style.add_modifier(Modifier::ITALIC);
     let code_style = base_style
@@ -510,14 +588,14 @@ fn parse_inline_spans(line: &str, base_style: Style, link_style: Style) -> Vec<(
         // **bold**
         if let Some(end) = rest.strip_prefix("**").and_then(|s| s.find("**")) {
             let inner = &rest[2..2 + end];
-            out.push((inner.to_string(), bold_style));
+            out.push(InlineToken::new(inner.to_string(), bold_style, None));
             rest = &rest[2 + end + 2..];
             continue;
         }
         // __bold__
         if let Some(end) = rest.strip_prefix("__").and_then(|s| s.find("__")) {
             let inner = &rest[2..2 + end];
-            out.push((inner.to_string(), bold_style));
+            out.push(InlineToken::new(inner.to_string(), bold_style, None));
             rest = &rest[2 + end + 2..];
             continue;
         }
@@ -527,9 +605,15 @@ fn parse_inline_spans(line: &str, base_style: Style, link_style: Style) -> Vec<(
             && let Some(end) = rest[1..].find('*')
         {
             let inner = &rest[1..1 + end];
-            out.push((inner.to_string(), italic_style));
-            rest = &rest[1 + end + 1..];
-            continue;
+            let after = &rest[1 + end + 1..];
+            // Closing delimiter must not be immediately followed by a
+            // letter, digit, or underscore (otherwise it's part of an
+            // identifier like `deepseek_tui`, not italic markup).
+            if !after.starts_with(|c: char| c.is_alphanumeric() || c == '_') {
+                out.push(InlineToken::new(inner.to_string(), italic_style, None));
+                rest = after;
+                continue;
+            }
         }
         // _italic_
         if rest.starts_with('_')
@@ -537,21 +621,26 @@ fn parse_inline_spans(line: &str, base_style: Style, link_style: Style) -> Vec<(
             && let Some(end) = rest[1..].find('_')
         {
             let inner = &rest[1..1 + end];
-            out.push((inner.to_string(), italic_style));
-            rest = &rest[1 + end + 1..];
-            continue;
+            let after = &rest[1 + end + 1..];
+            // Closing delimiter must not be immediately followed by a
+            // letter, digit, or underscore.
+            if !after.starts_with(|c: char| c.is_alphanumeric() || c == '_') {
+                out.push(InlineToken::new(inner.to_string(), italic_style, None));
+                rest = after;
+                continue;
+            }
         }
         // `inline code`
         if let Some(end) = rest.strip_prefix('`').and_then(|s| s.find('`')) {
             let inner = &rest[1..1 + end];
-            out.push((inner.to_string(), code_style));
+            out.push(InlineToken::new(inner.to_string(), code_style, None));
             rest = &rest[1 + end + 1..];
             continue;
         }
         // ~~strikethrough~~
         if let Some(end) = rest.strip_prefix("~~").and_then(|s| s.find("~~")) {
             let inner = &rest[2..2 + end];
-            out.push((inner.to_string(), strike_style));
+            out.push(InlineToken::new(inner.to_string(), strike_style, None));
             rest = &rest[2 + end + 2..];
             continue;
         }
@@ -565,12 +654,19 @@ fn parse_inline_spans(line: &str, base_style: Style, link_style: Style) -> Vec<(
                 && let Some(paren_end) = after_bracket.find(')')
             {
                 let url = &after_bracket[1..paren_end];
-                let content = if osc8::enabled() {
-                    osc8::wrap_link(url, text)
+                if osc8::enabled() {
+                    out.push(InlineToken::new(
+                        text.to_string(),
+                        link_style,
+                        Some(url.to_string()),
+                    ));
                 } else {
-                    format!("{text} ({url})")
-                };
-                out.push((content, link_style));
+                    out.push(InlineToken::new(
+                        format!("{text} ({url})"),
+                        link_style,
+                        None,
+                    ));
+                }
                 rest = &after_bracket[paren_end + 1..];
                 continue;
             }
@@ -579,18 +675,21 @@ fn parse_inline_spans(line: &str, base_style: Style, link_style: Style) -> Vec<(
         if rest.starts_with("http://") || rest.starts_with("https://") {
             let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
             let url = &rest[..end];
-            let content = if osc8::enabled() {
-                osc8::wrap_link(url, url)
+            if osc8::enabled() {
+                out.push(InlineToken::new(
+                    url.to_string(),
+                    link_style,
+                    Some(url.to_string()),
+                ));
             } else {
-                url.to_string()
-            };
-            out.push((content, link_style));
+                out.push(InlineToken::new(url.to_string(), link_style, None));
+            }
             rest = &rest[end..];
             continue;
         }
         // Plain text: consume until next marker or URL; always advance at least 1 char.
         let next = find_next_marker(rest).max(rest.chars().next().map_or(1, |c| c.len_utf8()));
-        out.push((rest[..next].to_string(), base_style));
+        out.push(InlineToken::new(rest[..next].to_string(), base_style, None));
         rest = &rest[next..];
     }
     out
@@ -660,24 +759,11 @@ fn wrap_cell_text(cell: &str, col_width: usize) -> Vec<String> {
     let mut current = String::new();
     let mut current_w = 0usize;
 
-    let push_word_breaking_chars =
-        |word: &str, current: &mut String, current_w: &mut usize, lines: &mut Vec<String>| {
-            for ch in word.chars() {
-                let cw = ch.width().unwrap_or(1);
-                if *current_w + cw > col_width && *current_w > 0 {
-                    lines.push(std::mem::take(current));
-                    *current_w = 0;
-                }
-                current.push(ch);
-                *current_w += cw;
-            }
-        };
-
     for word in cell.split_whitespace() {
         let word_w = word.width();
         if current_w == 0 {
             if word_w > col_width {
-                push_word_breaking_chars(word, &mut current, &mut current_w, &mut lines);
+                push_word_breaking_chars(word, col_width, &mut current, &mut current_w, &mut lines);
             } else {
                 current.push_str(word);
                 current_w = word_w;
@@ -690,7 +776,7 @@ fn wrap_cell_text(cell: &str, col_width: usize) -> Vec<String> {
             lines.push(std::mem::take(&mut current));
             current_w = 0;
             if word_w > col_width {
-                push_word_breaking_chars(word, &mut current, &mut current_w, &mut lines);
+                push_word_breaking_chars(word, col_width, &mut current, &mut current_w, &mut lines);
             } else {
                 current.push_str(word);
                 current_w = word_w;
@@ -722,12 +808,11 @@ fn render_table_row(cells: &[String], width: usize, base_style: Style) -> Vec<Li
         let mut spans: Vec<Span> = vec![Span::styled("│ ".to_string(), sep_style)];
         for (i, cell_segments) in wrapped.iter().enumerate() {
             let segment = cell_segments.get(row).map(String::as_str).unwrap_or("");
-            let cell_spans: Vec<(String, Style)> =
-                parse_inline_spans(segment, base_style, link_style());
-            let cell_width: usize = cell_spans.iter().map(|(t, _)| t.width()).sum();
+            let cell_spans = parse_inline_spans(segment, base_style, link_style());
+            let cell_width: usize = cell_spans.iter().map(|token| token.text.width()).sum();
             let pad = col_width.saturating_sub(cell_width);
-            for (text, style) in cell_spans {
-                spans.push(Span::styled(text, style));
+            for token in cell_spans {
+                spans.push(token.into_span());
             }
             spans.push(Span::raw(" ".repeat(pad)));
             if i + 1 < cells.len() {
@@ -891,6 +976,18 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
 
     for word in text.split_whitespace() {
         let word_width = word.width();
+        // If this single word is wider than the entire line, hard-break it
+        // at character boundaries so wrapping always makes progress
+        // (#1344, #1351). Without this, long URLs / paths / hashes overflow
+        // the right edge silently.
+        if word_width > width {
+            if !current.is_empty() {
+                lines.push(std::mem::take(&mut current));
+                current_width = 0;
+            }
+            push_word_breaking_chars(word, width, &mut current, &mut current_width, &mut lines);
+            continue;
+        }
         let additional = if current.is_empty() {
             word_width
         } else {
@@ -919,10 +1016,66 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
+/// Push characters from `word` into `current`, flushing to `lines` when the
+/// running display width would exceed `width`. Width is computed at the
+/// `unicode-width` char level, matching the rest of the rendering pipeline.
+/// Used by `wrap_text` and `wrap_cell_text` so a word longer than the
+/// allotted width never silently overflows the right edge.
+fn push_word_breaking_chars(
+    word: &str,
+    width: usize,
+    current: &mut String,
+    current_width: &mut usize,
+    lines: &mut Vec<String>,
+) {
+    for ch in word.chars() {
+        let cw = ch.width().unwrap_or(1);
+        if *current_width + cw > width && *current_width > 0 {
+            lines.push(std::mem::take(current));
+            *current_width = 0;
+        }
+        current.push(ch);
+        *current_width += cw;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use ratatui::style::Style;
+
+    #[test]
+    fn underscores_inside_identifiers_render_as_literal_text() {
+        // Regression for PR #1455 / @tiger-dog: previously the inline
+        // markdown parser ate the underscore in `deepseek_tui` because
+        // it matched the `_italic_` pattern without a CommonMark-style
+        // boundary check. The closing `_` followed by `t` (a letter)
+        // must now be treated as part of the identifier, not as
+        // markup. The same rule applies to `*` so identifiers like
+        // `crate*foo` round-trip cleanly.
+        let cases = [
+            "crate deepseek_tui handles approvals",
+            "see foo_bar_baz for details",
+            "look at *not_emphasised*tail",
+        ];
+        for source in cases {
+            let parsed = parse(source);
+            let rendered: String = render_parsed(&parsed, 80, Style::default())
+                .iter()
+                .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
+                .collect();
+            // The original identifier (with underscores intact) must
+            // appear in the rendered output. We don't assert on style
+            // here — that's an implementation detail; we assert on
+            // the user-visible character sequence.
+            for token in source.split_whitespace().filter(|t| t.contains('_')) {
+                assert!(
+                    rendered.contains(token),
+                    "identifier {token:?} must survive markdown rendering of {source:?}; got {rendered:?}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn render_markdown_matches_parse_then_render() {
@@ -1093,8 +1246,12 @@ mod tests {
     /// value. We serialize through a static mutex because `osc8::ENABLED` is
     /// process-wide state and other tests touching it would race otherwise.
     fn render_with_osc8(enabled: bool, source: &str) -> String {
+        render_with_osc8_width(enabled, source, 80)
+    }
+
+    fn render_with_osc8_width(enabled: bool, source: &str, width: u16) -> String {
         with_osc8(enabled, || {
-            render_markdown(source, 80, Style::default())
+            render_markdown(source, width, Style::default())
                 .iter()
                 .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
                 .collect::<String>()
@@ -1118,6 +1275,24 @@ mod tests {
         assert!(
             joined.contains("\x1b]8;;https://example.com\x1b\\https://example.com\x1b]8;;\x1b\\"),
             "expected OSC 8 wrapper around URL; got {joined:?}"
+        );
+    }
+
+    #[test]
+    fn wrapped_osc_8_url_chunks_keep_full_link_target() {
+        let url = "https://raw.githubusercontent.com/Hmbown/deepseek-skills/main/index.json";
+        let joined = render_with_osc8_width(true, url, 34);
+        let full_target = format!("\x1b]8;;{url}\x1b\\");
+
+        assert!(
+            joined.matches(&full_target).count() > 1,
+            "expected each wrapped URL chunk to reopen the full OSC 8 target; got {joined:?}"
+        );
+        assert!(
+            !joined.contains(
+                "\x1b]8;;https://raw.githubusercontent.com/Hmbown/deepseek-skills/main/inde\x1b\\"
+            ),
+            "wrapped link must not expose a truncated OSC 8 target: {joined:?}"
         );
     }
 
@@ -1291,5 +1466,154 @@ mod tests {
                 "fragment {fragment:?} missing from wrapped output:\n{combined}"
             );
         }
+    }
+
+    // ─── Paragraph wrap regression suite (#1344, #1351) ────────────────────
+    //
+    // The bug: paragraph wrap (render_line_with_links) and code-block wrap
+    // (wrap_text) are word-based. A single word wider than the available
+    // width was placed alone on a line and silently overflowed the right
+    // edge of the transcript. Long URLs / paths / hashes / no-whitespace
+    // CJK runs all hit this. The fix hard-breaks overlong words at
+    // character boundaries; these tests pin that across widths 40/60/80/120.
+
+    fn rendered_widths(rendered: &[Line<'static>]) -> Vec<usize> {
+        rendered
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref().width())
+                    .sum::<usize>()
+            })
+            .collect()
+    }
+
+    fn render_paragraph_for_test(text: &str, width: usize) -> Vec<Line<'static>> {
+        with_osc8(false, || {
+            render_line_with_links(text, width, Style::default(), Style::default())
+        })
+    }
+
+    #[test]
+    fn paragraph_wrap_breaks_overlong_word_at_width_40() {
+        // 200-char no-whitespace token must not exceed the 40-col window.
+        let long = "a".repeat(200);
+        let rendered = render_paragraph_for_test(&long, 40);
+        for w in rendered_widths(&rendered) {
+            assert!(w <= 40, "rendered width {w} exceeds 40-col window");
+        }
+        // And the full content must still be present across the wrapped lines.
+        let combined: String = rendered
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert_eq!(combined.matches('a').count(), 200);
+    }
+
+    #[test]
+    fn paragraph_wrap_breaks_overlong_word_at_widths_60_80_120() {
+        let long = format!("https://example.com/{}", "p".repeat(180));
+        for &width in &[60usize, 80, 120] {
+            let rendered = render_paragraph_for_test(&long, width);
+            for w in rendered_widths(&rendered) {
+                assert!(
+                    w <= width,
+                    "width={width}: rendered line width {w} exceeds budget"
+                );
+            }
+            assert!(rendered.len() >= 2, "width={width}: expected wrap");
+        }
+    }
+
+    #[test]
+    fn paragraph_wrap_keeps_short_words_unbroken() {
+        // Regression guard: short words must still be broken at whitespace,
+        // not mid-word. Width 40, only short words, expect zero mid-word
+        // breaks (each line reads as natural English).
+        let text = "the quick brown fox jumps over the lazy dog and then it stops moving";
+        let rendered = render_paragraph_for_test(text, 40);
+        for line in &rendered {
+            let s: String = line.spans.iter().map(|s| s.content.to_string()).collect();
+            // Heuristic: trimmed line should not start with a partial word
+            // (i.e. should start with a real English start) — every line in
+            // this fixture starts with a word in our short list.
+            let first = s.split_whitespace().next().unwrap_or("");
+            assert!(
+                [
+                    "the", "quick", "brown", "fox", "jumps", "over", "lazy", "dog", "and", "then",
+                    "it", "stops", "moving"
+                ]
+                .contains(&first),
+                "line {s:?} appears to start with a partial word"
+            );
+        }
+    }
+
+    #[test]
+    fn paragraph_wrap_mixed_short_and_overlong_word() {
+        // The overlong word must wrap; the trailing short words must pack
+        // onto subsequent lines. The combined content is preserved.
+        let long = "x".repeat(150);
+        let text = format!("intro {long} tail words go here");
+        let rendered = render_paragraph_for_test(&text, 80);
+        for w in rendered_widths(&rendered) {
+            assert!(w <= 80, "rendered width {w} exceeds 80-col window");
+        }
+        let combined: String = rendered
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        for fragment in ["intro", "tail", "words", "go", "here"] {
+            assert!(
+                combined.contains(fragment),
+                "fragment {fragment:?} missing from wrapped output:\n{combined}"
+            );
+        }
+        assert_eq!(combined.matches('x').count(), 150);
+    }
+
+    #[test]
+    fn wrap_text_breaks_overlong_word_for_code_blocks() {
+        // The standalone code-block wrap (wrap_text) had the same overflow
+        // bug; pin the fix at widths 40 and 80.
+        for &width in &[40usize, 80] {
+            let long = "z".repeat(200);
+            let lines = wrap_text(&long, width);
+            for line in &lines {
+                assert!(
+                    line.width() <= width,
+                    "wrap_text line {line:?} exceeds {width}"
+                );
+            }
+            let combined: String = lines.join("");
+            assert_eq!(combined.matches('z').count(), 200);
+        }
+    }
+
+    #[test]
+    fn wrap_cell_text_already_handled_long_words_remains_correct() {
+        // Regression guard for the v0.8.25 table-cell fix. After consolidating
+        // the char-break helper, wrap_cell_text must continue to handle
+        // overlong cells. Pin the property: every wrapped segment fits
+        // within the column width, and content is preserved.
+        let long = "y".repeat(120);
+        let segments = wrap_cell_text(&long, 30);
+        for seg in &segments {
+            assert!(seg.width() <= 30, "segment {seg:?} exceeds col 30");
+        }
+        let combined: String = segments.join("");
+        assert_eq!(combined.matches('y').count(), 120);
+    }
+
+    #[test]
+    fn paragraph_wrap_handles_zero_width_gracefully() {
+        // Width 0 should not panic or hang; it returns the input as-is or
+        // empty, but never produces a line wider than 0 (when 0 means "no
+        // budget at all"). This pins the early-return path against future
+        // regressions.
+        let rendered = render_paragraph_for_test("hello world", 0);
+        // Any output is acceptable (the path is degenerate); assert no panic.
+        let _ = rendered;
     }
 }

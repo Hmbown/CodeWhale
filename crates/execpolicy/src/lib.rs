@@ -291,3 +291,136 @@ fn first_token(command: &str) -> String {
         .unwrap_or_default()
         .to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ctx(command: &str, ask_for_approval: AskForApproval) -> ExecPolicyContext<'_> {
+        ExecPolicyContext {
+            command,
+            cwd: "/workspace",
+            ask_for_approval,
+            sandbox_mode: Some("workspace-write"),
+        }
+    }
+
+    #[test]
+    fn trusted_prefix_skips_approval_when_policy_is_unless_trusted() {
+        let engine = ExecPolicyEngine::new(vec!["git status".to_string()], vec![]);
+
+        let decision = engine
+            .check(ctx("git status --porcelain", AskForApproval::UnlessTrusted))
+            .unwrap();
+
+        assert!(decision.allow);
+        assert!(!decision.requires_approval);
+        assert_eq!(decision.matched_rule.as_deref(), Some("git status"));
+        assert!(matches!(
+            decision.requirement,
+            ExecApprovalRequirement::Skip {
+                bypass_sandbox: false,
+                proposed_execpolicy_amendment: None,
+            }
+        ));
+    }
+
+    #[test]
+    fn denied_prefix_blocks_even_when_command_is_also_trusted() {
+        let engine = ExecPolicyEngine::new(
+            vec!["git status".to_string()],
+            vec!["git status".to_string()],
+        );
+
+        let decision = engine
+            .check(ctx("git status --porcelain", AskForApproval::UnlessTrusted))
+            .unwrap();
+
+        assert!(!decision.allow);
+        assert!(!decision.requires_approval);
+        assert_eq!(decision.matched_rule.as_deref(), Some("git status"));
+        assert!(matches!(
+            decision.requirement,
+            ExecApprovalRequirement::Forbidden { .. }
+        ));
+        assert_eq!(
+            decision.reason(),
+            "Command blocked by denied prefix rule 'git status'"
+        );
+    }
+
+    #[test]
+    fn unmatched_command_requires_approval_and_proposes_first_token_rule() {
+        let engine = ExecPolicyEngine::new(vec![], vec![]);
+
+        let decision = engine
+            .check(ctx("cargo test --workspace", AskForApproval::UnlessTrusted))
+            .unwrap();
+
+        assert!(decision.allow);
+        assert!(decision.requires_approval);
+        assert_eq!(decision.matched_rule, None);
+        match decision.requirement {
+            ExecApprovalRequirement::NeedsApproval {
+                proposed_execpolicy_amendment: Some(amendment),
+                proposed_network_policy_amendments,
+                ..
+            } => {
+                assert_eq!(amendment.prefixes, vec!["cargo"]);
+                assert_eq!(
+                    proposed_network_policy_amendments,
+                    vec![NetworkPolicyAmendment {
+                        host: "/workspace".to_string(),
+                        action: NetworkPolicyRuleAction::Allow,
+                    }]
+                );
+            }
+            other => panic!("expected approval with proposed amendment, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn trusted_command_in_on_request_mode_still_requires_approval_without_new_rule() {
+        let engine = ExecPolicyEngine::new(vec!["cargo test".to_string()], vec![]);
+
+        let decision = engine
+            .check(ctx("cargo test --workspace", AskForApproval::OnRequest))
+            .unwrap();
+
+        assert!(decision.allow);
+        assert!(decision.requires_approval);
+        assert_eq!(decision.matched_rule.as_deref(), Some("cargo test"));
+        match decision.requirement {
+            ExecApprovalRequirement::NeedsApproval {
+                proposed_execpolicy_amendment,
+                ..
+            } => assert_eq!(proposed_execpolicy_amendment, None),
+            other => panic!("expected approval without amendment, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reject_rules_mode_forbids_unmatched_command() {
+        let engine = ExecPolicyEngine::new(vec![], vec![]);
+
+        let decision = engine
+            .check(ctx(
+                "npm install",
+                AskForApproval::Reject {
+                    sandbox_approval: false,
+                    rules: true,
+                    mcp_elicitations: false,
+                },
+            ))
+            .unwrap();
+
+        assert!(!decision.allow);
+        assert!(!decision.requires_approval);
+        assert_eq!(decision.matched_rule, None);
+        assert_eq!(decision.requirement.phase(), "forbidden");
+        assert_eq!(
+            decision.reason(),
+            "Policy is configured to reject rule-exceptions."
+        );
+    }
+}

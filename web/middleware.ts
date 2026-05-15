@@ -3,6 +3,19 @@ import { locales, defaultLocale } from "@/lib/i18n/config";
 
 const COOKIE = "NEXT_LOCALE";
 
+const SECURITY_HEADERS: Record<string, string> = {
+  "X-Frame-Options": "DENY",
+  "X-Content-Type-Options": "nosniff",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "Permissions-Policy": "camera=(), microphone=(), geolocation=(), interest-cohort=()",
+  "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+};
+
+function applySecurityHeaders(res: NextResponse): NextResponse {
+  for (const [k, v] of Object.entries(SECURITY_HEADERS)) res.headers.set(k, v);
+  return res;
+}
+
 function detectLocale(req: NextRequest): string {
   // 1. Cookie
   const cookie = req.cookies.get(COOKIE)?.value;
@@ -18,22 +31,21 @@ function detectLocale(req: NextRequest): string {
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
-  // Skip API routes, static files, _next
+  // Skip API routes, static files, _next (but still apply security headers).
   if (
     pathname.startsWith("/api/") ||
     pathname.startsWith("/_next/") ||
     pathname.includes(".")
   ) {
-    return NextResponse.next();
+    return applySecurityHeaders(NextResponse.next());
   }
 
   // Check if locale is already in path
   const seg = pathname.split("/")[1];
   if (locales.includes(seg as typeof locales[number])) {
-    // Ensure cookie is set
     const res = NextResponse.next();
     res.cookies.set(COOKIE, seg, { path: "/", maxAge: 60 * 60 * 24 * 365 });
-    return res;
+    return applySecurityHeaders(res);
   }
 
   // Redirect bare paths to detected locale
@@ -42,9 +54,11 @@ export function middleware(req: NextRequest) {
   url.pathname = `/${locale}${pathname}`;
   const res = NextResponse.redirect(url);
   res.cookies.set(COOKIE, locale, { path: "/", maxAge: 60 * 60 * 24 * 365 });
-  return res;
+  return applySecurityHeaders(res);
 }
 
 export const config = {
-  matcher: ["/((?!_next|api|favicon.ico|icon.svg|.*\\..*).*)"],
+  // Match everything so security headers apply globally; the function
+  // bypasses redirect/locale logic for /_next, /api, and dotted paths.
+  matcher: ["/:path*"],
 };

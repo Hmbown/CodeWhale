@@ -246,6 +246,10 @@ impl ModalView for HelpView {
     fn handle_key(&mut self, key: KeyEvent) -> ViewAction {
         match key.code {
             KeyCode::Esc => ViewAction::Close,
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                ViewAction::Close
+            }
+            KeyCode::Char('q') | KeyCode::Char('Q') if self.query.is_empty() => ViewAction::Close,
             KeyCode::Up => {
                 self.move_selection(-1);
                 ViewAction::None
@@ -483,24 +487,24 @@ mod tests {
     #[test]
     fn substring_filter_narrows_to_command() {
         let mut view = HelpView::new();
-        type_filter(&mut view, "yolo");
+        type_filter(&mut view, "mode yolo");
         assert!(!view.filtered.is_empty());
         // Every filtered entry should genuinely contain the query in its
         // searchable haystack — no false positives slipped past.
         for idx in &view.filtered {
             assert!(
                 view.entries[*idx].haystack.contains("yolo"),
-                "entry {:?} leaked through `yolo` filter",
+                "entry {:?} leaked through `mode yolo` filter",
                 view.entries[*idx]
             );
         }
-        // The `/yolo` command must survive the filter; it's the canonical
-        // single-term match.
+        // The unified `/mode` command must surface when filtering for a
+        // concrete mode value.
         assert!(
             view.filtered
                 .iter()
-                .any(|idx| view.entries[*idx].label == "/yolo"),
-            "/yolo should match the `yolo` filter"
+                .any(|idx| view.entries[*idx].label == "/mode"),
+            "/mode should match the `mode yolo` filter"
         );
     }
 
@@ -577,6 +581,26 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_c_closes_overlay() {
+        let mut view = HelpView::new();
+        let action = view.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(matches!(action, ViewAction::Close));
+    }
+
+    #[test]
+    fn q_closes_empty_filter_but_types_when_filtering() {
+        let mut view = HelpView::new();
+        let action = view.handle_key(key(KeyCode::Char('q')));
+        assert!(matches!(action, ViewAction::Close));
+
+        let mut view = HelpView::new();
+        type_filter(&mut view, "mod");
+        let action = view.handle_key(key(KeyCode::Char('q')));
+        assert!(matches!(action, ViewAction::None));
+        assert_eq!(view.query, "modq");
+    }
+
+    #[test]
     fn arrow_keys_move_selection_within_bounds() {
         let mut view = HelpView::new();
         // Down once → row 1; Up twice → clamped at 0.
@@ -618,14 +642,14 @@ mod tests {
     #[test]
     fn render_with_filter_shows_only_matching_section_and_status() {
         let mut view = HelpView::new();
-        type_filter(&mut view, "yolo");
+        type_filter(&mut view, "mode yolo");
         let area = Rect::new(0, 0, 96, 24);
         let mut buf = Buffer::empty(area);
         view.render(area, &mut buf);
 
         let dump = buffer_text(&buf, area);
         assert!(
-            dump.contains("Filter: yolo"),
+            dump.contains("Filter: mode yolo"),
             "filter echo missing:\n{dump}"
         );
         assert!(
@@ -633,12 +657,12 @@ mod tests {
             "match counter missing in dump:\n{dump}"
         );
         assert!(
-            dump.contains("/yolo"),
-            "expected /yolo command in filtered render:\n{dump}"
+            dump.contains("/mode"),
+            "expected /mode command in filtered render:\n{dump}"
         );
         assert!(
-            !dump.contains("/agent"),
-            "non-matching commands should not render under a `yolo` filter:\n{dump}"
+            !dump.contains("/model"),
+            "non-matching commands should not render under a `mode yolo` filter:\n{dump}"
         );
     }
 

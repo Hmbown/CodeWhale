@@ -13,7 +13,7 @@
  * Both surface as drafts in CURATED_KV under `draft:linkcheck:<...>` and
  * `draft:semantic-drift:<...>`, picked up by the existing /admin listing.
  */
-import { agentChat, saveDraft, type AgentDraft, VOICE_CONSTRAINTS } from "./community-agent";
+import { agentChat, saveDraft, type AgentDraft, type DeepSeekEnv, VOICE_CONSTRAINTS } from "./community-agent";
 
 interface KVNamespace {
   get(k: string): Promise<string | null>;
@@ -25,7 +25,16 @@ interface KVNamespace {
 interface WatchEnv {
   CURATED_KV?: KVNamespace;
   DEEPSEEK_API_KEY?: string;
+  DEEPSEEK_BASE_URL?: string;
+  DEEPSEEK_MODEL?: string;
   GITHUB_TOKEN?: string;
+}
+
+function dsEnv(env: WatchEnv): DeepSeekEnv {
+  return {
+    baseUrl: env.DEEPSEEK_BASE_URL ?? process.env.DEEPSEEK_BASE_URL,
+    model: env.DEEPSEEK_MODEL ?? process.env.DEEPSEEK_MODEL,
+  };
 }
 
 // --- Link checker ---
@@ -255,6 +264,7 @@ ${docsText}`;
       ],
       env.DEEPSEEK_API_KEY,
       true,
+      dsEnv(env),
     );
   } catch (e) {
     return { ok: false, drafted: 0, reason: `LLM call failed: ${e}` };

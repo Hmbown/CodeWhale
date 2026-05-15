@@ -761,6 +761,17 @@ fn read_text_prefix(path: &Path) -> std::io::Result<(String, bool)> {
     let truncated = buffer.len() as u64 > MAX_MENTION_FILE_BYTES;
     if truncated {
         buffer.truncate(MAX_MENTION_FILE_BYTES as usize);
+        // Round down to the nearest valid UTF-8 character boundary so a
+        // multi-byte sequence (CJK, emoji, etc.) is never split at the cut point.
+        // Only adjust when error_len() is None — that means truncation landed
+        // mid-sequence (incomplete tail).  A Some(_) error_len means the file
+        // genuinely contains invalid UTF-8 bytes; leave the buffer intact so
+        // the from_utf8 call below returns the correct "file is not UTF-8" error.
+        if let Err(e) = std::str::from_utf8(&buffer)
+            && e.error_len().is_none()
+        {
+            buffer.truncate(e.valid_up_to());
+        }
     }
     if buffer.contains(&0) {
         return Err(std::io::Error::new(
@@ -768,13 +779,9 @@ fn read_text_prefix(path: &Path) -> std::io::Result<(String, bool)> {
             "file appears to be binary",
         ));
     }
-    let text = if truncated {
-        String::from_utf8_lossy(&buffer).to_string()
-    } else {
-        std::str::from_utf8(&buffer)
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "file is not UTF-8"))?
-            .to_string()
-    };
+    let text = std::str::from_utf8(&buffer)
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "file is not UTF-8"))?
+        .to_string();
     Ok((text, truncated))
 }
 
@@ -1001,5 +1008,34 @@ mod tests {
         let encoded = serde_json::to_string(reference).expect("serialize");
         let decoded: ContextReference = serde_json::from_str(&encoded).expect("deserialize");
         assert_eq!(&decoded, reference);
+    }
+
+    /// Regression test for #1441: truncating at MAX_MENTION_FILE_BYTES must not
+    /// split a multi-byte UTF-8 sequence, which previously produced U+FFFD
+    /// replacement characters in the TUI output.
+    #[test]
+    fn read_text_prefix_truncation_respects_utf8_char_boundary() {
+        use std::io::Write;
+
+        // Build a file that is MAX_MENTION_FILE_BYTES - 1 ASCII bytes followed
+        // by a 3-byte CJK character (U+4E2D, '中'). The naive truncate at
+        // MAX_MENTION_FILE_BYTES cuts after the first byte of '中', producing
+        // an invalid sequence.
+        let tmp = TempDir::new().expect("tempdir");
+        let path = tmp.path().join("cjk.txt");
+        let mut f = std::fs::File::create(&path).expect("create");
+        let padding = vec![b'a'; MAX_MENTION_FILE_BYTES as usize - 1];
+        f.write_all(&padding).expect("write padding");
+        f.write_all("中".as_bytes()).expect("write CJK");
+
+        let (text, truncated) = read_text_prefix(&path).expect("should succeed");
+        assert!(
+            truncated,
+            "file exceeds limit so should be marked truncated"
+        );
+        assert!(
+            !text.contains('\u{FFFD}'),
+            "truncated text must not contain replacement characters; got: {text:?}",
+        );
     }
 }

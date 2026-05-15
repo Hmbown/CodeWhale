@@ -415,6 +415,7 @@ fn command_runs_directly(name: &str) -> bool {
             | "trust"
             | "logout"
             | "tokens"
+            | "change"
             | "system"
             | "context"
             | "undo"
@@ -818,7 +819,7 @@ mod tests {
     #[test]
     fn command_palette_filters_with_section_shortcuts() {
         let entries = vec![
-            palette_entry(PaletteSection::Command, "/agent", "agent command", "/agent"),
+            palette_entry(PaletteSection::Command, "/mode", "mode command", "/mode"),
             palette_entry(
                 PaletteSection::Skill,
                 "skill:search",
@@ -836,7 +837,7 @@ mod tests {
         ];
         let mut view = CommandPaletteView::new(entries);
 
-        view.query = "c:agent".to_string();
+        view.query = "c:mode".to_string();
         view.refilter();
         assert_eq!(view.filtered, vec![0]);
 
@@ -958,6 +959,26 @@ mod tests {
         assert!(matches!(
             &model.action,
             CommandPaletteAction::InsertText { text } if text == "/model "
+        ));
+    }
+
+    #[test]
+    fn command_palette_runs_change_without_requiring_version() {
+        let entries = build_entries(
+            Locale::En,
+            Path::new("."),
+            Path::new("."),
+            Path::new("mcp.json"),
+            None,
+        );
+        let change = entries
+            .iter()
+            .find(|entry| entry.section == PaletteSection::Command && entry.label == "/change")
+            .expect("change command entry");
+
+        assert!(matches!(
+            &change.action,
+            CommandPaletteAction::ExecuteCommand { command } if command == "/change"
         ));
     }
 

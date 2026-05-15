@@ -93,9 +93,18 @@ impl Workspace {
 
     fn build_file_index(&self) -> HashMap<String, Vec<PathBuf>> {
         let mut index: HashMap<String, Vec<PathBuf>> = HashMap::new();
+        let mut total: usize = 0;
         let builder = discovery_walk_builder(&self.root, Some(6));
 
         for entry in builder.build().flatten() {
+            if total >= FILE_INDEX_MAX_ENTRIES {
+                tracing::warn!(
+                    target: "working_set",
+                    limit = FILE_INDEX_MAX_ENTRIES,
+                    "file-index discovery hit the entry cap; truncating to keep first-turn latency bounded (#697)"
+                );
+                return index;
+            }
             if entry
                 .file_type()
                 .is_some_and(|ft| ft.is_file() || ft.is_dir())
@@ -105,11 +114,15 @@ impl Workspace {
                     .entry(name)
                     .or_default()
                     .push(entry.path().to_path_buf());
+                total += 1;
             }
         }
 
         // Also index AI-tool dot-directories with gitignore disabled.
         for dir_name in DISCOVERY_ALWAYS_DIRS {
+            if total >= FILE_INDEX_MAX_ENTRIES {
+                break;
+            }
             let dot_dir = self.root.join(dir_name);
             if !dot_dir.is_dir() {
                 continue;
@@ -122,6 +135,9 @@ impl Workspace {
                 .ignore(false)
                 .max_depth(Some(5));
             for entry in dot_builder.build().flatten() {
+                if total >= FILE_INDEX_MAX_ENTRIES {
+                    break;
+                }
                 // Exclude machine-generated bulk (e.g. .deepseek/snapshots/).
                 if path_is_excluded_from_discovery(&self.root, entry.path()) {
                     continue;
@@ -135,8 +151,27 @@ impl Workspace {
                         .entry(name)
                         .or_default()
                         .push(entry.path().to_path_buf());
+                    total += 1;
                 }
             }
+        }
+
+        // Beyond the curated dot-dir whitelist above, also index any explicit
+        // hidden/ignored path the user might `@`-mention (e.g. a project's
+        // own `.generated/specs/`). `local_reference_paths` walks with
+        // gitignore disabled but still honors `.deepseekignore`.
+        for path in local_reference_paths(&self.root, LOCAL_REFERENCE_SCAN_LIMIT) {
+            if total >= FILE_INDEX_MAX_ENTRIES {
+                break;
+            }
+            let Some(name) = path
+                .file_name()
+                .map(|name| name.to_string_lossy().to_lowercase())
+            else {
+                continue;
+            };
+            index.entry(name).or_default().push(path);
+            total += 1;
         }
         index
     }
@@ -183,8 +218,26 @@ impl Workspace {
                 &mut substring_hits,
                 &mut seen,
             );
+            add_local_reference_completions(
+                cwd,
+                cwd,
+                &needle,
+                limit,
+                &mut prefix_hits,
+                &mut substring_hits,
+                &mut seen,
+            );
         }
         walk_for_completions(
+            &self.root,
+            &self.root,
+            &needle,
+            limit,
+            &mut prefix_hits,
+            &mut substring_hits,
+            &mut seen,
+        );
+        add_local_reference_completions(
             &self.root,
             &self.root,
             &needle,
@@ -206,6 +259,15 @@ impl Workspace {
 /// Mirrors the existing `project_tree` cutoff and keeps Tab snappy in deep
 /// monorepos.
 const COMPLETIONS_WALK_DEPTH: usize = 6;
+
+/// Hard cap on the number of `(file or directory)` entries indexed by
+/// [`Workspace::build_file_index`]. The fuzzy-resolve index is a
+/// convenience for [`Workspace::fuzzy_resolve`]; missing entries fall
+/// back to literal-path resolution. Capping here keeps the first
+/// `fuzzy_resolve` call bounded on huge workspaces (#697 reported a
+/// ~10s hang on the first turn). For typical projects 50K is well
+/// above the actual entry count and the cap is a no-op.
+const FILE_INDEX_MAX_ENTRIES: usize = 50_000;
 
 /// Directories that must remain discoverable for `@`-mention completion and
 /// fuzzy file resolution even when excluded by `.gitignore`. AI-tool
@@ -368,6 +430,96 @@ fn walk_for_completions(
         seen,
         Some(COMPLETIONS_WALK_DEPTH),
     );
+}
+
+const LOCAL_REFERENCE_SCAN_LIMIT: usize = 4096;
+
+#[allow(clippy::too_many_arguments)]
+fn add_local_reference_completions(
+    root: &Path,
+    display_root: &Path,
+    needle: &str,
+    limit: usize,
+    prefix_hits: &mut Vec<String>,
+    substring_hits: &mut Vec<String>,
+    seen: &mut HashSet<PathBuf>,
+) {
+    if !should_try_local_reference_completion(needle) {
+        return;
+    }
+
+    for path in local_reference_paths(root, LOCAL_REFERENCE_SCAN_LIMIT) {
+        if prefix_hits.len() + substring_hits.len() >= limit {
+            break;
+        }
+        let Ok(rel) = path.strip_prefix(display_root) else {
+            continue;
+        };
+        let rel_str = rel.to_string_lossy().replace('\\', "/");
+        if rel_str.is_empty() || !seen.insert(path.clone()) {
+            continue;
+        }
+        let lower = rel_str.to_lowercase();
+        if needle.is_empty() || lower.starts_with(needle) {
+            prefix_hits.push(rel_str);
+        } else if lower.contains(needle) {
+            substring_hits.push(rel_str);
+        }
+    }
+}
+
+fn should_try_local_reference_completion(needle: &str) -> bool {
+    !needle.is_empty() && (needle.starts_with('.') || needle.contains('/') || needle.contains('\\'))
+}
+
+fn local_reference_paths(root: &Path, limit: usize) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut builder = WalkBuilder::new(root);
+    builder
+        .hidden(false)
+        .follow_links(false)
+        .max_depth(Some(COMPLETIONS_WALK_DEPTH))
+        .git_ignore(false)
+        .git_global(false)
+        .git_exclude(false);
+    let _ = builder.add_custom_ignore_filename(".deepseekignore");
+    builder.filter_entry(|entry| !should_skip_local_reference_dir(entry.path()));
+
+    for entry in builder.build().flatten() {
+        if out.len() >= limit {
+            break;
+        }
+        let path = entry.path();
+        if path == root {
+            continue;
+        }
+        if entry
+            .file_type()
+            .is_some_and(|ft| ft.is_file() || ft.is_dir())
+        {
+            out.push(path.to_path_buf());
+        }
+    }
+    out
+}
+
+fn should_skip_local_reference_dir(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    matches!(
+        name,
+        ".git"
+            | "target"
+            | "node_modules"
+            | ".venv"
+            | "venv"
+            | "env"
+            | "dist"
+            | "build"
+            | "__pycache__"
+            | ".ruff_cache"
+    )
 }
 
 impl Clone for Workspace {
@@ -1315,6 +1467,76 @@ mod tests {
         assert!(
             entries.iter().any(|e| e == "alphabeta.txt"),
             "expected cwd entry alphabeta.txt; got: {entries:?}",
+        );
+    }
+
+    #[test]
+    fn workspace_completions_surface_explicit_hidden_and_ignored_paths() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join(".gitignore"), ".deepseek/\n.generated/\n").unwrap();
+        std::fs::write(
+            tmp.path().join(".deepseekignore"),
+            ".generated/specs/secrets.env\n",
+        )
+        .unwrap();
+        let deepseek_commands = tmp.path().join(".deepseek").join("commands");
+        let generated_specs = tmp.path().join(".generated").join("specs");
+        std::fs::create_dir_all(&deepseek_commands).unwrap();
+        std::fs::create_dir_all(&generated_specs).unwrap();
+        std::fs::write(deepseek_commands.join("start-task.md"), "start").unwrap();
+        std::fs::write(generated_specs.join("device-layout.md"), "layout").unwrap();
+        std::fs::write(generated_specs.join("secrets.env"), "secret").unwrap();
+
+        let ws = Workspace::with_cwd(tmp.path().to_path_buf(), Some(tmp.path().to_path_buf()));
+
+        let start_entries = ws.completions(".deepseek/commands", 16);
+        assert!(
+            start_entries
+                .iter()
+                .any(|e| e == ".deepseek/commands/start-task.md"),
+            "expected explicitly addressed hidden command file in completions: {start_entries:?}",
+        );
+
+        let generated_entries = ws.completions(".generated/specs", 16);
+        assert!(
+            generated_entries
+                .iter()
+                .any(|e| e == ".generated/specs/device-layout.md"),
+            "expected explicitly addressed ignored user folder in completions: {generated_entries:?}",
+        );
+        assert!(
+            !generated_entries
+                .iter()
+                .any(|e| e == ".generated/specs/secrets.env"),
+            ".deepseekignore entries must not be reintroduced by local fallback: {generated_entries:?}",
+        );
+    }
+
+    #[test]
+    fn fuzzy_index_resolves_hidden_and_ignored_files_except_deepseekignored() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join(".gitignore"), ".generated/\n").unwrap();
+        std::fs::write(
+            tmp.path().join(".deepseekignore"),
+            ".generated/specs/secrets.env\n",
+        )
+        .unwrap();
+        let generated_specs = tmp.path().join(".generated").join("specs");
+        std::fs::create_dir_all(&generated_specs).unwrap();
+        std::fs::write(generated_specs.join("device-layout.md"), "layout").unwrap();
+        std::fs::write(generated_specs.join("secrets.env"), "secret").unwrap();
+
+        let ws = Workspace::with_cwd(tmp.path().to_path_buf(), None);
+        let resolved = ws.resolve("device-layout.md").unwrap();
+
+        assert!(resolved.ends_with(".generated/specs/device-layout.md"));
+        assert!(
+            ws.resolve("secrets.env").is_err(),
+            "basename fuzzy resolution must honor .deepseekignore"
+        );
+        assert!(
+            ws.resolve(".generated/specs/secrets.env").is_ok(),
+            "exact user-specified paths should still resolve"
         );
     }
 

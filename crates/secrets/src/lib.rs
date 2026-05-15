@@ -202,19 +202,25 @@ impl InMemoryKeyringStore {
 
 impl KeyringStore for InMemoryKeyringStore {
     fn get(&self, key: &str) -> Result<Option<String>, SecretsError> {
-        Ok(self.entries.lock().unwrap().get(key).cloned())
+        let guard = self.entries.lock().map_err(|e| {
+            SecretsError::Keyring(format!("InMemoryKeyringStore mutex poisoned: {e}"))
+        })?;
+        Ok(guard.get(key).cloned())
     }
 
     fn set(&self, key: &str, value: &str) -> Result<(), SecretsError> {
-        self.entries
-            .lock()
-            .unwrap()
-            .insert(key.to_string(), value.to_string());
+        let mut guard = self.entries.lock().map_err(|e| {
+            SecretsError::Keyring(format!("InMemoryKeyringStore mutex poisoned: {e}"))
+        })?;
+        guard.insert(key.to_string(), value.to_string());
         Ok(())
     }
 
     fn delete(&self, key: &str) -> Result<(), SecretsError> {
-        self.entries.lock().unwrap().remove(key);
+        let mut guard = self.entries.lock().map_err(|e| {
+            SecretsError::Keyring(format!("InMemoryKeyringStore mutex poisoned: {e}"))
+        })?;
+        guard.remove(key);
         Ok(())
     }
 
@@ -479,7 +485,8 @@ impl Secrets {
     /// Resolve a secret with `secret store → env → none` precedence.
     ///
     /// `name` is the canonical provider name (`"deepseek"`,
-    /// `"openrouter"`, `"novita"`, `"nvidia"`/`"nvidia-nim"`, `"openai"`).
+    /// `"openrouter"`, `"novita"`, `"nvidia"`/`"nvidia-nim"`, `"openai"`,
+    /// or `"atlascloud"`).
     /// Empty strings on either layer are treated as "not set".
     #[must_use]
     pub fn resolve(&self, name: &str) -> Option<String> {
@@ -532,6 +539,7 @@ pub fn env_for(name: &str) -> Option<String> {
         "vllm" | "v-llm" => &["VLLM_API_KEY"],
         "ollama" | "ollama-local" => &["OLLAMA_API_KEY"],
         "openai" => &["OPENAI_API_KEY"],
+        "atlascloud" | "atlas-cloud" | "atlas_cloud" | "atlas" => &["ATLASCLOUD_API_KEY"],
         _ => return None,
     };
     for var in candidates {
@@ -570,6 +578,7 @@ mod tests {
             "VLLM_API_KEY",
             "OLLAMA_API_KEY",
             "OPENAI_API_KEY",
+            "ATLASCLOUD_API_KEY",
             SECRET_BACKEND_ENV,
         ] {
             // Safety: tests serialise on env_lock(); the broader
@@ -719,6 +728,19 @@ mod tests {
         assert_eq!(secrets.resolve("nvidia").as_deref(), Some("nim-key"));
         // Safety: env mutation guarded by env_lock().
         unsafe { std::env::remove_var("NVIDIA_NIM_API_KEY") };
+    }
+
+    #[test]
+    fn atlascloud_env_aliases_resolve() {
+        let _guard = env_lock();
+        clear_known_envs();
+        unsafe { std::env::set_var("ATLASCLOUD_API_KEY", "atlas-key") };
+
+        assert_eq!(env_for("atlascloud").as_deref(), Some("atlas-key"));
+        assert_eq!(env_for("atlas").as_deref(), Some("atlas-key"));
+        assert_eq!(env_for("atlas-cloud").as_deref(), Some("atlas-key"));
+
+        clear_known_envs();
     }
 
     #[test]

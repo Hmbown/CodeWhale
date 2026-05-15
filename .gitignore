@@ -49,6 +49,7 @@ docs/*.pdf
 # Local dev scripts and temp files
 *.sh
 !scripts/**
+!.github/scripts/**
 test.txt
 TODO*.md
 todo*.md
@@ -79,5 +80,26 @@ apps/
 .claude/*.local.md
 .claude/*.local.json
 
+# Maintainer handoff + codemap notes are working-state, not user-facing
+# artifacts. They've leaked into the public repo via .claude/ in the past
+# (HANDOFF_v0.8.28, CODEMAP_v0.8.25) — those files now live under
+# .private/handoffs/ instead. Block the patterns here so a future accidental
+# add doesn't silently land on main.
+.claude/HANDOFF_*
+.claude/CODEMAP_*
+.claude/handoff_*
+.claude/codemap_*
+
 # Maintainer-internal design notes (trade-secret material, never published)
 .private/
+
+# Agent handoffs and version-specific setup plans are working-state notes, not
+# public docs. Keep durable setup guidance in docs/runbooks instead.
+docs/*HANDOFF*.md
+docs/*handoff*.md
+docs/*_PLAN.md
+!docs/archive/**
+
+# direnv
+.envrc
+.direnv

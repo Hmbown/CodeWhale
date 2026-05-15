@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use super::app::App;
+use super::app::{App, looks_like_slash_command_input};
 use super::paste_burst::CharDecision;
 
 /// Process a key in the context of paste-burst detection. Returns `true`
@@ -18,6 +18,15 @@ use super::paste_burst::CharDecision;
 /// composer path.
 pub fn handle_paste_burst_key(app: &mut App, key: &KeyEvent, now: Instant) -> bool {
     if !app.use_paste_burst_detection {
+        return false;
+    }
+    // Once we've observed a real `Event::Paste` in this session, bracketed
+    // paste is verified working and the rapid-keystroke heuristic is
+    // unnecessary. Skipping it eliminates false positives on fast typing /
+    // IME commits / autocomplete on terminals with reliable bracketed
+    // paste (the dominant case on iTerm2 / Ghostty / WezTerm / Windows
+    // Terminal).
+    if app.bracketed_paste_seen {
         return false;
     }
 
@@ -113,7 +122,7 @@ fn apply_paste_burst_retro_capture(
 }
 
 fn in_command_context(app: &App) -> bool {
-    app.input.starts_with('/')
+    looks_like_slash_command_input(&app.input)
 }
 
 #[cfg(test)]
@@ -154,6 +163,38 @@ mod tests {
 
     fn plain(ch: char) -> KeyEvent {
         KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn raw_short_cjk_multiline_paste_buffers_enter_instead_of_submitting() {
+        // #1302: pasting short CJK content like "请联网搜索：\nSTM32 …" used
+        // to silently submit the first line because the heuristic decided
+        // it wasn't paste-like (no whitespace + under 16 chars). The
+        // non-ASCII bypass now classifies it as a paste so the Enter is
+        // absorbed into the burst buffer.
+        let mut app = test_app();
+        let t0 = Instant::now();
+
+        let pasted = "请联网搜索：\nSTM32 商业应用案例";
+        for (i, ch) in pasted.chars().enumerate() {
+            let key = if ch == '\n' {
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
+            } else {
+                plain(ch)
+            };
+            let handled =
+                handle_paste_burst_key(&mut app, &key, t0 + Duration::from_millis(i as u64));
+            assert!(
+                handled,
+                "raw paste character {ch:?} must be handled by paste-burst detection"
+            );
+        }
+
+        assert!(app.flush_paste_burst_if_due(
+            t0 + Duration::from_millis(pasted.chars().count() as u64)
+                + crate::tui::paste_burst::PasteBurst::recommended_active_flush_delay()
+        ));
+        assert_eq!(app.input, pasted);
     }
 
     #[test]
@@ -267,5 +308,32 @@ mod tests {
         app.insert_paste_text("line 1\r\nline 2");
         assert_eq!(app.input, "line 1\nline 2");
         assert!(app.use_bracketed_paste);
+    }
+
+    /// Once the session has observed a real `Event::Paste`, the
+    /// rapid-keystroke heuristic must short-circuit. This pins the new
+    /// "auto-disable paste-burst on verified bracketed paste" behavior so
+    /// fast typing / IME commits / autocomplete on capable terminals can't
+    /// be mis-classified as a paste burst.
+    #[test]
+    fn paste_burst_short_circuits_after_bracketed_paste_observed() {
+        let mut app = test_app();
+        app.use_paste_burst_detection = true;
+        app.bracketed_paste_seen = true;
+
+        let t0 = Instant::now();
+        for (i, ch) in "abcdefgh".chars().enumerate() {
+            // Type fast enough that paste-burst would normally fire.
+            let now = t0 + Duration::from_millis(i as u64);
+            assert!(
+                !handle_paste_burst_key(&mut app, &plain(ch), now),
+                "paste-burst must NOT consume keys once bracketed paste verified"
+            );
+        }
+        // No buffering — every char fell through to the normal composer
+        // path (the test harness doesn't insert chars when the burst
+        // handler returns false; we only assert the short-circuit
+        // contract here).
+        assert!(app.input.is_empty());
     }
 }

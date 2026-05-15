@@ -10,8 +10,8 @@
 //! summary as if it were verbatim and confabulates around the gaps.
 //!
 //! Checkpoint-restart fixes this by giving every cycle a *homogeneous* fresh
-//! context: original system prompt, structured state (todos / plan / working
-//! set / sub-agent handles), and a model-curated free-form briefing of at
+//! context: original system prompt, structured work state (checklist /
+//! strategy / working set / sub-agent handles), and a model-curated free-form briefing of at
 //! most ~3,000 tokens. The previous cycle is archived to disk in JSONL form
 //! so a future `recall_archive` tool (issue #127) can search it on demand.
 //!
@@ -271,8 +271,27 @@ impl StructuredState {
             out.push_str(&format!("- Cwd: `{}`\n", cwd.display()));
         }
 
+        if self.todo_snapshot.is_some() || self.plan_snapshot.is_some() {
+            out.push_str("\n### Work\n");
+        }
+
+        if let Some(todos) = self.todo_snapshot.as_ref() {
+            out.push_str(&format!(
+                "\nChecklist ({}% complete)\n",
+                todos.completion_pct
+            ));
+            for item in &todos.items {
+                let marker = match item.status {
+                    crate::tools::todo::TodoStatus::Pending => "[ ]",
+                    crate::tools::todo::TodoStatus::InProgress => "[~]",
+                    crate::tools::todo::TodoStatus::Completed => "[x]",
+                };
+                out.push_str(&format!("- {marker} {}\n", item.content));
+            }
+        }
+
         if let Some(plan) = self.plan_snapshot.as_ref() {
-            out.push_str("\n### Plan\n");
+            out.push_str("\nStrategy\n");
             if let Some(explanation) = plan.explanation.as_ref() {
                 out.push_str(&format!("{explanation}\n\n"));
             }
@@ -283,21 +302,6 @@ impl StructuredState {
                     crate::tools::plan::StepStatus::Completed => "[x]",
                 };
                 out.push_str(&format!("- {marker} {}\n", item.step));
-            }
-        }
-
-        if let Some(todos) = self.todo_snapshot.as_ref() {
-            out.push_str(&format!(
-                "\n### Todos ({}% complete)\n",
-                todos.completion_pct
-            ));
-            for item in &todos.items {
-                let marker = match item.status {
-                    crate::tools::todo::TodoStatus::Pending => "[ ]",
-                    crate::tools::todo::TodoStatus::InProgress => "[~]",
-                    crate::tools::todo::TodoStatus::Completed => "[x]",
-                };
-                out.push_str(&format!("- {marker} {}\n", item.content));
             }
         }
 
@@ -974,6 +978,41 @@ mod tests {
         let block = state.to_system_block().expect("renders");
         assert!(block.contains("Mode: `agent`"));
         assert!(block.contains("Workspace: `/tmp/ws`"));
+    }
+
+    #[test]
+    fn structured_state_to_system_block_unifies_work_state() {
+        let state = StructuredState {
+            mode_label: "agent".to_string(),
+            workspace: PathBuf::from("/tmp/ws"),
+            cwd: None,
+            working_set_summary: None,
+            todo_snapshot: Some(TodoListSnapshot {
+                items: vec![crate::tools::todo::TodoItem {
+                    id: 1,
+                    content: "Run focused tests".to_string(),
+                    status: crate::tools::todo::TodoStatus::InProgress,
+                }],
+                completion_pct: 0,
+                in_progress_id: Some(1),
+            }),
+            plan_snapshot: Some(PlanSnapshot {
+                explanation: Some("Keep sidebar state unified".to_string()),
+                items: vec![crate::tools::plan::PlanItemArg {
+                    step: "Update prompts".to_string(),
+                    status: crate::tools::plan::StepStatus::Pending,
+                }],
+            }),
+            subagent_snapshots: Vec::new(),
+        };
+
+        let block = state.to_system_block().expect("renders");
+
+        assert!(block.contains("### Work"));
+        assert!(block.contains("Checklist (0% complete)"));
+        assert!(block.contains("Strategy"));
+        assert!(!block.contains("### Plan"));
+        assert!(!block.contains("### Todos"));
     }
 
     #[test]

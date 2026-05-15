@@ -6,60 +6,49 @@
 //! replaces the currently running binary.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use std::io::Write;
 
 const CHECKSUM_MANIFEST_ASSET: &str = "deepseek-artifacts-sha256.txt";
 const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/Hmbown/DeepSeek-TUI/releases/latest";
+const CNB_REPO_URL: &str = "https://cnb.cool/deepseek-tui.com/DeepSeek-TUI";
+const RELEASE_BASE_URL_ENV: &str = "DEEPSEEK_TUI_RELEASE_BASE_URL";
+const LEGACY_RELEASE_BASE_URL_ENV: &str = "DEEPSEEK_RELEASE_BASE_URL";
+const UPDATE_VERSION_ENV: &str = "DEEPSEEK_TUI_VERSION";
+const LEGACY_UPDATE_VERSION_ENV: &str = "DEEPSEEK_VERSION";
 const UPDATE_USER_AGENT: &str = "deepseek-tui-updater";
 
 /// Run the self-update workflow.
 pub fn run_update() -> Result<()> {
     let current_exe =
         std::env::current_exe().context("failed to determine current executable path")?;
+    let targets = update_targets_for_exe(&current_exe);
 
     println!("Checking for updates...");
     println!("Current binary: {}", current_exe.display());
 
-    let binary_name =
-        release_asset_stem_for(&current_exe, std::env::consts::OS, std::env::consts::ARCH);
-
     // Step 1: Fetch latest release metadata
-    let release = fetch_latest_release()?;
+    let release = fetch_latest_release().with_context(update_network_fallback_hint)?;
     let latest_tag = &release.tag_name;
     println!("Latest release: {latest_tag}");
 
-    // Step 2: Find the matching asset
-    let asset = select_platform_asset(&release, &binary_name).with_context(|| {
-        format!(
-            "no asset found for platform {binary_name} in release {latest_tag}. \
-                 Available assets: {}",
-            release
-                .assets
-                .iter()
-                .map(|a| a.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
-    })?;
-
-    println!("Downloading {}...", asset.name);
-
-    // Step 3: Download the asset
-    let bytes = download_url(&asset.browser_download_url)
-        .with_context(|| format!("failed to download {}", asset.name))?;
-
-    // Step 4: Download the aggregated SHA256 checksum manifest if available
-    let expected_hash = match select_checksum_manifest_asset(&release) {
+    // Step 2: Download the aggregated SHA256 checksum manifest if available
+    let checksum_manifest = match select_checksum_manifest_asset(&release) {
         Some(checksum_asset) => {
             println!("Downloading {}...", checksum_asset.name);
-            let checksum_bytes = download_url(&checksum_asset.browser_download_url)
-                .with_context(|| format!("failed to download {}", checksum_asset.name))?;
+            let checksum_bytes =
+                download_url(&checksum_asset.browser_download_url).with_context(|| {
+                    format!(
+                        "failed to download {}\n{}",
+                        checksum_asset.name,
+                        update_network_fallback_hint()
+                    )
+                })?;
             let checksum_text = std::str::from_utf8(&checksum_bytes)
                 .with_context(|| format!("{} is not valid UTF-8", checksum_asset.name))?;
-            Some(expected_sha256_from_manifest(checksum_text, &asset.name)?)
+            Some(parse_checksum_manifest(checksum_text)?)
         }
         None => {
             println!("  (no SHA256 checksum manifest found; skipping verification)");
@@ -67,24 +56,67 @@ pub fn run_update() -> Result<()> {
         }
     };
 
-    // Step 5: Verify checksum if available
-    if let Some(expected) = &expected_hash {
-        let actual = sha256_hex(&bytes);
-        if !actual.eq_ignore_ascii_case(expected) {
-            bail!("SHA256 mismatch!\n  expected: {expected}\n  actual:   {actual}");
+    // Step 3: Download and verify every colocated binary in the install.
+    let mut downloads = Vec::new();
+    for target in &targets {
+        let asset = select_platform_asset(&release, &target.asset_stem).with_context(|| {
+            format!(
+                "no asset found for platform {} in release {latest_tag}. \
+                     Available assets: {}",
+                target.asset_stem,
+                release
+                    .assets
+                    .iter()
+                    .map(|a| a.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })?;
+
+        println!("Downloading {}...", asset.name);
+        let bytes = download_url(&asset.browser_download_url).with_context(|| {
+            format!(
+                "failed to download {}\n{}",
+                asset.name,
+                update_network_fallback_hint()
+            )
+        })?;
+
+        if let Some(checksums) = &checksum_manifest {
+            let expected = checksums
+                .get(&asset.name)
+                .with_context(|| format!("checksum manifest is missing {}", asset.name))?;
+            let actual = sha256_hex(&bytes);
+            if !actual.eq_ignore_ascii_case(expected) {
+                bail!(
+                    "SHA256 mismatch for {}!\n  expected: {expected}\n  actual:   {actual}",
+                    asset.name
+                );
+            }
         }
+
+        downloads.push((target.path.clone(), asset.name.clone(), bytes));
+    }
+
+    if checksum_manifest.is_some() {
         println!("SHA256 checksum verified.");
     }
 
-    // Step 6: Replace the current binary atomically
-    replace_binary(&current_exe, &bytes)?;
+    // Step 4: Replace binaries atomically after all downloads verify.
+    for (path, _, bytes) in downloads.iter().rev() {
+        replace_binary(path, bytes)?;
+    }
 
     println!(
         "\n✅ Successfully updated to {latest_tag}!\n\
-         New binary: {}\n\
+         Updated binaries:\n{}\n\
          \n\
          Restart the application to use the new version.",
-        current_exe.display()
+        downloads
+            .iter()
+            .map(|(path, asset, _)| format!("  - {} ({asset})", path.display()))
+            .collect::<Vec<_>>()
+            .join("\n")
     );
 
     Ok(())
@@ -110,10 +142,69 @@ pub(crate) fn binary_prefix_for_exe(current_exe: &Path) -> &'static str {
     }
 }
 
-pub(crate) fn release_asset_stem_for(current_exe: &Path, os: &str, rust_arch: &str) -> String {
-    let prefix = binary_prefix_for_exe(current_exe);
+fn sibling_prefix_for(prefix: &str) -> &'static str {
+    if prefix == "deepseek-tui" {
+        "deepseek"
+    } else {
+        "deepseek-tui"
+    }
+}
+
+fn sibling_binary_path(current_exe: &Path, sibling_prefix: &str) -> PathBuf {
+    current_exe.with_file_name(format!("{sibling_prefix}{}", std::env::consts::EXE_SUFFIX))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UpdateTarget {
+    path: PathBuf,
+    asset_stem: String,
+}
+
+fn update_targets_for_exe(current_exe: &Path) -> Vec<UpdateTarget> {
+    let current_prefix = binary_prefix_for_exe(current_exe);
+    let mut targets = vec![UpdateTarget {
+        path: current_exe.to_path_buf(),
+        asset_stem: release_asset_stem_for_prefix(
+            current_prefix,
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+        ),
+    }];
+
+    let sibling_prefix = sibling_prefix_for(current_prefix);
+    let sibling = sibling_binary_path(current_exe, sibling_prefix);
+    if sibling.exists() {
+        targets.push(UpdateTarget {
+            path: sibling,
+            asset_stem: release_asset_stem_for_prefix(
+                sibling_prefix,
+                std::env::consts::OS,
+                std::env::consts::ARCH,
+            ),
+        });
+    }
+
+    targets
+}
+
+fn release_asset_stem_for_prefix(prefix: &str, os: &str, rust_arch: &str) -> String {
     let arch = release_arch_for_rust_arch(rust_arch);
     format!("{prefix}-{os}-{arch}")
+}
+
+fn release_asset_name_for_prefix(prefix: &str, os: &str, rust_arch: &str) -> String {
+    let stem = release_asset_stem_for_prefix(prefix, os, rust_arch);
+    if os == "windows" {
+        format!("{stem}.exe")
+    } else {
+        stem
+    }
+}
+
+#[cfg(test)]
+fn release_asset_stem_for(current_exe: &Path, os: &str, rust_arch: &str) -> String {
+    let prefix = binary_prefix_for_exe(current_exe);
+    release_asset_stem_for_prefix(prefix, os, rust_arch)
 }
 
 pub(crate) fn asset_matches_platform(asset_name: &str, binary_name: &str) -> bool {
@@ -174,6 +265,7 @@ fn parse_checksum_manifest(text: &str) -> Result<HashMap<String, String>> {
     Ok(checksums)
 }
 
+#[cfg(test)]
 fn expected_sha256_from_manifest(text: &str, asset_name: &str) -> Result<String> {
     let checksums = parse_checksum_manifest(text)?;
     checksums
@@ -205,7 +297,72 @@ fn update_http_client() -> Result<reqwest::blocking::Client> {
 
 /// Fetch the latest release metadata from GitHub.
 fn fetch_latest_release() -> Result<Release> {
+    if let Some(base_url) = release_base_url_from_env() {
+        let version = update_version_from_env().unwrap_or_else(|| env!("CARGO_PKG_VERSION").into());
+        return Ok(release_from_mirror_base_url(
+            &base_url,
+            &version,
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+        ));
+    }
     fetch_latest_release_from_url(LATEST_RELEASE_URL)
+}
+
+fn release_base_url_from_env() -> Option<String> {
+    std::env::var(RELEASE_BASE_URL_ENV)
+        .ok()
+        .or_else(|| std::env::var(LEGACY_RELEASE_BASE_URL_ENV).ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn update_version_from_env() -> Option<String> {
+    std::env::var(UPDATE_VERSION_ENV)
+        .ok()
+        .or_else(|| std::env::var(LEGACY_UPDATE_VERSION_ENV).ok())
+        .map(|value| value.trim().trim_start_matches('v').to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn release_from_mirror_base_url(
+    base_url: &str,
+    version: &str,
+    os: &str,
+    rust_arch: &str,
+) -> Release {
+    let tag_name = format!("v{}", version.trim_start_matches('v'));
+    let mut assets = vec![Asset {
+        name: CHECKSUM_MANIFEST_ASSET.to_string(),
+        browser_download_url: mirror_asset_url(base_url, CHECKSUM_MANIFEST_ASSET),
+    }];
+
+    for prefix in ["deepseek", "deepseek-tui"] {
+        let name = release_asset_name_for_prefix(prefix, os, rust_arch);
+        assets.push(Asset {
+            browser_download_url: mirror_asset_url(base_url, &name),
+            name,
+        });
+    }
+
+    Release { tag_name, assets }
+}
+
+fn mirror_asset_url(base_url: &str, asset_name: &str) -> String {
+    format!("{}/{}", base_url.trim_end_matches('/'), asset_name)
+}
+
+fn update_network_fallback_hint() -> String {
+    format!(
+        "GitHub release downloads may be blocked or slow on this network.\n\
+         For mainland China, use one of these fallback paths:\n\
+           1. Source build from the CNB mirror, installing both shipped binaries:\n\
+              cargo install --git {CNB_REPO_URL} --tag vX.Y.Z deepseek-tui-cli --locked --force\n\
+              cargo install --git {CNB_REPO_URL} --tag vX.Y.Z deepseek-tui --locked --force\n\
+           2. Use a binary asset mirror:\n\
+              {RELEASE_BASE_URL_ENV}=https://<mirror>/<release-assets>/ {UPDATE_VERSION_ENV}=X.Y.Z deepseek update\n\
+         The mirror directory must contain {CHECKSUM_MANIFEST_ASSET} and the platform binaries."
+    )
 }
 
 fn fetch_latest_release_from_url(url: &str) -> Result<Release> {
@@ -423,6 +580,44 @@ mod tests {
     }
 
     #[test]
+    fn update_targets_include_existing_sibling_tui_for_dispatcher() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let dispatcher = dir
+            .path()
+            .join(format!("deepseek{}", std::env::consts::EXE_SUFFIX));
+        let tui = dir
+            .path()
+            .join(format!("deepseek-tui{}", std::env::consts::EXE_SUFFIX));
+        std::fs::write(&dispatcher, b"dispatcher").unwrap();
+        std::fs::write(&tui, b"tui").unwrap();
+
+        let targets = update_targets_for_exe(&dispatcher);
+        let paths = targets
+            .iter()
+            .map(|target| target.path.as_path())
+            .collect::<Vec<_>>();
+
+        assert_eq!(paths, vec![dispatcher.as_path(), tui.as_path()]);
+        assert!(targets[0].asset_stem.starts_with("deepseek-"));
+        assert!(targets[1].asset_stem.starts_with("deepseek-tui-"));
+    }
+
+    #[test]
+    fn update_targets_skip_missing_sibling() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let dispatcher = dir
+            .path()
+            .join(format!("deepseek{}", std::env::consts::EXE_SUFFIX));
+        std::fs::write(&dispatcher, b"dispatcher").unwrap();
+
+        let targets = update_targets_for_exe(&dispatcher);
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].path, dispatcher);
+        assert!(targets[0].asset_stem.starts_with("deepseek-"));
+    }
+
+    #[test]
     fn test_asset_matching_accepts_binary_assets_and_rejects_checksums() {
         assert!(asset_matches_platform(
             "deepseek-macos-arm64",
@@ -577,6 +772,66 @@ E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  *deepseek-wind
             release_asset_stem_for(Path::new("/usr/local/bin/deepseek-tui"), "macos", "aarch64");
         let asset = select_platform_asset(&release, &stem).expect("TUI platform asset");
         assert_eq!(asset.name, "deepseek-tui-macos-arm64");
+    }
+
+    #[test]
+    fn mirror_release_uses_base_url_and_platform_assets() {
+        let release = release_from_mirror_base_url(
+            "https://mirror.example/releases/v0.8.36/",
+            "0.8.36",
+            "linux",
+            "x86_64",
+        );
+
+        assert_eq!(release.tag_name, "v0.8.36");
+        assert_eq!(release.assets[0].name, CHECKSUM_MANIFEST_ASSET);
+        assert_eq!(
+            release.assets[0].browser_download_url,
+            "https://mirror.example/releases/v0.8.36/deepseek-artifacts-sha256.txt"
+        );
+
+        let dispatcher =
+            select_platform_asset(&release, "deepseek-linux-x64").expect("dispatcher asset");
+        assert_eq!(
+            dispatcher.browser_download_url,
+            "https://mirror.example/releases/v0.8.36/deepseek-linux-x64"
+        );
+        let tui = select_platform_asset(&release, "deepseek-tui-linux-x64").expect("tui asset");
+        assert_eq!(
+            tui.browser_download_url,
+            "https://mirror.example/releases/v0.8.36/deepseek-tui-linux-x64"
+        );
+    }
+
+    #[test]
+    fn mirror_release_uses_windows_exe_asset_names() {
+        let release = release_from_mirror_base_url(
+            "https://mirror.example/releases/v0.8.36",
+            "v0.8.36",
+            "windows",
+            "x86_64",
+        );
+
+        assert_eq!(release.tag_name, "v0.8.36");
+        assert!(
+            select_platform_asset(&release, "deepseek-windows-x64")
+                .is_some_and(|asset| asset.name == "deepseek-windows-x64.exe")
+        );
+        assert!(
+            select_platform_asset(&release, "deepseek-tui-windows-x64")
+                .is_some_and(|asset| asset.name == "deepseek-tui-windows-x64.exe")
+        );
+    }
+
+    #[test]
+    fn update_fallback_hint_points_china_users_to_cnb_and_asset_mirrors() {
+        let hint = update_network_fallback_hint();
+
+        assert!(hint.contains(CNB_REPO_URL), "{hint}");
+        assert!(hint.contains(RELEASE_BASE_URL_ENV), "{hint}");
+        assert!(hint.contains(UPDATE_VERSION_ENV), "{hint}");
+        assert!(hint.contains("deepseek-tui-cli"), "{hint}");
+        assert!(hint.contains("deepseek-tui --locked"), "{hint}");
     }
 
     fn serve_http_once(

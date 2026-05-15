@@ -2,6 +2,7 @@ import type { FeedItem, RepoStats } from "./types";
 
 const REPO = process.env.GITHUB_REPO ?? "Hmbown/deepseek-tui";
 const GH = "https://api.github.com";
+const MIN_KNOWN_CONTRIBUTORS = 91;
 
 function headers(token?: string): HeadersInit {
   const h: Record<string, string> = {
@@ -29,13 +30,7 @@ export async function fetchRepoStats(token?: string): Promise<RepoStats> {
     open_issues_count: number;
   };
 
-  // Contributor count from Link header (anon=true). Fallback to 1.
-  let contributors = 1;
-  const link = contribRes.headers.get("link");
-  if (link) {
-    const m = link.match(/&page=(\d+)>; rel="last"/);
-    if (m) contributors = parseInt(m[1], 10);
-  }
+  const contributors = await contributorCount(contribRes);
 
   // Open PRs: cheapest path is the search API.
   const prRes = await fetch(
@@ -61,6 +56,36 @@ export async function fetchRepoStats(token?: string): Promise<RepoStats> {
     latestRelease,
     fetchedAt: new Date().toISOString(),
   };
+}
+
+async function contributorCount(res: Response): Promise<number> {
+  if (!res.ok) return MIN_KNOWN_CONTRIBUTORS;
+
+  const fromLink = lastPageFromLink(res.headers.get("link"));
+  if (fromLink) return Math.max(fromLink, MIN_KNOWN_CONTRIBUTORS);
+
+  const body = await res.json().catch(() => null);
+  if (Array.isArray(body)) return Math.max(body.length, MIN_KNOWN_CONTRIBUTORS);
+
+  return MIN_KNOWN_CONTRIBUTORS;
+}
+
+function lastPageFromLink(link: string | null): number | undefined {
+  if (!link) return undefined;
+
+  for (const part of link.split(",")) {
+    const [rawUrl, rawRel] = part.split(";").map((segment) => segment.trim());
+    if (rawRel !== 'rel="last"') continue;
+
+    const match = rawUrl.match(/^<(.+)>$/);
+    if (!match) continue;
+
+    const page = new URL(match[1]).searchParams.get("page");
+    const parsed = page ? Number.parseInt(page, 10) : NaN;
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+
+  return undefined;
 }
 
 interface RawIssue {

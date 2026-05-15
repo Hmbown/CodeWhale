@@ -27,7 +27,13 @@ platform/architecture combinations from v0.8.8 onward:
 
 ¹ The npm package will exit with a clear error and point you here.
 ² Provided your toolchain can compile a recent Rust workspace; see
-  [Build from source](#5-build-from-source) below.
+  [Build from source](#7-build-from-source) below.
+
+The Linux release assets are glibc builds, not musl builds. They dynamically
+link normal Linux runtime libraries such as `libdbus-1` and `libc`; SQLite is
+currently bundled into the binary through `rusqlite` so users do not need a
+separate `libsqlite3` runtime package for official release assets. Musl-based
+systems such as Alpine should use [Build from source](#7-build-from-source).
 
 > **Linux ARM64 note (v0.8.7 and earlier).** v0.8.7 and earlier do **not**
 > publish a Linux ARM64 prebuilt; users on HarmonyOS thin-and-light, Asahi
@@ -35,11 +41,45 @@ platform/architecture combinations from v0.8.8 onward:
 > from `npm i -g deepseek-tui`. v0.8.8 publishes both `deepseek-linux-arm64`
 > and `deepseek-tui-linux-arm64`, so a plain `npm i -g deepseek-tui` works
 > on any glibc-based ARM64 Linux. If you're stuck on v0.8.7, jump to
-> [Build from source](#5-build-from-source) — `cargo install` works fine.
+> [Build from source](#7-build-from-source) — `cargo install` works fine.
 
 ---
 
-## 2. Install via npm (recommended)
+## 2. Download safety and checksums
+
+Official release binaries are published only from
+`https://github.com/Hmbown/DeepSeek-TUI/releases` and the npm package named
+`deepseek-tui`. Do not install release assets from look-alike repositories,
+archives, or search-result mirrors unless you deliberately trust that mirror.
+
+Every GitHub release includes `deepseek-artifacts-sha256.txt`. If you download
+binaries manually, verify them before running:
+
+```bash
+# Run from the directory containing the downloaded binaries.
+curl -L -O https://github.com/Hmbown/DeepSeek-TUI/releases/latest/download/deepseek-artifacts-sha256.txt
+sha256sum -c deepseek-artifacts-sha256.txt --ignore-missing
+```
+
+On macOS, use `shasum -a 256 -c deepseek-artifacts-sha256.txt` instead of
+`sha256sum`.
+
+If antivirus software flags an official release binary, treat it as unresolved
+until the exact artifact is identified. Please include all of the following in
+the GitHub issue:
+
+- the release tag, for example `v0.8.36`
+- the exact download URL
+- the filename, for example `deepseek-linux-x64`
+- the file SHA-256 from your machine
+- the antivirus product name and detection name
+
+That lets maintainers distinguish a false positive on an official artifact from
+a download sourced from an impersonating repository or mirror.
+
+---
+
+## 3. Install via npm (recommended)
 
 ```bash
 npm install -g deepseek-tui
@@ -67,12 +107,12 @@ Useful environment variables:
 > npm config set registry https://registry.npmmirror.com
 > npm install -g deepseek-tui
 > ```
-> See also [Section 3](#3-install-via-cargo-any-tier-1-rust-target) if you
+> See also [Section 4](#4-install-via-cargo-any-tier-1-rust-target) if you
 > prefer Cargo over npm.
 
 ---
 
-## 3. Install via Cargo (any Tier-1 Rust target)
+## 4. Install via Cargo (any Tier-1 Rust target)
 
 If GitHub releases are slow, blocked, or you're on an unsupported architecture,
 install from crates.io directly. Both crates are required — the dispatcher
@@ -136,9 +176,80 @@ registry = "sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/"
 `rsproxy`, Tencent COS, and Aliyun OSS mirrors work the same way; pick whichever
 is fastest from your network.
 
+### Tencent Cloud remote-first setup
+
+For an always-on workspace that can be controlled from a phone, use the
+Tencent-native path instead of treating install as a single laptop step:
+
+- CNB mirror/source: `https://cnb.cool/deepseek-tui.com/DeepSeek-TUI.git`
+- Tencent Lighthouse HK: `/opt/whalebro` remote workspace
+- Feishu/Lark: long-connection phone bridge
+- EdgeOne: optional public HTTPS edge for docs/status/webhook surfaces
+
+Start with [Tencent Cloud Remote-First Quickstart](TENCENT_CLOUD_REMOTE_FIRST.md),
+then follow [Tencent Lighthouse Hong Kong Phone Setup](TENCENT_LIGHTHOUSE_HK.md).
+
 ---
 
-## 4. Manual download from GitHub Releases
+## 5. Install via Nix
+
+**Try it**
+
+If you already have Nix with flake support, run:
+
+```sh
+nix run github:Hmbown/DeepSeek-TUI
+```
+
+Nix builds `deepseek-tui` and then starts the `deepseek` dispatcher. Pass
+arguments after `--`, for example:
+
+```sh
+nix run github:Hmbown/DeepSeek-TUI -- --help
+```
+
+### Flake
+
+Add inputs to `flake.nix`:
+
+```nix
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+
+    deepseek-tui.url = "github:Hmbown/DeepSeek-TUI";
+    deepseek-tui.inputs.nixpkgs.follows = "nixpkgs";
+  };
+}
+```
+
+Install into a NixOS module:
+
+```nix
+{
+  outputs = { self, nixpkgs, deepseek-tui }:
+  let
+    # replace system "x86_64-linux" with your system
+    system = "x86_64-linux";
+  in
+  {
+    # change `yourhostname` to your actual hostname
+    nixosConfigurations.yourhostname = nixpkgs.lib.nixosSystem {
+      inherit system;
+      modules = [
+        # ...
+        {
+          environment.systemPackages = [ deepseek-tui.packages.${system}.default ];
+        }
+      ];
+    };
+  };
+}
+```
+
+---
+
+## 6. Manual download from GitHub Releases
 
 Grab the matching pair of binaries for your platform from the
 [Releases page](https://github.com/Hmbown/DeepSeek-TUI/releases) and drop them
@@ -181,7 +292,7 @@ when you need the newest version immediately.
 
 ---
 
-## 5. Build from source
+## 7. Build from source
 
 This is the catch-all for any platform we don't ship — including musl, riscv64,
 LoongArch, FreeBSD, and pre-2024 ARM64 distros.
@@ -314,17 +425,17 @@ Both binaries appear in `target\release\deepseek.exe` and
 
 > **Prefer `npm install -g` on Windows unless you need to modify source.**
 > The npm package pulls prebuilt binaries and avoids the C toolchain
-> dependency entirely — see [Section 2](#2-install-via-npm-recommended).
+> dependency entirely — see [Section 3](#3-install-via-npm-recommended).
 
 ---
 
-## 6. Troubleshooting
+## 8. Troubleshooting
 
 ### `Unsupported architecture: arm64 on platform linux`
 
 You're on a release earlier than v0.8.8 that doesn't publish Linux ARM64
 binaries. Either upgrade (`npm i -g deepseek-tui@latest`) or use
-`cargo install` per [Section 3](#3-install-via-cargo-any-tier-1-rust-target).
+`cargo install` per [Section 4](#4-install-via-cargo-any-tier-1-rust-target).
 
 ### `MISSING_COMPANION_BINARY` at runtime
 
@@ -353,20 +464,58 @@ cargo install deepseek-tui-cli --locked
 
 Set `DEEPSEEK_TUI_RELEASE_BASE_URL` to a mirrored release-asset directory
 (rsproxy, TUNA, Tencent COS, Aliyun OSS), or skip npm entirely and use the
-Cargo mirror setup in [Section 3](#3-install-via-cargo-any-tier-1-rust-target).
+Cargo mirror setup in [Section 4](#4-install-via-cargo-any-tier-1-rust-target).
+
+### `deepseek update` is blocked by GitHub from mainland China
+
+`deepseek update` normally contacts GitHub Releases for metadata and binary
+assets. On networks where GitHub is blocked or unreliable, use the CNB source
+mirror instead and install both binaries from the release tag:
+
+```bash
+cargo install --git https://cnb.cool/deepseek-tui.com/DeepSeek-TUI --tag vX.Y.Z deepseek-tui-cli --locked --force
+cargo install --git https://cnb.cool/deepseek-tui.com/DeepSeek-TUI --tag vX.Y.Z deepseek-tui     --locked --force
+```
+
+If you operate a binary asset mirror, `deepseek update` can use it directly:
+
+```bash
+DEEPSEEK_TUI_VERSION=X.Y.Z \
+DEEPSEEK_TUI_RELEASE_BASE_URL=https://your-mirror.example.com/DeepSeek-TUI/vX.Y.Z/ \
+deepseek update
+```
+
+The mirror directory must contain `deepseek-artifacts-sha256.txt` and the
+platform binaries from the GitHub release.
 
 ### Debian/Ubuntu: `feature edition2024 is required` from `cargo install`
 
 Some Debian/Ubuntu distro packages ship an older Cargo that cannot parse Rust
-2024 crates. For example, Cargo 1.75.0 fails before building with:
+2024 crates. For example, Cargo 1.75.0 on Ubuntu 24.04 fails before building
+with:
 
 ```text
 feature `edition2024` is required
+The package requires the Cargo feature called `edition2024`, but that feature
+is not stabilized in this version of Cargo
 ```
 
 Install current stable Rust through rustup, then rerun the two Cargo install
-commands from [Section 3](#3-install-via-cargo-any-tier-1-rust-target). After
-rustup finishes, `which cargo` should point to `~/.cargo/bin/cargo`, not
+commands from [Section 4](#4-install-via-cargo-any-tier-1-rust-target). For
+mainland China networks, this rsproxy-based sequence has been verified to work:
+
+```bash
+export RUSTUP_DIST_SERVER=https://rsproxy.cn
+export RUSTUP_UPDATE_ROOT=https://rsproxy.cn/rustup
+
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+source "$HOME/.cargo/env"
+rustup default stable
+cargo install deepseek-tui-cli --locked
+cargo install deepseek-tui     --locked
+```
+
+Afterward, `which cargo` should point to `~/.cargo/bin/cargo`, not
 `/usr/bin/cargo`.
 
 ### Debian/Ubuntu: `error: linker 'cc' not found` while building
@@ -426,7 +575,7 @@ path-agnostic — moving `target-dir` does not help.
 2. **Close the antivirus software temporarily** during `cargo build`.
 3. **Use `npm install -g deepseek-tui` instead** — the npm package ships
    prebuilt binaries and skips the Cargo build entirely
-   ([Section 2](#2-install-via-npm-recommended)).
+   ([Section 3](#3-install-via-npm-recommended)).
 4. **Use `cargo install deepseek-tui-cli --locked`** from crates.io — this
    changes the binary path, which some AV tools treat differently.
 
@@ -439,9 +588,44 @@ target/debug/build/libsqlite3-sys-*/build-script-build
 # fine — the AV is blocking Cargo's process-spawning path specifically.
 ```
 
+### npm binary download times out
+
+If `deepseek` waits several seconds and prints `connect ETIMEDOUT` or
+`EAI_AGAIN` while fetching from `github.com`, the npm wrapper installed
+successfully but the prebuilt binary download from GitHub Releases is blocked
+or unreliable on your network. This download is separate from the npm registry
+package download.
+
+Use one of these paths:
+
+1. Set a proxy and retry:
+
+   ```bash
+   export HTTPS_PROXY=http://your-proxy:port
+   deepseek
+   ```
+
+2. Mirror the release assets internally and set `DEEPSEEK_TUI_RELEASE_BASE_URL`:
+
+   ```bash
+   export DEEPSEEK_TUI_RELEASE_BASE_URL=https://your-mirror.example.com/DeepSeek-TUI/
+   deepseek
+   ```
+
+   The directory must contain `deepseek-artifacts-sha256.txt` and the platform
+   binaries from the GitHub release.
+
+3. Install via Cargo, which builds locally and does not download GitHub release
+   assets. See [Section 4](#4-install-via-cargo-any-tier-1-rust-target).
+
+4. Download both `deepseek` and `deepseek-tui` manually from the
+   [Releases page](https://github.com/Hmbown/DeepSeek-TUI/releases), place them
+   in a directory on `PATH`, and make them executable. See
+   [Section 6](#6-manual-download-from-github-releases).
+
 ---
 
-## 7. Verifying your install
+## 9. Verifying your install
 
 ```bash
 deepseek --version

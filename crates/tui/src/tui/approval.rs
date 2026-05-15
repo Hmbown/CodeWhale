@@ -504,6 +504,8 @@ pub struct ApprovalView {
     pending_confirm: Option<ApprovalOption>,
     timeout: Option<Duration>,
     requested_at: Instant,
+    /// Whether the approval card is collapsed to a single-line banner.
+    pub(crate) collapsed: bool,
 }
 
 impl ApprovalView {
@@ -520,6 +522,7 @@ impl ApprovalView {
             pending_confirm: None,
             timeout: None,
             requested_at: Instant::now(),
+            collapsed: false,
         }
     }
 
@@ -625,6 +628,10 @@ impl ModalView for ApprovalView {
 
     fn handle_key(&mut self, key: KeyEvent) -> ViewAction {
         match key.code {
+            KeyCode::Tab => {
+                self.collapsed = !self.collapsed;
+                ViewAction::None
+            }
             KeyCode::Up | KeyCode::Char('k') => {
                 self.select_prev();
                 ViewAction::None
@@ -1151,6 +1158,28 @@ mod tests {
         assert!(view.timeout.is_none());
         assert_eq!(view.pending_confirm(), None);
         assert_eq!(view.risk(), RiskLevel::Benign);
+    }
+
+    #[test]
+    fn tab_toggles_collapsed_card_so_transcript_stays_visible() {
+        // Regression for PR #1455 / @tiger-dog: the approval modal
+        // rendered as a full-screen takeover that hid the transcript
+        // behind it, so users had to dismiss the prompt to remember
+        // what they were approving. Tab now flips between the full
+        // takeover card and a single-line bottom banner.
+        let mut view = ApprovalView::new(benign_request());
+        assert!(
+            !view.collapsed,
+            "modal must start expanded so first-time users notice it"
+        );
+
+        let action = view.handle_key(create_key_event(KeyCode::Tab));
+        assert!(matches!(action, ViewAction::None));
+        assert!(view.collapsed, "first Tab collapses the card");
+
+        let action = view.handle_key(create_key_event(KeyCode::Tab));
+        assert!(matches!(action, ViewAction::None));
+        assert!(!view.collapsed, "second Tab restores the takeover card");
     }
 
     #[test]

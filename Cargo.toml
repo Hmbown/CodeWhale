@@ -19,7 +19,7 @@ default-members = ["crates/cli", "crates/app-server", "crates/tui"]
 resolver = "2"
 
 [workspace.package]
-version = "0.8.26"
+version = "0.8.37"
 edition = "2024"
 # Rust 1.88 stabilized `let_chains` in `if`/`while` conditions, which the
 # codebase relies on extensively. Cargo enforces this so users on older
@@ -47,4 +47,6 @@ toml = "0.9.7"
 sha2 = "0.10"
 tower-http = { version = "0.6", features = ["cors"] }
 tracing = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 uuid = { version = "1.11", features = ["v4"] }

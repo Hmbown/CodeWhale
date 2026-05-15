@@ -10,7 +10,7 @@
 
 use crate::commands;
 
-use super::app::App;
+use super::app::{App, looks_like_slash_command_input};
 use super::widgets::SlashMenuEntry;
 use super::widgets::slash_completion_hints;
 
@@ -26,6 +26,7 @@ pub fn visible_slash_menu_entries(app: &App, limit: usize) -> Vec<SlashMenuEntry
         &app.cached_skills,
         app.ui_locale,
         Some(&app.workspace),
+        app.api_provider,
     )
 }
 
@@ -48,6 +49,7 @@ pub fn apply_slash_menu_selection(
         && !command.ends_with(' ')
         && !command.contains(char::is_whitespace)
         && let Some(info) = commands::get_command_info(command.trim_start_matches('/'))
+        && info.name != "change"
         && (info.usage.contains('<') || info.usage.contains('['))
     {
         command.push(' ');
@@ -65,7 +67,7 @@ pub fn apply_slash_menu_selection(
 /// fully (with trailing space). On ambiguity, posts a status hint listing
 /// up to five candidates. Also considers skill names as completion candidates.
 pub fn try_autocomplete_slash_command(app: &mut App) -> bool {
-    if !app.input.starts_with('/') {
+    if !looks_like_slash_command_input(&app.input) {
         return false;
     }
 
@@ -75,6 +77,7 @@ pub fn try_autocomplete_slash_command(app: &mut App) -> bool {
         &app.cached_skills,
         app.ui_locale,
         Some(&app.workspace),
+        app.api_provider,
     )
     .into_iter()
     .map(|entry| entry.name)

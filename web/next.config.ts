@@ -1,5 +1,8 @@
 import type { NextConfig } from "next";
 
+// Security headers are set in middleware.ts (more reliable under OpenNext on
+// Cloudflare than next.config.ts headers(), which doesn't always apply to
+// prerendered/cached responses).
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   images: {

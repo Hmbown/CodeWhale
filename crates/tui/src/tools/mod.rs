@@ -1,5 +1,13 @@
 //! Tool system modules and re-exports.
 
+// Tools run inside the TUI alt-screen runtime. Raw `print!` / `eprintln!`
+// inside this module tree leaks into ratatui's diff-renderer buffer and
+// produces the "scroll demon" regression (#1085 / v0.8.27 follow-up).
+// Route status/error reporting through `tracing::*` instead — the
+// `runtime_log` subscriber captures it to `~/.deepseek/logs/`.
+#![deny(clippy::print_stdout)]
+#![deny(clippy::print_stderr)]
+
 pub mod apply_patch;
 pub mod approval_cache;
 pub mod arg_repair;
@@ -15,7 +23,12 @@ pub mod fim;
 pub mod git;
 pub mod git_history;
 pub mod github;
+pub mod handle;
+pub mod image_ocr;
+pub mod js_execution;
 pub mod large_output_router;
+pub mod notify;
+pub mod pandoc;
 pub mod parallel;
 pub mod plan;
 pub mod project;

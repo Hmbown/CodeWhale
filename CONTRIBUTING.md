@@ -64,6 +64,58 @@ Use clear, descriptive commit messages following conventional commits:
 
 Example: `feat: add doctor subcommand for system diagnostics`
 
+When a commit harvests code from a community PR (see "How Your Contribution
+Lands" below), include a `Harvested from PR #N by @author` line in the commit
+body. An auto-close workflow watches for this pattern and closes the
+referenced PR with credit so the contributor gets a clear signal that
+their work shipped.
+
+## How Your Contribution Lands
+
+We follow a deliberate "land what's useful, credit the contributor" model
+that occasionally surprises new contributors. Two paths:
+
+### Path 1 — Direct merge
+
+If your PR is well-scoped, passes CI, doesn't touch the trust-boundary
+surface (auth / sandbox / publishing / branding), and doesn't conflict
+with main, a maintainer merges it directly. This is the most common
+outcome for small bug fixes and well-tested feature additions.
+
+### Path 2 — Harvest
+
+If your PR is large, mixes scope, conflicts with main, or needs polish
+that's faster for the maintainer to apply than to round-trip with the
+contributor, the maintainer may **harvest** the useful commits or hunks
+into a new commit on `main` rather than merging the PR directly. This is
+**not a rejection** — it means your code landed.
+
+When this happens:
+
+- The harvested commit's message includes `Harvested from PR #N by
+  @your-handle`. This is the contract: that line is your credit and the
+  signal that your contribution shipped.
+- The `CHANGELOG.md` entry for the next release credits you by handle.
+- The auto-close workflow closes your PR with a templated thank-you and
+  a link to the commit on `main`.
+
+To make a future contribution land via the faster Direct-Merge path
+instead of the Harvest path, the highest-leverage things you can do are:
+
+1. **Keep PRs single-purpose.** One bug fix per PR; one feature per PR.
+   Don't mix a refactor with a feature.
+2. **Rebase onto current `main` before opening the PR**, and after CI
+   feedback. Conflicts force the harvest path even when the change is
+   small.
+3. **Include tests** with new behavior. The maintainer often harvests
+   PRs without tests because adding the test is faster than asking the
+   contributor for one.
+4. **Avoid the trust-boundary surface** without prior maintainer
+   sign-off. That includes auth/credential flows, sandbox policy,
+   publishing/release plumbing, and `prompts/` content. PRs that touch
+   these without prior discussion are unlikely to merge directly even
+   when the change is well-implemented.
+
 ## Project Structure
 
 DeepSeek TUI is a Cargo workspace. The live runtime and the majority of TUI,
@@ -88,7 +140,7 @@ crates/
 ```
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the live data flow across
-these crates and [DEPENDENCY_GRAPH.md](DEPENDENCY_GRAPH.md) for build ordering.
+these crates, including the bottom-up build order.
 
 ## Submitting Changes
 

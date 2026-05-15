@@ -26,6 +26,7 @@ enum ProviderArg {
     Deepseek,
     NvidiaNim,
     Openai,
+    Atlascloud,
     Openrouter,
     Novita,
     Fireworks,
@@ -40,6 +41,7 @@ impl From<ProviderArg> for ProviderKind {
             ProviderArg::Deepseek => ProviderKind::Deepseek,
             ProviderArg::NvidiaNim => ProviderKind::NvidiaNim,
             ProviderArg::Openai => ProviderKind::Openai,
+            ProviderArg::Atlascloud => ProviderKind::Atlascloud,
             ProviderArg::Openrouter => ProviderKind::Openrouter,
             ProviderArg::Novita => ProviderKind::Novita,
             ProviderArg::Fireworks => ProviderKind::Fireworks,
@@ -92,6 +94,9 @@ struct Cli {
     no_mouse_capture: bool,
     #[arg(long = "skip-onboarding")]
     skip_onboarding: bool,
+    /// YOLO mode: auto-approve all tools
+    #[arg(long)]
+    yolo: bool,
     #[arg(short = 'p', long = "prompt", value_name = "PROMPT")]
     prompt_flag: Option<String>,
     #[arg(
@@ -126,6 +131,15 @@ enum Commands {
     /// Bootstrap MCP config and/or skills directories.
     Setup(TuiPassthroughArgs),
     /// Run the DeepSeek TUI non-interactive agent command.
+    #[command(after_help = "\
+Common forwarded flags:
+  --auto                           Enable agentic mode with tool access
+  --json                           Emit summary JSON
+  --resume <SESSION_ID>            Resume a previous session by ID or prefix
+  --session-id <SESSION_ID>        Resume a previous session by ID or prefix
+  --continue                       Continue the most recent session for this workspace
+  --output-format <FORMAT>         Output format: text or stream-json
+")]
     Exec(TuiPassthroughArgs),
     /// Run a DeepSeek-powered code review over a git diff.
     Review(TuiPassthroughArgs),
@@ -428,6 +442,7 @@ fn run() -> Result<()> {
         telemetry: cli.telemetry,
         approval_policy: cli.approval_policy.clone(),
         sandbox_mode: cli.sandbox_mode.clone(),
+        yolo: Some(cli.yolo),
     };
     let command = cli.command.take();
 
@@ -676,6 +691,7 @@ fn provider_slot(provider: ProviderKind) -> &'static str {
         ProviderKind::Deepseek => "deepseek",
         ProviderKind::NvidiaNim => "nvidia-nim",
         ProviderKind::Openai => "openai",
+        ProviderKind::Atlascloud => "atlascloud",
         ProviderKind::Openrouter => "openrouter",
         ProviderKind::Novita => "novita",
         ProviderKind::Fireworks => "fireworks",
@@ -686,16 +702,17 @@ fn provider_slot(provider: ProviderKind) -> &'static str {
 }
 
 /// Provider order used by the `auth list` and `auth status` outputs.
-const PROVIDER_LIST: [ProviderKind; 9] = [
+const PROVIDER_LIST: [ProviderKind; 10] = [
     ProviderKind::Deepseek,
     ProviderKind::NvidiaNim,
+    ProviderKind::Openai,
+    ProviderKind::Atlascloud,
     ProviderKind::Openrouter,
     ProviderKind::Novita,
     ProviderKind::Fireworks,
     ProviderKind::Sglang,
     ProviderKind::Vllm,
     ProviderKind::Ollama,
-    ProviderKind::Openai,
 ];
 
 #[cfg(test)]
@@ -751,6 +768,7 @@ fn provider_env_vars(provider: ProviderKind) -> &'static [&'static str] {
         ProviderKind::Vllm => &["VLLM_API_KEY"],
         ProviderKind::Ollama => &["OLLAMA_API_KEY"],
         ProviderKind::Openai => &["OPENAI_API_KEY"],
+        ProviderKind::Atlascloud => &["ATLASCLOUD_API_KEY"],
     }
 }
 
@@ -1393,6 +1411,7 @@ fn build_tui_command(
         ProviderKind::Deepseek
             | ProviderKind::NvidiaNim
             | ProviderKind::Openai
+            | ProviderKind::Atlascloud
             | ProviderKind::Openrouter
             | ProviderKind::Novita
             | ProviderKind::Fireworks
@@ -1401,7 +1420,7 @@ fn build_tui_command(
             | ProviderKind::Ollama
     ) {
         bail!(
-            "The interactive TUI supports DeepSeek, NVIDIA NIM, OpenAI-compatible, OpenRouter, Novita, Fireworks, SGLang, vLLM, and Ollama providers. Remove --provider {} or use `deepseek model ...` for provider registry inspection.",
+            "The interactive TUI supports DeepSeek, NVIDIA NIM, OpenAI-compatible, AtlasCloud, OpenRouter, Novita, Fireworks, SGLang, vLLM, and Ollama providers. Remove --provider {} or use `deepseek model ...` for provider registry inspection.",
             resolved_runtime.provider.as_str()
         );
     }
@@ -1422,6 +1441,9 @@ fn build_tui_command(
         cmd.env("DEEPSEEK_API_KEY", api_key);
         if resolved_runtime.provider == ProviderKind::Openai {
             cmd.env("OPENAI_API_KEY", api_key);
+        }
+        if resolved_runtime.provider == ProviderKind::Atlascloud {
+            cmd.env("ATLASCLOUD_API_KEY", api_key);
         }
         let source = resolved_runtime
             .api_key_source
@@ -1448,10 +1470,16 @@ fn build_tui_command(
     if let Some(mode) = cli.sandbox_mode.as_ref() {
         cmd.env("DEEPSEEK_SANDBOX_MODE", mode);
     }
+    if cli.yolo {
+        cmd.env("DEEPSEEK_YOLO", "true");
+    }
     if let Some(api_key) = cli.api_key.as_ref() {
         cmd.env("DEEPSEEK_API_KEY", api_key);
         if resolved_runtime.provider == ProviderKind::Openai {
             cmd.env("OPENAI_API_KEY", api_key);
+        }
+        if resolved_runtime.provider == ProviderKind::Atlascloud {
+            cmd.env("ATLASCLOUD_API_KEY", api_key);
         }
         cmd.env("DEEPSEEK_API_KEY_SOURCE", "cli");
     }
@@ -2516,6 +2544,7 @@ mod tests {
             telemetry: false,
             approval_policy: None,
             sandbox_mode: None,
+            yolo: None,
             http_headers: std::collections::BTreeMap::new(),
         };
 
@@ -2641,6 +2670,18 @@ mod tests {
                 ],
             ),
             ("sandbox", vec!["check"]),
+            (
+                "exec",
+                vec![
+                    "--auto",
+                    "--json",
+                    "--resume",
+                    "--session-id",
+                    "--continue",
+                    "--output-format",
+                    "stream-json",
+                ],
+            ),
             (
                 "app-server",
                 vec!["--host", "--port", "--config", "--stdio"],

@@ -25,18 +25,40 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Widget},
 };
+use std::collections::HashSet;
 
+use crate::config::{
+    ApiProvider, model_completion_names_for_provider, provider_passes_model_through,
+};
 use crate::palette;
 use crate::tui::app::{App, ReasoningEffort};
 use crate::tui::views::{ModalKind, ModalView, ViewAction, ViewEvent};
 
-/// Models the picker exposes by default. Kept short on purpose — power
-/// users can still type `/model <id>` for anything else.
-const PICKER_MODELS: &[(&str, &str)] = &[
-    ("auto", "select per turn"),
-    ("deepseek-v4-pro", "flagship"),
-    ("deepseek-v4-flash", "fast / cheap"),
-];
+fn picker_models_for_provider(provider: ApiProvider) -> Vec<(String, String)> {
+    let mut rows = vec![("auto".to_string(), "select per turn".to_string())];
+    if provider_passes_model_through(provider) {
+        return rows;
+    }
+    rows.extend(
+        model_completion_names_for_provider(provider)
+            .into_iter()
+            .map(|id| (id.to_string(), String::new())),
+    );
+    rows
+}
+
+fn picker_rows_from_model_ids(model_ids: Vec<String>) -> Vec<(String, String)> {
+    let mut rows = vec![("auto".to_string(), "select per turn".to_string())];
+    let mut seen = HashSet::from(["auto".to_string()]);
+    for model_id in model_ids {
+        let id = model_id.trim();
+        if id.is_empty() || !seen.insert(id.to_string()) {
+            continue;
+        }
+        rows.push((id.to_string(), String::new()));
+    }
+    rows
+}
 
 /// Thinking-effort rows shown in the picker, in the order DeepSeek
 /// behaviorally distinguishes them.
@@ -56,6 +78,7 @@ enum Pane {
 pub struct ModelPickerView {
     initial_model: String,
     initial_effort: ReasoningEffort,
+    model_rows: Vec<(String, String)>,
     /// Working selection (separate from the initial values so we can offer a
     /// clean Esc-to-cancel without mutating App state).
     selected_model_idx: usize,
@@ -69,18 +92,24 @@ pub struct ModelPickerView {
 impl ModelPickerView {
     #[must_use]
     pub fn new(app: &App) -> Self {
+        Self::new_with_rows(app, picker_models_for_provider(app.api_provider))
+    }
+
+    #[must_use]
+    pub fn new_with_models(app: &App, model_ids: Vec<String>) -> Self {
+        Self::new_with_rows(app, picker_rows_from_model_ids(model_ids))
+    }
+
+    fn new_with_rows(app: &App, model_rows: Vec<(String, String)>) -> Self {
         let initial_model = if app.auto_model {
             "auto".to_string()
         } else {
             app.model.clone()
         };
-        let mut selected_model_idx = PICKER_MODELS
-            .iter()
-            .position(|(id, _)| *id == initial_model);
+        let mut selected_model_idx = model_rows.iter().position(|(id, _)| *id == initial_model);
         let show_custom_model_row = selected_model_idx.is_none();
         if show_custom_model_row {
-            // Custom row sits at the end; precompute its index.
-            selected_model_idx = Some(PICKER_MODELS.len());
+            selected_model_idx = Some(model_rows.len());
         }
         let selected_model_idx = selected_model_idx.unwrap_or(0);
 
@@ -98,6 +127,7 @@ impl ModelPickerView {
         Self {
             initial_model,
             initial_effort,
+            model_rows,
             selected_model_idx,
             selected_effort_idx,
             focus: Pane::Model,
@@ -106,17 +136,19 @@ impl ModelPickerView {
     }
 
     fn model_row_count(&self) -> usize {
-        PICKER_MODELS.len() + if self.show_custom_model_row { 1 } else { 0 }
+        self.model_rows.len() + if self.show_custom_model_row { 1 } else { 0 }
     }
 
     /// Resolve the currently highlighted model row to a model id. If the
     /// custom row is selected we return the original model from the App so
     /// "Apply" doesn't blow away an unrecognised id.
     fn resolved_model(&self) -> String {
-        if self.show_custom_model_row && self.selected_model_idx == PICKER_MODELS.len() {
+        if self.show_custom_model_row && self.selected_model_idx == self.model_rows.len() {
             self.initial_model.clone()
+        } else if let Some((model, _)) = self.model_rows.get(self.selected_model_idx) {
+            model.clone()
         } else {
-            PICKER_MODELS[self.selected_model_idx].0.to_string()
+            self.initial_model.clone()
         }
     }
 
@@ -305,10 +337,7 @@ impl ModalView for ModelPickerView {
             .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
             .split(inner);
 
-        let mut model_rows: Vec<(String, String)> = PICKER_MODELS
-            .iter()
-            .map(|(id, hint)| ((*id).to_string(), (*hint).to_string()))
-            .collect();
+        let mut model_rows = self.model_rows.clone();
         if self.show_custom_model_row {
             model_rows.push((self.initial_model.clone(), "current (custom)".to_string()));
         }
@@ -353,7 +382,8 @@ mod tests {
     use crate::tui::app::{App, TuiOptions};
     use std::path::PathBuf;
 
-    fn create_test_app() -> App {
+    fn create_test_app() -> (App, std::sync::MutexGuard<'static, ()>) {
+        let lock = crate::test_support::lock_test_env();
         let options = TuiOptions {
             model: "deepseek-v4-pro".to_string(),
             workspace: PathBuf::from("."),
@@ -378,18 +408,24 @@ mod tests {
         let mut app = App::new(options, &Config::default());
         // App::new merges in `~/.config/deepseek/settings.toml` /
         // `Application Support/deepseek/settings.toml`, which can override
-        // the model and effort with whatever the developer happens to have
-        // saved. Pin both back to known values so the picker tests below
-        // exercise the picker logic, not the user's environment.
+        // the model, effort, and provider with whatever the developer
+        // happens to have saved. Pin all three back to known values so
+        // the picker tests below exercise the picker logic, not the
+        // user's environment. In particular `api_provider` matters because
+        // pass-through providers (Ollama, OpenAI) hide the DeepSeek model
+        // rows and leave only `auto` + custom — Down has nowhere to go.
         app.model = "deepseek-v4-pro".to_string();
+        app.auto_model = false;
         app.reasoning_effort = ReasoningEffort::Max;
-        app
+        app.api_provider = crate::config::ApiProvider::Deepseek;
+        (app, lock)
     }
 
     #[test]
     fn picker_initial_selection_matches_app_state() {
-        let mut app = create_test_app();
+        let (mut app, _lock) = create_test_app();
         app.model = "deepseek-v4-flash".to_string();
+        app.auto_model = false;
         app.reasoning_effort = ReasoningEffort::Max;
         let view = ModelPickerView::new(&app);
         assert_eq!(view.resolved_model(), "deepseek-v4-flash");
@@ -398,7 +434,7 @@ mod tests {
 
     #[test]
     fn picker_initial_selection_matches_auto_state() {
-        let mut app = create_test_app();
+        let (mut app, _lock) = create_test_app();
         app.model = "auto".to_string();
         app.auto_model = true;
         app.reasoning_effort = ReasoningEffort::Auto;
@@ -411,7 +447,7 @@ mod tests {
 
     #[test]
     fn picker_auto_model_forces_auto_effort_on_apply() {
-        let mut app = create_test_app();
+        let (mut app, _lock) = create_test_app();
         app.model = "auto".to_string();
         app.auto_model = true;
         app.reasoning_effort = ReasoningEffort::Off;
@@ -429,8 +465,9 @@ mod tests {
 
     #[test]
     fn picker_normalizes_low_medium_to_high() {
-        let mut app = create_test_app();
+        let (mut app, _lock) = create_test_app();
         app.reasoning_effort = ReasoningEffort::Medium;
+        app.auto_model = false;
         let view = ModelPickerView::new(&app);
         assert_eq!(
             view.resolved_effort(),
@@ -441,7 +478,8 @@ mod tests {
 
     #[test]
     fn picker_exposes_auto_and_distinct_thinking_tiers() {
-        let model_labels: Vec<_> = PICKER_MODELS.iter().map(|(id, _)| *id).collect();
+        let model_rows = picker_models_for_provider(crate::config::ApiProvider::Deepseek);
+        let model_labels: Vec<_> = model_rows.iter().map(|(id, _)| id.as_str()).collect();
         assert_eq!(
             model_labels,
             vec!["auto", "deepseek-v4-pro", "deepseek-v4-flash"]
@@ -456,16 +494,37 @@ mod tests {
 
     #[test]
     fn picker_preserves_unknown_model_via_custom_row() {
-        let mut app = create_test_app();
+        let (mut app, _lock) = create_test_app();
         app.model = "deepseek-v4-pro-2026-04-XX".to_string();
+        app.auto_model = false;
         let view = ModelPickerView::new(&app);
         assert!(view.show_custom_model_row);
         assert_eq!(view.resolved_model(), "deepseek-v4-pro-2026-04-XX");
     }
 
     #[test]
+    fn picker_uses_live_provider_model_ids_when_supplied() {
+        let (mut app, _lock) = create_test_app();
+        app.api_provider = crate::config::ApiProvider::Openrouter;
+        app.model = "meta-llama/llama-3.1-405b-instruct".to_string();
+        app.auto_model = false;
+
+        let view = ModelPickerView::new_with_models(
+            &app,
+            vec![
+                "deepseek/deepseek-chat-v3.1".to_string(),
+                "meta-llama/llama-3.1-405b-instruct".to_string(),
+                "qwen/qwen3-coder".to_string(),
+            ],
+        );
+
+        assert!(!view.show_custom_model_row);
+        assert_eq!(view.resolved_model(), "meta-llama/llama-3.1-405b-instruct");
+    }
+
+    #[test]
     fn arrow_keys_move_within_focused_pane() {
-        let app = create_test_app();
+        let (app, _lock) = create_test_app();
         let mut view = ModelPickerView::new(&app);
         // Default focus is Model; move down then up.
         let initial = view.selected_model_idx;
@@ -483,7 +542,7 @@ mod tests {
 
     #[test]
     fn tab_switches_focus_and_arrow_now_moves_effort() {
-        let mut app = create_test_app();
+        let (mut app, _lock) = create_test_app();
         // Default is Max; pin to Off so the Down arrow has
         // somewhere to go.
         app.reasoning_effort = ReasoningEffort::Off;
@@ -503,8 +562,9 @@ mod tests {
 
     #[test]
     fn enter_emits_apply_event_with_selection() {
-        let mut app = create_test_app();
+        let (mut app, _lock) = create_test_app();
         app.reasoning_effort = ReasoningEffort::High;
+        app.auto_model = false;
         let mut view = ModelPickerView::new(&app);
         view.handle_key(KeyEvent::new(
             KeyCode::Tab,
@@ -535,7 +595,7 @@ mod tests {
 
     #[test]
     fn esc_closes_without_emitting() {
-        let app = create_test_app();
+        let (app, _lock) = create_test_app();
         let mut view = ModelPickerView::new(&app);
         let action = view.handle_key(KeyEvent::new(
             KeyCode::Esc,

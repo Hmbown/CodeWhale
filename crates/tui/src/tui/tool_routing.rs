@@ -11,7 +11,8 @@ use crate::tui::app::{App, ToolDetailRecord};
 use crate::tui::history::{
     DiffPreviewCell, ExecCell, ExecSource, ExploringEntry, GenericToolCell, HistoryCell,
     McpToolCell, PatchSummaryCell, PlanStep, PlanUpdateCell, ReviewCell, ToolCell, ToolStatus,
-    ViewImageCell, WebSearchCell, summarize_mcp_output, summarize_tool_args, summarize_tool_output,
+    ViewImageCell, WebSearchCell, output_looks_like_diff, summarize_mcp_output,
+    summarize_tool_args, summarize_tool_output,
 };
 
 #[allow(clippy::too_many_lines)]
@@ -52,6 +53,7 @@ pub(super) fn handle_tool_call_started(
         // starts in a single ExploringCell entry.
         let active = app.active_cell.as_mut().expect("active_cell just ensured");
         let entry_idx = active.ensure_exploring();
+        app.active_tool_entry_completed_at.remove(&entry_idx);
         let inner = active
             .append_to_exploring(
                 id.clone(),
@@ -109,6 +111,7 @@ pub(super) fn handle_tool_call_started(
                     duration_ms: None,
                     source,
                     interaction: Some(summary.clone()),
+                    output_summary: None,
                 })),
             );
             return;
@@ -140,6 +143,7 @@ pub(super) fn handle_tool_call_started(
                 duration_ms: None,
                 source,
                 interaction: None,
+                output_summary: None,
             })),
         );
         return;
@@ -258,6 +262,8 @@ pub(super) fn handle_tool_call_started(
             output: None,
             prompts: None,
             spillover_path: None,
+            output_summary: None,
+            is_diff: false,
         })),
     );
 }
@@ -276,6 +282,7 @@ fn push_active_tool_cell(
     }
     let active = app.active_cell.as_mut().expect("active_cell just ensured");
     let entry_idx = active.push_tool(tool_id.to_string(), cell);
+    app.active_tool_entry_completed_at.remove(&entry_idx);
     let virtual_index = app.history.len() + entry_idx;
     register_tool_cell(app, tool_id, tool_name, input, virtual_index);
     app.mark_history_updated();
@@ -385,6 +392,66 @@ fn accrue_child_token_cost_if_any(app: &mut App, result: &Result<ToolResult, Too
     }
 }
 
+fn record_spillover_artifact_if_any(
+    app: &mut App,
+    id: &str,
+    name: &str,
+    result: &Result<ToolResult, ToolError>,
+) {
+    let Ok(tool_result) = result else { return };
+    if !tool_result.success {
+        return;
+    }
+    let Some(path) = tool_result
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("spillover_path"))
+        .and_then(serde_json::Value::as_str)
+        .map(PathBuf::from)
+    else {
+        return;
+    };
+    let metadata = tool_result.metadata.as_ref();
+    let session_id = metadata
+        .and_then(|metadata| metadata.get("artifact_session_id"))
+        .and_then(serde_json::Value::as_str)
+        .or(app.current_session_id.as_deref())
+        .unwrap_or("");
+    let storage_path = metadata
+        .and_then(|metadata| metadata.get("artifact_relative_path"))
+        .and_then(serde_json::Value::as_str)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| path.clone());
+    let content_for_preview = metadata
+        .and_then(|metadata| metadata.get("artifact_preview"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(&tool_result.content);
+    let byte_size = metadata
+        .and_then(|metadata| metadata.get("artifact_byte_size"))
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or_else(|| {
+            std::fs::metadata(&storage_path)
+                .map(|metadata| metadata.len())
+                .unwrap_or(tool_result.content.len() as u64)
+        });
+    if app
+        .session_artifacts
+        .iter()
+        .any(|artifact| artifact.tool_call_id == id && artifact.storage_path == storage_path)
+    {
+        return;
+    }
+    app.session_artifacts
+        .push(crate::artifacts::record_tool_output_artifact_with_size(
+            session_id,
+            id,
+            name,
+            storage_path,
+            byte_size,
+            content_for_preview,
+        ));
+}
+
 pub(super) fn handle_tool_call_complete(
     app: &mut App,
     id: &str,
@@ -399,6 +466,7 @@ pub(super) fn handle_tool_call_complete(
     // spawn their own LLM calls (RLM, summarizers, retrieval helpers)
     // get accrued without needing a per-tool hook (#524).
     accrue_child_token_cost_if_any(app, result);
+    record_spillover_artifact_if_any(app, id, name, result);
 
     // Exploring entries land in the per-tool map regardless of whether they
     // live in the active cell or in finalized history; the path is the same.
@@ -424,6 +492,7 @@ pub(super) fn handle_tool_call_complete(
                 }
             }
         }
+        refresh_active_tool_completion_timestamp(app, cell_index);
         return;
     }
 
@@ -473,11 +542,15 @@ pub(super) fn handle_tool_call_complete(
                         .and_then(serde_json::Value::as_u64);
                     if status != ToolStatus::Running && exec.interaction.is_none() {
                         exec.output = Some(tool_result.content.clone());
+                        exec.output_summary =
+                            Some(super::history::summarize_tool_output(&tool_result.content));
                     }
                 } else if let Err(err) = result.as_ref()
                     && exec.interaction.is_none()
                 {
                     exec.output = Some(err.to_string());
+                    exec.output_summary =
+                        Some(super::history::summarize_tool_output(&err.to_string()));
                 }
                 app.mark_history_updated();
             }
@@ -553,10 +626,14 @@ pub(super) fn handle_tool_call_complete(
                 generic.status = status;
                 match result.as_ref() {
                     Ok(tool_result) => {
-                        generic.output = Some(summarize_tool_output(&tool_result.content));
+                        generic.output = Some(tool_result.content.clone());
+                        generic.output_summary = Some(summarize_tool_output(&tool_result.content));
+                        generic.is_diff = output_looks_like_diff(&tool_result.content);
                     }
                     Err(err) => {
                         generic.output = Some(err.to_string());
+                        generic.output_summary = Some(summarize_tool_output(&err.to_string()));
+                        generic.is_diff = false;
                     }
                 }
                 app.mark_history_updated();
@@ -572,6 +649,7 @@ pub(super) fn handle_tool_call_complete(
         if let Some(active) = app.active_cell.as_mut() {
             active.bump_revision();
         }
+        refresh_active_tool_completion_timestamp(app, cell_index);
     }
 
     // #455 (observer-only): fire `tool_call_after` hooks once the
@@ -591,6 +669,46 @@ pub(super) fn handle_tool_call_complete(
             .with_tool_name(name)
             .with_tool_result(&result_text, success, None);
         let _ = app.execute_hooks(HookEvent::ToolCallAfter, &context);
+    }
+}
+
+fn refresh_active_tool_completion_timestamp(app: &mut App, cell_index: usize) {
+    if cell_index < app.history.len() {
+        return;
+    }
+    let entry_idx = cell_index - app.history.len();
+    let Some(cell) = app.cell_at_virtual_index(cell_index) else {
+        app.active_tool_entry_completed_at.remove(&entry_idx);
+        return;
+    };
+
+    if history_cell_has_running_tool(cell) {
+        app.active_tool_entry_completed_at.remove(&entry_idx);
+    } else {
+        app.active_tool_entry_completed_at
+            .entry(entry_idx)
+            .or_insert_with(Instant::now);
+    }
+}
+
+fn history_cell_has_running_tool(cell: &HistoryCell) -> bool {
+    let HistoryCell::Tool(tool) = cell else {
+        return false;
+    };
+    match tool {
+        ToolCell::Exec(exec) => exec.status == ToolStatus::Running,
+        ToolCell::Exploring(explore) => explore
+            .entries
+            .iter()
+            .any(|entry| entry.status == ToolStatus::Running),
+        ToolCell::PlanUpdate(plan) => plan.status == ToolStatus::Running,
+        ToolCell::PatchSummary(patch) => patch.status == ToolStatus::Running,
+        ToolCell::Review(review) => review.status == ToolStatus::Running,
+        ToolCell::DiffPreview(_) => false,
+        ToolCell::Mcp(mcp) => mcp.status == ToolStatus::Running,
+        ToolCell::ViewImage(_) => false,
+        ToolCell::WebSearch(search) => search.status == ToolStatus::Running,
+        ToolCell::Generic(generic) => generic.status == ToolStatus::Running,
     }
 }
 
@@ -638,6 +756,8 @@ fn push_orphan_tool_completion(
         .and_then(|m| m.get("spillover_path"))
         .and_then(serde_json::Value::as_str)
         .map(std::path::PathBuf::from);
+    let output_summary = output.as_deref().map(summarize_tool_output);
+    let is_diff = output.as_deref().is_some_and(output_looks_like_diff);
     app.add_message(HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
         name: name.to_string(),
         status,
@@ -645,6 +765,8 @@ fn push_orphan_tool_completion(
         output,
         prompts: None,
         spillover_path,
+        output_summary,
+        is_diff,
     })));
     let cell_index = app.history.len().saturating_sub(1);
     app.tool_details_by_cell.insert(

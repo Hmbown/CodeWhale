@@ -120,9 +120,25 @@ fn make_plan(
     approval_required: bool,
     interactive: bool,
 ) -> ToolExecutionPlan {
+    make_plan_at(
+        0,
+        read_only,
+        supports_parallel,
+        approval_required,
+        interactive,
+    )
+}
+
+fn make_plan_at(
+    index: usize,
+    read_only: bool,
+    supports_parallel: bool,
+    approval_required: bool,
+    interactive: bool,
+) -> ToolExecutionPlan {
     ToolExecutionPlan {
-        index: 0,
-        id: "tool-1".to_string(),
+        index,
+        id: format!("tool-{index}"),
         name: "grep_files".to_string(),
         input: json!({"pattern": "test"}),
         caller: None,
@@ -206,6 +222,57 @@ fn parallel_batch_requires_read_only_parallel_tools() {
 
     let plans = vec![make_plan(true, true, false, true)];
     assert!(!should_parallelize_tool_batch(&plans));
+}
+
+#[test]
+fn tool_execution_batches_use_serial_barriers() {
+    let batches = plan_tool_execution_batches(vec![
+        make_plan_at(0, true, true, false, false),
+        make_plan_at(1, true, true, false, false),
+        make_plan_at(2, false, false, true, false),
+        make_plan_at(3, true, true, false, false),
+        make_plan_at(4, true, false, false, false),
+        make_plan_at(5, true, true, false, false),
+        make_plan_at(6, true, true, false, false),
+    ]);
+
+    assert_eq!(batches.len(), 5);
+
+    match &batches[0] {
+        ToolExecutionBatch::Parallel(plans) => {
+            assert_eq!(
+                plans.iter().map(|plan| plan.index).collect::<Vec<_>>(),
+                vec![0, 1]
+            );
+        }
+        ToolExecutionBatch::Serial(_) => panic!("first batch should be parallel"),
+    }
+    match &batches[1] {
+        ToolExecutionBatch::Serial(plan) => assert_eq!(plan.index, 2),
+        ToolExecutionBatch::Parallel(_) => panic!("second batch should be serial"),
+    }
+    match &batches[2] {
+        ToolExecutionBatch::Parallel(plans) => {
+            assert_eq!(
+                plans.iter().map(|plan| plan.index).collect::<Vec<_>>(),
+                vec![3]
+            );
+        }
+        ToolExecutionBatch::Serial(_) => panic!("third batch should be parallel"),
+    }
+    match &batches[3] {
+        ToolExecutionBatch::Serial(plan) => assert_eq!(plan.index, 4),
+        ToolExecutionBatch::Parallel(_) => panic!("fourth batch should be serial"),
+    }
+    match &batches[4] {
+        ToolExecutionBatch::Parallel(plans) => {
+            assert_eq!(
+                plans.iter().map(|plan| plan.index).collect::<Vec<_>>(),
+                vec![5, 6]
+            );
+        }
+        ToolExecutionBatch::Serial(_) => panic!("fifth batch should be parallel"),
+    }
 }
 
 #[test]
@@ -367,6 +434,79 @@ fn model_tool_catalog_applies_native_and_mcp_deferral() {
 }
 
 #[test]
+fn deferred_edit_file_first_use_hydrates_schema_without_execution() {
+    let mut edit = api_tool("edit_file");
+    edit.defer_loading = Some(true);
+    edit.input_schema = json!({
+        "type": "object",
+        "properties": {
+            "path": { "type": "string" },
+            "search": { "type": "string" },
+            "replace": { "type": "string" }
+        },
+        "required": ["path", "search", "replace"]
+    });
+
+    let catalog = vec![edit];
+    let active_at_batch_start = HashSet::new();
+    let mut hydrated_this_batch = HashSet::new();
+    let result = maybe_hydrate_requested_deferred_tool(
+        "edit_file",
+        &json!({
+            "path": "src/foo.rs",
+            "old_string": "before",
+            "new_string": "after"
+        }),
+        &catalog,
+        &active_at_batch_start,
+        &mut hydrated_this_batch,
+    )
+    .expect("first deferred use should hydrate");
+
+    assert!(!active_at_batch_start.contains("edit_file"));
+    assert!(hydrated_this_batch.contains("edit_file"));
+    assert!(result.success);
+    assert!(result.content.contains("Tool `edit_file` was deferred"));
+    assert!(result.content.contains("path: string"));
+    assert!(result.content.contains("search: string"));
+    assert!(result.content.contains("replace: string"));
+    assert!(result.content.contains("old_string -> search"));
+    assert!(result.content.contains("new_string -> replace"));
+    assert!(result.content.contains("The tool was not executed"));
+
+    let metadata = result.metadata.expect("metadata");
+    assert_eq!(metadata["event"], "tool.schema_hydrated");
+    assert_eq!(metadata["executed"], false);
+    assert_eq!(metadata["retry_required"], true);
+
+    let second_result = maybe_hydrate_requested_deferred_tool(
+        "edit_file",
+        &json!({"path": "src/bar.rs", "old_string": "before", "new_string": "after"}),
+        &catalog,
+        &active_at_batch_start,
+        &mut hydrated_this_batch,
+    )
+    .expect("later calls in the same batch should hydrate instead of executing");
+    assert_eq!(second_result.metadata.unwrap()["executed"], false);
+    assert_eq!(hydrated_this_batch.len(), 1);
+
+    let mut active_next_batch = active_at_batch_start.clone();
+    active_next_batch.extend(hydrated_this_batch);
+    let mut hydrated_next_batch = HashSet::new();
+    assert!(
+        maybe_hydrate_requested_deferred_tool(
+            "edit_file",
+            &json!({"path": "src/foo.rs", "search": "before", "replace": "after"}),
+            &catalog,
+            &active_next_batch,
+            &mut hydrated_next_batch,
+        )
+        .is_none(),
+        "tools hydrated in a previous batch should execute normally"
+    );
+}
+
+#[test]
 fn model_tool_catalog_keeps_everything_loaded_in_yolo_mode() {
     let catalog = build_model_tool_catalog(
         vec![api_tool("project_map")],
@@ -435,6 +575,111 @@ fn active_tool_list_pushes_deferred_activations_to_the_tail() {
 }
 
 #[test]
+fn deferred_tool_preflight_loads_edit_schema_without_executing_bad_aliases() {
+    let (engine, _handle) = Engine::new(EngineConfig::default(), &Config::default());
+    let registry = engine
+        .build_turn_tool_registry_builder(
+            AppMode::Agent,
+            engine.config.todos.clone(),
+            engine.config.plan_state.clone(),
+        )
+        .build(engine.build_tool_context(AppMode::Agent, false));
+    let catalog = build_model_tool_catalog(
+        registry.to_api_tools_with_cache(true),
+        vec![],
+        AppMode::Agent,
+    );
+    let mut active = initial_active_tools(&catalog);
+    assert!(!active.contains("edit_file"));
+
+    let result = preflight_requested_deferred_tool(
+        "edit_file",
+        &json!({
+            "path": "src/foo.rs",
+            "old_string": "before",
+            "new_string": "after"
+        }),
+        &catalog,
+        &mut active,
+    )
+    .expect("deferred edit_file should preflight");
+
+    assert!(active.contains("edit_file"));
+    assert!(result.success);
+    assert!(result.content.contains("Tool `edit_file` was deferred"));
+    assert!(result.content.contains("The tool was not executed"));
+    assert!(result.content.contains("path: string required"));
+    assert!(result.content.contains("search: string required"));
+    assert!(result.content.contains("replace: string required"));
+    assert!(result.content.contains("old_string -> search"));
+    assert!(result.content.contains("new_string -> replace"));
+    assert_eq!(
+        result.metadata.as_ref().unwrap()["deferred_tool_loaded"],
+        json!(true)
+    );
+}
+
+#[test]
+fn deferred_tool_preflight_guides_checklist_update_list_replacement() {
+    let (engine, _handle) = Engine::new(EngineConfig::default(), &Config::default());
+    let registry = engine
+        .build_turn_tool_registry_builder(
+            AppMode::Agent,
+            engine.config.todos.clone(),
+            engine.config.plan_state.clone(),
+        )
+        .build(engine.build_tool_context(AppMode::Agent, false));
+    let catalog = build_model_tool_catalog(
+        registry.to_api_tools_with_cache(true),
+        vec![],
+        AppMode::Agent,
+    );
+    let mut active = initial_active_tools(&catalog);
+    assert!(!active.contains("checklist_update"));
+
+    let result = preflight_requested_deferred_tool(
+        "checklist_update",
+        &json!({
+            "todos": [
+                { "content": "wire preflight", "status": "completed" }
+            ]
+        }),
+        &catalog,
+        &mut active,
+    )
+    .expect("deferred checklist_update should preflight");
+
+    assert!(active.contains("checklist_update"));
+    assert!(result.success);
+    assert!(
+        result
+            .content
+            .contains("Tool `checklist_update` was deferred")
+    );
+    assert!(result.content.contains("id: integer required"));
+    assert!(result.content.contains("status: string"));
+    assert!(result.content.contains("Missing required fields:"));
+    assert!(result.content.contains("id, status"));
+    assert!(result.content.contains("Unexpected fields:"));
+    assert!(result.content.contains("todos"));
+    assert!(result.content.contains("Use checklist_write"));
+}
+
+#[test]
+fn deferred_tool_preflight_skips_already_active_tools() {
+    let mut tool = api_tool("deferred_tool");
+    tool.defer_loading = Some(true);
+    let catalog = vec![tool];
+    let mut active = HashSet::from(["deferred_tool".to_string()]);
+
+    assert!(
+        preflight_requested_deferred_tool("deferred_tool", &json!({}), &catalog, &mut active,)
+            .is_none(),
+        "already active tools should execute normally"
+    );
+}
+
+#[test]
 fn turn_tool_registry_builder_keeps_plan_mode_read_only_for_files() {
     let (engine, _handle) = Engine::new(EngineConfig::default(), &Config::default());
     let registry = engine
@@ -460,6 +705,7 @@ fn turn_tool_registry_builder_keeps_plan_mode_read_only_for_files() {
     assert!(registry.contains("update_plan"));
     assert!(registry.contains("task_list"));
     assert!(registry.contains("task_read"));
+    assert!(registry.contains("handle_read"));
     assert!(registry.contains("recall_archive"));
 
     let plan_state_tools = [
@@ -754,13 +1000,17 @@ fn subagent_results_are_summarized_before_parent_context_insertion() {
         .to_string(),
     );
 
-    let context = compact_tool_result_for_context("deepseek-v4-pro", "agent_result", &output);
+    let context = compact_tool_result_for_context("deepseek-v4-pro", "agent_eval", &output);
 
     assert!(context.contains("[sub-agent result summarized for parent context]"));
     assert!(context.contains("agent_1234abcd (explore) status=Completed"));
     assert!(context.contains("Inspect the RLM rendering path"));
     assert!(context.contains("steps=12"));
     assert!(context.len() < output.content.len());
+    assert!(context.contains("self-report"));
+    assert!(context.contains("verify side effects"));
+    assert!(context.contains("read_file") && context.contains("list_dir"));
+    assert!(context.contains("handle_read"));
 }
 
 #[test]

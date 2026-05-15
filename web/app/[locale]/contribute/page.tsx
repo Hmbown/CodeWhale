@@ -38,7 +38,7 @@ const stepsEn = [
     n: "④",
     title: "Open the PR",
     cn: "提交合并",
-    body: "PR description should explain WHY, not WHAT (the diff covers what). Link the issue. The maintainer reviews everything personally — usually within a day.",
+    body: "PR description should explain WHY, not WHAT (the diff covers what). Link the issue. The maintainer reviews everything personally — response times vary.",
     cta: { label: "PR template", href: "https://github.com/Hmbown/deepseek-tui/blob/main/.github/PULL_REQUEST_TEMPLATE.md" },
   },
 ];
@@ -69,7 +69,7 @@ const stepsZh = [
     n: "④",
     title: "提交 PR",
     cn: "Open the PR",
-    body: "PR 描述应说明「为什么」而非「做了什么」（diff 已经展示了做了什么）。关联相关 issue。维护者亲自审查所有 PR——通常一天内完成。",
+    body: "PR 描述应说明「为什么」而非「做了什么」（diff 已经展示了做了什么）。关联相关 issue。维护者亲自审查所有 PR——响应时间视情况而定。",
     cta: { label: "PR 模板", href: "https://github.com/Hmbown/deepseek-tui/blob/main/.github/PULL_REQUEST_TEMPLATE.md" },
   },
 ];

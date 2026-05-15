@@ -6,13 +6,14 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
-use clap::{Args, CommandFactory, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{Shell, generate};
 use dotenvy::dotenv;
 use tempfile::NamedTempFile;
 use wait_timeout::ChildExt;
 
 mod acp_server;
+mod artifacts;
 mod audit;
 mod auto_reasoning;
 mod automation_manager;
@@ -29,6 +30,7 @@ mod core;
 mod cost_status;
 mod cycle_manager;
 mod deepseek_theme;
+mod dependencies;
 mod error_taxonomy;
 mod eval;
 mod execpolicy;
@@ -45,6 +47,7 @@ mod memory;
 mod models;
 mod network_policy;
 mod palette;
+mod prefix_cache;
 mod pricing;
 mod project_context;
 mod project_doc;
@@ -54,6 +57,7 @@ mod request_dump;
 mod retry_status;
 pub mod rlm;
 mod runtime_api;
+mod runtime_log;
 mod runtime_threads;
 mod sandbox;
 mod schema_migration;
@@ -69,6 +73,7 @@ mod test_support;
 mod tools;
 mod tui;
 mod utils;
+mod vision;
 mod working_set;
 mod workspace_trust;
 
@@ -97,7 +102,8 @@ fn configure_windows_console_utf8() {}
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "deepseek",
+    name = "deepseek-tui",
+    bin_name = "deepseek-tui",
     author,
     version = env!("DEEPSEEK_BUILD_VERSION"),
     about = "DeepSeek TUI/CLI for DeepSeek models",
@@ -152,7 +158,8 @@ struct Cli {
     #[arg(long = "no-alt-screen", hide = true)]
     no_alt_screen: bool,
 
-    /// Enable TUI mouse capture for internal scrolling and transcript selection
+    /// Enable TUI mouse capture for internal scrolling, transcript selection,
+    /// and scrollbar dragging
     /// (default off on Windows)
     #[arg(long = "mouse-capture", conflicts_with = "no_mouse_capture")]
     mouse_capture: bool,
@@ -292,12 +299,97 @@ struct ExecArgs {
     #[arg(long, default_value_t = false)]
     auto: bool,
     /// Emit machine-readable JSON output
-    #[arg(long, default_value_t = false)]
+    #[arg(long, default_value_t = false, conflicts_with = "output_format")]
     json: bool,
+    /// Resume a previous session by ID or prefix
+    #[arg(long, value_name = "SESSION_ID", conflicts_with_all = ["session_id", "continue_session"])]
+    resume: Option<String>,
+    /// Resume a previous session by ID or prefix
+    #[arg(long = "session-id", value_name = "SESSION_ID", conflicts_with_all = ["resume", "continue_session"])]
+    session_id: Option<String>,
+    /// Continue the most recent session for this workspace
+    #[arg(long = "continue", default_value_t = false, conflicts_with_all = ["resume", "session_id"])]
+    continue_session: bool,
+    /// Output format for exec mode
+    #[arg(long, value_enum, default_value_t = ExecOutputFormat::Text)]
+    output_format: ExecOutputFormat,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum ExecOutputFormat {
+    Text,
+    #[value(name = "stream-json")]
+    StreamJson,
+}
+
+/// Spawn a tokio task that listens for terminating signals (SIGINT
+/// always; SIGTERM and SIGHUP on Unix) and, on receipt, restores the
+/// terminal modes and exits with the conventional 128 + signal code.
+/// Multiple deliveries are tolerated: once the cleanup runs, a second
+/// signal short-circuits to plain exit so a stuck cleanup can never
+/// trap a frustrated user pressing Ctrl+C repeatedly.
+///
+/// See the call site in `main` for the rationale (#1583).
+fn spawn_signal_cleanup_task() {
+    tokio::spawn(async {
+        let exit_code = wait_for_terminating_signal().await;
+        // If we get here a fatal signal arrived. Restore the terminal
+        // and exit. A second signal during cleanup re-enters this
+        // path and aborts via `std::process::exit` directly.
+        static CLEANED_UP: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
+        if !CLEANED_UP.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            crate::tui::ui::emergency_restore_terminal();
+        }
+        std::process::exit(exit_code);
+    });
+}
+
+#[cfg(unix)]
+async fn wait_for_terminating_signal() -> i32 {
+    use tokio::signal::unix::{SignalKind, signal};
+    // Failing to install any individual stream is non-fatal: we still
+    // want the others to work. The fallback never-resolving future
+    // keeps `select!` well-typed when a stream fails to register.
+    let mut sigint = signal(SignalKind::interrupt()).ok();
+    let mut sigterm = signal(SignalKind::terminate()).ok();
+    let mut sighup = signal(SignalKind::hangup()).ok();
+    tokio::select! {
+        _ = async { match sigint.as_mut() { Some(s) => { s.recv().await; }, None => std::future::pending::<()>().await, } } => 130,
+        _ = async { match sigterm.as_mut() { Some(s) => { s.recv().await; }, None => std::future::pending::<()>().await, } } => 143,
+        _ = async { match sighup.as_mut() { Some(s) => { s.recv().await; }, None => std::future::pending::<()>().await, } } => 129,
+    }
+}
+
+#[cfg(not(unix))]
+async fn wait_for_terminating_signal() -> i32 {
+    // Windows: tokio::signal::ctrl_c covers both Ctrl+C and Ctrl+Break
+    // (CTRL_C_EVENT / CTRL_BREAK_EVENT). Console-close, logoff, and
+    // shutdown events are not currently routed through tokio.
+    let _ = tokio::signal::ctrl_c().await;
+    130
 }
 
 fn join_prompt_parts(parts: &[String]) -> String {
     parts.join(" ")
+}
+
+fn resolve_exec_resume_session_id(args: &ExecArgs, workspace: &Path) -> Result<Option<String>> {
+    if let Some(id) = args.resume.as_ref().or(args.session_id.as_ref()) {
+        return Ok(Some(id.clone()));
+    }
+    if !args.continue_session {
+        return Ok(None);
+    }
+    latest_session_id_for_workspace(workspace)?.map_or_else(
+        || {
+            bail!(
+                "No saved sessions found for workspace {}. Use `deepseek sessions` to list sessions, or pass `deepseek exec --resume <SESSION_ID> ...`.",
+                workspace.display()
+            )
+        },
+        |id| Ok(Some(id)),
+    )
 }
 
 #[derive(Args, Debug, Clone, Default)]
@@ -599,19 +691,10 @@ async fn main() -> Result<()> {
     std::panic::set_hook(Box::new(move |panic_info| {
         // Restore the terminal first so the panic message itself, plus the
         // user's shell after exit, are visible. Best-effort — we may not be
-        // in raw / alt-screen mode if the panic happens pre-TUI.
-        use crossterm::event::{
-            DisableBracketedPaste, DisableMouseCapture, PopKeyboardEnhancementFlags,
-        };
-        use crossterm::terminal::{LeaveAlternateScreen, disable_raw_mode};
-        let _ = crossterm::execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
-        // Best-effort: turn off bracketed paste + mouse capture so the user's
-        // parent shell doesn't get stuck wrapping pastes in `\e[200~…\e[201~`
-        // or printing `\e[<…M` on every click after a TUI panic.
-        let _ = crossterm::execute!(std::io::stdout(), DisableBracketedPaste);
-        let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture);
-        let _ = disable_raw_mode();
-        let _ = crossterm::execute!(std::io::stdout(), LeaveAlternateScreen);
+        // in raw / alt-screen mode if the panic happens pre-TUI. Shared
+        // with the signal handler installed below so both exit paths leave
+        // the terminal in the same well-defined state.
+        crate::tui::ui::emergency_restore_terminal();
 
         let msg = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
             s.to_string()
@@ -639,6 +722,22 @@ async fn main() -> Result<()> {
         // Invoke the original hook (prints to stderr, etc.)
         orig_hook(panic_info);
     }));
+
+    // Install signal handlers that restore the terminal before the
+    // process exits. Without this, Ctrl+C delivered while raw mode /
+    // kitty keyboard enhancement / alt-screen are active (or in the
+    // brief windows around startup and teardown where they're being
+    // toggled) leaves the user's shell receiving raw CSI sequences
+    // like `^[[>5u` until they run `reset` (#1583).
+    //
+    // Once the TUI's raw mode is engaged the terminal driver delivers
+    // Ctrl+C as the byte 0x03 rather than SIGINT, so the in-TUI key
+    // handler — not this handler — is what processes user interrupts
+    // during normal operation. This handler exists for the gaps:
+    // pre-TUI subcommands (--version, doctor, login, …), the moments
+    // around enable_raw_mode / disable_raw_mode, the external-editor
+    // suspend path, and SIGTERM / SIGHUP from the OS.
+    spawn_signal_cleanup_task();
 
     dotenv().ok();
     let cli = Cli::parse();
@@ -678,13 +777,19 @@ async fn main() -> Result<()> {
                 let config = load_config_from_cli(&cli)?;
                 let model = args
                     .model
+                    .clone()
                     .or_else(|| config.default_text_model.clone())
                     .unwrap_or_else(|| config.default_model());
                 let prompt = join_prompt_parts(&args.prompt);
-                if args.auto || cli.yolo {
-                    let workspace = cli.workspace.clone().unwrap_or_else(|| {
-                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-                    });
+                let workspace = cli.workspace.clone().unwrap_or_else(|| {
+                    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                });
+                let resume_session_id = resolve_exec_resume_session_id(&args, &workspace)?;
+                let needs_engine = args.auto
+                    || cli.yolo
+                    || resume_session_id.is_some()
+                    || args.output_format == ExecOutputFormat::StreamJson;
+                if needs_engine {
                     let max_subagents = cli.max_subagents.map_or_else(
                         || config.max_subagents(),
                         |value| value.clamp(1, MAX_SUBAGENTS),
@@ -696,9 +801,11 @@ async fn main() -> Result<()> {
                         &prompt,
                         workspace,
                         max_subagents,
-                        true,
+                        auto_mode,
                         auto_mode,
                         args.json,
+                        resume_session_id,
+                        args.output_format,
                     )
                     .await
                 } else if args.json {
@@ -950,6 +1057,7 @@ fn mcp_template_json() -> Result<String> {
             required: false,
             enabled_tools: Vec::new(),
             disabled_tools: Vec::new(),
+            headers: std::collections::HashMap::new(),
         },
     );
     serde_json::to_string_pretty(&cfg)
@@ -1374,6 +1482,10 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
                     "OPENAI_API_KEY",
                     "deepseek auth set --provider openai --api-key \"...\"",
                 ),
+                crate::config::ApiProvider::Atlascloud => (
+                    "ATLASCLOUD_API_KEY",
+                    "deepseek auth set --provider atlascloud --api-key \"...\"",
+                ),
                 crate::config::ApiProvider::Openrouter => (
                     "OPENROUTER_API_KEY",
                     "deepseek auth set --provider openrouter --api-key \"...\"",
@@ -1407,6 +1519,7 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
                 match config.api_provider() {
                     crate::config::ApiProvider::NvidiaNim => "nvidia_nim",
                     crate::config::ApiProvider::Openai => "openai",
+                    crate::config::ApiProvider::Atlascloud => "atlascloud",
                     crate::config::ApiProvider::Openrouter => "openrouter",
                     crate::config::ApiProvider::Novita => "novita",
                     crate::config::ApiProvider::Fireworks => "fireworks",
@@ -2097,6 +2210,219 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
                 "·".dimmed()
             );
         }
+    }
+
+    // Tool dependencies — probe external binaries that individual
+    // tools rely on (Python for code_execution, pdftotext for PDF
+    // reading) so users see explicit ✓/✗ rather than the tool failing
+    // at execution time with "program not found". New in v0.8.31.
+    println!();
+    println!("{}", "Tool Dependencies:".bold());
+
+    match crate::dependencies::resolve_python_interpreter() {
+        Some(name) => println!(
+            "  {} Python: {} → code_execution tool registered",
+            "✓".truecolor(aqua_r, aqua_g, aqua_b),
+            name
+        ),
+        None => {
+            println!(
+                "  {} Python: not found (tried {:?})",
+                "✗".truecolor(red_r, red_g, red_b),
+                crate::dependencies::PYTHON_CANDIDATES,
+            );
+            println!("    code_execution tool is NOT advertised to the model on this install.");
+            println!("    Install Python 3 and ensure one of those names is on PATH:");
+            match std::env::consts::OS {
+                "macos" => {
+                    println!("      brew install python@3.12   (or download from python.org)")
+                }
+                "linux" => println!(
+                    "      sudo apt install python3    (Debian/Ubuntu) — or your distro's equivalent"
+                ),
+                "windows" => {
+                    println!("      winget install Python.Python.3   (or download from python.org)")
+                }
+                other => println!("      install Python 3 for {other} from python.org"),
+            }
+        }
+    }
+
+    match crate::dependencies::resolve_node() {
+        Some(_) => println!(
+            "  {} Node.js: present → js_execution tool registered",
+            "✓".truecolor(aqua_r, aqua_g, aqua_b),
+        ),
+        None => {
+            println!(
+                "  {} Node.js: not found (tried `node`)",
+                "✗".truecolor(red_r, red_g, red_b),
+            );
+            println!("    js_execution tool is NOT advertised to the model on this install.");
+            println!("    Install Node 18+ and ensure `node` is on PATH:");
+            match std::env::consts::OS {
+                "macos" => println!("      brew install node   (or download from nodejs.org)"),
+                "linux" => println!(
+                    "      sudo apt install nodejs    (Debian/Ubuntu) — or your distro's equivalent"
+                ),
+                "windows" => {
+                    println!("      winget install OpenJS.NodeJS   (or download from nodejs.org)")
+                }
+                other => println!("      install Node.js for {other} from nodejs.org"),
+            }
+        }
+    }
+
+    match crate::dependencies::resolve_pandoc() {
+        Some(_) => println!(
+            "  {} pandoc: present → pandoc_convert tool registered",
+            "✓".truecolor(aqua_r, aqua_g, aqua_b),
+        ),
+        None => {
+            println!("  {} pandoc: not found (optional)", "·".dimmed(),);
+            println!(
+                "    pandoc_convert tool is NOT advertised to the model. Install pandoc to enable:"
+            );
+            match std::env::consts::OS {
+                "macos" => println!("      brew install pandoc"),
+                "linux" => println!(
+                    "      sudo apt install pandoc    (Debian/Ubuntu) — or your distro's equivalent"
+                ),
+                "windows" => {
+                    println!("      winget install JohnMacFarlane.Pandoc")
+                }
+                other => println!("      install pandoc for {other} from pandoc.org"),
+            }
+        }
+    }
+
+    match crate::dependencies::resolve_tesseract() {
+        Some(_) => println!(
+            "  {} tesseract: present → image_ocr tool registered",
+            "✓".truecolor(aqua_r, aqua_g, aqua_b),
+        ),
+        None => {
+            println!("  {} tesseract: not found (optional)", "·".dimmed(),);
+            println!(
+                "    image_ocr tool is NOT advertised to the model. Install tesseract to enable:"
+            );
+            match std::env::consts::OS {
+                "macos" => println!("      brew install tesseract"),
+                "linux" => println!(
+                    "      sudo apt install tesseract-ocr    (Debian/Ubuntu) — or your distro's equivalent"
+                ),
+                "windows" => println!("      winget install UB-Mannheim.TesseractOCR"),
+                other => {
+                    println!("      install tesseract for {other} from tesseract-ocr.github.io")
+                }
+            }
+        }
+    }
+
+    // PDF reader: pure-Rust `pdf-extract` is the v0.8.32 default, so
+    // `pdftotext` is no longer required for `read_file` to handle PDFs.
+    // We still surface its presence (a) so users with column-heavy PDFs
+    // know they can opt in via `prefer_external_pdftotext = true`, and
+    // (b) so users who *did* opt in get a clean signal when the binary
+    // is missing rather than discovering it on the next PDF read.
+    let prefer_external = crate::settings::Settings::load()
+        .map(|s| s.prefer_external_pdftotext)
+        .unwrap_or(false);
+    match crate::dependencies::resolve_pdftotext() {
+        Some(_) => {
+            if prefer_external {
+                println!(
+                    "  {} pdftotext: available → read_file routes PDFs through Poppler (prefer_external_pdftotext = true)",
+                    "✓".truecolor(aqua_r, aqua_g, aqua_b),
+                );
+            } else {
+                println!(
+                    "  {} pdftotext: available (optional — pure-Rust extractor is the default in v0.8.32)",
+                    "✓".truecolor(aqua_r, aqua_g, aqua_b),
+                );
+                println!(
+                    "    Set `prefer_external_pdftotext = true` in settings.toml for column-heavy PDFs."
+                );
+            }
+        }
+        None => {
+            if prefer_external {
+                println!(
+                    "  {} pdftotext: not found, but `prefer_external_pdftotext = true` is set → PDF reads will return `binary_unavailable`",
+                    "✗".truecolor(red_r, red_g, red_b),
+                );
+                println!(
+                    "    Either install Poppler or unset `prefer_external_pdftotext` to fall back to the bundled pure-Rust extractor."
+                );
+                match std::env::consts::OS {
+                    "macos" => println!("    Install via: brew install poppler"),
+                    "linux" => println!(
+                        "    Install via: sudo apt install poppler-utils   (Debian/Ubuntu)"
+                    ),
+                    "windows" => println!(
+                        "    Install Poppler for Windows from https://blog.alivate.com.au/poppler-windows/"
+                    ),
+                    _ => {}
+                }
+            } else {
+                println!(
+                    "  {} pdftotext: not found (optional — pure-Rust extractor is the default in v0.8.32)",
+                    "·".dimmed(),
+                );
+                println!(
+                    "    Install Poppler only if you want to opt into pdftotext for column-heavy PDFs."
+                );
+            }
+        }
+    }
+
+    // Terminal-quirk overrides currently active. Mirrors the env
+    // signals checked by `Settings::apply_env_overrides` so users
+    // can see at a glance which a11y/compat overrides fired.
+    println!();
+    println!("{}", "Terminal Quirks:".bold());
+    let term_program = std::env::var("TERM_PROGRAM").unwrap_or_default();
+    let term_program_lc = term_program.to_ascii_lowercase();
+    let mut any_quirk = false;
+    if matches!(term_program.as_str(), "vscode" | "ghostty") {
+        println!(
+            "  {} TERM_PROGRAM={} → low_motion + fancy_animations=false (auto)",
+            "•".truecolor(sky_r, sky_g, sky_b),
+            term_program
+        );
+        any_quirk = true;
+    }
+    if term_program == "Termius"
+        || std::env::var_os("SSH_CLIENT").is_some_and(|v| !v.is_empty())
+        || std::env::var_os("SSH_TTY").is_some_and(|v| !v.is_empty())
+    {
+        println!(
+            "  {} SSH/Termius session → low_motion + fancy_animations=false (auto, #1433)",
+            "•".truecolor(sky_r, sky_g, sky_b)
+        );
+        any_quirk = true;
+    }
+    if term_program_lc.contains("ptyxis")
+        || std::env::var_os("PTYXIS_VERSION").is_some_and(|v| !v.is_empty())
+    {
+        println!(
+            "  {} Ptyxis detected → synchronized_output=off (auto, v0.8.31)",
+            "•".truecolor(sky_r, sky_g, sky_b)
+        );
+        any_quirk = true;
+    }
+    if crate::settings::detected_legacy_windows_console_host() {
+        println!(
+            "  {} legacy Windows console host → low_motion + fancy_animations=false + synchronized_output=off (auto)",
+            "•".truecolor(sky_r, sky_g, sky_b)
+        );
+        any_quirk = true;
+    }
+    if !any_quirk {
+        println!(
+            "  {} no env-driven terminal-quirk overrides active",
+            "·".dimmed()
+        );
     }
 
     // Platform and sandbox checks
@@ -2807,13 +3133,14 @@ fn fork_session(session_id: Option<String>, last: bool, workspace: &Path) -> Res
         .system_prompt
         .as_ref()
         .map(|text| SystemPrompt::Text(text.clone()));
-    let forked = create_saved_session(
+    let mut forked = create_saved_session(
         &saved.messages,
         &saved.metadata.model,
         &saved.metadata.workspace,
         saved.metadata.total_tokens,
         system_prompt.as_ref(),
     );
+    forked.metadata.copy_cost_from(&saved.metadata);
     manager.save_session(&forked)?;
 
     let source_title = saved.metadata.title.trim();
@@ -3338,6 +3665,7 @@ async fn run_mcp_command(config: &Config, command: McpCommand) -> Result<()> {
                     required: false,
                     enabled_tools: Vec::new(),
                     disabled_tools: Vec::new(),
+                    headers: std::collections::HashMap::new(),
                 },
             );
             save_mcp_config(&config_path, &cfg)?;
@@ -3423,6 +3751,7 @@ async fn run_mcp_command(config: &Config, command: McpCommand) -> Result<()> {
                     required: false,
                     enabled_tools: Vec::new(),
                     disabled_tools: Vec::new(),
+                    headers: std::collections::HashMap::new(),
                 },
             );
             save_mcp_config(&config_path, &cfg)?;
@@ -3658,12 +3987,14 @@ fn should_use_alt_screen(_cli: &Cli, _config: &Config) -> bool {
 fn should_use_mouse_capture(cli: &Cli, config: &Config, use_alt_screen: bool) -> bool {
     let terminal_emulator = std::env::var("TERMINAL_EMULATOR").ok();
     let wt_session = std::env::var("WT_SESSION").ok().filter(|s| !s.is_empty());
+    let conemu_pid = std::env::var("ConEmuPID").ok().filter(|s| !s.is_empty());
     should_use_mouse_capture_with(
         cli,
         config,
         use_alt_screen,
         terminal_emulator.as_deref(),
         wt_session.as_deref(),
+        conemu_pid.as_deref(),
     )
 }
 
@@ -3673,6 +4004,7 @@ fn should_use_mouse_capture_with(
     use_alt_screen: bool,
     terminal_emulator: Option<&str>,
     wt_session: Option<&str>,
+    conemu_pid: Option<&str>,
 ) -> bool {
     if !use_alt_screen || cli.no_mouse_capture {
         return false;
@@ -3684,15 +4016,16 @@ fn should_use_mouse_capture_with(
         .tui
         .as_ref()
         .and_then(|tui| tui.mouse_capture)
-        .unwrap_or_else(|| default_mouse_capture_enabled(terminal_emulator, wt_session))
+        .unwrap_or_else(|| default_mouse_capture_enabled(terminal_emulator, wt_session, conemu_pid))
 }
 
 /// Whether to enable terminal mouse capture by default for this platform/host.
 ///
 /// On Windows the default depends on the host: Windows Terminal (which sets
-/// `WT_SESSION`) handles mouse-mode reporting cleanly, so default-on there
-/// gives users in-app text selection and keeps the application's selection
-/// clamped to the transcript area (#1169). Legacy conhost stays default-off
+/// `WT_SESSION`) and ConEmu/Cmder (which set `ConEmuPID`) handle mouse-mode
+/// reporting cleanly, so default-on there gives users in-app text selection
+/// and keeps the application's selection clamped to the transcript area
+/// (#1169). Legacy conhost (CMD without either env var) stays default-off
 /// because its mouse-mode reporting can leak SGR escape sequences as raw
 /// text into the composer (#878 / #898).
 ///
@@ -3703,9 +4036,10 @@ fn should_use_mouse_capture_with(
 fn default_mouse_capture_enabled(
     terminal_emulator: Option<&str>,
     wt_session: Option<&str>,
+    conemu_pid: Option<&str>,
 ) -> bool {
     if cfg!(windows) {
-        return wt_session.is_some();
+        return wt_session.is_some() || conemu_pid.is_some();
     }
     if matches!(terminal_emulator, Some(t) if t.eq_ignore_ascii_case("JetBrains-JediTerm")) {
         return false;
@@ -4055,9 +4389,17 @@ async fn resolve_cli_auto_route(config: &Config, model: &str, prompt: &str) -> C
             auto_model: true,
         }
     } else {
+        // When --model is not `auto`, fall back to the reasoning_effort
+        // declared in the user's config.toml. The previous hard-coded `None`
+        // silently dropped the user's setting on every non-auto-route exec
+        // call, which (for example) prevented vllm + Qwen3 users from
+        // disabling thinking via `reasoning_effort = "off"` and caused
+        // 30+ second SSE idle timeouts on trivial prompts.
         CliAutoRoute {
             model: model.to_string(),
-            reasoning_effort: None,
+            reasoning_effort: config
+                .reasoning_effort()
+                .map(crate::tui::app::ReasoningEffort::from_setting),
             auto_model: false,
         }
     }
@@ -4157,6 +4499,95 @@ async fn run_one_shot_json(config: &Config, model: &str, prompt: &str) -> Result
     Ok(())
 }
 
+#[derive(serde::Serialize)]
+struct ExecStreamMeta {
+    model: String,
+    input_tokens: u32,
+    output_tokens: u32,
+    session_id: String,
+    status: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(tag = "type")]
+enum ExecStreamEvent {
+    #[serde(rename = "content")]
+    Content { content: String },
+    #[serde(rename = "tool_use")]
+    ToolUse {
+        name: String,
+        id: String,
+        input: serde_json::Value,
+    },
+    #[serde(rename = "tool_result")]
+    ToolResult {
+        id: String,
+        output: String,
+        status: String,
+    },
+    #[serde(rename = "session_capture")]
+    SessionCapture { content: String },
+    #[serde(rename = "metadata")]
+    Metadata { meta: ExecStreamMeta },
+    #[serde(rename = "done")]
+    Done,
+    #[serde(rename = "error")]
+    Error { error: String },
+}
+
+fn emit_exec_stream_event(event: &ExecStreamEvent) -> Result<()> {
+    println!("{}", serde_json::to_string(event)?);
+    Ok(())
+}
+
+fn persist_exec_session(
+    messages: &[Message],
+    model: &str,
+    workspace: &Path,
+    system_prompt: &Option<SystemPrompt>,
+    session_id: Option<&str>,
+    total_tokens: u64,
+) -> Result<String> {
+    let manager =
+        SessionManager::default_location().context("could not open session manager for save")?;
+    let saved = if let Some(id) = session_id.filter(|id| !id.trim().is_empty()) {
+        match manager.load_session(id) {
+            Ok(existing) => session_manager::update_session(
+                existing,
+                messages,
+                total_tokens,
+                system_prompt.as_ref(),
+            ),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                session_manager::create_saved_session_with_id_and_mode(
+                    id.to_string(),
+                    messages,
+                    model,
+                    workspace,
+                    total_tokens,
+                    system_prompt.as_ref(),
+                    Some("exec"),
+                )
+            }
+            Err(err) => return Err(err).context("could not load existing exec session"),
+        }
+    } else {
+        session_manager::create_saved_session_with_mode(
+            messages,
+            model,
+            workspace,
+            total_tokens,
+            system_prompt.as_ref(),
+            Some("exec"),
+        )
+    };
+    let id = saved.metadata.id.clone();
+    manager
+        .save_session(&saved)
+        .context("could not save exec session")?;
+    Ok(id)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_exec_agent(
     config: &Config,
@@ -4167,6 +4598,8 @@ async fn run_exec_agent(
     auto_approve: bool,
     trust_mode: bool,
     json_output: bool,
+    resume_session_id: Option<String>,
+    output_format: ExecOutputFormat,
 ) -> Result<()> {
     use crate::compaction::CompactionConfig;
     use crate::core::engine::{EngineConfig, spawn_engine};
@@ -4215,6 +4648,7 @@ async fn run_exec_agent(
         skills_dir: config.skills_dir(),
         instructions: config.instructions_paths(),
         project_context_pack_enabled: config.project_context_pack_enabled(),
+        translation_enabled: false,
         max_steps: 100,
         max_subagents,
         features: config.features(),
@@ -4226,11 +4660,16 @@ async fn run_exec_agent(
         max_spawn_depth: crate::tools::subagent::DEFAULT_MAX_SPAWN_DEPTH,
         network_policy,
         snapshots_enabled: config.snapshots_config().enabled,
+        snapshots_max_workspace_bytes: config
+            .snapshots_config()
+            .max_workspace_gb
+            .saturating_mul(1024 * 1024 * 1024),
         lsp_config,
         runtime_services: crate::tools::spec::RuntimeToolServices::default(),
         subagent_model_overrides: config.subagent_model_overrides(),
         memory_enabled: config.memory_enabled(),
         memory_path: config.memory_path(),
+        vision_config: config.vision_model_config(),
         strict_tool_mode: config.strict_tool_mode.unwrap_or(false),
         goal_objective: None,
         locale_tag: crate::localization::resolve_locale(
@@ -4239,6 +4678,12 @@ async fn run_exec_agent(
         .tag()
         .to_string(),
         workshop: config.workshop.clone(),
+        search_provider: config
+            .search
+            .as_ref()
+            .and_then(|s| s.provider)
+            .unwrap_or_default(),
+        search_api_key: config.search.as_ref().and_then(|s| s.api_key.clone()),
     };
 
     let engine_handle = spawn_engine(engine_config, config);
@@ -4247,6 +4692,37 @@ async fn run_exec_agent(
     } else {
         AppMode::Agent
     };
+
+    let mut loaded_session_id = None;
+    if let Some(session_id) = resume_session_id.as_deref() {
+        let manager = SessionManager::default_location()
+            .context("could not open session manager for exec resume")?;
+        let saved = manager
+            .load_session_by_prefix(session_id)
+            .with_context(|| format!("could not load session '{session_id}'"))?;
+        let saved_id = saved.metadata.id.clone();
+        if saved.metadata.workspace != workspace && output_format == ExecOutputFormat::Text {
+            eprintln!(
+                "Warning: session {} was created in a different workspace ({}). Resuming anyway.",
+                truncate_id(&saved_id),
+                saved.metadata.workspace.display(),
+            );
+        }
+
+        engine_handle
+            .send(Op::SyncSession {
+                session_id: Some(saved_id.clone()),
+                messages: saved.messages,
+                system_prompt: saved.system_prompt.map(SystemPrompt::Text),
+                model: saved.metadata.model,
+                workspace: saved.metadata.workspace,
+            })
+            .await?;
+        loaded_session_id = Some(saved_id.clone());
+        if output_format == ExecOutputFormat::Text && !json_output {
+            eprintln!("resumed session: {saved_id}");
+        }
+    }
 
     engine_handle
         .send(Op::SendMessage {
@@ -4260,6 +4736,7 @@ async fn run_exec_agent(
             allow_shell: auto_approve || config.allow_shell(),
             trust_mode,
             auto_approve,
+            translation_enabled: false,
             approval_mode: if auto_approve {
                 crate::tui::approval::ApprovalMode::Auto
             } else {
@@ -4290,10 +4767,18 @@ async fn run_exec_agent(
     }
     let mut summary = ExecSummary {
         mode: "agent".to_string(),
-        model: effective_model,
+        model: effective_model.clone(),
         prompt: prompt.to_string(),
         ..ExecSummary::default()
     };
+
+    let should_persist_session =
+        resume_session_id.is_some() || output_format == ExecOutputFormat::StreamJson;
+    let mut latest_session_id = loaded_session_id;
+    let mut latest_messages: Vec<Message> = Vec::new();
+    let mut latest_system_prompt: Option<SystemPrompt> = None;
+    let mut latest_model = effective_model;
+    let mut latest_workspace = workspace.clone();
 
     let mut stdout = io::stdout();
     let mut ends_with_newline = false;
@@ -4310,71 +4795,115 @@ async fn run_exec_agent(
         match event {
             Event::MessageDelta { content, .. } => {
                 summary.output.push_str(&content);
-                if !json_output {
+                if output_format == ExecOutputFormat::StreamJson {
+                    emit_exec_stream_event(&ExecStreamEvent::Content { content })?;
+                } else if !json_output {
                     print!("{content}");
                     stdout.flush()?;
                 }
-                ends_with_newline = content.ends_with('\n');
+                ends_with_newline = summary.output.ends_with('\n');
             }
-            Event::MessageComplete { .. } if !json_output && !ends_with_newline => {
+            Event::MessageComplete { .. }
+                if output_format == ExecOutputFormat::Text
+                    && !json_output
+                    && !ends_with_newline =>
+            {
                 println!();
             }
-            Event::ToolCallStarted { name, input, .. } if !json_output => {
-                let summary = summarize_tool_args(&input);
-                if let Some(summary) = summary {
-                    eprintln!("tool: {name} ({summary})");
-                } else {
-                    eprintln!("tool: {name}");
+            Event::ThinkingDelta { .. } => {
+                // Exec stream-json intentionally omits reasoning deltas; the
+                // TUI transcript retains its existing Activity Detail surface.
+            }
+            Event::ToolCallStarted { id, name, input } => {
+                if output_format == ExecOutputFormat::StreamJson {
+                    emit_exec_stream_event(&ExecStreamEvent::ToolUse { name, id, input })?;
+                } else if !json_output {
+                    let summary = summarize_tool_args(&input);
+                    if let Some(summary) = summary {
+                        eprintln!("tool: {name} ({summary})");
+                    } else {
+                        eprintln!("tool: {name}");
+                    }
                 }
             }
-            Event::ToolCallProgress { id, output } if !json_output => {
+            Event::ToolCallProgress { id, output }
+                if output_format == ExecOutputFormat::Text && !json_output =>
+            {
                 eprintln!("tool {id}: {}", summarize_tool_output(&output));
             }
-            Event::ToolCallComplete { name, result, .. } => match result {
+            Event::ToolCallComplete {
+                id, name, result, ..
+            } => match result {
                 Ok(output) => {
                     summary.tools.push(ExecToolEntry {
                         name: name.clone(),
                         success: output.success,
                         output: output.content.clone(),
                     });
-                    if name == "exec_shell" && !output.content.trim().is_empty() {
-                        if !json_output {
+                    if output_format == ExecOutputFormat::StreamJson {
+                        emit_exec_stream_event(&ExecStreamEvent::ToolResult {
+                            id,
+                            output: output.content,
+                            status: if output.success {
+                                "success".to_string()
+                            } else {
+                                "error".to_string()
+                            },
+                        })?;
+                    } else if !json_output {
+                        if name == "exec_shell" && !output.content.trim().is_empty() {
                             eprintln!("tool {name} completed");
                             eprintln!(
                                 "--- stdout/stderr ---\n{}\n---------------------",
                                 output.content
                             );
+                        } else {
+                            eprintln!(
+                                "tool {name} completed: {}",
+                                summarize_tool_output(&output.content)
+                            );
                         }
-                    } else if !json_output {
-                        eprintln!(
-                            "tool {name} completed: {}",
-                            summarize_tool_output(&output.content)
-                        );
                     }
                 }
                 Err(err) => {
+                    let error_text = err.to_string();
                     summary.tools.push(ExecToolEntry {
                         name: name.clone(),
                         success: false,
-                        output: err.to_string(),
+                        output: error_text.clone(),
                     });
-                    if !json_output {
+                    if output_format == ExecOutputFormat::StreamJson {
+                        emit_exec_stream_event(&ExecStreamEvent::ToolResult {
+                            id,
+                            output: error_text,
+                            status: "error".to_string(),
+                        })?;
+                    } else if !json_output {
                         eprintln!("tool {name} failed: {err}");
                     }
                 }
             },
-            Event::AgentSpawned { id, prompt } => {
+            Event::AgentSpawned { id, prompt }
+                if output_format == ExecOutputFormat::Text && !json_output =>
+            {
                 eprintln!("sub-agent {id} spawned: {}", summarize_tool_output(&prompt));
             }
-            Event::AgentProgress { id, status } => {
+            Event::AgentProgress { id, status }
+                if output_format == ExecOutputFormat::Text && !json_output =>
+            {
                 eprintln!("sub-agent {id}: {status}");
             }
-            Event::AgentComplete { id, result } => {
+            Event::AgentComplete { id, result }
+                if output_format == ExecOutputFormat::Text && !json_output =>
+            {
                 eprintln!(
                     "sub-agent {id} completed: {}",
                     summarize_tool_output(&result)
                 );
             }
+            Event::AgentSpawned { .. }
+            | Event::AgentProgress { .. }
+            | Event::AgentComplete { .. } => {}
             Event::ApprovalRequired { id, .. } => {
                 if auto_approve {
                     let _ = engine_handle.approve_tool_call(id).await;
@@ -4389,11 +4918,15 @@ async fn run_exec_agent(
                 ..
             } => {
                 if auto_approve {
-                    eprintln!("sandbox denied {tool_name}: {denial_reason} (auto-elevating)");
+                    if output_format == ExecOutputFormat::Text && !json_output {
+                        eprintln!("sandbox denied {tool_name}: {denial_reason} (auto-elevating)");
+                    }
                     let policy = crate::sandbox::SandboxPolicy::DangerFullAccess;
                     let _ = engine_handle.retry_tool_with_policy(tool_id, policy).await;
                 } else {
-                    eprintln!("sandbox denied {tool_name}: {denial_reason}");
+                    if output_format == ExecOutputFormat::Text && !json_output {
+                        eprintln!("sandbox denied {tool_name}: {denial_reason}");
+                    }
                     let _ = engine_handle.deny_tool_call(tool_id).await;
                 }
             }
@@ -4402,15 +4935,80 @@ async fn run_exec_agent(
                 recoverable: _,
             } => {
                 summary.error = Some(envelope.message.clone());
-                if !json_output {
+                if output_format == ExecOutputFormat::StreamJson {
+                    emit_exec_stream_event(&ExecStreamEvent::Error {
+                        error: envelope.message,
+                    })?;
+                } else if !json_output {
                     eprintln!("error: {}", envelope.message);
                 }
             }
-            Event::TurnComplete { status, error, .. } => {
+            Event::TurnComplete {
+                status,
+                error,
+                usage,
+                ..
+            } => {
                 summary.status = Some(format!("{status:?}").to_lowercase());
                 summary.error = error;
+                let saved_session_id = if should_persist_session && !latest_messages.is_empty() {
+                    match persist_exec_session(
+                        &latest_messages,
+                        &latest_model,
+                        &latest_workspace,
+                        &latest_system_prompt,
+                        latest_session_id.as_deref(),
+                        u64::from(usage.input_tokens) + u64::from(usage.output_tokens),
+                    ) {
+                        Ok(id) => {
+                            if output_format == ExecOutputFormat::Text && !json_output {
+                                eprintln!("session: {id}");
+                            }
+                            Some(id)
+                        }
+                        Err(err) => {
+                            if output_format == ExecOutputFormat::Text && !json_output {
+                                eprintln!("warning: failed to save exec session: {err}");
+                            }
+                            latest_session_id.clone()
+                        }
+                    }
+                } else {
+                    latest_session_id.clone()
+                };
+
+                if output_format == ExecOutputFormat::StreamJson {
+                    if let Some(id) = saved_session_id.as_ref() {
+                        emit_exec_stream_event(&ExecStreamEvent::SessionCapture {
+                            content: id.clone(),
+                        })?;
+                    }
+                    emit_exec_stream_event(&ExecStreamEvent::Metadata {
+                        meta: ExecStreamMeta {
+                            model: latest_model.clone(),
+                            input_tokens: usage.input_tokens,
+                            output_tokens: usage.output_tokens,
+                            session_id: saved_session_id.unwrap_or_default(),
+                            status: summary.status.clone(),
+                        },
+                    })?;
+                    emit_exec_stream_event(&ExecStreamEvent::Done)?;
+                }
                 let _ = engine_handle.send(Op::Shutdown).await;
                 break;
+            }
+            Event::SessionUpdated {
+                session_id,
+                messages,
+                system_prompt,
+                model,
+                workspace,
+            } => {
+                latest_session_id = Some(session_id);
+                latest_messages = messages;
+                latest_system_prompt = system_prompt;
+                latest_model = model;
+                latest_workspace = workspace;
             }
             _ => {}
         }
@@ -4609,6 +5207,11 @@ mod terminal_mode_tests {
     }
 
     #[test]
+    fn companion_binary_reports_its_own_name() {
+        assert_eq!(Cli::command().get_name(), "deepseek-tui");
+    }
+
+    #[test]
     fn exec_accepts_split_prompt_words_for_windows_cmd_shims() {
         let cli = parse_cli(&["deepseek", "exec", "hello", "world"]);
         let Some(Commands::Exec(args)) = cli.command else {
@@ -4627,6 +5230,76 @@ mod terminal_mode_tests {
 
         assert!(args.json);
         assert_eq!(args.prompt, vec!["hello", "world"]);
+    }
+
+    #[test]
+    fn exec_accepts_resume_session_flags_for_harnesses() {
+        let cli = parse_cli(&[
+            "deepseek",
+            "exec",
+            "--resume",
+            "abc123",
+            "--output-format",
+            "stream-json",
+            "follow up",
+        ]);
+        let Some(Commands::Exec(args)) = cli.command else {
+            panic!("expected exec command");
+        };
+
+        assert_eq!(args.resume.as_deref(), Some("abc123"));
+        assert_eq!(args.output_format, ExecOutputFormat::StreamJson);
+        assert_eq!(args.prompt, vec!["follow up"]);
+    }
+
+    #[test]
+    fn exec_accepts_session_id_alias() {
+        let cli = parse_cli(&["deepseek", "exec", "--session-id", "abc123", "follow up"]);
+        let Some(Commands::Exec(args)) = cli.command else {
+            panic!("expected exec command");
+        };
+
+        assert_eq!(args.session_id.as_deref(), Some("abc123"));
+        assert_eq!(args.output_format, ExecOutputFormat::Text);
+    }
+
+    #[test]
+    fn exec_accepts_continue_for_latest_workspace_session() {
+        let cli = parse_cli(&["deepseek", "exec", "--continue", "follow up"]);
+        let Some(Commands::Exec(args)) = cli.command else {
+            panic!("expected exec command");
+        };
+
+        assert!(args.continue_session);
+    }
+
+    #[test]
+    fn exec_json_conflicts_with_stream_json_output() {
+        let err = Cli::try_parse_from([
+            "deepseek",
+            "exec",
+            "--json",
+            "--output-format",
+            "stream-json",
+            "hello",
+        ])
+        .expect_err("json summary and stream-json must not mix");
+
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn exec_stream_events_are_json_lines() {
+        let event = ExecStreamEvent::ToolResult {
+            id: "call_1".to_string(),
+            output: "line 1\nline 2".to_string(),
+            status: "success".to_string(),
+        };
+
+        let json = serde_json::to_string(&event).expect("serializes");
+        assert!(!json.contains('\n'));
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid json");
+        assert_eq!(parsed["type"], "tool_result");
     }
 
     #[test]
@@ -4655,6 +5328,7 @@ mod terminal_mode_tests {
                 terminal_probe_timeout_ms: None,
                 status_items: None,
                 osc8_links: None,
+                composer_arrows_scroll: None,
                 notification_condition: None,
             }),
             ..Config::default()
@@ -4670,21 +5344,21 @@ mod terminal_mode_tests {
         let config = Config::default();
 
         assert!(should_use_mouse_capture_with(
-            &cli, &config, true, None, None
+            &cli, &config, true, None, None, None
         ));
     }
 
     #[test]
     #[cfg(windows)]
     fn mouse_capture_defaults_off_on_legacy_windows_console() {
-        // Legacy conhost (no `WT_SESSION`) keeps the v0.8.x default-off
-        // behavior: mouse-mode reporting on legacy console can leak SGR
-        // escapes into the composer.
+        // Legacy conhost (no `WT_SESSION` and no `ConEmuPID`) keeps the
+        // v0.8.x default-off behavior: mouse-mode reporting on legacy console
+        // can leak SGR escapes into the composer.
         let cli = parse_cli(&["deepseek"]);
         let config = Config::default();
 
         assert!(!should_use_mouse_capture_with(
-            &cli, &config, true, None, None
+            &cli, &config, true, None, None, None
         ));
     }
 
@@ -4705,6 +5379,25 @@ mod terminal_mode_tests {
             true,
             None,
             Some("{a3a3b3a8-aa00-0000-0000-000000000000}"),
+            None,
+        ));
+    }
+
+    // ConEmu/Cmder sets `ConEmuPID` and handles VT mouse-mode reporting
+    // cleanly; default mouse capture on there so users get in-app scrolling.
+    #[test]
+    #[cfg(windows)]
+    fn mouse_capture_defaults_on_in_conemu() {
+        let cli = parse_cli(&["deepseek"]);
+        let config = Config::default();
+
+        assert!(should_use_mouse_capture_with(
+            &cli,
+            &config,
+            true,
+            None,
+            None,
+            Some("12345"),
         ));
     }
 
@@ -4714,7 +5407,7 @@ mod terminal_mode_tests {
         let config = Config::default();
 
         assert!(!should_use_mouse_capture_with(
-            &cli, &config, true, None, None
+            &cli, &config, true, None, None, None
         ));
     }
 
@@ -4728,13 +5421,14 @@ mod terminal_mode_tests {
                 terminal_probe_timeout_ms: None,
                 status_items: None,
                 osc8_links: None,
+                composer_arrows_scroll: None,
                 notification_condition: None,
             }),
             ..Config::default()
         };
 
         assert!(!should_use_mouse_capture_with(
-            &cli, &config, true, None, None
+            &cli, &config, true, None, None, None
         ));
     }
 
@@ -4744,7 +5438,7 @@ mod terminal_mode_tests {
         let config = Config::default();
 
         assert!(should_use_mouse_capture_with(
-            &cli, &config, true, None, None
+            &cli, &config, true, None, None, None
         ));
     }
 
@@ -4758,13 +5452,14 @@ mod terminal_mode_tests {
                 terminal_probe_timeout_ms: None,
                 status_items: None,
                 osc8_links: None,
+                composer_arrows_scroll: None,
                 notification_condition: None,
             }),
             ..Config::default()
         };
 
         assert!(should_use_mouse_capture_with(
-            &cli, &config, true, None, None
+            &cli, &config, true, None, None, None
         ));
     }
 
@@ -4774,7 +5469,7 @@ mod terminal_mode_tests {
         let config = Config::default();
 
         assert!(!should_use_mouse_capture_with(
-            &cli, &config, false, None, None
+            &cli, &config, false, None, None, None
         ));
     }
 
@@ -4796,6 +5491,7 @@ mod terminal_mode_tests {
             true,
             Some("JetBrains-JediTerm"),
             None,
+            None,
         ));
     }
 
@@ -4812,6 +5508,7 @@ mod terminal_mode_tests {
             true,
             Some("jetbrains-jediterm"),
             None,
+            None,
         ));
     }
 
@@ -4826,6 +5523,7 @@ mod terminal_mode_tests {
             true,
             Some("JetBrains-JediTerm"),
             None,
+            None,
         ));
     }
 
@@ -4839,6 +5537,7 @@ mod terminal_mode_tests {
                 terminal_probe_timeout_ms: None,
                 status_items: None,
                 osc8_links: None,
+                composer_arrows_scroll: None,
                 notification_condition: None,
             }),
             ..Config::default()
@@ -4849,6 +5548,7 @@ mod terminal_mode_tests {
             &config,
             true,
             Some("JetBrains-JediTerm"),
+            None,
             None,
         ));
     }
@@ -5192,6 +5892,7 @@ mod doctor_mcp_tests {
             required: false,
             enabled_tools: Vec::new(),
             disabled_tools: Vec::new(),
+            headers: std::collections::HashMap::new(),
         }
     }
 
@@ -5266,13 +5967,6 @@ mod setup_helper_tests {
     use super::*;
     use std::collections::BTreeSet;
     use tempfile::TempDir;
-
-    // Serialize tests that mutate process-global env vars. Without this,
-    // `cargo test` runs them in parallel and they race on `DEEPSEEK_API_KEY`,
-    // causing intermittent CI failures (one test reads while another's set
-    // is still active). `unwrap_or_else` recovers from poisoning so a panic
-    // in one test doesn't cascade through the whole module.
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     fn init_tools_dir_creates_readme_and_example() {
@@ -5428,7 +6122,7 @@ mod setup_helper_tests {
 
     #[test]
     fn plain_launch_preserves_checkpoint_but_starts_fresh() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = crate::test_support::lock_test_env();
         let tmp = TempDir::new().unwrap();
         let workspace = tmp.path().join("workspace");
         std::fs::create_dir_all(&workspace).unwrap();
@@ -5464,7 +6158,7 @@ mod setup_helper_tests {
 
     #[test]
     fn continue_recovers_same_workspace_checkpoint() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = crate::test_support::lock_test_env();
         let tmp = TempDir::new().unwrap();
         let workspace = tmp.path().join("workspace");
         std::fs::create_dir_all(&workspace).unwrap();
@@ -5528,6 +6222,7 @@ mod setup_helper_tests {
             "RUST_LOG",
             "DEEPSEEK_APPROVAL_POLICY",
             "DEEPSEEK_SANDBOX_MODE",
+            "DEEPSEEK_YOLO",
         ] {
             assert!(
                 keys.contains(required),
@@ -5573,7 +6268,7 @@ mod setup_helper_tests {
 
     #[test]
     fn resolve_api_key_source_reports_env_when_set() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = crate::test_support::lock_test_env();
         let prev = std::env::var("DEEPSEEK_API_KEY").ok();
         let prev_source = std::env::var("DEEPSEEK_API_KEY_SOURCE").ok();
         unsafe {
@@ -5595,7 +6290,7 @@ mod setup_helper_tests {
 
     #[test]
     fn resolve_api_key_source_reports_dispatcher_keyring() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = crate::test_support::lock_test_env();
         let prev = std::env::var("DEEPSEEK_API_KEY").ok();
         let prev_source = std::env::var("DEEPSEEK_API_KEY_SOURCE").ok();
         unsafe {
@@ -5617,7 +6312,7 @@ mod setup_helper_tests {
 
     #[test]
     fn resolve_api_key_source_prefers_config_over_env() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = crate::test_support::lock_test_env();
         let prev = std::env::var("DEEPSEEK_API_KEY").ok();
         let prev_source = std::env::var("DEEPSEEK_API_KEY_SOURCE").ok();
         unsafe {

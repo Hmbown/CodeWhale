@@ -180,6 +180,22 @@ npm publish --access public
 
 To re-enable automated publish: provision an npm automation token with "Bypass 2FA for token authentication" enabled (or set up npm Trusted Publishing via OIDC), store the corresponding secret on the repo, and re-add a `publish-npm` job to `release.yml` (or a dedicated workflow) along with reverting this section's "manual" framing.
 
+## CNB Cool mirror
+
+Every push to `main` and every `v*` tag is mirrored to
+`cnb.cool/deepseek-tui.com/DeepSeek-TUI` via the `Sync to CNB` workflow
+so users behind GitHub-blocking networks can fetch the source. After a
+release tag, **verify the mirror caught it** before declaring the
+release shipped:
+
+```bash
+git ls-remote https://cnb.cool/deepseek-tui.com/DeepSeek-TUI.git refs/tags/vX.Y.Z
+```
+
+If the workflow failed for the release tag, the manual fallback is
+documented in [docs/CNB_MIRROR.md](CNB_MIRROR.md) (one-time `git
+remote add cnb …`, then `git push cnb vX.Y.Z`).
+
 ## Recovery and Rollback
 
 - Crates publish partially:
@@ -194,3 +210,7 @@ To re-enable automated publish: provision an npm automation token with "Bypass 2
   - repack and republish the wrapper
 - A bad npm publish cannot be overwritten:
   - publish a new npm version with corrected metadata or install logic
+- CNB mirror failed for the release tag:
+  - check the run via `gh run list --workflow=sync-cnb.yml`
+  - retrigger with `gh workflow run sync-cnb.yml`, or push the tag
+    manually per [docs/CNB_MIRROR.md](CNB_MIRROR.md#manual-fallback)

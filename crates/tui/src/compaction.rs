@@ -53,7 +53,11 @@ impl Default for CompactionConfig {
             // v0.8.11: 50K was a 128K-era leftover that biased every
             // unconfigured caller toward "compact almost immediately on V4."
             // Bumped to 800K (80% of V4's 1M window) so the dead-code
-            // default no longer lies. Real call sites override this via
+            // default matches the hard automatic compaction guardrail. This
+            // is intentionally later than the model-visible 60% "suggest
+            // /compact during sustained work" guidance; automatic replacement
+            // compaction rewrites the cacheable prefix and remains opt-in.
+            // Real call sites override this via
             // `compaction_threshold_for_model_and_effort`.
             token_threshold: 800_000,
             model: DEFAULT_TEXT_MODEL.to_string(),
@@ -94,6 +98,7 @@ const LARGE_CONTEXT_SUMMARY_TOOL_RESULT_SNIPPET_CHARS: usize = 4_000;
 const LARGE_CONTEXT_SUMMARY_INPUT_MAX_CHARS: usize = 120_000;
 const LARGE_CONTEXT_SUMMARY_INPUT_HEAD_CHARS: usize = 72_000;
 const LARGE_CONTEXT_SUMMARY_INPUT_TAIL_CHARS: usize = 36_000;
+const TOOL_PRUNE_STOP_CHECK_BYTES: usize = 16 * 1024;
 const LARGE_CONTEXT_SUMMARY_MAX_TOKENS: u32 = 2_048;
 const LARGE_CONTEXT_WINDOW_TOKENS: u32 = 500_000;
 const CACHE_ALIGNED_SUMMARY_CONTEXT_BUDGET_PERCENT: usize = 85;
@@ -749,13 +754,25 @@ struct ToolResultPruneCandidate {
     original_len: usize,
 }
 
+#[cfg(test)]
+fn prune_tool_results(messages: &mut [Message], protected_window: usize) -> usize {
+    prune_tool_results_until(messages, protected_window, |_, _| false)
+}
+
 /// Mechanically prune old verbose tool results before paying for an LLM summary.
 ///
 /// The most recent `protected_window` messages stay byte-for-byte intact. Older
 /// duplicate tool results keep the freshest full body and replace earlier
 /// copies with one-line summaries; non-duplicate old results are summarized only
 /// when they exceed the normal summary snippet size.
-pub fn prune_tool_results(messages: &mut [Message], protected_window: usize) -> usize {
+fn prune_tool_results_until<F>(
+    messages: &mut [Message],
+    protected_window: usize,
+    mut should_stop: F,
+) -> usize
+where
+    F: FnMut(&[Message], usize) -> bool,
+{
     let cutoff = messages.len().saturating_sub(protected_window);
     if cutoff == 0 {
         return 0;
@@ -792,6 +809,12 @@ pub fn prune_tool_results(messages: &mut [Message], protected_window: usize) -> 
         }
     }
 
+    // The maps above are fully populated before pruning starts, so the order below
+    // only changes which message bytes are rewritten first. Pruning from newest to
+    // oldest lets callers stop as soon as enough bytes were saved, preserving the
+    // earlier JSON request prefix for byte-level KV caches.
+    candidates.reverse();
+
     let mut bytes_saved = 0usize;
     for candidate in candidates {
         let duplicate_count = count_by_key.get(&candidate.key).copied().unwrap_or(0);
@@ -821,6 +844,10 @@ pub fn prune_tool_results(messages: &mut [Message], protected_window: usize) -> 
             bytes_saved = bytes_saved.saturating_add(content.len().saturating_sub(summary.len()));
             *content = summary;
             *content_blocks = None;
+
+            if should_stop(messages, bytes_saved) {
+                break;
+            }
         }
     }
 
@@ -875,26 +902,54 @@ pub async fn compact_messages_safe(
     const MAX_RETRIES: u32 = 3;
     const BASE_DELAY_MS: u64 = 1000;
 
+    let was_over_threshold = should_compact(
+        messages,
+        config,
+        workspace,
+        external_pins,
+        external_working_set_paths,
+    );
     let mut pruned_messages = messages.to_vec();
-    let pruned_bytes = prune_tool_results(&mut pruned_messages, KEEP_RECENT_MESSAGES);
-    let compaction_input: &[Message] = if pruned_bytes > 0 {
-        logging::info(format!(
-            "Local tool-result prune saved {pruned_bytes} bytes before LLM compaction"
-        ));
-        let was_over_threshold = should_compact(
-            messages,
-            config,
-            workspace,
-            external_pins,
-            external_working_set_paths,
-        );
-        let now_under_threshold = !should_compact(
+    let mut now_under_threshold = false;
+    let mut next_stop_check_bytes = 0usize;
+    let pruned_bytes = prune_tool_results_until(
+        &mut pruned_messages,
+        KEEP_RECENT_MESSAGES,
+        |candidate_messages, bytes_saved| {
+            if !was_over_threshold || bytes_saved < next_stop_check_bytes {
+                return false;
+            }
+
+            // Stop at the first suffix-side prune check that clears the threshold.
+            // The check itself is a full compaction-plan pass, so bound it by saved
+            // bytes instead of running it after every candidate in huge sessions.
+            next_stop_check_bytes = bytes_saved.saturating_add(TOOL_PRUNE_STOP_CHECK_BYTES);
+            now_under_threshold = !should_compact(
+                candidate_messages,
+                config,
+                workspace,
+                external_pins,
+                external_working_set_paths,
+            );
+            now_under_threshold
+        },
+    );
+    if was_over_threshold && pruned_bytes > 0 && !now_under_threshold {
+        // The throttled in-loop check may skip the exact candidate that clears the
+        // budget. Do one final pass so a successful local prune still avoids LLM compaction.
+        now_under_threshold = !should_compact(
             &pruned_messages,
             config,
             workspace,
             external_pins,
             external_working_set_paths,
         );
+    }
+
+    let compaction_input: &[Message] = if pruned_bytes > 0 {
+        logging::info(format!(
+            "Local tool-result prune saved {pruned_bytes} bytes before LLM compaction"
+        ));
         if was_over_threshold && now_under_threshold {
             return Ok(CompactionResult {
                 messages: pruned_messages,
@@ -1569,6 +1624,60 @@ mod tests {
             panic!("expected tool result");
         };
         assert_eq!(content, &verbose);
+    }
+
+    #[test]
+    fn prune_tool_results_preserves_prefix_bytes_when_reverse_prune_is_enough() {
+        let older_verbose = "old ".repeat(SUMMARY_TOOL_RESULT_SNIPPET_CHARS + 40);
+        let newer_verbose = "new ".repeat(SUMMARY_TOOL_RESULT_SNIPPET_CHARS + 40);
+        let mut messages = vec![
+            tool_use("call-old", "read_file", json!({"path": "old.txt"})),
+            tool_result("call-old", &older_verbose),
+            tool_use("call-new", "read_file", json!({"path": "new.txt"})),
+            tool_result("call-new", &newer_verbose),
+            msg("user", "protected tail"),
+        ];
+        let original = messages.clone();
+
+        // Simulate the caller clearing its token budget after one suffix prune.
+        let saved = prune_tool_results_until(&mut messages, 1, |_, saved| saved > 0);
+
+        assert!(saved > 0);
+        assert_eq!(&messages[..3], &original[..3]);
+        assert_eq!(&messages[4..], &original[4..]);
+        let ContentBlock::ToolResult { content, .. } = &messages[3].content[0] else {
+            panic!("expected pruned tool result");
+        };
+        assert!(content.contains("[read_file] tool result pruned"));
+        assert!(content.contains("new.txt"));
+        assert!(content.len() < newer_verbose.len());
+    }
+
+    #[test]
+    fn prune_tool_results_stops_after_newest_duplicate_prune() {
+        let oldest = "oldest ".repeat(80);
+        let middle = "middle ".repeat(80);
+        let latest = "latest ".repeat(80);
+        let mut messages = vec![
+            tool_use("call-1", "read_file", json!({"path": "Cargo.toml"})),
+            tool_result("call-1", &oldest),
+            tool_use("call-2", "read_file", json!({"path": "Cargo.toml"})),
+            tool_result("call-2", &middle),
+            tool_use("call-3", "read_file", json!({"path": "Cargo.toml"})),
+            tool_result("call-3", &latest),
+            msg("user", "protected tail"),
+        ];
+        let original = messages.clone();
+
+        let saved = prune_tool_results_until(&mut messages, 1, |_, saved| saved > 0);
+
+        assert!(saved > 0);
+        assert_eq!(&messages[..3], &original[..3]);
+        assert_eq!(&messages[4..], &original[4..]);
+        let ContentBlock::ToolResult { content, .. } = &messages[3].content[0] else {
+            panic!("expected middle duplicate to be pruned");
+        };
+        assert!(content.contains("[read_file] tool result pruned"));
     }
 
     #[test]

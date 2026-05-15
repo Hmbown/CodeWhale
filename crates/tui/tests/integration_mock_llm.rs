@@ -410,56 +410,72 @@ async fn compaction_non_streaming_returns_queued_message_response() {
 
 // === 6. Sub-agent style turn ================================================
 //
-// Sub-agents share the trait boundary: a parent's tool-call (`agent_spawn`)
-// causes a child runtime to be created with its own `Arc<dyn LlmClient>`.
-// At the trait level the test is identical to a normal turn — what changes
-// is which mock instance answers. This test demonstrates two independent
-// mocks (parent + child) cooperating on the same protocol.
+// The next turn after an `agent_result` summary must re-verify the claimed
+// side effect before reporting success.
 
 #[tokio::test]
-async fn sub_agent_parent_and_child_each_drive_independent_mocks() {
-    // Parent decides to delegate.
-    let parent_turn = vec![
-        canned::message_start("parent_t1"),
-        canned::tool_use_block_start(0, "spawn_id", "agent_spawn"),
-        canned::tool_input_delta(0, r#"{"prompt":"compute 2+2"}"#),
-        canned::block_stop(0),
+async fn v4_parent_reverifies_subagent_file_self_report_before_claiming_success() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let missing = tmp.path().join("child-claimed-write.txt");
+    assert!(!missing.exists(), "fixture path must start missing");
+    let missing_path = missing.display().to_string();
+
+    let parent = MockLlmClient::new(vec![vec![
+        canned::message_start("parent_verify"),
+        canned::thinking_delta(0, "Verify the child's file-write self-report first."),
+        canned::tool_use_block_start(1, "verify_file", "read_file"),
+        canned::tool_input_delta(1, &serde_json::json!({ "path": &missing_path }).to_string()),
+        canned::block_stop(1),
         canned::message_delta("tool_use", None),
         canned::message_stop(),
-    ];
-    let parent = MockLlmClient::new(vec![parent_turn])
-        .with_provider("mock-parent")
-        .with_model("deepseek-v4-pro");
+    ]])
+    .with_model("deepseek-v4-pro");
+    let tool_summary = format!(
+        "[sub-agent result summarized for parent context]\n\
+Child results are self-reports; verify side effects with tools like read_file or list_dir before claiming success.\n\
+- agent_filecheck (implementer) status=Completed\n  result: Wrote {missing_path} successfully."
+    );
 
-    // Child does the work and replies with text.
-    let child_turn = vec![
-        canned::message_start("child_t1"),
-        canned::text_block_start(0),
-        canned::text_delta(0, "4"),
-        canned::block_stop(0),
-        canned::message_delta("end_turn", None),
-        canned::message_stop(),
-    ];
-    let child = MockLlmClient::new(vec![child_turn])
-        .with_provider("mock-child")
-        .with_model("deepseek-v4-flash");
-
-    // Drive both mocks against their own request streams.
-    let _ = parent
-        .create_message_stream(make_request(vec![user_message("delegate")]))
+    let mut stream = parent
+        .create_message_stream(make_request(vec![
+            user_message("Use a child to create the file, then report back."),
+            assistant_tool_call(
+                "agent_result_call",
+                "agent_result",
+                serde_json::json!({
+                    "agent_id": "agent_filecheck"
+                }),
+            ),
+            tool_result_message("agent_result_call", &tool_summary),
+        ]))
         .await
-        .unwrap()
-        .next()
-        .await;
+        .unwrap();
 
-    let (child_text, _) =
-        drain_stream_text(&child, make_request(vec![user_message("compute 2+2")])).await;
-    assert_eq!(child_text, "4");
+    let mut text_before_verification = String::new();
+    let mut tool_name = None;
+    let mut tool_input = String::new();
+    while let Some(ev) = stream.next().await {
+        match ev.unwrap() {
+            StreamEvent::ContentBlockStart { content_block, .. } => {
+                use crate::models::ContentBlockStart;
+                if let ContentBlockStart::ToolUse { name, .. } = content_block {
+                    tool_name = Some(name);
+                }
+            }
+            StreamEvent::ContentBlockDelta { delta, .. } => match delta {
+                Delta::InputJsonDelta { partial_json } => tool_input.push_str(&partial_json),
+                Delta::TextDelta { text } => text_before_verification.push_str(&text),
+                _ => {}
+            },
+            StreamEvent::MessageStop => break,
+            _ => {}
+        }
+    }
 
-    assert_eq!(parent.provider_name(), "mock-parent");
-    assert_eq!(child.provider_name(), "mock-child");
-    assert_eq!(parent.captured_requests().len(), 1);
-    assert_eq!(child.captured_requests().len(), 1);
+    assert_eq!(text_before_verification, "");
+    assert_eq!(tool_name.as_deref(), Some("read_file"));
+    let parsed: serde_json::Value = serde_json::from_str(&tool_input).expect("tool input JSON");
+    assert_eq!(parsed["path"], missing_path);
 }
 
 // === 7. Capacity-gate observation ===========================================

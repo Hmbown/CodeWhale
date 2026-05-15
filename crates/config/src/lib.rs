@@ -21,6 +21,8 @@ const DEFAULT_OPENAI_MODEL: &str = "gpt-4.1";
 const DEFAULT_DEEPSEEK_BASE_URL: &str = "https://api.deepseek.com/beta";
 const DEFAULT_NVIDIA_NIM_BASE_URL: &str = "https://integrate.api.nvidia.com/v1";
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+const DEFAULT_ATLASCLOUD_MODEL: &str = "deepseek-ai/deepseek-v4-flash";
+const DEFAULT_ATLASCLOUD_BASE_URL: &str = "https://api.atlascloud.ai/v1";
 const DEFAULT_OPENROUTER_MODEL: &str = "deepseek/deepseek-v4-pro";
 const DEFAULT_OPENROUTER_FLASH_MODEL: &str = "deepseek/deepseek-v4-flash";
 const DEFAULT_NOVITA_MODEL: &str = "deepseek/deepseek-v4-pro";
@@ -42,9 +44,16 @@ const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434/v1";
 #[serde(rename_all = "kebab-case")]
 pub enum ProviderKind {
     #[default]
+    #[serde(
+        alias = "deepseek-cn",
+        alias = "deepseek_china",
+        alias = "deepseekcn",
+        alias = "deepseek-china"
+    )]
     Deepseek,
     NvidiaNim,
     Openai,
+    Atlascloud,
     Openrouter,
     Novita,
     Fireworks,
@@ -60,6 +69,7 @@ impl ProviderKind {
             Self::Deepseek => "deepseek",
             Self::NvidiaNim => "nvidia-nim",
             Self::Openai => "openai",
+            Self::Atlascloud => "atlascloud",
             Self::Openrouter => "openrouter",
             Self::Novita => "novita",
             Self::Fireworks => "fireworks",
@@ -72,9 +82,11 @@ impl ProviderKind {
     #[must_use]
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
-            "deepseek" | "deep-seek" => Some(Self::Deepseek),
+            "deepseek" | "deep-seek" | "deepseek-cn" | "deepseek_china" | "deepseekcn"
+            | "deepseek-china" => Some(Self::Deepseek),
             "nvidia" | "nvidia-nim" | "nvidia_nim" | "nim" => Some(Self::NvidiaNim),
             "openai" | "open-ai" => Some(Self::Openai),
+            "atlascloud" | "atlas-cloud" | "atlas_cloud" | "atlas" => Some(Self::Atlascloud),
             "openrouter" | "open_router" => Some(Self::Openrouter),
             "novita" => Some(Self::Novita),
             "fireworks" | "fireworks-ai" => Some(Self::Fireworks),
@@ -104,6 +116,8 @@ pub struct ProvidersToml {
     #[serde(default)]
     pub openai: ProviderConfigToml,
     #[serde(default)]
+    pub atlascloud: ProviderConfigToml,
+    #[serde(default)]
     pub openrouter: ProviderConfigToml,
     #[serde(default)]
     pub novita: ProviderConfigToml,
@@ -124,6 +138,7 @@ impl ProvidersToml {
             ProviderKind::Deepseek => &self.deepseek,
             ProviderKind::NvidiaNim => &self.nvidia_nim,
             ProviderKind::Openai => &self.openai,
+            ProviderKind::Atlascloud => &self.atlascloud,
             ProviderKind::Openrouter => &self.openrouter,
             ProviderKind::Novita => &self.novita,
             ProviderKind::Fireworks => &self.fireworks,
@@ -138,6 +153,7 @@ impl ProvidersToml {
             ProviderKind::Deepseek => &mut self.deepseek,
             ProviderKind::NvidiaNim => &mut self.nvidia_nim,
             ProviderKind::Openai => &mut self.openai,
+            ProviderKind::Atlascloud => &mut self.atlascloud,
             ProviderKind::Openrouter => &mut self.openrouter,
             ProviderKind::Novita => &mut self.novita,
             ProviderKind::Fireworks => &mut self.fireworks,
@@ -350,6 +366,10 @@ impl ConfigToml {
         );
         merge_provider_config(&mut self.providers.openai, &project.providers.openai);
         merge_provider_config(
+            &mut self.providers.atlascloud,
+            &project.providers.atlascloud,
+        );
+        merge_provider_config(
             &mut self.providers.openrouter,
             &project.providers.openrouter,
         );
@@ -410,6 +430,12 @@ impl ConfigToml {
             "providers.openai.model" => self.providers.openai.model.clone(),
             "providers.openai.http_headers" => {
                 serialize_http_headers(&self.providers.openai.http_headers)
+            }
+            "providers.atlascloud.api_key" => self.providers.atlascloud.api_key.clone(),
+            "providers.atlascloud.base_url" => self.providers.atlascloud.base_url.clone(),
+            "providers.atlascloud.model" => self.providers.atlascloud.model.clone(),
+            "providers.atlascloud.http_headers" => {
+                serialize_http_headers(&self.providers.atlascloud.http_headers)
             }
             "providers.openrouter.api_key" => self.providers.openrouter.api_key.clone(),
             "providers.openrouter.base_url" => self.providers.openrouter.base_url.clone(),
@@ -508,6 +534,18 @@ impl ConfigToml {
             "providers.openai.model" => self.providers.openai.model = Some(value.to_string()),
             "providers.openai.http_headers" => {
                 self.providers.openai.http_headers = parse_http_headers(value)?;
+            }
+            "providers.atlascloud.api_key" => {
+                self.providers.atlascloud.api_key = Some(value.to_string());
+            }
+            "providers.atlascloud.base_url" => {
+                self.providers.atlascloud.base_url = Some(value.to_string());
+            }
+            "providers.atlascloud.model" => {
+                self.providers.atlascloud.model = Some(value.to_string());
+            }
+            "providers.atlascloud.http_headers" => {
+                self.providers.atlascloud.http_headers = parse_http_headers(value)?;
             }
             "providers.nvidia_nim.api_key" => {
                 self.providers.nvidia_nim.api_key = Some(value.to_string());
@@ -637,6 +675,10 @@ impl ConfigToml {
             "providers.openai.base_url" => self.providers.openai.base_url = None,
             "providers.openai.model" => self.providers.openai.model = None,
             "providers.openai.http_headers" => self.providers.openai.http_headers.clear(),
+            "providers.atlascloud.api_key" => self.providers.atlascloud.api_key = None,
+            "providers.atlascloud.base_url" => self.providers.atlascloud.base_url = None,
+            "providers.atlascloud.model" => self.providers.atlascloud.model = None,
+            "providers.atlascloud.http_headers" => self.providers.atlascloud.http_headers.clear(),
             "providers.nvidia_nim.api_key" => self.providers.nvidia_nim.api_key = None,
             "providers.nvidia_nim.base_url" => self.providers.nvidia_nim.base_url = None,
             "providers.nvidia_nim.model" => self.providers.nvidia_nim.model = None,
@@ -739,6 +781,18 @@ impl ConfigToml {
         }
         if let Some(v) = serialize_http_headers(&self.providers.openai.http_headers) {
             out.insert("providers.openai.http_headers".to_string(), v);
+        }
+        if let Some(v) = self.providers.atlascloud.api_key.as_ref() {
+            out.insert("providers.atlascloud.api_key".to_string(), redact_secret(v));
+        }
+        if let Some(v) = self.providers.atlascloud.base_url.as_ref() {
+            out.insert("providers.atlascloud.base_url".to_string(), v.clone());
+        }
+        if let Some(v) = self.providers.atlascloud.model.as_ref() {
+            out.insert("providers.atlascloud.model".to_string(), v.clone());
+        }
+        if let Some(v) = serialize_http_headers(&self.providers.atlascloud.http_headers) {
+            out.insert("providers.atlascloud.http_headers".to_string(), v);
         }
         if let Some(v) = self.providers.nvidia_nim.api_key.as_ref() {
             out.insert("providers.nvidia_nim.api_key".to_string(), redact_secret(v));
@@ -867,26 +921,6 @@ impl ConfigToml {
         let root_deepseek_model = (provider == ProviderKind::Deepseek)
             .then(|| self.default_text_model.clone())
             .flatten();
-        // CLI flag wins outright. Otherwise: config-file → injected secrets/env.
-        // This makes `deepseek auth set` a reliable fix even when the user's
-        // shell still exports an old key. When the file is empty, the injected
-        // secrets façade recovers configured secret-store credentials before
-        // falling back to ambient env.
-        let from_file = provider_cfg.api_key.clone().or(root_deepseek_api_key);
-        let (api_key, api_key_source) = if let Some(value) = cli.api_key.clone() {
-            (Some(value), Some(RuntimeApiKeySource::Cli))
-        } else if let Some(value) = from_file.clone().filter(|v| !v.trim().is_empty()) {
-            (Some(value), Some(RuntimeApiKeySource::ConfigFile))
-        } else if let Some((value, source)) = secrets.resolve_with_source(provider.as_str()) {
-            let source = match source {
-                SecretSource::Keyring => RuntimeApiKeySource::Keyring,
-                SecretSource::Env => RuntimeApiKeySource::Env,
-            };
-            (Some(value), Some(source))
-        } else {
-            (None, None)
-        };
-
         let base_url = cli
             .base_url
             .clone()
@@ -897,6 +931,7 @@ impl ConfigToml {
                 ProviderKind::Deepseek => DEFAULT_DEEPSEEK_BASE_URL.to_string(),
                 ProviderKind::NvidiaNim => DEFAULT_NVIDIA_NIM_BASE_URL.to_string(),
                 ProviderKind::Openai => DEFAULT_OPENAI_BASE_URL.to_string(),
+                ProviderKind::Atlascloud => DEFAULT_ATLASCLOUD_BASE_URL.to_string(),
                 ProviderKind::Openrouter => DEFAULT_OPENROUTER_BASE_URL.to_string(),
                 ProviderKind::Novita => DEFAULT_NOVITA_BASE_URL.to_string(),
                 ProviderKind::Fireworks => DEFAULT_FIREWORKS_BASE_URL.to_string(),
@@ -904,6 +939,38 @@ impl ConfigToml {
                 ProviderKind::Vllm => DEFAULT_VLLM_BASE_URL.to_string(),
                 ProviderKind::Ollama => DEFAULT_OLLAMA_BASE_URL.to_string(),
             });
+        let auth_mode = cli
+            .auth_mode
+            .clone()
+            .or_else(|| env.auth_mode.clone())
+            .or_else(|| self.auth_mode.clone());
+        // CLI flag wins outright. Otherwise: config-file → injected secrets/env.
+        // This makes `deepseek auth set` a reliable fix even when the user's
+        // shell still exports an old key. When the file is empty, the injected
+        // secrets façade recovers configured secret-store credentials before
+        // falling back to ambient env.
+        let from_file = provider_cfg.api_key.clone().or(root_deepseek_api_key);
+        let (api_key, api_key_source) = if let Some(value) = cli.api_key.clone() {
+            (Some(value), Some(RuntimeApiKeySource::Cli))
+        } else if let Some(value) = from_file.clone().filter(|v| !v.trim().is_empty()) {
+            (Some(value), Some(RuntimeApiKeySource::ConfigFile))
+        } else if should_skip_secret_store_for_provider(provider, &base_url, auth_mode.as_deref()) {
+            match deepseek_secrets::env_for(provider.as_str()) {
+                Some(value) => (Some(value), Some(RuntimeApiKeySource::Env)),
+                None => (None, None),
+            }
+        } else {
+            match secrets.resolve_with_source(provider.as_str()) {
+                Some((value, source)) => {
+                    let source = match source {
+                        SecretSource::Keyring => RuntimeApiKeySource::Keyring,
+                        SecretSource::Env => RuntimeApiKeySource::Env,
+                    };
+                    (Some(value), Some(source))
+                }
+                None => (None, None),
+            }
+        };
 
         let explicit_model = cli.model.is_some()
             || env.model.is_some()
@@ -937,11 +1004,6 @@ impl ConfigToml {
             .clone()
             .or_else(|| env.output_mode.clone())
             .or_else(|| self.output_mode.clone());
-        let auth_mode = cli
-            .auth_mode
-            .clone()
-            .or_else(|| env.auth_mode.clone())
-            .or_else(|| self.auth_mode.clone());
         let log_level = cli
             .log_level
             .clone()
@@ -962,6 +1024,7 @@ impl ConfigToml {
             .clone()
             .or_else(|| env.sandbox_mode.clone())
             .or_else(|| self.sandbox_mode.clone());
+        let yolo = cli.yolo.or(env.yolo);
 
         ResolvedRuntimeOptions {
             provider,
@@ -975,6 +1038,7 @@ impl ConfigToml {
             telemetry,
             approval_policy,
             sandbox_mode,
+            yolo,
             http_headers,
         }
     }
@@ -1007,7 +1071,7 @@ pub fn load_project_config(workspace: &Path) -> Option<ConfigToml> {
 }
 
 fn normalize_model_for_provider(provider: ProviderKind, model: &str) -> String {
-    if matches!(provider, ProviderKind::Ollama) {
+    if matches!(provider, ProviderKind::Atlascloud | ProviderKind::Ollama) {
         return model.to_string();
     }
 
@@ -1065,6 +1129,7 @@ fn default_model_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::Deepseek => DEFAULT_DEEPSEEK_MODEL,
         ProviderKind::NvidiaNim => DEFAULT_NVIDIA_NIM_MODEL,
         ProviderKind::Openai => DEFAULT_OPENAI_MODEL,
+        ProviderKind::Atlascloud => DEFAULT_ATLASCLOUD_MODEL,
         ProviderKind::Openrouter => DEFAULT_OPENROUTER_MODEL,
         ProviderKind::Novita => DEFAULT_NOVITA_MODEL,
         ProviderKind::Fireworks => DEFAULT_FIREWORKS_MODEL,
@@ -1079,6 +1144,7 @@ fn default_base_url_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::Deepseek => DEFAULT_DEEPSEEK_BASE_URL,
         ProviderKind::NvidiaNim => DEFAULT_NVIDIA_NIM_BASE_URL,
         ProviderKind::Openai => DEFAULT_OPENAI_BASE_URL,
+        ProviderKind::Atlascloud => DEFAULT_ATLASCLOUD_BASE_URL,
         ProviderKind::Openrouter => DEFAULT_OPENROUTER_BASE_URL,
         ProviderKind::Novita => DEFAULT_NOVITA_BASE_URL,
         ProviderKind::Fireworks => DEFAULT_FIREWORKS_BASE_URL,
@@ -1095,8 +1161,76 @@ fn base_url_is_custom_for_provider(provider: ProviderKind, base_url: &str) -> bo
 }
 
 fn provider_preserves_custom_base_url_model(provider: ProviderKind, base_url: &str) -> bool {
-    matches!(provider, ProviderKind::Openrouter)
-        && base_url_is_custom_for_provider(provider, base_url)
+    base_url_is_custom_for_provider(provider, base_url)
+}
+
+fn should_skip_secret_store_for_provider(
+    provider: ProviderKind,
+    base_url: &str,
+    auth_mode: Option<&str>,
+) -> bool {
+    if auth_mode_requires_api_key(auth_mode) {
+        return false;
+    }
+    if auth_mode_disables_api_key(auth_mode) {
+        return true;
+    }
+
+    matches!(
+        provider,
+        ProviderKind::Sglang | ProviderKind::Vllm | ProviderKind::Ollama
+    ) || base_url_uses_local_host(base_url)
+}
+
+fn auth_mode_requires_api_key(auth_mode: Option<&str>) -> bool {
+    matches!(
+        auth_mode
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_ascii_lowercase()),
+        Some(value)
+            if matches!(
+                value.as_str(),
+                "api_key" | "api-key" | "apikey" | "bearer" | "bearer-token"
+            )
+    )
+}
+
+fn auth_mode_disables_api_key(auth_mode: Option<&str>) -> bool {
+    matches!(
+        auth_mode
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_ascii_lowercase()),
+        Some(value)
+            if matches!(
+                value.as_str(),
+                "none" | "off" | "disabled" | "no_auth" | "no-auth" | "anonymous"
+            )
+    )
+}
+
+fn base_url_uses_local_host(base_url: &str) -> bool {
+    let Some(host) = base_url_host(base_url) else {
+        return false;
+    };
+    let host = host.trim_matches(['[', ']']).to_ascii_lowercase();
+    if matches!(host.as_str(), "localhost" | "0.0.0.0") {
+        return true;
+    }
+    host.parse::<std::net::IpAddr>()
+        .is_ok_and(|addr| addr.is_loopback() || addr.is_unspecified())
+}
+
+fn base_url_host(base_url: &str) -> Option<&str> {
+    let without_scheme = base_url
+        .split_once("://")
+        .map_or(base_url, |(_, rest)| rest);
+    let authority = without_scheme.split('/').next()?.rsplit('@').next()?;
+    if let Some(rest) = authority.strip_prefix('[') {
+        return rest.split_once(']').map(|(host, _)| host);
+    }
+    authority.split(':').next().filter(|host| !host.is_empty())
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1111,6 +1245,7 @@ pub struct CliRuntimeOverrides {
     pub telemetry: Option<bool>,
     pub approval_policy: Option<String>,
     pub sandbox_mode: Option<String>,
+    pub yolo: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1146,6 +1281,7 @@ pub struct ResolvedRuntimeOptions {
     pub telemetry: bool,
     pub approval_policy: Option<String>,
     pub sandbox_mode: Option<String>,
+    pub yolo: Option<bool>,
     pub http_headers: BTreeMap<String, String>,
 }
 
@@ -1361,10 +1497,12 @@ struct EnvRuntimeOverrides {
     telemetry: Option<bool>,
     approval_policy: Option<String>,
     sandbox_mode: Option<String>,
+    yolo: Option<bool>,
     http_headers: Option<BTreeMap<String, String>>,
     deepseek_base_url: Option<String>,
     nvidia_base_url: Option<String>,
     openai_base_url: Option<String>,
+    atlascloud_base_url: Option<String>,
     openrouter_base_url: Option<String>,
     novita_base_url: Option<String>,
     fireworks_base_url: Option<String>,
@@ -1388,6 +1526,9 @@ impl EnvRuntimeOverrides {
                 .and_then(|v| parse_bool(&v).ok()),
             approval_policy: std::env::var("DEEPSEEK_APPROVAL_POLICY").ok(),
             sandbox_mode: std::env::var("DEEPSEEK_SANDBOX_MODE").ok(),
+            yolo: std::env::var("DEEPSEEK_YOLO")
+                .ok()
+                .and_then(|v| parse_bool(&v).ok()),
             http_headers: std::env::var("DEEPSEEK_HTTP_HEADERS")
                 .ok()
                 .and_then(|value| parse_http_headers(&value).ok())
@@ -1401,6 +1542,9 @@ impl EnvRuntimeOverrides {
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
             openai_base_url: std::env::var("OPENAI_BASE_URL")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            atlascloud_base_url: std::env::var("ATLASCLOUD_BASE_URL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
             openrouter_base_url: std::env::var("OPENROUTER_BASE_URL")
@@ -1431,6 +1575,7 @@ impl EnvRuntimeOverrides {
             ProviderKind::Deepseek => self.deepseek_base_url.clone(),
             ProviderKind::NvidiaNim => self.nvidia_base_url.clone(),
             ProviderKind::Openai => self.openai_base_url.clone(),
+            ProviderKind::Atlascloud => self.atlascloud_base_url.clone(),
             ProviderKind::Openrouter => self.openrouter_base_url.clone(),
             ProviderKind::Novita => self.novita_base_url.clone(),
             ProviderKind::Fireworks => self.fireworks_base_url.clone(),
@@ -1446,6 +1591,7 @@ mod tests {
     use super::*;
     use std::env;
     use std::ffi::OsString;
+    use std::sync::Arc;
     use std::sync::{Mutex, OnceLock};
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
@@ -1474,6 +1620,7 @@ mod tests {
         deepseek_http_headers: Option<OsString>,
         deepseek_model: Option<OsString>,
         deepseek_provider: Option<OsString>,
+        deepseek_auth_mode: Option<OsString>,
         nvidia_api_key: Option<OsString>,
         nvidia_nim_api_key: Option<OsString>,
         nim_base_url: Option<OsString>,
@@ -1501,6 +1648,7 @@ mod tests {
                 deepseek_http_headers: env::var_os("DEEPSEEK_HTTP_HEADERS"),
                 deepseek_model: env::var_os("DEEPSEEK_MODEL"),
                 deepseek_provider: env::var_os("DEEPSEEK_PROVIDER"),
+                deepseek_auth_mode: env::var_os("DEEPSEEK_AUTH_MODE"),
                 nvidia_api_key: env::var_os("NVIDIA_API_KEY"),
                 nvidia_nim_api_key: env::var_os("NVIDIA_NIM_API_KEY"),
                 nim_base_url: env::var_os("NIM_BASE_URL"),
@@ -1526,6 +1674,7 @@ mod tests {
                 env::remove_var("DEEPSEEK_HTTP_HEADERS");
                 env::remove_var("DEEPSEEK_MODEL");
                 env::remove_var("DEEPSEEK_PROVIDER");
+                env::remove_var("DEEPSEEK_AUTH_MODE");
                 env::remove_var("NVIDIA_API_KEY");
                 env::remove_var("NVIDIA_NIM_API_KEY");
                 env::remove_var("NIM_BASE_URL");
@@ -1565,6 +1714,7 @@ mod tests {
                 Self::restore_var("DEEPSEEK_HTTP_HEADERS", self.deepseek_http_headers.take());
                 Self::restore_var("DEEPSEEK_MODEL", self.deepseek_model.take());
                 Self::restore_var("DEEPSEEK_PROVIDER", self.deepseek_provider.take());
+                Self::restore_var("DEEPSEEK_AUTH_MODE", self.deepseek_auth_mode.take());
                 Self::restore_var("NVIDIA_API_KEY", self.nvidia_api_key.take());
                 Self::restore_var("NVIDIA_NIM_API_KEY", self.nvidia_nim_api_key.take());
                 Self::restore_var("NIM_BASE_URL", self.nim_base_url.take());
@@ -1583,6 +1733,39 @@ mod tests {
                 Self::restore_var("OLLAMA_API_KEY", self.ollama_api_key.take());
                 Self::restore_var("OLLAMA_BASE_URL", self.ollama_base_url.take());
             }
+        }
+    }
+
+    struct RecordingSecretsStore {
+        gets: Mutex<Vec<String>>,
+        value: Option<String>,
+    }
+
+    impl RecordingSecretsStore {
+        fn with_value(value: &str) -> Self {
+            Self {
+                gets: Mutex::new(Vec::new()),
+                value: Some(value.to_string()),
+            }
+        }
+    }
+
+    impl deepseek_secrets::KeyringStore for RecordingSecretsStore {
+        fn get(&self, key: &str) -> Result<Option<String>, deepseek_secrets::SecretsError> {
+            self.gets.lock().unwrap().push(key.to_string());
+            Ok(self.value.clone())
+        }
+
+        fn set(&self, _key: &str, _value: &str) -> Result<(), deepseek_secrets::SecretsError> {
+            Ok(())
+        }
+
+        fn delete(&self, _key: &str) -> Result<(), deepseek_secrets::SecretsError> {
+            Ok(())
+        }
+
+        fn backend_name(&self) -> &'static str {
+            "recording"
         }
     }
 
@@ -1956,6 +2139,22 @@ mod tests {
     }
 
     #[test]
+    fn provider_kind_accepts_legacy_deepseek_cn_aliases() {
+        for alias in [
+            "deepseek-cn",
+            "deepseek_china",
+            "deepseekcn",
+            "deepseek-china",
+        ] {
+            assert_eq!(ProviderKind::parse(alias), Some(ProviderKind::Deepseek));
+
+            let parsed: ConfigToml =
+                toml::from_str(&format!("provider = \"{alias}\"")).expect("legacy provider alias");
+            assert_eq!(parsed.provider, ProviderKind::Deepseek);
+        }
+    }
+
+    #[test]
     fn openrouter_provider_defaults_to_canonical_endpoint_and_model() {
         let _lock = env_lock();
         let _env = EnvGuard::without_deepseek_runtime_overrides();
@@ -2050,6 +2249,78 @@ mod tests {
         assert_eq!(resolved.base_url, DEFAULT_OLLAMA_BASE_URL);
         assert_eq!(resolved.model, DEFAULT_OLLAMA_MODEL);
         assert_eq!(resolved.api_key, None);
+    }
+
+    #[test]
+    fn self_hosted_providers_do_not_probe_secret_store_by_default() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        let store = Arc::new(RecordingSecretsStore::with_value("secret-store-key"));
+        let secrets = Secrets::new(store.clone());
+
+        for provider in [
+            ProviderKind::Sglang,
+            ProviderKind::Vllm,
+            ProviderKind::Ollama,
+        ] {
+            let config = ConfigToml {
+                provider,
+                ..ConfigToml::default()
+            };
+
+            let resolved = config
+                .resolve_runtime_options_with_secrets(&CliRuntimeOverrides::default(), &secrets);
+
+            assert_eq!(resolved.provider, provider);
+            assert_eq!(resolved.api_key, None);
+        }
+
+        assert!(
+            store.gets.lock().unwrap().is_empty(),
+            "self-hosted providers should not read the secret store by default"
+        );
+    }
+
+    #[test]
+    fn self_hosted_api_key_auth_can_use_secret_store_when_requested() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        let store = Arc::new(RecordingSecretsStore::with_value("secret-store-key"));
+        let secrets = Secrets::new(store.clone());
+        let config = ConfigToml {
+            provider: ProviderKind::Ollama,
+            auth_mode: Some("api_key".to_string()),
+            ..ConfigToml::default()
+        };
+
+        let resolved =
+            config.resolve_runtime_options_with_secrets(&CliRuntimeOverrides::default(), &secrets);
+
+        assert_eq!(resolved.api_key.as_deref(), Some("secret-store-key"));
+        assert_eq!(store.gets.lock().unwrap().as_slice(), ["ollama"]);
+    }
+
+    #[test]
+    fn loopback_custom_deepseek_base_url_does_not_probe_secret_store_by_default() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        let store = Arc::new(RecordingSecretsStore::with_value("stale-deepseek-key"));
+        let secrets = Secrets::new(store.clone());
+        let config = ConfigToml {
+            base_url: Some("http://127.0.0.1:8000/v1".to_string()),
+            ..ConfigToml::default()
+        };
+
+        let resolved =
+            config.resolve_runtime_options_with_secrets(&CliRuntimeOverrides::default(), &secrets);
+
+        assert_eq!(resolved.provider, ProviderKind::Deepseek);
+        assert_eq!(resolved.base_url, "http://127.0.0.1:8000/v1");
+        assert_eq!(resolved.api_key, None);
+        assert!(
+            store.gets.lock().unwrap().is_empty(),
+            "loopback custom endpoints should not read macOS Keychain or any secret store"
+        );
     }
 
     #[test]
@@ -2237,6 +2508,25 @@ mod tests {
 
         assert_eq!(resolved.provider, ProviderKind::Openrouter);
         assert_eq!(resolved.base_url, "https://gateway.example.com/v1");
+        assert_eq!(resolved.model, "DeepSeek-V4-Pro");
+    }
+
+    #[test]
+    fn fireworks_custom_base_url_preserves_provider_model() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        let mut config = ConfigToml {
+            provider: ProviderKind::Fireworks,
+            ..ConfigToml::default()
+        };
+        config.providers.fireworks.base_url = Some("https://my-gateway.example/v1".to_string());
+        config.providers.fireworks.model = Some("DeepSeek-V4-Pro".to_string());
+
+        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::Fireworks);
+        assert_eq!(resolved.base_url, "https://my-gateway.example/v1");
+        // Custom base URL skips provider-specific model prefixing.
         assert_eq!(resolved.model, "DeepSeek-V4-Pro");
     }
 

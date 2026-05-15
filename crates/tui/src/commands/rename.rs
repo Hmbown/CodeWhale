@@ -58,6 +58,7 @@ fn rename_with_manager(
         u64::from(app.session.total_tokens),
         app.system_prompt.as_ref(),
     );
+    app.sync_cost_to_metadata(&mut session.metadata);
     session.metadata.title = new_title.to_string();
 
     match manager.save_session(&session) {

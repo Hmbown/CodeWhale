@@ -506,6 +506,20 @@ impl FooterWidget {
         }
         spans
     }
+
+    fn left_spans(&self, max_width: usize) -> Vec<Span<'static>> {
+        if let Some(banner) = retry_banner_spans(max_width, &self.props) {
+            // Retry banner takes precedence over toast and the regular
+            // status line so the user sees it loud and clear (#499).
+            // The banner clears automatically on success or on the next
+            // `TurnStarted` (engine emits the clear).
+            banner
+        } else if let Some(toast) = self.props.toast.as_ref() {
+            Self::toast_spans(toast, max_width)
+        } else {
+            self.status_line_spans(max_width)
+        }
+    }
 }
 
 fn spans_text(spans: &[Span<'_>]) -> String {
@@ -546,25 +560,19 @@ impl Renderable for FooterWidget {
             return;
         }
 
-        let right_spans = self.auxiliary_spans(available_width);
+        let preview_left_spans = self.left_spans(available_width);
+        let preview_left_width = span_width(&preview_left_spans);
+        let right_budget = available_width
+            .saturating_sub(preview_left_width)
+            .saturating_sub(2);
+        let right_spans = self.auxiliary_spans(right_budget);
         let right_width = span_width(&right_spans);
         let min_gap = if right_width > 0 { 2 } else { 0 };
         let max_left_width = available_width
             .saturating_sub(right_width)
             .saturating_sub(min_gap)
             .max(1);
-
-        let left_spans = if let Some(banner) = retry_banner_spans(max_left_width, &self.props) {
-            // Retry banner takes precedence over toast and the regular
-            // status line so the user sees it loud and clear (#499).
-            // The banner clears automatically on success or on the next
-            // `TurnStarted` (engine emits the clear).
-            banner
-        } else if let Some(toast) = self.props.toast.as_ref() {
-            Self::toast_spans(toast, max_left_width)
-        } else {
-            self.status_line_spans(max_left_width)
-        };
+        let left_spans = self.left_spans(max_left_width);
 
         let left_width = span_width(&left_spans);
         let spacer_width = available_width.saturating_sub(left_width + right_width);
@@ -635,6 +643,7 @@ mod tests {
         text::Span,
     };
     use std::path::PathBuf;
+    use unicode_width::UnicodeWidthStr;
 
     fn make_app() -> App {
         let options = TuiOptions {
@@ -659,10 +668,15 @@ mod tests {
             initial_input: None,
         };
         let mut app = App::new(options, &Config::default());
-        // App::new may pick up `default_model` from a local user Settings
-        // file, which overrides the option above. Pin the model explicitly
-        // so these tests are independent of any host-side configuration.
+        // App::new may pick up local Settings, which override the option
+        // above. Pin model state explicitly so these tests are host-neutral.
         app.model = "deepseek-v4-flash".to_string();
+        app.auto_model = false;
+        app.api_provider = crate::config::ApiProvider::Deepseek;
+        // Same for theme: tests below assert against the default dark palette,
+        // but App::new honors saved settings.toml values on the host machine.
+        app.theme_id = crate::palette::ThemeId::Whale;
+        app.ui_theme = crate::palette::UI_THEME;
         app
     }
 
@@ -1223,6 +1237,70 @@ mod tests {
             Vec::<Span<'static>>::new(),
             vec![Span::styled(cost.to_string(), Style::default())],
         )
+    }
+
+    #[test]
+    fn render_drops_oversized_right_chips_before_they_crowd_left_status() {
+        let app = make_app();
+        let long_cache = vec![Span::styled(
+            "Cache: 75.0% hit | hit 36000 | miss 12000".to_string(),
+            Style::default(),
+        )];
+        let props = FooterProps::from_app(
+            &app,
+            None,
+            "ready",
+            palette::TEXT_MUTED,
+            Vec::<Span<'static>>::new(),
+            Vec::<Span<'static>>::new(),
+            Vec::<Span<'static>>::new(),
+            long_cache,
+            Vec::<Span<'static>>::new(),
+        );
+
+        let line = render_at_width(props, 40);
+
+        assert!(
+            line.contains("agent"),
+            "left status should survive: {line:?}"
+        );
+        assert!(
+            !line.contains("Cache:"),
+            "oversized right chip should drop instead of crowding the row: {line:?}",
+        );
+        assert!(line.width() <= 40, "footer must fit in one row: {line:?}");
+    }
+
+    #[test]
+    fn render_keeps_right_chips_when_left_status_leaves_room() {
+        let app = make_app();
+        let cache = vec![Span::styled(
+            "Cache: 75.0% hit".to_string(),
+            Style::default(),
+        )];
+        let props = FooterProps::from_app(
+            &app,
+            None,
+            "ready",
+            palette::TEXT_MUTED,
+            Vec::<Span<'static>>::new(),
+            Vec::<Span<'static>>::new(),
+            Vec::<Span<'static>>::new(),
+            cache,
+            Vec::<Span<'static>>::new(),
+        );
+
+        let line = render_at_width(props, 80);
+
+        assert!(
+            line.contains("agent"),
+            "left status should render: {line:?}"
+        );
+        assert!(
+            line.contains("Cache: 75.0% hit"),
+            "right chip should render: {line:?}"
+        );
+        assert!(line.width() <= 80, "footer must fit in one row: {line:?}");
     }
 
     /// v0.6.6 redesign — cost lives on the LEFT, between model and status.

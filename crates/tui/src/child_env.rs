@@ -149,6 +149,34 @@ fn is_allowed_parent_env_key(key: &OsStr) -> bool {
             | "USERPROFILE"
             | "HOMEDRIVE"
             | "HOMEPATH"
+            // Preserve Windows toolchain context when the parent shell has
+            // already loaded VsDevCmd / vcvars. Without these, `exec_shell`
+            // can find `link.exe` via PATH but still fail to resolve
+            // SDK/CRT libraries like `kernel32.lib`, so any model-driven
+            // `cargo build` from inside the TUI silently breaks on
+            // Windows installs that don't run inside a Developer Command
+            // Prompt. Harvested from PR #1487.
+            | "LIB"
+            | "LIBPATH"
+            | "INCLUDE"
+            | "VSINSTALLDIR"
+            | "VCINSTALLDIR"
+            | "VCTOOLSINSTALLDIR"
+            | "WINDOWSSDKDIR"
+            | "WINDOWSSDKVERSION"
+            | "UNIVERSALCRTSDKDIR"
+            | "UCRTVERSION"
+            | "EXTENSIONSDKDIR"
+            | "DEVENVDIR"
+            | "VISUALSTUDIOVERSION"
+            // Standard proxy variables are needed by shell tasks in
+            // corporate and WSL environments where direct internet egress is
+            // blocked. They intentionally exclude token/API-key-shaped vars.
+            | "HTTP_PROXY"
+            | "HTTPS_PROXY"
+            | "NO_PROXY"
+            | "ALL_PROXY"
+            | "FTP_PROXY"
     ) || normalized.starts_with("LC_")
 }
 
@@ -232,7 +260,19 @@ mod tests {
 
     #[test]
     fn mcp_env_allowlist_inherits_base_keys() {
-        for key in ["PATH", "HOME", "USER", "TERM", "LANG", "SHELL"] {
+        for key in [
+            "PATH",
+            "HOME",
+            "USER",
+            "TERM",
+            "LANG",
+            "SHELL",
+            "LIB",
+            "LIBPATH",
+            "INCLUDE",
+            "VCTOOLSINSTALLDIR",
+            "WINDOWSSDKDIR",
+        ] {
             assert!(
                 is_allowed_mcp_env_key(OsStr::new(key)),
                 "MCP allowlist should inherit base key {key}"
@@ -289,6 +329,27 @@ mod tests {
             assert!(
                 is_allowed_mcp_env_key(OsStr::new(key)),
                 "MCP allowlist should include proxy key {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn child_env_allowlist_includes_proxy_keys_either_case() {
+        for key in [
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "NO_PROXY",
+            "ALL_PROXY",
+            "FTP_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "no_proxy",
+            "all_proxy",
+            "ftp_proxy",
+        ] {
+            assert!(
+                is_allowed_parent_env_key(OsStr::new(key)),
+                "child env allowlist should include proxy key {key}"
             );
         }
     }
@@ -450,5 +511,56 @@ mod tests {
             .find(|(key, _)| normalize_key(key) == "PATH")
             .map(|(_, value)| value);
         assert_eq!(path, Some(&OsString::from("/explicit/bin")));
+    }
+
+    #[test]
+    fn sanitized_child_env_preserves_windows_toolchain_vars() {
+        let _guard = env_lock().lock().expect("env lock");
+        let prev_lib = std::env::var_os("LIB");
+        let prev_include = std::env::var_os("INCLUDE");
+        let prev_sdk = std::env::var_os("WINDOWSSDKDIR");
+        // SAFETY: serialised by env_lock above. Restoring after the
+        // assertion is also under the same guard so concurrent tests
+        // never see our staged values.
+        unsafe {
+            std::env::set_var("LIB", r"C:\sdk\lib");
+            std::env::set_var("INCLUDE", r"C:\sdk\include");
+            std::env::set_var("WINDOWSSDKDIR", r"C:\sdk");
+        }
+
+        let env = sanitized_child_env(std::iter::empty::<(OsString, OsString)>());
+
+        // Restore prior state before asserting so a panic still leaves
+        // the process env clean for the next test.
+        unsafe {
+            match prev_lib {
+                Some(value) => std::env::set_var("LIB", value),
+                None => std::env::remove_var("LIB"),
+            }
+            match prev_include {
+                Some(value) => std::env::set_var("INCLUDE", value),
+                None => std::env::remove_var("INCLUDE"),
+            }
+            match prev_sdk {
+                Some(value) => std::env::set_var("WINDOWSSDKDIR", value),
+                None => std::env::remove_var("WINDOWSSDKDIR"),
+            }
+        }
+
+        assert!(
+            env.iter()
+                .any(|(key, value)| key == "LIB" && value == r"C:\sdk\lib"),
+            "child env should preserve LIB"
+        );
+        assert!(
+            env.iter()
+                .any(|(key, value)| key == "INCLUDE" && value == r"C:\sdk\include"),
+            "child env should preserve INCLUDE"
+        );
+        assert!(
+            env.iter()
+                .any(|(key, value)| key == "WINDOWSSDKDIR" && value == r"C:\sdk"),
+            "child env should preserve WINDOWSSDKDIR"
+        );
     }
 }

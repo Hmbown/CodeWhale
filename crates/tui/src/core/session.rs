@@ -4,6 +4,7 @@
 
 use crate::cycle_manager::CycleBriefing;
 use crate::models::{Message, SystemPrompt, Usage};
+use crate::prefix_cache::PrefixStabilityManager;
 use crate::project_context::{ProjectContext, load_project_context_with_parents};
 use crate::prompts::StaticPromptCache;
 use crate::tui::approval::ApprovalMode;
@@ -98,6 +99,11 @@ pub struct Session {
     /// session creation so `refresh_system_prompt` can skip per-turn disk
     /// reads and guarantee byte-stable system-prompt bytes across turns.
     pub cached_static_prefix: Option<StaticPromptCache>,
+
+    /// Prefix-cache stability monitor (inspired by Reasonix's Pillar 1).
+    /// Tracks the immutable prefix fingerprint and detects drift across turns.
+    /// Set during engine construction; None until the first system prompt assembly.
+    pub prefix_stability: Option<PrefixStabilityManager>,
 }
 
 /// Cumulative usage statistics for a session.
@@ -169,6 +175,7 @@ impl Session {
             cycle_briefings: Vec::new(),
             cached_user_memory_block: None,
             cached_static_prefix: None,
+            prefix_stability: None,
         }
     }
 

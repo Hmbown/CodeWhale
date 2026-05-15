@@ -16,7 +16,10 @@ Bindings are not (yet) user-configurable — tracked for a future release (#436,
 | `Shift-Tab`          | Cycle reasoning effort: off → high → max → off                 |
 | `Ctrl-R`             | Open the resume-session picker                                 |
 | `Ctrl-L`             | Refresh / clear the screen                                     |
+| `Ctrl-O`             | Open Activity Detail for selected/live/recent tool work, or the full reasoning timeline for thinking blocks when the composer is empty |
 | `Ctrl-Shift-E` / `Cmd-Shift-E` | Toggle the file-tree sidebar                          |
+| `Alt-!` / `Alt-@` / `Alt-#` / `Alt-$` / `Alt-0` | Focus Work / Tasks / Agents / Context / Auto sidebar |
+| `Ctrl-Alt-0`         | Hide the right sidebar                                          |
 | `Esc`                | Close topmost modal · cancel slash menu · dismiss toast        |
 
 ## Composer
@@ -40,7 +43,7 @@ Editing the message you're about to send.
 | `Ctrl-S`                    | Stash current draft (`/stash list`, `/stash pop` to recover) |
 | `Alt-R`                    | Search prompt history (Alt-R to exit)                  |
 | `Tab`                       | Slash-command / `@`-mention completion (popup-aware)    |
-| `Ctrl-O`                    | Open external editor for the composer draft             |
+| `Ctrl-O`                    | Open external editor for the composer draft when it has focus |
 
 ### `@` mentions
 
@@ -69,7 +72,7 @@ When `[memory] enabled = true`, typing `# foo` and pressing `Enter` appends `foo
 |----------------------|-----------------------------------------------------|
 | `↑` / `↓` / `j` / `k`| Move selection                                     |
 | `Enter`              | Activate the selected item (open / focus / cancel) |
-| `Tab`                | Cycle to next sidebar panel (Files → Tasks → Agents → Todos) |
+| `Tab`                | Cycle to next sidebar panel (Work → Tasks → Agents → Context) |
 | `Esc`                | Return focus to composer                           |
 
 ## Slash-command palette (after `Ctrl-K` or typing `/`)
@@ -79,6 +82,20 @@ When `[memory] enabled = true`, typing `# foo` and pressing `Enter` appends `foo
 | `↑` / `↓`            | Move selection                                     |
 | `Enter` / `Tab`      | Run / complete the highlighted command             |
 | `Esc`                | Dismiss palette                                     |
+
+## Session Picker (`Ctrl-R` or `/sessions`)
+
+| Chord                | Action                                              |
+|----------------------|-----------------------------------------------------|
+| `↑` / `↓` / `j` / `k`| Move selection in the session list                 |
+| `1`-`9`              | Open the visible session history at that list slot |
+| `PgUp` / `PgDn`      | Page the history pane                              |
+| `Enter`              | Resume the selected session                        |
+| `/`                  | Search sessions                                    |
+| `s`                  | Cycle sort order                                   |
+| `a`                  | Toggle current-workspace scope vs all workspaces   |
+| `d`                  | Delete selected session after confirmation         |
+| `Esc` / `q`          | Close the picker                                   |
 
 ## Approval modal (when a tool requests approval)
 
@@ -98,6 +115,10 @@ When `[memory] enabled = true`, typing `# foo` and pressing `Enter` appends `foo
 | `1`–`5`              | Pick a language (Language step)                    |
 | `y` / `Y`            | Trust the workspace (Trust step)                   |
 | `n` / `N`            | Skip the trust prompt                              |
+
+## v0.8.29 audit notes
+
+- **`Shift+Enter` / `Alt+Enter` newlines now work in VSCode on Windows (#1359).** crossterm's `PushKeyboardEnhancementFlags` command unconditionally returns `Unsupported` on Windows (`is_ansi_code_supported() == false`), so the Kitty keyboard protocol escape was never written to the terminal. Without it, VSCode's xterm.js stays in legacy mode where `Shift+Enter` is indistinguishable from plain `Enter`, causing the composer to send the message instead of inserting a newline. The fix writes the push/pop escapes (`\x1b[>1u` / `\x1b[<1u`) directly on Windows, bypassing crossterm's capability gate. VSCode integrated terminal and Windows Terminal ≥1.17 both honour the Kitty keyboard protocol; terminals that do not understand the sequences silently discard them.
 
 ## v0.8.13 audit notes
 

@@ -59,6 +59,61 @@ const MAX_SNAPSHOT_SIZE_MB: u64 = 500;
 /// so the repo doesn't hit the limit again one snapshot later.
 const PRUNE_TARGET_MB: u64 = 400;
 
+/// Default workspace-size ceiling above which snapshots self-disable
+/// on first use (2 GB of non-excluded content). Reports from users with
+/// multi-hundred-GB project directories — datasets, model weights,
+/// docker image dumps that fall outside the built-in excludes —
+/// surfaced that `git add -A` on first init would hang the TUI for
+/// minutes-to-hours while indexing the workspace. Snapshots are a
+/// rollback safety net, not a backup tool; bailing out on workspaces
+/// that big is the right tradeoff. Users with legitimate large
+/// monorepos can raise `[snapshots] max_workspace_gb` (or set it to
+/// `0` to disable the cap entirely).
+pub const DEFAULT_MAX_WORKSPACE_BYTES_FOR_SNAPSHOT: u64 = 2 * 1024 * 1024 * 1024;
+
+/// Hard cap on the number of file entries the bounded size estimator
+/// will inspect before declaring the workspace "too large". Protects
+/// against a workspace with millions of tiny files (no individual
+/// file is large, but `git add -A` would still take forever).
+const SIZE_WALK_MAX_ENTRIES: usize = 200_000;
+
+/// Top-level directory and extension patterns that the snapshot path
+/// already excludes via `BUILTIN_EXCLUDES`. The estimator skips these
+/// up front so the size walk reflects what would actually land in the
+/// snapshot commit. Kept narrow to common build-output dirs — anything
+/// else falls back to the `.gitignore` filter.
+const SIZE_WALK_SKIP_DIRS: &[&str] = &[
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+    ".build",
+    ".next",
+    ".nuxt",
+    ".svelte-kit",
+    ".turbo",
+    ".parcel-cache",
+    "vendor",
+    ".cargo",
+    ".rustup",
+    ".npm",
+    ".bun",
+    ".yarn",
+    ".pnpm-store",
+    ".cache",
+    ".venv",
+    "venv",
+    ".tox",
+    "__pycache__",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".gradle",
+    ".m2",
+    ".local",
+    ".git",
+];
+
 const BUILTIN_EXCLUDES: &str = "\
 # DeepSeek TUI built-in snapshot exclusions
 node_modules/
@@ -136,6 +191,18 @@ impl SnapshotRepo {
     ///    the user's global git identity (we don't want our snapshots to
     ///    look like they came from the user).
     pub fn open_or_init(workspace: &Path) -> io::Result<Self> {
+        Self::open_or_init_with_cap(workspace, DEFAULT_MAX_WORKSPACE_BYTES_FOR_SNAPSHOT)
+    }
+
+    /// Variant of [`Self::open_or_init`] that accepts an explicit
+    /// workspace-size cap. `cap_bytes = 0` disables the cap entirely
+    /// (always snapshot, regardless of size).
+    ///
+    /// When the workspace exceeds the cap and the side repo hasn't
+    /// been initialized yet, returns `Err(InvalidInput)` with a
+    /// "workspace too large" reason. Subsequent calls (after the user
+    /// shrinks the workspace or raises the cap via config) succeed.
+    pub fn open_or_init_with_cap(workspace: &Path, cap_bytes: u64) -> io::Result<Self> {
         let work_tree = workspace
             .canonicalize()
             .unwrap_or_else(|_| workspace.to_path_buf());
@@ -156,6 +223,24 @@ impl SnapshotRepo {
 
         let needs_init = !git_dir.exists();
         if needs_init {
+            // First-init size guard. Skipping this on subsequent opens
+            // is intentional: paying a workspace walk on every snapshot
+            // would defeat the purpose of the cap, and a workspace
+            // that fit on first init is allowed to grow within the
+            // existing repo's `MAX_SNAPSHOT_SIZE_MB` budget. Users on
+            // workspaces that grew past the cap mid-session get the
+            // existing aggressive-pruning path in `snapshot()`.
+            if estimate_workspace_size_bounded(&work_tree, cap_bytes).is_none() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "workspace too large for snapshots (over {} GB of non-excluded content or > {} entries): {}\n  raise `[snapshots] max_workspace_gb` in config.toml (or set it to 0 to disable the cap) if you want snapshots on this workspace.",
+                        cap_bytes / (1024 * 1024 * 1024),
+                        SIZE_WALK_MAX_ENTRIES,
+                        work_tree.display()
+                    ),
+                ));
+            }
             let parent = git_dir.parent().ok_or_else(|| {
                 io::Error::new(io::ErrorKind::InvalidInput, "snapshot dir has no parent")
             })?;
@@ -539,6 +624,91 @@ impl SnapshotRepo {
         Ok(removed)
     }
 
+    /// Keep only the latest `max_count` snapshots, dropping older ones.
+    ///
+    /// Uses `commit-tree` with no `-p` to create a true orphan commit at
+    /// the eldest survivor's tree, preserving its label.  The old chain
+    /// has zero refs after gc and is physically reclaimed.
+    /// Keep only the latest `max_count` snapshots by rebuilding the
+    /// survivor chain as orphan commits.  Each survivor's tree and label
+    /// are preserved — only the parent chain to older snapshots is cut.
+    /// Old objects become unreachable and gc reclaims them.
+    pub fn prune_keep_last_n(&self, max_count: usize) -> io::Result<usize> {
+        let snapshots = self.list(usize::MAX)?;
+        if snapshots.len() <= max_count {
+            return Ok(0);
+        }
+        let keep = max_count;
+        let removed = snapshots.len() - keep;
+        // snapshots are newest-first: [0..keep-1] are the survivors.
+        // Rebuild the chain from oldest survivor → newest, each as a
+        // commit-tree with the original tree but no link to the old chain.
+        let mut prev_sha: Option<String> = None;
+
+        for i in (0..keep).rev() {
+            let s = &snapshots[i];
+            let tree = run_git(
+                &self.git_dir,
+                &self.work_tree,
+                &["rev-parse", &format!("{}^{{tree}}", s.id.as_str())],
+            )?;
+            if !tree.status.success() {
+                return Err(io_other(format!(
+                    "rev-parse {}^{{tree}} failed: {}",
+                    s.id.as_str(),
+                    String::from_utf8_lossy(&tree.stderr).trim()
+                )));
+            }
+            let tree_hash = String::from_utf8_lossy(&tree.stdout).trim().to_string();
+
+            let mut args = vec![
+                "commit-tree".to_string(),
+                "-m".to_string(),
+                s.label.clone(),
+                tree_hash,
+            ];
+            if let Some(ref p) = prev_sha {
+                args.push("-p".to_string());
+                args.push(p.clone());
+            }
+            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+            let newc = run_git(&self.git_dir, &self.work_tree, &arg_refs)?;
+            if !newc.status.success() {
+                return Err(io_other(format!(
+                    "commit-tree failed: {}",
+                    String::from_utf8_lossy(&newc.stderr).trim()
+                )));
+            }
+            let new_sha = String::from_utf8_lossy(&newc.stdout).trim().to_string();
+            prev_sha = Some(new_sha);
+        }
+
+        if let Some(final_sha) = prev_sha {
+            let up = run_git(
+                &self.git_dir,
+                &self.work_tree,
+                &["update-ref", "HEAD", &final_sha],
+            )?;
+            if !up.status.success() {
+                return Err(io_other(format!(
+                    "update-ref HEAD failed: {}",
+                    String::from_utf8_lossy(&up.stderr).trim()
+                )));
+            }
+        }
+        let _ = run_git(
+            &self.git_dir,
+            &self.work_tree,
+            &["reflog", "expire", "--expire=now", "--all"],
+        );
+        let _ = run_git(
+            &self.git_dir,
+            &self.work_tree,
+            &["gc", "--prune=now", "--quiet"],
+        );
+        Ok(removed)
+    }
+
     /// Drop unreachable loose objects left behind by interrupted or
     /// orphaned side-repo operations.
     pub fn prune_unreachable_objects(&self) -> io::Result<()> {
@@ -656,6 +826,52 @@ fn run_git(git_dir: &Path, work_tree: &Path, args: &[&str]) -> io::Result<Output
 
 fn io_other(msg: impl Into<String>) -> io::Error {
     io::Error::other(msg.into())
+}
+
+/// Walk `workspace` and accumulate file sizes, returning `Some(total)`
+/// when the workspace fits under `cap_bytes` and `None` when the walk
+/// exceeds the cap. Honors `.gitignore` (via the `ignore` crate's
+/// `WalkBuilder` defaults) and the snapshot-specific skip list above,
+/// so the measured size reflects what would actually land in a
+/// snapshot commit rather than the raw `du -sh` total.
+///
+/// The walk is bounded by both `cap_bytes` and
+/// [`SIZE_WALK_MAX_ENTRIES`] — either trip returns `None`. A
+/// `cap_bytes` of `0` disables the cap entirely (returns `Some(total)`
+/// no matter how large), so config can opt out.
+pub fn estimate_workspace_size_bounded(workspace: &Path, cap_bytes: u64) -> Option<u64> {
+    use ignore::WalkBuilder;
+    let mut total: u64 = 0;
+    let mut entries: usize = 0;
+    let skip: HashSet<&'static str> = SIZE_WALK_SKIP_DIRS.iter().copied().collect();
+    let walker = WalkBuilder::new(workspace)
+        .hidden(false)
+        .follow_links(false)
+        .filter_entry(move |entry| {
+            // Skip the well-known build-output directories at any depth.
+            // The `ignore` crate calls `filter_entry` once per dir/file;
+            // returning `false` here prunes the whole subtree.
+            entry
+                .file_name()
+                .to_str()
+                .is_none_or(|name| !skip.contains(name))
+        })
+        .build();
+    for entry in walker.flatten() {
+        entries += 1;
+        if entries > SIZE_WALK_MAX_ENTRIES {
+            return None;
+        }
+        if let Ok(meta) = entry.metadata()
+            && meta.is_file()
+        {
+            total = total.saturating_add(meta.len());
+            if cap_bytes > 0 && total > cap_bytes {
+                return None;
+            }
+        }
+    }
+    Some(total)
 }
 
 fn unsafe_workspace_snapshot_reason(workspace: &Path, home: Option<&Path>) -> Option<&'static str> {
@@ -930,6 +1146,62 @@ mod tests {
     }
 
     #[test]
+    fn prune_keep_last_n_keeps_latest_and_gc_reclaims_rest() {
+        let tmp = tempdir().unwrap();
+        let (repo, _home) = make_repo(tmp.path());
+
+        for i in 0..3 {
+            std::fs::write(repo.work_tree().join("f.txt"), format!("v{i}")).unwrap();
+            repo.snapshot(&format!("turn:{i}")).unwrap();
+            std::thread::sleep(Duration::from_millis(1100));
+        }
+
+        assert_eq!(repo.list(usize::MAX).unwrap().len(), 3);
+
+        let removed = repo.prune_keep_last_n(1).unwrap();
+        assert_eq!(removed, 2);
+
+        let remaining = repo.list(usize::MAX).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].label, "turn:2");
+
+        // New snapshot starts a clean chain (not appending to old).
+        std::fs::write(repo.work_tree().join("f.txt"), "fresh").unwrap();
+        repo.snapshot("turn:new").unwrap();
+        assert_eq!(repo.list(usize::MAX).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn prune_keep_last_n_preserves_multiple_snapshots_in_order() {
+        let tmp = tempdir().unwrap();
+        let (repo, _home) = make_repo(tmp.path());
+
+        for i in 0..4 {
+            std::fs::write(repo.work_tree().join("f.txt"), format!("v{i}")).unwrap();
+            repo.snapshot(&format!("turn:{i}")).unwrap();
+            std::thread::sleep(Duration::from_millis(1100));
+        }
+
+        assert_eq!(repo.list(usize::MAX).unwrap().len(), 4);
+
+        let removed = repo.prune_keep_last_n(2).unwrap();
+        assert_eq!(removed, 2);
+
+        let remaining = repo.list(usize::MAX).unwrap();
+        assert_eq!(remaining.len(), 2);
+        // Should be newest-first: turn:3 (newest), turn:2 (second newest)
+        assert_eq!(remaining[0].label, "turn:3");
+        assert_eq!(remaining[1].label, "turn:2");
+
+        // New snapshot continues the chain.
+        std::fs::write(repo.work_tree().join("f.txt"), "fresh").unwrap();
+        repo.snapshot("turn:new").unwrap();
+        let after = repo.list(usize::MAX).unwrap();
+        assert_eq!(after.len(), 3);
+        assert_eq!(after[0].label, "turn:new");
+    }
+
+    #[test]
     fn open_or_init_removes_stale_tmp_pack_files_only() {
         let tmp = tempdir().unwrap();
         let (repo, _home) = make_repo(tmp.path());
@@ -1124,6 +1396,110 @@ mod tests {
         // The side repo is tiny — well under 500 MB. Snapshot should work.
         std::fs::write(repo.work_tree().join("f.txt"), b"hello").unwrap();
         let id = repo.snapshot("pre-turn:1").expect("snapshot under cap");
+        assert_eq!(id.as_str().len(), 40);
+    }
+
+    #[test]
+    fn estimate_workspace_size_bounded_returns_total_when_under_cap() {
+        let tmp = tempdir().unwrap();
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(workspace.join("a.txt"), vec![b'a'; 100]).unwrap();
+        std::fs::write(workspace.join("b.txt"), vec![b'b'; 50]).unwrap();
+        let total = estimate_workspace_size_bounded(&workspace, 10_000)
+            .expect("under-cap walk must return Some");
+        assert!(
+            total >= 150,
+            "total ({total}) must include both files (≥150 bytes)"
+        );
+    }
+
+    #[test]
+    fn estimate_workspace_size_bounded_returns_none_when_over_cap() {
+        let tmp = tempdir().unwrap();
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        // Two 1 KB files, cap at 1 KB — second file should trip the cap.
+        std::fs::write(workspace.join("a.bin"), vec![b'a'; 1024]).unwrap();
+        std::fs::write(workspace.join("b.bin"), vec![b'b'; 1024]).unwrap();
+        assert!(
+            estimate_workspace_size_bounded(&workspace, 1024).is_none(),
+            "over-cap walk must return None for early bailout"
+        );
+    }
+
+    #[test]
+    fn estimate_workspace_size_bounded_skips_builtin_excluded_dirs() {
+        let tmp = tempdir().unwrap();
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(workspace.join("node_modules")).unwrap();
+        std::fs::create_dir_all(workspace.join("target")).unwrap();
+        std::fs::create_dir_all(workspace.join("src")).unwrap();
+        // 2 MB of "build output" in excluded dirs — must not count toward
+        // the cap.
+        std::fs::write(workspace.join("node_modules/big.bin"), vec![0u8; 1_000_000]).unwrap();
+        std::fs::write(workspace.join("target/big.bin"), vec![0u8; 1_000_000]).unwrap();
+        std::fs::write(workspace.join("src/lib.rs"), b"// real source").unwrap();
+        let total = estimate_workspace_size_bounded(&workspace, 500_000)
+            .expect("walk must succeed since real source is tiny");
+        assert!(
+            total < 1_000,
+            "total ({total}) must reflect only src/, not node_modules/ or target/"
+        );
+    }
+
+    #[test]
+    fn estimate_workspace_size_bounded_cap_zero_disables_cap() {
+        let tmp = tempdir().unwrap();
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        // 10 KB file — would trip a 1 KB cap, but cap=0 means no cap.
+        std::fs::write(workspace.join("big.bin"), vec![0u8; 10 * 1024]).unwrap();
+        let total =
+            estimate_workspace_size_bounded(&workspace, 0).expect("cap=0 must always return Some");
+        assert!(
+            total >= 10 * 1024,
+            "total ({total}) must include the 10 KB file when cap is disabled"
+        );
+    }
+
+    #[test]
+    fn open_or_init_with_cap_rejects_oversized_workspace() {
+        let tmp = tempdir().unwrap();
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let _home = scoped_home(tmp.path());
+        // Drop a 4 KB file under a 1 KB cap.
+        std::fs::write(workspace.join("big.bin"), vec![0u8; 4096]).unwrap();
+        let outcome = SnapshotRepo::open_or_init_with_cap(&workspace, 1024);
+        let err = match outcome {
+            Ok(_) => panic!("oversized workspace must fail open_or_init_with_cap"),
+            Err(e) => e,
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains("workspace too large for snapshots"),
+            "error must call out the size cap; got: {msg}"
+        );
+        assert!(
+            msg.contains("max_workspace_gb"),
+            "error must reference the config knob users can raise; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn open_or_init_with_cap_zero_disables_size_check() {
+        let tmp = tempdir().unwrap();
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let _home = scoped_home(tmp.path());
+        // 4 KB file but cap=0 → should still succeed.
+        std::fs::write(workspace.join("big.bin"), vec![0u8; 4096]).unwrap();
+        let repo = SnapshotRepo::open_or_init_with_cap(&workspace, 0)
+            .expect("cap=0 must skip the size check");
+        let id = repo
+            .snapshot("pre-turn:1")
+            .expect("snapshot under disabled cap");
         assert_eq!(id.as_str().len(), 40);
     }
 }

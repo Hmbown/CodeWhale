@@ -772,6 +772,9 @@ mod tests {
     /// Establishes a baseline cost so we can detect regressions when the
     /// observation cadence is high (50+ message turns × per-step calls). Adds
     /// no dev-deps; we measure with `Instant` and print rather than gating CI.
+    // Perf bench prints per-call timing — runs in `cargo test`, never
+    // inside the TUI alt-screen.
+    #[allow(clippy::print_stdout)]
     #[test]
     #[ignore]
     fn bench_compute_profile() {

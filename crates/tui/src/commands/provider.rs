@@ -27,7 +27,7 @@ pub fn provider(app: &mut App, args: Option<&str>) -> CommandResult {
 
     let Some(target) = ApiProvider::parse(name) else {
         return CommandResult::error(format!(
-            "Unknown provider '{name}'. Expected: deepseek, nvidia-nim, openrouter, novita, fireworks, sglang, vllm, or ollama."
+            "Unknown provider '{name}'. Expected: deepseek, nvidia-nim, openai, atlascloud, openrouter, novita, fireworks, sglang, vllm, or ollama."
         ));
     };
 
@@ -123,6 +123,19 @@ mod tests {
         match result.action {
             Some(AppAction::SwitchProvider { provider, model }) => {
                 assert_eq!(provider, ApiProvider::Openrouter);
+                assert_eq!(model, None);
+            }
+            other => panic!("expected SwitchProvider, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn switch_to_atlascloud_emits_action() {
+        let mut app = create_test_app();
+        let result = provider(&mut app, Some("atlascloud"));
+        match result.action {
+            Some(AppAction::SwitchProvider { provider, model }) => {
+                assert_eq!(provider, ApiProvider::Atlascloud);
                 assert_eq!(model, None);
             }
             other => panic!("expected SwitchProvider, got {other:?}"),

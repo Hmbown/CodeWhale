@@ -54,7 +54,7 @@ export function Nav({ locale = "en" }: { locale?: Locale }) {
               <Whale size={20} className="text-indigo hidden sm:inline-block" />
             </div>
             <div className="font-cjk text-[0.65rem] sm:text-[0.7rem] text-ink-mute tracking-widest truncate">
-              {isZh ? "深度求索 · 终端智能体" : "深度求索 · 终端代理"}
+              {isZh ? "深度求索 · 终端智能体" : "深度求索 · 终端智能体"}
             </div>
           </div>
         </Link>
@@ -86,7 +86,7 @@ export function Nav({ locale = "en" }: { locale?: Locale }) {
           </Link>
           <MobileMenu
             installHref={isZh ? "/zh/install" : "/install"}
-            installLabel={isZh ? "安装 30 秒搞定 →" : "Install in 30 seconds →"}
+            installLabel={isZh ? "安装 →" : "Install →"}
             links={links.map((l) => ({
               href: l.href,
               label: l.label,
