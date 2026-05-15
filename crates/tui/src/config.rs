@@ -1967,7 +1967,7 @@ fn default_config_path() -> Option<PathBuf> {
     env_config_path().or_else(home_config_path)
 }
 
-fn effective_home_dir() -> Option<PathBuf> {
+pub(crate) fn effective_home_dir() -> Option<PathBuf> {
     if let Some(path) = std::env::var_os("HOME") {
         let path = PathBuf::from(path);
         if !path.as_os_str().is_empty() {

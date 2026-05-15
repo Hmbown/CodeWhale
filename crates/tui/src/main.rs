@@ -76,7 +76,7 @@ mod vision;
 mod working_set;
 mod workspace_trust;
 
-use crate::config::{Config, DEFAULT_TEXT_MODEL, MAX_SUBAGENTS};
+use crate::config::{Config, DEFAULT_TEXT_MODEL, MAX_SUBAGENTS, effective_home_dir};
 use crate::eval::{EvalHarness, EvalHarnessConfig, ScenarioStepKind};
 use crate::features::{Feature, render_feature_table};
 use crate::llm_client::LlmClient;
@@ -4600,6 +4600,20 @@ fn preserve_interrupted_checkpoint_for_explicit_resume(launch_workspace: &Path) 
 /// Only explicitly set fields in the project file are applied; everything
 /// else falls back to the global value.
 fn merge_project_config(config: &mut Config, workspace: &Path) {
+    // When the workspace is the user's home directory, the project-scope
+    // config file is also the global config file. Skip the merge to avoid
+    // redundant processing and a misleading "project-scope config key
+    // ignored" warning on every launch from ~.
+    if let Some(home) = effective_home_dir()
+        && let (Ok(w), Ok(h)) = (
+            std::fs::canonicalize(workspace),
+            std::fs::canonicalize(&home),
+        )
+        && w == h
+    {
+        return;
+    }
+
     // v0.8.44: prefer .codewhale/config.toml, fall back to .deepseek/
     let path = workspace
         .join(codewhale_config::CODEWHALE_APP_DIR)
@@ -6154,6 +6168,54 @@ mod project_config_tests {
         fs::create_dir_all(&project_dir).expect("mkdir .deepseek");
         fs::write(project_dir.join("config.toml"), body).expect("write project config");
         tmp
+    }
+
+    fn with_home_dir<T>(home: &Path, f: impl FnOnce() -> T) -> T {
+        let prev_home = std::env::var_os("HOME");
+        let prev_userprofile = std::env::var_os("USERPROFILE");
+        unsafe {
+            std::env::set_var("HOME", home);
+            std::env::set_var("USERPROFILE", home);
+        }
+        let result = f();
+        unsafe {
+            match prev_home {
+                Some(value) => std::env::set_var("HOME", value),
+                None => std::env::remove_var("HOME"),
+            }
+            match prev_userprofile {
+                Some(value) => std::env::set_var("USERPROFILE", value),
+                None => std::env::remove_var("USERPROFILE"),
+            }
+        }
+        result
+    }
+
+    #[test]
+    fn project_overlay_skips_when_workspace_is_home_directory() {
+        let _guard = crate::test_support::lock_test_env();
+        let tmp = tempdir().expect("tempdir");
+        let project_dir = tmp.path().join(codewhale_config::CODEWHALE_APP_DIR);
+        fs::create_dir_all(&project_dir).expect("mkdir .codewhale");
+        fs::write(
+            project_dir.join("config.toml"),
+            r#"model = "project-override-model""#,
+        )
+        .expect("write project config");
+
+        with_home_dir(tmp.path(), || {
+            let mut config = Config {
+                default_text_model: Some("deepseek-v4-flash".to_string()),
+                ..Config::default()
+            };
+
+            merge_project_config(&mut config, tmp.path());
+
+            assert_eq!(
+                config.default_text_model.as_deref(),
+                Some("deepseek-v4-flash")
+            );
+        });
     }
 
     #[test]
