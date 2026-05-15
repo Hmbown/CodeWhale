@@ -304,12 +304,7 @@ fn detect_macos_palette_mode() -> Option<PaletteMode> {
         ));
     }
 
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    if stderr.contains("does not exist") {
-        Some(PaletteMode::Light)
-    } else {
-        None
-    }
+    Some(PaletteMode::Light)
 }
 
 #[cfg(not(target_os = "macos"))]
