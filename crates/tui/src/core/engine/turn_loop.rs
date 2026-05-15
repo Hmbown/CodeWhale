@@ -351,7 +351,17 @@ impl Engine {
                 ..Usage::default()
             };
             let mut current_block_kind: Option<ContentBlockKind> = None;
-            let mut current_tool_index: Option<usize> = None;
+            // Map block_index → tool_uses position. Required because the
+            // OpenAI-compatible streaming parser emits multiple
+            // ContentBlockStart::ToolUse events back-to-back (one per
+            // tool_call in a batch) before any ContentBlockStop arrives —
+            // all Stops are flushed together at `finish_reason`. A single
+            // Option<usize> gets overwritten by each new Start; the first
+            // Stop then takes the last index, and every subsequent Stop
+            // takes `None`, dropping ToolCallStarted events for every
+            // tool call except the last one in the batch.
+            let mut current_tool_indices: std::collections::HashMap<u32, usize> =
+                std::collections::HashMap::new();
             let mut in_tool_call_block = false;
             let mut fake_wrapper_notice_emitted = false;
             let mut pending_message_complete = false;
@@ -562,7 +572,7 @@ impl Engine {
                                 name, input
                             ));
                             current_block_kind = Some(ContentBlockKind::ToolUse);
-                            current_tool_index = Some(tool_uses.len());
+                            current_tool_indices.insert(index, tool_uses.len());
                             // ToolCallStarted is deferred to ContentBlockStop —
                             // see `final_tool_input`. Emitting here would ship
                             // the placeholder `{}` and the cell would render
@@ -581,7 +591,7 @@ impl Engine {
                                 name, input
                             ));
                             current_block_kind = Some(ContentBlockKind::ToolUse);
-                            current_tool_index = Some(tool_uses.len());
+                            current_tool_indices.insert(index, tool_uses.len());
                             tool_uses.push(ToolUseState {
                                 id,
                                 name,
@@ -630,8 +640,8 @@ impl Engine {
                             }
                         }
                         Delta::InputJsonDelta { partial_json } => {
-                            if let Some(index) = current_tool_index
-                                && let Some(tool_state) = tool_uses.get_mut(index)
+                            if let Some(&tool_idx) = current_tool_indices.get(&index)
+                                && let Some(tool_state) = tool_uses.get_mut(tool_idx)
                             {
                                 tool_state.input_buffer.push_str(&partial_json);
                                 crate::logging::info(format!(
@@ -665,9 +675,15 @@ impl Engine {
                             }
                             Some(ContentBlockKind::ToolUse) | None => {}
                         }
-                        if matches!(stopped_kind, Some(ContentBlockKind::ToolUse))
-                            && let Some(index) = current_tool_index.take()
-                            && let Some(tool_state) = tool_uses.get_mut(index)
+                        // Route the Stop using event.index (via
+                        // `current_tool_indices`) rather than the single
+                        // `current_block_kind` slot. In an OpenAI batch
+                        // tool-call stream every Stop after the first sees
+                        // `stopped_kind = None` because `take()` cleared the
+                        // slot, so the original `matches!(stopped_kind, …)`
+                        // check would skip every tool except the last.
+                        if let Some(tool_idx) = current_tool_indices.remove(&index)
+                            && let Some(tool_state) = tool_uses.get_mut(tool_idx)
                         {
                             crate::logging::info(format!(
                                 "Tool '{}' block stop. Buffer: '{}', Current input: {:?}",
@@ -2021,6 +2037,65 @@ mod tests {
         assert!(should_hold_turn_for_subagents(1, 0));
         assert!(should_hold_turn_for_subagents(0, 1));
         assert!(!should_hold_turn_for_subagents(0, 0));
+    }
+
+    /// Regression test for the OpenAI streaming batch tool_calls bug.
+    ///
+    /// Background: when an OpenAI-compatible backend (vLLM, Ollama, LM Studio,
+    /// etc.) streams a response containing multiple `tool_calls` in the same
+    /// assistant message, the streaming parser emits the events in this order:
+    ///
+    /// ```text
+    /// ContentBlockStart::ToolUse { index: 0, .. }   // tool #1
+    /// ContentBlockDelta { index: 0, .. }            // its arguments
+    /// ContentBlockStart::ToolUse { index: 1, .. }   // tool #2
+    /// ContentBlockDelta { index: 1, .. }
+    /// …
+    /// ContentBlockStart::ToolUse { index: N-1, .. }
+    /// ContentBlockDelta { index: N-1, .. }
+    /// ContentBlockStop { index: 0 }                 // ── only flushed at
+    /// ContentBlockStop { index: 1 }                 //    finish_reason
+    /// …                                             //    (see chat.rs
+    /// ContentBlockStop { index: N-1 }               //    L2050-L2064)
+    /// ```
+    ///
+    /// All Starts arrive before any Stop. The fix replaces the single
+    /// `current_tool_index: Option<usize>` slot (overwritten by each Start)
+    /// with a `HashMap<u32 block_index, usize tool_uses_idx>` that survives
+    /// every Start and routes each Stop to the right `tool_uses` entry.
+    ///
+    /// This test confirms the invariant: feed 7 Starts then 7 Stops, expect
+    /// all 7 indices to come back out in order.
+    #[test]
+    fn batch_tool_calls_preserve_all_tool_use_indices() {
+        let mut current_tool_indices: std::collections::HashMap<u32, usize> =
+            std::collections::HashMap::new();
+
+        // Simulate `ContentBlockStart::ToolUse { index: i }` for 7 tools.
+        for block_index in 0..7u32 {
+            current_tool_indices.insert(block_index, block_index as usize);
+        }
+        assert_eq!(current_tool_indices.len(), 7);
+
+        // Now drain via `ContentBlockStop { index: i }` in the same order.
+        let mut recovered: Vec<(u32, usize)> = (0..7u32)
+            .map(|block_index| {
+                let tool_idx = current_tool_indices
+                    .remove(&block_index)
+                    .expect("each block_index must route to a tool_uses entry");
+                (block_index, tool_idx)
+            })
+            .collect();
+        recovered.sort_by_key(|(block_index, _)| *block_index);
+        let expected: Vec<(u32, usize)> = (0..7u32).map(|i| (i, i as usize)).collect();
+        assert_eq!(
+            recovered, expected,
+            "every Stop must recover the tool_uses index pushed by its matching Start"
+        );
+        assert!(
+            current_tool_indices.is_empty(),
+            "all entries must drain after their Stops"
+        );
     }
 
     #[test]
