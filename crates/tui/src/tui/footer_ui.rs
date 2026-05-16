@@ -4,6 +4,7 @@ use std::time::Instant;
 use unicode_width::UnicodeWidthStr;
 
 use crate::core::coherence::CoherenceState;
+use crate::localization::MessageId;
 use crate::palette;
 use crate::tools::subagent::SubAgentStatus;
 use crate::tui::app::App;
@@ -524,12 +525,13 @@ pub(crate) fn footer_balance_spans(app: &App) -> Vec<Span<'static>> {
         "CNY" | "cny" => "¥",
         _ => "$",
     };
+    let prefix = app.tr(MessageId::FooterBalancePrefix);
     let label = if total >= 1000.0 {
-        format!("bal {currency}{total:.0}")
+        format!("{prefix} {currency}{total:.0}")
     } else if total >= 10.0 {
-        format!("bal {currency}{total:.1}")
+        format!("{prefix} {currency}{total:.1}")
     } else {
-        format!("bal {currency}{total:.2}")
+        format!("{prefix} {currency}{total:.2}")
     };
     vec![Span::styled(
         label,
