@@ -20,7 +20,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Padding, Paragraph, Widget},
 };
 
-use crate::config::StatusItem;
+use crate::config::{ApiProvider, StatusItem};
 use crate::palette;
 use crate::tui::views::{ModalKind, ModalView, ViewAction, ViewEvent};
 
@@ -47,8 +47,12 @@ pub struct StatusPickerView {
 
 impl StatusPickerView {
     #[must_use]
-    pub fn new(active: &[StatusItem]) -> Self {
-        let rows: Vec<StatusItem> = StatusItem::all().to_vec();
+    pub fn new(active: &[StatusItem], provider: ApiProvider) -> Self {
+        let rows: Vec<StatusItem> = StatusItem::all()
+            .iter()
+            .filter(|item| item.is_available_for(provider))
+            .copied()
+            .collect();
         let selected: Vec<bool> = rows.iter().map(|item| active.contains(item)).collect();
         Self {
             rows,
@@ -290,14 +294,14 @@ mod tests {
     #[test]
     fn opens_with_active_items_pre_selected() {
         let active = StatusItem::default_footer();
-        let view = StatusPickerView::new(&active);
+        let view = StatusPickerView::new(&active, ApiProvider::Deepseek);
         assert_eq!(view.current_selection(), active);
     }
 
     #[test]
     fn space_toggles_current_row_and_emits_live_preview() {
         let active = StatusItem::default_footer();
-        let mut view = StatusPickerView::new(&active);
+        let mut view = StatusPickerView::new(&active, ApiProvider::Deepseek);
         // Cursor starts at row 0 = StatusItem::Mode (currently checked).
         let action = view.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
         match action {
@@ -312,7 +316,7 @@ mod tests {
     #[test]
     fn enter_emits_final_save() {
         let active = StatusItem::default_footer();
-        let mut view = StatusPickerView::new(&active);
+        let mut view = StatusPickerView::new(&active, ApiProvider::Deepseek);
         let action = view.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         match action {
             ViewAction::EmitAndClose(ViewEvent::StatusItemsUpdated { final_save, .. }) => {
@@ -325,7 +329,7 @@ mod tests {
     #[test]
     fn esc_reverts_to_snapshot() {
         let active = StatusItem::default_footer();
-        let mut view = StatusPickerView::new(&active);
+        let mut view = StatusPickerView::new(&active, ApiProvider::Deepseek);
         // Toggle a few items off so the working set diverges from snapshot.
         view.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
         view.move_down();
@@ -343,7 +347,7 @@ mod tests {
     #[test]
     fn select_all_and_select_none_keys_work() {
         let active: Vec<StatusItem> = Vec::new();
-        let mut view = StatusPickerView::new(&active);
+        let mut view = StatusPickerView::new(&active, ApiProvider::Deepseek);
         let action = view.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
         match action {
             ViewAction::Emit(ViewEvent::StatusItemsUpdated { items, .. }) => {
@@ -363,7 +367,7 @@ mod tests {
     #[test]
     fn arrow_keys_move_cursor_within_bounds() {
         let active = StatusItem::default_footer();
-        let mut view = StatusPickerView::new(&active);
+        let mut view = StatusPickerView::new(&active, ApiProvider::Deepseek);
         assert_eq!(view.cursor, 0);
         view.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         assert_eq!(view.cursor, 1);
@@ -374,5 +378,15 @@ mod tests {
             view.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         }
         assert_eq!(view.cursor, StatusItem::all().len() - 1);
+    }
+
+    #[test]
+    fn balance_excluded_for_non_deepseek_provider() {
+        let active = StatusItem::default_footer();
+        let view = StatusPickerView::new(&active, ApiProvider::Openrouter);
+        // Balance should not appear as a row for non-DeepSeek providers.
+        assert!(!view.rows.contains(&StatusItem::Balance));
+        // Mode should still be present.
+        assert!(view.rows.contains(&StatusItem::Mode));
     }
 }

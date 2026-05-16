@@ -5413,12 +5413,16 @@ fn render_footer_from_with_default_items_renders_mode_and_model() {
 }
 
 #[test]
-fn default_footer_keeps_prefix_stability_opt_in() {
+fn default_footer_excludes_provider_specific_diagnostic_chips() {
     let items = crate::config::StatusItem::default_footer();
 
     assert!(
         !items.contains(&crate::config::StatusItem::PrefixStability),
         "prefix stability is a diagnostic chip and should not crowd the default footer"
+    );
+    assert!(
+        !items.contains(&crate::config::StatusItem::Balance),
+        "balance is DeepSeek-only and should not crowd the default footer for non-DeepSeek users"
     );
     assert!(
         items.contains(&crate::config::StatusItem::Cache),
