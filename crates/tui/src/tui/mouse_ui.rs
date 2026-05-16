@@ -2,6 +2,8 @@ use std::time::{Duration, Instant};
 
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 use crate::tui::app::App;
 use crate::tui::command_palette::{
@@ -37,6 +39,91 @@ pub(crate) fn should_drop_loading_mouse_motion(app: &App, mouse: MouseEvent) -> 
     }
 }
 
+/// Map a mouse (column, row) within the composer area to a char index
+/// in the composer input string. Uses the inner content rect (border-aware)
+/// for coordinate mapping, and accounts for vertical padding and scroll offset.
+fn mouse_pos_to_char_index(app: &App, col: u16, row: u16, inner: Rect) -> Option<usize> {
+    let rel_col = col.saturating_sub(inner.x) as usize;
+    let rel_row = row.saturating_sub(inner.y) as usize;
+
+    if app.input.is_empty() {
+        return Some(0);
+    }
+
+    let width = inner.width.max(1) as usize;
+    let wrapped = crate::tui::widgets::wrap_input_lines_for_mouse(&app.input, width);
+
+    // Subtract the vertical top-padding (centering of short inputs).
+    let text_row = rel_row.saturating_sub(app.viewport.last_composer_top_padding);
+
+    // Add the scroll offset (lines scrolled out of view).
+    let absolute_row = text_row + app.viewport.last_composer_scroll_offset;
+
+    if absolute_row >= wrapped.len() {
+        return Some(app.input.chars().count());
+    }
+
+    let (line_start, line_text) = &wrapped[absolute_row];
+
+    let mut char_offset = 0usize;
+    let mut col_used = 0usize;
+    for g in line_text.graphemes(true) {
+        let gw = g.width();
+        if col_used + gw > rel_col {
+            break;
+        }
+        col_used += gw;
+        char_offset += g.chars().count();
+    }
+    Some(line_start + char_offset)
+}
+
+/// Handle mouse events within the composer area.
+/// Returns true if the event was consumed.
+pub(crate) fn handle_composer_mouse(app: &mut App, mouse: MouseEvent) -> bool {
+    // Use outer area for hit-testing (includes border).
+    let Some(area) = app.viewport.last_composer_area else {
+        return false;
+    };
+    if mouse.column < area.x
+        || mouse.column >= area.x + area.width
+        || mouse.row < area.y
+        || mouse.row >= area.y + area.height
+    {
+        return false;
+    }
+    // Use inner content rect for coordinate-to-char mapping (border-aware).
+    let inner = app.viewport.last_composer_content.unwrap_or(area);
+
+    match mouse.kind {
+        MouseEventKind::Down(MouseButton::Left) => {
+            if let Some(pos) = mouse_pos_to_char_index(app, mouse.column, mouse.row, inner) {
+                app.cursor_position = pos;
+                app.selection_anchor = None;
+                app.needs_redraw = true;
+            }
+            true
+        }
+        MouseEventKind::Drag(MouseButton::Left) => {
+            if let Some(pos) = mouse_pos_to_char_index(app, mouse.column, mouse.row, inner) {
+                if app.selection_anchor.is_none() {
+                    app.selection_anchor = Some(app.cursor_position);
+                }
+                app.cursor_position = pos;
+                app.needs_redraw = true;
+            }
+            true
+        }
+        MouseEventKind::Up(MouseButton::Left) => {
+            if app.selection_anchor == Some(app.cursor_position) {
+                app.selection_anchor = None;
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
 pub(crate) fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEvent> {
     if app.view_stack.top_kind() == Some(ModalKind::ContextMenu) {
         if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Right)) {
@@ -50,6 +137,11 @@ pub(crate) fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEv
     if !app.view_stack.is_empty() {
         app.needs_redraw = true;
         return app.view_stack.handle_mouse(mouse);
+    }
+
+    // Composer mouse events take priority over transcript.
+    if handle_composer_mouse(app, mouse) {
+        return Vec::new();
     }
 
     match mouse.kind {
@@ -585,6 +677,10 @@ pub(crate) fn selection_point_from_position(
 }
 
 pub(crate) fn selection_has_content(app: &App) -> bool {
+    // Composer selection takes priority (same as Cmd+C handler above).
+    if !app.selected_text().is_empty() {
+        return true;
+    }
     selection_to_text(app).is_some_and(|text| !text.is_empty())
 }
 
@@ -613,6 +709,17 @@ pub(crate) fn ctrl_c_disposition(app: &App) -> CtrlCDisposition {
 }
 
 pub(crate) fn copy_active_selection(app: &mut App) {
+    // Composer selection takes priority.
+    let sel = app.selected_text();
+    if !sel.is_empty() {
+        if app.clipboard.write_text(&sel).is_ok() {
+            app.status_message = Some("Selection copied".to_string());
+        } else {
+            app.status_message = Some("Copy failed".to_string());
+        }
+        app.clear_selection();
+        return;
+    }
     if !app.viewport.transcript_selection.is_active() {
         return;
     }

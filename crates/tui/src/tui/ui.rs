@@ -2969,7 +2969,14 @@ async fn run_event_loop(
                 KeyCode::Char('c') | KeyCode::Char('C')
                     if key_shortcuts::is_copy_shortcut(&key) =>
                 {
-                    copy_active_selection(app);
+                    let sel = app.selected_text();
+                    if !sel.is_empty() {
+                        let _ = app.clipboard.write_text(&sel);
+                        app.push_status_toast("Copied to clipboard", StatusToastLevel::Info, None);
+                        app.clear_selection();
+                    } else {
+                        copy_active_selection(app);
+                    }
                 }
                 KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     // Four behaviors layered on Ctrl+C in priority order — see
@@ -3618,12 +3625,19 @@ async fn run_event_loop(
                     }
                 }
                 KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    let new_mode = match app.mode {
-                        AppMode::Plan => AppMode::Agent,
-                        AppMode::Agent => AppMode::Yolo,
-                        AppMode::Yolo => AppMode::Plan,
-                    };
-                    app.set_mode(new_mode);
+                    let sel = app.selected_text();
+                    if !sel.is_empty() {
+                        let _ = app.clipboard.write_text(&sel);
+                        app.push_status_toast("Cut to clipboard", StatusToastLevel::Info, None);
+                        app.delete_selection();
+                    } else {
+                        let new_mode = match app.mode {
+                            AppMode::Plan => AppMode::Agent,
+                            AppMode::Agent => AppMode::Yolo,
+                            AppMode::Yolo => AppMode::Plan,
+                        };
+                        app.set_mode(new_mode);
+                    }
                 }
                 _ if key_shortcuts::is_paste_shortcut(&key) => {
                     app.paste_from_clipboard();
@@ -5826,6 +5840,47 @@ fn render(f: &mut Frame, app: &mut App) {
         composer_widget.render(chunks[3], buf);
         composer_widget.cursor_pos(chunks[3])
     };
+    app.viewport.last_composer_area = Some(chunks[3]);
+    {
+        let area = chunks[3];
+        let has_panel = app.composer_border && area.height >= 3 && area.width >= 12;
+        let inner = if has_panel {
+            ratatui::widgets::Block::default()
+                .borders(ratatui::widgets::Borders::ALL)
+                .inner(area)
+        } else {
+            area
+        };
+        app.viewport.last_composer_content = Some(inner);
+
+        // Compute scroll offset and top padding for mouse coordinate mapping.
+        let input_text = app.composer_display_input();
+        let input_cursor = app.composer_display_cursor();
+        let content_width = usize::from(inner.width.max(1));
+        let menu_lines = ComposerWidget::new(
+            app,
+            composer_max_height,
+            &slash_menu_entries,
+            &mention_menu_entries,
+        )
+        .active_menu_reserved_rows();
+        let budget = crate::tui::widgets::composer_input_rows_budget(inner.height, menu_lines);
+        let (_, _, _, scroll_offset) = crate::tui::widgets::layout_input_with_scroll(
+            &input_text,
+            input_cursor,
+            content_width,
+            budget,
+        );
+        let visible_lines = if input_text.is_empty() {
+            1
+        } else {
+            // Count wrapped lines (approximation matching the render path).
+            crate::tui::widgets::wrap_input_lines_for_mouse(&input_text, content_width).len()
+        };
+        let top_padding = budget.saturating_sub(visible_lines.clamp(1, budget));
+        app.viewport.last_composer_scroll_offset = scroll_offset;
+        app.viewport.last_composer_top_padding = top_padding;
+    }
     if let Some(cursor_pos) = cursor_pos {
         f.set_cursor_position(cursor_pos);
     }
