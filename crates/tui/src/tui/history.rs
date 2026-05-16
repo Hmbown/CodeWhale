@@ -180,13 +180,7 @@ impl HistoryCell {
     /// `transcript_lines`.
     pub fn lines(&self, width: u16) -> Vec<Line<'static>> {
         match self {
-            HistoryCell::User { content } => render_message(
-                USER_GLYPH,
-                user_label_style(),
-                user_body_style(),
-                content,
-                width,
-            ),
+            HistoryCell::User { content } => render_user_message(content, width, true),
             HistoryCell::Assistant { content, streaming } => render_message(
                 ASSISTANT_GLYPH,
                 assistant_label_style_for(*streaming, /*low_motion*/ false),
@@ -284,13 +278,7 @@ impl HistoryCell {
                 lines
             }
             HistoryCell::Tool(cell) => cell.lines_with_motion(width, options.low_motion),
-            HistoryCell::User { content } => render_message(
-                USER_GLYPH,
-                user_label_style(),
-                user_body_style(),
-                content,
-                width,
-            ),
+            HistoryCell::User { content } => render_user_message(content, width, true),
             HistoryCell::Assistant { content, streaming } => render_message(
                 ASSISTANT_GLYPH,
                 assistant_label_style_for(*streaming, options.low_motion),
@@ -316,13 +304,7 @@ impl HistoryCell {
     /// diverge.
     pub fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
         match self {
-            HistoryCell::User { content } => render_message(
-                USER_GLYPH,
-                user_label_style(),
-                user_body_style(),
-                content,
-                width,
-            ),
+            HistoryCell::User { content } => render_user_message(content, width, false),
             HistoryCell::Assistant { content, streaming } => render_message(
                 ASSISTANT_GLYPH,
                 // Pager / clipboard surface — pin the glyph at full
@@ -2237,6 +2219,43 @@ fn render_message(
     lines
 }
 
+fn render_user_message(content: &str, width: u16, fill_row: bool) -> Vec<Line<'static>> {
+    render_message(
+        USER_GLYPH,
+        user_label_style(),
+        user_body_style(),
+        content,
+        width,
+    )
+    .into_iter()
+    .map(|line| apply_user_message_background(line, width, fill_row))
+    .collect()
+}
+
+fn apply_user_message_background(
+    mut line: Line<'static>,
+    width: u16,
+    fill_row: bool,
+) -> Line<'static> {
+    let bg = palette::SURFACE_ELEVATED;
+    line.style = line.style.bg(bg);
+    for span in &mut line.spans {
+        span.style = span.style.bg(bg);
+    }
+    if !fill_row {
+        return line;
+    }
+    let target_width = usize::from(width);
+    let line_width = line.width();
+    if line_width < target_width {
+        line.spans.push(Span::styled(
+            " ".repeat(target_width - line_width),
+            Style::default().bg(bg),
+        ));
+    }
+    line
+}
+
 fn render_command_mode(command: &str, width: u16, mode: RenderMode) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let cap = match mode {
@@ -2719,7 +2738,7 @@ fn truncate_text(text: &str, max_len: usize) -> String {
 }
 
 fn user_label_style() -> Style {
-    Style::default().fg(palette::TEXT_MUTED)
+    Style::default().fg(palette::USER_BODY)
 }
 
 fn user_body_style() -> Style {
@@ -3777,6 +3796,15 @@ mod tests {
         let lines = cell.lines(80);
         let head = &lines[0];
         assert_eq!(head.spans[0].content.as_ref(), USER_GLYPH);
+        assert_eq!(head.spans[0].style.fg, Some(palette::USER_BODY));
+        assert_eq!(head.style.bg, Some(palette::SURFACE_ELEVATED));
+        assert_eq!(head.width(), 80);
+        assert!(
+            head.spans
+                .iter()
+                .all(|span| span.style.bg == Some(palette::SURFACE_ELEVATED)),
+            "user head line should render as a highlighted message block"
+        );
         // No "You" literal anywhere in the rendered head line.
         let visible: String = head
             .spans
@@ -3785,6 +3813,49 @@ mod tests {
             .collect::<String>();
         assert!(!visible.contains("You"), "user label dropped: {visible:?}");
         assert!(visible.contains("hello"));
+    }
+
+    #[test]
+    fn user_cell_wraps_keep_message_background() {
+        let cell = HistoryCell::User {
+            content: "hello world this prompt wraps onto multiple transcript lines".to_string(),
+        };
+        let lines = cell.lines(18);
+        assert!(lines.len() > 1, "expected wrapped user message");
+        assert!(
+            lines
+                .iter()
+                .all(|line| line.style.bg == Some(palette::SURFACE_ELEVATED)),
+            "wrapped user message lines should keep the highlighted block background"
+        );
+        assert!(
+            lines.iter().all(|line| line.width() == 18),
+            "wrapped user message lines should fill the rendered row width"
+        );
+        assert!(
+            lines.iter().all(|line| line
+                .spans
+                .iter()
+                .all(|span| span.style.bg == Some(palette::SURFACE_ELEVATED))),
+            "wrapped user message spans should keep the highlighted block background"
+        );
+    }
+
+    #[test]
+    fn user_transcript_lines_do_not_append_visual_padding() {
+        let cell = HistoryCell::User {
+            content: "hello".to_string(),
+        };
+        let lines = cell.transcript_lines(80);
+        let head = &lines[0];
+        assert!(head.width() < 80);
+        let visible: String = head
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect::<String>();
+        assert_eq!(visible, format!("{USER_GLYPH} hello"));
+        assert_eq!(head.style.bg, Some(palette::SURFACE_ELEVATED));
     }
 
     #[test]
@@ -3806,6 +3877,13 @@ mod tests {
             "assistant label dropped: {visible:?}"
         );
         assert!(visible.contains("ready"));
+        assert_ne!(head.style.bg, Some(palette::SURFACE_ELEVATED));
+        assert!(
+            head.spans
+                .iter()
+                .all(|span| span.style.bg != Some(palette::SURFACE_ELEVATED)),
+            "assistant lines should not receive the user message background"
+        );
     }
 
     #[test]
