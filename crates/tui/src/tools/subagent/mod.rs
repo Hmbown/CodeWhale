@@ -62,6 +62,10 @@ fn release_resident_leases_for(agent_id: &str) {
     }
 }
 
+/// Hard safety cap to prevent runaway sub-agents from flooding the event
+/// channel. Matches the Claude Code approach of no low artificial limit while
+/// guarding against pathological loops. 500 steps is ~10× a typical agent.
+const MAX_STEPS_HARD_LIMIT: u32 = 500;
 
 const TOOL_TIMEOUT: Duration = Duration::from_secs(30);
 /// Per-step LLM API call timeout. Each `create_message` request must complete
@@ -3376,6 +3380,46 @@ async fn run_subagent(
                 result: None,
                 steps_taken: steps,
                 duration_ms: u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX),
+                from_prior_session: false,
+            });
+        }
+
+        if steps >= MAX_STEPS_HARD_LIMIT {
+            emit_agent_progress(
+                runtime.event_tx.as_ref(),
+                runtime.mailbox.as_ref(),
+                &agent_id,
+                format!("step {steps}: reached safety limit, completing"),
+            );
+            if let Some(mb) = runtime.mailbox.as_ref() {
+                let _ = mb.send(MailboxMessage::Completed {
+                    agent_id: agent_id.clone(),
+                    summary: format!("(reached {MAX_STEPS_HARD_LIMIT}-step safety limit)"),
+                });
+            }
+            return Ok(SubAgentResult {
+                name: agent_id.clone(),
+                agent_id: agent_id.clone(),
+                context_mode: if fork_context_enabled {
+                    "forked"
+                } else {
+                    "fresh"
+                }
+                .to_string(),
+                fork_context: fork_context_enabled,
+                agent_type: agent_type.clone(),
+                assignment: assignment.clone(),
+                model: runtime.model.clone(),
+                nickname: None,
+                status: SubAgentStatus::Completed,
+                result: Some(format!(
+                    "Agent reached the {MAX_STEPS_HARD_LIMIT}-step safety limit. \
+                     The task may be too complex for a single agent; \
+                     consider splitting it or using a more focused objective."
+                )),
+                steps_taken: steps,
+                duration_ms: u64::try_from(started_at.elapsed().as_millis())
+                    .unwrap_or(u64::MAX),
                 from_prior_session: false,
             });
         }
