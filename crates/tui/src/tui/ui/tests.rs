@@ -5453,16 +5453,15 @@ fn composer_arrows_scroll_defaults_true_without_mouse_capture() {
 }
 
 #[test]
-fn composer_arrows_scroll_defaults_follow_platform_with_mouse_capture() {
+fn composer_arrows_scroll_defaults_false_with_mouse_capture() {
     let options = TuiOptions {
         use_mouse_capture: true,
         ..create_test_options()
     };
     let app = App::new(options, &Config::default());
-    assert_eq!(
-        app.composer_arrows_scroll,
-        cfg!(windows),
-        "arrows-scroll should default to true on Windows and false on other platforms when mouse capture is on"
+    assert!(
+        !app.composer_arrows_scroll,
+        "arrows-scroll must default to false when mouse capture is on"
     );
 }
 
@@ -5485,6 +5484,150 @@ fn composer_arrows_scroll_config_overrides_default() {
         !app.composer_arrows_scroll,
         "explicit config=false must override the mouse-capture-derived default"
     );
+}
+
+#[test]
+fn history_arrow_down_handles_empty_input() {
+    let mut app = create_test_app();
+    app.composer_arrows_scroll = false;
+    app.input_history.push("older".to_string());
+    app.input_history.push("newer".to_string());
+
+    // Empty composer + Up → newest entry (draft saved as empty string).
+    assert!(handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+        false,
+        false,
+    ));
+    assert_eq!(app.input, "newer");
+
+    // Down from newest → end of history → restores the saved empty draft.
+    assert!(handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+        false,
+        false,
+    ));
+    assert!(app.input.is_empty());
+    assert!(app.history_index.is_none());
+}
+
+#[test]
+fn history_arrow_down_walks_forward_through_entries() {
+    let mut app = create_test_app();
+    app.composer_arrows_scroll = false;
+    app.input_history.push("oldest".to_string());
+    app.input_history.push("middle".to_string());
+    app.input_history.push("newest".to_string());
+
+    // Up three times: newest → middle → oldest.
+    handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+        false,
+        false,
+    );
+    handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+        false,
+        false,
+    );
+    handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+        false,
+        false,
+    );
+    assert_eq!(app.input, "oldest");
+
+    // Down walks forward: oldest → middle → newest.
+    handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+        false,
+        false,
+    );
+    assert_eq!(app.input, "middle");
+
+    handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+        false,
+        false,
+    );
+    assert_eq!(app.input, "newest");
+}
+
+#[test]
+fn composer_arrow_up_at_first_line_falls_back_to_history_up() {
+    let mut app = create_test_app();
+    app.composer_arrows_scroll = false;
+    app.input = "line one\nline two".to_string();
+    // Cursor on first line (position 0).
+    app.cursor_position = 0;
+    app.input_history.push("previous prompt".to_string());
+
+    // Up at first line: no newline before cursor → falls back to history_up.
+    assert!(handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+        false,
+        false,
+    ));
+    assert_eq!(app.input, "previous prompt");
+}
+
+#[test]
+fn composer_arrow_down_at_last_line_falls_back_to_history_down() {
+    let mut app = create_test_app();
+    app.composer_arrows_scroll = false;
+    app.input = "line one\nline two".to_string();
+    // Cursor on the last line — rest from cursor has no '\n', so
+    // vim_move_down falls through to history_down.
+    app.cursor_position = "line one\n".chars().count();
+    app.input_history.push("unrelated".to_string());
+    // history_index is None → history_down is a no-op, input stays put.
+    assert!(app.history_index.is_none());
+
+    assert!(handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+        false,
+        false,
+    ));
+    // No crash, input and cursor unchanged (history_down with None is no-op).
+    assert_eq!(app.input, "line one\nline two");
+    assert_eq!(app.cursor_position, "line one\n".chars().count());
+}
+
+#[test]
+fn history_roundtrip_up_then_down_restores_draft() {
+    let mut app = create_test_app();
+    app.composer_arrows_scroll = false;
+    app.input = "my draft".to_string();
+    app.cursor_position = app.input.chars().count();
+    app.input_history.push("previous prompt".to_string());
+
+    // Up navigates to previous prompt.
+    assert!(handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+        false,
+        false,
+    ));
+    assert_eq!(app.input, "previous prompt");
+
+    // Down restores the draft.
+    assert!(handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+        false,
+        false,
+    ));
+    assert_eq!(app.input, "my draft");
+    assert_eq!(app.cursor_position, "my draft".chars().count());
 }
 
 #[test]
