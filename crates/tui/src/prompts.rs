@@ -664,7 +664,7 @@ pub fn system_prompt_for_mode_with_context_skills_session_and_approval(
              1. Use `/compact` to summarize earlier context and free up space\n\
              2. The system will preserve important information (files you're working on, recent messages, tool results)\n\
              3. After compaction, you'll see a summary of what was discussed and can continue seamlessly\n\n\
-             If you notice context is getting long (>60% during sustained work), proactively suggest using `/compact` to the user.\n\n\
+             If you notice context is getting long (>60% during sustained work), proactively suggest using `/compact` to the user. If `auto_compact` is enabled (check via `/config auto_compact`), the engine will automatically compact before the next send when context crosses the configured threshold (default 70%). The user can also press `Ctrl+L` at any time to trigger manual compaction.\n\n\
              ### Prompt-cache awareness\n\n\
              DeepSeek caches the longest *byte-stable prefix* of every request and charges roughly 100× less for cache-hit tokens than miss tokens. The system prompt above is layered most-static-first specifically so the prefix stays stable turn-over-turn. To keep cache hits high:\n\
              - **Working set location:** the current repo working set is stored on new user messages inside a `<turn_meta>` block. Treat it as high-priority turn metadata, not as a stable system-prompt section.\n\

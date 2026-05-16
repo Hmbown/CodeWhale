@@ -167,6 +167,11 @@ impl TuiPrefs {
 pub struct Settings {
     /// Auto-compact conversations when they approach the model limit.
     pub auto_compact: bool,
+    /// Context-usage percentage at which auto-compaction triggers before the
+    /// next send (when `auto_compact` is true). Default 70% balances V4
+    /// prefix-cache protection with headroom safety. Respects the 500K-token
+    /// hard floor regardless of percentage.
+    pub auto_compact_threshold_percent: f64,
     /// Reduce status noise and collapse details more aggressively
     pub calm_mode: bool,
     /// Streaming pacing mode. `true` pins the chunker to one-character-per-
@@ -285,6 +290,7 @@ impl Default for Settings {
             // available for users / agents that decide compaction is
             // worth the cache hit on their workload (#664).
             auto_compact: false,
+            auto_compact_threshold_percent: 70.0,
             calm_mode: false,
             low_motion: false,
             fancy_animations: false,
@@ -466,6 +472,19 @@ impl Settings {
         match key {
             "auto_compact" | "compact" => {
                 self.auto_compact = parse_bool(value)?;
+            }
+            "auto_compact_threshold" | "compact_threshold_pct" => {
+                let pct: f64 = value
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!(
+                        "Failed to parse auto_compact_threshold '{value}': expected a number (e.g. 70)"
+                    ))?;
+                if pct < 10.0 || pct > 100.0 {
+                    anyhow::bail!(
+                        "auto_compact_threshold must be between 10 and 100 (got {pct})"
+                    );
+                }
+                self.auto_compact_threshold_percent = pct;
             }
             "calm_mode" | "calm" => {
                 self.calm_mode = parse_bool(value)?;
@@ -720,6 +739,10 @@ impl Settings {
             (
                 "auto_compact",
                 "Auto-compact near the hard context limit: on/off (default off)",
+            ),
+            (
+                "auto_compact_threshold",
+                "Context % at which auto-compaction fires before send (default 70)",
             ),
             ("calm_mode", "Calmer UI defaults: on/off"),
             (

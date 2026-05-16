@@ -133,6 +133,7 @@ const SLASH_MENU_LIMIT: usize = 128;
 const MENTION_MENU_LIMIT: usize = 6;
 const MIN_CHAT_HEIGHT: u16 = 3;
 const MIN_COMPOSER_HEIGHT: u16 = 2;
+const CONTEXT_SUGGEST_COMPACT_THRESHOLD_PERCENT: f64 = 60.0;
 const CONTEXT_WARNING_THRESHOLD_PERCENT: f64 = 85.0;
 const CONTEXT_CRITICAL_THRESHOLD_PERCENT: f64 = 95.0;
 const UI_IDLE_POLL_MS: u64 = 48;
@@ -2461,6 +2462,19 @@ async fn run_event_loop(
                 && app.view_stack.is_empty()
             {
                 open_shell_control(app);
+                continue;
+            }
+
+            // Ctrl+L: manual context compaction — breaks the chicken-and-egg
+            // deadlock when the model is too slow to suggest /compact at high
+            // context saturation. Fires even when a turn is streaming so the
+            // user can compact between turns without canceling.
+            if matches!(key.code, KeyCode::Char('l') | KeyCode::Char('L'))
+                && key.modifiers.contains(KeyModifiers::CONTROL)
+                && app.view_stack.is_empty()
+            {
+                app.status_message = Some("Compacting context (Ctrl+L)...".to_string());
+                let _ = engine_handle.send(Op::CompactContext).await;
                 continue;
             }
 
@@ -6786,6 +6800,25 @@ fn maybe_warn_context_pressure(app: &mut App) {
         return;
     };
 
+    // Early heads-up at 60% — the same threshold the model is told to
+    // suggest /compact at. Non-intrusive: only sets the status message when
+    // it's currently empty, so it never stomps on a more important message.
+    if percent >= CONTEXT_SUGGEST_COMPACT_THRESHOLD_PERCENT
+        && percent < CONTEXT_WARNING_THRESHOLD_PERCENT
+        && app.status_message.is_none()
+    {
+        let hint = if app.auto_compact {
+            "Auto-compaction will fire before next send."
+        } else {
+            "Consider enabling auto_compact or use /compact."
+        };
+        app.status_message = Some(format!(
+            "Context building: {:.0}% ({used}/{max} tokens). {hint}",
+            percent
+        ));
+        return;
+    }
+
     if percent < CONTEXT_WARNING_THRESHOLD_PERCENT {
         return;
     }
@@ -6816,8 +6849,20 @@ fn should_auto_compact_before_send(app: &App) -> bool {
     if !app.auto_compact {
         return false;
     }
+    // Use the configurable threshold (default 70%) instead of the old
+    // hardcoded 95% critical threshold. The 500K-token hard floor from
+    // compaction.rs is also respected here so small sessions are never
+    // auto-compacted even if the percentage looks high.
     context_usage_snapshot(app)
-        .map(|(_, _, pct)| pct >= CONTEXT_CRITICAL_THRESHOLD_PERCENT)
+        .map(|(used, _, pct)| {
+            // Hard floor: below 500K tokens, auto-compaction is refused
+            // because rewriting the prefix kills V4's prefix cache for
+            // little budget recovery.
+            if (used as usize) < crate::compaction::MINIMUM_AUTO_COMPACTION_TOKENS {
+                return false;
+            }
+            pct >= app.auto_compact_threshold_pct
+        })
         .unwrap_or(false)
 }
 
