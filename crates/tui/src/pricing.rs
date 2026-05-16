@@ -55,6 +55,39 @@ impl CostEstimate {
     }
 }
 
+// === DeepSeek Account Balance ===
+
+/// Response from `GET https://api.deepseek.com/user/balance`.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct BalanceResponse {
+    #[allow(dead_code)]
+    pub is_available: bool,
+    pub balance_infos: Vec<BalanceInfo>,
+}
+
+/// Per-currency balance entry from the balance API.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct BalanceInfo {
+    pub currency: String,
+    #[serde(default)]
+    pub total_balance: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub topped_up_balance: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub granted_balance: String,
+}
+
+impl BalanceInfo {
+    /// Parse the `total_balance` field as an f64. Returns `None` on parse
+    /// failure or empty string.
+    #[must_use]
+    pub fn total_balance_f64(&self) -> Option<f64> {
+        self.total_balance.parse::<f64>().ok()
+    }
+}
+
 /// Per-million-token pricing for a model.
 #[derive(Debug, Clone, Copy)]
 struct CurrencyPricing {

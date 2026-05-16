@@ -278,6 +278,7 @@ pub enum StatusItemValue {
     GitBranch,
     LastToolElapsed,
     RateLimit,
+    Balance,
 }
 
 pub fn parse_mode(arg: Option<&str>) -> Result<ConfigUiMode, String> {
@@ -996,6 +997,7 @@ impl From<StatusItem> for StatusItemValue {
             StatusItem::GitBranch => Self::GitBranch,
             StatusItem::LastToolElapsed => Self::LastToolElapsed,
             StatusItem::RateLimit => Self::RateLimit,
+            StatusItem::Balance => Self::Balance,
         }
     }
 }
@@ -1016,6 +1018,7 @@ impl From<StatusItemValue> for StatusItem {
             StatusItemValue::GitBranch => Self::GitBranch,
             StatusItemValue::LastToolElapsed => Self::LastToolElapsed,
             StatusItemValue::RateLimit => Self::RateLimit,
+            StatusItemValue::Balance => Self::Balance,
         }
     }
 }

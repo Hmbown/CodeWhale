@@ -9,6 +9,8 @@
 //! The picker enumerates [`StatusItem::all`] so adding a new variant in
 //! `crates/tui/src/config.rs` automatically surfaces a new row here.
 
+use std::cell::Cell;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     buffer::Buffer,
@@ -35,6 +37,12 @@ pub struct StatusPickerView {
     cursor: usize,
     /// Snapshot of `app.status_items` at open time so Esc reverts cleanly.
     original: Vec<StatusItem>,
+    /// First visible row index. Auto-adjusted by `render` and `move_*` so
+    /// every item stays reachable regardless of popup height. Uses `Cell`
+    /// because `render` takes `&self`.
+    scroll_offset: Cell<usize>,
+    /// Number of item rows that fit in the popup, updated on each `render`.
+    visible_rows: Cell<usize>,
 }
 
 impl StatusPickerView {
@@ -47,6 +55,8 @@ impl StatusPickerView {
             selected,
             cursor: 0,
             original: active.to_vec(),
+            scroll_offset: Cell::new(0),
+            visible_rows: Cell::new(0),
         }
     }
 
@@ -65,12 +75,29 @@ impl StatusPickerView {
         if self.cursor > 0 {
             self.cursor -= 1;
         }
+        self.scroll_to_cursor();
     }
 
     fn move_down(&mut self) {
         let max = self.rows.len().saturating_sub(1);
         if self.cursor < max {
             self.cursor += 1;
+        }
+        self.scroll_to_cursor();
+    }
+
+    /// Keep the cursor row inside the visible window.
+    fn scroll_to_cursor(&self) {
+        let visible = self.visible_rows.get();
+        if visible == 0 {
+            return;
+        }
+        let offset = self.scroll_offset.get();
+        if self.cursor < offset {
+            self.scroll_offset.set(self.cursor);
+        } else if self.cursor >= offset + visible {
+            self.scroll_offset
+                .set(self.cursor.saturating_sub(visible.saturating_sub(1)));
         }
     }
 
@@ -155,8 +182,11 @@ impl ModalView for StatusPickerView {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         let popup_width = 64.min(area.width.saturating_sub(4)).max(40);
         // Two header lines + one row per StatusItem + one footer hint line.
+        // When the full list is taller than the screen, cap the popup so it
+        // stays on-screen and let the scroll offset handle overflow.
         let needed_height = (self.rows.len() as u16).saturating_add(4);
-        let popup_height = needed_height.min(area.height.saturating_sub(4)).max(8);
+        let max_fit = area.height.saturating_sub(4).max(8);
+        let popup_height = needed_height.min(max_fit);
 
         let popup_area = Rect {
             x: area.x + (area.width.saturating_sub(popup_width)) / 2,
@@ -194,16 +224,30 @@ impl ModalView for StatusPickerView {
         let inner = block.inner(popup_area);
         block.render(popup_area, buf);
 
-        let mut lines: Vec<Line> = Vec::with_capacity(self.rows.len() + 2);
+        // Two header lines ("Pick the chips…" + blank), rest is item rows.
+        let visible = (inner.height as usize).saturating_sub(2).max(1);
+        self.visible_rows.set(visible);
+
+        // Auto-scroll so the cursor stays inside the visible window,
+        // then clamp to a valid range.
+        self.scroll_to_cursor();
+        let offset = self
+            .scroll_offset
+            .get()
+            .min(self.rows.len().saturating_sub(visible));
+
+        let mut lines: Vec<Line> = Vec::with_capacity(visible + 2);
         lines.push(Line::from(Span::styled(
             "Pick the chips you want in the footer:",
             Style::default().fg(palette::TEXT_MUTED),
         )));
         lines.push(Line::from(""));
 
-        for (idx, item) in self.rows.iter().enumerate() {
-            let checked = *self.selected.get(idx).unwrap_or(&false);
-            let is_cursor = idx == self.cursor;
+        let end = (offset + visible).min(self.rows.len());
+        for (idx, item) in self.rows[offset..end].iter().enumerate() {
+            let real_idx = offset + idx;
+            let checked = *self.selected.get(real_idx).unwrap_or(&false);
+            let is_cursor = real_idx == self.cursor;
             let mark = if checked { "[x]" } else { "[ ]" };
 
             let row_style = if is_cursor {

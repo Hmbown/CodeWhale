@@ -398,6 +398,11 @@ pub(crate) fn render_footer_from(
     } else {
         Vec::new()
     };
+    let balance = if has(S::Balance) {
+        footer_balance_spans(app)
+    } else {
+        Vec::new()
+    };
 
     // Build the props; `Mode` and `Model` toggles modulate downstream by
     // blanking the rendered text rather than restructuring the widget — the
@@ -412,6 +417,7 @@ pub(crate) fn render_footer_from(
         reasoning_replay,
         cache,
         cost,
+        balance,
     );
     if !has(S::Mode) {
         props.mode_label = "";
@@ -497,6 +503,36 @@ pub(crate) fn footer_cost_spans(app: &App) -> Vec<Span<'static>> {
     }
     vec![Span::styled(
         app.format_cost_amount(displayed_cost),
+        Style::default().fg(palette::TEXT_MUTED),
+    )]
+}
+
+pub(crate) fn footer_balance_spans(app: &App) -> Vec<Span<'static>> {
+    let balance = match app.balance_cell.lock() {
+        Ok(guard) => guard,
+        Err(_) => return Vec::new(),
+    };
+    let info = match balance.as_ref() {
+        Some(info) => info,
+        None => return Vec::new(),
+    };
+    let total = match info.total_balance_f64() {
+        Some(total) if total > 0.0 => total,
+        _ => return Vec::new(),
+    };
+    let currency = match info.currency.as_str() {
+        "CNY" | "cny" => "¥",
+        _ => "$",
+    };
+    let label = if total >= 1000.0 {
+        format!("bal {currency}{total:.0}")
+    } else if total >= 10.0 {
+        format!("bal {currency}{total:.1}")
+    } else {
+        format!("bal {currency}{total:.2}")
+    };
+    vec![Span::styled(
+        label,
         Style::default().fg(palette::TEXT_MUTED),
     )]
 }
