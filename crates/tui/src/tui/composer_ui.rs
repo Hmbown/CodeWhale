@@ -56,13 +56,18 @@ pub(crate) fn handle_composer_history_arrow(
         return false;
     }
 
-    // When `composer_arrows_scroll` is enabled and the composer is empty,
-    // plain Up/Down scroll the transcript.  This helps terminals that map
-    // trackpad gestures to arrow keys.  Otherwise arrows navigate within
-    // the current input: Up/Down move the cursor one logical line when the
-    // composer is multiline, preserving column position.  At the first or
-    // last line they fall back to input-history navigation (#1117).
-    let scroll_on_empty = app.composer_arrows_scroll && app.input.trim().is_empty();
+    // When `composer_arrows_scroll` is enabled and the composer is empty
+    // (or contains only single-line whitespace), plain Up/Down scroll the
+    // transcript.  This helps terminals that map trackpad gestures to arrow
+    // keys.  Multiline inputs — even whitespace-only — are NOT treated as
+    // empty: the user likely wants to navigate between lines, not scroll.
+    // Otherwise arrows navigate within the current input: Up/Down move the
+    // cursor one logical line when the composer is multiline, preserving
+    // column position.  At the first or last line they fall back to
+    // input-history navigation (#1117).
+    let scroll_on_empty = app.composer_arrows_scroll
+        && (app.input.is_empty()
+            || (!app.input.contains('\n') && app.input.trim().is_empty()));
 
     match key.code {
         KeyCode::Up => {

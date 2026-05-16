@@ -5514,6 +5514,30 @@ fn history_arrow_down_handles_empty_input() {
 }
 
 #[test]
+fn composer_arrows_scroll_multiline_whitespace_navigates_lines() {
+    let mut app = create_test_app();
+    app.composer_arrows_scroll = true;
+    // Whitespace-only multiline: `trim()` would produce "", but we have
+    // newlines, so scroll_on_empty must stay false — the user can
+    // navigate between lines.
+    app.input = "   \n   ".to_string();
+    app.cursor_position = app.input.chars().count(); // end of second line
+
+    // Up: moves cursor to first line, not scrolling transcript.
+    assert!(handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+        false,
+        false,
+    ));
+    // Cursor moved to first line; input unchanged.
+    assert_eq!(app.input, "   \n   ");
+    assert!(app.cursor_position < app.input.chars().count());
+    // Pending scroll delta should be 0 (no scrolling happened).
+    assert_eq!(app.viewport.pending_scroll_delta, 0);
+}
+
+#[test]
 fn history_arrow_down_walks_forward_through_entries() {
     let mut app = create_test_app();
     app.composer_arrows_scroll = false;
