@@ -371,4 +371,77 @@ mod tests {
             "¥0.1234"
         );
     }
+
+    // ── BalanceResponse / BalanceInfo ──────────────────────────────
+
+    #[test]
+    fn balance_response_deserializes_from_json() {
+        let json = r#"{
+            "is_available": true,
+            "balance_infos": [
+                {
+                    "currency": "CNY",
+                    "total_balance": "123.45",
+                    "topped_up_balance": "100.00",
+                    "granted_balance": "23.45"
+                }
+            ]
+        }"#;
+        let resp: BalanceResponse = serde_json::from_str(json).expect("valid JSON");
+        assert!(resp.is_available);
+        assert_eq!(resp.balance_infos.len(), 1);
+        let info = &resp.balance_infos[0];
+        assert_eq!(info.currency, "CNY");
+        assert_eq!(info.total_balance, "123.45");
+        assert_eq!(info.topped_up_balance, "100.00");
+        assert_eq!(info.granted_balance, "23.45");
+    }
+
+    #[test]
+    fn balance_response_defaults_empty_balance_infos_when_unavailable() {
+        let json = r#"{"is_available": false, "balance_infos": []}"#;
+        let resp: BalanceResponse = serde_json::from_str(json).expect("valid JSON");
+        assert!(!resp.is_available);
+        assert!(resp.balance_infos.is_empty());
+    }
+
+    #[test]
+    fn balance_response_empty_list_is_valid() {
+        let json = r#"{"is_available": true, "balance_infos": []}"#;
+        let resp: BalanceResponse = serde_json::from_str(json).expect("valid JSON");
+        assert!(resp.is_available);
+        assert!(resp.balance_infos.is_empty());
+    }
+
+    // ── BalanceInfo::total_balance_f64 ─────────────────────────────
+
+    #[test]
+    fn total_balance_f64_parses_decimal() {
+        let info = BalanceInfo {
+            currency: "CNY".into(),
+            total_balance: "123.45".into(),
+            ..Default::default()
+        };
+        assert_eq!(info.total_balance_f64(), Some(123.45));
+    }
+
+    #[test]
+    fn total_balance_f64_returns_none_on_empty() {
+        let info = BalanceInfo {
+            currency: "USD".into(),
+            total_balance: String::new(),
+            ..Default::default()
+        };
+        assert_eq!(info.total_balance_f64(), None);
+    }
+
+    #[test]
+    fn total_balance_f64_returns_none_on_invalid() {
+        let info = BalanceInfo {
+            currency: "USD".into(),
+            total_balance: "not-a-number".into(),
+            ..Default::default()
+        };
+        assert_eq!(info.total_balance_f64(), None);
+    }
 }
