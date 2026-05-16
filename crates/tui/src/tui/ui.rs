@@ -6803,14 +6803,40 @@ fn maybe_warn_context_pressure(app: &mut App) {
     // Early heads-up at 60% — the same threshold the model is told to
     // suggest /compact at. Non-intrusive: only sets the status message when
     // it's currently empty, so it never stomps on a more important message.
-    if percent >= CONTEXT_SUGGEST_COMPACT_THRESHOLD_PERCENT
+    let effective_warn_threshold = if app.auto_compact {
+        CONTEXT_SUGGEST_COMPACT_THRESHOLD_PERCENT.min(app.auto_compact_threshold_pct)
+    } else {
+        CONTEXT_SUGGEST_COMPACT_THRESHOLD_PERCENT
+    };
+
+    if percent >= effective_warn_threshold
         && percent < CONTEXT_WARNING_THRESHOLD_PERCENT
         && app.status_message.is_none()
     {
         let hint = if app.auto_compact {
-            "Auto-compaction will fire before next send."
+            let below_floor =
+                (used as usize) < crate::compaction::MINIMUM_AUTO_COMPACTION_TOKENS;
+            let below_threshold = percent < app.auto_compact_threshold_pct;
+
+            if below_floor && below_threshold {
+                format!(
+                    "Auto-compact enabled but below 500K floor and {:.0}% threshold; won't fire yet.",
+                    app.auto_compact_threshold_pct
+                )
+            } else if below_floor {
+                "Auto-compact enabled but below 500K token floor; won't fire yet."
+                    .to_string()
+            } else if below_threshold {
+                format!(
+                    "Auto-compact will fire at {:.0}% (currently {:.0}%).",
+                    app.auto_compact_threshold_pct, percent
+                )
+            } else {
+                "Auto-compaction would fire now; it will run before the next send."
+                    .to_string()
+            }
         } else {
-            "Consider enabling auto_compact or use /compact."
+            "Consider enabling auto_compact or use /compact.".to_string()
         };
         app.status_message = Some(format!(
             "Context building: {:.0}% ({used}/{max} tokens). {hint}",
