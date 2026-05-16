@@ -5375,14 +5375,14 @@ fn composer_arrows_scroll_empty_down() {
 }
 
 #[test]
-fn composer_arrows_scroll_nonempty_still_navigates_history() {
+fn composer_arrows_scroll_singleline_navigates_history() {
     let mut app = create_test_app();
     app.composer_arrows_scroll = true;
     app.input = "hello".to_string();
     app.cursor_position = app.input.chars().count();
     app.input_history.push("previous prompt".to_string());
 
-    // Even with the option on, non-empty composer still navigates history.
+    // With the option on and a single-line input, Up navigates history.
     assert!(handle_composer_history_arrow(
         &mut app,
         KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
@@ -5390,6 +5390,50 @@ fn composer_arrows_scroll_nonempty_still_navigates_history() {
         false,
     ));
     assert_eq!(app.input, "previous prompt");
+}
+
+#[test]
+fn composer_arrow_up_moves_within_multiline_input() {
+    let mut app = create_test_app();
+    app.composer_arrows_scroll = false;
+    app.input = "line one\nline two".to_string();
+    // Place cursor at end of second line.
+    app.cursor_position = app.input.chars().count();
+    app.input_history.push("previous prompt".to_string());
+
+    // Up should move cursor to the first line, not navigate history.
+    assert!(handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+        false,
+        false,
+    ));
+    // Cursor should now be somewhere on line 1, not "previous prompt".
+    assert_ne!(app.input, "previous prompt");
+    assert!(app.input.contains("line one"));
+    assert!(app.cursor_position < app.input.chars().count());
+}
+
+#[test]
+fn composer_arrow_down_moves_within_multiline_input() {
+    let mut app = create_test_app();
+    app.composer_arrows_scroll = false;
+    app.input = "line one\nline two".to_string();
+    // Place cursor at start of first line.
+    app.cursor_position = 0;
+    app.input_history.push("next prompt".to_string());
+    app.history_index = Some(app.input_history.len() - 1);
+
+    // Down should move cursor to the second line, not navigate history.
+    assert!(handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+        false,
+        false,
+    ));
+    // Cursor should now be on line 2, input unchanged.
+    assert_eq!(app.input, "line one\nline two");
+    assert!(app.cursor_position >= "line one\n".len());
 }
 
 // #1443: when mouse capture is off (e.g. Windows CMD), arrow-scroll
