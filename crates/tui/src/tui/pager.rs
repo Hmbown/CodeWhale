@@ -38,7 +38,10 @@ pub struct PagerView {
     title: String,
     lines: Vec<Line<'static>>,
     plain_lines: Vec<String>,
-    scroll: usize,
+    /// Scroll position.  `Cell` so that `render()` (which takes `&self`) can
+    /// clamp it back to the visual max, eliminating the dead zone at the
+    /// bottom when scroll overshoots the renderer limit (#1716).
+    scroll: Cell<usize>,
     search_input: String,
     search_matches: Vec<usize>,
     search_index: usize,
@@ -48,6 +51,10 @@ pub struct PagerView {
     /// keys (Ctrl+D/U, Ctrl+F/B, Space, etc.) to compute scroll deltas
     /// without access to the render area.
     last_visible_height: Cell<usize>,
+    /// Cached render max scroll (lines.len() - visible_height) from the last
+    /// render.  Mouse scroll uses this instead of `max_scroll()` to avoid a
+    /// dead zone where `scroll` overshoots what the renderer actually shows.
+    last_render_max_scroll: Cell<usize>,
 }
 
 impl PagerView {
@@ -57,13 +64,14 @@ impl PagerView {
             title: title.into(),
             lines,
             plain_lines,
-            scroll: 0,
+            scroll: Cell::new(0),
             search_input: String::new(),
             search_matches: Vec::new(),
             search_index: 0,
             search_mode: false,
             pending_g: false,
             last_visible_height: Cell::new(0),
+            last_render_max_scroll: Cell::new(0),
         }
     }
 
@@ -81,19 +89,19 @@ impl PagerView {
     }
 
     fn scroll_up(&mut self, amount: usize) {
-        self.scroll = self.scroll.saturating_sub(amount);
+        self.scroll.set(self.scroll.get().saturating_sub(amount));
     }
 
     fn scroll_down(&mut self, amount: usize, max_scroll: usize) {
-        self.scroll = (self.scroll + amount).min(max_scroll);
+        self.scroll.set((self.scroll.get() + amount).min(max_scroll));
     }
 
     fn scroll_to_top(&mut self) {
-        self.scroll = 0;
+        self.scroll.set(0);
     }
 
     fn scroll_to_bottom(&mut self, max_scroll: usize) {
-        self.scroll = max_scroll;
+        self.scroll.set(max_scroll);
     }
 
     /// Plain-text body of the pager joined with `\n`, suitable for sending
@@ -162,7 +170,7 @@ impl PagerView {
 
     fn jump_to_match(&mut self) {
         if let Some(&line) = self.search_matches.get(self.search_index) {
-            self.scroll = line;
+            self.scroll.set(line);
         }
     }
 
@@ -359,8 +367,8 @@ impl ModalView for PagerView {
                 ViewAction::None
             }
             MouseEventKind::ScrollDown => {
-                let max_scroll = self.max_scroll();
-                self.scroll_down(3, max_scroll);
+                let max = self.last_render_max_scroll.get();
+                self.scroll_down(3, max);
                 self.pending_g = false;
                 ViewAction::None
             }
@@ -397,7 +405,11 @@ impl ModalView for PagerView {
         // clamped at use-time.
         self.last_visible_height.set(visible_height);
         let max_scroll = self.lines.len().saturating_sub(visible_height);
-        let scroll = self.scroll.min(max_scroll);
+        self.last_render_max_scroll.set(max_scroll);
+        let scroll = self.scroll.get().min(max_scroll);
+        // Write back clamped value so scroll_up from the bottom has no
+        // dead zone (#1716).
+        self.scroll.set(scroll);
         let end = (scroll + visible_height).min(self.lines.len());
         let mut visible_lines = if self.lines.is_empty() {
             vec![Line::from("")]
@@ -589,49 +601,49 @@ mod tests {
     fn j_scrolls_down_one_line() {
         let mut p = make_pager(50);
         let _ = p.handle_key(key(KeyCode::Char('j')));
-        assert_eq!(p.scroll, 1);
+        assert_eq!(p.scroll.get(), 1);
     }
 
     #[test]
     fn k_scrolls_up_one_line() {
         let mut p = make_pager(50);
-        p.scroll = 5;
+        p.scroll.set(5);
         let _ = p.handle_key(key(KeyCode::Char('k')));
-        assert_eq!(p.scroll, 4);
+        assert_eq!(p.scroll.get(), 4);
     }
 
     #[test]
     fn gg_jumps_to_top() {
         let mut p = make_pager(50);
-        p.scroll = 30;
+        p.scroll.set(30);
         let _ = p.handle_key(key(KeyCode::Char('g')));
         assert!(p.pending_g, "first 'g' should arm pending_g");
-        assert_eq!(p.scroll, 30, "first 'g' alone must not scroll");
+        assert_eq!(p.scroll.get(), 30, "first 'g' alone must not scroll");
         let _ = p.handle_key(key(KeyCode::Char('g')));
-        assert_eq!(p.scroll, 0);
+        assert_eq!(p.scroll.get(), 0);
         assert!(!p.pending_g);
     }
 
     #[test]
     fn home_jumps_to_top() {
         let mut p = make_pager(50);
-        p.scroll = 30;
+        p.scroll.set(30);
         let _ = p.handle_key(key(KeyCode::Home));
-        assert_eq!(p.scroll, 0);
+        assert_eq!(p.scroll.get(), 0);
     }
 
     #[test]
     fn shift_g_jumps_to_bottom() {
         let mut p = make_pager(50);
         let _ = p.handle_key(key(KeyCode::Char('G')));
-        assert_eq!(p.scroll, p.max_scroll());
+        assert_eq!(p.scroll.get(), p.max_scroll());
     }
 
     #[test]
     fn end_jumps_to_bottom() {
         let mut p = make_pager(50);
         let _ = p.handle_key(key(KeyCode::End));
-        assert_eq!(p.scroll, p.max_scroll());
+        assert_eq!(p.scroll.get(), p.max_scroll());
     }
 
     #[test]
@@ -641,17 +653,17 @@ mod tests {
         let half = p.half_page_height();
         assert!(half >= 1, "half-page must move at least one line");
         let _ = p.handle_key(ctrl(KeyCode::Char('d')));
-        assert_eq!(p.scroll, half);
+        assert_eq!(p.scroll.get(), half);
     }
 
     #[test]
     fn ctrl_u_half_page_up() {
         let mut p = make_pager(200);
         prime_layout(&mut p, 22);
-        p.scroll = 50;
+        p.scroll.set(50);
         let half = p.half_page_height();
         let _ = p.handle_key(ctrl(KeyCode::Char('u')));
-        assert_eq!(p.scroll, 50 - half);
+        assert_eq!(p.scroll.get(), 50 - half);
     }
 
     #[test]
@@ -660,17 +672,17 @@ mod tests {
         prime_layout(&mut p, 22);
         let page = p.page_height();
         let _ = p.handle_key(ctrl(KeyCode::Char('f')));
-        assert_eq!(p.scroll, page);
+        assert_eq!(p.scroll.get(), page);
     }
 
     #[test]
     fn ctrl_b_full_page_up() {
         let mut p = make_pager(200);
         prime_layout(&mut p, 22);
-        p.scroll = 80;
+        p.scroll.set(80);
         let page = p.page_height();
         let _ = p.handle_key(ctrl(KeyCode::Char('b')));
-        assert_eq!(p.scroll, 80 - page);
+        assert_eq!(p.scroll.get(), 80 - page);
     }
 
     #[test]
@@ -679,17 +691,17 @@ mod tests {
         prime_layout(&mut p, 22);
         let page = p.page_height();
         let _ = p.handle_key(key(KeyCode::Char(' ')));
-        assert_eq!(p.scroll, page);
+        assert_eq!(p.scroll.get(), page);
     }
 
     #[test]
     fn shift_space_pages_up() {
         let mut p = make_pager(200);
         prime_layout(&mut p, 22);
-        p.scroll = 80;
+        p.scroll.set(80);
         let page = p.page_height();
         let _ = p.handle_key(key_mod(KeyCode::Char(' '), KeyModifiers::SHIFT));
-        assert_eq!(p.scroll, 80 - page);
+        assert_eq!(p.scroll.get(), 80 - page);
     }
 
     #[test]
@@ -698,7 +710,7 @@ mod tests {
         prime_layout(&mut p, 22);
         let page = p.page_height();
         let _ = p.handle_key(key(KeyCode::PageDown));
-        assert_eq!(p.scroll, page);
+        assert_eq!(p.scroll.get(), page);
     }
 
     #[test]
@@ -720,12 +732,12 @@ mod tests {
         // While in search mode, 'g' must be treated as a search character,
         // not as the half of a `gg` jump-to-top sequence.
         let mut p = make_pager(50);
-        p.scroll = 10;
+        p.scroll.set(10);
         let _ = p.handle_key(key(KeyCode::Char('/')));
         assert!(p.search_mode);
         let _ = p.handle_key(key(KeyCode::Char('g')));
         assert_eq!(p.search_input, "g");
-        assert_eq!(p.scroll, 10);
+        assert_eq!(p.scroll.get(), 10);
     }
 
     #[test]
@@ -933,29 +945,51 @@ mod tests {
     #[test]
     fn mouse_scroll_up_scrolls_content() {
         let mut p = make_pager(50);
-        p.scroll = 10;
+        p.scroll.set(10);
         let action = p.handle_mouse(MouseEvent {
             kind: MouseEventKind::ScrollUp,
             column: 0,
             row: 0,
             modifiers: crossterm::event::KeyModifiers::NONE,
         });
-        assert_eq!(p.scroll, 7);
+        assert_eq!(p.scroll.get(), 7);
         assert!(matches!(action, ViewAction::None));
     }
 
     #[test]
     fn mouse_scroll_down_scrolls_content() {
         let mut p = make_pager(50);
-        p.scroll = 10;
+        prime_layout(&mut p, 20);
+        p.scroll.set(10);
         let action = p.handle_mouse(MouseEvent {
             kind: MouseEventKind::ScrollDown,
             column: 0,
             row: 0,
             modifiers: crossterm::event::KeyModifiers::NONE,
         });
-        assert_eq!(p.scroll, 13);
+        assert_eq!(p.scroll.get(), 13);
         assert!(matches!(action, ViewAction::None));
+    }
+
+    #[test]
+    fn mouse_scroll_down_clamps_to_render_max() {
+        let mut p = make_pager(50);
+        prime_layout(&mut p, 20);
+        let render_max = p.last_render_max_scroll.get();
+        for _ in 0..100 {
+            p.handle_mouse(MouseEvent {
+                kind: MouseEventKind::ScrollDown,
+                column: 0,
+                row: 0,
+                modifiers: crossterm::event::KeyModifiers::NONE,
+            });
+        }
+        assert!(
+            p.scroll.get() <= render_max,
+            "scroll {} should not exceed render max {}",
+            p.scroll.get(),
+            render_max
+        );
     }
 
     #[test]
