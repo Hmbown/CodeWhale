@@ -821,11 +821,12 @@ pub struct App {
     pub use_memory: bool,
     pub use_alt_screen: bool,
     pub use_mouse_capture: bool,
-    /// When true, plain Up/Down on an empty composer scroll the transcript
-    /// instead of navigating input history.  Defaults to `true` when mouse
-    /// capture is off: terminals that convert mouse-wheel events to arrow-key
+    /// When `true`, plain Up/Down on an empty composer scroll the transcript
+    /// instead of navigating input history.  Defaults to `true` only when mouse
+    /// capture is off, so terminals that convert mouse-wheel events to arrow-key
     /// sequences (e.g. Windows CMD without `WT_SESSION`) get page-scrolling
-    /// without any explicit config (#1443).
+    /// without any explicit config (#1443).  When mouse capture is on, plain
+    /// arrows navigate input history by default.
     pub composer_arrows_scroll: bool,
     pub use_bracketed_paste: bool,
     pub use_paste_burst_detection: bool,
@@ -1237,8 +1238,8 @@ fn default_composer_arrows_scroll(use_mouse_capture: bool) -> bool {
     default_composer_arrows_scroll_for_platform(use_mouse_capture, cfg!(windows))
 }
 
-fn default_composer_arrows_scroll_for_platform(use_mouse_capture: bool, is_windows: bool) -> bool {
-    is_windows || !use_mouse_capture
+fn default_composer_arrows_scroll_for_platform(use_mouse_capture: bool, _is_windows: bool) -> bool {
+    !use_mouse_capture
 }
 
 impl App {
@@ -4229,8 +4230,8 @@ mod tests {
     }
 
     #[test]
-    fn composer_arrows_scroll_default_is_true_on_windows_even_with_mouse_capture() {
-        assert!(default_composer_arrows_scroll_for_platform(true, true));
+    fn composer_arrows_scroll_default_is_false_with_mouse_capture_even_on_windows() {
+        assert!(!default_composer_arrows_scroll_for_platform(true, true));
     }
 
     struct EnvVarGuard {
