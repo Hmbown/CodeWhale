@@ -1497,9 +1497,8 @@ pub fn subagent_panel_lines(
             break;
         }
         let mut detail_parts = Vec::new();
-        detail_parts.push(truncate_line_to_width(&row.id, 10));
         if row.steps_taken > 0 {
-            detail_parts.push(format!("{} step(s)", row.steps_taken));
+            detail_parts.push(format!("{} steps", row.steps_taken));
         }
         if let Some(duration) = row.duration_ms {
             detail_parts.push(format_duration_ms(duration));
