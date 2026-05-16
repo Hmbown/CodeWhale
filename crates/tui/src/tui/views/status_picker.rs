@@ -228,8 +228,9 @@ impl ModalView for StatusPickerView {
         let inner = block.inner(popup_area);
         block.render(popup_area, buf);
 
-        // Two header lines ("Pick the chips…" + blank), rest is item rows.
-        let visible = (inner.height as usize).saturating_sub(2).max(1);
+        // Four non-item lines (header, blank, footer hint, and one for
+        // the bottom border decoration), rest is item rows.
+        let visible = (inner.height as usize).saturating_sub(4).max(1);
         self.visible_rows.set(visible);
 
         // Auto-scroll so the cursor stays inside the visible window,

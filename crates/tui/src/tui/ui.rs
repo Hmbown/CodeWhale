@@ -4,7 +4,7 @@ use std::io::{self, Stdout, Write};
 use std::path::PathBuf;
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 use std::process::{Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -846,13 +846,17 @@ fn active_rlm_task_entries(app: &App) -> Vec<TaskPanelEntry> {
         .collect()
 }
 
+/// Shared `reqwest::Client` for balance fetches so connection pools are
+/// reused across successive background polls.
+static BALANCE_CLIENT: LazyLock<::reqwest::Client> = LazyLock::new(|| ::reqwest::Client::new());
+
 /// Fetch the DeepSeek account balance from the balance API.
 ///
 /// Returns `None` on any error (network, auth, parse) — callers should treat
 /// a `None` return as "balance unknown" and keep the previous value.
 async fn fetch_deepseek_balance(api_key: &str) -> Option<crate::pricing::BalanceInfo> {
     let url = "https://api.deepseek.com/user/balance";
-    let client = ::reqwest::Client::new();
+    let client = &*BALANCE_CLIENT;
     let response = client
         .get(url)
         .header("Authorization", format!("Bearer {api_key}"))
