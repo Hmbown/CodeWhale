@@ -15,7 +15,7 @@
 
 use std::cell::Cell;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -346,6 +346,23 @@ impl ModalView for PagerView {
                     text: self.body_text(),
                     label: "Pager content".to_string(),
                 })
+            }
+            _ => ViewAction::None,
+        }
+    }
+
+    fn handle_mouse(&mut self, mouse: MouseEvent) -> ViewAction {
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                self.scroll_up(3);
+                self.pending_g = false;
+                ViewAction::None
+            }
+            MouseEventKind::ScrollDown => {
+                let max_scroll = self.max_scroll();
+                self.scroll_down(3, max_scroll);
+                self.pending_g = false;
+                ViewAction::None
             }
             _ => ViewAction::None,
         }
@@ -911,6 +928,34 @@ mod tests {
             found_highlight,
             "expected a Yellow/DarkGray highlight cell on the matched-line text columns"
         );
+    }
+
+    #[test]
+    fn mouse_scroll_up_scrolls_content() {
+        let mut p = make_pager(50);
+        p.scroll = 10;
+        let action = p.handle_mouse(MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 0,
+            row: 0,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        });
+        assert_eq!(p.scroll, 7);
+        assert!(matches!(action, ViewAction::None));
+    }
+
+    #[test]
+    fn mouse_scroll_down_scrolls_content() {
+        let mut p = make_pager(50);
+        p.scroll = 10;
+        let action = p.handle_mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 0,
+            row: 0,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        });
+        assert_eq!(p.scroll, 13);
+        assert!(matches!(action, ViewAction::None));
     }
 
     #[test]
