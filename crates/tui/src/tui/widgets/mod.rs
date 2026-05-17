@@ -535,8 +535,8 @@ impl Renderable for ComposerWidget<'_> {
         let input_rows_budget =
             composer_input_rows_budget(inner_area.height, menu_lines_for_budget);
         let content_width = usize::from(inner_area.width.max(1));
-        let (visible_lines, _cursor_row, _cursor_col) =
-            layout_input(input_text, input_cursor, content_width, input_rows_budget);
+        let (visible_lines, _cursor_row, _cursor_col, scroll_offset) =
+            layout_input_with_scroll(input_text, input_cursor, content_width, input_rows_budget);
         let is_draft_mode = input_text.contains('\n') || visible_lines.len() > 1;
         if has_panel {
             let border_color = if input_text.trim().is_empty() {
@@ -668,7 +668,7 @@ impl Renderable for ComposerWidget<'_> {
             )));
         } else if let Some((sel_start, sel_end)) = self.app.selection_range() {
             let line_ranges =
-                visible_line_char_ranges(&self.app.input, &visible_lines, content_width);
+                visible_line_char_ranges(&self.app.input, &visible_lines, content_width, scroll_offset);
             for (line_text, (line_start, line_end)) in visible_lines.iter().zip(line_ranges.iter())
             {
                 let spans = line_spans_with_selection(
@@ -2440,10 +2440,12 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
 
 /// Compute the (char_start, char_end) range for each visible wrapped line.
 /// `char_start` is inclusive, `char_end` is exclusive.
+/// `scroll_offset` is the number of wrapped lines skipped from the top.
 fn visible_line_char_ranges(
     input: &str,
     visible_lines: &[String],
     width: usize,
+    scroll_offset: usize,
 ) -> Vec<(usize, usize)> {
     if input.is_empty() || width == 0 {
         return vec![(0, 0); visible_lines.len()];
@@ -2479,18 +2481,13 @@ fn visible_line_char_ranges(
     }
     ranges.push((line_start, char_idx));
 
-    // layout_input may have trimmed lines from the start for scroll offset.
-    // Align with visible_lines by trimming from start.
-    if ranges.len() > visible_lines.len() {
-        let skip = ranges.len() - visible_lines.len();
-        ranges = ranges.into_iter().skip(skip).collect();
-    }
-    ranges.truncate(visible_lines.len());
-    ranges
+    // Use the actual scroll_offset to align with visible_lines.
+    let start = scroll_offset.min(ranges.len());
+    ranges.into_iter().skip(start).take(visible_lines.len()).collect()
 }
 
 fn line_spans_with_selection<'a>(
-    line: &str,
+    line: &'a str,
     line_start: usize,
     line_end: usize,
     sel_start: usize,
@@ -2502,34 +2499,32 @@ fn line_spans_with_selection<'a>(
 
     // No overlap between this line and the selection
     if line_end <= sel_start || line_start >= sel_end {
-        return vec![Span::styled(line.to_string(), normal_style)];
+        return vec![Span::styled(line, normal_style)];
     }
 
-    let line_chars: Vec<char> = line.chars().collect();
     let local_sel_start = sel_start.saturating_sub(line_start);
     let local_sel_end = sel_end.min(line_end).saturating_sub(line_start);
+
+    // Build a Vec of byte offsets for each char boundary, plus one past the end.
+    let mut byte_offsets: Vec<usize> = line.char_indices().map(|(i, _)| i).collect();
+    byte_offsets.push(line.len());
+
+    let b0 = byte_offsets.get(local_sel_start).copied().unwrap_or(line.len());
+    let b1 = byte_offsets.get(local_sel_end).copied().unwrap_or(line.len());
 
     let mut spans = Vec::with_capacity(3);
 
     // Text before selection
-    if local_sel_start > 0 {
-        let before: String = line_chars[..local_sel_start].iter().collect();
-        spans.push(Span::styled(before, normal_style));
+    if b0 > 0 {
+        spans.push(Span::styled(&line[..b0], normal_style));
     }
-
     // Selected text
-    let sel_end_clamped = local_sel_end.min(line_chars.len());
-    if local_sel_start < sel_end_clamped {
-        let selected: String = line_chars[local_sel_start..sel_end_clamped]
-            .iter()
-            .collect();
-        spans.push(Span::styled(selected, sel_style));
+    if b1 > b0 {
+        spans.push(Span::styled(&line[b0..b1], sel_style));
     }
-
     // Text after selection
-    if sel_end_clamped < line_chars.len() {
-        let after: String = line_chars[sel_end_clamped..].iter().collect();
-        spans.push(Span::styled(after, normal_style));
+    if b1 < line.len() {
+        spans.push(Span::styled(&line[b1..], normal_style));
     }
 
     spans
