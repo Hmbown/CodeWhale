@@ -174,6 +174,43 @@ fn install_parent_death_signal(cmd: &mut Command) {
     }
 }
 
+/// Attach `args` to a `std::process::Command`, honoring shell-quoting on
+/// Windows.
+///
+/// Issue #1691: on Windows the shell command is invoked as
+/// `cmd /C "chcp 65001 >NUL & <command>"`. Rust's `Command::arg` applies
+/// MSVCRT (`CommandLineToArgvW`) escaping, turning the embedded `"` in a
+/// quoted argument (e.g. `git commit -m "feat: complete sub-pages"`) into
+/// `\"`. `cmd.exe` does NOT use MSVCRT parsing — it treats `\` literally and
+/// `"` as a bare quote toggle — so the escaped payload is mis-tokenized and
+/// `git` receives `feat:`, `complete`, `sub-pages"` as separate pathspecs
+/// (the reported `pathspec 'sub-pages"' did not match` symptom). Passing the
+/// `cmd /C` payload through `CommandExt::raw_arg` suppresses std's escaping so
+/// the string reaches `cmd.exe` verbatim, exactly as a terminal would.
+#[cfg(windows)]
+fn push_shell_args(cmd: &mut Command, program: &str, args: &[String]) {
+    use std::os::windows::process::CommandExt;
+    // The `cmd /C <payload>` shape is the only place std's per-arg escaping
+    // corrupts a quoted command. Pass `/C` and the payload raw so the quotes
+    // survive; any other program keeps normal (correct) escaping.
+    if program.eq_ignore_ascii_case("cmd")
+        && args.len() == 2
+        && args[0].eq_ignore_ascii_case("/C")
+    {
+        cmd.raw_arg(&args[0]);
+        cmd.raw_arg(&args[1]);
+    } else {
+        cmd.args(args);
+    }
+}
+
+#[cfg(not(windows))]
+fn push_shell_args(cmd: &mut Command, _program: &str, args: &[String]) {
+    // Unix delegates tokenization entirely to `sh -c <command>`; the command
+    // string is passed as a single argv entry and never split by us.
+    cmd.args(args);
+}
+
 #[cfg(not(target_os = "linux"))]
 fn install_parent_death_signal(_cmd: &mut Command) {
     // No kernel-level equivalent on macOS / Windows. The cooperative
@@ -775,8 +812,8 @@ impl ShellManager {
         let args = exec_env.args();
 
         let mut cmd = Command::new(program);
-        cmd.args(args)
-            .current_dir(working_dir)
+        push_shell_args(&mut cmd, program, args);
+        cmd.current_dir(working_dir)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         #[cfg(unix)]
@@ -914,8 +951,8 @@ impl ShellManager {
         let args = exec_env.args();
 
         let mut cmd = Command::new(program);
-        cmd.args(args)
-            .current_dir(working_dir)
+        push_shell_args(&mut cmd, program, args);
+        cmd.current_dir(working_dir)
             .stdin(Stdio::inherit())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit());
@@ -1055,8 +1092,8 @@ impl ShellManager {
             )
         } else {
             let mut cmd = Command::new(program);
-            cmd.args(args)
-                .current_dir(working_dir)
+            push_shell_args(&mut cmd, program, args);
+            cmd.current_dir(working_dir)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());

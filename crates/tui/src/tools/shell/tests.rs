@@ -812,3 +812,46 @@ fn test_list_jobs_cleans_up_completed_old_processes() {
         "completed processes should be evicted by cleanup"
     );
 }
+
+/// Regression for #1691: a `git commit -m "feat: complete sub-pages"` shell
+/// command must reach the OS shell with its quoted message intact (one argv
+/// slot), never split into `feat:` / `complete` / `sub-pages"`.
+#[test]
+fn issue_1691_quoted_commit_message_round_trips() {
+    let cmd = r#"git commit -m "feat: complete sub-pages""#;
+    let spec = CommandSpec::shell(cmd, std::path::PathBuf::from("/tmp"), Duration::from_secs(5));
+
+    #[cfg(not(windows))]
+    {
+        // `sh -c <cmd>`: the whole command (with quotes) is a single argv
+        // entry. `sh` then POSIX-tokenizes it → correct git argv. We never
+        // split the command string ourselves.
+        assert_eq!(spec.program, "sh");
+        assert_eq!(spec.args, ["-c".to_string(), cmd.to_string()]);
+        assert_eq!(spec.args.len(), 2);
+
+        // push_shell_args is a faithful pass-through on Unix.
+        let mut built = Command::new(&spec.program);
+        push_shell_args(&mut built, &spec.program, &spec.args);
+        let got: Vec<String> = built
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(got, ["-c".to_string(), cmd.to_string()]);
+    }
+
+    #[cfg(windows)]
+    {
+        // `cmd /C <payload>`: payload carries the quotes verbatim. The fix
+        // routes /C + payload through `raw_arg` so `cmd.exe` (not MSVCRT)
+        // parses it, matching what a terminal does.
+        assert_eq!(spec.program, "cmd");
+        assert_eq!(
+            spec.args,
+            ["/C".to_string(), format!("chcp 65001 >NUL & {cmd}")]
+        );
+        let mut built = Command::new(&spec.program);
+        push_shell_args(&mut built, &spec.program, &spec.args);
+        assert_eq!(built.get_args().count(), 2);
+    }
+}
