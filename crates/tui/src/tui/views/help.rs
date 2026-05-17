@@ -26,6 +26,7 @@ use crate::commands;
 use crate::localization::{Locale, MessageId, tr};
 use crate::palette;
 use crate::tui::keybindings::KEYBINDINGS;
+use crate::tui::theme::Theme;
 use crate::tui::views::{ModalKind, ModalView, ViewAction};
 
 /// Two top-level sections rendered in the overlay.
@@ -69,6 +70,7 @@ struct HelpEntry {
 }
 
 pub struct HelpView {
+    theme: Theme,
     locale: Locale,
     entries: Vec<HelpEntry>,
     /// Indices into `entries`, in display order, after filtering.
@@ -85,12 +87,13 @@ impl Default for HelpView {
 
 impl HelpView {
     pub fn new() -> Self {
-        Self::new_for_locale(Locale::En)
+        Self::new_for_locale(Locale::En, Theme::detect())
     }
 
-    pub fn new_for_locale(locale: Locale) -> Self {
+    pub fn new_for_locale(locale: Locale, theme: Theme) -> Self {
         let entries = build_entries(locale);
         let mut view = Self {
+            theme,
             locale,
             entries,
             filtered: Vec::new(),
@@ -206,11 +209,12 @@ fn build_entries(locale: Locale) -> Vec<HelpEntry> {
     entries
 }
 
-fn modal_block() -> Block<'static> {
+fn modal_block(theme: &Theme) -> Block<'static> {
     Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette::BORDER_COLOR))
-        .style(Style::default().bg(palette::DEEPSEEK_INK))
+        .border_type(theme.border_type)
+        .border_style(Style::default().fg(theme.border_color))
+        .style(Style::default().bg(theme.surface_bg))
         .padding(Padding::uniform(1))
 }
 
@@ -430,7 +434,7 @@ impl ModalView for HelpView {
             }
         }
 
-        let block = modal_block()
+        let block = modal_block(&self.theme)
             .title(Line::from(vec![Span::styled(
                 format!(" {} ", self.tr(MessageId::HelpTitle)),
                 Style::default()
@@ -668,7 +672,7 @@ mod tests {
 
     #[test]
     fn localized_help_chrome_renders_without_missing_markers() {
-        let view = HelpView::new_for_locale(Locale::ZhHans);
+        let view = HelpView::new_for_locale(Locale::ZhHans, Theme::detect());
         let area = Rect::new(0, 0, 48, 18);
         let mut buf = Buffer::empty(area);
         view.render(area, &mut buf);

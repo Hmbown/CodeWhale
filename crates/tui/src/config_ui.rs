@@ -59,21 +59,6 @@ pub struct SettingsSection {
     pub show_tool_details: bool,
     pub locale: UiLocale,
     pub theme: UiThemeValue,
-    #[schemars(
-        title = "Background color",
-        description = "Main TUI background color as #RRGGBB"
-    )]
-    pub background_color: Option<String>,
-    #[schemars(
-        title = "Sidebar background",
-        description = "Sidebar panel background as #RRGGBB"
-    )]
-    pub sidebar_bg: Option<String>,
-    #[schemars(
-        title = "Composer background",
-        description = "Composer input area background as #RRGGBB"
-    )]
-    pub composer_bg: Option<String>,
     #[schemars(title = "Border type", description = "plain or rounded")]
     pub border_type: BorderTypeValue,
     pub bracketed_paste: bool,
@@ -360,9 +345,6 @@ pub fn build_document(app: &App, config: &Config) -> Result<ConfigUiDocument> {
             show_tool_details: settings.show_tool_details,
             locale: UiLocale::from_setting(&settings.locale)?,
             theme: UiThemeValue::from_setting(&settings.theme)?,
-            background_color: settings.background_color.clone(),
-            sidebar_bg: settings.sidebar_bg.clone(),
-            composer_bg: settings.composer_bg.clone(),
             border_type: BorderTypeValue::from_setting(settings.border_type.as_deref()),
             bracketed_paste: settings.bracketed_paste,
             composer_density: settings.composer_density.as_str().into(),
@@ -527,21 +509,6 @@ pub fn apply_document(
         ),
         ("locale", doc.settings.locale.as_setting()),
         ("theme", doc.settings.theme.as_setting()),
-        (
-            "background_color",
-            doc.settings
-                .background_color
-                .as_deref()
-                .unwrap_or("default"),
-        ),
-        (
-            "sidebar_bg",
-            doc.settings.sidebar_bg.as_deref().unwrap_or("default"),
-        ),
-        (
-            "composer_bg",
-            doc.settings.composer_bg.as_deref().unwrap_or("default"),
-        ),
         (
             "border_type",
             doc.settings.border_type.as_setting().unwrap_or("default"),
@@ -801,7 +768,11 @@ impl UiThemeValue {
     }
 
     fn from_setting(value: &str) -> Result<Self> {
-        match crate::palette::normalize_theme_name(value) {
+        let lookup = value
+            .strip_prefix("file:")
+            .map(|name| name.trim())
+            .unwrap_or(value);
+        match crate::palette::normalize_theme_name(lookup) {
             Some("system") => Ok(Self::System),
             Some("dark") => Ok(Self::Dark),
             Some("light") => Ok(Self::Light),
@@ -811,7 +782,10 @@ impl UiThemeValue {
             Some("dracula") => Ok(Self::Dracula),
             Some("gruvbox-dark") => Ok(Self::GruvboxDark),
             Some(other) => bail!("unsupported theme '{other}'"),
-            None => bail!("invalid theme '{value}'"),
+            None => {
+                // Custom `file:<name>` themes map to System for config UI display
+                Ok(Self::System)
+            }
         }
     }
 }
@@ -1163,48 +1137,6 @@ cost_currency = "cny"
 
         assert_eq!(doc.settings.cost_currency, CostCurrencyValue::Cny);
         // Safety: restore the guarded test-only environment mutation above.
-        unsafe {
-            if let Some(value) = old_config_path {
-                std::env::set_var("DEEPSEEK_CONFIG_PATH", value);
-            } else {
-                std::env::remove_var("DEEPSEEK_CONFIG_PATH");
-            }
-        }
-    }
-
-    #[test]
-    fn build_document_reflects_background_color_from_settings() {
-        let _lock = lock_test_env();
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos();
-        let temp_root = std::env::temp_dir().join(format!(
-            "deepseek-config-ui-background-color-{}-{}",
-            std::process::id(),
-            nanos
-        ));
-        fs::create_dir_all(temp_root.join(".deepseek")).expect("config dir");
-        let config_path = temp_root.join(".deepseek").join("config.toml");
-        fs::write(&config_path, "").expect("seed config");
-        fs::write(
-            temp_root.join(".deepseek").join("settings.toml"),
-            r##"
-background_color = "#1A1B26"
-"##,
-        )
-        .expect("seed settings");
-
-        let old_config_path = std::env::var_os("DEEPSEEK_CONFIG_PATH");
-        unsafe {
-            std::env::set_var("DEEPSEEK_CONFIG_PATH", &config_path);
-        }
-
-        let app = app();
-        let config = Config::default();
-        let doc = build_document(&app, &config).expect("document");
-
-        assert_eq!(doc.settings.background_color.as_deref(), Some("#1a1b26"));
         unsafe {
             if let Some(value) = old_config_path {
                 std::env::set_var("DEEPSEEK_CONFIG_PATH", value);

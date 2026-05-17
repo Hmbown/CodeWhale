@@ -1020,7 +1020,8 @@ fn right_click_menu_includes_selection_and_clicked_cell_actions() {
 #[test]
 fn mouse_events_do_not_mutate_transcript_behind_modal() {
     let mut app = create_test_app();
-    app.view_stack.push(HelpView::new_for_locale(app.ui_locale));
+    app.view_stack
+        .push(HelpView::new_for_locale(app.ui_locale, app.theme));
 
     let events = handle_mouse_event(
         &mut app,

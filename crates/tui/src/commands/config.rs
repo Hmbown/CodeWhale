@@ -497,20 +497,9 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
             app.mark_history_updated();
             app.needs_redraw = true;
         }
-        "theme"
-        | "ui_theme"
-        | "background_color"
-        | "background"
-        | "bg"
-        | "sidebar_bg"
-        | "composer_bg"
-        | "border_type"
-        | "section_border_type" => {
+        "theme" | "ui_theme" | "border_type" | "section_border_type" => {
             app.theme = crate::tui::theme::Theme::from_settings(
                 &settings.theme,
-                settings.background_color.as_deref(),
-                settings.sidebar_bg.as_deref(),
-                settings.composer_bg.as_deref(),
                 settings.border_type.as_deref(),
                 settings.section_border_type.as_deref(),
             );
@@ -592,18 +581,6 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
         "cost_currency" | "currency" => settings.cost_currency.clone(),
         "theme" | "ui_theme" => settings.theme.clone(),
         "synchronized_output" | "sync_output" | "sync" => settings.synchronized_output.clone(),
-        "background_color" | "background" | "bg" => settings
-            .background_color
-            .clone()
-            .unwrap_or_else(|| "default".to_string()),
-        "sidebar_bg" => settings
-            .sidebar_bg
-            .clone()
-            .unwrap_or_else(|| "default".to_string()),
-        "composer_bg" => settings
-            .composer_bg
-            .clone()
-            .unwrap_or_else(|| "default".to_string()),
         "border_type" | "section_border_type" => settings
             .border_type
             .clone()

@@ -43,7 +43,8 @@ pub struct Theme {
     pub text_body: Color,
     pub text_soft: Color,
     pub border_color: Color,
-    pub border_type: BorderType, // NEW — Plain | Rounded
+    pub border_type: BorderType,         // NEW — Plain | Rounded
+    pub section_border_type: BorderType, // NEW — defaults to border_type
 
     // ── Section / tool / plan colours (ex deepseek_theme::Theme) ──
     pub section_borders: Borders,
@@ -535,6 +536,7 @@ pub const DARK_THEME: Theme = Theme {
     text_soft: palette::TEXT_SOFT,
     border_color: palette::BORDER_COLOR,
     border_type: BorderType::Plain,
+    section_border_type: BorderType::Plain,
     section_borders: SECT_BORDERS,
     section_border_color: palette::BORDER_COLOR,
     section_title_color: palette::DEEPSEEK_BLUE,
@@ -579,6 +581,7 @@ pub const LIGHT_THEME: Theme = Theme {
     text_soft: palette::LIGHT_TEXT_SOFT,
     border_color: palette::LIGHT_BORDER,
     border_type: BorderType::Plain,
+    section_border_type: BorderType::Plain,
     section_borders: SECT_BORDERS,
     section_border_color: palette::LIGHT_BORDER,
     section_title_color: palette::DEEPSEEK_BLUE,
@@ -623,6 +626,7 @@ pub const GRAYSCALE_THEME: Theme = Theme {
     text_soft: palette::GRAYSCALE_TEXT_SOFT,
     border_color: palette::GRAYSCALE_BORDER,
     border_type: BorderType::Plain,
+    section_border_type: BorderType::Plain,
     section_borders: SECT_BORDERS,
     section_border_color: palette::GRAYSCALE_BORDER,
     section_title_color: palette::GRAYSCALE_TEXT_SOFT,
@@ -667,6 +671,7 @@ pub const CATPPUCCIN_MOCHA_THEME: Theme = {
         text_soft: Color::Rgb(0xba, 0xc2, 0xde),
         border_color: Color::Rgb(0x45, 0x47, 0x5a),
         border_type: BorderType::Plain,
+        section_border_type: BorderType::Plain,
         section_borders: Borders::ALL,
         section_border_color: Color::Rgb(0x45, 0x47, 0x5a),
         section_title_color: Color::Rgb(0xba, 0xc2, 0xde),
@@ -712,6 +717,7 @@ pub const TOKYO_NIGHT_THEME: Theme = {
         text_soft: Color::Rgb(0xbb, 0xc2, 0xe0),
         border_color: Color::Rgb(0x41, 0x48, 0x68),
         border_type: BorderType::Plain,
+        section_border_type: BorderType::Plain,
         section_borders: Borders::ALL,
         section_border_color: Color::Rgb(0x41, 0x48, 0x68),
         section_title_color: Color::Rgb(0xbb, 0xc2, 0xe0),
@@ -757,6 +763,7 @@ pub const DRACULA_THEME: Theme = {
         text_soft: Color::Rgb(0xe2, 0xe2, 0xdc),
         border_color: Color::Rgb(0x44, 0x47, 0x5a),
         border_type: BorderType::Plain,
+        section_border_type: BorderType::Plain,
         section_borders: Borders::ALL,
         section_border_color: Color::Rgb(0x44, 0x47, 0x5a),
         section_title_color: Color::Rgb(0xe2, 0xe2, 0xdc),
@@ -802,6 +809,7 @@ pub const GRUVBOX_DARK_THEME: Theme = {
         text_soft: Color::Rgb(0xd5, 0xc4, 0xa1),
         border_color: Color::Rgb(0x66, 0x5c, 0x54),
         border_type: BorderType::Plain,
+        section_border_type: BorderType::Plain,
         section_borders: Borders::ALL,
         section_border_color: Color::Rgb(0x66, 0x5c, 0x54),
         section_title_color: Color::Rgb(0xd5, 0xc4, 0xa1),
@@ -821,6 +829,19 @@ pub const GRUVBOX_DARK_THEME: Theme = {
         reasoning_bg: None,
     }
 };
+
+/// Apply a single hex-colour override from a `CustomThemeFile` field.
+/// If the field is `Some` and parses to a valid colour, calls the
+/// corresponding `with_<field>` builder method.
+macro_rules! try_override {
+    ($theme:ident, $custom:expr, $field:ident, $with:ident) => {
+        if let Some(ref c) = $custom.$field {
+            if let Some(color) = $crate::palette::parse_hex_rgb_color(c) {
+                $theme = $theme.$with(color);
+            }
+        }
+    };
+}
 
 // ── Theme methods ────────────────────────────────────────────────────────────
 
@@ -887,6 +908,12 @@ impl Theme {
     #[must_use]
     pub fn with_border_type(mut self, bt: BorderType) -> Self {
         self.border_type = bt;
+        self
+    }
+
+    #[must_use]
+    pub fn with_section_border_type(mut self, bt: BorderType) -> Self {
+        self.section_border_type = bt;
         self
     }
 
@@ -1072,24 +1099,12 @@ impl Theme {
     #[must_use]
     pub fn from_settings(
         theme_setting: &str,
-        background_color: Option<&str>,
-        sidebar_bg: Option<&str>,
-        composer_bg: Option<&str>,
         border_type_setting: Option<&str>,
         section_border_type: Option<&str>,
     ) -> Self {
         let mut t =
             Self::from_setting_or_file(theme_setting).unwrap_or_else(|| ThemeId::System.ui_theme());
 
-        if let Some(c) = background_color.and_then(palette::parse_hex_rgb_color) {
-            t = t.with_background_color(c);
-        }
-        if let Some(c) = sidebar_bg.and_then(palette::parse_hex_rgb_color) {
-            t = t.with_sidebar_bg(c);
-        }
-        if let Some(c) = composer_bg.and_then(palette::parse_hex_rgb_color) {
-            t = t.with_composer_bg(c);
-        }
         // Only override border_type from settings when the user explicitly
         // configured it.  Custom theme files already set their own.
         if let Some(bt_str) = border_type_setting {
@@ -1098,7 +1113,7 @@ impl Theme {
         // section_border_type falls back to the (possibly overridden) border_type
         let sbt = section_border_type.map_or(t.border_type, border_type_from_setting);
         t.section_borders = Borders::ALL;
-        t.border_type = sbt;
+        t = t.with_section_border_type(sbt);
         t
     }
 
@@ -1128,21 +1143,10 @@ impl Theme {
         let base_id = ThemeId::from_name(&custom.base).unwrap_or(ThemeId::Whale);
         let mut t = base_id.ui_theme();
 
-        if let Some(ref c) = custom.background_color
-            && let Some(color) = palette::parse_hex_rgb_color(c)
-        {
-            t = t.with_background_color(color);
-        }
-        if let Some(ref c) = custom.sidebar_bg
-            && let Some(color) = palette::parse_hex_rgb_color(c)
-        {
-            t = t.with_sidebar_bg(color);
-        }
-        if let Some(ref c) = custom.composer_bg
-            && let Some(color) = palette::parse_hex_rgb_color(c)
-        {
-            t = t.with_composer_bg(color);
-        }
+        try_override!(t, custom, background_color, with_background_color);
+        try_override!(t, custom, sidebar_bg, with_sidebar_bg);
+        try_override!(t, custom, composer_bg, with_composer_bg);
+
         if let Some(ref bt) = custom.border_type {
             t = t.with_border_type(border_type_from_setting(bt));
         }
@@ -1152,169 +1156,55 @@ impl Theme {
         }
 
         // ── Apply chrome colour overrides ──
-        if let Some(ref c) = custom.panel_bg
-            && let Some(color) = palette::parse_hex_rgb_color(c)
-        {
-            t = t.with_panel_bg(color);
-        }
-        if let Some(ref c) = custom.elevated_bg
-            && let Some(color) = palette::parse_hex_rgb_color(c)
-        {
-            t = t.with_elevated_bg(color);
-        }
-        if let Some(ref c) = custom.selection_bg
-            && let Some(color) = palette::parse_hex_rgb_color(c)
-        {
-            t = t.with_selection_bg(color);
-        }
-        if let Some(ref c) = custom.header_bg
-            && let Some(color) = palette::parse_hex_rgb_color(c)
-        {
-            t = t.with_header_bg(color);
-        }
-        if let Some(ref c) = custom.footer_bg
-            && let Some(color) = palette::parse_hex_rgb_color(c)
-        {
-            t = t.with_footer_bg(color);
-        }
-        if let Some(ref c) = custom.mode_agent
-            && let Some(color) = palette::parse_hex_rgb_color(c)
-        {
-            t = t.with_mode_agent(color);
-        }
-        if let Some(ref c) = custom.mode_yolo
-            && let Some(color) = palette::parse_hex_rgb_color(c)
-        {
-            t = t.with_mode_yolo(color);
-        }
-        if let Some(ref c) = custom.mode_plan
-            && let Some(color) = palette::parse_hex_rgb_color(c)
-        {
-            t = t.with_mode_plan(color);
-        }
-        if let Some(ref c) = custom.status_ready
-            && let Some(color) = palette::parse_hex_rgb_color(c)
-        {
-            t = t.with_status_ready(color);
-        }
-        if let Some(ref c) = custom.status_working
-            && let Some(color) = palette::parse_hex_rgb_color(c)
-        {
-            t = t.with_status_working(color);
-        }
-        if let Some(ref c) = custom.status_warning
-            && let Some(color) = palette::parse_hex_rgb_color(c)
-        {
-            t = t.with_status_warning(color);
-        }
+        try_override!(t, custom, panel_bg, with_panel_bg);
+        try_override!(t, custom, elevated_bg, with_elevated_bg);
+        try_override!(t, custom, selection_bg, with_selection_bg);
+        try_override!(t, custom, header_bg, with_header_bg);
+        try_override!(t, custom, footer_bg, with_footer_bg);
+        try_override!(t, custom, mode_agent, with_mode_agent);
+        try_override!(t, custom, mode_yolo, with_mode_yolo);
+        try_override!(t, custom, mode_plan, with_mode_plan);
+        try_override!(t, custom, status_ready, with_status_ready);
+        try_override!(t, custom, status_working, with_status_working);
+        try_override!(t, custom, status_warning, with_status_warning);
 
         // ── Apply text colour overrides ──
-        if let Some(ref c) = custom.text_dim
-            && let Some(color) = palette::parse_hex_rgb_color(c)
-        {
-            t = t.with_text_dim(color);
-        }
-        if let Some(ref c) = custom.text_hint
-            && let Some(color) = palette::parse_hex_rgb_color(c)
-        {
-            t = t.with_text_hint(color);
-        }
-        if let Some(ref c) = custom.text_muted
-            && let Some(color) = palette::parse_hex_rgb_color(c)
-        {
-            t = t.with_text_muted(color);
-        }
-        if let Some(ref c) = custom.text_body
-            && let Some(color) = palette::parse_hex_rgb_color(c)
-        {
-            t = t.with_text_body(color);
-        }
-        if let Some(ref c) = custom.text_soft
-            && let Some(color) = palette::parse_hex_rgb_color(c)
-        {
-            t = t.with_text_soft(color);
-        }
+        try_override!(t, custom, text_dim, with_text_dim);
+        try_override!(t, custom, text_hint, with_text_hint);
+        try_override!(t, custom, text_muted, with_text_muted);
+        try_override!(t, custom, text_body, with_text_body);
+        try_override!(t, custom, text_soft, with_text_soft);
 
         // ── Apply border colour override ──
-        if let Some(ref c) = custom.border_color
-            && let Some(color) = palette::parse_hex_rgb_color(c)
-        {
-            t = t.with_border_color(color);
-        }
+        try_override!(t, custom, border_color, with_border_color);
 
         // ── Apply section/tool colour overrides ──
-        if let Some(ref c) = custom.section_border_color
-            && let Some(color) = palette::parse_hex_rgb_color(c)
-        {
-            t = t.with_section_border_color(color);
-        }
-        if let Some(ref c) = custom.section_title_color
-            && let Some(color) = palette::parse_hex_rgb_color(c)
-        {
-            t = t.with_section_title_color(color);
-        }
-        if let Some(ref c) = custom.tool_title_color
-            && let Some(color) = palette::parse_hex_rgb_color(c)
-        {
-            t = t.with_tool_title_color(color);
-        }
-        if let Some(ref c) = custom.tool_value_color
-            && let Some(color) = palette::parse_hex_rgb_color(c)
-        {
-            t = t.with_tool_value_color(color);
-        }
-        if let Some(ref c) = custom.tool_label_color
-            && let Some(color) = palette::parse_hex_rgb_color(c)
-        {
-            t = t.with_tool_label_color(color);
-        }
-        if let Some(ref c) = custom.tool_running_accent
-            && let Some(color) = palette::parse_hex_rgb_color(c)
-        {
-            t = t.with_tool_running_accent(color);
-        }
-        if let Some(ref c) = custom.tool_success_accent
-            && let Some(color) = palette::parse_hex_rgb_color(c)
-        {
-            t = t.with_tool_success_accent(color);
-        }
-        if let Some(ref c) = custom.tool_failed_accent
-            && let Some(color) = palette::parse_hex_rgb_color(c)
-        {
-            t = t.with_tool_failed_accent(color);
-        }
+        try_override!(t, custom, section_border_color, with_section_border_color);
+        try_override!(t, custom, section_title_color, with_section_title_color);
+        try_override!(t, custom, tool_title_color, with_tool_title_color);
+        try_override!(t, custom, tool_value_color, with_tool_value_color);
+        try_override!(t, custom, tool_label_color, with_tool_label_color);
+        try_override!(t, custom, tool_running_accent, with_tool_running_accent);
+        try_override!(t, custom, tool_success_accent, with_tool_success_accent);
+        try_override!(t, custom, tool_failed_accent, with_tool_failed_accent);
 
         // ── Apply plan colour overrides ──
-        if let Some(ref c) = custom.plan_progress_color
-            && let Some(color) = palette::parse_hex_rgb_color(c)
-        {
-            t = t.with_plan_progress_color(color);
-        }
-        if let Some(ref c) = custom.plan_summary_color
-            && let Some(color) = palette::parse_hex_rgb_color(c)
-        {
-            t = t.with_plan_summary_color(color);
-        }
-        if let Some(ref c) = custom.plan_explanation_color
-            && let Some(color) = palette::parse_hex_rgb_color(c)
-        {
-            t = t.with_plan_explanation_color(color);
-        }
-        if let Some(ref c) = custom.plan_pending_color
-            && let Some(color) = palette::parse_hex_rgb_color(c)
-        {
-            t = t.with_plan_pending_color(color);
-        }
-        if let Some(ref c) = custom.plan_in_progress_color
-            && let Some(color) = palette::parse_hex_rgb_color(c)
-        {
-            t = t.with_plan_in_progress_color(color);
-        }
-        if let Some(ref c) = custom.plan_completed_color
-            && let Some(color) = palette::parse_hex_rgb_color(c)
-        {
-            t = t.with_plan_completed_color(color);
-        }
+        try_override!(t, custom, plan_progress_color, with_plan_progress_color);
+        try_override!(t, custom, plan_summary_color, with_plan_summary_color);
+        try_override!(
+            t,
+            custom,
+            plan_explanation_color,
+            with_plan_explanation_color
+        );
+        try_override!(t, custom, plan_pending_color, with_plan_pending_color);
+        try_override!(
+            t,
+            custom,
+            plan_in_progress_color,
+            with_plan_in_progress_color
+        );
+        try_override!(t, custom, plan_completed_color, with_plan_completed_color);
 
         t
     }
@@ -1483,27 +1373,19 @@ mod tests {
 
     #[test]
     fn from_settings_with_overrides() {
-        let theme = Theme::from_settings(
-            "tokyo-night",
-            Some("#000000"),
-            Some("#111111"),
-            Some("#222222"),
-            Some("rounded"),
-            None,
-        );
-        assert_eq!(theme.surface_bg, Color::Rgb(0, 0, 0));
-        assert_eq!(theme.sidebar_bg, Color::Rgb(0x11, 0x11, 0x11));
-        assert_eq!(theme.composer_bg, Color::Rgb(0x22, 0x22, 0x22));
+        let theme = Theme::from_settings("tokyo-night", Some("rounded"), None);
         assert_eq!(theme.border_type, BorderType::Rounded);
     }
 
     #[test]
     fn from_settings_with_section_border_fallback() {
-        let theme = Theme::from_settings("dark", None, None, None, Some("rounded"), None);
+        let theme = Theme::from_settings("dark", Some("rounded"), None);
         assert_eq!(theme.border_type, BorderType::Rounded);
+        assert_eq!(theme.section_border_type, BorderType::Rounded);
 
-        let theme2 = Theme::from_settings("dark", None, None, None, Some("rounded"), Some("plain"));
-        assert_eq!(theme2.border_type, BorderType::Plain);
+        let theme2 = Theme::from_settings("dark", Some("rounded"), Some("plain"));
+        assert_eq!(theme2.border_type, BorderType::Rounded);
+        assert_eq!(theme2.section_border_type, BorderType::Plain);
     }
 
     #[test]

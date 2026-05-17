@@ -356,7 +356,7 @@ pub fn render_file_tree(f: &mut Frame, area: Rect, state: &mut FileTreeState, th
                 Style::default().fg(theme.section_title_color).bold(),
             )))
             .borders(theme.section_borders)
-            .border_type(theme.border_type)
+            .border_type(theme.section_border_type)
             .border_style(Style::default().fg(theme.section_border_color))
             .style(Style::default().bg(theme.sidebar_bg))
             .padding(theme.section_padding),

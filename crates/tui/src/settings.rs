@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{expand_path, normalize_model_name};
 use crate::localization::normalize_configured_locale;
-use crate::palette::{normalize_hex_rgb_color, normalize_theme_name};
+use crate::palette::normalize_theme_name;
 
 // ============================================================================
 // TuiPrefs — ~/.deepseek/tui.toml
@@ -198,16 +198,9 @@ pub struct Settings {
     /// Named UI theme. Accepts `"system"` (follow terminal background),
     /// `"dark"`, `"light"`, `"grayscale"`, or one of the community
     /// presets: `"catppuccin-mocha"`, `"tokyo-night"`, `"dracula"`,
-    /// `"gruvbox-dark"`. The `background_color` setting still overrides the
-    /// surface color on top of the resolved theme.
+    /// `"gruvbox-dark"`.  Use a custom theme file
+    /// (`~/.config/deepseek/themes/<name>.toml`) for color overrides.
     pub theme: String,
-    /// Optional main TUI background color as a 6-digit hex RGB value.
-    pub background_color: Option<String>,
-    /// Optional sidebar background color as a 6-digit hex RGB value.
-    /// When unset, inherits from the theme's panel/sidebar colour.
-    pub sidebar_bg: Option<String>,
-    /// Optional composer input-area background color as a 6-digit hex RGB value.
-    pub composer_bg: Option<String>,
     /// Global border style: "plain" or "rounded".  `None` means "inherit
     /// from the theme" (the custom file or built-in default).
     pub border_type: Option<String>,
@@ -305,9 +298,6 @@ impl Default for Settings {
             show_tool_details: true,
             locale: "auto".to_string(),
             theme: "system".to_string(),
-            background_color: None,
-            sidebar_bg: None,
-            composer_bg: None,
             border_type: None,
             section_border_type: None,
             composer_density: "comfortable".to_string(),
@@ -372,8 +362,7 @@ impl Settings {
             s.locale = normalize_configured_locale(&s.locale)
                 .unwrap_or("en")
                 .to_string();
-            s.background_color = normalize_optional_background_color(s.background_color.as_deref());
-            s.theme = normalize_settings_theme(&s.theme).to_string();
+            s.theme = normalize_settings_theme(&s.theme);
             s.default_model = s.default_model.as_deref().and_then(normalize_default_model);
             s
         };
@@ -516,15 +505,6 @@ impl Settings {
             }
             "ui_theme" => {
                 self.theme = normalize_theme_setting(value)?;
-            }
-            "background_color" | "background" | "bg" => {
-                self.background_color = normalize_background_color_setting(value)?;
-            }
-            "sidebar_bg" => {
-                self.sidebar_bg = normalize_background_color_setting(value)?;
-            }
-            "composer_bg" => {
-                self.composer_bg = normalize_background_color_setting(value)?;
             }
             "border_type" => {
                 let normalized = value.trim().to_ascii_lowercase();
@@ -707,18 +687,6 @@ impl Settings {
         lines.push(format!("  locale:            {}", self.locale));
         lines.push(format!("  theme:              {}", self.theme));
         lines.push(format!(
-            "  background_color:   {}",
-            self.background_color.as_deref().unwrap_or("(default)")
-        ));
-        lines.push(format!(
-            "  sidebar_bg:         {}",
-            self.sidebar_bg.as_deref().unwrap_or("(default)")
-        ));
-        lines.push(format!(
-            "  composer_bg:        {}",
-            self.composer_bg.as_deref().unwrap_or("(default)")
-        ));
-        lines.push(format!(
             "  border_type:        {}",
             self.border_type.as_deref().unwrap_or("(default)")
         ));
@@ -795,10 +763,6 @@ impl Settings {
             (
                 "theme",
                 "UI theme: system, dark, light, grayscale, catppuccin-mocha, tokyo-night, dracula, gruvbox-dark",
-            ),
-            (
-                "background_color",
-                "Main TUI background color: #RRGGBB or default",
             ),
             (
                 "composer_density",
@@ -937,8 +901,31 @@ fn normalize_synchronized_output(value: &str) -> &str {
     }
 }
 
-fn normalize_settings_theme(value: &str) -> &'static str {
-    normalize_theme_name(value).unwrap_or("system")
+fn normalize_settings_theme(value: &str) -> String {
+    let trimmed = value.trim();
+    // Preserve `file:`-prefixed custom theme references as-is
+    if trimmed.starts_with("file:") && trimmed.len() > "file:".len() {
+        let name = &trimmed["file:".len()..];
+        let path = crate::tui::theme::themes_dir()
+            .join(name)
+            .with_extension("toml");
+        if path.exists() || crate::tui::theme::themes_dir().join(name).exists() {
+            return trimmed.to_string();
+        }
+        // File doesn't exist — fall through to built-in check
+    }
+    // Built-in names take priority over custom theme files
+    if let Some(name) = normalize_theme_name(trimmed) {
+        return name.to_string();
+    }
+    // Try as bare custom theme file name
+    let path = crate::tui::theme::themes_dir()
+        .join(trimmed)
+        .with_extension("toml");
+    if path.exists() || crate::tui::theme::themes_dir().join(trimmed).exists() {
+        return format!("file:{trimmed}");
+    }
+    "system".to_string()
 }
 
 /// Returns `true` when the active terminal is Ptyxis (the new default
@@ -990,35 +977,6 @@ fn legacy_windows_console_host_env(markers: [Option<&std::ffi::OsStr>; 8]) -> bo
     }
 
     markers.into_iter().all(|value| !has_value(value))
-}
-
-fn normalize_optional_background_color(value: Option<&str>) -> Option<String> {
-    value.and_then(|raw| normalize_background_color_setting(raw).ok().flatten())
-}
-
-fn normalize_background_color_setting(value: &str) -> Result<Option<String>> {
-    let trimmed = value.trim();
-    if trimmed.is_empty()
-        || matches!(
-            trimmed.to_ascii_lowercase().as_str(),
-            "default" | "none" | "off"
-        )
-    {
-        return Ok(None);
-    }
-    // "reset" / "terminal" / "transparent" → use terminal default background
-    if matches!(
-        trimmed.to_ascii_lowercase().as_str(),
-        "reset" | "terminal" | "transparent"
-    ) {
-        return Ok(Some("reset".to_string()));
-    }
-
-    normalize_hex_rgb_color(trimmed).map(Some).ok_or_else(|| {
-        anyhow::anyhow!(
-            "Failed to update setting: invalid background_color '{value}'. Expected #RRGGBB, RRGGBB, reset, or default."
-        )
-    })
 }
 
 /// Validate and normalise a theme setting value.
@@ -1187,29 +1145,6 @@ mod tests {
             .set("theme", "solarized")
             .expect_err("unknown theme should fail");
         assert!(err.to_string().contains("invalid theme"));
-    }
-
-    #[test]
-    fn background_color_normalizes_hex_and_accepts_default() {
-        let mut settings = Settings::default();
-        settings
-            .set("background_color", "#1A1b26")
-            .expect("set custom background");
-        assert_eq!(settings.background_color.as_deref(), Some("#1a1b26"));
-
-        settings
-            .set("background", "default")
-            .expect("reset custom background");
-        assert_eq!(settings.background_color, None);
-    }
-
-    #[test]
-    fn background_color_rejects_invalid_hex() {
-        let mut settings = Settings::default();
-        let err = settings
-            .set("background_color", "#123")
-            .expect_err("short hex should fail");
-        assert!(err.to_string().contains("invalid background_color"));
     }
 
     #[test]

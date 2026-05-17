@@ -626,16 +626,6 @@ impl ConfigView {
             },
             ConfigRow {
                 section: ConfigSection::Display,
-                key: "background_color".to_string(),
-                value: settings
-                    .background_color
-                    .clone()
-                    .unwrap_or_else(|| "(default)".to_string()),
-                editable: true,
-                scope: ConfigScope::Saved,
-            },
-            ConfigRow {
-                section: ConfigSection::Display,
                 key: "calm_mode".to_string(),
                 value: settings.calm_mode.to_string(),
                 editable: true,
@@ -1106,7 +1096,6 @@ fn config_hint_for_key(key: &str) -> &'static str {
         "composer_density" | "transcript_spacing" => "compact | comfortable | spacious",
         "theme" => "system | dark | light | grayscale",
         "locale" => "auto | en | ja | zh-Hans | pt-BR",
-        "background_color" => "#RRGGBB | default",
         "default_mode" => "agent | plan | yolo",
         "sidebar_width" => "10..=50",
         "sidebar_focus" => "auto | work | tasks | agents | context | hidden",
@@ -2135,7 +2124,6 @@ mod tests {
         assert!(keys.contains(&"approval_mode"));
         assert!(keys.contains(&"theme"));
         assert!(keys.contains(&"locale"));
-        assert!(keys.contains(&"background_color"));
         assert!(keys.contains(&"fancy_animations"));
         assert!(keys.contains(&"status_indicator"));
         assert!(keys.contains(&"synchronized_output"));

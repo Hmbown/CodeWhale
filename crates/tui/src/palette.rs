@@ -324,6 +324,7 @@ pub fn parse_hex_rgb_color(value: &str) -> Option<Color> {
     Some(Color::Rgb(r, g, b))
 }
 
+#[cfg(test)]
 #[must_use]
 pub fn normalize_hex_rgb_color(value: &str) -> Option<String> {
     hex_rgb_string(parse_hex_rgb_color(value)?)

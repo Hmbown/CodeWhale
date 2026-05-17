@@ -1337,9 +1337,6 @@ impl App {
         // setting still overlays on top.
         let theme = Theme::from_settings(
             &settings.theme,
-            settings.background_color.as_deref(),
-            settings.sidebar_bg.as_deref(),
-            settings.composer_bg.as_deref(),
             settings.border_type.as_deref(),
             settings.section_border_type.as_deref(),
         );
