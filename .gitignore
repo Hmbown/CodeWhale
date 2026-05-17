@@ -103,3 +103,7 @@ docs/*_PLAN.md
 # direnv
 .envrc
 .direnv
+
+# Superpowers plugin artifacts
+docs/superpowers/
+.serena/

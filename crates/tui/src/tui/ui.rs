@@ -3242,16 +3242,30 @@ async fn run_event_loop(
                     app.delete_char_forward();
                 }
                 KeyCode::Delete => {}
+                KeyCode::Left if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                    if app.selection_anchor.is_none() {
+                        app.selection_anchor = Some(app.cursor_position);
+                    }
+                    app.move_cursor_left();
+                }
                 KeyCode::Left if is_word_cursor_modifier(key.modifiers) => {
                     app.move_cursor_word_backward();
                 }
                 KeyCode::Left => {
+                    app.clear_selection();
                     app.move_cursor_left();
+                }
+                KeyCode::Right if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                    if app.selection_anchor.is_none() {
+                        app.selection_anchor = Some(app.cursor_position);
+                    }
+                    app.move_cursor_right();
                 }
                 KeyCode::Right if is_word_cursor_modifier(key.modifiers) => {
                     app.move_cursor_word_forward();
                 }
                 KeyCode::Right => {
+                    app.clear_selection();
                     app.move_cursor_right();
                 }
                 KeyCode::Home if key.modifiers.contains(KeyModifiers::CONTROL) => {
