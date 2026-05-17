@@ -11,6 +11,7 @@ use crate::tools::subagent::{SubAgentAssignment, SubAgentResult, SubAgentStatus,
 use crate::tui::app::App;
 use crate::tui::approval::{ElevationOption, ReviewDecision};
 use crate::tui::history::{HistoryCell, SubAgentCell, summarize_tool_output};
+use crate::tui::theme::Theme;
 use crate::tui::widgets::agent_card::AgentLifecycle;
 
 pub mod mode_picker;
@@ -567,6 +568,7 @@ pub struct ConfigView {
     filter: String,
     status: Option<String>,
     locale: Locale,
+    theme: Theme,
     last_visible_rows: Cell<usize>,
     last_row_hitboxes: RefCell<Vec<(u16, usize)>>,
 }
@@ -781,6 +783,7 @@ impl ConfigView {
             filter: String::new(),
             status: None,
             locale: app.ui_locale,
+            theme: app.theme,
             last_visible_rows: Cell::new(0),
             last_row_hitboxes: RefCell::new(Vec::new()),
         }
@@ -1106,25 +1109,25 @@ fn config_hint_for_key(key: &str) -> &'static str {
     }
 }
 
-fn render_config_editor_value_line(edit: &ConfigEdit) -> ratatui::text::Line<'static> {
+fn render_config_editor_value_line(
+    edit: &ConfigEdit,
+    theme: &Theme,
+) -> ratatui::text::Line<'static> {
     use ratatui::{
         style::Style,
         text::{Line, Span},
     };
 
     let mut spans = Vec::new();
-    spans.push(Span::styled(
-        "New: ",
-        Style::default().fg(palette::TEXT_MUTED),
-    ));
+    spans.push(Span::styled("New: ", Style::default().fg(theme.text_muted)));
 
     let cursor_style = Style::default()
-        .fg(palette::DEEPSEEK_INK)
-        .bg(palette::DEEPSEEK_SKY)
+        .fg(theme.surface_bg)
+        .bg(theme.section_title_color)
         .bold();
     let selected_style = Style::default()
         .fg(palette::SELECTION_TEXT)
-        .bg(palette::SELECTION_BG);
+        .bg(theme.selection_bg);
 
     if edit.select_all && !edit.buffer.is_empty() {
         let text = edit.buffer.iter().collect::<String>();
@@ -1283,8 +1286,9 @@ impl ModalView for ConfigView {
 
         let base_block = Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(palette::BORDER_COLOR))
-            .style(Style::default().bg(palette::DEEPSEEK_INK))
+            .border_type(self.theme.border_type)
+            .border_style(Style::default().fg(self.theme.border_color))
+            .style(Style::default().bg(self.theme.surface_bg))
             .padding(Padding::uniform(1));
 
         let inner = base_block.inner(popup_area);
@@ -1292,24 +1296,24 @@ impl ModalView for ConfigView {
             let mut lines: Vec<Line> = Vec::new();
             lines.push(Line::from(vec![Span::styled(
                 format!("Edit {}", edit.key),
-                Style::default().fg(palette::DEEPSEEK_SKY).bold(),
+                Style::default().fg(self.theme.section_title_color).bold(),
             )]));
             lines.push(Line::from(""));
             lines.push(Line::from(vec![
-                Span::styled("Scope: ", Style::default().fg(palette::TEXT_MUTED)),
+                Span::styled("Scope: ", Style::default().fg(self.theme.text_muted)),
                 Span::raw(edit.scope.label()),
             ]));
             lines.push(Line::from(vec![
-                Span::styled("Current: ", Style::default().fg(palette::TEXT_MUTED)),
+                Span::styled("Current: ", Style::default().fg(self.theme.text_muted)),
                 Span::raw(truncate_view_text(&edit.original_value, 60)),
             ]));
             lines.push(Line::from(""));
-            lines.push(render_config_editor_value_line(edit));
+            lines.push(render_config_editor_value_line(edit, &self.theme));
             lines.push(Line::from(""));
             let hint = config_hint_for_key(&edit.key);
             if !hint.is_empty() {
                 lines.push(Line::from(vec![
-                    Span::styled("Hint: ", Style::default().fg(palette::TEXT_MUTED)),
+                    Span::styled("Hint: ", Style::default().fg(self.theme.text_muted)),
                     Span::raw(hint),
                 ]));
             }
@@ -1342,14 +1346,14 @@ impl ModalView for ConfigView {
             let mut lines: Vec<Line> = vec![
                 Line::from(vec![Span::styled(
                     self.tr(MessageId::ConfigTitle),
-                    Style::default().fg(palette::DEEPSEEK_BLUE).bold(),
+                    Style::default().fg(self.theme.section_title_color).bold(),
                 )]),
                 Line::from(vec![
-                    Span::styled("  Search: ", Style::default().fg(palette::TEXT_MUTED)),
+                    Span::styled("  Search: ", Style::default().fg(self.theme.text_muted)),
                     Span::raw(search_value),
                     Span::styled(
                         format!("  ({match_count}/{})", self.rows.len()),
-                        Style::default().fg(palette::TEXT_MUTED),
+                        Style::default().fg(self.theme.text_muted),
                     ),
                 ]),
                 Line::from(""),
@@ -1372,7 +1376,7 @@ impl ModalView for ConfigView {
                     ConfigListItem::Section(section) => {
                         lines.push(Line::from(Span::styled(
                             format!("  {}", section.label()),
-                            Style::default().fg(palette::DEEPSEEK_SKY).bold(),
+                            Style::default().fg(self.theme.section_title_color).bold(),
                         )));
                     }
                     ConfigListItem::Row(idx) => {
@@ -1385,10 +1389,10 @@ impl ModalView for ConfigView {
                         let style = if selected {
                             Style::default()
                                 .fg(ratatui::style::Color::White)
-                                .bg(palette::DEEPSEEK_BLUE)
+                                .bg(self.theme.selection_bg)
                                 .add_modifier(ratatui::style::Modifier::BOLD)
                         } else {
-                            Style::default().fg(palette::TEXT_PRIMARY)
+                            Style::default().fg(self.theme.text_body)
                         };
                         let value = truncate_view_text(&row.value, CONFIG_VALUE_COLUMN_WIDTH);
                         let mut line = Line::from(format!(
@@ -1418,7 +1422,7 @@ impl ModalView for ConfigView {
                 };
                 lines.push(Line::from(Span::styled(
                     message,
-                    Style::default().fg(palette::TEXT_MUTED),
+                    Style::default().fg(self.theme.text_muted),
                 )));
             }
 
@@ -1442,7 +1446,7 @@ impl ModalView for ConfigView {
             };
             lines.push(Line::from(Span::styled(
                 bottom_text,
-                Style::default().fg(palette::TEXT_MUTED),
+                Style::default().fg(self.theme.text_muted),
             )));
 
             let footer = if !self.filter.is_empty() {
@@ -1458,21 +1462,22 @@ impl ModalView for ConfigView {
         let block = Block::default()
             .title(Line::from(vec![Span::styled(
                 self.tr(MessageId::ConfigModalTitle),
-                Style::default().fg(palette::DEEPSEEK_BLUE).bold(),
+                Style::default().fg(self.theme.section_title_color).bold(),
             )]))
             .title_bottom(Line::from(Span::styled(
                 footer,
-                Style::default().fg(palette::TEXT_MUTED),
+                Style::default().fg(self.theme.text_muted),
             )))
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(palette::BORDER_COLOR))
-            .style(Style::default().bg(palette::DEEPSEEK_INK))
+            .border_type(self.theme.border_type)
+            .border_style(Style::default().fg(self.theme.border_color))
+            .style(Style::default().bg(self.theme.surface_bg))
             .padding(Padding::uniform(1));
 
         let inner = block.inner(popup_area);
         block.render(popup_area, buf);
         Paragraph::new(lines)
-            .style(Style::default().fg(palette::TEXT_PRIMARY))
+            .style(Style::default().fg(self.theme.text_body))
             .scroll((0, 0))
             .render(inner, buf);
     }
