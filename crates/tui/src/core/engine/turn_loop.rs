@@ -874,6 +874,25 @@ impl Engine {
                     content: content_blocks,
                 })
                 .await;
+            } else if should_emit_thinking_only_status(
+                tool_uses.is_empty(),
+                turn_error.is_none(),
+                self.cancel_token.is_cancelled(),
+            ) {
+                // Issue #1727: the model streamed ONLY a reasoning/thinking
+                // block — empty content, no tool calls (e.g. gpt-oss via
+                // ollama's harmony→OpenAI shim mapping to `reasoning_content`).
+                // We intentionally do NOT persist an assistant message
+                // (preserves prior behavior), but the previous code emitted
+                // nothing at all and fell straight through to finishing the
+                // turn, leaving the UI spinner hung with no error. Surface a
+                // status so the user knows the turn ended and can retry.
+                let message =
+                    "Model returned reasoning but no answer or tool call; turn ended without \
+                     output. Send a follow-up to retry."
+                        .to_string();
+                crate::logging::warn(&message);
+                let _ = self.tx_event.send(Event::status(message)).await;
             }
 
             // If no tool uses, check for inline REPL blocks (paper §2) or
@@ -1965,6 +1984,22 @@ fn should_hold_turn_for_subagents(queued_completions: usize, running_children: u
     queued_completions > 0 || running_children > 0
 }
 
+/// Issue #1727: decide whether to surface a "thinking-only, no output" status.
+///
+/// Reached when the assistant turn had no sendable content (no Text, no
+/// ToolUse — only a reasoning/thinking block). We notify the user *only* when
+/// the turn is otherwise ending cleanly: no tool uses to dispatch, no
+/// `turn_error` already surfaced for this turn, and the request wasn't
+/// cancelled. In those cases the prior code emitted nothing and the UI
+/// spinner hung silently.
+fn should_emit_thinking_only_status(
+    tool_uses_empty: bool,
+    turn_error_is_none: bool,
+    cancelled: bool,
+) -> bool {
+    tool_uses_empty && turn_error_is_none && !cancelled
+}
+
 /// Resolve an `"auto"` reasoning-effort tier to a concrete value.
 ///
 /// When the configured effort is `"auto"`, inspects the last user message
@@ -2045,6 +2080,42 @@ mod tests {
         assert!(should_hold_turn_for_subagents(1, 0));
         assert!(should_hold_turn_for_subagents(0, 1));
         assert!(!should_hold_turn_for_subagents(0, 0));
+    }
+
+    /// Regression test for issue #1727 (P0, release-blocking).
+    ///
+    /// When a model (e.g. gpt-oss via ollama's harmony→OpenAI shim) returns
+    /// ONLY a reasoning/thinking block — empty `content`, no `tool_calls` —
+    /// `has_sendable_assistant_content` is false, so no assistant message is
+    /// persisted. Previously the code also emitted NO event and fell straight
+    /// through to finishing the turn: the UI spinner stayed up forever with no
+    /// error, looking hung.
+    ///
+    /// This pins the decision: a clean turn end (no tool uses to dispatch, no
+    /// `turn_error`, not cancelled) must surface a status. We must NOT spam the
+    /// status when the turn is ending for another reason (error already shown,
+    /// cancelled) or when there are tool uses still to dispatch.
+    ///
+    /// Limitation: this tests the extracted pure decision, not the full async
+    /// `handle_deepseek_turn` loop (driving it would need a mock DeepSeek
+    /// client + session + channels — far beyond a surgical fix and unlike any
+    /// existing turn-loop test, which all pin pure helpers the same way). The
+    /// `else if` wiring at the persist site is reviewed by inspection.
+    #[test]
+    fn thinking_only_turn_emits_status_only_on_clean_end() {
+        // Thinking-only response, turn ending cleanly → surface a status so
+        // the user isn't left staring at a hung spinner.
+        assert!(should_emit_thinking_only_status(true, true, false));
+
+        // Tool uses still pending → the normal dispatch path handles it; no
+        // thinking-only status.
+        assert!(!should_emit_thinking_only_status(false, true, false));
+
+        // A turn_error was already surfaced → don't double-report.
+        assert!(!should_emit_thinking_only_status(true, false, false));
+
+        // Request was cancelled → cancellation status already covers it.
+        assert!(!should_emit_thinking_only_status(true, true, true));
     }
 
     /// Regression test for the OpenAI streaming batch tool_calls bug.
