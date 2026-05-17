@@ -667,8 +667,12 @@ impl Renderable for ComposerWidget<'_> {
                 Style::default().fg(palette::TEXT_MUTED).italic(),
             )));
         } else if let Some((sel_start, sel_end)) = self.app.selection_range() {
-            let line_ranges =
-                visible_line_char_ranges(&self.app.input, &visible_lines, content_width, scroll_offset);
+            let line_ranges = visible_line_char_ranges(
+                &self.app.input,
+                &visible_lines,
+                content_width,
+                scroll_offset,
+            );
             for (line_text, (line_start, line_end)) in visible_lines.iter().zip(line_ranges.iter())
             {
                 let spans = line_spans_with_selection(
@@ -2483,7 +2487,11 @@ fn visible_line_char_ranges(
 
     // Use the actual scroll_offset to align with visible_lines.
     let start = scroll_offset.min(ranges.len());
-    ranges.into_iter().skip(start).take(visible_lines.len()).collect()
+    ranges
+        .into_iter()
+        .skip(start)
+        .take(visible_lines.len())
+        .collect()
 }
 
 fn line_spans_with_selection<'a>(
@@ -2509,8 +2517,14 @@ fn line_spans_with_selection<'a>(
     let mut byte_offsets: Vec<usize> = line.char_indices().map(|(i, _)| i).collect();
     byte_offsets.push(line.len());
 
-    let b0 = byte_offsets.get(local_sel_start).copied().unwrap_or(line.len());
-    let b1 = byte_offsets.get(local_sel_end).copied().unwrap_or(line.len());
+    let b0 = byte_offsets
+        .get(local_sel_start)
+        .copied()
+        .unwrap_or(line.len());
+    let b1 = byte_offsets
+        .get(local_sel_end)
+        .copied()
+        .unwrap_or(line.len());
 
     let mut spans = Vec::with_capacity(3);
 
