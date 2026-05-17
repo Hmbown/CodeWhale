@@ -137,7 +137,12 @@ pub(super) fn handle_subagent_mailbox(app: &mut App, seq: u64, message: &Mailbox
     // No existing card — only `Started` reasonably opens one. Anything else
     // for an unknown agent_id is dropped (likely arrived after the cell was
     // cleared, e.g. session-resume edge cases).
-    let MailboxMessage::Started { agent_type, .. } = message else {
+    let MailboxMessage::Started {
+        agent_type,
+        objective,
+        ..
+    } = message
+    else {
         return;
     };
 
@@ -162,7 +167,11 @@ pub(super) fn handle_subagent_mailbox(app: &mut App, seq: u64, message: &Mailbox
             app.subagent_card_index.insert(agent_id, idx);
         }
     } else {
-        let card = DelegateCard::new(agent_id.clone(), agent_type.clone());
+        let card = DelegateCard::new(
+            agent_id.clone(),
+            agent_type.clone(),
+            summarize_tool_output(objective),
+        );
         app.add_message(HistoryCell::SubAgent(SubAgentCell::Delegate(card)));
         let idx = app.history.len().saturating_sub(1);
         app.subagent_card_index.insert(agent_id, idx);

@@ -317,7 +317,10 @@ fn detect_macos_palette_mode() -> Option<PaletteMode> {
             &String::from_utf8_lossy(&output.stdout),
         ))
     } else {
-        Some(PaletteMode::Light)
+        // Key not present: macOS is in default light appearance, but we
+        // treat that as "no signal" — let detect() fall through to Dark
+        // (transparent) so the TUI matches Claude Code's default style.
+        None
     }
 }
 
@@ -334,7 +337,6 @@ fn palette_mode_from_apple_interface_style(value: &str) -> PaletteMode {
         PaletteMode::Light
     }
 }
-
 // === UiTheme ===
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UiTheme {
@@ -443,18 +445,18 @@ pub const CATPPUCCIN_MOCHA_UI_THEME: UiTheme = UiTheme {
     selection_bg: Color::Rgb(0x45, 0x47, 0x5a), // surface1
     header_bg: Color::Rgb(0x11, 0x11, 0x1b),    // crust
     footer_bg: Color::Rgb(0x11, 0x11, 0x1b),
-    mode_agent: Color::Rgb(0x89, 0xb4, 0xfa),     // blue
-    mode_yolo: Color::Rgb(0xf3, 0x8b, 0xa8),      // red
-    mode_plan: Color::Rgb(0xfa, 0xb3, 0x87),      // peach
-    status_ready: Color::Rgb(0x7f, 0x84, 0x9c),   // overlay1
+    mode_agent: Color::Rgb(0x89, 0xb4, 0xfa), // blue
+    mode_yolo: Color::Rgb(0xf3, 0x8b, 0xa8),  // red
+    mode_plan: BLUE,
+    status_ready: Color::Rgb(0x7f, 0x84, 0x9c), // overlay1
     status_working: Color::Rgb(0x74, 0xc7, 0xec), // sapphire
-    status_warning: Color::Rgb(0xf9, 0xe2, 0xaf), // yellow
-    text_dim: Color::Rgb(0x6c, 0x70, 0x86),       // overlay0
-    text_hint: Color::Rgb(0x7f, 0x84, 0x9c),      // overlay1
-    text_muted: Color::Rgb(0xa6, 0xad, 0xc8),     // subtext0
-    text_body: Color::Rgb(0xcd, 0xd6, 0xf4),      // text
-    text_soft: Color::Rgb(0xba, 0xc2, 0xde),      // subtext1
-    border: Color::Rgb(0x45, 0x47, 0x5a),         // surface1
+    status_warning: SKY,
+    text_dim: Color::Rgb(0x6c, 0x70, 0x86),   // overlay0
+    text_hint: Color::Rgb(0x7f, 0x84, 0x9c),  // overlay1
+    text_muted: Color::Rgb(0xa6, 0xad, 0xc8), // subtext0
+    text_body: Color::Rgb(0xcd, 0xd6, 0xf4),  // text
+    text_soft: Color::Rgb(0xba, 0xc2, 0xde),  // subtext1
+    border: Color::Rgb(0x45, 0x47, 0x5a),     // surface1
 };
 
 pub const TOKYO_NIGHT_UI_THEME: UiTheme = UiTheme {
@@ -467,16 +469,16 @@ pub const TOKYO_NIGHT_UI_THEME: UiTheme = UiTheme {
     selection_bg: Color::Rgb(0x28, 0x34, 0x57), // visual selection
     header_bg: Color::Rgb(0x16, 0x16, 0x1e),
     footer_bg: Color::Rgb(0x16, 0x16, 0x1e),
-    mode_agent: Color::Rgb(0x7a, 0xa2, 0xf7),     // blue
-    mode_yolo: Color::Rgb(0xf7, 0x76, 0x8e),      // red
-    mode_plan: Color::Rgb(0xff, 0x9e, 0x64),      // orange
-    status_ready: Color::Rgb(0x56, 0x5f, 0x89),   // comment
+    mode_agent: Color::Rgb(0x7a, 0xa2, 0xf7), // blue
+    mode_yolo: Color::Rgb(0xf7, 0x76, 0x8e),  // red
+    mode_plan: BLUE,
+    status_ready: Color::Rgb(0x56, 0x5f, 0x89), // comment
     status_working: Color::Rgb(0x7d, 0xcf, 0xff), // cyan
-    status_warning: Color::Rgb(0xe0, 0xaf, 0x68), // yellow
-    text_dim: Color::Rgb(0x56, 0x5f, 0x89),       // comment
-    text_hint: Color::Rgb(0x73, 0x7a, 0xa2),      // dark5
-    text_muted: Color::Rgb(0xa9, 0xb1, 0xd6),     // fg_dark
-    text_body: Color::Rgb(0xc0, 0xca, 0xf5),      // fg
+    status_warning: SKY,
+    text_dim: Color::Rgb(0x56, 0x5f, 0x89),   // comment
+    text_hint: Color::Rgb(0x73, 0x7a, 0xa2),  // dark5
+    text_muted: Color::Rgb(0xa9, 0xb1, 0xd6), // fg_dark
+    text_body: Color::Rgb(0xc0, 0xca, 0xf5),  // fg
     text_soft: Color::Rgb(0xbb, 0xc2, 0xe0),
     border: Color::Rgb(0x41, 0x48, 0x68), // terminal_black
 };
@@ -491,12 +493,12 @@ pub const DRACULA_UI_THEME: UiTheme = UiTheme {
     selection_bg: Color::Rgb(0x44, 0x47, 0x5a), // current line
     header_bg: Color::Rgb(0x21, 0x22, 0x2c),
     footer_bg: Color::Rgb(0x21, 0x22, 0x2c),
-    mode_agent: Color::Rgb(0xbd, 0x93, 0xf9),     // purple
-    mode_yolo: Color::Rgb(0xff, 0x55, 0x55),      // red
-    mode_plan: Color::Rgb(0xff, 0xb8, 0x6c),      // orange
-    status_ready: Color::Rgb(0x62, 0x72, 0xa4),   // comment
+    mode_agent: Color::Rgb(0xbd, 0x93, 0xf9), // purple
+    mode_yolo: Color::Rgb(0xff, 0x55, 0x55),  // red
+    mode_plan: BLUE,
+    status_ready: Color::Rgb(0x62, 0x72, 0xa4), // comment
     status_working: Color::Rgb(0x8b, 0xe9, 0xfd), // cyan
-    status_warning: Color::Rgb(0xf1, 0xfa, 0x8c), // yellow
+    status_warning: SKY,
     text_dim: Color::Rgb(0x62, 0x72, 0xa4),
     text_hint: Color::Rgb(0x8a, 0x8e, 0xaa),
     text_muted: Color::Rgb(0xc0, 0xc4, 0xd6),
@@ -515,18 +517,18 @@ pub const GRUVBOX_DARK_UI_THEME: UiTheme = UiTheme {
     selection_bg: Color::Rgb(0x66, 0x5c, 0x54), // bg3
     header_bg: Color::Rgb(0x1d, 0x20, 0x21),    // bg0_h
     footer_bg: Color::Rgb(0x1d, 0x20, 0x21),
-    mode_agent: Color::Rgb(0x83, 0xa5, 0x98),     // blue
-    mode_yolo: Color::Rgb(0xfb, 0x49, 0x34),      // red
-    mode_plan: Color::Rgb(0xfe, 0x80, 0x19),      // orange
+    mode_agent: Color::Rgb(0x83, 0xa5, 0x98), // blue
+    mode_yolo: Color::Rgb(0xfb, 0x49, 0x34),  // red
+    mode_plan: BLUE,
     status_ready: Color::Rgb(0x92, 0x83, 0x74),   // gray
     status_working: Color::Rgb(0x8e, 0xc0, 0x7c), // aqua
-    status_warning: Color::Rgb(0xfa, 0xbd, 0x2f), // yellow
-    text_dim: Color::Rgb(0x92, 0x83, 0x74),       // gray
-    text_hint: Color::Rgb(0xa8, 0x99, 0x84),      // fg4
-    text_muted: Color::Rgb(0xbd, 0xae, 0x93),     // fg3
-    text_body: Color::Rgb(0xeb, 0xdb, 0xb2),      // fg1
-    text_soft: Color::Rgb(0xd5, 0xc4, 0xa1),      // fg2
-    border: Color::Rgb(0x66, 0x5c, 0x54),         // bg3
+    status_warning: SKY,
+    text_dim: Color::Rgb(0x92, 0x83, 0x74),   // gray
+    text_hint: Color::Rgb(0xa8, 0x99, 0x84),  // fg4
+    text_muted: Color::Rgb(0xbd, 0xae, 0x93), // fg3
+    text_body: Color::Rgb(0xeb, 0xdb, 0xb2),  // fg1
+    text_soft: Color::Rgb(0xd5, 0xc4, 0xa1),  // fg2
+    border: Color::Rgb(0x66, 0x5c, 0x54),     // bg3
 };
 
 /// Stable identifiers for the named themes the user can select. `System`
@@ -1432,10 +1434,10 @@ mod tests {
     }
 
     #[test]
-    fn dark_palette_uses_soft_body_text_and_warm_reasoning() {
-        assert_eq!(TEXT_BODY, Color::Rgb(226, 232, 240));
-        assert_eq!(TEXT_REASONING, Color::Rgb(211, 170, 112));
-        assert_eq!(ACCENT_REASONING_LIVE, Color::Rgb(224, 153, 72));
+    fn dark_palette_uses_soft_body_text_and_blue_reasoning() {
+        assert_eq!(TEXT_BODY, Color::Rgb(238, 247, 255));
+        assert_eq!(TEXT_REASONING, Color::Rgb(154, 213, 235));
+        assert_eq!(ACCENT_REASONING_LIVE, Color::Rgb(54, 142, 188));
         assert_ne!(TEXT_REASONING, TEXT_TOOL_OUTPUT);
         assert_ne!(TEXT_BODY, Color::White);
     }

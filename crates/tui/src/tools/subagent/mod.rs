@@ -62,7 +62,10 @@ fn release_resident_leases_for(agent_id: &str) {
     }
 }
 
-const DEFAULT_MAX_STEPS: u32 = 100;
+/// Circuit-breaker: maximum tool-call turns before a sub-agent is forcibly
+/// stopped. The model is expected to finish naturally; this only catches
+/// infinite loops. Not exposed to the model — it should not pace itself.
+const DEFAULT_MAX_STEPS: u32 = 200;
 const TOOL_TIMEOUT: Duration = Duration::from_secs(30);
 /// Per-step LLM API call timeout. Each `create_message` request must complete
 /// within this window or the step is treated as timed out. Prevents a single
@@ -145,6 +148,51 @@ pub fn whale_nickname_for_index(index: usize) -> String {
         base.to_string()
     } else {
         format!("{base} {}", index / WHALE_NICKNAMES.len() + 1)
+    }
+}
+
+/// Derive a readable agent `session_name` from the objective. Caps at 50 chars,
+/// strips non-alphanumeric characters (replacing runs with a single dash), and
+/// falls back to the agent id when the objective is empty.
+fn slugify_agent_name(objective: &str, id: &str) -> String {
+    let slug: String = objective
+        .chars()
+        .filter_map(|c| {
+            if c.is_alphanumeric() || c == '_' || c == '-' {
+                Some(c.to_ascii_lowercase())
+            } else if c.is_whitespace() || c == '.' || c == ',' || c == ':' || c == ';' {
+                Some('-')
+            } else {
+                None
+            }
+        })
+        .collect();
+    let slug = slug.trim_matches('-');
+    // Collapse consecutive dashes
+    let mut compact = String::with_capacity(slug.len());
+    let mut prev_dash = false;
+    for c in slug.chars() {
+        if c == '-' {
+            if !prev_dash {
+                compact.push(c);
+            }
+            prev_dash = true;
+        } else {
+            compact.push(c);
+            prev_dash = false;
+        }
+    }
+    let compact = compact.trim_matches('-');
+    if compact.is_empty() {
+        id.to_string()
+    } else if compact.len() <= 50 {
+        compact.to_string()
+    } else {
+        // Cut at word boundary within limit
+        let end = compact[..50]
+            .rfind('-')
+            .unwrap_or(49);
+        compact[..=end].trim_end_matches('-').to_string()
     }
 }
 
@@ -874,7 +922,7 @@ impl SubAgent {
         session_boot_id: String,
     ) -> Self {
         let id = format!("agent_{}", &Uuid::new_v4().to_string()[..8]);
-        let session_name = id.clone();
+        let session_name = slugify_agent_name(&assignment.objective, &id);
 
         Self {
             id,
@@ -1210,6 +1258,21 @@ impl SubAgentManager {
                 return Err(anyhow!("Sub-agent session name '{name}' is already in use"));
             }
             agent.session_name = name.to_string();
+        } else {
+            // Auto-generated session_name (from objective). If a previous
+            // agent already has the same slug, append "-2", "-3", etc.
+            let base = agent.session_name.clone();
+            let mut unique = base.clone();
+            let mut n = 2u32;
+            while self
+                .agents
+                .values()
+                .any(|existing| existing.session_name == unique)
+            {
+                unique = format!("{base}-{n}");
+                n = n.saturating_add(1);
+            }
+            agent.session_name = unique;
         }
         agent.fork_context = options.fork_context;
         let agent_id = agent.id.clone();
@@ -3419,7 +3482,7 @@ async fn run_subagent(
     }
     let tools = tool_registry.tools_for_model(&agent_type);
     if let Some(mb) = runtime.mailbox.as_ref() {
-        let _ = mb.send(MailboxMessage::started(&agent_id, agent_type.clone()));
+        let _ = mb.send(MailboxMessage::started(&agent_id, agent_type.clone(), &prompt));
     }
     emit_agent_progress(
         runtime.event_tx.as_ref(),

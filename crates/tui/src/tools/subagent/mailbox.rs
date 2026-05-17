@@ -35,6 +35,7 @@ pub enum MailboxMessage {
     Started {
         agent_id: String,
         agent_type: String,
+        objective: String,
     },
     /// Free-form human-readable progress (mirrors `Event::AgentProgress`).
     Progress { agent_id: String, status: String },
@@ -89,10 +90,15 @@ impl MailboxMessage {
         }
     }
 
-    pub(crate) fn started(agent_id: impl Into<String>, agent_type: SubAgentType) -> Self {
+    pub(crate) fn started(
+        agent_id: impl Into<String>,
+        agent_type: SubAgentType,
+        objective: impl Into<String>,
+    ) -> Self {
         Self::Started {
             agent_id: agent_id.into(),
             agent_type: agent_type.as_str().to_string(),
+            objective: objective.into(),
         }
     }
 
@@ -412,7 +418,7 @@ mod tests {
     #[tokio::test]
     async fn agent_id_is_extractable_from_every_variant() {
         let cases: Vec<(MailboxMessage, &str)> = vec![
-            (MailboxMessage::started("a1", SubAgentType::General), "a1"),
+            (MailboxMessage::started("a1", SubAgentType::General, "test"), "a1"),
             (MailboxMessage::progress("a2", "x"), "a2"),
             (
                 MailboxMessage::ToolCallStarted {

@@ -255,7 +255,7 @@ mod tests {
     fn light_palette_maps_dark_cells_before_depth_adaptation() {
         let mut cell = Cell::default();
         cell.set_fg(Color::White);
-        cell.set_bg(Color::Rgb(11, 21, 38));
+        cell.set_bg(palette::DEEPSEEK_INK);
 
         adapt_cell_colors(
             &mut cell,

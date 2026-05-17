@@ -1258,11 +1258,7 @@ fn tool_status_marker(status: ToolStatus) -> (&'static str, ratatui::style::Colo
 }
 
 fn format_duration_ms(ms: u64) -> String {
-    if ms < 1000 {
-        format!("{ms}ms")
-    } else {
-        format!("{:.1}s", ms as f64 / 1000.0)
-    }
+    format!("{}s", ms / 1000)
 }
 
 fn duration_ms(duration: Duration) -> u64 {
@@ -1398,7 +1394,7 @@ fn sidebar_agent_rows(app: &App) -> Vec<SidebarAgentRow> {
             .filter(|(id, _)| !cached_ids.contains(id.as_str()))
             .map(|(id, progress)| SidebarAgentRow {
                 id: id.clone(),
-                name: id.clone(),
+                name: progress.clone(),
                 role: "agent".to_string(),
                 status: "running".to_string(),
                 progress: Some(progress.clone()),
@@ -1501,9 +1497,8 @@ pub fn subagent_panel_lines(
             break;
         }
         let mut detail_parts = Vec::new();
-        detail_parts.push(truncate_line_to_width(&row.id, 10));
         if row.steps_taken > 0 {
-            detail_parts.push(format!("{} step(s)", row.steps_taken));
+            detail_parts.push(format!("{} steps", row.steps_taken));
         }
         if let Some(duration) = row.duration_ms {
             detail_parts.push(format_duration_ms(duration));
@@ -2475,7 +2470,7 @@ mod tests {
 
         assert!(
             text.iter()
-                .any(|line| line.contains("[x] cargo check 1.2s")),
+                .any(|line| line.contains("[x] cargo check 1s")),
             "status marker and duration should stay in the row label: {text:?}"
         );
         assert!(

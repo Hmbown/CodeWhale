@@ -2812,7 +2812,7 @@ mod tests {
         widget.render(area, &mut buf);
         let rendered = buffer_text(&buf, area);
 
-        assert!(rendered.contains("Composer"));
+        assert!(rendered.contains("> "), "rendered output:\n{rendered}");
         assert!(!rendered.contains("deepseek-tui"));
         assert!(!rendered.contains("hello could you"));
     }

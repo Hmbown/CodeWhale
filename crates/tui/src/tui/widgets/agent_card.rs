@@ -71,18 +71,24 @@ pub struct DelegateCard {
     pub agent_type: String,
     pub status: AgentLifecycle,
     pub summary: Option<String>,
+    task_summary: String,
     actions: Vec<String>,
     truncated: bool,
 }
 
 impl DelegateCard {
     #[must_use]
-    pub fn new(agent_id: impl Into<String>, agent_type: impl Into<String>) -> Self {
+    pub fn new(
+        agent_id: impl Into<String>,
+        agent_type: impl Into<String>,
+        task_summary: impl Into<String>,
+    ) -> Self {
         Self {
             agent_id: agent_id.into(),
             agent_type: agent_type.into(),
             status: AgentLifecycle::Pending,
             summary: None,
+            task_summary: task_summary.into(),
             actions: Vec::new(),
             truncated: false,
         }
@@ -105,7 +111,7 @@ impl DelegateCard {
             ToolFamily::Delegate,
             self.status,
             &self.agent_type,
-            &self.agent_id,
+            &self.task_summary,
         ));
         if self.truncated {
             lines.push(Line::from(Span::styled(
@@ -489,7 +495,7 @@ mod tests {
 
     #[test]
     fn delegate_card_truncates_to_last_three_actions_with_ellipsis() {
-        let mut card = DelegateCard::new("agent_001", "general");
+        let mut card = DelegateCard::new("agent_001", "general", "test task");
         card.push_action("read README.md");
         card.push_action("grep TODO");
         card.push_action("edit src/lib.rs");
@@ -532,7 +538,7 @@ mod tests {
 
     #[test]
     fn delegate_card_terminal_status_renders_summary_row() {
-        let mut card = DelegateCard::new("agent_002", "explore");
+        let mut card = DelegateCard::new("agent_002", "explore", "search");
         card.push_action("listing files");
         let msg = MailboxMessage::Completed {
             agent_id: "agent_002".into(),
@@ -551,7 +557,7 @@ mod tests {
 
     #[test]
     fn delegate_card_ignores_low_signal_scheduler_progress() {
-        let mut card = DelegateCard::new("agent_003", "general");
+        let mut card = DelegateCard::new("agent_003", "general", "review");
         let msg = MailboxMessage::progress("agent_003", "step 1/100: requesting model response");
 
         assert!(apply_to_delegate(&mut card, &msg));
@@ -572,7 +578,7 @@ mod tests {
 
     #[test]
     fn delegate_tool_rows_omit_internal_step_numbers() {
-        let mut card = DelegateCard::new("agent_004", "general");
+        let mut card = DelegateCard::new("agent_004", "general", "check");
 
         assert!(apply_to_delegate(
             &mut card,
@@ -602,7 +608,7 @@ mod tests {
 
     #[test]
     fn delegate_card_ignores_envelopes_for_other_agents() {
-        let mut card = DelegateCard::new("agent_a", "general");
+        let mut card = DelegateCard::new("agent_a", "general", "test");
         let other = MailboxMessage::progress("agent_b", "noise");
         assert!(!apply_to_delegate(&mut card, &other));
         assert_eq!(card.action_count(), 0);
@@ -665,7 +671,7 @@ mod tests {
     fn fanout_started_claims_seeded_pending_slot_without_growing_grid() {
         let mut card = FanoutCard::new("fanout").with_workers(["task:a", "task:b"]);
         let started =
-            MailboxMessage::started("agent_live", crate::tools::subagent::SubAgentType::General);
+            MailboxMessage::started("agent_live", crate::tools::subagent::SubAgentType::General, "test");
 
         assert!(apply_to_fanout(&mut card, &started));
 
@@ -679,7 +685,7 @@ mod tests {
     #[test]
     fn fanout_apply_transitions_worker_through_lifecycle() {
         let mut card = FanoutCard::new("fanout").with_workers(["w_1"]);
-        let started = MailboxMessage::started("w_1", crate::tools::subagent::SubAgentType::General);
+        let started = MailboxMessage::started("w_1", crate::tools::subagent::SubAgentType::General, "test");
         apply_to_fanout(&mut card, &started);
         assert_eq!(card.workers[0].status, AgentLifecycle::Running);
 
