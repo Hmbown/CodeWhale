@@ -4584,7 +4584,7 @@ async fn apply_command_result(
                     // Esc can revert through the same ConfigUpdated channel.
                     // Avoids re-reading settings.toml from disk on every
                     // `/theme` invocation.
-                    let original = app.theme_id.name().to_string();
+                    let original = app.theme.name.to_string();
                     app.view_stack
                         .push(crate::tui::theme_picker::ThemePickerView::new(original));
                 }
@@ -5367,7 +5367,7 @@ fn render(f: &mut Frame, app: &mut App) {
     let size = f.area();
 
     // Clear entire area with the configured app background.
-    let background = Block::default().style(Style::default().bg(app.ui_theme.surface_bg));
+    let background = Block::default().style(Style::default().bg(app.theme.surface_bg));
     f.render_widget(background, size);
 
     // Show onboarding screen if needed
@@ -5457,7 +5457,7 @@ fn render(f: &mut Frame, app: &mut App) {
             &model_label,
             workspace_name,
             app.is_loading,
-            app.ui_theme.header_bg,
+            app.theme.header_bg,
         )
         .with_usage(
             app.session.total_conversation_tokens,
@@ -5483,7 +5483,7 @@ fn render(f: &mut Frame, app: &mut App) {
         // uncovered by layout splits (e.g. after file-tree toggle or
         // resize) don't retain stale content from a previous frame.
         Block::default()
-            .style(Style::default().bg(app.ui_theme.surface_bg))
+            .style(Style::default().bg(app.theme.surface_bg))
             .render(chunks[1], f.buffer_mut());
 
         let mut sidebar_area = None;
@@ -5501,7 +5501,7 @@ fn render(f: &mut Frame, app: &mut App) {
 
                 // Render the file-tree pane.
                 if let Some(ref mut state) = app.file_tree {
-                    super::file_tree::render_file_tree(f, tree_area, state, app.ui_theme.mode);
+                    super::file_tree::render_file_tree(f, tree_area, state, &app.theme);
                 }
 
                 remaining
@@ -5583,8 +5583,8 @@ fn draw_app_frame_inner(
     app: &mut App,
     full_repaint: bool,
 ) -> Result<()> {
-    terminal.backend_mut().set_palette_mode(app.ui_theme.mode);
-    terminal.backend_mut().set_theme(app.theme_id, app.ui_theme);
+    terminal.backend_mut().set_palette_mode(app.theme.mode);
+    terminal.backend_mut().set_theme(app.theme);
     // DEC 2026 wrapping is on by default but can be turned off for
     // terminals that mishandle it (Ptyxis 50.x + VTE 0.84.x flashes the
     // whole viewport on every wrapped frame instead of deferring as the

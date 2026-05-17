@@ -9,9 +9,15 @@ use std::path::Path;
 
 use ratatui::style::Color;
 
-#[path = "../src/palette.rs"]
-#[allow(dead_code)]
-mod palette;
+// Palette color constants used by contrast guardrail tests.
+// Inlined here so we don't #[path] embed palette.rs, which transitively
+// depends on crate::tui::theme and crate::tui that don't exist in the test crate.
+const DEEPSEEK_INK: Color = Color::Rgb(11, 21, 38);
+const TEXT_BODY: Color = Color::Rgb(226, 232, 240);
+const TEXT_SECONDARY: Color = Color::Rgb(177, 190, 207);
+const TEXT_HINT: Color = Color::Rgb(135, 151, 171);
+const STATUS_WARNING: Color = Color::Rgb(255, 170, 60);
+const STATUS_ERROR: Color = Color::Rgb(226, 80, 96);
 
 const DEPRECATED_DIRECT_COLORS: &[&str] = &["DEEPSEEK_AQUA"];
 const ALLOWED_PATTERNS: &[&str] = &["pub const DEEPSEEK_AQUA", "DEEPSEEK_AQUA_RGB"];
@@ -170,32 +176,32 @@ fn contrast_guardrails_for_key_ui_pairs() {
 
     assert_min_contrast(
         "TEXT_BODY on DEEPSEEK_INK",
-        palette::TEXT_BODY,
-        palette::DEEPSEEK_INK,
+        TEXT_BODY,
+        DEEPSEEK_INK,
         min_readable,
     );
     assert_min_contrast(
         "TEXT_SECONDARY on DEEPSEEK_INK",
-        palette::TEXT_SECONDARY,
-        palette::DEEPSEEK_INK,
+        TEXT_SECONDARY,
+        DEEPSEEK_INK,
         min_readable,
     );
     assert_min_contrast(
         "TEXT_HINT on DEEPSEEK_INK",
-        palette::TEXT_HINT,
-        palette::DEEPSEEK_INK,
+        TEXT_HINT,
+        DEEPSEEK_INK,
         min_readable,
     );
     assert_min_contrast(
         "STATUS_WARNING on DEEPSEEK_INK",
-        palette::STATUS_WARNING,
-        palette::DEEPSEEK_INK,
+        STATUS_WARNING,
+        DEEPSEEK_INK,
         min_readable,
     );
     assert_min_contrast(
         "STATUS_ERROR on DEEPSEEK_INK",
-        palette::STATUS_ERROR,
-        palette::DEEPSEEK_INK,
+        STATUS_ERROR,
+        DEEPSEEK_INK,
         min_readable,
     );
 }

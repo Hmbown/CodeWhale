@@ -16,11 +16,11 @@ use ratatui::{
     widgets::{Block, Paragraph, Wrap},
 };
 
-use crate::deepseek_theme::Theme;
 use crate::palette;
 use crate::tools::plan::StepStatus;
 use crate::tools::subagent::SubAgentStatus;
 use crate::tools::todo::TodoStatus;
+use crate::tui::theme::Theme;
 
 use super::app::{App, SidebarFocus, TaskPanelEntry};
 use super::history::{GenericToolCell, HistoryCell, ToolCell, ToolStatus, summarize_tool_output};
@@ -40,7 +40,7 @@ pub fn render_sidebar(f: &mut Frame, area: Rect, app: &App) {
         // Paint a styled block over the area so stale cells from a previous
         // (wider) frame don't persist as bleed-through artifacts (#400).
         Block::default()
-            .style(Style::default().bg(app.ui_theme.surface_bg))
+            .style(Style::default().bg(app.theme.sidebar_bg))
             .render(area, f.buffer_mut());
         return;
     }
@@ -52,7 +52,7 @@ pub fn render_sidebar(f: &mut Frame, area: Rect, app: &App) {
         SidebarFocus::Agents => render_sidebar_subagents(f, area, app),
         SidebarFocus::Context => render_context_panel(f, area, app),
         SidebarFocus::Hidden => Block::default()
-            .style(Style::default().bg(app.ui_theme.surface_bg))
+            .style(Style::default().bg(app.theme.sidebar_bg))
             .render(area, f.buffer_mut()),
     }
 }
@@ -277,9 +277,8 @@ fn work_panel_lines(
     summary: &SidebarWorkSummary,
     content_width: usize,
     max_rows: usize,
-    palette_mode: palette::PaletteMode,
+    theme: &Theme,
 ) -> Vec<Line<'static>> {
-    let theme = Theme::for_palette_mode(palette_mode);
     let mut lines: Vec<Line<'static>> = Vec::with_capacity(max_rows.max(4));
 
     push_work_goal_lines(summary, content_width, max_rows, &mut lines);
@@ -292,7 +291,7 @@ fn work_panel_lines(
     }
 
     push_work_checklist_lines(summary, content_width, max_rows, &mut lines);
-    push_work_strategy_lines(summary, content_width, max_rows, &mut lines, &theme);
+    push_work_strategy_lines(summary, content_width, max_rows, &mut lines, theme);
 
     if summary.cycle_count > 0 && lines.len() < max_rows {
         lines.push(Line::from(Span::styled(
@@ -535,12 +534,7 @@ fn render_sidebar_work(f: &mut Frame, area: Rect, app: &App) {
     let content_width = area.width.saturating_sub(4) as usize;
     let usable_rows = area.height.saturating_sub(3) as usize;
     let summary = sidebar_work_summary(app);
-    let lines = work_panel_lines(
-        &summary,
-        content_width.max(1),
-        usable_rows,
-        app.ui_theme.mode,
-    );
+    let lines = work_panel_lines(&summary, content_width.max(1), usable_rows, &app.theme);
 
     render_sidebar_section(f, area, "Work", lines, app);
 }
@@ -1697,12 +1691,12 @@ fn render_sidebar_section(
     if area.width < 4 || area.height < 3 {
         // Clear stale cells before bailing out (#400).
         Block::default()
-            .style(Style::default().bg(app.ui_theme.surface_bg))
+            .style(Style::default().bg(app.theme.sidebar_bg))
             .render(area, f.buffer_mut());
         return;
     }
 
-    let theme = Theme::for_palette_mode(app.ui_theme.mode);
+    let theme = &app.theme;
     // Truncate the panel title so it always fits within the section width
     // even after a resize. The title occupies up to 4 chars of border chrome
     // (two spaces + one space on each side), so the max title length is
@@ -1732,9 +1726,9 @@ fn render_sidebar_section(
                 Style::default().fg(theme.section_title_color).bold(),
             )]))
             .borders(theme.section_borders)
-            .border_type(theme.section_border_type)
+            .border_type(theme.border_type)
             .border_style(Style::default().fg(theme.section_border_color))
-            .style(Style::default().bg(theme.section_bg))
+            .style(Style::default().bg(theme.sidebar_bg))
             .padding(theme.section_padding),
     );
 
@@ -1750,7 +1744,6 @@ mod tests {
         task_panel_lines, work_panel_empty_hint, work_panel_lines,
     };
     use crate::config::Config;
-    use crate::palette::PaletteMode;
     use crate::tools::plan::StepStatus;
     use crate::tools::todo::TodoStatus;
     use crate::tui::active_cell::ActiveCell;
@@ -1874,7 +1867,12 @@ mod tests {
             ..SidebarWorkSummary::default()
         };
 
-        let text = lines_to_text(&work_panel_lines(&summary, 80, 16, PaletteMode::Dark));
+        let text = lines_to_text(&work_panel_lines(
+            &summary,
+            80,
+            16,
+            &crate::tui::theme::DARK_THEME,
+        ));
 
         assert!(
             text[0].starts_with("33% complete (1/3)"),
@@ -1910,7 +1908,12 @@ mod tests {
             ..SidebarWorkSummary::default()
         };
 
-        let text = lines_to_text(&work_panel_lines(&summary, 80, 6, PaletteMode::Dark));
+        let text = lines_to_text(&work_panel_lines(
+            &summary,
+            80,
+            6,
+            &crate::tui::theme::DARK_THEME,
+        ));
 
         assert!(
             text.iter()
@@ -1930,7 +1933,7 @@ mod tests {
             &SidebarWorkSummary::default(),
             80,
             16,
-            PaletteMode::Dark,
+            &crate::tui::theme::DARK_THEME,
         ));
         assert!(
             !empty_text.iter().any(|line| line.contains("Strategy")),
@@ -1941,7 +1944,12 @@ mod tests {
             strategy_explanation: Some("High-level sequencing".to_string()),
             ..SidebarWorkSummary::default()
         };
-        let text = lines_to_text(&work_panel_lines(&summary, 80, 16, PaletteMode::Dark));
+        let text = lines_to_text(&work_panel_lines(
+            &summary,
+            80,
+            16,
+            &crate::tui::theme::DARK_THEME,
+        ));
         assert!(
             text.iter().any(|line| line == "Strategy"),
             "non-empty plan should show strategy label: {text:?}"

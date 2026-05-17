@@ -124,10 +124,10 @@ fn show_single_setting(app: &App, key: &str) -> CommandResult {
         "approval_mode" | "approval" => Some(app.approval_mode.label().to_string()),
         "locale" | "language" => Some(locale_display(app.ui_locale).to_string()),
         "theme" | "ui_theme" => {
-            Some(crate::palette::theme_label_for_mode(app.ui_theme.mode).to_string())
+            Some(crate::palette::theme_label_for_mode(app.theme.mode).to_string())
         }
         "background_color" | "background" | "bg" => {
-            crate::palette::hex_rgb_string(app.ui_theme.surface_bg)
+            crate::palette::hex_rgb_string(app.theme.surface_bg)
                 .or_else(|| Some("(default)".to_string()))
         }
         "auto_compact" | "compact" => {
@@ -497,12 +497,22 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
             app.mark_history_updated();
             app.needs_redraw = true;
         }
-        "theme" | "ui_theme" | "background_color" | "background" | "bg" => {
-            app.theme_id = crate::palette::ThemeId::from_name(&settings.theme)
-                .unwrap_or(crate::palette::ThemeId::System);
-            app.ui_theme = crate::palette::ui_theme_from_settings(
+        "theme"
+        | "ui_theme"
+        | "background_color"
+        | "background"
+        | "bg"
+        | "sidebar_bg"
+        | "composer_bg"
+        | "border_type"
+        | "section_border_type" => {
+            app.theme = crate::tui::theme::Theme::from_settings(
                 &settings.theme,
                 settings.background_color.as_deref(),
+                settings.sidebar_bg.as_deref(),
+                settings.composer_bg.as_deref(),
+                settings.border_type.as_deref(),
+                settings.section_border_type.as_deref(),
             );
             app.needs_redraw = true;
         }
@@ -584,6 +594,18 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
         "synchronized_output" | "sync_output" | "sync" => settings.synchronized_output.clone(),
         "background_color" | "background" | "bg" => settings
             .background_color
+            .clone()
+            .unwrap_or_else(|| "default".to_string()),
+        "sidebar_bg" => settings
+            .sidebar_bg
+            .clone()
+            .unwrap_or_else(|| "default".to_string()),
+        "composer_bg" => settings
+            .composer_bg
+            .clone()
+            .unwrap_or_else(|| "default".to_string()),
+        "border_type" | "section_border_type" => settings
+            .border_type
             .clone()
             .unwrap_or_else(|| "default".to_string()),
         "composer_vim_mode" | "vim_mode" | "vim" => settings.composer_vim_mode.clone(),
@@ -1756,8 +1778,7 @@ mod tests {
         let result = theme(&mut app, Some("grayscale"));
 
         assert_eq!(result.message.unwrap(), "theme = grayscale (saved)");
-        assert_eq!(app.theme_id, crate::palette::ThemeId::Grayscale);
-        assert_eq!(app.ui_theme.mode, crate::palette::PaletteMode::Grayscale);
+        assert_eq!(app.theme.mode, crate::palette::PaletteMode::Grayscale);
         assert!(app.needs_redraw);
     }
 
@@ -1780,7 +1801,7 @@ mod tests {
         let msg = result.message.unwrap();
 
         assert_eq!(msg, "theme = grayscale (saved)");
-        assert_eq!(app.ui_theme.mode, crate::palette::PaletteMode::Grayscale);
+        assert_eq!(app.theme.mode, crate::palette::PaletteMode::Grayscale);
 
         let settings_path = Settings::path().unwrap();
         let saved = fs::read_to_string(settings_path).unwrap();

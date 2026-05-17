@@ -14,7 +14,7 @@ use ratatui::{
     layout::{Position, Size},
 };
 
-use crate::palette::{self, ColorDepth, PaletteMode, ThemeId, UiTheme};
+use crate::palette::{self, ColorDepth, PaletteMode, Theme};
 
 #[derive(Debug)]
 pub(crate) struct ColorCompatBackend<W: Write> {
@@ -23,16 +23,10 @@ pub(crate) struct ColorCompatBackend<W: Write> {
     palette_mode: PaletteMode,
     /// Currently active named theme. `System`/`Whale`/`WhaleLight` make the
     /// theme remap a no-op (those rely on the dark/light pipeline); the
-    /// community presets (Catppuccin, Tokyo Night, Dracula, Gruvbox) trigger
-    /// a per-cell rewrite of dark-palette constants → preset slots.
-    theme_id: ThemeId,
-    /// Resolved active `UiTheme`, *including* any user `background_color`
-    /// override (`UiTheme::with_background_color`). The cell remap reads
-    /// target slots from this struct, not from `theme_id.ui_theme()`, so
-    /// `theme = "tokyo-night"` + `background_color = "#000000"` lands as a
-    /// pure-black surface instead of being overwritten back to
-    /// tokyo-night's `#16161e` by the remap.
-    active_ui_theme: UiTheme,
+    /// Active `Theme`, *including* any user overrides.  The cell remap reads
+    /// target slots from this struct, so e.g. `theme = "tokyo-night"` +
+    /// `background_color = "#000000"` lands as a pure-black surface.
+    active_ui_theme: Theme,
     /// During a resize event the terminal emulator may report stale dimensions
     /// for a brief window (observed on macOS Terminal.app and Windows ConHost).
     /// Forcing the expected size prevents ratatui's internal `autoresize` from
@@ -46,12 +40,7 @@ impl<W: Write> ColorCompatBackend<W> {
             inner: CrosstermBackend::new(writer),
             depth,
             palette_mode,
-            theme_id: ThemeId::System,
-            // Default to whatever System resolves to right now — it stays a
-            // no-op for the remap since `theme_id` is also System, so this
-            // initial value only matters once `set_theme` flips both fields
-            // to a community preset.
-            active_ui_theme: UiTheme::detect(),
+            active_ui_theme: Theme::detect(),
             forced_size: None,
         }
     }
@@ -68,9 +57,8 @@ impl<W: Write> ColorCompatBackend<W> {
         self.palette_mode = palette_mode;
     }
 
-    pub(crate) fn set_theme(&mut self, theme_id: ThemeId, ui_theme: UiTheme) {
-        self.theme_id = theme_id;
-        self.active_ui_theme = ui_theme;
+    pub(crate) fn set_theme(&mut self, theme: Theme) {
+        self.active_ui_theme = theme;
     }
 }
 
@@ -98,7 +86,6 @@ impl<W: Write> Backend for ColorCompatBackend<W> {
                     &mut cell,
                     self.depth,
                     self.palette_mode,
-                    self.theme_id,
                     &self.active_ui_theme,
                 );
                 (x, y, cell)
@@ -156,16 +143,11 @@ fn adapt_cell_colors(
     cell: &mut Cell,
     depth: ColorDepth,
     palette_mode: PaletteMode,
-    theme_id: ThemeId,
-    ui_theme: &UiTheme,
+    ui_theme: &Theme,
 ) {
-    // Stage 1: community-theme remap (dark palette → preset slots). No-op
-    // for System / Whale / WhaleLight so legacy dark/light flows are
-    // untouched. Runs *before* the palette-mode remap so a light terminal
-    // running e.g. Catppuccin still routes the preset colors through the
-    // light adaptation below (rare combo, but the sequencing is the same).
-    cell.fg = palette::adapt_fg_for_theme(cell.fg, theme_id, ui_theme);
-    cell.bg = palette::adapt_bg_for_theme(cell.bg, theme_id, ui_theme);
+    // Stage 1: community-theme remap (dark palette → preset slots).
+    cell.fg = palette::adapt_fg_for_theme(cell.fg, ui_theme);
+    cell.bg = palette::adapt_bg_for_theme(cell.bg, ui_theme);
     // Stage 2: legacy dark↔light remap.
     let original_bg = cell.bg;
     cell.fg = palette::adapt_fg_for_palette_mode(cell.fg, original_bg, palette_mode);
@@ -208,8 +190,7 @@ mod tests {
             &mut cell,
             ColorDepth::Ansi256,
             PaletteMode::Dark,
-            ThemeId::System,
-            &palette::UI_THEME,
+            &crate::tui::theme::DARK_THEME,
         );
 
         assert!(matches!(cell.fg, Color::Indexed(_)));
@@ -226,8 +207,7 @@ mod tests {
             &mut cell,
             ColorDepth::TrueColor,
             PaletteMode::Dark,
-            ThemeId::System,
-            &palette::UI_THEME,
+            &crate::tui::theme::DARK_THEME,
         );
 
         assert_eq!(cell.fg, Color::Rgb(53, 120, 229));
@@ -261,8 +241,7 @@ mod tests {
             &mut cell,
             ColorDepth::TrueColor,
             PaletteMode::Light,
-            ThemeId::WhaleLight,
-            &palette::LIGHT_UI_THEME,
+            &crate::tui::theme::LIGHT_THEME,
         );
 
         assert_eq!(cell.fg, palette::LIGHT_TEXT_BODY);
@@ -279,8 +258,7 @@ mod tests {
             &mut cell,
             ColorDepth::TrueColor,
             PaletteMode::Grayscale,
-            ThemeId::Grayscale,
-            &palette::GRAYSCALE_UI_THEME,
+            &crate::tui::theme::GRAYSCALE_THEME,
         );
 
         assert_eq!(cell.fg, palette::GRAYSCALE_TEXT_SOFT);
@@ -292,17 +270,12 @@ mod tests {
         // Tokyo Night + a custom black surface: the remap must rewrite
         // `palette::DEEPSEEK_INK` to the *active* UiTheme's overridden
         // surface, not to tokyo-night's default surface.
-        let active = palette::TOKYO_NIGHT_UI_THEME.with_background_color(Color::Rgb(0, 0, 0));
+        let active =
+            crate::tui::theme::TOKYO_NIGHT_THEME.with_background_color(Color::Rgb(0, 0, 0));
         let mut cell = Cell::default();
         cell.set_bg(palette::DEEPSEEK_INK);
 
-        adapt_cell_colors(
-            &mut cell,
-            ColorDepth::TrueColor,
-            PaletteMode::Dark,
-            ThemeId::TokyoNight,
-            &active,
-        );
+        adapt_cell_colors(&mut cell, ColorDepth::TrueColor, PaletteMode::Dark, &active);
 
         assert_eq!(cell.bg, Color::Rgb(0, 0, 0));
     }

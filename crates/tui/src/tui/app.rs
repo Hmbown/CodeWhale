@@ -20,7 +20,7 @@ use crate::cycle_manager::{CycleBriefing, CycleConfig};
 use crate::hooks::{HookContext, HookEvent, HookExecutor, HookResult};
 use crate::localization::{Locale, MessageId, resolve_locale, tr};
 use crate::models::{Message, SystemPrompt, compaction_threshold_for_model_and_effort};
-use crate::palette::{self, UiTheme};
+use crate::palette::Theme;
 use crate::pricing::{CostCurrency, CostEstimate};
 use crate::session_manager::SessionContextReference;
 use crate::settings::Settings;
@@ -897,12 +897,9 @@ pub struct App {
     pub pending_subagent_dispatch: Option<String>,
     /// Animation anchor for status-strip active sub-agent spinner.
     pub agent_activity_started_at: Option<Instant>,
-    pub ui_theme: UiTheme,
-    /// Active named theme. Drives the cell-level color remap in
-    /// `tui::color_compat::ColorCompatBackend` so community presets
-    /// (Catppuccin, Tokyo Night, Dracula, Gruvbox) propagate to every
-    /// render site, not just the handful that read `app.ui_theme`.
-    pub theme_id: palette::ThemeId,
+    /// Active theme driving every render site. Includes user overrides
+    /// (background_color, sidebar_bg, composer_bg, border_type, …).
+    pub theme: Theme,
     // Onboarding
     pub onboarding: OnboardingState,
     pub onboarding_needs_api_key: bool,
@@ -1338,16 +1335,14 @@ impl App {
         // Resolve the named theme from settings; unknown values were already
         // normalised to "system" in Settings::load. The background_color
         // setting still overlays on top.
-        let theme_id =
-            palette::ThemeId::from_name(&settings.theme).unwrap_or(palette::ThemeId::System);
-        let mut ui_theme = theme_id.ui_theme();
-        if let Some(background) = settings
-            .background_color
-            .as_deref()
-            .and_then(palette::parse_hex_rgb_color)
-        {
-            ui_theme = ui_theme.with_background_color(background);
-        }
+        let theme = Theme::from_settings(
+            &settings.theme,
+            settings.background_color.as_deref(),
+            settings.sidebar_bg.as_deref(),
+            settings.composer_bg.as_deref(),
+            settings.border_type.as_deref(),
+            settings.section_border_type.as_deref(),
+        );
         let model = settings
             .provider_models
             .as_ref()
@@ -1526,8 +1521,7 @@ impl App {
             last_fanout_card_index: None,
             pending_subagent_dispatch: None,
             agent_activity_started_at: None,
-            ui_theme,
-            theme_id,
+            theme,
             onboarding,
             onboarding_needs_api_key: needs_api_key,
             onboarding_workspace_trust_gate,
@@ -2669,6 +2663,7 @@ impl App {
             calm_mode: self.calm_mode,
             low_motion: self.low_motion,
             spacing: self.transcript_spacing,
+            reasoning_bg: self.theme.reasoning_bg,
         }
     }
 

@@ -16,8 +16,8 @@ use ratatui::{
     widgets::{Block, Paragraph, Wrap},
 };
 
-use crate::deepseek_theme::Theme;
 use crate::palette;
+use crate::tui::theme::Theme;
 use crate::tui::ui_text::truncate_line_to_width;
 
 // ---------------------------------------------------------------------------
@@ -287,12 +287,7 @@ const FILE_TREE_MIN_WIDTH: u16 = 20;
 
 /// Render the file tree inside `area`.
 /// Polls async loading state before rendering (#399 S3).
-pub fn render_file_tree(
-    f: &mut Frame,
-    area: Rect,
-    state: &mut FileTreeState,
-    mode: palette::PaletteMode,
-) {
+pub fn render_file_tree(f: &mut Frame, area: Rect, state: &mut FileTreeState, theme: &Theme) {
     state.poll_loading();
     if area.width < FILE_TREE_MIN_WIDTH || area.height < 3 {
         return;
@@ -354,7 +349,6 @@ pub fn render_file_tree(
     }
 
     // Use the same theme as the sidebar for consistent styling.
-    let theme = Theme::for_palette_mode(mode);
     let section = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
         Block::default()
             .title(Line::from(Span::styled(
@@ -362,9 +356,9 @@ pub fn render_file_tree(
                 Style::default().fg(theme.section_title_color).bold(),
             )))
             .borders(theme.section_borders)
-            .border_type(theme.section_border_type)
+            .border_type(theme.border_type)
             .border_style(Style::default().fg(theme.section_border_color))
-            .style(Style::default().bg(theme.section_bg))
+            .style(Style::default().bg(theme.sidebar_bg))
             .padding(theme.section_padding),
     );
 

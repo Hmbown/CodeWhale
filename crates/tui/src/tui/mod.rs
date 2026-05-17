@@ -60,6 +60,7 @@ pub mod slash_menu;
 pub mod streaming;
 pub mod streaming_thinking;
 mod subagent_routing;
+pub mod theme;
 pub mod theme_picker;
 mod tool_routing;
 pub mod transcript;

@@ -1,5 +1,6 @@
 //! DeepSeek color palette and semantic roles.
 
+pub use crate::tui::theme::{Theme, ThemeId};
 use ratatui::style::Color;
 
 pub const DEEPSEEK_BLUE_RGB: (u8, u8, u8) = (53, 120, 229); // #3578E5
@@ -275,342 +276,6 @@ impl PaletteMode {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct UiTheme {
-    pub name: &'static str,
-    pub mode: PaletteMode,
-    pub surface_bg: Color,
-    pub panel_bg: Color,
-    pub elevated_bg: Color,
-    pub composer_bg: Color,
-    pub selection_bg: Color,
-    pub header_bg: Color,
-    pub footer_bg: Color,
-    /// Statusline mode colors (agent/yolo/plan)
-    pub mode_agent: Color,
-    pub mode_yolo: Color,
-    pub mode_plan: Color,
-    /// Statusline status colors
-    pub status_ready: Color,
-    pub status_working: Color,
-    pub status_warning: Color,
-    /// Statusline text colors
-    pub text_dim: Color,
-    pub text_hint: Color,
-    pub text_muted: Color,
-    pub text_body: Color,
-    pub text_soft: Color,
-    pub border: Color,
-}
-
-pub const UI_THEME: UiTheme = UiTheme {
-    name: "whale",
-    mode: PaletteMode::Dark,
-    surface_bg: DEEPSEEK_INK,
-    panel_bg: DEEPSEEK_SLATE,
-    elevated_bg: SURFACE_ELEVATED,
-    composer_bg: DEEPSEEK_SLATE,
-    selection_bg: SELECTION_BG,
-    header_bg: DEEPSEEK_INK,
-    footer_bg: DEEPSEEK_INK,
-    mode_agent: MODE_AGENT,
-    mode_yolo: MODE_YOLO,
-    mode_plan: MODE_PLAN,
-    status_ready: TEXT_MUTED,
-    status_working: DEEPSEEK_SKY,
-    status_warning: STATUS_WARNING,
-    text_dim: TEXT_DIM,
-    text_hint: TEXT_HINT,
-    text_muted: TEXT_MUTED,
-    text_body: TEXT_BODY,
-    text_soft: TEXT_SOFT,
-    border: BORDER_COLOR,
-};
-
-pub const LIGHT_UI_THEME: UiTheme = UiTheme {
-    name: "whale-light",
-    mode: PaletteMode::Light,
-    surface_bg: LIGHT_SURFACE,
-    panel_bg: LIGHT_PANEL,
-    elevated_bg: LIGHT_ELEVATED,
-    composer_bg: LIGHT_PANEL,
-    selection_bg: LIGHT_SELECTION_BG,
-    header_bg: LIGHT_SURFACE,
-    footer_bg: LIGHT_SURFACE,
-    mode_agent: DEEPSEEK_BLUE,
-    mode_yolo: DEEPSEEK_RED,
-    mode_plan: Color::Rgb(180, 83, 9),
-    status_ready: LIGHT_TEXT_MUTED,
-    status_working: DEEPSEEK_BLUE,
-    status_warning: Color::Rgb(180, 83, 9),
-    text_dim: LIGHT_TEXT_HINT,
-    text_hint: LIGHT_TEXT_HINT,
-    text_muted: LIGHT_TEXT_MUTED,
-    text_body: LIGHT_TEXT_BODY,
-    text_soft: LIGHT_TEXT_SOFT,
-    border: LIGHT_BORDER,
-};
-
-pub const GRAYSCALE_UI_THEME: UiTheme = UiTheme {
-    name: "grayscale",
-    mode: PaletteMode::Grayscale,
-    surface_bg: GRAYSCALE_SURFACE,
-    panel_bg: GRAYSCALE_PANEL,
-    elevated_bg: GRAYSCALE_ELEVATED,
-    composer_bg: GRAYSCALE_PANEL,
-    selection_bg: GRAYSCALE_SELECTION_BG,
-    header_bg: GRAYSCALE_SURFACE,
-    footer_bg: GRAYSCALE_SURFACE,
-    mode_agent: GRAYSCALE_TEXT_SOFT,
-    mode_yolo: GRAYSCALE_TEXT_BODY,
-    mode_plan: GRAYSCALE_TEXT_MUTED,
-    status_ready: GRAYSCALE_TEXT_MUTED,
-    status_working: GRAYSCALE_TEXT_SOFT,
-    status_warning: GRAYSCALE_TEXT_BODY,
-    text_dim: GRAYSCALE_TEXT_HINT,
-    text_hint: GRAYSCALE_TEXT_HINT,
-    text_muted: GRAYSCALE_TEXT_MUTED,
-    text_body: GRAYSCALE_TEXT_BODY,
-    text_soft: GRAYSCALE_TEXT_SOFT,
-    border: GRAYSCALE_BORDER,
-};
-
-pub const CATPPUCCIN_MOCHA_UI_THEME: UiTheme = UiTheme {
-    name: "catppuccin-mocha",
-    mode: PaletteMode::Dark,
-    surface_bg: Color::Rgb(0x1e, 0x1e, 0x2e),  // base
-    panel_bg: Color::Rgb(0x18, 0x18, 0x25),    // mantle
-    elevated_bg: Color::Rgb(0x31, 0x32, 0x44), // surface0
-    composer_bg: Color::Rgb(0x18, 0x18, 0x25),
-    selection_bg: Color::Rgb(0x45, 0x47, 0x5a), // surface1
-    header_bg: Color::Rgb(0x11, 0x11, 0x1b),    // crust
-    footer_bg: Color::Rgb(0x11, 0x11, 0x1b),
-    mode_agent: Color::Rgb(0x89, 0xb4, 0xfa),     // blue
-    mode_yolo: Color::Rgb(0xf3, 0x8b, 0xa8),      // red
-    mode_plan: Color::Rgb(0xfa, 0xb3, 0x87),      // peach
-    status_ready: Color::Rgb(0x7f, 0x84, 0x9c),   // overlay1
-    status_working: Color::Rgb(0x74, 0xc7, 0xec), // sapphire
-    status_warning: Color::Rgb(0xf9, 0xe2, 0xaf), // yellow
-    text_dim: Color::Rgb(0x6c, 0x70, 0x86),       // overlay0
-    text_hint: Color::Rgb(0x7f, 0x84, 0x9c),      // overlay1
-    text_muted: Color::Rgb(0xa6, 0xad, 0xc8),     // subtext0
-    text_body: Color::Rgb(0xcd, 0xd6, 0xf4),      // text
-    text_soft: Color::Rgb(0xba, 0xc2, 0xde),      // subtext1
-    border: Color::Rgb(0x45, 0x47, 0x5a),         // surface1
-};
-
-pub const TOKYO_NIGHT_UI_THEME: UiTheme = UiTheme {
-    name: "tokyo-night",
-    mode: PaletteMode::Dark,
-    surface_bg: Color::Rgb(0x1a, 0x1b, 0x26),  // bg
-    panel_bg: Color::Rgb(0x16, 0x16, 0x1e),    // bg_dark
-    elevated_bg: Color::Rgb(0x29, 0x2e, 0x42), // bg_highlight
-    composer_bg: Color::Rgb(0x16, 0x16, 0x1e),
-    selection_bg: Color::Rgb(0x28, 0x34, 0x57), // visual selection
-    header_bg: Color::Rgb(0x16, 0x16, 0x1e),
-    footer_bg: Color::Rgb(0x16, 0x16, 0x1e),
-    mode_agent: Color::Rgb(0x7a, 0xa2, 0xf7),     // blue
-    mode_yolo: Color::Rgb(0xf7, 0x76, 0x8e),      // red
-    mode_plan: Color::Rgb(0xff, 0x9e, 0x64),      // orange
-    status_ready: Color::Rgb(0x56, 0x5f, 0x89),   // comment
-    status_working: Color::Rgb(0x7d, 0xcf, 0xff), // cyan
-    status_warning: Color::Rgb(0xe0, 0xaf, 0x68), // yellow
-    text_dim: Color::Rgb(0x56, 0x5f, 0x89),       // comment
-    text_hint: Color::Rgb(0x73, 0x7a, 0xa2),      // dark5
-    text_muted: Color::Rgb(0xa9, 0xb1, 0xd6),     // fg_dark
-    text_body: Color::Rgb(0xc0, 0xca, 0xf5),      // fg
-    text_soft: Color::Rgb(0xbb, 0xc2, 0xe0),
-    border: Color::Rgb(0x41, 0x48, 0x68), // terminal_black
-};
-
-pub const DRACULA_UI_THEME: UiTheme = UiTheme {
-    name: "dracula",
-    mode: PaletteMode::Dark,
-    surface_bg: Color::Rgb(0x28, 0x2a, 0x36), // background
-    panel_bg: Color::Rgb(0x21, 0x22, 0x2c),
-    elevated_bg: Color::Rgb(0x34, 0x37, 0x46),
-    composer_bg: Color::Rgb(0x21, 0x22, 0x2c),
-    selection_bg: Color::Rgb(0x44, 0x47, 0x5a), // current line
-    header_bg: Color::Rgb(0x21, 0x22, 0x2c),
-    footer_bg: Color::Rgb(0x21, 0x22, 0x2c),
-    mode_agent: Color::Rgb(0xbd, 0x93, 0xf9),     // purple
-    mode_yolo: Color::Rgb(0xff, 0x55, 0x55),      // red
-    mode_plan: Color::Rgb(0xff, 0xb8, 0x6c),      // orange
-    status_ready: Color::Rgb(0x62, 0x72, 0xa4),   // comment
-    status_working: Color::Rgb(0x8b, 0xe9, 0xfd), // cyan
-    status_warning: Color::Rgb(0xf1, 0xfa, 0x8c), // yellow
-    text_dim: Color::Rgb(0x62, 0x72, 0xa4),
-    text_hint: Color::Rgb(0x8a, 0x8e, 0xaa),
-    text_muted: Color::Rgb(0xc0, 0xc4, 0xd6),
-    text_body: Color::Rgb(0xf8, 0xf8, 0xf2), // foreground
-    text_soft: Color::Rgb(0xe2, 0xe2, 0xdc),
-    border: Color::Rgb(0x44, 0x47, 0x5a),
-};
-
-pub const GRUVBOX_DARK_UI_THEME: UiTheme = UiTheme {
-    name: "gruvbox-dark",
-    mode: PaletteMode::Dark,
-    surface_bg: Color::Rgb(0x28, 0x28, 0x28),  // bg0
-    panel_bg: Color::Rgb(0x3c, 0x38, 0x36),    // bg1
-    elevated_bg: Color::Rgb(0x50, 0x49, 0x45), // bg2
-    composer_bg: Color::Rgb(0x3c, 0x38, 0x36),
-    selection_bg: Color::Rgb(0x66, 0x5c, 0x54), // bg3
-    header_bg: Color::Rgb(0x1d, 0x20, 0x21),    // bg0_h
-    footer_bg: Color::Rgb(0x1d, 0x20, 0x21),
-    mode_agent: Color::Rgb(0x83, 0xa5, 0x98),     // blue
-    mode_yolo: Color::Rgb(0xfb, 0x49, 0x34),      // red
-    mode_plan: Color::Rgb(0xfe, 0x80, 0x19),      // orange
-    status_ready: Color::Rgb(0x92, 0x83, 0x74),   // gray
-    status_working: Color::Rgb(0x8e, 0xc0, 0x7c), // aqua
-    status_warning: Color::Rgb(0xfa, 0xbd, 0x2f), // yellow
-    text_dim: Color::Rgb(0x92, 0x83, 0x74),       // gray
-    text_hint: Color::Rgb(0xa8, 0x99, 0x84),      // fg4
-    text_muted: Color::Rgb(0xbd, 0xae, 0x93),     // fg3
-    text_body: Color::Rgb(0xeb, 0xdb, 0xb2),      // fg1
-    text_soft: Color::Rgb(0xd5, 0xc4, 0xa1),      // fg2
-    border: Color::Rgb(0x66, 0x5c, 0x54),         // bg3
-};
-
-/// Stable identifiers for the named themes the user can select. `System`
-/// defers to `PaletteMode::detect()` (terminal-driven dark/light). Each
-/// dark/light id resolves to a single fixed `UiTheme`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ThemeId {
-    System,
-    Whale,
-    WhaleLight,
-    Grayscale,
-    CatppuccinMocha,
-    TokyoNight,
-    Dracula,
-    GruvboxDark,
-}
-
-impl ThemeId {
-    /// Parse a settings string (`"system"`, `"dark"`, `"catppuccin-mocha"`, …).
-    /// Accepts a few aliases (`"whale"` for dark, `"light"` for whale-light)
-    /// so existing config files keep working. Case-insensitive.
-    #[must_use]
-    pub fn from_name(value: &str) -> Option<Self> {
-        match normalize_theme_name(value)? {
-            "system" => Some(Self::System),
-            "dark" => Some(Self::Whale),
-            "light" => Some(Self::WhaleLight),
-            "grayscale" => Some(Self::Grayscale),
-            "catppuccin-mocha" => Some(Self::CatppuccinMocha),
-            "tokyo-night" => Some(Self::TokyoNight),
-            "dracula" => Some(Self::Dracula),
-            "gruvbox-dark" => Some(Self::GruvboxDark),
-            _ => None,
-        }
-    }
-
-    /// Canonical settings string (lowercase, dash-separated). Round-trips
-    /// through `from_name`.
-    #[must_use]
-    pub const fn name(self) -> &'static str {
-        match self {
-            Self::System => "system",
-            Self::Whale => "dark",
-            Self::WhaleLight => "light",
-            Self::Grayscale => "grayscale",
-            Self::CatppuccinMocha => "catppuccin-mocha",
-            Self::TokyoNight => "tokyo-night",
-            Self::Dracula => "dracula",
-            Self::GruvboxDark => "gruvbox-dark",
-        }
-    }
-
-    /// Human-readable label for picker rows.
-    #[must_use]
-    pub const fn display_name(self) -> &'static str {
-        match self {
-            Self::System => "System",
-            Self::Whale => "Whale (Dark)",
-            Self::WhaleLight => "Whale Light",
-            Self::Grayscale => "Grayscale",
-            Self::CatppuccinMocha => "Catppuccin Mocha",
-            Self::TokyoNight => "Tokyo Night",
-            Self::Dracula => "Dracula",
-            Self::GruvboxDark => "Gruvbox Dark",
-        }
-    }
-
-    /// Short tagline for picker rows.
-    #[must_use]
-    pub const fn tagline(self) -> &'static str {
-        match self {
-            Self::System => "Follow terminal background (COLORFGBG)",
-            Self::Whale => "Default DeepSeek dark blue",
-            Self::WhaleLight => "DeepSeek light, paper-ish",
-            Self::Grayscale => "Color-minimal high contrast",
-            Self::CatppuccinMocha => "Soft pastels on warm dark",
-            Self::TokyoNight => "Deep blue/violet night palette",
-            Self::Dracula => "Classic high-contrast purple",
-            Self::GruvboxDark => "Vintage warm earth tones",
-        }
-    }
-
-    /// Resolve to a concrete `UiTheme`. For `System` this consults
-    /// `PaletteMode::detect()` exactly once and returns the corresponding
-    /// dark/light theme — callers that want to live-track terminal background
-    /// changes need to re-invoke this.
-    #[must_use]
-    pub fn ui_theme(self) -> UiTheme {
-        match self {
-            Self::System => UiTheme::detect(),
-            Self::Whale => UI_THEME,
-            Self::WhaleLight => LIGHT_UI_THEME,
-            Self::Grayscale => GRAYSCALE_UI_THEME,
-            Self::CatppuccinMocha => CATPPUCCIN_MOCHA_UI_THEME,
-            Self::TokyoNight => TOKYO_NIGHT_UI_THEME,
-            Self::Dracula => DRACULA_UI_THEME,
-            Self::GruvboxDark => GRUVBOX_DARK_UI_THEME,
-        }
-    }
-}
-
-/// Themes shown in the `/theme` picker, in display order.
-pub const SELECTABLE_THEMES: &[ThemeId] = &[
-    ThemeId::System,
-    ThemeId::Whale,
-    ThemeId::WhaleLight,
-    ThemeId::Grayscale,
-    ThemeId::CatppuccinMocha,
-    ThemeId::TokyoNight,
-    ThemeId::Dracula,
-    ThemeId::GruvboxDark,
-];
-
-impl UiTheme {
-    #[must_use]
-    pub fn for_mode(mode: PaletteMode) -> Self {
-        match mode {
-            PaletteMode::Dark => UI_THEME,
-            PaletteMode::Light => LIGHT_UI_THEME,
-            PaletteMode::Grayscale => GRAYSCALE_UI_THEME,
-        }
-    }
-
-    #[must_use]
-    pub fn detect() -> Self {
-        Self::for_mode(PaletteMode::detect())
-    }
-
-    #[must_use]
-    pub fn from_setting(value: &str) -> Option<Self> {
-        ThemeId::from_name(value).map(ThemeId::ui_theme)
-    }
-
-    #[must_use]
-    pub fn with_background_color(mut self, color: Color) -> Self {
-        self.surface_bg = color;
-        self.header_bg = color;
-        self.footer_bg = color;
-        self
-    }
-}
-
 #[must_use]
 pub fn normalize_theme_name(value: &str) -> Option<&'static str> {
     match value.trim().to_ascii_lowercase().as_str() {
@@ -636,18 +301,19 @@ pub fn theme_label_for_mode(mode: PaletteMode) -> &'static str {
     }
 }
 
-#[must_use]
-pub fn ui_theme_from_settings(theme: &str, background_color: Option<&str>) -> UiTheme {
-    let mut ui_theme = UiTheme::from_setting(theme).unwrap_or_else(UiTheme::detect);
-    if let Some(background) = background_color.and_then(parse_hex_rgb_color) {
-        ui_theme = ui_theme.with_background_color(background);
-    }
-    ui_theme
-}
+// ui_theme_from_settings now lives in crate::tui::theme — re-exported above.
 
 #[must_use]
 pub fn parse_hex_rgb_color(value: &str) -> Option<Color> {
-    let hex = value.trim().strip_prefix('#').unwrap_or(value.trim());
+    let trimmed = value.trim();
+    // Special keywords for "use terminal default background"
+    if matches!(
+        trimmed.to_ascii_lowercase().as_str(),
+        "reset" | "terminal" | "default" | "transparent"
+    ) {
+        return Some(Color::Reset);
+    }
+    let hex = trimmed.strip_prefix('#').unwrap_or(trimmed);
     if hex.len() != 6 || !hex.chars().all(|ch| ch.is_ascii_hexdigit()) {
         return None;
     }
@@ -810,16 +476,7 @@ const fn theme_diff_deleted_bg(theme: ThemeId) -> Color {
 
 /// Returns `true` if the preset participates in the cell-level remap. The
 /// default Whale and System themes pass through unchanged so this whole
-/// stage compiles down to a single load+compare on the hot path.
-#[inline]
-#[must_use]
-pub const fn theme_remap_active(theme: ThemeId) -> bool {
-    matches!(
-        theme,
-        ThemeId::CatppuccinMocha | ThemeId::TokyoNight | ThemeId::Dracula | ThemeId::GruvboxDark
-    )
-}
-
+// theme_remap_active → Theme::is_community_preset()
 /// Remap a foreground color for a community theme preset. Mirrors the
 /// structure of [`adapt_fg_for_palette_mode`] — same source set, different
 /// destinations sourced from the preset's [`UiTheme`].
@@ -832,8 +489,8 @@ pub const fn theme_remap_active(theme: ThemeId) -> bool {
 /// would see their override silently overwritten by the preset's
 /// surface_bg on every cell remap.
 #[must_use]
-pub fn adapt_fg_for_theme(color: Color, theme: ThemeId, ui: &UiTheme) -> Color {
-    if !theme_remap_active(theme) {
+pub fn adapt_fg_for_theme(color: Color, ui: &Theme) -> Color {
+    if !ui.is_community_preset() {
         return color;
     }
 
@@ -846,7 +503,7 @@ pub fn adapt_fg_for_theme(color: Color, theme: ThemeId, ui: &UiTheme) -> Color {
     } else if color == TEXT_SOFT || color == TEXT_TOOL_OUTPUT {
         ui.text_soft
     } else if color == BORDER_COLOR {
-        ui.border
+        ui.border_color
     } else if color == TEXT_ACCENT || color == DEEPSEEK_SKY || color == ACCENT_TOOL_LIVE {
         ui.status_working
     } else if color == TEXT_REASONING || color == ACCENT_REASONING_LIVE {
@@ -856,9 +513,9 @@ pub fn adapt_fg_for_theme(color: Color, theme: ThemeId, ui: &UiTheme) -> Color {
     } else if color == STATUS_WARNING {
         ui.status_warning
     } else if color == DEEPSEEK_RED {
-        theme_red(theme)
+        theme_red(ui.theme_id())
     } else if color == DIFF_ADDED || color == USER_BODY {
-        theme_green(theme)
+        theme_green(ui.theme_id())
     } else if color == DEEPSEEK_BLUE {
         // The default mode_agent accent — keep it in the preset's blue family.
         ui.mode_agent
@@ -870,8 +527,8 @@ pub fn adapt_fg_for_theme(color: Color, theme: ThemeId, ui: &UiTheme) -> Color {
 /// Remap a background color for a community theme preset. See the
 /// `ui` note on [`adapt_fg_for_theme`] — same contract here.
 #[must_use]
-pub fn adapt_bg_for_theme(color: Color, theme: ThemeId, ui: &UiTheme) -> Color {
-    if !theme_remap_active(theme) {
+pub fn adapt_bg_for_theme(color: Color, ui: &Theme) -> Color {
+    if !ui.is_community_preset() {
         return color;
     }
 
@@ -898,9 +555,9 @@ pub fn adapt_bg_for_theme(color: Color, theme: ThemeId, ui: &UiTheme) -> Color {
     } else if color == SELECTION_BG {
         ui.selection_bg
     } else if color == DIFF_ADDED_BG {
-        theme_diff_added_bg(theme)
+        theme_diff_added_bg(ui.theme_id())
     } else if color == DIFF_DELETED_BG {
-        theme_diff_deleted_bg(theme)
+        theme_diff_deleted_bg(ui.theme_id())
     } else {
         color
     }
@@ -1047,7 +704,7 @@ fn grayscale_bg_from_luma(luma: u8) -> Color {
 }
 
 fn luma(r: u8, g: u8, b: u8) -> u8 {
-    (((u16::from(r) * 299) + (u16::from(g) * 587) + (u16::from(b) * 114)) / 1000) as u8
+    ((u32::from(r) * 299 + u32::from(g) * 587 + u32::from(b) * 114) / 1000) as u8
 }
 // === Color depth + brightness helpers (v0.6.6 UI redesign) ===
 
@@ -1307,16 +964,16 @@ fn rgb_to_ansi256(r: u8, g: u8, b: u8) -> u8 {
 mod tests {
     use super::{
         ACCENT_REASONING_LIVE, ColorDepth, DEEPSEEK_INK, DEEPSEEK_RED, DEEPSEEK_SKY,
-        DEEPSEEK_SLATE, GRAYSCALE_BORDER, GRAYSCALE_ELEVATED, GRAYSCALE_PANEL, GRAYSCALE_REASONING,
-        GRAYSCALE_SURFACE, GRAYSCALE_TEXT_BODY, GRAYSCALE_TEXT_HINT, GRAYSCALE_TEXT_SOFT,
-        GRAYSCALE_UI_THEME, LIGHT_BORDER, LIGHT_ELEVATED, LIGHT_PANEL, LIGHT_REASONING,
-        LIGHT_SURFACE, LIGHT_TEXT_BODY, LIGHT_TEXT_HINT, LIGHT_UI_THEME, PaletteMode,
-        SURFACE_REASONING, SURFACE_REASONING_TINT, TEXT_BODY, TEXT_HINT, TEXT_REASONING,
-        TEXT_TOOL_OUTPUT, UI_THEME, adapt_bg, adapt_bg_for_palette_mode, adapt_color,
-        adapt_fg_for_palette_mode, blend, nearest_ansi16, normalize_hex_rgb_color,
+        DEEPSEEK_SLATE, GRAYSCALE_PANEL, GRAYSCALE_REASONING, GRAYSCALE_SURFACE,
+        GRAYSCALE_TEXT_BODY, GRAYSCALE_TEXT_HINT, GRAYSCALE_TEXT_SOFT, LIGHT_BORDER,
+        LIGHT_ELEVATED, LIGHT_PANEL, LIGHT_REASONING, LIGHT_SURFACE, LIGHT_TEXT_BODY,
+        LIGHT_TEXT_HINT, PaletteMode, SURFACE_REASONING, SURFACE_REASONING_TINT, TEXT_BODY,
+        TEXT_HINT, TEXT_REASONING, TEXT_TOOL_OUTPUT, adapt_bg, adapt_bg_for_palette_mode,
+        adapt_color, adapt_fg_for_palette_mode, blend, nearest_ansi16, normalize_hex_rgb_color,
         normalize_theme_name, parse_hex_rgb_color, pulse_brightness, reasoning_surface_tint,
-        rgb_to_ansi256, theme_label_for_mode, ui_theme_from_settings,
+        rgb_to_ansi256, theme_label_for_mode,
     };
+    use crate::tui::theme::{DARK_THEME, GRAYSCALE_THEME, LIGHT_THEME, Theme};
     use ratatui::style::Color;
 
     #[test]
@@ -1335,16 +992,16 @@ mod tests {
 
     #[test]
     fn ui_theme_selects_light_variant() {
-        let theme = super::UiTheme::for_mode(PaletteMode::Light);
-        assert_eq!(theme, LIGHT_UI_THEME);
+        let theme = Theme::for_mode(PaletteMode::Light);
+        assert_eq!(theme, LIGHT_THEME);
         assert_eq!(theme.surface_bg, LIGHT_SURFACE);
         assert_eq!(theme.text_body, LIGHT_TEXT_BODY);
     }
 
     #[test]
     fn ui_theme_selects_grayscale_variant() {
-        let theme = super::UiTheme::for_mode(PaletteMode::Grayscale);
-        assert_eq!(theme, GRAYSCALE_UI_THEME);
+        let theme = Theme::for_mode(PaletteMode::Grayscale);
+        assert_eq!(theme, GRAYSCALE_THEME);
         assert_eq!(theme.surface_bg, GRAYSCALE_SURFACE);
         assert_eq!(theme.panel_bg, GRAYSCALE_PANEL);
         assert_eq!(theme.text_body, GRAYSCALE_TEXT_BODY);
@@ -1383,13 +1040,13 @@ mod tests {
     #[test]
     fn ui_theme_applies_custom_background_to_base_surfaces() {
         let custom = Color::Rgb(26, 27, 38);
-        let theme = super::UiTheme::for_mode(PaletteMode::Dark).with_background_color(custom);
+        let theme = Theme::for_mode(PaletteMode::Dark).with_background_color(custom);
 
         assert_eq!(theme.surface_bg, custom);
         assert_eq!(theme.header_bg, custom);
         assert_eq!(theme.footer_bg, custom);
         assert_eq!(
-            theme.composer_bg, UI_THEME.composer_bg,
+            theme.composer_bg, DARK_THEME.composer_bg,
             "custom background must not erase panel contrast"
         );
     }
@@ -1454,17 +1111,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn ui_theme_from_settings_applies_theme_and_background() {
-        let theme = ui_theme_from_settings("grayscale", Some("#111111"));
-        assert_eq!(theme.mode, PaletteMode::Grayscale);
-        assert_eq!(theme.surface_bg, Color::Rgb(17, 17, 17));
-        assert_eq!(theme.header_bg, Color::Rgb(17, 17, 17));
-        assert_eq!(theme.footer_bg, Color::Rgb(17, 17, 17));
-        assert_eq!(theme.panel_bg, GRAYSCALE_PANEL);
-        assert_eq!(theme.elevated_bg, GRAYSCALE_ELEVATED);
-        assert_eq!(theme.border, GRAYSCALE_BORDER);
-    }
+    // ui_theme_from_settings test moved to crate::tui::theme
 
     #[test]
     fn adapt_color_passes_through_truecolor() {

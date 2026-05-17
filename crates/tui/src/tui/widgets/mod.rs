@@ -74,11 +74,11 @@ struct TranscriptScrollbar {
 impl ChatWidget {
     pub fn new(app: &mut App, area: Rect) -> Self {
         let content_area = area;
-        let background = app.ui_theme.surface_bg;
-        let scroll_track = app.ui_theme.border;
-        let scroll_thumb = app.ui_theme.status_working;
-        let jump_border = app.ui_theme.border;
-        let jump_arrow = app.ui_theme.status_working;
+        let background = app.theme.surface_bg;
+        let scroll_track = app.theme.border_color;
+        let scroll_thumb = app.theme.status_working;
+        let jump_border = app.theme.border_color;
+        let jump_arrow = app.theme.status_working;
         let visible_lines = content_area.height as usize;
         let render_options = app.transcript_render_options();
 
@@ -513,7 +513,7 @@ impl<'a> ComposerWidget<'a> {
 
 impl Renderable for ComposerWidget<'_> {
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        let background = Style::default().bg(self.app.ui_theme.composer_bg);
+        let background = Style::default().bg(self.app.theme.composer_bg);
         let has_panel = self.has_panel(area);
         let inner_area = self.inner_area(area);
         let input_text = self.app.composer_display_input();
@@ -635,6 +635,7 @@ impl Renderable for ComposerWidget<'_> {
                     Style::default().fg(palette::TEXT_MUTED),
                 )))
                 .borders(Borders::ALL)
+                .border_type(self.app.theme.border_type)
                 .border_style(Style::default().fg(border_color))
                 .style(background);
             // Top-right corner: keep only editor state here. Session titles
@@ -1762,7 +1763,7 @@ fn apply_selection(lines: &mut [Line<'static>], top: usize, app: &App) {
     };
 
     let selection_style = Style::default()
-        .bg(app.ui_theme.selection_bg)
+        .bg(app.theme.selection_bg)
         .fg(palette::SELECTION_TEXT);
 
     for (idx, line) in lines.iter_mut().enumerate() {
@@ -3011,7 +3012,7 @@ mod tests {
     fn chat_widget_uses_configured_surface_background() {
         let mut app = create_test_app();
         let custom = ratatui::style::Color::Rgb(26, 27, 38);
-        app.ui_theme = app.ui_theme.with_background_color(custom);
+        app.theme = app.theme.with_background_color(custom);
         app.add_message(HistoryCell::Assistant {
             content: "ready".to_string(),
             streaming: false,
@@ -3115,7 +3116,7 @@ mod tests {
     #[test]
     fn chat_widget_uses_light_theme_scroll_chrome() {
         let mut app = create_test_app();
-        app.ui_theme = palette::LIGHT_UI_THEME;
+        app.theme = crate::tui::theme::LIGHT_THEME;
         app.use_mouse_capture = true;
         for i in 0..120 {
             app.add_message(HistoryCell::User {
@@ -3141,11 +3142,11 @@ mod tests {
             match cell.symbol() {
                 "│" => {
                     saw_track = true;
-                    assert_eq!(cell.fg, palette::LIGHT_UI_THEME.border);
+                    assert_eq!(cell.fg, crate::tui::theme::LIGHT_THEME.border_color);
                 }
                 "┃" => {
                     saw_thumb = true;
-                    assert_eq!(cell.fg, palette::LIGHT_UI_THEME.status_working);
+                    assert_eq!(cell.fg, crate::tui::theme::LIGHT_THEME.status_working);
                 }
                 _ => {}
             }
@@ -3159,7 +3160,7 @@ mod tests {
             .expect("button appears when transcript is not at tail");
         assert_eq!(
             buf[(button.x + 1, button.y + 1)].fg,
-            palette::LIGHT_UI_THEME.status_working
+            crate::tui::theme::LIGHT_THEME.status_working
         );
     }
 

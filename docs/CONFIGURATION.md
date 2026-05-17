@@ -327,12 +327,17 @@ replacement compaction. You can inspect or update these from the TUI with
 
 Common settings keys:
 
-- `theme` (`system`, `dark`, `light`, `grayscale`, `catppuccin-mocha`,
-  `tokyo-night`, `dracula`, `gruvbox-dark`; default `system`): `system`
+- `theme` (built-in names: `system`, `dark`, `light`, `grayscale`,
+  `catppuccin-mocha`, `tokyo-night`, `dracula`, `gruvbox-dark`; or
+  `file:<name>` to load a custom theme file; default `system`): `system`
   follows terminal background detection, `dark`/`light` use the DeepSeek
   palettes, `grayscale` is the low-opinion black/white theme, and the named
   community presets apply across the TUI. Aliases such as `whale`, `mono`,
-  `black-white`, `tokyonight`, and `gruvbox` are accepted.
+  `black-white`, `tokyonight`, and `gruvbox` are accepted. Custom theme
+  files live in `~/.config/deepseek/themes/<name>.toml` and inherit from a
+  built-in base with optional field-level overrides — see
+  [CUSTOM_THEME.md](CUSTOM_THEME.md) and `theme.example.toml` for the full
+  schema.
 - `auto_compact` (on/off, default off)
 - `paste_burst_detection` (on/off, default on): fallback rapid-key paste
   detection for terminals that do not emit bracketed-paste events. This is
@@ -349,6 +354,14 @@ Common settings keys:
 - `background_color` (`#RRGGBB`, `RRGGBB`, or `default`): optional main TUI
   background color applied to the root, header, transcript, and footer
   surfaces while preserving panel contrast.
+- `sidebar_bg` (hex color, `#RRGGBB` or `RRGGBB`): optional sidebar panel
+  background color. When unset, inherits from the theme's panel color.
+- `composer_bg` (hex color, `#RRGGBB` or `RRGGBB`): optional composer
+  (input area) background color.
+- `border_type` (`plain` or `rounded`): global border style. `None` inherits
+  from the theme (the custom theme file or built-in default).
+- `section_border_type` (`plain` or `rounded`): sidebar panel border style
+  override, falls back to `border_type` when unset.
 - `cost_currency` (`usd`, `cny`; default `usd`): currency used by the footer,
   context panel, `/cost`, `/tokens`, and long-turn notification summaries. The
   aliases `rmb` and `yuan` normalize to `cny`.

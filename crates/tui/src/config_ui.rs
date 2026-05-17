@@ -64,6 +64,18 @@ pub struct SettingsSection {
         description = "Main TUI background color as #RRGGBB"
     )]
     pub background_color: Option<String>,
+    #[schemars(
+        title = "Sidebar background",
+        description = "Sidebar panel background as #RRGGBB"
+    )]
+    pub sidebar_bg: Option<String>,
+    #[schemars(
+        title = "Composer background",
+        description = "Composer input area background as #RRGGBB"
+    )]
+    pub composer_bg: Option<String>,
+    #[schemars(title = "Border type", description = "plain or rounded")]
+    pub border_type: BorderTypeValue,
     pub bracketed_paste: bool,
     pub composer_density: ComposerDensityValue,
     pub composer_border: bool,
@@ -248,6 +260,33 @@ pub enum ReasoningEffortValue {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum BorderTypeValue {
+    Default,
+    Plain,
+    Rounded,
+}
+
+impl BorderTypeValue {
+    fn as_setting(self) -> Option<&'static str> {
+        match self {
+            Self::Default => None,
+            Self::Plain => Some("plain"),
+            Self::Rounded => Some("rounded"),
+        }
+    }
+
+    fn from_setting(value: Option<&str>) -> Self {
+        match value.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
+            None | Some("") | Some("default") => Self::Default,
+            Some("plain") => Self::Plain,
+            Some("rounded") => Self::Rounded,
+            _ => Self::Default,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum StatusIndicatorValue {
     Whale,
     Dots,
@@ -322,6 +361,9 @@ pub fn build_document(app: &App, config: &Config) -> Result<ConfigUiDocument> {
             locale: UiLocale::from_setting(&settings.locale)?,
             theme: UiThemeValue::from_setting(&settings.theme)?,
             background_color: settings.background_color.clone(),
+            sidebar_bg: settings.sidebar_bg.clone(),
+            composer_bg: settings.composer_bg.clone(),
+            border_type: BorderTypeValue::from_setting(settings.border_type.as_deref()),
             bracketed_paste: settings.bracketed_paste,
             composer_density: settings.composer_density.as_str().into(),
             composer_border: settings.composer_border,
@@ -491,6 +533,18 @@ pub fn apply_document(
                 .background_color
                 .as_deref()
                 .unwrap_or("default"),
+        ),
+        (
+            "sidebar_bg",
+            doc.settings.sidebar_bg.as_deref().unwrap_or("default"),
+        ),
+        (
+            "composer_bg",
+            doc.settings.composer_bg.as_deref().unwrap_or("default"),
+        ),
+        (
+            "border_type",
+            doc.settings.border_type.as_setting().unwrap_or("default"),
         ),
         ("bracketed_paste", bool_str(doc.settings.bracketed_paste)),
         (

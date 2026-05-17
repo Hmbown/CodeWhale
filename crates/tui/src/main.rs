@@ -29,7 +29,6 @@ mod config_ui;
 mod core;
 mod cost_status;
 mod cycle_manager;
-mod deepseek_theme;
 mod dependencies;
 mod error_taxonomy;
 mod eval;

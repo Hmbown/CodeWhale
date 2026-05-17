@@ -350,7 +350,7 @@ pub(crate) fn render_footer_from(
     } else {
         // "ready" is the sentinel the widget uses to skip the status segment;
         // pair it with theme text_muted for visual neutrality.
-        ("ready", app.ui_theme.text_muted)
+        ("ready", app.theme.text_muted)
     };
 
     let coherence = if has(S::Coherence) {
@@ -446,7 +446,7 @@ pub(crate) fn footer_git_branch_spans(app: &App) -> Vec<Span<'static>> {
     };
     vec![Span::styled(
         branch,
-        Style::default().fg(app.ui_theme.text_muted),
+        Style::default().fg(app.theme.text_muted),
     )]
 }
 
@@ -672,14 +672,14 @@ pub(crate) fn footer_status_line_spans(app: &App, max_width: usize) -> Vec<Span<
 
     let mut spans = vec![
         Span::styled(mode_label.to_string(), Style::default().fg(mode_color)),
-        Span::styled(sep.to_string(), Style::default().fg(app.ui_theme.text_dim)),
-        Span::styled(model_label, Style::default().fg(app.ui_theme.text_hint)),
+        Span::styled(sep.to_string(), Style::default().fg(app.theme.text_dim)),
+        Span::styled(model_label, Style::default().fg(app.theme.text_hint)),
     ];
 
     if show_status {
         spans.push(Span::styled(
             sep.to_string(),
-            Style::default().fg(app.ui_theme.text_dim),
+            Style::default().fg(app.theme.text_dim),
         ));
         spans.push(Span::styled(
             status_label.to_string(),
@@ -692,7 +692,7 @@ pub(crate) fn footer_status_line_spans(app: &App, max_width: usize) -> Vec<Span<
 
 pub(crate) fn footer_state_label(app: &App) -> (&'static str, ratatui::style::Color) {
     if app.is_compacting {
-        return ("compacting \u{238B}", app.ui_theme.status_warning);
+        return ("compacting \u{238B}", app.theme.status_warning);
     }
     // Note: we deliberately do NOT show a "thinking" label for `is_loading`.
     // The animated water-spout strip in the footer's spacer is the visual
@@ -701,30 +701,30 @@ pub(crate) fn footer_state_label(app: &App) -> (&'static str, ratatui::style::Co
     // not strictly reasoning. Sub-agents still surface "working" because
     // that's a distinct lifecycle the user can act on (open `/agents`).
     if running_agent_count(app) > 0 {
-        return ("working", app.ui_theme.status_working);
+        return ("working", app.theme.status_working);
     }
     if app.queued_draft.is_some() {
-        return ("draft", app.ui_theme.text_muted);
+        return ("draft", app.theme.text_muted);
     }
 
     if !app.view_stack.is_empty() {
-        return ("overlay", app.ui_theme.text_muted);
+        return ("overlay", app.theme.text_muted);
     }
 
     if !app.input.is_empty() {
-        return ("draft", app.ui_theme.text_muted);
+        return ("draft", app.theme.text_muted);
     }
 
-    ("ready", app.ui_theme.status_ready)
+    ("ready", app.theme.status_ready)
 }
 
 #[cfg(test)]
 pub(crate) fn footer_mode_style(app: &App) -> (&'static str, ratatui::style::Color) {
     let label = app.mode.as_setting();
     let color = match app.mode {
-        crate::tui::app::AppMode::Agent => app.ui_theme.mode_agent,
-        crate::tui::app::AppMode::Yolo => app.ui_theme.mode_yolo,
-        crate::tui::app::AppMode::Plan => app.ui_theme.mode_plan,
+        crate::tui::app::AppMode::Agent => app.theme.mode_agent,
+        crate::tui::app::AppMode::Yolo => app.theme.mode_yolo,
+        crate::tui::app::AppMode::Plan => app.theme.mode_plan,
     };
     (label, color)
 }

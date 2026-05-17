@@ -267,10 +267,10 @@ impl FooterProps {
             model: app.model_display_label(),
             mode_label,
             mode_color,
-            text_dim_color: app.ui_theme.text_dim,
-            text_hint_color: app.ui_theme.text_hint,
-            text_muted_color: app.ui_theme.text_muted,
-            footer_bg: app.ui_theme.footer_bg,
+            text_dim_color: app.theme.text_dim,
+            text_hint_color: app.theme.text_hint,
+            text_muted_color: app.theme.text_muted,
+            footer_bg: app.theme.footer_bg,
             state_label: state_label.to_string(),
             state_color,
             coherence,
@@ -294,9 +294,9 @@ fn mode_style(app: &App) -> (&'static str, Color) {
         AppMode::Plan => "plan",
     };
     let color = match app.mode {
-        AppMode::Agent => app.ui_theme.mode_agent,
-        AppMode::Yolo => app.ui_theme.mode_yolo,
-        AppMode::Plan => app.ui_theme.mode_plan,
+        AppMode::Agent => app.theme.mode_agent,
+        AppMode::Yolo => app.theme.mode_yolo,
+        AppMode::Plan => app.theme.mode_plan,
     };
     (label, color)
 }
@@ -675,8 +675,7 @@ mod tests {
         app.api_provider = crate::config::ApiProvider::Deepseek;
         // Same for theme: tests below assert against the default dark palette,
         // but App::new honors saved settings.toml values on the host machine.
-        app.theme_id = crate::palette::ThemeId::Whale;
-        app.ui_theme = crate::palette::UI_THEME;
+        app.theme = crate::tui::theme::DARK_THEME;
         app
     }
 
@@ -812,11 +811,11 @@ mod tests {
     #[test]
     fn from_app_statusline_colors_come_from_ui_theme() {
         let mut app = make_app();
-        app.ui_theme.mode_agent = Color::Rgb(1, 2, 3);
-        app.ui_theme.text_dim = Color::Rgb(4, 5, 6);
-        app.ui_theme.text_hint = Color::Rgb(7, 8, 9);
-        app.ui_theme.text_muted = Color::Rgb(10, 11, 12);
-        app.ui_theme.footer_bg = Color::Rgb(13, 14, 15);
+        app.theme.mode_agent = Color::Rgb(1, 2, 3);
+        app.theme.text_dim = Color::Rgb(4, 5, 6);
+        app.theme.text_hint = Color::Rgb(7, 8, 9);
+        app.theme.text_muted = Color::Rgb(10, 11, 12);
+        app.theme.footer_bg = Color::Rgb(13, 14, 15);
 
         let props = idle_props_for(&app);
 
@@ -830,7 +829,7 @@ mod tests {
     #[test]
     fn render_applies_footer_background_to_full_row() {
         let mut app = make_app();
-        app.ui_theme.footer_bg = Color::Rgb(13, 14, 15);
+        app.theme.footer_bg = Color::Rgb(13, 14, 15);
         let props = idle_props_for(&app);
         let widget = FooterWidget::new(props);
         let area = ratatui::layout::Rect::new(0, 0, 60, 1);

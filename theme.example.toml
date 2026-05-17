@@ -1,0 +1,58 @@
+# "Mo" custom theme — inherits from Whale (the original DeepSeek dark default).
+#
+# Every override field is exposed below. Uncomment and tweak to taste.
+# Load with: /theme mo   or   /config theme mo
+
+base = "dark"
+
+# ── Backgrounds ────────────────────────────────────────────────────────────
+background_color = "reset"   # main TUI background (also sets header/footer)
+panel_bg         = "reset"   # side panel background
+sidebar_bg       = "reset"   # sidebar panel background
+elevated_bg      = "reset"   # elevated surfaces
+composer_bg      = "reset"   # input-area background
+selection_bg     = "reset"   # selection highlight
+header_bg        = "reset"   # header bar (inherits background_color)
+footer_bg        = "reset"   # footer bar (inherits background_color)
+
+# ── Borders ────────────────────────────────────────────────────────────────
+border_type  = "rounded"       # "plain" (default) or "rounded"
+# border_color = "#30363D"       # border line colour
+
+# ── Mode status colours ────────────────────────────────────────────────────
+# mode_agent      = "#6E7681"    # Agent mode indicator
+# mode_yolo       = "#DA3633"    # YOLO mode indicator
+# mode_plan       = "#D29922"    # Plan mode indicator
+
+# ── Status indicator colours ───────────────────────────────────────────────
+# status_ready   = "#8B949E"     # idle/ready
+# status_working = "#79C0FF"     # active/processing
+# status_warning = "#D29922"     # warning attention
+
+# ── Text colours ───────────────────────────────────────────────────────────
+# text_dim    = "#484F58"        # dimmed text
+# text_hint   = "#6E7681"        # hint text
+# text_muted  = "#8B949E"        # muted text
+# text_body   = "#C9D1D9"        # body / primary text
+# text_soft   = "#8B949E"        # soft text
+
+# ── Section / tool colours ─────────────────────────────────────────────────
+# section_border_color = "#30363D"
+# section_title_color  = "#79C0FF"
+# tool_title_color     = "#8B949E"
+# tool_value_color     = "#8B949E"
+# tool_label_color     = "#6E7681"
+# tool_running_accent  = "#4493F8"    # tool mid-execution
+# tool_success_accent  = "#8B949E"    # tool finished OK
+# tool_failed_accent   = "#DA3633"    # tool failed
+
+# ── Plan colours ───────────────────────────────────────────────────────────
+# plan_progress_color      = "#238636"  # progress bar
+# plan_summary_color       = "#8B949E"  # plan summary text
+# plan_explanation_color   = "#6E7681"  # plan explanation text
+# plan_pending_color       = "#8B949E"  # pending step
+# plan_in_progress_color   = "#D29922"  # in-progress step
+# plan_completed_color     = "#238636"  # completed step
+
+# ── Reasoning tint ─────────────────────────────────────────────────────────
+reasoning_bg = "reset"       # thinking-block background. "reset" to clear.

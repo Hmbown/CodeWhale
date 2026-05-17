@@ -203,6 +203,17 @@ pub struct Settings {
     pub theme: String,
     /// Optional main TUI background color as a 6-digit hex RGB value.
     pub background_color: Option<String>,
+    /// Optional sidebar background color as a 6-digit hex RGB value.
+    /// When unset, inherits from the theme's panel/sidebar colour.
+    pub sidebar_bg: Option<String>,
+    /// Optional composer input-area background color as a 6-digit hex RGB value.
+    pub composer_bg: Option<String>,
+    /// Global border style: "plain" or "rounded".  `None` means "inherit
+    /// from the theme" (the custom file or built-in default).
+    pub border_type: Option<String>,
+    /// Section (sidebar panel) border style override. Falls back to `border_type`
+    /// when unset. Accepts "plain" or "rounded".
+    pub section_border_type: Option<String>,
     /// Composer layout density: compact, comfortable, spacious
     pub composer_density: String,
     /// Show a border around the composer input area
@@ -295,6 +306,10 @@ impl Default for Settings {
             locale: "auto".to_string(),
             theme: "system".to_string(),
             background_color: None,
+            sidebar_bg: None,
+            composer_bg: None,
+            border_type: None,
+            section_border_type: None,
             composer_density: "comfortable".to_string(),
             composer_border: true,
             composer_vim_mode: "normal".to_string(),
@@ -497,23 +512,40 @@ impl Settings {
                 self.locale = locale.to_string();
             }
             "theme" => {
-                let Some(id) = crate::palette::ThemeId::from_name(value) else {
-                    anyhow::bail!(
-                        "Failed to update setting: invalid theme '{value}'. Expected: system, dark, light, grayscale, catppuccin-mocha, tokyo-night, dracula, gruvbox-dark."
-                    );
-                };
-                self.theme = id.name().to_string();
+                self.theme = normalize_theme_setting(value)?;
             }
             "ui_theme" => {
-                let Some(id) = crate::palette::ThemeId::from_name(value) else {
-                    anyhow::bail!(
-                        "Failed to update setting: invalid theme '{value}'. Expected: system, dark, light, grayscale, catppuccin-mocha, tokyo-night, dracula, gruvbox-dark."
-                    );
-                };
-                self.theme = id.name().to_string();
+                self.theme = normalize_theme_setting(value)?;
             }
             "background_color" | "background" | "bg" => {
                 self.background_color = normalize_background_color_setting(value)?;
+            }
+            "sidebar_bg" => {
+                self.sidebar_bg = normalize_background_color_setting(value)?;
+            }
+            "composer_bg" => {
+                self.composer_bg = normalize_background_color_setting(value)?;
+            }
+            "border_type" => {
+                let normalized = value.trim().to_ascii_lowercase();
+                if ["default", "auto", "none", "off", ""].contains(&normalized.as_str()) {
+                    self.border_type = None;
+                } else if !["plain", "rounded"].contains(&normalized.as_str()) {
+                    anyhow::bail!(
+                        "Failed to update setting: invalid border_type '{value}'. Expected: plain, rounded, default."
+                    );
+                } else {
+                    self.border_type = Some(normalized);
+                }
+            }
+            "section_border_type" => {
+                let normalized = value.trim().to_ascii_lowercase();
+                if !["plain", "rounded"].contains(&normalized.as_str()) {
+                    anyhow::bail!(
+                        "Failed to update setting: invalid section_border_type '{value}'. Expected: plain, rounded."
+                    );
+                }
+                self.section_border_type = Some(normalized);
             }
             "composer_density" | "composer" => {
                 let normalized = normalize_composer_density(value);
@@ -677,6 +709,22 @@ impl Settings {
         lines.push(format!(
             "  background_color:   {}",
             self.background_color.as_deref().unwrap_or("(default)")
+        ));
+        lines.push(format!(
+            "  sidebar_bg:         {}",
+            self.sidebar_bg.as_deref().unwrap_or("(default)")
+        ));
+        lines.push(format!(
+            "  composer_bg:        {}",
+            self.composer_bg.as_deref().unwrap_or("(default)")
+        ));
+        lines.push(format!(
+            "  border_type:        {}",
+            self.border_type.as_deref().unwrap_or("(default)")
+        ));
+        lines.push(format!(
+            "  section_border_type:{}",
+            self.section_border_type.as_deref().unwrap_or("(default)")
         ));
         lines.push(format!("  composer_density:   {}", self.composer_density));
         lines.push(format!("  composer_border:    {}", self.composer_border));
@@ -953,17 +1001,83 @@ fn normalize_background_color_setting(value: &str) -> Result<Option<String>> {
     if trimmed.is_empty()
         || matches!(
             trimmed.to_ascii_lowercase().as_str(),
-            "default" | "none" | "reset" | "off"
+            "default" | "none" | "off"
         )
     {
         return Ok(None);
     }
+    // "reset" / "terminal" / "transparent" → use terminal default background
+    if matches!(
+        trimmed.to_ascii_lowercase().as_str(),
+        "reset" | "terminal" | "transparent"
+    ) {
+        return Ok(Some("reset".to_string()));
+    }
 
     normalize_hex_rgb_color(trimmed).map(Some).ok_or_else(|| {
         anyhow::anyhow!(
-            "Failed to update setting: invalid background_color '{value}'. Expected #RRGGBB, RRGGBB, or default."
+            "Failed to update setting: invalid background_color '{value}'. Expected #RRGGBB, RRGGBB, reset, or default."
         )
     })
+}
+
+/// Validate and normalise a theme setting value.
+///
+/// Accepts:
+/// - Built-in names (system, dark, light, grayscale, catppuccin-mocha, …)
+/// - `file:<name>` references to custom theme files
+/// - Bare custom theme file names (auto-detected)
+fn normalize_theme_setting(value: &str) -> Result<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok("system".to_string());
+    }
+
+    // `file:` prefix — validate the file exists
+    if let Some(file_name) = trimmed.strip_prefix("file:") {
+        let file_name = file_name.trim();
+        if file_name.is_empty() {
+            anyhow::bail!(
+                "Failed to update setting: invalid theme 'file:'. Expected a file name after 'file:'."
+            );
+        }
+        let path = crate::tui::theme::themes_dir()
+            .join(file_name)
+            .with_extension("toml");
+        if !path.exists() {
+            // also try without .toml extension
+            let bare = crate::tui::theme::themes_dir().join(file_name);
+            if !bare.exists() {
+                anyhow::bail!(
+                    "Failed to update setting: custom theme file '{}' not found in {:?}",
+                    file_name,
+                    crate::tui::theme::themes_dir()
+                );
+            }
+        }
+        return Ok(format!("file:{file_name}"));
+    }
+
+    // Built-in name — normalise through ThemeId to get canonical form
+    if let Some(id) = crate::palette::ThemeId::from_name(trimmed) {
+        return Ok(id.name().to_string());
+    }
+
+    // Try as a custom theme file name
+    let path = crate::tui::theme::themes_dir()
+        .join(trimmed)
+        .with_extension("toml");
+    if path.exists() {
+        return Ok(format!("file:{trimmed}"));
+    }
+    let bare = crate::tui::theme::themes_dir().join(trimmed);
+    if bare.exists() {
+        return Ok(format!("file:{trimmed}"));
+    }
+
+    anyhow::bail!(
+        "Failed to update setting: invalid theme '{value}'. Expected: system, dark, light, grayscale, catppuccin-mocha, tokyo-night, dracula, gruvbox-dark, or file:<name>."
+    )
 }
 
 fn normalize_sidebar_focus(value: &str) -> &str {

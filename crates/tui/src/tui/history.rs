@@ -8,13 +8,13 @@ use ratatui::text::{Line, Span};
 use serde_json::Value;
 use unicode_width::UnicodeWidthStr;
 
-use crate::deepseek_theme::active_theme;
 use crate::models::{ContentBlock, Message};
 use crate::palette;
 use crate::tools::review::ReviewOutput;
 use crate::tui::app::TranscriptSpacing;
 use crate::tui::diff_render;
 use crate::tui::markdown_render;
+use crate::tui::theme::active_theme;
 
 // === Constants ===
 
@@ -154,6 +154,8 @@ pub struct TranscriptRenderOptions {
     pub calm_mode: bool,
     pub low_motion: bool,
     pub spacing: TranscriptSpacing,
+    /// Reasoning block background tint. `None` → use hardcoded default.
+    pub reasoning_bg: Option<Color>,
 }
 
 impl Default for TranscriptRenderOptions {
@@ -165,6 +167,7 @@ impl Default for TranscriptRenderOptions {
             calm_mode: false,
             low_motion: false,
             spacing: TranscriptSpacing::Comfortable,
+            reasoning_bg: None,
         }
     }
 }
@@ -235,7 +238,15 @@ impl HistoryCell {
                 content,
                 streaming,
                 duration_secs,
-            } => render_thinking(content, width, *streaming, *duration_secs, false, false),
+            } => render_thinking(
+                content,
+                width,
+                *streaming,
+                *duration_secs,
+                false,
+                false,
+                None,
+            ),
             HistoryCell::Tool(cell) => cell.lines_with_motion(width, false),
             HistoryCell::SubAgent(cell) => cell.lines(width),
             HistoryCell::ArchivedContext { .. } => render_archived_context(self, width, false),
@@ -260,6 +271,7 @@ impl HistoryCell {
                 *duration_secs,
                 !options.verbose,
                 options.low_motion,
+                options.reasoning_bg,
             ),
             HistoryCell::Tool(cell) if !options.show_tool_details => {
                 let mut lines = cell.lines_with_motion(width, options.low_motion);
@@ -344,6 +356,7 @@ impl HistoryCell {
                 *duration_secs,
                 /*collapsed*/ false,
                 /*low_motion*/ false,
+                None,
             ),
             HistoryCell::Tool(cell) => cell.transcript_lines(width),
             HistoryCell::SubAgent(cell) => cell.lines(width),
@@ -2066,14 +2079,11 @@ fn render_thinking(
     duration_secs: Option<f32>,
     collapsed: bool,
     low_motion: bool,
+    reasoning_bg: Option<Color>,
 ) -> Vec<Line<'static>> {
     let state = thinking_visual_state(streaming, duration_secs);
     let style = thinking_style();
-    // 12% reasoning surface tint over the app ink — the only deliberately
-    // warm element in the transcript. Dropped on Ansi-16 terminals where the
-    // tint would distort the named palette.
-    let depth = cached_color_depth();
-    let body_bg = palette::reasoning_surface_tint(depth);
+    let body_bg = reasoning_bg.or_else(|| palette::reasoning_surface_tint(cached_color_depth()));
     let body_style = match body_bg {
         Some(bg) => style.italic().bg(bg),
         None => style.italic(),
@@ -2141,8 +2151,19 @@ fn render_thinking(
         truncated = true;
     }
 
-    let rail_style = Style::default().fg(thinking_state_accent(state));
-    let cursor_style = Style::default().fg(palette::ACCENT_REASONING_LIVE);
+    // Rail shares the body background so the thinking block reads as a
+    // single continuous surface — no visual seam between the rail and the
+    // tinted body text, especially when the user has set the main
+    // background to transparent.
+    let rail_bg = body_bg.unwrap_or(Color::Reset);
+    let rail_style = Style::default()
+        .fg(thinking_state_accent(state))
+        .bg(rail_bg);
+    let cursor_style = Style::default()
+        .fg(palette::ACCENT_REASONING_LIVE)
+        .bg(rail_bg);
+    // Base style for body rows — fills gaps between spans for a solid block.
+    let body_row_style = body_style;
 
     if rendered.is_empty() && streaming {
         let mut spans = vec![Span::styled(REASONING_RAIL.to_string(), rail_style)];
@@ -2150,7 +2171,12 @@ fn render_thinking(
         if !low_motion {
             spans.push(Span::styled(format!(" {REASONING_CURSOR}"), cursor_style));
         }
-        lines.push(Line::from(spans));
+        let visual: usize = spans.iter().map(|s| s.width()).sum();
+        let pad = width.saturating_sub(visual as u16) as usize;
+        if pad > 0 {
+            spans.push(Span::styled(" ".repeat(pad), body_row_style));
+        }
+        lines.push(Line::from(spans).style(body_row_style));
     }
 
     let last_idx = rendered.len().saturating_sub(1);
@@ -2162,7 +2188,13 @@ fn render_thinking(
         if streaming && !low_motion && idx == last_idx {
             spans.push(Span::styled(format!(" {REASONING_CURSOR}"), cursor_style));
         }
-        lines.push(Line::from(spans));
+        // Pad to full width so the tinted background fills the entire row.
+        let visual: usize = spans.iter().map(|s| s.width()).sum();
+        let pad = width.saturating_sub(visual as u16) as usize;
+        if pad > 0 {
+            spans.push(Span::styled(" ".repeat(pad), body_row_style));
+        }
+        lines.push(Line::from(spans).style(body_row_style));
     }
 
     let needs_affordance = collapsed
@@ -2180,10 +2212,16 @@ fn render_thinking(
         } else {
             "Full reasoning in Ctrl+O"
         };
-        lines.push(Line::from(vec![
+        let mut spans = vec![
             Span::styled(REASONING_RAIL.to_string(), rail_style),
             Span::styled(label, Style::default().fg(palette::TEXT_MUTED).italic()),
-        ]));
+        ];
+        let visual: usize = spans.iter().map(|s| s.width()).sum();
+        let pad = width.saturating_sub(visual as u16) as usize;
+        if pad > 0 {
+            spans.push(Span::styled(" ".repeat(pad), body_row_style));
+        }
+        lines.push(Line::from(spans).style(body_row_style));
     }
 
     lines
@@ -3165,9 +3203,9 @@ mod tests {
         assistant_label_style_for, extract_reasoning_summary, render_thinking,
         running_status_label_with_elapsed,
     };
-    use crate::deepseek_theme::Theme;
     use crate::models::{ContentBlock, Message};
     use crate::palette;
+    use crate::tui::theme::Theme;
     use ratatui::style::Modifier;
     use std::time::{Duration, Instant};
 
@@ -3657,6 +3695,7 @@ mod tests {
             Some(2.0),
             true,
             false,
+            None,
         );
         let text = lines
             .iter()
@@ -3679,6 +3718,7 @@ mod tests {
             None, // no duration yet
             true, // collapsed
             true, // low_motion (no cursor noise to grep)
+            None,
         );
         let text = lines
             .iter()
@@ -3704,7 +3744,7 @@ mod tests {
             .map(|i| format!("Reasoning line {i}"))
             .collect::<Vec<_>>()
             .join("\n");
-        let lines = render_thinking(&long, 80, true, None, true, true);
+        let lines = render_thinking(&long, 80, true, None, true, true, None);
         let text = lines
             .iter()
             .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
@@ -4065,7 +4105,15 @@ mod tests {
 
     #[test]
     fn render_thinking_uses_dotted_opener_in_header() {
-        let lines = render_thinking("Step one\nStep two", 80, false, Some(2.0), false, true);
+        let lines = render_thinking(
+            "Step one\nStep two",
+            80,
+            false,
+            Some(2.0),
+            false,
+            true,
+            None,
+        );
         let header = &lines[0];
         // First span carries `…` followed by a space.
         assert!(
@@ -4084,6 +4132,7 @@ mod tests {
             Some(1.0),
             /*collapsed*/ false,
             /*low_motion*/ true,
+            None,
         );
         // Header is index 0; first body line is index 1.
         assert!(lines.len() >= 2, "expected at least one body line");
@@ -4111,14 +4160,19 @@ mod tests {
             None,
             /*collapsed*/ false,
             /*low_motion*/ false,
+            None,
         );
         // Last line is the most recent body line — cursor lives there.
+        // (The very last span may be a width-padding space — check all spans.)
         let last = lines.last().expect("body line present");
-        let last_span = last.spans.last().expect("trailing span present");
+        let has_cursor = last
+            .spans
+            .iter()
+            .any(|s| s.content.contains(REASONING_CURSOR));
         assert!(
-            last_span.content.contains(REASONING_CURSOR),
-            "expected trailing cursor `▎` on last streaming body line, got {:?}",
-            last_span.content
+            has_cursor,
+            "expected trailing cursor `▎` on last streaming body line, got spans: {:?}",
+            last.spans.iter().map(|s| &s.content).collect::<Vec<_>>()
         );
     }
 
@@ -4131,6 +4185,7 @@ mod tests {
             None,
             /*collapsed*/ false,
             /*low_motion*/ true,
+            None,
         );
         let last = lines.last().expect("body line present");
         let visible: String = last
@@ -4153,7 +4208,7 @@ mod tests {
 
     #[test]
     fn plan_update_cell_renders_with_dark_theme_tokens() {
-        let theme = Theme::dark();
+        let theme = Theme::for_mode(crate::palette::PaletteMode::Dark);
         let cell = PlanUpdateCell {
             explanation: None,
             steps: vec![
@@ -4246,7 +4301,7 @@ mod tests {
 
     #[test]
     fn exec_cell_failed_status_renders_with_dark_theme_tokens() {
-        let theme = Theme::dark();
+        let theme = Theme::for_mode(crate::palette::PaletteMode::Dark);
         let cell = ExecCell {
             command: "false".to_string(),
             status: ToolStatus::Failed,
