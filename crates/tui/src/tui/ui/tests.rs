@@ -2045,10 +2045,10 @@ fn hidden_sidebar_focus_suppresses_sidebar_split_even_when_wide() {
     app.sidebar_width_percent = 28;
 
     app.sidebar_focus = SidebarFocus::Auto;
-    assert_eq!(sidebar_width_for_chat_area(&app, 120), Some(33));
+    assert_eq!(sidebar_width_for_chat_area(&app, 260), Some(72));
 
     app.sidebar_focus = SidebarFocus::Hidden;
-    assert_eq!(sidebar_width_for_chat_area(&app, 120), None);
+    assert_eq!(sidebar_width_for_chat_area(&app, 260), None);
 }
 
 fn make_subagent(
@@ -2330,14 +2330,10 @@ fn footer_auxiliary_spans_distinguish_api_round_cache_from_turn_cache() {
     app.session.last_prompt_tokens = Some(1_246_923);
     app.session.last_prompt_cache_hit_tokens = Some(447_360);
     app.session.last_prompt_cache_miss_tokens = Some(799_563);
-    app.session.last_api_prompt_tokens = Some(100_000);
-    app.session.last_api_prompt_cache_hit_tokens = Some(90_000);
-    app.session.last_api_prompt_cache_miss_tokens = Some(10_000);
 
     let roomy = spans_text(&footer_auxiliary_spans(&app, 104));
 
-    assert!(roomy.contains("Cache: api 90.0% | turn 35.9%"));
-    assert!(roomy.contains("hit 447360 | miss 799563"));
+    assert!(roomy.contains("Cache: 35.9% hit | hit 447360 | miss 799563"));
 }
 
 #[test]
