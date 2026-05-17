@@ -296,6 +296,14 @@ fn message_text(msg: &Message) -> String {
     text
 }
 
+fn is_user_text_query(msg: &Message) -> bool {
+    msg.role == "user"
+        && msg
+            .content
+            .iter()
+            .any(|block| matches!(block, ContentBlock::Text { .. }))
+}
+
 fn extract_paths_from_message(message: &Message, workspace: Option<&Path>) -> Vec<String> {
     let mut paths = Vec::new();
     for block in &message.content {
@@ -436,6 +444,21 @@ pub fn plan_compaction(
 
     // Ensure tool result messages are not kept without their corresponding tool call.
     enforce_tool_call_pairs(messages, &mut pinned_indices);
+
+    // Some OpenAI-compatible chat templates require at least one user text
+    // message. Tool-heavy tails can otherwise compact down to only tool calls
+    // and tool results, which makes those backends reject the next request.
+    if !pinned_indices
+        .iter()
+        .any(|&idx| is_user_text_query(&messages[idx]))
+        && let Some(idx) = messages
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(idx, msg)| is_user_text_query(msg).then_some(idx))
+    {
+        pinned_indices.insert(idx);
+    }
 
     let summarize_indices = (0..len)
         .filter(|idx| !pinned_indices.contains(idx))
@@ -2301,6 +2324,39 @@ mod tests {
 
         // All pairs should remain intact (no orphans)
         assert_eq!(pinned.len(), messages.len());
+    }
+
+    #[test]
+    fn plan_compaction_keeps_at_least_one_user_text_query() {
+        let mut messages = vec![msg(
+            "user",
+            "This is the original query that started the chain.",
+        )];
+
+        for i in 0..10 {
+            messages.push(Message {
+                role: "assistant".to_string(),
+                content: vec![ContentBlock::ToolUse {
+                    id: format!("call-{i}"),
+                    name: "test_tool".to_string(),
+                    input: json!({}),
+                    caller: None,
+                }],
+            });
+            messages.push(Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: format!("call-{i}"),
+                    content: "tool output".to_string(),
+                    is_error: None,
+                    content_blocks: None,
+                }],
+            });
+        }
+
+        let plan = plan_compaction(&messages, None, KEEP_RECENT_MESSAGES, None, None);
+
+        assert!(plan.pinned_indices.contains(&0));
     }
 
     // ========================================================================

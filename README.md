@@ -18,7 +18,9 @@ agent runtime itself.
 #    matching prebuilt Rust binaries from GitHub Releases.
 npm install -g deepseek-tui
 
-# 2. Cargo — no Node needed.
+# 2. Cargo — no Node needed. Requires Rust 1.88+ (the crates use the
+#    2024 edition; older toolchains fail with "feature `edition2024` is
+#    required"). Run `rustup update` first, or use a non-Cargo path below.
 cargo install deepseek-tui-cli --locked   # `deepseek` (entry point)
 cargo install deepseek-tui     --locked   # `deepseek-tui` (TUI binary)
 

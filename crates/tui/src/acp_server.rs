@@ -359,6 +359,7 @@ async fn write_jsonrpc_result<W>(writer: &mut W, id: Value, result: Value) -> Re
 where
     W: AsyncWrite + Unpin,
 {
+    let id = jsonrpc_response_id(id);
     write_json_line(
         writer,
         json!({
@@ -379,6 +380,7 @@ async fn write_jsonrpc_error<W>(
 where
     W: AsyncWrite + Unpin,
 {
+    let id = id.map(jsonrpc_response_id);
     write_json_line(
         writer,
         json!({
@@ -401,6 +403,15 @@ where
     writer.write_all(b"\n").await?;
     writer.flush().await?;
     Ok(())
+}
+
+fn jsonrpc_response_id(id: Value) -> Value {
+    match id {
+        Value::Null => Value::Null,
+        Value::String(_) => id,
+        Value::Number(number) => Value::String(number.to_string()),
+        other => Value::String(other.to_string()),
+    }
 }
 
 #[cfg(test)]
@@ -457,5 +468,33 @@ mod tests {
         assert_eq!(value["method"], "session/update");
         assert_eq!(value["params"]["sessionId"], "sess_1");
         assert_eq!(value["params"]["update"]["content"]["text"], "hello\nworld");
+    }
+
+    #[tokio::test]
+    async fn jsonrpc_result_stringifies_numeric_ids_for_zed_acp() {
+        let mut out = Vec::new();
+
+        write_jsonrpc_result(&mut out, json!(1), json!({"ok": true}))
+            .await
+            .expect("write result");
+
+        let line = String::from_utf8(out).expect("utf8");
+        let value: Value = serde_json::from_str(line.trim()).expect("json");
+        assert_eq!(value["id"], "1");
+        assert_eq!(value["result"], json!({"ok": true}));
+    }
+
+    #[tokio::test]
+    async fn jsonrpc_error_keeps_absent_id_null() {
+        let mut out = Vec::new();
+
+        write_jsonrpc_error(&mut out, None, -32700, "invalid json")
+            .await
+            .expect("write error");
+
+        let line = String::from_utf8(out).expect("utf8");
+        let value: Value = serde_json::from_str(line.trim()).expect("json");
+        assert_eq!(value["id"], Value::Null);
+        assert_eq!(value["error"]["code"], -32700);
     }
 }

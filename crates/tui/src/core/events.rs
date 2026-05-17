@@ -226,8 +226,11 @@ pub enum Event {
         id: String,
         tool_name: String,
         description: String,
-        /// Fingerprint key for per‑call approval caching (§5.A).
+        /// Exact-argument fingerprint, used to scope *denials* (#1617).
         approval_key: String,
+        /// Lossy / arity-aware fingerprint, used to scope *approvals* so an
+        /// "approve for session" covers later flag variants (v0.8.37).
+        approval_grouping_key: String,
     },
 
     /// Request user input for a tool call

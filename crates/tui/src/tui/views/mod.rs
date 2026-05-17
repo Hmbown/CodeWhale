@@ -92,8 +92,10 @@ pub enum ViewEvent {
         tool_name: String,
         decision: ReviewDecision,
         timed_out: bool,
-        /// Fingerprint key for per‑call approval caching (§5.A).
+        /// Exact-argument fingerprint, used to scope *denials* (#1617).
         approval_key: String,
+        /// Lossy / arity-aware fingerprint, used to scope *approvals*.
+        approval_grouping_key: String,
     },
     ElevationDecision {
         tool_id: String,

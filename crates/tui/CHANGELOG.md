@@ -5,13 +5,86 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.8.39] - 2026-05-17
 
 ### Fixed
 
 - **Feishu/Lark bridge startup order is guarded.** The bridge now keeps
   `ThreadStore` initialized before startup opens persisted thread state, with a
   regression test to prevent moving it below its first use.
+- **`/model` picker opens instantly with the curated list again.** Reverted
+  the v0.8.38 live-catalog rework: the picker no longer makes a blocking
+  network call on open and once again shows the curated `auto` /
+  `deepseek-v4-pro` / `deepseek-v4-flash` rows. The `/models` command still
+  lists the live provider catalog.
+- **"Approve for session" groups by command family again.** Session approvals
+  are keyed by a lossy, arity-aware fingerprint once more, so approving
+  `cargo build` also covers `cargo build --release`. Denials keep the exact
+  per-call fingerprint from #1617, so denying one call no longer over-blocks
+  later, different calls to the same tool.
+- **Docker first-run state directories are writable.** The image now
+  pre-creates `/home/deepseek/.deepseek` with `deepseek` ownership so the
+  documented named-volume launch can create runtime thread state on first use
+  (#1684).
+- **Runtime API system prompt overrides survive the first turn.** Threads
+  created with a `system_prompt` override now keep that prompt through
+  mode/context refreshes before the model request is built (#1688).
+- **Compaction keeps a user text query in tool-heavy histories.** Automatic
+  compaction now pins the latest user text message when the retained tail only
+  contains tool calls/results, avoiding OpenAI-compatible Jinja template
+  failures on the next request (#1704).
+- **Pager jumps land at the visible bottom.** Pressing `G` or End in the pager
+  no longer overshoots the render clamp, so `k`/Up scrolls upward immediately
+  afterward, and mouse wheels now scroll pager overlays directly (#1706,
+  #1716).
+- **Mouse-wheel-as-arrow scrolling preserves composer drafts.** When
+  `composer_arrows_scroll` is enabled, Up/Down now scroll the transcript even
+  with text in the composer instead of replacing the draft with input history
+  (#1677).
+- **Multiline composer arrows move between input lines.** Plain Up/Down now
+  move the cursor within multiline drafts before falling back to input history,
+  while single-line mouse-wheel-as-arrow scrolling remains unchanged (#1721).
+- **Third-party `reasoning_content` streams no longer corrupt text output.**
+  Generic OpenAI-compatible providers that stream answer text in
+  `reasoning_content` now render it as normal text unless the selected provider
+  is one whose reasoning-content semantics are supported (#1673).
+- **macOS system theme detection recognizes Light mode.** When `COLORFGBG` is
+  missing or unusable, `theme = "system"` now falls back to macOS appearance
+  detection and treats a missing `AppleInterfaceStyle` key as Light mode
+  (#1670).
+- **`rlm_open` accepts schema-filled blank source fields.** Empty `file_path`,
+  `content`, and `url` strings now count as absent, so calls that provide one
+  real source no longer fail the exactly-one-source validator (#1712).
+- **Resize keeps transcript paging usable immediately.** After a terminal
+  resize, PageUp/PageDown now use the resized viewport height instead of
+  falling back to one-line jumps before the next render (#1724).
+- **ACP responses stringify JSON-RPC ids.** `serve --acp` now returns string
+  ids even when clients send numeric ids, matching Zed's stricter ACP client
+  expectations (#1696).
+
+### Thanks
+
+Thanks to **Matt Van Horn ([@mvanhorn](https://github.com/mvanhorn))** for the
+Docker first-run permission fix in #1699 and the runtime system-prompt
+regression tests harvested from #1702. Thanks to **Kristopher Clark
+([@krisclarkdev](https://github.com/krisclarkdev))** for the compaction
+user-query preservation fix in #1704. Thanks to **Stephen Xu
+([@wlon](https://github.com/wlon))** for the pager jump-bottom fix in #1706.
+Thanks to **tdccccc ([@tdccccc](https://github.com/tdccccc))** for the
+composer scroll fix in #1715 and pager mouse-wheel support in #1716.
+Thanks to **Paulo Aboim Pinto
+([@aboimpinto](https://github.com/aboimpinto))** for the multiline composer
+arrow navigation tests harvested from #1719. Thanks to **LittleBlacky
+([@LittleBlacky](https://github.com/LittleBlacky))** for the provider-gated
+`reasoning_content` stream fix in #1680.
+Thanks to **Eosin Ai ([@Aitensa](https://github.com/Aitensa))** for the macOS
+system appearance fallback in #1674.
+Thanks to **Anaheim ([@AnaheimEX](https://github.com/AnaheimEX))** for the
+`rlm_open` schema validation report in #1712.
+Thanks to **THatch26 ([@THatch26](https://github.com/THatch26))** for the
+terminal resize paging fix in #1724.
+Thanks to **Alvin ([@alvin1](https://github.com/alvin1))** for the Zed ACP id
+compatibility report in #1696.
 
 ## [0.8.38] - 2026-05-15
 
@@ -4291,7 +4364,8 @@ Welcome — and thank you.
 - Hooks system and config profiles
 - Example skills and launch assets
 
-[Unreleased]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.38...HEAD
+[Unreleased]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.39...HEAD
+[0.8.39]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.38...v0.8.39
 [0.8.38]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.37...v0.8.38
 [0.8.37]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.36...v0.8.37
 [0.8.36]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.35...v0.8.36

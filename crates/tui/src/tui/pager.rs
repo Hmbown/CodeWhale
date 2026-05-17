@@ -15,7 +15,7 @@
 
 use std::cell::Cell;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -124,10 +124,9 @@ impl PagerView {
     }
 
     fn max_scroll(&self) -> usize {
-        // Match the existing 1-line scroll convention used by `j`/`k`. Render
-        // clamps `self.scroll` to `lines.len() - visible_height` for display
-        // purposes, so over-scrolling here is harmless.
-        self.lines.len().saturating_sub(1)
+        // Match the render-side clamp so G/End land at the visible bottom and
+        // k/Up immediately scroll back up by one line.
+        self.lines.len().saturating_sub(self.page_height())
     }
 
     fn start_search(&mut self) {
@@ -346,6 +345,22 @@ impl ModalView for PagerView {
                     text: self.body_text(),
                     label: "Pager content".to_string(),
                 })
+            }
+            _ => ViewAction::None,
+        }
+    }
+
+    fn handle_mouse(&mut self, mouse: MouseEvent) -> ViewAction {
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                self.scroll_up(3);
+                self.pending_g = false;
+                ViewAction::None
+            }
+            MouseEventKind::ScrollDown => {
+                self.scroll_down(3, self.max_scroll());
+                self.pending_g = false;
+                ViewAction::None
             }
             _ => ViewAction::None,
         }
@@ -615,6 +630,32 @@ mod tests {
         let mut p = make_pager(50);
         let _ = p.handle_key(key(KeyCode::End));
         assert_eq!(p.scroll, p.max_scroll());
+    }
+
+    #[test]
+    fn up_immediately_scrolls_after_shift_g_to_bottom() {
+        let mut p = make_pager(50);
+        prime_layout(&mut p, 22);
+        let bottom = p.max_scroll();
+
+        let _ = p.handle_key(key(KeyCode::Char('G')));
+        assert_eq!(p.scroll, bottom);
+        let _ = p.handle_key(key(KeyCode::Up));
+        assert_eq!(p.scroll, bottom - 1);
+        let _ = p.handle_key(key(KeyCode::Char('k')));
+        assert_eq!(p.scroll, bottom - 2);
+    }
+
+    #[test]
+    fn k_immediately_scrolls_after_end_to_bottom() {
+        let mut p = make_pager(50);
+        prime_layout(&mut p, 22);
+        let bottom = p.max_scroll();
+
+        let _ = p.handle_key(key(KeyCode::End));
+        assert_eq!(p.scroll, bottom);
+        let _ = p.handle_key(key(KeyCode::Char('k')));
+        assert_eq!(p.scroll, bottom - 1);
     }
 
     #[test]
@@ -911,6 +952,55 @@ mod tests {
             found_highlight,
             "expected a Yellow/DarkGray highlight cell on the matched-line text columns"
         );
+    }
+
+    #[test]
+    fn mouse_scroll_up_scrolls_content() {
+        let mut p = make_pager(50);
+        p.scroll = 10;
+        let action = p.handle_mouse(MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+
+        assert_eq!(p.scroll, 7);
+        assert!(matches!(action, ViewAction::None));
+    }
+
+    #[test]
+    fn mouse_scroll_down_scrolls_content() {
+        let mut p = make_pager(50);
+        prime_layout(&mut p, 20);
+        p.scroll = 10;
+        let action = p.handle_mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+
+        assert_eq!(p.scroll, 13);
+        assert!(matches!(action, ViewAction::None));
+    }
+
+    #[test]
+    fn mouse_scroll_down_clamps_to_pager_bottom() {
+        let mut p = make_pager(50);
+        prime_layout(&mut p, 20);
+        let bottom = p.max_scroll();
+
+        for _ in 0..100 {
+            let _ = p.handle_mouse(MouseEvent {
+                kind: MouseEventKind::ScrollDown,
+                column: 0,
+                row: 0,
+                modifiers: KeyModifiers::NONE,
+            });
+        }
+
+        assert_eq!(p.scroll, bottom);
     }
 
     #[test]

@@ -1597,6 +1597,12 @@ impl Engine {
                                 &tool_input,
                             )
                             .0;
+                            let approval_grouping_key =
+                                crate::tools::approval_cache::build_approval_grouping_key(
+                                    &tool_name,
+                                    &tool_input,
+                                )
+                                .0;
                             let _ = self
                                 .tx_event
                                 .send(Event::ApprovalRequired {
@@ -1604,6 +1610,7 @@ impl Engine {
                                     tool_name: tool_name.clone(),
                                     description: plan.approval_description.clone(),
                                     approval_key,
+                                    approval_grouping_key,
                                 })
                                 .await;
 

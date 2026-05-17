@@ -32,6 +32,9 @@ pub struct Session {
 
     /// System prompt (optional)
     pub system_prompt: Option<SystemPrompt>,
+    /// True when `system_prompt` came from an explicit runtime API override
+    /// and should not be replaced by mode/context refreshes.
+    pub system_prompt_override: bool,
     /// Hash of the last assembled stable system prompt. Used to avoid
     /// replacing `system_prompt` when unchanged.
     pub last_system_prompt_hash: Option<u64>,
@@ -141,6 +144,7 @@ impl Session {
             auto_model: false,
             workspace,
             system_prompt: None,
+            system_prompt_override: false,
             compaction_summary_prompt: None,
             messages: Vec::new(),
             total_usage: SessionUsage::default(),

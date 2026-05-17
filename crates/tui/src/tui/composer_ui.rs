@@ -71,7 +71,7 @@ pub(crate) fn handle_composer_history_arrow(
 
     match key.code {
         KeyCode::Up => {
-            if scroll_on_empty {
+            if scroll_transcript {
                 app.scroll_up(COMPOSER_ARROW_SCROLL_LINES);
             } else {
                 app.vim_move_up();
@@ -79,7 +79,7 @@ pub(crate) fn handle_composer_history_arrow(
             true
         }
         KeyCode::Down => {
-            if scroll_on_empty {
+            if scroll_transcript {
                 app.scroll_down(COMPOSER_ARROW_SCROLL_LINES);
             } else {
                 app.vim_move_down();

@@ -5330,6 +5330,9 @@ fn history_arrow_handles_whitespace_input() {
 #[test]
 fn history_arrow_handles_nonempty_input() {
     let mut app = create_test_app();
+    // Explicitly disable arrows-scroll so this test covers the
+    // history-navigation path regardless of the mouse-capture default.
+    app.composer_arrows_scroll = false;
     app.input = "hello".to_string();
     app.cursor_position = app.input.chars().count();
     app.input_history.push("previous prompt".to_string());
@@ -5376,6 +5379,7 @@ fn composer_arrows_scroll_empty_down() {
 
 #[test]
 fn composer_arrows_scroll_singleline_navigates_history() {
+fn composer_arrows_scroll_nonempty_also_scrolls() {
     let mut app = create_test_app();
     app.composer_arrows_scroll = true;
     app.input = "hello".to_string();
@@ -5383,12 +5387,91 @@ fn composer_arrows_scroll_singleline_navigates_history() {
     app.input_history.push("previous prompt".to_string());
 
     // With the option on and a single-line input, Up navigates history.
+    // #1677: terminals that convert mouse-wheel to arrow keys should scroll
+    // the transcript without mutating a draft the user is editing.
     assert!(handle_composer_history_arrow(
         &mut app,
         KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
         false,
         false,
     ));
+    assert_eq!(app.viewport.pending_scroll_delta, -3);
+    assert_eq!(app.input, "hello");
+}
+
+#[test]
+fn composer_arrow_up_moves_within_multiline_input() {
+    let mut app = create_test_app();
+    app.composer_arrows_scroll = false;
+    app.input = "line one\nline two".to_string();
+    app.cursor_position = app.input.chars().count();
+    app.input_history.push("previous prompt".to_string());
+
+    assert!(handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+        false,
+        false,
+    ));
+
+    assert_eq!(app.input, "line one\nline two");
+    assert!(app.cursor_position < app.input.chars().count());
+}
+
+#[test]
+fn composer_arrow_down_moves_within_multiline_input() {
+    let mut app = create_test_app();
+    app.composer_arrows_scroll = false;
+    app.input = "line one\nline two".to_string();
+    app.cursor_position = 0;
+    app.input_history.push("next prompt".to_string());
+    app.history_index = Some(app.input_history.len() - 1);
+
+    assert!(handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+        false,
+        false,
+    ));
+
+    assert_eq!(app.input, "line one\nline two");
+    assert!(app.cursor_position >= "line one\n".chars().count());
+}
+
+#[test]
+fn composer_arrows_scroll_multiline_input_navigates_lines() {
+    let mut app = create_test_app();
+    app.composer_arrows_scroll = true;
+    app.input = "line one\nline two".to_string();
+    app.cursor_position = app.input.chars().count();
+
+    assert!(handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+        false,
+        false,
+    ));
+
+    assert_eq!(app.input, "line one\nline two");
+    assert!(app.cursor_position < app.input.chars().count());
+    assert_eq!(app.viewport.pending_scroll_delta, 0);
+}
+
+#[test]
+fn composer_arrow_up_at_first_line_falls_back_to_history_up() {
+    let mut app = create_test_app();
+    app.composer_arrows_scroll = false;
+    app.input = "line one\nline two".to_string();
+    app.cursor_position = 0;
+    app.input_history.push("previous prompt".to_string());
+
+    assert!(handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+        false,
+        false,
+    ));
+
     assert_eq!(app.input, "previous prompt");
 }
 
@@ -5652,6 +5735,77 @@ fn history_roundtrip_up_then_down_restores_draft() {
     ));
     assert_eq!(app.input, "my draft");
     assert_eq!(app.cursor_position, "my draft".chars().count());
+fn home_jumps_to_line_start_multiline() {
+    let mut app = create_test_app();
+    app.input = "line one\nline two\nline three".to_string();
+    app.cursor_position = app.input.chars().count();
+    app.move_cursor_line_start();
+    assert_eq!(app.cursor_position, "line one\nline two\n".len());
+}
+
+#[test]
+fn home_from_middle_of_line_jumps_to_line_start() {
+    let mut app = create_test_app();
+    app.input = "line one\nline two".to_string();
+    app.cursor_position = "line one\nli".len();
+    app.move_cursor_line_start();
+    assert_eq!(app.cursor_position, "line one\n".len());
+}
+
+#[test]
+fn home_on_singleline_jumps_to_zero() {
+    let mut app = create_test_app();
+    app.input = "hello world".to_string();
+    app.cursor_position = 6;
+    app.move_cursor_line_start();
+    assert_eq!(app.cursor_position, 0);
+}
+
+#[test]
+fn end_jumps_to_line_end_multiline() {
+    let mut app = create_test_app();
+    app.input = "line one\nline two\nline three".to_string();
+    app.cursor_position = 0;
+    app.move_cursor_line_end();
+    assert_eq!(app.cursor_position, "line one".len());
+}
+
+#[test]
+fn end_from_middle_of_line_jumps_to_line_end() {
+    let mut app = create_test_app();
+    app.input = "line one\nline two".to_string();
+    app.cursor_position = "line one\nli".len();
+    app.move_cursor_line_end();
+    assert_eq!(app.cursor_position, "line one\nline two".len());
+}
+
+#[test]
+fn end_on_singleline_jumps_to_absolute_end() {
+    let mut app = create_test_app();
+    app.input = "hello world".to_string();
+    app.cursor_position = 0;
+    app.move_cursor_line_end();
+    assert_eq!(app.cursor_position, app.input.chars().count());
+}
+
+#[test]
+fn home_at_line_start_stays_put() {
+    let mut app = create_test_app();
+    app.input = "line one\nline two".to_string();
+    app.cursor_position = "line one\n".len();
+    app.move_cursor_line_start();
+    assert_eq!(app.cursor_position, "line one\n".len());
+}
+
+#[test]
+fn end_at_newline_stays_at_line_end() {
+    let mut app = create_test_app();
+    app.input = "line one\nline two\nline three".to_string();
+    // Cursor sitting on the first '\n'.
+    app.cursor_position = "line one".len();
+    app.move_cursor_line_end();
+    // Stays at end of current line.
+    assert_eq!(app.cursor_position, "line one".len());
 }
 
 #[test]
