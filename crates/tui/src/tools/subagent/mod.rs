@@ -2421,11 +2421,35 @@ impl ToolSpec for AgentEvalTool {
                 .map_err(|e| ToolError::execution_failed(e.to_string()))?
         };
 
+        // Track whether a supplied follow-up message actually reached the
+        // child. A completed/failed/cancelled session cannot accept input, but
+        // that must NOT abort the whole call: the parent still needs the
+        // session projection (and its `transcript_handle`) to retrieve the
+        // child's full output. Hard-failing here was #1738 — "agent_eval on a
+        // completed session returns 'not running', no way to recover the full
+        // child output".
+        let mut message_delivery: Option<Value> = None;
         if let Some(message) = message {
-            let mut manager = self.manager.write().await;
-            manager
-                .send_input(&agent_id, message, interrupt)
-                .map_err(|e| ToolError::execution_failed(e.to_string()))?;
+            let terminal = {
+                let manager = self.manager.read().await;
+                manager
+                    .get_result(&agent_id)
+                    .map(|snap| snap.status != SubAgentStatus::Running)
+                    .unwrap_or(false)
+            };
+            if terminal {
+                message_delivery = Some(json!({
+                    "delivered": false,
+                    "reason": "session already terminated; follow-up not delivered",
+                    "recover_full_output": "read the returned transcript_handle with handle_read"
+                }));
+            } else {
+                let mut manager = self.manager.write().await;
+                manager
+                    .send_input(&agent_id, message, interrupt)
+                    .map_err(|e| ToolError::execution_failed(e.to_string()))?;
+                message_delivery = Some(json!({ "delivered": true }));
+            }
         }
 
         let (snapshot, timed_out) = if block {
@@ -2448,7 +2472,8 @@ impl ToolSpec for AgentEvalTool {
             "timed_out": timed_out,
             "terminal": projection.terminal,
             "context_mode": projection.context_mode,
-            "timeout_ms": timeout_ms
+            "timeout_ms": timeout_ms,
+            "message_delivery": message_delivery
         }));
         Ok(result)
     }
