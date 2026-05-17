@@ -1331,6 +1331,7 @@ pub struct SidebarSubagentSummary {
 
 #[derive(Debug, Clone)]
 pub struct SidebarAgentRow {
+    #[allow(dead_code)]
     pub id: String,
     pub name: String,
     pub role: String,
@@ -1393,8 +1394,8 @@ fn sidebar_agent_rows(app: &App) -> Vec<SidebarAgentRow> {
             .iter()
             .filter(|(id, _)| !cached_ids.contains(id.as_str()))
             .map(|(id, progress)| SidebarAgentRow {
+                name: id.clone(),
                 id: id.clone(),
-                name: progress.clone(),
                 role: "agent".to_string(),
                 status: "running".to_string(),
                 progress: Some(progress.clone()),
@@ -1497,6 +1498,7 @@ pub fn subagent_panel_lines(
             break;
         }
         let mut detail_parts = Vec::new();
+        detail_parts.push(truncate_line_to_width(&row.id, 10));
         if row.steps_taken > 0 {
             detail_parts.push(format!("{} steps", row.steps_taken));
         }
@@ -1903,7 +1905,7 @@ mod tests {
     use crate::config::Config;
     use crate::palette::PaletteMode;
     use crate::tools::plan::StepStatus;
-    use crate::tools::todo::{TodoItem, TodoStatus};
+    use crate::tools::todo::TodoStatus;
     use crate::tui::active_cell::ActiveCell;
     use crate::tui::app::{App, TaskPanelEntry, TuiOptions};
     use crate::tui::history::{
@@ -2469,8 +2471,7 @@ mod tests {
         let text = lines_to_text(&task_panel_lines(&app, 80, 8));
 
         assert!(
-            text.iter()
-                .any(|line| line.contains("[x] cargo check 1s")),
+            text.iter().any(|line| line.contains("[x] cargo check 1s")),
             "status marker and duration should stay in the row label: {text:?}"
         );
         assert!(

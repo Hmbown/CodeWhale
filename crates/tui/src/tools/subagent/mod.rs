@@ -189,9 +189,7 @@ fn slugify_agent_name(objective: &str, id: &str) -> String {
         compact.to_string()
     } else {
         // Cut at word boundary within limit
-        let end = compact[..50]
-            .rfind('-')
-            .unwrap_or(49);
+        let end = compact[..50].rfind('-').unwrap_or(49);
         compact[..=end].trim_end_matches('-').to_string()
     }
 }
@@ -3482,7 +3480,11 @@ async fn run_subagent(
     }
     let tools = tool_registry.tools_for_model(&agent_type);
     if let Some(mb) = runtime.mailbox.as_ref() {
-        let _ = mb.send(MailboxMessage::started(&agent_id, agent_type.clone(), &prompt));
+        let _ = mb.send(MailboxMessage::started(
+            &agent_id,
+            agent_type.clone(),
+            &prompt,
+        ));
     }
     emit_agent_progress(
         runtime.event_tx.as_ref(),
