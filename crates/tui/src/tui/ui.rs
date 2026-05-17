@@ -5880,7 +5880,7 @@ fn render(f: &mut Frame, app: &mut App) {
         .active_menu_reserved_rows();
         let budget = crate::tui::widgets::composer_input_rows_budget(inner.height, menu_lines);
         let (_, _, _, scroll_offset) = crate::tui::widgets::layout_input_with_scroll(
-            &input_text,
+            input_text,
             input_cursor,
             content_width,
             budget,
@@ -5889,7 +5889,7 @@ fn render(f: &mut Frame, app: &mut App) {
             1
         } else {
             // Count wrapped lines (approximation matching the render path).
-            crate::tui::widgets::wrap_input_lines_for_mouse(&input_text, content_width).len()
+            crate::tui::widgets::wrap_input_lines_for_mouse(input_text, content_width).len()
         };
         let top_padding = budget.saturating_sub(visible_lines.clamp(1, budget));
         app.viewport.last_composer_scroll_offset = scroll_offset;

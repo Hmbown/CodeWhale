@@ -677,6 +677,7 @@ impl Renderable for ComposerWidget<'_> {
                     *line_end,
                     sel_start,
                     sel_end,
+                    self.app.ui_theme.selection_bg,
                 );
                 input_lines.push(Line::from(spans));
             }
@@ -2494,8 +2495,8 @@ fn line_spans_with_selection<'a>(
     line_end: usize,
     sel_start: usize,
     sel_end: usize,
+    highlight_bg: Color,
 ) -> Vec<Span<'a>> {
-    let highlight_bg = Color::Rgb(70, 130, 220);
     let normal_style = Style::default().fg(palette::TEXT_PRIMARY);
     let sel_style = Style::default().fg(palette::TEXT_PRIMARY).bg(highlight_bg);
 

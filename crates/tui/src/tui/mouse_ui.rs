@@ -117,6 +117,8 @@ pub(crate) fn handle_composer_mouse(app: &mut App, mouse: MouseEvent) -> bool {
         MouseEventKind::Up(MouseButton::Left) => {
             if app.selection_anchor == Some(app.cursor_position) {
                 app.selection_anchor = None;
+            } else if selection_has_content(app) {
+                copy_active_selection(app);
             }
             true
         }
