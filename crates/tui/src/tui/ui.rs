@@ -19,18 +19,6 @@ use crossterm::{
 // On Windows the push/pop helpers write the escapes directly; crossterm's
 // PushKeyboardEnhancementFlags / PopKeyboardEnhancementFlags commands are
 // never referenced, so the imports are gated to avoid -D warnings failures.
-#[cfg(not(windows))]
-use crossterm::event::{
-    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
-};
-use ratatui::{
-    Frame, Terminal,
-    layout::{Constraint, Direction, Layout, Rect, Size},
-    prelude::Widget,
-    style::Style,
-    widgets::Block,
-};
-use tracing;
 use crate::audit::log_sensitive_event;
 use crate::automation_manager::{AutomationManager, AutomationSchedulerConfig, spawn_scheduler};
 use crate::client::{DeepSeekClient, build_cache_warmup_request};
@@ -80,6 +68,18 @@ use crate::tui::pager::PagerView;
 use crate::tui::persistence_actor::{self, PersistRequest};
 use crate::tui::plan_prompt::PlanPromptView;
 use crate::tui::scrolling::TranscriptScroll;
+#[cfg(not(windows))]
+use crossterm::event::{
+    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+};
+use ratatui::{
+    Frame, Terminal,
+    layout::{Constraint, Direction, Layout, Rect, Size},
+    prelude::Widget,
+    style::Style,
+    widgets::Block,
+};
+use tracing;
 // SelectionAutoscroll unused
 use crate::tui::session_picker::SessionPickerView;
 use crate::tui::shell_job_routing::{
@@ -104,8 +104,7 @@ use crate::tui::workspace_context;
 use super::app::{
     App, AppAction, AppMode, IDLE_TURN_THRESHOLD, MAX_AUTO_CONTINUE_TURNS, OnboardingState,
     QueuedMessage, ReasoningEffort, STUCK_THRESHOLD, SidebarFocus, StatusToastLevel,
-    SubmitDisposition, TaskPanelEntry, TuiOptions,
-    looks_like_slash_command_input,
+    SubmitDisposition, TaskPanelEntry, TuiOptions, looks_like_slash_command_input,
 };
 use super::approval::{
     ApprovalMode, ApprovalRequest, ApprovalView, ElevationRequest, ElevationView, ReviewDecision,

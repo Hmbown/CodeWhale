@@ -2395,7 +2395,9 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::CmdProviderDescription => {
             "Cambiar o mostrar el backend LLM activo (deepseek | nvidia-nim | ollama)"
         }
-        MessageId::CmdRecapDescription => "Imprimir un resumen estructurado del estado de la sesión",
+        MessageId::CmdRecapDescription => {
+            "Imprimir un resumen estructurado del estado de la sesión"
+        }
         MessageId::CmdQueueDescription => "Ver o editar mensajes en cola",
         MessageId::CmdRecallDescription => {
             "Buscar archivos de ciclos anteriores (BM25 sobre el texto de los mensajes)"

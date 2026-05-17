@@ -670,8 +670,11 @@ mod tests {
     #[test]
     fn fanout_started_claims_seeded_pending_slot_without_growing_grid() {
         let mut card = FanoutCard::new("fanout").with_workers(["task:a", "task:b"]);
-        let started =
-            MailboxMessage::started("agent_live", crate::tools::subagent::SubAgentType::General, "test");
+        let started = MailboxMessage::started(
+            "agent_live",
+            crate::tools::subagent::SubAgentType::General,
+            "test",
+        );
 
         assert!(apply_to_fanout(&mut card, &started));
 
@@ -685,7 +688,8 @@ mod tests {
     #[test]
     fn fanout_apply_transitions_worker_through_lifecycle() {
         let mut card = FanoutCard::new("fanout").with_workers(["w_1"]);
-        let started = MailboxMessage::started("w_1", crate::tools::subagent::SubAgentType::General, "test");
+        let started =
+            MailboxMessage::started("w_1", crate::tools::subagent::SubAgentType::General, "test");
         apply_to_fanout(&mut card, &started);
         assert_eq!(card.workers[0].status, AgentLifecycle::Running);
 
