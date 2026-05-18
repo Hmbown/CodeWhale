@@ -63,6 +63,7 @@ mod schema_migration;
 mod seam_manager;
 #[allow(dead_code)]
 mod session_failure_classifier;
+mod shell_dispatcher;
 mod session_manager;
 mod settings;
 mod skill_state;

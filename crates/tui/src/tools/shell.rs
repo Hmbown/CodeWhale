@@ -841,6 +841,13 @@ impl ShellManager {
 
         child_env::apply_to_command(&mut cmd, child_env::string_map_env(&exec_env.env));
 
+        // Disable raw mode before spawn; restore on drop regardless of
+        // success/failure/timeout (issue #1690).
+        let _ = crossterm::terminal::disable_raw_mode();
+        struct SyncRawModeGuard;
+        impl Drop for SyncRawModeGuard { fn drop(&mut self) { let _ = crossterm::terminal::enable_raw_mode(); } }
+        let _guard = SyncRawModeGuard;
+
         let mut child = cmd
             .spawn()
             .with_context(|| format!("Failed to execute: {original_command}"))?;
@@ -974,6 +981,12 @@ impl ShellManager {
             cmd.process_group(0);
         }
         install_parent_death_signal(&mut cmd);
+
+        // Disable raw mode before spawn; restore on drop (issue #1690).
+        let _ = crossterm::terminal::disable_raw_mode();
+        struct InteractiveRawModeGuard;
+        impl Drop for InteractiveRawModeGuard { fn drop(&mut self) { let _ = crossterm::terminal::enable_raw_mode(); } }
+        let _guard = InteractiveRawModeGuard;
 
         child_env::apply_to_command(&mut cmd, child_env::string_map_env(&exec_env.env));
 
