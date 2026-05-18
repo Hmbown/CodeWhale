@@ -624,12 +624,13 @@ Use `deepseek-tui features list` to inspect known flags and their effective stat
 
 `web_search` uses Bing by default and does not require an API key. DuckDuckGo
 remains selectable for users who explicitly want it, and Tavily or Bocha can be
-selected when an API-backed provider is preferred.
+selected when an API-backed provider is preferred. **Metaso** ([metaso.cn](https://metaso.cn))
+100 searches/day free quota — set `METASO_API_KEY` or `[search] api_key` for a higher quota.
 
 ```toml
 [search]
-provider = "bing" # bing | duckduckgo | tavily | bocha
-# api_key = "tvly-YOUR_KEY" # required for tavily and bocha
+provider = "bing"    # bing | duckduckgo | tavily | bocha | metaso
+# api_key = "YOUR_KEY" # required for tavily and bocha; optional for metaso (100 searches/day free quota)
 ```
 
 ## Local Media Attachments

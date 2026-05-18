@@ -1,11 +1,12 @@
 //! Web search tool backed by multiple providers: Bing HTML scrape, DuckDuckGo
-//! (HTML scrape with Bing fallback), Tavily API, and Bocha (博查) API.
+//! (HTML scrape with Bing fallback), Tavily API, Bocha (博查) API, and
+//! Metaso API (<https://metaso.cn>).
 //!
 //! This is the primary web search surface for agents. For browsing workflows
 //! (page open, click, screenshot) use a direct URL approach instead.
 //!
 //! Set `[search]` in config.toml to switch providers:
-//!   provider = "duckduckgo"  # or tavily/bocha
+//!   provider = "duckduckgo"  # or tavily/bocha/metaso
 //!   api_key = "tvly-..."
 
 use super::spec::{
@@ -25,6 +26,8 @@ const DUCKDUCKGO_HOST: &str = "html.duckduckgo.com";
 const BING_HOST: &str = "www.bing.com";
 const TAVILY_ENDPOINT: &str = "https://api.tavily.com/search";
 const BOCHA_ENDPOINT: &str = "https://api.bochaai.com/v1/ai/search";
+const METASO_ENDPOINT: &str = "https://metaso.cn/api/v1";
+const METASO_DEFAULT_API_KEY: &str = "mk-E384C1DD5E8501BB7EFE27C949AFDE5B";
 const ERROR_BODY_PREVIEW_BYTES: usize = 512;
 
 /// Returns `Ok(())` if the policy allows the call, or a `ToolError` otherwise.
@@ -196,6 +199,13 @@ impl ToolSpec for WebSearchTool {
                 check_policy(decider, "api.bochaai.com")?;
                 return self
                     .run_bocha_search(&query, max_results, timeout_ms, context)
+                    .await;
+            }
+            SearchProvider::Metaso => {
+                let decider = context.network_policy.as_ref();
+                check_policy(decider, "metaso.cn")?;
+                return self
+                    .run_metaso_search(&query, max_results, timeout_ms, context)
                     .await;
             }
             SearchProvider::Bing | SearchProvider::DuckDuckGo => {}
@@ -514,6 +524,109 @@ impl WebSearchTool {
         };
 
         ToolResult::json(&response).map_err(|e| ToolError::execution_failed(e.to_string()))
+    }
+
+    /// Search via Metaso AI Search API (<https://metaso.cn>). Falls back to
+    /// `METASO_API_KEY` env var then a built-in default key if no config key
+    /// is set.
+    async fn run_metaso_search(
+        &self,
+        query: &str,
+        max_results: usize,
+        timeout_ms: u64,
+        context: &ToolContext,
+    ) -> Result<ToolResult, ToolError> {
+        let env_key = std::env::var("METASO_API_KEY").ok();
+        let api_key = context
+            .search_api_key
+            .as_deref()
+            .or(env_key.as_deref())
+            .unwrap_or(METASO_DEFAULT_API_KEY);
+
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_millis(timeout_ms))
+            .build()
+            .map_err(|e| {
+                ToolError::execution_failed(format!("Failed to build HTTP client: {e}"))
+            })?;
+
+        let size = max_results.clamp(1, 100);
+        let payload = json!({
+            "q": query,
+            "scope": "webpage",
+            "size": size,
+        });
+
+        let resp = client
+            .post(format!("{METASO_ENDPOINT}/search"))
+            .header("Content-Type", "application/json")
+            .header("Authorization", format!("Bearer {api_key}"))
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| {
+                ToolError::execution_failed(format!("Metaso search request failed: {e}"))
+            })?;
+
+        let status = resp.status();
+        let body = resp.text().await.map_err(|e| {
+            ToolError::execution_failed(format!("Failed to read Metaso response: {e}"))
+        })?;
+
+        if !status.is_success() {
+            let msg = match status.as_u16() {
+                401 | 403 => "Metaso API key rejected — check METASO_API_KEY or set `[search] api_key` in config.toml, or get one at https://metaso.cn/search-api/playground".to_string(),
+                429 => "Metaso rate-limited — wait and retry, or get your own API key at https://metaso.cn/search-api/playground".to_string(),
+                _ => {
+                    let truncated = truncate_error_body(&body);
+                    format!("Metaso server error (HTTP {status}) — {truncated}")
+                }
+            };
+            return Err(ToolError::execution_failed(msg));
+        }
+
+        let parsed: serde_json::Value = serde_json::from_str(&body).map_err(|e| {
+            ToolError::execution_failed(format!("Failed to parse Metaso response: {e}"))
+        })?;
+
+        // Check business-logic error codes in the response body.
+        if let Some(code) = parsed.get("code").and_then(|v| v.as_i64())
+            && code != 0
+        {
+            let msg = parsed
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown error");
+            return Err(ToolError::execution_failed(match code {
+                3003 => "Metaso: daily search limit reached — set METASO_API_KEY or get one at https://metaso.cn/search-api/playground".to_string(),
+                2005 => "Metaso API key rejected — check METASO_API_KEY or set `[search] api_key` in config.toml".to_string(),
+                _ => format!("Metaso API error (code {code}: {msg})"),
+            }));
+        }
+
+        let results: Vec<WebSearchEntry> = parsed
+            .get("webpages")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flat_map(|arr| arr.iter())
+            .filter_map(|item| {
+                let title = item.get("title")?.as_str()?.to_string();
+                let url = item.get("link")?.as_str()?.to_string();
+                let snippet = item
+                    .get("snippet")
+                    .or_else(|| item.get("summary"))
+                    .and_then(|s| s.as_str())
+                    .map(|s| s.to_string());
+                Some(WebSearchEntry {
+                    title,
+                    url,
+                    snippet,
+                })
+            })
+            .take(size)
+            .collect();
+
+        search_tool_result(query.to_string(), "metaso", results, None)
     }
 }
 
@@ -1208,6 +1321,32 @@ mod tests {
         assert!(
             msg.contains("Bocha") && msg.contains("API key"),
             "error must name the provider and missing key; got `{msg}`"
+        );
+    }
+
+    #[tokio::test]
+    async fn metaso_provider_uses_built_in_key_when_no_config_key_set() {
+        // Unlike Tavily/Bocha, Metaso falls back to a built-in default, so
+        // the call should NOT return an API-key-related error — it should
+        // either succeed or fail with a network-level error, but never a
+        // missing-key error.
+        use crate::config::SearchProvider;
+        use crate::tools::spec::{ToolContext, ToolSpec};
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut ctx = ToolContext::new(tmp.path().to_path_buf());
+        ctx.search_provider = SearchProvider::Metaso;
+        ctx.search_api_key = None;
+        let result = WebSearchTool
+            .execute(json!({"query": "anything"}), &ctx)
+            .await;
+        let msg = match &result {
+            Ok(res) => format!("{res:?}"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            !msg.contains("API key"),
+            "should not complain about missing API key (built-in default); got `{msg}`"
         );
     }
 }
