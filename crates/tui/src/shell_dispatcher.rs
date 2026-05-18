@@ -192,8 +192,7 @@ impl ShellDispatcher {
     /// 2. `/bin/sh` fallback.
     pub fn detect() -> Self {
         let kind = Self::detect_shell();
-        tracing::info!(target: "shell_dispatcher", shell = ?kind,
-            "ShellDispatcher detected {:?}", kind);
+        log_init(&kind);
         ShellDispatcher { kind }
     }
 
