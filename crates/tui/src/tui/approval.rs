@@ -179,14 +179,16 @@ impl ApprovalRequest {
         let mut details = Vec::new();
         match self.category {
             ToolCategory::Shell => {
-                if let Some(cmd) = param_preview(&self.params, &["cmd", "command"], 120) {
+                if let Some(cmd) = param_preview(&self.params, &["command", "cmd"], 120) {
                     details.push(("Command".into(), cmd));
                 }
                 if let Some(dir) = param_preview(&self.params, &["workdir", "cwd"], 48) {
-                    let is_current = self
-                        .workspace
-                        .as_ref()
-                        .is_some_and(|ws| std::path::Path::new(&dir) == std::path::Path::new(ws));
+                    let is_current = self.workspace.as_ref().is_some_and(|ws| {
+                        let a = std::path::Path::new(&dir);
+                        let b = std::path::Path::new(ws);
+                        a.canonicalize().unwrap_or_else(|_| a.to_path_buf())
+                            == b.canonicalize().unwrap_or_else(|_| b.to_path_buf())
+                    });
                     let label = if is_current {
                         "(current)".to_string()
                     } else {
@@ -225,6 +227,28 @@ impl ApprovalRequest {
             }
         }
         details
+    }
+
+    /// Like [`prominent_details`] but with localized labels.
+    pub fn prominent_details_for_locale(&self, locale: Locale) -> Vec<(String, String)> {
+        self.prominent_details()
+            .into_iter()
+            .map(|(label, value)| {
+                let localized = match locale {
+                    Locale::ZhHans => match label.as_str() {
+                        "Command" => "命令",
+                        "Dir" => "目录",
+                        "File" => "文件",
+                        "Path" => "路径",
+                        "Target" => "目标",
+                        "Input" => "输入",
+                        _ => &label,
+                    },
+                    _ => &label,
+                };
+                (localized.to_string(), value)
+            })
+            .collect()
     }
 }
 
@@ -1485,7 +1509,7 @@ mod tests {
             joined.contains("文件写入"),
             "missing zh category:\n{joined}"
         );
-        assert!(joined.contains("File"), "missing file label:\n{joined}");
+        assert!(joined.contains("文件"), "missing zh file label:\n{joined}");
         assert!(
             joined.contains("src/main.rs"),
             "missing file path:\n{joined}"

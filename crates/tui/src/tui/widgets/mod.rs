@@ -1121,7 +1121,7 @@ impl Renderable for ApprovalWidget<'_> {
         lines.push(Line::from(""));
         // Prominent key details (command, path, target) are the default
         // body. Full JSON stays behind `v`.
-        let details = self.request.prominent_details();
+        let details = self.request.prominent_details_for_locale(locale);
         if details.is_empty() {
             lines.push(Line::from(vec![
                 Span::raw("  "),
@@ -1429,11 +1429,12 @@ fn label_tool(locale: Locale) -> &'static str {
 fn confirm_label(locale: Locale, detail_label: &str) -> String {
     match locale {
         Locale::ZhHans => match detail_label {
-            "Command" => "确认命令：".to_string(),
-            "File" => "确认文件：".to_string(),
-            "Dir" => "确认目录：".to_string(),
-            "Target" => "确认目标：".to_string(),
-            "Path" => "确认路径：".to_string(),
+            "Command" | "命令" => "确认命令：".to_string(),
+            "File" | "文件" => "确认文件：".to_string(),
+            "Dir" | "目录" => "确认目录：".to_string(),
+            "Target" | "目标" => "确认目标：".to_string(),
+            "Path" | "路径" => "确认路径：".to_string(),
+            "Input" | "输入" => "确认输入：".to_string(),
             _ => format!("确认{detail_label}："),
         },
         _ => format!("Confirm {}: ", detail_label.to_ascii_lowercase()),
