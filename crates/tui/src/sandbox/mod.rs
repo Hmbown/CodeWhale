@@ -81,6 +81,7 @@ impl CommandSpec {
     pub fn shell(command: &str, cwd: PathBuf, timeout: Duration) -> Self {
         let dispatcher = crate::shell_dispatcher::global_dispatcher();
         let kind = dispatcher.kind();
+        crate::shell_dispatcher::log_exec(kind, command);
 
         #[cfg(windows)]
         let (program, args) = {

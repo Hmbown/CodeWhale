@@ -132,7 +132,7 @@ fn log_init(kind: &ShellKind) {
     log_dispatcher!("detect: {:?}", kind);
 }
 
-fn log_exec(kind: &ShellKind, command: &str) {
+pub(crate) fn log_exec(kind: &ShellKind, command: &str) {
     log_dispatcher!("exec via {:?}: {}", kind, command);
 }
 
