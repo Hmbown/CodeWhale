@@ -61,6 +61,7 @@ mod runtime_threads;
 mod sandbox;
 mod schema_migration;
 mod seam_manager;
+mod shell_dispatcher;
 mod session_manager;
 mod settings;
 mod skill_state;
