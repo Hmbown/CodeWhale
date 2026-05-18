@@ -129,8 +129,8 @@ impl ShellDispatcher {
     /// 2. `/bin/sh` fallback.
     pub fn detect() -> Self {
         let kind = Self::detect_shell();
-        use crate::logging;
-        logging::info(format!("ShellDispatcher: detected {:?}", kind));
+        tracing::info!(target: "shell_dispatcher", shell = ?kind,
+            "ShellDispatcher detected {:?}", kind);
         ShellDispatcher { kind }
     }
 
@@ -202,6 +202,9 @@ impl ShellDispatcher {
         cwd: &std::path::Path,
     ) -> Result<String, anyhow::Error> {
         use anyhow::Context;
+
+        tracing::info!(target: "shell_dispatcher", shell = ?self.kind, command = %shell_command,
+            "exec_shell via {:?}: {}", self.kind, shell_command);
 
         // Save terminal state — crossterm raw mode must be off while the
         // child process owns the console, otherwise Windows loses
