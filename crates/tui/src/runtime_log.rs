@@ -140,7 +140,8 @@ pub fn init() -> Result<TuiLogGuard> {
     // Best-effort: if a subscriber is already set (e.g., re-entry, or a
     // host process installed one), we skip ours rather than panic. The
     // stderr redirect below still happens.
-    let _ = tracing::subscriber::set_global_default(subscriber);
+    tracing::subscriber::set_global_default(subscriber)
+        .unwrap_or_else(|_| eprintln!("runtime_log: global subscriber already set — logs go to previous subscriber"));
 
     #[cfg(unix)]
     let saved_stderr_fd = redirect_stderr_to(&file).ok();
