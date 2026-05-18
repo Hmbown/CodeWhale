@@ -1514,19 +1514,40 @@ fn footer_controls(locale: Locale) -> &'static str {
 /// metadata. The header summarises the variant — `+N -M` for normal diffs,
 /// a "new file" or "no change" hint for the degenerate cases — so the user
 /// always knows what's behind the preview window even when it's empty.
+/// Build the rendered body + header for the approval popup diff area.
+///
+/// The popup uses the compact renderer (no summary / `--- +++` lines) so a
+/// 10-row preview window shows a few real lines of code instead of just
+/// metadata. The header summarises the variant — `+N -M` for normal diffs,
+/// a "new file" or "no change" hint for the degenerate cases — so the user
+/// always knows what's behind the preview window even when it's empty.
+///
+/// Body lines are indented by two spaces to line up with the rest of the
+/// popup body (the popup margin) so the hunk header and code rows visually
+/// align with the `File` / option rows above and below.
 fn build_diff_panel(
     preview: &ApprovalDiffPreview,
     width: u16,
     locale: Locale,
 ) -> (String, Vec<Line<'static>>) {
     use crate::tui::diff_render::render_diff_compact;
+    // Reserve 2 columns for the indent we prepend below so the renderer's
+    // wrapping decisions agree with the visible width.
+    let body_width = width.saturating_sub(2).max(20);
+    let indent = || Span::raw("  ");
+    let indent_lines = |mut lines: Vec<Line<'static>>| -> Vec<Line<'static>> {
+        for line in &mut lines {
+            line.spans.insert(0, indent());
+        }
+        lines
+    };
     match preview {
         ApprovalDiffPreview::Diff {
             text,
             added,
             deleted,
         } => {
-            let lines = render_diff_compact(text, width);
+            let lines = indent_lines(render_diff_compact(text, body_width));
             let header = format!(
                 "{} +{} -{}",
                 diff_preview_word(locale),
@@ -1536,24 +1557,38 @@ fn build_diff_panel(
             (header, lines)
         }
         ApprovalDiffPreview::NewFile { path: _, content } => {
-            // Render the content as additions so the user sees the proposed
-            // file body with `+` gutters / colour. We synthesize a hunk so
-            // line numbers start at 1.
-            let line_count = content.lines().count().max(1);
-            let synthetic = format!("@@ -0,0 +1,{line_count} @@\n");
+            // Render the proposed content directly as added lines so the
+            // user sees the body with the standard `+` gutter + new-side
+            // line numbers. No synthetic hunk header — the panel header
+            // already says "New file +N", and the hunk row would just
+            // duplicate metadata while costing one of the few rows we have.
             let body = content
                 .lines()
-                .map(|l| format!("+{l}"))
-                .collect::<Vec<_>>()
-                .join("\n");
-            let combined = format!("{synthetic}{body}");
-            let lines = render_diff_compact(&combined, width);
+                .enumerate()
+                .map(|(idx, line)| {
+                    // Reuse the diff renderer by feeding a synthetic line
+                    // wearing the `+` marker, but the renderer doesn't see
+                    // a hunk header so we build the styled line by hand
+                    // to keep colour + line numbers consistent.
+                    let prefix = format!("{:>4} {:>4} + ", "", idx + 1);
+                    Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled(prefix, Style::default().fg(palette::TEXT_MUTED)),
+                        Span::styled(
+                            line.to_string(),
+                            Style::default()
+                                .fg(palette::DIFF_ADDED)
+                                .bg(palette::DIFF_ADDED_BG),
+                        ),
+                    ])
+                })
+                .collect::<Vec<_>>();
             let header = format!(
                 "{} +{}",
                 new_file_word(locale),
                 content.lines().count()
             );
-            (header, lines)
+            (header, body)
         }
         ApprovalDiffPreview::NoChange { path: _ } => {
             let msg = no_change_text(locale);
@@ -1574,7 +1609,7 @@ fn build_diff_panel(
                     .fg(palette::STATUS_WARNING)
                     .add_modifier(Modifier::BOLD),
             ))];
-            lines.extend(render_diff_compact(text, width));
+            lines.extend(indent_lines(render_diff_compact(text, body_width)));
             (missing_match_header(locale).to_string(), lines)
         }
     }

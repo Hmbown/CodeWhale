@@ -232,10 +232,14 @@ impl ApprovalRequest {
         let mut details = Vec::new();
         match self.category {
             ToolCategory::Shell => {
-                if let Some(cmd) = param_preview(&self.params, &["command", "cmd"], 120) {
+                // Shell commands stay verbatim — the popup body uses
+                // `Paragraph::wrap`, so it folds long lines on its own and
+                // an in-band `...` truncation just hides the tail of the
+                // command the user is being asked to approve.
+                if let Some(cmd) = param_text(&self.params, &["command", "cmd"]) {
                     details.push(("Command".into(), cmd));
                 }
-                if let Some(dir) = param_preview(&self.params, &["workdir", "cwd"], 48) {
+                if let Some(dir) = param_preview(&self.params, &["workdir", "cwd"], 96) {
                     let is_current = self.workspace.as_ref().is_some_and(|ws| {
                         let a = std::path::Path::new(&dir);
                         let b = std::path::Path::new(ws);
@@ -252,19 +256,19 @@ impl ApprovalRequest {
             }
             ToolCategory::FileWrite => {
                 if let Some(path) =
-                    param_preview(&self.params, &["path", "target", "destination"], 96)
+                    param_preview(&self.params, &["path", "target", "destination"], 200)
                 {
                     details.push(("File".into(), path));
                 }
             }
             ToolCategory::Safe => {
-                if let Some(path) = param_preview(&self.params, &["path", "ref_id", "uri"], 96) {
+                if let Some(path) = param_preview(&self.params, &["path", "ref_id", "uri"], 200) {
                     details.push(("Path".into(), path));
                 }
             }
             ToolCategory::Network => {
                 if let Some(target) =
-                    param_preview(&self.params, &["url", "q", "query", "location", "repo"], 96)
+                    param_preview(&self.params, &["url", "q", "query", "location", "repo"], 200)
                 {
                     details.push(("Target".into(), target));
                 }
@@ -273,7 +277,7 @@ impl ApprovalRequest {
                 if let Some(val) = param_preview(
                     &self.params,
                     &["command", "path", "url", "q", "query", "ref_id"],
-                    96,
+                    200,
                 ) {
                     details.push(("Input".into(), val));
                 }
@@ -393,6 +397,22 @@ pub fn classify_risk(tool_name: &str, category: ToolCategory, params: &Value) ->
     }
 }
 
+/// Like [`param_preview`] but never truncates the string value. Used for
+/// shell commands so the popup shows what's actually being run instead of
+/// `...`-eliding the dangerous tail. The popup body uses `Paragraph::wrap`
+/// so long values fold across multiple visual lines on their own.
+fn param_text(params: &Value, keys: &[&str]) -> Option<String> {
+    let Value::Object(map) = params else {
+        return None;
+    };
+    for key in keys {
+        if let Some(Value::String(text)) = map.get(*key) {
+            return Some(text.clone());
+        }
+    }
+    None
+}
+
 /// Resolve a tool-supplied path against the workspace when it's relative.
 /// Absolute paths are returned unchanged so `write_file` to `/etc/foo` still
 /// shows the right diff. The original string flows through if there's no
@@ -409,20 +429,34 @@ fn resolve_workspace_path(raw: &str, workspace: Option<&str>) -> std::path::Path
     }
 }
 
-/// Count `+` and `-` lines in a unified diff, ignoring the `+++/---` headers.
+/// Count `+` and `-` lines in a unified diff. Delegates to the shared
+/// `summarize_diff` so the popup header reads the same `+N -M` totals
+/// the detail pager shows in its summary section — keeps the two views
+/// agreeing on what "changed" means even for tricky inputs (no-newline
+/// markers, multi-file patches, etc.).
 fn count_diff_changes(diff: &str) -> (usize, usize) {
-    let mut added = 0usize;
-    let mut deleted = 0usize;
-    for line in diff.lines() {
-        if line.starts_with("+++") || line.starts_with("---") {
-            continue;
+    let summaries = crate::tui::diff_render::summarize_diff(diff);
+    if summaries.is_empty() {
+        // summarize_diff only collects files that have a `diff --git` or
+        // `+++` header. For single-file fragments produced by
+        // `make_unified_diff` we fall back to a plain line scan so the
+        // header still reflects the change.
+        let mut added = 0usize;
+        let mut deleted = 0usize;
+        for line in diff.lines() {
+            if line.starts_with("+++") || line.starts_with("---") {
+                continue;
+            }
+            if line.starts_with('+') {
+                added += 1;
+            } else if line.starts_with('-') {
+                deleted += 1;
+            }
         }
-        if line.starts_with('+') {
-            added += 1;
-        } else if line.starts_with('-') {
-            deleted += 1;
-        }
+        return (added, deleted);
     }
+    let added = summaries.iter().map(|s| s.added).sum();
+    let deleted = summaries.iter().map(|s| s.deleted).sum();
     (added, deleted)
 }
 
@@ -1367,6 +1401,25 @@ mod tests {
         assert_eq!(details[0].1, "npm run build");
         assert_eq!(details[1].0, "Dir");
         assert_eq!(details[1].1, "/home/user");
+    }
+
+    #[test]
+    fn test_prominent_details_shell_does_not_truncate_long_command() {
+        // Regression: shell commands used to be hard-clipped at 120 chars
+        // with a trailing `…`, hiding the dangerous tail of long pipelines
+        // (the part where `rm -rf` or `>` redirects usually live). The
+        // popup body wraps long lines via `Paragraph::wrap`, so we now
+        // pass the command through verbatim.
+        let cmd = format!("printf '{}\n' > /tmp/x && cat /tmp/x", "x".repeat(300));
+        let params = json!({"command": cmd, "cwd": "/home/user"});
+        let request =
+            ApprovalRequest::new("test-id", "exec_shell", "Run shell", &params, "test_key");
+        let details = request.prominent_details();
+        assert_eq!(details[0].0, "Command");
+        assert_eq!(
+            details[0].1, cmd,
+            "shell command must be returned verbatim, no `…` truncation",
+        );
     }
 
     #[test]
