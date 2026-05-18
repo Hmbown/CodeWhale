@@ -135,6 +135,7 @@ pub enum HistoryCell {
 #[derive(Debug, Clone)]
 pub enum SubAgentCell {
     Delegate(crate::tui::widgets::agent_card::DelegateCard),
+    DelegateGroup(crate::tui::widgets::agent_card::DelegateGroupCard),
     Fanout(crate::tui::widgets::agent_card::FanoutCard),
 }
 
@@ -142,6 +143,7 @@ impl SubAgentCell {
     pub fn lines(&self, width: u16) -> Vec<Line<'static>> {
         match self {
             SubAgentCell::Delegate(card) => card.render_lines(width),
+            SubAgentCell::DelegateGroup(card) => card.render_lines(width),
             SubAgentCell::Fanout(card) => card.render_lines(width),
         }
     }

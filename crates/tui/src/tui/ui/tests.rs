@@ -2266,6 +2266,139 @@ fn subagent_started_uses_task_description_when_mailbox_only_has_role() {
 }
 
 #[test]
+fn sibling_subagents_render_as_claude_style_group() {
+    let mut app = create_test_app();
+    handle_tool_call_started(
+        &mut app,
+        "task-a",
+        "Task",
+        &serde_json::json!({
+            "description": "Explore backend driver linker issue",
+            "subagent_type": "explore",
+            "prompt": "Inspect linker issue"
+        }),
+    );
+    handle_subagent_mailbox(
+        &mut app,
+        1,
+        &crate::tools::subagent::MailboxMessage::started(
+            "agent_a",
+            crate::tools::subagent::SubAgentType::Explore,
+            "explore",
+        ),
+    );
+    handle_tool_call_started(
+        &mut app,
+        "task-b",
+        "Task",
+        &serde_json::json!({
+            "description": "Explore DOM reconcile key-diffing",
+            "subagent_type": "explore",
+            "prompt": "Inspect DOM reconcile key-diffing"
+        }),
+    );
+    handle_subagent_mailbox(
+        &mut app,
+        2,
+        &crate::tools::subagent::MailboxMessage::started(
+            "agent_b",
+            crate::tools::subagent::SubAgentType::Explore,
+            "explore",
+        ),
+    );
+    handle_subagent_mailbox(
+        &mut app,
+        3,
+        &crate::tools::subagent::MailboxMessage::ToolCallStarted {
+            agent_id: "agent_a".to_string(),
+            tool_name: "exec_shell".to_string(),
+            step: 1,
+        },
+    );
+    handle_subagent_mailbox(
+        &mut app,
+        4,
+        &crate::tools::subagent::MailboxMessage::token_usage(
+            "agent_a",
+            "deepseek-v4-flash",
+            crate::models::Usage {
+                input_tokens: 27_000,
+                output_tokens: 1_000,
+                ..Default::default()
+            },
+        ),
+    );
+
+    let active = app.active_cell.as_ref().expect("active cell exists");
+    assert_eq!(active.entries().len(), 1);
+    let Some(HistoryCell::SubAgent(crate::tui::history::SubAgentCell::DelegateGroup(card))) =
+        active.entries().first()
+    else {
+        panic!("expected delegate group card");
+    };
+
+    let rendered = card
+        .render_lines(120)
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("Running 2 agents"), "{rendered}");
+    assert!(
+        rendered.contains("Explore backend driver linker issue"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("1 tool use"), "{rendered}");
+    assert!(rendered.contains("28.0k tokens"), "{rendered}");
+    assert!(
+        !rendered.contains("Task("),
+        "Claude-style group should not repeat Task headers: {rendered}"
+    );
+
+    handle_subagent_mailbox(
+        &mut app,
+        5,
+        &crate::tools::subagent::MailboxMessage::Completed {
+            agent_id: "agent_a".to_string(),
+            summary: "Done".to_string(),
+        },
+    );
+    handle_subagent_mailbox(
+        &mut app,
+        6,
+        &crate::tools::subagent::MailboxMessage::Completed {
+            agent_id: "agent_b".to_string(),
+            summary: "Done".to_string(),
+        },
+    );
+
+    let active = app.active_cell.as_ref().expect("active cell exists");
+    let Some(HistoryCell::SubAgent(crate::tui::history::SubAgentCell::DelegateGroup(card))) =
+        active.entries().first()
+    else {
+        panic!("expected delegate group card");
+    };
+    let rendered = card
+        .render_lines(120)
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("2 Explore agents finished"), "{rendered}");
+    assert!(rendered.contains("Done"), "{rendered}");
+}
+
+#[test]
 fn agent_eval_started_uses_existing_subagent_label_not_agent_id() {
     let mut app = create_test_app();
     handle_tool_call_started(

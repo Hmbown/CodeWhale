@@ -8,7 +8,7 @@ use crate::tui::app::{App, AppMode, TaskPanelEntry};
 use crate::tui::history::{HistoryCell, SubAgentCell, summarize_tool_output};
 use crate::tui::pager::PagerView;
 use crate::tui::widgets::agent_card::{
-    AgentLifecycle, DelegateCard, FanoutCard, apply_to_delegate, apply_to_fanout,
+    AgentLifecycle, DelegateCard, DelegateGroupCard, FanoutCard, apply_to_delegate, apply_to_fanout,
 };
 
 pub(super) fn running_agent_count(app: &App) -> usize {
@@ -92,6 +92,7 @@ pub(super) fn sort_subagents_in_place(agents: &mut [SubAgentResult]) {
 fn subagent_cell_matches_agent(cell: &HistoryCell, agent_id: &str) -> bool {
     match cell {
         HistoryCell::SubAgent(SubAgentCell::Delegate(card)) => card.agent_id == agent_id,
+        HistoryCell::SubAgent(SubAgentCell::DelegateGroup(card)) => card.contains_agent(agent_id),
         HistoryCell::SubAgent(SubAgentCell::Fanout(card)) => card
             .workers
             .iter()
@@ -120,6 +121,21 @@ fn find_subagent_card_index(app: &App, agent_id: &str) -> Option<usize> {
             if subagent_cell_matches_agent(cell, agent_id) {
                 return Some(base + offset);
             }
+        }
+    }
+    None
+}
+
+fn find_active_delegate_container_index(app: &App) -> Option<usize> {
+    let active = app.active_cell.as_ref()?;
+    let base = app.history.len();
+    for (offset, cell) in active.entries().iter().enumerate().rev() {
+        if matches!(
+            cell,
+            HistoryCell::SubAgent(SubAgentCell::Delegate(_))
+                | HistoryCell::SubAgent(SubAgentCell::DelegateGroup(_))
+        ) {
+            return Some(base + offset);
         }
     }
     None
@@ -168,14 +184,11 @@ fn push_subagent_card(app: &mut App, card: SubAgentCell) -> usize {
 /// allocating a `DelegateCard` or `FanoutCard` on first sight (issue #128).
 pub(super) fn handle_subagent_mailbox(app: &mut App, seq: u64, message: &MailboxMessage) {
     // Accumulate sub-agent token costs for the real-time footer counter (#166).
-    if let MailboxMessage::TokenUsage { model, usage, .. } = message {
-        if app.session.subagent_cost_event_seqs.insert(seq)
-            && let Some(cost) =
-                crate::pricing::calculate_turn_cost_estimate_from_usage(model, usage)
-        {
-            app.accrue_subagent_cost_estimate(cost);
-        }
-        return; // No card visual change needed; the footer handles display.
+    if let MailboxMessage::TokenUsage { model, usage, .. } = message
+        && app.session.subagent_cost_event_seqs.insert(seq)
+        && let Some(cost) = crate::pricing::calculate_turn_cost_estimate_from_usage(model, usage)
+    {
+        app.accrue_subagent_cost_estimate(cost);
     }
 
     // Resolve (or allocate) the target cell for this envelope. ChildSpawned
@@ -202,6 +215,7 @@ pub(super) fn handle_subagent_mailbox(app: &mut App, seq: u64, message: &Mailbox
             Some(HistoryCell::SubAgent(SubAgentCell::Delegate(card))) => {
                 apply_to_delegate(card, message)
             }
+            Some(HistoryCell::SubAgent(SubAgentCell::DelegateGroup(card))) => card.apply(message),
             Some(HistoryCell::SubAgent(SubAgentCell::Fanout(card))) => {
                 apply_to_fanout(card, message)
             }
@@ -250,8 +264,28 @@ pub(super) fn handle_subagent_mailbox(app: &mut App, seq: u64, message: &Mailbox
         let objective_summary = summarize_tool_output(objective);
         let task_summary =
             delegate_task_summary_from_pending_label(app, agent_type, &objective_summary);
-        let card = DelegateCard::new(agent_id.clone(), agent_type.clone(), task_summary);
-        let idx = push_subagent_card(app, SubAgentCell::Delegate(card));
+        let idx = if let Some(idx) = find_active_delegate_container_index(app) {
+            if let Some(cell) = app.cell_at_virtual_index_mut(idx) {
+                match cell {
+                    HistoryCell::SubAgent(SubAgentCell::Delegate(card)) => {
+                        let existing = card.clone();
+                        let mut group = DelegateGroupCard::new();
+                        group.push_card(existing);
+                        group.push_started(agent_id.clone(), agent_type.clone(), task_summary);
+                        *cell = HistoryCell::SubAgent(SubAgentCell::DelegateGroup(group));
+                    }
+                    HistoryCell::SubAgent(SubAgentCell::DelegateGroup(card)) => {
+                        card.push_started(agent_id.clone(), agent_type.clone(), task_summary);
+                    }
+                    _ => {}
+                }
+            }
+            idx
+        } else {
+            let mut card = DelegateCard::new(agent_id.clone(), agent_type.clone(), task_summary);
+            card.status = AgentLifecycle::Running;
+            push_subagent_card(app, SubAgentCell::Delegate(card))
+        };
         app.subagent_card_index.insert(agent_id, idx);
         // Single delegate consumes the pending dispatch label so a follow-on
         // tool call doesn't accidentally inherit it.

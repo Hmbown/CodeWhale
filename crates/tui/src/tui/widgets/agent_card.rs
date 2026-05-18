@@ -17,6 +17,7 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use crate::models::Usage;
 use crate::palette;
 use crate::tools::subagent::MailboxMessage;
 use crate::tui::widgets::tool_card::{ToolFamily, family_glyph, family_label};
@@ -71,6 +72,8 @@ pub struct DelegateCard {
     pub agent_type: String,
     pub status: AgentLifecycle,
     pub summary: Option<String>,
+    pub tool_uses: u32,
+    pub token_count: u64,
     task_summary: String,
     actions: Vec<String>,
     truncated: bool,
@@ -88,6 +91,8 @@ impl DelegateCard {
             agent_type: agent_type.into(),
             status: AgentLifecycle::Pending,
             summary: None,
+            tool_uses: 0,
+            token_count: 0,
             task_summary: task_summary.into(),
             actions: Vec::new(),
             truncated: false,
@@ -102,6 +107,17 @@ impl DelegateCard {
             self.actions.remove(0);
             self.truncated = true;
         }
+    }
+
+    pub fn record_tool_use(&mut self) {
+        self.tool_uses = self.tool_uses.saturating_add(1);
+    }
+
+    pub fn record_token_usage(&mut self, usage: &Usage) {
+        self.token_count = self
+            .token_count
+            .saturating_add(u64::from(usage.input_tokens))
+            .saturating_add(u64::from(usage.output_tokens));
     }
 
     #[must_use]
@@ -163,6 +179,123 @@ impl DelegateCard {
     #[must_use]
     pub fn display_label(&self) -> String {
         delegate_display_label(&self.task_summary, &self.agent_type, &self.agent_id)
+    }
+
+    fn status_line(&self) -> String {
+        match self.status {
+            AgentLifecycle::Completed => "Done".to_string(),
+            AgentLifecycle::Failed => self.summary.clone().unwrap_or_else(|| "Failed".to_string()),
+            AgentLifecycle::Cancelled => "Cancelled".to_string(),
+            AgentLifecycle::Pending => "Pending".to_string(),
+            AgentLifecycle::Running => self
+                .actions
+                .last()
+                .cloned()
+                .unwrap_or_else(|| "Working".to_string()),
+        }
+    }
+}
+
+/// Claude Code-style aggregate card for sibling `Task` / `agent_open` workers.
+#[derive(Debug, Clone, Default)]
+pub struct DelegateGroupCard {
+    pub agents: Vec<DelegateCard>,
+}
+
+impl DelegateGroupCard {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[must_use]
+    pub fn contains_agent(&self, agent_id: &str) -> bool {
+        self.agents.iter().any(|agent| agent.agent_id == agent_id)
+    }
+
+    pub fn push_started(
+        &mut self,
+        agent_id: impl Into<String>,
+        agent_type: impl Into<String>,
+        task_summary: impl Into<String>,
+    ) {
+        let agent_id = agent_id.into();
+        if self.contains_agent(&agent_id) {
+            return;
+        }
+        let mut card = DelegateCard::new(agent_id, agent_type, task_summary);
+        card.status = AgentLifecycle::Running;
+        self.agents.push(card);
+    }
+
+    pub fn push_card(&mut self, card: DelegateCard) {
+        if !self.contains_agent(&card.agent_id) {
+            self.agents.push(card);
+        }
+    }
+
+    pub fn apply(&mut self, msg: &MailboxMessage) -> bool {
+        let agent_id = msg.agent_id();
+        let Some(card) = self
+            .agents
+            .iter_mut()
+            .find(|card| card.agent_id == agent_id)
+        else {
+            return false;
+        };
+        apply_to_delegate(card, msg)
+    }
+
+    #[must_use]
+    pub fn display_label_for(&self, agent_id: &str) -> Option<String> {
+        self.agents
+            .iter()
+            .find(|agent| agent.agent_id == agent_id)
+            .map(DelegateCard::display_label)
+    }
+
+    #[must_use]
+    pub fn has_live_motion(&self) -> bool {
+        self.agents.iter().any(|agent| {
+            matches!(
+                agent.status,
+                AgentLifecycle::Pending | AgentLifecycle::Running
+            )
+        })
+    }
+
+    #[must_use]
+    pub fn render_lines(&self, width: u16) -> Vec<Line<'static>> {
+        if self.agents.is_empty() {
+            return vec![Line::from(Span::styled(
+                "Running 0 agents...",
+                Style::default().fg(palette::TEXT_MUTED),
+            ))];
+        }
+
+        let mut lines = Vec::new();
+        let finished: Vec<&DelegateCard> = self
+            .agents
+            .iter()
+            .filter(|agent| agent.status.is_terminal())
+            .collect();
+        let running: Vec<&DelegateCard> = self
+            .agents
+            .iter()
+            .filter(|agent| !agent.status.is_terminal())
+            .collect();
+
+        if !finished.is_empty() {
+            render_delegate_group_section(&mut lines, &finished, true, width);
+        }
+        if !finished.is_empty() && !running.is_empty() {
+            lines.push(Line::from(""));
+        }
+        if !running.is_empty() {
+            render_delegate_group_section(&mut lines, &running, false, width);
+        }
+
+        lines
     }
 }
 
@@ -431,6 +564,139 @@ fn delegate_display_label(task_summary: &str, agent_type: &str, agent_id: &str) 
     "sub-agent".to_string()
 }
 
+fn render_delegate_group_section(
+    lines: &mut Vec<Line<'static>>,
+    agents: &[&DelegateCard],
+    finished: bool,
+    width: u16,
+) {
+    let status = if finished {
+        AgentLifecycle::Completed
+    } else {
+        AgentLifecycle::Running
+    };
+    let header_color = status.color();
+    let glyph = if finished { '\u{25CF}' } else { '\u{25D0}' };
+    let title = if finished {
+        let role = common_agent_type_label(agents);
+        format!(
+            "{}{} {} finished (Ctrl+O to expand)",
+            agents.len(),
+            role.as_ref()
+                .map(|role| format!(" {role}"))
+                .unwrap_or_default(),
+            plural_agent(agents.len())
+        )
+    } else {
+        format!(
+            "Running {} {}... (Ctrl+O to expand)",
+            agents.len(),
+            plural_agent(agents.len())
+        )
+    };
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!("{glyph} "),
+            Style::default()
+                .fg(header_color)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            title,
+            Style::default()
+                .fg(header_color)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+
+    let body_budget = usize::from(width).saturating_sub(8).max(24);
+    for (idx, agent) in agents.iter().enumerate() {
+        let last = idx + 1 == agents.len();
+        let branch = if last { "  \u{2514} " } else { "  \u{251C} " };
+        let child_branch = if last {
+            "    \u{2514} "
+        } else {
+            "  \u{2502} \u{2514} "
+        };
+        lines.push(Line::from(vec![
+            Span::styled(branch.to_string(), Style::default().fg(palette::TEXT_DIM)),
+            Span::styled(
+                truncate_action(&agent_row_title(agent), body_budget),
+                Style::default()
+                    .fg(palette::TEXT_PRIMARY)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled(
+                child_branch.to_string(),
+                Style::default().fg(palette::TEXT_DIM),
+            ),
+            Span::styled(
+                truncate_action(&agent.status_line(), body_budget),
+                Style::default().fg(agent.status.color()),
+            ),
+        ]));
+    }
+}
+
+fn agent_row_title(agent: &DelegateCard) -> String {
+    let mut row = agent.display_label();
+    row.push_str(&format!(
+        " \u{00B7} {} {}",
+        agent.tool_uses,
+        if agent.tool_uses == 1 {
+            "tool use"
+        } else {
+            "tool uses"
+        }
+    ));
+    if agent.token_count > 0 {
+        row.push_str(&format!(
+            " \u{00B7} {} tokens",
+            compact_token_count(agent.token_count)
+        ));
+    }
+    row
+}
+
+fn compact_token_count(tokens: u64) -> String {
+    if tokens >= 1_000_000 {
+        format!("{:.1}M", tokens as f64 / 1_000_000.0)
+    } else if tokens >= 1_000 {
+        format!("{:.1}k", tokens as f64 / 1_000.0)
+    } else {
+        tokens.to_string()
+    }
+}
+
+fn common_agent_type_label(agents: &[&DelegateCard]) -> Option<String> {
+    let first = agents.first()?.agent_type.trim();
+    if first.is_empty()
+        || !agents
+            .iter()
+            .all(|agent| agent.agent_type.trim().eq_ignore_ascii_case(first))
+    {
+        return None;
+    }
+    Some(agent_type_label(first).to_string())
+}
+
+fn agent_type_label(agent_type: &str) -> &str {
+    match agent_type.trim().to_ascii_lowercase().as_str() {
+        "explore" | "explorer" => "Explore",
+        "implementer" | "implement" => "Implement",
+        "verifier" | "verify" => "Verify",
+        "review" | "reviewer" => "Review",
+        "planner" | "plan" => "Plan",
+        _ => "General",
+    }
+}
+
+fn plural_agent(count: usize) -> &'static str {
+    if count == 1 { "agent" } else { "agents" }
+}
+
 fn truncate_action(text: &str, max: usize) -> String {
     let trimmed = text.trim();
     if trimmed.chars().count() <= max {
@@ -460,6 +726,7 @@ pub fn apply_to_delegate(card: &mut DelegateCard, msg: &MailboxMessage) -> bool 
             }
         }
         MailboxMessage::ToolCallStarted { tool_name, .. } => {
+            card.record_tool_use();
             card.push_action(format!("{tool_name} running"));
         }
         MailboxMessage::ToolCallCompleted { tool_name, ok, .. } => {
@@ -482,10 +749,9 @@ pub fn apply_to_delegate(card: &mut DelegateCard, msg: &MailboxMessage) -> bool 
             return false;
         }
         MailboxMessage::TokenUsage { .. } => {
-            // Cost accumulation happens in handle_subagent_mailbox (ui.rs)
-            // before this apply function is called; TokenUsage never reaches
-            // this arm in practice.
-            return false;
+            if let MailboxMessage::TokenUsage { usage, .. } = msg {
+                card.record_token_usage(usage);
+            }
         }
     }
     true

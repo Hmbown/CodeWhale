@@ -1557,6 +1557,21 @@ fn collect_live_subagents_from_cell(
                 Some("transcript"),
             ));
         }
+        HistoryCell::SubAgent(SubAgentCell::DelegateGroup(card)) => {
+            for agent in &card.agents {
+                if seen.insert(agent.agent_id.clone()) {
+                    let agent_type =
+                        SubAgentType::from_str(&agent.agent_type).unwrap_or(SubAgentType::General);
+                    agents.push(live_subagent_result(
+                        &agent.agent_id,
+                        agent_type,
+                        lifecycle_to_subagent_status(agent.status),
+                        &agent.display_label(),
+                        Some("transcript"),
+                    ));
+                }
+            }
+        }
         HistoryCell::SubAgent(SubAgentCell::Fanout(card)) => {
             for worker in &card.workers {
                 if seen.insert(worker.agent_id.clone()) {

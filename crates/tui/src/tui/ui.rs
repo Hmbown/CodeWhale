@@ -7127,6 +7127,7 @@ fn history_has_live_motion(history: &[HistoryCell]) -> bool {
             card.status,
             AgentLifecycle::Pending | AgentLifecycle::Running
         ),
+        HistoryCell::SubAgent(SubAgentCell::DelegateGroup(card)) => card.has_live_motion(),
         HistoryCell::SubAgent(SubAgentCell::Fanout(card)) => card
             .workers
             .iter()

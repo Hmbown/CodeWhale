@@ -144,6 +144,9 @@ fn subagent_card_display_label(app: &App, id: &str) -> Option<String> {
             let label = card.display_label();
             (label.trim() != id).then_some(label)
         }
+        HistoryCell::SubAgent(SubAgentCell::DelegateGroup(card)) => card
+            .display_label_for(id)
+            .filter(|label| label.trim() != id),
         _ => None,
     }
 }
