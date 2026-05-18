@@ -147,7 +147,6 @@ impl ApprovalDiffPreview {
     /// Plain unified-diff text suitable for the pager / detail view.
     /// Returns an empty string for non-diff variants.
     #[must_use]
-    #[allow(dead_code)] // wired up by the detail pager in the follow-up commit
     pub fn diff_text(&self) -> &str {
         match self {
             Self::Diff { text, .. } | Self::MissingMatch { text, .. } => text,
@@ -430,7 +429,7 @@ fn count_diff_changes(diff: &str) -> (usize, usize) {
 /// Build the diff snapshot for an approval request. Reads the filesystem
 /// at most once per request — relative paths resolve against `workspace`
 /// so previews work when the agent is rooted elsewhere from the TUI's CWD.
-fn build_diff_preview(
+pub fn build_diff_preview(
     tool_name: &str,
     params: &Value,
     workspace: Option<&str>,
