@@ -1645,6 +1645,7 @@ fn shell_network_restricted_hint<'a>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn execute_foreground_via_background(
     context: &ToolContext,
     command: &str,
@@ -1739,7 +1740,10 @@ impl ToolSpec for ExecShellTool {
     }
 
     fn description(&self) -> &'static str {
-        "Execute a shell command in the workspace directory. Foreground mode is for bounded commands; use background=true or task_shell_start for long-running work, then poll/wait."
+        "Execute a shell command in the workspace directory. \
+         Use the optional `shell` parameter to control which shell interprets the command. \
+         Foreground mode is for bounded commands; use background=true or task_shell_start \
+         for long-running work, then poll/wait."
     }
 
     fn input_schema(&self) -> serde_json::Value {
@@ -1753,7 +1757,13 @@ impl ToolSpec for ExecShellTool {
                 "shell": {
                     "type": "string",
                     "enum": ["auto", "sh", "bash", "zsh", "cmd", "powershell", "pwsh"],
-                    "description": "Shell used to interpret command (default: auto). On Windows the default is cmd; on Unix the default is sh. Use powershell or pwsh on Windows for modern PowerShell syntax, bash/zsh on Unix for interactive login shells."
+                    "description": "Shell used to interpret the command (default: auto). \
+                        `auto` preserves DeepSeek-TUI's existing platform default behavior \
+                        (cmd on Windows, sh on Unix) and does not translate command syntax. \
+                        Use an explicit shell when the command uses shell-specific syntax: \
+                        powershell for `$env:` / `Get-ChildItem` / `Select-String`; \
+                        cmd for `%FOO%` / `dir`; \
+                        bash/zsh for `export` / POSIX pipes / `grep`."
                 },
                 "timeout_ms": {
                     "type": "integer",
