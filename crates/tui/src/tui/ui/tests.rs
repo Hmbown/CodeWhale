@@ -3045,6 +3045,29 @@ async fn dispatch_user_message_records_prompt_for_cancel_restore() {
 }
 
 #[tokio::test]
+async fn steer_user_message_records_prompt_for_cancel_restore() {
+    let mut app = create_test_app();
+    let mut engine = crate::core::engine::mock_engine_handle();
+    let queued = crate::tui::app::QueuedMessage::new(
+        "adjust the active turn\nthen continue".to_string(),
+        None,
+    );
+
+    steer_user_message(&mut app, &engine.handle, queued)
+        .await
+        .expect("steer user message");
+
+    assert_eq!(
+        app.last_submitted_prompt.as_deref(),
+        Some("adjust the active turn\nthen continue")
+    );
+    assert_eq!(
+        engine.rx_steer.recv().await.as_deref(),
+        Some("adjust the active turn\nthen continue")
+    );
+}
+
+#[tokio::test]
 async fn numeric_plan_choice_still_queues_follow_up_when_busy() {
     let mut app = create_test_app();
     app.mode = AppMode::Plan;

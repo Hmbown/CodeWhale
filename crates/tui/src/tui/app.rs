@@ -3709,14 +3709,13 @@ impl App {
         }
         let Some(prompt) = self
             .last_submitted_prompt
-            .as_ref()
+            .as_deref()
             .filter(|prompt| !prompt.is_empty())
-            .cloned()
         else {
             return false;
         };
 
-        self.input = prompt;
+        self.input = prompt.to_string();
         self.cursor_position = char_count(&self.input);
         self.history_index = None;
         self.history_navigation_draft = None;
