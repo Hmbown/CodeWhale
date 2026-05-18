@@ -31,8 +31,9 @@ use crate::localization::Locale;
 use crate::sandbox::SandboxPolicy;
 use crate::tui::views::{ModalKind, ModalView, ViewAction, ViewEvent};
 use crate::tui::widgets::{ApprovalWidget, ElevationWidget, Renderable};
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use serde_json::Value;
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -113,6 +114,49 @@ pub enum RiskLevel {
     Destructive,
 }
 
+/// Cached diff preview for file-modification tools.
+///
+/// Built once at `ApprovalRequest` construction time so the modal doesn't
+/// re-read the file every render frame. The variants make the "nothing to
+/// show" cases explicit instead of collapsing to `None` and silently hiding
+/// the preview panel (#1638).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ApprovalDiffPreview {
+    /// Normal unified diff against an existing file (or apply_patch content).
+    Diff {
+        text: String,
+        added: usize,
+        deleted: usize,
+    },
+    /// `write_file` against a path that doesn't exist yet — there's no old
+    /// content to diff against, so we show the proposed content as additions.
+    NewFile { path: String, content: String },
+    /// Content matches the file already — render a calm "no changes" hint
+    /// instead of swallowing the whole preview area.
+    NoChange { path: String },
+    /// `edit_file` search string not present in the file — render a warning
+    /// plus a search→replace fallback diff so the user still sees intent.
+    MissingMatch {
+        path: String,
+        text: String,
+        match_count: usize,
+    },
+}
+
+impl ApprovalDiffPreview {
+    /// Plain unified-diff text suitable for the pager / detail view.
+    /// Returns an empty string for non-diff variants.
+    #[must_use]
+    #[allow(dead_code)] // wired up by the detail pager in the follow-up commit
+    pub fn diff_text(&self) -> &str {
+        match self {
+            Self::Diff { text, .. } | Self::MissingMatch { text, .. } => text,
+            Self::NewFile { content, .. } => content,
+            Self::NoChange { .. } => "",
+        }
+    }
+}
+
 /// Request for user approval of a tool execution
 #[derive(Debug, Clone)]
 pub struct ApprovalRequest {
@@ -131,8 +175,12 @@ pub struct ApprovalRequest {
     /// Lossy / arity-aware fingerprint, used to scope *approvals* so an
     /// "approve for session" covers later flag variants (v0.8.37).
     pub approval_grouping_key: String,
-    /// Current workspace directory, used to annotate cwd as "(current)".
+    /// Current workspace directory, used to annotate cwd as "(current)" and
+    /// to resolve relative paths when reading old file contents for diffs.
     pub workspace: Option<String>,
+    /// Snapshot of the diff/preview state, built once at construction so
+    /// renderers never re-read the filesystem mid-render.
+    diff_preview: Option<ApprovalDiffPreview>,
 }
 
 impl ApprovalRequest {
@@ -159,6 +207,11 @@ impl ApprovalRequest {
         let risk = classify_risk(tool_name, category, params);
         let approval_grouping_key =
             crate::tools::approval_cache::build_approval_grouping_key(tool_name, params).0;
+        // Build the diff snapshot once. Renderers read this cache instead of
+        // hitting the filesystem each frame; relative paths resolve against
+        // `workspace` so a `write_file` invoked from the agent doesn't go
+        // looking for the file in the TUI's CWD.
+        let diff_preview = build_diff_preview(tool_name, params, workspace.as_deref());
 
         Self {
             id: id.to_string(),
@@ -169,6 +222,7 @@ impl ApprovalRequest {
             approval_key: approval_key.to_string(),
             approval_grouping_key,
             workspace,
+            diff_preview,
         }
     }
 
@@ -227,6 +281,14 @@ impl ApprovalRequest {
             }
         }
         details
+    }
+
+    /// Cached diff/preview snapshot, or `None` when the tool isn't a file
+    /// modification. Building happens once at request construction; never
+    /// re-reads the filesystem.
+    #[must_use]
+    pub fn diff_preview(&self) -> Option<&ApprovalDiffPreview> {
+        self.diff_preview.as_ref()
     }
 
     /// Like [`prominent_details`] but with localized labels.
@@ -332,6 +394,191 @@ pub fn classify_risk(tool_name: &str, category: ToolCategory, params: &Value) ->
     }
 }
 
+/// Resolve a tool-supplied path against the workspace when it's relative.
+/// Absolute paths are returned unchanged so `write_file` to `/etc/foo` still
+/// shows the right diff. The original string flows through if there's no
+/// workspace context — matching the previous behavior for tests / direct
+/// constructors.
+fn resolve_workspace_path(raw: &str, workspace: Option<&str>) -> std::path::PathBuf {
+    let path = Path::new(raw);
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+    match workspace {
+        Some(ws) => Path::new(ws).join(path),
+        None => path.to_path_buf(),
+    }
+}
+
+/// Count `+` and `-` lines in a unified diff, ignoring the `+++/---` headers.
+fn count_diff_changes(diff: &str) -> (usize, usize) {
+    let mut added = 0usize;
+    let mut deleted = 0usize;
+    for line in diff.lines() {
+        if line.starts_with("+++") || line.starts_with("---") {
+            continue;
+        }
+        if line.starts_with('+') {
+            added += 1;
+        } else if line.starts_with('-') {
+            deleted += 1;
+        }
+    }
+    (added, deleted)
+}
+
+/// Build the diff snapshot for an approval request. Reads the filesystem
+/// at most once per request — relative paths resolve against `workspace`
+/// so previews work when the agent is rooted elsewhere from the TUI's CWD.
+fn build_diff_preview(
+    tool_name: &str,
+    params: &Value,
+    workspace: Option<&str>,
+) -> Option<ApprovalDiffPreview> {
+    match tool_name {
+        "edit_file" => {
+            let path = params.get("path")?.as_str()?;
+            let search = params.get("search")?.as_str()?;
+            let replace = params.get("replace")?.as_str()?;
+            let resolved = resolve_workspace_path(path, workspace);
+            match std::fs::read_to_string(&resolved) {
+                Ok(file) => {
+                    let count = file.matches(search).count();
+                    if count == 0 {
+                        // search isn't present — render the search/replace pair
+                        // as a fallback diff so the user still sees the intent,
+                        // and flag it so the UI can warn.
+                        let text =
+                            crate::tools::diff_format::make_unified_diff(path, search, replace);
+                        Some(ApprovalDiffPreview::MissingMatch {
+                            path: path.to_string(),
+                            text,
+                            match_count: 0,
+                        })
+                    } else {
+                        // Simulate the replace and diff the full file so the
+                        // user sees the actual change in context.
+                        let updated = file.replacen(search, replace, 1);
+                        let text =
+                            crate::tools::diff_format::make_unified_diff(path, &file, &updated);
+                        if text.is_empty() {
+                            Some(ApprovalDiffPreview::NoChange {
+                                path: path.to_string(),
+                            })
+                        } else {
+                            let (added, deleted) = count_diff_changes(&text);
+                            Some(ApprovalDiffPreview::Diff {
+                                text,
+                                added,
+                                deleted,
+                            })
+                        }
+                    }
+                }
+                Err(_) => {
+                    // File missing — fall back to inputs-only diff. edit_file
+                    // would fail at execution anyway, so MissingMatch is the
+                    // honest framing.
+                    let text =
+                        crate::tools::diff_format::make_unified_diff(path, search, replace);
+                    Some(ApprovalDiffPreview::MissingMatch {
+                        path: path.to_string(),
+                        text,
+                        match_count: 0,
+                    })
+                }
+            }
+        }
+        "write_file" => {
+            let path = params.get("path")?.as_str()?;
+            let new_content = params.get("content")?.as_str()?;
+            let resolved = resolve_workspace_path(path, workspace);
+            match std::fs::read_to_string(&resolved) {
+                Ok(old_content) => {
+                    let text = crate::tools::diff_format::make_unified_diff(
+                        path,
+                        &old_content,
+                        new_content,
+                    );
+                    if text.is_empty() {
+                        Some(ApprovalDiffPreview::NoChange {
+                            path: path.to_string(),
+                        })
+                    } else {
+                        let (added, deleted) = count_diff_changes(&text);
+                        Some(ApprovalDiffPreview::Diff {
+                            text,
+                            added,
+                            deleted,
+                        })
+                    }
+                }
+                Err(_) => Some(ApprovalDiffPreview::NewFile {
+                    path: path.to_string(),
+                    content: new_content.to_string(),
+                }),
+            }
+        }
+        "apply_patch" => {
+            if let Some(patch) = params.get("patch").and_then(|v| v.as_str()) {
+                if patch.is_empty() {
+                    None
+                } else {
+                    let (added, deleted) = count_diff_changes(patch);
+                    Some(ApprovalDiffPreview::Diff {
+                        text: patch.to_string(),
+                        added,
+                        deleted,
+                    })
+                }
+            } else if let Some(changes) = params.get("changes").and_then(|v| v.as_array()) {
+                // `changes` is an array of `{path, content}` full-file
+                // replacements. Build a multi-file unified diff against the
+                // current contents so the approval shows the same shape as
+                // the `patch` path.
+                let mut out = String::new();
+                for change in changes {
+                    let Some(path) = change.get("path").and_then(|v| v.as_str()) else {
+                        continue;
+                    };
+                    let Some(new_content) = change.get("content").and_then(|v| v.as_str()) else {
+                        continue;
+                    };
+                    let resolved = resolve_workspace_path(path, workspace);
+                    let old_content = std::fs::read_to_string(&resolved).unwrap_or_default();
+                    let fragment = crate::tools::diff_format::make_unified_diff(
+                        path,
+                        &old_content,
+                        new_content,
+                    );
+                    if !fragment.is_empty() {
+                        if !out.is_empty() {
+                            out.push('\n');
+                        }
+                        // Synthesize a `diff --git` header so the multi-file
+                        // summary in `diff_render` picks the file up.
+                        out.push_str(&format!("diff --git a/{path} b/{path}\n"));
+                        out.push_str(&fragment);
+                    }
+                }
+                if out.is_empty() {
+                    None
+                } else {
+                    let (added, deleted) = count_diff_changes(&out);
+                    Some(ApprovalDiffPreview::Diff {
+                        text: out,
+                        added,
+                        deleted,
+                    })
+                }
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
 fn param_preview(params: &Value, keys: &[&str], max_len: usize) -> Option<String> {
     let Value::Object(map) = params else {
         return None;
@@ -428,6 +675,9 @@ pub struct ApprovalView {
     requested_at: Instant,
     /// Whether the approval card is collapsed to a single-line banner.
     pub(crate) collapsed: bool,
+    diff_scroll: Cell<usize>,
+    diff_total_lines: Cell<usize>,
+    diff_visible_lines: Cell<usize>,
 }
 
 impl ApprovalView {
@@ -445,6 +695,9 @@ impl ApprovalView {
             timeout: None,
             requested_at: Instant::now(),
             collapsed: false,
+            diff_scroll: Cell::new(0),
+            diff_total_lines: Cell::new(0),
+            diff_visible_lines: Cell::new(0),
         }
     }
 
@@ -492,6 +745,37 @@ impl ApprovalView {
         self.locale
     }
 
+    pub(crate) fn set_diff_metrics(&self, total: usize, visible: usize) -> usize {
+        self.diff_total_lines.set(total);
+        self.diff_visible_lines.set(visible);
+        let max_scroll = total.saturating_sub(visible);
+        let scroll = self.diff_scroll.get().min(max_scroll);
+        self.diff_scroll.set(scroll);
+        scroll
+    }
+
+    fn scroll_diff_up(&mut self, amount: usize) {
+        self.diff_scroll
+            .set(self.diff_scroll.get().saturating_sub(amount));
+        self.pending_confirm = None;
+    }
+
+    fn scroll_diff_down(&mut self, amount: usize) {
+        let visible = self.diff_visible_lines.get();
+        let max_scroll = self.diff_total_lines.get().saturating_sub(visible);
+        self.diff_scroll
+            .set((self.diff_scroll.get() + amount).min(max_scroll));
+        self.pending_confirm = None;
+    }
+
+    fn diff_page_height(&self) -> usize {
+        self.diff_visible_lines.get().max(1)
+    }
+
+    fn diff_half_page_height(&self) -> usize {
+        self.diff_page_height().div_ceil(2).max(1)
+    }
+
     /// Try to commit (or stage) the given option respecting the
     /// variant's confirmation policy. Returns the action the modal
     /// stack should apply.
@@ -524,12 +808,54 @@ impl ApprovalView {
     }
 
     fn emit_params_pager(&self) -> ViewAction {
-        let content = serde_json::to_string_pretty(&self.request.params)
-            .unwrap_or_else(|_| self.request.params.to_string());
-        ViewAction::Emit(ViewEvent::OpenTextPager {
-            title: format!("Tool Params: {}", self.request.tool_name),
-            content,
-        })
+        // Show a readable before/after for file tools, raw JSON otherwise.
+        if let Some(content) = self.build_detail_view() {
+            ViewAction::Emit(ViewEvent::OpenTextPager {
+                title: format!("Details: {}", self.request.tool_name),
+                content,
+            })
+        } else {
+            let content = serde_json::to_string_pretty(&self.request.params)
+                .unwrap_or_else(|_| self.request.params.to_string());
+            ViewAction::Emit(ViewEvent::OpenTextPager {
+                title: format!("Tool Params: {}", self.request.tool_name),
+                content,
+            })
+        }
+    }
+
+    /// Build a human-readable before/after view for file tools.
+    fn build_detail_view(&self) -> Option<String> {
+        match self.request.tool_name.as_str() {
+            "edit_file" => {
+                let path = self.request.params.get("path")?.as_str()?;
+                let search = self.request.params.get("search")?.as_str()?;
+                let replace = self.request.params.get("replace")?.as_str()?;
+                Some(format!(
+                    "File: {path}\n\n--- Before ---\n{search}\n\n+++ After +++\n{replace}"
+                ))
+            }
+            "write_file" => {
+                let path = self.request.params.get("path")?.as_str()?;
+                let new_content = self.request.params.get("content")?.as_str()?;
+                let old_content = std::fs::read_to_string(path).unwrap_or_default();
+                if old_content.is_empty() {
+                    Some(format!(
+                        "File: {path} (new)\n\n--- Content ---\n{new_content}"
+                    ))
+                } else {
+                    Some(format!(
+                        "File: {path}\n\n--- Before ---\n{old_content}\n\n+++ After +++\n{new_content}"
+                    ))
+                }
+            }
+            "apply_patch" => {
+                let path = self.request.params.get("path")?.as_str()?;
+                let patch = self.request.params.get("patch")?.as_str()?;
+                Some(format!("File: {path}\n\n{patch}"))
+            }
+            _ => None,
+        }
     }
 
     fn is_timed_out(&self) -> bool {
@@ -550,9 +876,32 @@ impl ModalView for ApprovalView {
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> ViewAction {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        if ctrl {
+            match key.code {
+                KeyCode::Char('u') | KeyCode::Char('U') => {
+                    self.scroll_diff_up(self.diff_half_page_height());
+                    return ViewAction::None;
+                }
+                KeyCode::Char('d') | KeyCode::Char('D') => {
+                    self.scroll_diff_down(self.diff_half_page_height());
+                    return ViewAction::None;
+                }
+                _ => {}
+            }
+        }
+
         match key.code {
             KeyCode::Tab => {
                 self.collapsed = !self.collapsed;
+                ViewAction::None
+            }
+            KeyCode::PageUp => {
+                self.scroll_diff_up(self.diff_page_height());
+                ViewAction::None
+            }
+            KeyCode::PageDown => {
+                self.scroll_diff_down(self.diff_page_height());
                 ViewAction::None
             }
             KeyCode::Up | KeyCode::Char('k') => {
@@ -588,6 +937,20 @@ impl ModalView for ApprovalView {
                 self.pending_confirm = None;
                 ViewAction::None
             }
+        }
+    }
+
+    fn handle_mouse(&mut self, mouse: MouseEvent) -> ViewAction {
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                self.scroll_diff_up(3);
+                ViewAction::None
+            }
+            MouseEventKind::ScrollDown => {
+                self.scroll_diff_down(3);
+                ViewAction::None
+            }
+            _ => ViewAction::None,
         }
     }
 
@@ -1031,6 +1394,202 @@ mod tests {
         let details = request.prominent_details();
         assert_eq!(details[0].0, "File");
         assert_eq!(details[0].1, "src/main.rs");
+    }
+
+    #[test]
+    fn test_diff_preview_edit_file() {
+        let params = json!({
+            "path": "src/main.rs",
+            "search": "fn main() {\n    println!(\"hello\");\n}",
+            "replace": "fn main() {\n    println!(\"world\");\n}"
+        });
+        let request =
+            ApprovalRequest::new("test-id", "edit_file", "Edit file", &params, "test_key");
+        let preview = request.diff_preview().expect("edit_file produces a preview");
+        // Tests don't see src/main.rs, so we land in the MissingMatch fallback
+        // which still surfaces a search→replace diff for visual confirmation.
+        let diff = preview.diff_text();
+        assert!(diff.contains("--- a/src/main.rs"));
+        assert!(diff.contains("+++ b/src/main.rs"));
+        assert!(diff.contains("-    println!(\"hello\");"));
+        assert!(diff.contains("+    println!(\"world\");"));
+        assert!(
+            matches!(preview, ApprovalDiffPreview::MissingMatch { .. }),
+            "expected MissingMatch when file is absent, got {preview:?}"
+        );
+    }
+
+    #[test]
+    fn test_diff_preview_edit_file_existing_simulates_replace() {
+        // When the file exists and search matches, we should produce a full
+        // simulated diff against the real file content.
+        let path = std::env::temp_dir().join("deepseek_test_edit_file_existing.txt");
+        std::fs::write(&path, "alpha\nbeta\ngamma\n").unwrap();
+        let params = json!({
+            "path": path.display().to_string(),
+            "search": "beta",
+            "replace": "BETA",
+        });
+        let request =
+            ApprovalRequest::new("test-id", "edit_file", "Edit file", &params, "test_key");
+        let preview = request.diff_preview().expect("edit_file preview");
+        match preview {
+            ApprovalDiffPreview::Diff { text, .. } => {
+                assert!(text.contains("-beta"), "got {text}");
+                assert!(text.contains("+BETA"), "got {text}");
+            }
+            other => panic!("expected Diff for existing edit_file, got {other:?}"),
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_diff_preview_write_file_existing() {
+        let path = std::env::temp_dir().join("deepseek_test_diff_preview.txt");
+        std::fs::write(&path, "old content\n").unwrap();
+        let params = json!({"path": path.display().to_string(), "content": "new content\n"});
+        let request =
+            ApprovalRequest::new("test-id", "write_file", "Write file", &params, "test_key");
+        let preview = request
+            .diff_preview()
+            .expect("write_file on existing file should produce a preview");
+        let diff = preview.diff_text();
+        assert!(diff.contains("-old content"), "{diff}");
+        assert!(diff.contains("+new content"), "{diff}");
+        assert!(
+            matches!(preview, ApprovalDiffPreview::Diff { .. }),
+            "expected Diff variant, got {preview:?}"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_diff_preview_write_file_unchanged_shows_no_change() {
+        // write_file with content identical to the file's current bytes used
+        // to drop the whole preview panel. We now surface a NoChange hint so
+        // the user knows the call is a no-op.
+        let path = std::env::temp_dir().join("deepseek_test_diff_no_change.txt");
+        std::fs::write(&path, "same\n").unwrap();
+        let params = json!({"path": path.display().to_string(), "content": "same\n"});
+        let request =
+            ApprovalRequest::new("test-id", "write_file", "Write file", &params, "test_key");
+        let preview = request.diff_preview().expect("NoChange is still a preview");
+        assert!(
+            matches!(preview, ApprovalDiffPreview::NoChange { .. }),
+            "expected NoChange, got {preview:?}"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_diff_preview_write_file_new() {
+        let path = std::env::temp_dir().join("deepseek_test_diff_new_file.txt");
+        let _ = std::fs::remove_file(&path);
+        let params = json!({"path": path.display().to_string(), "content": "brand new\n"});
+        let request =
+            ApprovalRequest::new("test-id", "write_file", "Write file", &params, "test_key");
+        let preview = request
+            .diff_preview()
+            .expect("write_file on new file should produce a preview");
+        match preview {
+            ApprovalDiffPreview::NewFile { content, .. } => {
+                assert!(content.contains("brand new"), "{content}");
+            }
+            other => panic!("expected NewFile variant, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_diff_preview_write_file_resolves_workspace_relative_path() {
+        // Regression for the bug where write_file with a workspace-relative
+        // path produced an empty preview because std::fs::read_to_string was
+        // called with the raw relative path.
+        let workspace = std::env::temp_dir().join("deepseek_test_ws_relative");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let file_rel = "nested/file.txt";
+        let abs = workspace.join(file_rel);
+        std::fs::create_dir_all(abs.parent().unwrap()).unwrap();
+        std::fs::write(&abs, "before\n").unwrap();
+
+        let params = json!({"path": file_rel, "content": "after\n"});
+        let request = ApprovalRequest::new_with_workspace(
+            "test-id",
+            "write_file",
+            "Write file",
+            &params,
+            "test_key",
+            Some(workspace.display().to_string()),
+        );
+        let preview = request.diff_preview().expect("preview built");
+        match preview {
+            ApprovalDiffPreview::Diff { text, .. } => {
+                assert!(text.contains("-before"), "{text}");
+                assert!(text.contains("+after"), "{text}");
+            }
+            other => panic!("expected Diff for resolved path, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&workspace);
+    }
+
+    #[test]
+    fn test_diff_preview_apply_patch() {
+        let patch = "--- a/f.rs\n+++ b/f.rs\n@@ -1 +1 @@\n-old\n+new\n";
+        let params = json!({"path": "f.rs", "patch": patch});
+        let request =
+            ApprovalRequest::new("test-id", "apply_patch", "Apply patch", &params, "test_key");
+        let preview = request.diff_preview().expect("apply_patch preview");
+        match preview {
+            ApprovalDiffPreview::Diff { text, .. } => assert_eq!(text, patch),
+            other => panic!("expected Diff variant for apply_patch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_diff_preview_apply_patch_changes_array() {
+        // apply_patch accepts a `changes` array as a full-file replacement
+        // alternative to `patch`. The preview must surface those changes
+        // instead of leaving the popup blank.
+        let workspace = std::env::temp_dir().join("deepseek_test_apply_patch_changes");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let a = workspace.join("a.txt");
+        std::fs::write(&a, "old\n").unwrap();
+
+        let params = json!({
+            "changes": [
+                {"path": "a.txt", "content": "new\n"},
+                {"path": "b.txt", "content": "added\n"},
+            ]
+        });
+        let request = ApprovalRequest::new_with_workspace(
+            "test-id",
+            "apply_patch",
+            "Apply patch",
+            &params,
+            "test_key",
+            Some(workspace.display().to_string()),
+        );
+        let preview = request
+            .diff_preview()
+            .expect("changes array should produce a preview");
+        match preview {
+            ApprovalDiffPreview::Diff { text, .. } => {
+                assert!(text.contains("diff --git a/a.txt b/a.txt"), "{text}");
+                assert!(text.contains("-old"), "{text}");
+                assert!(text.contains("+new"), "{text}");
+                assert!(text.contains("diff --git a/b.txt b/b.txt"), "{text}");
+                assert!(text.contains("+added"), "{text}");
+            }
+            other => panic!("expected Diff for changes, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&workspace);
+    }
+
+    #[test]
+    fn test_diff_preview_none_for_other_tools() {
+        let params = json!({"command": "ls"});
+        let request =
+            ApprovalRequest::new("test-id", "exec_shell", "Run shell", &params, "test_key");
+        assert!(request.diff_preview().is_none());
     }
 
     // ========================================================================
