@@ -704,32 +704,7 @@ fn apply_patch(root: &Path, patch: &str) -> Result<()> {
 }
 
 fn exec_shell(root: &Path, command: &str) -> Result<String> {
-    #[cfg(windows)]
-    let output = Command::new("cmd")
-        .args(["/C", command])
-        .current_dir(root)
-        .output()
-        .with_context(|| format!("failed to execute shell command: {command}"))?;
-
-    #[cfg(not(windows))]
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg(command)
-        .current_dir(root)
-        .output()
-        .with_context(|| format!("failed to execute shell command: {command}"))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow!(
-            "shell command failed (status={}): {}",
-            output.status,
-            stderr.trim()
-        ));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    Ok(stdout.trim().to_string())
+    crate::shell_dispatcher::global_dispatcher().run_foreground(command, root)
 }
 
 fn truncate_output(value: &str, max_chars: usize) -> String {
