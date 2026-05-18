@@ -10,8 +10,9 @@ use crate::tui::file_mention::{
 };
 use crate::tui::footer_ui::{
     active_tool_status_label, footer_auxiliary_spans, footer_cache_spans, footer_coherence_spans,
-    footer_state_label, footer_status_line_spans, format_context_budget,
-    format_token_count_compact, friendly_subagent_progress, render_footer_from,
+    footer_output_speed_spans, footer_state_label, footer_status_line_spans,
+    format_context_budget, format_token_count_compact, friendly_subagent_progress,
+    render_footer_from,
 };
 use crate::tui::history::{
     ExecCell, ExecSource, GenericToolCell, HistoryCell, ToolCell, ToolStatus,
@@ -5083,6 +5084,39 @@ fn render_footer_from_with_default_items_renders_mode_and_model() {
     // Tiny but real costs should render instead of disappearing as "$0.00".
     assert!(!props.cost.is_empty());
     assert_eq!(spans_text(&props.cost), "<$0.0001");
+}
+
+#[test]
+fn default_footer_includes_output_speed() {
+    let items = crate::config::StatusItem::default_footer();
+    assert!(
+        items.contains(&crate::config::StatusItem::OutputSpeed),
+        "default footer should include the token output speed chip"
+    );
+}
+
+#[test]
+fn footer_output_speed_hidden_when_not_streaming() {
+    let app = create_test_app();
+    let spans = footer_output_speed_spans(&app);
+    assert!(
+        spans.is_empty(),
+        "output speed chip should be empty when no streaming has occurred"
+    );
+}
+
+#[test]
+fn footer_output_speed_renders_rate_during_streaming() {
+    let mut app = create_test_app();
+    // Simulate streaming: set start time and accumulated chars.
+    app.stream_started_at = Some(Instant::now() - Duration::from_secs(2));
+    app.stream_output_chars = 400; // ~100 tokens in 2 seconds = ~50 tok/s
+    let spans = footer_output_speed_spans(&app);
+    assert!(!spans.is_empty(), "output speed chip should render during streaming");
+    let text = spans_text(&spans);
+    assert!(text.contains("tok/s"), "should show tok/s: got {text}");
+    // ~50 tok/s should render as a rounded number
+    assert!(text.contains("50") || text.contains("51"), "expected ~50 tok/s: got {text}");
 }
 
 #[test]
