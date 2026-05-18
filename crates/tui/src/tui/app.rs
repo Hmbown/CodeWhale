@@ -1025,6 +1025,10 @@ pub struct App {
     /// `ToolCallStarted` for `agent_spawn` / `rlm` / etc., cleared
     /// after the first `Started` mailbox envelope routes through it).
     pub pending_subagent_dispatch: Option<String>,
+    /// Short labels captured from delegate tool calls before the runtime
+    /// returns the generated `agent_id`. `Started` envelopes can carry only a
+    /// role like `implementer`, so this FIFO keeps the Claude-style label.
+    pub pending_subagent_labels: VecDeque<String>,
     /// Animation anchor for status-strip active sub-agent spinner.
     pub agent_activity_started_at: Option<Instant>,
     pub ui_theme: UiTheme,
@@ -1144,6 +1148,9 @@ pub struct App {
     pub exploring_entries: HashMap<String, (usize, usize)>,
     /// Tool calls that should be ignored by the UI
     pub ignored_tool_calls: HashSet<String>,
+    /// Sub-agent spawn tool calls whose successful result is represented by
+    /// the live sub-agent card instead of a duplicate generic tool row.
+    pub collapsed_subagent_tool_calls: HashSet<String>,
     /// Last exec wait command shown (for duplicate suppression)
     pub last_exec_wait_command: Option<String>,
     /// Current streaming assistant cell
@@ -1674,6 +1681,7 @@ impl App {
             subagent_card_index: HashMap::new(),
             last_fanout_card_index: None,
             pending_subagent_dispatch: None,
+            pending_subagent_labels: VecDeque::new(),
             agent_activity_started_at: None,
             ui_theme,
             theme_id,
@@ -1742,6 +1750,7 @@ impl App {
             exploring_cell: None,
             exploring_entries: HashMap::new(),
             ignored_tool_calls: HashSet::new(),
+            collapsed_subagent_tool_calls: HashSet::new(),
             last_exec_wait_command: None,
             streaming_message_index: None,
             streaming_thinking_active_entry: None,

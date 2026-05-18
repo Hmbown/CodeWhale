@@ -964,6 +964,8 @@ impl Engine {
             return;
         }
 
+        self.drain_queued_subagent_completions_into_session().await;
+
         self.session
             .working_set
             .observe_user_message(&content, &self.session.workspace);

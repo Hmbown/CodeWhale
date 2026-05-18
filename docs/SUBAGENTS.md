@@ -8,14 +8,32 @@ Sub-agents inherit the parent's tool registry by default and run with
 descendant.
 
 This doc covers the role taxonomy. The active orchestration surface is
-`agent_open`, `agent_eval`, and `agent_close`; see `prompts/base.md`
+`Task`, `agent_open`, `agent_eval`, and `agent_close`; see `prompts/base.md`
 "Sub-Agent Strategy" and the in-line tool descriptions.
+
+## Claude Code-compatible `Task`
+
+`Task` is the Claude Code-style entry point for delegation:
+
+```json
+{
+  "description": "Review parser",
+  "prompt": "Inspect parser call sites and report risks with file evidence.",
+  "subagent_type": "explore"
+}
+```
+
+`description` is the short display label used by live TUI cards and the
+auto-generated session name. `prompt` is the full assignment. `subagent_type`
+accepts the built-in roles below; unknown ASCII names without whitespace are
+treated as custom role overlays on the general sub-agent type, so project-level
+names like `gate-main-exe-verify` remain visible instead of being rejected.
 
 ## Role taxonomy
 
 The `type` field on `agent_open` selects a system-prompt posture for the child
-(`agent_type` is accepted as a compatibility alias). Each role is a distinct
-stance toward the work — not just a different label.
+(`agent_type` and `subagent_type` are accepted as compatibility aliases). Each
+role is a distinct stance toward the work — not just a different label.
 
 | Role          | Stance                                 | Writes? | Runs shell? | Typical use                                  |
 |---------------|----------------------------------------|---------|-------------|----------------------------------------------|
@@ -91,9 +109,9 @@ The model can spell each role multiple ways:
 | `verifier`    | `verify`, `verification`, `validator`, `tester`                  |
 | `custom`      | (none; explicit `allowed_tools` array required)                  |
 
-All matching is case-insensitive. Unknown values produce a typed
-error listing the accepted set, so the model can self-correct on
-the next turn.
+Built-in matching is case-insensitive. Unknown ASCII role names without
+whitespace are accepted as custom role overlays; `custom` still means explicit
+narrow tool allowlist and requires `allowed_tools`.
 
 ## Concurrency cap
 

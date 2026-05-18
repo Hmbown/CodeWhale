@@ -70,6 +70,16 @@ impl Engine {
                     .await;
             }
 
+            let completion_count = self.drain_queued_subagent_completions_into_session().await;
+            if completion_count > 0 {
+                let _ = self
+                    .tx_event
+                    .send(Event::status(format!(
+                        "Resuming turn with {completion_count} sub-agent completion(s)"
+                    )))
+                    .await;
+            }
+
             // Ensure system prompt is up to date with latest session states
             self.refresh_system_prompt(mode);
 
@@ -901,76 +911,13 @@ impl Engine {
                 }
 
                 // Sub-agent completion handoff (issue #756). The model finished
-                // streaming with no tool calls — but if it has direct children
-                // still running (or completions queued from children that
-                // finished while we were inferring), surface their
-                // `<deepseek:subagent.done>` sentinels into the transcript and
-                // resume instead of ending the turn. This fulfils the contract
-                // already documented in `prompts/base.md`: the parent is
-                // promised it'll see the sentinel when a child finishes.
-                let mut completions: Vec<crate::tools::subagent::SubAgentCompletion> = Vec::new();
-                while let Ok(c) = self.rx_subagent_completion.try_recv() {
-                    completions.push(c);
-                }
-                if completions.is_empty() {
-                    let running = {
-                        let mgr = self.subagent_manager.read().await;
-                        mgr.running_count()
-                    };
-                    if should_hold_turn_for_subagents(completions.len(), running) {
-                        let _ = self
-                            .tx_event
-                            .send(Event::status(format!(
-                                "Waiting on {running} sub-agent(s) to complete..."
-                            )))
-                            .await;
-                        tokio::select! {
-                            biased;
-                            () = self.cancel_token.cancelled() => {
-                                let _ = self
-                                    .tx_event
-                                    .send(Event::status(
-                                        "Request cancelled while waiting for sub-agents",
-                                    ))
-                                    .await;
-                                return (TurnOutcomeStatus::Interrupted, None);
-                            }
-                            Some(c) = self.rx_subagent_completion.recv() => {
-                                completions.push(c);
-                                while let Ok(extra) = self.rx_subagent_completion.try_recv() {
-                                    completions.push(extra);
-                                }
-                            }
-                            Some(steer) = self.rx_steer.recv() => {
-                                let trimmed = steer.trim().to_string();
-                                if !trimmed.is_empty() {
-                                    self.session
-                                        .working_set
-                                        .observe_user_message(&trimmed, &self.session.workspace);
-                                    self.add_session_message(
-                                        self.user_text_message_with_turn_metadata(trimmed.clone()),
-                                    )
-                                    .await;
-                                    let _ = self
-                                        .tx_event
-                                        .send(Event::status(format!(
-                                            "Steer input accepted: {}",
-                                            summarize_text(&trimmed, 120)
-                                        )))
-                                        .await;
-                                }
-                                turn.next_step();
-                                continue;
-                            }
-                        }
-                    }
-                }
-                if !completions.is_empty() {
-                    let count = completions.len();
-                    for c in completions {
-                        self.add_session_message(subagent_completion_runtime_message(&c.payload))
-                            .await;
-                    }
+                // streaming with no tool calls. Surface only completions that
+                // are already queued, then resume so the parent can react. Do
+                // not wait for still-running children here: they are background
+                // work, and holding the parent turn makes the TUI look frozen
+                // while user input piles up under "Pending inputs".
+                let count = self.drain_queued_subagent_completions_into_session().await;
+                if count > 0 {
                     let _ = self
                         .tx_event
                         .send(Event::status(format!(
@@ -1943,6 +1890,19 @@ impl Engine {
         (TurnOutcomeStatus::Completed, None)
     }
 
+    pub(super) async fn drain_queued_subagent_completions_into_session(&mut self) -> usize {
+        let mut completions: Vec<crate::tools::subagent::SubAgentCompletion> = Vec::new();
+        while let Ok(completion) = self.rx_subagent_completion.try_recv() {
+            completions.push(completion);
+        }
+        let count = completions.len();
+        for completion in completions {
+            self.add_session_message(subagent_completion_runtime_message(&completion.payload))
+                .await;
+        }
+        count
+    }
+
     pub(super) fn messages_with_turn_metadata(&self) -> Vec<Message> {
         // `<turn_meta>` is stored on user-text messages when the message is
         // appended. Do not rewrite historical messages at request time: doing
@@ -1980,8 +1940,9 @@ fn usage_has_signal(usage: &Usage) -> bool {
         || usage.server_tool_use.is_some()
 }
 
-fn should_hold_turn_for_subagents(queued_completions: usize, running_children: usize) -> bool {
-    queued_completions > 0 || running_children > 0
+#[cfg(test)]
+fn should_hold_turn_for_subagents(queued_completions: usize, _running_children: usize) -> bool {
+    queued_completions > 0
 }
 
 /// Resolve an `"auto"` reasoning-effort tier to a concrete value.
@@ -2060,9 +2021,9 @@ mod tests {
     }
 
     #[test]
-    fn turn_holds_open_for_running_or_completed_subagents() {
+    fn turn_holds_open_only_for_completed_subagents() {
         assert!(should_hold_turn_for_subagents(1, 0));
-        assert!(should_hold_turn_for_subagents(0, 1));
+        assert!(!should_hold_turn_for_subagents(0, 1));
         assert!(!should_hold_turn_for_subagents(0, 0));
     }
 

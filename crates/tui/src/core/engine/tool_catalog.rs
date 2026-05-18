@@ -29,8 +29,15 @@ pub(super) fn is_tool_search_tool(name: &str) -> bool {
     matches!(name, TOOL_SEARCH_REGEX_NAME | TOOL_SEARCH_BM25_NAME)
 }
 
+pub(super) fn is_subagent_tool_name(name: &str) -> bool {
+    matches!(name, "Task" | "agent_open" | "agent_eval" | "agent_close")
+}
+
 pub(super) fn should_default_defer_tool(name: &str, mode: AppMode) -> bool {
     if mode == AppMode::Yolo {
+        return false;
+    }
+    if is_subagent_tool_name(name) {
         return false;
     }
 

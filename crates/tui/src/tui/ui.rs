@@ -19,18 +19,6 @@ use crossterm::{
 // On Windows the push/pop helpers write the escapes directly; crossterm's
 // PushKeyboardEnhancementFlags / PopKeyboardEnhancementFlags commands are
 // never referenced, so the imports are gated to avoid -D warnings failures.
-#[cfg(not(windows))]
-use crossterm::event::{
-    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
-};
-use ratatui::{
-    Frame, Terminal,
-    layout::{Constraint, Direction, Layout, Rect, Size},
-    prelude::Widget,
-    style::Style,
-    widgets::Block,
-};
-use tracing;
 use crate::audit::log_sensitive_event;
 use crate::automation_manager::{AutomationManager, AutomationSchedulerConfig, spawn_scheduler};
 use crate::client::{DeepSeekClient, build_cache_warmup_request};
@@ -68,6 +56,7 @@ use crate::tui::event_broker::EventBroker;
 use crate::tui::file_picker_relevance;
 use crate::tui::footer_ui::{
     friendly_subagent_progress, is_noisy_subagent_progress, one_line_summary, render_footer,
+    subagent_display_label,
 };
 use crate::tui::format_helpers;
 use crate::tui::key_shortcuts;
@@ -80,6 +69,18 @@ use crate::tui::pager::PagerView;
 use crate::tui::persistence_actor::{self, PersistRequest};
 use crate::tui::plan_prompt::PlanPromptView;
 use crate::tui::scrolling::TranscriptScroll;
+#[cfg(not(windows))]
+use crossterm::event::{
+    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+};
+use ratatui::{
+    Frame, Terminal,
+    layout::{Constraint, Direction, Layout, Rect, Size},
+    prelude::Widget,
+    style::Style,
+    widgets::Block,
+};
+use tracing;
 // SelectionAutoscroll unused
 use crate::tui::session_picker::SessionPickerView;
 use crate::tui::shell_job_routing::{
@@ -104,8 +105,7 @@ use crate::tui::workspace_context;
 use super::app::{
     App, AppAction, AppMode, IDLE_TURN_THRESHOLD, MAX_AUTO_CONTINUE_TURNS, OnboardingState,
     QueuedMessage, ReasoningEffort, STUCK_THRESHOLD, SidebarFocus, StatusToastLevel,
-    SubmitDisposition, TaskPanelEntry, TuiOptions,
-    looks_like_slash_command_input,
+    SubmitDisposition, TaskPanelEntry, TuiOptions, looks_like_slash_command_input,
 };
 use super::approval::{
     ApprovalMode, ApprovalRequest, ApprovalView, ElevationRequest, ElevationView, ReviewDecision,
@@ -1172,7 +1172,8 @@ async fn run_event_loop(
                         // (delegate vs fanout).
                         if matches!(
                             name.as_str(),
-                            "agent_open"
+                            "Task"
+                                | "agent_open"
                                 | "agent_spawn"
                                 | "rlm_open"
                                 | "rlm_eval"
@@ -1219,7 +1220,8 @@ async fn run_event_loop(
                         // poll. Also merge shell jobs (#373).
                         if matches!(
                             name.as_str(),
-                            "agent_open"
+                            "Task"
+                                | "agent_open"
                                 | "agent_spawn"
                                 | "agent_close"
                                 | "agent_cancel"
@@ -1232,7 +1234,8 @@ async fn run_event_loop(
                         }
                         if matches!(
                             name.as_str(),
-                            "agent_open"
+                            "Task"
+                                | "agent_open"
                                 | "agent_eval"
                                 | "agent_close"
                                 | "agent_cancel"
@@ -1811,8 +1814,9 @@ async fn run_event_loop(
                         if app.agent_activity_started_at.is_none() {
                             app.agent_activity_started_at = Some(Instant::now());
                         }
-                        app.status_message =
-                            Some(format!("Sub-agent {id} starting: {prompt_summary}"));
+                        let subject =
+                            subagent_display_label(app, &id).unwrap_or_else(|| id.clone());
+                        app.status_message = Some(format!("Sub-agent {subject}: starting"));
                         let _ = engine_handle.send(Op::ListSubAgents).await;
                     }
                     EngineEvent::AgentProgress { id, status } => {
@@ -1827,7 +1831,14 @@ async fn run_event_loop(
                         if app.agent_activity_started_at.is_none() {
                             app.agent_activity_started_at = Some(Instant::now());
                         }
-                        app.status_message = Some(format!("Sub-agent {id}: {display}"));
+                        let subject =
+                            subagent_display_label(app, &id).unwrap_or_else(|| id.clone());
+                        let display = if subject != id && is_noisy_subagent_progress(&status) {
+                            "working".to_string()
+                        } else {
+                            display
+                        };
+                        app.status_message = Some(format!("Sub-agent {subject}: {display}"));
                     }
                     EngineEvent::AgentComplete { id, result } => {
                         let subagent_elapsed = app
@@ -1841,9 +1852,11 @@ async fn run_event_loop(
                                     agent.agent_id != id
                                         && matches!(agent.status, SubAgentStatus::Running)
                                 });
+                        let subject =
+                            subagent_display_label(app, &id).unwrap_or_else(|| id.clone());
                         app.agent_progress.remove(&id);
                         app.status_message = Some(format!(
-                            "Sub-agent {id} completed: {}",
+                            "Sub-agent {subject} completed: {}",
                             summarize_tool_output(&result)
                         ));
                         let should_recapture_terminal =
@@ -1854,7 +1867,7 @@ async fn run_event_loop(
                         {
                             let in_tmux = std::env::var("TMUX").is_ok_and(|v| !v.is_empty());
                             let msg = notifications::subagent_completion_message(
-                                &id,
+                                &subject,
                                 &result,
                                 include_summary,
                                 subagent_elapsed,
@@ -6394,6 +6407,7 @@ fn apply_loaded_session(app: &mut App, config: &Config, session: &SavedSession) 
     app.exploring_cell = None;
     app.exploring_entries.clear();
     app.ignored_tool_calls.clear();
+    app.collapsed_subagent_tool_calls.clear();
     app.pending_tool_uses.clear();
     app.last_exec_wait_command = None;
 

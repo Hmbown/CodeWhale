@@ -2469,8 +2469,7 @@ mod tests {
         let text = lines_to_text(&task_panel_lines(&app, 80, 8));
 
         assert!(
-            text.iter()
-                .any(|line| line.contains("[x] cargo check 1s")),
+            text.iter().any(|line| line.contains("[x] cargo check 1s")),
             "status marker and duration should stay in the row label: {text:?}"
         );
         assert!(

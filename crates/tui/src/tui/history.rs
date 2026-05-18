@@ -1239,17 +1239,12 @@ impl GenericToolCell {
             return lines;
         }
 
-        // Issue #409: sub-agent open already gets a dedicated `DelegateCard`
-        // that owns the live action tree, status, and final summary. The
-        // generic tool block for the same call duplicates that signal at
-        // 3-4 lines per spawn — N parallel spawns multiply the noise. In
-        // live mode, render one compact summary line and let the
-        // DelegateCard be the source of truth. Transcript mode keeps the
-        // full block so session replay remains complete.
-        if matches!(mode, RenderMode::Live)
-            && matches!(self.name.as_str(), "agent_open" | "agent_spawn")
-        {
-            return self.render_agent_spawn_compact(low_motion);
+        // Sub-agent tools already have dedicated live cards / detail views.
+        // In live mode, render them as a single Task-family summary line so
+        // result fetches (`agent_eval`) don't spam `Task(agent_id: ...)` JSON
+        // blocks when the output already carries the readable session name.
+        if matches!(mode, RenderMode::Live) && is_subagent_compact_tool(&self.name) {
+            return self.render_subagent_tool_compact(low_motion);
         }
 
         let mut lines = Vec::new();
@@ -1339,25 +1334,21 @@ impl GenericToolCell {
         clamp_tool_block_lines(lines, width)
     }
 
-    /// Render `agent_open`/legacy `agent_spawn` as a single compact summary line for live
-    /// mode (#409). The companion `DelegateCard` already carries the
-    /// live action tree, status, and final summary; this line is just
-    /// the pointer that says "a spawn happened, here's the agent id".
-    ///
-    /// Output shape (header):
-    ///   `◐ delegate · agent_open  agent-abc12  [running]`
-    /// Falls back to a placeholder when the spawn is still pending and
-    /// no agent id has been assigned yet.
-    fn render_agent_spawn_compact(&self, low_motion: bool) -> Vec<Line<'static>> {
+    /// Render sub-agent management tools as a single compact live line.
+    fn render_subagent_tool_compact(&self, low_motion: bool) -> Vec<Line<'static>> {
         let family = crate::tui::widgets::tool_card::ToolFamily::Delegate;
-        let agent_id = self
+        let output_display_name = self
             .output
             .as_deref()
-            .and_then(extract_agent_id)
-            .unwrap_or("…");
+            .and_then(extract_subagent_display_name);
+        let input_display_name = crate::tui::widgets::tool_card::tool_header_summary_for_name(
+            &self.name,
+            self.input_summary.as_deref(),
+        );
+        let display_name = output_display_name.or(input_display_name.as_deref());
         vec![render_tool_header_with_family_and_summary(
             family,
-            Some(agent_id),
+            display_name,
             tool_status_label(self.status),
             self.status,
             None,
@@ -1434,26 +1425,48 @@ fn render_spillover_annotation(path: &std::path::Path, width: u16) -> Line<'stat
     ])
 }
 
-/// Pull the `agent_id` field out of a sub-agent open tool output. The
+fn is_subagent_compact_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "Task"
+            | "agent_open"
+            | "agent_spawn"
+            | "agent_eval"
+            | "agent_close"
+            | "agent_result"
+            | "agent_wait"
+            | "agent_status"
+            | "wait"
+    )
+}
+
+/// Pull the preferred display name out of a sub-agent open tool output. The
 /// tool emits structured JSON shaped like
-/// `{"agent_id": "agent-abc12", "nickname": "...", "model": "..."}` so we
-/// look for the `agent_id` key and return its string value.
+/// `{"name": "...", "agent_id": "...", "nickname": "...", "model": "..."}`.
+/// Prefer the human-facing name/nickname, then fall back to `agent_id`.
 ///
 /// Returns `None` for outputs we can't parse as JSON or that lack the
 /// expected key — the caller falls back to a placeholder so a still-pending
 /// spawn renders cleanly.
-fn extract_agent_id(output: &str) -> Option<&str> {
+fn extract_subagent_display_name(output: &str) -> Option<&str> {
+    extract_json_string_field(output, "name")
+        .or_else(|| extract_json_string_field(output, "display_name"))
+        .or_else(|| extract_json_string_field(output, "nickname"))
+        .or_else(|| extract_json_string_field(output, "agent_id"))
+}
+
+fn extract_json_string_field<'a>(output: &'a str, field: &str) -> Option<&'a str> {
     // Cheap, deterministic, no allocations: scan for the literal key.
     // Avoids dragging serde_json into a render hot path on every frame.
-    let key = "\"agent_id\"";
-    let key_idx = output.find(key)?;
+    let key = format!("\"{field}\"");
+    let key_idx = output.find(&key)?;
     let rest = &output[key_idx + key.len()..];
     let colon = rest.find(':')?;
     let after_colon = rest[colon + 1..].trim_start();
     let after_colon = after_colon.strip_prefix('"')?;
     let end = after_colon.find('"')?;
-    let id = &after_colon[..end];
-    (!id.is_empty()).then_some(id)
+    let value = &after_colon[..end];
+    (!value.is_empty()).then_some(value)
 }
 
 fn is_checklist_tool_name(name: &str) -> bool {
@@ -1779,6 +1792,24 @@ pub fn summarize_tool_args(input: &Value) -> Option<String> {
 
     let mut parts = Vec::new();
 
+    for key in [
+        "description",
+        "display_name",
+        "name",
+        "subagent_type",
+        "agent_type",
+        "type",
+        "role",
+        "agent_role",
+    ] {
+        if let Some(value) = obj.get(key) {
+            parts.push(format!(
+                "{}: {}",
+                key,
+                summarize_inline_value(value, 80, false)
+            ));
+        }
+    }
     if let Some(value) = obj.get("path") {
         parts.push(format!(
             "path: {}",
@@ -3356,33 +3387,48 @@ mod tests {
     // full block so debug history is intact.
 
     #[test]
-    fn extract_agent_id_pulls_id_from_json_output() {
-        let output =
-            r#"{"agent_id": "agent-abc12", "nickname": "Beluga", "model": "deepseek-v4-flash"}"#;
-        assert_eq!(super::extract_agent_id(output), Some("agent-abc12"));
+    fn extract_subagent_display_name_prefers_name_from_json_output() {
+        let output = r#"{"name": "review-parser", "agent_id": "agent-abc12", "nickname": "Review parser", "model": "deepseek-v4-flash"}"#;
+        assert_eq!(
+            super::extract_subagent_display_name(output),
+            Some("review-parser")
+        );
     }
 
     #[test]
-    fn extract_agent_id_handles_extra_whitespace() {
+    fn extract_subagent_display_name_handles_extra_whitespace() {
         let output = r#"{
-            "agent_id"   :    "agent-xyz",
+            "display_name"   :    "Verify gate",
+            "agent_id": "agent-xyz",
             "model": "x"
         }"#;
-        assert_eq!(super::extract_agent_id(output), Some("agent-xyz"));
+        assert_eq!(
+            super::extract_subagent_display_name(output),
+            Some("Verify gate")
+        );
     }
 
     #[test]
-    fn extract_agent_id_returns_none_when_missing() {
-        let output = r#"{"nickname": "Orca", "model": "x"}"#;
-        assert!(super::extract_agent_id(output).is_none());
-        assert!(super::extract_agent_id("(not json)").is_none());
-        assert!(super::extract_agent_id("").is_none());
+    fn extract_subagent_display_name_falls_back_to_agent_id() {
+        let output = r#"{"agent_id": "agent-xyz", "model": "x"}"#;
+        assert_eq!(
+            super::extract_subagent_display_name(output),
+            Some("agent-xyz")
+        );
     }
 
     #[test]
-    fn extract_agent_id_returns_none_for_empty_id() {
+    fn extract_subagent_display_name_returns_none_when_missing() {
+        let output = r#"{"model": "x"}"#;
+        assert!(super::extract_subagent_display_name(output).is_none());
+        assert!(super::extract_subagent_display_name("(not json)").is_none());
+        assert!(super::extract_subagent_display_name("").is_none());
+    }
+
+    #[test]
+    fn extract_subagent_display_name_returns_none_for_empty_id() {
         let output = r#"{"agent_id": "", "model": "x"}"#;
-        assert!(super::extract_agent_id(output).is_none());
+        assert!(super::extract_subagent_display_name(output).is_none());
     }
 
     #[test]
@@ -3404,11 +3450,11 @@ mod tests {
         // One header line, no details/args/output expansion.
         assert_eq!(lines.len(), 1, "expected exactly 1 line, got {:?}", lines);
         let rendered: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
-        // Header carries the agent id; running status is carried by the
+        // Header carries the display name; running status is carried by the
         // animated status glyph, matching the Claude-style compact row.
         assert!(
-            rendered.contains("agent-abc12"),
-            "expected agent id in header: {rendered:?}"
+            rendered.contains("Beluga"),
+            "expected display name in header: {rendered:?}"
         );
         assert!(
             !rendered.contains("running"),
@@ -3422,10 +3468,9 @@ mod tests {
     }
 
     #[test]
-    fn agent_spawn_pending_render_uses_placeholder_id() {
-        // No output yet → use the … placeholder so the user still sees a
-        // header line during the brief gap between tool-call-started and
-        // the spawn returning the agent_id.
+    fn agent_spawn_pending_render_uses_input_summary() {
+        // No output yet → use the input summary so the user still sees a
+        // meaningful header during the brief gap before the spawn returns.
         let cell = GenericToolCell {
             name: "agent_spawn".to_string(),
             status: ToolStatus::Running,
@@ -3439,7 +3484,88 @@ mod tests {
         let lines = cell.lines_with_mode(80, true, super::RenderMode::Live);
         assert_eq!(lines.len(), 1);
         let rendered: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(rendered.contains('\u{2026}'), "{rendered:?}"); // …
+        assert!(rendered.contains("do thing"), "{rendered:?}");
+    }
+
+    #[test]
+    fn task_pending_render_uses_description_summary() {
+        let cell = GenericToolCell {
+            name: "Task".to_string(),
+            status: ToolStatus::Running,
+            input_summary: Some("description: Review parser, prompt: inspect".to_string()),
+            output: None,
+            prompts: None,
+            spillover_path: None,
+            output_summary: None,
+            is_diff: false,
+        };
+        let lines = cell.lines_with_mode(80, true, super::RenderMode::Live);
+        assert_eq!(lines.len(), 1);
+        let rendered: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(rendered.contains("Review parser"), "{rendered:?}");
+    }
+
+    #[test]
+    fn task_pending_render_uses_subagent_type_when_description_missing() {
+        let cell = GenericToolCell {
+            name: "Task".to_string(),
+            status: ToolStatus::Running,
+            input_summary: Some("subagent_type: implementer, prompt: <1477 chars>".to_string()),
+            output: None,
+            prompts: None,
+            spillover_path: None,
+            output_summary: None,
+            is_diff: false,
+        };
+        let lines = cell.lines_with_mode(80, true, super::RenderMode::Live);
+        assert_eq!(lines.len(), 1);
+        let rendered: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(rendered.contains("implementer"), "{rendered:?}");
+        assert!(!rendered.contains("<1477 chars>"), "{rendered:?}");
+    }
+
+    #[test]
+    fn task_pending_render_hides_long_prompt_placeholder() {
+        let cell = GenericToolCell {
+            name: "Task".to_string(),
+            status: ToolStatus::Running,
+            input_summary: Some("prompt: <1477 chars>".to_string()),
+            output: None,
+            prompts: None,
+            spillover_path: None,
+            output_summary: None,
+            is_diff: false,
+        };
+        let lines = cell.lines_with_mode(80, true, super::RenderMode::Live);
+        assert_eq!(lines.len(), 1);
+        let rendered: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(!rendered.contains("<1477 chars>"), "{rendered:?}");
+        assert!(rendered.contains("running"), "{rendered:?}");
+    }
+
+    #[test]
+    fn agent_eval_live_render_prefers_output_name_over_input_agent_id() {
+        let cell = GenericToolCell {
+            name: "agent_eval".to_string(),
+            status: ToolStatus::Success,
+            input_summary: Some("agent_id: agent_d77823b2".to_string()),
+            output: Some(
+                r#"{"agent_id":"agent_d77823b2","name":"platform-provider-api-规格","timed_out":true}"#
+                    .to_string(),
+            ),
+            prompts: None,
+            spillover_path: None,
+            output_summary: None,
+            is_diff: false,
+        };
+        let lines = cell.lines_with_mode(80, true, super::RenderMode::Live);
+        assert_eq!(lines.len(), 1);
+        let rendered: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            rendered.contains("platform-provider-api-规格"),
+            "{rendered:?}"
+        );
+        assert!(!rendered.contains("agent_d77823b2"), "{rendered:?}");
     }
 
     #[test]

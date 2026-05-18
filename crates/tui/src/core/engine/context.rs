@@ -211,7 +211,13 @@ fn summarize_subagent_snapshot(snapshot: &serde_json::Value, index: usize) -> St
 fn compact_subagent_tool_result_for_context(tool_name: &str, raw: &str) -> Option<String> {
     if !matches!(
         tool_name,
-        "agent_open" | "agent_eval" | "agent_close" | "agent_result" | "agent_wait" | "wait"
+        "Task"
+            | "agent_open"
+            | "agent_eval"
+            | "agent_close"
+            | "agent_result"
+            | "agent_wait"
+            | "wait"
     ) {
         return None;
     }

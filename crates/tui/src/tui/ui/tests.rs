@@ -12,6 +12,7 @@ use crate::tui::footer_ui::{
     active_tool_status_label, footer_auxiliary_spans, footer_cache_spans, footer_coherence_spans,
     footer_state_label, footer_status_line_spans, format_context_budget,
     format_token_count_compact, friendly_subagent_progress, render_footer_from,
+    subagent_display_label,
 };
 use crate::tui::history::{
     ExecCell, ExecSource, GenericToolCell, HistoryCell, ToolCell, ToolStatus,
@@ -2173,6 +2174,134 @@ fn subagent_token_usage_is_deduped_by_mailbox_sequence() {
 }
 
 #[test]
+fn subagent_spawn_tool_row_collapses_into_live_card() {
+    let mut app = create_test_app();
+    handle_tool_call_started(
+        &mut app,
+        "task-call",
+        "Task",
+        &serde_json::json!({
+            "description": "Review parser",
+            "prompt": "Inspect parser call sites"
+        }),
+    );
+    assert!(
+        app.active_cell
+            .as_ref()
+            .is_some_and(|active| active.entries().is_empty()),
+        "Task spawn starts a turn but does not render a duplicate tool row"
+    );
+
+    handle_subagent_mailbox(
+        &mut app,
+        1,
+        &crate::tools::subagent::MailboxMessage::started(
+            "agent_live",
+            crate::tools::subagent::SubAgentType::General,
+            "Review parser",
+        ),
+    );
+
+    assert!(
+        app.active_cell.is_some(),
+        "sub-agent card insertion stays inside the active turn"
+    );
+    assert!(
+        app.history.is_empty(),
+        "sub-agent Started must not flush or append committed history mid-turn"
+    );
+    let active = app.active_cell.as_ref().expect("active cell exists");
+    assert_eq!(active.entries().len(), 1);
+    assert!(matches!(
+        active.entries().first(),
+        Some(HistoryCell::SubAgent(
+            crate::tui::history::SubAgentCell::Delegate(_)
+        ))
+    ));
+
+    handle_tool_call_complete(&mut app, "task-call", "Task", &ok_result("spawned"));
+    let active = app.active_cell.as_ref().expect("active cell remains");
+    assert_eq!(
+        active.entries().len(),
+        1,
+        "successful Task result stays folded into the live sub-agent card"
+    );
+    assert!(
+        app.collapsed_subagent_tool_calls.is_empty(),
+        "collapsed Task call is cleared on completion"
+    );
+}
+
+#[test]
+fn subagent_started_uses_task_description_when_mailbox_only_has_role() {
+    let mut app = create_test_app();
+    handle_tool_call_started(
+        &mut app,
+        "task-call",
+        "Task",
+        &serde_json::json!({
+            "description": "extend-js-function-runtime",
+            "subagent_type": "implementer",
+            "prompt": "Extend the JS runtime implementation"
+        }),
+    );
+
+    handle_subagent_mailbox(
+        &mut app,
+        1,
+        &crate::tools::subagent::MailboxMessage::started(
+            "agent_live",
+            crate::tools::subagent::SubAgentType::Implementer,
+            "implementer",
+        ),
+    );
+
+    let active = app.active_cell.as_ref().expect("active cell exists");
+    let Some(HistoryCell::SubAgent(crate::tui::history::SubAgentCell::Delegate(card))) =
+        active.entries().first()
+    else {
+        panic!("expected delegate card");
+    };
+    assert_eq!(card.display_label(), "extend-js-function-runtime");
+}
+
+#[test]
+fn agent_eval_started_uses_existing_subagent_label_not_agent_id() {
+    let mut app = create_test_app();
+    handle_tool_call_started(
+        &mut app,
+        "spawn-call",
+        "Task",
+        &serde_json::json!({
+            "description": "audit gui impl",
+            "prompt": "Audit GUI implementation"
+        }),
+    );
+    handle_subagent_mailbox(
+        &mut app,
+        1,
+        &crate::tools::subagent::MailboxMessage::started(
+            "agent_live",
+            crate::tools::subagent::SubAgentType::General,
+            "audit gui impl",
+        ),
+    );
+
+    handle_tool_call_started(
+        &mut app,
+        "eval-call",
+        "agent_eval",
+        &serde_json::json!({ "agent_id": "agent_live" }),
+    );
+
+    let active = app.active_cell.as_ref().expect("active cell exists");
+    let Some(HistoryCell::Tool(ToolCell::Generic(cell))) = active.entries().last() else {
+        panic!("expected agent_eval generic cell");
+    };
+    assert_eq!(cell.input_summary.as_deref(), Some("name: audit gui impl"));
+}
+
+#[test]
 fn format_token_count_compact_formats_units() {
     assert_eq!(format_token_count_compact(999), "999");
     assert_eq!(format_token_count_compact(1_200), "1.2k");
@@ -4049,6 +4178,44 @@ fn orphan_tool_complete_with_unknown_id_pushes_separate_cell() {
 }
 
 #[test]
+fn collapsed_subagent_spawn_failure_renders_tool_error() {
+    let mut app = create_test_app();
+
+    handle_tool_call_started(
+        &mut app,
+        "task-call",
+        "Task",
+        &serde_json::json!({
+            "description": "bad delegate",
+            "prompt": "Start a sub-agent"
+        }),
+    );
+    assert!(
+        app.active_cell
+            .as_ref()
+            .is_some_and(|active| active.entries().is_empty())
+    );
+
+    let result = Err(crate::tools::spec::ToolError::execution_failed(
+        "spawn failed",
+    ));
+    handle_tool_call_complete(&mut app, "task-call", "Task", &result);
+
+    assert_eq!(app.history.len(), 1, "failed spawn is still visible");
+    let HistoryCell::Tool(ToolCell::Generic(generic)) = &app.history[0] else {
+        panic!("failed spawn should render as a Generic tool cell")
+    };
+    assert_eq!(generic.name, "Task");
+    assert_eq!(generic.status, ToolStatus::Failed);
+    assert!(
+        generic
+            .output
+            .as_deref()
+            .is_some_and(|output| output.contains("spawn failed"))
+    );
+}
+
+#[test]
 fn turn_complete_flushes_active_cell_into_history() {
     // The full path through the public flush helper. Verifies that a
     // mid-turn snapshot (exec running, exploring complete) becomes a stable
@@ -4784,6 +4951,33 @@ fn noisy_subagent_progress_keeps_existing_objective_summary() {
         friendly_subagent_progress(&app, "agent_live", "step 1/8: requesting model response");
 
     assert_eq!(display, "starting: inspect release state");
+}
+
+#[test]
+fn started_subagent_progress_keeps_existing_objective_summary() {
+    let mut app = create_test_app();
+    app.agent_progress.insert(
+        "agent_live".to_string(),
+        "starting: compile core deps".to_string(),
+    );
+
+    let display = friendly_subagent_progress(&app, "agent_live", "started (implementer)");
+
+    assert_eq!(display, "starting: compile core deps");
+}
+
+#[test]
+fn subagent_display_label_uses_existing_task_summary_not_agent_id() {
+    let mut app = create_test_app();
+    app.agent_progress.insert(
+        "agent_live".to_string(),
+        "starting: inspect release state".to_string(),
+    );
+
+    assert_eq!(
+        subagent_display_label(&app, "agent_live").as_deref(),
+        Some("inspect release state")
+    );
 }
 
 /// Regression for issue #65: `truncate_line_to_width` with a tiny budget

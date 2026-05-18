@@ -32,6 +32,7 @@ use crate::models::{ContentBlock, Message, MessageRequest, SystemPrompt, Tool};
 use crate::tools::handle::VarHandle;
 use crate::tools::plan::{PlanState, SharedPlanState};
 use crate::tools::registry::{ToolRegistry, ToolRegistryBuilder};
+use crate::tools::shell::new_shared_shell_manager;
 use crate::tools::spec::{
     ApprovalRequirement, ToolCapability, ToolContext, ToolError, ToolResult, ToolSpec,
     optional_bool, optional_u64, required_str,
@@ -189,9 +190,7 @@ fn slugify_agent_name(objective: &str, id: &str) -> String {
         compact.to_string()
     } else {
         // Cut at word boundary within limit
-        let end = compact[..50]
-            .rfind('-')
-            .unwrap_or(49);
+        let end = compact[..50].rfind('-').unwrap_or(49);
         compact[..=end].trim_end_matches('-').to_string()
     }
 }
@@ -540,6 +539,7 @@ struct SubAgentInput {
 #[derive(Debug, Clone)]
 struct SpawnRequest {
     session_name: Option<String>,
+    display_name: Option<String>,
     prompt: String,
     agent_type: SubAgentType,
     assignment: SubAgentAssignment,
@@ -853,6 +853,7 @@ impl SubAgentRuntime {
     pub fn child_runtime(&self) -> Self {
         let mut child_context = self.context.clone();
         child_context.auto_approve = self.context.auto_approve;
+        isolate_subagent_shell_manager(&mut child_context);
         Self {
             client: self.client.clone(),
             model: self.model.clone(),
@@ -880,6 +881,12 @@ impl SubAgentRuntime {
     pub fn would_exceed_depth(&self) -> bool {
         self.spawn_depth + 1 > self.max_spawn_depth
     }
+}
+
+fn isolate_subagent_shell_manager(context: &mut ToolContext) {
+    let shell_manager = new_shared_shell_manager(context.workspace.clone());
+    context.shell_manager = shell_manager.clone();
+    context.runtime.shell_manager = Some(shell_manager);
 }
 
 /// A running sub-agent instance.
@@ -1282,7 +1289,7 @@ impl SubAgentManager {
         if let Some(event_tx) = runtime.event_tx.clone() {
             let _ = event_tx.try_send(Event::AgentSpawned {
                 id: agent_id.clone(),
-                prompt: prompt.clone(),
+                prompt: assignment.objective.clone(),
             });
         }
 
@@ -1877,6 +1884,14 @@ impl ToolSpec for AgentOpenTool {
                     "type": "string",
                     "description": "Alias for name"
                 },
+                "description": {
+                    "type": "string",
+                    "description": "Short human-readable label for this child session. Used for display and for the auto-generated session name when name is omitted."
+                },
+                "display_name": {
+                    "type": "string",
+                    "description": "Alias for description"
+                },
                 "prompt": {
                     "type": "string",
                     "description": "Initial task description for the child session"
@@ -1901,6 +1916,10 @@ impl ToolSpec for AgentOpenTool {
                 "agent_type": {
                     "type": "string",
                     "description": "Alias for type"
+                },
+                "subagent_type": {
+                    "type": "string",
+                    "description": "Claude Code-compatible alias for type/role. Built-ins include general, explore, plan, review, implementer, verifier; custom names are treated as role overlays."
                 },
                 "role": {
                     "type": "string",
@@ -1968,6 +1987,96 @@ impl ToolSpec for AgentOpenTool {
             "prefix_cache": projection.prefix_cache,
         }));
         Ok(tool_result)
+    }
+}
+
+/// Claude Code-compatible delegate tool.
+///
+/// Claude exposes sub-agents through a capitalized `Task` tool with
+/// `description`, `prompt`, and `subagent_type`. Internally it is the same
+/// durable background session as `agent_spawn`, but it preserves the short
+/// description as the display name so the transcript reads like Claude Code's
+/// named sub-agent cards.
+pub struct ClaudeTaskTool {
+    manager: SharedSubAgentManager,
+    runtime: SubAgentRuntime,
+}
+
+impl ClaudeTaskTool {
+    #[must_use]
+    pub fn new(manager: SharedSubAgentManager, runtime: SubAgentRuntime) -> Self {
+        Self { manager, runtime }
+    }
+}
+
+#[async_trait]
+impl ToolSpec for ClaudeTaskTool {
+    fn name(&self) -> &'static str {
+        "Task"
+    }
+
+    fn description(&self) -> &'static str {
+        "Start a named Claude Code-style sub-agent for focused background work. Use description as the short UI label, prompt as the full assignment, and subagent_type for a built-in type or custom role name. Returns immediately with the child session snapshot; use agent_eval to read or wait on it."
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string",
+                    "description": "Short human-readable task label shown in the transcript, e.g. \"Review parser\"."
+                },
+                "prompt": {
+                    "type": "string",
+                    "description": "Full assignment for the sub-agent."
+                },
+                "subagent_type": {
+                    "type": "string",
+                    "description": "Built-in type (general, explore, plan, review, implementer, verifier) or custom role name."
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Optional stable session name. Defaults to a slug derived from description."
+                },
+                "model": {
+                    "type": "string",
+                    "description": "Optional DeepSeek model id for this child"
+                },
+                "cwd": {
+                    "type": "string",
+                    "description": "Optional working directory for the child; must be inside the parent workspace"
+                },
+                "fork_context": {
+                    "type": "boolean",
+                    "description": "When true, inherit the parent's system prompt and conversation prefix before appending this task. Defaults to false."
+                },
+                "max_depth": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 3,
+                    "description": "Recursive child-agent budget for this session. 0 blocks agent_open from the child; 1-3 allow that many descendant levels."
+                }
+            },
+            "required": ["description", "prompt"]
+        })
+    }
+
+    fn capabilities(&self) -> Vec<ToolCapability> {
+        vec![
+            ToolCapability::ExecutesCode,
+            ToolCapability::RequiresApproval,
+        ]
+    }
+
+    fn approval_requirement(&self) -> ApprovalRequirement {
+        ApprovalRequirement::Required
+    }
+
+    async fn execute(&self, input: Value, context: &ToolContext) -> Result<ToolResult, ToolError> {
+        AgentSpawnTool::with_name(self.manager.clone(), self.runtime.clone(), "Task")
+            .execute(input, context)
+            .await
     }
 }
 
@@ -2050,6 +2159,18 @@ impl ToolSpec for AgentSpawnTool {
                 "agent_name": {
                     "type": "string",
                     "description": "Alias for type"
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Short human-readable label for this sub-agent. Used for display and for the auto-generated session name when name is omitted."
+                },
+                "display_name": {
+                    "type": "string",
+                    "description": "Alias for description"
+                },
+                "subagent_type": {
+                    "type": "string",
+                    "description": "Claude Code-compatible alias for type/role. Built-ins include general, explore, plan, review, implementer, verifier; custom names are treated as role overlays."
                 },
                 "role": {
                     "type": "string",
@@ -2169,6 +2290,7 @@ impl ToolSpec for AgentSpawnTool {
         }
         if let Some(cwd) = validated_cwd {
             child_runtime.context.workspace = cwd;
+            isolate_subagent_shell_manager(&mut child_runtime.context);
         }
         let configured_model = match spawn_request.model.clone() {
             Some(model) => Some(model),
@@ -2234,7 +2356,7 @@ impl ToolSpec for AgentSpawnTool {
                 SubAgentSpawnOptions {
                     name: spawn_request.session_name.clone(),
                     model: Some(effective_model),
-                    nickname: None,
+                    nickname: spawn_request.display_name.clone(),
                     fork_context: spawn_request.fork_context,
                 },
             )
@@ -3420,6 +3542,8 @@ pub(crate) fn emit_parent_completion(
 fn subagent_done_sentinel(agent_id: &str, res: &SubAgentResult) -> String {
     let payload = json!({
         "agent_id": agent_id,
+        "name": res.name.as_str(),
+        "display_name": res.nickname.as_deref().unwrap_or(res.name.as_str()),
         "agent_type": res.agent_type.as_str(),
         "status": subagent_status_name(&res.status),
         "summary_location": "previous_line",
@@ -3482,7 +3606,11 @@ async fn run_subagent(
     }
     let tools = tool_registry.tools_for_model(&agent_type);
     if let Some(mb) = runtime.mailbox.as_ref() {
-        let _ = mb.send(MailboxMessage::started(&agent_id, agent_type.clone(), &prompt));
+        let _ = mb.send(MailboxMessage::started(
+            &agent_id,
+            agent_type.clone(),
+            &assignment.objective,
+        ));
     }
     emit_agent_progress(
         runtime.event_tx.as_ref(),
@@ -4070,32 +4198,32 @@ fn parse_spawn_request(input: &Value) -> Result<SpawnRequest, ToolError> {
         "items",
         "prompt",
     )?;
+    let type_input = optional_input_str(
+        input,
+        &["type", "agent_type", "agent_name", "subagent_type"],
+    );
+    let role_input = optional_input_str(input, &["role", "agent_role"]);
+    let display_name = optional_input_str(input, &["description", "display_name"])
+        .map(compact_subagent_display_name)
+        .or_else(|| {
+            Some(derive_subagent_display_name(
+                &prompt, type_input, role_input,
+            ))
+        })
+        .filter(|name| !name.trim().is_empty());
     let session_name = optional_input_str(input, &["name", "session_name"])
         .map(validate_session_name)
-        .transpose()?;
+        .transpose()?
+        .or_else(|| {
+            display_name
+                .as_deref()
+                .map(|name| slugify_agent_name(name, "agent"))
+                .filter(|name| !name.trim().is_empty())
+        });
 
-    let type_input = optional_input_str(input, &["type", "agent_type", "agent_name"]);
-    let role_input = optional_input_str(input, &["role", "agent_role"]);
+    let parsed_type = type_input.and_then(SubAgentType::from_str);
 
-    let parsed_type = type_input
-        .map(|kind| {
-            SubAgentType::from_str(kind).ok_or_else(|| {
-                ToolError::invalid_input(format!(
-                    "Invalid sub-agent type '{kind}'. Use: {VALID_SUBAGENT_TYPES}"
-                ))
-            })
-        })
-        .transpose()?;
-
-    let parsed_role_type = role_input
-        .map(|role| {
-            SubAgentType::from_str(role).ok_or_else(|| {
-                ToolError::invalid_input(format!(
-                    "Invalid role alias '{role}'. Use: worker, explorer, awaiter, default"
-                ))
-            })
-        })
-        .transpose()?;
+    let parsed_role_type = role_input.and_then(SubAgentType::from_str);
 
     if let (Some(type_kind), Some(role_kind)) = (&parsed_type, &parsed_role_type)
         && type_kind != role_kind
@@ -4109,18 +4237,10 @@ fn parse_spawn_request(input: &Value) -> Result<SpawnRequest, ToolError> {
         .or(parsed_role_type)
         .unwrap_or(SubAgentType::General);
 
-    if let Some(role) = role_input
-        && normalize_role_alias(role).is_none()
-    {
-        return Err(ToolError::invalid_input(format!(
-            "Invalid role alias '{role}'. Use: worker, explorer, awaiter, default"
-        )));
-    }
-
-    let role = role_input
-        .and_then(normalize_role_alias)
-        .or_else(|| type_input.and_then(normalize_role_alias))
-        .map(str::to_string);
+    let role = match role_input {
+        Some(role) => Some(normalize_role_name(role)?),
+        None => type_input.map(normalize_role_name).transpose()?,
+    };
 
     let allowed_tools = input
         .get("allowed_tools")
@@ -4171,9 +4291,10 @@ fn parse_spawn_request(input: &Value) -> Result<SpawnRequest, ToolError> {
 
     Ok(SpawnRequest {
         session_name,
+        display_name: display_name.clone(),
         prompt: prompt.clone(),
         agent_type,
-        assignment: SubAgentAssignment::new(prompt, role),
+        assignment: SubAgentAssignment::new(display_name.unwrap_or_else(|| prompt.clone()), role),
         allowed_tools,
         model,
         cwd,
@@ -4203,6 +4324,33 @@ fn validate_session_name(name: &str) -> Result<String, ToolError> {
         ));
     }
     Ok(trimmed.to_string())
+}
+
+fn compact_subagent_display_name(name: &str) -> String {
+    const MAX_CHARS: usize = 64;
+    let one_line = name.split_whitespace().collect::<Vec<_>>().join(" ");
+    let trimmed = one_line.trim();
+    if trimmed.chars().count() <= MAX_CHARS {
+        return trimmed.to_string();
+    }
+    let mut out = trimmed
+        .chars()
+        .take(MAX_CHARS.saturating_sub(3))
+        .collect::<String>();
+    out.push_str("...");
+    out
+}
+
+fn derive_subagent_display_name(
+    prompt: &str,
+    type_input: Option<&str>,
+    role_input: Option<&str>,
+) -> String {
+    role_input
+        .or(type_input)
+        .map(compact_subagent_display_name)
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| compact_subagent_display_name(prompt))
 }
 
 fn parse_optional_bool(input: &Value, names: &[&str]) -> Option<bool> {
@@ -4456,15 +4604,9 @@ fn parse_assign_request(input: &Value) -> Result<AssignRequest, ToolError> {
         .to_string();
     let objective = optional_input_str(input, &["objective"]).map(str::to_string);
     let role = optional_input_str(input, &["role", "agent_role"])
-        .map(|role| {
-            normalize_role_alias(role).ok_or_else(|| {
-                ToolError::invalid_input(format!(
-                    "Invalid role alias '{role}'. Use: worker, explorer, awaiter, default"
-                ))
-            })
-        })
+        .map(normalize_role_name)
         .transpose()?
-        .map(str::to_string);
+        .map(|role| role.to_string());
     let message = parse_optional_text_or_items(input, &["message", "input"], "items")?;
     let interrupt = optional_bool(input, "interrupt", true);
 
@@ -4490,8 +4632,34 @@ fn normalize_role_alias(input: &str) -> Option<&'static str> {
         "worker" | "general" => Some("worker"),
         "explorer" | "explore" => Some("explorer"),
         "awaiter" | "plan" | "planner" => Some("awaiter"),
+        "review" | "reviewer" | "code-review" | "code_review" => Some("review"),
+        "implementer" | "implement" | "implementation" | "builder" => Some("implementer"),
+        "verifier" | "verify" | "verification" | "validator" | "tester" => Some("verifier"),
         _ => None,
     }
+}
+
+fn normalize_role_name(input: &str) -> Result<String, ToolError> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err(ToolError::invalid_input("role cannot be blank"));
+    }
+    if trimmed.chars().any(char::is_whitespace) {
+        return Err(ToolError::invalid_input(
+            "role must not contain whitespace; use letters, numbers, '-', '_', or '.'",
+        ));
+    }
+    if !trimmed
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+    {
+        return Err(ToolError::invalid_input(
+            "role may only contain ASCII letters, numbers, '-', '_', or '.'",
+        ));
+    }
+    Ok(normalize_role_alias(trimmed)
+        .map(str::to_string)
+        .unwrap_or_else(|| trimmed.to_string()))
 }
 
 fn build_assignment_prompt(
@@ -4609,7 +4777,7 @@ impl SubAgentToolRegistry {
     fn tools_for_model(&self, agent_type: &SubAgentType) -> Vec<Tool> {
         let disallowed = match agent_type {
             // Review agents should not spawn sub-agents (#1489).
-            SubAgentType::Review => &["agent_spawn"][..],
+            SubAgentType::Review => &["Task", "agent_open", "agent_spawn"][..],
             _ => &[][..],
         };
         let api_tools = self.registry.to_api_tools();

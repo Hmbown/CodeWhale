@@ -1527,43 +1527,56 @@ pub(crate) fn subagent_view_agents(
     }
 
     for cell in &app.history {
-        match cell {
-            HistoryCell::SubAgent(SubAgentCell::Delegate(card))
-                if seen.insert(card.agent_id.clone()) =>
-            {
-                let agent_type =
-                    SubAgentType::from_str(&card.agent_type).unwrap_or(SubAgentType::General);
-                agents.push(live_subagent_result(
-                    &card.agent_id,
-                    agent_type,
-                    lifecycle_to_subagent_status(card.status),
-                    card.summary.as_deref().unwrap_or(card.agent_type.as_str()),
-                    Some("transcript"),
-                ));
-            }
-            HistoryCell::SubAgent(SubAgentCell::Fanout(card)) => {
-                for worker in &card.workers {
-                    if seen.insert(worker.agent_id.clone()) {
-                        let objective = format!(
-                            "{} worker {}",
-                            summarize_tool_output(&card.kind),
-                            summarize_tool_output(&worker.worker_id)
-                        );
-                        agents.push(live_subagent_result(
-                            &worker.agent_id,
-                            SubAgentType::General,
-                            lifecycle_to_subagent_status(worker.status),
-                            &objective,
-                            Some(card.kind.as_str()),
-                        ));
-                    }
-                }
-            }
-            _ => {}
+        collect_live_subagents_from_cell(cell, &mut seen, &mut agents);
+    }
+    if let Some(active) = app.active_cell.as_ref() {
+        for cell in active.entries() {
+            collect_live_subagents_from_cell(cell, &mut seen, &mut agents);
         }
     }
 
     agents
+}
+
+fn collect_live_subagents_from_cell(
+    cell: &HistoryCell,
+    seen: &mut std::collections::HashSet<String>,
+    agents: &mut Vec<SubAgentResult>,
+) {
+    match cell {
+        HistoryCell::SubAgent(SubAgentCell::Delegate(card))
+            if seen.insert(card.agent_id.clone()) =>
+        {
+            let agent_type =
+                SubAgentType::from_str(&card.agent_type).unwrap_or(SubAgentType::General);
+            agents.push(live_subagent_result(
+                &card.agent_id,
+                agent_type,
+                lifecycle_to_subagent_status(card.status),
+                card.summary.as_deref().unwrap_or(card.agent_type.as_str()),
+                Some("transcript"),
+            ));
+        }
+        HistoryCell::SubAgent(SubAgentCell::Fanout(card)) => {
+            for worker in &card.workers {
+                if seen.insert(worker.agent_id.clone()) {
+                    let objective = format!(
+                        "{} worker {}",
+                        summarize_tool_output(&card.kind),
+                        summarize_tool_output(&worker.worker_id)
+                    );
+                    agents.push(live_subagent_result(
+                        &worker.agent_id,
+                        SubAgentType::General,
+                        lifecycle_to_subagent_status(worker.status),
+                        &objective,
+                        Some(card.kind.as_str()),
+                    ));
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 fn lifecycle_to_subagent_status(status: AgentLifecycle) -> SubAgentStatus {
@@ -1834,7 +1847,8 @@ fn append_subagent_group(
     )));
 
     for agent in agents {
-        let id = truncate_view_text(&agent.agent_id, 11);
+        let label = subagent_display_label(agent);
+        let id = truncate_view_text(&label, 11);
         let kind = format_agent_type(&agent.agent_type);
         let (status, status_style, status_detail) = format_agent_status(&agent.status);
 
@@ -1898,6 +1912,16 @@ fn append_subagent_group(
     }
 
     lines.push(Line::from(""));
+}
+
+fn subagent_display_label(agent: &SubAgentResult) -> String {
+    agent
+        .nickname
+        .as_deref()
+        .filter(|name| !name.trim().is_empty())
+        .or_else(|| (!agent.name.trim().is_empty()).then_some(agent.name.as_str()))
+        .unwrap_or(agent.agent_id.as_str())
+        .to_string()
 }
 
 fn agent_type_order(agent_type: &SubAgentType) -> u8 {

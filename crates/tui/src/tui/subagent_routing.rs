@@ -28,8 +28,9 @@ pub(super) fn active_fanout_counts(app: &App) -> Option<(usize, usize)> {
     // Read running count from the canonical slot states on the active
     // FanoutCard, if one exists. Used by `rlm` and any future multi-child
     // dispatch the parent agent makes via repeated `agent_spawn`.
-    if let Some(idx) = app.last_fanout_card_index
-        && let Some(HistoryCell::SubAgent(SubAgentCell::Fanout(card))) = app.history.get(idx)
+    if let Some(idx) = find_fanout_card_index(app, app.last_fanout_card_index)
+        && let Some(HistoryCell::SubAgent(SubAgentCell::Fanout(card))) =
+            app.cell_at_virtual_index(idx)
     {
         let running = card
             .workers
@@ -88,6 +89,81 @@ pub(super) fn sort_subagents_in_place(agents: &mut [SubAgentResult]) {
     });
 }
 
+fn subagent_cell_matches_agent(cell: &HistoryCell, agent_id: &str) -> bool {
+    match cell {
+        HistoryCell::SubAgent(SubAgentCell::Delegate(card)) => card.agent_id == agent_id,
+        HistoryCell::SubAgent(SubAgentCell::Fanout(card)) => card
+            .workers
+            .iter()
+            .any(|worker| worker.agent_id == agent_id),
+        _ => false,
+    }
+}
+
+fn find_subagent_card_index(app: &App, agent_id: &str) -> Option<usize> {
+    if let Some(&idx) = app.subagent_card_index.get(agent_id)
+        && app
+            .cell_at_virtual_index(idx)
+            .is_some_and(|cell| subagent_cell_matches_agent(cell, agent_id))
+    {
+        return Some(idx);
+    }
+
+    for (idx, cell) in app.history.iter().enumerate() {
+        if subagent_cell_matches_agent(cell, agent_id) {
+            return Some(idx);
+        }
+    }
+    if let Some(active) = app.active_cell.as_ref() {
+        let base = app.history.len();
+        for (offset, cell) in active.entries().iter().enumerate() {
+            if subagent_cell_matches_agent(cell, agent_id) {
+                return Some(base + offset);
+            }
+        }
+    }
+    None
+}
+
+fn find_fanout_card_index(app: &App, preferred: Option<usize>) -> Option<usize> {
+    if let Some(idx) = preferred
+        && matches!(
+            app.cell_at_virtual_index(idx),
+            Some(HistoryCell::SubAgent(SubAgentCell::Fanout(_)))
+        )
+    {
+        return Some(idx);
+    }
+
+    if let Some(active) = app.active_cell.as_ref() {
+        let base = app.history.len();
+        for (offset, cell) in active.entries().iter().enumerate().rev() {
+            if matches!(cell, HistoryCell::SubAgent(SubAgentCell::Fanout(_))) {
+                return Some(base + offset);
+            }
+        }
+    }
+    app.history
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(idx, cell)| {
+            matches!(cell, HistoryCell::SubAgent(SubAgentCell::Fanout(_))).then_some(idx)
+        })
+}
+
+fn push_subagent_card(app: &mut App, card: SubAgentCell) -> usize {
+    let cell = HistoryCell::SubAgent(card);
+    if let Some(active) = app.active_cell.as_mut() {
+        let entry_idx = active.push_untracked(cell);
+        app.bump_active_cell_revision();
+        app.history.len() + entry_idx
+    } else {
+        app.add_message(cell);
+        app.history.len().saturating_sub(1)
+    }
+}
+
 /// Route a `MailboxMessage` envelope to the matching in-transcript card,
 /// allocating a `DelegateCard` or `FanoutCard` on first sight (issue #128).
 pub(super) fn handle_subagent_mailbox(app: &mut App, seq: u64, message: &MailboxMessage) {
@@ -108,18 +184,21 @@ pub(super) fn handle_subagent_mailbox(app: &mut App, seq: u64, message: &Mailbox
     let agent_id = message.agent_id().to_string();
 
     if matches!(message, MailboxMessage::ChildSpawned { .. })
-        && let Some(idx) = app.last_fanout_card_index
-        && let Some(HistoryCell::SubAgent(SubAgentCell::Fanout(card))) = app.history.get_mut(idx)
+        && let Some(idx) = find_fanout_card_index(app, app.last_fanout_card_index)
+        && let Some(HistoryCell::SubAgent(SubAgentCell::Fanout(card))) =
+            app.cell_at_virtual_index_mut(idx)
     {
         apply_to_fanout(card, message);
         app.subagent_card_index.insert(agent_id, idx);
+        app.last_fanout_card_index = Some(idx);
         app.mark_history_updated();
         return;
     }
 
     // Existing card for this agent_id? Mutate in place.
-    if let Some(&idx) = app.subagent_card_index.get(&agent_id) {
-        let updated = match app.history.get_mut(idx) {
+    if let Some(idx) = find_subagent_card_index(app, &agent_id) {
+        app.subagent_card_index.insert(agent_id.clone(), idx);
+        let updated = match app.cell_at_virtual_index_mut(idx) {
             Some(HistoryCell::SubAgent(SubAgentCell::Delegate(card))) => {
                 apply_to_delegate(card, message)
             }
@@ -146,34 +225,33 @@ pub(super) fn handle_subagent_mailbox(app: &mut App, seq: u64, message: &Mailbox
         return;
     };
 
-    let dispatch_kind = app.pending_subagent_dispatch.as_deref();
+    let dispatch_kind = app.pending_subagent_dispatch.clone();
+    let dispatch_kind = dispatch_kind.as_deref();
     let is_fanout = matches!(dispatch_kind, Some("rlm_open" | "rlm_eval" | "rlm"));
 
     if is_fanout {
         // Reuse the active fanout card for sibling spawns; otherwise create
         // one anchored at this position so subsequent siblings join it.
-        if let Some(idx) = app.last_fanout_card_index
+        if let Some(idx) = find_fanout_card_index(app, app.last_fanout_card_index)
             && let Some(HistoryCell::SubAgent(SubAgentCell::Fanout(card))) =
-                app.history.get_mut(idx)
+                app.cell_at_virtual_index_mut(idx)
         {
             card.claim_pending_worker(&agent_id, AgentLifecycle::Running);
             app.subagent_card_index.insert(agent_id, idx);
+            app.last_fanout_card_index = Some(idx);
         } else {
             let mut card = FanoutCard::new(dispatch_kind.unwrap_or("rlm_eval").to_string());
             card.upsert_worker(&agent_id, AgentLifecycle::Running);
-            app.add_message(HistoryCell::SubAgent(SubAgentCell::Fanout(card)));
-            let idx = app.history.len().saturating_sub(1);
+            let idx = push_subagent_card(app, SubAgentCell::Fanout(card));
             app.last_fanout_card_index = Some(idx);
             app.subagent_card_index.insert(agent_id, idx);
         }
     } else {
-        let card = DelegateCard::new(
-            agent_id.clone(),
-            agent_type.clone(),
-            summarize_tool_output(objective),
-        );
-        app.add_message(HistoryCell::SubAgent(SubAgentCell::Delegate(card)));
-        let idx = app.history.len().saturating_sub(1);
+        let objective_summary = summarize_tool_output(objective);
+        let task_summary =
+            delegate_task_summary_from_pending_label(app, agent_type, &objective_summary);
+        let card = DelegateCard::new(agent_id.clone(), agent_type.clone(), task_summary);
+        let idx = push_subagent_card(app, SubAgentCell::Delegate(card));
         app.subagent_card_index.insert(agent_id, idx);
         // Single delegate consumes the pending dispatch label so a follow-on
         // tool call doesn't accidentally inherit it.
@@ -181,6 +259,49 @@ pub(super) fn handle_subagent_mailbox(app: &mut App, seq: u64, message: &Mailbox
     }
 
     app.mark_history_updated();
+}
+
+fn delegate_task_summary_from_pending_label(
+    app: &mut App,
+    agent_type: &str,
+    objective_summary: &str,
+) -> String {
+    if let Some(label) = app.pending_subagent_labels.pop_front()
+        && is_specific_subagent_label(&label, agent_type)
+    {
+        return label;
+    }
+    objective_summary.to_string()
+}
+
+fn is_specific_subagent_label(label: &str, agent_type: &str) -> bool {
+    let trimmed = label.trim();
+    if trimmed.is_empty()
+        || trimmed.starts_with('<')
+        || trimmed.starts_with("agent_")
+        || trimmed.eq_ignore_ascii_case(agent_type)
+    {
+        return false;
+    }
+    !matches!(
+        trimmed.to_ascii_lowercase().as_str(),
+        "default"
+            | "general"
+            | "worker"
+            | "explore"
+            | "explorer"
+            | "plan"
+            | "planner"
+            | "awaiter"
+            | "review"
+            | "reviewer"
+            | "implementer"
+            | "implement"
+            | "verifier"
+            | "verify"
+            | "validator"
+            | "tester"
+    )
 }
 
 pub(super) fn task_mode_label(mode: AppMode) -> &'static str {

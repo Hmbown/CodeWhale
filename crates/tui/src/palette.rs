@@ -1332,14 +1332,13 @@ mod tests {
         ACCENT_REASONING_LIVE, BLUE, ColorDepth, DEEPSEEK_BLUE, DEEPSEEK_INK, DEEPSEEK_RED,
         DEEPSEEK_SKY, DEEPSEEK_SLATE, GRAYSCALE_BORDER, GRAYSCALE_ELEVATED, GRAYSCALE_PANEL,
         GRAYSCALE_REASONING, GRAYSCALE_SURFACE, GRAYSCALE_TEXT_BODY, GRAYSCALE_TEXT_HINT,
-        GRAYSCALE_TEXT_SOFT, GRAYSCALE_UI_THEME, INK, LIGHT_BORDER, LIGHT_ELEVATED,
-        LIGHT_PANEL, LIGHT_REASONING, LIGHT_SURFACE, LIGHT_TEXT_BODY, LIGHT_TEXT_HINT,
-        LIGHT_UI_THEME, PaletteMode, RED, SKY, SURFACE_REASONING, SURFACE_REASONING_TINT,
-        TEXT_BODY, TEXT_HINT, TEXT_REASONING, TEXT_TOOL_OUTPUT, UI_THEME, UiTheme, adapt_bg,
-        adapt_bg_for_palette_mode, adapt_color, adapt_fg_for_palette_mode, blend,
-        nearest_ansi16, normalize_hex_rgb_color, normalize_theme_name, parse_hex_rgb_color,
-        pulse_brightness, reasoning_surface_tint, rgb_to_ansi256, theme_label_for_mode,
-        ui_theme_from_settings,
+        GRAYSCALE_TEXT_SOFT, GRAYSCALE_UI_THEME, INK, LIGHT_BORDER, LIGHT_ELEVATED, LIGHT_PANEL,
+        LIGHT_REASONING, LIGHT_SURFACE, LIGHT_TEXT_BODY, LIGHT_TEXT_HINT, LIGHT_UI_THEME,
+        PaletteMode, RED, SKY, SURFACE_REASONING, SURFACE_REASONING_TINT, TEXT_BODY, TEXT_HINT,
+        TEXT_REASONING, TEXT_TOOL_OUTPUT, UI_THEME, UiTheme, adapt_bg, adapt_bg_for_palette_mode,
+        adapt_color, adapt_fg_for_palette_mode, blend, nearest_ansi16, normalize_hex_rgb_color,
+        normalize_theme_name, parse_hex_rgb_color, pulse_brightness, reasoning_surface_tint,
+        rgb_to_ansi256, theme_label_for_mode, ui_theme_from_settings,
     };
     use ratatui::style::Color;
 
