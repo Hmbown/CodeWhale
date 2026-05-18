@@ -225,6 +225,7 @@ pub enum Event {
     ApprovalRequired {
         id: String,
         tool_name: String,
+        input: serde_json::Value,
         description: String,
         /// Exact-argument fingerprint, used to scope *denials* (#1617).
         approval_key: String,

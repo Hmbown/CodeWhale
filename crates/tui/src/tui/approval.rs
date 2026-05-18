@@ -120,14 +120,10 @@ pub struct ApprovalRequest {
     pub id: String,
     /// Tool being executed
     pub tool_name: String,
-    /// Human-readable tool description from the engine
-    pub description: String,
     /// Tool category
     pub category: ToolCategory,
     /// Stakes-based routing for the takeover modal
     pub risk: RiskLevel,
-    /// Derived impact summary for the approval prompt
-    pub impacts: Vec<String>,
     /// Tool parameters (for display)
     pub params: Value,
     /// Exact-argument fingerprint, used to scope *denials* (#1617).
@@ -135,15 +131,29 @@ pub struct ApprovalRequest {
     /// Lossy / arity-aware fingerprint, used to scope *approvals* so an
     /// "approve for session" covers later flag variants (v0.8.37).
     pub approval_grouping_key: String,
+    /// Current workspace directory, used to annotate cwd as "(current)".
+    pub workspace: Option<String>,
 }
 
 impl ApprovalRequest {
+    #[cfg(test)]
     pub fn new(
         id: &str,
         tool_name: &str,
         description: &str,
         params: &Value,
         approval_key: &str,
+    ) -> Self {
+        Self::new_with_workspace(id, tool_name, description, params, approval_key, None)
+    }
+
+    pub fn new_with_workspace(
+        id: &str,
+        tool_name: &str,
+        _description: &str,
+        params: &Value,
+        approval_key: &str,
+        workspace: Option<String>,
     ) -> Self {
         let category = get_tool_category(tool_name);
         let risk = classify_risk(tool_name, category, params);
@@ -153,36 +163,68 @@ impl ApprovalRequest {
         Self {
             id: id.to_string(),
             tool_name: tool_name.to_string(),
-            description: description.to_string(),
             category,
             risk,
-            impacts: build_impact_summary(tool_name, category, params),
             params: params.clone(),
             approval_key: approval_key.to_string(),
             approval_grouping_key,
+            workspace,
         }
     }
 
-    /// Format parameters for display (truncated)
-    pub fn params_display(&self) -> String {
-        let truncated = truncate_params_value(&self.params, 200);
-        serde_json::to_string(&truncated).unwrap_or_else(|_| truncated.to_string())
-    }
-
-    pub fn description_for_locale(&self, locale: Locale) -> String {
-        match locale {
-            Locale::ZhHans => localized_description_zh_hans(self.category),
-            _ => self.description.clone(),
-        }
-    }
-
-    pub fn impacts_for_locale(&self, locale: Locale) -> Vec<String> {
-        match locale {
-            Locale::ZhHans => {
-                build_impact_summary_zh_hans(&self.tool_name, self.category, &self.params)
+    /// Extract the most important param values as (label, value) pairs for
+    /// prominent display in the approval widget.  Returns pairs like
+    /// `[("Command", "npm run build"), ("Dir", "/home/user")]`.
+    pub fn prominent_details(&self) -> Vec<(String, String)> {
+        let mut details = Vec::new();
+        match self.category {
+            ToolCategory::Shell => {
+                if let Some(cmd) = param_preview(&self.params, &["cmd", "command"], 120) {
+                    details.push(("Command".into(), cmd));
+                }
+                if let Some(dir) = param_preview(&self.params, &["workdir", "cwd"], 48) {
+                    let is_current = self
+                        .workspace
+                        .as_ref()
+                        .is_some_and(|ws| std::path::Path::new(&dir) == std::path::Path::new(ws));
+                    let label = if is_current {
+                        "(current)".to_string()
+                    } else {
+                        dir
+                    };
+                    details.push(("Dir".into(), label));
+                }
             }
-            _ => self.impacts.clone(),
+            ToolCategory::FileWrite => {
+                if let Some(path) =
+                    param_preview(&self.params, &["path", "target", "destination"], 96)
+                {
+                    details.push(("File".into(), path));
+                }
+            }
+            ToolCategory::Safe => {
+                if let Some(path) = param_preview(&self.params, &["path", "ref_id", "uri"], 96) {
+                    details.push(("Path".into(), path));
+                }
+            }
+            ToolCategory::Network => {
+                if let Some(target) =
+                    param_preview(&self.params, &["url", "q", "query", "location", "repo"], 96)
+                {
+                    details.push(("Target".into(), target));
+                }
+            }
+            _ => {
+                if let Some(val) = param_preview(
+                    &self.params,
+                    &["command", "path", "url", "q", "query", "ref_id"],
+                    96,
+                ) {
+                    details.push(("Input".into(), val));
+                }
+            }
         }
+        details
     }
 }
 
@@ -192,7 +234,10 @@ pub fn get_tool_category(name: &str) -> ToolCategory {
         ToolCategory::FileWrite
     } else if matches!(name, "web_run" | "web_search" | "fetch_url") {
         ToolCategory::Network
-    } else if name == "exec_shell" {
+    } else if matches!(
+        name,
+        "exec_shell" | "task_shell_start" | "exec_shell_wait" | "exec_shell_interact"
+    ) {
         ToolCategory::Shell
     } else if name.starts_with("list_mcp_")
         || name.starts_with("read_mcp_")
@@ -246,7 +291,11 @@ pub fn classify_risk(tool_name: &str, category: ToolCategory, params: &Value) ->
         // shape so a future routing tweak (say, pure-readonly `ls`
         // staying benign) lands here without a second pass.
         ToolCategory::Shell => {
-            if let Some(cmd) = params.get("command").and_then(Value::as_str) {
+            if let Some(cmd) = params
+                .get("command")
+                .or_else(|| params.get("cmd"))
+                .and_then(Value::as_str)
+            {
                 let _ = crate::command_safety::analyze_command(cmd);
             }
             RiskLevel::Destructive
@@ -289,163 +338,6 @@ fn param_preview(params: &Value, keys: &[&str], max_len: usize) -> Option<String
     }
 
     None
-}
-
-fn mcp_server_hint(tool_name: &str) -> Option<String> {
-    let remainder = tool_name.strip_prefix("mcp_")?;
-    let (server, _) = remainder.split_once('_')?;
-    if server.is_empty() {
-        None
-    } else {
-        Some(server.to_string())
-    }
-}
-
-fn build_impact_summary(tool_name: &str, category: ToolCategory, params: &Value) -> Vec<String> {
-    match category {
-        ToolCategory::Safe => {
-            let mut impacts = vec!["Read-only operation.".to_string()];
-            if let Some(path) = param_preview(params, &["path", "ref_id", "uri"], 72) {
-                impacts.push(format!("Reads: {path}"));
-            }
-            impacts
-        }
-        ToolCategory::FileWrite => {
-            let mut impacts =
-                vec!["Writes files in the workspace or an approved write scope.".to_string()];
-            if let Some(path) = param_preview(params, &["path", "target", "destination"], 72) {
-                impacts.push(format!("Writes: {path}"));
-            }
-            impacts
-        }
-        ToolCategory::Shell => {
-            let mut impacts = vec!["Executes a shell command.".to_string()];
-            if let Some(command) = param_preview(params, &["cmd", "command"], 96) {
-                impacts.push(format!("Command: {command}"));
-            }
-            if let Some(workdir) = param_preview(params, &["workdir", "cwd"], 72) {
-                impacts.push(format!("Working dir: {workdir}"));
-            }
-            impacts
-        }
-        ToolCategory::Network => {
-            let mut impacts = vec!["May reach network services or remote content.".to_string()];
-            if let Some(target) =
-                param_preview(params, &["url", "q", "query", "location", "repo"], 96)
-            {
-                impacts.push(format!("Target: {target}"));
-            }
-            impacts
-        }
-        ToolCategory::McpRead => {
-            let mut impacts =
-                vec!["Reads from an MCP server without an obvious local write.".to_string()];
-            if let Some(server) = mcp_server_hint(tool_name) {
-                impacts.push(format!("Server: {server}"));
-            }
-            impacts
-        }
-        ToolCategory::McpAction => {
-            let mut impacts =
-                vec!["Calls an MCP server action that may have side effects.".to_string()];
-            if let Some(server) = mcp_server_hint(tool_name) {
-                impacts.push(format!("Server: {server}"));
-            }
-            impacts
-        }
-        ToolCategory::Unknown => {
-            let mut impacts = vec![
-                "Tool is not classified. Review params carefully before approving.".to_string(),
-            ];
-            if let Some(target) = param_preview(
-                params,
-                &["path", "cmd", "command", "url", "q", "query", "ref_id"],
-                96,
-            ) {
-                impacts.push(format!("Primary input: {target}"));
-            }
-            impacts
-        }
-    }
-}
-
-fn localized_description_zh_hans(category: ToolCategory) -> String {
-    match category {
-        ToolCategory::Safe => "请求执行只读操作。".to_string(),
-        ToolCategory::FileWrite => "请求修改文件。请确认路径和内容符合预期。".to_string(),
-        ToolCategory::Shell => "请求执行 shell 命令。请先检查命令和工作目录。".to_string(),
-        ToolCategory::Network => "请求访问网络或远程内容。请确认目标可信。".to_string(),
-        ToolCategory::McpRead => "请求从 MCP 服务器读取信息。".to_string(),
-        ToolCategory::McpAction => "请求调用 MCP 服务器操作，可能产生副作用。".to_string(),
-        ToolCategory::Unknown => "请求运行未分类工具。批准前请仔细检查参数。".to_string(),
-    }
-}
-
-fn build_impact_summary_zh_hans(
-    tool_name: &str,
-    category: ToolCategory,
-    params: &Value,
-) -> Vec<String> {
-    match category {
-        ToolCategory::Safe => {
-            let mut impacts = vec!["只读操作。".to_string()];
-            if let Some(path) = param_preview(params, &["path", "ref_id", "uri"], 72) {
-                impacts.push(format!("读取：{path}"));
-            }
-            impacts
-        }
-        ToolCategory::FileWrite => {
-            let mut impacts = vec!["会写入工作区或已批准写入范围内的文件。".to_string()];
-            if let Some(path) = param_preview(params, &["path", "target", "destination"], 72) {
-                impacts.push(format!("写入：{path}"));
-            }
-            impacts
-        }
-        ToolCategory::Shell => {
-            let mut impacts = vec!["执行 shell 命令。".to_string()];
-            if let Some(command) = param_preview(params, &["cmd", "command"], 96) {
-                impacts.push(format!("命令：{command}"));
-            }
-            if let Some(workdir) = param_preview(params, &["workdir", "cwd"], 72) {
-                impacts.push(format!("工作目录：{workdir}"));
-            }
-            impacts
-        }
-        ToolCategory::Network => {
-            let mut impacts = vec!["可能访问网络服务或远程内容。".to_string()];
-            if let Some(target) =
-                param_preview(params, &["url", "q", "query", "location", "repo"], 96)
-            {
-                impacts.push(format!("目标：{target}"));
-            }
-            impacts
-        }
-        ToolCategory::McpRead => {
-            let mut impacts = vec!["从 MCP 服务器读取信息，不应产生本地写入。".to_string()];
-            if let Some(server) = mcp_server_hint(tool_name) {
-                impacts.push(format!("服务器：{server}"));
-            }
-            impacts
-        }
-        ToolCategory::McpAction => {
-            let mut impacts = vec!["调用可能产生副作用的 MCP 服务器操作。".to_string()];
-            if let Some(server) = mcp_server_hint(tool_name) {
-                impacts.push(format!("服务器：{server}"));
-            }
-            impacts
-        }
-        ToolCategory::Unknown => {
-            let mut impacts = vec!["工具未分类。批准前请仔细检查参数。".to_string()];
-            if let Some(target) = param_preview(
-                params,
-                &["path", "cmd", "command", "url", "q", "query", "ref_id"],
-                96,
-            ) {
-                impacts.push(format!("主要输入：{target}"));
-            }
-            impacts
-        }
-    }
 }
 
 /// Indices into the option list shared by both variants. Visible to
@@ -685,34 +577,6 @@ impl ModalView for ApprovalView {
             return self.emit_decision(ReviewDecision::Denied, true);
         }
         ViewAction::None
-    }
-}
-
-fn truncate_params_value(value: &Value, max_len: usize) -> Value {
-    match value {
-        Value::Object(map) => {
-            let truncated = map
-                .iter()
-                .map(|(key, val)| (key.clone(), truncate_params_value(val, max_len)))
-                .collect();
-            Value::Object(truncated)
-        }
-        Value::Array(items) => {
-            let truncated_items = items
-                .iter()
-                .map(|val| truncate_params_value(val, max_len))
-                .collect();
-            Value::Array(truncated_items)
-        }
-        Value::String(text) => Value::String(truncate_string_value(text, max_len)),
-        other => {
-            let rendered = other.to_string();
-            if rendered.chars().count() > max_len {
-                Value::String(truncate_string_value(&rendered, max_len))
-            } else {
-                other.clone()
-            }
-        }
     }
 }
 
@@ -998,6 +862,12 @@ mod tests {
     #[test]
     fn test_get_tool_category_shell_tools() {
         assert_eq!(get_tool_category("exec_shell"), ToolCategory::Shell);
+        assert_eq!(get_tool_category("task_shell_start"), ToolCategory::Shell);
+        assert_eq!(get_tool_category("exec_shell_wait"), ToolCategory::Shell);
+        assert_eq!(
+            get_tool_category("exec_shell_interact"),
+            ToolCategory::Shell
+        );
         assert_eq!(
             get_tool_category("mcp_linear_save_issue"),
             ToolCategory::McpAction
@@ -1097,40 +967,8 @@ mod tests {
     }
 
     #[test]
-    fn test_approval_request_params_display_truncates() {
-        let long_content = "x".repeat(300);
-        let params = json!({"path": "src/main.rs", "content": long_content});
-        let request = ApprovalRequest::new(
-            "test-id",
-            "write_file",
-            "Write a file to disk",
-            &params,
-            "test_key",
-        );
-
-        let display = request.params_display();
-        assert!(display.len() < 250);
-        assert!(display.contains("src/main.rs"));
-    }
-
-    #[test]
-    fn test_approval_request_params_display_short() {
-        let params = json!({"path": "src/main.rs"});
-        let request = ApprovalRequest::new(
-            "test-id",
-            "read_file",
-            "Read a file from disk",
-            &params,
-            "test_key",
-        );
-
-        let display = request.params_display();
-        assert!(display.contains("src/main.rs"));
-    }
-
-    #[test]
-    fn test_approval_request_derives_impact_summary() {
-        let params = json!({"cmd": "cargo test", "workdir": "/tmp/project"});
+    fn test_prominent_details_shell() {
+        let params = json!({"command": "npm run build", "cwd": "/home/user"});
         let request = ApprovalRequest::new(
             "test-id",
             "exec_shell",
@@ -1138,20 +976,37 @@ mod tests {
             &params,
             "test_key",
         );
+        let details = request.prominent_details();
+        assert_eq!(details[0].0, "Command");
+        assert_eq!(details[0].1, "npm run build");
+        assert_eq!(details[1].0, "Dir");
+        assert_eq!(details[1].1, "/home/user");
+    }
 
-        assert_eq!(request.category, ToolCategory::Shell);
-        assert!(
-            request
-                .impacts
-                .iter()
-                .any(|line| line.contains("Executes a shell command"))
+    #[test]
+    fn test_prominent_details_shell_marks_current_dir() {
+        let params = json!({"command": "ls", "cwd": "/home/user/project"});
+        let request = ApprovalRequest::new_with_workspace(
+            "test-id",
+            "exec_shell",
+            "Run a shell command",
+            &params,
+            "test_key",
+            Some("/home/user/project".to_string()),
         );
-        assert!(
-            request
-                .impacts
-                .iter()
-                .any(|line| line.contains("cargo test"))
-        );
+        let details = request.prominent_details();
+        assert_eq!(details[1].0, "Dir");
+        assert_eq!(details[1].1, "(current)");
+    }
+
+    #[test]
+    fn test_prominent_details_file_write() {
+        let params = json!({"path": "src/main.rs", "content": "fn main() {}"});
+        let request =
+            ApprovalRequest::new("test-id", "write_file", "Write file", &params, "test_key");
+        let details = request.prominent_details();
+        assert_eq!(details[0].0, "File");
+        assert_eq!(details[0].1, "src/main.rs");
     }
 
     // ========================================================================
@@ -1566,7 +1421,9 @@ mod tests {
             joined.contains("Single key approves"),
             "benign hint missing:\n{joined}"
         );
-        assert!(joined.contains("read_file"));
+        assert!(joined.contains("Safe"));
+        assert!(joined.contains("Path"));
+        assert!(joined.contains("src/main.rs"));
     }
 
     #[test]
@@ -1582,7 +1439,13 @@ mod tests {
             joined.contains("Two keys to approve"),
             "destructive hint missing:\n{joined}"
         );
-        assert!(joined.contains("write_file"));
+        assert!(joined.contains("File Write"));
+        assert!(joined.contains("File"));
+        assert!(joined.contains("src/main.rs"));
+        assert!(
+            joined.contains("Approve file writes this session"),
+            "session approval label missing:\n{joined}"
+        );
     }
 
     #[test]
@@ -1594,6 +1457,10 @@ mod tests {
         assert!(
             joined.contains("Confirm destructive action"),
             "confirm banner missing:\n{joined}"
+        );
+        assert!(
+            joined.contains("Confirm file:"),
+            "confirm detail missing:\n{joined}"
         );
         assert!(
             joined.contains("(staged)"),
@@ -1618,17 +1485,18 @@ mod tests {
             joined.contains("文件写入"),
             "missing zh category:\n{joined}"
         );
+        assert!(joined.contains("File"), "missing file label:\n{joined}");
         assert!(
-            joined.contains("影响："),
-            "missing zh impact label:\n{joined}"
-        );
-        assert!(
-            joined.contains("写入：src/main.rs"),
-            "missing zh impact path:\n{joined}"
+            joined.contains("src/main.rs"),
+            "missing file path:\n{joined}"
         );
         assert!(
             joined.contains("仅本次批准"),
             "missing zh approve option:\n{joined}"
+        );
+        assert!(
+            joined.contains("本会话自动批准文件写入"),
+            "missing zh session approve option:\n{joined}"
         );
 
         view.handle_key(create_key_event(KeyCode::Char('y')));
@@ -1637,6 +1505,10 @@ mod tests {
         assert!(
             joined.contains("确认破坏性操作"),
             "missing zh confirm banner:\n{joined}"
+        );
+        assert!(
+            joined.contains("确认文件："),
+            "missing zh confirm detail:\n{joined}"
         );
         assert!(
             joined.contains("(待确认)"),

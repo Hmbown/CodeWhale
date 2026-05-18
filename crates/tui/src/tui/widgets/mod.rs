@@ -1049,13 +1049,13 @@ const APPROVAL_CARD_HORIZONTAL_PAD: u16 = 6;
 const APPROVAL_CARD_VERTICAL_PAD: u16 = 2;
 /// Minimum card height — anything tighter and the destructive variant's
 /// confirmation banner overlaps the option list.
-const APPROVAL_CARD_MIN_HEIGHT: u16 = 18;
+const APPROVAL_CARD_MIN_HEIGHT: u16 = 16;
 /// Minimum card width — anything tighter makes approval copy wrap too
 /// aggressively on small terminals.
 const APPROVAL_CARD_MIN_WIDTH: u16 = 40;
 /// Maximum card height — taller cards stop reading like a focused
 /// takeover and waste vertical space on large terminals.
-const APPROVAL_CARD_MAX_HEIGHT: u16 = 28;
+const APPROVAL_CARD_MAX_HEIGHT: u16 = 18;
 /// Maximum card width — readability craters past this on wide terminals.
 const APPROVAL_CARD_MAX_WIDTH: u16 = 96;
 
@@ -1098,9 +1098,10 @@ impl Renderable for ApprovalWidget<'_> {
         let palette_colors = approval_palette(risk);
         let mut lines: Vec<Line<'static>> = Vec::with_capacity(20);
 
-        // Header: stakes badge + tool identifier. The badge is the
-        // first thing the eye lands on.
+        // Header: stakes badge + plain category. Keep the tool id out of
+        // the first read path so the command/path remains the focus.
         lines.push(Line::from(""));
+        let (cat_label, cat_color) = category_label_for(self.request.category, locale);
         lines.push(Line::from(vec![
             Span::raw("  "),
             Span::styled(
@@ -1112,67 +1113,49 @@ impl Renderable for ApprovalWidget<'_> {
             ),
             Span::raw("  "),
             Span::styled(
-                self.request.tool_name.clone(),
-                Style::default()
-                    .fg(palette::DEEPSEEK_SKY)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]));
-
-        // Category line — English remains the baseline while localized
-        // sessions get the same risk category in their UI language.
-        let (cat_label, cat_color) = category_label_for(self.request.category, locale);
-        lines.push(Line::from(vec![
-            Span::raw("  "),
-            Span::styled(label_type(locale), Style::default().fg(palette::TEXT_HINT)),
-            Span::styled(
                 cat_label,
                 Style::default().fg(cat_color).add_modifier(Modifier::BOLD),
             ),
         ]));
 
         lines.push(Line::from(""));
-        // About + impacts. Impact lines are the load-bearing content;
-        // they tell the user what will happen.
-        lines.push(Line::from(vec![
-            Span::raw("  "),
-            Span::styled(label_about(locale), Style::default().fg(palette::TEXT_HINT)),
-            Span::styled(
-                self.request.description_for_locale(locale),
-                Style::default().fg(palette::TEXT_BODY),
-            ),
-        ]));
-        for impact in self.request.impacts_for_locale(locale).into_iter().take(4) {
+        // Prominent key details (command, path, target) are the default
+        // body. Full JSON stays behind `v`.
+        let details = self.request.prominent_details();
+        if details.is_empty() {
             lines.push(Line::from(vec![
                 Span::raw("  "),
+                Span::styled(label_tool(locale), Style::default().fg(palette::TEXT_HINT)),
                 Span::styled(
-                    label_impact(locale),
-                    Style::default().fg(palette::TEXT_HINT),
+                    self.request.tool_name.clone(),
+                    Style::default()
+                        .fg(palette::TEXT_BODY)
+                        .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(impact, Style::default().fg(palette::TEXT_BODY)),
             ]));
+        } else {
+            for (label, value) in &details {
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        format!("{label:<7} "),
+                        Style::default()
+                            .fg(palette::DEEPSEEK_SKY)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        value.clone(),
+                        Style::default()
+                            .fg(palette::TEXT_BODY)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]));
+            }
         }
 
         lines.push(Line::from(""));
-        let params_str = self.request.params_display();
-        let params_width = card_area.width.saturating_sub(14) as usize;
-        let params_truncated =
-            crate::utils::truncate_with_ellipsis(&params_str, params_width.max(20), "...");
-        lines.push(Line::from(vec![
-            Span::raw("  "),
-            Span::styled(
-                label_params(locale),
-                Style::default().fg(palette::TEXT_HINT),
-            ),
-            Span::styled(
-                params_truncated,
-                Style::default().fg(palette::TEXT_SECONDARY),
-            ),
-        ]));
 
-        lines.push(Line::from(""));
-
-        let options = approval_options_for(risk, locale);
+        let options = approval_options_for(self.request, risk, locale);
         let pending = self.view.pending_confirm();
 
         for (i, opt) in options.iter().enumerate() {
@@ -1200,7 +1183,7 @@ impl Renderable for ApprovalWidget<'_> {
                         .fg(palette_colors.shortcut)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(opt.label.to_string(), row_style.fg(label_color)),
+                Span::styled(opt.label.clone(), row_style.fg(label_color)),
             ];
             if staged {
                 spans.push(Span::raw("  "));
@@ -1246,6 +1229,23 @@ impl Renderable for ApprovalWidget<'_> {
                     }
                     _ => "Enter",
                 };
+                // Show what is being confirmed so the user never loses
+                // context between the selection and the commit step.
+                if let Some((label, value)) = details.first() {
+                    lines.push(Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled(
+                            confirm_label(locale, label),
+                            Style::default().fg(palette::TEXT_BODY),
+                        ),
+                        Span::styled(
+                            value.clone(),
+                            Style::default()
+                                .fg(palette::TEXT_BODY)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                    ]));
+                }
                 lines.push(Line::from(vec![
                     Span::raw("  "),
                     Span::styled(
@@ -1419,31 +1419,24 @@ fn approval_word(locale: Locale) -> &'static str {
     }
 }
 
-fn label_type(locale: Locale) -> &'static str {
+fn label_tool(locale: Locale) -> &'static str {
     match locale {
-        Locale::ZhHans => "类型：",
-        _ => "Type: ",
+        Locale::ZhHans => "工具    ",
+        _ => "Tool    ",
     }
 }
 
-fn label_about(locale: Locale) -> &'static str {
+fn confirm_label(locale: Locale, detail_label: &str) -> String {
     match locale {
-        Locale::ZhHans => "说明：",
-        _ => "About:  ",
-    }
-}
-
-fn label_impact(locale: Locale) -> &'static str {
-    match locale {
-        Locale::ZhHans => "影响：",
-        _ => "Impact: ",
-    }
-}
-
-fn label_params(locale: Locale) -> &'static str {
-    match locale {
-        Locale::ZhHans => "参数：",
-        _ => "Params: ",
+        Locale::ZhHans => match detail_label {
+            "Command" => "确认命令：".to_string(),
+            "File" => "确认文件：".to_string(),
+            "Dir" => "确认目录：".to_string(),
+            "Target" => "确认目标：".to_string(),
+            "Path" => "确认路径：".to_string(),
+            _ => format!("确认{detail_label}："),
+        },
+        _ => format!("Confirm {}: ", detail_label.to_ascii_lowercase()),
     }
 }
 
@@ -1516,36 +1509,40 @@ fn two_key_value(locale: Locale) -> &'static str {
 
 struct ApprovalOptionRow {
     option: crate::tui::approval::ApprovalOption,
-    label: &'static str,
+    label: String,
     key_hint: &'static str,
     dangerous: bool,
 }
 
-fn approval_options_for(risk: RiskLevel, locale: Locale) -> [ApprovalOptionRow; 4] {
+fn approval_options_for(
+    request: &ApprovalRequest,
+    risk: RiskLevel,
+    locale: Locale,
+) -> [ApprovalOptionRow; 4] {
     use crate::tui::approval::ApprovalOption as O;
     let dangerous = matches!(risk, RiskLevel::Destructive);
     [
         ApprovalOptionRow {
             option: O::ApproveOnce,
-            label: option_approve_once(locale),
+            label: option_approve_once(locale).to_string(),
             key_hint: "1 / y",
             dangerous,
         },
         ApprovalOptionRow {
             option: O::ApproveAlways,
-            label: option_approve_always(locale),
+            label: option_approve_always(request.category, locale),
             key_hint: "2 / a",
             dangerous,
         },
         ApprovalOptionRow {
             option: O::Deny,
-            label: option_deny(locale),
+            label: option_deny(locale).to_string(),
             key_hint: "3 / d / n",
             dangerous: false,
         },
         ApprovalOptionRow {
             option: O::Abort,
-            label: option_abort(locale),
+            label: option_abort(locale).to_string(),
             key_hint: "Esc",
             dangerous: false,
         },
@@ -1559,10 +1556,14 @@ fn option_approve_once(locale: Locale) -> &'static str {
     }
 }
 
-fn option_approve_always(locale: Locale) -> &'static str {
-    match locale {
-        Locale::ZhHans => "本会话同类自动批准",
-        _ => "Approve always for this kind",
+fn option_approve_always(category: ToolCategory, locale: Locale) -> String {
+    match (locale, category) {
+        (Locale::ZhHans, ToolCategory::Shell) => "本会话自动批准 Shell 命令".to_string(),
+        (Locale::ZhHans, ToolCategory::FileWrite) => "本会话自动批准文件写入".to_string(),
+        (Locale::ZhHans, _) => "本会话同类自动批准".to_string(),
+        (_, ToolCategory::Shell) => "Approve shell commands this session".to_string(),
+        (_, ToolCategory::FileWrite) => "Approve file writes this session".to_string(),
+        _ => "Approve this kind this session".to_string(),
     }
 }
 
