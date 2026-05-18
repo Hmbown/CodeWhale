@@ -155,6 +155,11 @@ pub fn models(_app: &mut App) -> CommandResult {
     CommandResult::action(AppAction::FetchModels)
 }
 
+/// Fetch the current DeepSeek account balance.
+pub fn balance(_app: &mut App) -> CommandResult {
+    CommandResult::action(AppAction::FetchBalance)
+}
+
 /// List sub-agent status from the engine
 pub fn subagents(app: &mut App) -> CommandResult {
     if app.view_stack.top_kind() != Some(ModalKind::SubAgents) {

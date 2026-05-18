@@ -177,6 +177,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         description_id: MessageId::CmdModelsDescription,
     },
     CommandInfo {
+        name: "balance",
+        aliases: &["yue"],
+        usage: "/balance",
+        description_id: MessageId::CmdBalanceDescription,
+    },
+    CommandInfo {
         name: "provider",
         aliases: &[],
         usage: "/provider [name]",
@@ -549,6 +555,7 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "exit" | "quit" | "q" | "tuichu" => core::exit(),
         "model" | "moxing" => core::model(app, arg),
         "models" | "moxingliebiao" => core::models(app),
+        "balance" | "yue" => core::balance(app),
         "provider" => provider::provider(app, arg),
         "queue" | "queued" => queue::queue(app, arg),
         "stash" | "park" => stash::stash(app, arg),
@@ -1096,6 +1103,7 @@ mod tests {
         assert!(COMMANDS.iter().any(|cmd| cmd.name == "config"));
         assert!(COMMANDS.iter().any(|cmd| cmd.name == "links"));
         assert!(COMMANDS.iter().any(|cmd| cmd.name == "memory"));
+        assert!(COMMANDS.iter().any(|cmd| cmd.name == "balance"));
         assert!(!COMMANDS.iter().any(|cmd| cmd.name == "set"));
         assert!(!COMMANDS.iter().any(|cmd| cmd.name == "deepseek"));
     }
@@ -1262,6 +1270,14 @@ mod tests {
         let result = execute("/cache warmup", &mut app);
         assert!(result.message.is_none());
         assert!(matches!(result.action, Some(AppAction::CacheWarmup)));
+    }
+
+    #[test]
+    fn balance_command_dispatches_action() {
+        let mut app = create_test_app();
+        let result = execute("/balance", &mut app);
+        assert!(result.message.is_none());
+        assert!(matches!(result.action, Some(AppAction::FetchBalance)));
     }
 
     #[test]

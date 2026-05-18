@@ -6,6 +6,7 @@
 //! need to scroll past their bodies, and so the labels can be unit
 //! tested in isolation.
 
+use crate::client::AccountBalance;
 use crate::models::Usage;
 use crate::tui::app::App;
 
@@ -74,9 +75,39 @@ pub(super) fn available_models_message(current_model: &str, models: &[String]) -
     lines.join("\n")
 }
 
+pub(super) fn account_balance_message(provider: &str, balance: &AccountBalance) -> String {
+    let mut lines = vec![format!("Provider: {provider}")];
+    if balance.balance_infos.is_empty() {
+        lines.push("Balance : unavailable".to_string());
+    } else {
+        for info in &balance.balance_infos {
+            lines.push(format!(
+                "Balance : {} (topped up: {}, granted: {})",
+                format_money(&info.currency, &info.total_balance),
+                format_money(&info.currency, &info.topped_up_balance),
+                format_money(&info.currency, &info.granted_balance),
+            ));
+        }
+    }
+    lines.push(format!(
+        "Available: {}",
+        if balance.is_available { "yes" } else { "no" }
+    ));
+    lines.join("\n")
+}
+
+fn format_money(currency: &str, amount: &str) -> String {
+    match currency.trim().to_ascii_uppercase().as_str() {
+        "CNY" => format!("¥{amount}"),
+        "USD" => format!("${amount}"),
+        other => format!("{other} {amount}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::client::AccountBalanceInfo;
 
     #[test]
     fn available_models_message_marks_current_model() {
@@ -99,5 +130,26 @@ mod tests {
         };
         let msg = cache_warmup_result(&usage);
         assert!(msg.contains("cache telemetry unavailable"), "got: {msg}");
+    }
+
+    #[test]
+    fn account_balance_message_matches_deepseek_shape() {
+        let balance = AccountBalance {
+            is_available: true,
+            balance_infos: vec![AccountBalanceInfo {
+                currency: "CNY".to_string(),
+                total_balance: "8.66".to_string(),
+                topped_up_balance: "8.66".to_string(),
+                granted_balance: "0.00".to_string(),
+            }],
+        };
+
+        let msg = account_balance_message("deepseek", &balance);
+        assert!(msg.contains("Provider: deepseek"), "got: {msg}");
+        assert!(
+            msg.contains("Balance : ¥8.66 (topped up: ¥8.66, granted: ¥0.00)"),
+            "got: {msg}"
+        );
+        assert!(msg.contains("Available: yes"), "got: {msg}");
     }
 }

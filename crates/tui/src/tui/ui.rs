@@ -3474,6 +3474,11 @@ async fn fetch_available_models(config: &Config) -> Result<Vec<String>> {
     Ok(ids)
 }
 
+async fn fetch_account_balance(config: &Config) -> Result<crate::client::AccountBalance> {
+    let client = DeepSeekClient::new(config)?;
+    tokio::time::timeout(Duration::from_secs(20), client.account_balance()).await?
+}
+
 async fn run_cache_warmup(app: &App, config: &Config) -> Result<Usage> {
     let client = DeepSeekClient::new(config)?;
     let reasoning_effort = if app.reasoning_effort == ReasoningEffort::Auto {
@@ -4409,6 +4414,36 @@ async fn apply_command_result(
                             app.add_message(HistoryCell::System {
                                 content: format!("Failed to fetch models: {error}"),
                             });
+                        }
+                    }
+                }
+            }
+            AppAction::FetchBalance => {
+                let provider = config.api_provider();
+                if !matches!(provider, ApiProvider::Deepseek | ApiProvider::DeepseekCN) {
+                    app.add_message(HistoryCell::System {
+                        content: format!(
+                            "/balance is only supported by the DeepSeek provider. Current provider: {}",
+                            provider.display_name()
+                        ),
+                    });
+                } else {
+                    app.status_message = Some("Fetching account balance...".to_string());
+                    match fetch_account_balance(config).await {
+                        Ok(balance) => {
+                            app.add_message(HistoryCell::System {
+                                content: format_helpers::account_balance_message(
+                                    provider.as_str(),
+                                    &balance,
+                                ),
+                            });
+                            app.status_message = Some("Account balance fetched".to_string());
+                        }
+                        Err(error) => {
+                            app.add_message(HistoryCell::System {
+                                content: format!("Failed to fetch account balance: {error}"),
+                            });
+                            app.status_message = Some("Balance fetch failed".to_string());
                         }
                     }
                 }

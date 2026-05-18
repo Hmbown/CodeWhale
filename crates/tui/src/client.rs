@@ -119,6 +119,21 @@ pub struct AvailableModel {
     pub created: Option<u64>,
 }
 
+/// Account balance returned by DeepSeek's `/user/balance` endpoint.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct AccountBalance {
+    pub is_available: bool,
+    pub balance_infos: Vec<AccountBalanceInfo>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct AccountBalanceInfo {
+    pub currency: String,
+    pub total_balance: String,
+    pub granted_balance: String,
+    pub topped_up_balance: String,
+}
+
 /// Client for DeepSeek's OpenAI-compatible APIs.
 #[must_use]
 pub struct DeepSeekClient {
@@ -643,6 +658,26 @@ impl DeepSeekClient {
         parse_models_response(&response_text)
     }
 
+    /// Fetch the current DeepSeek account balance.
+    pub async fn account_balance(&self) -> Result<AccountBalance> {
+        let url = format!(
+            "{}/user/balance",
+            unversioned_base_url(&self.base_url).trim_end_matches('/')
+        );
+        let response = self.send_with_retry(|| self.http_client.get(&url)).await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let error_text = bounded_error_text(response, ERROR_BODY_MAX_BYTES).await;
+            anyhow::bail!("Failed to fetch account balance: HTTP {status}: {error_text}");
+        }
+
+        response
+            .json::<AccountBalance>()
+            .await
+            .context("Failed to parse account balance response")
+    }
+
     async fn wait_for_rate_limit(&self) {
         let maybe_delay = {
             let mut limiter = self.rate_limiter.lock().await;
@@ -1094,10 +1129,13 @@ mod tests {
         parse_chat_message, parse_sse_chunk, sanitize_thinking_mode_messages, tool_to_chat,
         tool_to_chat_for_base_url,
     };
+    use crate::config::Config;
     use crate::models::{
         ContentBlock, ContentBlockStart, Delta, Message, MessageRequest, StreamEvent, Tool,
     };
     use serde_json::json;
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
     fn tool_name_roundtrip_dot() {
@@ -2794,6 +2832,41 @@ mod tests {
             delay >= Duration::from_millis(400) && delay <= Duration::from_millis(600),
             "unexpected refill delay: {delay:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn account_balance_fetches_unversioned_user_balance_endpoint() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/user/balance"))
+            .and(header("authorization", "Bearer sk-test"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "is_available": true,
+                "balance_infos": [
+                    {
+                        "currency": "CNY",
+                        "total_balance": "8.66",
+                        "granted_balance": "0.00",
+                        "topped_up_balance": "8.66"
+                    }
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let config = Config {
+            api_key: Some("sk-test".to_string()),
+            base_url: Some(format!("{}/beta", server.uri())),
+            ..Config::default()
+        };
+        let client = DeepSeekClient::new(&config).expect("client should construct");
+
+        let balance = client.account_balance().await.expect("balance response");
+
+        assert!(balance.is_available);
+        assert_eq!(balance.balance_infos.len(), 1);
+        assert_eq!(balance.balance_infos[0].currency, "CNY");
+        assert_eq!(balance.balance_infos[0].total_balance, "8.66");
     }
 
     #[test]

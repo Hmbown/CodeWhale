@@ -246,6 +246,7 @@ pub enum MessageId {
     HelpFooterClose,
     CmdAttachDescription,
     CmdAnchorDescription,
+    CmdBalanceDescription,
     CmdCacheDescription,
     CmdChangeDescription,
     CmdChangeHeader,
@@ -484,6 +485,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::HelpFooterClose,
     MessageId::CmdAnchorDescription,
     MessageId::CmdAttachDescription,
+    MessageId::CmdBalanceDescription,
     MessageId::CmdCacheDescription,
     MessageId::CmdClearDescription,
     MessageId::CmdCompactDescription,
@@ -898,6 +900,7 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CmdAttachDescription => {
             "Attach image/video media; use @path for text files or directories"
         }
+        MessageId::CmdBalanceDescription => "Show DeepSeek API account balance",
         MessageId::CmdCacheDescription => {
             "Show DeepSeek prefix-cache hit/miss stats for the last N turns"
         }
@@ -1275,6 +1278,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::CmdAttachDescription => {
             "画像・動画メディアを添付（テキストファイルやディレクトリは @path）"
         }
+        MessageId::CmdBalanceDescription => "DeepSeek API アカウント残高を表示",
         MessageId::CmdCacheDescription => {
             "直近 N ターンの DeepSeek プレフィックスキャッシュのヒット/ミス統計を表示"
         }
@@ -1629,6 +1633,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::HelpFooterClose => " Esc 关闭 ",
         MessageId::CmdAnchorDescription => "钉选关键事实，在压缩后自动注入上下文",
         MessageId::CmdAttachDescription => "附加图片或视频媒体；文本文件或目录请使用 @path",
+        MessageId::CmdBalanceDescription => "显示 DeepSeek API 账户余额",
         MessageId::CmdCacheDescription => "显示最近 N 轮的 DeepSeek 前缀缓存命中/未命中统计",
         MessageId::CmdChangeDescription => "显示最新的更新日志",
         MessageId::CmdChangeHeader => "最新更新日志",
@@ -1939,6 +1944,7 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::CmdAttachDescription => {
             "Anexar imagem ou vídeo; use @path para arquivos de texto ou diretórios"
         }
+        MessageId::CmdBalanceDescription => "Exibir o saldo da conta da API DeepSeek",
         MessageId::CmdCacheDescription => {
             "Exibir estatísticas de hit/miss do cache de prefixo DeepSeek nas últimas N rodadas"
         }
@@ -2321,6 +2327,7 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::CmdAttachDescription => {
             "Adjuntar imagen o video; usa @ruta para archivos de texto o directorios"
         }
+        MessageId::CmdBalanceDescription => "Mostrar el saldo de la cuenta de la API DeepSeek",
         MessageId::CmdCacheDescription => {
             "Mostrar estadísticas de hit/miss del caché de prefijo DeepSeek en las últimas N rondas"
         }
