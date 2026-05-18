@@ -405,9 +405,15 @@ fn load_project_context_with_parents_and_home(
 
     // If no context found in workspace, check parent directories
     if !ctx.has_instructions() {
+        let home_boundary = home_dir.and_then(|home| fs::canonicalize(home).ok());
         let mut current = workspace.parent();
 
         while let Some(parent) = current {
+            if let Some(home) = home_boundary.as_ref()
+                && fs::canonicalize(parent).ok().as_ref() == Some(home)
+            {
+                break;
+            }
             let parent_ctx = load_project_context(parent);
             ctx.warnings.extend(parent_ctx.warnings.iter().cloned());
             if parent_ctx.has_instructions() {
@@ -982,14 +988,15 @@ mod tests {
 
     #[test]
     fn test_load_global_agents_when_project_has_no_context() {
-        let workspace = tempdir().expect("workspace tempdir");
         let home = tempdir().expect("home tempdir");
+        let workspace = home.path().join("workspace");
+        fs::create_dir(&workspace).expect("mkdir workspace");
         let global_dir = home.path().join(".deepseek");
         fs::create_dir(&global_dir).expect("mkdir .deepseek");
         let global_agents = global_dir.join("AGENTS.md");
         fs::write(&global_agents, "Global instructions").expect("write global agents");
 
-        let ctx = load_project_context_with_parents_and_home(workspace.path(), Some(home.path()));
+        let ctx = load_project_context_with_parents_and_home(&workspace, Some(home.path()));
 
         assert!(ctx.has_instructions());
         assert!(
@@ -1051,14 +1058,15 @@ mod tests {
     fn test_global_agents_only_no_project_unchanged_fallback() {
         // Sanity: when only the global file exists, the historical
         // fallback behaviour is preserved — no merge framing leaks in.
-        let workspace = tempdir().expect("workspace tempdir");
         let home = tempdir().expect("home tempdir");
+        let workspace = home.path().join("workspace");
+        fs::create_dir(&workspace).expect("mkdir workspace");
         let global_dir = home.path().join(".deepseek");
         fs::create_dir(&global_dir).expect("mkdir .deepseek");
         let global_agents = global_dir.join("AGENTS.md");
         fs::write(&global_agents, "Just the global instructions").expect("write global agents");
 
-        let ctx = load_project_context_with_parents_and_home(workspace.path(), Some(home.path()));
+        let ctx = load_project_context_with_parents_and_home(&workspace, Some(home.path()));
 
         assert!(ctx.has_instructions());
         let instructions = ctx.instructions.as_ref().unwrap();
@@ -1072,13 +1080,14 @@ mod tests {
 
     #[test]
     fn test_invalid_global_agents_warns_and_falls_back_to_generated_context() {
-        let workspace = tempdir().expect("workspace tempdir");
         let home = tempdir().expect("home tempdir");
+        let workspace = home.path().join("workspace");
+        fs::create_dir(&workspace).expect("mkdir workspace");
         let global_dir = home.path().join(".deepseek");
         fs::create_dir(&global_dir).expect("mkdir .deepseek");
         fs::write(global_dir.join("AGENTS.md"), "   \n  ").expect("write empty global agents");
 
-        let ctx = load_project_context_with_parents_and_home(workspace.path(), Some(home.path()));
+        let ctx = load_project_context_with_parents_and_home(&workspace, Some(home.path()));
 
         assert!(
             ctx.warnings

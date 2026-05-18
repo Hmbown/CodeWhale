@@ -30,7 +30,7 @@ const MAX_AVAILABLE_SKILLS_CHARS: usize = 12_000;
 #[allow(dead_code)]
 #[must_use]
 pub fn default_skills_dir() -> PathBuf {
-    dirs::home_dir().map_or_else(
+    skills_home_dir().map_or_else(
         || PathBuf::from("/tmp/deepseek/skills"),
         |p| p.join(".deepseek").join("skills"),
     )
@@ -39,7 +39,7 @@ pub fn default_skills_dir() -> PathBuf {
 /// Global agentskills.io-compatible skills directory (`~/.agents/skills`).
 #[must_use]
 pub fn agents_global_skills_dir() -> Option<PathBuf> {
-    dirs::home_dir().map(|p| p.join(".agents").join("skills"))
+    skills_home_dir().map(|p| p.join(".agents").join("skills"))
 }
 
 /// Global Claude-compatible skills directory (`~/.claude/skills`). The
@@ -50,7 +50,18 @@ pub fn agents_global_skills_dir() -> Option<PathBuf> {
 #[allow(dead_code)]
 #[must_use]
 pub fn claude_global_skills_dir() -> Option<PathBuf> {
-    dirs::home_dir().map(|p| p.join(".claude").join("skills"))
+    skills_home_dir().map(|p| p.join(".claude").join("skills"))
+}
+
+fn skills_home_dir() -> Option<PathBuf> {
+    #[cfg(test)]
+    if let Some(home) = std::env::var_os("DEEPSEEK_TEST_HOME")
+        && !home.is_empty()
+    {
+        return Some(PathBuf::from(home));
+    }
+
+    dirs::home_dir()
 }
 
 // === Types ===
@@ -391,7 +402,7 @@ pub fn resolve_skills_dir(workspace: &Path) -> PathBuf {
 /// installed (the system-prompt skills block is then suppressed).
 #[must_use]
 pub fn skills_directories(workspace: &Path) -> Vec<PathBuf> {
-    let home = dirs::home_dir();
+    let home = skills_home_dir();
     skills_directories_with_home(workspace, home.as_deref())
 }
 

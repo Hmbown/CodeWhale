@@ -311,8 +311,17 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::localization::Locale;
+    use crate::test_support::{EnvVarGuard, lock_test_env};
     use crate::tui::app::{App, TuiOptions};
     fn make_app(tmpdir: &tempfile::TempDir, locale: Locale, has_api_key: bool) -> App {
+        let _lock = lock_test_env();
+        let config_path = tmpdir.path().join("config.toml");
+        let _home = EnvVarGuard::set("HOME", tmpdir.path());
+        let _userprofile = EnvVarGuard::set("USERPROFILE", tmpdir.path());
+        let _config_path = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
+        let _deepseek_key = EnvVarGuard::remove("DEEPSEEK_API_KEY");
+        let _openai_key = EnvVarGuard::remove("OPENAI_API_KEY");
+
         let mut config = Config::default();
         if has_api_key {
             config.api_key = Some("test-key".to_string());

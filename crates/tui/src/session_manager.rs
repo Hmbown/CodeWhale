@@ -574,13 +574,17 @@ fn paths_equivalent(lhs: &Path, rhs: &Path) -> bool {
 fn find_git_root(path: &Path) -> Option<PathBuf> {
     let mut current = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     loop {
+        // A `.git` marker at the filesystem root is too broad to define a
+        // workspace scope: on Windows a stray `C:\.git\HEAD` would make every
+        // temp directory on C: look like the same checkout.
+        let parent = match current.parent() {
+            Some(parent) if parent != current => parent.to_path_buf(),
+            _ => return None,
+        };
         if is_git_metadata_entry(&current.join(".git")) {
             return Some(current);
         }
-        match current.parent() {
-            Some(parent) if parent != current => current = parent.to_path_buf(),
-            _ => return None,
-        }
+        current = parent;
     }
 }
 

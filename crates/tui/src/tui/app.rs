@@ -4220,11 +4220,10 @@ pub enum McpUiAction {
 mod tests {
     use super::*;
     use crate::config::{ApiProvider, Config, ProviderConfig, ProvidersConfig};
-    use crate::test_support::lock_test_env;
+    use crate::test_support::{EnvVarGuard, lock_test_env};
     use crate::tools::plan::{PlanItemArg, StepStatus, UpdatePlanArgs};
     use crate::tools::todo::TodoStatus;
     use crate::tui::clipboard::PastedImage;
-    use std::ffi::OsString;
 
     fn test_options(yolo: bool) -> TuiOptions {
         TuiOptions {
@@ -4265,34 +4264,6 @@ mod tests {
     #[test]
     fn composer_arrows_scroll_default_is_true_on_windows_even_with_mouse_capture() {
         assert!(default_composer_arrows_scroll_for_platform(true, true));
-    }
-
-    struct EnvVarGuard {
-        key: &'static str,
-        previous: Option<OsString>,
-    }
-
-    impl EnvVarGuard {
-        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
-            let previous = std::env::var_os(key);
-            unsafe { std::env::set_var(key, value) };
-            Self { key, previous }
-        }
-
-        fn remove(key: &'static str) -> Self {
-            let previous = std::env::var_os(key);
-            unsafe { std::env::remove_var(key) };
-            Self { key, previous }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            match self.previous.as_ref() {
-                Some(value) => unsafe { std::env::set_var(self.key, value) },
-                None => unsafe { std::env::remove_var(self.key) },
-            }
-        }
     }
 
     #[test]
@@ -4531,8 +4502,15 @@ mod tests {
 
     #[test]
     fn app_new_detects_missing_api_key_with_default_config() {
-        // Config::default() carries no api_key and the test runner
-        // should not have DEEPSEEK_API_KEY in its environment.
+        let _lock = lock_test_env();
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let config_path = tmp.path().join("config.toml");
+        let _home = EnvVarGuard::set("HOME", tmp.path());
+        let _userprofile = EnvVarGuard::set("USERPROFILE", tmp.path());
+        let _config_path = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
+        let _deepseek_key = EnvVarGuard::remove("DEEPSEEK_API_KEY");
+        let _openai_key = EnvVarGuard::remove("OPENAI_API_KEY");
+
         let app = App::new(test_options(false), &Config::default());
         assert!(
             app.onboarding_needs_api_key,
@@ -4542,6 +4520,14 @@ mod tests {
 
     #[test]
     fn app_new_with_explicit_api_key_does_not_trigger_onboarding() {
+        let _lock = lock_test_env();
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let config_path = tmp.path().join("config.toml");
+        let _home = EnvVarGuard::set("HOME", tmp.path());
+        let _userprofile = EnvVarGuard::set("USERPROFILE", tmp.path());
+        let _config_path = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
+        let _openai_key = EnvVarGuard::remove("OPENAI_API_KEY");
+
         let config = Config {
             api_key: Some("sk-test-onboarding-key".to_string()),
             ..Config::default()

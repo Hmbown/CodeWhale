@@ -29,6 +29,8 @@
 //! schema description; the dispatch logic is whitelist-driven so
 //! anything in the list goes through unchanged.
 
+#[cfg(windows)]
+use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
@@ -155,6 +157,7 @@ impl ToolSpec for PandocConvertTool {
         })?;
 
         let mut cmd = Command::new(&pandoc);
+        configure_pandoc_command_env(&mut cmd)?;
         cmd.arg(&source_path);
         cmd.arg("--to").arg(&target_format);
         if let Some(out) = resolved_output_path.as_ref() {
@@ -189,6 +192,60 @@ impl ToolSpec for PandocConvertTool {
         };
         Ok(ToolResult::success(summary))
     }
+}
+
+#[cfg(windows)]
+fn configure_pandoc_command_env(cmd: &mut Command) -> Result<(), ToolError> {
+    // Pandoc's Windows build is Haskell-based and consults profile/shell
+    // directories while starting up. Unit tests mutate HOME/USERPROFILE in
+    // parallel, so derive a stable real profile from APPDATA where possible
+    // and pin only this child process.
+    let appdata = non_empty_env_path("APPDATA");
+    let localappdata = non_empty_env_path("LOCALAPPDATA");
+    let profile = appdata
+        .as_deref()
+        .and_then(|path| path.parent())
+        .and_then(|path| path.parent())
+        .map(PathBuf::from)
+        .or_else(|| non_empty_env_path("USERPROFILE"))
+        .unwrap_or_else(|| std::env::temp_dir().join("deepseek-tui-pandoc-profile"));
+
+    fs::create_dir_all(&profile).map_err(|e| {
+        ToolError::execution_failed(format!(
+            "failed to prepare pandoc profile directory {}: {e}",
+            profile.display()
+        ))
+    })?;
+    cmd.env("HOME", &profile).env("USERPROFILE", &profile);
+
+    let appdata = appdata.unwrap_or_else(|| profile.join("AppData").join("Roaming"));
+    let localappdata = localappdata.unwrap_or_else(|| profile.join("AppData").join("Local"));
+    for (key, path) in [("APPDATA", appdata), ("LOCALAPPDATA", localappdata)] {
+        fs::create_dir_all(&path).map_err(|e| {
+            ToolError::execution_failed(format!(
+                "failed to prepare pandoc {key} directory {}: {e}",
+                path.display()
+            ))
+        })?;
+        cmd.env(key, path);
+    }
+
+    Ok(())
+}
+
+#[cfg(windows)]
+fn non_empty_env_path(key: &str) -> Option<PathBuf> {
+    let value = std::env::var_os(key)?;
+    if value.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(value))
+    }
+}
+
+#[cfg(not(windows))]
+fn configure_pandoc_command_env(_cmd: &mut Command) -> Result<(), ToolError> {
+    Ok(())
 }
 
 /// Whitelist of target formats whose output is binary (and therefore

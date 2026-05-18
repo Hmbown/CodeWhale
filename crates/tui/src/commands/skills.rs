@@ -602,6 +602,7 @@ mod tests {
         _lock: std::sync::MutexGuard<'static, ()>,
         home_prev: Option<OsString>,
         userprofile_prev: Option<OsString>,
+        test_home_prev: Option<OsString>,
     }
 
     impl IsolatedHome {
@@ -611,16 +612,19 @@ mod tests {
             std::fs::create_dir_all(&home).unwrap();
             let home_prev = std::env::var_os("HOME");
             let userprofile_prev = std::env::var_os("USERPROFILE");
+            let test_home_prev = std::env::var_os("DEEPSEEK_TEST_HOME");
             // SAFETY: tests that mutate process env hold the shared test env
             // mutex for the full lifetime of this guard.
             unsafe {
                 std::env::set_var("HOME", &home);
                 std::env::set_var("USERPROFILE", &home);
+                std::env::set_var("DEEPSEEK_TEST_HOME", &home);
             }
             Self {
                 _lock: lock,
                 home_prev,
                 userprofile_prev,
+                test_home_prev,
             }
         }
 
@@ -639,6 +643,7 @@ mod tests {
             unsafe {
                 Self::restore_var("HOME", self.home_prev.take());
                 Self::restore_var("USERPROFILE", self.userprofile_prev.take());
+                Self::restore_var("DEEPSEEK_TEST_HOME", self.test_home_prev.take());
             }
         }
     }
