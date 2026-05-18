@@ -14,11 +14,21 @@ pub fn set_verbose(enabled: bool) {
 
 /// Return true when `DEEPSEEK_LOG_LEVEL` requests verbose output.
 ///
-/// Note: `RUST_LOG` is intentionally NOT checked here — it controls the
-/// `tracing` subscriber filter in `runtime_log.rs` (file logging) and
-/// should not gate CLI verbose output. On Windows, where stderr is not
-/// redirected to the log file, coupling the two causes tracing log
-/// messages to leak into the TUI alt-screen.
+/// Two separate logging systems exist and are intentionally kept independent:
+///
+/// 1. **CLI verbose output** (this module): controlled by `DEEPSEEK_LOG_LEVEL`.
+///    When enabled, `info()` and `warn()` emit messages to stderr via
+///    `eprintln!`. These are internal CLI diagnostics, not `tracing` events.
+///
+/// 2. **`tracing` subscriber** (file logging): controlled by `RUST_LOG` in
+///    `runtime_log.rs`. This filters structured tracing spans and events
+///    emitted by the `tracing` crate, writing them to the log file.
+///
+/// `RUST_LOG` is intentionally NOT checked here. If it were, setting
+/// `RUST_LOG=trace` for file diagnostics would also enable CLI verbose
+/// output, causing `eprintln!` messages to spill onto the TUI alt-screen.
+/// The problem is especially visible on Windows where stderr is not
+/// redirected to the log file.
 #[must_use]
 pub fn env_requests_verbose_logging() -> bool {
     std::env::var("DEEPSEEK_LOG_LEVEL")
