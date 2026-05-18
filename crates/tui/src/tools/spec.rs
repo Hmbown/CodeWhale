@@ -174,6 +174,12 @@ pub struct ToolContext {
     /// `None` when the feature is disabled or initialization failed.
     /// Copy is cheap — the service is `Clone` and backed by `Arc`.
     pub vector_db: Option<crate::vector_db::VectorDbService>,
+    /// Enable Tier 4 code index reads/writes in file tools.
+    pub code_index_enabled: bool,
+    /// Stable project identifier for vector-backed code indexing. Uses the
+    /// canonical workspace path rather than the basename to avoid collisions
+    /// between unrelated repositories with the same directory name.
+    pub project_id: String,
 }
 
 impl ToolContext {
@@ -184,6 +190,7 @@ impl ToolContext {
         let shell_manager = new_shared_shell_manager(workspace.clone());
         let notes_path = workspace.join(".deepseek").join("notes.md");
         let mcp_config_path = workspace.join(".deepseek").join("mcp.json");
+        let project_id = project_id_for_workspace(&workspace);
         Self {
             workspace,
             shell_manager,
@@ -208,6 +215,8 @@ impl ToolContext {
             search_api_key: None,
             workshop_vars: None,
             vector_db: None,
+            code_index_enabled: false,
+            project_id,
         }
     }
 
@@ -221,6 +230,7 @@ impl ToolContext {
     ) -> Self {
         let workspace = workspace.into();
         let shell_manager = new_shared_shell_manager(workspace.clone());
+        let project_id = project_id_for_workspace(&workspace);
         Self {
             workspace,
             shell_manager,
@@ -245,6 +255,8 @@ impl ToolContext {
             search_api_key: None,
             workshop_vars: None,
             vector_db: None,
+            code_index_enabled: false,
+            project_id,
         }
     }
 
@@ -258,6 +270,7 @@ impl ToolContext {
     ) -> Self {
         let workspace = workspace.into();
         let shell_manager = new_shared_shell_manager(workspace.clone());
+        let project_id = project_id_for_workspace(&workspace);
         Self {
             workspace,
             shell_manager,
@@ -282,6 +295,8 @@ impl ToolContext {
             search_api_key: None,
             workshop_vars: None,
             vector_db: None,
+            code_index_enabled: false,
+            project_id,
         }
     }
 
@@ -528,6 +543,21 @@ impl ToolContext {
     }
 }
 
+/// Stable FNV-1a digest for a workspace path. This is an isolation tag, not a
+/// security boundary.
+#[must_use]
+pub fn project_id_for_workspace(workspace: &Path) -> String {
+    let canonical = workspace
+        .canonicalize()
+        .unwrap_or_else(|_| workspace.to_path_buf());
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for byte in canonical.to_string_lossy().as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
+}
+
 /// Gather LSP diagnostics for `paths` using the manager stored in `context`,
 /// and return the rendered `<diagnostics …>` blocks joined by newlines.
 ///
@@ -693,6 +723,20 @@ mod tests {
     fn test_tool_result_with_metadata() {
         let result = ToolResult::success("content").with_metadata(json!({"extra": true}));
         assert!(result.metadata.is_some());
+    }
+
+    #[test]
+    fn project_id_uses_full_workspace_path_not_basename() {
+        let tmp = tempdir().expect("tempdir");
+        let left = tmp.path().join("left").join("app");
+        let right = tmp.path().join("right").join("app");
+        std::fs::create_dir_all(&left).expect("left");
+        std::fs::create_dir_all(&right).expect("right");
+
+        assert_ne!(
+            project_id_for_workspace(&left),
+            project_id_for_workspace(&right)
+        );
     }
 
     #[test]

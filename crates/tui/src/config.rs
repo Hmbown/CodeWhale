@@ -592,6 +592,16 @@ pub struct VectorMemoryConfig {
     pub path: Option<String>,
     /// Embedding dimension. Default: `384` (all-MiniLM-L6-v2).
     pub dim: Option<usize>,
+    /// Minimum similarity score for retrieved memories/summaries. Default: 0.4.
+    #[serde(default)]
+    pub min_similarity_score: Option<f64>,
+    /// Maximum number of records mirrored in the in-memory cache. Default: 1000.
+    #[serde(default)]
+    pub max_memory_items: Option<usize>,
+    /// Enable Tier 4 code indexing/search. Default: false until full-project
+    /// background indexing is implemented.
+    #[serde(default)]
+    pub code_index_enabled: Option<bool>,
 }
 
 /// Search provider enumeration — selects which backend `web_search` uses.
@@ -1810,6 +1820,35 @@ impl Config {
             .as_ref()
             .and_then(|v| v.dim)
             .unwrap_or(384)
+    }
+
+    /// Resolve the minimum vector-memory similarity score.
+    #[must_use]
+    pub fn vector_memory_min_similarity_score(&self) -> f64 {
+        self.vector_memory
+            .as_ref()
+            .and_then(|v| v.min_similarity_score)
+            .unwrap_or(0.4)
+            .clamp(0.0, 1.0)
+    }
+
+    /// Resolve the in-memory vector cache cap.
+    #[must_use]
+    pub fn vector_memory_max_items(&self) -> usize {
+        self.vector_memory
+            .as_ref()
+            .and_then(|v| v.max_memory_items)
+            .unwrap_or(crate::vector_db::MAX_IN_MEMORY_ITEMS)
+            .max(1)
+    }
+
+    /// Whether Tier 4 code indexing/search should be enabled.
+    #[must_use]
+    pub fn vector_memory_code_index_enabled(&self) -> bool {
+        self.vector_memory
+            .as_ref()
+            .and_then(|v| v.code_index_enabled)
+            .unwrap_or(false)
     }
 
     /// Return the configured vision model config, inheriting api_key from main config.

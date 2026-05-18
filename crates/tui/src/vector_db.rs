@@ -142,9 +142,7 @@ impl Embedder {
 #[cfg(feature = "vector-memory")]
 impl std::fmt::Debug for Embedder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Embedder")
-            .field("dim", &self.dim)
-            .finish()
+        f.debug_struct("Embedder").field("dim", &self.dim).finish()
     }
 }
 
@@ -308,7 +306,8 @@ impl InMemoryBackend {
 
         // Cap check: evict oldest by created_at if over max_items.
         if self.summaries.len() > self.max_items {
-            self.summaries.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+            self.summaries
+                .sort_by(|a, b| a.created_at.cmp(&b.created_at));
             let removed = self.summaries.len() - self.max_items;
             self.summaries.drain(0..removed);
             tracing::debug!(
@@ -321,7 +320,12 @@ impl InMemoryBackend {
         self.save_to_disk().await;
     }
 
-    fn search_summaries(&self, query: &str, k: usize) -> Vec<HistorySummary> {
+    fn search_summaries(
+        &self,
+        query: &str,
+        k: usize,
+        session_id: Option<&str>,
+    ) -> Vec<HistorySummary> {
         let query_lower = query.to_lowercase();
         let query_words: Vec<&str> = query_lower.split_whitespace().collect();
 
@@ -329,6 +333,11 @@ impl InMemoryBackend {
             .summaries
             .iter()
             .filter(|s| {
+                if let Some(session_id) = session_id
+                    && s.session_id != session_id
+                {
+                    return false;
+                }
                 let summary_lower = s.summary.to_lowercase();
                 query_words.iter().any(|w| summary_lower.contains(w))
             })
@@ -365,11 +374,7 @@ impl InMemoryBackend {
     }
 
     /// Collect the IDs and texts of the oldest Phase 0 summaries for a session.
-    fn oldest_phase0_summaries(
-        &self,
-        session_id: &str,
-        limit: usize,
-    ) -> Vec<(String, String)> {
+    fn oldest_phase0_summaries(&self, session_id: &str, limit: usize) -> Vec<(String, String)> {
         let mut candidates: Vec<&HistorySummary> = self
             .summaries
             .iter()
@@ -432,14 +437,14 @@ mod lance {
 
     use anyhow::{Context, Result};
     use arrow_array::{
-        types::Float32Type, Array, FixedSizeListArray, Float32Array, Int32Array,
-        RecordBatch, StringArray, TimestampNanosecondArray,
+        Array, FixedSizeListArray, Float32Array, Int32Array, RecordBatch, StringArray,
+        TimestampNanosecondArray, UInt8Array, types::Float32Type,
     };
-    use lancedb::arrow::arrow_schema::{DataType, Field, Schema, TimeUnit};
     use chrono::{DateTime, Utc};
     use futures_util::TryStreamExt;
-    use lancedb::query::{ExecutableQuery, QueryBase};
+    use lancedb::arrow::arrow_schema::{DataType, Field, Schema, TimeUnit};
     use lancedb::index::Index;
+    use lancedb::query::{ExecutableQuery, QueryBase};
 
     use super::{Embedder, HistorySummary, MemoryRecord, NewMemoryItem, Path};
 
@@ -467,11 +472,7 @@ mod lance {
             let dim = if dim == 0 { DEFAULT_DIM } else { dim };
             let embedder = std::sync::Arc::new(Embedder::new(dim));
 
-            let backend = Self {
-                db,
-                embedder,
-                dim,
-            };
+            let backend = Self { db, embedder, dim };
             backend.ensure_tables().await?;
             Ok(backend)
         }
@@ -481,12 +482,25 @@ mod lance {
             &self.embedder
         }
 
+        async fn embed_texts(&self, texts: Vec<String>) -> Result<Vec<Vec<f32>>> {
+            let embedder = self.embedder.clone();
+            tokio::task::spawn_blocking(move || {
+                let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
+                embedder.embed(&refs)
+            })
+            .await
+            .context("embedding task failed")?
+        }
+
         /// Create tables that don't exist yet.
         async fn ensure_tables(&self) -> Result<()> {
             let existing = self.db.table_names().execute().await?;
             let tables: Vec<(&str, Schema)> = vec![
                 ("memories", Self::memories_schema(self.dim)),
-                ("history_summaries", Self::history_summaries_schema(self.dim)),
+                (
+                    "history_summaries",
+                    Self::history_summaries_schema(self.dim),
+                ),
                 ("code_index", Self::code_index_schema(self.dim)),
             ];
 
@@ -538,7 +552,11 @@ mod lance {
                 Field::new("session_id", DataType::Utf8, true),
                 Field::new("tags", DataType::Utf8, true),
                 Field::new("importance", DataType::Float32, true),
-                Field::new("created_at", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
+                Field::new(
+                    "created_at",
+                    DataType::Timestamp(TimeUnit::Nanosecond, None),
+                    true,
+                ),
                 Field::new("ttl", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
                 Field::new(
                     "embedding",
@@ -558,7 +576,11 @@ mod lance {
                 Field::new("summary", DataType::Utf8, true),
                 Field::new("key_files", DataType::Utf8, true),
                 Field::new("session_id", DataType::Utf8, true),
-                Field::new("created_at", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
+                Field::new(
+                    "created_at",
+                    DataType::Timestamp(TimeUnit::Nanosecond, None),
+                    true,
+                ),
                 Field::new("phase", DataType::UInt8, true),
                 Field::new(
                     "embedding",
@@ -578,7 +600,11 @@ mod lance {
                 Field::new("chunk_index", DataType::Int32, true),
                 Field::new("content", DataType::Utf8, true),
                 Field::new("project", DataType::Utf8, true),
-                Field::new("updated_at", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
+                Field::new(
+                    "updated_at",
+                    DataType::Timestamp(TimeUnit::Nanosecond, None),
+                    true,
+                ),
                 Field::new(
                     "embedding",
                     DataType::FixedSizeList(
@@ -593,7 +619,10 @@ mod lance {
         async fn create_empty_table(&self, name: &str, schema: Arc<Schema>) -> Result<()> {
             let empty = RecordBatch::new_empty(schema);
             self.db.create_table(name, empty).execute().await?;
-            // Index is created automatically by LanceDB on first data addition.
+            // Note: LanceDB does NOT auto-create IVF-PQ indexes on empty
+            // tables. Index creation is deferred to the first write via
+            // ensure_vector_index() in store_memory / store_summary /
+            // store_code_chunk (audit #3).
             Ok(())
         }
 
@@ -606,7 +635,7 @@ mod lance {
 
         /// Store a memory with its embedding.
         pub async fn store_memory(&self, item: &NewMemoryItem) -> Result<MemoryRecord> {
-            let embedding = self.embedder.embed(&[item.content.as_str()])?;
+            let embedding = self.embed_texts(vec![item.content.clone()]).await?;
             let record = MemoryRecord {
                 id: uuid::Uuid::new_v4().to_string(),
                 content: item.content.clone(),
@@ -621,6 +650,9 @@ mod lance {
             let table = self.open_table("memories").await?;
             let batch = memory_record_to_batch(&record, &embedding[0], self.dim)?;
             table.add(vec![batch]).execute().await?;
+            // Deferred: create the IVF-PQ vector index on first write
+            // (empty-table index creation fails silently in ensure_tables).
+            let _ = self.ensure_vector_index("memories").await;
 
             Ok(record)
         }
@@ -632,7 +664,7 @@ mod lance {
             k: u32,
             filter: Option<&str>,
         ) -> Result<Vec<MemoryRecord>> {
-            let query_vec = self.embedder.embed(&[query])?;
+            let query_vec = self.embed_texts(vec![query.to_string()]).await?;
             if query_vec.is_empty() {
                 return Ok(Vec::new());
             }
@@ -663,9 +695,7 @@ mod lance {
 
             // Tier 1: SQL delete with CAST (fastest)
             match table
-                .delete(&format!(
-                    "ttl IS NOT NULL AND CAST(ttl AS INT64) < {nanos}"
-                ))
+                .delete(&format!("ttl IS NOT NULL AND CAST(ttl AS INT64) < {nanos}"))
                 .await
             {
                 Ok(result) => return Ok(result.num_deleted_rows as usize),
@@ -684,9 +714,7 @@ mod lance {
             {
                 Ok(result) => return Ok(result.num_deleted_rows as usize),
                 Err(e) => {
-                    tracing::debug!(
-                        "TTL delete tier-2 (native ttl compare) failed: {e}. "
-                    );
+                    tracing::debug!("TTL delete tier-2 (native ttl compare) failed: {e}. ");
                 }
             }
 
@@ -715,10 +743,12 @@ mod lance {
 
         /// Store a history summary.
         pub async fn store_summary(&self, summary: &HistorySummary) -> Result<()> {
-            let embedding = self.embedder.embed(&[summary.summary.as_str()])?;
+            let embedding = self.embed_texts(vec![summary.summary.clone()]).await?;
             let table = self.open_table("history_summaries").await?;
             let batch = summary_to_batch(summary, &embedding[0], self.dim)?;
             table.add(vec![batch]).execute().await?;
+            // Deferred: create the IVF-PQ vector index on first write.
+            let _ = self.ensure_vector_index("history_summaries").await;
             Ok(())
         }
 
@@ -727,31 +757,52 @@ mod lance {
             &self,
             query: &str,
             k: u32,
+            session_id: Option<&str>,
         ) -> Result<Vec<HistorySummary>> {
-            let query_vec = self.embedder.embed(&[query])?;
+            let query_vec = self.embed_texts(vec![query.to_string()]).await?;
             if query_vec.is_empty() {
                 return Ok(Vec::new());
             }
 
             let table = self.open_table("history_summaries").await?;
             let qv = query_vec[0].clone();
-            let batches: Vec<RecordBatch> = table
-                .query()
-                .nearest_to(qv.as_slice())?
-                .limit(k as usize)
-                .execute()
-                .await?
-                .try_collect()
-                .await?;
+            let mut query = table.query().nearest_to(qv.as_slice())?.limit(k as usize);
+            if let Some(session_id) = session_id {
+                let session_id = escape_sql_string(session_id);
+                query = query.only_if(format!("session_id = '{session_id}'"));
+            }
+            let batches: Vec<RecordBatch> = query.execute().await?.try_collect().await?;
 
             Ok(summaries_from_batches(&batches))
+        }
+
+        /// Delete history summaries by IDs. Best-effort callers use this
+        /// after merging Phase 0 summaries so stale vectors do not keep
+        /// polluting retrieval.
+        pub async fn delete_summaries_by_ids(&self, ids: &[String]) -> Result<usize> {
+            if ids.is_empty() {
+                return Ok(0);
+            }
+            let table = self.open_table("history_summaries").await?;
+            let mut deleted = 0usize;
+            for id in ids {
+                let escaped = escape_sql_string(id);
+                match table.delete(&format!("id = '{escaped}'")).await {
+                    Ok(result) => deleted += result.num_deleted_rows as usize,
+                    Err(e) => tracing::warn!(id = %id, error = %e, "failed to delete summary"),
+                }
+            }
+            Ok(deleted)
         }
 
         /// Create the vector index if it doesn't exist (idempotent).
         #[allow(dead_code)]
         pub async fn create_index(&self, table_name: &str) -> Result<()> {
             let table = self.open_table(table_name).await?;
-            table.create_index(&["embedding"], Index::Auto).execute().await?;
+            table
+                .create_index(&["embedding"], Index::Auto)
+                .execute()
+                .await?;
             Ok(())
         }
 
@@ -766,7 +817,7 @@ mod lance {
             content: &str,
             project: &str,
         ) -> Result<()> {
-            let embedding = self.embedder.embed(&[content])?;
+            let embedding = self.embed_texts(vec![content.to_string()]).await?;
             let table = self.open_table("code_index").await?;
             let schema = Arc::new(Self::code_index_schema(self.dim));
             let embed_values: Vec<Option<f32>> = embedding[0].iter().map(|&v| Some(v)).collect();
@@ -782,12 +833,30 @@ mod lance {
                     Arc::new(Int32Array::from(vec![Some(chunk_index)])),
                     Arc::new(StringArray::from(vec![Some(content)])),
                     Arc::new(StringArray::from(vec![Some(project)])),
-                    Arc::new(TimestampNanosecondArray::from(vec![Some(Utc::now().timestamp_nanos_opt().unwrap_or(0))])),
+                    Arc::new(TimestampNanosecondArray::from(vec![Some(
+                        Utc::now().timestamp_nanos_opt().unwrap_or(0),
+                    )])),
                     Arc::new(embed_array),
                 ],
             )?;
             table.add(vec![batch]).execute().await?;
+            // Deferred: create the IVF-PQ vector index on first write.
+            let _ = self.ensure_vector_index("code_index").await;
             Ok(())
+        }
+
+        /// Remove indexed chunks for one file in one project before
+        /// re-indexing the file.
+        pub async fn delete_code_chunks(&self, file_path: &str, project: &str) -> Result<usize> {
+            let table = self.open_table("code_index").await?;
+            let file_path = escape_sql_string(file_path);
+            let project = escape_sql_string(project);
+            let result = table
+                .delete(&format!(
+                    "file_path = '{file_path}' AND project = '{project}'"
+                ))
+                .await?;
+            Ok(result.num_deleted_rows as usize)
         }
 
         /// Search code chunks by semantic similarity to `query`.
@@ -795,17 +864,21 @@ mod lance {
             &self,
             query: &str,
             k: u32,
+            project: &str,
+            min_similarity_score: Option<f64>,
         ) -> Result<Vec<(String, String, f64)>> {
             // Returns (file_path, content, score)
-            let query_vec = self.embedder.embed(&[query])?;
+            let query_vec = self.embed_texts(vec![query.to_string()]).await?;
             if query_vec.is_empty() {
                 return Ok(Vec::new());
             }
             let table = self.open_table("code_index").await?;
             let qv = query_vec[0].clone();
+            let project_filter = escape_sql_string(project);
             let batches: Vec<RecordBatch> = table
                 .query()
                 .nearest_to(qv.as_slice())?
+                .only_if(format!("project = '{project_filter}'"))
                 .limit(k as usize)
                 .execute()
                 .await?
@@ -813,19 +886,28 @@ mod lance {
                 .await?;
             let mut results = Vec::new();
             for batch in &batches {
-                let files: Vec<String> = batch.column_by_name("file_path")
+                let files: Vec<String> = batch
+                    .column_by_name("file_path")
                     .and_then(|c| c.as_any().downcast_ref::<StringArray>())
                     .map(|a| (0..a.len()).map(|i| a.value(i).to_string()).collect())
                     .unwrap_or_default();
-                let contents: Vec<String> = batch.column_by_name("content")
+                let contents: Vec<String> = batch
+                    .column_by_name("content")
                     .and_then(|c| c.as_any().downcast_ref::<StringArray>())
                     .map(|a| (0..a.len()).map(|i| a.value(i).to_string()).collect())
                     .unwrap_or_default();
-                let distances = batch.column_by_name("_distance")
+                let distances = batch
+                    .column_by_name("_distance")
                     .and_then(|c| c.as_any().downcast_ref::<Float32Array>());
                 for i in 0..batch.num_rows() {
                     let score = distances
-                        .and_then(|d| if d.is_null(i) { None } else { Some((1.0 - d.value(i) as f64).max(0.0)) })
+                        .and_then(|d| {
+                            if d.is_null(i) {
+                                None
+                            } else {
+                                Some((1.0 - d.value(i) as f64).max(0.0))
+                            }
+                        })
                         .unwrap_or(0.0);
                     results.push((
                         files.get(i).cloned().unwrap_or_default(),
@@ -833,6 +915,9 @@ mod lance {
                         score,
                     ));
                 }
+            }
+            if let Some(min_score) = min_similarity_score {
+                results.retain(|(_, _, score)| *score >= min_score);
             }
             Ok(results)
         }
@@ -844,7 +929,11 @@ mod lance {
         dt.map(|d| d.timestamp_nanos_opt().unwrap_or(0))
     }
 
-    fn memory_record_to_batch(record: &MemoryRecord, embedding: &[f32], dim: usize) -> Result<RecordBatch> {
+    fn memory_record_to_batch(
+        record: &MemoryRecord,
+        embedding: &[f32],
+        dim: usize,
+    ) -> Result<RecordBatch> {
         let schema = Arc::new(LanceDbBackend::memories_schema(dim));
 
         let embed_values: Vec<Option<f32>> = embedding.iter().map(|&v| Some(v)).collect();
@@ -861,8 +950,10 @@ mod lance {
                 Arc::new(StringArray::from(vec![Some(record.source.as_str())])),
                 Arc::new(StringArray::from(vec![Some(record.session_id.as_str())])),
                 Arc::new(StringArray::from(vec![record.tags.as_deref()])),
-                Arc::new(Float32Array::from(vec![Some(0.0f32)])),  // importance (unused for now)
-                Arc::new(TimestampNanosecondArray::from(vec![Some(record.created_at.timestamp_nanos_opt().unwrap_or(0))])),
+                Arc::new(Float32Array::from(vec![Some(0.0f32)])), // importance (unused for now)
+                Arc::new(TimestampNanosecondArray::from(vec![Some(
+                    record.created_at.timestamp_nanos_opt().unwrap_or(0),
+                )])),
                 Arc::new(TimestampNanosecondArray::from(vec![ts_nanos(&record.ttl)])),
                 Arc::new(embed_array),
             ],
@@ -873,38 +964,100 @@ mod lance {
     fn memories_from_batches(batches: &[RecordBatch]) -> Vec<MemoryRecord> {
         let mut results = Vec::new();
         for batch in batches {
-            let ids = batch.column_by_name("id")
+            let ids = batch
+                .column_by_name("id")
                 .and_then(|c| c.as_any().downcast_ref::<StringArray>())
-                .map(|a| (0..a.len()).map(|i| a.value(i).to_string()).collect::<Vec<_>>())
+                .map(|a| {
+                    (0..a.len())
+                        .map(|i| a.value(i).to_string())
+                        .collect::<Vec<_>>()
+                })
                 .unwrap_or_default();
-            let contents = batch.column_by_name("content")
+            let contents = batch
+                .column_by_name("content")
                 .and_then(|c| c.as_any().downcast_ref::<StringArray>())
-                .map(|a| (0..a.len()).map(|i| a.value(i).to_string()).collect::<Vec<_>>())
+                .map(|a| {
+                    (0..a.len())
+                        .map(|i| a.value(i).to_string())
+                        .collect::<Vec<_>>()
+                })
                 .unwrap_or_default();
-            let sources = batch.column_by_name("source")
+            let sources = batch
+                .column_by_name("source")
                 .and_then(|c| c.as_any().downcast_ref::<StringArray>())
-                .map(|a| (0..a.len()).map(|i| a.value(i).to_string()).collect::<Vec<_>>())
+                .map(|a| {
+                    (0..a.len())
+                        .map(|i| a.value(i).to_string())
+                        .collect::<Vec<_>>()
+                })
                 .unwrap_or_default();
-            let session_ids = batch.column_by_name("session_id")
+            let session_ids = batch
+                .column_by_name("session_id")
                 .and_then(|c| c.as_any().downcast_ref::<StringArray>())
-                .map(|a| (0..a.len()).map(|i| a.value(i).to_string()).collect::<Vec<_>>())
+                .map(|a| {
+                    (0..a.len())
+                        .map(|i| a.value(i).to_string())
+                        .collect::<Vec<_>>()
+                })
                 .unwrap_or_default();
-            let tags_col = batch.column_by_name("tags")
+            let tags_col = batch
+                .column_by_name("tags")
                 .and_then(|c| c.as_any().downcast_ref::<StringArray>())
-                .map(|a| (0..a.len()).map(|i| if a.is_null(i) { None } else { Some(a.value(i).to_string()) }).collect::<Vec<_>>())
+                .map(|a| {
+                    (0..a.len())
+                        .map(|i| {
+                            if a.is_null(i) {
+                                None
+                            } else {
+                                Some(a.value(i).to_string())
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                })
                 .unwrap_or_default();
-            let created_col = batch.column_by_name("created_at")
+            let created_col = batch
+                .column_by_name("created_at")
                 .and_then(|c| c.as_any().downcast_ref::<TimestampNanosecondArray>())
-                .map(|a| (0..a.len()).map(|i| {
-                    if a.is_null(i) { None } else { Some(DateTime::from_timestamp_nanos(a.value(i))) }
-                }).collect::<Vec<_>>())
+                .map(|a| {
+                    (0..a.len())
+                        .map(|i| {
+                            if a.is_null(i) {
+                                None
+                            } else {
+                                Some(DateTime::from_timestamp_nanos(a.value(i)))
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                })
                 .unwrap_or_default();
-            let distance_col = batch.column_by_name("_distance")
+            let ttl_col = batch
+                .column_by_name("ttl")
+                .and_then(|c| c.as_any().downcast_ref::<TimestampNanosecondArray>())
+                .map(|a| {
+                    (0..a.len())
+                        .map(|i| {
+                            if a.is_null(i) {
+                                None
+                            } else {
+                                Some(DateTime::from_timestamp_nanos(a.value(i)))
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let distance_col = batch
+                .column_by_name("_distance")
                 .and_then(|c| c.as_any().downcast_ref::<Float32Array>());
 
             for i in 0..batch.num_rows() {
                 let score = distance_col
-                    .and_then(|d| if d.is_null(i) { None } else { Some((1.0 - d.value(i) as f64).max(0.0)) })
+                    .and_then(|d| {
+                        if d.is_null(i) {
+                            None
+                        } else {
+                            Some((1.0 - d.value(i) as f64).max(0.0))
+                        }
+                    })
                     .unwrap_or(0.0);
                 results.push(MemoryRecord {
                     id: ids.get(i).cloned().unwrap_or_default(),
@@ -913,7 +1066,7 @@ mod lance {
                     session_id: session_ids.get(i).cloned().unwrap_or_default(),
                     tags: tags_col.get(i).cloned().unwrap_or_default(),
                     created_at: created_col.get(i).copied().flatten().unwrap_or(Utc::now()),
-                    ttl: None,
+                    ttl: ttl_col.get(i).copied().flatten(),
                     score,
                 });
             }
@@ -921,7 +1074,11 @@ mod lance {
         results
     }
 
-    fn summary_to_batch(summary: &HistorySummary, embedding: &[f32], dim: usize) -> Result<RecordBatch> {
+    fn summary_to_batch(
+        summary: &HistorySummary,
+        embedding: &[f32],
+        dim: usize,
+    ) -> Result<RecordBatch> {
         let schema = Arc::new(LanceDbBackend::history_summaries_schema(dim));
 
         let embed_values: Vec<Option<f32>> = embedding.iter().map(|&v| Some(v)).collect();
@@ -938,7 +1095,10 @@ mod lance {
                 Arc::new(StringArray::from(vec![Some(summary.summary.as_str())])),
                 Arc::new(StringArray::from(vec![summary.key_files.as_deref()])),
                 Arc::new(StringArray::from(vec![Some(summary.session_id.as_str())])),
-                Arc::new(TimestampNanosecondArray::from(vec![Some(summary.created_at.timestamp_nanos_opt().unwrap_or(0))])),
+                Arc::new(TimestampNanosecondArray::from(vec![Some(
+                    summary.created_at.timestamp_nanos_opt().unwrap_or(0),
+                )])),
+                Arc::new(UInt8Array::from(vec![Some(summary.phase)])),
                 Arc::new(embed_array),
             ],
         )?;
@@ -948,32 +1108,94 @@ mod lance {
     fn summaries_from_batches(batches: &[RecordBatch]) -> Vec<HistorySummary> {
         let mut results = Vec::new();
         for batch in batches {
-            let ids = batch.column_by_name("id")
+            let ids = batch
+                .column_by_name("id")
                 .and_then(|c| c.as_any().downcast_ref::<StringArray>())
-                .map(|a| (0..a.len()).map(|i| a.value(i).to_string()).collect::<Vec<_>>())
+                .map(|a| {
+                    (0..a.len())
+                        .map(|i| a.value(i).to_string())
+                        .collect::<Vec<_>>()
+                })
                 .unwrap_or_default();
-            let turn_ranges = batch.column_by_name("turn_range")
+            let turn_ranges = batch
+                .column_by_name("turn_range")
                 .and_then(|c| c.as_any().downcast_ref::<StringArray>())
-                .map(|a| (0..a.len()).map(|i| a.value(i).to_string()).collect::<Vec<_>>())
+                .map(|a| {
+                    (0..a.len())
+                        .map(|i| a.value(i).to_string())
+                        .collect::<Vec<_>>()
+                })
                 .unwrap_or_default();
-            let summaries = batch.column_by_name("summary")
+            let summaries = batch
+                .column_by_name("summary")
                 .and_then(|c| c.as_any().downcast_ref::<StringArray>())
-                .map(|a| (0..a.len()).map(|i| a.value(i).to_string()).collect::<Vec<_>>())
+                .map(|a| {
+                    (0..a.len())
+                        .map(|i| a.value(i).to_string())
+                        .collect::<Vec<_>>()
+                })
                 .unwrap_or_default();
-            let key_files = batch.column_by_name("key_files")
+            let key_files = batch
+                .column_by_name("key_files")
                 .and_then(|c| c.as_any().downcast_ref::<StringArray>())
-                .map(|a| (0..a.len()).map(|i| if a.is_null(i) { None } else { Some(a.value(i).to_string()) }).collect::<Vec<_>>())
+                .map(|a| {
+                    (0..a.len())
+                        .map(|i| {
+                            if a.is_null(i) {
+                                None
+                            } else {
+                                Some(a.value(i).to_string())
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                })
                 .unwrap_or_default();
-            let session_ids = batch.column_by_name("session_id")
+            let session_ids = batch
+                .column_by_name("session_id")
                 .and_then(|c| c.as_any().downcast_ref::<StringArray>())
-                .map(|a| (0..a.len()).map(|i| a.value(i).to_string()).collect::<Vec<_>>())
+                .map(|a| {
+                    (0..a.len())
+                        .map(|i| a.value(i).to_string())
+                        .collect::<Vec<_>>()
+                })
                 .unwrap_or_default();
-            let distance_col = batch.column_by_name("_distance")
+            let created_col = batch
+                .column_by_name("created_at")
+                .and_then(|c| c.as_any().downcast_ref::<TimestampNanosecondArray>())
+                .map(|a| {
+                    (0..a.len())
+                        .map(|i| {
+                            if a.is_null(i) {
+                                None
+                            } else {
+                                Some(DateTime::from_timestamp_nanos(a.value(i)))
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let phases = batch
+                .column_by_name("phase")
+                .and_then(|c| c.as_any().downcast_ref::<UInt8Array>())
+                .map(|a| {
+                    (0..a.len())
+                        .map(|i| if a.is_null(i) { 0 } else { a.value(i) })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let distance_col = batch
+                .column_by_name("_distance")
                 .and_then(|c| c.as_any().downcast_ref::<Float32Array>());
 
             for i in 0..batch.num_rows() {
                 let score = distance_col
-                    .and_then(|d| if d.is_null(i) { None } else { Some((1.0 - d.value(i) as f64).max(0.0)) })
+                    .and_then(|d| {
+                        if d.is_null(i) {
+                            None
+                        } else {
+                            Some((1.0 - d.value(i) as f64).max(0.0))
+                        }
+                    })
                     .unwrap_or(0.0);
                 results.push(HistorySummary {
                     id: ids.get(i).cloned().unwrap_or_default(),
@@ -981,13 +1203,17 @@ mod lance {
                     summary: summaries.get(i).cloned().unwrap_or_default(),
                     key_files: key_files.get(i).cloned().unwrap_or_default(),
                     session_id: session_ids.get(i).cloned().unwrap_or_default(),
-                    created_at: Utc::now(),
+                    created_at: created_col.get(i).copied().flatten().unwrap_or(Utc::now()),
                     score,
-                    phase: 0,
+                    phase: phases.get(i).copied().unwrap_or(0),
                 });
             }
         }
         results
+    }
+
+    fn escape_sql_string(input: &str) -> String {
+        input.replace('\'', "''")
     }
 }
 
@@ -1070,8 +1296,11 @@ impl VectorDbService {
     pub async fn warmup_embedder(&self) {
         #[cfg(feature = "vector-memory")]
         if let Some(ref lance) = self.lance {
-            if let Err(e) = lance.embedder().initialize() {
-                tracing::warn!("embedder warmup failed: {e}");
+            let embedder = lance.embedder().clone();
+            match tokio::task::spawn_blocking(move || embedder.initialize()).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => tracing::warn!("embedder warmup failed: {e}"),
+                Err(e) => tracing::warn!("embedder warmup task failed: {e}"),
             }
         }
     }
@@ -1117,7 +1346,10 @@ impl VectorDbService {
         };
 
         // Filter by configured min similarity score
-        results.retain(|r| r.score >= self.min_similarity_score);
+        let now = Utc::now();
+        results.retain(|r| {
+            r.score >= self.min_similarity_score && r.ttl.map_or(true, |ttl| ttl > now)
+        });
         Ok(results)
     }
 
@@ -1133,17 +1365,28 @@ impl VectorDbService {
     }
 
     /// Search history summaries by semantic relevance to `query`.
-    pub async fn search_summaries(&self, query: &str, k: u32) -> Result<Vec<HistorySummary>> {
+    pub async fn search_summaries(
+        &self,
+        query: &str,
+        k: u32,
+        session_id: Option<&str>,
+    ) -> Result<Vec<HistorySummary>> {
         let mut results = {
             #[cfg(feature = "vector-memory")]
             if let Some(ref lance) = self.lance {
-                lance.search_summaries(query, k).await?
+                lance.search_summaries(query, k, session_id).await?
             } else {
-                self.memory.lock().await.search_summaries(query, k as usize)
+                self.memory
+                    .lock()
+                    .await
+                    .search_summaries(query, k as usize, session_id)
             }
             #[cfg(not(feature = "vector-memory"))]
             {
-                self.memory.lock().await.search_summaries(query, k as usize)
+                self.memory
+                    .lock()
+                    .await
+                    .search_summaries(query, k as usize, session_id)
             }
         };
 
@@ -1184,6 +1427,13 @@ impl VectorDbService {
 
     /// Remove summaries by their IDs (best-effort).
     pub async fn remove_summaries(&self, ids: &[String]) {
+        #[cfg(feature = "vector-memory")]
+        if let Some(ref lance) = self.lance {
+            if let Err(e) = lance.delete_summaries_by_ids(ids).await {
+                tracing::warn!("failed to delete merged summaries from LanceDB: {e}");
+            }
+        }
+
         let mut guard = self.memory.lock().await;
         guard.remove_summaries_by_ids(ids);
         guard.save_to_disk().await;
@@ -1232,6 +1482,18 @@ impl VectorDbService {
     /// Best-effort: errors are logged but never propagated — a failed index
     /// write still returns successfully so the tool result is not affected.
     pub async fn index_file(&self, file_path: &str, content: &str, project: &str) {
+        #[cfg(feature = "vector-memory")]
+        if let Some(ref lance) = self.lance {
+            if let Err(e) = lance.delete_code_chunks(file_path, project).await {
+                tracing::warn!(
+                    file_path = %file_path,
+                    project = %project,
+                    error = %e,
+                    "index_file: failed to delete stale code chunks"
+                );
+            }
+        }
+
         let chunks = chunk_content(content, 2000);
         for (i, chunk) in chunks.iter().enumerate() {
             let id = format!("{file_path}:chunk_{i}");
@@ -1254,12 +1516,17 @@ impl VectorDbService {
         &self,
         query: &str,
         k: u32,
+        project: &str,
+        min_similarity_score: Option<f64>,
     ) -> Result<Vec<(String, String, f64)>> {
+        let min_similarity_score = min_similarity_score.or(Some(self.min_similarity_score));
         #[cfg(feature = "vector-memory")]
         if let Some(ref lance) = self.lance {
-            return lance.search_code(query, k).await;
+            return lance
+                .search_code(query, k, project, min_similarity_score)
+                .await;
         }
-        let _ = (query, k);
+        let _ = (query, k, project, min_similarity_score);
         Ok(Vec::new())
     }
 }
@@ -1422,8 +1689,7 @@ impl VerbatimWindow {
         // 3b. Tool result in window → pull in its call
         for (tool_id, result_idx) in tool_result_indices {
             if indices.contains(result_idx) {
-                if let Some((_, call_idx)) =
-                    tool_call_indices.iter().find(|(id, _)| id == tool_id)
+                if let Some((_, call_idx)) = tool_call_indices.iter().find(|(id, _)| id == tool_id)
                 {
                     if !indices.contains(call_idx) {
                         indices.push(*call_idx);
@@ -1602,7 +1868,10 @@ mod tests {
         .await
         .unwrap();
 
-        let results = svc.search_memories("不存在的关键词", 5, None).await.unwrap();
+        let results = svc
+            .search_memories("不存在的关键词", 5, None)
+            .await
+            .unwrap();
         assert!(results.is_empty());
     }
 
@@ -1652,9 +1921,12 @@ mod tests {
         .await
         .unwrap();
 
-        let results = svc.search_summaries("config", 5).await.unwrap();
+        let results = svc.search_summaries("config", 5, Some("s1")).await.unwrap();
         assert_eq!(results.len(), 1);
         assert!(results[0].summary.contains("config.rs"));
+
+        let other_session = svc.search_summaries("config", 5, Some("s2")).await.unwrap();
+        assert!(other_session.is_empty());
     }
 
     #[tokio::test]

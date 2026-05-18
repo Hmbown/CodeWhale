@@ -23,8 +23,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::client::DeepSeekClient;
 use crate::compaction::{
-    CompactionConfig, compact_messages_safe, merge_system_prompts, should_compact,
-    summarize_range, KEEP_RECENT_MESSAGES, MIN_SUMMARIZE_MESSAGES,
+    CompactionConfig, KEEP_RECENT_MESSAGES, MIN_SUMMARIZE_MESSAGES, compact_messages_safe,
+    merge_system_prompts, should_compact, summarize_range,
 };
 use crate::config::{ApiProvider, Config, DEFAULT_MAX_SUBAGENTS, DEFAULT_TEXT_MODEL};
 use crate::cycle_manager::{
@@ -457,8 +457,11 @@ impl Engine {
         // Set up stable system prompt with project context (default to agent mode).
         // Per-turn working-set metadata is injected into the latest user
         // message at request time so file churn does not rewrite this prefix.
-        let user_memory_block =
-            crate::memory::compose_block(config.memory_enabled, &config.memory_path);
+        let user_memory_block = if config.vector_memory_enabled {
+            crate::memory::compose_vector_managed_block(config.memory_enabled, &config.memory_path)
+        } else {
+            crate::memory::compose_block(config.memory_enabled, &config.memory_path)
+        };
         let system_prompt =
             prompts::system_prompt_for_mode_with_context_skills_session_and_approval(
                 AppMode::Agent,
@@ -1451,6 +1454,13 @@ impl Engine {
             ctx.memory_path = Some(self.config.memory_path.clone());
         }
 
+        // Share the semantic memory service with tools. `remember` writes
+        // durable memories; file tools use the same service for Tier 4 when
+        // code indexing is enabled.
+        ctx.vector_db = self.vector_db.clone();
+        ctx.code_index_enabled = self.config.code_index_enabled;
+        ctx.project_id = crate::tools::spec::project_id_for_workspace(&self.session.workspace);
+
         if let Some(decider) = self.config.network_policy.as_ref() {
             ctx = ctx.with_network_policy(decider.clone());
         }
@@ -1829,8 +1839,14 @@ impl Engine {
 
     /// Refresh the system prompt based on current mode and context.
     fn refresh_system_prompt(&mut self, mode: AppMode) {
-        let user_memory_block =
-            crate::memory::compose_block(self.config.memory_enabled, &self.config.memory_path);
+        let user_memory_block = if self.config.vector_memory_enabled {
+            crate::memory::compose_vector_managed_block(
+                self.config.memory_enabled,
+                &self.config.memory_path,
+            )
+        } else {
+            crate::memory::compose_block(self.config.memory_enabled, &self.config.memory_path)
+        };
         let base = prompts::system_prompt_for_mode_with_context_skills_session_and_approval(
             mode,
             &self.config.workspace,
@@ -1895,14 +1911,32 @@ impl Engine {
                 .collect::<Vec<_>>()
                 .join("\n"),
         };
-        // Extract only the first summary section: from the first "## "
-        // heading to the next "---" separator, stripping boilerplate
-        // section headers like "## 📋 Conversation Summary (Auto-Generated)",
-        // "## 🔍 Workflow Context", "## 💡 What to Do Next".
+        // Extract the LLM-generated summary text, stripping boilerplate
+        // scaffolding that would otherwise pollute the embedding space
+        // (audit #2). The compaction summary follows this structure:
+        //
+        //   ## 📋 Conversation Summary (Auto-Generated)
+        //   {summary}          ← keep only this
+        //   ---
+        //   ## 🔍 Workflow Context
+        //   {workflow_context}
+        //   ---
+        //   ## 💡 What to Do Next
+        //   {rest}
+        //
+        // We extract the body between the "## 📋" heading and the first
+        // "---" separator, then strip the heading line itself so the
+        // embedding space carries only the model's actual summary.
         let summary_text = if let Some(start) = raw.find("## ") {
             let from_heading = &raw[start..];
             if let Some(end) = from_heading.find("\n---") {
-                from_heading[..end].trim().to_string()
+                let section = &from_heading[..end];
+                // Drop the heading line (e.g. "## 📋 Conversation Summary
+                // (Auto-Generated)") and keep the body.
+                section
+                    .find('\n')
+                    .map(|nl| section[nl..].trim().to_string())
+                    .unwrap_or_else(|| section.trim().to_string())
             } else {
                 from_heading.trim().to_string()
             }
@@ -1933,6 +1967,14 @@ impl Engine {
     /// token-density-based dynamic adjustment. When `None`, turn-based
     /// mini-compaction is disabled.
     fn dynamic_mini_compaction_interval(&self) -> Option<usize> {
+        // Mini-compaction produces vector DB summaries (Tier 2). When the
+        // vector DB is not available there is nowhere to store them and the
+        // compaction cost (LLM summarisation + cache rewrite) yields no
+        // retrieval benefit — disable turn-interval mode in that case
+        // (audit #4).
+        if self.vector_db.is_none() {
+            return None;
+        }
         self.config.compaction.turns_interval
     }
 
@@ -2099,16 +2141,23 @@ impl Engine {
         let mut capped_indices: Vec<usize> = Vec::new();
         let mut token_budget_used = 0usize;
         for &idx in vw.indices.iter().rev() {
-            let msg_tokens = messages.get(idx).map(|m| {
-                m.content.iter().map(|c| match c {
-                    ContentBlock::Text { text, .. } => text.len() / 4,
-                    ContentBlock::Thinking { .. } => 0, // not sent verbatim
-                    ContentBlock::ToolUse { input, .. } => serde_json::to_string(input)
-                        .map(|s| s.len() / 4).unwrap_or(100),
-                    ContentBlock::ToolResult { content, .. } => content.len() / 4,
-                    _ => 0,
-                }).sum::<usize>()
-            }).unwrap_or(0);
+            let msg_tokens = messages
+                .get(idx)
+                .map(|m| {
+                    m.content
+                        .iter()
+                        .map(|c| match c {
+                            ContentBlock::Text { text, .. } => text.len() / 4,
+                            ContentBlock::Thinking { .. } => 0, // not sent verbatim
+                            ContentBlock::ToolUse { input, .. } => serde_json::to_string(input)
+                                .map(|s| s.len() / 4)
+                                .unwrap_or(100),
+                            ContentBlock::ToolResult { content, .. } => content.len() / 4,
+                            _ => 0,
+                        })
+                        .sum::<usize>()
+                })
+                .unwrap_or(0);
             if token_budget_used + msg_tokens > max_tokens && !capped_indices.is_empty() {
                 break; // budget exhausted
             }
@@ -2116,6 +2165,44 @@ impl Engine {
             capped_indices.push(idx);
         }
         capped_indices.reverse(); // restore chronological order
+
+        // The token cap must not invalidate the API's required tool
+        // call/result pairing. Re-close the capped set over the known pairs
+        // after truncation, even if that pushes the window slightly above the
+        // soft token budget.
+        let mut changed = true;
+        while changed {
+            changed = false;
+            let snapshot = capped_indices.clone();
+            for idx in snapshot {
+                for (tool_id, call_idx) in &tool_call_indices {
+                    if *call_idx == idx {
+                        if let Some((_, result_idx)) =
+                            tool_result_indices.iter().find(|(id, _)| id == tool_id)
+                        {
+                            if !capped_indices.contains(result_idx) {
+                                capped_indices.push(*result_idx);
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+                for (tool_id, result_idx) in &tool_result_indices {
+                    if *result_idx == idx {
+                        if let Some((_, call_idx)) =
+                            tool_call_indices.iter().find(|(id, _)| id == tool_id)
+                        {
+                            if !capped_indices.contains(call_idx) {
+                                capped_indices.push(*call_idx);
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        capped_indices.sort_unstable();
+        capped_indices.dedup();
         let verbatim_count = capped_indices.len();
         let history_count = total.saturating_sub(verbatim_count);
 
@@ -2205,8 +2292,7 @@ impl Engine {
                                     .as_ref()
                                     .and_then(|t| t.split(',').next())
                                     .unwrap_or("memory");
-                                memory_blocks
-                                    .push(format!("[{tag}] {}", r.content));
+                                memory_blocks.push(format!("[{tag}] {}", r.content));
                             }
                         }
                         Ok(_) => {}
@@ -2216,7 +2302,10 @@ impl Engine {
                     }
 
                     // Retrieve relevant history summaries (Tier 2)
-                    match vdb.search_summaries(&query, 2).await {
+                    match vdb
+                        .search_summaries(&query, 2, Some(&self.session.id))
+                        .await
+                    {
                         Ok(results) if !results.is_empty() => {
                             tracing::debug!(
                                 summary_count = results.len(),
@@ -2257,9 +2346,7 @@ impl Engine {
             return Some(SystemPrompt::Text(context_block));
         };
         let augmented = match existing {
-            SystemPrompt::Text(base) => {
-                SystemPrompt::Text(format!("{base}\n\n{context_block}"))
-            }
+            SystemPrompt::Text(base) => SystemPrompt::Text(format!("{base}\n\n{context_block}")),
             SystemPrompt::Blocks(mut blocks) => {
                 blocks.push(SystemBlock {
                     block_type: "text".to_string(),
@@ -2277,13 +2364,9 @@ impl Engine {
     /// Applies the verbatim window to filter messages and augments the
     /// system prompt with retrieved semantic context from the vector DB.
     /// Returns `(filtered_messages, augmented_system_prompt)`.
-    pub(super) async fn prepare_request_context(
-        &mut self,
-    ) -> (Vec<Message>, Option<SystemPrompt>) {
+    pub(super) async fn prepare_request_context(&mut self) -> (Vec<Message>, Option<SystemPrompt>) {
         let all_messages = self.messages_with_turn_metadata();
-        let retrieved = self
-            .build_verbatim_window_for_request(&all_messages)
-            .await;
+        let retrieved = self.build_verbatim_window_for_request(&all_messages).await;
 
         // Cache the retrieved context so sub-agents can inherit the
         // parent's semantic retrieval results (#12).
@@ -2296,11 +2379,10 @@ impl Engine {
             .filter_map(|&idx| all_messages.get(idx).cloned())
             .collect();
 
-        let augmented_system =
-            Self::augment_system_prompt_with_context(
-                self.session.system_prompt.clone(),
-                &retrieved,
-            );
+        let augmented_system = Self::augment_system_prompt_with_context(
+            self.session.system_prompt.clone(),
+            &retrieved,
+        );
 
         tracing::debug!(
             verbatim = retrieved.verbatim_messages.len(),
@@ -2312,8 +2394,7 @@ impl Engine {
 
         (filtered, augmented_system)
     }
-    }
-
+}
 
 fn system_prompt_hash(prompt: Option<&SystemPrompt>) -> u64 {
     let mut hasher = DefaultHasher::new();

@@ -650,23 +650,33 @@ pub fn should_compact(
     workspace: Option<&Path>,
     external_pins: Option<&[usize]>,
     external_working_set_paths: Option<&[String]>,
-    _has_vector_db: bool,
+    has_vector_db: bool,
 ) -> bool {
     if !config.enabled {
         return false;
     }
+
+    // When vector memory is not available there is no retrieval benefit to
+    // compaction — the only effect is destroying the V4 prefix cache. Use
+    // the legacy higher thresholds to avoid unnecessary cache rewrites
+    // (audit #4).
+    let auto_floor = if has_vector_db {
+        config.auto_floor_tokens
+    } else {
+        config.auto_floor_tokens.max(MINIMUM_AUTO_COMPACTION_TOKENS)
+    };
 
     // v0.8.11: hard floor enforcement. Below the floor (default 500K tokens
     // — see `MINIMUM_AUTO_COMPACTION_TOKENS`), automatic compaction is
     // refused because rewriting the prefix kills V4's prefix cache for
     // little budget recovery. Manual `/compact` and the `compact_now` tool
     // bypass this floor by going through different code paths.
-    if config.auto_floor_tokens > 0 {
+    if auto_floor > 0 {
         let total_session_tokens: usize = messages
             .iter()
             .map(|m| estimate_tokens_for_message(m, false))
             .sum();
-        if total_session_tokens < config.auto_floor_tokens {
+        if total_session_tokens < auto_floor {
             return false;
         }
     }

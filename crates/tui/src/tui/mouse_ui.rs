@@ -359,6 +359,18 @@ pub(crate) fn build_context_menu_entries(app: &App, mouse: MouseEvent) -> Vec<Co
             description: "open file:line in $EDITOR".to_string(),
             action: ContextMenuAction::OpenFileAtLine { cell_index },
         });
+        if let Some(HistoryCell::Thinking { expanded, .. }) = app.cell_at_virtual_index(cell_index)
+        {
+            entries.push(ContextMenuEntry {
+                label: if *expanded {
+                    "Collapse thinking".to_string()
+                } else {
+                    "Expand thinking".to_string()
+                },
+                description: "toggle reasoning body inline".to_string(),
+                action: ContextMenuAction::ToggleExpandThinking { cell_index },
+            });
+        }
         // Hide/show cell toggle.
         if app.collapsed_cells.contains(&cell_index) {
             entries.push(ContextMenuEntry {
@@ -492,6 +504,21 @@ pub(crate) fn handle_context_menu_action(app: &mut App, action: ContextMenuActio
             app.collapsed_cells.clear();
             app.status_message = Some(format!("{count} hidden cell(s) restored"));
         }
+        ContextMenuAction::ToggleExpandThinking { cell_index } => {
+            let status = if let Some(HistoryCell::Thinking { expanded, .. }) =
+                app.cell_at_virtual_index_mut(cell_index)
+            {
+                *expanded = !*expanded;
+                if *expanded {
+                    "Thinking expanded".to_string()
+                } else {
+                    "Thinking collapsed".to_string()
+                }
+            } else {
+                "No thinking cell at that line".to_string()
+            };
+            app.status_message = Some(status);
+        }
     }
     app.needs_redraw = true;
 }
@@ -606,6 +633,24 @@ pub(crate) fn selection_to_text(app: &App) -> Option<String> {
         // Rail-prefix decorations are stored as cache metadata rather than
         // detected from glyphs, so new decoration types are covered without
         // changes to the copy path (#1163).
+        if let Some((cell_index, line_in_cell)) = app
+            .viewport
+            .transcript_cache
+            .line_meta()
+            .get(line_index)
+            .and_then(crate::tui::scrolling::TranscriptLineMeta::cell_line)
+            && line_in_cell > 0
+            && let Some(HistoryCell::Thinking {
+                streaming: false,
+                expanded: false,
+                ..
+            }) = app.cell_at_virtual_index(cell_index)
+        {
+            if line_in_cell == 1 {
+                selected_lines.push("Full reasoning in Ctrl+O".to_string());
+            }
+            continue;
+        }
         let rail_width = app.viewport.transcript_cache.rail_prefix_width(line_index);
         // Convert the rendered line to plain text (strips OSC-8), then
         // slice off the rail prefix so subsequent column offsets operate

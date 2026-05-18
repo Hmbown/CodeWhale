@@ -187,16 +187,17 @@ impl ToolSpec for ReadFileTool {
         // Append related code chunks from the vector DB code_index (Tier 4)
         // when available. Best-effort: if the search fails we still return
         // the file contents as-is.
-        if let Some(ref vdb) = context.vector_db {
-            let query = format!("{} {}", path_str, &contents[..contents.len().min(200)]);
-            if let Ok(chunks) = vdb.search_code(&query, 3).await {
+        if context.code_index_enabled
+            && let Some(ref vdb) = context.vector_db
+        {
+            let preview: String = contents.chars().take(200).collect();
+            let query = format!("{path_str} {preview}");
+            if let Ok(chunks) = vdb.search_code(&query, 3, &context.project_id, None).await {
                 if !chunks.is_empty() {
                     let related: Vec<String> = chunks
                         .into_iter()
                         .map(|(fp, content, score)| {
-                            format!(
-                                "--- related: {fp} (score={score:.2}) ---\n{content}",
-                            )
+                            format!("--- related: {fp} (score={score:.2}) ---\n{content}",)
                         })
                         .collect();
                     if !related.is_empty() {
@@ -462,14 +463,11 @@ impl ToolSpec for WriteFileTool {
 
         // Index the file for code search (Tier 4). Best-effort: a failed
         // index write does not affect the tool result.
-        if let Some(ref vdb) = context.vector_db {
-            let project = context
-                .workspace
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| "unknown".to_string());
+        if context.code_index_enabled
+            && let Some(ref vdb) = context.vector_db
+        {
             let fp = file_path.to_string_lossy();
-            vdb.index_file(&fp, file_content, &project).await;
+            vdb.index_file(&fp, file_content, &context.project_id).await;
         }
 
         let display = file_path.display().to_string();
@@ -627,14 +625,11 @@ impl ToolSpec for EditFileTool {
         })?;
 
         // Index the file for code search (Tier 4). Best-effort.
-        if let Some(ref vdb) = context.vector_db {
-            let project = context
-                .workspace
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| "unknown".to_string());
+        if context.code_index_enabled
+            && let Some(ref vdb) = context.vector_db
+        {
             let fp = file_path.to_string_lossy();
-            vdb.index_file(&fp, &updated, &project).await;
+            vdb.index_file(&fp, &updated, &context.project_id).await;
         }
 
         let display = file_path.display().to_string();

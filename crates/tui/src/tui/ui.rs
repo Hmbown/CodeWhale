@@ -709,6 +709,16 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         subagent_model_overrides: config.subagent_model_overrides(),
         memory_enabled: config.memory_enabled(),
         memory_path: config.memory_path(),
+        verbatim_window_turns: config
+            .context
+            .verbatim_window_turns
+            .unwrap_or(crate::vector_db::DEFAULT_VERBATIM_WINDOW_TURNS),
+        vector_memory_enabled: config.vector_memory_enabled(),
+        vector_memory_path: config.vector_memory_path(),
+        vector_memory_dim: config.vector_memory_dim(),
+        max_memory_items: config.vector_memory_max_items(),
+        min_similarity_score: config.vector_memory_min_similarity_score(),
+        code_index_enabled: config.vector_memory_code_index_enabled(),
         vision_config: config.vision_model_config(),
         strict_tool_mode: config.strict_tool_mode.unwrap_or(false),
         goal_objective: app.goal.goal_objective.clone(),
@@ -7094,6 +7104,7 @@ fn reasoning_timeline_text(app: &App, selected_cell_index: usize) -> Option<Stri
             content,
             streaming,
             duration_secs,
+            ..
         }) = app.cell_at_virtual_index(cell_index)
         else {
             continue;

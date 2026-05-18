@@ -72,8 +72,8 @@ mod test_support;
 mod tools;
 mod tui;
 mod utils;
-mod vision;
 mod vector_db;
+mod vision;
 mod working_set;
 mod workspace_trust;
 
@@ -4664,9 +4664,9 @@ async fn run_exec_agent(
         vector_memory_enabled: config.vector_memory_enabled(),
         vector_memory_path: config.vector_memory_path(),
         vector_memory_dim: config.vector_memory_dim(),
-        max_memory_items: 1000,
-        min_similarity_score: 0.4,
-        code_index_enabled: false,
+        max_memory_items: config.vector_memory_max_items(),
+        min_similarity_score: config.vector_memory_min_similarity_score(),
+        code_index_enabled: config.vector_memory_code_index_enabled(),
         vision_config: config.vision_model_config(),
         strict_tool_mode: config.strict_tool_mode.unwrap_or(false),
         goal_objective: None,

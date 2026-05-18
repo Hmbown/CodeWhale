@@ -1990,9 +1990,9 @@ impl RuntimeThreadManager {
             vector_memory_enabled: self.config.vector_memory_enabled(),
             vector_memory_path: self.config.vector_memory_path(),
             vector_memory_dim: self.config.vector_memory_dim(),
-            max_memory_items: 1000,
-            min_similarity_score: 0.4,
-            code_index_enabled: false,
+            max_memory_items: self.config.vector_memory_max_items(),
+            min_similarity_score: self.config.vector_memory_min_similarity_score(),
+            code_index_enabled: self.config.vector_memory_code_index_enabled(),
         };
 
         let engine = spawn_engine(engine_cfg, &self.config);

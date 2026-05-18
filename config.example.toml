@@ -108,6 +108,7 @@ memory_path = "~/.deepseek/memory.md"
 # dim = 384                   # embedding dimension (all-MiniLM-L6-v2, 384)
 # min_similarity_score = 0.4  # filter threshold for retrieved memories/summaries
 # max_memory_items = 1000     # in-memory cache cap before eviction
+# code_index_enabled = false  # enable Tier 4 code chunk indexing/search
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Security

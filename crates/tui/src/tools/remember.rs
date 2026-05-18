@@ -84,9 +84,12 @@ impl ToolSpec for RememberTool {
                 .search_memories(note, 3, None)
                 .await
                 .unwrap_or_default();
-            let too_similar = existing
-                .iter()
-                .any(|m| m.score > 0.85 && m.content.to_lowercase().contains(&note.to_lowercase()));
+            // #5: dedup by vector similarity score alone — cosine >= 0.85
+            // signals near-duplicate semantic content regardless of exact
+            // wording. The `contains` substring check was removed because it
+            // misses inversions (old content broader than new), a common case
+            // when the model progressively refines its understanding.
+            let too_similar = existing.iter().any(|m| m.score > 0.85);
 
             if too_similar {
                 tracing::debug!(

@@ -113,6 +113,23 @@ pub fn compose_block(enabled: bool, path: &Path) -> Option<String> {
     as_system_block(&content, path)
 }
 
+/// Compose a lightweight memory marker for vector-memory mode. The flat file
+/// remains the durable append log, but its full contents should not be pinned
+/// into every system prompt when semantic retrieval is enabled.
+#[must_use]
+pub fn compose_vector_managed_block(enabled: bool, path: &Path) -> Option<String> {
+    if !enabled {
+        return None;
+    }
+    load(path)?;
+    let display = path.display();
+    Some(format!(
+        "<user_memory source=\"{display}\" retrieval=\"vector\">\n\
+         Durable memory is available through semantic retrieval; relevant entries are injected per turn.\n\
+         </user_memory>"
+    ))
+}
+
 /// Append `entry` to the memory file at `path`, creating it (and its
 /// parent directory) if needed. The entry is timestamped so the user can
 /// later see when each note was added. The leading `#` from a `# foo`
@@ -180,6 +197,17 @@ mod tests {
     #[test]
     fn as_system_block_returns_none_for_empty_content() {
         assert!(as_system_block("   ", Path::new("/tmp/m.md")).is_none());
+    }
+
+    #[test]
+    fn vector_managed_block_does_not_inline_flat_memory() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("memory.md");
+        fs::write(&path, "very large durable note").unwrap();
+
+        let block = compose_vector_managed_block(true, &path).unwrap();
+        assert!(block.contains("retrieval=\"vector\""));
+        assert!(!block.contains("very large durable note"));
     }
 
     #[test]
