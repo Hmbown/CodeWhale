@@ -1,5 +1,7 @@
 # Build artifacts
 /target
+/target-feat-*
+/target-*
 *.pdb
 *.exe
 *.dll
