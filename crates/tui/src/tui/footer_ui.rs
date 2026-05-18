@@ -415,6 +415,7 @@ pub(crate) fn render_footer_from(
             S::Cache => cache_chip.clone(),
             S::ContextPercent => footer_context_percent_spans(app),
             S::GitBranch => footer_git_branch_spans(app),
+            S::OutputSpeed => footer_output_speed_spans(app),
             S::LastToolElapsed | S::RateLimit => Vec::new(),
             _ => continue,
         };
@@ -638,6 +639,48 @@ pub(crate) fn footer_reasoning_replay_spans(app: &App) -> Vec<Span<'static>> {
         }
         _ => palette::TEXT_MUTED,
     };
+    vec![Span::styled(label, Style::default().fg(color))]
+}
+
+/// Real-time token output speed chip shown during streaming.
+///
+/// Estimates tokens-per-second from accumulated characters (`stream_output_chars`)
+/// and wall-clock time since the first content delta arrived (`stream_started_at`).
+/// Uses a 1:4 token:character ratio as a lightweight approximation.
+/// Renders as e.g. `"12.5 tok/s"` in the right cluster. Hidden when not streaming.
+pub(crate) fn footer_output_speed_spans(app: &App) -> Vec<Span<'static>> {
+    let started_at = match app.stream_started_at {
+        Some(t) => t,
+        None => return Vec::new(),
+    };
+    if app.stream_output_chars == 0 {
+        return Vec::new();
+    }
+    let elapsed_secs = started_at.elapsed().as_secs_f64();
+    if elapsed_secs <= 0.0 {
+        return Vec::new();
+    }
+
+    // Rough estimate: 1 token ≈ 4 characters for mixed text.
+    let estimated_tokens = app.stream_output_chars as f64 / 4.0;
+    let tps = estimated_tokens / elapsed_secs;
+
+    let label = if tps >= 10.0 {
+        format!("{:.0} tok/s", tps)
+    } else {
+        format!("{:.1} tok/s", tps)
+    };
+
+    // Colour ramp: green when cranking (>50 tok/s), warning at mid-range,
+    // normal dim for low output (thinking-heavy turns).
+    let color = if tps > 50.0 {
+        palette::STATUS_SUCCESS
+    } else if tps > 20.0 {
+        palette::DEEPSEEK_SKY
+    } else {
+        palette::TEXT_MUTED
+    };
+
     vec![Span::styled(label, Style::default().fg(color))]
 }
 

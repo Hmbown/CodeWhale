@@ -1076,6 +1076,12 @@ pub struct App {
     pub needs_redraw: bool,
     /// When the current thinking block started (for duration tracking).
     pub thinking_started_at: Option<Instant>,
+    /// Accumulated output characters during streaming (text + thinking).
+    /// Used to estimate real-time token output speed for the footer chip.
+    pub stream_output_chars: u64,
+    /// When the first stream content (text or thinking) arrived this turn.
+    /// `None` before any delta or after the turn completes.
+    pub stream_started_at: Option<Instant>,
     /// Whether context compaction is currently in progress.
     pub is_compacting: bool,
     /// Set when the user scrolls up/down during a streaming turn so subsequent
@@ -1617,6 +1623,8 @@ impl App {
             task_panel: Vec::new(),
             needs_redraw: true,
             thinking_started_at: None,
+            stream_output_chars: 0,
+            stream_started_at: None,
             is_compacting: false,
             user_scrolled_during_stream: false,
             coherence_state: CoherenceState::default(),

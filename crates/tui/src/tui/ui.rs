@@ -960,6 +960,13 @@ async fn run_event_loop(
                         if app.streaming_message_index.is_none() {
                             app.flush_active_cell();
                         }
+                        // Track output for real-time token speed chip.
+                        if app.stream_started_at.is_none() {
+                            app.stream_started_at = Some(std::time::Instant::now());
+                        }
+                        app.stream_output_chars = app
+                            .stream_output_chars
+                            .saturating_add(u64::try_from(sanitized.len()).unwrap_or(0));
                         current_streaming_text.push_str(&sanitized);
                         let index = ensure_streaming_assistant_history_cell(app);
                         app.streaming_state.push_content(0, &sanitized);
@@ -1078,6 +1085,14 @@ async fn run_event_loop(
                         if sanitized.is_empty() {
                             continue;
                         }
+                        // Track output for real-time token speed chip
+                        // (includes thinking tokens as part of generation).
+                        if app.stream_started_at.is_none() {
+                            app.stream_started_at = Some(std::time::Instant::now());
+                        }
+                        app.stream_output_chars = app
+                            .stream_output_chars
+                            .saturating_add(u64::try_from(sanitized.len()).unwrap_or(0));
                         app.reasoning_buffer.push_str(&sanitized);
                         if app.reasoning_header.is_none() {
                             app.reasoning_header = extract_reasoning_header(&app.reasoning_buffer);
@@ -1250,6 +1265,8 @@ async fn run_event_loop(
                         app.streaming_state.reset();
                         app.streaming_message_index = None;
                         app.streaming_thinking_active_entry = None;
+                        app.stream_output_chars = 0;
+                        app.stream_started_at = None;
                         app.turn_started_at = Some(Instant::now());
                         // Discoverability hint for users who don't know how
                         // to interrupt a long-running turn (#1367). Only
@@ -1302,6 +1319,8 @@ async fn run_event_loop(
                         app.dispatch_started_at = None;
                         app.offline_mode = false;
                         app.streaming_state.reset();
+                        app.stream_output_chars = 0;
+                        app.stream_started_at = None;
                         // Capture elapsed before clearing turn_started_at so
                         // notifications can use the real wall-clock duration.
                         let turn_elapsed =
