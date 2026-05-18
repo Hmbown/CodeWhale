@@ -129,6 +129,8 @@ impl ShellDispatcher {
     /// 2. `/bin/sh` fallback.
     pub fn detect() -> Self {
         let kind = Self::detect_shell();
+        use crate::logging;
+        logging::info(format!("ShellDispatcher: detected {:?}", kind));
         ShellDispatcher { kind }
     }
 
