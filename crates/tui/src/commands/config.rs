@@ -248,6 +248,11 @@ pub fn status_line(_app: &mut App) -> CommandResult {
     CommandResult::action(AppAction::OpenStatusPicker)
 }
 
+/// Open the full-terminal live reasoning stream overlay.
+pub fn thinking_stream(_app: &mut App) -> CommandResult {
+    CommandResult::action(AppAction::OpenThinkingStream)
+}
+
 /// Toggle whether the live transcript renders full thinking detail.
 pub fn verbose(app: &mut App, arg: Option<&str>) -> CommandResult {
     let next = match arg.map(str::trim).filter(|s| !s.is_empty()) {

@@ -4445,6 +4445,20 @@ fn open_thinking_pager_finds_thinking_in_active_cell() {
 }
 
 #[test]
+fn activity_detail_opens_live_thinking_stream_for_streaming_thinking() {
+    let mut app = create_test_app();
+    let entry_idx = crate::tui::streaming_thinking::ensure_active_entry(&mut app);
+    crate::tui::streaming_thinking::append(&mut app, entry_idx, "live reasoning");
+
+    assert!(open_activity_detail_pager(&mut app));
+    assert_eq!(app.view_stack.top_kind(), Some(ModalKind::LiveTranscript));
+    assert_eq!(
+        live_transcript_overlay_mode(&mut app),
+        Some(crate::tui::live_transcript::Mode::ThinkingOnly)
+    );
+}
+
+#[test]
 fn activity_detail_opens_reasoning_timeline_for_selected_thinking() {
     let mut app = create_test_app();
     app.history = vec![

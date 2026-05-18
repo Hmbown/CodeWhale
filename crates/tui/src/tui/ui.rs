@@ -72,7 +72,7 @@ use crate::tui::footer_ui::{
 };
 use crate::tui::format_helpers;
 use crate::tui::key_shortcuts;
-use crate::tui::live_transcript::LiveTranscriptOverlay;
+use crate::tui::live_transcript::{LiveTranscriptOverlay, Mode as LiveTranscriptMode};
 use crate::tui::mcp_routing::{add_mcp_message, open_mcp_manager_pager};
 use crate::tui::mouse_ui::*;
 use crate::tui::notifications;
@@ -4570,6 +4570,9 @@ async fn apply_command_result(
                         .push(crate::tui::theme_picker::ThemePickerView::new(original));
                 }
             }
+            AppAction::OpenThinkingStream => {
+                toggle_live_thinking_overlay(app);
+            }
             AppAction::OpenExternalUrl { url, label } => match open_external_url(&url) {
                 Ok(()) => {
                     app.status_message = Some(format!("Opened {label} in your browser"));
@@ -5643,6 +5646,37 @@ fn toggle_live_transcript_overlay(app: &mut App) {
     app.view_stack.push(overlay);
     app.status_message = Some("Live transcript: tailing (Esc to close)".to_string());
     app.needs_redraw = true;
+}
+
+fn toggle_live_thinking_overlay(app: &mut App) {
+    if app.view_stack.top_kind() == Some(ModalKind::LiveTranscript)
+        && live_transcript_overlay_mode(app) == Some(LiveTranscriptMode::ThinkingOnly)
+    {
+        app.view_stack.pop();
+        app.needs_redraw = true;
+        return;
+    }
+    if app.view_stack.top_kind() == Some(ModalKind::LiveTranscript) {
+        app.view_stack.pop();
+    }
+    let mut overlay = LiveTranscriptOverlay::thinking_only();
+    overlay.refresh_from_app(app);
+    app.view_stack.push(overlay);
+    app.status_message = Some("Thinking stream: tailing (Esc to close)".to_string());
+    app.needs_redraw = true;
+}
+
+fn live_transcript_overlay_mode(app: &mut App) -> Option<LiveTranscriptMode> {
+    if app.view_stack.top_kind() != Some(ModalKind::LiveTranscript) {
+        return None;
+    }
+    let mut overlay = app.view_stack.pop()?;
+    let mode = overlay
+        .as_any_mut()
+        .downcast_mut::<LiveTranscriptOverlay>()
+        .map(|typed| typed.mode());
+    app.view_stack.push_boxed(overlay);
+    mode
 }
 
 async fn handle_view_events(
@@ -6915,6 +6949,19 @@ fn open_activity_detail_pager(app: &mut App) -> bool {
         app.status_message = Some("No activity detail available".to_string());
         return true;
     };
+
+    if app.cell_at_virtual_index(idx).is_some_and(|cell| {
+        matches!(
+            cell,
+            HistoryCell::Thinking {
+                streaming: true,
+                ..
+            }
+        )
+    }) {
+        toggle_live_thinking_overlay(app);
+        return true;
+    }
 
     let width = app
         .viewport

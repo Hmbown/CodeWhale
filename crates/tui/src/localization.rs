@@ -303,6 +303,7 @@ pub enum MessageId {
     CmdSwarmDescription,
     CmdSystemDescription,
     CmdTaskDescription,
+    CmdThinkingDescription,
     CmdTokensDescription,
     CmdTranslateDescription,
     CmdTranslateOff,
@@ -534,6 +535,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CmdSwarmDescription,
     MessageId::CmdSystemDescription,
     MessageId::CmdTaskDescription,
+    MessageId::CmdThinkingDescription,
     MessageId::CmdTokensDescription,
     MessageId::CmdTranslateDescription,
     MessageId::CmdTranslateOff,
@@ -983,6 +985,7 @@ fn english(id: MessageId) -> &'static str {
         }
         MessageId::CmdSystemDescription => "Show current system prompt",
         MessageId::CmdTaskDescription => "Manage background tasks",
+        MessageId::CmdThinkingDescription => "Open the full-terminal live thinking stream",
         MessageId::CmdTokensDescription => "Show token usage for session",
         MessageId::CmdTranslateDescription => {
             "Toggle output translation to the current system language on/off"
@@ -1368,6 +1371,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         }
         MessageId::CmdSystemDescription => "現在のシステムプロンプトを表示",
         MessageId::CmdTaskDescription => "バックグラウンドタスクを管理",
+        MessageId::CmdThinkingDescription => "全画面のライブ思考ストリームを開く",
         MessageId::CmdTokensDescription => "セッションのトークン使用量を表示",
         MessageId::CmdTranslateDescription => "出力翻訳を現在のシステム言語に切り替え",
         MessageId::CmdTranslateOff => "出力翻訳が無効になりました（元のモデル出力を表示）",
@@ -1704,6 +1708,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         }
         MessageId::CmdSystemDescription => "显示当前系统提示词",
         MessageId::CmdTaskDescription => "管理后台任务",
+        MessageId::CmdThinkingDescription => "打开全屏实时思考流",
         MessageId::CmdTokensDescription => "显示本次会话的 token 用量",
         MessageId::CmdTranslateDescription => "切换输出翻译为当前系统语言的开/关状态",
         MessageId::CmdTranslateOff => "输出翻译已关闭（显示原始模型输出）",
@@ -2040,6 +2045,7 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         }
         MessageId::CmdSystemDescription => "Exibir o prompt de sistema atual",
         MessageId::CmdTaskDescription => "Gerenciar tarefas em segundo plano",
+        MessageId::CmdThinkingDescription => "Abrir o fluxo de raciocínio ao vivo em tela cheia",
         MessageId::CmdTokensDescription => "Exibir o uso de tokens da sessão",
         MessageId::CmdTranslateDescription => {
             "Alternar tradução de saída para o idioma atual do sistema"
@@ -2428,6 +2434,9 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         }
         MessageId::CmdSystemDescription => "Mostrar el prompt de sistema actual",
         MessageId::CmdTaskDescription => "Gestionar tareas en segundo plano",
+        MessageId::CmdThinkingDescription => {
+            "Abrir el flujo de razonamiento en vivo a pantalla completa"
+        }
         MessageId::CmdTokensDescription => "Mostrar el uso de tokens de la sesión",
         MessageId::CmdTranslateDescription => {
             "Activar o desactivar la traducción de salida al idioma actual del sistema"

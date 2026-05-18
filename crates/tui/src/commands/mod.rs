@@ -365,6 +365,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         description_id: MessageId::CmdThemeDescription,
     },
     CommandInfo {
+        name: "thinking",
+        aliases: &["think"],
+        usage: "/thinking",
+        description_id: MessageId::CmdThinkingDescription,
+    },
+    CommandInfo {
         name: "verbose",
         aliases: &[],
         usage: "/verbose [on|off]",
@@ -588,6 +594,7 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "jihua" => config::mode(app, Some("plan")),
         "zidong" => config::mode(app, Some("yolo")),
         "theme" => config::theme(app, arg),
+        "thinking" | "think" => config::thinking_stream(app),
         "verbose" => config::verbose(app, arg),
         "trust" | "xinren" => config::trust(app, arg),
         "logout" => config::logout(app),
@@ -1286,6 +1293,17 @@ mod tests {
         assert!(!result.is_error);
         assert!(!app.verbose_transcript);
         assert!(result.message.unwrap().contains("off"));
+    }
+
+    #[test]
+    fn execute_thinking_opens_live_reasoning_stream() {
+        let mut app = create_test_app();
+        let result = execute("/thinking", &mut app);
+        assert!(result.message.is_none());
+        assert!(matches!(result.action, Some(AppAction::OpenThinkingStream)));
+
+        let alias = execute("/think", &mut app);
+        assert!(matches!(alias.action, Some(AppAction::OpenThinkingStream)));
     }
 
     #[test]

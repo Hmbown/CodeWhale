@@ -4085,6 +4085,8 @@ pub enum AppAction {
     OpenFeedbackPicker,
     /// Open the `/theme` picker modal with live preview of every preset.
     OpenThemePicker,
+    /// Open the full-terminal live thinking stream overlay (#1750).
+    OpenThinkingStream,
     /// Open an external URL in the system browser.
     OpenExternalUrl {
         url: String,

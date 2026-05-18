@@ -39,15 +39,16 @@ use crate::tui::transcript_cache::{CellId, TranscriptCache};
 use crate::tui::views::{ModalKind, ModalView, ViewAction, ViewEvent};
 
 /// Render mode for the overlay. `Tail` is the original Ctrl+T sticky-tail
-/// behaviour (#94). `BacktrackPreview` (#133) highlights the Nth-from-tail
-/// `HistoryCell::User` so the user can see which turn Esc-Esc-Enter will
-/// roll back to. The mode also disables sticky-tail (we want the user to
-/// scan history, not be yanked to live output) and pins scroll near the
-/// highlighted cell on transitions.
+/// behaviour (#94). `ThinkingOnly` tails just reasoning cells for #1750.
+/// `BacktrackPreview` (#133) highlights the Nth-from-tail `HistoryCell::User`
+/// so the user can see which turn Esc-Esc-Enter will roll back to. The mode
+/// also disables sticky-tail (we want the user to scan history, not be yanked
+/// to live output) and pins scroll near the highlighted cell on transitions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Mode {
     #[default]
     Tail,
+    ThinkingOnly,
     BacktrackPreview {
         selected_idx: usize,
     },
@@ -56,6 +57,7 @@ pub enum Mode {
 /// Single-line footer hint. Kept short so it fits on narrow terminals.
 const FOOTER_HINT: &str =
     " j/k scroll  Space/b page  g/G top/bottom  End=resume tail  q/Esc close ";
+const THINKING_ONLY_REVISION_SALT: u64 = 0xD1A1_1750_7A11_0001;
 
 /// Snapshot of one cell, refreshed every frame from `App`. Owns the cell so
 /// the overlay's `render(&self)` can wrap without re-borrowing `App`.
@@ -140,8 +142,24 @@ impl LiveTranscriptOverlay {
         self.preview_pin_pending.set(false);
     }
 
+    /// Show only thinking cells, always in full-detail form. This is the
+    /// full-terminal live stream requested in #1750: the overlay still
+    /// refreshes from `App` every frame, but non-reasoning transcript cells
+    /// are filtered out and the view tails the latest reasoning chunk.
+    pub fn set_thinking_only(&mut self) {
+        self.mode = Mode::ThinkingOnly;
+        self.sticky_to_bottom.set(true);
+        self.preview_pin_pending.set(false);
+    }
+
+    #[must_use]
+    pub fn thinking_only() -> Self {
+        let mut overlay = Self::new();
+        overlay.set_thinking_only();
+        overlay
+    }
+
     /// For tests + UI: current mode.
-    #[allow(dead_code)] // currently consumed only by tests; kept public for symmetry with `set_*` setters.
     #[must_use]
     pub fn mode(&self) -> Mode {
         self.mode
@@ -214,17 +232,36 @@ impl LiveTranscriptOverlay {
                 }
                 hit
             }
-            Mode::Tail => None,
+            Mode::Tail | Mode::ThinkingOnly => None,
         };
 
         let mut cache = self.cache.borrow_mut();
         for (cell_idx, snap) in self.snapshots.iter().enumerate() {
-            let lines: Vec<Line<'static>> = match cache.get(snap.id, width, snap.revision) {
-                Some(cached) => cached.to_vec(),
-                None => {
-                    let rendered = snap.cell.lines_with_options(width, self.options);
-                    cache.insert(snap.id, width, snap.revision, rendered.clone());
-                    rendered
+            let revision = if matches!(self.mode, Mode::ThinkingOnly) {
+                snap.revision.wrapping_add(THINKING_ONLY_REVISION_SALT)
+            } else {
+                snap.revision
+            };
+            let lines: Vec<Line<'static>> = if matches!(self.mode, Mode::ThinkingOnly) {
+                if !matches!(snap.cell, HistoryCell::Thinking { .. }) {
+                    continue;
+                }
+                match cache.get(snap.id, width, revision) {
+                    Some(cached) => cached.to_vec(),
+                    None => {
+                        let rendered = snap.cell.transcript_lines(width);
+                        cache.insert(snap.id, width, revision, rendered.clone());
+                        rendered
+                    }
+                }
+            } else {
+                match cache.get(snap.id, width, revision) {
+                    Some(cached) => cached.to_vec(),
+                    None => {
+                        let rendered = snap.cell.lines_with_options(width, self.options);
+                        cache.insert(snap.id, width, revision, rendered.clone());
+                        rendered
+                    }
                 }
             };
 
@@ -272,7 +309,7 @@ impl LiveTranscriptOverlay {
         let scroll = self.scroll.get().saturating_add(amount).min(max);
         self.scroll.set(scroll);
         self.preview_pin_pending.set(false);
-        if scroll >= max && matches!(self.mode, Mode::Tail) {
+        if scroll >= max && self.mode_sticks_to_bottom() {
             self.sticky_to_bottom.set(true);
         }
     }
@@ -285,8 +322,12 @@ impl LiveTranscriptOverlay {
 
     fn jump_to_bottom(&mut self) {
         self.scroll.set(self.max_scroll());
-        self.sticky_to_bottom.set(matches!(self.mode, Mode::Tail));
+        self.sticky_to_bottom.set(self.mode_sticks_to_bottom());
         self.preview_pin_pending.set(false);
+    }
+
+    fn mode_sticks_to_bottom(&self) -> bool {
+        matches!(self.mode, Mode::Tail | Mode::ThinkingOnly)
     }
 
     /// For tests: snapshot count.
@@ -539,8 +580,13 @@ impl ModalView for LiveTranscriptOverlay {
         };
         let end = (scroll + visible_height).min(lines.len());
         let visible_lines: Vec<Line<'static>> = if lines.is_empty() {
+            let empty_label = if matches!(self.mode, Mode::ThinkingOnly) {
+                "(no thinking stream yet)"
+            } else {
+                "(no transcript yet)"
+            };
             vec![Line::from(Span::styled(
-                "(no transcript yet)",
+                empty_label,
                 Style::default().fg(palette::TEXT_DIM),
             ))]
         } else {
@@ -552,6 +598,13 @@ impl ModalView for LiveTranscriptOverlay {
                 " Backtrack preview — turn {} (\u{2190}/\u{2192} step, Enter rewind, Esc cancel) ",
                 selected_idx + 1
             ),
+            Mode::ThinkingOnly => {
+                if self.sticky_to_bottom.get() {
+                    " Thinking stream (tailing) ".to_string()
+                } else {
+                    " Thinking stream (paused) ".to_string()
+                }
+            }
             Mode::Tail => {
                 if self.sticky_to_bottom.get() {
                     " Live transcript (tailing) ".to_string()
@@ -595,6 +648,14 @@ mod tests {
         HistoryCell::Assistant {
             content: s.to_string(),
             streaming,
+        }
+    }
+
+    fn thinking(s: &str, streaming: bool) -> HistoryCell {
+        HistoryCell::Thinking {
+            content: s.to_string(),
+            streaming,
+            duration_secs: None,
         }
     }
 
@@ -795,6 +856,75 @@ mod tests {
         v.set_tail_mode();
         assert!(v.is_sticky());
         assert!(matches!(v.mode(), Mode::Tail));
+    }
+
+    #[test]
+    fn thinking_only_filters_transcript_to_reasoning_cells() {
+        let mut v = LiveTranscriptOverlay::new();
+        install_snapshots(
+            &mut v,
+            vec![
+                user("prompt that should be hidden"),
+                thinking("line one\nline two", true),
+                assistant("answer that should be hidden", false),
+            ],
+        );
+        v.set_thinking_only();
+
+        let area = Rect::new(0, 0, 64, 16);
+        let mut buf = Buffer::empty(area);
+        v.render(area, &mut buf);
+        let rendered = buffer_text(&buf);
+
+        assert!(rendered.contains("Thinking stream"), "{rendered}");
+        assert!(rendered.contains("line one"), "{rendered}");
+        assert!(rendered.contains("line two"), "{rendered}");
+        assert!(!rendered.contains("prompt that should be hidden"));
+        assert!(!rendered.contains("answer that should be hidden"));
+    }
+
+    #[test]
+    fn thinking_only_uses_full_reasoning_body() {
+        let mut v = LiveTranscriptOverlay::new();
+        install_snapshots(
+            &mut v,
+            vec![thinking(
+                "This completed reasoning block has no explicit summary.\nKeep the actual body visible.",
+                false,
+            )],
+        );
+        v.set_thinking_only();
+
+        let area = Rect::new(0, 0, 72, 18);
+        let mut buf = Buffer::empty(area);
+        v.render(area, &mut buf);
+        let rendered = buffer_text(&buf);
+
+        assert!(rendered.contains("no explicit summary"), "{rendered}");
+        assert!(rendered.contains("actual body visible"), "{rendered}");
+        assert!(
+            !rendered.contains("Full reasoning in Ctrl+O"),
+            "thinking-only mode should not reuse the compact summary surface: {rendered}"
+        );
+    }
+
+    #[test]
+    fn thinking_only_end_resumes_sticky_tail() {
+        let mut v = LiveTranscriptOverlay::new();
+        install_snapshots(
+            &mut v,
+            (0..50)
+                .map(|i| thinking(&format!("reasoning line {i}"), true))
+                .collect(),
+        );
+        v.set_thinking_only();
+        prime_layout(&mut v, 10);
+        v.scroll.set(10);
+        v.sticky_to_bottom.set(false);
+
+        let _ = v.handle_key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+
+        assert!(v.is_sticky());
     }
 
     #[test]
