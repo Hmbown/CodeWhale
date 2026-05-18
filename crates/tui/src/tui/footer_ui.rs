@@ -642,13 +642,29 @@ pub(crate) fn footer_reasoning_replay_spans(app: &App) -> Vec<Span<'static>> {
     vec![Span::styled(label, Style::default().fg(color))]
 }
 
-/// Real-time token output speed chip shown during streaming.
+/// Token output speed chip shown during streaming (real-time estimate) and
+/// persisted briefly after the turn ends (final average from actual token counts).
 ///
-/// Estimates tokens-per-second from accumulated characters (`stream_output_chars`)
-/// and wall-clock time since the first content delta arrived (`stream_started_at`).
-/// Uses a 1:4 token:character ratio as a lightweight approximation.
-/// Renders as e.g. `"12.5 tok/s"` in the right cluster. Hidden when not streaming.
+/// **During streaming:** estimates tokens-per-second from accumulated characters
+/// (`stream_output_chars`) and wall-clock time (`stream_started_at`), using a
+/// ~1:4 token:character ratio as a lightweight approximation.
+/// Renders as `"12.5 tok/s"`.
+///
+/// **After turn completion:** reads `app.last_turn_output_speed` which was set
+/// from the actual `usage.output_tokens` and the turn's wall-clock duration.
+/// Renders as `"12.5 tok/s avg"`.
+///
+/// Hidden when no streaming has occurred and no completed-turn data is available.
 pub(crate) fn footer_output_speed_spans(app: &App) -> Vec<Span<'static>> {
+    // Priority 1: completed turn average (from actual token counts).
+    if let Some(ref stored) = app.last_turn_output_speed {
+        return vec![Span::styled(
+            stored.clone(),
+            Style::default().fg(palette::TEXT_MUTED),
+        )];
+    }
+
+    // Priority 2: real-time estimate during active streaming.
     let started_at = match app.stream_started_at {
         Some(t) => t,
         None => return Vec::new(),
@@ -671,8 +687,8 @@ pub(crate) fn footer_output_speed_spans(app: &App) -> Vec<Span<'static>> {
         format!("{:.1} tok/s", tps)
     };
 
-    // Colour ramp: green when cranking (>50 tok/s), warning at mid-range,
-    // normal dim for low output (thinking-heavy turns).
+    // Colour ramp: green when cranking (>50 tok/s), sky at mid-range,
+    // dim for low output (thinking-heavy turns).
     let color = if tps > 50.0 {
         palette::STATUS_SUCCESS
     } else if tps > 20.0 {

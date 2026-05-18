@@ -1082,6 +1082,10 @@ pub struct App {
     /// When the first stream content (text or thinking) arrived this turn.
     /// `None` before any delta or after the turn completes.
     pub stream_started_at: Option<Instant>,
+    /// Formatted average token speed from the most recent completed turn.
+    /// Stays `None` during streaming (real-time estimate is shown instead)
+    /// and clears on the next `TurnStarted`.
+    pub last_turn_output_speed: Option<String>,
     /// Whether context compaction is currently in progress.
     pub is_compacting: bool,
     /// Set when the user scrolls up/down during a streaming turn so subsequent
@@ -1625,6 +1629,7 @@ impl App {
             thinking_started_at: None,
             stream_output_chars: 0,
             stream_started_at: None,
+            last_turn_output_speed: None,
             is_compacting: false,
             user_scrolled_during_stream: false,
             coherence_state: CoherenceState::default(),

@@ -1267,6 +1267,7 @@ async fn run_event_loop(
                         app.streaming_thinking_active_entry = None;
                         app.stream_output_chars = 0;
                         app.stream_started_at = None;
+                        app.last_turn_output_speed = None;
                         app.turn_started_at = Some(Instant::now());
                         // Discoverability hint for users who don't know how
                         // to interrupt a long-running turn (#1367). Only
@@ -1319,8 +1320,6 @@ async fn run_event_loop(
                         app.dispatch_started_at = None;
                         app.offline_mode = false;
                         app.streaming_state.reset();
-                        app.stream_output_chars = 0;
-                        app.stream_started_at = None;
                         // Capture elapsed before clearing turn_started_at so
                         // notifications can use the real wall-clock duration.
                         let turn_elapsed =
@@ -1365,6 +1364,23 @@ async fn run_event_loop(
                         app.session.last_prompt_cache_hit_tokens = usage.prompt_cache_hit_tokens;
                         app.session.last_prompt_cache_miss_tokens = usage.prompt_cache_miss_tokens;
                         app.session.last_reasoning_replay_tokens = usage.reasoning_replay_tokens;
+                        // Compute average output speed from actual token counts
+                        // and persist it so the footer chip survives turn end.
+                        if usage.output_tokens > 0 && turn_elapsed.as_secs_f64() > 0.0 {
+                            let avg_tps =
+                                usage.output_tokens as f64 / turn_elapsed.as_secs_f64();
+                            let label = if avg_tps >= 10.0 {
+                                format!("{:.0} tok/s avg", avg_tps)
+                            } else {
+                                format!("{:.1} tok/s avg", avg_tps)
+                            };
+                            app.last_turn_output_speed = Some(label);
+                        } else {
+                            app.last_turn_output_speed = None;
+                        }
+                        // Reset streaming counters for the next turn.
+                        app.stream_output_chars = 0;
+                        app.stream_started_at = None;
                         app.push_turn_cache_record(crate::tui::app::TurnCacheRecord {
                             input_tokens: usage.input_tokens,
                             output_tokens: usage.output_tokens,
