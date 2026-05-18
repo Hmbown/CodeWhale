@@ -26,7 +26,8 @@ use crate::localization::Locale;
 use crate::palette;
 use crate::tui::app::{App, AppMode, ComposerDensity, VimMode};
 use crate::tui::approval::{
-    ApprovalRequest, ApprovalView, ElevationOption, ElevationRequest, RiskLevel, ToolCategory,
+    ApprovalDiffPreview, ApprovalRequest, ApprovalView, ElevationOption, ElevationRequest,
+    RiskLevel, ToolCategory,
 };
 use crate::tui::history::HistoryCell;
 use crate::tui::scrolling::TranscriptLineMeta;
@@ -1055,7 +1056,7 @@ const APPROVAL_CARD_MIN_HEIGHT: u16 = 16;
 const APPROVAL_CARD_MIN_WIDTH: u16 = 40;
 /// Maximum card height — taller cards stop reading like a focused
 /// takeover and waste vertical space on large terminals.
-const APPROVAL_CARD_MAX_HEIGHT: u16 = 18;
+const APPROVAL_CARD_MAX_HEIGHT: u16 = 28;
 /// Maximum card width — readability craters past this on wide terminals.
 const APPROVAL_CARD_MAX_WIDTH: u16 = 96;
 
@@ -1153,10 +1154,50 @@ impl Renderable for ApprovalWidget<'_> {
             }
         }
 
-        lines.push(Line::from(""));
-
         let options = approval_options_for(self.request, risk, locale);
         let pending = self.view.pending_confirm();
+
+        if let Some(preview) = self.request.diff_preview() {
+            let diff_width = card_area.width.saturating_sub(4).max(20);
+            let (header, body_lines) = build_diff_panel(preview, diff_width, locale);
+            let body_height = card_area.height.saturating_sub(4) as usize;
+            let footer_rows = match (risk, pending) {
+                (RiskLevel::Destructive, Some(_)) if !details.is_empty() => 2,
+                _ => 1,
+            };
+            // Keep the action rows and confirmation copy visible while the
+            // diff itself scrolls inside the approval card.
+            let reserved_after_diff = 1 + 4 + 1 + footer_rows;
+            let available = body_height
+                .saturating_sub(lines.len())
+                .saturating_sub(reserved_after_diff)
+                .saturating_sub(2);
+            let visible = available.min(body_lines.len());
+            let scroll = self.view.set_diff_metrics(body_lines.len(), visible);
+
+            lines.push(Line::from(""));
+            if visible > 0 {
+                let end = scroll.saturating_add(visible).min(body_lines.len());
+                let more_above = scroll > 0;
+                let more_below = end < body_lines.len();
+                lines.push(Line::from(Span::styled(
+                    diff_header_with_scroll(&header, more_above, more_below, locale),
+                    Style::default().fg(palette::TEXT_HINT),
+                )));
+                for line in body_lines.into_iter().skip(scroll).take(visible) {
+                    lines.push(line);
+                }
+            } else {
+                lines.push(Line::from(Span::styled(
+                    format!("  {header}  ·  {}", diff_hidden_hint(locale)),
+                    Style::default().fg(palette::TEXT_HINT),
+                )));
+            }
+        } else {
+            self.view.set_diff_metrics(0, 0);
+        }
+
+        lines.push(Line::from(""));
 
         for (i, opt) in options.iter().enumerate() {
             let is_selected = i == self.view.selected();
@@ -1461,8 +1502,178 @@ fn single_key_value(_locale: Locale) -> &'static str {
 
 fn footer_controls(locale: Locale) -> &'static str {
     match locale {
-        Locale::ZhHans => "  ·  v：完整参数  ·  Esc：终止",
-        _ => "  ·  v: full params  ·  Esc: abort",
+        Locale::ZhHans => "  ·  v：完整 diff  ·  Esc：终止",
+        _ => "  ·  v: full details  ·  Esc: abort",
+    }
+}
+
+/// Build the rendered body + header for the approval popup diff area.
+///
+/// The popup uses the compact renderer (no summary / `--- +++` lines) so a
+/// 10-row preview window shows a few real lines of code instead of just
+/// metadata. The header summarises the variant — `+N -M` for normal diffs,
+/// a "new file" or "no change" hint for the degenerate cases — so the user
+/// always knows what's behind the preview window even when it's empty.
+fn build_diff_panel(
+    preview: &ApprovalDiffPreview,
+    width: u16,
+    locale: Locale,
+) -> (String, Vec<Line<'static>>) {
+    use crate::tui::diff_render::render_diff_compact;
+    match preview {
+        ApprovalDiffPreview::Diff {
+            text,
+            added,
+            deleted,
+        } => {
+            let lines = render_diff_compact(text, width);
+            let header = format!(
+                "{} +{} -{}",
+                diff_preview_word(locale),
+                added,
+                deleted
+            );
+            (header, lines)
+        }
+        ApprovalDiffPreview::NewFile { path: _, content } => {
+            // Render the content as additions so the user sees the proposed
+            // file body with `+` gutters / colour. We synthesize a hunk so
+            // line numbers start at 1.
+            let line_count = content.lines().count().max(1);
+            let synthetic = format!("@@ -0,0 +1,{line_count} @@\n");
+            let body = content
+                .lines()
+                .map(|l| format!("+{l}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let combined = format!("{synthetic}{body}");
+            let lines = render_diff_compact(&combined, width);
+            let header = format!(
+                "{} +{}",
+                new_file_word(locale),
+                content.lines().count()
+            );
+            (header, lines)
+        }
+        ApprovalDiffPreview::NoChange { path: _ } => {
+            let msg = no_change_text(locale);
+            let line = Line::from(Span::styled(
+                msg.to_string(),
+                Style::default().fg(palette::TEXT_MUTED),
+            ));
+            (no_change_word(locale).to_string(), vec![line])
+        }
+        ApprovalDiffPreview::MissingMatch {
+            path: _,
+            text,
+            match_count: _,
+        } => {
+            let mut lines = vec![Line::from(Span::styled(
+                missing_match_warning(locale).to_string(),
+                Style::default()
+                    .fg(palette::STATUS_WARNING)
+                    .add_modifier(Modifier::BOLD),
+            ))];
+            lines.extend(render_diff_compact(text, width));
+            (missing_match_header(locale).to_string(), lines)
+        }
+    }
+}
+
+fn diff_header_with_scroll(
+    header: &str,
+    more_above: bool,
+    more_below: bool,
+    locale: Locale,
+) -> String {
+    let mut parts: Vec<String> = vec![format!("  {header}")];
+    if more_above || more_below {
+        parts.push(scroll_hint(locale).to_string());
+    }
+    if more_above {
+        parts.push(more_above_hint(locale).to_string());
+    }
+    if more_below {
+        parts.push(more_below_hint(locale).to_string());
+    }
+    parts.push(full_details_hint(locale).to_string());
+    parts.join("  ·  ")
+}
+
+fn diff_preview_word(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "差异预览",
+        _ => "Diff preview",
+    }
+}
+
+fn new_file_word(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "新文件",
+        _ => "New file",
+    }
+}
+
+fn no_change_word(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "无变化",
+        _ => "No change",
+    }
+}
+
+fn no_change_text(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "  内容与当前文件一致，无需写入。",
+        _ => "  Content matches the current file — nothing to write.",
+    }
+}
+
+fn missing_match_warning(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "  ⚠ 文件中未匹配到 search，下面是 search→replace 兜底视图。",
+        _ => "  ⚠ Search string not found in file — fallback search→replace below.",
+    }
+}
+
+fn missing_match_header(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "未匹配（兜底视图）",
+        _ => "No match (fallback)",
+    }
+}
+
+fn scroll_hint(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "PgUp/PgDn 滚动",
+        _ => "PgUp/PgDn scroll",
+    }
+}
+
+fn more_above_hint(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "↑ 上方还有",
+        _ => "↑ more above",
+    }
+}
+
+fn more_below_hint(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "↓ 下方还有",
+        _ => "↓ more below",
+    }
+}
+
+fn full_details_hint(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "v 完整 diff",
+        _ => "v full details",
+    }
+}
+
+fn diff_hidden_hint(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "终端高度不足，按 v 查看",
+        _ => "preview hidden — press v",
     }
 }
 
