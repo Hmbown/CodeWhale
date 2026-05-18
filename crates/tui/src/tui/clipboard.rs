@@ -55,19 +55,50 @@ pub enum ClipboardContent {
 /// Clipboard reader/writer helper.
 pub struct ClipboardHandler {
     clipboard: Option<Clipboard>,
+    clipboard_init_attempted: bool,
     #[cfg(test)]
     written_text: Vec<String>,
 }
 
 impl ClipboardHandler {
-    /// Create a new clipboard handler, falling back to a no-op when unavailable.
+    /// Create a new clipboard handler without connecting.
+    ///
+    /// The actual clipboard connection is deferred to first use
+    /// (`ensure_clipboard`) so that startup on hosts without an X11/Wayland
+    /// server (headless, WSL2) never blocks the TUI event loop.
     pub fn new() -> Self {
-        let clipboard = Clipboard::new().ok();
         Self {
-            clipboard,
+            clipboard: None,
+            clipboard_init_attempted: false,
             #[cfg(test)]
             written_text: Vec::new(),
         }
+    }
+
+    /// Try to connect to the system clipboard, bounded by a short timeout.
+    ///
+    /// On Linux, `arboard::Clipboard::new()` opens a blocking X11 connection.
+    /// When no X server is running (headless, WSL2 without WSLg), the connect
+    /// call can hang indefinitely.  We spawn the connection attempt on a
+    /// temporary thread and give it 500 ms; if it doesn't return in time the
+    /// handler stays in fallback/no-op mode and `read`/`write_text` fall
+    /// through to their OSC 52 and pbcopy/powershell fallbacks.
+    fn ensure_clipboard(&mut self) {
+        if self.clipboard_init_attempted {
+            return;
+        }
+        self.clipboard_init_attempted = true;
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(Clipboard::new().ok());
+        });
+        // 500 ms is generous for a local Unix socket connect — the
+        // kernel either answers or doesn't.
+        self.clipboard = rx
+            .recv_timeout(std::time::Duration::from_millis(500))
+            .ok()
+            .flatten();
     }
 
     /// Read the clipboard and return the parsed content.
@@ -75,6 +106,7 @@ impl ClipboardHandler {
     /// `workspace` is used as a fallback location when `~/.deepseek/` cannot
     /// be resolved (e.g. running with a stripped HOME in CI sandboxes).
     pub fn read(&mut self, workspace: &Path) -> Option<ClipboardContent> {
+        self.ensure_clipboard();
         let clipboard = self.clipboard.as_mut()?;
         if let Ok(text) = clipboard.get_text() {
             return Some(ClipboardContent::Text(text));
@@ -99,6 +131,7 @@ impl ClipboardHandler {
 
         #[cfg(not(test))]
         {
+            self.ensure_clipboard();
             if let Some(clipboard) = self.clipboard.as_mut()
                 && clipboard.set_text(text.to_string()).is_ok()
             {
