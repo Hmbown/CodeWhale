@@ -791,6 +791,13 @@ impl ShellManager {
 
         child_env::apply_to_command(&mut cmd, child_env::string_map_env(&exec_env.env));
 
+        // Disable raw mode before spawn; restore on drop (issue #1690).
+        let _ = crossterm::terminal::disable_raw_mode();
+        crate::shell_dispatcher::log_raw_mode("disabled (sync)");
+        struct SyncRawModeGuard;
+        impl Drop for SyncRawModeGuard { fn drop(&mut self) { crate::shell_dispatcher::log_raw_mode("enabled (sync)"); let _ = crossterm::terminal::enable_raw_mode(); } }
+        let _guard = SyncRawModeGuard;
+
         let mut child = cmd
             .spawn()
             .with_context(|| format!("Failed to execute: {original_command}"))?;
