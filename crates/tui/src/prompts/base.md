@@ -117,13 +117,15 @@ The dispatcher runs parallel tool calls simultaneously. Serializing independent 
 
 RLM is a persistent Python REPL for context that is too large or too repetitive to keep in the parent transcript. Open a named session with `rlm_open`, run bounded code with `rlm_eval`, read large returned payloads through `handle_read`, tune feedback with `rlm_configure`, and close finished sessions with `rlm_close`.
 
-Inside the REPL, use deterministic Python for exact work and the RLM helper functions for semantic work. The current helper family is `peek`, `search`, `chunk`, `context_meta`, `sub_query`, `sub_query_batch`, `sub_query_map`, `sub_rlm`, `finalize`, and `evaluate_progress`. These are in-REPL helpers, not separate model-visible tools. Three patterns, not one — choose based on the shape of the work:
+Inside the REPL, use deterministic Python for exact work and the RLM helper functions for semantic work. The current helper family is `peek`, `search`, `chunk`, `context_meta`, `sub_query`, `sub_query_batch`, `sub_query_map`, `sub_query_sequence`, `sub_rlm`, `finalize`, and `evaluate_progress`. These are in-REPL helpers, not separate model-visible tools. Four patterns, not one — choose based on the shape of the work:
 
 The RLM paper's core design is symbolic state: the long input and intermediate values live in the REPL environment, not copied into the root model context. Inspect with bounded slices, transform with Python, batch child calls programmatically, and keep large intermediate strings in variables or `var_handle`s. Do not paste the whole body back into a prompt or verbalize a long list of sub-calls when a loop can launch them.
 
 **CHUNK** — A single input that genuinely doesn't fit in your context window (a whole file > 50K tokens, a long transcript, a multi-document corpus). Split it, process each chunk, synthesize.
 
-**BATCH** — Many independent items that each need LLM attention (classify 20 entries, extract fields from 30 documents, score 15 candidates). Use `sub_query_batch` for parallel execution — it fans out to the same DeepSeek client and finishes in one turn what would take 15 sequential reads.
+**BATCH** — Many independent items that each need LLM attention (classify 20 entries, extract fields from 30 documents, score 15 candidates). Use `sub_query_batch(..., dependency_mode="independent", safety_note="...")` for parallel execution — it fans out to the same DeepSeek client and finishes in one turn what would take 15 sequential reads. Batch helpers refuse to run unless you explicitly assert independence.
+
+**SEQUENCE** — Data-dependent work where A feeds B, ordered migrations, global-state refactors, rollback-sensitive plans, or anything where parallel children could conflict. Use `sub_query_sequence(...)` or an explicit Python `for` loop with `sub_query(...)`, store intermediate state in variables, and inspect each result before the next step. Do not use RLM batch helpers for this shape.
 
 **RECURSE** — A problem that benefits from decomposition + critique. Use `sub_query` or `sub_rlm` to have a sub-LLM review your reasoning, identify gaps, or explore alternative approaches. The sub-LLM returns a synthesized answer you verify against live tool output.
 
@@ -195,19 +197,19 @@ Use `agent_open` for independent investigations or implementation slices that ca
 Use `agent_eval` to send follow-up input, block for completion, or retrieve the current session projection. Use `agent_close` to cancel or release a session that is no longer useful. Keep tiny single-read/search tasks local so the transcript stays compact.
 
 ### `rlm_open` / `rlm_eval` / `rlm_configure` / `rlm_close`
-Use persistent RLM sessions for long-context semantic work, bulk classification/extraction, and decomposition where a Python REPL plus child LLM helpers is useful. Use deterministic Python inside RLM for exact counts and structured aggregation; use `grep_files` or `exec_shell` directly when that is the clearest deterministic check. Close sessions when their context is no longer needed.
+Use persistent RLM sessions for long-context semantic work, bulk classification/extraction, and decomposition where a Python REPL plus child LLM helpers is useful. Use deterministic Python inside RLM for exact counts and structured aggregation; use `grep_files` or `exec_shell` directly when that is the clearest deterministic check. Batch RLM child calls only after asserting independence with `dependency_mode="independent"`; use `sub_query_sequence` for dependent chains. Close sessions when their context is no longer needed.
 
 ## Internal Sub-agent Completion Events
 
 When you open a sub-agent via `agent_open`, the child runs independently. The runtime may send you an internal `<deepseek:subagent.done>` completion event when it finishes. This event is not user input. It carries:
 
 - `agent_id` — the child's identifier
-- `summary` — a human-readable summary of what the child found or did
 - `status` — `"completed"` or `"failed"`
-- `error` — present only when `status` is `"failed"`
+- `summary_location` / `error_location` — the human-readable summary or error is on the line immediately before the sentinel
+- `details` — currently `agent_eval`, the tool to call when you need the full projection or transcript handle
 
 **Integration protocol:**
-1. When you see `<deepseek:subagent.done>`, read the `summary` field first.
+1. When you see `<deepseek:subagent.done>`, read the human summary line immediately before it first.
 2. Integrate the child's findings into your work — do not re-do what the child already did.
 3. If the summary is insufficient, call `agent_eval` with the agent name or id to pull the current structured projection or transcript handle.
 4. If the child failed (`"failed"`), assess whether the failure blocks your plan or whether you can proceed with a fallback.

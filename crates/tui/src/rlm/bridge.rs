@@ -151,8 +151,13 @@ impl RlmBridge {
         SingleResp { text, error: None }
     }
 
-    async fn dispatch_llm_batch(&self, prompts: Vec<String>, _model: Option<String>) -> BatchResp {
-        if let Some(resp) = batch_guard(prompts.len()) {
+    async fn dispatch_llm_batch(
+        &self,
+        prompts: Vec<String>,
+        _model: Option<String>,
+        dependency_mode: Option<String>,
+    ) -> BatchResp {
+        if let Some(resp) = batch_guard(prompts.len(), dependency_mode.as_deref()) {
             return resp;
         }
 
@@ -217,8 +222,13 @@ impl RlmBridge {
         }
     }
 
-    async fn dispatch_rlm_batch(&self, prompts: Vec<String>, _model: Option<String>) -> BatchResp {
-        if let Some(resp) = batch_guard(prompts.len()) {
+    async fn dispatch_rlm_batch(
+        &self,
+        prompts: Vec<String>,
+        _model: Option<String>,
+        dependency_mode: Option<String>,
+    ) -> BatchResp {
+        if let Some(resp) = batch_guard(prompts.len(), dependency_mode.as_deref()) {
             return resp;
         }
 
@@ -231,7 +241,7 @@ impl RlmBridge {
     }
 }
 
-fn batch_guard(prompt_count: usize) -> Option<BatchResp> {
+fn batch_guard(prompt_count: usize, dependency_mode: Option<&str>) -> Option<BatchResp> {
     if prompt_count == 0 {
         return Some(BatchResp { results: vec![] });
     }
@@ -241,6 +251,27 @@ fn batch_guard(prompt_count: usize) -> Option<BatchResp> {
                 .map(|_| SingleResp {
                     text: String::new(),
                     error: Some(format!("batch too large: {prompt_count} > {MAX_BATCH}")),
+                })
+                .collect(),
+        });
+    }
+    let mode = dependency_mode
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase()
+        .replace(['-', ' '], "_");
+    if !matches!(
+        mode.as_str(),
+        "independent" | "parallel_safe" | "map_reduce"
+    ) {
+        return Some(BatchResp {
+            results: (0..prompt_count)
+                .map(|_| SingleResp {
+                    text: String::new(),
+                    error: Some(
+                        "batch requires dependency_mode='independent'; use sub_query_sequence or sequential sub_query calls for dependent work"
+                            .to_string(),
+                    ),
                 })
                 .collect(),
         });
@@ -263,15 +294,27 @@ impl RpcDispatcher for RlmBridge {
                 } => {
                     RpcResponse::Single(self.dispatch_llm(prompt, model, max_tokens, system).await)
                 }
-                RpcRequest::LlmBatch { prompts, model } => {
-                    RpcResponse::Batch(self.dispatch_llm_batch(prompts, model).await)
-                }
+                RpcRequest::LlmBatch {
+                    prompts,
+                    model,
+                    dependency_mode,
+                    safety_note: _,
+                } => RpcResponse::Batch(
+                    self.dispatch_llm_batch(prompts, model, dependency_mode)
+                        .await,
+                ),
                 RpcRequest::Rlm { prompt, model } => {
                     RpcResponse::Single(self.dispatch_rlm(prompt, model).await)
                 }
-                RpcRequest::RlmBatch { prompts, model } => {
-                    RpcResponse::Batch(self.dispatch_rlm_batch(prompts, model).await)
-                }
+                RpcRequest::RlmBatch {
+                    prompts,
+                    model,
+                    dependency_mode,
+                    safety_note: _,
+                } => RpcResponse::Batch(
+                    self.dispatch_rlm_batch(prompts, model, dependency_mode)
+                        .await,
+                ),
             }
         })
     }
@@ -317,18 +360,19 @@ mod tests {
 
     #[test]
     fn batch_guard_allows_non_empty_batches_at_the_cap() {
-        assert!(batch_guard(MAX_BATCH).is_none());
+        assert!(batch_guard(MAX_BATCH, Some("independent")).is_none());
     }
 
     #[test]
     fn batch_guard_returns_empty_response_for_empty_batches() {
-        let response = batch_guard(0).expect("empty batch should be handled");
+        let response = batch_guard(0, None).expect("empty batch should be handled");
         assert!(response.results.is_empty());
     }
 
     #[test]
     fn batch_guard_returns_one_error_per_oversized_prompt() {
-        let response = batch_guard(MAX_BATCH + 2).expect("oversized batch should be handled");
+        let response = batch_guard(MAX_BATCH + 2, Some("independent"))
+            .expect("oversized batch should be handled");
         assert_eq!(response.results.len(), MAX_BATCH + 2);
         assert!(response.results.iter().all(|result| {
             result.text.is_empty()
@@ -336,6 +380,28 @@ mod tests {
                     .error
                     .as_deref()
                     .is_some_and(|err| err.contains("batch too large"))
+        }));
+    }
+
+    #[test]
+    fn batch_guard_requires_explicit_independence_for_parallel_work() {
+        let response = batch_guard(2, None).expect("missing dependency mode should be handled");
+        assert_eq!(response.results.len(), 2);
+        assert!(response.results.iter().all(|result| {
+            result.text.is_empty()
+                && result
+                    .error
+                    .as_deref()
+                    .is_some_and(|err| err.contains("dependency_mode='independent'"))
+        }));
+
+        let response = batch_guard(2, Some("sequential"))
+            .expect("dependent dependency mode should be handled");
+        assert!(response.results.iter().all(|result| {
+            result
+                .error
+                .as_deref()
+                .is_some_and(|err| err.contains("sub_query_sequence"))
         }));
     }
 
@@ -427,6 +493,8 @@ mod tests {
             .dispatch(RpcRequest::LlmBatch {
                 prompts: vec!["a".to_string(), "b".to_string(), "c".to_string()],
                 model: Some("batch-model".to_string()),
+                dependency_mode: Some("independent".to_string()),
+                safety_note: Some("test prompts are independent".to_string()),
             })
             .await;
 

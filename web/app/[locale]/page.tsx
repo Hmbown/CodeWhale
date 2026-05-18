@@ -17,7 +17,7 @@ const FALLBACK_STATS: RepoStats = {
   forks: 0,
   openIssues: 0,
   openPulls: 0,
-  contributors: 69,
+  contributors: 91,
   fetchedAt: new Date().toISOString(),
 };
 
@@ -148,35 +148,31 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
               <pre className="code-block mt-2">
                 {isZh ? (
                   <>
-                    <span className="comment"># macOS / Linux — Cargo</span>{"\n"}
+                    <span className="comment"># 安装</span>{"\n"}
                     <span className="prompt">$</span> cargo install deepseek-tui-cli --locked{"\n"}
                     <span className="prompt">$</span> deepseek{"\n"}
                     <br />
-                    <span className="comment"># 或通过 npm 安装</span>{"\n"}
-                    <span className="prompt">$</span> npm i -g deepseek-tui{"\n"}
+                    <span className="comment"># 已安装？更新到最新版</span>{"\n"}
+                    <span className="prompt">$</span> deepseek update{"\n"}
                     <br />
-                    <span className="comment"># 首次运行会自动创建 <span className="key">~/.deepseek/</span></span>{"\n"}
-                    <br />
-                    <span className="comment"># 国内镜像</span>{"\n"}
-                    <span className="prompt">$</span> npm config set registry https://registry.npmmirror.com{"\n"}
-                    <span className="prompt">$</span> npm i -g deepseek-tui
+                    <span className="comment"># 首次运行会自动创建 <span className="key">~/.deepseek/</span></span>
                   </>
                 ) : (
                   <>
-                    <span className="comment"># macOS / Linux — Cargo</span>{"\n"}
+                    <span className="comment"># install</span>{"\n"}
                     <span className="prompt">$</span> cargo install deepseek-tui-cli --locked{"\n"}
                     <span className="prompt">$</span> deepseek{"\n"}
                     <br />
-                    <span className="comment"># or via npm wrapper</span>{"\n"}
-                    <span className="prompt">$</span> npm i -g deepseek-tui{"\n"}
+                    <span className="comment"># already installed? pull the latest</span>{"\n"}
+                    <span className="prompt">$</span> deepseek update{"\n"}
                     <br />
                     <span className="comment"># first run sets up <span className="key">~/.deepseek/</span></span>
                   </>
                 )}
               </pre>
               <div className="mt-3 flex items-center justify-between text-[0.7rem] font-mono text-ink-mute">
-                <span>{isZh ? `需要 Rust 1.88+ 或 Node ${facts.nodeEngines ?? ">=18"}` : `requires Rust 1.88+ or Node ${facts.nodeEngines ?? ">=18"}`}</span>
-                <Link href={isZh ? "/zh/install" : "/install"} className="text-indigo hover:underline">{isZh ? "其他系统 →" : "other OSes →"}</Link>
+                <span>{isZh ? "需要 Rust 1.88+ · 没有 Rust? 见其他方式" : "requires Rust 1.88+ · no Rust? see other ways"}</span>
+                <Link href={isZh ? "/zh/install" : "/install"} className="text-indigo hover:underline">{isZh ? "其他方式 →" : "other ways →"}</Link>
               </div>
             </div>
           </div>

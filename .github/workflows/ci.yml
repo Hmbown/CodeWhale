@@ -55,6 +55,8 @@ jobs:
           done
           sudo apt-get install -y libdbus-1-dev pkg-config
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: false
       - name: Check formatting
         run: cargo fmt --all -- --check
       # Mirror the release-workflow `parity` gate exactly. Anything that
@@ -83,6 +85,8 @@ jobs:
           done
           sudo apt-get install -y libdbus-1-dev pkg-config
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: false
       - name: Run tests
         run: cargo test --workspace --all-features --locked
       - name: Lockfile drift guard
@@ -113,6 +117,8 @@ jobs:
         with:
           node-version: 20
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: false
       - name: Build wrapper binaries
         run: cargo build --release --locked -p deepseek-tui-cli -p deepseek-tui
       - name: Smoke wrapper install and delegated entrypoints
@@ -136,6 +142,8 @@ jobs:
           done
           sudo apt-get install -y libdbus-1-dev pkg-config
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: false
       - name: Build docs
         run: cargo doc --workspace --no-deps
         env:

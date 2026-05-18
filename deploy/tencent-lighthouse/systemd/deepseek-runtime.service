@@ -1,0 +1,21 @@
+[Unit]
+Description=DeepSeek TUI Runtime API
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=deepseek
+Group=deepseek
+WorkingDirectory=/opt/whalebro
+EnvironmentFile=/etc/deepseek/runtime.env
+ExecStart=/home/deepseek/.cargo/bin/deepseek serve --http --host 127.0.0.1 --port ${DEEPSEEK_RUNTIME_PORT} --workers ${DEEPSEEK_RUNTIME_WORKERS} --auth-token ${DEEPSEEK_RUNTIME_TOKEN}
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/home/deepseek/.deepseek /opt/whalebro
+
+[Install]
+WantedBy=multi-user.target

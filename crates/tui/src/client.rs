@@ -887,10 +887,10 @@ pub(super) fn apply_reasoning_effort(
             | ApiProvider::DeepseekCN
             | ApiProvider::Openrouter
             | ApiProvider::Novita
-            | ApiProvider::Fireworks
             | ApiProvider::Sglang => {
                 body["thinking"] = json!({ "type": "disabled" });
             }
+            ApiProvider::Fireworks => {}
             // vLLM is an OpenAI-protocol server, not an Anthropic-protocol one.
             // For Qwen3 / DeepSeek-R1 / other reasoning models hosted via vLLM,
             // the canonical OpenAI extension to disable thinking is
@@ -917,10 +917,12 @@ pub(super) fn apply_reasoning_effort(
             | ApiProvider::DeepseekCN
             | ApiProvider::Openrouter
             | ApiProvider::Novita
-            | ApiProvider::Fireworks
             | ApiProvider::Sglang => {
                 body["reasoning_effort"] = json!("high");
                 body["thinking"] = json!({ "type": "enabled" });
+            }
+            ApiProvider::Fireworks => {
+                body["reasoning_effort"] = json!("high");
             }
             ApiProvider::Vllm => {
                 body["chat_template_kwargs"] = json!({
@@ -941,10 +943,12 @@ pub(super) fn apply_reasoning_effort(
             | ApiProvider::DeepseekCN
             | ApiProvider::Openrouter
             | ApiProvider::Novita
-            | ApiProvider::Fireworks
             | ApiProvider::Sglang => {
                 body["reasoning_effort"] = json!("max");
                 body["thinking"] = json!({ "type": "enabled" });
+            }
+            ApiProvider::Fireworks => {
+                body["reasoning_effort"] = json!("max");
             }
             ApiProvider::Vllm => {
                 body["chat_template_kwargs"] = json!({
@@ -1919,6 +1923,21 @@ mod tests {
     }
 
     #[test]
+    fn reasoning_effort_uses_openai_compatible_shape_for_fireworks() {
+        let mut body = json!({});
+        apply_reasoning_effort(&mut body, Some("max"), ApiProvider::Fireworks);
+
+        assert_eq!(
+            body.get("reasoning_effort").and_then(Value::as_str),
+            Some("max")
+        );
+        assert!(
+            body.get("thinking").is_none(),
+            "Fireworks strict-validates OpenAI-compatible requests and rejects top-level thinking"
+        );
+    }
+
+    #[test]
     fn chat_parser_accepts_nvidia_nim_reasoning_field() -> Result<()> {
         let response = parse_chat_message(&json!({
             "id": "chatcmpl-test",
@@ -2053,6 +2072,27 @@ mod tests {
                 Some(true)
             );
         }
+    }
+
+    #[test]
+    fn chat_tool_wire_shape_omits_anthropic_only_metadata() {
+        let tool = Tool {
+            tool_type: Some("function".to_string()),
+            name: "mcp_read_resource".to_string(),
+            description: "Read resource".to_string(),
+            input_schema: json!({"type": "object", "properties": {}}),
+            allowed_callers: Some(vec!["direct".to_string()]),
+            defer_loading: Some(false),
+            input_examples: Some(vec![json!({"uri": "file://example"})]),
+            strict: None,
+            cache_control: None,
+        };
+
+        let encoded = tool_to_chat_for_base_url(&tool, "https://api.fireworks.ai/inference/v1");
+
+        assert!(encoded.get("allowed_callers").is_none());
+        assert!(encoded.get("defer_loading").is_none());
+        assert!(encoded.get("input_examples").is_none());
     }
 
     #[test]

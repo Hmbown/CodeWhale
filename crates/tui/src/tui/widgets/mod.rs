@@ -30,7 +30,10 @@ use crate::tui::approval::{
 };
 use crate::tui::history::HistoryCell;
 use crate::tui::scrolling::TranscriptLineMeta;
-use crate::{commands, config::COMMON_DEEPSEEK_MODELS};
+use crate::{
+    commands,
+    config::{ApiProvider, model_completion_names_for_provider},
+};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -2033,8 +2036,9 @@ pub(crate) fn slash_completion_hints(
     cached_skills: &[(String, String)],
     locale: crate::localization::Locale,
     workspace: Option<&std::path::Path>,
+    api_provider: ApiProvider,
 ) -> Vec<SlashMenuEntry> {
-    if !input.starts_with('/') {
+    if !super::app::looks_like_slash_command_input(input) {
         return Vec::new();
     }
 
@@ -2111,7 +2115,7 @@ pub(crate) fn slash_completion_hints(
 
     // Special: /model <name> completions when only /model matches
     if entries.iter().any(|e| e.name == "/model") && prefix_lower.eq_ignore_ascii_case("model") {
-        for model_name in COMMON_DEEPSEEK_MODELS {
+        for model_name in model_completion_names_for_provider(api_provider) {
             entries.push(SlashMenuEntry {
                 name: format!("/model {model_name}"),
                 description: String::from("Switch to this model"),
@@ -2273,7 +2277,7 @@ mod tests {
         cursor_row_col, layout_input, pad_lines_to_bottom, placeholder_visual_lines,
         should_render_empty_state, slash_completion_hints, wrap_input_lines, wrap_text,
     };
-    use crate::config::Config;
+    use crate::config::{ApiProvider, Config};
     use crate::localization::Locale;
     use crate::palette;
     use crate::tui::app::{App, ComposerDensity, TuiOptions};
@@ -2475,14 +2479,14 @@ mod tests {
 
     #[test]
     fn slash_completion_hints_include_links_and_config() {
-        let hints = slash_completion_hints("/", 128, &[], Locale::En, None);
+        let hints = slash_completion_hints("/", 128, &[], Locale::En, None, ApiProvider::Deepseek);
         assert!(hints.iter().any(|hint| hint.name == "/config"));
         assert!(hints.iter().any(|hint| hint.name == "/links"));
     }
 
     #[test]
     fn slash_completion_hints_exclude_set_and_deepseek_commands() {
-        let hints = slash_completion_hints("/", 128, &[], Locale::En, None);
+        let hints = slash_completion_hints("/", 128, &[], Locale::En, None, ApiProvider::Deepseek);
         assert!(!hints.iter().any(|hint| hint.name == "/set"));
         assert!(!hints.iter().any(|hint| hint.name == "/deepseek"));
     }
@@ -2493,7 +2497,14 @@ mod tests {
             ("search-files".to_string(), "Search files".to_string()),
             ("my-review".to_string(), "Review code".to_string()),
         ];
-        let hints = slash_completion_hints("/", 128, &cached_skills, Locale::En, None);
+        let hints = slash_completion_hints(
+            "/",
+            128,
+            &cached_skills,
+            Locale::En,
+            None,
+            ApiProvider::Deepseek,
+        );
         assert!(hints.iter().any(|hint| hint.name == "/skill"));
         assert!(hints.iter().any(|hint| hint.name == "/skills"));
         assert!(!hints.iter().any(|hint| hint.is_skill));
@@ -2505,7 +2516,14 @@ mod tests {
             ("search-files".to_string(), "Search files".to_string()),
             ("my-review".to_string(), "Review code".to_string()),
         ];
-        let hints = slash_completion_hints("/se", 128, &cached_skills, Locale::En, None);
+        let hints = slash_completion_hints(
+            "/se",
+            128,
+            &cached_skills,
+            Locale::En,
+            None,
+            ApiProvider::Deepseek,
+        );
         assert!(!hints.iter().any(|hint| hint.name == "/skill search-files"));
         assert!(!hints.iter().any(|hint| hint.name == "/skill my-review"));
     }
@@ -2516,7 +2534,14 @@ mod tests {
             ("search-files".to_string(), "Search files".to_string()),
             ("my-review".to_string(), "Review code".to_string()),
         ];
-        let hints = slash_completion_hints("/skill ", 128, &cached_skills, Locale::En, None);
+        let hints = slash_completion_hints(
+            "/skill ",
+            128,
+            &cached_skills,
+            Locale::En,
+            None,
+            ApiProvider::Deepseek,
+        );
         assert_eq!(hints.len(), 2);
         assert!(hints.iter().any(|hint| hint.name == "/skill search-files"));
         assert!(hints.iter().any(|hint| hint.name == "/skill my-review"));
@@ -2529,10 +2554,45 @@ mod tests {
             ("search-files".to_string(), "Search files".to_string()),
             ("my-review".to_string(), "Review code".to_string()),
         ];
-        let hints = slash_completion_hints("/skill my", 128, &cached_skills, Locale::En, None);
+        let hints = slash_completion_hints(
+            "/skill my",
+            128,
+            &cached_skills,
+            Locale::En,
+            None,
+            ApiProvider::Deepseek,
+        );
         assert_eq!(hints.len(), 1);
         assert_eq!(hints[0].name, "/skill my-review");
         assert!(hints[0].is_skill);
+    }
+
+    #[test]
+    fn slash_completion_hints_model_deepseek_provider_uses_bare_ids() {
+        let hints =
+            slash_completion_hints("/model", 128, &[], Locale::En, None, ApiProvider::Deepseek);
+        let names = hints
+            .iter()
+            .map(|hint| hint.name.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"/model deepseek-v4-pro"));
+        assert!(names.contains(&"/model deepseek-v4-flash"));
+        assert!(!names.contains(&"/model deepseek-ai/deepseek-v4-pro"));
+        assert!(!names.contains(&"/model deepseek/deepseek-v4-pro"));
+    }
+
+    #[test]
+    fn slash_completion_hints_model_provider_uses_provider_specific_ids() {
+        let hints =
+            slash_completion_hints("/model", 128, &[], Locale::En, None, ApiProvider::NvidiaNim);
+        let names = hints
+            .iter()
+            .map(|hint| hint.name.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"/model deepseek-ai/deepseek-v4-pro"));
+        assert!(!names.contains(&"/model deepseek/deepseek-v4-pro"));
     }
 
     #[test]

@@ -3,7 +3,7 @@
 use std::fmt::Write;
 use std::path::PathBuf;
 
-use crate::config::{COMMON_DEEPSEEK_MODELS, normalize_model_name};
+use crate::config::{COMMON_DEEPSEEK_MODELS, normalize_model_name_for_provider};
 use crate::localization::{MessageId, tr};
 use crate::tui::app::{App, AppAction, AppMode, ReasoningEffort};
 use crate::tui::views::{HelpView, ModalKind, SubAgentsView, subagent_view_agents};
@@ -121,7 +121,7 @@ pub fn model(app: &mut App, model_name: Option<&str>) -> CommandResult {
                 AppAction::UpdateCompaction(app.compaction_config()),
             );
         }
-        let Some(model_id) = normalize_model_name(name) else {
+        let Some(model_id) = normalize_model_name_for_provider(app.api_provider, name) else {
             return CommandResult::error(format!(
                 "Invalid model '{name}'. Expected auto or a DeepSeek model ID. Common models: {}",
                 COMMON_DEEPSEEK_MODELS.join(", ")
@@ -629,6 +629,9 @@ mod tests {
     #[test]
     fn model_switch_clears_turn_cache_history() {
         let mut app = create_test_app();
+        // Keep the assertion independent of the developer's saved default model.
+        app.auto_model = false;
+        app.model = "deepseek-v4-pro".to_string();
         app.push_turn_cache_record(TurnCacheRecord {
             input_tokens: 100,
             output_tokens: 25,

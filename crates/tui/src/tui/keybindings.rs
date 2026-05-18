@@ -247,7 +247,7 @@ pub const KEYBINDINGS: &[KeybindingEntry] = &[
         section: KeybindingSection::Modes,
     },
     KeybindingEntry {
-        chord: "Alt+! / Alt+@ / Alt+# / Alt+$ / Alt+0",
+        chord: "Alt+! / Alt+@ / Alt+# / Alt+$ / Alt+0 / Ctrl+Alt+0",
         description_id: crate::localization::MessageId::KbFocusSidebar,
         section: KeybindingSection::Modes,
     },

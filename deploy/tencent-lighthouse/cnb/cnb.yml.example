@@ -1,0 +1,87 @@
+# Historical CNB config template for the Tencent Lighthouse remote-first path.
+# The active pipeline now lives in the repository-root .cnb.yml so the GitHub
+# -> CNB one-way mirror cannot overwrite CNB-only pipeline edits.
+
+main:
+  push:
+    - docker:
+        image: node:22-bookworm
+      stages:
+        - name: feishu bridge tests
+          script: |
+            cd integrations/feishu-bridge
+            npm install
+            npm run check
+            npm test
+
+    - docker:
+        image: rust:1.88-bookworm
+      stages:
+        - name: release version check
+          script: |
+            ./scripts/release/check-versions.sh
+
+  web_trigger_lighthouse:
+    - docker:
+        image: cnbcool/default-build-env:latest
+      stages:
+        - name: deploy to lighthouse
+          script: |
+            set -euo pipefail
+
+            : "${LIGHTHOUSE_HOST:?Set LIGHTHOUSE_HOST in CNB secrets}"
+            : "${LIGHTHOUSE_SSH_TARGET:?Set LIGHTHOUSE_SSH_TARGET in CNB secrets}"
+            : "${LIGHTHOUSE_SSH_PRIVATE_KEY:?Set LIGHTHOUSE_SSH_PRIVATE_KEY in CNB secrets}"
+
+            if ! command -v ssh >/dev/null 2>&1 || ! command -v ssh-keyscan >/dev/null 2>&1; then
+              apt-get update
+              apt-get install -y openssh-client
+            fi
+
+            LIGHTHOUSE_SSH_PORT="${LIGHTHOUSE_SSH_PORT:-22}"
+            DEEPSEEK_REPO_BRANCH="${DEEPSEEK_REPO_BRANCH:-main}"
+            DEEPSEEK_REPO_URL="${DEEPSEEK_REPO_URL:-https://cnb.cool/deepseek-tui.com/DeepSeek-TUI.git}"
+
+            install -m 700 -d ~/.ssh
+            printf '%s\n' "$LIGHTHOUSE_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+            chmod 600 ~/.ssh/id_ed25519
+            ssh-keyscan -p "$LIGHTHOUSE_SSH_PORT" -H "$LIGHTHOUSE_HOST" >> ~/.ssh/known_hosts
+
+            ssh -p "$LIGHTHOUSE_SSH_PORT" "$LIGHTHOUSE_SSH_TARGET" \
+              "DEEPSEEK_REPO_BRANCH='$DEEPSEEK_REPO_BRANCH' DEEPSEEK_REPO_URL='$DEEPSEEK_REPO_URL' bash -s" <<'REMOTE'
+            set -euo pipefail
+
+            if [ ! -d /opt/whalebro/deepseek-tui/.git ]; then
+              sudo -u deepseek git clone --branch "$DEEPSEEK_REPO_BRANCH" "$DEEPSEEK_REPO_URL" /opt/whalebro/deepseek-tui
+            fi
+
+            cd /opt/whalebro/deepseek-tui
+            if [ -n "$(sudo -u deepseek git status --porcelain)" ]; then
+              echo "Refusing to deploy over a dirty /opt/whalebro/deepseek-tui checkout." >&2
+              sudo -u deepseek git status --short
+              exit 1
+            fi
+
+            sudo -u deepseek git fetch --all --tags
+            if sudo -u deepseek git rev-parse --verify --quiet "refs/remotes/origin/$DEEPSEEK_REPO_BRANCH" >/dev/null; then
+              sudo -u deepseek git checkout -B "$DEEPSEEK_REPO_BRANCH" "origin/$DEEPSEEK_REPO_BRANCH"
+            elif sudo -u deepseek git rev-parse --verify --quiet "refs/tags/$DEEPSEEK_REPO_BRANCH" >/dev/null; then
+              sudo -u deepseek git checkout --detach "$DEEPSEEK_REPO_BRANCH"
+            else
+              sudo -u deepseek git checkout "$DEEPSEEK_REPO_BRANCH"
+              sudo -u deepseek git pull --ff-only
+            fi
+
+            sudo -iu deepseek bash -lc '
+              set -euo pipefail
+              . "$HOME/.cargo/env"
+              cd /opt/whalebro/deepseek-tui
+              cargo install --path crates/cli --locked --force
+              cargo install --path crates/tui --locked --force
+            '
+
+            sudo bash scripts/tencent-lighthouse/install-services.sh
+            sudo systemctl restart deepseek-runtime
+            sudo systemctl restart deepseek-feishu-bridge
+            sudo bash scripts/tencent-lighthouse/doctor.sh
+            REMOTE

@@ -419,7 +419,7 @@ pub fn text_summary(text: &str) -> Option<String> {
     let collapsed = sanitized
         .lines()
         .map(str::trim)
-        .filter(|line| !line.is_empty())
+        .filter(|line: &&str| !line.is_empty())
         .collect::<Vec<_>>()
         .join("\n");
     let trimmed = collapsed.trim();

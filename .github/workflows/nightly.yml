@@ -71,6 +71,8 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: false
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         run: |

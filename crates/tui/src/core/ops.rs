@@ -68,6 +68,7 @@ pub enum Op {
         session_id: Option<String>,
         messages: Vec<Message>,
         system_prompt: Option<SystemPrompt>,
+        system_prompt_override: bool,
         model: String,
         workspace: PathBuf,
     },

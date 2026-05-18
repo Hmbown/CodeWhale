@@ -130,8 +130,11 @@ pub struct ApprovalRequest {
     pub impacts: Vec<String>,
     /// Tool parameters (for display)
     pub params: Value,
-    /// Fingerprint key for per‑call approval caching (§5.A).
+    /// Exact-argument fingerprint, used to scope *denials* (#1617).
     pub approval_key: String,
+    /// Lossy / arity-aware fingerprint, used to scope *approvals* so an
+    /// "approve for session" covers later flag variants (v0.8.37).
+    pub approval_grouping_key: String,
 }
 
 impl ApprovalRequest {
@@ -144,6 +147,8 @@ impl ApprovalRequest {
     ) -> Self {
         let category = get_tool_category(tool_name);
         let risk = classify_risk(tool_name, category, params);
+        let approval_grouping_key =
+            crate::tools::approval_cache::build_approval_grouping_key(tool_name, params).0;
 
         Self {
             id: id.to_string(),
@@ -154,6 +159,7 @@ impl ApprovalRequest {
             impacts: build_impact_summary(tool_name, category, params),
             params: params.clone(),
             approval_key: approval_key.to_string(),
+            approval_grouping_key,
         }
     }
 
@@ -597,6 +603,7 @@ impl ApprovalView {
             decision,
             timed_out,
             approval_key: self.request.approval_key.clone(),
+            approval_grouping_key: self.request.approval_grouping_key.clone(),
         })
     }
 

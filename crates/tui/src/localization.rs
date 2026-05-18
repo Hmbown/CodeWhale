@@ -1100,7 +1100,9 @@ fn english(id: MessageId) -> &'static str {
         }
         MessageId::KbJumpPlanAgentYolo => "Jump directly to Plan / Agent / YOLO mode",
         MessageId::KbAltJumpPlanAgentYolo => "Alternative jump to Plan / Agent / YOLO mode",
-        MessageId::KbFocusSidebar => "Focus Work / Tasks / Agents / Context / Auto sidebar",
+        MessageId::KbFocusSidebar => {
+            "Focus Work / Tasks / Agents / Context / Auto sidebar; Ctrl+Alt+0 hides it"
+        }
         MessageId::KbTogglePlanAgent => "Toggle between Plan and Agent modes",
         MessageId::KbSessionPicker => "Open the session picker",
         MessageId::KbPasteAttach => "Paste text or attach a clipboard image",
@@ -1481,7 +1483,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::KbJumpPlanAgentYolo => "Plan / Agent / YOLO モードに直接ジャンプ",
         MessageId::KbAltJumpPlanAgentYolo => "Plan / Agent / YOLO モードへの代替ジャンプ",
         MessageId::KbFocusSidebar => {
-            "Work / Tasks / Agents / Context / Auto サイドバーにフォーカス"
+            "Work / Tasks / Agents / Context / Auto / Hidden サイドバーにフォーカス"
         }
         MessageId::KbTogglePlanAgent => "Plan モードと Agent モードを切り替え",
         MessageId::KbSessionPicker => "セッションピッカーを開く",
@@ -1802,7 +1804,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         }
         MessageId::KbJumpPlanAgentYolo => "直接跳转到 Plan / Agent / YOLO 模式",
         MessageId::KbAltJumpPlanAgentYolo => "替代快捷键跳转到 Plan / Agent / YOLO 模式",
-        MessageId::KbFocusSidebar => "聚焦 Work / 任务 / 代理 / Context / 自动侧边栏",
+        MessageId::KbFocusSidebar => "聚焦 Work / 任务 / 代理 / Context / 自动 / 隐藏侧边栏",
         MessageId::KbTogglePlanAgent => "在 Plan 和 Agent 模式之间切换",
         MessageId::KbSessionPicker => "打开会话选择器",
         MessageId::KbPasteAttach => "粘贴文本或附加剪贴板图片",
@@ -2162,7 +2164,9 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         }
         MessageId::KbJumpPlanAgentYolo => "Pular direto para modo Plan / Agent / YOLO",
         MessageId::KbAltJumpPlanAgentYolo => "Salto alternativo para modo Plan / Agent / YOLO",
-        MessageId::KbFocusSidebar => "Focar barra lateral Work / Tasks / Agents / Context / Auto",
+        MessageId::KbFocusSidebar => {
+            "Focar barra lateral Work / Tasks / Agents / Context / Auto / Ocultar"
+        }
         MessageId::KbTogglePlanAgent => "Alternar entre modos Plan e Agent",
         MessageId::KbSessionPicker => "Abrir seletor de sessões",
         MessageId::KbPasteAttach => "Colar texto ou anexar imagem da área de transferência",
@@ -2550,7 +2554,9 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         }
         MessageId::KbJumpPlanAgentYolo => "Saltar directo a modo Plan / Agent / YOLO",
         MessageId::KbAltJumpPlanAgentYolo => "Salto alternativo a modo Plan / Agent / YOLO",
-        MessageId::KbFocusSidebar => "Enfocar barra lateral Plan / Todos / Tasks / Agents / Auto",
+        MessageId::KbFocusSidebar => {
+            "Enfocar barra lateral Work / Tasks / Agents / Context / Auto / Ocultar"
+        }
         MessageId::KbTogglePlanAgent => "Alternar entre modos Plan y Agent",
         MessageId::KbSessionPicker => "Abrir selector de sesiones",
         MessageId::KbPasteAttach => "Pegar texto o adjuntar imagen del portapapeles",

@@ -18,7 +18,7 @@ use ratatui::{
 
 use crate::deepseek_theme::Theme;
 use crate::palette;
-use crate::tui::ui::truncate_line_to_width;
+use crate::tui::ui_text::truncate_line_to_width;
 
 // ---------------------------------------------------------------------------
 // Public API

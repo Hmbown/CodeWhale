@@ -353,10 +353,12 @@ Common settings keys:
   context panel, `/cost`, `/tokens`, and long-turn notification summaries. The
   aliases `rmb` and `yuan` normalize to `cny`.
 - `default_mode` (agent, plan, yolo; legacy `normal` is accepted and normalized to `agent`)
-- `sidebar_focus` (`auto`, `work`, `tasks`, `agents`, `context`; default
+- `sidebar_focus` (`auto`, `work`, `tasks`, `agents`, `context`, `hidden`; default
   `auto`): selects the right sidebar focus. `auto` prioritizes Work, Tasks,
   Agents, then optional Context, and uses Work as the single quiet empty state.
-  Legacy `plan` and `todos` values are accepted and normalized to `work`.
+  `hidden` disables the right sidebar entirely so raw terminal selection cannot
+  cross from the transcript into sidebar borders. Legacy `plan` and `todos`
+  values are accepted and normalized to `work`.
 - `max_history` (number of submitted input history entries; cleared drafts are
   also kept locally for composer history search)
 - `default_model` (model name override)
@@ -517,7 +519,7 @@ If you are upgrading from older releases:
   `false`. When `true`, the notification body includes the elapsed
   duration and the turn's cost in the configured display currency.
 - `tui.alternate_screen` (string, optional): `auto`, `always`, or `never`. This is retained for config compatibility, but interactive sessions now always use the TUI-owned alternate screen so host terminal scrollback cannot hijack the viewport.
-- `tui.mouse_capture` (bool, optional, default `true` on non-Windows terminals when the alternate screen is active; `false` on Windows and inside JetBrains JediTerm — PyCharm/IDEA/CLion/etc. — where mouse-event escapes leak into the input stream as garbled text, see #878 / #898): enable internal mouse scrolling, transcript selection, right-click context actions, and transcript scrollbar dragging. TUI-owned drag selection copies only transcript text and keeps selection scoped to the transcript pane. Set this to `false` or run with `--no-mouse-capture` for raw terminal selection; set it to `true` or run with `--mouse-capture` to opt in anywhere it's defaulted off. On Windows, raw terminal selection may cross the right sidebar because the terminal, not the TUI, owns the selection.
+- `tui.mouse_capture` (bool, optional, default `true` on non-Windows terminals and on Windows Terminal/ConEmu/Cmder when the alternate screen is active; `false` on legacy Windows console and inside JetBrains JediTerm — PyCharm/IDEA/CLion/etc. — where mouse-event escapes leak into the input stream as garbled text, see #878 / #898): enable internal mouse scrolling, transcript selection, right-click context actions, and transcript scrollbar dragging. TUI-owned drag selection copies only transcript text and keeps selection scoped to the transcript pane. Set this to `false` or run with `--no-mouse-capture` for raw terminal selection; set it to `true` or run with `--mouse-capture` to opt in anywhere it's defaulted off. On raw terminal selection, especially on legacy Windows console or when mouse capture is disabled, selection may cross the right sidebar because the terminal, not the TUI, owns the selection.
 - `tui.terminal_probe_timeout_ms` (int, optional, default `500`): startup terminal-mode probe timeout in milliseconds. Values are clamped to `100..=5000`; timeout emits a warning and aborts startup instead of hanging indefinitely.
 - `tui.osc8_links` (bool, optional, default `true`): emit OSC 8 escape sequences around URLs in transcript output so terminals that support them (iTerm2, Terminal.app 13+, Ghostty, Kitty, WezTerm, Alacritty, recent gnome-terminal/konsole) render them as Cmd+click hyperlinks. Terminals without OSC 8 support render the plain URL and ignore the escape. Set `false` for terminals that misrender the sequence; selection/clipboard output always strips the escapes.
 - `hooks` (optional): lifecycle hooks configuration (see `config.example.toml`).
@@ -617,6 +619,18 @@ You can also override features for a single run:
 - `deepseek-tui --disable subagents`
 
 Use `deepseek-tui features list` to inspect known flags and their effective state.
+
+## Web Search Provider
+
+`web_search` uses Bing by default and does not require an API key. DuckDuckGo
+remains selectable for users who explicitly want it, and Tavily or Bocha can be
+selected when an API-backed provider is preferred.
+
+```toml
+[search]
+provider = "bing" # bing | duckduckgo | tavily | bocha
+# api_key = "tvly-YOUR_KEY" # required for tavily and bocha
+```
 
 ## Local Media Attachments
 

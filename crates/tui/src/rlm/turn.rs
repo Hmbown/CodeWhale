@@ -324,7 +324,8 @@ async fn run_rlm_turn_impl(
                             text: "You called FINAL(...) without ever running a ```repl block. \
                                    That defeats the recursive language model — you're guessing \
                                    from the preview alone. Emit a ```repl block now that uses \
-                                   `llm_query`, `llm_query_batched`, or `rlm_query` against \
+                                   `llm_query`, `sub_query_sequence`, or an explicitly independent \
+                                   `llm_query_batched(..., dependency_mode=\"independent\")` against \
                                    `context` to actually compute the answer."
                                 .to_string(),
                             cache_control: None,
@@ -383,7 +384,8 @@ async fn run_rlm_turn_impl(
                         role: "user".to_string(),
                         content: vec![ContentBlock::Text {
                             text: "Reminder: emit Python inside a ```repl … ``` fence. \
-                                   Use `llm_query` / `llm_query_batched` / `rlm_query` to \
+                                   Use `llm_query`, `sub_query_sequence`, or \
+                                   `llm_query_batched(..., dependency_mode=\"independent\")` to \
                                    process `context` and call `FINAL(value)` when done."
                                 .to_string(),
                             cache_control: None,
@@ -595,7 +597,7 @@ fn build_metadata_message(
             .to_string(),
     );
     parts.push(
-        "- `llm_query_batched([p1, p2, ...])`     — concurrent fan-out; `model` is ignored"
+        "- `llm_query_batched([p1, p2, ...], dependency_mode=\"independent\")` — concurrent fan-out for independent prompts only; `model` is ignored"
             .to_string(),
     );
     parts.push(
@@ -603,7 +605,15 @@ fn build_metadata_message(
             .to_string(),
     );
     parts.push(
-        "- `rlm_query_batched([p1, p2, ...])`     — concurrent recursive sub-RLMs; `model` is ignored"
+        "- `rlm_query_batched([p1, p2, ...], dependency_mode=\"independent\")` — concurrent recursive sub-RLMs for independent prompts only; `model` is ignored"
+            .to_string(),
+    );
+    parts.push(
+        "- `sub_query_sequence(prompt, slices)`   — sequential child calls for A->B dependencies and rollback-sensitive work"
+            .to_string(),
+    );
+    parts.push(
+        "- Batch safety: never batch dependent steps, global-state refactors, schema migrations, or rollback-sensitive tasks"
             .to_string(),
     );
     parts.push("- `SHOW_VARS()`                          — list user variables".to_string());

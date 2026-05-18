@@ -44,6 +44,12 @@ const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434/v1";
 #[serde(rename_all = "kebab-case")]
 pub enum ProviderKind {
     #[default]
+    #[serde(
+        alias = "deepseek-cn",
+        alias = "deepseek_china",
+        alias = "deepseekcn",
+        alias = "deepseek-china"
+    )]
     Deepseek,
     NvidiaNim,
     Openai,
@@ -76,7 +82,8 @@ impl ProviderKind {
     #[must_use]
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
-            "deepseek" | "deep-seek" => Some(Self::Deepseek),
+            "deepseek" | "deep-seek" | "deepseek-cn" | "deepseek_china" | "deepseekcn"
+            | "deepseek-china" => Some(Self::Deepseek),
             "nvidia" | "nvidia-nim" | "nvidia_nim" | "nim" => Some(Self::NvidiaNim),
             "openai" | "open-ai" => Some(Self::Openai),
             "atlascloud" | "atlas-cloud" | "atlas_cloud" | "atlas" => Some(Self::Atlascloud),
@@ -2129,6 +2136,22 @@ mod tests {
             ProviderKind::parse("ollama-local"),
             Some(ProviderKind::Ollama)
         );
+    }
+
+    #[test]
+    fn provider_kind_accepts_legacy_deepseek_cn_aliases() {
+        for alias in [
+            "deepseek-cn",
+            "deepseek_china",
+            "deepseekcn",
+            "deepseek-china",
+        ] {
+            assert_eq!(ProviderKind::parse(alias), Some(ProviderKind::Deepseek));
+
+            let parsed: ConfigToml =
+                toml::from_str(&format!("provider = \"{alias}\"")).expect("legacy provider alias");
+            assert_eq!(parsed.provider, ProviderKind::Deepseek);
+        }
     }
 
     #[test]

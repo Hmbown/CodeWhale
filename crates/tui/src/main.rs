@@ -311,6 +311,54 @@ enum ExecOutputFormat {
     StreamJson,
 }
 
+/// Spawn a tokio task that listens for terminating signals (SIGINT
+/// always; SIGTERM and SIGHUP on Unix) and, on receipt, restores the
+/// terminal modes and exits with the conventional 128 + signal code.
+/// Multiple deliveries are tolerated: once the cleanup runs, a second
+/// signal short-circuits to plain exit so a stuck cleanup can never
+/// trap a frustrated user pressing Ctrl+C repeatedly.
+///
+/// See the call site in `main` for the rationale (#1583).
+fn spawn_signal_cleanup_task() {
+    tokio::spawn(async {
+        let exit_code = wait_for_terminating_signal().await;
+        // If we get here a fatal signal arrived. Restore the terminal
+        // and exit. A second signal during cleanup re-enters this
+        // path and aborts via `std::process::exit` directly.
+        static CLEANED_UP: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
+        if !CLEANED_UP.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            crate::tui::ui::emergency_restore_terminal();
+        }
+        std::process::exit(exit_code);
+    });
+}
+
+#[cfg(unix)]
+async fn wait_for_terminating_signal() -> i32 {
+    use tokio::signal::unix::{SignalKind, signal};
+    // Failing to install any individual stream is non-fatal: we still
+    // want the others to work. The fallback never-resolving future
+    // keeps `select!` well-typed when a stream fails to register.
+    let mut sigint = signal(SignalKind::interrupt()).ok();
+    let mut sigterm = signal(SignalKind::terminate()).ok();
+    let mut sighup = signal(SignalKind::hangup()).ok();
+    tokio::select! {
+        _ = async { match sigint.as_mut() { Some(s) => { s.recv().await; }, None => std::future::pending::<()>().await, } } => 130,
+        _ = async { match sigterm.as_mut() { Some(s) => { s.recv().await; }, None => std::future::pending::<()>().await, } } => 143,
+        _ = async { match sighup.as_mut() { Some(s) => { s.recv().await; }, None => std::future::pending::<()>().await, } } => 129,
+    }
+}
+
+#[cfg(not(unix))]
+async fn wait_for_terminating_signal() -> i32 {
+    // Windows: tokio::signal::ctrl_c covers both Ctrl+C and Ctrl+Break
+    // (CTRL_C_EVENT / CTRL_BREAK_EVENT). Console-close, logoff, and
+    // shutdown events are not currently routed through tokio.
+    let _ = tokio::signal::ctrl_c().await;
+    130
+}
+
 fn join_prompt_parts(parts: &[String]) -> String {
     parts.join(" ")
 }
@@ -632,22 +680,10 @@ async fn main() -> Result<()> {
     std::panic::set_hook(Box::new(move |panic_info| {
         // Restore the terminal first so the panic message itself, plus the
         // user's shell after exit, are visible. Best-effort — we may not be
-        // in raw / alt-screen mode if the panic happens pre-TUI.
-        use crossterm::event::{DisableBracketedPaste, DisableMouseCapture};
-        use crossterm::terminal::{LeaveAlternateScreen, disable_raw_mode};
-        // Use the Windows-aware helper: crossterm's PopKeyboardEnhancementFlags
-        // is a no-op on Windows (is_ansi_code_supported() == false), so the
-        // plain execute!() form would leave the terminal in Kitty-enhanced mode
-        // after a panic. pop_keyboard_enhancement_flags writes the pop escape
-        // directly on Windows (#1359).
-        crate::tui::ui::pop_keyboard_enhancement_flags(&mut std::io::stdout());
-        // Best-effort: turn off bracketed paste + mouse capture so the user's
-        // parent shell doesn't get stuck wrapping pastes in `\e[200~…\e[201~`
-        // or printing `\e[<…M` on every click after a TUI panic.
-        let _ = crossterm::execute!(std::io::stdout(), DisableBracketedPaste);
-        let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture);
-        let _ = disable_raw_mode();
-        let _ = crossterm::execute!(std::io::stdout(), LeaveAlternateScreen);
+        // in raw / alt-screen mode if the panic happens pre-TUI. Shared
+        // with the signal handler installed below so both exit paths leave
+        // the terminal in the same well-defined state.
+        crate::tui::ui::emergency_restore_terminal();
 
         let msg = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
             s.to_string()
@@ -675,6 +711,22 @@ async fn main() -> Result<()> {
         // Invoke the original hook (prints to stderr, etc.)
         orig_hook(panic_info);
     }));
+
+    // Install signal handlers that restore the terminal before the
+    // process exits. Without this, Ctrl+C delivered while raw mode /
+    // kitty keyboard enhancement / alt-screen are active (or in the
+    // brief windows around startup and teardown where they're being
+    // toggled) leaves the user's shell receiving raw CSI sequences
+    // like `^[[>5u` until they run `reset` (#1583).
+    //
+    // Once the TUI's raw mode is engaged the terminal driver delivers
+    // Ctrl+C as the byte 0x03 rather than SIGINT, so the in-TUI key
+    // handler — not this handler — is what processes user interrupts
+    // during normal operation. This handler exists for the gaps:
+    // pre-TUI subcommands (--version, doctor, login, …), the moments
+    // around enable_raw_mode / disable_raw_mode, the external-editor
+    // suspend path, and SIGTERM / SIGHUP from the OS.
+    spawn_signal_cleanup_task();
 
     dotenv().ok();
     let cli = Cli::parse();
@@ -2343,6 +2395,13 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
     {
         println!(
             "  {} Ptyxis detected → synchronized_output=off (auto, v0.8.31)",
+            "•".truecolor(sky_r, sky_g, sky_b)
+        );
+        any_quirk = true;
+    }
+    if crate::settings::detected_legacy_windows_console_host() {
+        println!(
+            "  {} legacy Windows console host → low_motion + fancy_animations=false + synchronized_output=off (auto)",
             "•".truecolor(sky_r, sky_g, sky_b)
         );
         any_quirk = true;
@@ -4653,6 +4712,7 @@ async fn run_exec_agent(
                 session_id: Some(saved_id.clone()),
                 messages: saved.messages,
                 system_prompt: saved.system_prompt.map(SystemPrompt::Text),
+                system_prompt_override: false,
                 model: saved.metadata.model,
                 workspace: saved.metadata.workspace,
             })

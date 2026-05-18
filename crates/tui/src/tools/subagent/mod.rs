@@ -3293,25 +3293,30 @@ pub(crate) fn emit_parent_completion(
 /// Build a `<deepseek:subagent.done>` JSON sentinel for a successful child.
 /// Intended to surface in the parent's transcript so the model recognizes
 /// child completion and can decide whether to read the full result via
-/// `agent_result`.
+/// `agent_eval`.
+///
+/// Keep this payload deliberately lean. The human summary is emitted on the
+/// line immediately before the sentinel; duplicating it here bloats the next
+/// parent request's cache-miss tail. Wall-clock duration is useful UI
+/// telemetry, but it is volatile and not useful for model coordination.
 fn subagent_done_sentinel(agent_id: &str, res: &SubAgentResult) -> String {
     let payload = json!({
         "agent_id": agent_id,
         "agent_type": res.agent_type.as_str(),
         "status": subagent_status_name(&res.status),
-        "duration_ms": res.duration_ms,
-        "steps": res.steps_taken,
-        "summary": summarize_subagent_result(res),
+        "summary_location": "previous_line",
+        "details": "agent_eval",
     });
     format!("<deepseek:subagent.done>{payload}</deepseek:subagent.done>")
 }
 
 /// Build a `<deepseek:subagent.done>` sentinel for a failed child.
-fn subagent_failed_sentinel(agent_id: &str, err: &str) -> String {
+fn subagent_failed_sentinel(agent_id: &str, _err: &str) -> String {
     let payload = json!({
         "agent_id": agent_id,
         "status": "failed",
-        "error": err,
+        "error_location": "previous_line",
+        "details": "agent_eval",
     });
     format!("<deepseek:subagent.done>{payload}</deepseek:subagent.done>")
 }

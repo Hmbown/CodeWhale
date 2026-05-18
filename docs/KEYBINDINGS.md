@@ -18,6 +18,8 @@ Bindings are not (yet) user-configurable — tracked for a future release (#436,
 | `Ctrl-L`             | Refresh / clear the screen                                     |
 | `Ctrl-O`             | Open Activity Detail for selected/live/recent tool work, or the full reasoning timeline for thinking blocks when the composer is empty |
 | `Ctrl-Shift-E` / `Cmd-Shift-E` | Toggle the file-tree sidebar                          |
+| `Alt-!` / `Alt-@` / `Alt-#` / `Alt-$` / `Alt-0` | Focus Work / Tasks / Agents / Context / Auto sidebar |
+| `Ctrl-Alt-0`         | Hide the right sidebar                                          |
 | `Esc`                | Close topmost modal · cancel slash menu · dismiss toast        |
 
 ## Composer

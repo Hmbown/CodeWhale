@@ -74,11 +74,15 @@ pub enum RpcRequest {
         #[serde(default)]
         system: Option<String>,
     },
-    /// `llm_query_batched(prompts, model=None)`
+    /// `llm_query_batched(prompts, model=None, dependency_mode="independent")`
     LlmBatch {
         prompts: Vec<String>,
         #[serde(default)]
         model: Option<String>,
+        #[serde(default)]
+        dependency_mode: Option<String>,
+        #[serde(default)]
+        safety_note: Option<String>,
     },
     /// `rlm_query(prompt, model=None)` — recursive sub-RLM (paper's `sub_RLM`).
     Rlm {
@@ -86,11 +90,15 @@ pub enum RpcRequest {
         #[serde(default)]
         model: Option<String>,
     },
-    /// `rlm_query_batched(prompts, model=None)`
+    /// `rlm_query_batched(prompts, model=None, dependency_mode="independent")`
     RlmBatch {
         prompts: Vec<String>,
         #[serde(default)]
         model: Option<String>,
+        #[serde(default)]
+        dependency_mode: Option<String>,
+        #[serde(default)]
+        safety_note: Option<String>,
     },
 }
 
@@ -587,11 +595,39 @@ def llm_query(prompt, model=None, max_tokens=None, system=None):
         return resp.get("text","")
     return str(resp)
 
-def llm_query_batched(prompts, model=None):
-    """Run multiple sub-LLM calls concurrently. The model arg is accepted for compatibility but ignored."""
+def _normalize_dependency_mode(mode):
+    if mode is None:
+        return ""
+    return str(mode).strip().lower().replace("-", "_").replace(" ", "_")
+
+def _batch_dependency_error(helper, prompts, dependency_mode):
+    mode = _normalize_dependency_mode(dependency_mode)
+    if mode in ("independent", "parallel_safe", "map_reduce"):
+        return None
+    if mode in ("sequential", "dependent", "ordered", "chain", "serial"):
+        return (
+            f"[{helper}: refused parallel batch because dependency_mode={dependency_mode!r}. "
+            "Use sub_query_sequence(...) or an explicit for-loop with sub_query(...) so each step can consume the previous result.]"
+        )
+    return (
+        f"[{helper}: batch helpers require dependency_mode='independent'. "
+        "Use only for independent slices/items; for A->B dependencies, global-state refactors, migrations, or rollback-sensitive work, use sub_query_sequence(...).]"
+    )
+
+def llm_query_batched(prompts, model=None, dependency_mode=None, safety_note=None):
+    """Run independent sub-LLM calls concurrently. Declare dependency_mode='independent'."""
     if not isinstance(prompts, (list, tuple)):
         return ["[llm_query_batched: prompts must be a list]"]
-    resp = _rpc({"type":"llm_batch","prompts":[str(p) for p in prompts],"model":model})
+    err = _batch_dependency_error("llm_query_batched", prompts, dependency_mode)
+    if err is not None:
+        return [err for _ in prompts]
+    resp = _rpc({
+        "type":"llm_batch",
+        "prompts":[str(p) for p in prompts],
+        "model":model,
+        "dependency_mode":dependency_mode,
+        "safety_note":safety_note,
+    })
     if isinstance(resp, dict) and resp.get("error"):
         return [f"[llm_query_batched: {resp['error']}]" for _ in prompts]
     results = (resp or {}).get("results", []) if isinstance(resp, dict) else []
@@ -614,11 +650,20 @@ def rlm_query(prompt, model=None):
         return resp.get("text","")
     return str(resp)
 
-def rlm_query_batched(prompts, model=None):
-    """Run multiple recursive sub-RLMs in parallel. The model arg is accepted for compatibility but ignored."""
+def rlm_query_batched(prompts, model=None, dependency_mode=None, safety_note=None):
+    """Run independent recursive sub-RLMs in parallel. Declare dependency_mode='independent'."""
     if not isinstance(prompts, (list, tuple)):
         return ["[rlm_query_batched: prompts must be a list]"]
-    resp = _rpc({"type":"rlm_batch","prompts":[str(p) for p in prompts],"model":model})
+    err = _batch_dependency_error("rlm_query_batched", prompts, dependency_mode)
+    if err is not None:
+        return [err for _ in prompts]
+    resp = _rpc({
+        "type":"rlm_batch",
+        "prompts":[str(p) for p in prompts],
+        "model":model,
+        "dependency_mode":dependency_mode,
+        "safety_note":safety_note,
+    })
     if isinstance(resp, dict) and resp.get("error"):
         return [f"[rlm_query_batched: {resp['error']}]" for _ in prompts]
     results = (resp or {}).get("results", []) if isinstance(resp, dict) else []
@@ -655,23 +700,55 @@ def sub_query(prompt, slice=None, timeout_secs=None, **kwargs):
     """One child LLM call, optionally scoped to a bounded slice."""
     return llm_query(_prompt_with_slice(prompt, slice))
 
-def sub_query_batch(prompt, slices, timeout_secs=None, **kwargs):
-    """Apply one prompt to many bounded slices concurrently."""
+def sub_query_batch(prompt, slices, timeout_secs=None, dependency_mode=None, safety_note=None, **kwargs):
+    """Apply one prompt to many independent bounded slices concurrently."""
     if not isinstance(slices, (list, tuple)):
         return ["[sub_query_batch: slices must be a list]"]
-    return llm_query_batched([_prompt_with_slice(prompt, s) for s in slices])
+    return llm_query_batched(
+        [_prompt_with_slice(prompt, s) for s in slices],
+        dependency_mode=dependency_mode,
+        safety_note=safety_note,
+    )
 
-def sub_query_map(prompts, slices=None, timeout_secs=None, **kwargs):
-    """Run N distinct prompts, optionally paired with N bounded slices."""
+def sub_query_map(prompts, slices=None, timeout_secs=None, dependency_mode=None, safety_note=None, **kwargs):
+    """Run N distinct independent prompts, optionally paired with N bounded slices."""
     if not isinstance(prompts, (list, tuple)):
         return ["[sub_query_map: prompts must be a list]"]
     if slices is None:
-        return llm_query_batched([str(p) for p in prompts])
+        return llm_query_batched(
+            [str(p) for p in prompts],
+            dependency_mode=dependency_mode,
+            safety_note=safety_note,
+        )
     if not isinstance(slices, (list, tuple)):
         return ["[sub_query_map: slices must be a list]"]
     if len(prompts) != len(slices):
         return [f"[sub_query_map: size mismatch ({len(prompts)}/{len(slices)})]" for _ in prompts]
-    return llm_query_batched([_prompt_with_slice(p, s) for p, s in zip(prompts, slices)])
+    return llm_query_batched(
+        [_prompt_with_slice(p, s) for p, s in zip(prompts, slices)],
+        dependency_mode=dependency_mode,
+        safety_note=safety_note,
+    )
+
+def sub_query_sequence(prompt, slices, carry_prompt=None, timeout_secs=None, **kwargs):
+    """Apply one prompt to slices sequentially, feeding each result into the next step."""
+    if not isinstance(slices, (list, tuple)):
+        return ["[sub_query_sequence: slices must be a list]"]
+    out = []
+    previous = ""
+    carry = str(carry_prompt or "Previous step result; treat it as required input for this step:")
+    total = len(slices)
+    for i, s in enumerate(slices):
+        step_prompt = _prompt_with_slice(prompt, s)
+        if previous:
+            step_prompt = (
+                f"{step_prompt}\n\n--- dependency_state step {i}/{total} ---\n"
+                f"{carry}\n{previous}"
+            )
+        result = llm_query(step_prompt)
+        out.append(result)
+        previous = result
+    return out
 
 def sub_rlm(prompt, source=None, timeout_secs=None, **kwargs):
     """Recursive sub-RLM call for tasks that need their own decomposition."""
@@ -864,8 +941,9 @@ _BOOTSTRAP_NAMES = {
     "_SID","_REQ","_RESP","_FINAL","_ERR","_RUN","_END","_DONE","_READY",
     "_rpc","_ctx_file","_context","_slice_chars","_slice_lines","_BOOTSTRAP_NAMES","_main_loop",
     "_emit_final","_json_safe","_slice_text","_prompt_with_slice",
+    "_normalize_dependency_mode","_batch_dependency_error",
     "llm_query","llm_query_batched","rlm_query","rlm_query_batched",
-    "sub_query","sub_query_batch","sub_query_map","sub_rlm",
+    "sub_query","sub_query_batch","sub_query_map","sub_query_sequence","sub_rlm",
     "FINAL","FINAL_VAR","SHOW_VARS","repl_get","repl_set",
     "context_meta","peek","search","chunk","chunk_context","chunk_coverage",
     "finalize","evaluate_progress","content",
@@ -1281,7 +1359,8 @@ mod tests {
         let mut rt = PythonRuntime::new().await.expect("spawn");
         let round = rt
             .run(
-                "outs = llm_query_batched(['a','b','c']); print('|'.join(outs))",
+                "outs = llm_query_batched(['a','b','c'], dependency_mode='independent', safety_note='same independent classification')\n\
+                 print('|'.join(outs))",
                 Some(&bridge),
             )
             .await
@@ -1290,6 +1369,80 @@ mod tests {
         assert!(round.stdout.contains("stub#0.1: b"));
         assert!(round.stdout.contains("stub#0.2: c"));
         assert_eq!(round.rpc_count, 1);
+        rt.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn batched_helpers_require_independence_declaration() {
+        let bridge = StubBridge::new();
+        let mut rt = PythonRuntime::new().await.expect("spawn");
+        let round = rt
+            .run(
+                "outs = sub_query_batch('summarize', [{'text': 'a'}, {'text': 'b'}])\n\
+                 print(outs[0])",
+                Some(&bridge),
+            )
+            .await
+            .expect("execute");
+
+        assert!(
+            round.stdout.contains("dependency_mode='independent'"),
+            "{}",
+            round.stdout
+        );
+        assert_eq!(round.rpc_count, 0);
+        rt.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn dependent_batch_mode_points_to_sequence_helper() {
+        let bridge = StubBridge::new();
+        let mut rt = PythonRuntime::new().await.expect("spawn");
+        let round = rt
+            .run(
+                "outs = llm_query_batched(['migrate A', 'migrate B'], dependency_mode='sequential')\n\
+                 print(outs[0])",
+                Some(&bridge),
+            )
+            .await
+            .expect("execute");
+
+        assert!(
+            round.stdout.contains("sub_query_sequence"),
+            "{}",
+            round.stdout
+        );
+        assert_eq!(round.rpc_count, 0);
+        rt.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn sub_query_sequence_feeds_prior_result_into_next_prompt() {
+        let bridge = StubBridge::new();
+        let calls = Arc::clone(&bridge.calls);
+
+        let mut rt = PythonRuntime::new().await.expect("spawn");
+        let round = rt
+            .run(
+                "outs = sub_query_sequence('process this step', [{'text': 'A'}, {'text': 'B'}])\n\
+                 print(len(outs))",
+                Some(&bridge),
+            )
+            .await
+            .expect("execute");
+
+        assert!(round.stdout.contains("2"), "{}", round.stdout);
+        assert_eq!(round.rpc_count, 2);
+
+        let recorded = calls.lock().await;
+        assert_eq!(recorded.len(), 2);
+        let second_prompt = match &recorded[1] {
+            RpcRequest::Llm { prompt, .. } => prompt,
+            other => panic!("expected second Llm request, got {other:?}"),
+        };
+        assert!(second_prompt.contains("--- dependency_state step 1/2 ---"));
+        assert!(second_prompt.contains("stub#0: process this step"));
+        drop(recorded);
         rt.shutdown().await;
     }
 

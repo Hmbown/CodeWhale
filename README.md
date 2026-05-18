@@ -18,7 +18,9 @@ agent runtime itself.
 #    matching prebuilt Rust binaries from GitHub Releases.
 npm install -g deepseek-tui
 
-# 2. Cargo — no Node needed.
+# 2. Cargo — no Node needed. Requires Rust 1.88+ (the crates use the
+#    2024 edition; older toolchains fail with "feature `edition2024` is
+#    required"). Run `rustup update` first, or use a non-Cargo path below.
 cargo install deepseek-tui-cli --locked   # `deepseek` (entry point)
 cargo install deepseek-tui     --locked   # `deepseek-tui` (TUI binary)
 
@@ -31,15 +33,33 @@ brew install deepseek-tui
 #    Prebuilt for Linux x64/ARM64, macOS x64/ARM64, Windows x64.
 
 # 5. Docker — prebuilt release image.
+docker volume create deepseek-tui-home
 docker run --rm -it \
-  -e DEEPSEEK_API_KEY \
+  -e DEEPSEEK_API_KEY="$DEEPSEEK_API_KEY" \
+  -v deepseek-tui-home:/home/deepseek/.deepseek \
   -v "$PWD:/workspace" \
+  -w /workspace \
   ghcr.io/hmbown/deepseek-tui:latest
 ```
 
 > In mainland China, speed up the npm path with
 > `--registry=https://registry.npmmirror.com`, or use the
 > [Cargo mirror](#china--mirror-friendly-installation) below.
+>
+> Download safety: official release binaries live under
+> `https://github.com/Hmbown/DeepSeek-TUI/releases`. For manual downloads,
+> verify the SHA-256 manifest and avoid look-alike repositories or search-result
+> mirrors. See [download safety and checksums](docs/INSTALL.md#2-download-safety-and-checksums).
+
+Already installed? Use the updater that matches the install path:
+
+```bash
+deepseek update                         # release-binary updater
+npm install -g deepseek-tui@latest      # npm wrapper
+brew update && brew upgrade deepseek-tui
+cargo install deepseek-tui-cli --locked --force
+cargo install deepseek-tui     --locked --force
+```
 
 [![CI](https://github.com/Hmbown/DeepSeek-TUI/actions/workflows/ci.yml/badge.svg)](https://github.com/Hmbown/DeepSeek-TUI/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/deepseek-tui)](https://www.npmjs.com/package/deepseek-tui)
@@ -62,7 +82,7 @@ It is built around DeepSeek V4 (`deepseek-v4-pro` / `deepseek-v4-flash`), includ
 - **Thinking-mode streaming** — see DeepSeek reasoning blocks as the model works
 - **Full tool suite** — file ops, shell execution, git, web search/browse, apply-patch, sub-agents, MCP servers
 - **1M-token context** — context tracking, manual or configured compaction, and prefix-cache telemetry
-- **Prefix-cache stability tracking** — a footer chip surfaces how stable the cached prefix has been across recent turns so cost-busting edits are visible before they land
+- **Prefix-cache stability tracking** — an optional `/statusline` footer chip surfaces how stable the cached prefix has been across recent turns so cost-busting edits are visible before they land
 - **Three modes** — Plan (read-only explore), Agent (interactive with approval), YOLO (auto-approved)
 - **Reasoning-effort tiers** — cycle through `off → high → max` with `Shift + Tab`
 - **Session save/resume** — checkpoint and resume long-running sessions
@@ -132,6 +152,17 @@ config, keyring, and env-var source state without printing the key. Saved config
 keys take precedence over the keyring and environment and are easier to rotate.
 
 > To rotate or remove a saved key: `deepseek auth clear --provider deepseek`.
+
+### Tencent Cloud / CNB Remote-First Path
+
+For an always-on workspace you can control from a phone, use the Tencent-native
+path: CNB mirror/source, Tencent Lighthouse HK, a Feishu/Lark long-connection
+bridge, and optional EdgeOne for a deliberate public HTTPS edge. The runtime API
+stays bound to localhost; EdgeOne is not used to expose `/v1/*`.
+
+Start with [docs/TENCENT_CLOUD_REMOTE_FIRST.md](docs/TENCENT_CLOUD_REMOTE_FIRST.md),
+then use [docs/TENCENT_LIGHTHOUSE_HK.md](docs/TENCENT_LIGHTHOUSE_HK.md) for the
+server runbook.
 
 ### Auto Mode
 
@@ -220,6 +251,18 @@ Both binaries are required. Cross-compilation and platform-specific notes: [docs
 deepseek auth set --provider nvidia-nim --api-key "YOUR_NVIDIA_API_KEY"
 deepseek --provider nvidia-nim
 
+# AtlasCloud
+deepseek auth set --provider atlascloud --api-key "YOUR_ATLASCLOUD_API_KEY"
+deepseek --provider atlascloud
+
+# OpenRouter
+deepseek auth set --provider openrouter --api-key "YOUR_OPENROUTER_API_KEY"
+deepseek --provider openrouter --model deepseek/deepseek-v4-pro
+
+# Novita
+deepseek auth set --provider novita --api-key "YOUR_NOVITA_API_KEY"
+deepseek --provider novita --model deepseek/deepseek-v4-pro
+
 # Fireworks
 deepseek auth set --provider fireworks --api-key "YOUR_FIREWORKS_API_KEY"
 deepseek --provider fireworks --model deepseek-v4-pro
@@ -239,29 +282,19 @@ ollama pull deepseek-coder:1.3b
 deepseek --provider ollama --model deepseek-coder:1.3b
 ```
 
+Inside the TUI, `/provider` opens the provider picker and `/model` opens the
+model picker. `/provider openrouter` and `/model <id>` switch directly, while
+`/models` lists live API models. The `/model` picker uses the active provider's
+live model catalog when the provider exposes one, with provider-aware defaults
+as a fallback.
+
 ---
 
-## What's New In v0.8.35
+## Release Notes
 
-A post-release cleanup branch for the `v0.8.34` line. It keeps the
-model-facing surface stable while trimming first-turn context, clarifying
-context-pressure behavior, and reducing sidebar noise during long runs.
-[Full changelog](CHANGELOG.md).
-
-- **First-turn context is leaner.** Hidden tool/cache state is excluded
-  from the generated project pack, and `/context` now names prompt layers
-  instead of showing one opaque blob.
-- **Prompt rules are de-conflicted.** Useful `deepseek` diagnostics are
-  allowed, simple one-step work no longer forces checklist ceremony, and
-  sustained sessions consistently suggest `/compact` around 60%.
-- **Automatic compaction stays conservative.** The 80% threshold remains
-  an opt-in hard guardrail so DeepSeek V4 prefix-cache behavior is not
-  disturbed by default.
-- **The Tasks sidebar settles down.** Completed live-tool rows expire
-  after a short linger, and very old running shell rows collapse instead
-  of filling the right rail.
-- **`auto_compact` help is honest.** Settings now report the real default:
-  off.
+Release-specific changes live in [CHANGELOG.md](CHANGELOG.md). This README
+stays focused on current install paths, core workflows, provider setup, runtime
+interfaces, and extension points.
 
 ---
 
@@ -302,8 +335,13 @@ docker volume create deepseek-tui-home
 docker run --rm -it \
   -e DEEPSEEK_API_KEY="$DEEPSEEK_API_KEY" \
   -v deepseek-tui-home:/home/deepseek/.deepseek \
+  -v "$PWD:/workspace" \
+  -w /workspace \
   ghcr.io/hmbown/deepseek-tui:latest
 ```
+
+See [docs/DOCKER.md](docs/DOCKER.md) for pinned tags, local image builds,
+volume ownership notes, and non-interactive pipeline usage.
 
 ### Zed / ACP
 
@@ -373,14 +411,20 @@ Key environment variables:
 | `DEEPSEEK_HTTP_HEADERS` | Optional custom model request headers, e.g. `X-Model-Provider-Id=your-model-provider` |
 | `DEEPSEEK_MODEL` | Default model |
 | `DEEPSEEK_STREAM_IDLE_TIMEOUT_SECS` | Stream idle timeout in seconds, default `300`, clamped to `1..=3600` |
-| `DEEPSEEK_PROVIDER` | `deepseek` (default), `nvidia-nim`, `openai`, `openrouter`, `novita`, `fireworks`, `sglang`, `vllm`, `ollama` |
+| `DEEPSEEK_PROVIDER` | `deepseek` (default), `nvidia-nim`, `openai`, `atlascloud`, `openrouter`, `novita`, `fireworks`, `sglang`, `vllm`, `ollama` |
 | `DEEPSEEK_PROFILE` | Config profile name |
 | `DEEPSEEK_MEMORY` | Set to `on` to enable user memory |
 | `DEEPSEEK_ALLOW_INSECURE_HTTP=1` | Allow non-local `http://` API base URLs on trusted networks |
-| `NVIDIA_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY` / `NOVITA_API_KEY` / `FIREWORKS_API_KEY` / `SGLANG_API_KEY` / `VLLM_API_KEY` / `OLLAMA_API_KEY` | Provider auth |
+| `NVIDIA_API_KEY` / `OPENAI_API_KEY` / `ATLASCLOUD_API_KEY` / `OPENROUTER_API_KEY` / `NOVITA_API_KEY` / `FIREWORKS_API_KEY` / `SGLANG_API_KEY` / `VLLM_API_KEY` / `OLLAMA_API_KEY` | Provider auth |
 | `OPENAI_BASE_URL` / `OPENAI_MODEL` | Generic OpenAI-compatible endpoint and model ID |
+| `ATLASCLOUD_BASE_URL` / `ATLASCLOUD_MODEL` | AtlasCloud endpoint and model override |
+| `OPENROUTER_BASE_URL` | OpenRouter endpoint override |
+| `NOVITA_BASE_URL` | Novita endpoint override |
+| `FIREWORKS_BASE_URL` | Fireworks endpoint override |
 | `SGLANG_BASE_URL` | Self-hosted SGLang endpoint |
+| `SGLANG_MODEL` | Self-hosted SGLang model ID |
 | `VLLM_BASE_URL` | Self-hosted vLLM endpoint |
+| `VLLM_MODEL` | Self-hosted vLLM model ID |
 | `OLLAMA_BASE_URL` | Self-hosted Ollama endpoint |
 | `OLLAMA_MODEL` | Self-hosted Ollama model tag |
 | `NO_ANIMATIONS=1` | Force accessibility mode at startup |
@@ -397,7 +441,7 @@ Set `locale` in `settings.toml`, use `/config locale zh-Hans`, or rely on `LC_AL
 | `deepseek-v4-pro` | 1M | $0.003625 / 1M* | $0.435 / 1M* | $0.87 / 1M* |
 | `deepseek-v4-flash` | 1M | $0.0028 / 1M | $0.14 / 1M | $0.28 / 1M |
 
-DeepSeek Platform defaults to `https://api.deepseek.com/beta` in v0.8.16 so beta-gated API features can be tested without extra setup. Set `base_url = "https://api.deepseek.com"` to opt out.
+DeepSeek Platform defaults to `https://api.deepseek.com/beta` so beta-gated API features can be tested without extra setup. Set `base_url = "https://api.deepseek.com"` to opt out.
 
 Legacy aliases `deepseek-chat` / `deepseek-reasoner` map to `deepseek-v4-flash` and retire after July 24, 2026. NVIDIA NIM variants use your NVIDIA account terms.
 
@@ -450,6 +494,10 @@ without recreating skills the user deliberately deleted.
 | [MCP.md](docs/MCP.md) | Model Context Protocol integration |
 | [RUNTIME_API.md](docs/RUNTIME_API.md) | HTTP/SSE API server |
 | [INSTALL.md](docs/INSTALL.md) | Platform-specific install guide |
+| [DOCKER.md](docs/DOCKER.md) | GHCR image, volumes, and Docker usage |
+| [CNB_MIRROR.md](docs/CNB_MIRROR.md) | CNB mirror and China-friendly install notes |
+| [TENCENT_CLOUD_REMOTE_FIRST.md](docs/TENCENT_CLOUD_REMOTE_FIRST.md) | Tencent/CNB/Lighthouse/Feishu remote-first path |
+| [TENCENT_LIGHTHOUSE_HK.md](docs/TENCENT_LIGHTHOUSE_HK.md) | Lighthouse Hong Kong server setup |
 | [MEMORY.md](docs/MEMORY.md) | User memory feature guide |
 | [SUBAGENTS.md](docs/SUBAGENTS.md) | Sub-agent role taxonomy and lifecycle |
 | [KEYBINDINGS.md](docs/KEYBINDINGS.md) | Full shortcut catalog |
@@ -475,7 +523,7 @@ This project ships with help from a growing community of contributors:
 - **[loongmiaow-pixel](https://github.com/loongmiaow-pixel)** — Windows + China install documentation (#578)
 - **[20bytes](https://github.com/20bytes)** — User memory docs and help polish (#569)
 - **[staryxchen](https://github.com/staryxchen)** — glibc compatibility preflight (#556)
-- **[Vishnu1837](https://github.com/Vishnu1837)** — glibc compatibility improvements (#565)
+- **[Vishnu1837](https://github.com/Vishnu1837)** — glibc compatibility improvements and terminal restoration on SIGINT/SIGTERM (#565, #1586)
 - **[shentoumengxin](https://github.com/shentoumengxin)** — Shell `cwd` boundary validation (#524)
 - **[toi500](https://github.com/toi500)** — Windows paste fix report
 - **[xsstomy](https://github.com/xsstomy)** — Terminal startup repaint report
@@ -486,8 +534,8 @@ This project ships with help from a growing community of contributors:
 - **[wangfeng](mailto:wangfengcsu@qq.com)** — Pricing/discount info update (#692)
 - **[zichen0116](https://github.com/zichen0116)** — CODE_OF_CONDUCT.md (#686)
 - **[dfwqdyl-ui](https://github.com/dfwqdyl-ui)** — model ID case-sensitivity compatibility report (#729)
-- **[Oliver-ZPLiu](https://github.com/Oliver-ZPLiu)** — stale `working...` state bug report and Windows clipboard fallback (#738, #850)
-- **[reidliu41](https://github.com/reidliu41)** — resume hint, workspace trust persistence, Ollama provider support, and thinking-block stream finalization (#863, #870, #921, #1078)
+- **[Oliver-ZPLiu](https://github.com/Oliver-ZPLiu)** — stale `working...` state bug report, Windows clipboard fallback, MCP Streamable HTTP session fixes, and Homebrew tap automation (#738, #850, #1643, #1631)
+- **[reidliu41](https://github.com/reidliu41)** — resume hint, workspace trust persistence, Ollama provider support, thinking-block stream finalization, CI cache hardening, streaming wrap, and DeepSeek model completions (#863, #870, #921, #1078, #1603, #1628, #1601)
 - **[xieshutao](https://github.com/xieshutao)** — plain Markdown skill fallback (#869)
 - **[GK012](https://github.com/GK012)** — npm wrapper `--version` fallback (#885)
 - **[y0sif](https://github.com/y0sif)** — parent turn-loop wakeup after direct child sub-agent completion (#901)
@@ -504,7 +552,7 @@ This project ships with help from a growing community of contributors:
 - **Hafeez Pizofreude** — SSRF protection in `fetch_url` and Star History chart
 - **Unic (YuniqueUnic)** — Schema-driven config UI (TUI + web)
 - **Jason** — SSRF security hardening
-- **[axobase001](https://github.com/axobase001)** — snapshot orphan cleanup, npm install guards, session telemetry fixes, model-scope cache clear, symlinked skill support, and npm mirror-escape-hatch guidance (#975, #1032, #1047, #1049, #1052, #1019, #1051, #1056)
+- **[axobase001](https://github.com/axobase001)** — snapshot orphan cleanup, npm install guards, session telemetry fixes, model-scope cache clear, symlinked skill support, npm mirror-escape-hatch guidance, and proxy preservation for child tasks (#975, #1032, #1047, #1049, #1052, #1019, #1051, #1056, #1608)
 - **[MengZ-super](https://github.com/MengZ-super)** — `/theme` command foundation and SSE gzip/brotli decompression (#1057, #1061)
 - **[DI-HUO-MING-YI](https://github.com/DI-HUO-MING-YI)** — Plan-mode read-only sandbox safety fix (#1077)
 - **[bevis-wong](https://github.com/bevis-wong)** — precise paste-Enter auto-submit reproducer (#1073)
@@ -514,6 +562,11 @@ This project ships with help from a growing community of contributors:
 - **[Jefsky](https://github.com/Jefsky)** — DeepSeek endpoint correction report (#1079, #1084)
 - **[wlon](https://github.com/wlon)** — NVIDIA NIM provider API-key preference diagnosis (#1081)
 - **[Horace Liu](https://github.com/liuhq)** — Nix package support and install documentation (#1173)
+- **[jieshu666](https://github.com/jieshu666)** — terminal repaint flicker reduction (#1563)
+- **[gordonlu](https://github.com/gordonlu)** — Windows Enter / CSI-u input fix (#1612)
+- **[mdrkrg](https://github.com/mdrkrg)** — first-run onboarding crash fix when the API key is missing (#1598)
+- **[Aitensa](https://github.com/Aitensa)** — CJK wrapping propagation for diff and pager output (#1622)
+- **[qiyan233](https://github.com/qiyan233)** — legacy DeepSeek CN provider alias compatibility (#1645)
 
 ---
 

@@ -22,8 +22,9 @@ The REPL exposes:
 - `chunk(max_chars=20000, overlap=0)` - full-coverage chunks with index/start/end/text fields.
 - `chunk_coverage(chunks)` - coverage summary for chunks produced by `chunk`.
 - `sub_query(prompt, slice=None)` - one child LLM call, optionally scoped to one bounded slice.
-- `sub_query_batch(prompt, slices)` - apply one prompt to many bounded slices concurrently.
-- `sub_query_map(prompts, slices=None)` - run N distinct prompts, optionally paired with N bounded slices.
+- `sub_query_batch(prompt, slices, dependency_mode="independent", safety_note="...")` - apply one prompt to many independent bounded slices concurrently.
+- `sub_query_map(prompts, slices=None, dependency_mode="independent", safety_note="...")` - run N distinct independent prompts, optionally paired with N bounded slices.
+- `sub_query_sequence(prompt, slices, carry_prompt=None)` - process dependent slices sequentially, feeding each child result into the next step.
 - `sub_rlm(prompt, source=None)` - recursive sub-RLM for a sub-task that needs its own decomposition. Pass a bounded source, not the whole body.
 - `SHOW_VARS()` - list user variables and their types.
 - `repl_set(name, value)` / `repl_get(name)` - explicit cross-round storage.
@@ -60,10 +61,14 @@ partials = sub_query_batch(
     "Extract the facts needed for the user's question from this slice. "
     "Return only grounded facts and cite the slice index/range.",
     chunks,
+    dependency_mode="independent",
+    safety_note="each chunk is read-only evidence extraction; no step consumes another step's output",
 )
 print({"coverage": coverage, "partials": len(partials)})
 ```
 Use deterministic Python first for counts, regex, parsing, sorting, dedupe, joins, and coverage. You do NO math by asking a child model to count; if Python can enumerate, parse, or simulate it exactly, do that in Python.
+
+Parallel safety gate: `sub_query_batch`, `sub_query_map`, and low-level `*_batched` helpers are only for independent map-reduce work. Do not batch tasks where A's output feeds B, multi-file refactors with shared global state, database or schema migrations with ordered steps, rollback-sensitive edits, or any task that requires a sequential invariant. For dependent work, use `sub_query_sequence(...)` or an explicit Python `for` loop with `sub_query(...)`, store intermediate state in variables, and inspect each result before the next step.
 
 4. Recurse
 ```repl
@@ -92,6 +97,7 @@ Rules
 
 - Use the bounded helpers (`context_meta`, `peek`, `search`, `chunk`) to inspect input.
 - Use `sub_query`, `sub_query_batch`, `sub_query_map`, or `sub_rlm` before finalizing unless the task is purely deterministic and fully computed in Python.
+- Batch helpers require an explicit `dependency_mode="independent"` assertion. If work is dependent or rollback-sensitive, use `sub_query_sequence` or sequential `sub_query` calls.
 - End only by calling `finalize(value, confidence=...)`.
 - For exact counts, totals, parsing, and structured aggregates, compute with Python. Do not ask a child LLM to count.
 - For whole-input map-reduce, include coverage in the final answer: chunks processed, total chunks, and whether every char range was included. If you only processed a subset, say that explicitly.
@@ -138,6 +144,7 @@ mod tests {
             "sub_query",
             "sub_query_batch",
             "sub_query_map",
+            "sub_query_sequence",
             "sub_rlm",
             "finalize",
             "evaluate_progress",
@@ -172,6 +179,15 @@ mod tests {
         assert!(s.contains("compute with Python"));
         assert!(s.contains("include coverage"));
         assert!(s.contains("chunks processed"));
+    }
+
+    #[test]
+    fn rlm_prompt_requires_batch_dependency_safety() {
+        let s = body();
+        assert!(s.contains("dependency_mode=\"independent\""));
+        assert!(s.contains("sub_query_sequence"));
+        assert!(s.contains("database or schema migrations"));
+        assert!(s.contains("rollback-sensitive"));
     }
 
     #[test]

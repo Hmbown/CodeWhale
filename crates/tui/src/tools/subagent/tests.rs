@@ -1077,6 +1077,11 @@ fn subagent_done_sentinel_format_is_well_formed() {
     assert_eq!(parsed["agent_id"], "agent_xyz");
     assert_eq!(parsed["status"], "completed");
     assert_eq!(parsed["agent_type"], "general");
+    assert_eq!(parsed["summary_location"], "previous_line");
+    assert_eq!(parsed["details"], "agent_eval");
+    assert!(parsed.get("summary").is_none());
+    assert!(parsed.get("duration_ms").is_none());
+    assert!(parsed.get("steps").is_none());
 }
 
 #[test]
@@ -1088,7 +1093,9 @@ fn subagent_failed_sentinel_format_is_well_formed() {
     let parsed: serde_json::Value = serde_json::from_str(inner).expect("inner JSON parses");
     assert_eq!(parsed["agent_id"], "agent_zzz");
     assert_eq!(parsed["status"], "failed");
-    assert_eq!(parsed["error"], "boom");
+    assert_eq!(parsed["error_location"], "previous_line");
+    assert_eq!(parsed["details"], "agent_eval");
+    assert!(parsed.get("error").is_none());
 }
 
 #[test]
@@ -1733,5 +1740,9 @@ fn subagent_completion_payload_carries_existing_sentinel_format() {
     assert!(
         second.contains("\"agent_id\":\"agent_test\""),
         "sentinel JSON includes agent_id"
+    );
+    assert!(
+        !second.contains("Found three errors."),
+        "sentinel should not duplicate the human summary line"
     );
 }

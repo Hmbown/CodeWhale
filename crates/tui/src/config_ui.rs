@@ -232,6 +232,7 @@ pub enum SidebarFocusValue {
     Tasks,
     Agents,
     Context,
+    Hidden,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -271,6 +272,7 @@ pub enum StatusItemValue {
     Coherence,
     Agents,
     ReasoningReplay,
+    PrefixStability,
     Cache,
     ContextPercent,
     GitBranch,
@@ -835,6 +837,7 @@ impl SidebarFocusValue {
             Self::Tasks => "tasks",
             Self::Agents => "agents",
             Self::Context => "context",
+            Self::Hidden => "hidden",
         }
     }
 }
@@ -972,6 +975,7 @@ impl From<&str> for SidebarFocusValue {
             SidebarFocus::Tasks => Self::Tasks,
             SidebarFocus::Agents => Self::Agents,
             SidebarFocus::Context => Self::Context,
+            SidebarFocus::Hidden => Self::Hidden,
         }
     }
 }
@@ -986,6 +990,7 @@ impl From<StatusItem> for StatusItemValue {
             StatusItem::Coherence => Self::Coherence,
             StatusItem::Agents => Self::Agents,
             StatusItem::ReasoningReplay => Self::ReasoningReplay,
+            StatusItem::PrefixStability => Self::PrefixStability,
             StatusItem::Cache => Self::Cache,
             StatusItem::ContextPercent => Self::ContextPercent,
             StatusItem::GitBranch => Self::GitBranch,
@@ -1005,6 +1010,7 @@ impl From<StatusItemValue> for StatusItem {
             StatusItemValue::Coherence => Self::Coherence,
             StatusItemValue::Agents => Self::Agents,
             StatusItemValue::ReasoningReplay => Self::ReasoningReplay,
+            StatusItemValue::PrefixStability => Self::PrefixStability,
             StatusItemValue::Cache => Self::Cache,
             StatusItemValue::ContextPercent => Self::ContextPercent,
             StatusItemValue::GitBranch => Self::GitBranch,

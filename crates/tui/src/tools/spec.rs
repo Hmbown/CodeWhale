@@ -157,10 +157,10 @@ pub struct ToolContext {
     /// routing (e.g. in sub-agents and test contexts to avoid recursion).
     pub large_output_router: Option<crate::tools::large_output_router::LargeOutputRouter>,
 
-    /// Which search backend `web_search` should use. Default: DuckDuckGo with
-    /// Bing fallback. Set via `[search] provider` in config.toml.
+    /// Which search backend `web_search` should use. Default: Bing. Set via
+    /// `[search] provider` in config.toml.
     pub search_provider: crate::config::SearchProvider,
-    /// API key for Tavily or Bocha. `None` for DuckDuckGo.
+    /// API key for Tavily or Bocha. `None` for Bing or DuckDuckGo.
     pub search_api_key: Option<String>,
 
     /// Per-session workshop variable store (#548). Holds the raw content of

@@ -74,7 +74,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Non-root user with explicit UID/GID for filesystem ownership clarity.
 RUN groupadd --gid 1000 deepseek \
-    && useradd --create-home --shell /bin/bash --uid 1000 --gid 1000 deepseek
+    && useradd --create-home --shell /bin/bash --uid 1000 --gid 1000 deepseek \
+    && install -d -m 0700 -o deepseek -g deepseek /home/deepseek/.deepseek
 USER deepseek
 WORKDIR /home/deepseek
 
