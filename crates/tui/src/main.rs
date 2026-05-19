@@ -37,6 +37,7 @@ mod execpolicy;
 mod features;
 mod handoff;
 mod hooks;
+mod ide_bridge;
 mod llm_client;
 mod localization;
 mod logging;
@@ -4306,6 +4307,10 @@ async fn run_interactive(
     if let Err(e) = crate::skills::install_system_skills(&skills_dir) {
         logging::warn(format!("Failed to install system skills: {e}"));
     }
+
+    // Best-effort connection to an IDE bridge published by an IDE host.
+    // No-op when no bridge is available; never blocks startup on failure.
+    crate::ide_bridge::IdeBridgeHandle::init().await;
 
     // Prune stale workspace snapshots from prior sessions (7-day default).
     // Non-fatal: a flaky disk, missing `git`, or read-only home should

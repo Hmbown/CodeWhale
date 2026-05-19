@@ -415,6 +415,7 @@ pub(crate) fn render_footer_from(
             S::Cache => cache_chip.clone(),
             S::ContextPercent => footer_context_percent_spans(app),
             S::GitBranch => footer_git_branch_spans(app),
+            S::Ide => crate::tui::widgets::footer_ide_chip(),
             S::LastToolElapsed | S::RateLimit => Vec::new(),
             _ => continue,
         };

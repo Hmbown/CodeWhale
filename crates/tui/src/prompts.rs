@@ -721,6 +721,12 @@ pub fn system_prompt_for_mode_with_context_skills_session_and_approval(
         );
     }
 
+    // 6d. Active editor context from the IDE bridge, if connected.
+    // Volatile per-turn: changes whenever the user moves the cursor.
+    if let Some(editor_block) = crate::ide_bridge::editor_context_block() {
+        full_prompt = format!("{full_prompt}\n\n{editor_block}");
+    }
+
     // 7. Previous-session relay (file-backed, rewritten by `/compact`).
     if let Some(handoff_block) = load_handoff_block(workspace) {
         full_prompt = format!("{full_prompt}\n\n{handoff_block}");

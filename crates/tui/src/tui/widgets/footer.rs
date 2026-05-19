@@ -218,6 +218,44 @@ pub fn footer_mcp_chip(connected: Option<usize>, configured: usize) -> Vec<Span<
     vec![Span::styled(label, Style::default().fg(color))]
 }
 
+/// "IDE: <basename>:<line>" chip — surfaces the active editor file and
+/// selection from a connected IDE bridge. Returns an empty span list when
+/// no bridge is connected or no selection has arrived yet, so the chip
+/// disappears cleanly when there's nothing to show.
+#[must_use]
+pub fn footer_ide_chip() -> Vec<Span<'static>> {
+    let Some(handle) = crate::ide_bridge::IdeBridgeHandle::instance() else {
+        return Vec::new();
+    };
+    let label = handle.with_latest_selection(|selection| {
+        let path = selection.file_path.as_deref()?;
+        let basename = std::path::Path::new(path)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(path);
+
+        Some(match selection.selection.as_ref() {
+            Some(range) if range.start.line == range.end.line => {
+                format!("IDE: {basename}:{}", range.start.line + 1)
+            }
+            Some(range) => format!(
+                "IDE: {basename}:{}-{}",
+                range.start.line + 1,
+                range.end.line + 1,
+            ),
+            None => format!("IDE: {basename}"),
+        })
+    });
+    let Some(Some(label)) = label else {
+        return Vec::new();
+    };
+
+    vec![Span::styled(
+        label,
+        Style::default().fg(palette::TEXT_MUTED),
+    )]
+}
+
 /// A status toast routed to the footer's left segment for a short time.
 #[derive(Debug, Clone)]
 pub struct FooterToast {

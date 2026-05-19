@@ -1969,6 +1969,18 @@ async fn run_event_loop(
             !app.is_loading && !has_running_agents && !app.is_compacting;
         workspace_context::refresh_if_needed(app, now, allow_workspace_context_refresh);
 
+        // Drain any IDE-bridge selection updates pushed by the connected
+        // IDE since the last tick. The bridge writes selections into a
+        // shared cache and bumps an atomic seq; if it advanced, we flip
+        // `needs_redraw` so the footer chip / `<editor_context>` block
+        // catch up on the next frame instead of waiting for an unrelated
+        // event to wake the loop.
+        if let Some(handle) = crate::ide_bridge::IdeBridgeHandle::instance()
+            && handle.take_dirty()
+        {
+            app.needs_redraw = true;
+        }
+
         // Draw is gated by the frame-rate limiter (120 FPS cap). When a
         // redraw is needed but the limiter says we're inside the cooldown
         // window, leave `needs_redraw = true` and shorten the poll timeout

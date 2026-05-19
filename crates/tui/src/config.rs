@@ -660,6 +660,8 @@ pub enum StatusItem {
     LastToolElapsed,
     /// Remaining rate-limit budget (placeholder until wired).
     RateLimit,
+    /// Active editor file/selection from a connected IDE bridge.
+    Ide,
 }
 
 impl StatusItem {
@@ -678,6 +680,7 @@ impl StatusItem {
             StatusItem::Agents,
             StatusItem::ReasoningReplay,
             StatusItem::Cache,
+            StatusItem::Ide,
         ]
     }
 
@@ -698,6 +701,7 @@ impl StatusItem {
             StatusItem::GitBranch => "git_branch",
             StatusItem::LastToolElapsed => "last_tool_elapsed",
             StatusItem::RateLimit => "rate_limit",
+            StatusItem::Ide => "ide",
         }
     }
 
@@ -718,6 +722,7 @@ impl StatusItem {
             StatusItem::GitBranch => "Git branch",
             StatusItem::LastToolElapsed => "Last tool elapsed",
             StatusItem::RateLimit => "Rate-limit remaining",
+            StatusItem::Ide => "IDE editor context",
         }
     }
 
@@ -739,6 +744,7 @@ impl StatusItem {
             StatusItem::GitBranch => "current workspace branch",
             StatusItem::LastToolElapsed => "ms of the most recent tool call (placeholder)",
             StatusItem::RateLimit => "remaining requests in the budget (placeholder)",
+            StatusItem::Ide => "active file and selection from a connected IDE",
         }
     }
 
@@ -759,6 +765,7 @@ impl StatusItem {
             StatusItem::GitBranch,
             StatusItem::LastToolElapsed,
             StatusItem::RateLimit,
+            StatusItem::Ide,
         ]
     }
 

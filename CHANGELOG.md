@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **IDE bridge integration.** New `deepseek-ide-bridge` workspace crate that
+  speaks MCP-over-WebSocket to an IDE host (VS Code via the Claude Code
+  extension, Cursor, Zed, etc.) discovered through the `~/.claude/ide/<port>.lock`
+  files. The TUI auto-connects in the background, surfaces the active editor
+  selection in the footer, and injects an `<editor_context>` block (file path +
+  selection range + selected text) into the system prompt so the model can act
+  on what the user is looking at. Discovery is **scoped to the current working
+  directory** — only a lockfile whose `workspaceFolders` contains the cwd is
+  picked, so an unrelated VS Code window can never leak its selection into the
+  current project's prompts. Set `CLAUDE_CODE_SSE_PORT=<port>` to force-attach
+  to a specific bridge.
+
 ## [0.8.39] - 2026-05-17
 
 ### Fixed

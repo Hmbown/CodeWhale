@@ -7,6 +7,7 @@ members = [
     "crates/core",
     "crates/execpolicy",
     "crates/hooks",
+    "crates/ide-bridge",
     "crates/mcp",
     "crates/protocol",
     "crates/secrets",

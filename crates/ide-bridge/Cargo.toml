@@ -1,0 +1,27 @@
+[package]
+name = "deepseek-ide-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "MCP-over-WebSocket IDE bridge client for DeepSeek workspace architecture"
+
+[dependencies]
+anyhow.workspace = true
+dirs.workspace = true
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true }
+# We only ever talk to a loopback bridge published by the IDE host process,
+# so we deliberately exclude the TLS feature flags. Pinned to 0.24 because
+# the 0.24 line is what the rest of the workspace's transitive graph
+# already exercises through `axum`/`reqwest`-adjacent crates and it has
+# the most stable `http` re-export surface for our auth-header needs.
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect"] }
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true }
