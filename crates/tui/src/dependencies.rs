@@ -417,6 +417,31 @@ impl ExternalTool for Node {
     }
 }
 
+/// .NET SDK — used by the `dotnet_execution` tool.
+/// Starting with .NET 6, `dotnet run file.cs` can run a single C# file
+/// without a project. The binary is `dotnet` on all platforms.
+pub struct DotNet;
+
+impl ExternalTool for DotNet {
+    fn candidates() -> &'static [&'static str] {
+        &["dotnet"]
+    }
+
+    fn resolve() -> Option<String> {
+        static CACHE: OnceLock<Option<String>> = OnceLock::new();
+        CACHE
+            .get_or_init(|| {
+                if probe_executable("dotnet") {
+                    tracing::info!(target: "tool_dependencies", "Resolved dotnet binary");
+                    Some("dotnet".to_string())
+                } else {
+                    None
+                }
+            })
+            .clone()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Legacy interpreter helpers (kept for existing callers until migrated)
 // ---------------------------------------------------------------------------

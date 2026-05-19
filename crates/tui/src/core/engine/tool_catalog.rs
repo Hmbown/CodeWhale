@@ -21,6 +21,7 @@ pub(super) const MULTI_TOOL_PARALLEL_NAME: &str = "multi_tool_use.parallel";
 pub(super) const REQUEST_USER_INPUT_NAME: &str = "request_user_input";
 pub(super) const CODE_EXECUTION_TOOL_NAME: &str = "code_execution";
 const CODE_EXECUTION_TOOL_TYPE: &str = "code_execution_20250825";
+pub(super) use crate::tools::dotnet_execution::DOTNET_EXECUTION_TOOL_NAME;
 pub(super) use crate::tools::js_execution::JS_EXECUTION_TOOL_NAME;
 const TOOL_SEARCH_REGEX_NAME: &str = "tool_search_tool_regex";
 const TOOL_SEARCH_REGEX_TYPE: &str = "tool_search_tool_regex_20251119";
@@ -167,6 +168,14 @@ pub(super) fn ensure_advanced_tooling(catalog: &mut Vec<Tool>, mode: AppMode) {
         && crate::dependencies::resolve_node().is_some()
     {
         catalog.push(crate::tools::js_execution::js_execution_tool_definition());
+    }
+
+    // dotnet_execution: gate on .NET SDK being present locally.
+    if mode != AppMode::Plan
+        && !catalog.iter().any(|t| t.name == DOTNET_EXECUTION_TOOL_NAME)
+        && crate::dependencies::DotNet::available()
+    {
+        catalog.push(crate::tools::dotnet_execution::dotnet_execution_tool_definition());
     }
 
     if !catalog.iter().any(|t| t.name == TOOL_SEARCH_REGEX_NAME) {
