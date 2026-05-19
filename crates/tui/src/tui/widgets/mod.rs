@@ -2125,7 +2125,51 @@ pub(crate) fn slash_completion_hints(
         }
     }
 
-    entries.sort_by(|a, b| a.name.cmp(&b.name));
+    // Prioritize entries where the user's prefix is an exact alias match
+    // (e.g. typing `/q` should rank `/exit` — which has alias `q` — above
+    // `/clear` which only matches via the longer alias `qingping`).
+    // Priority: 0 = exact alias match, 1 = canonical name prefix,
+    //           2 = alias prefix match, 3 = none of the above.
+    // Uses eq_ignore_ascii_case and &str slicing to avoid allocations
+    // inside the O(N log N) comparator.
+    entries.sort_by(|a, b| {
+        let pri = |entry: &SlashMenuEntry| -> u8 {
+            let key = entry
+                .name
+                .trim_start_matches('/')
+                .split_whitespace()
+                .next()
+                .unwrap_or("");
+            if let Some(info) = commands::get_command_info(key) {
+                if info
+                    .aliases
+                    .iter()
+                    .any(|a| a.eq_ignore_ascii_case(&prefix_lower))
+                {
+                    return 0;
+                }
+                if info
+                    .name
+                    .get(..prefix_lower.len())
+                    .is_some_and(|p| p.eq_ignore_ascii_case(&prefix_lower))
+                {
+                    return 1;
+                }
+                if info
+                    .aliases
+                    .iter()
+                    .any(|a| {
+                        a.get(..prefix_lower.len())
+                            .is_some_and(|p| p.eq_ignore_ascii_case(&prefix_lower))
+                    })
+                {
+                    return 2;
+                }
+            }
+            3
+        };
+        pri(a).cmp(&pri(b)).then_with(|| a.name.cmp(&b.name))
+    });
     entries.dedup_by(|a, b| a.name == b.name);
     entries.into_iter().take(limit).collect()
 }
