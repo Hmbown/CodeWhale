@@ -15,7 +15,13 @@
 //!    crossterm raw-mode so the TUI input pipeline is not broken after a
 //!    child process exits (issue #1690).
 
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::Path;
 use std::process::Command;
+use std::sync::Mutex;
+
+static LOG_MUTEX: Mutex<()> = Mutex::new(());
 
 // ---------------------------------------------------------------------------
 // Shell kind
@@ -115,8 +121,50 @@ impl ShellDispatcher {
     /// 2. `/bin/sh` fallback.
     pub fn detect() -> Self {
         let kind = Self::detect_shell();
+        Self::log_startup(&kind);
         ShellDispatcher { kind }
     }
+
+    /// Log a shell execution line when `SHELL_DISPATCHER_LOG` is set.
+    pub fn log_exec(command: &str) {
+        if let Ok(path) = std::env::var("SHELL_DISPATCHER_LOG") {
+            let _ = Self::append_log_static(&path, command);
+        }
+    }
+
+    fn log_startup(kind: &ShellKind) {
+        let _lock = LOG_MUTEX.lock();
+        if let Ok(path) = std::env::var("SHELL_DISPATCHER_LOG") {
+            let init_line = format!(
+                "--- ShellDispatcher log started pid={} ---\n",
+                std::process::id()
+            );
+            let _ = Self::append_log(&path, &init_line);
+            let detect_line = format!("[{}] detect: {kind:?}\n", now_iso());
+            let _ = Self::append_log(&path, &detect_line);
+        }
+    }
+
+    fn append_log(path: &str, line: &str) -> std::io::Result<()> {
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(Path::new(path))?;
+        file.write_all(line.as_bytes())?;
+        file.flush()
+    }
+
+    fn append_log_static(path: &str, command: &str) -> std::io::Result<()> {
+        // Resolve kind outside the lock — `global_dispatcher()` may trigger
+        // `detect()` which calls `log_startup()` which also acquires the mutex.
+        let kind = global_dispatcher().kind();
+        let _lock = LOG_MUTEX.lock();
+        let line = format!(
+            "[{}] exec via {kind:?}: {command}\n", now_iso()
+        );
+        Self::append_log(path, &line)
+    }
+
 
     /// The detected shell kind.
     pub fn kind(&self) -> &ShellKind {
@@ -180,6 +228,18 @@ impl ShellDispatcher {
     ) -> Result<String, anyhow::Error> {
         use anyhow::Context;
 
+        // Log the execution
+        {
+            let _lock = LOG_MUTEX.lock();
+            if let Ok(path) = std::env::var("SHELL_DISPATCHER_LOG") {
+                let kind = self.kind();
+                let line = format!(
+                    "[{}] exec via {kind:?}: {shell_command}\n", now_iso()
+                );
+                let _ = Self::append_log(&path, &line);
+            }
+        }
+
         // Disable raw mode; guard restores it even on `?` early return.
         let _ = crossterm::terminal::disable_raw_mode();
         struct FgRawModeGuard;
@@ -233,10 +293,10 @@ impl ShellDispatcher {
 
         #[cfg(windows)]
         {
-            if Self::binary_on_path("pwsh.exe") {
+            if Self::find_exe("pwsh.exe") {
                 return ShellKind::Pwsh;
             }
-            if Self::binary_on_path("powershell.exe") {
+            if Self::find_exe("powershell.exe") {
                 return ShellKind::WindowsPowerShell;
             }
             return ShellKind::Cmd;
@@ -246,6 +306,19 @@ impl ShellDispatcher {
         {
             ShellKind::Sh
         }
+    }
+
+    /// Check PATH first, then fall back to well-known install directories.
+    fn find_exe(name: &str) -> bool {
+        if Self::binary_on_path(name) {
+            return true;
+        }
+        // Well-known install locations (order by preference).
+        let known_dirs: &[&str] = &[
+            r"C:\Program Files\PowerShell\7",
+            r"C:\Windows\System32\WindowsPowerShell\v1.0",
+        ];
+        known_dirs.iter().any(|dir| std::path::Path::new(dir).join(name).is_file())
     }
 
     fn binary_on_path(name: &str) -> bool {
@@ -258,6 +331,12 @@ impl ShellDispatcher {
             })
             .unwrap_or(false)
     }
+}
+
+// -- Helpers ---------------------------------------------------------------
+
+fn now_iso() -> String {
+    chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3f").to_string()
 }
 
 /// Global dispatcher instance, detected once at startup.
@@ -386,6 +465,29 @@ mod tests {
         let cmd = dispatcher.build_direct("echo", &[]);
         let args: Vec<&str> = cmd.get_args().map(|a| a.to_str().unwrap()).collect();
         assert!(args.is_empty());
+    }
+
+    #[test]
+    fn find_exe_finds_cmd_on_path() {
+        // cmd.exe is always on PATH on Windows.
+        assert!(ShellDispatcher::find_exe("cmd.exe"));
+    }
+
+    #[test]
+    fn find_exe_rejects_nonexistent_binary() {
+        assert!(!ShellDispatcher::find_exe("nonexistent_xyz_12345.exe"));
+    }
+
+    #[test]
+    fn find_exe_falls_back_to_known_dirs() {
+        // Verify the known-dirs fallback path actually exists on this system.
+        let ps_path = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe";
+        if std::path::Path::new(ps_path).is_file() {
+            // The fallback directory exists — find_exe should locate it.
+            assert!(ShellDispatcher::find_exe("powershell.exe"));
+        } else {
+            eprintln!("Skipping: {ps_path} not present on this system");
+        }
     }
 
     #[test]
