@@ -73,6 +73,67 @@ MCP tools are exposed as `mcp_<server>_<tool>` and use the same approval flow as
 
 See `MCP.md`.
 
+## Goal Mode (`/goal` auto-continue)
+
+`/goal <objective>` sets a session goal AND enables **auto-continue**: at
+the end of each turn the TUI evaluates whether the model emitted the
+literal token `GOAL_ACHIEVED` on its own line. If not (and none of the
+four safety nets fired), a synthetic continuation user-message is queued
+so the next turn keeps pushing the work forward without you having to
+type "continue".
+
+The **first turn is kickstarted automatically** the moment you run
+`/goal X` — a "Begin executing toward this goal now" prompt is dispatched
+immediately so you don't have to type a placeholder message to start
+the loop. The kickstart is suppressed when `[goal] auto_continue_default
+= false` (you opted into passive tracking only); in that mode use
+`/goal resume` to start the loop on demand.
+
+### Subcommands
+
+| Command                                      | Behaviour |
+| -------------------------------------------- | --------- |
+| `/goal <objective>`                          | Set objective + enable auto-continue + persist to `~/.deepseek/goals.v1.json` |
+| `/goal <objective> \| budget: N`             | Same, plus a token budget that feeds the `BudgetExceeded` safety net |
+| `/goal`                                      | Show current status (objective, elapsed, auto-continue on/off, iterations) |
+| `/goal stop`                                 | Pause auto-continue but keep the objective (`/goal resume` to re-enable) |
+| `/goal resume`                               | Re-enable auto-continue and reset streak counters |
+| `/goal done` / `/goal clear` / `/goal reset` | Clear the goal entirely (also wipes the persisted file) |
+
+### Safety nets
+
+Each safety net stops the chain and prints `⏹ [goal] stopped: <reason>`
+into the transcript:
+
+- **BudgetExceeded** — total conversation tokens met `| budget: N`
+- **Stuck** — 3 consecutive turns with flat pending-todo count **and**
+  token-usage delta under 200 (double condition designed to avoid
+  misfires on slow-but-substantive long tasks)
+- **Idle** — 2 consecutive turns where the model spoke without calling
+  any tool
+- **MaxIterations** — total continuations crossed `max_iterations`
+  (default 50; configurable via `[goal] max_iterations`)
+
+### Cancelling
+
+`Esc` cancels the current request, which marks the turn as Interrupted —
+that itself stops the continuation chain (the `Interrupted` reason).
+`Esc Esc` opens the backtrack overlay as usual; neither flow clears
+the objective.
+
+### Persistence
+
+Active goals are saved to `~/.deepseek/goals.v1.json` so a crash or
+intentional restart resumes the goal. Streak counters are intentionally
+**not** persisted — each fresh session earns its own stuck / idle
+judgement.
+
+### Disabling
+
+Conservative users can flip `[goal] auto_continue_default = false` in
+`config.toml` to revert to v0.8.x behaviour (passive bookkeeping only);
+`/goal resume` then opts a single goal into the loop on demand.
+
 ## Related CLI Flags
 
 Run `deepseek --help` for the canonical list. Common flags:

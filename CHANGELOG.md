@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`/goal` auto-continue (#891).** Setting `/goal <objective>` now keeps
+  the agent advancing turn-by-turn until either the model emits
+  `GOAL_ACHIEVED` on its own line or one of four safety nets fires
+  (token budget, max iterations, "stuck" on pending todos with no
+  token movement, or "idle" without tool calls). The first turn is
+  kickstarted automatically — no need to type a placeholder message
+  after `/goal`. New subcommands `/goal stop` and `/goal resume`
+  toggle auto-continue without clearing the objective. Active goals
+  are persisted to `~/.deepseek/goals.v1.json` so a restart resumes
+  the goal. See `docs/MODES.md → Goal Mode` for the full contract.
+
+### Changed
+
+- **`/goal <text>` is no longer passive bookkeeping.** It defaults to
+  enabling the auto-continue loop. Conservative users can restore the
+  previous behaviour with `[goal] auto_continue_default = false` in
+  `config.toml`; `/goal resume` then opts a single goal into the loop
+  on demand.
+
 ## [0.8.39] - 2026-05-17
 
 ### Fixed

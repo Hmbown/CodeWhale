@@ -438,6 +438,30 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 # include_summary = false
 
 # ─────────────────────────────────────────────────────────────────────────────────
+# /goal Auto-Continue (#891)
+# ─────────────────────────────────────────────────────────────────────────────────
+# Setting `/goal <objective>` enables an auto-continuation loop: after each
+# turn the TUI evaluates whether the model emitted the literal token
+# `GOAL_ACHIEVED` (or whether any of four safety nets fired) and, if not,
+# automatically pushes the next turn forward.
+#
+# Safety nets (always on):
+#   - BudgetExceeded — total conversation tokens met `/goal X | budget: N`
+#   - Stuck          — 3 consecutive turns with flat pending todos AND
+#                       token-usage delta under 200 (double condition)
+#   - Idle           — 2 consecutive turns where the model spoke without
+#                       calling any tool
+#   - MaxIterations  — total continuations crossed `max_iterations`
+#
+# Set `auto_continue_default = false` to revert to v0.8.x behaviour where
+# `/goal X` is passive bookkeeping only; use `/goal resume` to start the
+# loop on demand.
+#
+# [goal]
+# auto_continue_default = true   # /goal <text> auto-enables the loop
+# max_iterations = 50            # Hard ceiling per goal; 0 disables the cap
+
+# ─────────────────────────────────────────────────────────────────────────────────
 # Workspace Snapshots (#137)
 # ─────────────────────────────────────────────────────────────────────────────────
 # Each turn the TUI takes a `pre-turn:<seq>` and `post-turn:<seq>` snapshot of
