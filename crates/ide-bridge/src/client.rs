@@ -160,14 +160,24 @@ impl IdeBridgeClient {
     pub async fn get_current_selection(&self) -> Result<SelectionChange> {
         let result = self.call_tool("getCurrentSelection", json!({})).await?;
         let sel: SelectionChange = decode_tool_json(&result)?;
-        update_selection(&self.inner, Some(sel.clone()));
+        // Same validation as `selection_changed` notifications: only
+        // overwrite the cache when the response actually describes an
+        // active editor selection. An empty response (no filePath / no
+        // range) means the IDE has no active editor — keep the previous
+        // selection so the footer chip and `<editor_context>` block
+        // don't blink when the user toggles focus.
+        if is_usable_selection_push(&sel) {
+            update_selection(&self.inner, Some(sel.clone()));
+        }
         Ok(sel)
     }
 
     pub async fn get_latest_selection(&self) -> Result<SelectionChange> {
         let result = self.call_tool("getLatestSelection", json!({})).await?;
         let sel: SelectionChange = decode_tool_json(&result)?;
-        update_selection(&self.inner, Some(sel.clone()));
+        if is_usable_selection_push(&sel) {
+            update_selection(&self.inner, Some(sel.clone()));
+        }
         Ok(sel)
     }
 
@@ -381,8 +391,41 @@ async fn dispatch_frame(inner: &Inner, text: &str) {
     if let Ok(notif) = serde_json::from_str::<SelectionChangedNotification>(text)
         && notif.method == "selection_changed"
     {
+        // Mirror opencode's `EditorSelectionSchema` validation
+        // (`packages/opencode/src/cli/cmd/tui/context/editor.ts`):
+        // a usable `selection_changed` payload must carry **both** a
+        // non-empty `filePath` **and** a complete `selection: {start, end}`
+        // range. The Claude Code IDE extension fires defective pushes
+        // when focus leaves the editor (e.g. clicking into the
+        // integrated terminal):
+        //   • `{}` / `{filePath: ""}`            — no editor at all
+        //   • `{filePath, selection: null}`      — focus left the editor
+        //   • `{filePath}` (selection omitted)   — same as above
+        // opencode's schema rejects all three, so the cached selection
+        // survives the focus toggle. We do the same here. Without this
+        // guard the previous selection is overwritten with an empty
+        // payload the moment the user moves focus back to the TUI,
+        // wiping the footer "IDE: file:line" chip and the
+        // `<editor_context>` system block.
+        if !is_usable_selection_push(&notif.params) {
+            tracing::debug!(
+                file_path = ?notif.params.file_path,
+                has_range = notif.params.selection.is_some(),
+                "ignoring selection_changed without filePath+selection (focus likely moved off the editor)"
+            );
+            return;
+        }
         update_selection(inner, Some(notif.params));
     }
+}
+
+/// Reject pushes that opencode's schema would reject. Keeps the cached
+/// selection intact when the IDE host emits a "no active editor" signal
+/// (focus moved to terminal panel, sidebar, etc.).
+fn is_usable_selection_push(sel: &SelectionChange) -> bool {
+    let has_file_path = sel.file_path.as_deref().is_some_and(|p| !p.is_empty());
+    let has_range = sel.selection.is_some();
+    has_file_path && has_range
 }
 
 #[derive(serde::Deserialize)]
@@ -649,6 +692,89 @@ mod tests {
         assert!(
             lingering.is_err(),
             "duplicate push must not wake subscribers"
+        );
+    }
+
+    /// Reproduces the regression where focusing away from the IDE editor
+    /// (e.g. clicking into the integrated terminal) wiped the cached
+    /// selection. The Claude Code extension publishes one of several
+    /// "no active editor" shapes in that case; opencode's
+    /// `EditorSelectionSchema` rejects them all because both `filePath`
+    /// AND `selection: {start, end}` are required. We mirror that here.
+    #[tokio::test]
+    async fn empty_selection_changed_does_not_clobber_cache() {
+        let client = test_client(Duration::from_secs(1));
+        let mut rx = client.subscribe_selection();
+        rx.borrow_and_update();
+
+        // Seed a real selection.
+        let real = json!({
+            "jsonrpc": "2.0",
+            "method": "selection_changed",
+            "params": {
+                "filePath": "/tmp/a.rs",
+                "text": "foo",
+                "selection": {
+                    "start": { "line": 1, "character": 2 },
+                    "end":   { "line": 1, "character": 7 }
+                }
+            }
+        })
+        .to_string();
+        super::dispatch_frame(&client.inner, &real).await;
+        rx.changed().await.unwrap();
+
+        // Now simulate every focus-away push shape the IDE host can emit.
+        // None of them must be allowed to overwrite the cached selection.
+        for empty in [
+            // Completely empty params.
+            json!({ "jsonrpc": "2.0", "method": "selection_changed", "params": {} }).to_string(),
+            // Empty filePath.
+            json!({
+                "jsonrpc": "2.0",
+                "method": "selection_changed",
+                "params": { "filePath": "", "text": "" }
+            })
+            .to_string(),
+            // Missing filePath.
+            json!({
+                "jsonrpc": "2.0",
+                "method": "selection_changed",
+                "params": { "text": "leftover" }
+            })
+            .to_string(),
+            // filePath present, but no selection range — the most common
+            // shape when focus moves to a non-editor panel.
+            json!({
+                "jsonrpc": "2.0",
+                "method": "selection_changed",
+                "params": { "filePath": "/tmp/a.rs", "text": "" }
+            })
+            .to_string(),
+            // filePath + null selection.
+            json!({
+                "jsonrpc": "2.0",
+                "method": "selection_changed",
+                "params": { "filePath": "/tmp/a.rs", "text": "", "selection": null }
+            })
+            .to_string(),
+        ] {
+            super::dispatch_frame(&client.inner, &empty).await;
+        }
+
+        // Cache must still hold the previous real selection, and the
+        // subscriber must not have been woken by any of the empty pushes.
+        let cached = client.latest_selection().unwrap();
+        assert_eq!(cached.file_path.as_deref(), Some("/tmp/a.rs"));
+        assert_eq!(cached.text, "foo");
+        let range = cached.selection.expect("range survives focus toggle");
+        assert_eq!(range.start.line, 1);
+        assert_eq!(range.end.character, 7);
+
+        let lingering = tokio::time::timeout(Duration::from_millis(50), rx.changed()).await;
+        assert!(
+            lingering.is_err(),
+            "empty selection_changed must not wake subscribers"
         );
     }
 
