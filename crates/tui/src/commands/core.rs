@@ -57,6 +57,11 @@ pub fn clear(app: &mut App) -> CommandResult {
     app.session.total_conversation_tokens = 0;
     app.session.session_cost = 0.0;
     app.session.session_cost_cny = 0.0;
+    app.session.subagent_cost = 0.0;
+    app.session.subagent_cost_cny = 0.0;
+    app.session.subagent_cost_event_seqs.clear();
+    app.session.displayed_cost_high_water = 0.0;
+    app.session.displayed_cost_high_water_cny = 0.0;
     let todos_cleared = app.clear_todos();
     app.tool_log.clear();
     app.tool_cells.clear();
@@ -523,6 +528,11 @@ mod tests {
         app.session.total_conversation_tokens = 123;
         app.session.session_cost = 0.42;
         app.session.session_cost_cny = 3.05;
+        app.session.subagent_cost = 0.11;
+        app.session.subagent_cost_cny = 0.80;
+        app.session.subagent_cost_event_seqs.insert(7);
+        app.session.displayed_cost_high_water = 0.53;
+        app.session.displayed_cost_high_water_cny = 3.85;
         app.session.last_prompt_cache_hit_tokens = Some(70);
         app.session.last_prompt_cache_miss_tokens = Some(30);
         app.push_turn_cache_record(TurnCacheRecord {
@@ -540,6 +550,12 @@ mod tests {
         assert_eq!(app.session.total_conversation_tokens, 0);
         assert_eq!(app.session.session_cost, 0.0);
         assert_eq!(app.session.session_cost_cny, 0.0);
+        assert_eq!(app.session.subagent_cost, 0.0);
+        assert_eq!(app.session.subagent_cost_cny, 0.0);
+        assert!(app.session.subagent_cost_event_seqs.is_empty());
+        assert_eq!(app.session.displayed_cost_high_water, 0.0);
+        assert_eq!(app.session.displayed_cost_high_water_cny, 0.0);
+        assert_eq!(app.displayed_session_cost(), 0.0);
         assert_eq!(app.session.last_prompt_cache_hit_tokens, None);
         assert_eq!(app.session.last_prompt_cache_miss_tokens, None);
         assert!(app.session.turn_cache_history.is_empty());
