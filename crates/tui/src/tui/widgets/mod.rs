@@ -2030,6 +2030,26 @@ pub(crate) struct SlashMenuEntry {
     pub alias_hint: Option<String>,
 }
 
+/// Check if all characters in `needle` appear in `haystack` in order
+/// (subsequence matching — fuzzy filtering).
+fn fuzzy_chars_in_order(needle: &str, haystack: &str) -> bool {
+    let mut chars = needle.chars();
+    let mut current = match chars.next() {
+        Some(c) => c,
+        None => return true,
+    };
+    for ch in haystack.chars() {
+        if ch == current {
+            if let Some(next) = chars.next() {
+                current = next;
+            } else {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 pub(crate) fn slash_completion_hints(
     input: &str,
     limit: usize,
@@ -2048,61 +2068,89 @@ pub(crate) fn slash_completion_hints(
         return Vec::new();
     }
     let mut entries: Vec<SlashMenuEntry> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let prefix_lower = prefix.to_ascii_lowercase();
 
-    // Built-in commands + user-defined commands
-    // `all_command_names_matching` returns both; we resolve descriptions for
-    // built-in ones from the static registry and use a generic label for
-    // user-defined commands.
+    // ── Phase 1: prefix (starts_with) matches ─────────────────────────
+    // Highest priority — preserves existing exact-prefix completion.
     if completing_skill_arg.is_none() {
-        let prefix_lower = prefix.to_ascii_lowercase();
         for name in commands::all_command_names_matching(prefix, workspace) {
+            seen.insert(name.clone());
             let command_key = name.trim_start_matches('/');
-            let (description, alias_hint) =
-                if let Some(info) = commands::get_command_info(command_key) {
-                    // Detect matching alias: if the user typed via pinyin rather
-                    // than the canonical name, record which alias matched.
-                    let hint = if !command_key.to_ascii_lowercase().starts_with(&prefix_lower) {
-                        info.aliases
-                            .iter()
-                            .find(|a| a.to_ascii_lowercase().starts_with(&prefix_lower))
-                            .map(|a| a.to_string())
-                    } else {
-                        None
-                    };
-                    let desc = if info.aliases.is_empty() {
-                        info.description_for(locale).to_string()
-                    } else {
-                        format!(
-                            "{}  (aliases: {})",
-                            info.description_for(locale),
-                            info.aliases
-                                .iter()
-                                .map(|a| format!("/{a}"))
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        )
-                    };
-                    (desc, hint)
-                } else {
-                    (String::from("User-defined command"), None)
-                };
-            entries.push(SlashMenuEntry {
-                name,
-                description,
-                is_skill: false,
-                alias_hint,
-            });
+            push_command_entry(&mut entries, &name, command_key, &prefix_lower, locale);
         }
     }
 
-    // Cached skills are arguments to `/skill`, not top-level commands. Keep
-    // the top-level slash menu focused on commands and expand skills only
-    // after the user has selected the skill command.
-    let prefix_lower = completing_skill_arg.unwrap_or(prefix).to_ascii_lowercase();
+    // ── Phase 2: contains (substring) matches ─────────────────────────
+    // Medium priority — broader catching.
+    if completing_skill_arg.is_none() {
+        for cmd in commands::COMMANDS {
+            let name = format!("/{}", cmd.name);
+            if seen.contains(&name) {
+                continue;
+            }
+            let cmd_lower = cmd.name.to_ascii_lowercase();
+            let alias_match = cmd.aliases.iter().any(|a| a.to_ascii_lowercase().contains(&prefix_lower));
+            if cmd_lower.contains(&prefix_lower) || alias_match {
+                seen.insert(name.clone());
+                push_command_entry(&mut entries, &name, cmd.name, &prefix_lower, locale);
+            }
+        }
+    }
+
+    // ── Phase 3: fuzzy subsequence matches ────────────────────────────
+    // Lowest priority — characters in order, not necessarily consecutive.
+    if completing_skill_arg.is_none() {
+        for cmd in commands::COMMANDS {
+            let name = format!("/{}", cmd.name);
+            if seen.contains(&name) {
+                continue;
+            }
+            let cmd_lower = cmd.name.to_ascii_lowercase();
+            let alias_match = cmd.aliases.iter().any(|a| fuzzy_chars_in_order(&prefix_lower, &a.to_ascii_lowercase()));
+            if fuzzy_chars_in_order(&prefix_lower, &cmd_lower) || alias_match {
+                seen.insert(name.clone());
+                push_command_entry(&mut entries, &name, cmd.name, &prefix_lower, locale);
+            }
+        }
+    }
+
+    // ── Skills (only after user has typed `/skill `) ──────────────────
+    let skill_prefix = completing_skill_arg.unwrap_or(prefix).to_ascii_lowercase();
     if completing_skill_arg.is_some() {
         for (skill_name, skill_desc) in cached_skills {
             let skill_name_lower = skill_name.to_ascii_lowercase();
-            if skill_name_lower.starts_with(&prefix_lower) {
+            if skill_name_lower.starts_with(&skill_prefix) {
+                entries.push(SlashMenuEntry {
+                    name: format!("/skill {skill_name}"),
+                    description: skill_desc.clone(),
+                    is_skill: true,
+                    alias_hint: None,
+                });
+            }
+        }
+        // Skills: contains fuzzy fallback
+        for (skill_name, skill_desc) in cached_skills {
+            let skill_name_lower = skill_name.to_ascii_lowercase();
+            if skill_name_lower.contains(&skill_prefix)
+                && !entries.iter().any(|e| {
+                    e.name == format!("/skill {skill_name}")
+                })
+            {
+                entries.push(SlashMenuEntry {
+                    name: format!("/skill {skill_name}"),
+                    description: skill_desc.clone(),
+                    is_skill: true,
+                    alias_hint: None,
+                });
+            }
+        }
+        for (skill_name, skill_desc) in cached_skills {
+            let skill_name_lower = skill_name.to_ascii_lowercase();
+            if !skill_name_lower.starts_with(&skill_prefix)
+                && !skill_name_lower.contains(&skill_prefix)
+                && fuzzy_chars_in_order(&skill_prefix, &skill_name_lower)
+            {
                 entries.push(SlashMenuEntry {
                     name: format!("/skill {skill_name}"),
                     description: skill_desc.clone(),
@@ -2128,6 +2176,54 @@ pub(crate) fn slash_completion_hints(
     entries.sort_by(|a, b| a.name.cmp(&b.name));
     entries.dedup_by(|a, b| a.name == b.name);
     entries.into_iter().take(limit).collect()
+}
+
+/// Push a built-in command entry to the slash menu, resolving description
+/// and alias hints.
+fn push_command_entry(
+    entries: &mut Vec<SlashMenuEntry>,
+    name: &str,
+    command_key: &str,
+    prefix_lower: &str,
+    locale: crate::localization::Locale,
+) {
+    let (description, alias_hint) =
+        if let Some(info) = commands::get_command_info(command_key) {
+            let hint = if !command_key.to_ascii_lowercase().starts_with(prefix_lower) {
+                info.aliases
+                    .iter()
+                    .find(|a| {
+                        a.to_ascii_lowercase().starts_with(prefix_lower)
+                            || a.to_ascii_lowercase().contains(prefix_lower)
+                            || fuzzy_chars_in_order(prefix_lower, &a.to_ascii_lowercase())
+                    })
+                    .map(|a| a.to_string())
+            } else {
+                None
+            };
+            let desc = if info.aliases.is_empty() {
+                info.description_for(locale).to_string()
+            } else {
+                format!(
+                    "{}  (aliases: {})",
+                    info.description_for(locale),
+                    info.aliases
+                        .iter()
+                        .map(|a| format!("/{a}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            };
+            (desc, hint)
+        } else {
+            (String::from("User-defined command"), None)
+        };
+    entries.push(SlashMenuEntry {
+        name: name.to_string(),
+        description,
+        is_skill: false,
+        alias_hint,
+    });
 }
 
 fn layout_input(
