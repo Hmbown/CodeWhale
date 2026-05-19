@@ -635,6 +635,25 @@ pub(crate) fn footer_cache_spans(app: &App) -> Vec<Span<'static>> {
     let prefix_is_stable = app
         .prefix_stability_pct
         .is_some_and(|pct| pct >= 95 && app.prefix_change_count == 0);
+    let api_cache_label = app.session.last_api_prompt_cache_hit_tokens.map(|api_hit| {
+        let api_miss = app
+            .session
+            .last_api_prompt_cache_miss_tokens
+            .unwrap_or_else(|| {
+                app.session
+                    .last_api_prompt_tokens
+                    .unwrap_or(0)
+                    .saturating_sub(api_hit)
+            });
+        let api_total = api_hit.saturating_add(api_miss);
+        let api_percent = if api_total == 0 {
+            0.0
+        } else {
+            (f64::from(api_hit) / f64::from(api_total) * 100.0).clamp(0.0, 100.0)
+        };
+        format!("api {api_percent:.1}% | turn {percent:.1}%")
+    });
+
     let color = if percent > 80.0 {
         palette::STATUS_SUCCESS
     } else if percent >= 40.0 {
@@ -644,13 +663,13 @@ pub(crate) fn footer_cache_spans(app: &App) -> Vec<Span<'static>> {
     } else {
         palette::STATUS_ERROR
     };
-    vec![Span::styled(
-        format!(
-            "Cache: {:.1}% hit | hit {hit_tokens} | miss {miss_tokens}",
-            percent
-        ),
-        Style::default().fg(color),
-    )]
+    let label = if let Some(api_cache_label) = api_cache_label {
+        format!("Cache: {api_cache_label} | hit {hit_tokens} | miss {miss_tokens}")
+    } else {
+        format!("Cache: {percent:.1}% hit | hit {hit_tokens} | miss {miss_tokens}")
+    };
+
+    vec![Span::styled(label, Style::default().fg(color))]
 }
 
 /// Render a footer chip showing the size of the `reasoning_content` block

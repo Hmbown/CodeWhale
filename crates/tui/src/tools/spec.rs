@@ -169,6 +169,11 @@ pub struct ToolContext {
     pub workshop_vars: Option<
         std::sync::Arc<tokio::sync::Mutex<crate::tools::large_output_router::WorkshopVariables>>,
     >,
+
+    /// Current model tool-call id while a tool is executing. Sub-agent tools
+    /// copy this into their mailbox `Started` envelope so UI cards bind to
+    /// the exact parent call instead of relying on ordering.
+    pub current_tool_call_id: Option<String>,
 }
 
 impl ToolContext {
@@ -202,6 +207,7 @@ impl ToolContext {
             search_provider: crate::config::SearchProvider::default(),
             search_api_key: None,
             workshop_vars: None,
+            current_tool_call_id: None,
         }
     }
 
@@ -238,6 +244,7 @@ impl ToolContext {
             search_provider: crate::config::SearchProvider::default(),
             search_api_key: None,
             workshop_vars: None,
+            current_tool_call_id: None,
         }
     }
 
@@ -274,6 +281,7 @@ impl ToolContext {
             search_provider: crate::config::SearchProvider::default(),
             search_api_key: None,
             workshop_vars: None,
+            current_tool_call_id: None,
         }
     }
 
@@ -281,6 +289,13 @@ impl ToolContext {
     #[must_use]
     pub fn with_network_policy(mut self, policy: NetworkPolicyDecider) -> Self {
         self.network_policy = Some(policy);
+        self
+    }
+
+    /// Attach the current model tool-call id to this execution context.
+    #[must_use]
+    pub fn with_current_tool_call_id(mut self, id: impl Into<String>) -> Self {
+        self.current_tool_call_id = Some(id.into());
         self
     }
 

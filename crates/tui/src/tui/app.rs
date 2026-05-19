@@ -1025,10 +1025,6 @@ pub struct App {
     /// `ToolCallStarted` for `agent_spawn` / `rlm` / etc., cleared
     /// after the first `Started` mailbox envelope routes through it).
     pub pending_subagent_dispatch: Option<String>,
-    /// Short labels captured from delegate tool calls before the runtime
-    /// returns the generated `agent_id`. `Started` envelopes can carry only a
-    /// role like `implementer`, so this FIFO keeps the Claude-style label.
-    pub pending_subagent_labels: VecDeque<String>,
     /// Animation anchor for status-strip active sub-agent spinner.
     pub agent_activity_started_at: Option<Instant>,
     pub ui_theme: UiTheme,
@@ -1681,7 +1677,6 @@ impl App {
             subagent_card_index: HashMap::new(),
             last_fanout_card_index: None,
             pending_subagent_dispatch: None,
-            pending_subagent_labels: VecDeque::new(),
             agent_activity_started_at: None,
             ui_theme,
             theme_id,

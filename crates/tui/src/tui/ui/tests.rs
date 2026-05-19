@@ -2046,10 +2046,10 @@ fn hidden_sidebar_focus_suppresses_sidebar_split_even_when_wide() {
     app.sidebar_width_percent = 28;
 
     app.sidebar_focus = SidebarFocus::Auto;
-    assert_eq!(sidebar_width_for_chat_area(&app, 120), Some(33));
+    assert_eq!(sidebar_width_for_chat_area(&app, 240), Some(67));
 
     app.sidebar_focus = SidebarFocus::Hidden;
-    assert_eq!(sidebar_width_for_chat_area(&app, 120), None);
+    assert_eq!(sidebar_width_for_chat_area(&app, 240), None);
 }
 
 fn make_subagent(
@@ -2233,7 +2233,7 @@ fn subagent_spawn_tool_row_collapses_into_live_card() {
 }
 
 #[test]
-fn subagent_started_uses_task_description_when_mailbox_only_has_role() {
+fn subagent_started_uses_mailbox_display_name_when_objective_only_has_role() {
     let mut app = create_test_app();
     handle_tool_call_started(
         &mut app,
@@ -2249,10 +2249,14 @@ fn subagent_started_uses_task_description_when_mailbox_only_has_role() {
     handle_subagent_mailbox(
         &mut app,
         1,
-        &crate::tools::subagent::MailboxMessage::started(
+        &crate::tools::subagent::MailboxMessage::started_with_metadata(
             "agent_live",
             crate::tools::subagent::SubAgentType::Implementer,
             "implementer",
+            Some("extend-js-function-runtime".to_string()),
+            Some("extend-js-function-runtime".to_string()),
+            Some("task-call".to_string()),
+            None,
         ),
     );
 
@@ -2281,10 +2285,14 @@ fn sibling_subagents_render_as_claude_style_group() {
     handle_subagent_mailbox(
         &mut app,
         1,
-        &crate::tools::subagent::MailboxMessage::started(
+        &crate::tools::subagent::MailboxMessage::started_with_metadata(
             "agent_a",
             crate::tools::subagent::SubAgentType::Explore,
             "explore",
+            Some("explore-backend-driver-linker-issue".to_string()),
+            Some("Explore backend driver linker issue".to_string()),
+            Some("task-a".to_string()),
+            None,
         ),
     );
     handle_tool_call_started(
@@ -2300,10 +2308,14 @@ fn sibling_subagents_render_as_claude_style_group() {
     handle_subagent_mailbox(
         &mut app,
         2,
-        &crate::tools::subagent::MailboxMessage::started(
+        &crate::tools::subagent::MailboxMessage::started_with_metadata(
             "agent_b",
             crate::tools::subagent::SubAgentType::Explore,
             "explore",
+            Some("explore-dom-reconcile-key-diffing".to_string()),
+            Some("Explore DOM reconcile key-diffing".to_string()),
+            Some("task-b".to_string()),
+            None,
         ),
     );
     handle_subagent_mailbox(
@@ -2413,10 +2425,14 @@ fn agent_eval_started_uses_existing_subagent_label_not_agent_id() {
     handle_subagent_mailbox(
         &mut app,
         1,
-        &crate::tools::subagent::MailboxMessage::started(
+        &crate::tools::subagent::MailboxMessage::started_with_metadata(
             "agent_live",
             crate::tools::subagent::SubAgentType::General,
             "audit gui impl",
+            Some("audit-gui-impl".to_string()),
+            Some("audit gui impl".to_string()),
+            Some("spawn-call".to_string()),
+            None,
         ),
     );
 
@@ -3503,6 +3519,7 @@ fn detail_target_prefers_visible_tool_card() {
 #[test]
 fn activity_footer_hint_surfaces_visible_thinking_without_raw_tool_hint() {
     let mut app = create_test_app();
+    app.show_thinking = true;
     app.history = vec![HistoryCell::Thinking {
         content: "visible reasoning".to_string(),
         streaming: false,
@@ -4767,6 +4784,7 @@ fn open_thinking_pager_finds_thinking_in_active_cell() {
 #[test]
 fn activity_detail_opens_reasoning_timeline_for_selected_thinking() {
     let mut app = create_test_app();
+    app.show_thinking = true;
     app.history = vec![
         HistoryCell::Thinking {
             content: "first chunk reasoning".to_string(),
@@ -4846,7 +4864,56 @@ fn activity_detail_fallback_prefers_live_activity_context() {
     assert!(body.contains("Turn: turn_live_123456789"));
     assert!(body.contains("Activity: tool agent_eval"));
     assert!(body.contains("Status: running"));
-    assert!(body.contains("agent_id: agent_af58ba3a"));
+    assert!(body.contains("Task"), "{body}");
+    assert!(
+        !body.contains("agent_af58ba3a"),
+        "activity detail should not surface bare internal agent ids: {body}"
+    );
+}
+
+#[test]
+fn activity_detail_uses_structured_subagent_group_detail() {
+    let mut app = create_test_app();
+    let mut first = crate::tui::widgets::agent_card::DelegateCard::new(
+        "agent_a",
+        "explore",
+        "Explore linker issue",
+    );
+    first.status = crate::tui::widgets::agent_card::AgentLifecycle::Running;
+    first.record_tool_use();
+    first.record_token_usage(&crate::models::Usage {
+        input_tokens: 27_000,
+        output_tokens: 1_000,
+        ..Default::default()
+    });
+    first.push_action("exec_shell running");
+
+    let mut second =
+        crate::tui::widgets::agent_card::DelegateCard::new("agent_b", "review", "Review patch");
+    second.status = crate::tui::widgets::agent_card::AgentLifecycle::Completed;
+    second.push_action("read_file ok");
+    second.summary = Some("review complete".to_string());
+
+    let mut group = crate::tui::widgets::agent_card::DelegateGroupCard::new();
+    group.push_card(first);
+    group.push_card(second);
+    app.history.push(HistoryCell::SubAgent(
+        crate::tui::history::SubAgentCell::DelegateGroup(group),
+    ));
+
+    assert!(open_activity_detail_pager(&mut app));
+    let body = pop_pager_body(&mut app);
+
+    assert!(body.contains("Activity: sub-agent"), "{body}");
+    assert!(body.contains("Sub-agent group: 2 agents"), "{body}");
+    assert!(body.contains("Name: Explore linker issue"), "{body}");
+    assert!(body.contains("Status: running"), "{body}");
+    assert!(body.contains("Tool uses: 1"), "{body}");
+    assert!(body.contains("Tokens: 28.0k"), "{body}");
+    assert!(body.contains("Last action: exec_shell running"), "{body}");
+    assert!(body.contains("Name: Review patch"), "{body}");
+    assert!(body.contains("Summary: review complete"), "{body}");
+    assert!(!body.contains("Task("), "{body}");
 }
 
 #[test]

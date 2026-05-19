@@ -142,7 +142,7 @@ When running in auto-continue mode, every turn must produce **verifiable forward
 
 2. **State intent** — open the turn with a one-line plan: "I'll add the rate-limiting middleware." This lets the user (and the idle detector) know you're working, not just chatting.
 
-3. **Use tools, don't just describe** — every turn should include actual tool calls (read_file, write_file, exec_shell, agent_spawn, etc.). A turn with zero tool calls counts as idle. Two consecutive idle turns stop auto-continue.
+3. **Use tools, don't just describe** — every turn should include actual tool calls (read_file, write_file, exec_shell, Task/agent_open, etc.). A turn with zero tool calls counts as idle. Two consecutive idle turns stop auto-continue.
 
 4. **Verify before marking done** — after completing the work, run the relevant verification (cargo build, cargo test, review the diff). Only then call `checklist_update` to mark the item `completed`.
 

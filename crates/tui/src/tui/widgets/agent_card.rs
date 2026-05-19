@@ -25,6 +25,7 @@ use crate::tui::widgets::tool_card::{ToolFamily, family_glyph, family_label};
 /// Maximum number of recent actions kept on a `DelegateCard`. Older entries
 /// are dropped from the head; an ellipsis row signals truncation.
 pub const DELEGATE_MAX_ACTIONS: usize = 3;
+const DELEGATE_LIVE_ACTION_MAX_CHARS: usize = 180;
 
 /// Lifecycle of a delegated / fanned-out agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,7 +101,7 @@ impl DelegateCard {
     }
 
     pub fn push_action(&mut self, action: impl Into<String>) {
-        self.actions.push(action.into());
+        self.actions.push(compact_live_action(&action.into()));
         if self.actions.len() > DELEGATE_MAX_ACTIONS {
             // Drop one head entry per overflow so steady-state is exactly
             // DELEGATE_MAX_ACTIONS lines; the ellipsis row signals the rest.
@@ -160,6 +161,29 @@ impl DelegateCard {
         lines
     }
 
+    #[must_use]
+    pub fn detail_text(&self, width: u16) -> String {
+        let value_budget = detail_value_budget(width);
+        let mut lines = Vec::with_capacity(8);
+        lines.push("Sub-agent".to_string());
+        lines.push(format!(
+            "Name: {}",
+            truncate_action(&self.display_label(), value_budget)
+        ));
+        lines.push(format!("Status: {}", self.status.label()));
+        lines.push(format!("Tool uses: {}", self.tool_uses));
+        lines.push(format!("Tokens: {}", compact_token_count(self.token_count)));
+        lines.push(format!(
+            "Last action: {}",
+            truncate_action(self.last_action_text(), value_budget)
+        ));
+        lines.push(format!(
+            "Summary: {}",
+            truncate_action(self.summary_text(), value_budget)
+        ));
+        lines.join("\n")
+    }
+
     /// Number of actions held — exposed for tests; bounded at
     /// `DELEGATE_MAX_ACTIONS`.
     #[must_use]
@@ -193,6 +217,14 @@ impl DelegateCard {
                 .cloned()
                 .unwrap_or_else(|| "Working".to_string()),
         }
+    }
+
+    fn last_action_text(&self) -> &str {
+        self.actions.last().map(String::as_str).unwrap_or("-")
+    }
+
+    fn summary_text(&self) -> &str {
+        self.summary.as_deref().unwrap_or("-")
     }
 }
 
@@ -296,6 +328,20 @@ impl DelegateGroupCard {
         }
 
         lines
+    }
+
+    #[must_use]
+    pub fn detail_text(&self, width: u16) -> String {
+        let mut lines = Vec::new();
+        lines.push(format!("Sub-agent group: {} agents", self.agents.len()));
+        for (idx, agent) in self.agents.iter().enumerate() {
+            if idx > 0 {
+                lines.push(String::new());
+            }
+            lines.push(format!("Agent {}", idx + 1));
+            lines.extend(agent.detail_text(width).lines().skip(1).map(str::to_string));
+        }
+        lines.join("\n")
     }
 }
 
@@ -670,6 +716,10 @@ fn compact_token_count(tokens: u64) -> String {
     }
 }
 
+fn detail_value_budget(width: u16) -> usize {
+    usize::from(width).saturating_sub(14).max(24)
+}
+
 fn common_agent_type_label(agents: &[&DelegateCard]) -> Option<String> {
     let first = agents.first()?.agent_type.trim();
     if first.is_empty()
@@ -708,6 +758,27 @@ fn truncate_action(text: &str, max: usize) -> String {
     }
 }
 
+fn compact_live_action(text: &str) -> String {
+    let mut out = String::new();
+    let mut last_was_space = false;
+    for ch in text.trim().chars() {
+        if ch.is_whitespace() {
+            if !last_was_space {
+                out.push(' ');
+                last_was_space = true;
+            }
+        } else {
+            out.push(ch);
+            last_was_space = false;
+        }
+
+        if out.chars().count() >= DELEGATE_LIVE_ACTION_MAX_CHARS {
+            break;
+        }
+    }
+    truncate_action(&out, DELEGATE_LIVE_ACTION_MAX_CHARS)
+}
+
 /// Apply a mailbox envelope to a `DelegateCard`. Returns `true` if the
 /// state changed (UI may want to redraw); `false` if the envelope was for
 /// a different `agent_id`.
@@ -734,11 +805,11 @@ pub fn apply_to_delegate(card: &mut DelegateCard, msg: &MailboxMessage) -> bool 
         }
         MailboxMessage::Completed { summary, .. } => {
             card.status = AgentLifecycle::Completed;
-            card.summary = Some(summary.clone());
+            card.summary = Some(compact_live_action(summary));
         }
         MailboxMessage::Failed { error, .. } => {
             card.status = AgentLifecycle::Failed;
-            card.summary = Some(error.clone());
+            card.summary = Some(compact_live_action(error));
         }
         MailboxMessage::Cancelled { .. } => {
             card.status = AgentLifecycle::Cancelled;
@@ -933,6 +1004,60 @@ mod tests {
     }
 
     #[test]
+    fn delegate_progress_is_compacted_before_live_storage() {
+        let mut card = DelegateCard::new("agent_long", "general", "long command");
+        let long_output = format!(
+            "cargo test failed\n{}\nstderr: {}",
+            "stdout line ".repeat(80),
+            "error details ".repeat(80)
+        );
+
+        assert!(apply_to_delegate(
+            &mut card,
+            &MailboxMessage::progress("agent_long", long_output.clone())
+        ));
+
+        assert_eq!(card.action_count(), 1);
+        let rendered = render_to_strings(&card.render_lines(240)).join("\n");
+        assert!(rendered.contains("cargo test failed"), "{rendered}");
+        assert!(
+            rendered.chars().count() < long_output.chars().count() / 4,
+            "live card should not retain long command output: {} vs {}",
+            rendered.chars().count(),
+            long_output.chars().count()
+        );
+    }
+
+    #[test]
+    fn delegate_failed_summary_is_short_but_visible() {
+        let mut card = DelegateCard::new("agent_fail", "verifier", "cargo test");
+        let long_error = format!(
+            "command failed: cargo test\n{}",
+            "thread panic backtrace frame ".repeat(80)
+        );
+
+        assert!(apply_to_delegate(
+            &mut card,
+            &MailboxMessage::Failed {
+                agent_id: "agent_fail".into(),
+                error: long_error.clone(),
+            }
+        ));
+
+        let rendered = render_to_strings(&card.render_lines(240)).join("\n");
+        assert!(
+            rendered.contains("command failed: cargo test"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.chars().count() < long_error.chars().count() / 4,
+            "failed live summary should be bounded: {} vs {}",
+            rendered.chars().count(),
+            long_error.chars().count()
+        );
+    }
+
+    #[test]
     fn delegate_header_uses_claude_task_label_without_duplicate_role() {
         let mut card = DelegateCard::new("agent_005", "implementer", "implementer");
         assert!(apply_to_delegate(
@@ -991,6 +1116,53 @@ mod tests {
             "summary should fit terminal width: {summary:?}"
         );
         assert!(summary.ends_with('\u{2026}'), "{summary:?}");
+    }
+
+    #[test]
+    fn delegate_group_detail_includes_structured_fields_for_each_agent() {
+        let mut first = DelegateCard::new("agent_a", "explore", "Explore linker issue");
+        first.status = AgentLifecycle::Running;
+        first.record_tool_use();
+        first.record_token_usage(&Usage {
+            input_tokens: 27_000,
+            output_tokens: 1_000,
+            ..Default::default()
+        });
+        first.push_action("exec_shell running");
+
+        let mut second = DelegateCard::new("agent_b", "implementer", "Patch renderer");
+        second.status = AgentLifecycle::Completed;
+        second.record_tool_use();
+        second.push_action("apply_patch ok");
+        second.summary = Some("patched renderer tests".to_string());
+
+        let mut group = DelegateGroupCard::new();
+        group.push_card(first);
+        group.push_card(second);
+
+        let detail = group.detail_text(120);
+        assert!(detail.contains("Sub-agent group: 2 agents"), "{detail}");
+        assert!(detail.contains("Agent 1"), "{detail}");
+        assert!(detail.contains("Name: Explore linker issue"), "{detail}");
+        assert!(detail.contains("Status: running"), "{detail}");
+        assert!(detail.contains("Tool uses: 1"), "{detail}");
+        assert!(detail.contains("Tokens: 28.0k"), "{detail}");
+        assert!(
+            detail.contains("Last action: exec_shell running"),
+            "{detail}"
+        );
+        assert!(detail.contains("Agent 2"), "{detail}");
+        assert!(detail.contains("Name: Patch renderer"), "{detail}");
+        assert!(detail.contains("Status: done"), "{detail}");
+        assert!(detail.contains("Last action: apply_patch ok"), "{detail}");
+        assert!(
+            detail.contains("Summary: patched renderer tests"),
+            "{detail}"
+        );
+        assert!(
+            !detail.contains("Task("),
+            "detail should not reintroduce duplicate Task rows: {detail}"
+        );
     }
 
     #[test]

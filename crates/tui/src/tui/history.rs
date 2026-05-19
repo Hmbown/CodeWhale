@@ -147,6 +147,24 @@ impl SubAgentCell {
             SubAgentCell::Fanout(card) => card.render_lines(width),
         }
     }
+
+    pub fn detail_text(&self, width: u16) -> String {
+        match self {
+            SubAgentCell::Delegate(card) => card.detail_text(width),
+            SubAgentCell::DelegateGroup(card) => card.detail_text(width),
+            SubAgentCell::Fanout(card) => card
+                .render_lines(width)
+                .iter()
+                .map(|line| {
+                    line.spans
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

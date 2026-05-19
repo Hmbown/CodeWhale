@@ -1288,6 +1288,12 @@ impl Engine {
                         let started_at = Instant::now();
 
                         tool_tasks.push(async move {
+                            let context_override = registry.map(|registry| {
+                                registry
+                                    .context()
+                                    .clone()
+                                    .with_current_tool_call_id(plan.id.clone())
+                            });
                             let mut result = Engine::execute_tool_with_lock(
                                 lock,
                                 plan.supports_parallel,
@@ -1297,7 +1303,7 @@ impl Engine {
                                 plan.input.clone(),
                                 registry,
                                 mcp_pool,
-                                None,
+                                context_override,
                             )
                             .await;
 
@@ -1635,6 +1641,9 @@ impl Engine {
                         }
 
                         let started_at = Instant::now();
+                        let context_override = context_override
+                            .or_else(|| tool_registry.map(|registry| registry.context().clone()))
+                            .map(|ctx| ctx.with_current_tool_call_id(tool_id.clone()));
                         let mut result = if let Some(result_override) = result_override {
                             result_override
                         } else {

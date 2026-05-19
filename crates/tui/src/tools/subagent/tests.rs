@@ -35,6 +35,25 @@ fn estimate_tool_description_tokens_conservative(text: &str) -> usize {
 }
 
 #[test]
+fn subagent_tool_failure_summary_is_single_line_and_bounded() {
+    let output = format!(
+        "Error: cargo test failed\n{}\nstderr: {}",
+        "stdout line ".repeat(80),
+        "panic frame ".repeat(80)
+    );
+
+    let summary = summarize_subagent_tool_failure(&output);
+
+    assert!(summary.starts_with("Error: cargo test failed"), "{summary}");
+    assert!(!summary.contains('\n'), "{summary:?}");
+    assert!(summary.chars().count() <= 160, "{summary}");
+    assert!(
+        summary.chars().count() < output.chars().count() / 4,
+        "summary should not mirror full output"
+    );
+}
+
+#[test]
 fn test_agent_type_from_str() {
     assert_eq!(
         SubAgentType::from_str("general"),

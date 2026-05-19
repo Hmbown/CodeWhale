@@ -233,6 +233,7 @@ pub(super) fn handle_subagent_mailbox(app: &mut App, seq: u64, message: &Mailbox
     let MailboxMessage::Started {
         agent_type,
         objective,
+        display_name,
         ..
     } = message
     else {
@@ -262,8 +263,12 @@ pub(super) fn handle_subagent_mailbox(app: &mut App, seq: u64, message: &Mailbox
         }
     } else {
         let objective_summary = summarize_tool_output(objective);
-        let task_summary =
-            delegate_task_summary_from_pending_label(app, agent_type, &objective_summary);
+        let task_summary = display_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or(objective_summary);
         let idx = if let Some(idx) = find_active_delegate_container_index(app) {
             if let Some(cell) = app.cell_at_virtual_index_mut(idx) {
                 match cell {
@@ -287,55 +292,10 @@ pub(super) fn handle_subagent_mailbox(app: &mut App, seq: u64, message: &Mailbox
             push_subagent_card(app, SubAgentCell::Delegate(card))
         };
         app.subagent_card_index.insert(agent_id, idx);
-        // Single delegate consumes the pending dispatch label so a follow-on
-        // tool call doesn't accidentally inherit it.
         app.pending_subagent_dispatch = None;
     }
 
     app.mark_history_updated();
-}
-
-fn delegate_task_summary_from_pending_label(
-    app: &mut App,
-    agent_type: &str,
-    objective_summary: &str,
-) -> String {
-    if let Some(label) = app.pending_subagent_labels.pop_front()
-        && is_specific_subagent_label(&label, agent_type)
-    {
-        return label;
-    }
-    objective_summary.to_string()
-}
-
-fn is_specific_subagent_label(label: &str, agent_type: &str) -> bool {
-    let trimmed = label.trim();
-    if trimmed.is_empty()
-        || trimmed.starts_with('<')
-        || trimmed.starts_with("agent_")
-        || trimmed.eq_ignore_ascii_case(agent_type)
-    {
-        return false;
-    }
-    !matches!(
-        trimmed.to_ascii_lowercase().as_str(),
-        "default"
-            | "general"
-            | "worker"
-            | "explore"
-            | "explorer"
-            | "plan"
-            | "planner"
-            | "awaiter"
-            | "review"
-            | "reviewer"
-            | "implementer"
-            | "implement"
-            | "verifier"
-            | "verify"
-            | "validator"
-            | "tester"
-    )
 }
 
 pub(super) fn task_mode_label(mode: AppMode) -> &'static str {

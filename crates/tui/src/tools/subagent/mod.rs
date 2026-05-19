@@ -493,6 +493,8 @@ pub(crate) struct SubAgentSpawnOptions {
     pub model: Option<String>,
     pub nickname: Option<String>,
     pub fork_context: bool,
+    pub parent_tool_call_id: Option<String>,
+    pub group_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1236,6 +1238,7 @@ impl SubAgentManager {
             runtime.model = model.to_string();
         }
         let effective_model = runtime.model.clone();
+        let requested_display_name = options.nickname.clone();
         let nickname = options
             .nickname
             .or_else(|| Some(whale_nickname_for_index(self.agents.len())));
@@ -1283,6 +1286,7 @@ impl SubAgentManager {
         }
         agent.fork_context = options.fork_context;
         let agent_id = agent.id.clone();
+        let session_name = agent.session_name.clone();
         let started_at = agent.started_at;
         let max_steps = self.max_steps;
 
@@ -1297,11 +1301,15 @@ impl SubAgentManager {
             manager_handle,
             runtime,
             agent_id: agent_id.clone(),
+            session_name,
             agent_type,
             prompt,
             assignment,
             allowed_tools: tools,
             fork_context: options.fork_context,
+            display_name: requested_display_name,
+            parent_tool_call_id: options.parent_tool_call_id,
+            group_id: options.group_id,
             started_at,
             max_steps,
             input_rx,
@@ -1427,11 +1435,15 @@ impl SubAgentManager {
                 manager_handle,
                 runtime: restart_runtime,
                 agent_id: agent.id.clone(),
+                session_name: agent.session_name.clone(),
                 agent_type: agent.agent_type.clone(),
                 prompt: agent.prompt.clone(),
                 assignment: agent.assignment.clone(),
                 allowed_tools: agent.allowed_tools.clone(),
                 fork_context: false,
+                display_name: None,
+                parent_tool_call_id: None,
+                group_id: None,
                 started_at: restarted_at,
                 max_steps: self.max_steps,
                 input_rx,
@@ -2220,7 +2232,7 @@ impl ToolSpec for AgentSpawnTool {
         ApprovalRequirement::Required
     }
 
-    async fn execute(&self, input: Value, _context: &ToolContext) -> Result<ToolResult, ToolError> {
+    async fn execute(&self, input: Value, context: &ToolContext) -> Result<ToolResult, ToolError> {
         let spawn_request = parse_spawn_request(&input)?;
 
         // Soft cap check: read current count before locking the manager.
@@ -2358,6 +2370,8 @@ impl ToolSpec for AgentSpawnTool {
                     model: Some(effective_model),
                     nickname: spawn_request.display_name.clone(),
                     fork_context: spawn_request.fork_context,
+                    parent_tool_call_id: context.current_tool_call_id.clone(),
+                    group_id: None,
                 },
             )
             .map_err(|e| ToolError::execution_failed(format!("Failed to spawn sub-agent: {e}")))?;
@@ -3425,6 +3439,7 @@ struct SubAgentTask {
     manager_handle: SharedSubAgentManager,
     runtime: SubAgentRuntime,
     agent_id: String,
+    session_name: String,
     agent_type: SubAgentType,
     prompt: String,
     assignment: SubAgentAssignment,
@@ -3432,6 +3447,9 @@ struct SubAgentTask {
     /// Approval-gated tools still require an auto-approved parent runtime.
     allowed_tools: Option<Vec<String>>,
     fork_context: bool,
+    display_name: Option<String>,
+    parent_tool_call_id: Option<String>,
+    group_id: Option<String>,
     started_at: Instant,
     max_steps: u32,
     input_rx: mpsc::UnboundedReceiver<SubAgentInput>,
@@ -3442,11 +3460,15 @@ async fn run_subagent_task(task: SubAgentTask) {
     let result = run_subagent(
         &task.runtime,
         task.agent_id.clone(),
+        task.session_name,
         task.agent_type,
         task.prompt,
         task.assignment,
         task.allowed_tools,
         task.fork_context,
+        task.display_name,
+        task.parent_tool_call_id,
+        task.group_id,
         task.started_at,
         task.max_steps,
         task.input_rx,
@@ -3567,11 +3589,15 @@ fn subagent_failed_sentinel(agent_id: &str, _err: &str) -> String {
 async fn run_subagent(
     runtime: &SubAgentRuntime,
     agent_id: String,
+    session_name: String,
     agent_type: SubAgentType,
     prompt: String,
     assignment: SubAgentAssignment,
     allowed_tools: Option<Vec<String>>,
     fork_context: bool,
+    display_name: Option<String>,
+    parent_tool_call_id: Option<String>,
+    group_id: Option<String>,
     started_at: Instant,
     max_steps: u32,
     mut input_rx: mpsc::UnboundedReceiver<SubAgentInput>,
@@ -3606,10 +3632,14 @@ async fn run_subagent(
     }
     let tools = tool_registry.tools_for_model(&agent_type);
     if let Some(mb) = runtime.mailbox.as_ref() {
-        let _ = mb.send(MailboxMessage::started(
+        let _ = mb.send(MailboxMessage::started_with_metadata(
             &agent_id,
             agent_type.clone(),
             &assignment.objective,
+            Some(session_name.clone()),
+            display_name.clone(),
+            parent_tool_call_id.clone(),
+            group_id.clone(),
         ));
     }
     emit_agent_progress(
@@ -3839,6 +3869,17 @@ async fn run_subagent(
                             Err(_) => format!("Error: Tool {tool_name} timed out"),
                         };
                         let tool_ok = !output.starts_with("Error:");
+                        if !tool_ok {
+                            emit_agent_progress(
+                                event_tx.as_ref(),
+                                mb.as_ref(),
+                                &agent_id,
+                                format!(
+                                    "tool '{tool_name}' failed: {}",
+                                    summarize_subagent_tool_failure(&output)
+                                ),
+                            );
+                        }
                         if let Some(mb) = mb.as_ref() {
                             let _ = mb.send(MailboxMessage::ToolCallCompleted {
                                 agent_id: agent_id.clone(),
@@ -3847,7 +3888,7 @@ async fn run_subagent(
                                 ok: tool_ok,
                             });
                         }
-                        if let Some(event_tx) = event_tx.as_ref() {
+                        if tool_ok && let Some(event_tx) = event_tx.as_ref() {
                             let _ = event_tx.try_send(Event::AgentProgress {
                                 id: agent_id.clone(),
                                 status: format!(
@@ -3898,11 +3939,19 @@ async fn run_subagent(
                 Err(_) => format!("Error: Tool {tool_name} timed out"),
             };
             let tool_ok = !result.starts_with("Error:");
+            let tool_progress = if tool_ok {
+                format!("step {steps}/{max_steps}: finished tool '{tool_name}'")
+            } else {
+                format!(
+                    "tool '{tool_name}' failed: {}",
+                    summarize_subagent_tool_failure(&result)
+                )
+            };
             emit_agent_progress(
                 runtime.event_tx.as_ref(),
                 runtime.mailbox.as_ref(),
                 &agent_id,
-                format!("step {steps}/{max_steps}: finished tool '{tool_name}'"),
+                tool_progress,
             );
             if let Some(mb) = runtime.mailbox.as_ref() {
                 let _ = mb.send(MailboxMessage::ToolCallCompleted {
@@ -4691,6 +4740,38 @@ fn emit_agent_progress(
             id: agent_id.to_string(),
             status,
         });
+    }
+}
+
+fn summarize_subagent_tool_failure(output: &str) -> String {
+    const MAX_CHARS: usize = 160;
+    let mut out = String::new();
+    let mut last_was_space = false;
+
+    for ch in output.trim().chars() {
+        if ch.is_whitespace() {
+            if !last_was_space {
+                out.push(' ');
+                last_was_space = true;
+            }
+        } else {
+            out.push(ch);
+            last_was_space = false;
+        }
+
+        if out.chars().count() >= MAX_CHARS {
+            break;
+        }
+    }
+
+    if out.is_empty() {
+        "tool failed".to_string()
+    } else if output.trim().chars().count() > MAX_CHARS {
+        let mut truncated: String = out.chars().take(MAX_CHARS.saturating_sub(1)).collect();
+        truncated.push('…');
+        truncated
+    } else {
+        out
     }
 }
 

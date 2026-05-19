@@ -342,6 +342,7 @@ mod tests {
             &config,
         );
         app.ui_locale = locale;
+        app.onboarding_needs_api_key = !has_api_key;
         app
     }
 

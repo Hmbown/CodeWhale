@@ -15,9 +15,6 @@ use crate::tui::history::{
     ViewImageCell, WebSearchCell, output_looks_like_diff, summarize_mcp_output,
     summarize_tool_args, summarize_tool_output,
 };
-use crate::tui::widgets::tool_card::{
-    ToolFamily, tool_family_for_name, tool_header_summary_for_name,
-};
 
 #[allow(clippy::too_many_lines)]
 pub(super) fn handle_tool_call_started(
@@ -254,7 +251,6 @@ pub(super) fn handle_tool_call_started(
     }
 
     let input_summary = summarize_tool_args_for_tool(app, name, input);
-    remember_pending_subagent_label(app, name, input_summary.as_deref());
     if is_subagent_spawn_tool(name) {
         app.collapsed_subagent_tool_calls.insert(id);
         return;
@@ -299,20 +295,6 @@ fn is_subagent_lookup_tool(name: &str) -> bool {
 
 fn is_subagent_spawn_tool(name: &str) -> bool {
     matches!(name, "Task" | "agent_open" | "agent_spawn" | "spawn_agent")
-}
-
-fn remember_pending_subagent_label(app: &mut App, name: &str, input_summary: Option<&str>) {
-    if !matches!(tool_family_for_name(name), ToolFamily::Delegate) || is_subagent_lookup_tool(name)
-    {
-        return;
-    }
-
-    if let Some(label) = tool_header_summary_for_name(name, input_summary)
-        .map(|label| label.trim().to_string())
-        .filter(|label| !label.is_empty())
-    {
-        app.pending_subagent_labels.push_back(label);
-    }
 }
 
 fn subagent_tool_display_label(app: &App, input: &serde_json::Value) -> Option<String> {

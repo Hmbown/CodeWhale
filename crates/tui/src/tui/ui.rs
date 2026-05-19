@@ -7531,6 +7531,7 @@ fn thinking_chunk_position(app: &App, cell_index: usize) -> Option<(usize, usize
 
 fn activity_cell_to_text(cell: &HistoryCell, width: u16) -> String {
     let lines = match cell {
+        HistoryCell::SubAgent(subagent) => return subagent.detail_text(width),
         HistoryCell::Tool(_) => cell.lines_with_options(
             width,
             TranscriptRenderOptions {
