@@ -91,10 +91,13 @@ impl CommandSpec {
 
         #[cfg(windows)]
         let (program, args) = {
-            // Force UTF-8 output on Windows. chcp is cmd-compatible;
-            // PowerShell uses semicolons instead of &. See issue #982.
-            let separator = if kind.is_powershell() { ";" } else { "&" };
-            let cmd = format!("chcp 65001 >NUL {separator} {command}");
+            // Force UTF-8 output. cmd.exe uses chcp; PowerShell sets the
+            // console output encoding directly. See issue #982.
+            let cmd = if kind.is_powershell() {
+                format!("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; {command}")
+            } else {
+                format!("chcp 65001 >NUL & {command}")
+            };
             dispatcher.build_command_parts(&cmd)
         };
         #[cfg(not(windows))]
@@ -161,6 +164,17 @@ impl CommandSpec {
             // UTF-8 output (issue #982).
             let raw = &self.args[1];
             raw.strip_prefix("chcp 65001 >NUL & ")
+                .unwrap_or(raw)
+                .to_string()
+        } else if (self.program.eq_ignore_ascii_case("pwsh")
+            || self.program.eq_ignore_ascii_case("powershell"))
+            && self.args.len() >= 3
+            && self.args[0].eq_ignore_ascii_case("-NoProfile")
+            && self.args[1].eq_ignore_ascii_case("-Command")
+        {
+            // Strip the PowerShell encoding prefix.
+            let raw = &self.args[2];
+            raw.strip_prefix("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; ")
                 .unwrap_or(raw)
                 .to_string()
         } else {

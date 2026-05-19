@@ -142,7 +142,10 @@ for the current turn."
 fn render_environment_block(workspace: &Path, locale_tag: &str) -> String {
     let deepseek_version = env!("CARGO_PKG_VERSION");
     let platform = std::env::consts::OS;
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "unknown".to_string());
+    let shell = crate::shell_dispatcher::global_dispatcher()
+        .kind()
+        .binary()
+        .to_string();
     let pwd = workspace.display();
 
     format!(
