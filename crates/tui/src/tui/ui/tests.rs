@@ -25,6 +25,8 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::MutexGuard;
+
+use crate::dependencies::ExternalTool;
 use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthStr;
 
@@ -1936,7 +1938,7 @@ fn auto_model_still_uses_auto_model_router() {
 fn init_git_repo() -> TempDir {
     let dir = tempfile::tempdir().expect("tempdir");
 
-    let init = Command::new("git")
+    let init = crate::dependencies::Git::command().expect("git not found")
         .arg("init")
         .current_dir(dir.path())
         .output()
@@ -1947,7 +1949,7 @@ fn init_git_repo() -> TempDir {
         String::from_utf8_lossy(&init.stderr)
     );
 
-    let commit = Command::new("git")
+    let commit = crate::dependencies::Git::command().expect("git not found")
         .args([
             "-c",
             "user.name=DeepSeek TUI Tests",
@@ -2549,6 +2551,197 @@ fn should_auto_compact_before_send_respects_threshold_and_setting() {
     app.auto_compact = true;
     app.session.last_prompt_tokens = Some(10_000);
     assert!(!should_auto_compact_before_send(&app));
+}
+
+#[test]
+fn auto_compact_respects_500k_floor_even_at_high_percent() {
+    let mut app = create_test_app();
+    app.auto_compact = true;
+    app.auto_compact_threshold_pct = 70.0;
+    app.session.last_prompt_tokens = Some(400_000);
+    app.api_messages = vec![Message {
+        role: "user".to_string(),
+        content: vec![ContentBlock::Text {
+            text: "x".repeat(400_000),
+            cache_control: None,
+        }],
+    }];
+    assert!(!should_auto_compact_before_send(&app));
+}
+
+#[test]
+fn auto_compact_fires_when_above_floor_and_threshold() {
+    let mut app = create_test_app();
+    app.auto_compact = true;
+    app.auto_compact_threshold_pct = 70.0;
+    app.session.last_prompt_tokens = Some(600_000);
+    app.api_messages = vec![Message {
+        role: "user".to_string(),
+        content: vec![ContentBlock::Text {
+            text: "x".repeat(600_000),
+            cache_control: None,
+        }],
+    }];
+    assert!(should_auto_compact_before_send(&app));
+}
+
+#[test]
+fn auto_compact_blocked_when_above_floor_but_below_threshold() {
+    let mut app = create_test_app();
+    app.auto_compact = true;
+    app.auto_compact_threshold_pct = 85.0;
+    app.session.last_prompt_tokens = Some(600_000);
+    app.api_messages = vec![Message {
+        role: "user".to_string(),
+        content: vec![ContentBlock::Text {
+            text: "x".repeat(600_000),
+            cache_control: None,
+        }],
+    }];
+    assert!(!should_auto_compact_before_send(&app));
+}
+
+#[test]
+fn auto_compact_threshold_10_percent_fires_early() {
+    let mut app = create_test_app();
+    app.auto_compact = true;
+    app.auto_compact_threshold_pct = 10.0;
+    app.session.last_prompt_tokens = Some(500_000);
+    app.api_messages = vec![Message {
+        role: "user".to_string(),
+        content: vec![ContentBlock::Text {
+            text: "x".repeat(500_000),
+            cache_control: None,
+        }],
+    }];
+    assert!(should_auto_compact_before_send(&app));
+}
+
+#[test]
+fn auto_compact_threshold_100_percent_never_fires() {
+    let mut app = create_test_app();
+    app.auto_compact = true;
+    app.auto_compact_threshold_pct = 100.0;
+    app.session.last_prompt_tokens = Some(999_000);
+    app.api_messages = vec![Message {
+        role: "user".to_string(),
+        content: vec![ContentBlock::Text {
+            text: "x".repeat(999_000),
+            cache_control: None,
+        }],
+    }];
+    assert!(!should_auto_compact_before_send(&app));
+}
+
+#[test]
+fn auto_compact_disabled_master_switch_always_blocks() {
+    let mut app = create_test_app();
+    app.auto_compact = false;
+    app.auto_compact_threshold_pct = 10.0;
+    app.session.last_prompt_tokens = Some(900_000);
+    app.api_messages = vec![Message {
+        role: "user".to_string(),
+        content: vec![ContentBlock::Text {
+            text: "x".repeat(900_000),
+            cache_control: None,
+        }],
+    }];
+    assert!(!should_auto_compact_before_send(&app));
+}
+
+#[test]
+fn context_warning_without_auto_compact_suggests_enabling() {
+    let mut app = create_test_app();
+    app.auto_compact = false;
+    app.auto_compact_threshold_pct = 70.0;
+    app.session.last_prompt_tokens = Some(650_000);
+    app.api_messages = vec![Message {
+        role: "user".to_string(),
+        content: vec![ContentBlock::Text {
+            text: "x".repeat(650_000),
+            cache_control: None,
+        }],
+    }];
+    maybe_warn_context_pressure(&mut app);
+    assert!(app.status_message.is_some());
+    let msg = app.status_message.unwrap();
+    assert!(msg.contains("Consider enabling auto_compact or use /compact."));
+}
+
+#[test]
+fn context_warning_below_floor_and_below_threshold() {
+    let mut app = create_test_app();
+    app.auto_compact = true;
+    app.auto_compact_threshold_pct = 70.0;
+    app.session.last_prompt_tokens = Some(300_000);
+    app.api_messages = vec![Message {
+        role: "user".to_string(),
+        content: vec![ContentBlock::Text {
+            text: "x".repeat(300_000),
+            cache_control: None,
+        }],
+    }];
+    maybe_warn_context_pressure(&mut app);
+    assert!(app.status_message.is_some());
+    let msg = app.status_message.unwrap();
+    assert!(msg.contains("below 500K floor and 70% threshold"));
+}
+
+#[test]
+fn context_warning_below_floor_above_threshold() {
+    let mut app = create_test_app();
+    app.auto_compact = true;
+    app.auto_compact_threshold_pct = 30.0;
+    app.session.last_prompt_tokens = Some(400_000);
+    app.api_messages = vec![Message {
+        role: "user".to_string(),
+        content: vec![ContentBlock::Text {
+            text: "x".repeat(400_000),
+            cache_control: None,
+        }],
+    }];
+    maybe_warn_context_pressure(&mut app);
+    assert!(app.status_message.is_some());
+    let msg = app.status_message.unwrap();
+    assert!(msg.contains("below 500K token floor"));
+}
+
+#[test]
+fn context_warning_above_floor_below_threshold() {
+    let mut app = create_test_app();
+    app.auto_compact = true;
+    app.auto_compact_threshold_pct = 90.0;
+    app.session.last_prompt_tokens = Some(700_000);
+    app.api_messages = vec![Message {
+        role: "user".to_string(),
+        content: vec![ContentBlock::Text {
+            text: "x".repeat(700_000),
+            cache_control: None,
+        }],
+    }];
+    maybe_warn_context_pressure(&mut app);
+    assert!(app.status_message.is_some());
+    let msg = app.status_message.unwrap();
+    assert!(msg.contains("will fire at 90%"));
+}
+
+#[test]
+fn context_warning_above_floor_and_threshold() {
+    let mut app = create_test_app();
+    app.auto_compact = true;
+    app.auto_compact_threshold_pct = 50.0;
+    app.session.last_prompt_tokens = Some(800_000);
+    app.api_messages = vec![Message {
+        role: "user".to_string(),
+        content: vec![ContentBlock::Text {
+            text: "x".repeat(800_000),
+            cache_control: None,
+        }],
+    }];
+    maybe_warn_context_pressure(&mut app);
+    assert!(app.status_message.is_some());
+    let msg = app.status_message.unwrap();
+    assert!(msg.contains("would fire now"));
 }
 
 // ============================================================================
@@ -5167,7 +5360,7 @@ fn render_footer_from_drops_only_unselected_clusters() {
 #[test]
 fn render_footer_from_git_branch_item_renders_workspace_branch() {
     let repo = init_git_repo();
-    let checkout = Command::new("git")
+    let checkout = crate::dependencies::Git::command().expect("git not found")
         .args(["checkout", "-b", "feature/statusline"])
         .current_dir(repo.path())
         .output()
@@ -5385,6 +5578,7 @@ fn composer_arrows_scroll_nonempty_also_scrolls() {
     app.cursor_position = app.input.chars().count();
     app.input_history.push("previous prompt".to_string());
 
+    // With the option on and a single-line input, Up navigates history.
     // #1677: terminals that convert mouse-wheel to arrow keys should scroll
     // the transcript without mutating a draft the user is editing.
     assert!(handle_composer_history_arrow(
@@ -5395,45 +5589,6 @@ fn composer_arrows_scroll_nonempty_also_scrolls() {
     ));
     assert_eq!(app.viewport.pending_scroll_delta, -3);
     assert_eq!(app.input, "hello");
-}
-
-#[test]
-fn composer_arrow_up_moves_within_multiline_input() {
-    let mut app = create_test_app();
-    app.composer_arrows_scroll = false;
-    app.input = "line one\nline two".to_string();
-    app.cursor_position = app.input.chars().count();
-    app.input_history.push("previous prompt".to_string());
-
-    assert!(handle_composer_history_arrow(
-        &mut app,
-        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
-        false,
-        false,
-    ));
-
-    assert_eq!(app.input, "line one\nline two");
-    assert!(app.cursor_position < app.input.chars().count());
-}
-
-#[test]
-fn composer_arrow_down_moves_within_multiline_input() {
-    let mut app = create_test_app();
-    app.composer_arrows_scroll = false;
-    app.input = "line one\nline two".to_string();
-    app.cursor_position = 0;
-    app.input_history.push("next prompt".to_string());
-    app.history_index = Some(app.input_history.len() - 1);
-
-    assert!(handle_composer_history_arrow(
-        &mut app,
-        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
-        false,
-        false,
-    ));
-
-    assert_eq!(app.input, "line one\nline two");
-    assert!(app.cursor_position >= "line one\n".chars().count());
 }
 
 #[test]
@@ -5456,21 +5611,47 @@ fn composer_arrows_scroll_multiline_input_navigates_lines() {
 }
 
 #[test]
-fn composer_arrow_up_at_first_line_falls_back_to_history_up() {
+fn composer_arrow_up_moves_within_multiline_input() {
     let mut app = create_test_app();
     app.composer_arrows_scroll = false;
     app.input = "line one\nline two".to_string();
-    app.cursor_position = 0;
+    // Place cursor at end of second line.
+    app.cursor_position = app.input.chars().count();
     app.input_history.push("previous prompt".to_string());
 
+    // Up should move cursor to the first line, not navigate history.
     assert!(handle_composer_history_arrow(
         &mut app,
         KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
         false,
         false,
     ));
+    // Cursor should now be somewhere on line 1, not "previous prompt".
+    assert_ne!(app.input, "previous prompt");
+    assert!(app.input.contains("line one"));
+    assert!(app.cursor_position < app.input.chars().count());
+}
 
-    assert_eq!(app.input, "previous prompt");
+#[test]
+fn composer_arrow_down_moves_within_multiline_input() {
+    let mut app = create_test_app();
+    app.composer_arrows_scroll = false;
+    app.input = "line one\nline two".to_string();
+    // Place cursor at start of first line.
+    app.cursor_position = 0;
+    app.input_history.push("next prompt".to_string());
+    app.history_index = Some(app.input_history.len() - 1);
+
+    // Down should move cursor to the second line, not navigate history.
+    assert!(handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+        false,
+        false,
+    ));
+    // Cursor should now be on line 2, input unchanged.
+    assert_eq!(app.input, "line one\nline two");
+    assert!(app.cursor_position >= "line one\n".len());
 }
 
 // #1443: when mouse capture is off (e.g. Windows CMD), arrow-scroll
@@ -5490,16 +5671,15 @@ fn composer_arrows_scroll_defaults_true_without_mouse_capture() {
 }
 
 #[test]
-fn composer_arrows_scroll_defaults_follow_platform_with_mouse_capture() {
+fn composer_arrows_scroll_defaults_false_with_mouse_capture() {
     let options = TuiOptions {
         use_mouse_capture: true,
         ..create_test_options()
     };
     let app = App::new(options, &Config::default());
-    assert_eq!(
-        app.composer_arrows_scroll,
-        cfg!(windows),
-        "arrows-scroll should default to true on Windows and false on other platforms when mouse capture is on"
+    assert!(
+        !app.composer_arrows_scroll,
+        "arrows-scroll must default to false when mouse capture is on"
     );
 }
 
@@ -5522,6 +5702,247 @@ fn composer_arrows_scroll_config_overrides_default() {
         !app.composer_arrows_scroll,
         "explicit config=false must override the mouse-capture-derived default"
     );
+}
+
+#[test]
+fn history_arrow_down_handles_empty_input() {
+    let mut app = create_test_app();
+    app.composer_arrows_scroll = false;
+    app.input_history.push("older".to_string());
+    app.input_history.push("newer".to_string());
+
+    // Empty composer + Up → newest entry (draft saved as empty string).
+    assert!(handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+        false,
+        false,
+    ));
+    assert_eq!(app.input, "newer");
+
+    // Down from newest → end of history → restores the saved empty draft.
+    assert!(handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+        false,
+        false,
+    ));
+    assert!(app.input.is_empty());
+    assert!(app.history_index.is_none());
+}
+
+#[test]
+fn composer_arrows_scroll_multiline_whitespace_navigates_lines() {
+    let mut app = create_test_app();
+    app.composer_arrows_scroll = true;
+    // Whitespace-only multiline: `trim()` would produce "", but we have
+    // newlines, so scroll_on_empty must stay false — the user can
+    // navigate between lines.
+    app.input = "   \n   ".to_string();
+    app.cursor_position = app.input.chars().count(); // end of second line
+
+    // Up: moves cursor to first line, not scrolling transcript.
+    assert!(handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+        false,
+        false,
+    ));
+    // Cursor moved to first line; input unchanged.
+    assert_eq!(app.input, "   \n   ");
+    assert!(app.cursor_position < app.input.chars().count());
+    // Pending scroll delta should be 0 (no scrolling happened).
+    assert_eq!(app.viewport.pending_scroll_delta, 0);
+}
+
+#[test]
+fn history_arrow_down_walks_forward_through_entries() {
+    let mut app = create_test_app();
+    app.composer_arrows_scroll = false;
+    app.input_history.push("oldest".to_string());
+    app.input_history.push("middle".to_string());
+    app.input_history.push("newest".to_string());
+
+    // Up three times: newest → middle → oldest.
+    handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+        false,
+        false,
+    );
+    handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+        false,
+        false,
+    );
+    handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+        false,
+        false,
+    );
+    assert_eq!(app.input, "oldest");
+
+    // Down walks forward: oldest → middle → newest.
+    handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+        false,
+        false,
+    );
+    assert_eq!(app.input, "middle");
+
+    handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+        false,
+        false,
+    );
+    assert_eq!(app.input, "newest");
+}
+
+#[test]
+fn composer_arrow_up_at_first_line_falls_back_to_history_up() {
+    let mut app = create_test_app();
+    app.composer_arrows_scroll = false;
+    app.input = "line one\nline two".to_string();
+    // Cursor on first line (position 0).
+    app.cursor_position = 0;
+    app.input_history.push("previous prompt".to_string());
+
+    // Up at first line: no newline before cursor → falls back to history_up.
+    assert!(handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+        false,
+        false,
+    ));
+    assert_eq!(app.input, "previous prompt");
+}
+
+#[test]
+fn composer_arrow_down_at_last_line_falls_back_to_history_down() {
+    let mut app = create_test_app();
+    app.composer_arrows_scroll = false;
+    app.input = "line one\nline two".to_string();
+    // Cursor on the last line — rest from cursor has no '\n', so
+    // vim_move_down falls through to history_down.
+    app.cursor_position = "line one\n".chars().count();
+    app.input_history.push("unrelated".to_string());
+    // history_index is None → history_down is a no-op, input stays put.
+    assert!(app.history_index.is_none());
+
+    assert!(handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+        false,
+        false,
+    ));
+    // No crash, input and cursor unchanged (history_down with None is no-op).
+    assert_eq!(app.input, "line one\nline two");
+    assert_eq!(app.cursor_position, "line one\n".chars().count());
+}
+
+#[test]
+fn history_roundtrip_up_then_down_restores_draft() {
+    let mut app = create_test_app();
+    app.composer_arrows_scroll = false;
+    app.input = "my draft".to_string();
+    app.cursor_position = app.input.chars().count();
+    app.input_history.push("previous prompt".to_string());
+
+    // Up navigates to previous prompt.
+    assert!(handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+        false,
+        false,
+    ));
+    assert_eq!(app.input, "previous prompt");
+
+    // Down restores the draft.
+    assert!(handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+        false,
+        false,
+    ));
+    assert_eq!(app.input, "my draft");
+    assert_eq!(app.cursor_position, "my draft".chars().count());
+}
+#[test]
+fn home_jumps_to_line_start_multiline() {
+    let mut app = create_test_app();
+    app.input = "line one\nline two\nline three".to_string();
+    app.cursor_position = app.input.chars().count();
+    app.move_cursor_line_start();
+    assert_eq!(app.cursor_position, "line one\nline two\n".len());
+}
+
+#[test]
+fn home_from_middle_of_line_jumps_to_line_start() {
+    let mut app = create_test_app();
+    app.input = "line one\nline two".to_string();
+    app.cursor_position = "line one\nli".len();
+    app.move_cursor_line_start();
+    assert_eq!(app.cursor_position, "line one\n".len());
+}
+
+#[test]
+fn home_on_singleline_jumps_to_zero() {
+    let mut app = create_test_app();
+    app.input = "hello world".to_string();
+    app.cursor_position = 6;
+    app.move_cursor_line_start();
+    assert_eq!(app.cursor_position, 0);
+}
+
+#[test]
+fn end_jumps_to_line_end_multiline() {
+    let mut app = create_test_app();
+    app.input = "line one\nline two\nline three".to_string();
+    app.cursor_position = 0;
+    app.move_cursor_line_end();
+    assert_eq!(app.cursor_position, "line one".len());
+}
+
+#[test]
+fn end_from_middle_of_line_jumps_to_line_end() {
+    let mut app = create_test_app();
+    app.input = "line one\nline two".to_string();
+    app.cursor_position = "line one\nli".len();
+    app.move_cursor_line_end();
+    assert_eq!(app.cursor_position, "line one\nline two".len());
+}
+
+#[test]
+fn end_on_singleline_jumps_to_absolute_end() {
+    let mut app = create_test_app();
+    app.input = "hello world".to_string();
+    app.cursor_position = 0;
+    app.move_cursor_line_end();
+    assert_eq!(app.cursor_position, app.input.chars().count());
+}
+
+#[test]
+fn home_at_line_start_stays_put() {
+    let mut app = create_test_app();
+    app.input = "line one\nline two".to_string();
+    app.cursor_position = "line one\n".len();
+    app.move_cursor_line_start();
+    assert_eq!(app.cursor_position, "line one\n".len());
+}
+
+#[test]
+fn end_at_newline_stays_at_line_end() {
+    let mut app = create_test_app();
+    app.input = "line one\nline two\nline three".to_string();
+    // Cursor sitting on the first '\n'.
+    app.cursor_position = "line one".len();
+    app.move_cursor_line_end();
+    // Stays at end of current line.
+    assert_eq!(app.cursor_position, "line one".len());
 }
 
 #[test]

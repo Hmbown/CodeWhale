@@ -2,8 +2,7 @@
 
 use std::io::{self, Stdout, Write};
 use std::path::PathBuf;
-#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
-use std::process::{Command, Stdio};
+
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -31,6 +30,7 @@ use ratatui::{
     widgets::Block,
 };
 use tracing;
+use crate::logging;
 
 use crate::audit::log_sensitive_event;
 use crate::automation_manager::{AutomationManager, AutomationSchedulerConfig, spawn_scheduler};
@@ -133,6 +133,7 @@ const SLASH_MENU_LIMIT: usize = 128;
 const MENTION_MENU_LIMIT: usize = 6;
 const MIN_CHAT_HEIGHT: u16 = 3;
 const MIN_COMPOSER_HEIGHT: u16 = 2;
+const CONTEXT_SUGGEST_COMPACT_THRESHOLD_PERCENT: f64 = 60.0;
 const CONTEXT_WARNING_THRESHOLD_PERCENT: f64 = 85.0;
 const CONTEXT_CRITICAL_THRESHOLD_PERCENT: f64 = 95.0;
 const UI_IDLE_POLL_MS: u64 = 48;
@@ -276,6 +277,11 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
     if use_alt_screen {
         execute!(stdout, EnterAlternateScreen)?;
     }
+    // On Windows, stderr cannot be redirected to the log file (no dup2).
+    // Suppress verbose CLI logging once the alt-screen is active so
+    // eprintln! calls from crate::logging don't leak into the TUI buffer.
+    #[cfg(windows)]
+    crate::logging::set_verbose(false);
     // Initialize the file-backed TUI log and (on Unix) redirect raw stderr
     // away from the alt-screen for the lifetime of this guard. Any
     // `eprintln!`, panic message, or third-party stderr write that would
@@ -830,7 +836,14 @@ async fn run_event_loop(
         .checked_sub(Duration::from_secs(60))
         .unwrap_or_else(Instant::now);
 
+    let mut loop_ticks: u64 = 0;
+
     loop {
+        loop_ticks += 1;
+        if loop_ticks % 100 == 0 {
+            logging::info(format!("[FREEZE-DEBUG] event_loop tick={loop_ticks}, mode={:?}, streaming={}", app.mode, app.streaming_state.is_active));
+        }
+
         if !drain_web_config_events(&mut web_config_session, app, config, &engine_handle).await {
             web_config_session = None;
         }
@@ -933,11 +946,17 @@ async fn run_event_loop(
         let mut transcript_batch_updated = false;
         let mut queued_to_send: Option<QueuedMessage> = None;
         {
+            if loop_ticks % 100 == 0 {
+                logging::info(format!("[FREEZE-DEBUG] engine_poll_enter tick={loop_ticks}"));
+            }
             let mut rx = engine_handle.rx_event.write().await;
+            let poll_start = Instant::now();
             while let Ok(event) = rx.try_recv() {
                 received_engine_event = true;
+                logging::info(format!("[FREEZE-DEBUG] engine_event_rcvd tick={loop_ticks}"));
                 match event {
                     EngineEvent::MessageStarted { .. } => {
+                        logging::info("[FREEZE-DEBUG] EngineEvent::MessageStarted");
                         // Assistant text starting after parallel tool work
                         // means the tool group is done. Flush the active
                         // cell first so the message lands BELOW the
@@ -970,6 +989,7 @@ async fn run_event_loop(
                         }
                     }
                     EngineEvent::MessageComplete { .. } => {
+                        let complete_char_count = current_streaming_text.len();
                         // #861 RC3: defensive drain of a still-active thinking
                         // entry. Normally `ThinkingComplete` arrives first and
                         // populates `last_reasoning` before we get here, but
@@ -1059,6 +1079,8 @@ async fn run_event_loop(
                                 tool_uses,
                             );
                         }
+                        logging::info(format!(
+                            "[FREEZE-DEBUG] EngineEvent::MessageComplete chars={complete_char_count}"));
                     }
                     EngineEvent::ThinkingStarted { .. } => {
                         // P2.3: thinking lives in the active cell so it groups
@@ -2467,6 +2489,19 @@ async fn run_event_loop(
                 continue;
             }
 
+            // Ctrl+L: manual context compaction — breaks the chicken-and-egg
+            // deadlock when the model is too slow to suggest /compact at high
+            // context saturation. Fires even when a turn is streaming so the
+            // user can compact between turns without canceling.
+            if matches!(key.code, KeyCode::Char('l') | KeyCode::Char('L'))
+                && key.modifiers.contains(KeyModifiers::CONTROL)
+                && app.view_stack.is_empty()
+            {
+                app.status_message = Some("Compacting context (Ctrl+L)...".to_string());
+                let _ = engine_handle.send(Op::CompactContext).await;
+                continue;
+            }
+
             if matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C'))
                 && key.modifiers.contains(KeyModifiers::ALT)
                 && !key.modifiers.contains(KeyModifiers::CONTROL)
@@ -3267,10 +3302,10 @@ async fn run_event_loop(
                     app.move_cursor_start();
                 }
                 KeyCode::Home => {
-                    app.move_cursor_start();
+                    app.move_cursor_line_start();
                 }
                 KeyCode::End => {
-                    app.move_cursor_end();
+                    app.move_cursor_line_end();
                 }
                 KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     app.move_cursor_end();
@@ -4726,49 +4761,8 @@ async fn apply_command_result(
     Ok(false)
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 fn open_external_url(url: &str) -> Result<()> {
-    let mut command = external_url_command(url);
-
-    let status = command
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map_err(|err| anyhow::anyhow!("failed to launch browser command: {err}"))?;
-    if !status.success() {
-        return Err(anyhow::anyhow!(
-            "browser command exited with status {status}"
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-fn open_external_url(_url: &str) -> Result<()> {
-    Err(anyhow::anyhow!(
-        "browser opening is unsupported on this platform"
-    ))
-}
-
-#[cfg(target_os = "macos")]
-fn external_url_command(url: &str) -> Command {
-    let mut command = Command::new("open");
-    command.arg(url);
-    command
-}
-
-#[cfg(target_os = "linux")]
-fn external_url_command(url: &str) -> Command {
-    let mut command = Command::new("xdg-open");
-    command.arg(url);
-    command
-}
-
-#[cfg(target_os = "windows")]
-fn external_url_command(url: &str) -> Command {
-    let mut command = Command::new("cmd");
-    command.args(["/C", "start", "", url]);
-    command
+    crate::utils::open_url(url)
 }
 
 fn apply_workspace_runtime_state(app: &mut App, config: &Config, workspace: PathBuf) {
@@ -5347,6 +5341,18 @@ fn build_pending_input_preview(app: &App) -> PendingInputPreview {
 }
 
 fn render(f: &mut Frame, app: &mut App) {
+    {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static RENDER_COUNT: AtomicU64 = AtomicU64::new(0);
+        let n = RENDER_COUNT.fetch_add(1, Ordering::Relaxed);
+        if n % 100 == 0 || app.needs_redraw {
+            logging::info(format!(
+                "[FREEZE-DEBUG] render #{n} cells={} needs_redraw={}",
+                app.history.len(),
+                app.needs_redraw
+            ));
+        }
+    }
     let size = f.area();
 
     // Clear entire area with the configured app background.
@@ -6365,6 +6371,10 @@ fn resume_terminal(
     enable_raw_mode()?;
     if use_alt_screen {
         execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+        // Re-entering alt-screen after mode recovery — suppress verbose
+        // CLI logging again so eprintln! doesn't leak into the TUI.
+        #[cfg(windows)]
+        crate::logging::set_verbose(false);
     }
     recover_terminal_modes(
         terminal.backend_mut(),
@@ -6774,6 +6784,51 @@ fn maybe_warn_context_pressure(app: &mut App) {
         return;
     };
 
+    // Early heads-up at 60% — the same threshold the model is told to
+    // suggest /compact at. Non-intrusive: only sets the status message when
+    // it's currently empty, so it never stomps on a more important message.
+    let effective_warn_threshold = if app.auto_compact {
+        CONTEXT_SUGGEST_COMPACT_THRESHOLD_PERCENT.min(app.auto_compact_threshold_pct)
+    } else {
+        CONTEXT_SUGGEST_COMPACT_THRESHOLD_PERCENT
+    };
+
+    if percent >= effective_warn_threshold
+        && percent < CONTEXT_WARNING_THRESHOLD_PERCENT
+        && app.status_message.is_none()
+    {
+        let hint = if app.auto_compact {
+            let below_floor =
+                (used as usize) < crate::compaction::MINIMUM_AUTO_COMPACTION_TOKENS;
+            let below_threshold = percent < app.auto_compact_threshold_pct;
+
+            if below_floor && below_threshold {
+                format!(
+                    "Auto-compact enabled but below 500K floor and {:.0}% threshold; won't fire yet.",
+                    app.auto_compact_threshold_pct
+                )
+            } else if below_floor {
+                "Auto-compact enabled but below 500K token floor; won't fire yet."
+                    .to_string()
+            } else if below_threshold {
+                format!(
+                    "Auto-compact will fire at {:.0}% (currently {:.0}%).",
+                    app.auto_compact_threshold_pct, percent
+                )
+            } else {
+                "Auto-compaction would fire now; it will run before the next send."
+                    .to_string()
+            }
+        } else {
+            "Consider enabling auto_compact or use /compact.".to_string()
+        };
+        app.status_message = Some(format!(
+            "Context building: {:.0}% ({used}/{max} tokens). {hint}",
+            percent
+        ));
+        return;
+    }
+
     if percent < CONTEXT_WARNING_THRESHOLD_PERCENT {
         return;
     }
@@ -6804,8 +6859,20 @@ fn should_auto_compact_before_send(app: &App) -> bool {
     if !app.auto_compact {
         return false;
     }
+    // Use the configurable threshold (default 70%) instead of the old
+    // hardcoded 95% critical threshold. The 500K-token hard floor from
+    // compaction.rs is also respected here so small sessions are never
+    // auto-compacted even if the percentage looks high.
     context_usage_snapshot(app)
-        .map(|(_, _, pct)| pct >= CONTEXT_CRITICAL_THRESHOLD_PERCENT)
+        .map(|(used, _, pct)| {
+            // Hard floor: below 500K tokens, auto-compaction is refused
+            // because rewriting the prefix kills V4's prefix cache for
+            // little budget recovery.
+            if (used as usize) < crate::compaction::MINIMUM_AUTO_COMPACTION_TOKENS {
+                return false;
+            }
+            pct >= app.auto_compact_threshold_pct
+        })
         .unwrap_or(false)
 }
 

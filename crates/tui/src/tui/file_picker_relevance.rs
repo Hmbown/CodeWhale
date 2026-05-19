@@ -16,7 +16,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use crate::dependencies::{ExternalTool, Git};
 
 use crate::tui::app::App;
 use crate::tui::app::ToolDetailRecord;
@@ -70,7 +70,10 @@ pub(super) fn build_relevance(app: &App) -> FilePickerRelevance {
 }
 
 fn modified_workspace_paths(workspace: &Path) -> Vec<String> {
-    let Ok(output) = Command::new("git")
+    let Some(mut cmd) = Git::command() else {
+        return Vec::new();
+    };
+    let Ok(output) = cmd
         .arg("-C")
         .arg(workspace)
         .args(["status", "--short", "--untracked-files=normal"])
