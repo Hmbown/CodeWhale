@@ -173,7 +173,7 @@ async fn upload_gist(path: &Path) -> Result<String, String> {
         .output()
     })
     .await
-    .map_err(|join_err| format!("gh gist create panicked: {join_err}"))?
+    .map_err(|join_err| format!("gh gist create failed: task panicked ({join_err})"))?
         .map_err(|e| format!("Failed to run `gh gist create`: {e}"))?;
 
     if !output.status.success() {

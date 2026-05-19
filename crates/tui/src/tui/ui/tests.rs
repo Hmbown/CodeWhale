@@ -1938,7 +1938,10 @@ fn auto_model_still_uses_auto_model_router() {
 fn init_git_repo() -> TempDir {
     let dir = tempfile::tempdir().expect("tempdir");
 
-    let init = crate::dependencies::Git::command().expect("git not found")
+    let Some(mut git_cmd) = crate::dependencies::Git::command() else {
+        panic!("git not found");
+    };
+    let init = git_cmd
         .arg("init")
         .current_dir(dir.path())
         .output()
@@ -1949,7 +1952,10 @@ fn init_git_repo() -> TempDir {
         String::from_utf8_lossy(&init.stderr)
     );
 
-    let commit = crate::dependencies::Git::command().expect("git not found")
+    let Some(mut git_cmd) = crate::dependencies::Git::command() else {
+        panic!("git not found");
+    };
+    let commit = git_cmd
         .args([
             "-c",
             "user.name=DeepSeek TUI Tests",
@@ -5360,7 +5366,10 @@ fn render_footer_from_drops_only_unselected_clusters() {
 #[test]
 fn render_footer_from_git_branch_item_renders_workspace_branch() {
     let repo = init_git_repo();
-    let checkout = crate::dependencies::Git::command().expect("git not found")
+    let Some(mut git_cmd) = crate::dependencies::Git::command() else {
+        panic!("git not found");
+    };
+    let checkout = git_cmd
         .args(["checkout", "-b", "feature/statusline"])
         .current_dir(repo.path())
         .output()

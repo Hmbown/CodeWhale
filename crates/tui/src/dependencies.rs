@@ -198,6 +198,15 @@ pub fn resolve_node() -> Option<String> {
         .clone()
 }
 
+/// Extract the simple type name from `std::any::type_name` output.
+/// e.g. turns `deepseek_tui::dependencies::Git` into `Git`.
+fn simple_type_name<T>() -> &'static str {
+    let full = std::any::type_name::<T>();
+    full.rsplit("::")
+        .next()
+        .unwrap_or(full)
+}
+
 // ---------------------------------------------------------------------------
 // ExternalTool trait — unified subprocess interface
 // ---------------------------------------------------------------------------
@@ -254,7 +263,7 @@ pub trait ExternalTool {
         let mut cmd = Self::command().ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::NotFound,
-                format!("{} not found on PATH", std::any::type_name::<Self>()),
+                format!("{} not found on PATH", simple_type_name::<Self>()),
             )
         })?;
         cmd.args(args).current_dir(cwd).output()
@@ -266,7 +275,7 @@ pub trait ExternalTool {
         let mut cmd = Self::command().ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::NotFound,
-                format!("{} not found on PATH", std::any::type_name::<Self>()),
+                format!("{} not found on PATH", simple_type_name::<Self>()),
             )
         })?;
         cmd.args(args).current_dir(cwd).status()

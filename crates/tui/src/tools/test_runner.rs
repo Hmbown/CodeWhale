@@ -180,8 +180,10 @@ mod tests {
     fn init_cargo_project(root: &Path) -> std::path::PathBuf {
         let project_dir = root.join("project");
         fs::create_dir_all(&project_dir).expect("create project dir");
-        let status = crate::dependencies::Cargo::command()
-            .expect("cargo not found")
+        let Some(mut cargo_cmd) = crate::dependencies::Cargo::command() else {
+            panic!("cargo not found");
+        };
+        let status = cargo_cmd
             .args([
                 "init",
                 "--lib",

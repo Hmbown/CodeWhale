@@ -1053,20 +1053,29 @@ mod tests {
         let tmp = tempdir().unwrap();
         let workspace = tmp.path().join("workspace");
         std::fs::create_dir_all(&workspace).unwrap();
-        crate::dependencies::Git::command().expect("git not found")
+        let Some(mut git_cmd) = crate::dependencies::Git::command() else {
+            panic!("git not found");
+        };
+        git_cmd
             .arg("-C").arg(&workspace)
             .arg("init").arg("--quiet")
             .status()
             .unwrap();
         std::fs::write(workspace.join("tracked.txt"), b"committed").unwrap();
-        crate::dependencies::Git::command().expect("git not found")
+        let Some(mut git_cmd) = crate::dependencies::Git::command() else {
+            panic!("git not found");
+        };
+        git_cmd
             .arg("-C")
             .arg(&workspace)
             .arg("add")
             .arg("tracked.txt")
             .status()
             .unwrap();
-        crate::dependencies::Git::command().expect("git not found")
+        let Some(mut git_cmd) = crate::dependencies::Git::command() else {
+            panic!("git not found");
+        };
+        git_cmd
             .arg("-C")
             .arg(&workspace)
             .arg("-c")
@@ -1079,7 +1088,10 @@ mod tests {
             .arg("init")
             .status()
             .unwrap();
-        let user_head_before = crate::dependencies::Git::command().expect("git not found")
+        let Some(mut git_cmd) = crate::dependencies::Git::command() else {
+            panic!("git not found");
+        };
+        let user_head_before = git_cmd
             .arg("-C")
             .arg(&workspace)
             .args(["rev-parse", "HEAD"])
@@ -1095,7 +1107,10 @@ mod tests {
         repo.snapshot("post-turn:1").unwrap();
         repo.restore(&id).unwrap();
 
-        let user_head_after = crate::dependencies::Git::command().expect("git not found")
+        let Some(mut git_cmd) = crate::dependencies::Git::command() else {
+            panic!("git not found");
+        };
+        let user_head_after = git_cmd
             .arg("-C")
             .arg(&workspace)
             .args(["rev-parse", "HEAD"])
