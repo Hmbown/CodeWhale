@@ -7,6 +7,7 @@ use std::time::Instant;
 use super::CommandResult;
 use crate::client::{PromptInspection, inspect_prompt_for_request};
 use crate::compaction::estimate_input_tokens_conservative;
+use crate::dependencies::{ExternalTool, Git};
 use crate::localization::{Locale, MessageId, tr};
 use crate::models::{ContentBlock, MessageRequest, SystemPrompt, context_window_for_model};
 use crate::tui::app::{App, AppAction, TurnCacheRecord};
@@ -1590,7 +1591,8 @@ pub fn patch_undo(app: &mut App) -> CommandResult {
     }
 
     // Show diff stat so the user knows what changed.
-    let diff_stat = std::process::Command::new("git")
+    let diff_stat = Git::command()
+        .expect("git not found")
         .args(["diff", "--stat"])
         .current_dir(&workspace)
         .output()
@@ -1669,11 +1671,13 @@ pub fn edit(app: &mut App) -> CommandResult {
 pub fn diff(app: &mut App) -> CommandResult {
     let workspace = app.workspace.clone();
 
-    let name_only_output = std::process::Command::new("git")
+    let name_only_output = Git::command()
+        .expect("git not found")
         .args(["diff", "--name-only"])
         .current_dir(&workspace)
         .output();
-    let stat_output = std::process::Command::new("git")
+    let stat_output = Git::command()
+        .expect("git not found")
         .args(["diff", "--stat"])
         .current_dir(&workspace)
         .output();

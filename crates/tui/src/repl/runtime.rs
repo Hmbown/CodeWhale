@@ -25,11 +25,11 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::process::{Child, ChildStdin, ChildStdout};
 use uuid::Uuid;
 
 use crate::child_env;
-use crate::dependencies::{PYTHON_CANDIDATES, resolve_python_interpreter, split_interpreter_spec};
+use crate::dependencies::ExternalTool;
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -203,22 +203,12 @@ impl PythonRuntime {
         let session_id = Uuid::new_v4().simple().to_string();
         let bootstrap = render_bootstrap(&session_id);
 
-        let interpreter = resolve_python_interpreter().ok_or_else(|| {
-            format!(
-                "no Python interpreter found on PATH (tried {PYTHON_CANDIDATES:?}). \
-                 Install Python 3 and ensure one of these commands works, then restart codewhale.",
-            )
+        let mut cmd = crate::dependencies::Python::tokio_command().ok_or_else(|| {
+            "no Python interpreter found on PATH (tried python3, python, py -3). \
+             Install Python 3 and restart deepseek-tui."
+                .to_string()
         })?;
-        let (program, interpreter_args) = split_interpreter_spec(&interpreter);
-        if program.is_empty() {
-            return Err(format!(
-                "resolved Python interpreter is empty: {interpreter:?}"
-            ));
-        }
-
-        let mut cmd = Command::new(&program);
-        cmd.args(&interpreter_args)
-            .arg("-u")
+        cmd.arg("-u")
             .arg("-c")
             .arg(&bootstrap)
             .stdin(Stdio::piped())
@@ -238,16 +228,16 @@ impl PythonRuntime {
 
         let mut child = cmd
             .spawn()
-            .map_err(|e| format!("failed to spawn Python interpreter `{interpreter}`: {e}"))?;
+            .map_err(|e| format!("failed to spawn Python interpreter: {e}"))?;
 
         let stdin = child
             .stdin
             .take()
-            .ok_or_else(|| format!("Python interpreter `{interpreter}` stdin pipe missing"))?;
+            .ok_or_else(|| "Python interpreter stdin pipe missing".to_string())?;
         let raw_stdout = child
             .stdout
             .take()
-            .ok_or_else(|| format!("Python interpreter `{interpreter}` stdout pipe missing"))?;
+            .ok_or_else(|| "Python interpreter stdout pipe missing".to_string())?;
         let stdout = BufReader::new(raw_stdout);
 
         let mut rt = Self {
@@ -271,14 +261,12 @@ impl PythonRuntime {
             Ok(Ok(())) => Ok(rt),
             Ok(Err(e)) => {
                 let _ = rt.child.kill().await;
-                Err(format!(
-                    "Python interpreter `{interpreter}` bootstrap failed: {e}"
-                ))
+                Err(format!("Python interpreter bootstrap failed: {e}"))
             }
             Err(_) => {
                 let _ = rt.child.kill().await;
                 Err(format!(
-                    "Python interpreter `{interpreter}` bootstrap did not signal ready within {}s",
+                    "Python interpreter bootstrap did not signal ready within {}s",
                     SPAWN_READY_TIMEOUT.as_secs()
                 ))
             }
@@ -287,31 +275,20 @@ impl PythonRuntime {
 
     async fn read_until_ready(&mut self, ready_sentinel: &str) -> Result<(), String> {
         loop {
-            let line = match self.read_stdout_line_lossy().await? {
-                Some(line) => line,
-                None => {
-                    return Err("Python interpreter closed stdout before ready signal".to_string());
-                }
-            };
+            let mut line = String::new();
+            let n = self
+                .stdout
+                .read_line(&mut line)
+                .await
+                .map_err(|e| format!("stdout read: {e}"))?;
+            if n == 0 {
+                return Err("Python interpreter closed stdout before ready signal".to_string());
+            }
             let trimmed = line.trim_end_matches(['\n', '\r']);
             if trimmed == ready_sentinel {
                 return Ok(());
             }
             // Pre-ready output is rare; ignore it.
-        }
-    }
-
-    async fn read_stdout_line_lossy(&mut self) -> Result<Option<String>, String> {
-        let mut buf = Vec::new();
-        let n = self
-            .stdout
-            .read_until(b'\n', &mut buf)
-            .await
-            .map_err(|e| format!("stdout read: {e}"))?;
-        if n == 0 {
-            Ok(None)
-        } else {
-            Ok(Some(String::from_utf8_lossy(&buf).into_owned()))
         }
     }
 
@@ -362,12 +339,15 @@ impl PythonRuntime {
 
         let read_loop = async {
             loop {
-                let line = match self.read_stdout_line_lossy().await? {
-                    Some(line) => line,
-                    None => {
-                        return Err("Python interpreter closed stdout mid-round".to_string());
-                    }
-                };
+                let mut line = String::new();
+                let n = self
+                    .stdout
+                    .read_line(&mut line)
+                    .await
+                    .map_err(|e| format!("stdout read: {e}"))?;
+                if n == 0 {
+                    return Err("Python interpreter closed stdout mid-round".to_string());
+                }
                 let trimmed = line.trim_end_matches(['\n', '\r']);
 
                 if let Some(rest) = trimmed.strip_prefix(&done_prefix) {
@@ -943,11 +923,10 @@ if _ctx_file:
     except Exception as e:
         _sys.stderr.write(f"[bootstrap] failed to load context: {e}\n")
 content = _context
-_ctx = _context
 
 _BOOTSTRAP_NAMES = {
     "_SID","_REQ","_RESP","_FINAL","_ERR","_RUN","_END","_DONE","_READY",
-    "_rpc","_ctx_file","_context","_ctx","_slice_chars","_slice_lines","_BOOTSTRAP_NAMES","_main_loop",
+    "_rpc","_ctx_file","_context","_slice_chars","_slice_lines","_BOOTSTRAP_NAMES","_main_loop",
     "_emit_final","_json_safe","_slice_text","_prompt_with_slice",
     "_normalize_dependency_mode","_batch_dependency_error",
     "llm_query","llm_query_batched","rlm_query","rlm_query_batched",
@@ -1088,24 +1067,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn non_utf8_stdout_decodes_lossy_and_runtime_survives() {
-        let mut rt = PythonRuntime::new().await.expect("spawn");
-        let round = rt
-            .execute(
-                "import sys\n\
-                 sys.stdout.buffer.write(b'bad:\\xff\\n')\n\
-                 sys.stdout.buffer.flush()\n\
-                 print('after invalid')",
-            )
-            .await
-            .expect("execute");
-
-        assert!(round.stdout.contains("bad:\u{fffd}"), "{}", round.stdout);
-        assert!(round.stdout.contains("after invalid"), "{}", round.stdout);
-        rt.shutdown().await;
-    }
-
-    #[tokio::test]
     async fn variables_persist_across_rounds() {
         let mut rt = PythonRuntime::new().await.expect("spawn");
         rt.execute("x = [1, 2, 3]").await.expect("r1");
@@ -1146,10 +1107,10 @@ mod tests {
             .await
             .expect("spawn");
         let round = rt
-            .execute("print(content == _context, _ctx == _context, 'context' in globals(), 'ctx' in globals())")
+            .execute("print(content == _context, 'context' in globals(), 'ctx' in globals())")
             .await
             .expect("execute");
-        assert!(round.stdout.contains("True True False False"));
+        assert!(round.stdout.contains("True False False"));
         rt.shutdown().await;
     }
 

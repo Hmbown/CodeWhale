@@ -17,6 +17,7 @@
 use std::path::Path;
 use std::time::Duration;
 
+use crate::dependencies::ExternalTool;
 use serde_json::{Value, json};
 
 use crate::models::Tool;
@@ -73,20 +74,8 @@ pub async fn execute_js_execution_tool(
 ) -> Result<ToolResult, ToolError> {
     let code = required_str(input, "code")?;
 
-    // Resolve the Node runtime we cached at catalog-build time. If
-    // it's absent now (somehow registered but disappeared between
-    // startup and this call — concurrent uninstall, PATH change)
-    // fail fast with a clear message rather than dropping into
-    // `tokio::process::Command::new("node")` and surfacing the
-    // generic "program not found" error.
-    let node = crate::dependencies::resolve_node().ok_or_else(|| {
-        ToolError::execution_failed(
-            "js_execution: no Node.js runtime found on PATH (tried `node`). \
-             Install Node 18+ and ensure `node` is on PATH, then restart \
-             codewhale."
-                .to_string(),
-        )
-    })?;
+    // Resolve the Node runtime via ExternalTool. If it's absent now
+    // tokio_command() returns None and we fail fast with a clear message.
 
     let temp_dir = tempfile::tempdir()
         .map_err(|e| ToolError::execution_failed(format!("tempdir failed: {e}")))?;
@@ -95,9 +84,10 @@ pub async fn execute_js_execution_tool(
         .await
         .map_err(|e| ToolError::execution_failed(format!("tempfile write failed: {e}")))?;
 
-    let mut cmd = tokio::process::Command::new(&node);
-    cmd.arg(&script_path);
-    cmd.current_dir(workspace);
+    let mut cmd = crate::dependencies::Node::tokio_command().ok_or_else(|| {
+        ToolError::execution_failed("js_execution: Node.js runtime became unavailable".to_string())
+    })?;
+    cmd.arg(&script_path).current_dir(workspace);
 
     let output = tokio::time::timeout(Duration::from_secs(120), cmd.output())
         .await

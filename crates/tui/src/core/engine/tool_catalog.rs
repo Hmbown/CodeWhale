@@ -15,6 +15,8 @@ use crate::models::Tool;
 use crate::tools::spec::{ToolError, ToolResult, required_str};
 use crate::tui::app::AppMode;
 
+use crate::dependencies::ExternalTool;
+
 pub(super) const MULTI_TOOL_PARALLEL_NAME: &str = "multi_tool_use.parallel";
 pub(super) const REQUEST_USER_INPUT_NAME: &str = "request_user_input";
 pub(super) const CODE_EXECUTION_TOOL_NAME: &str = "code_execution";
@@ -29,53 +31,61 @@ pub(super) fn is_tool_search_tool(name: &str) -> bool {
     matches!(name, TOOL_SEARCH_REGEX_NAME | TOOL_SEARCH_BM25_NAME)
 }
 
-pub(super) const DEFAULT_ACTIVE_NATIVE_TOOLS: &[&str] = &[
-    "agent_open",
-    "apply_patch",
-    "checklist_write",
-    "edit_file",
-    "exec_shell",
-    "fetch_url",
-    "file_search",
-    "git_diff",
-    "git_status",
-    "grep_files",
-    "list_dir",
-    "read_file",
-    "run_tests",
-    "task_create",
-    "task_list",
-    "task_read",
-    "update_plan",
-    "web_search",
-    "write_file",
-];
-
-pub(super) fn should_default_defer_tool(
-    name: &str,
-    _mode: AppMode,
-    always_load: &HashSet<String>,
-) -> bool {
-    if always_load.contains(name) {
+pub(super) fn should_default_defer_tool(name: &str, mode: AppMode) -> bool {
+    if mode == AppMode::Yolo {
         return false;
     }
 
-    if is_tool_search_tool(name) {
+    // Shell exec tools are kept active in Agent so the model can run
+    // verification commands (build/test/git/cargo) without first having to
+    // discover them through ToolSearch. Plan mode does not register shell
+    // execution tools.
+    let always_loaded_in_action_modes = matches!(mode, AppMode::Agent)
+        && matches!(
+            name,
+            "exec_shell"
+                | "exec_shell_wait"
+                | "exec_shell_interact"
+                | "exec_wait"
+                | "exec_interact"
+        );
+    if always_loaded_in_action_modes {
         return false;
     }
 
-    !DEFAULT_ACTIVE_NATIVE_TOOLS
-        .iter()
-        .any(|core_tool| core_tool == &name)
+    !matches!(
+        name,
+        "read_file"
+            | "list_dir"
+            | "grep_files"
+            | "file_search"
+            | "diagnostics"
+            | "rlm_open"
+            | "rlm_eval"
+            | "rlm_configure"
+            | "rlm_close"
+            | "handle_read"
+            | "recall_archive"
+            | "notify"
+            | MULTI_TOOL_PARALLEL_NAME
+            | "update_plan"
+            | "checklist_write"
+            | "todo_write"
+            | "task_create"
+            | "task_list"
+            | "task_read"
+            | "task_gate_run"
+            | "task_shell_start"
+            | "task_shell_wait"
+            | "github_issue_context"
+            | "github_pr_context"
+            | REQUEST_USER_INPUT_NAME
+    )
 }
 
-pub(super) fn apply_native_tool_deferral(
-    catalog: &mut [Tool],
-    mode: AppMode,
-    always_load: &HashSet<String>,
-) {
+pub(super) fn apply_native_tool_deferral(catalog: &mut [Tool], mode: AppMode) {
     for tool in catalog {
-        tool.defer_loading = Some(should_default_defer_tool(&tool.name, mode, always_load));
+        tool.defer_loading = Some(should_default_defer_tool(&tool.name, mode));
     }
 }
 
@@ -101,9 +111,8 @@ pub(super) fn build_model_tool_catalog(
     mut native_tools: Vec<Tool>,
     mut mcp_tools: Vec<Tool>,
     mode: AppMode,
-    always_load: &HashSet<String>,
 ) -> Vec<Tool> {
-    apply_native_tool_deferral(&mut native_tools, mode, always_load);
+    apply_native_tool_deferral(&mut native_tools, mode);
     apply_mcp_tool_deferral(&mut mcp_tools, mode);
     // Sort each partition by name for prefix-cache stability (#263). The
     // upstream `to_api_tools()` already sorts the registry's HashMap output;
@@ -117,11 +126,7 @@ pub(super) fn build_model_tool_catalog(
     native_tools
 }
 
-pub(super) fn ensure_advanced_tooling(
-    catalog: &mut Vec<Tool>,
-    mode: AppMode,
-    always_load: &HashSet<String>,
-) {
+pub(super) fn ensure_advanced_tooling(catalog: &mut Vec<Tool>, mode: AppMode) {
     // code_execution depends on a locally-installed Python interpreter
     // (python3 / python / py -3). Before v0.8.31, the tool was always
     // advertised and would fail at execution time on Windows where
@@ -145,11 +150,7 @@ pub(super) fn ensure_advanced_tooling(
                 "required": ["code"]
             }),
             allowed_callers: Some(vec!["direct".to_string()]),
-            defer_loading: Some(should_default_defer_tool(
-                CODE_EXECUTION_TOOL_NAME,
-                mode,
-                always_load,
-            )),
+            defer_loading: Some(false),
             input_examples: None,
             strict: None,
             cache_control: None,
@@ -165,9 +166,7 @@ pub(super) fn ensure_advanced_tooling(
         && !catalog.iter().any(|t| t.name == JS_EXECUTION_TOOL_NAME)
         && crate::dependencies::resolve_node().is_some()
     {
-        let mut tool = crate::tools::js_execution::js_execution_tool_definition();
-        tool.defer_loading = Some(should_default_defer_tool(&tool.name, mode, always_load));
-        catalog.push(tool);
+        catalog.push(crate::tools::js_execution::js_execution_tool_definition());
     }
 
     if !catalog.iter().any(|t| t.name == TOOL_SEARCH_REGEX_NAME) {
@@ -683,20 +682,9 @@ pub(super) async fn execute_code_execution_tool(
     // Resolve the locally-installed Python interpreter we cached at
     // catalog-build time. If it's absent now (somehow registered but
     // disappeared between startup and this call — concurrent uninstall,
-    // PATH change, etc.) we fail fast with a clear message rather than
-    // dropping into `tokio::process::Command::new("python3")` and
-    // surfacing the cryptic "program not found" the contributor
-    // originally hit on Windows.
-    let interpreter = crate::dependencies::resolve_python_interpreter().ok_or_else(|| {
-        ToolError::execution_failed(format!(
-            "code_execution: no Python interpreter found on PATH (tried {:?}). \
-             Install Python 3 and ensure one of these is on PATH, then restart \
-             codewhale.",
-            crate::dependencies::PYTHON_CANDIDATES,
-        ))
-    })?;
-    let (program, args) = crate::dependencies::split_interpreter_spec(&interpreter);
-
+    // PATH change, etc.) the ExternalTool::tokio_command() will return
+    // None and we fail fast with a clear message.
+    //
     // Write the code to a temp file and execute it as a script rather
     // than passing it via `-c "<code>"`. Reasons:
     //   * `-c` has length limits (argv) on Windows.
@@ -713,12 +701,12 @@ pub(super) async fn execute_code_execution_tool(
         .await
         .map_err(|e| ToolError::execution_failed(format!("tempfile write failed: {e}")))?;
 
-    let mut cmd = tokio::process::Command::new(&program);
-    for arg in &args {
-        cmd.arg(arg);
-    }
-    cmd.arg(&script_path);
-    cmd.current_dir(workspace);
+    let mut cmd = crate::dependencies::Python::tokio_command().ok_or_else(|| {
+        ToolError::execution_failed(
+            "code_execution: Python interpreter became unavailable".to_string(),
+        )
+    })?;
+    cmd.arg(&script_path).current_dir(workspace);
 
     let output = tokio::time::timeout(Duration::from_secs(120), cmd.output())
         .await

@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::dependencies::ExternalTool;
 use async_trait::async_trait;
 use chrono::Utc;
 use serde_json::{Value, json};
@@ -430,11 +431,11 @@ fn run_gh_json(context: &ToolContext, args: &[&str]) -> Result<Value, ToolError>
 }
 
 fn ensure_github_repo(context: &ToolContext) -> Result<(), ToolError> {
-    let out = Command::new("git")
-        .args(["rev-parse", "--is-inside-work-tree"])
-        .current_dir(&context.workspace)
-        .output()
-        .map_err(|e| ToolError::execution_failed(format!("failed to run git: {e}")))?;
+    let out = crate::dependencies::Git::output(
+        &["rev-parse", "--is-inside-work-tree"],
+        &context.workspace,
+    )
+    .map_err(|e| ToolError::execution_failed(format!("failed to run git: {e}")))?;
     if out.status.success() {
         Ok(())
     } else {
@@ -445,10 +446,7 @@ fn ensure_github_repo(context: &ToolContext) -> Result<(), ToolError> {
 }
 
 fn git_status_porcelain(context: &ToolContext) -> Result<String, ToolError> {
-    let out = Command::new("git")
-        .args(["status", "--porcelain"])
-        .current_dir(&context.workspace)
-        .output()
+    let out = crate::dependencies::Git::output(&["status", "--porcelain"], &context.workspace)
         .map_err(|e| ToolError::execution_failed(format!("failed to run git status: {e}")))?;
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }

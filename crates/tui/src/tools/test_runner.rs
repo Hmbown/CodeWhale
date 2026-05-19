@@ -4,7 +4,6 @@
 //! approval policy as the other code-executing tools.
 
 use std::path::Path;
-use std::process::Command;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -15,6 +14,8 @@ use super::spec::{
     ApprovalRequirement, ToolCapability, ToolContext, ToolError, ToolResult, ToolSpec,
     optional_bool, optional_str,
 };
+
+use crate::dependencies::ExternalTool;
 
 const MAX_OUTPUT_CHARS: usize = 40_000;
 
@@ -121,7 +122,11 @@ impl ToolSpec for RunTestsTool {
 // === Helpers ===
 
 fn run_cargo(workspace: &Path, args: &[String]) -> Result<std::process::Output, ToolError> {
-    let mut cmd = Command::new("cargo");
+    let Some(mut cmd) = crate::dependencies::Cargo::command() else {
+        return Err(ToolError::not_available(
+            "cargo is not installed or not in PATH",
+        ));
+    };
     cmd.args(args).current_dir(workspace);
     cmd.output().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
@@ -189,7 +194,8 @@ mod tests {
     fn init_cargo_project(root: &Path) -> std::path::PathBuf {
         let project_dir = root.join("project");
         fs::create_dir_all(&project_dir).expect("create project dir");
-        let status = Command::new("cargo")
+        let status = crate::dependencies::Cargo::command()
+            .expect("cargo not found")
             .args([
                 "init",
                 "--lib",

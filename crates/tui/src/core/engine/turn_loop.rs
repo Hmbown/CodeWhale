@@ -35,7 +35,7 @@ impl Engine {
         let mut context_recovery_attempts = 0u8;
         let mut tool_catalog = tools.unwrap_or_default();
         if !tool_catalog.is_empty() {
-            ensure_advanced_tooling(&mut tool_catalog, mode, &self.config.tools_always_load);
+            ensure_advanced_tooling(&mut tool_catalog, mode);
         }
         let mut active_tool_names = initial_active_tools(&tool_catalog);
         let mut loop_guard = LoopGuard::default();
