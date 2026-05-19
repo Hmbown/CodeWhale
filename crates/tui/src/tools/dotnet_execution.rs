@@ -55,49 +55,90 @@ pub fn dotnet_execution_tool_definition() -> Tool {
 /// Run the model-provided C# code and return the captured
 /// stdout / stderr / return_code payload.
 ///
-/// Writes code to a temp `.cs` file, spawns `dotnet run <file>`,
-/// and collects the output. 120-second timeout, same error shape
-/// as `code_execution` and `js_execution`.
+/// Uses a persistent runner project at `$workspace/.deepseek/dotnet-runner/`
+/// so that NuGet restore only happens once (when the project is first opened
+/// in Visual Studio or `dotnet restore` is run manually). Subsequent runs
+/// use `dotnet run --no-restore` to bypass the NuGet layer entirely.
+///
+/// 120-second timeout, same error shape as `code_execution` and `js_execution`.
 pub async fn execute_dotnet_execution_tool(
     input: &Value,
     workspace: &Path,
 ) -> Result<ToolResult, ToolError> {
     let code = required_str(input, "code")?;
 
-    // Resolve the .NET SDK via ExternalTool. If absent, fail fast.
-    let temp_dir = tempfile::tempdir()
-        .map_err(|e| ToolError::execution_failed(format!("tempdir failed: {e}")))?;
-    let script_path = temp_dir.path().join("dotnet_execution.cs");
-    tokio::fs::write(&script_path, code)
+    // --- resolve or create the persistent runner project -------------------
+    let runner_dir = workspace.join(".deepseek").join("dotnet-runner");
+    tokio::fs::create_dir_all(&runner_dir)
         .await
-        .map_err(|e| ToolError::execution_failed(format!("tempfile write failed: {e}")))?;
+        .map_err(|e| ToolError::execution_failed(format!("mkdir runner dir: {e}")))?;
+
+    let csproj_path = runner_dir.join("runner.csproj");
+    if !csproj_path.exists() {
+        tokio::fs::write(&csproj_path, r#"<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+</Project>
+"#)
+            .await
+            .map_err(|e| ToolError::execution_failed(format!("write csproj: {e}")))?;
+    }
+
+    // Write user code to Program.cs
+    let program_path = runner_dir.join("Program.cs");
+    tokio::fs::write(&program_path, code)
+        .await
+        .map_err(|e| ToolError::execution_failed(format!("write Program.cs: {e}")))?;
 
     let mut cmd = crate::dependencies::DotNet::tokio_command().ok_or_else(|| {
         ToolError::execution_failed(
             "dotnet_execution: .NET SDK became unavailable".to_string()
         )
     })?;
-    // `dotnet run file.cs` works from .NET 6 onwards.
-    // The current_dir must be the temp_dir so `dotnet run` can
-    // create its temporary project artefacts there.
+
+    // First try `dotnet run --no-restore` — works when NuGet restore
+    // was already done (e.g. by opening the project in Visual Studio).
+    // If that fails with "assets file not found", try `dotnet run` which
+    // will attempt restore (may fail on SDKs with broken NuGet layers).
+    let assets_path = runner_dir.join("obj").join("project.assets.json");
+    let use_no_restore = assets_path.exists();
+
     cmd.arg("run")
-        .arg(&script_path)
-        .current_dir(temp_dir.path());
+        .arg("--project")
+        .arg(&csproj_path)
+        .current_dir(&runner_dir);
+
+    if use_no_restore {
+        cmd.arg("--no-restore");
+    }
 
     let output = tokio::time::timeout(Duration::from_secs(120), cmd.output())
         .await
         .map_err(|_| ToolError::Timeout { seconds: 120 })
         .and_then(|res| res.map_err(|e| ToolError::execution_failed(e.to_string())))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let return_code = output.status.code().unwrap_or(-1);
+    let stdout_raw = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr_raw = String::from_utf8_lossy(&output.stderr).to_string();
     let success = output.status.success();
+
+    // If restore failed, surface a clear message.
+    if !success && !use_no_restore && stderr_raw.contains("NuGet.targets") {
+        return Err(ToolError::execution_failed(
+            "dotnet_execution: NuGet restore failed. Open the runner project \
+             in Visual Studio once to generate NuGet assets:\n  \
+             ".to_string() + &runner_dir.display().to_string()
+        ));
+    }
+
     let payload = json!({
         "type": "code_execution_result",
-        "stdout": stdout,
-        "stderr": stderr,
-        "return_code": return_code,
+        "stdout": stdout_raw,
+        "stderr": stderr_raw,
+        "return_code": output.status.code().unwrap_or(-1),
         "content": [],
     });
 
@@ -107,6 +148,8 @@ pub async fn execute_dotnet_execution_tool(
         metadata: Some(payload),
     })
 }
+
+// =========================================================================
 
 #[cfg(test)]
 mod tests {
