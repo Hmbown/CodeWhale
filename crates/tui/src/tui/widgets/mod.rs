@@ -19,6 +19,7 @@ pub use footer::{
 };
 pub use header::{HeaderData, HeaderWidget, header_status_indicator_frame};
 pub use renderable::Renderable;
+pub use crate::tui::history::HistoryCell;
 
 use std::time::Duration;
 
@@ -52,6 +53,15 @@ const COMPOSER_PANEL_HEIGHT: u16 = 2;
 const JUMP_TO_LATEST_BUTTON_WIDTH: u16 = 3;
 const JUMP_TO_LATEST_BUTTON_HEIGHT: u16 = 3;
 
+/// Identifies which region of the split chat area a widget should render.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChatRegion {
+    /// Upper region: conversation/transcript (user, assistant, thinking).
+    Conversation,
+    /// Lower region: tool output (exec, exploring, patch, etc.).
+    ToolOutput,
+}
+
 pub struct ChatWidget {
     content_area: Rect,
     lines: Vec<Line<'static>>,
@@ -62,6 +72,7 @@ pub struct ChatWidget {
     scroll_thumb: Color,
     jump_border: Color,
     jump_arrow: Color,
+    region: ChatRegion,
 }
 
 #[derive(Debug, Clone, Copy)]

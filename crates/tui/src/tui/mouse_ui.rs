@@ -15,6 +15,7 @@ use crate::tui::ui_text::{
     history_cell_to_text, line_to_plain, slice_text, text_display_width, truncate_line_to_width,
 };
 use crate::tui::views::{ContextMenuAction, HelpView, ModalKind, ViewEvent};
+use crate::tui::widgets::ChatRegion;
 
 // These functions will need to be imported from ui.rs or we can just import crate::tui::ui::*.
 use crate::tui::ui::{
@@ -55,23 +56,25 @@ pub(crate) fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEv
     match mouse.kind {
         MouseEventKind::ScrollUp => {
             let update = app.viewport.mouse_scroll.on_scroll(ScrollDirection::Up);
-            app.viewport.pending_scroll_delta = app
-                .viewport
-                .pending_scroll_delta
-                .saturating_add(update.delta_lines);
+            let pending_delta = if mouse_hits_tool_output_area(app, mouse) {
+                &mut app.viewport.pending_tool_scroll_delta
+            } else {
+                &mut app.viewport.pending_scroll_delta
+            };
+            *pending_delta = pending_delta.saturating_add(update.delta_lines);
             if update.delta_lines != 0 {
-                app.user_scrolled_during_stream = true;
                 app.needs_redraw = true;
             }
         }
         MouseEventKind::ScrollDown => {
             let update = app.viewport.mouse_scroll.on_scroll(ScrollDirection::Down);
-            app.viewport.pending_scroll_delta = app
-                .viewport
-                .pending_scroll_delta
-                .saturating_add(update.delta_lines);
+            let pending_delta = if mouse_hits_tool_output_area(app, mouse) {
+                &mut app.viewport.pending_tool_scroll_delta
+            } else {
+                &mut app.viewport.pending_scroll_delta
+            };
+            *pending_delta = pending_delta.saturating_add(update.delta_lines);
             if update.delta_lines != 0 {
-                app.user_scrolled_during_stream = true;
                 app.needs_redraw = true;
             }
         }
@@ -139,6 +142,24 @@ pub(crate) fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEv
     }
 
     Vec::new()
+}
+
+/// Check if mouse is over the tool output area (lower region).
+fn mouse_hits_tool_output_area(app: &App, mouse: MouseEvent) -> bool {
+    if let Some(area) = app.viewport.tool_output_area {
+        return mouse.row >= area.y && mouse.row < area.y.saturating_add(area.height)
+            && mouse.column >= area.x && mouse.column < area.x.saturating_add(area.width);
+    }
+    false
+}
+
+/// Check if mouse is over the conversation area (upper region).
+fn mouse_hits_conversation_area(app: &App, mouse: MouseEvent) -> bool {
+    if let Some(area) = app.viewport.conversation_area {
+        return mouse.row >= area.y && mouse.row < area.y.saturating_add(area.height)
+            && mouse.column >= area.x && mouse.column < area.x.saturating_add(area.width);
+    }
+    false
 }
 
 pub(crate) fn mouse_hits_transcript_scrollbar(app: &App, mouse: MouseEvent) -> bool {

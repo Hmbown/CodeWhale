@@ -170,6 +170,25 @@ impl Default for TranscriptRenderOptions {
 }
 
 impl HistoryCell {
+    /// Returns true if this cell belongs in the conversation (upper) region.
+    pub fn is_conversation_cell(&self) -> bool {
+        matches!(
+            self,
+            HistoryCell::User { .. }
+                | HistoryCell::Assistant { .. }
+                | HistoryCell::Thinking { .. }
+                | HistoryCell::System { .. }
+                | HistoryCell::Error { .. }
+                | HistoryCell::ArchivedContext { .. }
+                | HistoryCell::SubAgent(_)
+        )
+    }
+
+    /// Returns true if this cell belongs in the tool output (lower) region.
+    pub fn is_tool_output_cell(&self) -> bool {
+        matches!(self, HistoryCell::Tool(_))
+    }
+
     /// Render the cell into a set of terminal lines.
     ///
     /// This is the live-display path used by widgets that don't already pass

@@ -667,13 +667,25 @@ impl Default for ComposerState {
 
 /// Viewport/scroll state — fields related to transcript scrolling and caching.
 pub struct ViewportState {
+    // Conversation region (upper)
     pub transcript_scroll: TranscriptScroll,
     pub pending_scroll_delta: i32,
-    pub mouse_scroll: MouseScrollState,
     pub transcript_cache: TranscriptViewCache,
+
+    // Tool output region (lower)
+    pub tool_output_scroll: TranscriptScroll,
+    pub pending_tool_scroll_delta: i32,
+    pub tool_output_cache: TranscriptViewCache,
+
+    // Shared state
+    pub mouse_scroll: MouseScrollState,
     pub transcript_selection: TranscriptSelection,
     pub selection_autoscroll: Option<SelectionAutoscroll>,
     pub transcript_scrollbar_dragging: bool,
+
+    // Region area tracking
+    pub conversation_area: Option<Rect>,
+    pub tool_output_area: Option<Rect>,
     pub last_transcript_area: Option<Rect>,
     pub last_transcript_top: usize,
     pub last_transcript_visible: usize,
@@ -685,13 +697,25 @@ pub struct ViewportState {
 impl Default for ViewportState {
     fn default() -> Self {
         Self {
+            // Conversation region
             transcript_scroll: TranscriptScroll::to_bottom(),
             pending_scroll_delta: 0,
-            mouse_scroll: MouseScrollState::new(),
             transcript_cache: TranscriptViewCache::new(),
+
+            // Tool output region
+            tool_output_scroll: TranscriptScroll::to_bottom(),
+            pending_tool_scroll_delta: 0,
+            tool_output_cache: TranscriptViewCache::new(),
+
+            // Shared state
+            mouse_scroll: MouseScrollState::new(),
             transcript_selection: TranscriptSelection::default(),
             selection_autoscroll: None,
             transcript_scrollbar_dragging: false,
+
+            // Region area tracking
+            conversation_area: None,
+            tool_output_area: None,
             last_transcript_area: None,
             last_transcript_top: 0,
             last_transcript_visible: 0,
