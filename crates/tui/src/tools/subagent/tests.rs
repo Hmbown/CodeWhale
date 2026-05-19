@@ -17,6 +17,7 @@ fn make_snapshot(status: SubAgentStatus) -> SubAgentResult {
         nickname: None,
         status,
         result: None,
+        full_transcript_handle: None,
         steps_taken: 0,
         duration_ms: 0,
         from_prior_session: false,
@@ -356,6 +357,100 @@ async fn session_projection_exposes_forked_prefix_cache_contract() {
     );
     assert_eq!(projection.transcript_handle.kind, "var_handle");
     assert_eq!(projection.transcript_handle.name, "transcript");
+}
+
+#[tokio::test]
+async fn session_projection_surfaces_full_transcript_handle() {
+    let ctx = ToolContext::new(".");
+    let full_handle = {
+        let mut store = ctx.runtime.handle_store.lock().await;
+        store.insert_json(
+            "agent:agent_test",
+            "full_transcript",
+            json!({"kind": "subagent_full_transcript", "messages": []}),
+        )
+    };
+
+    let mut snapshot = make_snapshot(SubAgentStatus::Completed);
+    snapshot.full_transcript_handle = Some(full_handle.clone());
+
+    let projection = subagent_session_projection(snapshot, false, &ctx).await;
+
+    assert_eq!(
+        projection.full_transcript_handle.as_ref(),
+        Some(&full_handle)
+    );
+    assert_eq!(
+        projection.snapshot.full_transcript_handle.as_ref(),
+        Some(&full_handle)
+    );
+}
+
+#[tokio::test]
+async fn full_transcript_handle_exposes_subagent_messages() {
+    use crate::tools::handle::HandleReadTool;
+
+    let runtime = stub_runtime();
+    let mut result = make_snapshot(SubAgentStatus::Completed);
+    result.result = Some("final summary".to_string());
+    result.steps_taken = 2;
+    let messages = vec![
+        Message {
+            role: "user".to_string(),
+            content: vec![ContentBlock::Text {
+                text: "first source details".to_string(),
+                cache_control: None,
+            }],
+        },
+        Message {
+            role: "assistant".to_string(),
+            content: vec![ContentBlock::Text {
+                text: "final summary".to_string(),
+                cache_control: None,
+            }],
+        },
+    ];
+
+    attach_full_transcript_handle(&runtime, &mut result, &messages).await;
+
+    let handle = result
+        .full_transcript_handle
+        .clone()
+        .expect("full transcript handle should be attached");
+    assert_eq!(handle.name, "full_transcript");
+    let output = HandleReadTool
+        .execute(
+            json!({
+                "handle": handle,
+                "jsonpath": "$.messages[0].content[0].text"
+            }),
+            &runtime.context,
+        )
+        .await
+        .expect("handle_read should project full transcript JSON");
+    let value: Value = serde_json::from_str(&output.content).expect("json output");
+
+    assert_eq!(value["count"], 1);
+    assert_eq!(value["matches"][0], "first source details");
+}
+
+#[test]
+fn subagent_done_sentinel_includes_full_transcript_handle_when_available() {
+    let mut snap = make_snapshot(SubAgentStatus::Completed);
+    snap.full_transcript_handle = Some(VarHandle {
+        kind: "var_handle".to_string(),
+        session_id: "agent:agent_test".to_string(),
+        name: "full_transcript".to_string(),
+        type_name: "dict".to_string(),
+        length: 12,
+        repr_preview: "{}".to_string(),
+        sha256: "abc".to_string(),
+    });
+
+    let sentinel = subagent_done_sentinel("agent_test", &snap);
+
+    assert!(sentinel.contains("\"full_transcript_handle\""));
+    assert!(sentinel.contains("\"name\":\"full_transcript\""));
 }
 
 #[test]

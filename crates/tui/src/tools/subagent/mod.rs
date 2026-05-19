@@ -426,6 +426,8 @@ pub struct SubAgentResult {
     pub nickname: Option<String>,
     pub status: SubAgentStatus,
     pub result: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub full_transcript_handle: Option<VarHandle>,
     pub steps_taken: u32,
     pub duration_ms: u64,
     /// `true` when this agent was loaded from a prior-session persisted
@@ -818,6 +820,7 @@ pub struct SubAgent {
     pub nickname: Option<String>,
     pub status: SubAgentStatus,
     pub result: Option<String>,
+    pub full_transcript_handle: Option<VarHandle>,
     pub steps_taken: u32,
     pub started_at: Instant,
     /// `None` = full registry inheritance, with approval-gated tools still
@@ -859,6 +862,7 @@ impl SubAgent {
             nickname,
             status: SubAgentStatus::Running,
             result: None,
+            full_transcript_handle: None,
             steps_taken: 0,
             started_at: Instant::now(),
             allowed_tools,
@@ -882,6 +886,7 @@ impl SubAgent {
             nickname: self.nickname.clone(),
             status: self.status.clone(),
             result: self.result.clone(),
+            full_transcript_handle: self.full_transcript_handle.clone(),
             steps_taken: self.steps_taken,
             duration_ms: u64::try_from(self.started_at.elapsed().as_millis()).unwrap_or(u64::MAX),
             // Snapshots from the agent itself don't know the manager's
@@ -1044,6 +1049,7 @@ impl SubAgentManager {
                 nickname: persisted.nickname,
                 status,
                 result: persisted.result,
+                full_transcript_handle: None,
                 steps_taken: persisted.steps_taken,
                 started_at,
                 allowed_tools,
@@ -1554,6 +1560,7 @@ impl SubAgentManager {
             agent.status = result.status;
             agent.assignment = result.assignment;
             agent.result = result.result;
+            agent.full_transcript_handle = result.full_transcript_handle;
             agent.steps_taken = result.steps_taken;
             agent.task_handle = None;
             changed = true;
@@ -1591,6 +1598,8 @@ pub struct SubAgentSessionProjection {
     pub fork_context: bool,
     pub prefix_cache: SubAgentPrefixCacheProjection,
     pub transcript_handle: VarHandle,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub full_transcript_handle: Option<VarHandle>,
     pub snapshot: SubAgentResult,
     #[serde(default, skip_serializing_if = "is_false")]
     pub timed_out: bool,
@@ -1632,6 +1641,7 @@ async fn subagent_session_projection(
         "context_mode": snapshot.context_mode.clone(),
         "fork_context": snapshot.fork_context,
         "result": snapshot.result.clone(),
+        "full_transcript_handle": snapshot.full_transcript_handle.clone(),
         "steps_taken": snapshot.steps_taken,
         "duration_ms": snapshot.duration_ms,
         "assignment": snapshot.assignment.clone(),
@@ -1655,6 +1665,7 @@ async fn subagent_session_projection(
         fork_context: snapshot.fork_context,
         prefix_cache: subagent_prefix_cache_projection(&snapshot),
         transcript_handle,
+        full_transcript_handle: snapshot.full_transcript_handle.clone(),
         snapshot,
         timed_out,
     }
@@ -3271,13 +3282,16 @@ pub(crate) fn emit_parent_completion(
 /// parent request's cache-miss tail. Wall-clock duration is useful UI
 /// telemetry, but it is volatile and not useful for model coordination.
 fn subagent_done_sentinel(agent_id: &str, res: &SubAgentResult) -> String {
-    let payload = json!({
+    let mut payload = json!({
         "agent_id": agent_id,
         "agent_type": res.agent_type.as_str(),
         "status": subagent_status_name(&res.status),
         "summary_location": "previous_line",
         "details": "agent_eval",
     });
+    if let Some(handle) = &res.full_transcript_handle {
+        payload["full_transcript_handle"] = json!(handle);
+    }
     format!("<deepseek:subagent.done>{payload}</deepseek:subagent.done>")
 }
 
@@ -3290,6 +3304,37 @@ fn subagent_failed_sentinel(agent_id: &str, _err: &str) -> String {
         "details": "agent_eval",
     });
     format!("<deepseek:subagent.done>{payload}</deepseek:subagent.done>")
+}
+
+async fn attach_full_transcript_handle(
+    runtime: &SubAgentRuntime,
+    result: &mut SubAgentResult,
+    messages: &[Message],
+) {
+    let payload = json!({
+        "kind": "subagent_full_transcript",
+        "agent_id": result.agent_id.clone(),
+        "name": result.name.clone(),
+        "status": subagent_status_name(&result.status),
+        "context_mode": result.context_mode.clone(),
+        "fork_context": result.fork_context,
+        "agent_type": result.agent_type.clone(),
+        "assignment": result.assignment.clone(),
+        "model": result.model.clone(),
+        "result": result.result.clone(),
+        "steps_taken": result.steps_taken,
+        "duration_ms": result.duration_ms,
+        "messages": messages,
+    });
+    let handle = {
+        let mut store = runtime.context.runtime.handle_store.lock().await;
+        store.insert_json(
+            format!("agent:{}", result.agent_id),
+            "full_transcript",
+            payload,
+        )
+    };
+    result.full_transcript_handle = Some(handle);
 }
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -3362,7 +3407,7 @@ async fn run_subagent(
                     agent_id: agent_id.clone(),
                 });
             }
-            return Ok(SubAgentResult {
+            let mut result = SubAgentResult {
                 name: agent_id.clone(),
                 agent_id: agent_id.clone(),
                 context_mode: if fork_context_enabled {
@@ -3378,10 +3423,13 @@ async fn run_subagent(
                 nickname: None,
                 status: SubAgentStatus::Cancelled,
                 result: None,
+                full_transcript_handle: None,
                 steps_taken: steps,
                 duration_ms: u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX),
                 from_prior_session: false,
-            });
+            };
+            attach_full_transcript_handle(runtime, &mut result, &messages).await;
+            return Ok(result);
         }
 
         steps += 1;
@@ -3443,7 +3491,7 @@ async fn run_subagent(
                         agent_id: agent_id.clone(),
                     });
                 }
-                return Ok(SubAgentResult {
+                let mut result = SubAgentResult {
                     name: agent_id.clone(),
                     agent_id: agent_id.clone(),
                     context_mode: if fork_context_enabled { "forked" } else { "fresh" }.to_string(),
@@ -3454,11 +3502,14 @@ async fn run_subagent(
                     nickname: None,
                     status: SubAgentStatus::Cancelled,
                     result: None,
+                    full_transcript_handle: None,
                     steps_taken: steps,
                     duration_ms: u64::try_from(started_at.elapsed().as_millis())
                         .unwrap_or(u64::MAX),
                     from_prior_session: false,
-                });
+                };
+                attach_full_transcript_handle(runtime, &mut result, &messages).await;
+                return Ok(result);
             }
             api = tokio::time::timeout(STEP_API_TIMEOUT, runtime.client.create_message(request)) => {
                 api.map_err(|_| anyhow!("API call timed out after {}s", STEP_API_TIMEOUT.as_secs()))??
@@ -3583,7 +3634,7 @@ async fn run_subagent(
 
     release_resident_leases_for(&agent_id);
 
-    Ok(SubAgentResult {
+    let mut result = SubAgentResult {
         name: agent_id.clone(),
         agent_id,
         context_mode: if fork_context_enabled {
@@ -3599,10 +3650,13 @@ async fn run_subagent(
         nickname: None,
         status: SubAgentStatus::Completed,
         result: final_result,
+        full_transcript_handle: None,
         steps_taken: steps,
         duration_ms: u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX),
         from_prior_session: false,
-    })
+    };
+    attach_full_transcript_handle(runtime, &mut result, &messages).await;
+    Ok(result)
 }
 
 async fn wait_for_result(

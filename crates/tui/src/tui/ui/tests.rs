@@ -2066,6 +2066,7 @@ fn make_subagent(
         nickname: None,
         status,
         result: None,
+        full_transcript_handle: None,
         steps_taken: 0,
         duration_ms: 0,
         from_prior_session: false,
