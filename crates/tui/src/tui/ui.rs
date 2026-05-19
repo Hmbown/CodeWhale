@@ -4363,6 +4363,10 @@ fn open_text_pager(app: &mut App, title: String, content: String) {
     ));
 }
 
+fn open_styled_pager(app: &mut App, title: String, lines: Vec<ratatui::text::Line<'static>>) {
+    app.view_stack.push(PagerView::new(title, lines));
+}
+
 pub(crate) fn open_context_inspector(app: &mut App) {
     let width = app
         .viewport
@@ -5751,6 +5755,9 @@ async fn handle_view_events(
             },
             ViewEvent::OpenTextPager { title, content } => {
                 open_text_pager(app, title, content);
+            }
+            ViewEvent::OpenStyledPager { title, lines } => {
+                open_styled_pager(app, title, lines);
             }
             ViewEvent::CopyToClipboard { text, label } => {
                 if text.is_empty() {
@@ -7498,10 +7505,8 @@ pub(crate) fn open_details_pager_for_cell(app: &mut App, cell_index: usize) -> b
             push_plain(&mut lines, &section);
         }
 
-        app.view_stack.push(PagerView::new(
-            format!("Tool: {}", detail.tool_name),
-            lines,
-        ));
+        app.view_stack
+            .push(PagerView::new(format!("Tool: {}", detail.tool_name), lines));
         return true;
     }
 

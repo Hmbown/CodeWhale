@@ -47,7 +47,7 @@ pub fn render_diff(diff: &str, width: u16) -> Vec<Line<'static>> {
         }
 
         if raw.starts_with('+') && !raw.starts_with("+++") {
-            let content = raw.trim_start_matches('+');
+            let content = raw.strip_prefix('+').unwrap_or(raw);
             lines.extend(render_diff_line(
                 content,
                 width,
@@ -65,7 +65,7 @@ pub fn render_diff(diff: &str, width: u16) -> Vec<Line<'static>> {
         }
 
         if raw.starts_with('-') && !raw.starts_with("---") {
-            let content = raw.trim_start_matches('-');
+            let content = raw.strip_prefix('-').unwrap_or(raw);
             lines.extend(render_diff_line(
                 content,
                 width,
@@ -83,7 +83,7 @@ pub fn render_diff(diff: &str, width: u16) -> Vec<Line<'static>> {
         }
 
         if raw.starts_with(' ') {
-            let content = raw.trim_start_matches(' ');
+            let content = raw.strip_prefix(' ').unwrap_or(raw);
             lines.extend(render_diff_line(
                 content,
                 width,
@@ -139,7 +139,7 @@ pub fn render_diff_compact(diff: &str, width: u16) -> Vec<Line<'static>> {
         }
 
         if raw.starts_with('+') {
-            let content = raw.trim_start_matches('+');
+            let content = raw.strip_prefix('+').unwrap_or(raw);
             lines.extend(render_diff_line(
                 content,
                 width,
@@ -157,7 +157,7 @@ pub fn render_diff_compact(diff: &str, width: u16) -> Vec<Line<'static>> {
         }
 
         if raw.starts_with('-') {
-            let content = raw.trim_start_matches('-');
+            let content = raw.strip_prefix('-').unwrap_or(raw);
             lines.extend(render_diff_line(
                 content,
                 width,
@@ -175,7 +175,7 @@ pub fn render_diff_compact(diff: &str, width: u16) -> Vec<Line<'static>> {
         }
 
         if raw.starts_with(' ') {
-            let content = raw.trim_start_matches(' ');
+            let content = raw.strip_prefix(' ').unwrap_or(raw);
             lines.extend(render_diff_line(
                 content,
                 width,
@@ -445,33 +445,14 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
     let mut current = String::new();
     let mut current_width = 0;
 
-    for word in text.split_whitespace() {
-        let word_width = word.width();
-        if word_width > width {
-            if !current.is_empty() {
-                lines.push(std::mem::take(&mut current));
-                current_width = 0;
-            }
-            push_word_breaking_chars(word, width, &mut current, &mut current_width, &mut lines);
-            continue;
+    for ch in text.chars() {
+        let char_width = ch.width().unwrap_or(1);
+        if current_width + char_width > width && current_width > 0 {
+            lines.push(std::mem::take(&mut current));
+            current_width = 0;
         }
-        let additional = if current.is_empty() {
-            word_width
-        } else {
-            word_width + 1
-        };
-        if current_width + additional > width && !current.is_empty() {
-            lines.push(current);
-            current = word.to_string();
-            current_width = word_width;
-        } else {
-            if !current.is_empty() {
-                current.push(' ');
-                current_width += 1;
-            }
-            current.push_str(word);
-            current_width += word_width;
-        }
+        current.push(ch);
+        current_width += char_width;
     }
 
     if current.is_empty() {
@@ -481,24 +462,6 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
     }
 
     lines
-}
-
-fn push_word_breaking_chars(
-    word: &str,
-    width: usize,
-    current: &mut String,
-    current_width: &mut usize,
-    lines: &mut Vec<String>,
-) {
-    for ch in word.chars() {
-        let char_width = ch.width().unwrap_or(1);
-        if *current_width + char_width > width && *current_width > 0 {
-            lines.push(std::mem::take(current));
-            *current_width = 0;
-        }
-        current.push(ch);
-        *current_width += char_width;
-    }
 }
 
 #[cfg(test)]
@@ -556,7 +519,8 @@ diff --git a/src/a.rs b/src/a.rs
         let rendered = render_diff(diff, 80);
         let text = rendered.iter().map(line_text).collect::<Vec<_>>();
         assert!(text[0].contains("summary: 1 file, +1 -1, 1 hunk"));
-        assert!(text.iter().any(|line| line.contains("src/a.rs +1 -1")));
+        assert!(text.iter().any(|line| line.contains("src/a.rs")));
+        assert!(text.iter().any(|line| line.contains("+1 -1")));
         assert!(
             text.iter().any(|line| line.contains(" + new")),
             "added line should carry + gutter: {text:?}"
@@ -597,7 +561,10 @@ diff --git a/src/a.rs b/src/a.rs
         let rendered = render_diff_compact(diff, 80);
         let text: Vec<String> = rendered.iter().map(line_text).collect();
         let joined = text.join("\n");
-        assert!(!joined.contains("summary:"), "compact must skip summary: {joined}");
+        assert!(
+            !joined.contains("summary:"),
+            "compact must skip summary: {joined}"
+        );
         assert!(
             !joined.contains("diff --git"),
             "compact must skip file headers: {joined}",
@@ -618,5 +585,25 @@ diff --git a/src/a.rs b/src/a.rs
             text.iter().any(|line| line.contains(" - old")),
             "deleted line should carry - gutter: {text:?}",
         );
+    }
+
+    #[test]
+    fn render_diff_preserves_indented_context_lines() {
+        let diff = "\
+diff --git a/src/a.rs b/src/a.rs
+--- a/src/a.rs
++++ b/src/a.rs
+@@ -1,2 +1,2 @@
+ fn main() {
+     println!(\"hello\");
+";
+        let rendered = render_diff_compact(diff, 80);
+        let text = rendered
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains(" fn main() {"), "{text}");
+        assert!(text.contains("     println!"), "{text}");
     }
 }

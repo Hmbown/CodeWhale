@@ -1136,21 +1136,13 @@ impl Renderable for ApprovalWidget<'_> {
             ]));
         } else {
             for (label, value) in &details {
-                lines.push(Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled(
-                        format!("{label:<7} "),
-                        Style::default()
-                            .fg(palette::DEEPSEEK_SKY)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        value.clone(),
-                        Style::default()
-                            .fg(palette::TEXT_BODY)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                ]));
+                if self.request.category == ToolCategory::Shell
+                    && matches!(label.as_str(), "Command" | "命令")
+                {
+                    push_shell_command_lines(&mut lines, label, value);
+                } else {
+                    push_detail_line(&mut lines, label, value);
+                }
             }
         }
 
@@ -1548,12 +1540,7 @@ fn build_diff_panel(
             deleted,
         } => {
             let lines = indent_lines(render_diff_compact(text, body_width));
-            let header = format!(
-                "{} +{} -{}",
-                diff_preview_word(locale),
-                added,
-                deleted
-            );
+            let header = format!("{} +{} -{}", diff_preview_word(locale), added, deleted);
             (header, lines)
         }
         ApprovalDiffPreview::NewFile { path: _, content } => {
@@ -1583,11 +1570,7 @@ fn build_diff_panel(
                     ])
                 })
                 .collect::<Vec<_>>();
-            let header = format!(
-                "{} +{}",
-                new_file_word(locale),
-                content.lines().count()
-            );
+            let header = format!("{} +{}", new_file_word(locale), content.lines().count());
             (header, body)
         }
         ApprovalDiffPreview::NoChange { path: _ } => {
@@ -1622,9 +1605,6 @@ fn diff_header_with_scroll(
     locale: Locale,
 ) -> String {
     let mut parts: Vec<String> = vec![format!("  {header}")];
-    if more_above || more_below {
-        parts.push(scroll_hint(locale).to_string());
-    }
     if more_above {
         parts.push(more_above_hint(locale).to_string());
     }
@@ -1677,13 +1657,6 @@ fn missing_match_header(locale: Locale) -> &'static str {
     }
 }
 
-fn scroll_hint(locale: Locale) -> &'static str {
-    match locale {
-        Locale::ZhHans => "PgUp/PgDn 滚动",
-        _ => "PgUp/PgDn scroll",
-    }
-}
-
 fn more_above_hint(locale: Locale) -> &'static str {
     match locale {
         Locale::ZhHans => "↑ 上方还有",
@@ -1700,9 +1673,208 @@ fn more_below_hint(locale: Locale) -> &'static str {
 
 fn full_details_hint(locale: Locale) -> &'static str {
     match locale {
-        Locale::ZhHans => "v 完整 diff",
-        _ => "v full details",
+        Locale::ZhHans => "v 详情",
+        _ => "v details",
     }
+}
+
+fn push_detail_line(lines: &mut Vec<Line<'static>>, label: &str, value: &str) {
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            format!("{label:<7} "),
+            Style::default()
+                .fg(palette::DEEPSEEK_SKY)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            value.to_string(),
+            Style::default()
+                .fg(palette::TEXT_BODY)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+}
+
+fn push_shell_command_lines(lines: &mut Vec<Line<'static>>, label: &str, command: &str) {
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            format!("{label:<7} "),
+            Style::default()
+                .fg(palette::DEEPSEEK_SKY)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+
+    for line in format_shell_command_for_approval(command) {
+        lines.push(Line::from(vec![
+            Span::raw("    "),
+            Span::styled(
+                line,
+                Style::default()
+                    .fg(palette::TEXT_BODY)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+    }
+}
+
+fn format_shell_command_for_approval(command: &str) -> Vec<String> {
+    if let Some(write) = parse_printf_write_file_command(command) {
+        return format_printf_write_file_preview(write);
+    }
+
+    let mut out = Vec::new();
+    for raw in command.split('\n') {
+        let mut current = String::new();
+        let mut chars = raw.chars().peekable();
+        let mut quote: Option<char> = None;
+        while let Some(ch) = chars.next() {
+            if matches!(ch, '"' | '\'') {
+                if quote == Some(ch) {
+                    quote = None;
+                } else if quote.is_none() {
+                    quote = Some(ch);
+                }
+                current.push(ch);
+                continue;
+            }
+
+            if quote.is_none() && ch == '&' && chars.peek() == Some(&'&') {
+                chars.next();
+                push_shell_clause(&mut out, &mut current, Some("&&"));
+                continue;
+            }
+
+            if quote.is_none() && ch == '|' {
+                push_shell_clause(&mut out, &mut current, Some("|"));
+                continue;
+            }
+
+            if quote.is_none() && ch == ';' {
+                current.push(';');
+                push_shell_clause(&mut out, &mut current, None);
+                continue;
+            }
+
+            if quote.is_none() && matches!(ch, '>' | '<') {
+                current.push(ch);
+                while chars
+                    .peek()
+                    .is_some_and(|next| matches!(next, '>' | '<' | '&'))
+                {
+                    current.push(chars.next().expect("peeked char exists"));
+                }
+                while chars.peek().is_some_and(|next| next.is_whitespace()) {
+                    current.push(chars.next().expect("peeked char exists"));
+                }
+                while chars
+                    .peek()
+                    .is_some_and(|next| !next.is_whitespace() && !matches!(next, '&' | '|' | ';'))
+                {
+                    current.push(chars.next().expect("peeked char exists"));
+                }
+                continue;
+            }
+
+            current.push(ch);
+        }
+        push_shell_clause(&mut out, &mut current, None);
+    }
+
+    if out.is_empty() {
+        vec![String::new()]
+    } else {
+        out
+    }
+}
+
+struct PrintfWriteFilePreview {
+    target: String,
+    lines: Vec<String>,
+}
+
+fn parse_printf_write_file_command(command: &str) -> Option<PrintfWriteFilePreview> {
+    let (before_redirect, after_redirect) = split_unquoted_redirect(command)?;
+    let before_redirect = before_redirect.trim();
+    if !before_redirect.starts_with("printf") {
+        return None;
+    }
+    let tokens = shlex::split(before_redirect)?;
+    if tokens.len() < 3 || tokens.first()?.as_str() != "printf" {
+        return None;
+    }
+    let fmt = tokens.get(1)?.as_str();
+    if fmt != "%s\n" && fmt != "%s\\n" {
+        return None;
+    }
+    let target_tokens = shlex::split(after_redirect.trim_start_matches(['>', '&']).trim_start())?;
+    if target_tokens.len() != 1 {
+        return None;
+    }
+    let target = target_tokens.into_iter().next()?;
+    let lines = tokens.into_iter().skip(2).collect::<Vec<_>>();
+    if lines.is_empty() {
+        return None;
+    }
+    Some(PrintfWriteFilePreview { target, lines })
+}
+
+fn format_printf_write_file_preview(write: PrintfWriteFilePreview) -> Vec<String> {
+    let mut out = Vec::new();
+    out.push("Write file via printf".to_string());
+    out.push(format!("Target: {}", write.target));
+    out.push(format!("Lines: {}", write.lines.len()));
+    out.push(String::new());
+    out.push("Content:".to_string());
+    let total = write.lines.len();
+    for (idx, line) in write.lines.into_iter().enumerate().take(12) {
+        out.push(format!("{:>4}  {}", idx + 1, line));
+    }
+    if total > 12 {
+        out.push(format!("  ... (+{} more lines)", total - 12));
+    }
+    out
+}
+
+fn split_unquoted_redirect(command: &str) -> Option<(&str, &str)> {
+    let mut quote: Option<char> = None;
+    for (idx, ch) in command.char_indices() {
+        if matches!(ch, '"' | '\'') {
+            if quote == Some(ch) {
+                quote = None;
+            } else if quote.is_none() {
+                quote = Some(ch);
+            }
+            continue;
+        }
+        if quote.is_none() && ch == '>' {
+            let before = &command[..idx];
+            let after = &command[idx + ch.len_utf8()..];
+            return Some((before, after));
+        }
+    }
+    None
+}
+
+fn push_shell_clause(out: &mut Vec<String>, current: &mut String, connector: Option<&str>) {
+    let trimmed = current.trim();
+    if !trimmed.is_empty() {
+        let mut line = trimmed.to_string();
+        if let Some(connector) = connector {
+            line.push(' ');
+            line.push_str(connector);
+        }
+        out.push(line);
+    } else if let Some(connector) = connector
+        && let Some(prev) = out.last_mut()
+        && !prev.ends_with(connector)
+    {
+        prev.push(' ');
+        prev.push_str(connector);
+    }
+    current.clear();
 }
 
 fn diff_hidden_hint(locale: Locale) -> &'static str {
@@ -3595,6 +3767,96 @@ mod tests {
             let mut buf = Buffer::empty(area);
             widget.render(area, &mut buf);
         }
+    }
+
+    #[test]
+    fn approval_shell_command_splits_long_command_into_multiple_lines() {
+        let request = crate::tui::approval::ApprovalRequest::new(
+            "approval-1",
+            "exec_shell",
+            "Run shell command",
+            &serde_json::json!({
+                "command": "printf 'a b c' && cat /tmp/x | sed -n '1,5p' > out.txt",
+            }),
+            "exec_shell:printf",
+        );
+        let view = crate::tui::approval::ApprovalView::new(request.clone());
+        let widget = ApprovalWidget::new(&request, &view);
+        let area = Rect::new(0, 0, 120, 24);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+
+        let mut body = String::new();
+        for y in 0..area.height {
+            for x in 0..area.width {
+                body.push_str(buf[(x, y)].symbol());
+            }
+            body.push('\n');
+        }
+        assert!(body.contains("Command"));
+        assert!(body.contains("printf 'a b c'"));
+        assert!(body.contains("cat /tmp/x"));
+        assert!(body.contains("sed -n '1,5p'"));
+    }
+
+    #[test]
+    fn approval_shell_command_detects_printf_write_file_preview() {
+        let request = crate::tui::approval::ApprovalRequest::new(
+            "approval-1",
+            "exec_shell",
+            "Run shell command",
+            &serde_json::json!({
+                "command": "printf '%s\\n' \"line one\" \"line two\" > /tmp/out.txt",
+            }),
+            "exec_shell:printf",
+        );
+        let view = crate::tui::approval::ApprovalView::new(request.clone());
+        let widget = ApprovalWidget::new(&request, &view);
+        let area = Rect::new(0, 0, 120, 24);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+
+        let mut body = String::new();
+        for y in 0..area.height {
+            for x in 0..area.width {
+                body.push_str(buf[(x, y)].symbol());
+            }
+            body.push('\n');
+        }
+        assert!(body.contains("Write file via printf"), "{body}");
+        assert!(body.contains("Target: /tmp/out.txt"), "{body}");
+        assert!(body.contains("Lines: 2"), "{body}");
+        assert!(body.contains("1  line one"), "{body}");
+        assert!(body.contains("2  line two"), "{body}");
+    }
+
+    #[test]
+    fn approval_shell_command_keeps_compound_printf_command_visible() {
+        let request = crate::tui::approval::ApprovalRequest::new(
+            "approval-1",
+            "exec_shell",
+            "Run shell command",
+            &serde_json::json!({
+                "command": "printf '%s\\n' \"line one\" > /tmp/out.txt && rm /tmp/other.txt",
+            }),
+            "exec_shell:printf",
+        );
+        let view = crate::tui::approval::ApprovalView::new(request.clone());
+        let widget = ApprovalWidget::new(&request, &view);
+        let area = Rect::new(0, 0, 120, 24);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+
+        let mut body = String::new();
+        for y in 0..area.height {
+            for x in 0..area.width {
+                body.push_str(buf[(x, y)].symbol());
+            }
+            body.push('\n');
+        }
+        assert!(!body.contains("Write file via printf"), "{body}");
+        assert!(body.contains("printf '%s"), "{body}");
+        assert!(body.contains("rm /tmp/other.txt"), "{body}");
     }
 
     /// Regression for issue #65: after `App::handle_resize`, the chat widget

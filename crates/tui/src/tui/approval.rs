@@ -28,10 +28,13 @@
 //! module always assumes the user is being asked.
 
 use crate::localization::Locale;
+use crate::palette;
 use crate::sandbox::SandboxPolicy;
 use crate::tui::views::{ModalKind, ModalView, ViewAction, ViewEvent};
 use crate::tui::widgets::{ApprovalWidget, ElevationWidget, Renderable};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
 use serde_json::Value;
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
@@ -267,9 +270,11 @@ impl ApprovalRequest {
                 }
             }
             ToolCategory::Network => {
-                if let Some(target) =
-                    param_preview(&self.params, &["url", "q", "query", "location", "repo"], 200)
-                {
+                if let Some(target) = param_preview(
+                    &self.params,
+                    &["url", "q", "query", "location", "repo"],
+                    200,
+                ) {
                     details.push(("Target".into(), target));
                 }
             }
@@ -512,8 +517,7 @@ pub fn build_diff_preview(
                     // File missing — fall back to inputs-only diff. edit_file
                     // would fail at execution anyway, so MissingMatch is the
                     // honest framing.
-                    let text =
-                        crate::tools::diff_format::make_unified_diff(path, search, replace);
+                    let text = crate::tools::diff_format::make_unified_diff(path, search, replace);
                     Some(ApprovalDiffPreview::MissingMatch {
                         path: path.to_string(),
                         text,
@@ -841,11 +845,10 @@ impl ApprovalView {
     }
 
     fn emit_params_pager(&self) -> ViewAction {
-        // Show a readable before/after for file tools, raw JSON otherwise.
-        if let Some(content) = self.build_detail_view() {
-            ViewAction::Emit(ViewEvent::OpenTextPager {
+        if let Some(lines) = self.build_detail_lines() {
+            ViewAction::Emit(ViewEvent::OpenStyledPager {
                 title: format!("Details: {}", self.request.tool_name),
-                content,
+                lines,
             })
         } else {
             let content = serde_json::to_string_pretty(&self.request.params)
@@ -857,35 +860,85 @@ impl ApprovalView {
         }
     }
 
-    /// Build a human-readable before/after view for file tools.
-    fn build_detail_view(&self) -> Option<String> {
+    /// Build a styled details view for file tools.
+    fn build_detail_lines(&self) -> Option<Vec<Line<'static>>> {
+        let label_style = Style::default()
+            .fg(palette::DEEPSEEK_SKY)
+            .add_modifier(Modifier::BOLD);
+        let muted_style = Style::default().fg(palette::TEXT_MUTED);
+        let mut lines: Vec<Line<'static>> = Vec::new();
+
         match self.request.tool_name.as_str() {
             "edit_file" => {
                 let path = self.request.params.get("path")?.as_str()?;
-                let search = self.request.params.get("search")?.as_str()?;
-                let replace = self.request.params.get("replace")?.as_str()?;
-                Some(format!(
-                    "File: {path}\n\n--- Before ---\n{search}\n\n+++ After +++\n{replace}"
-                ))
+                lines.push(Line::from(vec![
+                    Span::styled("File: ", muted_style),
+                    Span::raw(path.to_string()),
+                ]));
+                push_approval_changes(&mut lines, self.request.diff_preview(), 120);
+                if let Some(search) = self.request.params.get("search").and_then(|v| v.as_str()) {
+                    push_multiline_field(&mut lines, "Search", search, label_style);
+                }
+                if let Some(replace) = self.request.params.get("replace").and_then(|v| v.as_str()) {
+                    push_multiline_field(&mut lines, "Replace", replace, label_style);
+                }
+                if let Some(fuzz) = self.request.params.get("fuzz") {
+                    push_scalar_field(&mut lines, "Fuzz", &fuzz.to_string(), label_style);
+                }
+                Some(lines)
             }
             "write_file" => {
                 let path = self.request.params.get("path")?.as_str()?;
-                let new_content = self.request.params.get("content")?.as_str()?;
-                let old_content = std::fs::read_to_string(path).unwrap_or_default();
-                if old_content.is_empty() {
-                    Some(format!(
-                        "File: {path} (new)\n\n--- Content ---\n{new_content}"
-                    ))
-                } else {
-                    Some(format!(
-                        "File: {path}\n\n--- Before ---\n{old_content}\n\n+++ After +++\n{new_content}"
-                    ))
+                lines.push(Line::from(vec![
+                    Span::styled("File: ", muted_style),
+                    Span::raw(path.to_string()),
+                ]));
+                push_approval_changes(&mut lines, self.request.diff_preview(), 120);
+                if let Some(content) = self.request.params.get("content").and_then(|v| v.as_str()) {
+                    push_multiline_field(&mut lines, "Content", content, label_style);
                 }
+                if let Some(mode) = self.request.params.get("mode").and_then(|v| v.as_str()) {
+                    push_scalar_field(&mut lines, "Mode", mode, label_style);
+                }
+                Some(lines)
             }
             "apply_patch" => {
-                let path = self.request.params.get("path")?.as_str()?;
-                let patch = self.request.params.get("patch")?.as_str()?;
-                Some(format!("File: {path}\n\n{patch}"))
+                if let Some(path) = self.request.params.get("path").and_then(|v| v.as_str()) {
+                    lines.push(Line::from(vec![
+                        Span::styled("File: ", muted_style),
+                        Span::raw(path.to_string()),
+                    ]));
+                }
+                push_approval_changes(&mut lines, self.request.diff_preview(), 120);
+                if let Some(patch) = self.request.params.get("patch").and_then(|v| v.as_str()) {
+                    push_multiline_field(&mut lines, "Patch", patch, label_style);
+                }
+                if let Some(changes) = self
+                    .request
+                    .params
+                    .get("changes")
+                    .and_then(|v| v.as_array())
+                {
+                    lines.push(Line::from(Span::styled("Changes:", label_style)));
+                    for (idx, change) in changes.iter().enumerate() {
+                        let Some(change_path) = change.get("path").and_then(|v| v.as_str()) else {
+                            continue;
+                        };
+                        lines.push(Line::from(vec![
+                            Span::raw("  "),
+                            Span::styled(
+                                format!("{}.", idx + 1),
+                                Style::default().fg(palette::TEXT_MUTED),
+                            ),
+                            Span::raw(" "),
+                            Span::styled(change_path.to_string(), muted_style),
+                        ]));
+                        if let Some(content) = change.get("content").and_then(|v| v.as_str()) {
+                            push_multiline_body(&mut lines, content, 4);
+                        }
+                    }
+                }
+                Some(lines)
             }
             _ => None,
         }
@@ -937,11 +990,19 @@ impl ModalView for ApprovalView {
                 self.scroll_diff_down(self.diff_page_height());
                 ViewAction::None
             }
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Up => {
+                self.scroll_diff_up(1);
+                ViewAction::None
+            }
+            KeyCode::Down => {
+                self.scroll_diff_down(1);
+                ViewAction::None
+            }
+            KeyCode::Char('k') => {
                 self.select_prev();
                 ViewAction::None
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Char('j') => {
                 self.select_next();
                 ViewAction::None
             }
@@ -997,6 +1058,72 @@ impl ModalView for ApprovalView {
             return self.emit_decision(ReviewDecision::Denied, true);
         }
         ViewAction::None
+    }
+}
+
+fn push_approval_changes(
+    lines: &mut Vec<Line<'static>>,
+    preview: Option<&ApprovalDiffPreview>,
+    width: u16,
+) {
+    let label_style = Style::default()
+        .fg(palette::DEEPSEEK_SKY)
+        .add_modifier(Modifier::BOLD);
+    let muted_style = Style::default().fg(palette::TEXT_MUTED);
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled("Changes:", label_style)));
+    match preview {
+        Some(ApprovalDiffPreview::Diff { text, .. })
+        | Some(ApprovalDiffPreview::MissingMatch { text, .. }) => {
+            if text.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    "  (no textual changes - content matches current file)".to_string(),
+                    muted_style,
+                )));
+            } else {
+                lines.extend(crate::tui::diff_render::render_diff(text, width));
+            }
+        }
+        Some(ApprovalDiffPreview::NewFile { path, content }) => {
+            let diff = crate::tools::diff_format::make_unified_diff(path, "", content);
+            lines.extend(crate::tui::diff_render::render_diff(&diff, width));
+        }
+        Some(ApprovalDiffPreview::NoChange { .. }) | None => {
+            lines.push(Line::from(Span::styled(
+                "  (no textual changes - content matches current file)".to_string(),
+                muted_style,
+            )));
+        }
+    }
+    lines.push(Line::from(""));
+}
+
+fn push_scalar_field(lines: &mut Vec<Line<'static>>, label: &str, value: &str, label_style: Style) {
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(format!("{label}: "), label_style),
+        Span::raw(value.to_string()),
+    ]));
+}
+
+fn push_multiline_field(
+    lines: &mut Vec<Line<'static>>,
+    label: &str,
+    value: &str,
+    label_style: Style,
+) {
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(format!("{label}:"), label_style),
+    ]));
+    push_multiline_body(lines, value, 4);
+}
+
+fn push_multiline_body(lines: &mut Vec<Line<'static>>, value: &str, indent: usize) {
+    let indent = " ".repeat(indent);
+    for raw in value.split('\n') {
+        lines.push(Line::from(Span::raw(format!("{indent}{raw}"))));
     }
 }
 
@@ -1457,7 +1584,9 @@ mod tests {
         });
         let request =
             ApprovalRequest::new("test-id", "edit_file", "Edit file", &params, "test_key");
-        let preview = request.diff_preview().expect("edit_file produces a preview");
+        let preview = request
+            .diff_preview()
+            .expect("edit_file produces a preview");
         // Tests don't see src/main.rs, so we land in the MissingMatch fallback
         // which still surfaces a search→replace diff for visual confirmation.
         let diff = preview.diff_text();
@@ -1493,6 +1622,35 @@ mod tests {
             other => panic!("expected Diff for existing edit_file, got {other:?}"),
         }
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_build_detail_lines_edit_file_structures_multiline_params() {
+        let params = json!({
+            "path": "test_db.js",
+            "search": "async transaction(callback) {\n    const conn = await this.pool.getConnection();\n}",
+            "replace": "async transaction(callback, timeout = 30000) {\n    const conn = await this.pool.getConnection();\n}",
+        });
+        let request =
+            ApprovalRequest::new("test-id", "edit_file", "Edit file", &params, "test_key");
+        let view = ApprovalView::new(request);
+        let lines = view.build_detail_lines().expect("file tools have details");
+        let rendered = lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("File: test_db.js"), "{rendered}");
+        assert!(rendered.contains("Changes:"), "{rendered}");
+        assert!(rendered.contains("Search:"), "{rendered}");
+        assert!(rendered.contains("Replace:"), "{rendered}");
+        assert!(!rendered.contains("\"search\""), "{rendered}");
+        assert!(!rendered.contains("\"replace\""), "{rendered}");
     }
 
     #[test]
@@ -1634,6 +1792,32 @@ mod tests {
             other => panic!("expected Diff for changes, got {other:?}"),
         }
         let _ = std::fs::remove_dir_all(&workspace);
+    }
+
+    #[test]
+    fn test_build_detail_lines_apply_patch_changes_without_top_level_path() {
+        let params = json!({
+            "changes": [
+                {"path": "a.txt", "content": "new\n"},
+            ]
+        });
+        let request =
+            ApprovalRequest::new("test-id", "apply_patch", "Apply patch", &params, "test_key");
+        let view = ApprovalView::new(request);
+        let lines = view.build_detail_lines().expect("apply_patch has details");
+        let rendered = lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("Changes:"), "{rendered}");
+        assert!(rendered.contains("a.txt"), "{rendered}");
+        assert!(!rendered.contains("\"changes\""), "{rendered}");
     }
 
     #[test]
@@ -1825,13 +2009,13 @@ mod tests {
         assert_eq!(view.selected, 0); // clamped at 0
 
         view.handle_key(create_key_event(KeyCode::Down));
-        assert_eq!(view.selected, 1);
+        assert_eq!(view.selected, 0);
 
         view.handle_key(create_key_event(KeyCode::Char('j')));
-        assert_eq!(view.selected, 2);
+        assert_eq!(view.selected, 1);
 
         view.handle_key(create_key_event(KeyCode::Char('k')));
-        assert_eq!(view.selected, 1);
+        assert_eq!(view.selected, 0);
     }
 
     #[test]
@@ -1840,15 +2024,39 @@ mod tests {
         let action = view.handle_key(create_key_event(KeyCode::Char('v')));
         assert!(matches!(
             action,
-            ViewAction::Emit(ViewEvent::OpenTextPager { .. })
+            ViewAction::Emit(ViewEvent::OpenTextPager { .. } | ViewEvent::OpenStyledPager { .. })
         ));
 
         let mut view = ApprovalView::new(benign_request());
         let action = view.handle_key(create_key_event(KeyCode::Char('V')));
         assert!(matches!(
             action,
-            ViewAction::Emit(ViewEvent::OpenTextPager { .. })
+            ViewAction::Emit(ViewEvent::OpenTextPager { .. } | ViewEvent::OpenStyledPager { .. })
         ));
+    }
+
+    #[test]
+    fn test_approval_view_view_params_uses_styled_pager_for_files() {
+        let mut view = ApprovalView::new(destructive_request());
+        let action = view.handle_key(create_key_event(KeyCode::Char('v')));
+        match action {
+            ViewAction::Emit(ViewEvent::OpenStyledPager { title, lines }) => {
+                assert!(title.contains("Details"));
+                let rendered = lines
+                    .iter()
+                    .map(|line| {
+                        line.spans
+                            .iter()
+                            .map(|span| span.content.as_ref())
+                            .collect::<String>()
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                assert!(rendered.contains("Changes:"));
+                assert!(rendered.contains("@@"));
+            }
+            other => panic!("expected styled pager, got {other:?}"),
+        }
     }
 
     #[test]
@@ -2101,6 +2309,22 @@ mod tests {
             joined.contains("(staged)"),
             "stage marker missing:\n{joined}"
         );
+    }
+
+    #[test]
+    fn up_down_scroll_diff_without_changing_selection() {
+        let mut view = ApprovalView::new(destructive_request());
+        let before = view.selected();
+        assert!(matches!(
+            view.handle_key(create_key_event(KeyCode::Up)),
+            ViewAction::None
+        ));
+        assert_eq!(view.selected(), before);
+        assert!(matches!(
+            view.handle_key(create_key_event(KeyCode::Down)),
+            ViewAction::None
+        ));
+        assert_eq!(view.selected(), before);
     }
 
     #[test]
