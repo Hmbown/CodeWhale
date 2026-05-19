@@ -378,13 +378,14 @@ pub fn resolve_skills_dir(workspace: &Path) -> PathBuf {
 /// Precedence (first match wins on name conflicts):
 ///
 /// 1. `<workspace>/.agents/skills` — deepseek-native convention.
-/// 2. `<workspace>/skills` — flat, project-local.
-/// 3. `<workspace>/.opencode/skills` — OpenCode interop.
-/// 4. `<workspace>/.claude/skills` — Claude Code interop.
-/// 5. `<workspace>/.cursor/skills` — Cursor interop.
-/// 6. [`agents_global_skills_dir`] — agentskills.io global.
-/// 7. [`claude_global_skills_dir`] — Claude-ecosystem global (#902).
-/// 8. [`default_skills_dir`] — DeepSeek global, user-installed.
+/// 2. `<workspace>/.deepseek/skills` — project-local deepseek convention.
+/// 3. `<workspace>/skills` — flat, project-local.
+/// 4. `<workspace>/.opencode/skills` — OpenCode interop.
+/// 5. `<workspace>/.claude/skills` — Claude Code interop.
+/// 6. `<workspace>/.cursor/skills` — Cursor interop.
+/// 7. [`agents_global_skills_dir`] — agentskills.io global.
+/// 8. [`claude_global_skills_dir`] — Claude-ecosystem global (#902).
+/// 9. [`default_skills_dir`] — DeepSeek global, user-installed.
 ///
 /// Only directories that exist on disk are returned — callers don't
 /// need to filter further. Returns an empty vec when nothing is
@@ -398,6 +399,7 @@ pub fn skills_directories(workspace: &Path) -> Vec<PathBuf> {
 fn skills_directories_with_home(workspace: &Path, home_dir: Option<&Path>) -> Vec<PathBuf> {
     let mut candidates = vec![
         workspace.join(".agents").join("skills"),
+        workspace.join(".deepseek").join("skills"),
         workspace.join("skills"),
         workspace.join(".opencode").join("skills"),
         workspace.join(".claude").join("skills"),
@@ -855,8 +857,9 @@ mod tests {
         let tmpdir = TempDir::new().unwrap();
         let workspace = tmpdir.path();
 
-        // Create four of the five workspace candidate dirs (skip `.opencode`).
+        // Create five of the six workspace candidate dirs (skip `.opencode`).
         std::fs::create_dir_all(workspace.join(".agents").join("skills")).unwrap();
+        std::fs::create_dir_all(workspace.join(".deepseek").join("skills")).unwrap();
         std::fs::create_dir_all(workspace.join("skills")).unwrap();
         std::fs::create_dir_all(workspace.join(".claude").join("skills")).unwrap();
         std::fs::create_dir_all(workspace.join(".cursor").join("skills")).unwrap();
@@ -866,13 +869,20 @@ mod tests {
         // host-dependent (may not exist on the test machine).
         let mut idx = 0;
         let agents = workspace.join(".agents").join("skills");
+        let deepseek = workspace.join(".deepseek").join("skills");
         let local = workspace.join("skills");
         let claude = workspace.join(".claude").join("skills");
         let cursor = workspace.join(".cursor").join("skills");
 
         assert_eq!(dirs.get(idx), Some(&agents), "agents must come first");
         idx += 1;
-        assert_eq!(dirs.get(idx), Some(&local), "local must come second");
+        assert_eq!(
+            dirs.get(idx),
+            Some(&deepseek),
+            ".deepseek/skills must come second (after .agents)"
+        );
+        idx += 1;
+        assert_eq!(dirs.get(idx), Some(&local), "local must come third");
         idx += 1;
         // .opencode/skills was not created — it must NOT appear.
         assert!(
@@ -881,7 +891,11 @@ mod tests {
                 .any(|p| p == &workspace.join(".opencode").join("skills")),
             "missing dir must be omitted, got: {dirs:?}"
         );
-        assert_eq!(dirs.get(idx), Some(&claude), "claude must come after local");
+        assert_eq!(
+            dirs.get(idx),
+            Some(&claude),
+            "claude must come after local"
+        );
         idx += 1;
         assert_eq!(
             dirs.get(idx),

@@ -85,8 +85,9 @@ impl ToolSpec for LoadSkillTool {
         }
 
         // #432: walk every candidate skill directory (workspace
-        // .agents/skills, skills, .opencode/skills, .claude/skills,
-        // .cursor/skills, ~/.agents/skills, global default), merging with
+        // .agents/skills, .deepseek/skills, skills, .opencode/skills,
+        // .claude/skills, .cursor/skills, ~/.agents/skills, global default),
+        // merging with
         // first-wins precedence. The
         // tool's lookup mirrors what the system-prompt skills block
         // already lists, so the model never asks for a name it
@@ -100,7 +101,7 @@ impl ToolSpec for LoadSkillTool {
                     .map(|p| p.display().to_string())
                     .collect();
                 if dirs.is_empty() {
-                    "no skills directories found; install skills under `<workspace>/.agents/skills/<name>/SKILL.md`, `~/.agents/skills/<name>/SKILL.md`, or `~/.deepseek/skills/<name>/SKILL.md`"
+                    "no skills directories found; install skills under `<workspace>/.agents/skills/<name>/SKILL.md`, `<workspace>/.deepseek/skills/<name>/SKILL.md`, `~/.agents/skills/<name>/SKILL.md`, or `~/.deepseek/skills/<name>/SKILL.md`"
                         .to_string()
                 } else {
                     format!("no skills installed. Searched: {}", dirs.join(", "))
