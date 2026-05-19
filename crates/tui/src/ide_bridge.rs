@@ -395,9 +395,16 @@ pub fn editor_context_block() -> Option<String> {
             out.push_str(path);
             out.push('\n');
             if let Some(range) = &selection.selection {
+                // LSP positions are 0-based; render as 1-based for both
+                // human readers and the model — matches the footer chip
+                // (`IDE: foo.rs:21`) and the line/column convention used
+                // in compiler errors, `grep -n`, stack traces, etc.
                 out.push_str(&format!(
                     "selection: line {}:{} -> {}:{}\n",
-                    range.start.line, range.start.character, range.end.line, range.end.character,
+                    range.start.line + 1,
+                    range.start.character + 1,
+                    range.end.line + 1,
+                    range.end.character + 1,
                 ));
             }
             if !selection.text.is_empty() {

@@ -423,12 +423,11 @@ fn update_selection(inner: &Inner, mut selection: Option<SelectionChange>) {
     let _ = inner.selection_seq.send(next);
 }
 
-/// Cheap field-wise compare that avoids the full O(n) byte compare on
-/// long `text`. We hash-compare nothing — `text.len()` plus the small
-/// metadata (file path / range) is enough to skip the duplicate-push
-/// case (IDEs replay the *same* payload, not a same-length-different-
-/// content one). On the rare false positive we just miss one wakeup,
-/// which is harmless because the next non-duplicate push will catch up.
+/// Cheap field-wise compare to skip the duplicate-push case (IDEs
+/// frequently replay the same payload on focus changes). Falls through
+/// to `String`'s `PartialEq`, which is itself O(1) on length mismatch
+/// before the byte compare, so an explicit length check would be
+/// redundant.
 fn selection_changed(prev: Option<&SelectionChange>, next: Option<&SelectionChange>) -> bool {
     match (prev, next) {
         (None, None) => false,
@@ -437,7 +436,6 @@ fn selection_changed(prev: Option<&SelectionChange>, next: Option<&SelectionChan
             a.file_path != b.file_path
                 || a.file_url != b.file_url
                 || a.selection != b.selection
-                || a.text.len() != b.text.len()
                 || a.text != b.text
         }
     }
