@@ -739,7 +739,12 @@ fn turn_tool_registry_builder_keeps_plan_mode_read_only_for_files() {
 fn parent_turn_registry_includes_recall_archive_for_investigative_modes() {
     let (engine, _handle) = Engine::new(EngineConfig::default(), &Config::default());
 
-    for mode in [AppMode::Plan, AppMode::Agent, AppMode::Yolo] {
+    for mode in [
+        AppMode::Plan,
+        AppMode::ProPlan,
+        AppMode::Agent,
+        AppMode::Yolo,
+    ] {
         let registry = engine
             .build_turn_tool_registry_builder(
                 mode,
@@ -753,6 +758,27 @@ fn parent_turn_registry_includes_recall_archive_for_investigative_modes() {
             "parent {mode:?} registry should expose recall_archive"
         );
     }
+}
+
+#[test]
+fn raw_pro_plan_registry_fails_closed_to_plan_tools() {
+    let (engine, _handle) = Engine::new(EngineConfig::default(), &Config::default());
+    let registry = engine
+        .build_turn_tool_registry_builder(
+            AppMode::ProPlan,
+            engine.config.todos.clone(),
+            engine.config.plan_state.clone(),
+        )
+        .build(engine.build_tool_context(AppMode::ProPlan, false));
+
+    assert!(registry.contains("read_file"));
+    assert!(registry.contains("list_dir"));
+    assert!(registry.contains("update_plan"));
+    assert!(!registry.contains("write_file"));
+    assert!(!registry.contains("edit_file"));
+    assert!(!registry.contains("apply_patch"));
+    assert!(!registry.contains("exec_shell"));
+    assert!(!registry.contains("task_shell_start"));
 }
 
 #[test]
@@ -846,6 +872,13 @@ fn sandbox_policy_for_mode_returns_correct_policy_per_mode() {
     // Plan: ReadOnly. The whole point of #1077.
     assert!(matches!(
         sandbox_policy_for_mode(AppMode::Plan, &workspace),
+        SandboxPolicy::ReadOnly
+    ));
+
+    // Raw ProPlan should fail closed. Normal ProPlan execution is resolved to
+    // Plan or Agent before this point.
+    assert!(matches!(
+        sandbox_policy_for_mode(AppMode::ProPlan, &workspace),
         SandboxPolicy::ReadOnly
     ));
 

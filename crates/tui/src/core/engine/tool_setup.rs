@@ -18,10 +18,13 @@ use crate::sandbox::SandboxPolicy;
 ///   on. Approval flow gates risky individual commands; the sandbox handles
 ///   the rest. Network is allowed because cargo / npm / curl-style commands
 ///   are normal during agent work and DNS-deny breaks them silently.
+/// - **ProPlan**: `ReadOnly` as a defense-in-depth fallback. Normal ProPlan
+///   turns are resolved to `Plan` or `Agent` before reaching the engine; if a
+///   future path passes raw `ProPlan`, fail closed.
 /// - **YOLO**: `DangerFullAccess` — explicit no-guardrails contract.
 pub(crate) fn sandbox_policy_for_mode(mode: AppMode, workspace: &Path) -> SandboxPolicy {
     match mode {
-        AppMode::Plan => SandboxPolicy::ReadOnly,
+        AppMode::Plan | AppMode::ProPlan => SandboxPolicy::ReadOnly,
         AppMode::Agent => SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![workspace.to_path_buf()],
             network_access: true,
@@ -39,7 +42,8 @@ impl Engine {
         todo_list: SharedTodoList,
         plan_state: SharedPlanState,
     ) -> ToolRegistryBuilder {
-        let mut builder = if mode == AppMode::Plan {
+        let read_only_mode = matches!(mode, AppMode::Plan | AppMode::ProPlan);
+        let mut builder = if read_only_mode {
             ToolRegistryBuilder::new()
                 .with_read_only_file_tools()
                 .with_search_tools()
@@ -65,13 +69,13 @@ impl Engine {
             .with_parallel_tool()
             .with_recall_archive_tool();
 
-        if mode != AppMode::Plan {
+        if !read_only_mode {
             builder = builder
                 .with_rlm_tool(self.deepseek_client.clone(), self.session.model.clone())
                 .with_fim_tool(self.deepseek_client.clone(), self.session.model.clone());
         }
 
-        if self.config.features.enabled(Feature::ApplyPatch) && mode != AppMode::Plan {
+        if self.config.features.enabled(Feature::ApplyPatch) && !read_only_mode {
             builder = builder.with_patch_tools();
         }
         if self.config.features.enabled(Feature::WebSearch) {
@@ -79,7 +83,7 @@ impl Engine {
         }
         // Plan mode is strictly read-only: do not expose shell execution at
         // all, even if the session would otherwise allow it.
-        if mode != AppMode::Plan
+        if !read_only_mode
             && self.config.features.enabled(Feature::ShellTool)
             && self.session.allow_shell
         {

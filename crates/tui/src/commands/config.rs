@@ -664,6 +664,7 @@ fn parse_mode_arg(arg: &str) -> Option<AppMode> {
         "agent" | "1" => Some(AppMode::Agent),
         "plan" | "2" => Some(AppMode::Plan),
         "yolo" | "3" => Some(AppMode::Yolo),
+        "pro-plan" | "proplan" | "4" => Some(AppMode::ProPlan),
         _ => None,
     }
 }
@@ -673,6 +674,7 @@ fn mode_display_name(mode: AppMode) -> &'static str {
         AppMode::Agent => "Agent",
         AppMode::Plan => "Plan",
         AppMode::Yolo => "YOLO",
+        AppMode::ProPlan => "Pro Plan",
     }
 }
 

@@ -9,10 +9,7 @@ use crate::palette;
 use crate::tui::views::{ModalKind, ModalView, ViewAction, ViewEvent};
 
 const PLAN_OPTIONS: [(&str, &str); 4] = [
-    (
-        "Accept plan (Agent)",
-        "Start implementation in Agent mode with approvals",
-    ),
+    ("Accept plan", "Start implementation with approvals"),
     (
         "Accept plan (YOLO)",
         "Start implementation in YOLO mode (auto-approve)",
