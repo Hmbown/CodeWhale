@@ -12,6 +12,8 @@ use dotenvy::dotenv;
 use tempfile::NamedTempFile;
 use wait_timeout::ChildExt;
 
+use crate::dependencies::ExternalTool;
+
 mod acp_server;
 mod artifacts;
 mod audit;
@@ -61,9 +63,9 @@ mod runtime_threads;
 mod sandbox;
 mod schema_migration;
 mod seam_manager;
+mod shell_dispatcher;
 mod session_manager;
 mod settings;
-mod shell_dispatcher;
 mod skill_state;
 mod skills;
 mod snapshot;
@@ -102,12 +104,12 @@ fn configure_windows_console_utf8() {}
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "codewhale-tui",
-    bin_name = "codewhale-tui",
+    name = "deepseek-tui",
+    bin_name = "deepseek-tui",
     author,
     version = env!("DEEPSEEK_BUILD_VERSION"),
-    about = "codewhale/CLI for DeepSeek models",
-    long_about = "Terminal-native TUI and CLI for DeepSeek models.\n\nRun 'codewhale' to start.\n\nNot affiliated with DeepSeek Inc."
+    about = "DeepSeek TUI/CLI for DeepSeek models",
+    long_about = "Terminal-native TUI and CLI for DeepSeek models.\n\nRun 'deepseek' to start.\n\nNot affiliated with DeepSeek Inc."
 )]
 struct Cli {
     /// Subcommand to run
@@ -433,7 +435,7 @@ fn resolve_exec_resume_session_id(args: &ExecArgs, workspace: &Path) -> Result<O
     latest_session_id_for_workspace(workspace)?.map_or_else(
         || {
             bail!(
-                "No saved sessions found for workspace {}. Use `codewhale sessions` to list sessions, or pass `codewhale exec --resume <SESSION_ID> ...`.",
+                "No saved sessions found for workspace {}. Use `deepseek sessions` to list sessions, or pass `deepseek exec --resume <SESSION_ID> ...`.",
                 workspace.display()
             )
         },
@@ -651,15 +653,15 @@ enum McpCommand {
     Validate,
     /// Register this DeepSeek binary as a local MCP stdio server.
     ///
-    /// This adds a config entry that runs `codewhale serve --mcp` (stdio protocol).
-    /// For the HTTP/SSE runtime API, use `codewhale serve --http` directly instead.
+    /// This adds a config entry that runs `deepseek serve --mcp` (stdio protocol).
+    /// For the HTTP/SSE runtime API, use `deepseek serve --http` directly instead.
     #[command(
         name = "add-self",
-        long_about = "Register this DeepSeek binary as a local MCP stdio server.\n\nAdds a config entry to ~/.deepseek/mcp.json that launches `codewhale serve --mcp`\nvia the stdio transport. Other DeepSeek sessions (or any MCP client) can then\ndiscover and call tools exposed by this server.\n\nUse `codewhale serve --http` instead if you need the HTTP/SSE runtime API."
+        long_about = "Register this DeepSeek binary as a local MCP stdio server.\n\nAdds a config entry to ~/.deepseek/mcp.json that launches `deepseek serve --mcp`\nvia the stdio transport. Other DeepSeek sessions (or any MCP client) can then\ndiscover and call tools exposed by this server.\n\nUse `deepseek serve --http` instead if you need the HTTP/SSE runtime API."
     )]
     AddSelf {
-        /// Server name in mcp.json (default: "codewhale")
-        #[arg(long, default_value = "codewhale")]
+        /// Server name in mcp.json (default: "deepseek")
+        #[arg(long, default_value = "deepseek")]
         name: String,
         /// Workspace directory for the MCP server
         #[arg(long)]
@@ -970,7 +972,7 @@ async fn main() -> Result<()> {
         return run_one_shot(&config, &model, &prompt).await;
     }
 
-    // Handle session resume. Plain `codewhale` starts fresh: interrupted
+    // Handle session resume. Plain `deepseek` starts fresh: interrupted
     // snapshots are preserved for explicit resume, but never auto-attached.
     let resume_session_id = if cli.continue_session {
         let workspace = resolve_workspace(&cli);
@@ -1455,18 +1457,26 @@ fn init_skills_dir(skills_dir: &Path, force: bool) -> Result<(PathBuf, WriteStat
 
 fn tools_readme_template() -> &'static str {
     "# Local tools\n\n\
-     Drop self-describing scripts here so they can be discovered by\n\
-     `codewhale-tui setup --status` and surfaced in `codewhale-tui doctor`.\n\n\
-     Each script should start with a frontmatter-style header so the\n\
-     description is visible without executing the file:\n\n\
+     Drop self-describing scripts here — they are auto-discovered and\n\
+     registered as model-visible tools when `[tools.plugin_dir]` is set in\n\
+     config.toml (or when the default `~/.deepseek/tools/` directory exists).\n\n\
+     Each script must start with a frontmatter-style header so the agent\n\
+     knows the tool name, description, and input schema:\n\n\
      ```\n\
      # name: my-tool\n\
      # description: One-line summary of what this tool does\n\
-     # usage: my-tool [args...]\n\
+     # schema: {\"type\":\"object\",\"properties\":{\"input\":{\"type\":\"string\"}}}\n\
+     # approval: auto\n\
      ```\n\n\
-     The directory is intentionally not auto-loaded into the agent's tool\n\
-     catalog. Wire individual tools through MCP, hooks, or skills when you\n\
-     want them available inside a session.\n"
+     The script receives the tool's JSON input on **stdin** and must return\n\
+     a JSON `ToolResult` (`{\"content\": \"...\", \"success\": true}`) on stdout.\n\n\
+     To override a built-in tool (e.g. `exec_shell` with an audit wrapper),\n\
+     add an entry to the `[tools.overrides]` table in config.toml:\n\n\
+     ```toml\n\
+     [tools.overrides]\n\
+     \"exec_shell\" = { type = \"script\", path = \"audit-exec-shell.sh\" }\n\
+     ```\n\n\
+     See `config.example.toml` for the full [tools] reference.\n"
 }
 
 fn tools_example_script() -> &'static str {
@@ -1474,7 +1484,7 @@ fn tools_example_script() -> &'static str {
      # name: example\n\
      # description: Print a confirmation that local tool discovery works\n\
      # usage: example [name]\n\
-     printf 'codewhale-tui local tool ok: %s\\n' \"${1:-world}\"\n"
+     printf 'deepseek-tui local tool ok: %s\\n' \"${1:-world}\"\n"
 }
 
 fn init_tools_dir(tools_dir: &Path, force: bool) -> Result<(PathBuf, WriteStatus, WriteStatus)> {
@@ -1535,7 +1545,7 @@ fn init_plugins_dir(
     Ok((readme_path, example_path, readme_status, example_status))
 }
 
-/// Resolve the user-supplied CORS origins for `codewhale serve --http`.
+/// Resolve the user-supplied CORS origins for `deepseek serve --http`.
 ///
 /// Sources, in priority order (later sources extend earlier ones):
 /// 1. `--cors-origin URL` flags (repeatable)
@@ -1662,9 +1672,7 @@ fn run_setup(config: &Config, workspace: &Path, args: SetupArgs) -> Result<()> {
                 println!("  · MCP config already exists at {}", mcp_path.display());
             }
         }
-        println!(
-            "    Next: edit the file, then run `codewhale mcp list` or `codewhale mcp tools`."
-        );
+        println!("    Next: edit the file, then run `deepseek mcp list` or `deepseek mcp tools`.");
     }
 
     if run_skills {
@@ -1836,45 +1844,41 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
             let (env_var, login_hint) = match config.api_provider() {
                 crate::config::ApiProvider::NvidiaNim => (
                     "NVIDIA_API_KEY",
-                    "codewhale auth set --provider nvidia-nim --api-key \"...\"",
+                    "deepseek auth set --provider nvidia-nim --api-key \"...\"",
                 ),
                 crate::config::ApiProvider::Openai => (
                     "OPENAI_API_KEY",
-                    "codewhale auth set --provider openai --api-key \"...\"",
+                    "deepseek auth set --provider openai --api-key \"...\"",
                 ),
                 crate::config::ApiProvider::Atlascloud => (
                     "ATLASCLOUD_API_KEY",
-                    "codewhale auth set --provider atlascloud --api-key \"...\"",
-                ),
-                crate::config::ApiProvider::WanjieArk => (
-                    "WANJIE_ARK_API_KEY",
-                    "codewhale auth set --provider wanjie-ark --api-key \"...\"",
+                    "deepseek auth set --provider atlascloud --api-key \"...\"",
                 ),
                 crate::config::ApiProvider::Openrouter => (
                     "OPENROUTER_API_KEY",
-                    "codewhale auth set --provider openrouter --api-key \"...\"",
+                    "deepseek auth set --provider openrouter --api-key \"...\"",
                 ),
                 crate::config::ApiProvider::Novita => (
                     "NOVITA_API_KEY",
-                    "codewhale auth set --provider novita --api-key \"...\"",
+                    "deepseek auth set --provider novita --api-key \"...\"",
                 ),
                 crate::config::ApiProvider::Fireworks => (
                     "FIREWORKS_API_KEY",
-                    "codewhale auth set --provider fireworks --api-key \"...\"",
+                    "deepseek auth set --provider fireworks --api-key \"...\"",
                 ),
                 crate::config::ApiProvider::Sglang => (
                     "SGLANG_API_KEY",
-                    "codewhale auth set --provider sglang --api-key \"...\"",
+                    "deepseek auth set --provider sglang --api-key \"...\"",
                 ),
                 crate::config::ApiProvider::Vllm => (
                     "VLLM_API_KEY",
-                    "codewhale auth set --provider vllm --api-key \"...\"",
+                    "deepseek auth set --provider vllm --api-key \"...\"",
                 ),
                 crate::config::ApiProvider::Ollama => {
-                    ("OLLAMA_API_KEY", "codewhale auth set --provider ollama")
+                    ("OLLAMA_API_KEY", "deepseek auth set --provider ollama")
                 }
                 crate::config::ApiProvider::Deepseek | crate::config::ApiProvider::DeepseekCN => {
-                    ("DEEPSEEK_API_KEY", "codewhale auth set --provider deepseek")
+                    ("DEEPSEEK_API_KEY", "deepseek auth set --provider deepseek")
                 }
             };
             println!(
@@ -1884,7 +1888,6 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
                     crate::config::ApiProvider::NvidiaNim => "nvidia_nim",
                     crate::config::ApiProvider::Openai => "openai",
                     crate::config::ApiProvider::Atlascloud => "atlascloud",
-                    crate::config::ApiProvider::WanjieArk => "wanjie_ark",
                     crate::config::ApiProvider::Openrouter => "openrouter",
                     crate::config::ApiProvider::Novita => "novita",
                     crate::config::ApiProvider::Fireworks => "fireworks",
@@ -1969,7 +1972,7 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
     println!("  {} {}", "·".dimmed(), dotenv_status_line(workspace));
 
     println!();
-    println!("Run `codewhale doctor --json` for a machine-readable check.");
+    println!("Run `deepseek doctor --json` for a machine-readable check.");
     Ok(())
 }
 
@@ -2037,14 +2040,16 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
 
     println!(
         "{}",
-        "codewhale Doctor".truecolor(blue_r, blue_g, blue_b).bold()
+        "DeepSeek TUI Doctor"
+            .truecolor(blue_r, blue_g, blue_b)
+            .bold()
     );
     println!("{}", "==================".truecolor(sky_r, sky_g, sky_b));
     println!();
 
     // Version info
     println!("{}", "Version Information:".bold());
-    println!("  codewhale-tui: {}", env!("DEEPSEEK_BUILD_VERSION"));
+    println!("  deepseek-tui: {}", env!("DEEPSEEK_BUILD_VERSION"));
     println!("  rust: {}", rustc_version());
     println!();
 
@@ -2120,25 +2125,6 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
             crate::config::ApiProvider::NvidiaNim,
             "nvidia-nim",
             &["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"][..],
-        ),
-        (
-            crate::config::ApiProvider::Openai,
-            "openai",
-            &["OPENAI_API_KEY"][..],
-        ),
-        (
-            crate::config::ApiProvider::Atlascloud,
-            "atlascloud",
-            &["ATLASCLOUD_API_KEY"][..],
-        ),
-        (
-            crate::config::ApiProvider::WanjieArk,
-            "wanjie-ark",
-            &[
-                "WANJIE_ARK_API_KEY",
-                "WANJIE_API_KEY",
-                "WANJIE_MAAS_API_KEY",
-            ][..],
         ),
         (
             crate::config::ApiProvider::Openrouter,
@@ -2234,7 +2220,7 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
             "✗".truecolor(red_r, red_g, red_b)
         );
         println!(
-            "    Run 'codewhale auth set --provider <name>' to save a key to ~/.deepseek/config.toml."
+            "    Run 'deepseek auth set --provider <name>' to save a key to ~/.deepseek/config.toml."
         );
         false
     };
@@ -2286,21 +2272,21 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
                 );
                 if error_msg.contains("401") || error_msg.contains("Unauthorized") {
                     println!(
-                        "    Invalid API key. Check `codewhale auth status`, DEEPSEEK_API_KEY, or config.toml"
+                        "    Invalid API key. Check `deepseek auth status`, DEEPSEEK_API_KEY, or config.toml"
                     );
                     if matches!(api_key_source, ApiKeySource::Keyring) {
                         println!(
                             "    The rejected key came from the OS keyring via the dispatcher."
                         );
                         println!(
-                            "    Run `codewhale auth status` to inspect config/keyring/env sources."
+                            "    Run `deepseek auth status` to inspect config/keyring/env sources."
                         );
                     } else if matches!(api_key_source, ApiKeySource::Env) {
                         println!(
                             "    The rejected key came from DEEPSEEK_API_KEY; no saved config key is present."
                         );
                         println!(
-                            "    Run `codewhale auth set --provider deepseek` to save a config key that overrides stale env."
+                            "    Run `deepseek auth set --provider deepseek` to save a config key that overrides stale env."
                         );
                     }
                 } else if error_msg.contains("403") || error_msg.contains("Forbidden") {
@@ -2316,7 +2302,7 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
                 } else if error_msg.contains("connect") {
                     println!("    Connection failed. Check firewall settings or try again");
                 } else {
-                    println!("    Error: {error_msg}");
+                    println!("    Error: {}", error_msg);
                 }
             }
         }
@@ -2402,7 +2388,7 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
             "·".dimmed(),
             crate::utils::display_path(&mcp_config_path)
         );
-        println!("    Run `codewhale mcp init` or `codewhale setup --mcp`.");
+        println!("    Run `deepseek mcp init` or `deepseek setup --mcp`.");
     }
 
     // Skills configuration
@@ -2532,7 +2518,7 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
             .is_some_and(|dir| dir.exists())
         && !global_skills_dir.exists()
     {
-        println!("    Run `codewhale setup --skills` (or add --local for ./skills).");
+        println!("    Run `deepseek setup --skills` (or add --local for ./skills).");
     }
 
     // Tools directory
@@ -2553,7 +2539,7 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
             "·".dimmed(),
             crate::utils::display_path(&tools_dir)
         );
-        println!("    Run `codewhale setup --tools` to scaffold a starter dir.");
+        println!("    Run `deepseek setup --tools` to scaffold a starter dir.");
     }
 
     // Plugins directory
@@ -2574,7 +2560,7 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
             "·".dimmed(),
             crate::utils::display_path(&plugins_dir)
         );
-        println!("    Run `codewhale setup --plugins` to scaffold a starter dir.");
+        println!("    Run `deepseek setup --plugins` to scaffold a starter dir.");
     }
 
     // Storage surfaces (#422 / #440 / #500)
@@ -2708,42 +2694,23 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
     }
 
     match crate::dependencies::resolve_tesseract() {
-        Some(_) => {
-            if cfg!(target_os = "macos") {
-                println!(
-                    "  {} OCR: macOS Vision + tesseract available → image_ocr/read_file screenshot OCR enabled",
-                    "✓".truecolor(aqua_r, aqua_g, aqua_b),
-                );
-            } else {
-                println!(
-                    "  {} tesseract: present → image_ocr/read_file screenshot OCR enabled",
-                    "✓".truecolor(aqua_r, aqua_g, aqua_b),
-                );
-            }
-        }
+        Some(_) => println!(
+            "  {} tesseract: present → image_ocr tool registered",
+            "✓".truecolor(aqua_r, aqua_g, aqua_b),
+        ),
         None => {
-            if cfg!(target_os = "macos") {
-                println!(
-                    "  {} OCR: macOS Vision available → image_ocr/read_file screenshot OCR enabled",
-                    "✓".truecolor(aqua_r, aqua_g, aqua_b),
-                );
-                println!(
-                    "    tesseract not found (optional; install only for alternate OCR packs)."
-                );
-            } else {
-                println!("  {} tesseract: not found (optional)", "·".dimmed(),);
-                println!(
-                    "    image_ocr tool is NOT advertised to the model. Install tesseract to enable:"
-                );
-                match std::env::consts::OS {
-                    "macos" => println!("      brew install tesseract"),
-                    "linux" => println!(
-                        "      sudo apt install tesseract-ocr    (Debian/Ubuntu) — or your distro's equivalent"
-                    ),
-                    "windows" => println!("      winget install UB-Mannheim.TesseractOCR"),
-                    other => {
-                        println!("      install tesseract for {other} from tesseract-ocr.github.io")
-                    }
+            println!("  {} tesseract: not found (optional)", "·".dimmed(),);
+            println!(
+                "    image_ocr tool is NOT advertised to the model. Install tesseract to enable:"
+            );
+            match std::env::consts::OS {
+                "macos" => println!("      brew install tesseract"),
+                "linux" => println!(
+                    "      sudo apt install tesseract-ocr    (Debian/Ubuntu) — or your distro's equivalent"
+                ),
+                "windows" => println!("      winget install UB-Mannheim.TesseractOCR"),
+                other => {
+                    println!("      install tesseract for {other} from tesseract-ocr.github.io")
                 }
             }
         }
@@ -3107,7 +3074,7 @@ fn run_doctor_json(
         },
         "api_connectivity": {
             "checked": false,
-            "note": "Skipped in --json mode; run `codewhale doctor` for a live check.",
+            "note": "Skipped in --json mode; run `deepseek doctor` for a live check.",
         },
         "capability": provider_capability_report(config),
     });
@@ -3244,7 +3211,7 @@ fn doctor_timeout_recovery_lines(config: &Config) -> Vec<String> {
                 && !target.base_url.contains("api.deepseeki.com") =>
         {
             lines.push(
-                "If this is a custom DeepSeek-compatible endpoint, set its HTTPS base URL in ~/.deepseek/config.toml and rerun `codewhale doctor`."
+                "If this is a custom DeepSeek-compatible endpoint, set its HTTPS base URL in ~/.deepseek/config.toml and rerun `deepseek doctor`."
                     .to_string(),
             );
         }
@@ -3263,7 +3230,7 @@ fn doctor_timeout_recovery_lines(config: &Config) -> Vec<String> {
     }
 
     lines.push(
-        "Run `codewhale doctor --json` and include `base_url`, `default_text_model`, and `api_connectivity` when filing an issue."
+        "Run `deepseek doctor --json` and include `base_url`, `default_text_model`, and `api_connectivity` when filing an issue."
             .to_string(),
     );
     lines
@@ -3362,10 +3329,10 @@ fn rustc_version() -> String {
     let Ok(output) = cmd.arg("--version").output() else {
         return "unknown".to_string();
     };
-    String::from_utf8(output.stdout)
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|_| "unknown".to_string())
+    String::from_utf8(output.stdout).map(|s| s.trim().to_string()).unwrap_or_else(|_| "unknown".to_string())
 }
+
+
 
 /// List saved sessions
 fn list_sessions(limit: usize, search: Option<String>) -> Result<()> {
@@ -3389,7 +3356,7 @@ fn list_sessions(limit: usize, search: Option<String>) -> Result<()> {
         println!("{}", "No sessions found.".truecolor(sky_r, sky_g, sky_b));
         println!(
             "Start a new session with: {}",
-            "codewhale".truecolor(blue_r, blue_g, blue_b)
+            "deepseek".truecolor(blue_r, blue_g, blue_b)
         );
         return Ok(());
     }
@@ -3422,12 +3389,12 @@ fn list_sessions(limit: usize, search: Option<String>) -> Result<()> {
     println!();
     println!(
         "Resume with: {} {}",
-        "codewhale --resume".truecolor(blue_r, blue_g, blue_b),
+        "deepseek --resume".truecolor(blue_r, blue_g, blue_b),
         "<session-id>".dimmed()
     );
     println!(
         "Continue latest in this workspace: {}",
-        "codewhale --continue".truecolor(blue_r, blue_g, blue_b)
+        "deepseek --continue".truecolor(blue_r, blue_g, blue_b)
     );
 
     Ok(())
@@ -3464,7 +3431,7 @@ fn init_project() -> Result<()> {
             );
             println!();
             println!("Edit this file to customize how the AI agent works with your project.");
-            println!("The instructions will be loaded automatically when you run codewhale.");
+            println!("The instructions will be loaded automatically when you run deepseek.");
         }
         Err(e) => {
             println!(
@@ -3528,7 +3495,7 @@ fn resolve_session_id(session_id: Option<String>, last: bool, workspace: &Path) 
     if last {
         return latest_session_id_for_workspace(workspace)?.ok_or_else(|| {
             anyhow!(
-                "No saved sessions found for workspace {}. Use `codewhale sessions` to list all sessions, or `codewhale resume <SESSION_ID>` to resume one explicitly.",
+                "No saved sessions found for workspace {}. Use `deepseek sessions` to list all sessions, or `deepseek resume <SESSION_ID>` to resume one explicitly.",
                 workspace.display()
             )
         });
@@ -3573,7 +3540,6 @@ fn fork_session(session_id: Option<String>, last: bool, workspace: &Path) -> Res
         system_prompt.as_ref(),
     );
     forked.metadata.copy_cost_from(&saved.metadata);
-    forked.metadata.mark_forked_from(&saved.metadata);
     manager.save_session(&forked)?;
 
     let source_title = saved.metadata.title.trim();
@@ -3691,7 +3657,7 @@ Provide findings ordered by severity with file references, then open questions, 
     Ok(())
 }
 
-/// `codewhale pr <N>` (#451) — fetch a GitHub PR via `gh`, format
+/// `deepseek pr <N>` (#451) — fetch a GitHub PR via `gh`, format
 /// title + body + diff as the composer's first message, and launch
 /// the interactive TUI. Falls back gracefully if `gh` is missing.
 async fn run_pr(
@@ -3705,7 +3671,7 @@ async fn run_pr(
         bail!(
             "`gh` CLI not found on PATH. Install GitHub CLI \
              (https://cli.github.com) and authenticate (`gh auth login`) \
-             so `codewhale pr <N>` can fetch PR metadata and the diff."
+             so `deepseek pr <N>` can fetch PR metadata and the diff."
         );
     }
 
@@ -3776,8 +3742,7 @@ struct GhPullRequest {
 }
 
 fn run_gh_pr_view(number: u32, repo: Option<&str>) -> Result<GhPullRequest> {
-    let mut cmd =
-        crate::dependencies::Gh::command().ok_or_else(|| anyhow::anyhow!("gh not found"))?;
+    let mut cmd = crate::dependencies::Gh::command().ok_or_else(|| anyhow::anyhow!("gh not found"))?;
     cmd.arg("pr").arg("view").arg(number.to_string());
     if let Some(r) = repo {
         cmd.arg("--repo").arg(r);
@@ -3811,8 +3776,7 @@ fn run_gh_pr_view(number: u32, repo: Option<&str>) -> Result<GhPullRequest> {
 }
 
 fn run_gh_pr_diff(number: u32, repo: Option<&str>) -> Result<String> {
-    let mut cmd =
-        crate::dependencies::Gh::command().ok_or_else(|| anyhow::anyhow!("gh not found"))?;
+    let mut cmd = crate::dependencies::Gh::command().ok_or_else(|| anyhow::anyhow!("gh not found"))?;
     cmd.arg("pr").arg("diff").arg(number.to_string());
     if let Some(r) = repo {
         cmd.arg("--repo").arg(r);
@@ -3828,8 +3792,7 @@ fn run_gh_pr_diff(number: u32, repo: Option<&str>) -> Result<String> {
 }
 
 fn run_gh_pr_checkout(number: u32, repo: Option<&str>) -> Result<()> {
-    let mut cmd =
-        crate::dependencies::Gh::command().ok_or_else(|| anyhow::anyhow!("gh not found"))?;
+    let mut cmd = crate::dependencies::Gh::command().ok_or_else(|| anyhow::anyhow!("gh not found"))?;
     cmd.arg("pr").arg("checkout").arg(number.to_string());
     if let Some(r) = repo {
         cmd.arg("--repo").arg(r);
@@ -3903,8 +3866,7 @@ fn format_pr_prompt(number: u32, view: &GhPullRequest, diff: &str) -> String {
 }
 
 fn collect_diff(args: &ReviewArgs) -> Result<String> {
-    let mut cmd =
-        crate::dependencies::Git::command().ok_or_else(|| anyhow::anyhow!("git not found"))?;
+    let mut cmd = crate::dependencies::Git::command().ok_or_else(|| anyhow::anyhow!("git not found"))?;
     cmd.arg("diff");
     if args.staged {
         cmd.arg("--cached");
@@ -3918,7 +3880,7 @@ fn collect_diff(args: &ReviewArgs) -> Result<String> {
 
     let output = cmd
         .output()
-        .map_err(|e| anyhow::anyhow!("Failed to run git diff. Is git installed? ({e})"))?;
+        .map_err(|e| anyhow::anyhow!("Failed to run git diff. Is git installed? ({})", e))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         bail!("git diff failed: {}", stderr.trim());
@@ -3945,13 +3907,12 @@ fn run_apply(args: ApplyArgs) -> Result<()> {
     tmp.write_all(patch.as_bytes())?;
     let tmp_path = tmp.path().to_path_buf();
 
-    let output = crate::dependencies::Git::command()
-        .ok_or_else(|| anyhow::anyhow!("git not found"))?
+    let output = crate::dependencies::Git::command().ok_or_else(|| anyhow::anyhow!("git not found"))?
         .arg("apply")
         .arg("--whitespace=nowarn")
         .arg(&tmp_path)
         .output()
-        .map_err(|e| anyhow::anyhow!("Failed to run git apply: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("Failed to run git apply: {}", e))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -3990,7 +3951,7 @@ async fn run_mcp_command(config: &Config, command: McpCommand) -> Result<()> {
                     );
                 }
             }
-            println!("Edit the file, then run `codewhale mcp list` or `codewhale mcp tools`.");
+            println!("Edit the file, then run `deepseek mcp list` or `deepseek mcp tools`.");
             Ok(())
         }
         McpCommand::List => {
@@ -4170,7 +4131,7 @@ async fn run_mcp_command(config: &Config, command: McpCommand) -> Result<()> {
             let mut cfg = load_mcp_config(&config_path)?;
             if cfg.servers.contains_key(&name) {
                 bail!(
-                    "MCP server '{name}' already exists in {}. Use `codewhale mcp remove {name}` first, or choose a different --name.",
+                    "MCP server '{name}' already exists in {}. Use `deepseek mcp remove {name}` first, or choose a different --name.",
                     config_path.display()
                 );
             }
@@ -4203,8 +4164,8 @@ async fn run_mcp_command(config: &Config, command: McpCommand) -> Result<()> {
                 workspace.map_or(String::new(), |ws| format!(" --workspace {ws}"))
             );
             println!();
-            println!("Tip: Use `codewhale mcp validate` to test the connection.");
-            println!("     Use `codewhale serve --http` for the HTTP/SSE runtime API instead.");
+            println!("Tip: Use `deepseek mcp validate` to test the connection.");
+            println!("     Use `deepseek serve --http` for the HTTP/SSE runtime API instead.");
             Ok(())
         }
     }
@@ -4373,7 +4334,7 @@ fn run_sandbox_command(args: SandboxArgs) -> Result<()> {
             print!("{}", String::from_utf8_lossy(&stdout));
         }
         if !stderr.is_empty() {
-            eprint!("{stderr_str}");
+            eprint!("{}", stderr_str);
         }
         if sandbox_denied {
             eprintln!(
@@ -4524,7 +4485,7 @@ fn checkpoint_age_label(age: std::time::Duration) -> String {
 /// **The checkpoint's workspace must also match the resolved launch workspace
 /// after canonicalisation.** If the workspace doesn't match, the checkpoint is
 /// persisted as a regular session (so the user can find it via
-/// `codewhale sessions` / `codewhale resume <id>`) and cleared, but not loaded.
+/// `deepseek sessions` / `deepseek resume <id>`) and cleared, but not loaded.
 fn recover_interrupted_checkpoint_for_resume(launch_workspace: &Path) -> Option<String> {
     let manager = session_manager::SessionManager::default_location().ok()?;
     let (session, age) = load_recent_checkpoint(&manager)?;
@@ -4538,7 +4499,7 @@ fn recover_interrupted_checkpoint_for_resume(launch_workspace: &Path) -> Option<
         session_manager::workspace_scope_matches(&session_workspace, launch_workspace);
 
     if !workspace_matches {
-        // Persist the checkpoint so the user can find it via `codewhale
+        // Persist the checkpoint so the user can find it via `deepseek
         // sessions`, then clear it so the next launch in this folder doesn't
         // re-trip the nag. Print a one-line notice pointing at the explicit
         // resume command — but DO NOT auto-load the session here.
@@ -4546,7 +4507,7 @@ fn recover_interrupted_checkpoint_for_resume(launch_workspace: &Path) -> Option<
         let _ = manager.clear_checkpoint();
         eprintln!(
             "Note: an interrupted session from another workspace ({}) is \
-             available. Run `codewhale sessions` to list saved sessions. Starting \
+             available. Run `deepseek sessions` to list saved sessions. Starting \
              fresh in {}.",
             session_workspace.display(),
             launch_workspace.display(),
@@ -4571,7 +4532,7 @@ fn recover_interrupted_checkpoint_for_resume(launch_workspace: &Path) -> Option<
 }
 
 /// Preserve an interrupted checkpoint on a normal fresh launch without
-/// attaching it to the new TUI instance. This keeps "open another codewhale in
+/// attaching it to the new TUI instance. This keeps "open another deepseek in
 /// the same folder" from re-entering the previous in-flight session while still
 /// leaving an explicit resume path.
 fn preserve_interrupted_checkpoint_for_explicit_resume(launch_workspace: &Path) {
@@ -4590,12 +4551,12 @@ fn preserve_interrupted_checkpoint_for_explicit_resume(launch_workspace: &Path) 
     if session_manager::workspace_scope_matches(&session_workspace, launch_workspace) {
         eprintln!(
             "Found an in-flight session snapshot ({age_str}). Starting a new \
-             session. Run `codewhale --continue` to resume it."
+             session. Run `deepseek --continue` to resume it."
         );
     } else {
         eprintln!(
             "Note: an interrupted session from another workspace ({}) is \
-             available. Run `codewhale sessions` to list saved sessions. Starting \
+             available. Run `deepseek sessions` to list saved sessions. Starting \
              fresh in {}.",
             session_workspace.display(),
             launch_workspace.display(),
@@ -5126,7 +5087,6 @@ async fn run_exec_agent(
         lsp_config,
         runtime_services: crate::tools::spec::RuntimeToolServices::default(),
         subagent_model_overrides: config.subagent_model_overrides(),
-        subagent_api_timeout: std::time::Duration::from_secs(config.subagent_api_timeout_secs()),
         memory_enabled: config.memory_enabled(),
         memory_path: config.memory_path(),
         vision_config: config.vision_model_config(),
@@ -5144,6 +5104,7 @@ async fn run_exec_agent(
             .and_then(|s| s.provider)
             .unwrap_or_default(),
         search_api_key: config.search.as_ref().and_then(|s| s.api_key.clone()),
+        tools: config.tools.clone(),
     };
 
     let engine_handle = spawn_engine(engine_config, config);
@@ -5647,7 +5608,7 @@ mod doctor_endpoint_tests {
         assert!(text.contains("api.deepseek.com"));
         assert!(text.contains("custom DeepSeek-compatible endpoint"));
         assert!(!text.contains("provider = \"deepseek-cn\""));
-        assert!(text.contains("codewhale doctor --json"));
+        assert!(text.contains("deepseek doctor --json"));
     }
 
     #[test]
@@ -5676,19 +5637,19 @@ mod terminal_mode_tests {
 
     #[test]
     fn prompt_flag_accepts_split_prompt_words_for_windows_cmd_shims() {
-        let cli = parse_cli(&["codewhale", "-p", "hello", "world"]);
+        let cli = parse_cli(&["deepseek", "-p", "hello", "world"]);
 
         assert_eq!(cli.prompt, vec!["hello", "world"]);
     }
 
     #[test]
     fn companion_binary_reports_its_own_name() {
-        assert_eq!(Cli::command().get_name(), "codewhale-tui");
+        assert_eq!(Cli::command().get_name(), "deepseek-tui");
     }
 
     #[test]
     fn exec_accepts_split_prompt_words_for_windows_cmd_shims() {
-        let cli = parse_cli(&["codewhale", "exec", "hello", "world"]);
+        let cli = parse_cli(&["deepseek", "exec", "hello", "world"]);
         let Some(Commands::Exec(args)) = cli.command else {
             panic!("expected exec command");
         };
@@ -5698,7 +5659,7 @@ mod terminal_mode_tests {
 
     #[test]
     fn exec_keeps_flags_before_split_prompt_words() {
-        let cli = parse_cli(&["codewhale", "exec", "--json", "hello", "world"]);
+        let cli = parse_cli(&["deepseek", "exec", "--json", "hello", "world"]);
         let Some(Commands::Exec(args)) = cli.command else {
             panic!("expected exec command");
         };
@@ -5710,7 +5671,7 @@ mod terminal_mode_tests {
     #[test]
     fn exec_accepts_resume_session_flags_for_harnesses() {
         let cli = parse_cli(&[
-            "codewhale",
+            "deepseek",
             "exec",
             "--resume",
             "abc123",
@@ -5729,7 +5690,7 @@ mod terminal_mode_tests {
 
     #[test]
     fn exec_accepts_session_id_alias() {
-        let cli = parse_cli(&["codewhale", "exec", "--session-id", "abc123", "follow up"]);
+        let cli = parse_cli(&["deepseek", "exec", "--session-id", "abc123", "follow up"]);
         let Some(Commands::Exec(args)) = cli.command else {
             panic!("expected exec command");
         };
@@ -5740,7 +5701,7 @@ mod terminal_mode_tests {
 
     #[test]
     fn exec_accepts_continue_for_latest_workspace_session() {
-        let cli = parse_cli(&["codewhale", "exec", "--continue", "follow up"]);
+        let cli = parse_cli(&["deepseek", "exec", "--continue", "follow up"]);
         let Some(Commands::Exec(args)) = cli.command else {
             panic!("expected exec command");
         };
@@ -5870,7 +5831,7 @@ mod terminal_mode_tests {
     #[test]
     fn exec_json_conflicts_with_stream_json_output() {
         let err = Cli::try_parse_from([
-            "codewhale",
+            "deepseek",
             "exec",
             "--json",
             "--output-format",
@@ -5898,7 +5859,7 @@ mod terminal_mode_tests {
 
     #[test]
     fn alternate_screen_defaults_on_in_auto_mode() {
-        let cli = parse_cli(&["codewhale"]);
+        let cli = parse_cli(&["deepseek"]);
         let config = Config::default();
 
         assert!(should_use_alt_screen(&cli, &config));
@@ -5906,7 +5867,7 @@ mod terminal_mode_tests {
 
     #[test]
     fn no_alt_screen_flag_is_accepted_but_keeps_alternate_screen() {
-        let cli = parse_cli(&["codewhale", "--no-alt-screen"]);
+        let cli = parse_cli(&["deepseek", "--no-alt-screen"]);
         let config = Config::default();
 
         assert!(should_use_alt_screen(&cli, &config));
@@ -5914,7 +5875,7 @@ mod terminal_mode_tests {
 
     #[test]
     fn config_never_is_accepted_but_keeps_alternate_screen() {
-        let cli = parse_cli(&["codewhale"]);
+        let cli = parse_cli(&["deepseek"]);
         let config = Config {
             tui: Some(crate::config::TuiConfig {
                 alternate_screen: Some("never".to_string()),
@@ -5934,7 +5895,7 @@ mod terminal_mode_tests {
     #[test]
     #[cfg(not(windows))]
     fn mouse_capture_defaults_on_when_alternate_screen_is_active() {
-        let cli = parse_cli(&["codewhale"]);
+        let cli = parse_cli(&["deepseek"]);
         let config = Config::default();
 
         assert!(should_use_mouse_capture_with(
@@ -5948,7 +5909,7 @@ mod terminal_mode_tests {
         // Legacy conhost (no `WT_SESSION` and no `ConEmuPID`) keeps the
         // v0.8.x default-off behavior: mouse-mode reporting on legacy console
         // can leak SGR escapes into the composer.
-        let cli = parse_cli(&["codewhale"]);
+        let cli = parse_cli(&["deepseek"]);
         let config = Config::default();
 
         assert!(!should_use_mouse_capture_with(
@@ -5964,7 +5925,7 @@ mod terminal_mode_tests {
     #[test]
     #[cfg(windows)]
     fn mouse_capture_defaults_on_in_windows_terminal() {
-        let cli = parse_cli(&["codewhale"]);
+        let cli = parse_cli(&["deepseek"]);
         let config = Config::default();
 
         assert!(should_use_mouse_capture_with(
@@ -5982,7 +5943,7 @@ mod terminal_mode_tests {
     #[test]
     #[cfg(windows)]
     fn mouse_capture_defaults_on_in_conemu() {
-        let cli = parse_cli(&["codewhale"]);
+        let cli = parse_cli(&["deepseek"]);
         let config = Config::default();
 
         assert!(should_use_mouse_capture_with(
@@ -5997,7 +5958,7 @@ mod terminal_mode_tests {
 
     #[test]
     fn no_mouse_capture_flag_disables_mouse_capture() {
-        let cli = parse_cli(&["codewhale", "--no-mouse-capture"]);
+        let cli = parse_cli(&["deepseek", "--no-mouse-capture"]);
         let config = Config::default();
 
         assert!(!should_use_mouse_capture_with(
@@ -6007,7 +5968,7 @@ mod terminal_mode_tests {
 
     #[test]
     fn config_can_disable_default_mouse_capture() {
-        let cli = parse_cli(&["codewhale"]);
+        let cli = parse_cli(&["deepseek"]);
         let config = Config {
             tui: Some(crate::config::TuiConfig {
                 alternate_screen: None,
@@ -6028,7 +5989,7 @@ mod terminal_mode_tests {
 
     #[test]
     fn mouse_capture_flag_enables_mouse_capture() {
-        let cli = parse_cli(&["codewhale", "--mouse-capture"]);
+        let cli = parse_cli(&["deepseek", "--mouse-capture"]);
         let config = Config::default();
 
         assert!(should_use_mouse_capture_with(
@@ -6038,7 +5999,7 @@ mod terminal_mode_tests {
 
     #[test]
     fn config_can_enable_mouse_capture() {
-        let cli = parse_cli(&["codewhale"]);
+        let cli = parse_cli(&["deepseek"]);
         let config = Config {
             tui: Some(crate::config::TuiConfig {
                 alternate_screen: None,
@@ -6059,7 +6020,7 @@ mod terminal_mode_tests {
 
     #[test]
     fn mouse_capture_is_off_without_alternate_screen() {
-        let cli = parse_cli(&["codewhale", "--mouse-capture"]);
+        let cli = parse_cli(&["deepseek", "--mouse-capture"]);
         let config = Config::default();
 
         assert!(!should_use_mouse_capture_with(
@@ -6076,7 +6037,7 @@ mod terminal_mode_tests {
 
     #[test]
     fn mouse_capture_defaults_off_in_jetbrains_jediterm() {
-        let cli = parse_cli(&["codewhale"]);
+        let cli = parse_cli(&["deepseek"]);
         let config = Config::default();
 
         assert!(!should_use_mouse_capture_with(
@@ -6091,7 +6052,7 @@ mod terminal_mode_tests {
 
     #[test]
     fn jetbrains_default_off_is_case_insensitive() {
-        let cli = parse_cli(&["codewhale"]);
+        let cli = parse_cli(&["deepseek"]);
         let config = Config::default();
 
         // JetBrains has occasionally varied the casing across releases;
@@ -6108,7 +6069,7 @@ mod terminal_mode_tests {
 
     #[test]
     fn mouse_capture_flag_overrides_jetbrains_default() {
-        let cli = parse_cli(&["codewhale", "--mouse-capture"]);
+        let cli = parse_cli(&["deepseek", "--mouse-capture"]);
         let config = Config::default();
 
         assert!(should_use_mouse_capture_with(
@@ -6123,7 +6084,7 @@ mod terminal_mode_tests {
 
     #[test]
     fn config_mouse_capture_true_overrides_jetbrains_default() {
-        let cli = parse_cli(&["codewhale"]);
+        let cli = parse_cli(&["deepseek"]);
         let config = Config {
             tui: Some(crate::config::TuiConfig {
                 alternate_screen: None,
@@ -6343,24 +6304,24 @@ max_subagents = -3
     fn project_overlay_skips_missing_config_file() {
         let tmp = tempdir().expect("tempdir");
         let mut config = Config {
-            provider: Some("codewhale".to_string()),
+            provider: Some("deepseek".to_string()),
             ..Config::default()
         };
         merge_project_config(&mut config, tmp.path());
         // Untouched.
-        assert_eq!(config.provider.as_deref(), Some("codewhale"));
+        assert_eq!(config.provider.as_deref(), Some("deepseek"));
     }
 
     #[test]
     fn project_overlay_skips_malformed_toml() {
         let tmp = workspace_with_project_config("this is not valid TOML !!");
         let mut config = Config {
-            provider: Some("codewhale".to_string()),
+            provider: Some("deepseek".to_string()),
             ..Config::default()
         };
         merge_project_config(&mut config, tmp.path());
         // Untouched on parse error — better to fall back to global than crash.
-        assert_eq!(config.provider.as_deref(), Some("codewhale"));
+        assert_eq!(config.provider.as_deref(), Some("deepseek"));
     }
 
     #[test]
@@ -6372,13 +6333,13 @@ model = ""
 "#,
         );
         let mut config = Config {
-            provider: Some("codewhale".to_string()),
+            provider: Some("deepseek".to_string()),
             default_text_model: Some("deepseek-v4-pro".to_string()),
             ..Config::default()
         };
         merge_project_config(&mut config, tmp.path());
         // Empty strings are ignored — they're rarely a deliberate override.
-        assert_eq!(config.provider.as_deref(), Some("codewhale"));
+        assert_eq!(config.provider.as_deref(), Some("deepseek"));
         assert_eq!(
             config.default_text_model.as_deref(),
             Some("deepseek-v4-pro")
@@ -6519,7 +6480,7 @@ mod doctor_mcp_tests {
 
     #[test]
     fn test_self_hosted_absolute_is_ok() {
-        let server = make_server(Some("/usr/local/bin/codewhale"), &["serve", "--mcp"], None);
+        let server = make_server(Some("/usr/local/bin/deepseek"), &["serve", "--mcp"], None);
         match doctor_check_mcp_server(&server) {
             McpServerDoctorStatus::Ok(detail) | McpServerDoctorStatus::Error(detail) => {
                 // On systems where the path doesn't exist, this will be Error.
@@ -6537,7 +6498,7 @@ mod doctor_mcp_tests {
 
     #[test]
     fn test_self_hosted_relative_is_warning() {
-        let server = make_server(Some("codewhale"), &["serve", "--mcp"], None);
+        let server = make_server(Some("deepseek"), &["serve", "--mcp"], None);
         match doctor_check_mcp_server(&server) {
             McpServerDoctorStatus::Warning(detail) => {
                 assert!(detail.contains("relative"));
@@ -7022,7 +6983,7 @@ mod pr_prompt_tests {
         // A deliberately-implausible name to confirm the negative
         // branch — `--version` on this would exec(3) → ENOENT.
         assert!(
-            !is_command_available("this-command-cannot-exist-codewhale-tui-test-ENOENT-marker"),
+            !is_command_available("this-command-cannot-exist-deepseek-tui-test-ENOENT-marker"),
             "missing command should return false, not panic"
         );
     }

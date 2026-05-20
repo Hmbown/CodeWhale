@@ -1039,6 +1039,59 @@ pub struct Config {
     /// Vision model configuration for the `image_analyze` tool.
     #[serde(default)]
     pub vision_model: Option<VisionModelConfig>,
+
+    /// Tool override and plugin configuration (`[tools]` table in config.toml).
+    /// When absent, all built-in tools remain as-is and no plugin directory
+    /// is scanned.
+    #[serde(default)]
+    pub tools: Option<ToolsConfig>,
+}
+
+/// Runtime tool override configuration loaded from `[tools]` in config.toml.
+///
+/// Users can replace any built-in tool with a script or external command,
+/// or disable a tool entirely — without forking or recompiling.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ToolsConfig {
+    /// Optional directory to scan for plugin tool scripts. Scripts with a
+    /// frontmatter header (`# name:`, `# description:`, `# schema:`) are
+    /// auto-discovered and registered as tools.
+    ///
+    /// Defaults to `~/.deepseek/tools/` when `None`.
+    pub plugin_dir: Option<String>,
+
+    /// Per-tool overrides keyed by built-in tool name.
+    /// Each override replaces or disables the named tool.
+    #[serde(default)]
+    pub overrides: Option<HashMap<String, ToolOverride>>,
+}
+
+/// How a user wants to replace or disable a built-in tool.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ToolOverride {
+    /// Run a local script file. The script receives the tool's JSON input
+    /// on stdin and must return a JSON `ToolResult` on stdout.
+    Script {
+        /// Path to the script (absolute, or relative to `~/.deepseek/tools/`).
+        path: String,
+        /// Optional static arguments prepended before the tool's JSON input.
+        #[serde(default)]
+        args: Option<Vec<String>>,
+    },
+    /// Run an external command. The command receives the tool's JSON input
+    /// on stdin and must return a JSON `ToolResult` on stdout.
+    Command {
+        /// The command to run (binary name or absolute path).
+        command: String,
+        /// Optional static arguments prepended before the tool's JSON input.
+        #[serde(default)]
+        args: Option<Vec<String>>,
+    },
+    /// Completely disable a built-in tool. The tool will not appear in the
+    /// model-visible catalog and cannot be called.
+    Disabled,
 }
 
 /// Vision model configuration for the `image_analyze` tool.
@@ -2971,6 +3024,7 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
         strict_tool_mode: override_cfg.strict_tool_mode.or(base.strict_tool_mode),
         runtime_api: override_cfg.runtime_api.or(base.runtime_api),
         workshop: override_cfg.workshop.or(base.workshop),
+        tools: override_cfg.tools.or(base.tools),
     }
 }
 

@@ -1,10 +1,8 @@
 //! TUI event loop and rendering logic for `DeepSeek` CLI.
 
-use std::fmt::Write as _;
 use std::io::{self, Stdout, Write};
 use std::path::PathBuf;
-#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
-use std::process::{Command, Stdio};
+
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -32,6 +30,7 @@ use ratatui::{
     widgets::Block,
 };
 use tracing;
+use crate::logging;
 
 use crate::audit::log_sensitive_event;
 use crate::automation_manager::{AutomationManager, AutomationSchedulerConfig, spawn_scheduler};
@@ -55,7 +54,7 @@ use crate::session_manager::{
     create_saved_session_with_id_and_mode, create_saved_session_with_mode, update_session,
 };
 use crate::task_manager::{
-    NewTaskRequest, SharedTaskManager, TaskManager, TaskManagerConfig, TaskStatus, TaskSummary,
+    NewTaskRequest, SharedTaskManager, TaskManager, TaskManagerConfig, TaskStatus,
 };
 use crate::tools::spec::RuntimeToolServices;
 use crate::tools::subagent::SubAgentStatus;
@@ -135,6 +134,7 @@ const SLASH_MENU_LIMIT: usize = 128;
 const MENTION_MENU_LIMIT: usize = 6;
 const MIN_CHAT_HEIGHT: u16 = 3;
 const MIN_COMPOSER_HEIGHT: u16 = 2;
+const CONTEXT_SUGGEST_COMPACT_THRESHOLD_PERCENT: f64 = 60.0;
 const CONTEXT_WARNING_THRESHOLD_PERCENT: f64 = 85.0;
 const CONTEXT_CRITICAL_THRESHOLD_PERCENT: f64 = 95.0;
 const UI_IDLE_POLL_MS: u64 = 48;
@@ -255,7 +255,7 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
     // Terminal probe with timeout to prevent hanging on unresponsive terminals
     let probe_timeout = terminal_probe_timeout(config);
     let enable_raw = tokio::task::spawn_blocking(move || {
-        enable_raw_mode().map_err(|e| anyhow::anyhow!("Failed to enable raw mode: {e}"))
+        enable_raw_mode().map_err(|e| anyhow::anyhow!("Failed to enable raw mode: {}", e))
     });
 
     match tokio::time::timeout(probe_timeout, enable_raw).await {
@@ -278,6 +278,11 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
     if use_alt_screen {
         execute!(stdout, EnterAlternateScreen)?;
     }
+    // On Windows, stderr cannot be redirected to the log file (no dup2).
+    // Suppress verbose CLI logging once the alt-screen is active so
+    // eprintln! calls from crate::logging don't leak into the TUI buffer.
+    #[cfg(windows)]
+    crate::logging::set_verbose(false);
     // Initialize the file-backed TUI log and (on Unix) redirect raw stderr
     // away from the alt-screen for the lifetime of this guard. Any
     // `eprintln!`, panic message, or third-party stderr write that would
@@ -578,7 +583,7 @@ fn should_show_resume_hint(session_id: Option<&str>) -> bool {
 }
 
 fn resume_hint_text() -> &'static str {
-    "To continue this session, execute codewhale run --continue"
+    "To continue this session, execute deepseek run --continue"
 }
 
 fn terminal_probe_timeout(config: &Config) -> Duration {
@@ -709,7 +714,6 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
             .map(crate::config::LspConfigToml::into_runtime),
         runtime_services: app.runtime_services.clone(),
         subagent_model_overrides: config.subagent_model_overrides(),
-        subagent_api_timeout: Duration::from_secs(config.subagent_api_timeout_secs()),
         memory_enabled: config.memory_enabled(),
         memory_path: config.memory_path(),
         vision_config: config.vision_model_config(),
@@ -723,72 +727,17 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
             .and_then(|s| s.provider)
             .unwrap_or_default(),
         search_api_key: config.search.as_ref().and_then(|s| s.api_key.clone()),
+        tools: config.tools.clone(),
     }
-}
-
-/// How long after a task finishes it should still appear in the Work
-/// sidebar even if its `ended_at` predates the current TUI session.
-///
-/// Tasks completing during the current session always show (until the
-/// next session boundary). Tasks that completed shortly before the
-/// session also show, so users coming back to a terminal see "you just
-/// finished X". Anything older than this window is hidden — preventing
-/// the sidebar from accumulating indefinitely (bug #1913).
-const WORK_SIDEBAR_RECENT_COMPLETED_TTL: chrono::Duration = chrono::Duration::hours(2);
-
-/// Choose which durable-task summaries should appear in the Work
-/// sidebar's Tasks panel.
-///
-/// Active tasks (`Queued`/`Running`) are always included. Terminal
-/// tasks (`Completed`/`Failed`/`Canceled`) are kept only if their
-/// `ended_at` falls within the "recent" window — defined as either:
-///
-/// - within the current TUI session (`ended_at >= session_started_at`), or
-/// - within `recent_ttl` of `now` (so a task that finished a few
-///   minutes before the session started still shows).
-///
-/// Anything older than that — including the multi-day-old completed
-/// tasks reported in bug #1913 — is excluded so the sidebar does not
-/// accumulate indefinitely across sessions.
-///
-/// A terminal task missing `ended_at` is treated as not-recent and
-/// dropped: durable tasks always stamp `ended_at` when they reach a
-/// terminal state, so absence of it indicates a record from a much
-/// older schema and isn't worth surfacing.
-pub(crate) fn select_work_sidebar_tasks(
-    tasks: Vec<TaskSummary>,
-    session_started_at: chrono::DateTime<chrono::Utc>,
-    now: chrono::DateTime<chrono::Utc>,
-    recent_ttl: chrono::Duration,
-) -> Vec<TaskSummary> {
-    let recent_cutoff = now - recent_ttl;
-    tasks
-        .into_iter()
-        .filter(|task| match task.status {
-            TaskStatus::Queued | TaskStatus::Running => true,
-            TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Canceled => {
-                match task.ended_at {
-                    Some(ended_at) => ended_at >= session_started_at || ended_at >= recent_cutoff,
-                    None => false,
-                }
-            }
-        })
-        .collect()
 }
 
 async fn refresh_active_task_panel(app: &mut App, task_manager: &SharedTaskManager) {
     let tasks = task_manager.list_tasks(None).await;
-    let session_started_at = app.session_started_at;
-    let now = chrono::Utc::now();
-    let mut entries: Vec<TaskPanelEntry> = select_work_sidebar_tasks(
-        tasks,
-        session_started_at,
-        now,
-        WORK_SIDEBAR_RECENT_COMPLETED_TTL,
-    )
-    .into_iter()
-    .map(task_summary_to_panel_entry)
-    .collect();
+    let mut entries: Vec<TaskPanelEntry> = tasks
+        .into_iter()
+        .filter(|task| matches!(task.status, TaskStatus::Queued | TaskStatus::Running))
+        .map(task_summary_to_panel_entry)
+        .collect();
 
     entries.extend(active_rlm_task_entries(app));
 
@@ -889,7 +838,14 @@ async fn run_event_loop(
         .checked_sub(Duration::from_secs(60))
         .unwrap_or_else(Instant::now);
 
+    let mut loop_ticks: u64 = 0;
+
     loop {
+        loop_ticks += 1;
+        if loop_ticks % 100 == 0 {
+            logging::info(format!("[FREEZE-DEBUG] event_loop tick={loop_ticks}, mode={:?}, streaming={}", app.mode, app.streaming_state.is_active));
+        }
+
         if !drain_web_config_events(&mut web_config_session, app, config, &engine_handle).await {
             web_config_session = None;
         }
@@ -992,27 +948,17 @@ async fn run_event_loop(
         let mut transcript_batch_updated = false;
         let mut queued_to_send: Option<QueuedMessage> = None;
         {
+            if loop_ticks % 100 == 0 {
+                logging::info(format!("[FREEZE-DEBUG] engine_poll_enter tick={loop_ticks}"));
+            }
             let mut rx = engine_handle.rx_event.write().await;
+            let _poll_start = Instant::now();
             while let Ok(event) = rx.try_recv() {
                 received_engine_event = true;
-                if app.suppress_stream_events_until_turn_complete {
-                    if matches!(event, EngineEvent::TurnStarted { .. }) {
-                        // Ctrl+C can race with the engine's per-turn token
-                        // reset: the first cancel may hit the previous token
-                        // if SendMessage is queued but TurnStarted has not
-                        // arrived yet. Reassert cancellation once the real
-                        // turn starts, then keep hiding its queued deltas.
-                        engine_handle.cancel();
-                        continue;
-                    }
-                    if suppress_engine_event_after_local_cancel(&event) {
-                        continue;
-                    }
-                } else if !app.is_loading && ignore_stale_stream_event_while_idle(&event) {
-                    continue;
-                }
+                logging::info(format!("[FREEZE-DEBUG] engine_event_rcvd tick={loop_ticks}"));
                 match event {
                     EngineEvent::MessageStarted { .. } => {
+                        logging::info("[FREEZE-DEBUG] EngineEvent::MessageStarted");
                         // Assistant text starting after parallel tool work
                         // means the tool group is done. Flush the active
                         // cell first so the message lands BELOW the
@@ -1045,6 +991,7 @@ async fn run_event_loop(
                         }
                     }
                     EngineEvent::MessageComplete { .. } => {
+                        let complete_char_count = current_streaming_text.len();
                         // #861 RC3: defensive drain of a still-active thinking
                         // entry. Normally `ThinkingComplete` arrives first and
                         // populates `last_reasoning` before we get here, but
@@ -1134,6 +1081,8 @@ async fn run_event_loop(
                                 tool_uses,
                             );
                         }
+                        logging::info(format!(
+                            "[FREEZE-DEBUG] EngineEvent::MessageComplete chars={complete_char_count}"));
                     }
                     EngineEvent::ThinkingStarted { .. } => {
                         // P2.3: thinking lives in the active cell so it groups
@@ -1320,7 +1269,6 @@ async fn run_event_loop(
                         }
                     }
                     EngineEvent::TurnStarted { turn_id } => {
-                        app.suppress_stream_events_until_turn_complete = false;
                         app.is_loading = true;
                         app.offline_mode = false;
                         app.turn_error_posted = false;
@@ -1354,8 +1302,6 @@ async fn run_event_loop(
                         status,
                         error,
                     } => {
-                        let was_locally_cancelled = app.suppress_stream_events_until_turn_complete;
-                        app.suppress_stream_events_until_turn_complete = false;
                         if !matches!(status, crate::core::events::TurnOutcomeStatus::Completed)
                             || draws_since_last_full_repaint >= PERIODIC_FULL_REPAINT_EVERY_N
                         {
@@ -1383,9 +1329,6 @@ async fn run_event_loop(
                         app.dispatch_started_at = None;
                         app.offline_mode = false;
                         app.streaming_state.reset();
-                        if was_locally_cancelled {
-                            current_streaming_text.clear();
-                        }
                         // Capture elapsed before clearing turn_started_at so
                         // notifications can use the real wall-clock duration.
                         let turn_elapsed =
@@ -1578,7 +1521,8 @@ async fn run_event_loop(
                         if app.auto_model {
                             app.last_effective_model = Some(model);
                         } else {
-                            app.set_model_selection(model);
+                            app.model = model;
+                            app.last_effective_model = None;
                         }
                         app.update_model_compaction_budget();
                         app.workspace = workspace;
@@ -2648,6 +2592,19 @@ async fn run_event_loop(
                 continue;
             }
 
+            // Ctrl+L: manual context compaction — breaks the chicken-and-egg
+            // deadlock when the model is too slow to suggest /compact at high
+            // context saturation. Fires even when a turn is streaming so the
+            // user can compact between turns without canceling.
+            if matches!(key.code, KeyCode::Char('l') | KeyCode::Char('L'))
+                && key.modifiers.contains(KeyModifiers::CONTROL)
+                && app.view_stack.is_empty()
+            {
+                app.status_message = Some("Compacting context (Ctrl+L)...".to_string());
+                let _ = engine_handle.send(Op::CompactContext).await;
+                continue;
+            }
+
             if matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C'))
                 && key.modifiers.contains(KeyModifiers::ALT)
                 && !key.modifiers.contains(KeyModifiers::CONTROL)
@@ -2702,7 +2659,7 @@ async fn run_event_loop(
                                 // Insert @path into the composer.
                                 let path_str = rel_path.to_string_lossy().to_string();
                                 app.status_message = Some(format!("Attached @{path_str}"));
-                                app.insert_str(&format!("@{path_str} "));
+                                app.insert_str(&format!("@{} ", path_str));
                             } else {
                                 // Directory was expanded/collapsed; rebuild.
                                 app.needs_redraw = true;
@@ -2815,24 +2772,6 @@ async fn run_event_loop(
                 {
                     continue;
                 }
-                // Space toggles collapse/expand of the focused thinking block
-                // when the composer is empty (#1972).
-                KeyCode::Char(' ')
-                    if key.modifiers == KeyModifiers::NONE && app.input.is_empty() =>
-                {
-                    if let Some(idx) = detail_target_cell_index(app) {
-                        if app.collapsed_cells.contains(&idx) {
-                            app.collapsed_cells.remove(&idx);
-                            app.status_message = Some("Thinking block expanded".to_string());
-                        } else {
-                            app.collapsed_cells.insert(idx);
-                            app.status_message = Some("Thinking block collapsed".to_string());
-                        }
-                        app.mark_history_updated();
-                        app.needs_redraw = true;
-                    }
-                    continue;
-                }
                 KeyCode::Char('t') | KeyCode::Char('T')
                     if key.modifiers == KeyModifiers::CONTROL =>
                 {
@@ -2927,17 +2866,17 @@ async fn run_event_loop(
                         }
                         CtrlCDisposition::CancelTurn => {
                             engine_handle.cancel();
-                            mark_active_turn_cancelled_locally(app);
-                            current_streaming_text.clear();
-                            let prompt_restored = app.restore_last_submitted_prompt_if_empty();
-                            app.status_message = Some(
-                                if prompt_restored {
-                                    "Request cancelled; prompt restored to composer"
-                                } else {
-                                    "Request cancelled"
-                                }
-                                .to_string(),
-                            );
+                            app.is_loading = false;
+                            app.dispatch_started_at = None;
+                            app.streaming_state.reset();
+                            // Optimistically clear the turn-in-progress flag
+                            // so the footer wave animation halts immediately —
+                            // without this, the strip keeps animating until
+                            // the engine eventually emits TurnComplete (#5a).
+                            // The engine's eventual TurnComplete event will
+                            // overwrite with the real outcome ("interrupted").
+                            app.runtime_turn_status = None;
+                            app.status_message = Some("Request cancelled".to_string());
                             app.disarm_quit();
                         }
                         CtrlCDisposition::ConfirmExit => {
@@ -2984,8 +2923,24 @@ async fn run_event_loop(
                         EscapeAction::CancelRequest => {
                             app.backtrack.reset();
                             engine_handle.cancel();
-                            mark_active_turn_cancelled_locally(app);
-                            current_streaming_text.clear();
+                            app.is_loading = false;
+                            app.dispatch_started_at = None;
+                            app.streaming_state.reset();
+                            // Optimistically halt the wave + working label —
+                            // engine's TurnComplete will resync with the real
+                            // outcome. Fixes #5a (wave kept animating after Esc).
+                            app.runtime_turn_status = None;
+                            // Finalize any in-flight tool entries optimistically so
+                            // the composer regains focus and the footer's "tool ...
+                            // · X active" chip clears immediately rather than
+                            // waiting for the engine's TurnComplete echo to drain.
+                            // Idempotent with the TurnComplete handler that runs
+                            // when the engine actually echoes the cancel (#243).
+                            // Background sub-agents continue running — they are
+                            // tracked via `subagent_cache` independently of the
+                            // foreground turn.
+                            app.finalize_active_cell_as_interrupted();
+                            app.finalize_streaming_assistant_as_interrupted();
                             app.status_message = Some("Request cancelled".to_string());
                         }
                         EscapeAction::DiscardQueuedDraft => {
@@ -3453,10 +3408,10 @@ async fn run_event_loop(
                     app.move_cursor_start();
                 }
                 KeyCode::Home => {
-                    app.move_cursor_line_start();
+                    app.move_cursor_start();
                 }
                 KeyCode::End => {
-                    app.move_cursor_line_end();
+                    app.move_cursor_end();
                 }
                 KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     app.move_cursor_end();
@@ -3699,7 +3654,6 @@ async fn run_cache_warmup(app: &App, config: &Config) -> Result<Usage> {
 // `format_*` chip/message builders moved to `tui/format_helpers.rs`.
 
 fn build_session_snapshot(app: &App, manager: &SessionManager) -> SavedSession {
-    let model = app.model_selection_for_persistence();
     if let Some(ref existing_id) = app.current_session_id
         && let Ok(existing) = manager.load_session(existing_id)
     {
@@ -3709,7 +3663,6 @@ fn build_session_snapshot(app: &App, manager: &SessionManager) -> SavedSession {
             u64::from(app.session.total_tokens),
             app.system_prompt.as_ref(),
         );
-        updated.metadata.model = model;
         updated.metadata.mode = Some(app.mode.as_setting().to_string());
         app.sync_cost_to_metadata(&mut updated.metadata);
         updated.context_references = app.session_context_references.clone();
@@ -3720,7 +3673,7 @@ fn build_session_snapshot(app: &App, manager: &SessionManager) -> SavedSession {
             create_saved_session_with_id_and_mode(
                 existing_id.clone(),
                 &app.api_messages,
-                &model,
+                &app.model,
                 &app.workspace,
                 u64::from(app.session.total_tokens),
                 app.system_prompt.as_ref(),
@@ -3729,7 +3682,7 @@ fn build_session_snapshot(app: &App, manager: &SessionManager) -> SavedSession {
         } else {
             create_saved_session_with_mode(
                 &app.api_messages,
-                &model,
+                &app.model,
                 &app.workspace,
                 u64::from(app.session.total_tokens),
                 app.system_prompt.as_ref(),
@@ -3815,14 +3768,7 @@ pub(crate) fn apply_engine_error_to_app(
     let recoverable = envelope.recoverable;
     let message = envelope.message.clone();
     let severity = envelope.severity;
-    let turn_was_in_progress =
-        app.is_loading || matches!(app.runtime_turn_status.as_deref(), Some("in_progress"));
     streaming_thinking::finalize_current(app);
-    if turn_was_in_progress {
-        app.finalize_streaming_assistant_as_interrupted();
-        app.finalize_active_cell_as_interrupted();
-        app.runtime_turn_status = Some("failed".to_string());
-    }
     app.streaming_state.reset();
     app.streaming_message_index = None;
     app.streaming_thinking_active_entry = None;
@@ -3869,23 +3815,22 @@ pub(crate) fn apply_engine_error_to_app(
 }
 
 fn persist_offline_queue_state(app: &App) {
-    if app.queued_messages.is_empty() && app.queued_draft.is_none() {
-        persistence_actor::persist(PersistRequest::ClearOfflineQueue);
-        return;
+    if let Ok(manager) = SessionManager::default_location() {
+        if app.queued_messages.is_empty() && app.queued_draft.is_none() {
+            let _ = manager.clear_offline_queue_state();
+            return;
+        }
+        let state = OfflineQueueState {
+            messages: app
+                .queued_messages
+                .iter()
+                .map(queued_ui_to_session)
+                .collect(),
+            draft: app.queued_draft.as_ref().map(queued_ui_to_session),
+            ..OfflineQueueState::default()
+        };
+        let _ = manager.save_offline_queue_state(&state, app.current_session_id.as_deref());
     }
-    let state = OfflineQueueState {
-        messages: app
-            .queued_messages
-            .iter()
-            .map(queued_ui_to_session)
-            .collect(),
-        draft: app.queued_draft.as_ref().map(queued_ui_to_session),
-        ..OfflineQueueState::default()
-    };
-    persistence_actor::persist(PersistRequest::OfflineQueue {
-        state,
-        session_id: app.current_session_id.clone(),
-    });
 }
 
 /// Strip ANSI control codes / non-printable bytes from a streaming
@@ -4311,33 +4256,36 @@ async fn apply_model_picker_choice(
     }
 
     if model_changed {
-        app.set_model_selection(model.clone());
+        app.auto_model = model_is_auto;
+        app.last_effective_model = None;
+        app.model = model.clone();
+        app.update_model_compaction_budget();
         app.clear_model_scoped_telemetry();
     }
     if effort_changed {
         app.reasoning_effort = effort;
         app.last_effective_reasoning_effort = None;
     }
-    if model_changed || effort_changed {
-        app.update_model_compaction_budget();
-    }
 
     // Best-effort persist; surface a status warning if the settings file
     // can't be written rather than aborting the in-memory change.
     let mut persist_warning: Option<String> = None;
-    let persist_result = (|| -> anyhow::Result<()> {
-        let mut settings = crate::settings::Settings::load()?;
-        if model_changed {
-            settings.set("default_model", &model)?;
-            settings.set_model_for_provider(app.api_provider.as_str(), &model);
+    match crate::settings::Settings::load() {
+        Ok(mut settings) => {
+            if model_changed {
+                let _ = settings.set("default_model", &model);
+                settings.set_model_for_provider(app.api_provider.as_str(), &model);
+            }
+            if effort_changed {
+                let _ = settings.set("reasoning_effort", effort.as_setting());
+            }
+            if let Err(err) = settings.save() {
+                persist_warning = Some(format!("(not persisted: {err})"));
+            }
         }
-        if effort_changed {
-            settings.set("reasoning_effort", effort.as_setting())?;
+        Err(err) => {
+            persist_warning = Some(format!("(not persisted: {err})"));
         }
-        settings.save()
-    })();
-    if let Err(err) = persist_result {
-        persist_warning = Some(format!("(not persisted: {err})"));
     }
 
     if model_changed {
@@ -4433,7 +4381,7 @@ async fn switch_provider(
     let new_model = config.default_model();
     let cache_scope_changed = previous_provider != target || previous_model != new_model;
     app.api_provider = target;
-    app.set_model_selection(new_model.clone());
+    app.model = new_model.clone();
     app.update_model_compaction_budget();
     if cache_scope_changed {
         app.clear_model_scoped_telemetry();
@@ -4705,7 +4653,7 @@ async fn apply_command_result(
                     {
                         let session = config_ui::start_web_editor(app, config).await?;
                         let url = format!("http://{}", session.addr);
-                        let open_err = config_ui::open_browser(&url).err();
+                        let open_err = crate::utils::open_url(&url).err();
                         if let Some(err) = open_err {
                             app.add_message(HistoryCell::System {
                                 content: format!("Failed to open browser automatically: {err}"),
@@ -4775,7 +4723,7 @@ async fn apply_command_result(
                         .push(crate::tui::theme_picker::ThemePickerView::new(original));
                 }
             }
-            AppAction::OpenExternalUrl { url, label } => match open_external_url(&url) {
+            AppAction::OpenExternalUrl { url, label } => match crate::utils::open_url(&url) {
                 Ok(()) => {
                     app.status_message = Some(format!("Opened {label} in your browser"));
                 }
@@ -4869,7 +4817,7 @@ async fn apply_command_result(
                         *config = new_config.clone();
                         app.api_provider = config.api_provider();
                         let new_model = config.default_model();
-                        app.set_model_selection(new_model.clone());
+                        app.model = new_model.clone();
                         app.update_model_compaction_budget();
                         app.session.last_prompt_tokens = None;
                         app.session.last_completion_tokens = None;
@@ -4929,50 +4877,6 @@ async fn apply_command_result(
     }
 
     Ok(false)
-}
-
-#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
-fn open_external_url(url: &str) -> Result<()> {
-    spawn_external_url_command(external_url_command(url))
-}
-
-#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
-fn spawn_external_url_command(mut command: Command) -> Result<()> {
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map(|_| ())
-        .map_err(|err| anyhow::anyhow!("failed to launch browser command: {err}"))
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-fn open_external_url(_url: &str) -> Result<()> {
-    Err(anyhow::anyhow!(
-        "browser opening is unsupported on this platform"
-    ))
-}
-
-#[cfg(target_os = "macos")]
-fn external_url_command(url: &str) -> Command {
-    let mut command = Command::new("open");
-    command.arg(url);
-    command
-}
-
-#[cfg(target_os = "linux")]
-fn external_url_command(url: &str) -> Command {
-    let mut command = Command::new("xdg-open");
-    command.arg(url);
-    command
-}
-
-#[cfg(target_os = "windows")]
-fn external_url_command(url: &str) -> Command {
-    let mut command = Command::new("cmd");
-    command.args(["/C", "start", "", url]);
-    command
 }
 
 fn apply_workspace_runtime_state(app: &mut App, config: &Config, workspace: PathBuf) {
@@ -5285,7 +5189,6 @@ async fn steer_user_message(
     let message_index = app.api_messages.len();
 
     engine_handle.steer(content.clone()).await?;
-    app.last_submitted_prompt = Some(message.display.clone());
 
     // Mirror steer input in local transcript/session state.
     app.add_message(HistoryCell::User {
@@ -5556,6 +5459,18 @@ fn build_pending_input_preview(app: &App) -> PendingInputPreview {
 }
 
 fn render(f: &mut Frame, app: &mut App) {
+    {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static RENDER_COUNT: AtomicU64 = AtomicU64::new(0);
+        let n = RENDER_COUNT.fetch_add(1, Ordering::Relaxed);
+        if n % 100 == 0 || app.needs_redraw {
+            logging::info(format!(
+                "[FREEZE-DEBUG] render #{n} cells={} needs_redraw={}",
+                app.history.len(),
+                app.needs_redraw
+            ));
+        }
+    }
     let size = f.area();
 
     // Clear entire area with the configured app background.
@@ -5632,7 +5547,6 @@ fn render(f: &mut Frame, app: &mut App) {
             crate::config::ApiProvider::NvidiaNim => Some("NIM"),
             crate::config::ApiProvider::Openai => Some("OpenAI"),
             crate::config::ApiProvider::Atlascloud => Some("Atlas"),
-            crate::config::ApiProvider::WanjieArk => Some("Wanjie"),
             crate::config::ApiProvider::Openrouter => Some("OR"),
             crate::config::ApiProvider::Novita => Some("Novita"),
             crate::config::ApiProvider::Fireworks => Some("Fireworks"),
@@ -5750,25 +5664,6 @@ fn render(f: &mut Frame, app: &mut App) {
     // surface the older ones as a 1-2 line strip above the footer so a
     // burst of events isn't collapsed to a single visible message.
     render_toast_stack_overlay(f, size, chunks[3], chunks[4], app);
-
-    // Decision card overlay (v0.8.43 truth-surface). When a decision card is
-    // active, render it centered on top of the transcript.
-    if let Some(ref card) = app.decision_card {
-        let card_width = size.width.clamp(30, 60);
-        let card_height = card.desired_height(card_width);
-        let card_area = ratatui::layout::Rect {
-            x: size
-                .x
-                .saturating_add(size.width.saturating_sub(card_width) / 2),
-            y: size
-                .y
-                .saturating_add(size.height.saturating_sub(card_height) / 2),
-            width: card_width,
-            height: card_height.min(size.height),
-        };
-        let buf = f.buffer_mut();
-        card.render(card_area, buf);
-    }
 
     if !app.view_stack.is_empty() {
         // The live transcript overlay snapshots the app's history + active
@@ -6211,60 +6106,18 @@ async fn handle_view_events(
             ViewEvent::ShellControlCancel => {
                 app.backtrack.reset();
                 engine_handle.cancel();
-                mark_active_turn_cancelled_locally(app);
+                app.is_loading = false;
+                app.dispatch_started_at = None;
+                app.streaming_state.reset();
+                app.runtime_turn_status = None;
+                app.finalize_active_cell_as_interrupted();
+                app.finalize_streaming_assistant_as_interrupted();
                 app.status_message = Some("Request cancelled".to_string());
             }
         }
     }
 
     Ok(false)
-}
-
-fn mark_active_turn_cancelled_locally(app: &mut App) {
-    app.is_loading = false;
-    app.dispatch_started_at = None;
-    app.streaming_state.reset();
-    app.runtime_turn_status = None;
-    app.suppress_stream_events_until_turn_complete = true;
-    app.finalize_active_cell_as_interrupted();
-    app.finalize_streaming_assistant_as_interrupted();
-}
-
-fn suppress_engine_event_after_local_cancel(event: &EngineEvent) -> bool {
-    matches!(
-        event,
-        EngineEvent::MessageStarted { .. }
-            | EngineEvent::MessageDelta { .. }
-            | EngineEvent::MessageComplete { .. }
-            | EngineEvent::ThinkingStarted { .. }
-            | EngineEvent::ThinkingDelta { .. }
-            | EngineEvent::ThinkingComplete { .. }
-            | EngineEvent::ToolCallStarted { .. }
-            | EngineEvent::ToolCallProgress { .. }
-            | EngineEvent::ToolCallComplete { .. }
-            | EngineEvent::ApprovalRequired { .. }
-            | EngineEvent::UserInputRequired { .. }
-            | EngineEvent::ElevationRequired { .. }
-            | EngineEvent::SessionUpdated { .. }
-    )
-}
-
-fn ignore_stale_stream_event_while_idle(event: &EngineEvent) -> bool {
-    matches!(
-        event,
-        EngineEvent::MessageStarted { .. }
-            | EngineEvent::MessageDelta { .. }
-            | EngineEvent::MessageComplete { .. }
-            | EngineEvent::ThinkingStarted { .. }
-            | EngineEvent::ThinkingDelta { .. }
-            | EngineEvent::ThinkingComplete { .. }
-            | EngineEvent::ToolCallStarted { .. }
-            | EngineEvent::ToolCallProgress { .. }
-            | EngineEvent::ToolCallComplete { .. }
-            | EngineEvent::ApprovalRequired { .. }
-            | EngineEvent::UserInputRequired { .. }
-            | EngineEvent::ElevationRequired { .. }
-    )
 }
 
 /// Push the new `selected_idx` into the live transcript overlay so the
@@ -6417,7 +6270,6 @@ async fn apply_provider_picker_api_key(
             ApiProvider::NvidiaNim => &mut providers.nvidia_nim,
             ApiProvider::Openai => &mut providers.openai,
             ApiProvider::Atlascloud => &mut providers.atlascloud,
-            ApiProvider::WanjieArk => &mut providers.wanjie_ark,
             ApiProvider::Openrouter => &mut providers.openrouter,
             ApiProvider::Novita => &mut providers.novita,
             ApiProvider::Fireworks => &mut providers.fireworks,
@@ -6476,7 +6328,7 @@ fn apply_loaded_session(app: &mut App, config: &Config, session: &SavedSession) 
     app.sync_context_references_from_session(&session.context_references, &message_to_cell);
     app.mark_history_updated();
     app.viewport.transcript_selection.clear();
-    app.set_model_selection(session.metadata.model.clone());
+    app.model.clone_from(&session.metadata.model);
     app.update_model_compaction_budget();
     apply_workspace_runtime_state(app, config, session.metadata.workspace.clone());
     app.session.total_tokens = u32::try_from(session.metadata.total_tokens).unwrap_or(u32::MAX);
@@ -6639,6 +6491,10 @@ fn resume_terminal(
     enable_raw_mode()?;
     if use_alt_screen {
         execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+        // Re-entering alt-screen after mode recovery — suppress verbose
+        // CLI logging again so eprintln! doesn't leak into the TUI.
+        #[cfg(windows)]
+        crate::logging::set_verbose(false);
     }
     recover_terminal_modes(
         terminal.backend_mut(),
@@ -6701,6 +6557,7 @@ fn push_keyboard_enhancement_flags<W: Write>(writer: &mut W) {
                 "PushKeyboardEnhancementFlags direct write failed on Windows"
             );
         }
+        return;
     }
     #[cfg(not(windows))]
     if let Err(err) = execute!(
@@ -6732,6 +6589,7 @@ pub(crate) fn pop_keyboard_enhancement_flags<W: Write>(writer: &mut W) {
                 "PopKeyboardEnhancementFlags direct write failed on Windows"
             );
         }
+        return;
     }
     #[cfg(not(windows))]
     let _ = execute!(writer, PopKeyboardEnhancementFlags);
@@ -7046,6 +6904,51 @@ fn maybe_warn_context_pressure(app: &mut App) {
         return;
     };
 
+    // Early heads-up at 60% — the same threshold the model is told to
+    // suggest /compact at. Non-intrusive: only sets the status message when
+    // it's currently empty, so it never stomps on a more important message.
+    let effective_warn_threshold = if app.auto_compact {
+        CONTEXT_SUGGEST_COMPACT_THRESHOLD_PERCENT.min(app.auto_compact_threshold_pct)
+    } else {
+        CONTEXT_SUGGEST_COMPACT_THRESHOLD_PERCENT
+    };
+
+    if percent >= effective_warn_threshold
+        && percent < CONTEXT_WARNING_THRESHOLD_PERCENT
+        && app.status_message.is_none()
+    {
+        let hint = if app.auto_compact {
+            let below_floor =
+                (used as usize) < crate::compaction::MINIMUM_AUTO_COMPACTION_TOKENS;
+            let below_threshold = percent < app.auto_compact_threshold_pct;
+
+            if below_floor && below_threshold {
+                format!(
+                    "Auto-compact enabled but below 500K floor and {:.0}% threshold; won't fire yet.",
+                    app.auto_compact_threshold_pct
+                )
+            } else if below_floor {
+                "Auto-compact enabled but below 500K token floor; won't fire yet."
+                    .to_string()
+            } else if below_threshold {
+                format!(
+                    "Auto-compact will fire at {:.0}% (currently {:.0}%).",
+                    app.auto_compact_threshold_pct, percent
+                )
+            } else {
+                "Auto-compaction would fire now; it will run before the next send."
+                    .to_string()
+            }
+        } else {
+            "Consider enabling auto_compact or use /compact.".to_string()
+        };
+        app.status_message = Some(format!(
+            "Context building: {:.0}% ({used}/{max} tokens). {hint}",
+            percent
+        ));
+        return;
+    }
+
     if percent < CONTEXT_WARNING_THRESHOLD_PERCENT {
         return;
     }
@@ -7058,14 +6961,16 @@ fn maybe_warn_context_pressure(app: &mut App) {
 
     if percent >= CONTEXT_CRITICAL_THRESHOLD_PERCENT {
         app.status_message = Some(format!(
-            "Context critical: {percent:.0}% ({used}/{max} tokens). {recommendation}"
+            "Context critical: {:.0}% ({used}/{max} tokens). {recommendation}",
+            percent
         ));
         return;
     }
 
     if app.status_message.is_none() {
         app.status_message = Some(format!(
-            "Context high: {percent:.0}% ({used}/{max} tokens). {recommendation}"
+            "Context high: {:.0}% ({used}/{max} tokens). {recommendation}",
+            percent
         ));
     }
 }
@@ -7074,8 +6979,20 @@ fn should_auto_compact_before_send(app: &App) -> bool {
     if !app.auto_compact {
         return false;
     }
+    // Use the configurable threshold (default 70%) instead of the old
+    // hardcoded 95% critical threshold. The 500K-token hard floor from
+    // compaction.rs is also respected here so small sessions are never
+    // auto-compacted even if the percentage looks high.
     context_usage_snapshot(app)
-        .map(|(_, _, pct)| pct >= CONTEXT_CRITICAL_THRESHOLD_PERCENT)
+        .map(|(used, _, pct)| {
+            // Hard floor: below 500K tokens, auto-compaction is refused
+            // because rewriting the prefix kills V4's prefix cache for
+            // little budget recovery.
+            if (used as usize) < crate::compaction::MINIMUM_AUTO_COMPACTION_TOKENS {
+                return false;
+            }
+            pct >= app.auto_compact_threshold_pct
+        })
         .unwrap_or(false)
 }
 
@@ -7436,7 +7353,7 @@ fn activity_status_line(cell: &HistoryCell) -> Option<String> {
             }
             Some(line)
         }
-        HistoryCell::Error { severity, .. } => Some(format!("Status: {severity:?}")),
+        HistoryCell::Error { severity, .. } => Some(format!("Status: {:?}", severity)),
         HistoryCell::SubAgent(_) => None,
         _ => None,
     }
