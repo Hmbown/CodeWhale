@@ -655,11 +655,12 @@ pub fn system_prompt_for_mode_with_context_skills_session_and_approval(
     if !session_context.show_thinking {
         full_prompt.push_str(
             "\n\n## Thinking Language\n\n\
-             The user has disabled thinking display in settings. To save tokens, \
-             your `reasoning_content` (internal thinking) MUST be in English \
-             regardless of the user's language. This directive overrides the \
-             `## Language` section above for reasoning_content only. \
-             Your final reply must STILL match the user's language.",
+             The user has disabled thinking display in settings — they will \
+             never see your `reasoning_content`. Therefore, your internal \
+             thinking MUST be in English regardless of the user's language. \
+             This directive overrides the `## Language` section above for \
+             reasoning_content only. Your final reply must STILL match the \
+             user's language.",
         );
     }
 
