@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
+use tokio_util::sync::CancellationToken;
 
 /// Maximum number of results to return to avoid overwhelming output
 const MAX_RESULTS: usize = 100;
@@ -148,8 +149,15 @@ impl ToolSpec for GrepFilesTool {
         // Resolve search path
         let search_path = context.resolve_path(path_str)?;
 
+        let cancel_token = context.cancel_token.as_ref();
+
         // Collect files to search
-        let files = collect_files(&search_path, &include_patterns, &exclude_patterns)?;
+        let files = collect_files(
+            &search_path,
+            &include_patterns,
+            &exclude_patterns,
+            cancel_token,
+        )?;
 
         // Search files
         let mut results: Vec<GrepMatch> = Vec::new();
@@ -157,6 +165,8 @@ impl ToolSpec for GrepFilesTool {
         let mut total_matches = 0;
 
         for file_path in files {
+            check_cancelled(cancel_token)?;
+
             if results.len() >= max_results {
                 break;
             }
@@ -177,6 +187,8 @@ impl ToolSpec for GrepFilesTool {
             let lines: Vec<&str> = file_content.lines().collect();
 
             for (line_idx, line) in lines.iter().enumerate() {
+                check_cancelled(cancel_token)?;
+
                 if regex.is_match(line) {
                     total_matches += 1;
 
@@ -251,15 +263,24 @@ fn collect_files(
     root: &Path,
     include_patterns: &[String],
     exclude_patterns: &[String],
+    cancel_token: Option<&CancellationToken>,
 ) -> Result<Vec<PathBuf>, ToolError> {
     let mut files = Vec::new();
+    check_cancelled(cancel_token)?;
 
     if root.is_file() {
         files.push(root.to_path_buf());
         return Ok(files);
     }
 
-    collect_files_recursive(root, root, include_patterns, exclude_patterns, &mut files)?;
+    collect_files_recursive(
+        root,
+        root,
+        include_patterns,
+        exclude_patterns,
+        cancel_token,
+        &mut files,
+    )?;
     Ok(files)
 }
 
@@ -268,8 +289,11 @@ fn collect_files_recursive(
     current: &Path,
     include_patterns: &[String],
     exclude_patterns: &[String],
+    cancel_token: Option<&CancellationToken>,
     files: &mut Vec<PathBuf>,
 ) -> Result<(), ToolError> {
+    check_cancelled(cancel_token)?;
+
     let entries = fs::read_dir(current).map_err(|e| {
         ToolError::execution_failed(format!(
             "Failed to read directory {}: {}",
@@ -279,6 +303,8 @@ fn collect_files_recursive(
     })?;
 
     for entry in entries {
+        check_cancelled(cancel_token)?;
+
         let entry = entry.map_err(|e| ToolError::execution_failed(e.to_string()))?;
         let path = entry.path();
         let file_type = entry.file_type().map_err(|e| {
@@ -302,7 +328,14 @@ fn collect_files_recursive(
         }
 
         if file_type.is_dir() {
-            collect_files_recursive(root, &path, include_patterns, exclude_patterns, files)?;
+            collect_files_recursive(
+                root,
+                &path,
+                include_patterns,
+                exclude_patterns,
+                cancel_token,
+                files,
+            )?;
         } else if file_type.is_file() {
             // Check inclusions (if any specified)
             if include_patterns.is_empty() || should_include(&relative_str, include_patterns) {
@@ -311,6 +344,15 @@ fn collect_files_recursive(
         }
     }
 
+    Ok(())
+}
+
+fn check_cancelled(cancel_token: Option<&CancellationToken>) -> Result<(), ToolError> {
+    if cancel_token.is_some_and(CancellationToken::is_cancelled) {
+        return Err(ToolError::execution_failed(
+            "search cancelled before completion",
+        ));
+    }
     Ok(())
 }
 
@@ -428,6 +470,7 @@ mod tests {
 
     use serde_json::{Value, json};
     use tempfile::tempdir;
+    use tokio_util::sync::CancellationToken;
 
     use crate::tools::spec::{ApprovalRequirement, ToolContext, ToolSpec};
 
@@ -637,6 +680,26 @@ mod tests {
         let result = tool.execute(json!({"pattern": "[invalid"}), &ctx).await;
 
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_grep_files_respects_cancel_token() {
+        let tmp = tempdir().expect("tempdir");
+        fs::write(tmp.path().join("test.txt"), "needle\n").expect("write");
+        let cancel_token = CancellationToken::new();
+        cancel_token.cancel();
+        let ctx = ToolContext::new(tmp.path().to_path_buf()).with_cancel_token(cancel_token);
+
+        let tool = GrepFilesTool;
+        let err = tool
+            .execute(json!({"pattern": "needle"}), &ctx)
+            .await
+            .expect_err("cancelled grep should return an error");
+
+        assert!(
+            format!("{err:?}").contains("cancelled"),
+            "unexpected error: {err:?}"
+        );
     }
 
     #[test]
