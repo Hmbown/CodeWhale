@@ -2265,6 +2265,24 @@ mod stream_decoder_tests {
     //! directly to verify each "class of stream failure" the engine relies on.
     use super::*;
     use crate::models::{ContentBlockStart, Delta, StreamEvent};
+    use std::path::PathBuf;
+
+    struct SpilloverRootGuard {
+        prior: Option<PathBuf>,
+    }
+
+    impl SpilloverRootGuard {
+        fn new(path: PathBuf) -> Self {
+            let prior = crate::tools::truncate::set_test_spillover_root(Some(path));
+            Self { prior }
+        }
+    }
+
+    impl Drop for SpilloverRootGuard {
+        fn drop(&mut self) {
+            crate::tools::truncate::set_test_spillover_root(self.prior.take());
+        }
+    }
 
     /// Decode a raw SSE-data JSON chunk into our internal events, mirroring
     /// the per-event call shape used by `handle_chat_completion_stream`.
@@ -2774,6 +2792,14 @@ mod stream_decoder_tests {
 
     #[test]
     fn request_builder_deduplicates_large_identical_tool_results_with_retrieval_hint() {
+        let _lock = crate::tools::truncate::TEST_SPILLOVER_GUARD
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let _guard = SpilloverRootGuard::new(
+            tmp.path().join(".deepseek").join("tool_outputs"),
+        );
+
         let output = "A".repeat(2_000);
         let messages = vec![
             tool_use_message("tool-1", "read_file", json!({"path": "README.md"})),
@@ -2961,6 +2987,14 @@ mod stream_decoder_tests {
 
     #[test]
     fn cache_inspect_reports_tool_result_budget_metadata() {
+        let _lock = crate::tools::truncate::TEST_SPILLOVER_GUARD
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let _guard = SpilloverRootGuard::new(
+            tmp.path().join(".deepseek").join("tool_outputs"),
+        );
+
         let long_output = format!("{}{}", "A".repeat(7_000), "Z".repeat(7_000));
         let request = MessageRequest {
             model: "deepseek-v4-flash".to_string(),
