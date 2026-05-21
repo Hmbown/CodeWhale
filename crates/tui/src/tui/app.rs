@@ -719,6 +719,8 @@ pub struct ComposerState {
     pub paste_burst: PasteBurst,
     pub input_history: Vec<String>,
     pub draft_history: VecDeque<String>,
+    /// Last non-empty composer text cleared through a recoverable clear path.
+    pub clear_undo_buffer: Option<String>,
     pub history_index: Option<usize>,
     pub(crate) history_navigation_draft: Option<InputHistoryDraft>,
     pub composer_history_search: Option<ComposerHistorySearch>,
@@ -750,6 +752,7 @@ impl Default for ComposerState {
             paste_burst: PasteBurst::default(),
             input_history: Vec::new(),
             draft_history: VecDeque::new(),
+            clear_undo_buffer: None,
             history_index: None,
             history_navigation_draft: None,
             composer_history_search: None,
@@ -1562,6 +1565,7 @@ impl App {
                 paste_burst: PasteBurst::default(),
                 input_history,
                 draft_history: VecDeque::new(),
+                clear_undo_buffer: None,
                 history_index: None,
                 history_navigation_draft: None,
                 composer_history_search: None,
@@ -3617,6 +3621,9 @@ impl App {
 
     pub fn stash_current_input_for_recovery(&mut self) {
         let draft = self.input.clone();
+        if !draft.trim().is_empty() {
+            self.clear_undo_buffer = Some(draft.clone());
+        }
         self.remember_draft_for_recovery(draft);
     }
 
@@ -3846,6 +3853,27 @@ impl App {
         };
 
         self.input = prompt.to_string();
+        self.cursor_position = char_count(&self.input);
+        self.history_index = None;
+        self.history_navigation_draft = None;
+        self.selected_attachment_index = None;
+        self.needs_redraw = true;
+        true
+    }
+
+    pub fn restore_last_cleared_input_if_empty(&mut self) -> bool {
+        if !self.input.is_empty() {
+            return false;
+        }
+        let Some(draft) = self
+            .clear_undo_buffer
+            .as_deref()
+            .filter(|draft| !draft.trim().is_empty())
+        else {
+            return false;
+        };
+
+        self.input = draft.to_string();
         self.cursor_position = char_count(&self.input);
         self.history_index = None;
         self.history_navigation_draft = None;
@@ -5378,6 +5406,62 @@ mod tests {
             app.history_search_matches(),
             vec!["recover this".to_string()]
         );
+    }
+
+    #[test]
+    fn restore_last_cleared_input_rehydrates_empty_composer() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "recover this\ncarefully".to_string();
+        app.cursor_position = app.input.chars().count();
+
+        app.clear_input_recoverable();
+
+        assert!(app.restore_last_cleared_input_if_empty());
+        assert_eq!(app.input, "recover this\ncarefully");
+        assert_eq!(app.cursor_position, app.input.chars().count());
+        assert!(app.history_index.is_none());
+        assert!(app.history_navigation_draft.is_none());
+    }
+
+    #[test]
+    fn restore_last_cleared_input_preserves_existing_draft() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "cleared draft".to_string();
+        app.cursor_position = app.input.chars().count();
+        app.clear_input_recoverable();
+        app.input = "current draft".to_string();
+        app.cursor_position = app.input.chars().count();
+
+        assert!(!app.restore_last_cleared_input_if_empty());
+        assert_eq!(app.input, "current draft");
+    }
+
+    #[test]
+    fn empty_recoverable_clear_does_not_overwrite_undo_buffer() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "still recoverable".to_string();
+        app.cursor_position = app.input.chars().count();
+        app.clear_input_recoverable();
+
+        app.clear_input_recoverable();
+
+        assert!(app.restore_last_cleared_input_if_empty());
+        assert_eq!(app.input, "still recoverable");
+    }
+
+    #[test]
+    fn whitespace_recoverable_clear_does_not_overwrite_undo_buffer() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "still recoverable".to_string();
+        app.cursor_position = app.input.chars().count();
+        app.clear_input_recoverable();
+
+        app.input = "  \n\t".to_string();
+        app.cursor_position = app.input.chars().count();
+        app.clear_input_recoverable();
+
+        assert!(app.restore_last_cleared_input_if_empty());
+        assert_eq!(app.input, "still recoverable");
     }
 
     #[test]
