@@ -4117,7 +4117,7 @@ pub enum AppAction {
     /// Open the `/provider` picker modal — DeepSeek / NVIDIA NIM / OpenRouter
     /// / Novita with inline API-key prompt for un-configured providers (#52).
     OpenProviderPicker,
-    /// Open the `/mode` picker modal for Agent / Plan / YOLO.
+    /// Open the `/mode` picker modal for Agent / Plan / YOLO / Pro Plan.
     OpenModePicker,
     /// Open the `/statusline` multi-select picker for footer items.
     OpenStatusPicker,
@@ -4767,7 +4767,13 @@ mod tests {
 
         app.mode = AppMode::Plan;
         app.cycle_mode_reverse();
+        assert_eq!(app.mode, AppMode::ProPlan);
+
+        app.cycle_mode_reverse();
         assert_eq!(app.mode, AppMode::Yolo);
+
+        app.cycle_mode_reverse();
+        assert_eq!(app.mode, AppMode::Agent);
 
         app.mode = AppMode::Agent;
         app.cycle_mode_reverse();

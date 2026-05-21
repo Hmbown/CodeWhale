@@ -309,14 +309,55 @@ fn quick_plan_requests_force_update_plan_on_first_step() {
         AppMode::Plan,
         "Make a high-level plan for the footer work."
     ));
+    assert!(should_force_update_plan_first(
+        AppMode::Plan,
+        "Use the existing Plan mode behavior and call update_plan with the proposed implementation plan."
+    ));
+    assert!(should_force_update_plan_first(
+        AppMode::Plan,
+        "请只制定计划，不要改文件。"
+    ));
+    assert!(should_force_update_plan_first(
+        AppMode::Plan,
+        "先看代码再制定计划。\n\n<pro_plan_planning>\ncall update_plan\n</pro_plan_planning>"
+    ));
     assert!(!should_force_update_plan_first(
         AppMode::Plan,
         "Inspect the repo and then give me a quick plan."
     ));
     assert!(!should_force_update_plan_first(
+        AppMode::Plan,
+        "先看代码再制定计划。"
+    ));
+    assert!(!should_force_update_plan_first(
         AppMode::Agent,
         "Give me a quick 3-step plan."
     ));
+}
+
+#[test]
+fn forced_plan_step_stays_active_until_update_plan_succeeds() {
+    assert!(should_force_update_plan_step(true, &[]));
+
+    let mut read_call = TurnToolCall::new(
+        "read-1".to_string(),
+        "read_file".to_string(),
+        json!({"path": "README.md"}),
+    );
+    read_call.set_error(
+        "blocked until update_plan".to_string(),
+        std::time::Duration::from_millis(1),
+    );
+    assert!(should_force_update_plan_step(true, &[read_call]));
+
+    let mut plan_call = TurnToolCall::new(
+        "plan-1".to_string(),
+        "update_plan".to_string(),
+        json!({"plan": []}),
+    );
+    plan_call.set_result("planned".to_string(), std::time::Duration::from_millis(1));
+    assert!(!should_force_update_plan_step(true, &[plan_call]));
+    assert!(!should_force_update_plan_step(false, &[]));
 }
 
 #[test]

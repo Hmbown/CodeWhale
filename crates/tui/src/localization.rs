@@ -943,7 +943,7 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CmdMcpDescription => "Open or manage MCP servers",
         MessageId::CmdMemoryDescription => "Inspect or manage the persistent user-memory file",
         MessageId::CmdModeDescription => {
-            "Switch mode or open picker: /mode [agent|plan|yolo|1|2|3]"
+            "Switch mode or open picker: /mode [agent|plan|yolo|pro-plan|1|2|3|4]"
         }
         MessageId::CmdModelDescription => "Switch or view current model",
         MessageId::CmdModelsDescription => "List available models from API",
@@ -1324,7 +1324,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::CmdMcpDescription => "MCP サーバを開く・管理する",
         MessageId::CmdMemoryDescription => "永続ユーザーメモリファイルを確認・管理",
         MessageId::CmdModeDescription => {
-            "動作モードを切り替え、または選択画面を開く: /mode [agent|plan|yolo|1|2|3]"
+            "動作モードを切り替え、または選択画面を開く: /mode [agent|plan|yolo|pro-plan|1|2|3|4]"
         }
         MessageId::CmdModelDescription => "現在のモデルを切り替え・確認",
         MessageId::CmdModelsDescription => "API から利用可能なモデルを一覧表示",
@@ -1669,7 +1669,9 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CmdLogoutDescription => "清除 API 密钥并返回设置",
         MessageId::CmdMcpDescription => "打开或管理 MCP 服务器",
         MessageId::CmdMemoryDescription => "查看或管理持久用户记忆文件",
-        MessageId::CmdModeDescription => "切换运行模式或打开选择器：/mode [agent|plan|yolo|1|2|3]",
+        MessageId::CmdModeDescription => {
+            "切换运行模式或打开选择器：/mode [agent|plan|yolo|pro-plan|1|2|3|4]"
+        }
         MessageId::CmdModelDescription => "切换或查看当前模型",
         MessageId::CmdModelsDescription => "列出 API 中可用的模型",
         MessageId::CmdNetworkDescription => "管理网络允许和拒绝规则",
@@ -1994,7 +1996,7 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
             "Inspecionar ou gerenciar o arquivo persistente de memória do usuário"
         }
         MessageId::CmdModeDescription => {
-            "Alternar modo ou abrir seletor: /mode [agent|plan|yolo|1|2|3]"
+            "Alternar modo ou abrir seletor: /mode [agent|plan|yolo|pro-plan|1|2|3|4]"
         }
         MessageId::CmdModelDescription => "Trocar ou exibir o modelo atual",
         MessageId::CmdModelsDescription => "Listar os modelos disponíveis pela API",
@@ -2380,7 +2382,7 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
             "Inspeccionar o gestionar el archivo persistente de memoria del usuario"
         }
         MessageId::CmdModeDescription => {
-            "Alternar modo o abrir selector: /mode [agent|plan|yolo|1|2|3]"
+            "Alternar modo o abrir selector: /mode [agent|plan|yolo|pro-plan|1|2|3|4]"
         }
         MessageId::CmdModelDescription => "Cambiar o mostrar el modelo actual",
         MessageId::CmdModelsDescription => "Listar los modelos disponibles por la API",

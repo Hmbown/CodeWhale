@@ -6,7 +6,8 @@ Code's plan-first workflow:
 - Plan phase: use `deepseek-v4-pro` with the existing Plan mode prompt and
   read-only tool policy.
 - Execute phase: use `deepseek-v4-flash` with Agent-mode tools and normal
-  approvals.
+  approvals, or temporary YOLO semantics when the user accepts the plan with
+  auto-approval.
 - Review phase: use `deepseek-v4-pro` with Plan-mode read-only tools.
 
 The mode intentionally reuses the existing Plan and Agent contracts instead of
@@ -25,6 +26,13 @@ Plan confirmation is shown only when the Plan phase actually creates plan
 state, either through the existing `update_plan` tool path or an explicit
 `<pro_plan plan_ready="true">` marker. Ordinary numbered answers are not enough
 to trigger implementation.
+
+For implementation-like requests in Pro Plan's Plan phase, the TUI adds a
+small turn-local instruction to use the existing Plan behavior and call
+`update_plan` as the next step. The engine keeps that requirement active until
+`update_plan` succeeds, so even text-parsed tool calls such as `read_file` are
+blocked before the plan confirmation gate. Pure questions are not wrapped this
+way, so normal Q&A does not pop a confirmation dialog.
 
 The Review follow-up is queued only on the real `Execute -> Review` transition.
 Remaining in Review does not enqueue another review request, which prevents
@@ -49,6 +57,10 @@ Normal Pro Plan turns are resolved before dispatch:
 
 - `Plan`, `Review`, and `Done` use `AppMode::Plan`.
 - `Execute` uses `AppMode::Agent`.
+- `Execute` after "Accept plan (YOLO)" uses `AppMode::Yolo` for that Pro Plan
+  execution pipeline, but the visible mode stays Pro Plan so review still runs.
+
+After `Done`, the next user turn resets the router to a fresh Plan phase.
 
 If a raw `AppMode::ProPlan` reaches the engine unexpectedly, it fails closed to
 Plan-mode behavior: read-only registry, read-only sandbox, and Never approval.

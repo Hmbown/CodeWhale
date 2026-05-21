@@ -41,6 +41,7 @@ impl Default for ProPlanConfig {
 pub struct ProPlanState {
     pub phase: ProPlanPhase,
     pub has_generated_plan: bool,
+    pub execute_auto_approve: bool,
     pub plan_turns: u32,
     pub execute_turns: u32,
 }
@@ -50,6 +51,7 @@ impl Default for ProPlanState {
         Self {
             phase: ProPlanPhase::default(),
             has_generated_plan: false,
+            execute_auto_approve: false,
             plan_turns: 0,
             execute_turns: 0,
         }
@@ -130,8 +132,13 @@ impl ProPlanRouter {
         self.state.has_generated_plan = true;
     }
 
-    pub fn start_execution(&mut self) {
+    pub fn start_execution(&mut self, auto_approve: bool) {
         self.state.phase = ProPlanPhase::Execute;
+        self.state.execute_auto_approve = auto_approve;
+    }
+
+    pub fn execute_auto_approve(&self) -> bool {
+        self.state.execute_auto_approve
     }
 
     pub fn reset(&mut self) {
@@ -213,8 +220,21 @@ mod tests {
         router.transition("Here is my plan:\n<pro_plan plan_ready=\"true\">");
         assert_eq!(router.phase(), ProPlanPhase::Plan);
         assert!(router.state.has_generated_plan);
-        router.start_execution();
+        router.start_execution(false);
         assert_eq!(router.current_model(), "deepseek-v4-flash");
+        assert!(!router.execute_auto_approve());
+    }
+
+    #[test]
+    fn test_plan_to_auto_approved_execution() {
+        let config = ProPlanConfig::default();
+        let mut router = ProPlanRouter::new(config);
+
+        router.mark_plan_ready();
+        router.start_execution(true);
+
+        assert_eq!(router.phase(), ProPlanPhase::Execute);
+        assert!(router.execute_auto_approve());
     }
 
     #[test]

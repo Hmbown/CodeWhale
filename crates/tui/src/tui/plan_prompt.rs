@@ -12,11 +12,11 @@ const PLAN_OPTIONS: [(&str, &str); 4] = [
     ("Accept plan", "Start implementation with approvals"),
     (
         "Accept plan (YOLO)",
-        "Start implementation in YOLO mode (auto-approve)",
+        "Start implementation with auto-approval",
     ),
     ("Revise plan", "Ask follow-ups or request plan changes"),
     (
-        "Exit Plan mode",
+        "Exit to Agent",
         "Return to Agent mode without implementation",
     ),
 ];
@@ -280,6 +280,6 @@ mod tests {
         let rendered = render_view(&view, 110, 36);
 
         assert!(rendered.contains("> 2) Accept plan (YOLO)"));
-        assert!(rendered.contains("Start implementation in YOLO mode (auto-approve)"));
+        assert!(rendered.contains("Start implementation with auto-approval"));
     }
 }

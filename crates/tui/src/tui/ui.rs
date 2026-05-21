@@ -718,19 +718,156 @@ fn effective_mode_for_turn(app: &App) -> AppMode {
         return app.mode;
     }
 
-    match app
-        .pro_plan_router
-        .as_ref()
-        .map(crate::tui::pro_plan::ProPlanRouter::phase)
-    {
-        Some(crate::tui::pro_plan::ProPlanPhase::Execute) => AppMode::Agent,
+    match app.pro_plan_router.as_ref() {
+        Some(router) if router.phase() == crate::tui::pro_plan::ProPlanPhase::Execute => {
+            if router.execute_auto_approve() {
+                AppMode::Yolo
+            } else {
+                AppMode::Agent
+            }
+        }
         // Planning and review are intentionally read-only, matching the
         // Opus Plan shape: think with the stronger model before/after writes.
-        Some(crate::tui::pro_plan::ProPlanPhase::Plan)
-        | Some(crate::tui::pro_plan::ProPlanPhase::Review)
-        | Some(crate::tui::pro_plan::ProPlanPhase::Done)
-        | None => AppMode::Plan,
+        Some(_) | None => AppMode::Plan,
     }
+}
+
+fn prepare_pro_plan_for_user_turn(app: &mut App) {
+    if app.mode != AppMode::ProPlan {
+        return;
+    }
+
+    if let Some(router) = app.pro_plan_router.as_mut()
+        && router.phase() == crate::tui::pro_plan::ProPlanPhase::Done
+    {
+        router.reset();
+    }
+}
+
+fn should_add_pro_plan_planning_instruction(app: &App, input: &str) -> bool {
+    if app.mode != AppMode::ProPlan {
+        return false;
+    }
+
+    let Some(router) = app.pro_plan_router.as_ref() else {
+        return false;
+    };
+    if router.phase() != crate::tui::pro_plan::ProPlanPhase::Plan {
+        return false;
+    }
+
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+    let explicit_no_plan = [
+        "don't plan",
+        "do not plan",
+        "no plan",
+        "without a plan",
+        "don't use update_plan",
+        "do not use update_plan",
+        "不要计划",
+        "不用计划",
+        "别计划",
+        "不要用 update_plan",
+        "不要使用 update_plan",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle));
+    if explicit_no_plan {
+        return false;
+    }
+
+    let words = lower
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|word| !word.is_empty());
+    let asks_for_action_word = words.into_iter().any(|word| {
+        matches!(
+            word,
+            "implement"
+                | "add"
+                | "fix"
+                | "modify"
+                | "change"
+                | "update"
+                | "refactor"
+                | "create"
+                | "delete"
+                | "remove"
+                | "wire"
+                | "integrate"
+                | "improve"
+                | "polish"
+                | "repair"
+                | "build"
+        )
+    });
+
+    let asks_for_action_phrase = [
+        "implement",
+        "write test",
+        "open a pr",
+        "create a pr",
+        "submit a pr",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle));
+
+    let asks_for_cn_action = [
+        "帮我改",
+        "改一下",
+        "修改",
+        "修复",
+        "新增",
+        "添加",
+        "实现",
+        "接入",
+        "优化",
+        "重构",
+        "删除",
+        "移除",
+        "完善",
+        "跑测试",
+        "提pr",
+        "提 pr",
+        "开pr",
+        "开 pr",
+    ]
+    .iter()
+    .any(|needle| trimmed.contains(needle));
+
+    asks_for_action_word || asks_for_action_phrase || asks_for_cn_action
+}
+
+fn pro_plan_planning_instruction() -> &'static str {
+    "\n\n<pro_plan_planning>\nYou are in Pro Plan's planning phase. Use the existing Plan mode behavior and call update_plan with the proposed implementation plan as the next tool call, then stop. Do not edit files in this phase. If the user only asked a question, answer normally without update_plan.\n</pro_plan_planning>"
+}
+
+fn turn_auto_approve(app: &App, turn_mode: AppMode) -> bool {
+    if turn_mode == AppMode::Yolo {
+        return true;
+    }
+
+    app.mode == AppMode::Yolo
+}
+
+fn turn_allows_shell(app: &App, turn_mode: AppMode) -> bool {
+    if turn_mode == AppMode::Yolo {
+        return true;
+    }
+
+    app.allow_shell
+}
+
+fn turn_trust_mode(app: &App, turn_mode: AppMode) -> bool {
+    if turn_mode == AppMode::Yolo {
+        return true;
+    }
+
+    app.trust_mode
 }
 
 async fn refresh_active_task_panel(app: &mut App, task_manager: &SharedTaskManager) {
@@ -3988,9 +4125,16 @@ async fn dispatch_user_message(
         &app.workspace,
         cwd.clone(),
     );
-    let content = queued_message_content_for_app(app, &message, cwd);
+    prepare_pro_plan_for_user_turn(app);
+    let mut content = queued_message_content_for_app(app, &message, cwd);
+    if should_add_pro_plan_planning_instruction(app, &message.display) {
+        content.push_str(pro_plan_planning_instruction());
+    }
     let message_index = app.api_messages.len();
     let turn_mode = effective_mode_for_turn(app);
+    let auto_approve = turn_auto_approve(app, turn_mode);
+    let allow_shell = turn_allows_shell(app, turn_mode);
+    let trust_mode = turn_trust_mode(app, turn_mode);
     app.system_prompt = Some(
         prompts::system_prompt_for_mode_with_context_skills_and_session(
             turn_mode,
@@ -4099,9 +4243,9 @@ async fn dispatch_user_message(
             reasoning_effort: effective_reasoning_effort,
             reasoning_effort_auto: auto_controls_reasoning,
             auto_model: app.auto_model,
-            allow_shell: app.allow_shell,
-            trust_mode: app.trust_mode,
-            auto_approve: app.mode == AppMode::Yolo,
+            allow_shell,
+            trust_mode,
+            auto_approve,
             approval_mode: app.approval_mode,
             translation_enabled: app.translation_enabled,
         })
@@ -5378,7 +5522,7 @@ async fn apply_plan_choice(
             let pro_plan = app.mode == AppMode::ProPlan;
             if pro_plan {
                 if let Some(router) = app.pro_plan_router.as_mut() {
-                    router.start_execution();
+                    router.start_execution(false);
                 }
             } else {
                 app.set_mode(AppMode::Agent);
@@ -5409,16 +5553,34 @@ async fn apply_plan_choice(
             }
         }
         PlanChoice::AcceptYolo => {
-            app.set_mode(AppMode::Yolo);
+            let pro_plan = app.mode == AppMode::ProPlan;
+            if pro_plan {
+                if let Some(router) = app.pro_plan_router.as_mut() {
+                    router.start_execution(true);
+                }
+            } else {
+                app.set_mode(AppMode::Yolo);
+            }
             app.add_message(HistoryCell::System {
-                content: "Plan accepted. Switching to YOLO mode and starting implementation."
-                    .to_string(),
+                content: if pro_plan {
+                    "Plan accepted. Starting Pro Plan execution with auto-approval.".to_string()
+                } else {
+                    "Plan accepted. Switching to YOLO mode and starting implementation.".to_string()
+                },
             });
-            let followup = QueuedMessage::new("Proceed with the accepted plan.".to_string(), None);
+            let followup_text = if pro_plan {
+                "Proceed with the accepted plan using auto-approval. Implement it now. When implementation is complete, summarize the changes and include `<pro_plan execute_complete=\"true\">`."
+            } else {
+                "Proceed with the accepted plan."
+            };
+            let followup = QueuedMessage::new(followup_text.to_string(), None);
             if app.is_loading {
                 app.queue_message(followup);
-                app.status_message =
-                    Some("Queued accepted plan execution (YOLO mode).".to_string());
+                app.status_message = Some(if pro_plan {
+                    "Queued accepted plan execution (pro-plan auto).".to_string()
+                } else {
+                    "Queued accepted plan execution (YOLO mode).".to_string()
+                });
             } else {
                 dispatch_user_message(app, config, engine_handle, followup).await?;
             }
