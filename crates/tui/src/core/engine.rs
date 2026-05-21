@@ -389,6 +389,7 @@ impl Engine {
             ApiProvider::Openrouter => "OPENROUTER_API_KEY",
             ApiProvider::Novita => "NOVITA_API_KEY",
             ApiProvider::Fireworks => "FIREWORKS_API_KEY",
+            ApiProvider::Siliconflow => "SILICONFLOW_API_KEY",
             ApiProvider::Moonshot => "MOONSHOT_API_KEY/KIMI_API_KEY",
             ApiProvider::Sglang => "SGLANG_API_KEY",
             ApiProvider::Vllm => "VLLM_API_KEY",

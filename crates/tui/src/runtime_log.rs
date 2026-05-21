@@ -174,7 +174,7 @@ fn log_directory() -> Option<PathBuf> {
     {
         return resolve(userprofile);
     }
-    dirs::home_dir().and_then(|h| resolve(h))
+    dirs::home_dir().and_then(resolve)
 }
 
 fn log_file_name(date: &str, pid: u32) -> String {

@@ -5314,8 +5314,37 @@ mod tests {
 
     #[test]
     fn app_new_detects_missing_api_key_with_default_config() {
-        // Config::default() carries no api_key and the test runner
-        // should not have DEEPSEEK_API_KEY in its environment.
+        let _lock = lock_test_env();
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let config_path = tmp.path().join("config.toml");
+        let _config_path = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
+        let _provider_env = EnvVarGuard::remove("CODEWHALE_PROVIDER");
+        let _legacy_provider_env = EnvVarGuard::remove("DEEPSEEK_PROVIDER");
+        let _api_key_envs: Vec<_> = [
+            "DEEPSEEK_API_KEY",
+            "NVIDIA_API_KEY",
+            "NVIDIA_NIM_API_KEY",
+            "OPENAI_API_KEY",
+            "ATLASCLOUD_API_KEY",
+            "WANJIE_ARK_API_KEY",
+            "WANJIE_API_KEY",
+            "WANJIE_MAAS_API_KEY",
+            "OPENROUTER_API_KEY",
+            "NOVITA_API_KEY",
+            "FIREWORKS_API_KEY",
+            "SILICONFLOW_API_KEY",
+            "MOONSHOT_API_KEY",
+            "KIMI_API_KEY",
+            "SGLANG_API_KEY",
+            "VLLM_API_KEY",
+            "OLLAMA_API_KEY",
+        ]
+        .into_iter()
+        .map(EnvVarGuard::remove)
+        .collect();
+
+        // Config::default() carries no api_key, and this test isolates process
+        // env/settings so previous tests or developer shells cannot satisfy it.
         let app = App::new(test_options(false), &Config::default());
         assert!(
             app.onboarding_needs_api_key,
