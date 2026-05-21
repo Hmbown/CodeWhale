@@ -182,7 +182,7 @@ fn log_file_name(date: &str, pid: u32) -> String {
 /// Resolve the effective retention period in days. Precedence:
 ///
 /// 1. Env var `DEEPSEEK_LOG_RETENTION_DAYS` — when set to a positive integer
-///    it wins unconditionally (backward-compatible override).
+///    (including `0` to purge all on startup) it wins unconditionally.
 /// 2. Config value from `[logs] retention_days` in config.toml.
 /// 3. Hard-coded default (7).
 fn log_retention_days(config_days: Option<u64>) -> u64 {
@@ -315,9 +315,10 @@ mod tests {
         unsafe {
             std::env::set_var(LOG_RETENTION_ENV, "0");
         }
-        // 0 == not positive → fall through to config, then default
-        assert_eq!(log_retention_days(None), DEFAULT_LOG_RETENTION_DAYS);
-        assert_eq!(log_retention_days(Some(30)), 30);
+        // 0 is valid: purge all logs on startup
+        assert_eq!(log_retention_days(None), 0);
+        // env var 0 wins over config
+        assert_eq!(log_retention_days(Some(30)), 0);
 
         // SAFETY: cleanup under the same lock.
         unsafe {
