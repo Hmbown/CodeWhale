@@ -161,7 +161,7 @@ pub fn load(app: &mut App, path: Option<&str>) -> CommandResult {
     app.extend_history(cells_to_add);
     app.mark_history_updated();
     app.viewport.transcript_selection.clear();
-    app.model.clone_from(&session.metadata.model);
+    app.set_model_selection(session.metadata.model.clone());
     app.update_model_compaction_budget();
     app.workspace.clone_from(&session.metadata.workspace);
     app.session.total_tokens = u32::try_from(session.metadata.total_tokens).unwrap_or(u32::MAX);
@@ -355,8 +355,8 @@ fn line_to_string(line: ratatui::text::Line<'static>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
-    use crate::tui::app::{App, TuiOptions, TurnCacheRecord};
+    use crate::config::{Config, DEFAULT_TEXT_MODEL};
+    use crate::tui::app::{App, ReasoningEffort, TuiOptions, TurnCacheRecord};
     use std::time::Instant;
     use tempfile::TempDir;
 
@@ -563,6 +563,31 @@ mod tests {
         assert_eq!(app2.session.total_tokens, 500);
         assert!(app2.current_session_id.is_some());
         assert!(matches!(result.action, Some(AppAction::SyncSession { .. })));
+    }
+
+    #[test]
+    fn load_auto_model_session_restores_auto_mode() {
+        let tmpdir = TempDir::new().unwrap();
+        let mut saved_app = create_test_app_with_tmpdir(&tmpdir);
+        saved_app.set_model_selection("auto".to_string());
+        saved_app.last_effective_model = Some("deepseek-v4-flash".to_string());
+        saved_app.last_effective_reasoning_effort = Some(ReasoningEffort::Low);
+        let save_path = tmpdir.path().join("auto_model.json");
+        save(&mut saved_app, Some(save_path.to_str().unwrap()));
+
+        let mut app = create_test_app_with_tmpdir(&tmpdir);
+        app.set_model_selection("deepseek-v4-flash".to_string());
+        app.reasoning_effort = ReasoningEffort::High;
+        let result = load(&mut app, Some(save_path.to_str().unwrap()));
+
+        assert!(!result.is_error);
+        assert!(app.auto_model);
+        assert_eq!(app.model, "auto");
+        assert_eq!(app.model_selection_for_persistence(), "auto");
+        assert_eq!(app.last_effective_model, None);
+        assert_eq!(app.last_effective_reasoning_effort, None);
+        assert_eq!(app.reasoning_effort, ReasoningEffort::Auto);
+        assert_eq!(app.effective_model_for_budget(), DEFAULT_TEXT_MODEL);
     }
 
     #[test]

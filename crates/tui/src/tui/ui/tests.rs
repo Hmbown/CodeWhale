@@ -1,5 +1,5 @@
 use super::*;
-use crate::config::{ApiProvider, Config};
+use crate::config::{ApiProvider, Config, DEFAULT_TEXT_MODEL};
 use crate::config_ui::{self, WebConfigSession, WebConfigSessionEvent};
 use crate::core::engine::mock_engine_handle;
 use crate::tui::active_cell::ActiveCell;
@@ -3956,6 +3956,9 @@ fn apply_loaded_session_restores_concrete_model_mode() {
 fn apply_loaded_session_restores_auto_model_mode() {
     let mut app = create_test_app();
     app.set_model_selection("deepseek-v4-pro".to_string());
+    app.reasoning_effort = ReasoningEffort::High;
+    app.last_effective_model = Some("deepseek-v4-flash".to_string());
+    app.last_effective_reasoning_effort = Some(ReasoningEffort::Low);
     let mut session = saved_session_with_messages(vec![
         text_message("user", "hello"),
         text_message("assistant", "hi"),
@@ -3968,6 +3971,10 @@ fn apply_loaded_session_restores_auto_model_mode() {
     assert!(app.auto_model);
     assert_eq!(app.model, "auto");
     assert_eq!(app.model_selection_for_persistence(), "auto");
+    assert_eq!(app.last_effective_model, None);
+    assert_eq!(app.last_effective_reasoning_effort, None);
+    assert_eq!(app.reasoning_effort, ReasoningEffort::Auto);
+    assert_eq!(app.effective_model_for_budget(), DEFAULT_TEXT_MODEL);
 }
 
 #[test]

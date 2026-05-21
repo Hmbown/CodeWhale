@@ -4161,6 +4161,10 @@ impl App {
         };
         self.auto_model = auto_model;
         self.last_effective_model = None;
+        self.last_effective_reasoning_effort = None;
+        if auto_model {
+            self.reasoning_effort = ReasoningEffort::Auto;
+        }
     }
 
     pub fn model_selection_for_persistence(&self) -> String {
