@@ -276,6 +276,11 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
     if use_alt_screen {
         execute!(stdout, EnterAlternateScreen)?;
     }
+    // On Windows, stderr cannot be redirected to the log file (no dup2).
+    // Suppress verbose CLI logging once the alt-screen is active so
+    // eprintln! calls from crate::logging don't leak into the TUI buffer.
+    #[cfg(windows)]
+    crate::logging::set_verbose(false);
     // Initialize the file-backed TUI log and (on Unix) redirect raw stderr
     // away from the alt-screen for the lifetime of this guard. Any
     // `eprintln!`, panic message, or third-party stderr write that would
@@ -6417,6 +6422,10 @@ fn resume_terminal(
     if use_alt_screen {
         execute!(terminal.backend_mut(), EnterAlternateScreen)?;
     }
+    // Re-entering alt-screen after mode recovery — suppress verbose
+    // CLI logging again so eprintln! doesn't leak into the TUI.
+    #[cfg(windows)]
+    crate::logging::set_verbose(false);
     recover_terminal_modes(
         terminal.backend_mut(),
         use_mouse_capture,
