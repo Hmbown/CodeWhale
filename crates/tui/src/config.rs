@@ -1039,6 +1039,31 @@ pub struct Config {
     /// Vision model configuration for the `image_analyze` tool.
     #[serde(default)]
     pub vision_model: Option<VisionModelConfig>,
+
+    /// TUI runtime log pruning configuration (#1785). When absent, the env var
+    /// `DEEPSEEK_LOG_RETENTION_DAYS` is checked (default 7).
+    #[serde(default)]
+    pub logs: Option<LogsConfig>,
+}
+
+/// TUI runtime log pruning configuration.
+#[derive(Debug, Clone, Deserialize)]
+pub struct LogsConfig {
+    /// Delete logs older than this many days. Default: 7.
+    #[serde(default = "default_log_retention_days")]
+    pub retention_days: u64,
+}
+
+fn default_log_retention_days() -> u64 {
+    crate::runtime_log::DEFAULT_LOG_RETENTION_DAYS
+}
+
+impl Default for LogsConfig {
+    fn default() -> Self {
+        Self {
+            retention_days: default_log_retention_days(),
+        }
+    }
 }
 
 /// Vision model configuration for the `image_analyze` tool.
@@ -1914,6 +1939,12 @@ impl Config {
     #[must_use]
     pub fn snapshots_config(&self) -> SnapshotsConfig {
         self.snapshots.clone().unwrap_or_default()
+    }
+
+    /// Resolve TUI runtime log pruning settings with defaults applied.
+    #[must_use]
+    pub fn logs_config(&self) -> LogsConfig {
+        self.logs.clone().unwrap_or_default()
     }
 
     /// Resolve enabled features from defaults and config entries.

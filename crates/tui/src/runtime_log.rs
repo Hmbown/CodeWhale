@@ -46,7 +46,7 @@ use std::time::{Duration, SystemTime};
 use anyhow::{Context, Result};
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
-const DEFAULT_LOG_RETENTION_DAYS: u64 = 7;
+pub const DEFAULT_LOG_RETENTION_DAYS: u64 = 7;
 const LOG_RETENTION_ENV: &str = "DEEPSEEK_LOG_RETENTION_DAYS";
 const SECONDS_PER_DAY: u64 = 24 * 60 * 60;
 
@@ -99,13 +99,18 @@ impl Drop for TuiLogGuard {
 /// of `set_default` — if a global subscriber is already set we still install
 /// the stderr redirect.
 ///
+/// Accepts an optional `config_retention_days` from config.toml (the
+/// `[logs] retention_days` setting). The env var `DEEPSEEK_LOG_RETENTION_DAYS`
+/// takes precedence over the config value when set to a positive integer.
+///
 /// Returns a guard that must outlive the alt-screen session. Drop it after
 /// `LeaveAlternateScreen` so any shutdown messages reach the user.
-pub fn init() -> Result<TuiLogGuard> {
+pub fn init(config_retention_days: Option<u64>) -> Result<TuiLogGuard> {
     let log_dir = log_directory().context("could not resolve TUI log directory")?;
     fs::create_dir_all(&log_dir)
         .with_context(|| format!("failed to create {}", log_dir.display()))?;
-    let _ = prune_old_logs(&log_dir, log_retention_days());
+    let retention_days = log_retention_days(config_retention_days);
+    let _ = prune_old_logs(&log_dir, retention_days);
 
     let date = chrono::Local::now().format("%Y-%m-%d").to_string();
     let log_path = log_dir.join(log_file_name(&date, std::process::id()));
@@ -174,11 +179,18 @@ fn log_file_name(date: &str, pid: u32) -> String {
     format!("tui-{date}-{pid}.log")
 }
 
-fn log_retention_days() -> u64 {
+/// Resolve the effective retention period in days. Precedence:
+///
+/// 1. Env var `DEEPSEEK_LOG_RETENTION_DAYS` — when set to a positive integer
+///    it wins unconditionally (backward-compatible override).
+/// 2. Config value from `[logs] retention_days` in config.toml.
+/// 3. Hard-coded default (7).
+fn log_retention_days(config_days: Option<u64>) -> u64 {
     std::env::var(LOG_RETENTION_ENV)
         .ok()
         .and_then(|raw| raw.trim().parse::<u64>().ok())
         .filter(|days| *days > 0)
+        .or(config_days)
         .unwrap_or(DEFAULT_LOG_RETENTION_DAYS)
 }
 
@@ -287,7 +299,7 @@ mod tests {
     }
 
     #[test]
-    fn log_retention_days_uses_positive_env_override() {
+    fn log_retention_days_uses_config_from_env() {
         let _lock = crate::test_support::lock_test_env();
         let previous = std::env::var_os(LOG_RETENTION_ENV);
 
@@ -295,19 +307,43 @@ mod tests {
         unsafe {
             std::env::set_var(LOG_RETENTION_ENV, "14");
         }
-        assert_eq!(log_retention_days(), 14);
+        // env var wins over None config
+        assert_eq!(log_retention_days(None), 14);
+        // env var wins over Some config
+        assert_eq!(log_retention_days(Some(3)), 14);
 
         // SAFETY: serialised by lock_test_env.
         unsafe {
             std::env::set_var(LOG_RETENTION_ENV, "0");
         }
-        assert_eq!(log_retention_days(), DEFAULT_LOG_RETENTION_DAYS);
+        // 0 == not positive → fall through to config, then default
+        assert_eq!(log_retention_days(None), DEFAULT_LOG_RETENTION_DAYS);
+        assert_eq!(log_retention_days(Some(30)), 30);
 
         // SAFETY: cleanup under the same lock.
         unsafe {
             match previous {
                 Some(value) => std::env::set_var(LOG_RETENTION_ENV, value),
                 None => std::env::remove_var(LOG_RETENTION_ENV),
+            }
+        }
+    }
+
+    #[test]
+    fn log_retention_config_fallback_to_default() {
+        let _lock = crate::test_support::lock_test_env();
+        let previous = std::env::var_os(LOG_RETENTION_ENV);
+        unsafe { std::env::remove_var(LOG_RETENTION_ENV); }
+
+        // No config, no env → default
+        assert_eq!(log_retention_days(None), DEFAULT_LOG_RETENTION_DAYS);
+        // Config value used
+        assert_eq!(log_retention_days(Some(14)), 14);
+
+        unsafe {
+            match previous {
+                Some(value) => std::env::set_var(LOG_RETENTION_ENV, value),
+                None => {}
             }
         }
     }

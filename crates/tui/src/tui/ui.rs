@@ -287,7 +287,7 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
     // the user's terminal. We accept the init failing (e.g., read-only
     // `$HOME`) and continue without the redirect rather than refusing to
     // start the TUI.
-    let _tui_log_guard = match crate::runtime_log::init() {
+    let _tui_log_guard = match crate::runtime_log::init(Some(config.logs_config().retention_days)) {
         Ok(guard) => Some(guard),
         Err(err) => {
             tracing::warn!(target: "runtime_log", ?err, "TUI log init failed; stderr leaks may render as scroll-demon");

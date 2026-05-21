@@ -448,6 +448,29 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 # include_summary = false
 
 # ─────────────────────────────────────────────────────────────────────────────────
+# TUI Runtime Logs (#1785)
+# ─────────────────────────────────────────────────────────────────────────────────
+# The TUI writes tracing logs to `~/.deepseek/logs/tui-YYYY-MM-DD-PID.log`
+# (one file per process). Without cleanup these accumulate indefinitely.
+#
+# At session start, logs older than `retention_days` are automatically pruned.
+# Only files matching `tui-*.log` in the configured log directory are affected.
+#
+# Precedence:
+#   1. `DEEPSEEK_LOG_RETENTION_DAYS` env var — set to a positive day count
+#      to override the config value for a single session.
+#   2. `retention_days` below (default: 7).
+#
+# Check the log directory manually:
+#   ls ~/.deepseek/logs/
+#
+# Prune outside the TUI (when retention_days is set to 0):
+#   DEEPSEEK_LOG_RETENTION_DAYS=0 deepseek-tui
+#
+# [logs]
+# retention_days = 7
+
+# ─────────────────────────────────────────────────────────────────────────────────
 # Workspace Snapshots (#137)
 # ─────────────────────────────────────────────────────────────────────────────────
 # Each turn the TUI takes a `pre-turn:<seq>` and `post-turn:<seq>` snapshot of
