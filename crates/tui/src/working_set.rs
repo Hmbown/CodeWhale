@@ -1156,6 +1156,7 @@ fn detect_key_files(workspace: &Path) -> Vec<String> {
         "Cargo.toml",
         "README.md",
         "AGENTS.md",
+        "DEEPSEEK.md",
         "CLAUDE.md",
         "package.json",
         "pyproject.toml",
