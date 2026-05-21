@@ -111,10 +111,13 @@ pub struct WebhookHookSink {
 }
 
 impl WebhookHookSink {
-    pub fn new(url: String) -> Self {
+    pub fn new(url: String, skip_verify: bool) -> Self {
         Self {
             url,
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .danger_accept_invalid_certs(skip_verify)
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
         }
     }
 }

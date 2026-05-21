@@ -1517,6 +1517,7 @@ impl Engine {
         // Wire search provider config.
         ctx.search_provider = self.config.search_provider;
         ctx.search_api_key = self.config.search_api_key.clone();
+        ctx.insecure_skip_tls_verify = self.config.insecure_skip_tls_verify.unwrap_or(false);
 
         let policy = sandbox_policy_for_mode(mode, &self.session.workspace);
         let mut ctx = ctx.with_elevated_sandbox_policy(policy);
@@ -1533,7 +1534,8 @@ impl Engine {
             return Ok(Arc::clone(pool));
         }
         let mut pool = McpPool::from_config_path(&self.session.mcp_config_path)
-            .map_err(|e| ToolError::execution_failed(format!("Failed to load MCP config: {e}")))?;
+            .map_err(|e| ToolError::execution_failed(format!("Failed to load MCP config: {e}")))?
+            .with_skip_tls_verify(self.config.insecure_skip_tls_verify.unwrap_or(false));
         if let Some(decider) = self.config.network_policy.as_ref() {
             pool = pool.with_network_policy(decider.clone());
         }

@@ -612,7 +612,7 @@ impl ToolRegistryBuilder {
         use super::web_search::WebSearchTool;
         self.with_tool(Arc::new(WebSearchTool))
             .with_tool(Arc::new(FetchUrlTool))
-            .with_tool(Arc::new(FinanceTool::new()))
+            .with_tool(Arc::new(FinanceTool::new(false)))
             .with_tool(Arc::new(WebRunTool))
     }
 
@@ -621,7 +621,7 @@ impl ToolRegistryBuilder {
     #[must_use]
     pub fn with_vision_tools(self, config: crate::config::VisionModelConfig) -> Self {
         use crate::vision::tools::ImageAnalyzeTool;
-        self.with_tool(Arc::new(ImageAnalyzeTool::new(config)))
+        self.with_tool(Arc::new(ImageAnalyzeTool::new(config, false)))
     }
 
     /// Previously registered the OpenAI-style `multi_tool_use.parallel`

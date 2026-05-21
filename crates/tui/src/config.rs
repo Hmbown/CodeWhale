@@ -1150,6 +1150,11 @@ pub struct Config {
     /// Vision model configuration for the `image_analyze` tool.
     #[serde(default)]
     pub vision_model: Option<VisionModelConfig>,
+
+    /// Skip TLS certificate verification for all outbound HTTPS requests.
+    /// Defaults to `false` (verify certificates).
+    #[serde(default)]
+    pub insecure_skip_tls_verify: Option<bool>,
 }
 
 /// Vision model configuration for the `image_analyze` tool.
@@ -1460,6 +1465,12 @@ impl Config {
         normalize_model_config(&mut config);
         config.validate()?;
         config.warn_on_misplaced_root_base_url();
+        if config.insecure_skip_tls_verify == Some(true) {
+            tracing::warn!(
+                "TLS certificate verification is disabled (insecure_skip_tls_verify = true). \
+                 This is insecure and should only be used for development or trusted internal servers."
+            );
+        }
         Ok(config)
     }
 
@@ -2966,6 +2977,17 @@ fn apply_env_overrides(config: &mut Config) {
             && c.fallback_default_prior.is_none()
     }) {
         config.capacity = None;
+    }
+    if let Ok(value) = std::env::var("DEEPSEEK_INSECURE_SKIP_TLS_VERIFY") {
+        config.insecure_skip_tls_verify = parse_bool_env(&value);
+    }
+}
+
+fn parse_bool_env(raw: &str) -> Option<bool> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" | "enabled" => Some(true),
+        "0" | "false" | "no" | "off" | "disabled" => Some(false),
+        _ => None,
     }
 }
 
@@ -7534,5 +7556,32 @@ model = "deepseek-ai/deepseek-v4-pro"
         let json = serde_json::to_value(&cap).unwrap();
         let deserialized: ProviderCapability = serde_json::from_value(json).unwrap();
         assert_eq!(cap, deserialized);
+    }
+
+    #[test]
+    fn insecure_skip_tls_verify_toml_deserializes() {
+        let config: Config = toml::from_str(
+            r#"
+            insecure_skip_tls_verify = true
+            "#,
+        )
+        .expect("config toml");
+        assert_eq!(config.insecure_skip_tls_verify, Some(true));
+    }
+
+    #[test]
+    fn insecure_skip_tls_verify_env_override_applied() {
+        let _lock = lock_test_env();
+        // Safety: test-only environment mutation guarded by a global mutex.
+        unsafe {
+            env::set_var("DEEPSEEK_INSECURE_SKIP_TLS_VERIFY", "true");
+        }
+
+        let mut config = Config::default();
+        config.apply_env_overrides();
+        assert_eq!(config.insecure_skip_tls_verify, Some(true));
+
+        // Safety: env mutation guarded by lock_test_env().
+        unsafe { env::remove_var("DEEPSEEK_INSECURE_SKIP_TLS_VERIFY") };
     }
 }

@@ -20,8 +20,9 @@ pub struct ImageAnalyzeTool {
 
 impl ImageAnalyzeTool {
     #[must_use]
-    pub fn new(config: VisionModelConfig) -> Self {
+    pub fn new(config: VisionModelConfig, skip_verify: bool) -> Self {
         let client = reqwest::Client::builder()
+            .danger_accept_invalid_certs(skip_verify)
             .timeout(Duration::from_secs(120))
             .build()
             .expect("Failed to build HTTP client");
@@ -231,7 +232,7 @@ mod tests {
 
     #[test]
     fn tool_metadata_is_read_only_and_named_image_analyze() {
-        let tool = ImageAnalyzeTool::new(fake_config());
+        let tool = ImageAnalyzeTool::new(fake_config(), false);
         assert_eq!(tool.name(), "image_analyze");
         assert!(tool.capabilities().contains(&ToolCapability::ReadOnly));
     }
@@ -269,7 +270,7 @@ mod tests {
         // before any base64 / API call.
         let tmp = tempdir().expect("tempdir");
         let ctx = ToolContext::new(tmp.path().to_path_buf());
-        let tool = ImageAnalyzeTool::new(fake_config());
+        let tool = ImageAnalyzeTool::new(fake_config(), false);
         let outside_workspace = if cfg!(windows) {
             r"C:\Windows\System32\drivers\etc\hosts"
         } else {
@@ -290,7 +291,7 @@ mod tests {
     async fn execute_rejects_parent_dir_traversal() {
         let tmp = tempdir().expect("tempdir");
         let ctx = ToolContext::new(tmp.path().to_path_buf());
-        let tool = ImageAnalyzeTool::new(fake_config());
+        let tool = ImageAnalyzeTool::new(fake_config(), false);
         let err = tool
             .execute(json!({"image_path": "../escape.png"}), &ctx)
             .await

@@ -148,10 +148,11 @@ pub struct FinanceTool {
 
 impl FinanceTool {
     #[must_use]
-    pub fn new() -> Self {
+    pub fn new(skip_verify: bool) -> Self {
         Self {
             endpoints: FinanceEndpoints::default(),
             client: Client::builder()
+                .danger_accept_invalid_certs(skip_verify)
                 .user_agent(USER_AGENT)
                 .build()
                 .expect("failed to build HTTP client"),
@@ -159,13 +160,14 @@ impl FinanceTool {
     }
 
     #[cfg(test)]
-    fn with_endpoints(quote_base: impl Into<String>, chart_base: impl Into<String>) -> Self {
+    fn with_endpoints(quote_base: impl Into<String>, chart_base: impl Into<String>, skip_verify: bool) -> Self {
         Self {
             endpoints: FinanceEndpoints {
                 quote_base: quote_base.into(),
                 chart_base: chart_base.into(),
             },
             client: Client::builder()
+                .danger_accept_invalid_certs(skip_verify)
                 .user_agent(USER_AGENT)
                 .build()
                 .expect("failed to build HTTP client"),
@@ -175,7 +177,7 @@ impl FinanceTool {
 
 impl Default for FinanceTool {
     fn default() -> Self {
-        Self::new()
+        Self::new(false)
     }
 }
 
@@ -627,6 +629,7 @@ mod tests {
         FinanceTool::with_endpoints(
             server.uri().to_string() + "/quote",
             server.uri().to_string() + "/chart",
+            false,
         )
     }
 
@@ -939,7 +942,7 @@ mod tests {
 
     #[test]
     fn finance_schema_allows_ticker_or_symbol() {
-        let schema = FinanceTool::new().input_schema();
+        let schema = FinanceTool::new(false).input_schema();
         let any_of = schema["anyOf"]
             .as_array()
             .expect("finance schema should advertise alternate required fields");

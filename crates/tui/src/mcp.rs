@@ -1147,6 +1147,7 @@ impl McpConnection {
         config: McpServerConfig,
         global_timeouts: &McpTimeouts,
         network_policy: Option<&NetworkPolicyDecider>,
+        skip_verify: bool,
     ) -> Result<Self> {
         let connect_timeout_secs = config.effective_connect_timeout(global_timeouts);
         let cancel_token = tokio_util::sync::CancellationToken::new();
@@ -1182,7 +1183,7 @@ impl McpConnection {
             // HTTP traffic bypass the proxy entirely while every other
             // tool on the box (curl, npm, …) used it.
             let mut client_builder =
-                reqwest::Client::builder().timeout(Duration::from_secs(connect_timeout_secs));
+                reqwest::Client::builder().danger_accept_invalid_certs(skip_verify).timeout(Duration::from_secs(connect_timeout_secs));
             let env_proxy_url = std::env::var("HTTPS_PROXY")
                 .or_else(|_| std::env::var("https_proxy"))
                 .or_else(|_| std::env::var("HTTP_PROXY"))
@@ -1749,6 +1750,7 @@ pub struct McpPool {
     /// Most recently observed mtime of `config_source`. Updated whenever the
     /// reload check runs (whether or not it triggered a reload).
     last_mtime: Option<std::time::SystemTime>,
+    skip_verify: bool,
 }
 
 impl McpPool {
@@ -1762,6 +1764,7 @@ impl McpPool {
             config_source: None,
             config_hash,
             last_mtime: None,
+            skip_verify: false,
         }
     }
 
@@ -1787,6 +1790,12 @@ impl McpPool {
     /// transports are gated through it; STDIO transports are unaffected.
     pub fn with_network_policy(mut self, policy: NetworkPolicyDecider) -> Self {
         self.network_policy = Some(policy);
+        self
+    }
+
+    /// Configure TLS certificate verification skipping.
+    pub fn with_skip_tls_verify(mut self, skip_verify: bool) -> Self {
+        self.skip_verify = skip_verify;
         self
     }
 
@@ -1877,6 +1886,7 @@ impl McpPool {
             server_config,
             &self.config.timeouts,
             self.network_policy.as_ref(),
+            self.skip_verify,
         )
         .await?;
 
@@ -3518,6 +3528,7 @@ mod tests {
             config,
             &McpTimeouts::default(),
             None,
+            false,
         )
         .await
         .unwrap();

@@ -26,7 +26,7 @@ const LEGACY_UPDATE_VERSION_ENV: &str = "DEEPSEEK_VERSION";
 const UPDATE_USER_AGENT: &str = "codewhale-updater";
 
 /// Run the self-update workflow.
-pub fn run_update(beta: bool) -> Result<()> {
+pub fn run_update(beta: bool, skip_verify: bool) -> Result<()> {
     let current_exe =
         std::env::current_exe().context("failed to determine current executable path")?;
     let targets = update_targets_for_exe(&current_exe);
@@ -38,7 +38,7 @@ pub fn run_update(beta: bool) -> Result<()> {
     println!("Current version: v{current_version}");
 
     // Step 1: Fetch latest release metadata
-    let fetched = fetch_latest_release(channel).with_context(update_network_fallback_hint)?;
+    let fetched = fetch_latest_release(channel, skip_verify).with_context(update_network_fallback_hint)?;
     let release = &fetched.release;
     let latest_tag = &release.tag_name;
     println!("Latest {} release: {latest_tag}", channel.label());
@@ -60,7 +60,7 @@ pub fn run_update(beta: bool) -> Result<()> {
         Some(checksum_asset) => {
             println!("Downloading {}...", checksum_asset.name);
             let checksum_bytes =
-                download_url(&checksum_asset.browser_download_url).with_context(|| {
+                download_url(&checksum_asset.browser_download_url, skip_verify).with_context(|| {
                     format!(
                         "failed to download {}\n{}",
                         checksum_asset.name,
@@ -95,7 +95,7 @@ pub fn run_update(beta: bool) -> Result<()> {
         })?;
 
         println!("Downloading {}...", asset.name);
-        let bytes = download_url(&asset.browser_download_url).with_context(|| {
+        let bytes = download_url(&asset.browser_download_url, skip_verify).with_context(|| {
             format!(
                 "failed to download {}\n{}",
                 asset.name,
@@ -342,15 +342,16 @@ struct Asset {
     browser_download_url: String,
 }
 
-fn update_http_client() -> Result<reqwest::blocking::Client> {
+fn update_http_client(skip_verify: bool) -> Result<reqwest::blocking::Client> {
     reqwest::blocking::Client::builder()
+        .danger_accept_invalid_certs(skip_verify)
         .user_agent(UPDATE_USER_AGENT)
         .build()
         .context("failed to build update HTTP client")
 }
 
 /// Fetch the latest release metadata from GitHub.
-fn fetch_latest_release(channel: ReleaseChannel) -> Result<FetchedRelease> {
+fn fetch_latest_release(channel: ReleaseChannel, skip_verify: bool) -> Result<FetchedRelease> {
     let version = update_version_from_env().unwrap_or_else(|| env!("CARGO_PKG_VERSION").into());
     if let Some(base_url) = release_base_url_from_env(&version) {
         return Ok(FetchedRelease {
@@ -364,7 +365,7 @@ fn fetch_latest_release(channel: ReleaseChannel) -> Result<FetchedRelease> {
         });
     }
     let release = match channel {
-        ReleaseChannel::Stable => fetch_latest_release_from_url(LATEST_RELEASE_URL),
+        ReleaseChannel::Stable => fetch_latest_release_from_url(LATEST_RELEASE_URL, skip_verify),
         ReleaseChannel::Beta => fetch_latest_beta_release_from_url(RELEASES_URL),
     }?;
     Ok(FetchedRelease {
@@ -454,8 +455,8 @@ fn update_network_fallback_hint() -> String {
     )
 }
 
-fn fetch_latest_release_from_url(url: &str) -> Result<Release> {
-    let client = update_http_client()?;
+fn fetch_latest_release_from_url(url: &str, skip_verify: bool) -> Result<Release> {
+    let client = update_http_client(skip_verify)?;
     let response = client
         .get(url)
         .header(reqwest::header::ACCEPT, "application/vnd.github+json")
@@ -553,8 +554,8 @@ fn version_is_beta(version: &semver::Version) -> bool {
 }
 
 /// Download a URL to bytes.
-fn download_url(url: &str) -> Result<Vec<u8>> {
-    let client = update_http_client()?;
+fn download_url(url: &str, skip_verify: bool) -> Result<Vec<u8>> {
+    let client = update_http_client(skip_verify)?;
     let response = client
         .get(url)
         .send()
@@ -1197,7 +1198,7 @@ E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  *codewhale-win
     fn download_url_reads_binary_body_with_updater_user_agent() {
         let (url, request_rx, handle) =
             serve_http_once("200 OK", "application/octet-stream", b"\0binary bytes");
-        let bytes = download_url(&url).expect("binary download should succeed");
+        let bytes = download_url(&url, false).expect("binary download should succeed");
 
         assert_eq!(bytes, b"\0binary bytes");
 
