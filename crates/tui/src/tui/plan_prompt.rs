@@ -5,26 +5,33 @@ use ratatui::layout::{Alignment, Rect};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph, Widget, Wrap};
 
+use crate::localization::{Locale, MessageId, tr};
 use crate::palette;
 use crate::tui::views::{ModalKind, ModalView, ViewAction, ViewEvent};
 
-const PLAN_OPTIONS: [(&str, &str); 4] = [
-    ("Accept plan", "Start implementation with approvals"),
+const PLAN_OPTIONS: [(MessageId, MessageId); 4] = [
     (
-        "Accept plan (YOLO)",
-        "Start implementation with auto-approval",
+        MessageId::PlanPromptAcceptPlan,
+        MessageId::PlanPromptAcceptPlanDescription,
     ),
-    ("Revise plan", "Ask follow-ups or request plan changes"),
     (
-        "Exit to Agent",
-        "Return to Agent mode without implementation",
+        MessageId::PlanPromptAcceptPlanYolo,
+        MessageId::PlanPromptAcceptPlanYoloDescription,
+    ),
+    (
+        MessageId::PlanPromptRevisePlan,
+        MessageId::PlanPromptRevisePlanDescription,
+    ),
+    (
+        MessageId::PlanPromptExitToAgent,
+        MessageId::PlanPromptExitToAgentDescription,
     ),
 ];
 
-fn modal_block() -> Block<'static> {
+fn modal_block(locale: Locale) -> Block<'static> {
     Block::default()
         .title(Line::from(vec![Span::styled(
-            " Plan Confirmation ",
+            tr(locale, MessageId::PlanPromptTitle),
             Style::default().fg(palette::DEEPSEEK_BLUE).bold(),
         )]))
         .borders(Borders::ALL)
@@ -89,14 +96,32 @@ fn push_option_lines(
     )));
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct PlanPromptView {
     selected: usize,
+    locale: Locale,
+}
+
+impl Default for PlanPromptView {
+    fn default() -> Self {
+        Self {
+            selected: 0,
+            locale: Locale::En,
+        }
+    }
 }
 
 impl PlanPromptView {
+    #[cfg(test)]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn new_for_locale(locale: Locale) -> Self {
+        Self {
+            selected: 0,
+            locale,
+        }
     }
 
     fn max_index(&self) -> usize {
@@ -184,18 +209,24 @@ impl ModalView for PlanPromptView {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         let mut lines: Vec<Line> = Vec::new();
         lines.push(Line::from(vec![Span::styled(
-            "Action required",
+            tr(self.locale, MessageId::PlanPromptActionRequired),
             Style::default().fg(palette::DEEPSEEK_SKY).bold(),
         )]));
         lines.push(Line::from(vec![Span::styled(
-            "Choose what should happen after this plan.",
+            tr(self.locale, MessageId::PlanPromptChooseNextStep),
             Style::default().fg(palette::TEXT_PRIMARY).bold(),
         )]));
         lines.push(Line::from(""));
 
-        for (idx, (label, description)) in PLAN_OPTIONS.iter().enumerate() {
+        for (idx, (label_id, description_id)) in PLAN_OPTIONS.iter().enumerate() {
             let number = idx + 1;
-            push_option_lines(&mut lines, self.selected == idx, number, label, description);
+            push_option_lines(
+                &mut lines,
+                self.selected == idx,
+                number,
+                tr(self.locale, *label_id),
+                tr(self.locale, *description_id),
+            );
         }
 
         lines.push(Line::from(""));
@@ -204,22 +235,34 @@ impl ModalView for PlanPromptView {
                 "1-4 / a / y / r / q",
                 Style::default().fg(palette::DEEPSEEK_SKY).bold(),
             ),
-            Span::styled(" quick pick", Style::default().fg(palette::TEXT_MUTED)),
+            Span::styled(
+                tr(self.locale, MessageId::PlanPromptQuickPick),
+                Style::default().fg(palette::TEXT_MUTED),
+            ),
             Span::raw("  "),
             Span::styled("Up/Down", Style::default().fg(palette::DEEPSEEK_SKY).bold()),
-            Span::styled(" move", Style::default().fg(palette::TEXT_MUTED)),
+            Span::styled(
+                tr(self.locale, MessageId::PlanPromptMove),
+                Style::default().fg(palette::TEXT_MUTED),
+            ),
             Span::raw("  "),
             Span::styled("Enter", Style::default().fg(palette::DEEPSEEK_SKY).bold()),
-            Span::styled(" confirm", Style::default().fg(palette::TEXT_MUTED)),
+            Span::styled(
+                tr(self.locale, MessageId::PlanPromptConfirm),
+                Style::default().fg(palette::TEXT_MUTED),
+            ),
             Span::raw("  "),
             Span::styled("Esc", Style::default().fg(palette::DEEPSEEK_SKY).bold()),
-            Span::styled(" close", Style::default().fg(palette::TEXT_MUTED)),
+            Span::styled(
+                tr(self.locale, MessageId::PlanPromptClose),
+                Style::default().fg(palette::TEXT_MUTED),
+            ),
         ]));
 
         let paragraph = Paragraph::new(lines)
             .alignment(Alignment::Left)
             .wrap(Wrap { trim: true })
-            .block(modal_block());
+            .block(modal_block(self.locale));
 
         let popup_area = centered_rect(72, 52, area);
         render_modal_chrome(area, popup_area, buf);

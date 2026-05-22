@@ -44,6 +44,7 @@ use crate::core::events::Event as EngineEvent;
 use crate::core::ops::Op;
 use crate::hooks::{HookEvent, HookExecutor};
 use crate::llm_client::LlmClient;
+use crate::localization::{MessageId, tr};
 use crate::models::{
     ContentBlock, Message, MessageRequest, SystemPrompt, Usage, context_window_for_model,
 };
@@ -80,6 +81,7 @@ use crate::tui::onboarding;
 use crate::tui::pager::PagerView;
 use crate::tui::persistence_actor::{self, PersistRequest};
 use crate::tui::plan_prompt::PlanPromptView;
+use crate::tui::pro_plan::{ProPlanFollowUp, ProPlanPhase, ProPlanRouter};
 use crate::tui::scrolling::TranscriptScroll;
 // SelectionAutoscroll unused
 use crate::tui::session_picker::SessionPickerView;
@@ -719,7 +721,7 @@ fn effective_mode_for_turn(app: &App) -> AppMode {
     }
 
     match app.pro_plan_router.as_ref() {
-        Some(router) if router.phase() == crate::tui::pro_plan::ProPlanPhase::Execute => {
+        Some(router) if router.phase() == ProPlanPhase::Execute => {
             if router.execute_auto_approve() {
                 AppMode::Yolo
             } else {
@@ -737,10 +739,10 @@ fn prepare_pro_plan_for_user_turn(app: &mut App) {
         return;
     }
 
-    if let Some(router) = app.pro_plan_router.as_mut()
-        && router.phase() == crate::tui::pro_plan::ProPlanPhase::Done
-    {
-        router.reset();
+    if let Some(router) = app.pro_plan_router.as_mut() {
+        if router.phase() == ProPlanPhase::Done {
+            router.reset();
+        }
     }
 }
 
@@ -752,7 +754,7 @@ fn should_add_pro_plan_planning_instruction(app: &App, input: &str) -> bool {
     let Some(router) = app.pro_plan_router.as_ref() else {
         return false;
     };
-    if router.phase() != crate::tui::pro_plan::ProPlanPhase::Plan {
+    if router.phase() != ProPlanPhase::Plan {
         return false;
     }
 
@@ -1571,93 +1573,108 @@ async fn run_event_loop(
                                 content: plan_next_step_prompt(),
                             });
                             if app.view_stack.top_kind() != Some(ModalKind::PlanPrompt) {
-                                app.view_stack.push(PlanPromptView::new());
+                                app.view_stack
+                                    .push(PlanPromptView::new_for_locale(app.ui_locale));
                             }
                         }
                         // ProPlan mode: automatic phase advancement
                         let queued_count = app.queued_message_count();
                         let has_queued_draft = app.queued_draft.is_some();
                         let mut show_pro_plan_prompt = false;
-                        if app.mode == AppMode::ProPlan
-                            && let Some(ref mut router) = app.pro_plan_router
-                        {
-                            // Collect the last assistant message for explicit
-                            // ProPlan marker detection.
-                            let last_assistant = app
-                                .api_messages
-                                .iter()
-                                .rev()
-                                .find(|m| m.role == "assistant");
+                        if app.mode == AppMode::ProPlan {
+                            if let Some(ref mut router) = app.pro_plan_router {
+                                // Collect the last assistant message for explicit
+                                // ProPlan marker detection.
+                                let last_assistant = app
+                                    .api_messages
+                                    .iter()
+                                    .rev()
+                                    .find(|m| m.role == "assistant");
 
-                            let last_assistant_text = last_assistant
-                                .map(|m| {
-                                    m.content
-                                        .iter()
-                                        .filter_map(|block| match block {
-                                            crate::models::ContentBlock::Text { text, .. } => {
-                                                Some(text.as_str())
-                                            }
-                                            _ => None,
-                                        })
-                                        .collect::<Vec<_>>()
-                                        .join("\n")
-                                })
-                                .unwrap_or_default();
+                                let last_assistant_text = last_assistant
+                                    .map(|m| {
+                                        m.content
+                                            .iter()
+                                            .filter_map(|block| match block {
+                                                crate::models::ContentBlock::Text {
+                                                    text, ..
+                                                } => Some(text.as_str()),
+                                                _ => None,
+                                            })
+                                            .collect::<Vec<_>>()
+                                            .join("\n")
+                                    })
+                                    .unwrap_or_default();
 
-                            let phase_before = router.phase();
-                            if !last_assistant_text.is_empty() {
-                                router.transition(&last_assistant_text);
-                            }
-                            if app.plan_tool_used_in_turn
-                                && router.phase() == crate::tui::pro_plan::ProPlanPhase::Plan
-                            {
-                                router.mark_plan_ready();
-                            }
-                            let transition_changed = router.phase() != phase_before;
-
-                            if status == crate::core::events::TurnOutcomeStatus::Completed {
-                                let no_pending_user_work = queued_count == 0 && !has_queued_draft;
-                                let phase_after = router.phase();
-
-                                if phase_after == crate::tui::pro_plan::ProPlanPhase::Plan
-                                    && router.state().has_generated_plan
-                                    && !app.plan_prompt_pending
-                                    && no_pending_user_work
-                                {
-                                    show_pro_plan_prompt = true;
+                                let phase_before = router.phase();
+                                if !last_assistant_text.is_empty() {
+                                    router.transition(&last_assistant_text);
                                 }
+                                if app.plan_tool_used_in_turn
+                                    && router.phase() == ProPlanPhase::Plan
+                                {
+                                    router.mark_plan_ready();
+                                }
+                                let transition_changed = router.phase() != phase_before;
 
-                                if transition_changed
-                                    && no_pending_user_work
-                                    && queued_to_send.is_none()
-                                    && let Some(follow_up) =
-                                        crate::tui::pro_plan::ProPlanRouter::follow_up_after_transition(
+                                if status == crate::core::events::TurnOutcomeStatus::Completed {
+                                    let no_pending_user_work =
+                                        queued_count == 0 && !has_queued_draft;
+                                    let phase_after = router.phase();
+
+                                    if phase_after == ProPlanPhase::Plan
+                                        && router.state().has_generated_plan
+                                        && !app.plan_prompt_pending
+                                        && no_pending_user_work
+                                    {
+                                        show_pro_plan_prompt = true;
+                                    }
+
+                                    if transition_changed
+                                        && no_pending_user_work
+                                        && queued_to_send.is_none()
+                                    {
+                                        let follow_up = ProPlanRouter::follow_up_after_transition(
                                             phase_before,
                                             phase_after,
-                                        )
-                                {
-                                    let follow_up_text = match follow_up {
-                                        crate::tui::pro_plan::ProPlanFollowUp::ReviewImplementation => {
-                                            "Review the implementation against the accepted plan. Do not edit files during review. If it is correct, include `<pro_plan review=\"approved\">`; if changes are needed, include `<pro_plan review=\"changes_requested\">` and list the fixes."
+                                        );
+                                        if let Some(follow_up) = follow_up {
+                                            // These are model steering messages, not UI chrome.
+                                            // Keep the control tags exact so phase detection stays stable.
+                                            let follow_up_text = match follow_up {
+                                                ProPlanFollowUp::ReviewImplementation => {
+                                                    "Review the implementation against the accepted plan. Do not edit files during review. If it is correct, include `<pro_plan review=\"approved\">`; if changes are needed, include `<pro_plan review=\"changes_requested\">` and list the fixes."
+                                                }
+                                                ProPlanFollowUp::AddressReviewFeedback => {
+                                                    "Address the review feedback using the accepted plan, then summarize the changes and include `<pro_plan execute_complete=\"true\">`."
+                                                }
+                                            };
+                                            queued_to_send = Some(QueuedMessage::new(
+                                                follow_up_text.to_string(),
+                                                None,
+                                            ));
                                         }
-                                        crate::tui::pro_plan::ProPlanFollowUp::AddressReviewFeedback => {
-                                            "Address the review feedback using the accepted plan, then summarize the changes and include `<pro_plan execute_complete=\"true\">`."
-                                        }
-                                    };
-                                    queued_to_send =
-                                        Some(QueuedMessage::new(follow_up_text.to_string(), None));
+                                    }
                                 }
-                            }
 
-                            // Reflect phase in status message.
-                            let phase_label = match router.phase() {
-                                crate::tui::pro_plan::ProPlanPhase::Plan => "PRO-PLAN: Plan",
-                                crate::tui::pro_plan::ProPlanPhase::Execute => "PRO-PLAN: Execute",
-                                crate::tui::pro_plan::ProPlanPhase::Review => "PRO-PLAN: Review",
-                                crate::tui::pro_plan::ProPlanPhase::Done => "PRO-PLAN: Done",
-                            };
-                            let model = router.current_model();
-                            app.status_message = Some(format!("{phase_label} ({model})"));
+                                // Reflect phase in status message.
+                                let phase_label = match router.phase() {
+                                    ProPlanPhase::Plan => {
+                                        tr(app.ui_locale, MessageId::ProPlanStatusPlan)
+                                    }
+                                    ProPlanPhase::Execute => {
+                                        tr(app.ui_locale, MessageId::ProPlanStatusExecute)
+                                    }
+                                    ProPlanPhase::Review => {
+                                        tr(app.ui_locale, MessageId::ProPlanStatusReview)
+                                    }
+                                    ProPlanPhase::Done => {
+                                        tr(app.ui_locale, MessageId::ProPlanStatusDone)
+                                    }
+                                };
+                                let model = router.current_model();
+                                app.status_message = Some(format!("{phase_label} ({model})"));
+                            }
                         }
                         if show_pro_plan_prompt {
                             app.plan_prompt_pending = true;
@@ -1665,7 +1682,8 @@ async fn run_event_loop(
                                 content: plan_next_step_prompt(),
                             });
                             if app.view_stack.top_kind() != Some(ModalKind::PlanPrompt) {
-                                app.view_stack.push(PlanPromptView::new());
+                                app.view_stack
+                                    .push(PlanPromptView::new_for_locale(app.ui_locale));
                             }
                         }
                         app.plan_tool_used_in_turn = false;
@@ -5586,10 +5604,10 @@ async fn apply_plan_choice(
             }
         }
         PlanChoice::RevisePlan => {
-            if app.mode == AppMode::ProPlan
-                && let Some(router) = app.pro_plan_router.as_mut()
-            {
-                router.reset();
+            if app.mode == AppMode::ProPlan {
+                if let Some(router) = app.pro_plan_router.as_mut() {
+                    router.reset();
+                }
             }
             let prompt = "Revise the plan: ";
             app.input = prompt.to_string();
