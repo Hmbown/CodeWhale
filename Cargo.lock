@@ -1322,6 +1322,8 @@ dependencies = [
  "image",
  "libc",
  "multimap",
+ "objc2",
+ "objc2-foundation",
  "pdf-extract",
  "portable-pty",
  "pretty_assertions",

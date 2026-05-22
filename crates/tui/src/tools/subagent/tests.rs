@@ -62,6 +62,11 @@ fn test_agent_type_from_str() {
         Some(SubAgentType::Explore)
     );
     assert_eq!(SubAgentType::from_str("awaiter"), Some(SubAgentType::Plan));
+    assert_eq!(
+        SubAgentType::from_str("tool-agent"),
+        Some(SubAgentType::ToolAgent)
+    );
+    assert_eq!(SubAgentType::from_str("fin"), Some(SubAgentType::ToolAgent));
     assert_eq!(SubAgentType::from_str("invalid"), None);
 }
 
@@ -112,6 +117,7 @@ fn test_agent_type_round_trips_via_as_str() {
         SubAgentType::Review,
         SubAgentType::Implementer,
         SubAgentType::Verifier,
+        SubAgentType::ToolAgent,
         SubAgentType::Custom,
     ] {
         let label = t.as_str();
@@ -165,6 +171,7 @@ fn test_agent_type_prompts_include_shared_output_contract_once() {
         (SubAgentType::Review, "code review sub-agent"),
         (SubAgentType::Implementer, "implementation sub-agent"),
         (SubAgentType::Verifier, "verification sub-agent"),
+        (SubAgentType::ToolAgent, "tool execution sub-agent"),
         (SubAgentType::Custom, "custom sub-agent"),
     ] {
         let prompt = agent_type.system_prompt();
@@ -213,7 +220,24 @@ fn new_session_tools_use_open_eval_close_names() {
         "agent_open"
     );
     assert_eq!(AgentEvalTool::new(manager.clone()).name(), "agent_eval");
+    assert_eq!(
+        ToolAgentTool::new(manager.clone(), stub_runtime()).name(),
+        "tool_agent"
+    );
     assert_eq!(AgentCloseTool::new(manager).name(), "agent_close");
+}
+
+#[test]
+fn tool_agent_description_explains_fast_lane() {
+    let tmp = tempdir().expect("tempdir");
+    let manager = new_shared_subagent_manager(tmp.path().to_path_buf(), 1);
+    let tool = ToolAgentTool::new(manager, stub_runtime());
+    let description = tool.description();
+
+    assert!(description.contains("Fin"));
+    assert!(description.contains("Flash"));
+    assert!(description.contains("thinking forced off"));
+    assert!(description.contains("OCR"));
 }
 
 #[test]
@@ -310,6 +334,17 @@ fn test_parse_spawn_request_accepts_session_name_for_agent_open() {
     assert_eq!(parsed.session_name.as_deref(), Some("review.parser"));
     assert!(parsed.fork_context);
     assert_eq!(parsed.max_depth, Some(0));
+}
+
+#[test]
+fn test_parse_spawn_request_accepts_tool_agent_aliases() {
+    let input = json!({
+        "prompt": "OCR this screenshot",
+        "agent_type": "tool-agent"
+    });
+    let parsed = parse_spawn_request(&input).expect("spawn request should parse");
+    assert_eq!(parsed.agent_type, SubAgentType::ToolAgent);
+    assert_eq!(parsed.assignment.role.as_deref(), Some("tool_agent"));
 }
 
 #[test]
@@ -656,6 +691,24 @@ fn subagent_auto_route_respects_explicit_or_role_model() {
         .model,
         "deepseek-v4-flash"
     );
+}
+
+#[tokio::test]
+async fn tool_agent_route_forces_flash_with_thinking_off() {
+    let runtime = stub_runtime()
+        .with_auto_model(false)
+        .with_reasoning_effort(Some("max".to_string()), false);
+
+    let route = resolve_subagent_assignment_route(
+        &runtime,
+        Some("deepseek-v4-pro".to_string()),
+        "run OCR on this screenshot",
+        &SubAgentType::ToolAgent,
+    )
+    .await;
+
+    assert_eq!(route.model, "deepseek-v4-flash");
+    assert_eq!(route.reasoning_effort.as_deref(), Some("off"));
 }
 
 #[test]

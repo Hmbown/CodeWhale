@@ -79,7 +79,9 @@ pub fn tool_family_for_name(name: &str) -> ToolFamily {
         "edit_file" | "apply_patch" | "write_file" => ToolFamily::Patch,
         "exec_shell" | "exec_shell_wait" | "exec_shell_interact" => ToolFamily::Run,
         "grep_files" | "file_search" | "web_search" | "fetch_url" => ToolFamily::Find,
-        "agent_open" | "agent_eval" | "agent_close" | "agent_spawn" => ToolFamily::Delegate,
+        "agent_open" | "agent_eval" | "agent_close" | "agent_spawn" | "tool_agent" => {
+            ToolFamily::Delegate
+        }
         "rlm_open" | "rlm_eval" | "rlm_configure" | "rlm_close" | "rlm" => ToolFamily::Rlm,
         _ => ToolFamily::Generic,
     }

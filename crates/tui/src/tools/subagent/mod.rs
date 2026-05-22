@@ -84,8 +84,8 @@ const SUBAGENT_STATE_SCHEMA_VERSION: u32 = 1;
 const SUBAGENT_STATE_FILE: &str = "subagents.v1.json";
 const SUBAGENT_RESTART_REASON: &str = "Interrupted by process restart";
 
-const VALID_SUBAGENT_TYPES: &str = "general, explore, plan, review, implementer, verifier, custom, \
-     worker, explorer, awaiter, default, implement, builder, verify, validator, tester";
+const VALID_SUBAGENT_TYPES: &str = "general, explore, plan, review, implementer, verifier, tool_agent, custom, \
+     worker, explorer, awaiter, default, implement, builder, verify, validator, tester, tool-agent, executor, fin";
 /// Whale species names rotated through `whale_nickname_for_index` to label
 /// sub-agents in the UI. English and Simplified-Chinese names are interleaved
 /// so any newly spawned agent has a roughly even chance of either — the goal
@@ -245,6 +245,11 @@ pub enum SubAgentType {
     /// Distinct from `Review` in that Review reads code and grades it;
     /// Verifier *runs* tests and reports the outcome (#404).
     Verifier,
+    /// Tool execution — a fast, non-thinking Flash V4 executor for simple
+    /// machine-bound tasks. Intended as the experimental "Fin" lane: the
+    /// parent does planning/synthesis while this child runs tools and reports
+    /// compact facts.
+    ToolAgent,
     /// Custom tool access defined at spawn time.
     Custom,
 }
@@ -262,6 +267,9 @@ impl SubAgentType {
             "review" | "code-review" | "code_review" | "reviewer" => Some(Self::Review),
             "implementer" | "implement" | "implementation" | "builder" => Some(Self::Implementer),
             "verifier" | "verify" | "verification" | "validator" | "tester" => Some(Self::Verifier),
+            "tool-agent" | "tool_agent" | "toolagent" | "executor" | "execution" | "fin" => {
+                Some(Self::ToolAgent)
+            }
             "custom" => Some(Self::Custom),
             _ => None,
         }
@@ -276,6 +284,7 @@ impl SubAgentType {
             Self::Review => "review",
             Self::Implementer => "implementer",
             Self::Verifier => "verifier",
+            Self::ToolAgent => "tool_agent",
             Self::Custom => "custom",
         }
     }
@@ -290,6 +299,7 @@ impl SubAgentType {
             Self::Review => REVIEW_AGENT_INTRO,
             Self::Implementer => IMPLEMENTER_AGENT_INTRO,
             Self::Verifier => VERIFIER_AGENT_INTRO,
+            Self::ToolAgent => TOOL_AGENT_INTRO,
             Self::Custom => CUSTOM_AGENT_INTRO,
         };
         format!("{role_intro}{SUBAGENT_OUTPUT_FORMAT}")
@@ -401,6 +411,22 @@ impl SubAgentType {
                 "run_tests",
                 "diagnostics",
                 "note",
+            ],
+            Self::ToolAgent => vec![
+                "list_dir",
+                "read_file",
+                "grep_files",
+                "file_search",
+                "image_ocr",
+                "fetch_url",
+                "web_search",
+                "web.run",
+                "exec_shell",
+                "exec_shell_wait",
+                "exec_shell_interact",
+                "exec_wait",
+                "exec_interact",
+                "handle_read",
             ],
             Self::Custom => vec![], // Must be provided by caller.
         }
@@ -1883,6 +1909,124 @@ impl ToolSpec for AgentOpenTool {
     }
 }
 
+/// Open a fast, non-thinking Flash V4 execution agent.
+///
+/// This is deliberately a thin wrapper over the durable `agent_open` runtime:
+/// cost accounting, mailbox updates, transcript handles, cancellation, and
+/// `agent_eval`/`agent_close` all stay on the same path.
+pub struct ToolAgentTool {
+    manager: SharedSubAgentManager,
+    runtime: SubAgentRuntime,
+}
+
+impl ToolAgentTool {
+    #[must_use]
+    pub fn new(manager: SharedSubAgentManager, runtime: SubAgentRuntime) -> Self {
+        Self { manager, runtime }
+    }
+}
+
+#[async_trait]
+impl ToolSpec for ToolAgentTool {
+    fn name(&self) -> &'static str {
+        "tool_agent"
+    }
+
+    fn description(&self) -> &'static str {
+        concat!(
+            "Open an experimental fast-lane execution agent (Fin): DeepSeek V4 Flash with thinking forced off. ",
+            "Use it for simple tool-bound work such as OCR, file/search lookups, fetches, or command probes where the parent model should keep planning and synthesis context clean. ",
+            "Returns the same session projection as agent_open; use agent_eval to fetch/wait and agent_close to close it. ",
+            "Do not use this for nuanced implementation, architecture, release decisions, or tasks that need careful reasoning."
+        )
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Stable model-facing session name. Defaults to the generated agent_id when omitted."
+                },
+                "session_name": {
+                    "type": "string",
+                    "description": "Alias for name"
+                },
+                "prompt": {
+                    "type": "string",
+                    "description": "Initial tool-bound task for the fast execution agent"
+                },
+                "message": {
+                    "type": "string",
+                    "description": "Alias for prompt"
+                },
+                "objective": {
+                    "type": "string",
+                    "description": "Alias for prompt"
+                },
+                "items": {
+                    "type": "array",
+                    "description": "Structured input items (text, mention, skill, local_image, image)",
+                    "items": { "type": "object" }
+                },
+                "allowed_tools": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Optional explicit tool allowlist for this executor"
+                },
+                "cwd": {
+                    "type": "string",
+                    "description": "Optional working directory for the child; must be inside the parent workspace"
+                },
+                "fork_context": {
+                    "type": "boolean",
+                    "description": "Defaults to false. Set true only when the executor needs the parent prefix."
+                },
+                "max_depth": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 3,
+                    "description": "Recursive child-agent budget. Defaults to 0 for tool_agent."
+                }
+            },
+            "required": ["prompt"]
+        })
+    }
+
+    fn capabilities(&self) -> Vec<ToolCapability> {
+        vec![
+            ToolCapability::ExecutesCode,
+            ToolCapability::RequiresApproval,
+        ]
+    }
+
+    fn approval_requirement(&self) -> ApprovalRequirement {
+        ApprovalRequirement::Required
+    }
+
+    async fn execute(&self, input: Value, context: &ToolContext) -> Result<ToolResult, ToolError> {
+        let mut forwarded = input;
+        let object = forwarded.as_object_mut().ok_or_else(|| {
+            ToolError::invalid_input("tool_agent input must be an object".to_string())
+        })?;
+        object.insert("type".to_string(), Value::String("tool-agent".to_string()));
+        object.remove("model");
+        object.remove("agent_type");
+        object.remove("agent_name");
+        object.remove("role");
+        object.remove("agent_role");
+        object
+            .entry("fork_context".to_string())
+            .or_insert(Value::Bool(false));
+        object.entry("max_depth".to_string()).or_insert(json!(0));
+
+        AgentOpenTool::new(self.manager.clone(), self.runtime.clone())
+            .execute(forwarded, context)
+            .await
+    }
+}
+
 /// Tool to spawn a background sub-agent.
 pub struct AgentSpawnTool {
     manager: SharedSubAgentManager,
@@ -2105,9 +2249,13 @@ impl ToolSpec for AgentSpawnTool {
                 (spawn_request.prompt, None)
             };
 
-        let route =
-            resolve_subagent_assignment_route(&self.runtime, configured_model, &effective_prompt)
-                .await;
+        let route = resolve_subagent_assignment_route(
+            &self.runtime,
+            configured_model,
+            &effective_prompt,
+            &spawn_request.agent_type,
+        )
+        .await;
         child_runtime.model = route.model.clone();
         child_runtime.reasoning_effort = route.reasoning_effort.clone();
         child_runtime.reasoning_effort_auto = false;
@@ -4154,7 +4302,12 @@ pub(crate) async fn resolve_subagent_assignment_route(
     runtime: &SubAgentRuntime,
     configured_model: Option<String>,
     prompt: &str,
+    agent_type: &SubAgentType,
 ) -> SubAgentResolvedRoute {
+    if matches!(agent_type, SubAgentType::ToolAgent) {
+        return tool_agent_route();
+    }
+
     let explicit_model = configured_model.is_some();
     let mut route = fallback_subagent_assignment_route(runtime, configured_model, prompt);
 
@@ -4173,6 +4326,13 @@ pub(crate) async fn resolve_subagent_assignment_route(
     }
 
     route
+}
+
+fn tool_agent_route() -> SubAgentResolvedRoute {
+    SubAgentResolvedRoute {
+        model: "deepseek-v4-flash".to_string(),
+        reasoning_effort: Some("off".to_string()),
+    }
 }
 
 fn should_use_subagent_flash_router(runtime: &SubAgentRuntime) -> bool {
@@ -4373,6 +4533,9 @@ fn normalize_role_alias(input: &str) -> Option<&'static str> {
         "worker" | "general" => Some("worker"),
         "explorer" | "explore" => Some("explorer"),
         "awaiter" | "plan" | "planner" => Some("awaiter"),
+        "tool-agent" | "tool_agent" | "toolagent" | "executor" | "execution" | "fin" => {
+            Some("tool_agent")
+        }
         _ => None,
     }
 }
@@ -4490,8 +4653,20 @@ impl SubAgentToolRegistry {
 
     fn tools_for_model(&self, agent_type: &SubAgentType) -> Vec<Tool> {
         let disallowed = match agent_type {
-            // Review agents should not spawn sub-agents (#1489).
-            SubAgentType::Review => &["agent_spawn"][..],
+            // Review and tool-executor agents should not spawn or manage
+            // sub-agents recursively (#1489, fast-lane executor).
+            SubAgentType::Review => &["agent_spawn", "agent_open", "agent_eval", "agent_close"][..],
+            SubAgentType::ToolAgent => &[
+                "agent_spawn",
+                "agent_open",
+                "agent_eval",
+                "agent_close",
+                "tool_agent",
+                "rlm_open",
+                "rlm_eval",
+                "rlm_configure",
+                "rlm_close",
+            ][..],
             _ => &[][..],
         };
         let api_tools = self.registry.to_api_tools();
@@ -4706,6 +4881,13 @@ const VERIFIER_AGENT_INTRO: &str = concat!(
     "Report PASS/FAIL/FLAKY at the top of SUMMARY with exact command evidence.\n",
     "Capture failing assertion and file:line; put obvious fixes under RISKS.\n",
     "CHANGES will almost always be \"None.\" for a verifier.\n\n"
+);
+
+const TOOL_AGENT_INTRO: &str = concat!(
+    "You are a tool execution sub-agent (experimental Fin fast lane). You run simple tools quickly and report compact facts.\n",
+    "The parent model owns planning, trade-offs, and synthesis; do not expand the task or narrate strategy.\n",
+    "Prefer direct tool calls, concise evidence, and one-pass results. Stop after the requested machine-bound action is done.\n",
+    "CHANGES should be \"None.\" unless an explicitly allowed tool made a real edit.\n\n"
 );
 
 // === Tests ===

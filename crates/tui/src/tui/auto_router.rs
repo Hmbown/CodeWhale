@@ -85,9 +85,7 @@ fn content_blocks_text(blocks: &[ContentBlock]) -> String {
             ContentBlock::Text { text, .. } => {
                 append_router_text(&mut out, text);
             }
-            ContentBlock::Thinking { thinking } => {
-                append_router_text(&mut out, thinking);
-            }
+            ContentBlock::Thinking { .. } => {}
             ContentBlock::ToolUse { name, .. } => {
                 append_router_text(&mut out, &format!("[tool call: {name}]"));
             }
@@ -164,5 +162,30 @@ mod tests {
     #[test]
     fn recent_auto_router_context_handles_empty_history() {
         assert_eq!(recent_auto_router_context(&[]), "No prior context.");
+    }
+
+    #[test]
+    fn recent_auto_router_context_excludes_hidden_thinking() {
+        let msgs = vec![
+            Message {
+                role: "assistant".to_string(),
+                content: vec![
+                    ContentBlock::Thinking {
+                        thinking: "The user seems to be asking me to classify myself.".to_string(),
+                    },
+                    ContentBlock::Text {
+                        text: "Visible assistant answer.".to_string(),
+                        cache_control: None,
+                    },
+                ],
+            },
+            make_msg("user", "latest draft"),
+        ];
+
+        let context = recent_auto_router_context(&msgs);
+
+        assert!(context.contains("Visible assistant answer."));
+        assert!(!context.contains("The user seems"));
+        assert!(!context.contains("latest draft"));
     }
 }

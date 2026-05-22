@@ -26,7 +26,7 @@ impl ToolSpec for ReadFileTool {
     }
 
     fn description(&self) -> &'static str {
-        "Read a UTF-8 file from the workspace. Use this instead of `cat`, `head`, `tail`, or `sed -n '..p'` in `exec_shell` — it's faster, sandbox-aware, and skips the approval prompt. Plain text is returned as-is; PDFs are auto-extracted via the bundled pure-Rust extractor (no Poppler install required). Cannot read images or non-PDF binaries.\n\nFor large files, use `start_line` and `max_lines` to read in chunks. By default, returns at most 200 lines (~16KB). If `truncated=\"true\"` in the response, use `next_start_line` to continue reading. For PDFs, use `pages` instead — `start_line`/`max_lines` only apply to text files."
+        "Read a UTF-8 file from the workspace. Use this instead of `cat`, `head`, `tail`, or `sed -n '..p'` in `exec_shell` — it's faster, sandbox-aware, and skips the approval prompt. Plain text is returned as-is; PDFs are auto-extracted via the bundled pure-Rust extractor (no Poppler install required). Image screenshots are OCR-extracted when local OCR is available. Cannot read other non-PDF binaries.\n\nFor large files, use `start_line` and `max_lines` to read in chunks. By default, returns at most 200 lines (~16KB). If `truncated=\"true\"` in the response, use `next_start_line` to continue reading. For PDFs, use `pages` instead — `start_line`/`max_lines` only apply to text files."
     }
 
     fn input_schema(&self) -> Value {
@@ -83,6 +83,9 @@ impl ToolSpec for ReadFileTool {
 
         if is_pdf(&file_path)? {
             return read_pdf(&file_path, pages);
+        }
+        if is_image_for_ocr(&file_path) {
+            return read_image_via_ocr(&file_path, path_str);
         }
 
         let contents = fs::read_to_string(&file_path).map_err(|e| {
@@ -188,6 +191,13 @@ impl ToolSpec for ReadFileTool {
     }
 }
 
+fn read_image_via_ocr(path: &Path, requested_path: &str) -> Result<ToolResult, ToolError> {
+    let text = crate::tools::image_ocr::ocr_image_path(path)?;
+    Ok(ToolResult::success(format!(
+        "<image_ocr path=\"{requested_path}\">\n{text}\n</image_ocr>"
+    )))
+}
+
 /// Detect a PDF by extension OR by sniffing the `%PDF-` magic bytes.
 /// Files without an extension are still recognized as PDFs when the header
 /// matches.
@@ -210,6 +220,17 @@ fn is_pdf(path: &Path) -> Result<bool, ToolError> {
         Err(_) => return Ok(false),
     };
     Ok(matches!(result, Ok(b) if &b == b"%PDF"))
+}
+
+fn is_image_for_ocr(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| {
+            matches!(
+                ext.to_ascii_lowercase().as_str(),
+                "png" | "jpg" | "jpeg" | "tif" | "tiff" | "bmp"
+            )
+        })
 }
 
 fn parse_pages_arg(spec: &str) -> Option<(u32, u32)> {
@@ -823,6 +844,35 @@ mod tests {
 
         assert!(result.success);
         assert_eq!(result.content, "hello world");
+    }
+
+    #[tokio::test]
+    async fn read_file_ocr_extracts_text_from_image_when_backend_exists() {
+        if !crate::tools::image_ocr::ocr_available() {
+            return;
+        }
+        let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/ocr_hello.png");
+        if !fixture.exists() {
+            return;
+        }
+        let tmp = tempdir().expect("tempdir");
+        fs::copy(&fixture, tmp.path().join("ocr_hello.png")).expect("copy fixture");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+
+        let result = ReadFileTool
+            .execute(json!({"path": "ocr_hello.png"}), &ctx)
+            .await
+            .expect("read image through OCR");
+
+        assert!(result.success);
+        assert!(result.content.contains("<image_ocr"));
+        let normalized = result.content.to_uppercase();
+        assert!(
+            normalized.contains("HELLO") && normalized.contains("OCR"),
+            "expected OCR text in read_file result, got {:?}",
+            result.content
+        );
     }
 
     #[test]

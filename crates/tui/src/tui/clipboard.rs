@@ -232,7 +232,7 @@ fn osc52_sequence(text: &str, in_tmux: bool) -> Result<String> {
 /// `~/.deepseek/clipboard-images/` so the path is stable across worktrees and
 /// matches the location described in user-facing docs; falls back to
 /// `<workspace>/clipboard-images/` if the home dir is unavailable.
-fn clipboard_images_dir(workspace: &Path) -> PathBuf {
+pub(crate) fn clipboard_images_dir(workspace: &Path) -> PathBuf {
     if let Some(home) = dirs::home_dir() {
         return home.join(".deepseek").join("clipboard-images");
     }

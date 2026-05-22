@@ -2308,23 +2308,42 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
     }
 
     match crate::dependencies::resolve_tesseract() {
-        Some(_) => println!(
-            "  {} tesseract: present → image_ocr tool registered",
-            "✓".truecolor(aqua_r, aqua_g, aqua_b),
-        ),
+        Some(_) => {
+            if cfg!(target_os = "macos") {
+                println!(
+                    "  {} OCR: macOS Vision + tesseract available → image_ocr/read_file screenshot OCR enabled",
+                    "✓".truecolor(aqua_r, aqua_g, aqua_b),
+                );
+            } else {
+                println!(
+                    "  {} tesseract: present → image_ocr/read_file screenshot OCR enabled",
+                    "✓".truecolor(aqua_r, aqua_g, aqua_b),
+                );
+            }
+        }
         None => {
-            println!("  {} tesseract: not found (optional)", "·".dimmed(),);
-            println!(
-                "    image_ocr tool is NOT advertised to the model. Install tesseract to enable:"
-            );
-            match std::env::consts::OS {
-                "macos" => println!("      brew install tesseract"),
-                "linux" => println!(
-                    "      sudo apt install tesseract-ocr    (Debian/Ubuntu) — or your distro's equivalent"
-                ),
-                "windows" => println!("      winget install UB-Mannheim.TesseractOCR"),
-                other => {
-                    println!("      install tesseract for {other} from tesseract-ocr.github.io")
+            if cfg!(target_os = "macos") {
+                println!(
+                    "  {} OCR: macOS Vision available → image_ocr/read_file screenshot OCR enabled",
+                    "✓".truecolor(aqua_r, aqua_g, aqua_b),
+                );
+                println!(
+                    "    tesseract not found (optional; install only for alternate OCR packs)."
+                );
+            } else {
+                println!("  {} tesseract: not found (optional)", "·".dimmed(),);
+                println!(
+                    "    image_ocr tool is NOT advertised to the model. Install tesseract to enable:"
+                );
+                match std::env::consts::OS {
+                    "macos" => println!("      brew install tesseract"),
+                    "linux" => println!(
+                        "      sudo apt install tesseract-ocr    (Debian/Ubuntu) — or your distro's equivalent"
+                    ),
+                    "windows" => println!("      winget install UB-Mannheim.TesseractOCR"),
+                    other => {
+                        println!("      install tesseract for {other} from tesseract-ocr.github.io")
+                    }
                 }
             }
         }

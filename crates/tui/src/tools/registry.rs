@@ -490,14 +490,12 @@ impl ToolRegistryBuilder {
         }
     }
 
-    /// Include the `image_ocr` tool only when the `tesseract`
-    /// binary is present on this host. Probe-then-decide mirroring
-    /// `with_pandoc_tools` — when tesseract is missing the tool
-    /// stays out of the catalog, so the model never tries to call
-    /// an OCR engine the host can't actually run.
+    /// Include the `image_ocr` tool only when a local OCR backend is present.
+    /// macOS uses the built-in Vision framework, while other platforms use
+    /// Tesseract when installed.
     #[must_use]
     pub fn with_image_ocr_tools(self) -> Self {
-        if crate::dependencies::resolve_tesseract().is_some() {
+        if super::image_ocr::ocr_available() {
             use super::image_ocr::ImageOcrTool;
             self.with_tool(Arc::new(ImageOcrTool))
         } else {
@@ -848,13 +846,17 @@ impl ToolRegistryBuilder {
         manager: super::subagent::SharedSubAgentManager,
         runtime: super::subagent::SubAgentRuntime,
     ) -> Self {
-        use super::subagent::{AgentCloseTool, AgentEvalTool, AgentOpenTool};
+        use super::subagent::{AgentCloseTool, AgentEvalTool, AgentOpenTool, ToolAgentTool};
 
         self.with_tool(Arc::new(AgentOpenTool::new(
             manager.clone(),
             runtime.clone(),
         )))
         .with_tool(Arc::new(AgentEvalTool::new(manager.clone())))
+        .with_tool(Arc::new(ToolAgentTool::new(
+            manager.clone(),
+            runtime.clone(),
+        )))
         .with_tool(Arc::new(AgentCloseTool::new(manager)))
     }
 

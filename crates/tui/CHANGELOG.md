@@ -27,6 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   regardless of role. Pick `implementer` (or pass an explicit `custom`
   allowlist) when the delegated task needs to land file changes
   (#1828, #1833).
+- **Experimental Fin fast-lane tool agents.** `tool_agent` opens a durable
+  child session on DeepSeek V4 Flash with thinking forced off for simple
+  tool-bound work such as OCR, file/search lookups, fetches, and command
+  probes. It uses the existing `agent_eval` / `agent_close` lifecycle and
+  mailbox token-usage stream, so sub-agent cost accounting stays on the same
+  path as normal `agent_open` sessions.
 
 ### Fixed
 
@@ -117,6 +123,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now defaults to `true`, while `NO_ANIMATIONS`, SSH/Termius, VS Code, Ghostty,
   and legacy terminal overrides still disable the animated strip where it is
   known to flicker.
+- **Screenshots are readable without extra setup on macOS.** `image_ocr` now
+  uses the native Vision framework on macOS when Tesseract is absent, and
+  `read_file` routes screenshot/image reads through the same OCR path. Pasted
+  clipboard screenshots saved under `~/.deepseek/clipboard-images` are trusted
+  automatically for read-only tools.
+- **Auto-routing context no longer leaks hidden thinking.** The model/router
+  context summary now excludes `ContentBlock::Thinking`, so prior internal
+  reasoning is not reintroduced as if it were visible user or assistant text.
 
 ### Changed
 
