@@ -12,15 +12,18 @@ pub fn set_verbose(enabled: bool) {
     VERBOSE.store(enabled, Ordering::SeqCst);
 }
 
-/// Return true when supported env logging knobs request verbose output.
+/// Return true when `DEEPSEEK_LOG_LEVEL` requests verbose output.
+///
+/// Note: `RUST_LOG` is intentionally NOT checked here — it controls the
+/// `tracing` subscriber filter in `runtime_log.rs` (file logging) and
+/// should not gate CLI verbose output. On Windows, where stderr is not
+/// redirected to the log file, coupling the two causes tracing log
+/// messages to leak into the TUI alt-screen.
 #[must_use]
 pub fn env_requests_verbose_logging() -> bool {
     std::env::var("DEEPSEEK_LOG_LEVEL")
         .ok()
         .is_some_and(|value| log_value_enables_verbose(&value))
-        || std::env::var("RUST_LOG")
-            .ok()
-            .is_some_and(|value| log_value_enables_verbose(&value))
 }
 
 fn log_value_enables_verbose(value: &str) -> bool {

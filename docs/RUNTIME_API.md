@@ -154,6 +154,13 @@ clients that cannot set custom headers.
 - `POST /v1/threads/{id}/resume`
 - `POST /v1/threads/{id}/fork`
 
+Thread forks are sibling runtime threads, not an in-place tree projection.
+`thread.forked` events include `source_thread_id`; internal backtrack-aware
+forks may also include `backtrack_depth_from_tail` and `dropped_turn_id`.
+Thread list and summary responses remain flat in v0.8.40, so clients that need
+a graph should reconstruct it from events instead of assuming list order is a
+complete tree.
+
 `archived_only=true` returns archived threads only (mutually overrides
 `include_archived`). Default behavior is unchanged: `include_archived=false`
 and `archived_only=false` returns active threads. Added in v0.8.10 (#563).

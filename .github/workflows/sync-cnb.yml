@@ -7,6 +7,7 @@ name: Sync to CNB
 # Triggers:
 #   * push to main              → mirrors that commit to CNB main
 #   * tag matching v*           → mirrors that tag to CNB
+#   * release stability branches→ mirrors release-candidate refs for CNB preflight
 #   * Tencent release branches  → mirrors Feishu/Lighthouse setup branches
 #   * workflow_dispatch         → manual fallback if any of the above fails
 #
@@ -25,6 +26,7 @@ on:
   push:
     branches:
       - main
+      - 'work/v*-stability'
       - 'work/v*-feishu-*'
       - 'work/v*-lighthouse*'
     tags: ['v*']
@@ -110,9 +112,10 @@ jobs:
             push_with_retry "main" HEAD:refs/heads/main --force
           else
             # Tencent release-candidate branches are first-class CNB
-            # sources for Lighthouse/Feishu bootstrap. Mirror the triggering
-            # branch exactly so the CNB clone path stays the default even
-            # before the branch has merged to main or become a release tag.
+            # sources for release preflight and Lighthouse/Feishu bootstrap.
+            # Mirror the triggering branch exactly so the CNB clone path stays
+            # useful before the branch has merged to main or become a release
+            # tag.
             BRANCH="${GITHUB_REF#refs/heads/}"
             push_with_retry "branch ${BRANCH}" "HEAD:refs/heads/${BRANCH}" --force
           fi

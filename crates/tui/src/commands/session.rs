@@ -3,7 +3,9 @@
 use std::fmt::Write;
 use std::path::PathBuf;
 
-use crate::session_manager::create_saved_session_with_mode;
+use crate::session_manager::{
+    create_saved_session_with_id_and_mode, create_saved_session_with_mode,
+};
 use crate::tui::app::{App, AppAction};
 use crate::tui::history::{HistoryCell, history_cells_from_message};
 use crate::tui::session_picker::SessionPickerView;
@@ -56,6 +58,71 @@ pub fn save(app: &mut App, path: Option<&str>) -> CommandResult {
         }
         Err(e) => CommandResult::error(format!("Failed to create directory: {e}")),
     }
+}
+
+/// Fork the active conversation into a new saved sibling session and switch to it.
+pub fn fork(app: &mut App) -> CommandResult {
+    if app.api_messages.is_empty() {
+        return CommandResult::error("Nothing to fork. Send or load a message first.");
+    }
+
+    let manager = match crate::session_manager::SessionManager::default_location() {
+        Ok(manager) => manager,
+        Err(err) => {
+            return CommandResult::error(format!("could not open sessions directory: {err}"));
+        }
+    };
+
+    let parent_id = app
+        .current_session_id
+        .clone()
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let mut parent = create_saved_session_with_id_and_mode(
+        parent_id,
+        &app.api_messages,
+        &app.model,
+        &app.workspace,
+        u64::from(app.session.total_tokens),
+        app.system_prompt.as_ref(),
+        Some(app.mode.label()),
+    );
+    app.sync_cost_to_metadata(&mut parent.metadata);
+    parent.artifacts = app.session_artifacts.clone();
+
+    if let Err(err) = manager.save_session(&parent) {
+        return CommandResult::error(format!("Failed to save parent session: {err}"));
+    }
+
+    let mut forked = create_saved_session_with_mode(
+        &app.api_messages,
+        &app.model,
+        &app.workspace,
+        u64::from(app.session.total_tokens),
+        app.system_prompt.as_ref(),
+        Some(app.mode.label()),
+    );
+    forked.metadata.copy_cost_from(&parent.metadata);
+    forked.metadata.mark_forked_from(&parent.metadata);
+
+    if let Err(err) = manager.save_session(&forked) {
+        return CommandResult::error(format!("Failed to save forked session: {err}"));
+    }
+
+    app.current_session_id = Some(forked.metadata.id.clone());
+    let fork_id = forked.metadata.id.clone();
+    let parent_label = crate::session_manager::truncate_id(&parent.metadata.id).to_string();
+    let fork_label = crate::session_manager::truncate_id(&fork_id).to_string();
+
+    CommandResult::with_message_and_action(
+        format!("Forked session {parent_label} -> {fork_label}"),
+        AppAction::SyncSession {
+            session_id: Some(fork_id),
+            messages: app.api_messages.clone(),
+            system_prompt: app.system_prompt.clone(),
+            model: app.model.clone(),
+            workspace: app.workspace.clone(),
+        },
+    )
 }
 
 /// Load session from file
@@ -357,6 +424,56 @@ mod tests {
         let saved: crate::session_manager::SavedSession =
             serde_json::from_str(&std::fs::read_to_string(save_path).unwrap()).unwrap();
         assert_eq!(saved.artifacts, app.session_artifacts);
+    }
+
+    #[test]
+    fn fork_saves_parent_and_switches_to_child_session() {
+        let tmpdir = TempDir::new().unwrap();
+        let _lock = crate::test_support::lock_test_env();
+        let home = tmpdir.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let previous_home = std::env::var_os("HOME");
+        // SAFETY: guarded by the process-wide test env mutex above.
+        unsafe {
+            std::env::set_var("HOME", &home);
+        }
+        let mut app = create_test_app_with_tmpdir(&tmpdir);
+        app.current_session_id = Some("parent-session".to_string());
+        app.api_messages.push(crate::models::Message {
+            role: "user".to_string(),
+            content: vec![crate::models::ContentBlock::Text {
+                text: "try another path".to_string(),
+                cache_control: None,
+            }],
+        });
+
+        let result = fork(&mut app);
+
+        assert!(!result.is_error, "{:?}", result.message);
+        let new_id = app.current_session_id.clone().expect("fork session id");
+        assert_ne!(new_id, "parent-session");
+        assert!(result.message.as_deref().unwrap_or("").contains("Forked"));
+        assert!(matches!(result.action, Some(AppAction::SyncSession { .. })));
+
+        let manager = crate::session_manager::SessionManager::default_location().unwrap();
+        let parent = manager
+            .load_session("parent-session")
+            .expect("parent saved");
+        let child = manager.load_session(&new_id).expect("child saved");
+        assert_eq!(parent.messages.len(), 1);
+        assert_eq!(
+            child.metadata.parent_session_id.as_deref(),
+            Some("parent-session")
+        );
+        assert_eq!(child.metadata.forked_from_message_count, Some(1));
+        // SAFETY: guarded by the process-wide test env mutex above.
+        unsafe {
+            if let Some(previous_home) = previous_home {
+                std::env::set_var("HOME", previous_home);
+            } else {
+                std::env::remove_var("HOME");
+            }
+        }
     }
 
     #[test]

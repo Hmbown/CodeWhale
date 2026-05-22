@@ -92,8 +92,10 @@ pub enum ViewEvent {
         tool_name: String,
         decision: ReviewDecision,
         timed_out: bool,
-        /// Fingerprint key for per‑call approval caching (§5.A).
+        /// Exact-argument fingerprint, used to scope *denials* (#1617).
         approval_key: String,
+        /// Lossy / arity-aware fingerprint, used to scope *approvals*.
+        approval_grouping_key: String,
     },
     ElevationDecision {
         tool_id: String,
@@ -597,6 +599,17 @@ impl ConfigView {
                 scope: ConfigScope::Saved,
             },
             ConfigRow {
+                section: ConfigSection::Model,
+                key: "reasoning_effort".to_string(),
+                value: settings
+                    .reasoning_effort
+                    .as_deref()
+                    .unwrap_or("(config/default)")
+                    .to_string(),
+                editable: true,
+                scope: ConfigScope::Saved,
+            },
+            ConfigRow {
                 section: ConfigSection::Permissions,
                 key: "approval_mode".to_string(),
                 value: app.approval_mode.label().to_string(),
@@ -1065,7 +1078,9 @@ impl ConfigView {
         };
         let key = row.key.clone();
         let original_value = row.value.clone();
-        let initial_value = if key == "default_model" && original_value == "(default)" {
+        let initial_value = if (key == "default_model" && original_value == "(default)")
+            || (key == "reasoning_effort" && original_value == "(config/default)")
+        {
             String::new()
         } else {
             original_value.clone()
@@ -1112,6 +1127,7 @@ fn config_hint_for_key(key: &str) -> &'static str {
         "sidebar_focus" => "auto | work | tasks | agents | context | hidden",
         "max_history" => "integer (0 allowed)",
         "default_model" => "deepseek-v4-pro | deepseek-v4-flash | deepseek-* | none/default",
+        "reasoning_effort" => "auto | off | low | medium | high | max | default",
         "mcp_config_path" => "path to mcp.json",
         _ => "",
     }
@@ -1906,7 +1922,8 @@ fn agent_type_order(agent_type: &SubAgentType) -> u8 {
         SubAgentType::Implementer => 3,
         SubAgentType::Verifier => 4,
         SubAgentType::Review => 5,
-        SubAgentType::Custom => 6,
+        SubAgentType::ToolAgent => 6,
+        SubAgentType::Custom => 7,
     }
 }
 
@@ -2132,6 +2149,7 @@ mod tests {
             .map(|row| row.key.as_str())
             .collect::<Vec<_>>();
         assert!(keys.contains(&"model"));
+        assert!(keys.contains(&"reasoning_effort"));
         assert!(keys.contains(&"approval_mode"));
         assert!(keys.contains(&"theme"));
         assert!(keys.contains(&"locale"));

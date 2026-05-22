@@ -442,6 +442,7 @@ fn non_yolo_mode_retains_default_defer_policy() {
     assert!(!should_default_defer_tool("exec_shell", AppMode::Agent));
     assert!(should_default_defer_tool("exec_shell", AppMode::Plan));
     assert!(!should_default_defer_tool("read_file", AppMode::Agent));
+    assert!(!should_default_defer_tool("write_file", AppMode::Agent));
     assert!(should_default_defer_tool(
         "mcp_read_resource",
         AppMode::Agent
@@ -453,6 +454,7 @@ fn model_tool_catalog_applies_native_and_mcp_deferral() {
     let catalog = build_model_tool_catalog(
         vec![
             api_tool("read_file"),
+            api_tool("write_file"),
             api_tool("exec_shell"),
             api_tool("project_map"),
         ],
@@ -468,6 +470,7 @@ fn model_tool_catalog_applies_native_and_mcp_deferral() {
     };
 
     assert_eq!(defer_loading("read_file"), Some(false));
+    assert_eq!(defer_loading("write_file"), Some(false));
     assert_eq!(defer_loading("exec_shell"), Some(false));
     assert_eq!(defer_loading("project_map"), Some(true));
     assert_eq!(defer_loading("list_mcp_resources"), Some(false));
@@ -1369,6 +1372,51 @@ fn refresh_system_prompt_is_noop_when_unchanged() {
 
     assert_eq!(engine.session.last_system_prompt_hash, first_hash);
     assert_eq!(engine.session.system_prompt, first_prompt);
+}
+
+fn sync_runtime_system_prompt_override(engine: &mut Engine, system_prompt: SystemPrompt) {
+    engine.session.compaction_summary_prompt =
+        extract_compaction_summary_prompt(Some(system_prompt.clone()));
+    engine.session.system_prompt = Some(system_prompt);
+    engine.session.system_prompt_override = true;
+}
+
+#[test]
+fn text_system_prompt_override_via_runtime_sync_survives_refresh() {
+    let tmp = tempdir().expect("tempdir");
+    let config = EngineConfig {
+        workspace: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    let (mut engine, _handle) = Engine::new(config, &Config::default());
+    let prompt = SystemPrompt::Text("TANGERINE-7".to_string());
+    let expected = Some(prompt.clone());
+
+    sync_runtime_system_prompt_override(&mut engine, prompt);
+    engine.refresh_system_prompt(AppMode::Agent);
+
+    assert_eq!(engine.session.system_prompt, expected);
+}
+
+#[test]
+fn blocks_system_prompt_override_via_runtime_sync_survives_mode_change_refresh() {
+    let tmp = tempdir().expect("tempdir");
+    let config = EngineConfig {
+        workspace: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    let (mut engine, _handle) = Engine::new(config, &Config::default());
+    let prompt = SystemPrompt::Blocks(vec![SystemBlock {
+        block_type: "text".to_string(),
+        text: "TANGERINE-7".to_string(),
+        cache_control: None,
+    }]);
+    let expected = Some(prompt.clone());
+
+    sync_runtime_system_prompt_override(&mut engine, prompt);
+    engine.refresh_system_prompt(AppMode::Plan);
+
+    assert_eq!(engine.session.system_prompt, expected);
 }
 
 #[test]

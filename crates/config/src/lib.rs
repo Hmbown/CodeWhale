@@ -23,6 +23,8 @@ const DEFAULT_NVIDIA_NIM_BASE_URL: &str = "https://integrate.api.nvidia.com/v1";
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const DEFAULT_ATLASCLOUD_MODEL: &str = "deepseek-ai/deepseek-v4-flash";
 const DEFAULT_ATLASCLOUD_BASE_URL: &str = "https://api.atlascloud.ai/v1";
+const DEFAULT_WANJIE_ARK_MODEL: &str = "deepseek-reasoner";
+const DEFAULT_WANJIE_ARK_BASE_URL: &str = "https://maas-openapi.wanjiedata.com/api/v1";
 const DEFAULT_OPENROUTER_MODEL: &str = "deepseek/deepseek-v4-pro";
 const DEFAULT_OPENROUTER_FLASH_MODEL: &str = "deepseek/deepseek-v4-flash";
 const DEFAULT_NOVITA_MODEL: &str = "deepseek/deepseek-v4-pro";
@@ -54,6 +56,15 @@ pub enum ProviderKind {
     NvidiaNim,
     Openai,
     Atlascloud,
+    #[serde(
+        alias = "wanjie",
+        alias = "wanjie_ark",
+        alias = "ark-wanjie",
+        alias = "ark_wanjie",
+        alias = "wanjie-maas",
+        alias = "wanjie_maas"
+    )]
+    WanjieArk,
     Openrouter,
     Novita,
     Fireworks,
@@ -70,6 +81,7 @@ impl ProviderKind {
             Self::NvidiaNim => "nvidia-nim",
             Self::Openai => "openai",
             Self::Atlascloud => "atlascloud",
+            Self::WanjieArk => "wanjie-ark",
             Self::Openrouter => "openrouter",
             Self::Novita => "novita",
             Self::Fireworks => "fireworks",
@@ -87,6 +99,8 @@ impl ProviderKind {
             "nvidia" | "nvidia-nim" | "nvidia_nim" | "nim" => Some(Self::NvidiaNim),
             "openai" | "open-ai" => Some(Self::Openai),
             "atlascloud" | "atlas-cloud" | "atlas_cloud" | "atlas" => Some(Self::Atlascloud),
+            "wanjie" | "wanjie-ark" | "wanjie_ark" | "ark-wanjie" | "ark_wanjie" | "wanjieark"
+            | "wanjie-maas" | "wanjie_maas" | "wanjiemaas" => Some(Self::WanjieArk),
             "openrouter" | "open_router" => Some(Self::Openrouter),
             "novita" => Some(Self::Novita),
             "fireworks" | "fireworks-ai" => Some(Self::Fireworks),
@@ -118,6 +132,8 @@ pub struct ProvidersToml {
     #[serde(default)]
     pub atlascloud: ProviderConfigToml,
     #[serde(default)]
+    pub wanjie_ark: ProviderConfigToml,
+    #[serde(default)]
     pub openrouter: ProviderConfigToml,
     #[serde(default)]
     pub novita: ProviderConfigToml,
@@ -139,6 +155,7 @@ impl ProvidersToml {
             ProviderKind::NvidiaNim => &self.nvidia_nim,
             ProviderKind::Openai => &self.openai,
             ProviderKind::Atlascloud => &self.atlascloud,
+            ProviderKind::WanjieArk => &self.wanjie_ark,
             ProviderKind::Openrouter => &self.openrouter,
             ProviderKind::Novita => &self.novita,
             ProviderKind::Fireworks => &self.fireworks,
@@ -154,6 +171,7 @@ impl ProvidersToml {
             ProviderKind::NvidiaNim => &mut self.nvidia_nim,
             ProviderKind::Openai => &mut self.openai,
             ProviderKind::Atlascloud => &mut self.atlascloud,
+            ProviderKind::WanjieArk => &mut self.wanjie_ark,
             ProviderKind::Openrouter => &mut self.openrouter,
             ProviderKind::Novita => &mut self.novita,
             ProviderKind::Fireworks => &mut self.fireworks,
@@ -370,6 +388,10 @@ impl ConfigToml {
             &project.providers.atlascloud,
         );
         merge_provider_config(
+            &mut self.providers.wanjie_ark,
+            &project.providers.wanjie_ark,
+        );
+        merge_provider_config(
             &mut self.providers.openrouter,
             &project.providers.openrouter,
         );
@@ -436,6 +458,12 @@ impl ConfigToml {
             "providers.atlascloud.model" => self.providers.atlascloud.model.clone(),
             "providers.atlascloud.http_headers" => {
                 serialize_http_headers(&self.providers.atlascloud.http_headers)
+            }
+            "providers.wanjie_ark.api_key" => self.providers.wanjie_ark.api_key.clone(),
+            "providers.wanjie_ark.base_url" => self.providers.wanjie_ark.base_url.clone(),
+            "providers.wanjie_ark.model" => self.providers.wanjie_ark.model.clone(),
+            "providers.wanjie_ark.http_headers" => {
+                serialize_http_headers(&self.providers.wanjie_ark.http_headers)
             }
             "providers.openrouter.api_key" => self.providers.openrouter.api_key.clone(),
             "providers.openrouter.base_url" => self.providers.openrouter.base_url.clone(),
@@ -546,6 +574,18 @@ impl ConfigToml {
             }
             "providers.atlascloud.http_headers" => {
                 self.providers.atlascloud.http_headers = parse_http_headers(value)?;
+            }
+            "providers.wanjie_ark.api_key" => {
+                self.providers.wanjie_ark.api_key = Some(value.to_string());
+            }
+            "providers.wanjie_ark.base_url" => {
+                self.providers.wanjie_ark.base_url = Some(value.to_string());
+            }
+            "providers.wanjie_ark.model" => {
+                self.providers.wanjie_ark.model = Some(value.to_string());
+            }
+            "providers.wanjie_ark.http_headers" => {
+                self.providers.wanjie_ark.http_headers = parse_http_headers(value)?;
             }
             "providers.nvidia_nim.api_key" => {
                 self.providers.nvidia_nim.api_key = Some(value.to_string());
@@ -679,6 +719,12 @@ impl ConfigToml {
             "providers.atlascloud.base_url" => self.providers.atlascloud.base_url = None,
             "providers.atlascloud.model" => self.providers.atlascloud.model = None,
             "providers.atlascloud.http_headers" => self.providers.atlascloud.http_headers.clear(),
+            "providers.wanjie_ark.api_key" => self.providers.wanjie_ark.api_key = None,
+            "providers.wanjie_ark.base_url" => self.providers.wanjie_ark.base_url = None,
+            "providers.wanjie_ark.model" => self.providers.wanjie_ark.model = None,
+            "providers.wanjie_ark.http_headers" => {
+                self.providers.wanjie_ark.http_headers.clear();
+            }
             "providers.nvidia_nim.api_key" => self.providers.nvidia_nim.api_key = None,
             "providers.nvidia_nim.base_url" => self.providers.nvidia_nim.base_url = None,
             "providers.nvidia_nim.model" => self.providers.nvidia_nim.model = None,
@@ -793,6 +839,18 @@ impl ConfigToml {
         }
         if let Some(v) = serialize_http_headers(&self.providers.atlascloud.http_headers) {
             out.insert("providers.atlascloud.http_headers".to_string(), v);
+        }
+        if let Some(v) = self.providers.wanjie_ark.api_key.as_ref() {
+            out.insert("providers.wanjie_ark.api_key".to_string(), redact_secret(v));
+        }
+        if let Some(v) = self.providers.wanjie_ark.base_url.as_ref() {
+            out.insert("providers.wanjie_ark.base_url".to_string(), v.clone());
+        }
+        if let Some(v) = self.providers.wanjie_ark.model.as_ref() {
+            out.insert("providers.wanjie_ark.model".to_string(), v.clone());
+        }
+        if let Some(v) = serialize_http_headers(&self.providers.wanjie_ark.http_headers) {
+            out.insert("providers.wanjie_ark.http_headers".to_string(), v);
         }
         if let Some(v) = self.providers.nvidia_nim.api_key.as_ref() {
             out.insert("providers.nvidia_nim.api_key".to_string(), redact_secret(v));
@@ -932,6 +990,7 @@ impl ConfigToml {
                 ProviderKind::NvidiaNim => DEFAULT_NVIDIA_NIM_BASE_URL.to_string(),
                 ProviderKind::Openai => DEFAULT_OPENAI_BASE_URL.to_string(),
                 ProviderKind::Atlascloud => DEFAULT_ATLASCLOUD_BASE_URL.to_string(),
+                ProviderKind::WanjieArk => DEFAULT_WANJIE_ARK_BASE_URL.to_string(),
                 ProviderKind::Openrouter => DEFAULT_OPENROUTER_BASE_URL.to_string(),
                 ProviderKind::Novita => DEFAULT_NOVITA_BASE_URL.to_string(),
                 ProviderKind::Fireworks => DEFAULT_FIREWORKS_BASE_URL.to_string(),
@@ -974,6 +1033,7 @@ impl ConfigToml {
 
         let explicit_model = cli.model.is_some()
             || env.model.is_some()
+            || env.model_for(provider).is_some()
             || provider_cfg.model.is_some()
             || root_deepseek_model.is_some()
             || self.model.is_some();
@@ -981,6 +1041,7 @@ impl ConfigToml {
             .model
             .clone()
             .or_else(|| env.model.clone())
+            .or_else(|| env.model_for(provider))
             .or_else(|| provider_cfg.model.clone())
             .or(root_deepseek_model)
             .or_else(|| self.model.clone())
@@ -1071,7 +1132,10 @@ pub fn load_project_config(workspace: &Path) -> Option<ConfigToml> {
 }
 
 fn normalize_model_for_provider(provider: ProviderKind, model: &str) -> String {
-    if matches!(provider, ProviderKind::Atlascloud | ProviderKind::Ollama) {
+    if matches!(
+        provider,
+        ProviderKind::Atlascloud | ProviderKind::WanjieArk | ProviderKind::Ollama
+    ) {
         return model.to_string();
     }
 
@@ -1130,6 +1194,7 @@ fn default_model_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::NvidiaNim => DEFAULT_NVIDIA_NIM_MODEL,
         ProviderKind::Openai => DEFAULT_OPENAI_MODEL,
         ProviderKind::Atlascloud => DEFAULT_ATLASCLOUD_MODEL,
+        ProviderKind::WanjieArk => DEFAULT_WANJIE_ARK_MODEL,
         ProviderKind::Openrouter => DEFAULT_OPENROUTER_MODEL,
         ProviderKind::Novita => DEFAULT_NOVITA_MODEL,
         ProviderKind::Fireworks => DEFAULT_FIREWORKS_MODEL,
@@ -1145,6 +1210,7 @@ fn default_base_url_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::NvidiaNim => DEFAULT_NVIDIA_NIM_BASE_URL,
         ProviderKind::Openai => DEFAULT_OPENAI_BASE_URL,
         ProviderKind::Atlascloud => DEFAULT_ATLASCLOUD_BASE_URL,
+        ProviderKind::WanjieArk => DEFAULT_WANJIE_ARK_BASE_URL,
         ProviderKind::Openrouter => DEFAULT_OPENROUTER_BASE_URL,
         ProviderKind::Novita => DEFAULT_NOVITA_BASE_URL,
         ProviderKind::Fireworks => DEFAULT_FIREWORKS_BASE_URL,
@@ -1491,6 +1557,7 @@ fn normalize_config_file_path(path: PathBuf) -> Result<PathBuf> {
 struct EnvRuntimeOverrides {
     provider: Option<ProviderKind>,
     model: Option<String>,
+    wanjie_ark_model: Option<String>,
     output_mode: Option<String>,
     auth_mode: Option<String>,
     log_level: Option<String>,
@@ -1503,6 +1570,7 @@ struct EnvRuntimeOverrides {
     nvidia_base_url: Option<String>,
     openai_base_url: Option<String>,
     atlascloud_base_url: Option<String>,
+    wanjie_ark_base_url: Option<String>,
     openrouter_base_url: Option<String>,
     novita_base_url: Option<String>,
     fireworks_base_url: Option<String>,
@@ -1518,6 +1586,11 @@ impl EnvRuntimeOverrides {
                 .ok()
                 .and_then(|v| ProviderKind::parse(&v)),
             model: std::env::var("DEEPSEEK_MODEL").ok(),
+            wanjie_ark_model: std::env::var("WANJIE_ARK_MODEL")
+                .or_else(|_| std::env::var("WANJIE_MODEL"))
+                .or_else(|_| std::env::var("WANJIE_MAAS_MODEL"))
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
             output_mode: std::env::var("DEEPSEEK_OUTPUT_MODE").ok(),
             auth_mode: std::env::var("DEEPSEEK_AUTH_MODE").ok(),
             log_level: std::env::var("DEEPSEEK_LOG_LEVEL").ok(),
@@ -1545,6 +1618,11 @@ impl EnvRuntimeOverrides {
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
             atlascloud_base_url: std::env::var("ATLASCLOUD_BASE_URL")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            wanjie_ark_base_url: std::env::var("WANJIE_ARK_BASE_URL")
+                .or_else(|_| std::env::var("WANJIE_BASE_URL"))
+                .or_else(|_| std::env::var("WANJIE_MAAS_BASE_URL"))
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
             openrouter_base_url: std::env::var("OPENROUTER_BASE_URL")
@@ -1576,12 +1654,20 @@ impl EnvRuntimeOverrides {
             ProviderKind::NvidiaNim => self.nvidia_base_url.clone(),
             ProviderKind::Openai => self.openai_base_url.clone(),
             ProviderKind::Atlascloud => self.atlascloud_base_url.clone(),
+            ProviderKind::WanjieArk => self.wanjie_ark_base_url.clone(),
             ProviderKind::Openrouter => self.openrouter_base_url.clone(),
             ProviderKind::Novita => self.novita_base_url.clone(),
             ProviderKind::Fireworks => self.fireworks_base_url.clone(),
             ProviderKind::Sglang => self.sglang_base_url.clone(),
             ProviderKind::Vllm => self.vllm_base_url.clone(),
             ProviderKind::Ollama => self.ollama_base_url.clone(),
+        }
+    }
+
+    fn model_for(&self, provider: ProviderKind) -> Option<String> {
+        match provider {
+            ProviderKind::WanjieArk => self.wanjie_ark_model.clone(),
+            _ => None,
         }
     }
 }
@@ -1628,6 +1714,13 @@ mod tests {
         nvidia_nim_base_url: Option<OsString>,
         openrouter_api_key: Option<OsString>,
         openrouter_base_url: Option<OsString>,
+        wanjie_ark_api_key: Option<OsString>,
+        wanjie_ark_base_url: Option<OsString>,
+        wanjie_base_url: Option<OsString>,
+        wanjie_maas_base_url: Option<OsString>,
+        wanjie_ark_model: Option<OsString>,
+        wanjie_model: Option<OsString>,
+        wanjie_maas_model: Option<OsString>,
         novita_api_key: Option<OsString>,
         novita_base_url: Option<OsString>,
         fireworks_api_key: Option<OsString>,
@@ -1656,6 +1749,13 @@ mod tests {
                 nvidia_nim_base_url: env::var_os("NVIDIA_NIM_BASE_URL"),
                 openrouter_api_key: env::var_os("OPENROUTER_API_KEY"),
                 openrouter_base_url: env::var_os("OPENROUTER_BASE_URL"),
+                wanjie_ark_api_key: env::var_os("WANJIE_ARK_API_KEY"),
+                wanjie_ark_base_url: env::var_os("WANJIE_ARK_BASE_URL"),
+                wanjie_base_url: env::var_os("WANJIE_BASE_URL"),
+                wanjie_maas_base_url: env::var_os("WANJIE_MAAS_BASE_URL"),
+                wanjie_ark_model: env::var_os("WANJIE_ARK_MODEL"),
+                wanjie_model: env::var_os("WANJIE_MODEL"),
+                wanjie_maas_model: env::var_os("WANJIE_MAAS_MODEL"),
                 novita_api_key: env::var_os("NOVITA_API_KEY"),
                 novita_base_url: env::var_os("NOVITA_BASE_URL"),
                 fireworks_api_key: env::var_os("FIREWORKS_API_KEY"),
@@ -1682,6 +1782,13 @@ mod tests {
                 env::remove_var("NVIDIA_NIM_BASE_URL");
                 env::remove_var("OPENROUTER_API_KEY");
                 env::remove_var("OPENROUTER_BASE_URL");
+                env::remove_var("WANJIE_ARK_API_KEY");
+                env::remove_var("WANJIE_ARK_BASE_URL");
+                env::remove_var("WANJIE_BASE_URL");
+                env::remove_var("WANJIE_MAAS_BASE_URL");
+                env::remove_var("WANJIE_ARK_MODEL");
+                env::remove_var("WANJIE_MODEL");
+                env::remove_var("WANJIE_MAAS_MODEL");
                 env::remove_var("NOVITA_API_KEY");
                 env::remove_var("NOVITA_BASE_URL");
                 env::remove_var("FIREWORKS_API_KEY");
@@ -1722,6 +1829,13 @@ mod tests {
                 Self::restore_var("NVIDIA_NIM_BASE_URL", self.nvidia_nim_base_url.take());
                 Self::restore_var("OPENROUTER_API_KEY", self.openrouter_api_key.take());
                 Self::restore_var("OPENROUTER_BASE_URL", self.openrouter_base_url.take());
+                Self::restore_var("WANJIE_ARK_API_KEY", self.wanjie_ark_api_key.take());
+                Self::restore_var("WANJIE_ARK_BASE_URL", self.wanjie_ark_base_url.take());
+                Self::restore_var("WANJIE_BASE_URL", self.wanjie_base_url.take());
+                Self::restore_var("WANJIE_MAAS_BASE_URL", self.wanjie_maas_base_url.take());
+                Self::restore_var("WANJIE_ARK_MODEL", self.wanjie_ark_model.take());
+                Self::restore_var("WANJIE_MODEL", self.wanjie_model.take());
+                Self::restore_var("WANJIE_MAAS_MODEL", self.wanjie_maas_model.take());
                 Self::restore_var("NOVITA_API_KEY", self.novita_api_key.take());
                 Self::restore_var("NOVITA_BASE_URL", self.novita_base_url.take());
                 Self::restore_var("FIREWORKS_API_KEY", self.fireworks_api_key.take());
@@ -2136,6 +2250,18 @@ mod tests {
             ProviderKind::parse("ollama-local"),
             Some(ProviderKind::Ollama)
         );
+        assert_eq!(
+            ProviderKind::parse("wanjie-ark"),
+            Some(ProviderKind::WanjieArk)
+        );
+        assert_eq!(
+            ProviderKind::parse("ark_wanjie"),
+            Some(ProviderKind::WanjieArk)
+        );
+
+        let parsed: ConfigToml =
+            toml::from_str("provider = \"ark-wanjie\"").expect("wanjie provider alias");
+        assert_eq!(parsed.provider, ProviderKind::WanjieArk);
     }
 
     #[test]
@@ -2200,6 +2326,22 @@ mod tests {
         assert_eq!(resolved.provider, ProviderKind::Fireworks);
         assert_eq!(resolved.base_url, DEFAULT_FIREWORKS_BASE_URL);
         assert_eq!(resolved.model, DEFAULT_FIREWORKS_MODEL);
+    }
+
+    #[test]
+    fn wanjie_ark_provider_defaults_to_openai_compatible_endpoint_and_model() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        let config = ConfigToml {
+            provider: ProviderKind::WanjieArk,
+            ..ConfigToml::default()
+        };
+
+        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::WanjieArk);
+        assert_eq!(resolved.base_url, DEFAULT_WANJIE_ARK_BASE_URL);
+        assert_eq!(resolved.model, DEFAULT_WANJIE_ARK_MODEL);
     }
 
     #[test]
@@ -2410,6 +2552,27 @@ mod tests {
         assert_eq!(resolved.provider, ProviderKind::Fireworks);
         assert_eq!(resolved.api_key.as_deref(), Some("fw-env-key"));
         assert_eq!(resolved.base_url, DEFAULT_FIREWORKS_BASE_URL);
+    }
+
+    #[test]
+    fn wanjie_ark_env_api_key_and_base_url_fall_back_when_config_missing() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        // Safety: test-only environment mutation guarded by a module mutex.
+        unsafe {
+            env::set_var("DEEPSEEK_PROVIDER", "wanjie-ark");
+            env::set_var("WANJIE_ARK_API_KEY", "wanjie-env-key");
+            env::set_var("WANJIE_ARK_BASE_URL", "https://wanjie.example/api/v1");
+            env::set_var("WANJIE_ARK_MODEL", "account-model-id");
+        }
+
+        let resolved =
+            ConfigToml::default().resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::WanjieArk);
+        assert_eq!(resolved.api_key.as_deref(), Some("wanjie-env-key"));
+        assert_eq!(resolved.base_url, "https://wanjie.example/api/v1");
+        assert_eq!(resolved.model, "account-model-id");
     }
 
     #[test]

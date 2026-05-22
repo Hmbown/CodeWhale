@@ -421,8 +421,17 @@ fn strip_raw_mouse_report_runs(input: &str, cursor: usize) -> Option<(String, us
                 index += 1;
             }
             let run = &chars[start..index];
-            if looks_like_raw_mouse_report_run(run) {
+            if let Some(keep) = raw_mouse_report_keep_mask(run) {
                 changed = true;
+                for (offset, ch) in run.iter().copied().enumerate() {
+                    if !keep[offset] {
+                        continue;
+                    }
+                    if start + offset < cursor {
+                        new_cursor += 1;
+                    }
+                    output.push(ch);
+                }
                 continue;
             }
             for (offset, ch) in run.iter().copied().enumerate() {
@@ -465,6 +474,98 @@ fn looks_like_raw_mouse_report_run(run: &[char]) -> bool {
 
 fn has_sgr_mouse_marker(run: &[char]) -> bool {
     run.windows(2).any(|window| window == ['[', '<'])
+}
+
+fn raw_mouse_report_keep_mask(run: &[char]) -> Option<Vec<bool>> {
+    let mut ranges: Vec<(usize, usize)> = Vec::new();
+    let mut index = 0usize;
+
+    while index < run.len() {
+        let (start, body_start) = if run[index] == '\x1b'
+            && run.get(index + 1) == Some(&'[')
+            && run.get(index + 2) == Some(&'<')
+        {
+            (index, index + 3)
+        } else if run[index] == '[' && run.get(index + 1) == Some(&'<') {
+            (index, index + 2)
+        } else {
+            index += 1;
+            continue;
+        };
+
+        let mut end = body_start;
+        let mut has_digit = false;
+        let mut has_separator = false;
+        let mut matched = false;
+        while end < run.len() {
+            match run[end] {
+                '0'..='9' => {
+                    has_digit = true;
+                    end += 1;
+                }
+                ';' | ':' => {
+                    has_separator = true;
+                    end += 1;
+                }
+                'M' | 'm' if has_digit && has_separator => {
+                    ranges.push((start, end + 1));
+                    index = end + 1;
+                    matched = true;
+                    break;
+                }
+                _ => break,
+            }
+        }
+        if !matched {
+            index = index.saturating_add(1);
+        }
+    }
+
+    if ranges.is_empty() {
+        if looks_like_raw_mouse_report_run(run) {
+            return Some(vec![false; run.len()]);
+        }
+        return None;
+    }
+
+    ranges.sort_unstable_by_key(|(start, _)| *start);
+    let first_start = ranges[0].0;
+    let mut prefix_start = first_start;
+    while prefix_start > 0 && is_raw_mouse_report_fragment_char(run[prefix_start - 1]) {
+        prefix_start -= 1;
+    }
+    if prefix_start < first_start
+        && looks_like_raw_mouse_report_fragment(&run[prefix_start..first_start])
+    {
+        ranges.push((prefix_start, first_start));
+    }
+
+    let last_end = ranges.iter().map(|(_, end)| *end).max().unwrap_or_default();
+    if last_end < run.len() && looks_like_raw_mouse_report_fragment(&run[last_end..]) {
+        ranges.push((last_end, run.len()));
+    }
+
+    ranges.sort_unstable_by_key(|(start, _)| *start);
+    let mut keep = vec![true; run.len()];
+    for (start, end) in ranges {
+        for slot in keep.iter_mut().take(end.min(run.len())).skip(start) {
+            *slot = false;
+        }
+    }
+    Some(keep)
+}
+
+fn is_raw_mouse_report_fragment_char(ch: char) -> bool {
+    matches!(ch, ';' | ':' | 'M' | 'm') || ch.is_ascii_digit()
+}
+
+fn looks_like_raw_mouse_report_fragment(run: &[char]) -> bool {
+    if run.len() < 4 {
+        return false;
+    }
+    run.iter().any(|ch| ch.is_ascii_digit())
+        && run.iter().any(|ch| matches!(ch, ';' | ':'))
+        && run.iter().any(|ch| matches!(ch, 'M' | 'm'))
 }
 
 const MAX_SUBMITTED_INPUT_CHARS: usize = 16_000;
@@ -1029,6 +1130,11 @@ pub struct App {
     pub last_exec_wait_command: Option<String>,
     /// Current streaming assistant cell
     pub streaming_message_index: Option<usize>,
+    /// True after a local cancel key has been handled and before the engine's
+    /// authoritative TurnComplete arrives. Stream events already queued for
+    /// the cancelled turn are ignored so text does not keep appearing after
+    /// Ctrl+C/Esc returns focus to the composer.
+    pub suppress_stream_events_until_turn_complete: bool,
     /// Index into `active_cell.entries` of the thinking entry currently being
     /// streamed. `None` when no thinking block is in flight. P2.3 routes
     /// thinking into the active cell so it groups visually with tool calls
@@ -1097,6 +1203,9 @@ pub struct App {
     pub coherence_state: CoherenceState,
     /// Timestamp of the last user message send (for brief visual feedback).
     pub last_send_at: Option<Instant>,
+    /// Most recent user prompt accepted for an active engine turn. Ctrl+C can
+    /// restore this into an empty composer after cancelling that turn.
+    pub last_submitted_prompt: Option<String>,
     /// Two-tap quit confirmation. When set, a prior Ctrl+C in idle state has
     /// armed the quit shortcut; a second Ctrl+C before this `Instant` exits
     /// the app, while expiry silently re-arms the prompt for next time.
@@ -1374,21 +1483,23 @@ impl App {
             })
             .unwrap_or(model);
         let auto_model = model.trim().eq_ignore_ascii_case("auto");
+        let configured_reasoning_effort = settings
+            .reasoning_effort
+            .as_deref()
+            .or_else(|| config.reasoning_effort());
         let threshold_model = if auto_model {
             DEFAULT_TEXT_MODEL
         } else {
             model.as_str()
         };
         let compact_threshold =
-            compaction_threshold_for_model_and_effort(threshold_model, config.reasoning_effort());
+            compaction_threshold_for_model_and_effort(threshold_model, configured_reasoning_effort);
         let reasoning_effort = if auto_model {
             ReasoningEffort::Auto
         } else {
-            config
-                .reasoning_effort()
-                .map_or_else(ReasoningEffort::default, |s| {
-                    ReasoningEffort::from_setting(s)
-                })
+            configured_reasoning_effort.map_or_else(ReasoningEffort::default, |s| {
+                ReasoningEffort::from_setting(s)
+            })
         };
 
         // Start in YOLO mode if --yolo flag was passed
@@ -1620,6 +1731,7 @@ impl App {
             ignored_tool_calls: HashSet::new(),
             last_exec_wait_command: None,
             streaming_message_index: None,
+            suppress_stream_events_until_turn_complete: false,
             streaming_thinking_active_entry: None,
             streaming_state: StreamingState::new(),
             reasoning_buffer: String::new(),
@@ -1646,6 +1758,7 @@ impl App {
             user_scrolled_during_stream: false,
             coherence_state: CoherenceState::default(),
             last_send_at: None,
+            last_submitted_prompt: None,
             quit_armed_until: None,
             cycle_count: 0,
             cycle_briefings: Vec::new(),
@@ -2726,7 +2839,9 @@ impl App {
 
         self.viewport.last_transcript_area = None;
         self.viewport.last_transcript_top = 0;
-        self.viewport.last_transcript_visible = 0;
+        // Seed visible height from the resize event so paging keys use a
+        // useful page size immediately, before the next render updates it.
+        self.viewport.last_transcript_visible = (_height as usize).saturating_sub(2).max(1);
         self.viewport.last_transcript_total = 0;
         self.viewport.last_transcript_padding_top = 0;
         self.viewport.jump_to_latest_button_area = None;
@@ -3255,6 +3370,33 @@ impl App {
         self.needs_redraw = true;
     }
 
+    /// In a multiline composer, jump to the start of the current line.
+    /// On single-line input this is equivalent to `move_cursor_start`.
+    pub fn move_cursor_line_start(&mut self) {
+        let byte_pos = byte_index_at_char(&self.input, self.cursor_position);
+        let before = &self.input[..byte_pos];
+        if let Some(last_nl_byte) = before.rfind('\n') {
+            // Position after the '\n' (start of the current line).
+            self.cursor_position = char_count(&self.input[..=last_nl_byte]);
+        } else {
+            self.cursor_position = 0;
+        }
+        self.needs_redraw = true;
+    }
+
+    /// In a multiline composer, jump to the end of the current line
+    /// (just before the next `\n` or at the end of input).
+    /// On single-line input this is equivalent to `move_cursor_end`.
+    pub fn move_cursor_line_end(&mut self) {
+        let search_start = byte_index_at_char(&self.input, self.cursor_position);
+        if let Some(offset) = self.input[search_start..].find('\n') {
+            self.cursor_position = char_count(&self.input[..search_start + offset]);
+        } else {
+            self.cursor_position = char_count(&self.input);
+        }
+        self.needs_redraw = true;
+    }
+
     /// Move forward one word. Skips over the current word then any trailing
     /// whitespace to land on the first character of the next word.
     pub fn move_cursor_word_forward(&mut self) {
@@ -3730,6 +3872,27 @@ impl App {
         Some(input)
     }
 
+    pub fn restore_last_submitted_prompt_if_empty(&mut self) -> bool {
+        if !self.input.is_empty() {
+            return false;
+        }
+        let Some(prompt) = self
+            .last_submitted_prompt
+            .as_deref()
+            .filter(|prompt| !prompt.is_empty())
+        else {
+            return false;
+        };
+
+        self.input = prompt.to_string();
+        self.cursor_position = char_count(&self.input);
+        self.history_index = None;
+        self.history_navigation_draft = None;
+        self.selected_attachment_index = None;
+        self.needs_redraw = true;
+        true
+    }
+
     /// Composer-Enter dispatch. Returns `Some(input)` when the press should
     /// fire a submit; `None` when Enter was absorbed (paste-burst Enter
     /// suppression — see #1073).
@@ -4028,6 +4191,25 @@ impl App {
             compaction_threshold_for_model_and_effort(&model, self.reasoning_effort.api_value());
     }
 
+    pub fn set_model_selection(&mut self, model: String) {
+        let auto_model = model.trim().eq_ignore_ascii_case("auto");
+        self.model = if auto_model {
+            "auto".to_string()
+        } else {
+            model
+        };
+        self.auto_model = auto_model;
+        self.last_effective_model = None;
+    }
+
+    pub fn model_selection_for_persistence(&self) -> String {
+        if self.auto_model || self.model.trim().eq_ignore_ascii_case("auto") {
+            "auto".to_string()
+        } else {
+            self.model.clone()
+        }
+    }
+
     pub fn effective_model_for_budget(&self) -> &str {
         if let Some(ref router) = self.pro_plan_router {
             return router.current_model();
@@ -4275,6 +4457,60 @@ mod tests {
         assert!(default_composer_arrows_scroll_for_platform(true, true));
     }
 
+    #[test]
+    fn move_cursor_line_start_multiline() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "abc\ndef\nghi".to_string();
+        app.cursor_position = "abc\ndef\nghi".chars().count(); // absolute end
+        app.move_cursor_line_start();
+        assert_eq!(app.cursor_position, "abc\ndef\n".len()); // start of "ghi"
+    }
+
+    #[test]
+    fn move_cursor_line_start_singleline() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "hello".to_string();
+        app.cursor_position = 3;
+        app.move_cursor_line_start();
+        assert_eq!(app.cursor_position, 0);
+    }
+
+    #[test]
+    fn move_cursor_line_end_multiline() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "abc\ndef\nghi".to_string();
+        app.cursor_position = 0; // start of first line
+        app.move_cursor_line_end();
+        assert_eq!(app.cursor_position, "abc".len()); // before first '\n'
+    }
+
+    #[test]
+    fn move_cursor_line_end_at_newline_stays_at_line_end() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "abc\ndef\nghi".to_string();
+        app.cursor_position = "abc".len(); // on the '\n'
+        app.move_cursor_line_end();
+        assert_eq!(app.cursor_position, "abc".len()); // stays at line end
+    }
+
+    #[test]
+    fn move_cursor_line_end_last_line() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "abc\ndef".to_string();
+        app.cursor_position = "abc\n".len(); // start of last line
+        app.move_cursor_line_end();
+        assert_eq!(app.cursor_position, "abc\ndef".chars().count()); // absolute end
+    }
+
+    #[test]
+    fn move_cursor_line_start_already_at_start() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "abc\ndef".to_string();
+        app.cursor_position = "abc\n".len(); // start of second line
+        app.move_cursor_line_start();
+        assert_eq!(app.cursor_position, "abc\n".len()); // unchanged
+    }
+
     struct EnvVarGuard {
         key: &'static str,
         previous: Option<OsString>,
@@ -4384,6 +4620,31 @@ mod tests {
     }
 
     #[test]
+    fn restore_last_submitted_prompt_rehydrates_empty_composer() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.last_submitted_prompt = Some("fix the typo\nand retry".to_string());
+
+        assert!(app.restore_last_submitted_prompt_if_empty());
+
+        assert_eq!(app.input, "fix the typo\nand retry");
+        assert_eq!(app.cursor_position, app.input.chars().count());
+        assert!(app.needs_redraw);
+    }
+
+    #[test]
+    fn restore_last_submitted_prompt_preserves_existing_draft() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.last_submitted_prompt = Some("previous prompt".to_string());
+        app.input = "new draft".to_string();
+        app.cursor_position = app.input.chars().count();
+
+        assert!(!app.restore_last_submitted_prompt_if_empty());
+
+        assert_eq!(app.input, "new draft");
+        assert_eq!(app.cursor_position, "new draft".chars().count());
+    }
+
+    #[test]
     fn composer_strips_raw_sgr_mouse_report_when_mouse_capture_is_enabled() {
         let mut app = App::new(test_options(false), &Config::default());
         app.use_mouse_capture = true;
@@ -4405,6 +4666,30 @@ mod tests {
 
         assert_eq!(app.input, "draft ");
         assert_eq!(app.cursor_position, "draft ".chars().count());
+    }
+
+    #[test]
+    fn composer_preserves_draft_suffix_when_stripping_mouse_report() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.use_mouse_capture = true;
+        app.insert_str("commit -m");
+
+        app.insert_str("[<65;44;18M");
+
+        assert_eq!(app.input, "commit -m");
+        assert_eq!(app.cursor_position, "commit -m".chars().count());
+    }
+
+    #[test]
+    fn composer_preserves_numeric_draft_when_stripping_mouse_report() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.use_mouse_capture = true;
+        app.insert_str("123");
+
+        app.insert_str("[<65;44;18M");
+
+        assert_eq!(app.input, "123");
+        assert_eq!(app.cursor_position, 3);
     }
 
     #[test]
@@ -4941,6 +5226,18 @@ mod tests {
         app.handle_resize(120, 40);
 
         assert!(app.viewport.transcript_scroll.is_at_tail());
+    }
+
+    #[test]
+    fn resize_seeds_visible_height_for_paging_before_next_render() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.viewport.last_transcript_visible = 12;
+
+        app.handle_resize(120, 40);
+        assert_eq!(app.viewport.last_transcript_visible, 38);
+
+        app.handle_resize(120, 1);
+        assert_eq!(app.viewport.last_transcript_visible, 1);
     }
 
     #[test]

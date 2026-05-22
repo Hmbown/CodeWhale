@@ -12,11 +12,12 @@
 # Choose which provider to use by default. Per-provider credentials live in the
 # `[providers.*]` sections near the bottom of
 # this file — keeping both stored at once means `/provider deepseek` and
-# `/provider nvidia-nim` (or `--provider openai`, `--provider fireworks`,
-# `/provider sglang`, `/provider vllm`, `/provider ollama`) toggle without having to
-# re-enter keys. Top-level `api_key` / `base_url` are still read as DeepSeek
-# defaults when `[providers.deepseek]` is absent (backward compatibility).
-provider = "deepseek" # deepseek | deepseek-cn | nvidia-nim | openai | atlascloud | openrouter | novita | fireworks | sglang | vllm | ollama
+# `/provider nvidia-nim` (or `--provider openai`, `--provider wanjie-ark`,
+# `--provider fireworks`, `/provider sglang`, `/provider vllm`, `/provider ollama`)
+# toggle without having to re-enter keys. Top-level `api_key` / `base_url` are
+# still read as DeepSeek defaults when `[providers.deepseek]` is absent
+# (backward compatibility).
+provider = "deepseek" # deepseek | deepseek-cn | nvidia-nim | openai | atlascloud | wanjie-ark | openrouter | novita | fireworks | sglang | vllm | ollama
 api_key = "YOUR_DEEPSEEK_API_KEY" # must be non-empty
 base_url = "https://api.deepseek.com/beta"
 # provider = "deepseek-cn"                       # legacy alias (official host is still https://api.deepseek.com)
@@ -35,6 +36,7 @@ base_url = "https://api.deepseek.com/beta"
 #   deepseek-ai/deepseek-v4-flash — NVIDIA NIM-hosted Flash model ID
 #   gpt-4.1                         — default generic OpenAI-compatible model ID
 #   deepseek-ai/deepseek-v4-flash   — default AtlasCloud model ID
+#   deepseek-reasoner               — default Wanjie Ark model ID
 #   accounts/fireworks/models/deepseek-v4-pro — Fireworks AI Pro model ID
 #   deepseek-ai/DeepSeek-V4-Pro    — SGLang self-hosted Pro model ID
 #   deepseek-ai/DeepSeek-V4-Flash  — SGLang self-hosted Flash model ID
@@ -144,6 +146,7 @@ max_subagents = 10 # optional (1-20)
 # Optional sub-agent tuning. max_concurrent overrides top-level max_subagents.
 # [subagents]
 # max_concurrent = 10
+# api_timeout_secs = 120 # per-step API timeout, clamped to 1..=1800
 
 # Optional managed policy paths (defaults to /etc/deepseek/*.toml on unix):
 # managed_config_path = "/etc/deepseek/managed_config.toml"
@@ -154,12 +157,13 @@ max_subagents = 10 # optional (1-20)
 # ─────────────────────────────────────────────────────────────────────────────────
 # Providers can be stored at once; `provider = "..."` (top of file) or
 # `/provider deepseek` / `/provider nvidia-nim` / `--provider openai` /
-# `/provider fireworks` switches between them without
+# `--provider wanjie-ark` / `/provider fireworks` switches between them without
 # having to re-enter keys. Env vars override anything set here:
 #   DeepSeek: DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
 #   NIM:      NVIDIA_API_KEY (or NVIDIA_NIM_API_KEY), NIM_BASE_URL
 #             (or NVIDIA_NIM_BASE_URL / NVIDIA_BASE_URL), NVIDIA_NIM_MODEL
 #   OpenAI-compatible: OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL
+#   Wanjie Ark: WANJIE_ARK_API_KEY (or WANJIE_API_KEY), WANJIE_ARK_BASE_URL, WANJIE_ARK_MODEL
 #   Fireworks: FIREWORKS_API_KEY, FIREWORKS_BASE_URL
 #   SGLang:    SGLANG_BASE_URL, SGLANG_MODEL, optional SGLANG_API_KEY
 #   vLLM:      VLLM_BASE_URL, VLLM_MODEL, optional VLLM_API_KEY
@@ -192,6 +196,12 @@ max_subagents = 10 # optional (1-20)
 # api_key = "YOUR_ATLASCLOUD_API_KEY"
 # base_url = "https://api.atlascloud.ai/v1"
 # model = "deepseek-ai/deepseek-v4-flash"
+
+# Wanjie Ark / 万界方舟 OpenAI-compatible endpoint
+[providers.wanjie_ark]
+# api_key = "YOUR_WANJIE_API_KEY"
+# base_url = "https://maas-openapi.wanjiedata.com/api/v1"
+# model = "deepseek-reasoner"                # or the exact model ID enabled on your Wanjie account
 
 # Fireworks AI-hosted DeepSeek V4 (https://fireworks.ai)
 [providers.fireworks]

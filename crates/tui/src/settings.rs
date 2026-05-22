@@ -230,6 +230,9 @@ pub struct Settings {
     pub default_provider: Option<String>,
     /// Default model to use
     pub default_model: Option<String>,
+    /// Default reasoning effort selected from the TUI model picker.
+    /// `None` falls back to `config.toml` and then the runtime default.
+    pub reasoning_effort: Option<String>,
     /// Per-provider model overrides. Key is provider name (e.g. "openai"),
     /// value is the model id. Takes precedence over `default_model`.
     pub provider_models: Option<std::collections::HashMap<String, String>>,
@@ -287,7 +290,7 @@ impl Default for Settings {
             auto_compact: false,
             calm_mode: false,
             low_motion: false,
-            fancy_animations: false,
+            fancy_animations: true,
             bracketed_paste: true,
             paste_burst_detection: true,
             show_thinking: true,
@@ -307,6 +310,7 @@ impl Default for Settings {
             max_input_history: 100,
             default_provider: None,
             default_model: None,
+            reasoning_effort: None,
             provider_models: None,
             status_indicator: "whale".to_string(),
             synchronized_output: "auto".to_string(),
@@ -360,6 +364,10 @@ impl Settings {
             s.background_color = normalize_optional_background_color(s.background_color.as_deref());
             s.theme = normalize_settings_theme(&s.theme).to_string();
             s.default_model = s.default_model.as_deref().and_then(normalize_default_model);
+            s.reasoning_effort = s
+                .reasoning_effort
+                .as_deref()
+                .and_then(|value| normalize_reasoning_effort_setting(value).ok().flatten());
             s
         };
         settings.apply_env_overrides();
@@ -648,6 +656,9 @@ impl Settings {
                 };
                 self.default_model = Some(model);
             }
+            "reasoning_effort" | "effort" => {
+                self.reasoning_effort = normalize_reasoning_effort_setting(value)?;
+            }
             _ => {
                 anyhow::bail!("Failed to update setting: unknown setting '{key}'.");
             }
@@ -703,6 +714,12 @@ impl Settings {
         lines.push(format!(
             "  default_model:      {}",
             self.default_model.as_deref().unwrap_or("(default)")
+        ));
+        lines.push(format!(
+            "  reasoning_effort:   {}",
+            self.reasoning_effort
+                .as_deref()
+                .unwrap_or("(config/default)")
         ));
         lines.push(String::new());
         lines.push(format!(
@@ -793,6 +810,10 @@ impl Settings {
                 "default_model",
                 "Default model: auto or any DeepSeek model ID (e.g. deepseek-v4-pro)",
             ),
+            (
+                "reasoning_effort",
+                "Default thinking effort: auto, off, low, medium, high, max, or default",
+            ),
         ]
     }
 
@@ -821,6 +842,33 @@ fn normalize_default_model(value: &str) -> Option<String> {
     } else {
         normalize_model_name(trimmed)
     }
+}
+
+fn normalize_reasoning_effort_setting(value: &str) -> Result<Option<String>> {
+    let trimmed = value.trim();
+    if trimmed.is_empty()
+        || matches!(
+            trimmed.to_ascii_lowercase().as_str(),
+            "default" | "(default)" | "config" | "configured" | "unset"
+        )
+    {
+        return Ok(None);
+    }
+
+    let normalized = match trimmed.to_ascii_lowercase().as_str() {
+        "off" | "disabled" | "none" | "false" => "off",
+        "low" | "minimal" => "low",
+        "medium" | "mid" => "medium",
+        "high" => "high",
+        "auto" | "automatic" => "auto",
+        "max" | "maximum" | "xhigh" => "max",
+        _ => {
+            anyhow::bail!(
+                "Failed to update setting: invalid reasoning_effort '{value}'. Expected: auto, off, low, medium, high, max, or default."
+            );
+        }
+    };
+    Ok(Some(normalized.to_string()))
 }
 
 /// Parse a boolean value from various formats
@@ -1017,6 +1065,25 @@ mod tests {
     }
 
     #[test]
+    fn default_settings_show_footer_water_strip() {
+        let settings = Settings::default();
+        assert!(settings.fancy_animations);
+    }
+
+    #[test]
+    fn reasoning_effort_setting_normalizes_and_clears() {
+        let mut settings = Settings::default();
+        settings
+            .set("reasoning_effort", "xhigh")
+            .expect("normalize xhigh");
+        assert_eq!(settings.reasoning_effort.as_deref(), Some("max"));
+        settings
+            .set("reasoning_effort", "default")
+            .expect("clear effort");
+        assert!(settings.reasoning_effort.is_none());
+    }
+
+    #[test]
     fn paste_burst_detection_is_configurable_independent_of_bracketed_paste() {
         let mut settings = Settings::default();
         assert!(settings.bracketed_paste);
@@ -1197,7 +1264,7 @@ mod tests {
         }
         let mut settings = Settings::default();
         assert!(!settings.low_motion, "default is animated");
-        assert!(!settings.fancy_animations, "default is animated");
+        assert!(settings.fancy_animations, "default shows the water strip");
         settings.apply_env_overrides();
         assert!(settings.low_motion, "NO_ANIMATIONS=1 forces low_motion");
         assert!(
@@ -1536,6 +1603,7 @@ mod tests {
 
         let mut settings = Settings::default();
         assert!(!settings.low_motion, "default is animated");
+        assert!(settings.fancy_animations, "default shows the water strip");
         assert_eq!(settings.synchronized_output, "auto");
         settings.apply_env_overrides();
         assert!(settings.low_motion);

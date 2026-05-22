@@ -12,14 +12,15 @@ The mirror is maintained by the [`Sync to CNB`](../.github/workflows/sync-cnb.ym
 GitHub Actions workflow:
 
 - **Trigger:** `push` to `main`, `push` of any `v*` tag,
+  release stability branches matching `work/v*-stability`,
   Tencent setup branches matching `work/v*-feishu-*` or
   `work/v*-lighthouse*`, or `workflow_dispatch` for manual recovery.
 - **Auth:** HTTPS basic auth as user `cnb` with the `CNB_GIT_TOKEN`
   repository secret as the password.
 - **Scope:** only the ref that triggered the run is pushed. Tag pushes
   push exactly that tag. Branch pushes mirror `main` or an explicitly
-  matched Tencent setup branch. Other feature branches and dependabot refs
-  are intentionally *not* mirrored.
+  matched release/Tencent setup branch. Other feature branches and dependabot
+  refs are intentionally *not* mirrored.
 - **Concurrency:** runs are serialized via a `cnb-sync` concurrency
   group so the back-to-back `main` push and tag push from
   `auto-tag.yml` cannot race each other.
@@ -44,6 +45,14 @@ release assets from source and publishes a CNB release with:
 This gives users who can reach CNB but not GitHub a CNB-native release path.
 GitHub remains the canonical full release matrix; the CNB tag pipeline is the
 China-friendly Linux x64 fallback.
+
+## Release branch preflight
+
+Release stability branches matching `work/v*-stability` are mirrored to CNB so
+CNB can run Linux/container release preflight before the branch merges. This is
+useful for offloading Linux Rust, npm wrapper, and Feishu bridge checks, but it
+does not replace platform-specific GitHub Actions jobs such as Windows and
+macOS.
 
 ## Verifying the mirror after a release
 

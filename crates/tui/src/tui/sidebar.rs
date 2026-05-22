@@ -1096,6 +1096,7 @@ fn editorial_tool_rows(rows: Vec<SidebarToolRow>, limit: usize) -> Vec<SidebarTo
     let mut candidates: Vec<Candidate> = Vec::new();
     let mut low_value_groups: Vec<(usize, SidebarToolRow, usize)> = Vec::new();
     let mut ci_poll_groups: Vec<(usize, SidebarToolRow, usize)> = Vec::new();
+    let mut shell_wait_groups: Vec<(usize, SidebarToolRow, usize, String)> = Vec::new();
     let mut seen_success: Vec<String> = Vec::new();
 
     for (order, mut row) in rows.into_iter().enumerate() {
@@ -1114,6 +1115,22 @@ fn editorial_tool_rows(rows: Vec<SidebarToolRow>, limit: usize) -> Vec<SidebarTo
                 }
             } else {
                 ci_poll_groups.push((order, row, 1));
+            }
+            continue;
+        }
+
+        if is_shell_wait_poll_row(&row) {
+            let key = shell_wait_poll_key(&row);
+            if let Some((_, grouped, count, _)) = shell_wait_groups
+                .iter_mut()
+                .find(|(_, _, _, existing_key)| existing_key == &key)
+            {
+                *count += 1;
+                if !row.summary.trim().is_empty() {
+                    grouped.summary = row.summary;
+                }
+            } else {
+                shell_wait_groups.push((order, row, 1, key));
             }
             continue;
         }
@@ -1165,6 +1182,20 @@ fn editorial_tool_rows(rows: Vec<SidebarToolRow>, limit: usize) -> Vec<SidebarTo
         });
     }
 
+    for (order, mut row, count, key) in shell_wait_groups {
+        if count > 1 {
+            row.summary = compact_join([
+                format!("{key} \u{00B7} {count} waits collapsed"),
+                row.summary.clone(),
+            ]);
+        }
+        candidates.push(Candidate {
+            rank: tool_row_rank(&row),
+            order,
+            row,
+        });
+    }
+
     for (order, mut row, count) in low_value_groups {
         if count > 1 {
             row.name = format!("{} x{count}", row.name);
@@ -1197,6 +1228,27 @@ fn sidebar_row_identity(row: &SidebarToolRow) -> String {
 
 fn is_ci_poll_row(row: &SidebarToolRow) -> bool {
     row.name.starts_with("gh pr checks") || row.name.starts_with("gh run watch")
+}
+
+fn is_shell_wait_poll_row(row: &SidebarToolRow) -> bool {
+    row.status == ToolStatus::Running && row.name == "wait shell job"
+}
+
+fn shell_wait_poll_key(row: &SidebarToolRow) -> String {
+    const MARKER: &str = "task_id:";
+    if let Some((_, rest)) = row.summary.split_once(MARKER) {
+        let task_id = rest
+            .trim_start()
+            .split(|ch: char| ch.is_whitespace() || ch == ',' || ch == '\u{00B7}')
+            .next()
+            .unwrap_or_default()
+            .trim();
+        if !task_id.is_empty() {
+            return task_id.to_string();
+        }
+    }
+
+    normalize_activity_text(&row.summary)
 }
 
 fn normalize_activity_text(text: &str) -> String {
@@ -2356,6 +2408,42 @@ mod tests {
         assert!(
             !text.iter().any(|line| line.contains("task_shell_wait")),
             "internal helper name should not leak into sidebar: {text:?}"
+        );
+    }
+
+    #[test]
+    fn tasks_panel_collapses_repeated_shell_waits_for_same_job() {
+        let mut app = create_test_app();
+        let mut active = ActiveCell::new();
+        for id in ["shell-wait-1", "shell-wait-2"] {
+            active.push_tool(
+                id,
+                HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
+                    name: "task_shell_wait".to_string(),
+                    status: ToolStatus::Running,
+                    input_summary: Some("task_id: shell_33a08c3c".to_string()),
+                    output: None,
+                    prompts: None,
+                    spillover_path: None,
+                    output_summary: Some("Background task running (no new output).".to_string()),
+                    is_diff: false,
+                })),
+            );
+        }
+        app.active_cell = Some(active);
+
+        let text = lines_to_text(&task_panel_lines(&app, 100, 8));
+
+        assert_eq!(
+            text.iter()
+                .filter(|line| line.contains("[~] wait shell job"))
+                .count(),
+            1,
+            "duplicate waits for the same shell job should collapse: {text:?}"
+        );
+        assert!(
+            text.iter().any(|line| line.contains("2 waits collapsed")),
+            "collapsed row should explain why only one wait is visible: {text:?}"
         );
     }
 

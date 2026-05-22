@@ -1,6 +1,8 @@
 //! DeepSeek color palette and semantic roles.
 
 use ratatui::style::Color;
+#[cfg(target_os = "macos")]
+use std::process::Command;
 
 pub const DEEPSEEK_BLUE_RGB: (u8, u8, u8) = (53, 120, 229); // #3578E5
 pub const DEEPSEEK_SKY_RGB: (u8, u8, u8) = (106, 174, 242);
@@ -264,14 +266,54 @@ impl PaletteMode {
         Some(if bg >= 8 { Self::Light } else { Self::Dark })
     }
 
-    /// Detect whether the terminal profile is light. Missing or unparsable
-    /// values default to dark so existing terminal setups keep the tuned theme.
+    /// Detect the active palette mode. `COLORFGBG` wins when present; macOS
+    /// appearance is a fallback for terminals that omit terminal color hints.
+    /// Missing or unparsable values default to dark so existing terminal setups
+    /// keep the tuned theme.
     #[must_use]
     pub fn detect() -> Self {
-        std::env::var("COLORFGBG")
-            .ok()
-            .and_then(|value| Self::from_colorfgbg(&value))
+        Self::detect_from_sources(
+            std::env::var("COLORFGBG").ok().as_deref(),
+            detect_macos_palette_mode(),
+        )
+    }
+
+    #[must_use]
+    fn detect_from_sources(colorfgbg: Option<&str>, macos_fallback: Option<Self>) -> Self {
+        colorfgbg
+            .and_then(Self::from_colorfgbg)
+            .or(macos_fallback)
             .unwrap_or(Self::Dark)
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn detect_macos_palette_mode() -> Option<PaletteMode> {
+    let output = Command::new("defaults")
+        .args(["read", "-g", "AppleInterfaceStyle"])
+        .output()
+        .ok()?;
+
+    if output.status.success() {
+        Some(palette_mode_from_apple_interface_style(
+            &String::from_utf8_lossy(&output.stdout),
+        ))
+    } else {
+        Some(PaletteMode::Light)
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn detect_macos_palette_mode() -> Option<PaletteMode> {
+    None
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn palette_mode_from_apple_interface_style(value: &str) -> PaletteMode {
+    if value.trim().eq_ignore_ascii_case("dark") {
+        PaletteMode::Dark
+    } else {
+        PaletteMode::Light
     }
 }
 
@@ -540,7 +582,7 @@ impl ThemeId {
     #[must_use]
     pub const fn tagline(self) -> &'static str {
         match self {
-            Self::System => "Follow terminal background (COLORFGBG)",
+            Self::System => "Follow terminal background (COLORFGBG / macOS appearance)",
             Self::Whale => "Default DeepSeek dark blue",
             Self::WhaleLight => "DeepSeek light, paper-ish",
             Self::Grayscale => "Color-minimal high contrast",
@@ -1047,7 +1089,8 @@ fn grayscale_bg_from_luma(luma: u8) -> Color {
 }
 
 fn luma(r: u8, g: u8, b: u8) -> u8 {
-    (((u16::from(r) * 299) + (u16::from(g) * 587) + (u16::from(b) * 114)) / 1000) as u8
+    let weighted = u32::from(r) * 299 + u32::from(g) * 587 + u32::from(b) * 114;
+    (weighted / 1000) as u8
 }
 // === Color depth + brightness helpers (v0.6.6 UI redesign) ===
 
@@ -1313,7 +1356,7 @@ mod tests {
         LIGHT_SURFACE, LIGHT_TEXT_BODY, LIGHT_TEXT_HINT, LIGHT_UI_THEME, PaletteMode,
         SURFACE_REASONING, SURFACE_REASONING_TINT, TEXT_BODY, TEXT_HINT, TEXT_REASONING,
         TEXT_TOOL_OUTPUT, UI_THEME, adapt_bg, adapt_bg_for_palette_mode, adapt_color,
-        adapt_fg_for_palette_mode, blend, nearest_ansi16, normalize_hex_rgb_color,
+        adapt_fg_for_palette_mode, blend, luma, nearest_ansi16, normalize_hex_rgb_color,
         normalize_theme_name, parse_hex_rgb_color, pulse_brightness, reasoning_surface_tint,
         rgb_to_ansi256, theme_label_for_mode, ui_theme_from_settings,
     };
@@ -1331,6 +1374,50 @@ mod tests {
             Some(PaletteMode::Light)
         );
         assert_eq!(PaletteMode::from_colorfgbg("not-a-color"), None);
+    }
+
+    #[test]
+    fn palette_mode_detect_prefers_colorfgbg_over_macos_fallback() {
+        assert_eq!(
+            PaletteMode::detect_from_sources(Some("0;15"), Some(PaletteMode::Dark)),
+            PaletteMode::Light
+        );
+        assert_eq!(
+            PaletteMode::detect_from_sources(Some("15;0"), Some(PaletteMode::Light)),
+            PaletteMode::Dark
+        );
+    }
+
+    #[test]
+    fn palette_mode_detect_uses_macos_fallback_when_colorfgbg_missing_or_invalid() {
+        assert_eq!(
+            PaletteMode::detect_from_sources(None, Some(PaletteMode::Light)),
+            PaletteMode::Light
+        );
+        assert_eq!(
+            PaletteMode::detect_from_sources(Some("not-a-color"), Some(PaletteMode::Light)),
+            PaletteMode::Light
+        );
+        assert_eq!(
+            PaletteMode::detect_from_sources(None, None),
+            PaletteMode::Dark
+        );
+    }
+
+    #[test]
+    fn apple_interface_style_maps_dark_and_missing_key_to_expected_modes() {
+        assert_eq!(
+            super::palette_mode_from_apple_interface_style("Dark\n"),
+            PaletteMode::Dark
+        );
+        assert_eq!(
+            super::palette_mode_from_apple_interface_style("Light\n"),
+            PaletteMode::Light
+        );
+        assert_eq!(
+            super::palette_mode_from_apple_interface_style(""),
+            PaletteMode::Light
+        );
     }
 
     #[test]
@@ -1451,6 +1538,19 @@ mod tests {
         assert_eq!(
             adapt_fg_for_palette_mode(TEXT_HINT, GRAYSCALE_SURFACE, PaletteMode::Grayscale),
             GRAYSCALE_TEXT_HINT
+        );
+    }
+
+    #[test]
+    fn grayscale_luma_handles_bright_rgb_without_overflow() {
+        assert_eq!(luma(255, 255, 255), 255);
+        assert_eq!(
+            adapt_fg_for_palette_mode(
+                Color::Rgb(255, 255, 255),
+                GRAYSCALE_SURFACE,
+                PaletteMode::Grayscale
+            ),
+            GRAYSCALE_TEXT_BODY
         );
     }
 

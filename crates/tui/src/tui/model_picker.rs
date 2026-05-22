@@ -25,40 +25,18 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Widget},
 };
-use std::collections::HashSet;
 
-use crate::config::{
-    ApiProvider, model_completion_names_for_provider, provider_passes_model_through,
-};
 use crate::palette;
 use crate::tui::app::{App, ReasoningEffort};
 use crate::tui::views::{ModalKind, ModalView, ViewAction, ViewEvent};
 
-fn picker_models_for_provider(provider: ApiProvider) -> Vec<(String, String)> {
-    let mut rows = vec![("auto".to_string(), "select per turn".to_string())];
-    if provider_passes_model_through(provider) {
-        return rows;
-    }
-    rows.extend(
-        model_completion_names_for_provider(provider)
-            .into_iter()
-            .map(|id| (id.to_string(), String::new())),
-    );
-    rows
-}
-
-fn picker_rows_from_model_ids(model_ids: Vec<String>) -> Vec<(String, String)> {
-    let mut rows = vec![("auto".to_string(), "select per turn".to_string())];
-    let mut seen = HashSet::from(["auto".to_string()]);
-    for model_id in model_ids {
-        let id = model_id.trim();
-        if id.is_empty() || !seen.insert(id.to_string()) {
-            continue;
-        }
-        rows.push((id.to_string(), String::new()));
-    }
-    rows
-}
+/// Models the picker exposes by default. Kept short on purpose — power
+/// users can still type `/model <id>` for anything else.
+const PICKER_MODELS: &[(&str, &str)] = &[
+    ("auto", "select per turn"),
+    ("deepseek-v4-pro", "flagship"),
+    ("deepseek-v4-flash", "fast / cheap"),
+];
 
 /// Thinking-effort rows shown in the picker, in the order DeepSeek
 /// behaviorally distinguishes them.
@@ -78,7 +56,6 @@ enum Pane {
 pub struct ModelPickerView {
     initial_model: String,
     initial_effort: ReasoningEffort,
-    model_rows: Vec<(String, String)>,
     /// Working selection (separate from the initial values so we can offer a
     /// clean Esc-to-cancel without mutating App state).
     selected_model_idx: usize,
@@ -87,29 +64,30 @@ pub struct ModelPickerView {
     /// True when the active model is one we don't list — we still show it
     /// so the picker doesn't quietly forget the user's chosen IDs.
     show_custom_model_row: bool,
+    /// When true, hide DeepSeek-specific model rows (pass-through providers
+    /// like openai don't support them).
+    hide_deepseek_models: bool,
 }
 
 impl ModelPickerView {
     #[must_use]
     pub fn new(app: &App) -> Self {
-        Self::new_with_rows(app, picker_models_for_provider(app.api_provider))
-    }
-
-    #[must_use]
-    pub fn new_with_models(app: &App, model_ids: Vec<String>) -> Self {
-        Self::new_with_rows(app, picker_rows_from_model_ids(model_ids))
-    }
-
-    fn new_with_rows(app: &App, model_rows: Vec<(String, String)>) -> Self {
+        let hide_deepseek_models = crate::config::provider_passes_model_through(app.api_provider);
         let initial_model = if app.auto_model {
             "auto".to_string()
         } else {
             app.model.clone()
         };
-        let mut selected_model_idx = model_rows.iter().position(|(id, _)| *id == initial_model);
+        // On pass-through providers, only show "auto" and the custom row.
+        let visible_models: Vec<&str> = if hide_deepseek_models {
+            vec!["auto"]
+        } else {
+            PICKER_MODELS.iter().map(|(id, _)| *id).collect()
+        };
+        let mut selected_model_idx = visible_models.iter().position(|id| *id == initial_model);
         let show_custom_model_row = selected_model_idx.is_none();
         if show_custom_model_row {
-            selected_model_idx = Some(model_rows.len());
+            selected_model_idx = Some(visible_models.len());
         }
         let selected_model_idx = selected_model_idx.unwrap_or(0);
 
@@ -127,26 +105,35 @@ impl ModelPickerView {
         Self {
             initial_model,
             initial_effort,
-            model_rows,
             selected_model_idx,
             selected_effort_idx,
             focus: Pane::Model,
             show_custom_model_row,
+            hide_deepseek_models,
+        }
+    }
+
+    fn visible_model_ids(&self) -> Vec<&'static str> {
+        if self.hide_deepseek_models {
+            vec!["auto"]
+        } else {
+            PICKER_MODELS.iter().map(|(id, _)| *id).collect()
         }
     }
 
     fn model_row_count(&self) -> usize {
-        self.model_rows.len() + if self.show_custom_model_row { 1 } else { 0 }
+        self.visible_model_ids().len() + if self.show_custom_model_row { 1 } else { 0 }
     }
 
     /// Resolve the currently highlighted model row to a model id. If the
     /// custom row is selected we return the original model from the App so
     /// "Apply" doesn't blow away an unrecognised id.
     fn resolved_model(&self) -> String {
-        if self.show_custom_model_row && self.selected_model_idx == self.model_rows.len() {
+        let visible = self.visible_model_ids();
+        if self.show_custom_model_row && self.selected_model_idx == visible.len() {
             self.initial_model.clone()
-        } else if let Some((model, _)) = self.model_rows.get(self.selected_model_idx) {
-            model.clone()
+        } else if self.selected_model_idx < visible.len() {
+            visible[self.selected_model_idx].to_string()
         } else {
             self.initial_model.clone()
         }
@@ -337,7 +324,14 @@ impl ModalView for ModelPickerView {
             .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
             .split(inner);
 
-        let mut model_rows = self.model_rows.clone();
+        let mut model_rows: Vec<(String, String)> = if self.hide_deepseek_models {
+            vec![("auto".to_string(), "select per turn".to_string())]
+        } else {
+            PICKER_MODELS
+                .iter()
+                .map(|(id, hint)| ((*id).to_string(), (*hint).to_string()))
+                .collect()
+        };
         if self.show_custom_model_row {
             model_rows.push((self.initial_model.clone(), "current (custom)".to_string()));
         }
@@ -478,8 +472,7 @@ mod tests {
 
     #[test]
     fn picker_exposes_auto_and_distinct_thinking_tiers() {
-        let model_rows = picker_models_for_provider(crate::config::ApiProvider::Deepseek);
-        let model_labels: Vec<_> = model_rows.iter().map(|(id, _)| id.as_str()).collect();
+        let model_labels: Vec<_> = PICKER_MODELS.iter().map(|(id, _)| *id).collect();
         assert_eq!(
             model_labels,
             vec!["auto", "deepseek-v4-pro", "deepseek-v4-flash"]
@@ -500,26 +493,6 @@ mod tests {
         let view = ModelPickerView::new(&app);
         assert!(view.show_custom_model_row);
         assert_eq!(view.resolved_model(), "deepseek-v4-pro-2026-04-XX");
-    }
-
-    #[test]
-    fn picker_uses_live_provider_model_ids_when_supplied() {
-        let (mut app, _lock) = create_test_app();
-        app.api_provider = crate::config::ApiProvider::Openrouter;
-        app.model = "meta-llama/llama-3.1-405b-instruct".to_string();
-        app.auto_model = false;
-
-        let view = ModelPickerView::new_with_models(
-            &app,
-            vec![
-                "deepseek/deepseek-chat-v3.1".to_string(),
-                "meta-llama/llama-3.1-405b-instruct".to_string(),
-                "qwen/qwen3-coder".to_string(),
-            ],
-        );
-
-        assert!(!view.show_custom_model_row);
-        assert_eq!(view.resolved_model(), "meta-llama/llama-3.1-405b-instruct");
     }
 
     #[test]

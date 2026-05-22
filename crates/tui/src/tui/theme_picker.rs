@@ -90,15 +90,22 @@ impl ThemePickerView {
     }
 
     fn move_up(&mut self) {
-        if self.selected > 0 {
+        let len = SELECTABLE_THEMES.len();
+        if len == 0 {
+            self.selected = 0;
+        } else if self.selected == 0 {
+            self.selected = len - 1;
+        } else {
             self.selected -= 1;
         }
     }
 
     fn move_down(&mut self) {
-        let max = SELECTABLE_THEMES.len().saturating_sub(1);
-        if self.selected < max {
-            self.selected += 1;
+        let len = SELECTABLE_THEMES.len();
+        if len == 0 {
+            self.selected = 0;
+        } else {
+            self.selected = (self.selected + 1) % len;
         }
     }
 }
@@ -311,6 +318,17 @@ mod tests {
         let action = v.handle_key(key(KeyCode::Down));
         assert!(matches!(action, ViewAction::Emit(_)));
         assert_eq!(selected_name(&action), Some(ThemeId::Whale.name()));
+    }
+
+    #[test]
+    fn arrow_navigation_wraps_at_picker_edges() {
+        let mut v = ThemePickerView::new("system".to_string());
+
+        let action = v.handle_key(key(KeyCode::Up));
+        assert_eq!(selected_name(&action), Some(ThemeId::GruvboxDark.name()));
+
+        let action = v.handle_key(key(KeyCode::Down));
+        assert_eq!(selected_name(&action), Some(ThemeId::System.name()));
     }
 
     #[test]

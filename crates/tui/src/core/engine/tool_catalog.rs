@@ -54,6 +54,7 @@ pub(super) fn should_default_defer_tool(name: &str, mode: AppMode) -> bool {
     !matches!(
         name,
         "read_file"
+            | "write_file"
             | "list_dir"
             | "grep_files"
             | "file_search"

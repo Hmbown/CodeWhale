@@ -2126,7 +2126,32 @@ pub(crate) fn slash_completion_hints(
         }
     }
 
-    entries.sort_by(|a, b| a.name.cmp(&b.name));
+    // Rank exact-alias matches above prefix/alias matches so e.g. typing
+    // `/q` ranks `/exit` (alias `q` is an exact hit) above `/clear` (alias
+    // `qingping` only matches by prefix). Inside each tier, fall back to
+    // alphabetical name order for deterministic display (#1811).
+    let rank = |entry: &SlashMenuEntry| -> u8 {
+        if entry.is_skill {
+            return 3;
+        }
+        let command_key = entry.name.trim_start_matches('/');
+        if command_key.eq_ignore_ascii_case(&prefix_lower) {
+            return 0;
+        }
+        if let Some(info) = commands::get_command_info(command_key)
+            && info
+                .aliases
+                .iter()
+                .any(|a| a.eq_ignore_ascii_case(&prefix_lower))
+        {
+            return 0;
+        }
+        if command_key.to_ascii_lowercase().starts_with(&prefix_lower) {
+            return 1;
+        }
+        2
+    };
+    entries.sort_by(|a, b| rank(a).cmp(&rank(b)).then_with(|| a.name.cmp(&b.name)));
     entries.dedup_by(|a, b| a.name == b.name);
     entries.into_iter().take(limit).collect()
 }
@@ -2483,6 +2508,50 @@ mod tests {
         let hints = slash_completion_hints("/", 128, &[], Locale::En, None, ApiProvider::Deepseek);
         assert!(hints.iter().any(|hint| hint.name == "/config"));
         assert!(hints.iter().any(|hint| hint.name == "/links"));
+    }
+
+    #[test]
+    fn slash_completion_hints_rank_exact_alias_above_prefix_alias() {
+        // `/q` should rank `/exit` (exact alias `q`) above `/clear` (alias
+        // `qingping` only matches by prefix). Before #1811 the entries were
+        // sorted alphabetically, so `/clear` shadowed `/exit` even though
+        // the user typed the exact alias for `/exit`.
+        let hints = slash_completion_hints("/q", 128, &[], Locale::En, None, ApiProvider::Deepseek);
+        let names: Vec<&str> = hints.iter().map(|h| h.name.as_str()).collect();
+        let exit_pos = names
+            .iter()
+            .position(|n| *n == "/exit")
+            .expect("/exit should appear when typing /q (alias `q`)");
+        let clear_pos = names
+            .iter()
+            .position(|n| *n == "/clear")
+            .expect("/clear should still appear when typing /q (alias `qingping`)");
+        assert!(
+            exit_pos < clear_pos,
+            "expected /exit to rank above /clear for prefix /q, got {names:?}"
+        );
+    }
+
+    #[test]
+    fn slash_completion_hints_keep_prefix_match_alphabetical_within_tier() {
+        // Within the same rank tier (no exact-alias match), entries fall
+        // back to alphabetical name order, same as the prior behavior.
+        let hints =
+            slash_completion_hints("/co", 128, &[], Locale::En, None, ApiProvider::Deepseek);
+        let names: Vec<&str> = hints
+            .iter()
+            .map(|h| h.name.as_str())
+            .filter(|n| n.starts_with("/co"))
+            .collect();
+        let sorted = {
+            let mut copy = names.clone();
+            copy.sort();
+            copy
+        };
+        assert_eq!(
+            names, sorted,
+            "tied entries (no exact-alias match) should stay alphabetical"
+        );
     }
 
     #[test]

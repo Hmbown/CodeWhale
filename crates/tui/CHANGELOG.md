@@ -5,7 +5,255 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.8.40] - 2026-05-21
+
+### Added
+
+- **Configurable sub-agent per-step API timeout.** A new
+  `[subagents] api_timeout_secs` setting in `~/.deepseek/config.toml`
+  controls how long each sub-agent step will wait on a DeepSeek
+  `create_message` response before falling back. The value is clamped to
+  `1..=1800`; `0` or unset preserves the legacy 120-second default, so
+  existing installs see no behavior change. Long-thinking children (e.g.
+  heavy plan or review work behind `agent_open`) can extend the timeout
+  without recompiling (#1806, #1808).
+- **Delegated file-write permissions for write-capable sub-agent roles.**
+  `implementer` and `custom` sub-agents may now run `Suggest`-level write
+  tools (`write_file`, `edit_file`, `apply_patch`) without the parent
+  runtime being auto-approved. Read-only stances (`explore`, `plan`,
+  `review`, `verifier`) and the default `general` role still bounce
+  approval-gated tools so they can't quietly mutate the workspace, and
+  `Required`-level tools (shell, etc.) still need parent auto-approve
+  regardless of role. Pick `implementer` (or pass an explicit `custom`
+  allowlist) when the delegated task needs to land file changes
+  (#1828, #1833).
+- **Experimental Fin fast-lane tool agents.** `tool_agent` opens a durable
+  child session on DeepSeek V4 Flash with thinking forced off for simple
+  tool-bound work such as OCR, file/search lookups, fetches, and command
+  probes. It uses the existing `agent_eval` / `agent_close` lifecycle and
+  mailbox token-usage stream, so sub-agent cost accounting stays on the same
+  path as normal `agent_open` sessions.
+
+### Fixed
+
+- **WSL2 and headless Linux startup no longer blocks on clipboard init.** The
+  TUI now defers clipboard initialization so machines without an X server can
+  reach the first frame instead of hanging on a blank screen (#1773, #1772).
+- **Windows alt-screen output stays clean when `RUST_LOG` is set.** Runtime
+  tracing is routed away from the interactive buffer so logs no longer leak
+  into the TUI display (#1774, #1776).
+- **OpenAI-compatible custom model names are preserved.** Non-DeepSeek
+  providers now pass explicit model names through instead of rewriting them to
+  a DeepSeek default (#1714, #1740).
+- **Wanjie Ark is a first-class provider.** `--provider wanjie-ark`, the TUI
+  provider picker, `deepseek auth`, doctor, and config files now target
+  Wanjie's OpenAI-compatible MaaS endpoint with pass-through model IDs and
+  Wanjie-specific env vars.
+- **DeepSeek reasoning replay works through OpenAI-compatible endpoints.**
+  DeepSeek models selected under the generic `openai` provider now replay
+  prior `reasoning_content` consistently and classify streamed reasoning the
+  same way the replay path does (#1694, #1739, #1743).
+- **Thinking-only turns no longer disappear.** If a clean turn ends with
+  thinking but no final answer text, the UI now surfaces a clear status instead
+  of silently ending the turn (#1727, #1742).
+- **Windows `cmd /C` preserves quoted shell arguments.** Commands such as
+  `git commit -m "feat: complete sub-pages"` now round-trip through the Windows
+  shell wrapper without losing the quoted message (#1691, #1744).
+- **Home/End are line-local inside multiline composer drafts.** The keys now
+  jump to the current input line boundary before falling back to transcript
+  navigation (#1748, #1749).
+- **Ctrl+C restores the canceled prompt reliably.** Canceling a streaming turn
+  puts the submitted prompt back in the composer and suppresses late stream
+  events from drawing stale output (#1757, #1764).
+- **Compaction recovers from cache-aligned summary context overflow.** When a
+  cache-preserving summary request itself exceeds the provider context window,
+  compaction retries with the bounded formatted summary path instead of failing
+  with a 400 "compression command failed" style error.
+- **Terminal sub-agent sessions expose full transcript handles.** Completed
+  and canceled child agents now store the full child message transcript behind
+  `transcript_handle`, so the parent can inspect details with `handle_read`
+  instead of relying only on a lossy summary (#1738).
+- **Forked saved sessions now keep visible lineage.** `deepseek fork` records
+  the parent session id and fork-time message count in additive metadata, and
+  session listings mark forked paths with their source id. This gives users a
+  bounded branchable-conversation workflow while the larger visual tree browser
+  stays scoped for a future release.
+- **Repeated shell wait rows collapse in the Tasks sidebar.** Multiple live
+  `task_shell_wait` polls for the same background job now render as one row
+  with an explicit collapsed-wait count, reducing the stuck-task appearance
+  tracked for v0.8.40 (#1737).
+- **Leaked mouse scroll reports no longer erase composer draft suffixes.** If
+  a terminal delivers raw SGR mouse bytes into the input stream, the sanitizer
+  now strips only the mouse report and adjacent coordinate fragments instead
+  of deleting legitimate draft text such as `commit -m` or numeric prompts
+  (#1778).
+- **TUI runtime logs are separated per process and pruned on startup.** Each
+  session now writes `~/.deepseek/logs/tui-YYYY-MM-DD-PID.log`, and startup
+  removes stale TUI logs older than seven days by default. Set
+  `DEEPSEEK_LOG_RETENTION_DAYS` to a positive day count to adjust retention
+  (#1782, #1784).
+- **The offline eval harness preserves quoted Windows shell payloads.** Its
+  `exec_shell` step now uses the same single-payload shape as the runtime shell
+  path, with raw `cmd /C` arguments on Windows so quoted commands remain intact
+  (#1779).
+- **The Feishu/Lark bridge recovers better after restarts.** It now reattaches
+  to persisted active turns after the long-connection client starts, and text
+  chunking no longer splits emoji or other multi-code-unit characters.
+- **RLM survives non-UTF-8 stdout.** `rlm_eval` now decodes REPL stdout
+  lossily instead of treating a single invalid byte as a fatal crash, so
+  binary-adjacent diagnostics can still return a bounded result (#1815,
+  #1819).
+- **Small UI/review reliability fixes landed with the stability branch.**
+  `/clear` now resets all displayed cost state, grayscale theme previews avoid
+  luma overflow, `/theme` picker arrow navigation wraps at the list edges, and
+  encoded JSON review output is parsed before display.
+- **New-file writes execute on the first Agent-mode call.** `write_file` now
+  stays preloaded in Agent mode, so creating a file no longer stops at the
+  deferred-tool schema hydration message before the normal approval/execution
+  path (#1825, #1841).
+- **Saved sessions keep the selected model mode.** Changing from `auto` to a
+  concrete model now updates existing session metadata, and resumed sessions
+  recompute the `auto` flag from the saved model instead of falling back to the
+  startup default.
+- **The `/model` picker persists thinking effort across restarts.** Selecting
+  Pro/Flash plus `high`/`max`/`auto` now writes both `default_model` and
+  `reasoning_effort` to `settings.toml`, and startup restores the saved effort
+  before falling back to `config.toml`.
+- **The footer water strip is visible by default again.** `fancy_animations`
+  now defaults to `true`, while `NO_ANIMATIONS`, SSH/Termius, VS Code, Ghostty,
+  and legacy terminal overrides still disable the animated strip where it is
+  known to flicker.
+- **Screenshots are readable without extra setup on macOS.** `image_ocr` now
+  uses the native Vision framework on macOS when Tesseract is absent, and
+  `read_file` routes screenshot/image reads through the same OCR path. Pasted
+  clipboard screenshots saved under `~/.deepseek/clipboard-images` are trusted
+  automatically for read-only tools.
+- **Auto-routing context no longer leaks hidden thinking.** The model/router
+  context summary now excludes `ContentBlock::Thinking`, so prior internal
+  reasoning is not reintroduced as if it were visible user or assistant text.
+
+### Changed
+
+- **Slash-command autocomplete ranks exact alias matches first.** Typing
+  `/q` now surfaces `/exit` (whose alias `q` is an exact match) above
+  `/clear` (which only matches by the longer pinyin alias `qingping`).
+  Within each rank tier the menu still falls back to alphabetical name
+  order for deterministic display (#1811).
+- **CNB mirror preflight covers stability-release branches.** The CNB sync
+  path now recognizes the v0.8.40 stability branch shape before release tags
+  exist, making the Tencent Lighthouse/Lark deployment path easier to verify
+  before publishing.
+
+### Thanks
+
+Thanks to **jayzhu ([@zlh124](https://github.com/zlh124))** for the WSL2
+startup report and clipboard-init fix in #1772/#1773. Thanks to **Paulo Aboim
+Pinto ([@aboimpinto](https://github.com/aboimpinto))** for the Windows
+alt-screen logging report and fix in #1774/#1776, and for the Home/End
+composer work in #1748/#1749, plus the per-process log filename follow-up in
+#1782/#1783. Thanks to **Zhongyue Lin
+([@LeoLin990405](https://github.com/LeoLin990405))** for the provider model
+passthrough, reasoning replay, thinking-only turn, and Windows quoting fixes
+in #1740, #1743, #1742, and #1744. Thanks to **Nightt
+([@nightt5879](https://github.com/nightt5879))** for the Ctrl+C prompt restore
+fix in #1764. Thanks to **Ling ([@LING71671](https://github.com/LING71671);
+commits as `www17 <ivonrust@gmail.com>`)** for the configurable sub-agent API
+timeout in #1808 and the Agent-mode `write_file` preload fix in #1841,
+harvested with `1..=1800` clamping and a fail-fast guard so a stray
+`api_timeout_secs = 0` keeps the legacy 120-second default.
+Thanks to **[@knqiufan](https://github.com/knqiufan)** for the sub-agent
+file-write delegation work in #1833, harvested with structured approval-
+gate semantics (`Implementer` and `Custom` only, never `Required`-level
+tools) so write-capable children can actually land code without bypassing
+the `Required` approval class. Thanks to **[@IIzzaya](https://github.com/IIzzaya)**
+for the exact-alias-first slash-completion ordering idea in #1811, landed
+with a focused regression test. Thanks to **Bevis** and the community reports
+that surfaced the compaction failure mode addressed in this release. Thanks to
+**Reid ([@reidliu41](https://github.com/reidliu41))** for the grayscale theme
+overflow report and `/theme` picker edge-wrapping patch in #1814.
+
+## [0.8.39] - 2026-05-17
+
+### Fixed
+
+- **Feishu/Lark bridge startup order is guarded.** The bridge now keeps
+  `ThreadStore` initialized before startup opens persisted thread state, with a
+  regression test to prevent moving it below its first use.
+- **`/model` picker opens instantly with the curated list again.** Reverted
+  the v0.8.38 live-catalog rework: the picker no longer makes a blocking
+  network call on open and once again shows the curated `auto` /
+  `deepseek-v4-pro` / `deepseek-v4-flash` rows. The `/models` command still
+  lists the live provider catalog.
+- **"Approve for session" groups by command family again.** Session approvals
+  are keyed by a lossy, arity-aware fingerprint once more, so approving
+  `cargo build` also covers `cargo build --release`. Denials keep the exact
+  per-call fingerprint from #1617, so denying one call no longer over-blocks
+  later, different calls to the same tool.
+- **Docker first-run state directories are writable.** The image now
+  pre-creates `/home/deepseek/.deepseek` with `deepseek` ownership so the
+  documented named-volume launch can create runtime thread state on first use
+  (#1684).
+- **Runtime API system prompt overrides survive the first turn.** Threads
+  created with a `system_prompt` override now keep that prompt through
+  mode/context refreshes before the model request is built (#1688).
+- **Compaction keeps a user text query in tool-heavy histories.** Automatic
+  compaction now pins the latest user text message when the retained tail only
+  contains tool calls/results, avoiding OpenAI-compatible Jinja template
+  failures on the next request (#1704).
+- **Pager jumps land at the visible bottom.** Pressing `G` or End in the pager
+  no longer overshoots the render clamp, so `k`/Up scrolls upward immediately
+  afterward, and mouse wheels now scroll pager overlays directly (#1706,
+  #1716).
+- **Mouse-wheel-as-arrow scrolling preserves composer drafts.** When
+  `composer_arrows_scroll` is enabled, Up/Down now scroll the transcript even
+  with text in the composer instead of replacing the draft with input history
+  (#1677).
+- **Multiline composer arrows move between input lines.** Plain Up/Down now
+  move the cursor within multiline drafts before falling back to input history,
+  while single-line mouse-wheel-as-arrow scrolling remains unchanged (#1721).
+- **Third-party `reasoning_content` streams no longer corrupt text output.**
+  Generic OpenAI-compatible providers that stream answer text in
+  `reasoning_content` now render it as normal text unless the selected provider
+  is one whose reasoning-content semantics are supported (#1673).
+- **macOS system theme detection recognizes Light mode.** When `COLORFGBG` is
+  missing or unusable, `theme = "system"` now falls back to macOS appearance
+  detection and treats a missing `AppleInterfaceStyle` key as Light mode
+  (#1670).
+- **`rlm_open` accepts schema-filled blank source fields.** Empty `file_path`,
+  `content`, and `url` strings now count as absent, so calls that provide one
+  real source no longer fail the exactly-one-source validator (#1712).
+- **Resize keeps transcript paging usable immediately.** After a terminal
+  resize, PageUp/PageDown now use the resized viewport height instead of
+  falling back to one-line jumps before the next render (#1724).
+- **ACP responses stringify JSON-RPC ids.** `serve --acp` now returns string
+  ids even when clients send numeric ids, matching Zed's stricter ACP client
+  expectations (#1696).
+
+### Thanks
+
+Thanks to **Matt Van Horn ([@mvanhorn](https://github.com/mvanhorn))** for the
+Docker first-run permission fix in #1699 and the runtime system-prompt
+regression tests harvested from #1702. Thanks to **Kristopher Clark
+([@krisclarkdev](https://github.com/krisclarkdev))** for the compaction
+user-query preservation fix in #1704. Thanks to **Stephen Xu
+([@wlon](https://github.com/wlon))** for the pager jump-bottom fix in #1706.
+Thanks to **tdccccc ([@tdccccc](https://github.com/tdccccc))** for the
+composer scroll fix in #1715 and pager mouse-wheel support in #1716.
+Thanks to **Paulo Aboim Pinto
+([@aboimpinto](https://github.com/aboimpinto))** for the multiline composer
+arrow navigation tests harvested from #1719. Thanks to **LittleBlacky
+([@LittleBlacky](https://github.com/LittleBlacky))** for the provider-gated
+`reasoning_content` stream fix in #1680.
+Thanks to **Eosin Ai ([@Aitensa](https://github.com/Aitensa))** for the macOS
+system appearance fallback in #1674.
+Thanks to **Anaheim ([@AnaheimEX](https://github.com/AnaheimEX))** for the
+`rlm_open` schema validation report in #1712.
+Thanks to **THatch26 ([@THatch26](https://github.com/THatch26))** for the
+terminal resize paging fix in #1724.
+Thanks to **Alvin ([@alvin1](https://github.com/alvin1))** for the Zed ACP id
+compatibility report in #1696.
+
+## [0.8.38] - 2026-05-15
 
 ### Changed
 
@@ -39,6 +287,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   default providers sync into the runtime config before the first request, and
   reselecting the active provider from the picker keeps the current model
   instead of falling back to the provider default (#1632).
+- **OpenAI-compatible batch tool calls keep all start events.** Streaming
+  responses with multiple `tool_calls` in one assistant message now preserve
+  every tool-use block instead of pairing many tool results with only the last
+  tool start event (#1686).
+- **Diagnostics tool schemas include an empty `required` list.** The built-in
+  `diagnostics` tool now sends `required: []` with its empty object schema so
+  DeepSeek no longer rejects it as a null required array (#1685).
 - **Windows wheel-as-arrow scrolling works with mouse capture enabled.**
   `composer_arrows_scroll` now defaults on for Windows terminals even when
   mouse capture is enabled, so wheel events that arrive as arrow keys scroll the
@@ -47,6 +302,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   legacy Windows console hosts now automatically enable low-motion rendering,
   disable fancy animations, and resolve `synchronized_output = "auto"` to off
   so streaming redraws do not overlap or visibly flicker (#1590).
+- **LoopGuard blocks now count as failed tool calls.** Identical tool-call
+  blocks now return a failed tool result instead of a success, so repeated
+  blocked checklist/tool retries can trip the existing failure warning and halt
+  path instead of spinning indefinitely (#1574).
+- **Denied tool approvals are scoped to the exact call.** Denying one
+  write/shell approval now caches the canonical argument fingerprint instead of
+  a lossy tool/prefix key, so later calls to the same tool with different
+  arguments can still be reviewed and approved (#1617).
 
 ### Thanks
 
@@ -55,11 +318,21 @@ terminal cleanup-guard idea harvested from #1630, and **imkingjh999
 ([@imkingjh999](https://github.com/imkingjh999))** for the provider/model
 switching fixes harvested from #1642. Thanks to **Photo
 ([@eng2007](https://github.com/eng2007))** for the provider-aware `/model`
-picker catalog work harvested from #1201. Thanks to
+picker catalog work harvested from #1201. Thanks to **hexin
+([@h3c-hexin](https://github.com/h3c-hexin))** for the OpenAI batch tool-call
+streaming fix in #1686. Thanks to **chennest
+([@chennest](https://github.com/chennest))** for the diagnostics schema report
+in #1685. Thanks to
 **[@kunpeng-ai-lab](https://github.com/kunpeng-ai-lab)** for the Windows
 composer scroll fix harvested from #1578, and **WuMing
 ([@asdfg314284230](https://github.com/asdfg314284230))** for the Windows
-PowerShell flicker fix harvested from #1591.
+PowerShell flicker fix harvested from #1591. Thanks to
+**[@maker316](https://github.com/maker316)** for the LoopGuard/checklist loop
+report in #1574. Thanks to **lalala
+([@lalala-233](https://github.com/lalala-233))** for the approval denial
+regression report in #1617, and **Nightt
+([@nightt5879](https://github.com/nightt5879))** for the exact-call approval
+key work harvested from #1624.
 
 ## [0.8.37] - 2026-05-14
 
@@ -4258,7 +4531,10 @@ Welcome — and thank you.
 - Hooks system and config profiles
 - Example skills and launch assets
 
-[Unreleased]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.37...HEAD
+[Unreleased]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.40...HEAD
+[0.8.40]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.39...v0.8.40
+[0.8.39]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.38...v0.8.39
+[0.8.38]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.37...v0.8.38
 [0.8.37]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.36...v0.8.37
 [0.8.36]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.35...v0.8.36
 [0.8.35]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.34...v0.8.35

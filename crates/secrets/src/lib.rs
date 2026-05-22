@@ -540,6 +540,12 @@ pub fn env_for(name: &str) -> Option<String> {
         "ollama" | "ollama-local" => &["OLLAMA_API_KEY"],
         "openai" => &["OPENAI_API_KEY"],
         "atlascloud" | "atlas-cloud" | "atlas_cloud" | "atlas" => &["ATLASCLOUD_API_KEY"],
+        "wanjie" | "wanjie-ark" | "wanjie_ark" | "ark-wanjie" | "ark_wanjie" | "wanjieark"
+        | "wanjie-maas" | "wanjie_maas" | "wanjiemaas" => &[
+            "WANJIE_ARK_API_KEY",
+            "WANJIE_API_KEY",
+            "WANJIE_MAAS_API_KEY",
+        ],
         _ => return None,
     };
     for var in candidates {
@@ -579,6 +585,9 @@ mod tests {
             "OLLAMA_API_KEY",
             "OPENAI_API_KEY",
             "ATLASCLOUD_API_KEY",
+            "WANJIE_ARK_API_KEY",
+            "WANJIE_API_KEY",
+            "WANJIE_MAAS_API_KEY",
             SECRET_BACKEND_ENV,
         ] {
             // Safety: tests serialise on env_lock(); the broader
@@ -739,6 +748,19 @@ mod tests {
         assert_eq!(env_for("atlascloud").as_deref(), Some("atlas-key"));
         assert_eq!(env_for("atlas").as_deref(), Some("atlas-key"));
         assert_eq!(env_for("atlas-cloud").as_deref(), Some("atlas-key"));
+
+        clear_known_envs();
+    }
+
+    #[test]
+    fn wanjie_ark_env_aliases_resolve() {
+        let _guard = env_lock();
+        clear_known_envs();
+        unsafe { std::env::set_var("WANJIE_API_KEY", "wanjie-key") };
+
+        assert_eq!(env_for("wanjie-ark").as_deref(), Some("wanjie-key"));
+        assert_eq!(env_for("ark_wanjie").as_deref(), Some("wanjie-key"));
+        assert_eq!(env_for("wanjie-maas").as_deref(), Some("wanjie-key"));
 
         clear_known_envs();
     }

@@ -624,11 +624,17 @@ fn format_session_line(session: &SessionMetadata) -> String {
         .as_deref()
         .unwrap_or("unknown")
         .to_ascii_lowercase();
+    let fork_label = session
+        .parent_session_id
+        .as_deref()
+        .map(|parent| format!(" | fork {}", crate::session_manager::truncate_id(parent)))
+        .unwrap_or_default();
     format!(
-        "{} | {} | {} msgs | {} | {}",
+        "{} | {} | {} msgs{} | {} | {}",
         crate::session_manager::truncate_id(&session.id),
         title,
         session.message_count,
+        fork_label,
         mode,
         updated
     )
@@ -864,6 +870,8 @@ mod tests {
             workspace: std::path::PathBuf::from("/tmp"),
             mode: Some("agent".to_string()),
             cost: crate::session_manager::SessionCostSnapshot::default(),
+            parent_session_id: None,
+            forked_from_message_count: None,
         }
     }
 
@@ -1016,6 +1024,22 @@ mod tests {
         assert_eq!(span.style.fg, Some(palette::SELECTION_TEXT));
         assert_eq!(span.style.bg, Some(palette::DEEPSEEK_BLUE));
         assert!(span.style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn build_list_lines_marks_fork_lineage() {
+        let mut forked = test_session(1, "forked path");
+        forked.parent_session_id = Some("parent-session-abcdef".to_string());
+        forked.forked_from_message_count = Some(3);
+        let lines = build_list_lines(&[forked], 0, 120, 0, 5, false, "", "recent", false, None);
+
+        let rendered = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("fork parent"));
     }
 
     #[test]

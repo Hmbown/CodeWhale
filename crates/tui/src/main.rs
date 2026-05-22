@@ -1473,6 +1473,10 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
                     "ATLASCLOUD_API_KEY",
                     "deepseek auth set --provider atlascloud --api-key \"...\"",
                 ),
+                crate::config::ApiProvider::WanjieArk => (
+                    "WANJIE_ARK_API_KEY",
+                    "deepseek auth set --provider wanjie-ark --api-key \"...\"",
+                ),
                 crate::config::ApiProvider::Openrouter => (
                     "OPENROUTER_API_KEY",
                     "deepseek auth set --provider openrouter --api-key \"...\"",
@@ -1507,6 +1511,7 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
                     crate::config::ApiProvider::NvidiaNim => "nvidia_nim",
                     crate::config::ApiProvider::Openai => "openai",
                     crate::config::ApiProvider::Atlascloud => "atlascloud",
+                    crate::config::ApiProvider::WanjieArk => "wanjie_ark",
                     crate::config::ApiProvider::Openrouter => "openrouter",
                     crate::config::ApiProvider::Novita => "novita",
                     crate::config::ApiProvider::Fireworks => "fireworks",
@@ -1717,6 +1722,25 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
             crate::config::ApiProvider::NvidiaNim,
             "nvidia-nim",
             &["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"][..],
+        ),
+        (
+            crate::config::ApiProvider::Openai,
+            "openai",
+            &["OPENAI_API_KEY"][..],
+        ),
+        (
+            crate::config::ApiProvider::Atlascloud,
+            "atlascloud",
+            &["ATLASCLOUD_API_KEY"][..],
+        ),
+        (
+            crate::config::ApiProvider::WanjieArk,
+            "wanjie-ark",
+            &[
+                "WANJIE_ARK_API_KEY",
+                "WANJIE_API_KEY",
+                "WANJIE_MAAS_API_KEY",
+            ][..],
         ),
         (
             crate::config::ApiProvider::Openrouter,
@@ -2284,23 +2308,42 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
     }
 
     match crate::dependencies::resolve_tesseract() {
-        Some(_) => println!(
-            "  {} tesseract: present → image_ocr tool registered",
-            "✓".truecolor(aqua_r, aqua_g, aqua_b),
-        ),
+        Some(_) => {
+            if cfg!(target_os = "macos") {
+                println!(
+                    "  {} OCR: macOS Vision + tesseract available → image_ocr/read_file screenshot OCR enabled",
+                    "✓".truecolor(aqua_r, aqua_g, aqua_b),
+                );
+            } else {
+                println!(
+                    "  {} tesseract: present → image_ocr/read_file screenshot OCR enabled",
+                    "✓".truecolor(aqua_r, aqua_g, aqua_b),
+                );
+            }
+        }
         None => {
-            println!("  {} tesseract: not found (optional)", "·".dimmed(),);
-            println!(
-                "    image_ocr tool is NOT advertised to the model. Install tesseract to enable:"
-            );
-            match std::env::consts::OS {
-                "macos" => println!("      brew install tesseract"),
-                "linux" => println!(
-                    "      sudo apt install tesseract-ocr    (Debian/Ubuntu) — or your distro's equivalent"
-                ),
-                "windows" => println!("      winget install UB-Mannheim.TesseractOCR"),
-                other => {
-                    println!("      install tesseract for {other} from tesseract-ocr.github.io")
+            if cfg!(target_os = "macos") {
+                println!(
+                    "  {} OCR: macOS Vision available → image_ocr/read_file screenshot OCR enabled",
+                    "✓".truecolor(aqua_r, aqua_g, aqua_b),
+                );
+                println!(
+                    "    tesseract not found (optional; install only for alternate OCR packs)."
+                );
+            } else {
+                println!("  {} tesseract: not found (optional)", "·".dimmed(),);
+                println!(
+                    "    image_ocr tool is NOT advertised to the model. Install tesseract to enable:"
+                );
+                match std::env::consts::OS {
+                    "macos" => println!("      brew install tesseract"),
+                    "linux" => println!(
+                        "      sudo apt install tesseract-ocr    (Debian/Ubuntu) — or your distro's equivalent"
+                    ),
+                    "windows" => println!("      winget install UB-Mannheim.TesseractOCR"),
+                    other => {
+                        println!("      install tesseract for {other} from tesseract-ocr.github.io")
+                    }
                 }
             }
         }
@@ -3128,6 +3171,7 @@ fn fork_session(session_id: Option<String>, last: bool, workspace: &Path) -> Res
         system_prompt.as_ref(),
     );
     forked.metadata.copy_cost_from(&saved.metadata);
+    forked.metadata.mark_forked_from(&saved.metadata);
     manager.save_session(&forked)?;
 
     let source_title = saved.metadata.title.trim();
@@ -4654,6 +4698,7 @@ async fn run_exec_agent(
         lsp_config,
         runtime_services: crate::tools::spec::RuntimeToolServices::default(),
         subagent_model_overrides: config.subagent_model_overrides(),
+        subagent_api_timeout: std::time::Duration::from_secs(config.subagent_api_timeout_secs()),
         memory_enabled: config.memory_enabled(),
         memory_path: config.memory_path(),
         vision_config: config.vision_model_config(),
@@ -4701,6 +4746,7 @@ async fn run_exec_agent(
                 session_id: Some(saved_id.clone()),
                 messages: saved.messages,
                 system_prompt: saved.system_prompt.map(SystemPrompt::Text),
+                system_prompt_override: false,
                 model: saved.metadata.model,
                 workspace: saved.metadata.workspace,
             })

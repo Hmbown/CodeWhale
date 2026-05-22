@@ -219,8 +219,8 @@ The caps appear in each tool's description and error messages so the model
 (and the user) can choose the right tool for the job. If one sub-agent is
 enough but you need parallel semantic lookups over the same loaded context,
 prefer `rlm_eval` with `sub_query_batch`; if each task needs its own
-tool-carrying agent loop, use `agent_open` and close completed sessions to free
-slots.
+tool-carrying agent loop, use `agent_open` and wait for running sessions to
+complete or cancel no-longer-needed running sessions with `agent_close`.
 
 ## Removed legacy aliases and surfaces
 

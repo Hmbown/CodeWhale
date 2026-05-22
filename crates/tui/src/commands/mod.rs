@@ -292,6 +292,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         description_id: MessageId::CmdSaveDescription,
     },
     CommandInfo {
+        name: "fork",
+        aliases: &["branch"],
+        usage: "/fork",
+        description_id: MessageId::CmdForkDescription,
+    },
+    CommandInfo {
         name: "sessions",
         aliases: &["resume"],
         usage: "/sessions [show|prune <days>]",
@@ -570,6 +576,7 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         // Session commands
         "rename" | "gaiming" | "chongmingming" => rename::rename(app, arg),
         "save" => session::save(app, arg),
+        "fork" | "branch" => session::fork(app),
         "sessions" | "resume" => session::sessions(app, arg),
         "relay" | "batonpass" | "接力" => relay(app, arg),
         "load" | "jiazai" => session::load(app, arg),

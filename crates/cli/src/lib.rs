@@ -27,6 +27,7 @@ enum ProviderArg {
     NvidiaNim,
     Openai,
     Atlascloud,
+    WanjieArk,
     Openrouter,
     Novita,
     Fireworks,
@@ -42,6 +43,7 @@ impl From<ProviderArg> for ProviderKind {
             ProviderArg::NvidiaNim => ProviderKind::NvidiaNim,
             ProviderArg::Openai => ProviderKind::Openai,
             ProviderArg::Atlascloud => ProviderKind::Atlascloud,
+            ProviderArg::WanjieArk => ProviderKind::WanjieArk,
             ProviderArg::Openrouter => ProviderKind::Openrouter,
             ProviderArg::Novita => ProviderKind::Novita,
             ProviderArg::Fireworks => ProviderKind::Fireworks,
@@ -685,6 +687,7 @@ fn provider_slot(provider: ProviderKind) -> &'static str {
         ProviderKind::NvidiaNim => "nvidia-nim",
         ProviderKind::Openai => "openai",
         ProviderKind::Atlascloud => "atlascloud",
+        ProviderKind::WanjieArk => "wanjie-ark",
         ProviderKind::Openrouter => "openrouter",
         ProviderKind::Novita => "novita",
         ProviderKind::Fireworks => "fireworks",
@@ -695,11 +698,12 @@ fn provider_slot(provider: ProviderKind) -> &'static str {
 }
 
 /// Provider order used by the `auth list` and `auth status` outputs.
-const PROVIDER_LIST: [ProviderKind; 10] = [
+const PROVIDER_LIST: [ProviderKind; 11] = [
     ProviderKind::Deepseek,
     ProviderKind::NvidiaNim,
     ProviderKind::Openai,
     ProviderKind::Atlascloud,
+    ProviderKind::WanjieArk,
     ProviderKind::Openrouter,
     ProviderKind::Novita,
     ProviderKind::Fireworks,
@@ -762,6 +766,11 @@ fn provider_env_vars(provider: ProviderKind) -> &'static [&'static str] {
         ProviderKind::Ollama => &["OLLAMA_API_KEY"],
         ProviderKind::Openai => &["OPENAI_API_KEY"],
         ProviderKind::Atlascloud => &["ATLASCLOUD_API_KEY"],
+        ProviderKind::WanjieArk => &[
+            "WANJIE_ARK_API_KEY",
+            "WANJIE_API_KEY",
+            "WANJIE_MAAS_API_KEY",
+        ],
     }
 }
 
@@ -1405,6 +1414,7 @@ fn build_tui_command(
             | ProviderKind::NvidiaNim
             | ProviderKind::Openai
             | ProviderKind::Atlascloud
+            | ProviderKind::WanjieArk
             | ProviderKind::Openrouter
             | ProviderKind::Novita
             | ProviderKind::Fireworks
@@ -1413,7 +1423,7 @@ fn build_tui_command(
             | ProviderKind::Ollama
     ) {
         bail!(
-            "The interactive TUI supports DeepSeek, NVIDIA NIM, OpenAI-compatible, AtlasCloud, OpenRouter, Novita, Fireworks, SGLang, vLLM, and Ollama providers. Remove --provider {} or use `deepseek model ...` for provider registry inspection.",
+            "The interactive TUI supports DeepSeek, NVIDIA NIM, OpenAI-compatible, AtlasCloud, Wanjie Ark, OpenRouter, Novita, Fireworks, SGLang, vLLM, and Ollama providers. Remove --provider {} or use `deepseek model ...` for provider registry inspection.",
             resolved_runtime.provider.as_str()
         );
     }
@@ -1437,6 +1447,9 @@ fn build_tui_command(
         }
         if resolved_runtime.provider == ProviderKind::Atlascloud {
             cmd.env("ATLASCLOUD_API_KEY", api_key);
+        }
+        if resolved_runtime.provider == ProviderKind::WanjieArk {
+            cmd.env("WANJIE_ARK_API_KEY", api_key);
         }
         let source = resolved_runtime
             .api_key_source
@@ -1473,6 +1486,9 @@ fn build_tui_command(
         }
         if resolved_runtime.provider == ProviderKind::Atlascloud {
             cmd.env("ATLASCLOUD_API_KEY", api_key);
+        }
+        if resolved_runtime.provider == ProviderKind::WanjieArk {
+            cmd.env("WANJIE_ARK_API_KEY", api_key);
         }
         cmd.env("DEEPSEEK_API_KEY_SOURCE", "cli");
     }
@@ -2056,6 +2072,18 @@ mod tests {
             Some(Commands::Auth(AuthArgs {
                 command: AuthCommand::Set {
                     provider: ProviderArg::Fireworks,
+                    api_key: None,
+                    api_key_stdin: false,
+                }
+            }))
+        ));
+
+        let cli = parse_ok(&["deepseek", "auth", "set", "--provider", "wanjie-ark"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Auth(AuthArgs {
+                command: AuthCommand::Set {
+                    provider: ProviderArg::WanjieArk,
                     api_key: None,
                     api_key_stdin: false,
                 }

@@ -10,8 +10,8 @@ visual motion and density for screen-reader and low-motion users.
 | Toggle | Default | Effect |
 | --- | --- | --- |
 | `NO_ANIMATIONS=1` env var | unset | At startup, forces `low_motion = true` and `fancy_animations = false`. Overrides whatever's saved in `settings.toml`. |
-| `low_motion` setting | `false` | Suppresses spinners' motion, transcript fade-ins, footer drift, the header status-indicator cycle, and the active-cell pulse. The frame-rate limiter also slows down idle redraws so the cursor doesn't blink as aggressively. |
-| `fancy_animations` setting | `false` | Footer water-spout strip and pulsing sub-agent counter. Off by default. |
+| `low_motion` setting | `false` | Uses calmer streaming pacing and a lower redraw cadence so cursor/status motion is less aggressive. The footer water strip is controlled separately by `fancy_animations`. |
+| `fancy_animations` setting | `true` | Footer water-spout strip and pulsing sub-agent counter. Set to `false` to keep live-turn chrome still. |
 | `status_indicator` setting | `whale` | Header status chip. Set to `dots` for the compact dot cycle or `off` to hide it. |
 | `calm_mode` setting | `false` | Collapses tool-output details by default and trims status messages. Useful for screen readers that announce every redraw. |
 | `show_thinking` setting | `true` | Set to `false` to hide model `reasoning_content` blocks entirely. |

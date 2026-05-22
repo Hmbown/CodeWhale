@@ -1964,6 +1964,9 @@ impl RuntimeThreadManager {
                 rlm_sessions: crate::rlm::session::new_shared_rlm_session_store(),
             },
             subagent_model_overrides: self.config.subagent_model_overrides(),
+            subagent_api_timeout: std::time::Duration::from_secs(
+                self.config.subagent_api_timeout_secs(),
+            ),
             memory_enabled: self.config.memory_enabled(),
             memory_path: self.config.memory_path(),
             vision_config: self.config.vision_model_config(),
@@ -1998,6 +2001,7 @@ impl RuntimeThreadManager {
                     session_id: None,
                     messages: session_messages,
                     system_prompt: sys_prompt,
+                    system_prompt_override: thread.system_prompt.is_some(),
                     model: thread.model.clone(),
                     workspace: thread.workspace.clone(),
                 })
@@ -4154,6 +4158,7 @@ mod tests {
             .tx_event
             .send(EngineEvent::ApprovalRequired {
                 approval_key: "test_key".to_string(),
+                approval_grouping_key: "test_key".to_string(),
                 id: "tool_stale".to_string(),
                 tool_name: "exec_command".to_string(),
                 description: "stale approval".to_string(),
@@ -4226,6 +4231,7 @@ mod tests {
             .tx_event
             .send(EngineEvent::ApprovalRequired {
                 approval_key: "key1".to_string(),
+                approval_grouping_key: "key1".to_string(),
                 id: "tool_external_allow".to_string(),
                 tool_name: "exec_command".to_string(),
                 description: "external allow".to_string(),
@@ -4302,6 +4308,7 @@ mod tests {
             .tx_event
             .send(EngineEvent::ApprovalRequired {
                 approval_key: "key2".to_string(),
+                approval_grouping_key: "key2".to_string(),
                 id: "tool_external_deny".to_string(),
                 tool_name: "exec_command".to_string(),
                 description: "external deny".to_string(),
@@ -4487,6 +4494,7 @@ mod tests {
             .tx_event
             .send(EngineEvent::ApprovalRequired {
                 approval_key: "key3".to_string(),
+                approval_grouping_key: "key3".to_string(),
                 id: "tool_remember".to_string(),
                 tool_name: "exec_command".to_string(),
                 description: "remember=true".to_string(),

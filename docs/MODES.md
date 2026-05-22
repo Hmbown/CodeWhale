@@ -83,6 +83,7 @@ Run `deepseek --help` for the canonical list. Common flags:
 - `deepseek exec --output-format stream-json <PROMPT>`: emit one JSON object per line for harnesses and backend wrappers
 - `deepseek exec --resume <ID|PREFIX> <PROMPT>` / `--session-id <ID|PREFIX>`: continue a saved session non-interactively
 - `deepseek exec --continue <PROMPT>`: continue the most recent saved session for this workspace non-interactively
+- `deepseek fork <ID|PREFIX>` / `deepseek fork --last`: copy a saved session into a new sibling session; forked sessions retain additive parent-session metadata and show that lineage in session listings
 - `--model <MODEL>`: when using the `deepseek` facade, forward a DeepSeek model override to the TUI
 - `--workspace <DIR>`: workspace root for file tools
 - `--yolo`: start in YOLO mode
@@ -93,3 +94,18 @@ Run `deepseek --help` for the canonical list. Common flags:
 - `--profile <NAME>`: select config profile
 - `--config <PATH>`: config file path
 - `-v, --verbose`: verbose logging
+
+## Branching and Rollback
+
+DeepSeek-TUI has three related but intentionally separate recovery paths:
+
+- `deepseek fork <ID>` creates a new saved session from an existing saved
+  conversation and records the source session id. This is the safe way to
+  explore a different answer path without overwriting the original session.
+- Esc-Esc backtrack rewinds the live transcript to a previous user prompt and
+  restores that prompt into the composer for editing.
+- `/restore` and the `revert_turn` tool restore workspace files from side-git
+  snapshots. They do not rewrite conversation history.
+
+A Pi-style in-file tree browser is a larger UI/data-model project. v0.8.40
+ships the bounded fork/backtrack primitives and explicit lineage metadata.

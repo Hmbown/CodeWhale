@@ -24,6 +24,56 @@ main:
             apt-get install -y git libdbus-1-dev nodejs pkg-config
             ./scripts/release/check-versions.sh
 
+"work/v*-stability":
+  push:
+    - name: feishu bridge release preflight
+      runner:
+        tags: cnb:arch:amd64
+        cpus: 8
+      docker:
+        image: node:22-bookworm
+      stages:
+        - name: feishu bridge tests
+          script: |
+            set -euo pipefail
+            cd integrations/feishu-bridge
+            npm ci
+            npm run check
+            npm test
+
+    - name: linux release preflight
+      runner:
+        tags: cnb:arch:amd64
+        cpus: 16
+      docker:
+        image: rust:1.88-bookworm
+      stages:
+        - name: install release dependencies
+          script: |
+            set -euo pipefail
+            apt-get update
+            apt-get install -y git libdbus-1-dev nodejs npm pkg-config
+            if command -v rustup >/dev/null 2>&1; then
+              rustup component add rustfmt clippy
+            fi
+
+        - name: rust workspace gates
+          script: |
+            set -euo pipefail
+            ./scripts/release/check-versions.sh
+            cargo fmt --all -- --check
+            cargo check --workspace --all-targets --locked
+            cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+            cargo test --workspace --all-features --locked
+
+        - name: release binary smoke
+          script: |
+            set -euo pipefail
+            cargo build --release --locked -p deepseek-tui-cli -p deepseek-tui
+            node scripts/release/npm-wrapper-smoke.js
+            ./target/release/deepseek --version
+            ./target/release/deepseek-tui --version
+
 $:
   tag_push:
     - docker:

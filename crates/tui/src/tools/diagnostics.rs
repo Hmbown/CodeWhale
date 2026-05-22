@@ -58,6 +58,7 @@ impl ToolSpec for DiagnosticsTool {
         json!({
             "type": "object",
             "properties": {},
+            "required": [],
             "additionalProperties": false
         })
     }
@@ -215,6 +216,13 @@ mod tests {
         fs::write(root.join("README.md"), "init\n").expect("write");
         run(&["add", "."]);
         run(&["commit", "-q", "-m", "init"]);
+    }
+
+    #[test]
+    fn diagnostics_schema_has_empty_required_array() {
+        let schema = DiagnosticsTool.input_schema();
+        assert_eq!(schema["properties"], json!({}));
+        assert_eq!(schema["required"], json!([]));
     }
 
     #[tokio::test]

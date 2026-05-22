@@ -19,6 +19,18 @@ use crate::hooks::HooksConfig;
 
 pub const DEFAULT_MAX_SUBAGENTS: usize = 10;
 pub const MAX_SUBAGENTS: usize = 20;
+/// Default per-step DeepSeek API timeout for sub-agent requests, in seconds.
+/// Matches the legacy hardcoded value so existing configs keep their old
+/// behavior when `[subagents] api_timeout_secs` is unset (#1806, #1808).
+pub const DEFAULT_SUBAGENT_API_TIMEOUT_SECS: u64 = 120;
+/// Minimum accepted `[subagents] api_timeout_secs`. Anything lower (including
+/// `0`, which would otherwise produce an immediate timeout footgun) clamps
+/// up to this value before the runtime sees it.
+pub const MIN_SUBAGENT_API_TIMEOUT_SECS: u64 = 1;
+/// Maximum accepted `[subagents] api_timeout_secs` (30 minutes). The cap
+/// keeps a misconfigured per-step timeout from masking real model/network
+/// hangs forever.
+pub const MAX_SUBAGENT_API_TIMEOUT_SECS: u64 = 1800;
 pub const DEFAULT_TEXT_MODEL: &str = "deepseek-v4-pro";
 pub const DEFAULT_DEEPSEEK_BASE_URL: &str = "https://api.deepseek.com/beta";
 pub const DEFAULT_NVIDIA_NIM_MODEL: &str = "deepseek-ai/deepseek-v4-pro";
@@ -28,6 +40,8 @@ pub const DEFAULT_OPENAI_MODEL: &str = "gpt-4.1";
 pub const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 pub const DEFAULT_ATLASCLOUD_MODEL: &str = "deepseek-ai/deepseek-v4-flash";
 pub const DEFAULT_ATLASCLOUD_BASE_URL: &str = "https://api.atlascloud.ai/v1";
+pub const DEFAULT_WANJIE_ARK_MODEL: &str = "deepseek-reasoner";
+pub const DEFAULT_WANJIE_ARK_BASE_URL: &str = "https://maas-openapi.wanjiedata.com/api/v1";
 pub const DEFAULT_OPENROUTER_MODEL: &str = "deepseek/deepseek-v4-pro";
 pub const DEFAULT_OPENROUTER_FLASH_MODEL: &str = "deepseek/deepseek-v4-flash";
 pub const DEFAULT_OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
@@ -70,6 +84,7 @@ pub enum ApiProvider {
     NvidiaNim,
     Openai,
     Atlascloud,
+    WanjieArk,
     Openrouter,
     Novita,
     Fireworks,
@@ -89,6 +104,8 @@ impl ApiProvider {
             "nvidia" | "nvidia-nim" | "nvidia_nim" | "nim" => Some(Self::NvidiaNim),
             "openai" | "open-ai" => Some(Self::Openai),
             "atlascloud" | "atlas-cloud" | "atlas_cloud" | "atlas" => Some(Self::Atlascloud),
+            "wanjie" | "wanjie-ark" | "wanjie_ark" | "ark-wanjie" | "ark_wanjie" | "wanjieark"
+            | "wanjie-maas" | "wanjie_maas" | "wanjiemaas" => Some(Self::WanjieArk),
             "openrouter" | "open_router" => Some(Self::Openrouter),
             "novita" => Some(Self::Novita),
             "fireworks" | "fireworks-ai" => Some(Self::Fireworks),
@@ -107,6 +124,7 @@ impl ApiProvider {
             Self::NvidiaNim => "nvidia-nim",
             Self::Openai => "openai",
             Self::Atlascloud => "atlascloud",
+            Self::WanjieArk => "wanjie-ark",
             Self::Openrouter => "openrouter",
             Self::Novita => "novita",
             Self::Fireworks => "fireworks",
@@ -125,6 +143,7 @@ impl ApiProvider {
             Self::NvidiaNim => "NVIDIA NIM",
             Self::Openai => "OpenAI-compatible",
             Self::Atlascloud => "AtlasCloud",
+            Self::WanjieArk => "Wanjie Ark",
             Self::Openrouter => "OpenRouter",
             Self::Novita => "Novita AI",
             Self::Fireworks => "Fireworks AI",
@@ -142,6 +161,7 @@ impl ApiProvider {
             Self::NvidiaNim,
             Self::Openai,
             Self::Atlascloud,
+            Self::WanjieArk,
             Self::Openrouter,
             Self::Novita,
             Self::Fireworks,
@@ -250,6 +270,8 @@ pub fn provider_capability(provider: ApiProvider, resolved_model: &str) -> Provi
         || model_lower == "deepseek-v4flash"
         || model_lower == "deepseek-v4"
         || alias_deprecation.is_some();
+    let is_reasoner = matches!(provider, ApiProvider::WanjieArk)
+        && (model_lower.contains("reasoner") || model_lower.contains("r1"));
 
     // Context window: V4-class models get 1M, everything else falls through
     // to the model's own lookup or a default.
@@ -270,7 +292,7 @@ pub fn provider_capability(provider: ApiProvider, resolved_model: &str) -> Provi
 
     // Thinking support: V4 models support thinking on all providers, but
     // only when the model name matches the V4 family.
-    let thinking_supported = is_v4_pro || is_v4_flash;
+    let thinking_supported = is_v4_pro || is_v4_flash || is_reasoner;
 
     // Cache telemetry: returned only by DeepSeek-native and NVIDIA NIM endpoints.
     let cache_telemetry_supported = matches!(
@@ -398,6 +420,7 @@ pub fn model_completion_names_for_provider(provider: ApiProvider) -> Vec<&'stati
         ApiProvider::Openrouter => vec![DEFAULT_OPENROUTER_MODEL, DEFAULT_OPENROUTER_FLASH_MODEL],
         ApiProvider::Novita => vec![DEFAULT_NOVITA_MODEL, DEFAULT_NOVITA_FLASH_MODEL],
         ApiProvider::Fireworks => vec![DEFAULT_FIREWORKS_MODEL],
+        ApiProvider::WanjieArk => vec![DEFAULT_WANJIE_ARK_MODEL],
         ApiProvider::Sglang => vec![DEFAULT_SGLANG_MODEL, DEFAULT_SGLANG_FLASH_MODEL],
         ApiProvider::Vllm => vec![DEFAULT_VLLM_MODEL, DEFAULT_VLLM_FLASH_MODEL],
         ApiProvider::Openai | ApiProvider::Atlascloud | ApiProvider::Ollama => {
@@ -868,6 +891,14 @@ pub struct SubagentsConfig {
     /// setting. Clamped to [1, MAX_SUBAGENTS].
     #[serde(default)]
     pub max_concurrent: Option<usize>,
+    /// Per-step DeepSeek API timeout for sub-agent requests, in seconds. The
+    /// timeout wraps `client.create_message` so a stuck single step cannot
+    /// pin the parent's parent-completion wakeup channel indefinitely.
+    /// Defaults to `DEFAULT_SUBAGENT_API_TIMEOUT_SECS` (120) and is clamped
+    /// to `MIN_SUBAGENT_API_TIMEOUT_SECS..=MAX_SUBAGENT_API_TIMEOUT_SECS`
+    /// (1..=1800). Zero or unset uses the legacy 120s default (#1806, #1808).
+    #[serde(default)]
+    pub api_timeout_secs: Option<u64>,
 }
 
 /// `[auto]` table — knobs for the `--model auto` / `/model auto` router.
@@ -1194,6 +1225,8 @@ pub struct ProvidersConfig {
     #[serde(default)]
     pub atlascloud: ProviderConfig,
     #[serde(default)]
+    pub wanjie_ark: ProviderConfig,
+    #[serde(default)]
     pub openrouter: ProviderConfig,
     #[serde(default)]
     pub novita: ProviderConfig,
@@ -1306,6 +1339,7 @@ impl Config {
         let table = match provider {
             ApiProvider::Openai => "providers.openai",
             ApiProvider::Atlascloud => "providers.atlascloud",
+            ApiProvider::WanjieArk => "providers.wanjie_ark",
             ApiProvider::Openrouter => "providers.openrouter",
             ApiProvider::Novita => "providers.novita",
             ApiProvider::Fireworks => "providers.fireworks",
@@ -1328,7 +1362,7 @@ impl Config {
             && ApiProvider::parse(provider).is_none()
         {
             anyhow::bail!(
-                "Invalid provider '{provider}': expected deepseek, deepseek-cn, nvidia-nim, openai, atlascloud, openrouter, novita, fireworks, sglang, vllm, or ollama."
+                "Invalid provider '{provider}': expected deepseek, deepseek-cn, nvidia-nim, openai, atlascloud, wanjie-ark, openrouter, novita, fireworks, sglang, vllm, or ollama."
             );
         }
         if let Some(ref key) = self.api_key
@@ -1446,6 +1480,7 @@ impl Config {
             ApiProvider::NvidiaNim => &providers.nvidia_nim,
             ApiProvider::Openai => &providers.openai,
             ApiProvider::Atlascloud => &providers.atlascloud,
+            ApiProvider::WanjieArk => &providers.wanjie_ark,
             ApiProvider::Openrouter => &providers.openrouter,
             ApiProvider::Novita => &providers.novita,
             ApiProvider::Fireworks => &providers.fireworks,
@@ -1487,6 +1522,17 @@ impl Config {
             if let Some(normalized) = normalize_model_for_provider(provider, model) {
                 return normalized;
             }
+            // An explicit provider-scoped model that is not a recognized
+            // DeepSeek alias is a deliberate custom choice for a non-DeepSeek
+            // provider (e.g. `MiniMax-M2.7` on an OpenAI-compatible endpoint).
+            // It must pass through verbatim rather than fall back to a
+            // DeepSeek/provider default (issue #1714).
+            if !matches!(provider, ApiProvider::Deepseek | ApiProvider::DeepseekCN) {
+                let trimmed = model.trim();
+                if !trimmed.is_empty() {
+                    return trimmed.to_string();
+                }
+            }
         }
         if let Some(model) = self.default_text_model.as_deref()
             && (provider_passes_model_through(provider)
@@ -1510,6 +1556,7 @@ impl Config {
             ApiProvider::NvidiaNim => DEFAULT_NVIDIA_NIM_MODEL,
             ApiProvider::Openai => DEFAULT_OPENAI_MODEL,
             ApiProvider::Atlascloud => DEFAULT_ATLASCLOUD_MODEL,
+            ApiProvider::WanjieArk => DEFAULT_WANJIE_ARK_MODEL,
             ApiProvider::Openrouter => DEFAULT_OPENROUTER_MODEL,
             ApiProvider::Novita => DEFAULT_NOVITA_MODEL,
             ApiProvider::Fireworks => DEFAULT_FIREWORKS_MODEL,
@@ -1540,6 +1587,7 @@ impl Config {
                 .cloned(),
             ApiProvider::Openai
             | ApiProvider::Atlascloud
+            | ApiProvider::WanjieArk
             | ApiProvider::Openrouter
             | ApiProvider::Novita
             | ApiProvider::Fireworks
@@ -1554,6 +1602,7 @@ impl Config {
                 ApiProvider::NvidiaNim => DEFAULT_NVIDIA_NIM_BASE_URL,
                 ApiProvider::Openai => DEFAULT_OPENAI_BASE_URL,
                 ApiProvider::Atlascloud => DEFAULT_ATLASCLOUD_BASE_URL,
+                ApiProvider::WanjieArk => DEFAULT_WANJIE_ARK_BASE_URL,
                 ApiProvider::Openrouter => DEFAULT_OPENROUTER_BASE_URL,
                 ApiProvider::Novita => DEFAULT_NOVITA_BASE_URL,
                 ApiProvider::Fireworks => DEFAULT_FIREWORKS_BASE_URL,
@@ -1586,6 +1635,7 @@ impl Config {
             ApiProvider::NvidiaNim => "nvidia-nim",
             ApiProvider::Openai => "openai",
             ApiProvider::Atlascloud => "atlascloud",
+            ApiProvider::WanjieArk => "wanjie-ark",
             ApiProvider::Openrouter => "openrouter",
             ApiProvider::Novita => "novita",
             ApiProvider::Fireworks => "fireworks",
@@ -1653,6 +1703,11 @@ impl Config {
             ApiProvider::Atlascloud => anyhow::bail!(
                 "AtlasCloud API key not found. Run 'deepseek auth set --provider atlascloud', \
                  set ATLASCLOUD_API_KEY, or add [providers.atlascloud] api_key in ~/.deepseek/config.toml."
+            ),
+            ApiProvider::WanjieArk => anyhow::bail!(
+                "Wanjie Ark API key not found. Run 'deepseek auth set --provider wanjie-ark', \
+                 set WANJIE_ARK_API_KEY/WANJIE_API_KEY/WANJIE_MAAS_API_KEY, or add \
+                 [providers.wanjie_ark] api_key in ~/.deepseek/config.toml."
             ),
             ApiProvider::Openrouter => anyhow::bail!(
                 "OpenRouter API key not found. Run 'deepseek auth set --provider openrouter', \
@@ -1778,6 +1833,27 @@ impl Config {
         self.max_subagents
             .unwrap_or(DEFAULT_MAX_SUBAGENTS)
             .clamp(1, MAX_SUBAGENTS)
+    }
+
+    /// Resolved per-step DeepSeek API timeout for sub-agents, in seconds.
+    ///
+    /// Reads `[subagents] api_timeout_secs` and clamps to
+    /// `[MIN_SUBAGENT_API_TIMEOUT_SECS, MAX_SUBAGENT_API_TIMEOUT_SECS]`
+    /// (1..=1800). `None` or `0` resolve to the legacy
+    /// `DEFAULT_SUBAGENT_API_TIMEOUT_SECS` (120) so existing configs keep
+    /// their old behavior; explicit `1` is honored, useful only in fast
+    /// fail-fast tests, not production (#1806, #1808).
+    #[must_use]
+    pub fn subagent_api_timeout_secs(&self) -> u64 {
+        let raw = self
+            .subagents
+            .as_ref()
+            .and_then(|cfg| cfg.api_timeout_secs)
+            .unwrap_or(DEFAULT_SUBAGENT_API_TIMEOUT_SECS);
+        if raw == 0 {
+            return DEFAULT_SUBAGENT_API_TIMEOUT_SECS;
+        }
+        raw.clamp(MIN_SUBAGENT_API_TIMEOUT_SECS, MAX_SUBAGENT_API_TIMEOUT_SECS)
     }
 
     /// Raw sub-agent model override map. Values are validated at spawn time
@@ -2166,6 +2242,13 @@ fn apply_env_overrides(config: &mut Config) {
                     .openrouter
                     .base_url = Some(value);
             }
+            ApiProvider::WanjieArk => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .wanjie_ark
+                    .base_url = Some(value);
+            }
             ApiProvider::Novita => {
                 config
                     .providers
@@ -2254,6 +2337,18 @@ fn apply_env_overrides(config: &mut Config) {
             .openrouter
             .base_url = Some(value);
     }
+    if matches!(config.api_provider(), ApiProvider::WanjieArk)
+        && let Ok(value) = std::env::var("WANJIE_ARK_BASE_URL")
+            .or_else(|_| std::env::var("WANJIE_BASE_URL"))
+            .or_else(|_| std::env::var("WANJIE_MAAS_BASE_URL"))
+        && !value.trim().is_empty()
+    {
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .wanjie_ark
+            .base_url = Some(value);
+    }
     if matches!(config.api_provider(), ApiProvider::Novita)
         && let Ok(value) = std::env::var("NOVITA_BASE_URL")
         && !value.trim().is_empty()
@@ -2312,6 +2407,7 @@ fn apply_env_overrides(config: &mut Config) {
             ApiProvider::NvidiaNim => &mut providers.nvidia_nim,
             ApiProvider::Openai => &mut providers.openai,
             ApiProvider::Atlascloud => &mut providers.atlascloud,
+            ApiProvider::WanjieArk => &mut providers.wanjie_ark,
             ApiProvider::Openrouter => &mut providers.openrouter,
             ApiProvider::Novita => &mut providers.novita,
             ApiProvider::Fireworks => &mut providers.fireworks,
@@ -2362,10 +2458,52 @@ fn apply_env_overrides(config: &mut Config) {
     {
         config.default_text_model = Some(value);
     }
+    if matches!(config.api_provider(), ApiProvider::WanjieArk)
+        && let Ok(value) = std::env::var("WANJIE_ARK_MODEL")
+            .or_else(|_| std::env::var("WANJIE_MODEL"))
+            .or_else(|_| std::env::var("WANJIE_MAAS_MODEL"))
+    {
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .wanjie_ark
+            .model = Some(value);
+    }
     if let Ok(value) =
         std::env::var("DEEPSEEK_MODEL").or_else(|_| std::env::var("DEEPSEEK_DEFAULT_TEXT_MODEL"))
     {
-        config.default_text_model = Some(value);
+        // The CLI `--model` handoff always sets DEEPSEEK_MODEL, never the
+        // provider-specific *_MODEL var. The legacy root `default_text_model`
+        // is a DeepSeek-only slot (the validator rejects non-DeepSeek IDs
+        // there). For a non-DeepSeek provider the explicit model must land in
+        // the provider-scoped slot instead so the verbatim-passthrough path
+        // honors it rather than falling back to a DeepSeek/provider default
+        // (issue #1714). Mirror the OPENAI_MODEL branch above for every
+        // non-DeepSeek provider.
+        let provider = config.api_provider();
+        if matches!(provider, ApiProvider::Deepseek | ApiProvider::DeepseekCN) {
+            config.default_text_model = Some(value);
+        } else {
+            let providers = config
+                .providers
+                .get_or_insert_with(ProvidersConfig::default);
+            let entry = match provider {
+                ApiProvider::Deepseek | ApiProvider::DeepseekCN => unreachable!(
+                    "DeepSeek providers are handled in the if branch above (issue #1714)"
+                ),
+                ApiProvider::NvidiaNim => &mut providers.nvidia_nim,
+                ApiProvider::Openai => &mut providers.openai,
+                ApiProvider::Atlascloud => &mut providers.atlascloud,
+                ApiProvider::WanjieArk => &mut providers.wanjie_ark,
+                ApiProvider::Openrouter => &mut providers.openrouter,
+                ApiProvider::Novita => &mut providers.novita,
+                ApiProvider::Fireworks => &mut providers.fireworks,
+                ApiProvider::Sglang => &mut providers.sglang,
+                ApiProvider::Vllm => &mut providers.vllm,
+                ApiProvider::Ollama => &mut providers.ollama,
+            };
+            entry.model = Some(value);
+        }
     }
     if matches!(config.api_provider(), ApiProvider::NvidiaNim)
         && let Ok(value) = std::env::var("NVIDIA_NIM_MODEL")
@@ -2612,7 +2750,10 @@ fn normalize_model_for_provider(provider: ApiProvider, model: &str) -> Option<St
 pub(crate) fn provider_passes_model_through(provider: ApiProvider) -> bool {
     matches!(
         provider,
-        ApiProvider::Openai | ApiProvider::Atlascloud | ApiProvider::Ollama
+        ApiProvider::Openai
+            | ApiProvider::Atlascloud
+            | ApiProvider::WanjieArk
+            | ApiProvider::Ollama
     )
 }
 
@@ -2630,6 +2771,7 @@ fn default_base_url_for_provider(provider: ApiProvider) -> &'static str {
         ApiProvider::NvidiaNim => DEFAULT_NVIDIA_NIM_BASE_URL,
         ApiProvider::Openai => DEFAULT_OPENAI_BASE_URL,
         ApiProvider::Atlascloud => DEFAULT_ATLASCLOUD_BASE_URL,
+        ApiProvider::WanjieArk => DEFAULT_WANJIE_ARK_BASE_URL,
         ApiProvider::Openrouter => DEFAULT_OPENROUTER_BASE_URL,
         ApiProvider::Novita => DEFAULT_NOVITA_BASE_URL,
         ApiProvider::Fireworks => DEFAULT_FIREWORKS_BASE_URL,
@@ -2860,6 +3002,7 @@ fn merge_providers(
             nvidia_nim: merge_provider_config(base.nvidia_nim, override_cfg.nvidia_nim),
             openai: merge_provider_config(base.openai, override_cfg.openai),
             atlascloud: merge_provider_config(base.atlascloud, override_cfg.atlascloud),
+            wanjie_ark: merge_provider_config(base.wanjie_ark, override_cfg.wanjie_ark),
             openrouter: merge_provider_config(base.openrouter, override_cfg.openrouter),
             novita: merge_provider_config(base.novita, override_cfg.novita),
             fireworks: merge_provider_config(base.fireworks, override_cfg.fireworks),
@@ -3265,6 +3408,11 @@ pub fn active_provider_has_env_api_key(config: &Config) -> bool {
         ApiProvider::Atlascloud => {
             std::env::var("ATLASCLOUD_API_KEY").is_ok_and(|k| !k.trim().is_empty())
         }
+        ApiProvider::WanjieArk => {
+            std::env::var("WANJIE_ARK_API_KEY").is_ok_and(|k| !k.trim().is_empty())
+                || std::env::var("WANJIE_API_KEY").is_ok_and(|k| !k.trim().is_empty())
+                || std::env::var("WANJIE_MAAS_API_KEY").is_ok_and(|k| !k.trim().is_empty())
+        }
         ApiProvider::Openrouter => {
             std::env::var("OPENROUTER_API_KEY").is_ok_and(|k| !k.trim().is_empty())
         }
@@ -3293,6 +3441,7 @@ pub fn has_api_key_for(config: &Config, provider: ApiProvider) -> bool {
         ApiProvider::NvidiaNim => "NVIDIA_API_KEY",
         ApiProvider::Openai => "OPENAI_API_KEY",
         ApiProvider::Atlascloud => "ATLASCLOUD_API_KEY",
+        ApiProvider::WanjieArk => "WANJIE_ARK_API_KEY",
         ApiProvider::Openrouter => "OPENROUTER_API_KEY",
         ApiProvider::Novita => "NOVITA_API_KEY",
         ApiProvider::Fireworks => "FIREWORKS_API_KEY",
@@ -3305,6 +3454,12 @@ pub fn has_api_key_for(config: &Config, provider: ApiProvider) -> bool {
     }
     if matches!(provider, ApiProvider::NvidiaNim)
         && std::env::var("NVIDIA_NIM_API_KEY").is_ok_and(|k| !k.trim().is_empty())
+    {
+        return true;
+    }
+    if matches!(provider, ApiProvider::WanjieArk)
+        && (std::env::var("WANJIE_API_KEY").is_ok_and(|k| !k.trim().is_empty())
+            || std::env::var("WANJIE_MAAS_API_KEY").is_ok_and(|k| !k.trim().is_empty()))
     {
         return true;
     }
@@ -3366,6 +3521,7 @@ pub fn save_api_key_for(provider: ApiProvider, api_key: &str) -> Result<PathBuf>
         ApiProvider::NvidiaNim => "providers.nvidia_nim",
         ApiProvider::Openai => "providers.openai",
         ApiProvider::Atlascloud => "providers.atlascloud",
+        ApiProvider::WanjieArk => "providers.wanjie_ark",
         ApiProvider::Openrouter => "providers.openrouter",
         ApiProvider::Novita => "providers.novita",
         ApiProvider::Fireworks => "providers.fireworks",
@@ -3401,6 +3557,7 @@ pub fn save_api_key_for(provider: ApiProvider, api_key: &str) -> Result<PathBuf>
         ApiProvider::NvidiaNim => "nvidia_nim",
         ApiProvider::Openai => "openai",
         ApiProvider::Atlascloud => "atlascloud",
+        ApiProvider::WanjieArk => "wanjie_ark",
         ApiProvider::Openrouter => "openrouter",
         ApiProvider::Novita => "novita",
         ApiProvider::Fireworks => "fireworks",
@@ -3569,6 +3726,15 @@ mod tests {
         atlascloud_api_key: Option<OsString>,
         atlascloud_base_url: Option<OsString>,
         atlascloud_model: Option<OsString>,
+        wanjie_ark_api_key: Option<OsString>,
+        wanjie_api_key: Option<OsString>,
+        wanjie_maas_api_key: Option<OsString>,
+        wanjie_ark_base_url: Option<OsString>,
+        wanjie_base_url: Option<OsString>,
+        wanjie_maas_base_url: Option<OsString>,
+        wanjie_ark_model: Option<OsString>,
+        wanjie_model: Option<OsString>,
+        wanjie_maas_model: Option<OsString>,
         openrouter_api_key: Option<OsString>,
         openrouter_base_url: Option<OsString>,
         novita_api_key: Option<OsString>,
@@ -3612,6 +3778,15 @@ mod tests {
             let atlascloud_api_key_prev = env::var_os("ATLASCLOUD_API_KEY");
             let atlascloud_base_url_prev = env::var_os("ATLASCLOUD_BASE_URL");
             let atlascloud_model_prev = env::var_os("ATLASCLOUD_MODEL");
+            let wanjie_ark_api_key_prev = env::var_os("WANJIE_ARK_API_KEY");
+            let wanjie_api_key_prev = env::var_os("WANJIE_API_KEY");
+            let wanjie_maas_api_key_prev = env::var_os("WANJIE_MAAS_API_KEY");
+            let wanjie_ark_base_url_prev = env::var_os("WANJIE_ARK_BASE_URL");
+            let wanjie_base_url_prev = env::var_os("WANJIE_BASE_URL");
+            let wanjie_maas_base_url_prev = env::var_os("WANJIE_MAAS_BASE_URL");
+            let wanjie_ark_model_prev = env::var_os("WANJIE_ARK_MODEL");
+            let wanjie_model_prev = env::var_os("WANJIE_MODEL");
+            let wanjie_maas_model_prev = env::var_os("WANJIE_MAAS_MODEL");
             let openrouter_api_key_prev = env::var_os("OPENROUTER_API_KEY");
             let openrouter_base_url_prev = env::var_os("OPENROUTER_BASE_URL");
             let novita_api_key_prev = env::var_os("NOVITA_API_KEY");
@@ -3650,6 +3825,15 @@ mod tests {
                 env::remove_var("ATLASCLOUD_API_KEY");
                 env::remove_var("ATLASCLOUD_BASE_URL");
                 env::remove_var("ATLASCLOUD_MODEL");
+                env::remove_var("WANJIE_ARK_API_KEY");
+                env::remove_var("WANJIE_API_KEY");
+                env::remove_var("WANJIE_MAAS_API_KEY");
+                env::remove_var("WANJIE_ARK_BASE_URL");
+                env::remove_var("WANJIE_BASE_URL");
+                env::remove_var("WANJIE_MAAS_BASE_URL");
+                env::remove_var("WANJIE_ARK_MODEL");
+                env::remove_var("WANJIE_MODEL");
+                env::remove_var("WANJIE_MAAS_MODEL");
                 env::remove_var("OPENROUTER_API_KEY");
                 env::remove_var("OPENROUTER_BASE_URL");
                 env::remove_var("NOVITA_API_KEY");
@@ -3688,6 +3872,15 @@ mod tests {
                 atlascloud_api_key: atlascloud_api_key_prev,
                 atlascloud_base_url: atlascloud_base_url_prev,
                 atlascloud_model: atlascloud_model_prev,
+                wanjie_ark_api_key: wanjie_ark_api_key_prev,
+                wanjie_api_key: wanjie_api_key_prev,
+                wanjie_maas_api_key: wanjie_maas_api_key_prev,
+                wanjie_ark_base_url: wanjie_ark_base_url_prev,
+                wanjie_base_url: wanjie_base_url_prev,
+                wanjie_maas_base_url: wanjie_maas_base_url_prev,
+                wanjie_ark_model: wanjie_ark_model_prev,
+                wanjie_model: wanjie_model_prev,
+                wanjie_maas_model: wanjie_maas_model_prev,
                 openrouter_api_key: openrouter_api_key_prev,
                 openrouter_base_url: openrouter_base_url_prev,
                 novita_api_key: novita_api_key_prev,
@@ -3735,6 +3928,15 @@ mod tests {
                 Self::restore_var("ATLASCLOUD_API_KEY", self.atlascloud_api_key.take());
                 Self::restore_var("ATLASCLOUD_BASE_URL", self.atlascloud_base_url.take());
                 Self::restore_var("ATLASCLOUD_MODEL", self.atlascloud_model.take());
+                Self::restore_var("WANJIE_ARK_API_KEY", self.wanjie_ark_api_key.take());
+                Self::restore_var("WANJIE_API_KEY", self.wanjie_api_key.take());
+                Self::restore_var("WANJIE_MAAS_API_KEY", self.wanjie_maas_api_key.take());
+                Self::restore_var("WANJIE_ARK_BASE_URL", self.wanjie_ark_base_url.take());
+                Self::restore_var("WANJIE_BASE_URL", self.wanjie_base_url.take());
+                Self::restore_var("WANJIE_MAAS_BASE_URL", self.wanjie_maas_base_url.take());
+                Self::restore_var("WANJIE_ARK_MODEL", self.wanjie_ark_model.take());
+                Self::restore_var("WANJIE_MODEL", self.wanjie_model.take());
+                Self::restore_var("WANJIE_MAAS_MODEL", self.wanjie_maas_model.take());
                 Self::restore_var("OPENROUTER_API_KEY", self.openrouter_api_key.take());
                 Self::restore_var("OPENROUTER_BASE_URL", self.openrouter_base_url.take());
                 Self::restore_var("NOVITA_API_KEY", self.novita_api_key.take());
@@ -3807,6 +4009,47 @@ mod tests {
             ..Config::default()
         };
         assert_eq!(high.max_subagents(), MAX_SUBAGENTS);
+    }
+
+    #[test]
+    fn subagent_api_timeout_defaults_and_clamps() {
+        assert_eq!(
+            Config::default().subagent_api_timeout_secs(),
+            DEFAULT_SUBAGENT_API_TIMEOUT_SECS
+        );
+
+        let zero = Config {
+            subagents: Some(SubagentsConfig {
+                api_timeout_secs: Some(0),
+                ..SubagentsConfig::default()
+            }),
+            ..Config::default()
+        };
+        assert_eq!(
+            zero.subagent_api_timeout_secs(),
+            DEFAULT_SUBAGENT_API_TIMEOUT_SECS
+        );
+
+        let explicit_min = Config {
+            subagents: Some(SubagentsConfig {
+                api_timeout_secs: Some(MIN_SUBAGENT_API_TIMEOUT_SECS),
+                ..SubagentsConfig::default()
+            }),
+            ..Config::default()
+        };
+        assert_eq!(explicit_min.subagent_api_timeout_secs(), 1);
+
+        let high = Config {
+            subagents: Some(SubagentsConfig {
+                api_timeout_secs: Some(MAX_SUBAGENT_API_TIMEOUT_SECS + 60),
+                ..SubagentsConfig::default()
+            }),
+            ..Config::default()
+        };
+        assert_eq!(
+            high.subagent_api_timeout_secs(),
+            MAX_SUBAGENT_API_TIMEOUT_SECS
+        );
     }
 
     #[test]
@@ -4020,6 +4263,9 @@ mod tests {
             "openai" => {
                 providers.openai.api_key = Some(api_key.to_string());
             }
+            "wanjie-ark" => {
+                providers.wanjie_ark.api_key = Some(api_key.to_string());
+            }
             "openrouter" => {
                 providers.openrouter.api_key = Some(api_key.to_string());
             }
@@ -4050,7 +4296,7 @@ mod tests {
 
     #[test]
     fn has_api_key_uses_active_provider_scoped_config_key() {
-        for provider in ["openai", "openrouter", "novita", "fireworks"] {
+        for provider in ["openai", "wanjie-ark", "openrouter", "novita", "fireworks"] {
             let config = config_with_provider_scoped_key(provider, "provider-config-key");
 
             assert!(
@@ -4065,6 +4311,7 @@ mod tests {
         let _lock = lock_test_env();
         for (provider, env_var) in [
             ("openai", "OPENAI_API_KEY"),
+            ("wanjie-ark", "WANJIE_ARK_API_KEY"),
             ("openrouter", "OPENROUTER_API_KEY"),
             ("novita", "NOVITA_API_KEY"),
             ("fireworks", "FIREWORKS_API_KEY"),
@@ -5061,6 +5308,89 @@ http_headers = { "X-Model-Provider-Id" = "from-file" }
     }
 
     #[test]
+    fn wanjie_ark_provider_uses_documented_defaults() -> Result<()> {
+        let config = Config {
+            provider: Some("wanjie-ark".to_string()),
+            ..Default::default()
+        };
+
+        config.validate()?;
+        assert_eq!(config.api_provider(), ApiProvider::WanjieArk);
+        assert_eq!(config.default_model(), DEFAULT_WANJIE_ARK_MODEL);
+        assert_eq!(config.deepseek_base_url(), DEFAULT_WANJIE_ARK_BASE_URL);
+        Ok(())
+    }
+
+    #[test]
+    fn wanjie_ark_env_overrides_provider_base_url_model_and_key() -> Result<()> {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "deepseek-tui-wanjie-env-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
+
+        unsafe {
+            env::set_var("DEEPSEEK_PROVIDER", "ark-wanjie");
+            env::set_var("WANJIE_ARK_API_KEY", "wanjie-env-key");
+            env::set_var("WANJIE_ARK_BASE_URL", "https://wanjie.example/api/v1");
+            env::set_var("WANJIE_ARK_MODEL", "wanjie-model-id");
+        }
+
+        let config = Config::load(None, None)?;
+        assert_eq!(config.api_provider(), ApiProvider::WanjieArk);
+        assert_eq!(config.deepseek_api_key()?, "wanjie-env-key");
+        assert_eq!(config.deepseek_base_url(), "https://wanjie.example/api/v1");
+        assert_eq!(config.default_model(), "wanjie-model-id");
+        Ok(())
+    }
+
+    #[test]
+    fn wanjie_ark_provider_accepts_custom_model_and_table_key() -> Result<()> {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "deepseek-tui-wanjie-table-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
+
+        let config_path = temp_root.join(".deepseek").join("config.toml");
+        ensure_parent_dir(&config_path)?;
+        fs::write(
+            &config_path,
+            r#"provider = "wanjie-ark"
+
+[providers.wanjie_ark]
+api_key = "wanjie-table-key"
+base_url = "https://maas-openapi.wanjiedata.com/api/v1"
+model = "account-model-id"
+"#,
+        )?;
+
+        let config = Config::load(None, None)?;
+        assert_eq!(config.api_provider(), ApiProvider::WanjieArk);
+        assert_eq!(config.deepseek_api_key()?, "wanjie-table-key");
+        assert_eq!(
+            config.deepseek_base_url(),
+            "https://maas-openapi.wanjiedata.com/api/v1"
+        );
+        assert_eq!(config.default_model(), "account-model-id");
+        Ok(())
+    }
+
+    #[test]
     fn openai_provider_accepts_custom_model_and_base_url() -> Result<()> {
         let _lock = lock_test_env();
         let nanos = SystemTime::now()
@@ -5096,6 +5426,64 @@ model = "glm-5"
             "https://openai-compatible.example/api/coding/paas/v4"
         );
         assert_eq!(config.default_model(), "glm-5");
+        Ok(())
+    }
+
+    // Regression for issue #1714: `deepseek --provider openai --model
+    // MiniMax-M2.7` forwards the choice via DEEPSEEK_MODEL (never
+    // OPENAI_MODEL) and uses the DEFAULT base_url. The explicit custom model
+    // must pass through verbatim instead of silently becoming a
+    // DeepSeek/provider default.
+    #[test]
+    fn deepseek_model_env_passes_custom_model_through_for_non_deepseek_providers() -> Result<()> {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "deepseek-tui-1714-passthrough-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+
+        // (a) provider=openai + model="MiniMax-M2.7" via env, NO OPENAI_MODEL,
+        // DEFAULT base_url.
+        {
+            let _guard = EnvGuard::new(&temp_root);
+            // Safety: test-only environment mutation guarded by a global mutex.
+            unsafe {
+                env::set_var("DEEPSEEK_PROVIDER", "openai");
+                env::set_var("OPENAI_API_KEY", "openai-env-key");
+                env::set_var("DEEPSEEK_MODEL", "MiniMax-M2.7");
+            }
+
+            let config = Config::load(None, None)?;
+            assert_eq!(config.api_provider(), ApiProvider::Openai);
+            assert_eq!(config.deepseek_base_url(), DEFAULT_OPENAI_BASE_URL);
+            assert_eq!(config.default_model(), "MiniMax-M2.7");
+        }
+
+        // (b) a non-passthrough provider (novita) with an unknown custom model
+        // and the DEFAULT base_url must also be preserved verbatim — never
+        // rewritten to DEFAULT_NOVITA_MODEL.
+        {
+            let _guard = EnvGuard::new(&temp_root);
+            // Safety: test-only environment mutation guarded by a global mutex.
+            unsafe {
+                env::set_var("DEEPSEEK_PROVIDER", "novita");
+                env::set_var("NOVITA_API_KEY", "novita-env-key");
+                env::set_var("DEEPSEEK_MODEL", "MiniMax-M2.7");
+            }
+
+            let config = Config::load(None, None)?;
+            assert_eq!(config.api_provider(), ApiProvider::Novita);
+            assert_eq!(config.deepseek_base_url(), DEFAULT_NOVITA_BASE_URL);
+            assert_ne!(config.default_model(), DEFAULT_NOVITA_MODEL);
+            assert_eq!(config.default_model(), "MiniMax-M2.7");
+        }
+
         Ok(())
     }
 
@@ -5600,6 +5988,7 @@ api_key = "novita-table-key"
 
         let mut config = Config::default();
         assert!(!has_api_key_for(&config, ApiProvider::Openai));
+        assert!(!has_api_key_for(&config, ApiProvider::WanjieArk));
         assert!(!has_api_key_for(&config, ApiProvider::Openrouter));
         assert!(
             has_api_key_for(&config, ApiProvider::Sglang),
@@ -5614,8 +6003,10 @@ api_key = "novita-table-key"
         unsafe {
             env::set_var("OPENROUTER_API_KEY", "or-env");
             env::set_var("OPENAI_API_KEY", "openai-env");
+            env::set_var("WANJIE_API_KEY", "wanjie-env");
         }
         assert!(has_api_key_for(&config, ApiProvider::Openai));
+        assert!(has_api_key_for(&config, ApiProvider::WanjieArk));
         assert!(has_api_key_for(&config, ApiProvider::Openrouter));
         assert!(!has_api_key_for(&config, ApiProvider::Novita));
 
@@ -5623,12 +6014,15 @@ api_key = "novita-table-key"
         unsafe {
             env::remove_var("OPENROUTER_API_KEY");
             env::remove_var("OPENAI_API_KEY");
+            env::remove_var("WANJIE_API_KEY");
         }
         let mut providers = ProvidersConfig::default();
         providers.openai.api_key = Some("file-openai".to_string());
+        providers.wanjie_ark.api_key = Some("file-wanjie".to_string());
         providers.novita.api_key = Some("file-novita".to_string());
         config.providers = Some(providers);
         assert!(has_api_key_for(&config, ApiProvider::Openai));
+        assert!(has_api_key_for(&config, ApiProvider::WanjieArk));
         assert!(has_api_key_for(&config, ApiProvider::Novita));
         assert!(!has_api_key_for(&config, ApiProvider::Openrouter));
         Ok(())
@@ -5719,6 +6113,7 @@ api_key = "novita-table-key"
             Some("novita-saved-key")
         );
         save_api_key_for(ApiProvider::Openai, "openai-saved-key")?;
+        save_api_key_for(ApiProvider::WanjieArk, "wanjie-saved-key")?;
         save_api_key_for(ApiProvider::Fireworks, "fireworks-saved-key")?;
         save_api_key_for(ApiProvider::Sglang, "sglang-saved-key")?;
         let contents = fs::read_to_string(&path)?;
@@ -5730,6 +6125,14 @@ api_key = "novita-table-key"
                 .and_then(|t| t.get("api_key"))
                 .and_then(toml::Value::as_str),
             Some("openai-saved-key")
+        );
+        assert_eq!(
+            parsed
+                .get("providers")
+                .and_then(|p| p.get("wanjie_ark"))
+                .and_then(|t| t.get("api_key"))
+                .and_then(toml::Value::as_str),
+            Some("wanjie-saved-key")
         );
         assert_eq!(
             parsed
@@ -6035,6 +6438,22 @@ model = "deepseek-ai/deepseek-v4-pro"
         );
         assert_eq!(cap.max_output, 4096);
         assert!(!cap.thinking_supported);
+        assert!(!cap.cache_telemetry_supported);
+        assert_eq!(
+            cap.request_payload_mode,
+            RequestPayloadMode::ChatCompletions
+        );
+    }
+
+    #[test]
+    fn provider_capability_wanjie_ark_reasoner_has_thinking_no_cache() {
+        let cap = provider_capability(ApiProvider::WanjieArk, DEFAULT_WANJIE_ARK_MODEL);
+        assert_eq!(
+            cap.context_window,
+            crate::models::LEGACY_DEEPSEEK_CONTEXT_WINDOW_TOKENS
+        );
+        assert_eq!(cap.max_output, 4096);
+        assert!(cap.thinking_supported);
         assert!(!cap.cache_telemetry_supported);
         assert_eq!(
             cap.request_payload_mode,

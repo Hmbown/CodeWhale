@@ -157,11 +157,12 @@ export function commandAction(command) {
 
 export function splitMessage(text, maxChars = 3500) {
   const value = String(text || "");
-  if (value.length <= maxChars) return value ? [value] : [];
+  const chars = Array.from(value);
+  if (chars.length <= maxChars) return value ? [value] : [];
   const chunks = [];
   let cursor = 0;
-  while (cursor < value.length) {
-    chunks.push(value.slice(cursor, cursor + maxChars));
+  while (cursor < chars.length) {
+    chunks.push(chars.slice(cursor, cursor + maxChars).join(""));
     cursor += maxChars;
   }
   return chunks;

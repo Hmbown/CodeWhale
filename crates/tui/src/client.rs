@@ -905,7 +905,10 @@ pub(super) fn apply_reasoning_effort(
                     "enable_thinking": false,
                 });
             }
-            ApiProvider::Openai | ApiProvider::Atlascloud | ApiProvider::Ollama => {}
+            ApiProvider::Openai
+            | ApiProvider::Atlascloud
+            | ApiProvider::WanjieArk
+            | ApiProvider::Ollama => {}
             ApiProvider::NvidiaNim => {
                 body["chat_template_kwargs"] = json!({
                     "thinking": false,
@@ -930,7 +933,10 @@ pub(super) fn apply_reasoning_effort(
                 });
                 body["reasoning_effort"] = json!("high");
             }
-            ApiProvider::Openai | ApiProvider::Atlascloud | ApiProvider::Ollama => {}
+            ApiProvider::Openai
+            | ApiProvider::Atlascloud
+            | ApiProvider::WanjieArk
+            | ApiProvider::Ollama => {}
             ApiProvider::NvidiaNim => {
                 body["chat_template_kwargs"] = json!({
                     "thinking": true,
@@ -956,7 +962,10 @@ pub(super) fn apply_reasoning_effort(
                 });
                 body["reasoning_effort"] = json!("max");
             }
-            ApiProvider::Openai | ApiProvider::Atlascloud | ApiProvider::Ollama => {}
+            ApiProvider::Openai
+            | ApiProvider::Atlascloud
+            | ApiProvider::WanjieArk
+            | ApiProvider::Ollama => {}
             ApiProvider::NvidiaNim => {
                 body["chat_template_kwargs"] = json!({
                     "thinking": true,
@@ -1264,9 +1273,15 @@ mod tests {
     }
 
     #[test]
-    fn generic_openai_provider_drops_deepseek_reasoning_content() {
+    fn generic_openai_provider_drops_reasoning_content_for_non_deepseek_models() {
+        // #1542 intent (narrowed by #1739/#1694): a *genuine non-DeepSeek*
+        // model on the generic openai provider must not carry DeepSeek-only
+        // `reasoning_content`. A DeepSeek reasoning model on the openai
+        // provider (DeepSeek-compatible endpoint) is now covered separately
+        // and DOES replay reasoning_content — see
+        // `deepseek_model_on_openai_provider_still_replays_reasoning_content`.
         let request = MessageRequest {
-            model: "deepseek-v4-pro".to_string(),
+            model: "gpt-4o".to_string(),
             messages: vec![Message {
                 role: "assistant".to_string(),
                 content: vec![
@@ -1290,19 +1305,6 @@ mod tests {
             temperature: None,
             top_p: None,
         };
-
-        let deepseek =
-            build_chat_messages_for_request_and_provider(&request, ApiProvider::Deepseek);
-        let native_assistant = deepseek
-            .iter()
-            .find(|value| value.get("role").and_then(Value::as_str) == Some("assistant"))
-            .expect("assistant message");
-        assert_eq!(
-            native_assistant
-                .get("reasoning_content")
-                .and_then(Value::as_str),
-            Some("plan")
-        );
 
         let openai = build_chat_messages_for_request_and_provider(&request, ApiProvider::Openai);
         let generic_assistant = openai
@@ -2707,8 +2709,12 @@ mod tests {
 
     #[test]
     fn sanitize_thinking_mode_skips_generic_openai_provider() {
+        // #1542 intent (narrowed by #1739/#1694): the sanitizer only skips for
+        // a *genuine non-DeepSeek* model on the generic openai provider. A
+        // DeepSeek reasoning model on the openai provider still gets sanitized
+        // (see chat.rs `deepseek_model_on_openai_provider_still_replays_*`).
         let mut body = json!({
-            "model": "deepseek-v4-pro",
+            "model": "gpt-4o",
             "messages": [
                 { "role": "user", "content": "hi" },
                 {
@@ -2719,12 +2725,8 @@ mod tests {
             ]
         });
 
-        let result = sanitize_thinking_mode_messages(
-            &mut body,
-            "deepseek-v4-pro",
-            Some("max"),
-            ApiProvider::Openai,
-        );
+        let result =
+            sanitize_thinking_mode_messages(&mut body, "gpt-4o", Some("max"), ApiProvider::Openai);
 
         assert!(result.is_none());
         let assistant = body["messages"]

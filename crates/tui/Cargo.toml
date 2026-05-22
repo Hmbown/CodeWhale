@@ -21,8 +21,8 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1.0.100"
 arboard = "3.4"
-deepseek-secrets = { path = "../secrets", version = "0.8.37" }
-deepseek-tools = { path = "../tools", version = "0.8.37" }
+deepseek-secrets = { path = "../secrets", version = "0.8.40" }
+deepseek-tools = { path = "../tools", version = "0.8.40" }
 schemaui = { version = "0.12.0", default-features = false, optional = true }
 async-stream = "0.3.6"
 async-trait = "0.1"
@@ -79,6 +79,10 @@ vt100 = "0.15"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.3"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSDictionary", "NSError", "NSObject", "NSString", "NSURL"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.60", features = ["Win32_Foundation", "Win32_System_Console", "Win32_UI_WindowsAndMessaging", "Win32_System_Diagnostics_Debug"] }

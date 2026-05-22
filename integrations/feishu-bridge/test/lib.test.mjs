@@ -145,6 +145,10 @@ test("splitMessage chunks long text", () => {
   assert.deepEqual(splitMessage("abcdef", 2), ["ab", "cd", "ef"]);
 });
 
+test("splitMessage does not split surrogate pairs", () => {
+  assert.deepEqual(splitMessage("a🧪b", 2), ["a🧪", "b"]);
+});
+
 test("validateBridgeConfig accepts locked-down whalebro DM config", () => {
   const result = validateBridgeConfig(
     {

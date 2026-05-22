@@ -641,6 +641,13 @@ mod tests {
 
     #[test]
     fn cache_inspect_displays_tool_result_budget_metadata() {
+        // Wire dedup persists to the process-global SHA spillover root.
+        // Serialize through the same guard other tests use to override
+        // that root, so a parallel test pointing it at a temp dir can't
+        // make this test's second-sighting dedup silently fail.
+        let _spill_guard = crate::tools::truncate::TEST_SPILLOVER_GUARD
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
         let mut app = create_test_app();
         let long_output = format!("{}{}", "A".repeat(7_000), "Z".repeat(7_000));
         app.api_messages.push(Message {

@@ -1275,6 +1275,33 @@ fn create_test_app() -> App {
     app
 }
 
+#[test]
+fn session_denied_cache_matches_only_approval_key() {
+    let mut app = create_test_app();
+    app.approval_session_denied.insert("edit_file".to_string());
+
+    assert!(
+        !is_session_denied_for_key(&app, "file:edit_file:fresh"),
+        "a legacy tool-name entry must not deny a later fresh call"
+    );
+
+    app.approval_session_denied
+        .insert("file:edit_file:retry".to_string());
+    assert!(is_session_denied_for_key(&app, "file:edit_file:retry"));
+}
+
+#[test]
+fn session_approved_cache_keeps_tool_name_session_grants() {
+    let mut app = create_test_app();
+    app.approval_session_approved
+        .insert("edit_file".to_string());
+
+    assert!(
+        is_session_approved_for_tool(&app, "edit_file", "file:edit_file:fresh"),
+        "approve-for-session should still cover future calls of the same tool"
+    );
+}
+
 fn create_test_options() -> TuiOptions {
     TuiOptions {
         model: "deepseek-v4-pro".to_string(),
@@ -1325,6 +1352,8 @@ fn saved_session_with_messages(messages: Vec<Message>) -> SavedSession {
             workspace: PathBuf::from("/tmp/resume-recovery"),
             mode: Some("yolo".to_string()),
             cost: crate::session_manager::SessionCostSnapshot::default(),
+            parent_session_id: None,
+            forked_from_message_count: None,
         },
         messages,
         system_prompt: None,
@@ -2705,6 +2734,57 @@ fn test_ctrl_c_cancels_streaming_sets_status() {
 }
 
 #[test]
+fn local_cancel_marks_late_stream_events_for_suppression() {
+    let mut app = create_test_app();
+    app.is_loading = true;
+    app.streaming_state.start_text(0, None);
+
+    mark_active_turn_cancelled_locally(&mut app);
+
+    assert!(!app.is_loading);
+    assert!(app.suppress_stream_events_until_turn_complete);
+    assert!(suppress_engine_event_after_local_cancel(
+        &EngineEvent::MessageDelta {
+            index: 0,
+            content: "late text".to_string(),
+        }
+    ));
+    assert!(suppress_engine_event_after_local_cancel(
+        &EngineEvent::ThinkingDelta {
+            index: 0,
+            content: "late thinking".to_string(),
+        }
+    ));
+    assert!(suppress_engine_event_after_local_cancel(
+        &EngineEvent::SessionUpdated {
+            session_id: "session".to_string(),
+            messages: Vec::new(),
+            system_prompt: None,
+            model: "deepseek-v4-flash".to_string(),
+            workspace: PathBuf::from("."),
+        }
+    ));
+    assert!(ignore_stale_stream_event_while_idle(
+        &EngineEvent::MessageDelta {
+            index: 0,
+            content: "late text".to_string(),
+        }
+    ));
+    assert!(!suppress_engine_event_after_local_cancel(
+        &EngineEvent::TurnComplete {
+            usage: Usage::default(),
+            status: crate::core::events::TurnOutcomeStatus::Interrupted,
+            error: None,
+        }
+    ));
+    assert!(!suppress_engine_event_after_local_cancel(
+        &EngineEvent::Status {
+            message: "Request cancelled".to_string(),
+        }
+    ));
+}
+
+#[test]
 fn test_ctrl_c_exits_when_not_loading() {
     let mut app = create_test_app();
     app.is_loading = false;
@@ -3012,6 +3092,52 @@ async fn dismissed_plan_prompt_leaves_non_numeric_input_for_normal_send_path() {
     assert_eq!(
         app.status_message.as_deref(),
         Some("Offline: 1 queued — ↑ to edit, /queue list")
+    );
+}
+
+#[tokio::test]
+async fn dispatch_user_message_records_prompt_for_cancel_restore() {
+    let mut app = create_test_app();
+    let config = Config::default();
+    let mut engine = crate::core::engine::mock_engine_handle();
+    let queued = crate::tui::app::QueuedMessage::new("fix this typo\nthen retry".to_string(), None);
+
+    dispatch_user_message(&mut app, &config, &engine.handle, queued)
+        .await
+        .expect("dispatch user message");
+
+    assert_eq!(
+        app.last_submitted_prompt.as_deref(),
+        Some("fix this typo\nthen retry")
+    );
+    match engine.rx_op.recv().await.expect("send message op") {
+        crate::core::ops::Op::SendMessage { content, .. } => {
+            assert_eq!(content, "fix this typo\nthen retry");
+        }
+        other => panic!("expected SendMessage, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn steer_user_message_records_prompt_for_cancel_restore() {
+    let mut app = create_test_app();
+    let mut engine = crate::core::engine::mock_engine_handle();
+    let queued = crate::tui::app::QueuedMessage::new(
+        "adjust the active turn\nthen continue".to_string(),
+        None,
+    );
+
+    steer_user_message(&mut app, &engine.handle, queued)
+        .await
+        .expect("steer user message");
+
+    assert_eq!(
+        app.last_submitted_prompt.as_deref(),
+        Some("adjust the active turn\nthen continue")
+    );
+    assert_eq!(
+        engine.rx_steer.recv().await.as_deref(),
+        Some("adjust the active turn\nthen continue")
     );
 }
 
@@ -3889,6 +4015,140 @@ fn first_snapshot_preserves_current_session_id_for_artifact_ownership() {
     let snapshot = build_session_snapshot(&app, &manager);
 
     assert_eq!(snapshot.metadata.id, "session-123");
+}
+
+#[test]
+fn existing_session_snapshot_updates_model_selection() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let manager =
+        crate::session_manager::SessionManager::new(tmp.path().join("sessions")).expect("manager");
+    let mut existing = saved_session_with_messages(vec![text_message("user", "hello")]);
+    existing.metadata.model = "auto".to_string();
+    manager
+        .save_session(&existing)
+        .expect("save existing session");
+
+    let mut app = create_test_app();
+    app.current_session_id = Some(existing.metadata.id.clone());
+    app.api_messages.push(text_message("user", "hello"));
+    app.set_model_selection("deepseek-v4-flash".to_string());
+
+    let snapshot = build_session_snapshot(&app, &manager);
+
+    assert_eq!(snapshot.metadata.id, existing.metadata.id);
+    assert_eq!(snapshot.metadata.model, "deepseek-v4-flash");
+}
+
+#[test]
+fn apply_loaded_session_restores_concrete_model_mode() {
+    let mut app = create_test_app();
+    app.set_model_selection("auto".to_string());
+    let mut session = saved_session_with_messages(vec![
+        text_message("user", "hello"),
+        text_message("assistant", "hi"),
+    ]);
+    session.metadata.model = "deepseek-v4-flash".to_string();
+
+    let recovered = apply_loaded_session(&mut app, &Config::default(), &session);
+
+    assert!(!recovered);
+    assert!(!app.auto_model);
+    assert_eq!(app.model, "deepseek-v4-flash");
+    assert_eq!(app.model_selection_for_persistence(), "deepseek-v4-flash");
+}
+
+#[test]
+fn apply_loaded_session_restores_auto_model_mode() {
+    let mut app = create_test_app();
+    app.set_model_selection("deepseek-v4-pro".to_string());
+    let mut session = saved_session_with_messages(vec![
+        text_message("user", "hello"),
+        text_message("assistant", "hi"),
+    ]);
+    session.metadata.model = "auto".to_string();
+
+    let recovered = apply_loaded_session(&mut app, &Config::default(), &session);
+
+    assert!(!recovered);
+    assert!(app.auto_model);
+    assert_eq!(app.model, "auto");
+    assert_eq!(app.model_selection_for_persistence(), "auto");
+}
+
+#[test]
+fn app_new_restores_saved_model_and_reasoning_effort() {
+    let _guard = ConfigPathEnvGuard::new();
+    let settings = crate::settings::Settings {
+        default_model: Some("deepseek-v4-pro".to_string()),
+        reasoning_effort: Some("high".to_string()),
+        ..Default::default()
+    };
+    settings.save().expect("save settings");
+
+    let options = TuiOptions {
+        model: "auto".to_string(),
+        workspace: PathBuf::from("."),
+        config_path: None,
+        config_profile: None,
+        allow_shell: false,
+        use_alt_screen: true,
+        use_mouse_capture: false,
+        use_bracketed_paste: true,
+        max_subagents: 1,
+        skills_dir: PathBuf::from("."),
+        memory_path: PathBuf::from("memory.md"),
+        notes_path: PathBuf::from("notes.txt"),
+        mcp_config_path: PathBuf::from("mcp.json"),
+        use_memory: false,
+        start_in_agent_mode: true,
+        skip_onboarding: false,
+        yolo: false,
+        resume_session_id: None,
+        initial_input: None,
+    };
+    let config = Config {
+        reasoning_effort: Some("max".to_string()),
+        ..Default::default()
+    };
+
+    let app = App::new(options, &config);
+
+    assert!(!app.auto_model);
+    assert_eq!(app.model, "deepseek-v4-pro");
+    assert_eq!(app.reasoning_effort, ReasoningEffort::High);
+}
+
+#[tokio::test]
+async fn model_picker_persists_model_and_reasoning_effort() {
+    let _guard = ConfigPathEnvGuard::new();
+    let mut app = create_test_app();
+    app.set_model_selection("auto".to_string());
+    app.reasoning_effort = ReasoningEffort::Auto;
+    let engine = mock_engine_handle();
+
+    apply_model_picker_choice(
+        &mut app,
+        &engine.handle,
+        "deepseek-v4-pro".to_string(),
+        ReasoningEffort::High,
+        "auto".to_string(),
+        ReasoningEffort::Auto,
+    )
+    .await;
+
+    let settings = crate::settings::Settings::load().expect("load settings");
+    assert_eq!(settings.default_model.as_deref(), Some("deepseek-v4-pro"));
+    assert_eq!(
+        settings
+            .provider_models
+            .as_ref()
+            .and_then(|models| models.get("deepseek"))
+            .map(String::as_str),
+        Some("deepseek-v4-pro")
+    );
+    assert_eq!(settings.reasoning_effort.as_deref(), Some("high"));
+    assert!(!app.auto_model);
+    assert_eq!(app.reasoning_effort, ReasoningEffort::High);
 }
 
 #[test]
@@ -5408,6 +5668,9 @@ fn history_arrow_handles_whitespace_input() {
 #[test]
 fn history_arrow_handles_nonempty_input() {
     let mut app = create_test_app();
+    // Explicitly disable arrows-scroll so this test covers the
+    // history-navigation path regardless of the mouse-capture default.
+    app.composer_arrows_scroll = false;
     app.input = "hello".to_string();
     app.cursor_position = app.input.chars().count();
     app.input_history.push("previous prompt".to_string());
@@ -5453,20 +5716,98 @@ fn composer_arrows_scroll_empty_down() {
 }
 
 #[test]
-fn composer_arrows_scroll_nonempty_still_navigates_history() {
+fn composer_arrows_scroll_nonempty_also_scrolls() {
     let mut app = create_test_app();
     app.composer_arrows_scroll = true;
     app.input = "hello".to_string();
     app.cursor_position = app.input.chars().count();
     app.input_history.push("previous prompt".to_string());
 
-    // Even with the option on, non-empty composer still navigates history.
+    // #1677: terminals that convert mouse-wheel to arrow keys should scroll
+    // the transcript without mutating a draft the user is editing.
     assert!(handle_composer_history_arrow(
         &mut app,
         KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
         false,
         false,
     ));
+    assert_eq!(app.viewport.pending_scroll_delta, -3);
+    assert_eq!(app.input, "hello");
+}
+
+#[test]
+fn composer_arrow_up_moves_within_multiline_input() {
+    let mut app = create_test_app();
+    app.composer_arrows_scroll = false;
+    app.input = "line one\nline two".to_string();
+    app.cursor_position = app.input.chars().count();
+    app.input_history.push("previous prompt".to_string());
+
+    assert!(handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+        false,
+        false,
+    ));
+
+    assert_eq!(app.input, "line one\nline two");
+    assert!(app.cursor_position < app.input.chars().count());
+}
+
+#[test]
+fn composer_arrow_down_moves_within_multiline_input() {
+    let mut app = create_test_app();
+    app.composer_arrows_scroll = false;
+    app.input = "line one\nline two".to_string();
+    app.cursor_position = 0;
+    app.input_history.push("next prompt".to_string());
+    app.history_index = Some(app.input_history.len() - 1);
+
+    assert!(handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+        false,
+        false,
+    ));
+
+    assert_eq!(app.input, "line one\nline two");
+    assert!(app.cursor_position >= "line one\n".chars().count());
+}
+
+#[test]
+fn composer_arrows_scroll_multiline_input_navigates_lines() {
+    let mut app = create_test_app();
+    app.composer_arrows_scroll = true;
+    app.input = "line one\nline two".to_string();
+    app.cursor_position = app.input.chars().count();
+
+    assert!(handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+        false,
+        false,
+    ));
+
+    assert_eq!(app.input, "line one\nline two");
+    assert!(app.cursor_position < app.input.chars().count());
+    assert_eq!(app.viewport.pending_scroll_delta, 0);
+}
+
+#[test]
+fn composer_arrow_up_at_first_line_falls_back_to_history_up() {
+    let mut app = create_test_app();
+    app.composer_arrows_scroll = false;
+    app.input = "line one\nline two".to_string();
+    app.cursor_position = 0;
+    app.input_history.push("previous prompt".to_string());
+
+    assert!(handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+        false,
+        false,
+    ));
+
     assert_eq!(app.input, "previous prompt");
 }
 
@@ -5519,6 +5860,80 @@ fn composer_arrows_scroll_config_overrides_default() {
         !app.composer_arrows_scroll,
         "explicit config=false must override the mouse-capture-derived default"
     );
+}
+
+#[test]
+fn home_jumps_to_line_start_multiline() {
+    let mut app = create_test_app();
+    app.input = "line one\nline two\nline three".to_string();
+    app.cursor_position = app.input.chars().count();
+    app.move_cursor_line_start();
+    assert_eq!(app.cursor_position, "line one\nline two\n".len());
+}
+
+#[test]
+fn home_from_middle_of_line_jumps_to_line_start() {
+    let mut app = create_test_app();
+    app.input = "line one\nline two".to_string();
+    app.cursor_position = "line one\nli".len();
+    app.move_cursor_line_start();
+    assert_eq!(app.cursor_position, "line one\n".len());
+}
+
+#[test]
+fn home_on_singleline_jumps_to_zero() {
+    let mut app = create_test_app();
+    app.input = "hello world".to_string();
+    app.cursor_position = 6;
+    app.move_cursor_line_start();
+    assert_eq!(app.cursor_position, 0);
+}
+
+#[test]
+fn end_jumps_to_line_end_multiline() {
+    let mut app = create_test_app();
+    app.input = "line one\nline two\nline three".to_string();
+    app.cursor_position = 0;
+    app.move_cursor_line_end();
+    assert_eq!(app.cursor_position, "line one".len());
+}
+
+#[test]
+fn end_from_middle_of_line_jumps_to_line_end() {
+    let mut app = create_test_app();
+    app.input = "line one\nline two".to_string();
+    app.cursor_position = "line one\nli".len();
+    app.move_cursor_line_end();
+    assert_eq!(app.cursor_position, "line one\nline two".len());
+}
+
+#[test]
+fn end_on_singleline_jumps_to_absolute_end() {
+    let mut app = create_test_app();
+    app.input = "hello world".to_string();
+    app.cursor_position = 0;
+    app.move_cursor_line_end();
+    assert_eq!(app.cursor_position, app.input.chars().count());
+}
+
+#[test]
+fn home_at_line_start_stays_put() {
+    let mut app = create_test_app();
+    app.input = "line one\nline two".to_string();
+    app.cursor_position = "line one\n".len();
+    app.move_cursor_line_start();
+    assert_eq!(app.cursor_position, "line one\n".len());
+}
+
+#[test]
+fn end_at_newline_stays_at_line_end() {
+    let mut app = create_test_app();
+    app.input = "line one\nline two\nline three".to_string();
+    // Cursor sitting on the first '\n'.
+    app.cursor_position = "line one".len();
+    app.move_cursor_line_end();
+    // Stays at end of current line.
+    assert_eq!(app.cursor_position, "line one".len());
 }
 
 #[test]

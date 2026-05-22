@@ -1,7 +1,7 @@
 //! TUI runtime logging. Initializes a `tracing-subscriber` that writes to a
-//! daily-rolling file under `~/.deepseek/logs/`, and (on Unix) redirects the
-//! process's `stderr` fd to that same file for the lifetime of the alt-screen
-//! TUI.
+//! per-process file under `~/.deepseek/logs/tui-YYYY-MM-DD-PID.log`, and (on
+//! Unix) redirects the process's `stderr` fd to that same file for the lifetime
+//! of the alt-screen TUI.
 //!
 //! Why this exists:
 //!
@@ -22,7 +22,7 @@
 //!
 //! Defence-in-depth:
 //!   1. A `tracing-subscriber` writes formatted logs to
-//!      `~/.deepseek/logs/tui-YYYY-MM-DD.log` so `tracing::warn!` /
+//!      `~/.deepseek/logs/tui-YYYY-MM-DD-PID.log` so `tracing::warn!` /
 //!      `tracing::error!` calls go somewhere observable instead of
 //!      disappearing into the void (the TUI previously had no global
 //!      subscriber, so contributors reached for `eprintln!`).
@@ -40,10 +40,15 @@
 //!      the alt-screen is entered.
 
 use std::fs::{self, File, OpenOptions};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result};
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
+
+const DEFAULT_LOG_RETENTION_DAYS: u64 = 7;
+const LOG_RETENTION_ENV: &str = "DEEPSEEK_LOG_RETENTION_DAYS";
+const SECONDS_PER_DAY: u64 = 24 * 60 * 60;
 
 /// Owns the active tracing subscriber and (on Unix) a saved copy of the
 /// original `stderr` fd so it can be restored on drop. Dropped when the TUI
@@ -100,9 +105,10 @@ pub fn init() -> Result<TuiLogGuard> {
     let log_dir = log_directory().context("could not resolve TUI log directory")?;
     fs::create_dir_all(&log_dir)
         .with_context(|| format!("failed to create {}", log_dir.display()))?;
+    let _ = prune_old_logs(&log_dir, log_retention_days());
 
-    let date = chrono::Local::now().format("%Y-%m-%d");
-    let log_path = log_dir.join(format!("tui-{date}.log"));
+    let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let log_path = log_dir.join(log_file_name(&date, std::process::id()));
 
     let file = OpenOptions::new()
         .create(true)
@@ -164,6 +170,52 @@ fn log_directory() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".deepseek").join("logs"))
 }
 
+fn log_file_name(date: &str, pid: u32) -> String {
+    format!("tui-{date}-{pid}.log")
+}
+
+fn log_retention_days() -> u64 {
+    std::env::var(LOG_RETENTION_ENV)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .filter(|days| *days > 0)
+        .unwrap_or(DEFAULT_LOG_RETENTION_DAYS)
+}
+
+fn prune_old_logs(log_dir: &Path, retention_days: u64) -> std::io::Result<usize> {
+    let retention = Duration::from_secs(retention_days.saturating_mul(SECONDS_PER_DAY));
+    let cutoff = SystemTime::now()
+        .checked_sub(retention)
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+    let mut removed = 0usize;
+
+    for entry in fs::read_dir(log_dir)? {
+        let entry = entry?;
+        if !is_tui_log_file_name(&entry.file_name()) {
+            continue;
+        }
+        let metadata = match entry.metadata() {
+            Ok(metadata) if metadata.is_file() => metadata,
+            _ => continue,
+        };
+        let modified = match metadata.modified() {
+            Ok(modified) => modified,
+            Err(_) => continue,
+        };
+        if modified < cutoff && fs::remove_file(entry.path()).is_ok() {
+            removed += 1;
+        }
+    }
+
+    Ok(removed)
+}
+
+fn is_tui_log_file_name(file_name: &std::ffi::OsStr) -> bool {
+    file_name
+        .to_str()
+        .is_some_and(|name| name.starts_with("tui-") && name.ends_with(".log"))
+}
+
 #[cfg(unix)]
 fn redirect_stderr_to(file: &File) -> Result<libc::c_int> {
     use std::os::fd::AsRawFd;
@@ -190,6 +242,13 @@ fn redirect_stderr_to(file: &File) -> Result<libc::c_int> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::FileTimes;
+
+    fn set_modified(path: &Path, modified: SystemTime) {
+        let file = OpenOptions::new().write(true).open(path).unwrap();
+        file.set_times(FileTimes::new().set_modified(modified))
+            .unwrap();
+    }
 
     #[test]
     fn log_directory_prefers_home() {
@@ -217,5 +276,67 @@ mod tests {
                 None => std::env::remove_var("USERPROFILE"),
             }
         }
+    }
+
+    #[test]
+    fn log_file_name_includes_pid() {
+        assert_eq!(
+            log_file_name("2026-05-18", 12345),
+            "tui-2026-05-18-12345.log"
+        );
+    }
+
+    #[test]
+    fn log_retention_days_uses_positive_env_override() {
+        let _lock = crate::test_support::lock_test_env();
+        let previous = std::env::var_os(LOG_RETENTION_ENV);
+
+        // SAFETY: serialised by lock_test_env.
+        unsafe {
+            std::env::set_var(LOG_RETENTION_ENV, "14");
+        }
+        assert_eq!(log_retention_days(), 14);
+
+        // SAFETY: serialised by lock_test_env.
+        unsafe {
+            std::env::set_var(LOG_RETENTION_ENV, "0");
+        }
+        assert_eq!(log_retention_days(), DEFAULT_LOG_RETENTION_DAYS);
+
+        // SAFETY: cleanup under the same lock.
+        unsafe {
+            match previous {
+                Some(value) => std::env::set_var(LOG_RETENTION_ENV, value),
+                None => std::env::remove_var(LOG_RETENTION_ENV),
+            }
+        }
+    }
+
+    #[test]
+    fn prune_old_logs_drops_only_stale_tui_logs() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let fresh = tmp.path().join("tui-2026-05-18-1.log");
+        let stale = tmp.path().join("tui-2026-05-01-2.log");
+        let legacy_stale = tmp.path().join("tui-2026-05-01.log");
+        let unrelated = tmp.path().join("agent-2026-05-01.log");
+
+        fs::write(&fresh, "fresh").unwrap();
+        fs::write(&stale, "stale").unwrap();
+        fs::write(&legacy_stale, "legacy").unwrap();
+        fs::write(&unrelated, "other").unwrap();
+
+        let now = SystemTime::now();
+        let old = now - Duration::from_secs(10 * SECONDS_PER_DAY);
+        set_modified(&stale, old);
+        set_modified(&legacy_stale, old);
+        set_modified(&unrelated, old);
+
+        let removed = prune_old_logs(tmp.path(), 7).unwrap();
+
+        assert_eq!(removed, 2);
+        assert!(fresh.exists());
+        assert!(!stale.exists());
+        assert!(!legacy_stale.exists());
+        assert!(unrelated.exists());
     }
 }

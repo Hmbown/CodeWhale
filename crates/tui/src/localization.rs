@@ -292,6 +292,7 @@ pub enum MessageId {
     CmdReviewDescription,
     CmdRlmDescription,
     CmdSaveDescription,
+    CmdForkDescription,
     CmdSessionsDescription,
     CmdSettingsDescription,
     CmdSkillDescription,
@@ -1002,6 +1003,7 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CmdReviewDescription => "Run a structured code review on a file, diff, or PR",
         MessageId::CmdRlmDescription => "Open a persistent RLM context: /rlm [0-3] <file_or_text>",
         MessageId::CmdSaveDescription => "Save session to file",
+        MessageId::CmdForkDescription => "Fork the active conversation into a sibling session",
         MessageId::CmdSessionsDescription => "Open session history picker",
         MessageId::CmdSettingsDescription => "Show persistent settings",
         MessageId::CmdSkillDescription => {
@@ -1408,6 +1410,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::CmdReviewDescription => "ファイル・diff・PR に対して構造化コードレビューを実行",
         MessageId::CmdRlmDescription => "永続 RLM コンテキストを開く: /rlm [0-3] <file_or_text>",
         MessageId::CmdSaveDescription => "セッションをファイルに保存",
+        MessageId::CmdForkDescription => "現在の会話を兄弟セッションに fork",
         MessageId::CmdSessionsDescription => "セッション履歴ピッカーを開く",
         MessageId::CmdSettingsDescription => "永続化された設定を表示",
         MessageId::CmdSkillDescription => {
@@ -1769,6 +1772,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CmdReviewDescription => "对文件、diff 或 PR 进行结构化代码审查",
         MessageId::CmdRlmDescription => "打开持久 RLM 上下文：/rlm [0-3] <file_or_text>",
         MessageId::CmdSaveDescription => "将会话保存到文件",
+        MessageId::CmdForkDescription => "将当前对话分叉为兄弟会话",
         MessageId::CmdSessionsDescription => "打开会话历史选择器",
         MessageId::CmdSettingsDescription => "显示持久化设置",
         MessageId::CmdSkillDescription => "激活技能，或安装/更新/卸载/信任社区技能",
@@ -2120,6 +2124,7 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
             "Abrir um contexto RLM persistente: /rlm [0-3] <file_or_text>"
         }
         MessageId::CmdSaveDescription => "Salvar a sessão em arquivo",
+        MessageId::CmdForkDescription => "Bifurcar a conversa ativa para uma sessão irmã",
         MessageId::CmdSessionsDescription => "Abrir seletor de histórico de sessões",
         MessageId::CmdSettingsDescription => "Exibir as configurações persistidas",
         MessageId::CmdSkillDescription => {
@@ -2525,6 +2530,7 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
             "Turno del Recursive Language Model (RLM) — guarda el prompt en un REPL Python y deja que el modelo escriba el código que lo procesa; usa `llm_query()` / `sub_rlm()` para llamadas a sub-LLMs."
         }
         MessageId::CmdSaveDescription => "Guardar la sesión en archivo",
+        MessageId::CmdForkDescription => "Bifurcar la conversación activa a una sesión hermana",
         MessageId::CmdSessionsDescription => "Abrir el selector de sesiones",
         MessageId::CmdSettingsDescription => "Mostrar las configuraciones persistidas",
         MessageId::CmdSkillDescription => {

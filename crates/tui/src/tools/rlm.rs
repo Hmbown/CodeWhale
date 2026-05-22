@@ -81,10 +81,7 @@ impl ToolSpec for RlmOpenTool {
     }
 
     async fn execute(&self, input: Value, context: &ToolContext) -> Result<ToolResult, ToolError> {
-        let source_count = ["file_path", "content", "url"]
-            .iter()
-            .filter(|key| input.get(**key).and_then(Value::as_str).is_some())
-            .count();
+        let source_count = rlm_open_source_count(&input);
         if source_count != 1 {
             return Err(ToolError::invalid_input(
                 "rlm_open: provide exactly one of `file_path`, `content`, or `url`",
@@ -417,7 +414,7 @@ async fn load_source(
     input: &Value,
     context: &ToolContext,
 ) -> Result<(String, String, Option<String>), ToolError> {
-    if let Some(path) = input.get("file_path").and_then(Value::as_str) {
+    if let Some(path) = rlm_open_source_field(input, "file_path").map(str::trim) {
         let resolved = context.resolve_path(path)?;
         let body = tokio::fs::read_to_string(&resolved).await.map_err(|e| {
             ToolError::execution_failed(format!("rlm_open: read {}: {e}", resolved.display()))
@@ -425,7 +422,7 @@ async fn load_source(
         return Ok((body, "file".to_string(), Some(path.to_string())));
     }
 
-    if let Some(content) = input.get("content").and_then(Value::as_str) {
+    if let Some(content) = rlm_open_source_field(input, "content") {
         if content.chars().count() > MAX_INLINE_CONTENT_CHARS {
             return Err(ToolError::invalid_input(format!(
                 "rlm_open: inline content is {} chars (cap {MAX_INLINE_CONTENT_CHARS})",
@@ -435,9 +432,8 @@ async fn load_source(
         return Ok((content.to_string(), "content".to_string(), None));
     }
 
-    let url = input
-        .get("url")
-        .and_then(Value::as_str)
+    let url = rlm_open_source_field(input, "url")
+        .map(str::trim)
         .ok_or_else(|| ToolError::invalid_input("rlm_open: missing source"))?;
     let result = FetchUrlTool
         .execute(json!({"url": url, "format": "raw"}), context)
@@ -456,6 +452,20 @@ async fn load_source(
         .unwrap_or("url")
         .to_string();
     Ok((body, source_type, Some(url.to_string())))
+}
+
+fn rlm_open_source_count(input: &Value) -> usize {
+    ["file_path", "content", "url"]
+        .iter()
+        .filter(|field| rlm_open_source_field(input, field).is_some())
+        .count()
+}
+
+fn rlm_open_source_field<'a>(input: &'a Value, field: &str) -> Option<&'a str> {
+    input
+        .get(field)
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
 }
 
 async fn get_session(
@@ -517,6 +527,43 @@ mod tests {
         assert_eq!(RlmEvalTool::new(None).name(), "rlm_eval");
         assert_eq!(RlmConfigureTool.name(), "rlm_configure");
         assert_eq!(RlmCloseTool.name(), "rlm_close");
+    }
+
+    #[test]
+    fn rlm_open_source_count_ignores_empty_string_defaults() {
+        assert_eq!(
+            rlm_open_source_count(
+                &json!({"name": "url-doc", "file_path": "", "content": "", "url": "https://example.com/doc"})
+            ),
+            1
+        );
+        assert_eq!(
+            rlm_open_source_count(
+                &json!({"name": "inline-doc", "file_path": "", "content": "body", "url": ""})
+            ),
+            1
+        );
+        assert_eq!(
+            rlm_open_source_count(&json!({"content": "body", "url": "https://example.com/doc"})),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn rlm_open_ignores_blank_source_defaults_from_schema_fillers() {
+        let ctx = ctx();
+        RlmOpenTool
+            .execute(
+                json!({"name": "blank-defaults", "file_path": "", "content": "body", "url": ""}),
+                &ctx,
+            )
+            .await
+            .expect("open with blank sibling source fields");
+
+        RlmCloseTool
+            .execute(json!({"name": "blank-defaults"}), &ctx)
+            .await
+            .expect("close");
     }
 
     #[tokio::test]
