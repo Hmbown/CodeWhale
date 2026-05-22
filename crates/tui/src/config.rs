@@ -1039,6 +1039,11 @@ pub struct Config {
     /// Vision model configuration for the `image_analyze` tool.
     #[serde(default)]
     pub vision_model: Option<VisionModelConfig>,
+
+    /// Image fetch/download configuration for `/attach-url` and `image_analyze` URL support.
+    /// When absent, defaults are used (20 MB max, cache in ~/.deepseek/cache/images/).
+    #[serde(default)]
+    pub image_fetch: Option<ImageFetchConfig>,
 }
 
 /// Vision model configuration for the `image_analyze` tool.
@@ -1054,6 +1059,20 @@ pub struct VisionModelConfig {
     #[serde(default)]
     pub base_url: Option<String>,
 }
+
+/// Configuration for image URL downloads (`/attach-url` and `image_analyze` with `image_url`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct ImageFetchConfig {
+    /// Whether image URL attachments are enabled. Defaults to `true`.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Maximum download size in bytes. Defaults to 20 MiB.
+    #[serde(default = "default_image_max_bytes")]
+    pub max_size_bytes: u64,
+}
+
+fn default_true() -> bool { true }
+fn default_image_max_bytes() -> u64 { 20 * 1024 * 1024 }
 
 /// `[runtime_api]` table — knobs for the local HTTP/SSE daemon.
 #[derive(Debug, Clone, Deserialize, Default)]

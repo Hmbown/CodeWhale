@@ -1,6 +1,6 @@
 //! `image_analyze` tool — analyze images using a dedicated vision model.
 
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 use crate::config::VisionModelConfig;
 use crate::llm_client::{LlmError, RetryConfig, with_retry};
+use crate::tools::image_fetch::download_image;
 use crate::tools::spec::{
     ToolCapability, ToolContext, ToolError, ToolResult, ToolSpec, required_str,
 };
@@ -67,6 +68,15 @@ impl ImageAnalyzeTool {
     fn api_key(&self) -> String {
         self.config.api_key.clone().unwrap_or_default()
     }
+
+    /// Resolve the image cache directory: `~/.deepseek/cache/images/`
+    fn image_cache_dir() -> PathBuf {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".deepseek")
+            .join("cache")
+            .join("images")
+    }
 }
 
 #[async_trait]
@@ -77,7 +87,9 @@ impl ToolSpec for ImageAnalyzeTool {
 
     fn description(&self) -> &str {
         "Analyze an image using the configured vision model. \
-         Supports PNG, JPEG, GIF, WebP, and BMP formats."
+         Supports PNG, JPEG, GIF, WebP, and BMP formats. \
+         Provide either `image_path` (local workspace file) or \
+         `image_url` (remote HTTP/HTTPS URL to download and analyze)."
     }
 
     fn input_schema(&self) -> Value {
@@ -86,14 +98,18 @@ impl ToolSpec for ImageAnalyzeTool {
             "properties": {
                 "image_path": {
                     "type": "string",
-                    "description": "Path to the image file to analyze"
+                    "description": "Path to the image file to analyze (relative to workspace)"
+                },
+                "image_url": {
+                    "type": "string",
+                    "description": "HTTP/HTTPS URL of an image to download and analyze"
                 },
                 "prompt": {
                     "type": "string",
                     "description": "Optional prompt to guide the analysis."
                 }
             },
-            "required": ["image_path"]
+            "required": []
         })
     }
 
@@ -102,25 +118,60 @@ impl ToolSpec for ImageAnalyzeTool {
     }
 
     async fn execute(&self, input: Value, context: &ToolContext) -> Result<ToolResult, ToolError> {
-        let image_path = required_str(&input, "image_path")?;
         let prompt = input
             .get("prompt")
             .and_then(|v| v.as_str())
             .unwrap_or("Describe this image in detail.");
 
-        let image_path_buf = Path::new(image_path);
-        if image_path_buf.components().any(|c| {
-            matches!(
-                c,
-                Component::Prefix(_) | Component::RootDir | Component::ParentDir
-            )
-        }) {
-            return Err(ToolError::execution_failed(
-                "image_path must be a relative path within the workspace and cannot escape it.",
-            ));
-        }
-        let resolved_path = context.workspace.join(image_path_buf);
-        let (image_data, mime_type) = Self::read_image_file(&resolved_path).await?;
+        // Resolve the image source: local path or remote URL.
+        let image_source: ImageSource = if let Some(url) = input
+            .get("image_url")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.trim().is_empty())
+        {
+            // Download image from URL to local cache.
+            let cache_dir = Self::image_cache_dir();
+            let downloaded = download_image(url, &cache_dir, context).await?;
+            ImageSource::Url {
+                url: url.to_string(),
+                cached_path: downloaded.path,
+                mime_type: downloaded.content_type,
+            }
+        } else {
+            let image_path = required_str(&input, "image_path")?;
+            let image_path_buf = Path::new(image_path);
+            if image_path_buf.components().any(|c| {
+                matches!(
+                    c,
+                    Component::Prefix(_) | Component::RootDir | Component::ParentDir
+                )
+            }) {
+                return Err(ToolError::execution_failed(
+                    "image_path must be a relative path within the workspace and cannot escape it.",
+                ));
+            }
+            let resolved_path = context.workspace.join(image_path_buf);
+            let mime_type = Self::detect_mime_type(&resolved_path)?;
+            ImageSource::Local {
+                path: resolved_path,
+                mime_type,
+            }
+        };
+
+        let (image_data, mime_type) = match &image_source {
+            ImageSource::Local { path, mime_type } => {
+                let (data, _) = Self::read_image_file(path).await?;
+                (data, mime_type.clone())
+            }
+            ImageSource::Url {
+                cached_path,
+                mime_type,
+                ..
+            } => {
+                let (data, _) = Self::read_image_file(cached_path).await?;
+                (data, mime_type.clone())
+            }
+        };
 
         let payload = json!({
             "model": self.config.model,
@@ -206,14 +257,30 @@ impl ToolSpec for ImageAnalyzeTool {
             .unwrap_or(&self.config.model)
             .to_string();
 
+        let source_label = match &image_source {
+            ImageSource::Local { path, .. } => {
+                format!("local:{}", path.display())
+            }
+            ImageSource::Url { url, .. } => {
+                format!("url:{url}")
+            }
+        };
+
         let result = json!({
             "analysis": content,
             "model": model,
+            "source": source_label,
         });
 
         ToolResult::json(&result)
             .map_err(|e| ToolError::execution_failed(format!("Failed to serialize result: {e}")))
     }
+}
+
+/// Internal enum for image source resolution.
+enum ImageSource {
+    Local { path: PathBuf, mime_type: String },
+    Url { url: String, cached_path: PathBuf, mime_type: String },
 }
 
 #[cfg(test)]
@@ -264,9 +331,6 @@ mod tests {
 
     #[tokio::test]
     async fn execute_rejects_absolute_path() {
-        // Trust-boundary pin: image_path must stay inside the workspace
-        // — an absolute path or a `..`-traversing path must reject
-        // before any base64 / API call.
         let tmp = tempdir().expect("tempdir");
         let ctx = ToolContext::new(tmp.path().to_path_buf());
         let tool = ImageAnalyzeTool::new(fake_config());
@@ -300,5 +364,16 @@ mod tests {
                 .contains("relative path within the workspace"),
             "error must call out the workspace boundary; got {err}"
         );
+    }
+
+    #[test]
+    fn input_schema_accepts_image_url() {
+        let tool = ImageAnalyzeTool::new(fake_config());
+        let schema = tool.input_schema();
+        let props = schema.get("properties").expect("has properties");
+        assert!(props.get("image_url").is_some(), "must have image_url property");
+        let required = schema.get("required").expect("has required");
+        let req_arr = required.as_array().expect("required is array");
+        assert!(req_arr.is_empty(), "required should be empty (one of image_path or image_url)");
     }
 }

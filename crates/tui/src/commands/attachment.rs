@@ -1,10 +1,11 @@
-//! Local media attachment commands.
+//! Local and remote media attachment commands.
 
 use std::path::{Path, PathBuf};
 
 use super::CommandResult;
 use crate::tui::app::App;
 
+/// Attach a local image or video file by path.
 pub fn attach(app: &mut App, arg: Option<&str>) -> CommandResult {
     let Some(raw_path) = arg.map(str::trim).filter(|value| !value.is_empty()) else {
         return CommandResult::error("Usage: /attach <image-or-video-path>");
@@ -58,6 +59,49 @@ fn media_kind(path: &Path) -> Option<&'static str> {
         "mp4" | "mov" | "m4v" | "webm" | "avi" | "mkv" => Some("video"),
         _ => None,
     }
+}
+
+/// Validate that a string looks like an HTTP(S) URL pointing to an image
+/// (by extension). Returns the trimmed URL on success.
+fn validate_image_url(raw: &str) -> Result<String, String> {
+    let url = raw.trim();
+    if url.is_empty() {
+        return Err("empty image URL".to_string());
+    }
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err("image URL must start with http:// or https://".to_string());
+    }
+    // Quick check: reasonable image extension in the path
+    let lower = url.to_ascii_lowercase();
+    let has_image_ext = lower.ends_with(".png")
+        || lower.ends_with(".jpg")
+        || lower.ends_with(".jpeg")
+        || lower.ends_with(".gif")
+        || lower.ends_with(".webp")
+        || lower.ends_with(".bmp")
+        || lower.ends_with(".tif")
+        || lower.ends_with(".tiff");
+    if has_image_ext {
+        return Ok(url.to_string());
+    }
+    // Accept anyway — the server Content-Type check in download_image
+    // will be the authoritative gate.
+    Ok(url.to_string())
+}
+
+/// Attach an image by URL. Inserts a reference into the composer.
+pub fn attach_url(app: &mut App, arg: Option<&str>) -> CommandResult {
+    let Some(raw_url) = arg.map(str::trim).filter(|v| !v.is_empty()) else {
+        return CommandResult::error("Usage: /attach-url <https://...>");
+    };
+
+    let url = match validate_image_url(raw_url) {
+        Ok(url) => url,
+        Err(msg) => return CommandResult::error(msg),
+    };
+
+    app.insert_image_url_attachment(&url);
+    CommandResult::message(format!("Attached image URL: {url}"))
 }
 
 #[cfg(test)]
@@ -124,5 +168,42 @@ mod tests {
                 .contains("Unsupported attachment type")
         );
         assert!(app.input.is_empty());
+    }
+
+    #[test]
+    fn attach_url_inserts_image_url_reference() {
+        let tmpdir = TempDir::new().expect("tempdir");
+        let mut app = app_with_workspace(&tmpdir);
+
+        let result = attach_url(&mut app, Some("https://example.com/photo.png"));
+
+        assert!(result
+            .message
+            .expect("message")
+            .contains("Attached image URL"));
+        assert!(app.input.contains("[Attached image-url: https://example.com/photo.png]"));
+    }
+
+    #[test]
+    fn attach_url_rejects_empty() {
+        let tmpdir = TempDir::new().expect("tempdir");
+        let mut app = app_with_workspace(&tmpdir);
+
+        let result = attach_url(&mut app, Some("   "));
+
+        assert!(result.message.expect("message").contains("empty image URL"));
+    }
+
+    #[test]
+    fn attach_url_rejects_non_http() {
+        let tmpdir = TempDir::new().expect("tempdir");
+        let mut app = app_with_workspace(&tmpdir);
+
+        let result = attach_url(&mut app, Some("ftp://example.com/photo.png"));
+
+        assert!(result
+            .message
+            .expect("message")
+            .contains("must start with http"));
     }
 }

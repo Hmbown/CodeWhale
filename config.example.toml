@@ -333,6 +333,14 @@ exec_policy = true
 # base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"  # Optional
 
 # ─────────────────────────────────────────────────────────────────────────────────
+# Image Fetch Configuration
+# ─────────────────────────────────────────────────────────────────────────────────
+# Controls downloading of images from URLs for /attach-url and image_analyze.
+# [image_fetch]
+# enabled = true                 # Enable image URL downloads (default: true)
+# max_size_bytes = 20971520      # Max download size in bytes (default: 20 MiB)
+
+# ─────────────────────────────────────────────────────────────────────────────────
 # Retry Configuration
 # ─────────────────────────────────────────────────────────────────────────────────
 [retry]

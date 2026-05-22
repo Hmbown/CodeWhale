@@ -24,6 +24,7 @@ pub mod git;
 pub mod git_history;
 pub mod github;
 pub mod handle;
+pub mod image_fetch;
 pub mod image_ocr;
 pub mod js_execution;
 pub mod large_output_router;

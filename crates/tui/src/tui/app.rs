@@ -2874,6 +2874,32 @@ impl App {
         self.paste_burst.clear_after_explicit_paste();
     }
 
+    /// Insert an image URL attachment reference into the composer.
+    pub fn insert_image_url_attachment(&mut self, url: &str) {
+        let reference = format!("[Attached image-url: {url}]");
+        let cursor = self.cursor_position.min(char_count(&self.input));
+        let byte_index = byte_index_at_char(&self.input, cursor);
+        let needs_prefix_newline = self.input[..byte_index]
+            .chars()
+            .last()
+            .is_some_and(|ch| !ch.is_whitespace());
+        let needs_suffix_newline = self.input[byte_index..]
+            .chars()
+            .next()
+            .is_some_and(|ch| !ch.is_whitespace());
+
+        let mut inserted = String::new();
+        if needs_prefix_newline {
+            inserted.push('\n');
+        }
+        inserted.push_str(&reference);
+        if needs_suffix_newline || self.input[byte_index..].is_empty() {
+            inserted.push('\n');
+        }
+        self.insert_str(&inserted);
+        self.paste_burst.clear_after_explicit_paste();
+    }
+
     pub fn composer_attachment_count(&self) -> usize {
         crate::tui::file_mention::media_attachment_references(&self.input).len()
     }

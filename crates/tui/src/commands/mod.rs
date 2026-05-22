@@ -255,6 +255,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         description_id: MessageId::CmdAttachDescription,
     },
     CommandInfo {
+        name: "attach-url",
+        aliases: &["image-url", "attachurl"],
+        usage: "/attach-url <https://...>",
+        description_id: MessageId::CmdAttachDescription,
+    },
+    CommandInfo {
         name: "task",
         aliases: &["tasks"],
         usage: "/task [add <prompt>|list|show <id>|cancel <id>]",
@@ -568,6 +574,7 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "note" => note::note(app, arg),
         "memory" => memory::memory(app, arg),
         "attach" | "image" | "media" | "fujian" => attachment::attach(app, arg),
+        "attach-url" | "image-url" | "attachurl" => attachment::attach_url(app, arg),
         "task" | "tasks" => task::task(app, arg),
         "jobs" | "job" | "zuoye" => jobs::jobs(app, arg),
         "mcp" => mcp::mcp(app, arg),
