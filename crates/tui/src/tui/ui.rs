@@ -740,7 +740,7 @@ fn effective_mode_for_turn(app: &App) -> AppMode {
             }
         }
         // Planning and review are intentionally read-only, matching the
-        // Opus Plan shape: think with the stronger model before/after writes.
+        // Pro Plan shape: think with the stronger model before/after writes.
         Some(_) | None => AppMode::Plan,
     }
 }

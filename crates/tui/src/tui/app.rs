@@ -4225,6 +4225,10 @@ impl App {
     }
 
     pub fn model_display_label(&self) -> String {
+        if self.mode == AppMode::ProPlan {
+            return format!("pro-plan: {}", self.effective_model_for_budget());
+        }
+
         if self.auto_model {
             if let Some(effective) = self.last_effective_model.as_deref()
                 && effective != "auto"
@@ -5150,6 +5154,33 @@ mod tests {
         assert!(!app.allow_shell);
         assert!(!app.trust_mode);
         assert_eq!(app.approval_mode, ApprovalMode::Never);
+    }
+
+    #[test]
+    fn set_mode_pro_plan_temporarily_disables_auto_model_and_restores_on_exit() {
+        let mut options = test_options(false);
+        options.start_in_agent_mode = true; // avoid coupling to settings.default_mode
+        let mut app = App::new(options, &Config::default());
+        app.auto_model = true;
+        app.last_effective_model = Some("deepseek-v4-flash".to_string());
+
+        app.set_mode(AppMode::ProPlan);
+        assert_eq!(app.mode, AppMode::ProPlan);
+        assert!(!app.auto_model);
+        assert!(app.pro_plan_router.is_some());
+        assert_eq!(app.model_display_label(), "pro-plan: deepseek-v4-pro");
+
+        {
+            let router = app.pro_plan_router.as_mut().expect("pro plan router");
+            router.start_execution(false);
+        }
+        assert_eq!(app.model_display_label(), "pro-plan: deepseek-v4-flash");
+
+        app.set_mode(AppMode::Agent);
+        assert_eq!(app.mode, AppMode::Agent);
+        assert!(app.auto_model);
+        assert!(app.pro_plan_router.is_none());
+        assert_eq!(app.model_display_label(), "auto: deepseek-v4-flash");
     }
 
     #[test]

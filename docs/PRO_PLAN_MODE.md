@@ -1,7 +1,7 @@
 # Pro Plan Mode
 
-Pro Plan is a model-routing mode inspired by the public behavior of Claude
-Code's plan-first workflow:
+Pro Plan is a model-routing mode that keeps planning and review on the
+stronger model while using the faster model for the implementation pass:
 
 - Plan phase: use `deepseek-v4-pro` with the existing Plan mode prompt and
   read-only tool policy.
