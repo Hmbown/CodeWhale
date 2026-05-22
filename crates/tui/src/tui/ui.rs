@@ -1397,6 +1397,7 @@ async fn run_event_loop(
                                 in_tmux,
                                 &msg,
                                 threshold,
+                                turn_elapsed,
                                 app.last_interaction_time,
                             );
                         }
@@ -1655,6 +1656,7 @@ async fn run_event_loop(
                                 in_tmux,
                                 &msg,
                                 threshold,
+                                subagent_elapsed,
                                 app.last_interaction_time,
                             );
                         }

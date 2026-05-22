@@ -422,14 +422,15 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 #
 # method        = "auto"   # auto | osc9 | native | bel | off
 #                 auto: OSC 9 for iTerm.app / Ghostty / WezTerm / Cmux
-#                       (or any terminal with TERM containing "ghostty").
-#                       On macOS / Linux, falls back to native
-#                       (osascript display notification) — works in any
-#                       terminal, no OSC 9 support required.
-#                       On Windows, falls back to "off" — BEL maps to the
-#                       system error chime (SystemAsterisk / MB_OK), which
-#                       sounds like an error popup. Set method = "bel"
-#                       explicitly to opt back in (#583).
+#                       (or any terminal with TERM containing "ghostty" or
+#                       LC_TERMINAL=*). Kitty OSC 99 for kitty terminals.
+#                       Ghostty OSC 777 when TERM_PROGRAM=Ghostty.
+#                       On macOS / Linux, unknown terminals fall back to
+#                       Bel (audible beep). On Windows, falls back to "off"
+#                       — BEL maps to the system error chime
+#                       (SystemAsterisk / MB_OK), which sounds like an
+#                       error popup. Set method = "bel" explicitly to opt
+#                       back in (#583).
 #                 osc9:   \x1b]9;<msg>\x07 (iTerm2-style; shows macOS notification
 #                         in iTerm2/Ghostty/WezTerm/Cmux)
 #                 native: osascript display notification (macOS) /

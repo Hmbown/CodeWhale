@@ -80,12 +80,12 @@ fn terminal_bundle_id() -> Option<&'static str> {
 
 /// Check whether `terminal-notifier` is installed and reachable.
 fn has_terminal_notifier() -> bool {
-    std::process::Command::new("which")
-        .arg("terminal-notifier")
+    std::process::Command::new("terminal-notifier")
+        .arg("-version")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
-        .map_or(false, |s| s.success())
+        .is_ok_and(|s| s.success())
 }
 
 /// Fire a native OS notification.
@@ -116,8 +116,14 @@ fn native_notify(msg: &str) {
                 return;
             }
             // Fallback: plain osascript notification (no click-to-focus).
-            // Escape backslashes and double-quotes to prevent AppleScript injection.
-            let escaped = msg.replace('\\', "\\\\").replace('"', "\\\"");
+            // Escape backslashes, double-quotes, and newlines to prevent
+            // AppleScript injection and malformed string literals. Newlines
+            // are replaced with spaces — osascript string literals cannot
+            // contain literal line breaks.
+            let escaped = msg
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace(['\n', '\r'], " ");
             let _ = std::process::Command::new("osascript")
                 .arg("-e")
                 .arg(format!(
@@ -127,10 +133,12 @@ fn native_notify(msg: &str) {
                 .stderr(std::process::Stdio::null())
                 .spawn();
         }
-        #[cfg(all(target_os = "linux", not(target_os = "macos")))]
+        #[cfg(target_os = "linux")]
         {
-            if std::process::Command::new("which")
-                .arg("notify-send")
+            // Check availability directly (Command::new searches PATH),
+            // avoiding an extra `which` process.
+            if std::process::Command::new("notify-send")
+                .arg("--version")
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .status()
@@ -305,21 +313,16 @@ pub fn notify_done(
     notify_done_to(method, in_tmux, msg, threshold, elapsed, &mut io::stdout());
 }
 
-/// Default idle threshold: 6 seconds without keyboard input.
+/// Seconds of keyboard inactivity required to trigger an idle notification.
 pub const DEFAULT_IDLE_THRESHOLD: Duration = Duration::from_secs(6);
-
-/// Maximum time to wait for user to become idle before giving up.
-pub const MAX_IDLE_WAIT: Duration = Duration::from_secs(300);
 
 /// Emit a notification when the user is idle after a turn completes.
 ///
-/// If `idle_threshold` is zero, fires immediately (old fixed-elapsed behavior).
-///
-/// Otherwise, checks whether the user has been idle (no keyboard input)
-/// for at least `idle_threshold` seconds at the time of this call.
-/// If already idle, fires immediately. If not idle, the notification is
-/// silently skipped — the user is actively watching the output and doesn't
-/// need an alert.
+/// Notifies only when both conditions are met:
+/// 1. The turn took at least `min_turn_duration` (or the duration is zero,
+///    which means "always notify").
+/// 2. The user has been idle (no keyboard input) for at least
+///    [`DEFAULT_IDLE_THRESHOLD`] seconds.
 ///
 /// This mirrors Claude Code's approach: notify when the user has tabbed
 /// away or stopped typing, not while they're actively engaged.
@@ -327,23 +330,23 @@ pub fn notify_after_idle(
     method: Method,
     in_tmux: bool,
     msg: &str,
-    idle_threshold: Duration,
+    min_turn_duration: Duration,
+    turn_elapsed: Duration,
     last_interaction: std::time::Instant,
 ) {
-    // Zero threshold → fire immediately (old behavior).
-    if idle_threshold.is_zero() {
-        let effective = resolve_effective_method(method);
-        emit_notification(effective, in_tmux, msg);
+    // Don't notify if the turn was too quick, unless the caller opted into
+    // "always" by passing a zero min_turn_duration.
+    if turn_elapsed < min_turn_duration {
         return;
     }
 
-    // Check if user is currently idle.
-    let elapsed_since_input = last_interaction.elapsed();
-    if elapsed_since_input >= idle_threshold {
-        let effective = resolve_effective_method(method);
-        emit_notification(effective, in_tmux, msg);
+    // User must have been idle for the threshold to get an alert.
+    if last_interaction.elapsed() < DEFAULT_IDLE_THRESHOLD {
+        return;
     }
-    // Not idle → skip. User is actively watching the output.
+
+    let effective = resolve_effective_method(method);
+    emit_notification(effective, in_tmux, msg);
 }
 
 /// Resolve `Auto` to a concrete method.
@@ -354,9 +357,43 @@ fn resolve_effective_method(method: Method) -> Method {
     }
 }
 
+/// Check whether at least one native notification command is available.
+#[cfg(target_os = "macos")]
+fn has_any_native_command() -> bool {
+    has_terminal_notifier()
+        || std::process::Command::new("osascript")
+            .arg("-e")
+            .arg("")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
+}
+
+#[cfg(target_os = "linux")]
+fn has_any_native_command() -> bool {
+    std::process::Command::new("notify-send")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+#[cfg(target_os = "windows")]
+fn has_any_native_command() -> bool {
+    false
+}
+
 /// Core notification emission shared by both notify paths.
+/// Silently falls back to Bel when `Native` is requested but no native
+/// command is available.
 fn emit_notification(method: Method, in_tmux: bool, msg: &str) {
-    match method {
+    let effective = match method {
+        Method::Native if !has_any_native_command() => Method::Bel,
+        other => other,
+    };
+    match effective {
         Method::Off => {}
         Method::Native => {
             native_notify(msg);
