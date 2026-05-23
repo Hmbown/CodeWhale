@@ -220,7 +220,7 @@ fn write_text_with_set_clipboard(text: &str) -> Result<()> {
 /// `wl_data_device_manager` protocol that every Wayland compositor implements.
 #[cfg(all(target_os = "linux", not(test)))]
 fn write_text_with_wlcopy(text: &str) -> Result<()> {
-    write_text_with_wlcopy_using(WLCOPY_BIN, text)
+    write_text_with_wlcopy_using_argv(&[WLCOPY_BIN], text)
 }
 
 #[cfg(all(target_os = "linux", not(test)))]
@@ -228,13 +228,19 @@ const WLCOPY_BIN: &str = "wl-copy";
 
 /// Inner helper that delegates to an arbitrary stdin-fed command. Parameterised
 /// so tests can exercise both success and failure paths without depending on
-/// `wl-copy` being installed on the build host.
+/// `wl-copy` being installed on the build host. `argv[0]` is the program; the
+/// remaining slots are its arguments.
 #[cfg(target_os = "linux")]
-fn write_text_with_wlcopy_using(program: &str, text: &str) -> Result<()> {
+fn write_text_with_wlcopy_using_argv(argv: &[&str], text: &str) -> Result<()> {
     use std::io::Write;
     use std::process::{Command, Stdio};
 
+    let (program, args) = argv.split_first().ok_or_else(|| {
+        anyhow::anyhow!("write_text_with_wlcopy_using_argv requires at least the program name")
+    })?;
+
     let mut child = Command::new(program)
+        .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -251,7 +257,7 @@ fn write_text_with_wlcopy_using(program: &str, text: &str) -> Result<()> {
     if status.success() {
         return Ok(());
     }
-    Err(anyhow::anyhow!("{program} failed"))
+    bail!("{program} failed with {status}")
 }
 
 #[cfg(not(test))]
@@ -406,9 +412,11 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn wlcopy_helper_errors_when_binary_missing() {
-        let err =
-            write_text_with_wlcopy_using("deepseek-tui-nonexistent-clipboard-binary-zzz", "hi")
-                .expect_err("missing binary should fail");
+        let err = write_text_with_wlcopy_using_argv(
+            &["deepseek-tui-nonexistent-clipboard-binary-zzz"],
+            "hi",
+        )
+        .expect_err("missing binary should fail");
         assert!(
             err.to_string().contains("Failed to run"),
             "unexpected error: {err}"
@@ -418,15 +426,15 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn wlcopy_helper_errors_when_binary_exits_nonzero() {
-        // `/bin/false` exits 1 immediately and drops stdin. The helper must
-        // surface that as a failure so the caller falls through to arboard /
-        // OSC 52 instead of believing the clipboard write succeeded.
-        let err = write_text_with_wlcopy_using("false", "hi")
+        // Drain stdin then exit non-zero. Using `sh -c "cat >/dev/null; exit 1"`
+        // is deterministic — `/bin/false` would race the parent's write_all and
+        // sometimes surface as a broken-pipe write error instead of the
+        // exit-status path we are exercising here. The helper must surface a
+        // non-zero exit so the caller falls through to arboard / OSC 52.
+        let err = write_text_with_wlcopy_using_argv(&["sh", "-c", "cat >/dev/null; exit 1"], "hi")
             .expect_err("non-zero exit must be reported as failure");
-        assert!(
-            err.to_string().contains("failed"),
-            "unexpected error: {err}"
-        );
+        let msg = err.to_string();
+        assert!(msg.contains("failed with"), "unexpected error: {err}");
     }
 
     #[cfg(target_os = "linux")]
@@ -434,7 +442,7 @@ mod tests {
     fn wlcopy_helper_succeeds_when_binary_returns_zero() {
         // `cat` drains stdin and exits 0 — same observable contract as a
         // successful `wl-copy` invocation on a supported compositor.
-        write_text_with_wlcopy_using("cat", "hello").expect("cat should succeed");
+        write_text_with_wlcopy_using_argv(&["cat"], "hello").expect("cat should succeed");
     }
 
     #[test]
