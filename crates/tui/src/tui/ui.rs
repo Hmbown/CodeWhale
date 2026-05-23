@@ -3731,22 +3731,23 @@ pub(crate) fn apply_engine_error_to_app(
 }
 
 fn persist_offline_queue_state(app: &App) {
-    if let Ok(manager) = SessionManager::default_location() {
-        if app.queued_messages.is_empty() && app.queued_draft.is_none() {
-            let _ = manager.clear_offline_queue_state();
-            return;
-        }
-        let state = OfflineQueueState {
-            messages: app
-                .queued_messages
-                .iter()
-                .map(queued_ui_to_session)
-                .collect(),
-            draft: app.queued_draft.as_ref().map(queued_ui_to_session),
-            ..OfflineQueueState::default()
-        };
-        let _ = manager.save_offline_queue_state(&state, app.current_session_id.as_deref());
+    if app.queued_messages.is_empty() && app.queued_draft.is_none() {
+        persistence_actor::persist(PersistRequest::ClearOfflineQueue);
+        return;
     }
+    let state = OfflineQueueState {
+        messages: app
+            .queued_messages
+            .iter()
+            .map(queued_ui_to_session)
+            .collect(),
+        draft: app.queued_draft.as_ref().map(queued_ui_to_session),
+        ..OfflineQueueState::default()
+    };
+    persistence_actor::persist(PersistRequest::OfflineQueue {
+        state,
+        session_id: app.current_session_id.clone(),
+    });
 }
 
 /// Strip ANSI control codes / non-printable bytes from a streaming

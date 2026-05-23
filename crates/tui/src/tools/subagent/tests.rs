@@ -825,6 +825,63 @@ async fn test_wait_for_result_reports_timeout_when_still_running() {
     assert_eq!(snapshot.status, SubAgentStatus::Running);
 }
 
+// Regression for #1738: agent_eval on a terminated session must not
+// hard-fail with "not running" when a follow-up message is supplied. The
+// parent still needs the projection (and its transcript_handle) to recover
+// the child's full output.
+#[tokio::test]
+async fn agent_eval_on_completed_session_returns_full_projection_not_running_error() {
+    let manager = Arc::new(RwLock::new(SubAgentManager::new(PathBuf::from("."), 1)));
+    let (input_tx, _input_rx) = mpsc::unbounded_channel();
+    let mut agent = SubAgent::new(
+        SubAgentType::Explore,
+        "analyze 14 issues".to_string(),
+        make_assignment(),
+        "deepseek-v4-flash".to_string(),
+        Some("Blue".to_string()),
+        Some(vec!["read_file".to_string()]),
+        input_tx,
+        "boot_test".to_string(),
+    );
+    let full_output = "Per-issue analysis:\n".to_string() + &"detail line\n".repeat(400);
+    agent.status = SubAgentStatus::Completed;
+    agent.result = Some(full_output.clone());
+    let agent_id = agent.id.clone();
+    {
+        let mut guard = manager.write().await;
+        guard.agents.insert(agent_id.clone(), agent);
+    }
+
+    let ctx = ToolContext::new(".");
+    let tool = AgentEvalTool::new(manager.clone());
+    let result = tool
+        .execute(
+            json!({
+                "agent_id": agent_id,
+                "message": "give me the full per-issue breakdown",
+                "block": false
+            }),
+            &ctx,
+        )
+        .await
+        .expect("agent_eval on a completed session must not error");
+
+    let meta = result.metadata.expect("metadata present");
+    assert_eq!(meta["terminal"], json!(true));
+    assert_eq!(meta["message_delivery"]["delivered"], json!(false));
+
+    let projection: SubAgentSessionProjection =
+        serde_json::from_str(&result.content).expect("projection deserializes");
+    assert_eq!(projection.status, "completed");
+    assert_eq!(projection.transcript_handle.kind, "var_handle");
+    // The full, untruncated child output survives in the snapshot the
+    // transcript_handle points at.
+    assert_eq!(
+        projection.snapshot.result.as_deref(),
+        Some(full_output.as_str())
+    );
+}
+
 #[tokio::test]
 async fn test_running_count_counts_only_agents_with_live_task_handles() {
     let mut manager = SubAgentManager::new(PathBuf::from("."), 1);
