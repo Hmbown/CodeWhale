@@ -60,17 +60,15 @@ pub(crate) fn render_footer(f: &mut Frame, area: Rect, app: &mut App) {
 
     // Animate the spacer between the left status line and the right-hand
     // chips whenever a turn is live: model loading/streaming, compacting, or
-    // sub-agents in flight. The spout strip is gated on `fancy_animations`
-    // (the "do I want a whale at all" knob); `low_motion` now governs only
-    // streaming pacing (typewriter vs upstream), not the spout. Dot-pulse
-    // counter ticks every 400 ms so `working` → `working...` reads at a
-    // calm pace regardless of motion mode.
+    // sub-agents in flight. The spout strip and dot-pulse fallback are gated
+    // on `fancy_animations` (the "do I want animated chrome" knob);
+    // `low_motion` governs streaming pacing and redraw cadence.
     if footer_working_strip_active(app) {
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
-        let dot_frame = now_ms / 400;
+        let dot_frame = footer_working_label_frame(now_ms, app.fancy_animations);
         // Surface one compact live status row in the footer whenever a turn
         // is live. Tool turns get the current action plus active/done counts;
         // non-tool work falls back to the existing dot-pulse label.
@@ -83,9 +81,8 @@ pub(crate) fn render_footer(f: &mut Frame, area: Rect, app: &mut App) {
         // math in `footer_working_strip_glyph_at` was tuned for this cadence
         // (`t = frame / 1000.0`, primary term × 8.0 ≈ 1.3 Hz at 1 ms ticks),
         // so frame must advance at ~1000 units/sec to produce the intended
-        // animation feel. `fancy_animations = false` hides the strip
-        // entirely; the textual `working...` pulse still keeps a heartbeat
-        // regardless.
+        // animation feel. `fancy_animations = false` hides the strip and pins
+        // the textual fallback to `working`.
         if app.fancy_animations {
             props.working_strip_frame = Some(now_ms);
         }
@@ -112,6 +109,23 @@ pub(crate) fn render_footer(f: &mut Frame, area: Rect, app: &mut App) {
 pub(crate) fn footer_working_strip_active(app: &App) -> bool {
     let turn_in_progress = app.runtime_turn_status.as_deref() == Some("in_progress");
     app.is_loading || app.is_compacting || running_agent_count(app) > 0 || turn_in_progress
+}
+
+pub(crate) fn footer_working_label_frame(now_ms: u64, fancy_animations: bool) -> u64 {
+    if fancy_animations { now_ms / 400 } else { 0 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::footer_working_label_frame;
+
+    #[test]
+    fn footer_working_label_frame_is_static_without_fancy_animations() {
+        assert_eq!(footer_working_label_frame(0, false), 0);
+        assert_eq!(footer_working_label_frame(399, false), 0);
+        assert_eq!(footer_working_label_frame(1_600, false), 0);
+        assert_eq!(footer_working_label_frame(1_600, true), 4);
+    }
 }
 
 pub(crate) fn is_noisy_subagent_progress(status: &str) -> bool {
