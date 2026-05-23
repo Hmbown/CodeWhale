@@ -2606,6 +2606,24 @@ mod stream_decoder_tests {
             .expect("user message content")
     }
 
+    fn with_tool_result_sha_spillover_root<T>(f: impl FnOnce() -> T) -> T {
+        let _guard = crate::tools::truncate::TEST_SPILLOVER_GUARD
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let prior = crate::tools::truncate::set_test_spillover_root(Some(
+            tmp.path().join(".deepseek").join("tool_outputs"),
+        ));
+        struct Restore(Option<std::path::PathBuf>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                crate::tools::truncate::set_test_spillover_root(self.0.take());
+            }
+        }
+        let _restore = Restore(prior);
+        f()
+    }
+
     #[test]
     fn request_builder_deduplicates_consecutive_identical_turn_meta_for_wire() {
         let turn_meta = "<turn_meta>\nCurrent local date: 2026-05-09\n</turn_meta>";
@@ -2774,73 +2792,77 @@ mod stream_decoder_tests {
 
     #[test]
     fn request_builder_deduplicates_large_identical_tool_results_with_retrieval_hint() {
-        let output = "A".repeat(2_000);
-        let messages = vec![
-            tool_use_message("tool-1", "read_file", json!({"path": "README.md"})),
-            tool_result_message("tool-1", &output),
-            tool_use_message("tool-2", "read_file", json!({"path": "README.md"})),
-            tool_result_message("tool-2", &output),
-        ];
+        with_tool_result_sha_spillover_root(|| {
+            let output = "A".repeat(2_000);
+            let messages = vec![
+                tool_use_message("tool-1", "read_file", json!({"path": "README.md"})),
+                tool_result_message("tool-1", &output),
+                tool_use_message("tool-2", "read_file", json!({"path": "README.md"})),
+                tool_result_message("tool-2", &output),
+            ];
 
-        let built = build_chat_messages(None, &messages, "deepseek-v4-flash");
-        let first = tool_message_content(&built, 0);
-        let second = tool_message_content(&built, 1);
+            let built = build_chat_messages(None, &messages, "deepseek-v4-flash");
+            let first = tool_message_content(&built, 0);
+            let second = tool_message_content(&built, 1);
 
-        assert_eq!(first, output);
-        assert!(
-            second.starts_with("<TOOL_RESULT_REF sha=\""),
-            "got: {second}"
-        );
-        assert!(
-            second.contains("original_message=\"Message #1\""),
-            "got: {second}"
-        );
-        assert!(second.contains("chars=\"2000\""), "got: {second}");
-        assert!(
-            second.contains("retrieve: retrieve_tool_result ref=sha:"),
-            "got: {second}"
-        );
+            assert_eq!(first, output);
+            assert!(
+                second.starts_with("<TOOL_RESULT_REF sha=\""),
+                "got: {second}"
+            );
+            assert!(
+                second.contains("original_message=\"Message #1\""),
+                "got: {second}"
+            );
+            assert!(second.contains("chars=\"2000\""), "got: {second}");
+            assert!(
+                second.contains("retrieve: retrieve_tool_result ref=sha:"),
+                "got: {second}"
+            );
+        });
     }
 
     #[test]
     fn request_builder_never_dedups_large_identical_write_file_confirmations() {
-        // A `write_file` result embeds the unified diff + summary; it is a
-        // confirmation, not retrievable data. Two identical >1024-char
-        // write_file results must BOTH stay inline — collapsing the second
-        // to a SHA ref makes the model lose write-success context and
-        // report the file as missing (#1695).
-        let output = "A".repeat(2_000);
-        let messages = vec![
-            tool_use_message("tool-1", "write_file", json!({"path": "big.txt"})),
-            tool_result_message("tool-1", &output),
-            tool_use_message("tool-2", "write_file", json!({"path": "big.txt"})),
-            tool_result_message("tool-2", &output),
-        ];
+        with_tool_result_sha_spillover_root(|| {
+            // A `write_file` result embeds the unified diff + summary; it is a
+            // confirmation, not retrievable data. Two identical >1024-char
+            // write_file results must BOTH stay inline — collapsing the second
+            // to a SHA ref makes the model lose write-success context and
+            // report the file as missing (#1695).
+            let output = "A".repeat(2_000);
+            let messages = vec![
+                tool_use_message("tool-1", "write_file", json!({"path": "big.txt"})),
+                tool_result_message("tool-1", &output),
+                tool_use_message("tool-2", "write_file", json!({"path": "big.txt"})),
+                tool_result_message("tool-2", &output),
+            ];
 
-        let built = build_chat_messages(None, &messages, "deepseek-v4-flash");
-        let first = tool_message_content(&built, 0);
-        let second = tool_message_content(&built, 1);
+            let built = build_chat_messages(None, &messages, "deepseek-v4-flash");
+            let first = tool_message_content(&built, 0);
+            let second = tool_message_content(&built, 1);
 
-        assert_eq!(first, output);
-        assert_eq!(second, output);
-        assert!(!second.contains("<TOOL_RESULT_REF"), "got: {second}");
+            assert_eq!(first, output);
+            assert_eq!(second, output);
+            assert!(!second.contains("<TOOL_RESULT_REF"), "got: {second}");
 
-        // Non-mutation tools still dedup: an identical large read_file
-        // result collapses to a retrievable SHA ref.
-        let read_messages = vec![
-            tool_use_message("read-1", "read_file", json!({"path": "README.md"})),
-            tool_result_message("read-1", &output),
-            tool_use_message("read-2", "read_file", json!({"path": "README.md"})),
-            tool_result_message("read-2", &output),
-        ];
-        let read_built = build_chat_messages(None, &read_messages, "deepseek-v4-flash");
-        let read_first = tool_message_content(&read_built, 0);
-        let read_second = tool_message_content(&read_built, 1);
-        assert_eq!(read_first, output);
-        assert!(
-            read_second.starts_with("<TOOL_RESULT_REF sha=\""),
-            "got: {read_second}"
-        );
+            // Non-mutation tools still dedup: an identical large read_file
+            // result collapses to a retrievable SHA ref.
+            let read_messages = vec![
+                tool_use_message("read-1", "read_file", json!({"path": "README.md"})),
+                tool_result_message("read-1", &output),
+                tool_use_message("read-2", "read_file", json!({"path": "README.md"})),
+                tool_result_message("read-2", &output),
+            ];
+            let read_built = build_chat_messages(None, &read_messages, "deepseek-v4-flash");
+            let read_first = tool_message_content(&read_built, 0);
+            let read_second = tool_message_content(&read_built, 1);
+            assert_eq!(read_first, output);
+            assert!(
+                read_second.starts_with("<TOOL_RESULT_REF sha=\""),
+                "got: {read_second}"
+            );
+        });
     }
 
     #[test]
@@ -2961,49 +2983,51 @@ mod stream_decoder_tests {
 
     #[test]
     fn cache_inspect_reports_tool_result_budget_metadata() {
-        let long_output = format!("{}{}", "A".repeat(7_000), "Z".repeat(7_000));
-        let request = MessageRequest {
-            model: "deepseek-v4-flash".to_string(),
-            messages: vec![
-                tool_use_message("tool-1", "shell_command", json!({"command": "cargo test"})),
-                tool_result_message("tool-1", &long_output),
-                tool_use_message("tool-2", "shell_command", json!({"command": "cargo test"})),
-                tool_result_message("tool-2", &long_output),
-            ],
-            max_tokens: 0,
-            system: None,
-            tools: None,
-            tool_choice: None,
-            metadata: None,
-            thinking: None,
-            reasoning_effort: None,
-            stream: None,
-            temperature: None,
-            top_p: None,
-        };
+        with_tool_result_sha_spillover_root(|| {
+            let long_output = format!("{}{}", "A".repeat(7_000), "Z".repeat(7_000));
+            let request = MessageRequest {
+                model: "deepseek-v4-flash".to_string(),
+                messages: vec![
+                    tool_use_message("tool-1", "shell_command", json!({"command": "cargo test"})),
+                    tool_result_message("tool-1", &long_output),
+                    tool_use_message("tool-2", "shell_command", json!({"command": "cargo test"})),
+                    tool_result_message("tool-2", &long_output),
+                ],
+                max_tokens: 0,
+                system: None,
+                tools: None,
+                tool_choice: None,
+                metadata: None,
+                thinking: None,
+                reasoning_effort: None,
+                stream: None,
+                temperature: None,
+                top_p: None,
+            };
 
-        let inspection = inspect_prompt_for_request(&request);
-        let tool_layers: Vec<_> = inspection
-            .layers
-            .iter()
-            .filter_map(|layer| layer.tool_result.as_ref())
-            .collect();
+            let inspection = inspect_prompt_for_request(&request);
+            let tool_layers: Vec<_> = inspection
+                .layers
+                .iter()
+                .filter_map(|layer| layer.tool_result.as_ref())
+                .collect();
 
-        assert_eq!(tool_layers.len(), 2);
-        assert_eq!(tool_layers[0].original_chars, 14_000);
-        assert!(tool_layers[0].sent_chars < tool_layers[0].original_chars);
-        assert!(tool_layers[0].truncated);
-        assert!(!tool_layers[0].deduplicated);
-        assert_eq!(tool_layers[1].original_chars, 14_000);
-        // Keep the reference far smaller than the original 14K output
-        // even with a copyable retrieval hint included.
-        assert!(
-            tool_layers[1].sent_chars < 300,
-            "deduplicated ref grew unexpectedly large: {}",
-            tool_layers[1].sent_chars
-        );
-        assert!(!tool_layers[1].truncated);
-        assert!(tool_layers[1].deduplicated);
+            assert_eq!(tool_layers.len(), 2);
+            assert_eq!(tool_layers[0].original_chars, 14_000);
+            assert!(tool_layers[0].sent_chars < tool_layers[0].original_chars);
+            assert!(tool_layers[0].truncated);
+            assert!(!tool_layers[0].deduplicated);
+            assert_eq!(tool_layers[1].original_chars, 14_000);
+            // Keep the reference far smaller than the original 14K output
+            // even with a copyable retrieval hint included.
+            assert!(
+                tool_layers[1].sent_chars < 300,
+                "deduplicated ref grew unexpectedly large: {}",
+                tool_layers[1].sent_chars
+            );
+            assert!(!tool_layers[1].truncated);
+            assert!(tool_layers[1].deduplicated);
+        });
     }
 }
 
