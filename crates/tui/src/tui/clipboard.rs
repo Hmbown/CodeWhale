@@ -7,11 +7,15 @@
 //! endpoint, so we materialize the bytes to disk instead of base64-embedding
 //! them in the request).
 
+#[cfg(any(not(test), all(test, unix)))]
 use std::io::Write;
 #[cfg(not(test))]
 use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
-#[cfg(any(test, all(any(target_os = "macos", target_os = "windows"), not(test))))]
+#[cfg(any(
+    all(test, unix),
+    all(any(target_os = "macos", target_os = "windows"), not(test))
+))]
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -175,7 +179,10 @@ fn write_text_with_set_clipboard(text: &str) -> Result<()> {
     )
 }
 
-#[cfg(any(test, all(any(target_os = "macos", target_os = "windows"), not(test))))]
+#[cfg(any(
+    all(test, unix),
+    all(any(target_os = "macos", target_os = "windows"), not(test))
+))]
 fn write_text_with_stdin_command(
     program: &str,
     args: &[&str],
