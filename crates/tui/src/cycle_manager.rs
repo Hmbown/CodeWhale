@@ -284,7 +284,7 @@ impl StructuredState {
                 let marker = match item.status {
                     crate::tools::todo::TodoStatus::Pending => "[ ]",
                     crate::tools::todo::TodoStatus::InProgress => "[~]",
-                    crate::tools::todo::TodoStatus::Completed => "[x]",
+                    crate::tools::todo::TodoStatus::Completed => "[✓]",
                 };
                 out.push_str(&format!("- {marker} {}\n", item.content));
             }
@@ -299,7 +299,7 @@ impl StructuredState {
                 let marker = match item.status {
                     crate::tools::plan::StepStatus::Pending => "[ ]",
                     crate::tools::plan::StepStatus::InProgress => "[~]",
-                    crate::tools::plan::StepStatus::Completed => "[x]",
+                    crate::tools::plan::StepStatus::Completed => "[✓]",
                 };
                 out.push_str(&format!("- {marker} {}\n", item.step));
             }
