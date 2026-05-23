@@ -58,6 +58,8 @@ pub const DEFAULT_VLLM_FLASH_MODEL: &str = "deepseek-ai/DeepSeek-V4-Flash";
 pub const DEFAULT_VLLM_BASE_URL: &str = "http://localhost:8000/v1";
 pub const DEFAULT_OLLAMA_MODEL: &str = "deepseek-coder:1.3b";
 pub const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434/v1";
+pub const DEFAULT_SILICONFLOW_MODEL: &str = "deepseek-ai/DeepSeek-V4-Pro";
+pub const DEFAULT_SILICONFLOW_BASE_URL: &str = "https://api.siliconflow.com/v1";
 /// Legacy `deepseek-cn` provider alias.
 ///
 /// DeepSeek's official API host is the same worldwide. Keep this alias for
@@ -91,6 +93,7 @@ pub enum ApiProvider {
     Sglang,
     Vllm,
     Ollama,
+    SiliconFlow,
 }
 
 impl ApiProvider {
@@ -112,6 +115,7 @@ impl ApiProvider {
             "sglang" | "sg-lang" => Some(Self::Sglang),
             "vllm" | "v-llm" => Some(Self::Vllm),
             "ollama" | "ollama-local" => Some(Self::Ollama),
+            "siliconflow" | "sf" => Some(Self::SiliconFlow),
             _ => None,
         }
     }
@@ -131,6 +135,7 @@ impl ApiProvider {
             Self::Sglang => "sglang",
             Self::Vllm => "vllm",
             Self::Ollama => "ollama",
+            Self::SiliconFlow => "siliconflow",
         }
     }
 
@@ -150,6 +155,7 @@ impl ApiProvider {
             Self::Sglang => "SGLang",
             Self::Vllm => "vLLM",
             Self::Ollama => "Ollama",
+            Self::SiliconFlow => "SiliconFlow",
         }
     }
 
@@ -168,6 +174,7 @@ impl ApiProvider {
             Self::Sglang,
             Self::Vllm,
             Self::Ollama,
+            Self::SiliconFlow,
         ]
     }
 }
@@ -297,7 +304,10 @@ pub fn provider_capability(provider: ApiProvider, resolved_model: &str) -> Provi
     // Cache telemetry: returned only by DeepSeek-native and NVIDIA NIM endpoints.
     let cache_telemetry_supported = matches!(
         provider,
-        ApiProvider::Deepseek | ApiProvider::DeepseekCN | ApiProvider::NvidiaNim
+        ApiProvider::Deepseek
+            | ApiProvider::DeepseekCN
+            | ApiProvider::NvidiaNim
+            | ApiProvider::SiliconFlow
     );
 
     // Request payload mode: all current providers use chat completions.
@@ -423,9 +433,10 @@ pub fn model_completion_names_for_provider(provider: ApiProvider) -> Vec<&'stati
         ApiProvider::WanjieArk => vec![DEFAULT_WANJIE_ARK_MODEL],
         ApiProvider::Sglang => vec![DEFAULT_SGLANG_MODEL, DEFAULT_SGLANG_FLASH_MODEL],
         ApiProvider::Vllm => vec![DEFAULT_VLLM_MODEL, DEFAULT_VLLM_FLASH_MODEL],
-        ApiProvider::Openai | ApiProvider::Atlascloud | ApiProvider::Ollama => {
-            OFFICIAL_DEEPSEEK_MODELS.to_vec()
-        }
+        ApiProvider::Openai
+        | ApiProvider::Atlascloud
+        | ApiProvider::Ollama
+        | ApiProvider::SiliconFlow => OFFICIAL_DEEPSEEK_MODELS.to_vec(),
     }
 }
 
@@ -1238,6 +1249,8 @@ pub struct ProvidersConfig {
     pub vllm: ProviderConfig,
     #[serde(default)]
     pub ollama: ProviderConfig,
+    #[serde(default)]
+    pub siliconflow: ProviderConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -1346,6 +1359,7 @@ impl Config {
             ApiProvider::Sglang => "providers.sglang",
             ApiProvider::Vllm => "providers.vllm",
             ApiProvider::Ollama => "providers.ollama",
+            ApiProvider::SiliconFlow => "providers.siliconflow",
             ApiProvider::NvidiaNim => "providers.nvidia_nim",
             ApiProvider::Deepseek | ApiProvider::DeepseekCN => return,
         };
@@ -1487,6 +1501,7 @@ impl Config {
             ApiProvider::Sglang => &providers.sglang,
             ApiProvider::Vllm => &providers.vllm,
             ApiProvider::Ollama => &providers.ollama,
+            ApiProvider::SiliconFlow => &providers.siliconflow,
         })
     }
 
@@ -1563,6 +1578,7 @@ impl Config {
             ApiProvider::Sglang => DEFAULT_SGLANG_MODEL,
             ApiProvider::Vllm => DEFAULT_VLLM_MODEL,
             ApiProvider::Ollama => DEFAULT_OLLAMA_MODEL,
+            ApiProvider::SiliconFlow => DEFAULT_SILICONFLOW_MODEL,
         }
         .to_string()
     }
@@ -1593,7 +1609,8 @@ impl Config {
             | ApiProvider::Fireworks
             | ApiProvider::Sglang
             | ApiProvider::Vllm
-            | ApiProvider::Ollama => None,
+            | ApiProvider::Ollama
+            | ApiProvider::SiliconFlow => None,
         };
         let base = provider_base.or(root_base).unwrap_or_else(|| {
             match provider {
@@ -1609,6 +1626,7 @@ impl Config {
                 ApiProvider::Sglang => DEFAULT_SGLANG_BASE_URL,
                 ApiProvider::Vllm => DEFAULT_VLLM_BASE_URL,
                 ApiProvider::Ollama => DEFAULT_OLLAMA_BASE_URL,
+                ApiProvider::SiliconFlow => DEFAULT_SILICONFLOW_BASE_URL,
             }
             .to_string()
         });
@@ -1642,6 +1660,7 @@ impl Config {
             ApiProvider::Sglang => "sglang",
             ApiProvider::Vllm => "vllm",
             ApiProvider::Ollama => "ollama",
+            ApiProvider::SiliconFlow => "siliconflow",
         };
 
         // 0. DeepSeek compatibility slot. The legacy top-level `api_key`
@@ -1724,6 +1743,10 @@ impl Config {
             // Self-hosted deployments commonly run without auth on localhost.
             // Return an empty key and let the client omit the Authorization header.
             ApiProvider::Sglang | ApiProvider::Vllm | ApiProvider::Ollama => Ok(String::new()),
+            ApiProvider::SiliconFlow => anyhow::bail!(
+                "SiliconFlow API key not found. Run 'deepseek auth set --provider siliconflow', \
+                 set SILICONFLOW_API_KEY, or add [providers.siliconflow] api_key in ~/.deepseek/config.toml."
+            ),
         }
     }
 
@@ -2291,6 +2314,13 @@ fn apply_env_overrides(config: &mut Config) {
                     .atlascloud
                     .base_url = Some(value);
             }
+            ApiProvider::SiliconFlow => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .siliconflow
+                    .base_url = Some(value);
+            }
         }
     }
     if matches!(config.api_provider(), ApiProvider::NvidiaNim)
@@ -2414,6 +2444,7 @@ fn apply_env_overrides(config: &mut Config) {
             ApiProvider::Sglang => &mut providers.sglang,
             ApiProvider::Vllm => &mut providers.vllm,
             ApiProvider::Ollama => &mut providers.ollama,
+            ApiProvider::SiliconFlow => &mut providers.siliconflow,
         };
         let mut provider_headers = entry.http_headers.clone().unwrap_or_default();
         provider_headers.extend(headers);
@@ -2427,6 +2458,16 @@ fn apply_env_overrides(config: &mut Config) {
             .providers
             .get_or_insert_with(ProvidersConfig::default)
             .ollama
+            .base_url = Some(value);
+    }
+    if matches!(config.api_provider(), ApiProvider::SiliconFlow)
+        && let Ok(value) = std::env::var("SILICONFLOW_BASE_URL")
+        && !value.trim().is_empty()
+    {
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .siliconflow
             .base_url = Some(value);
     }
     if matches!(config.api_provider(), ApiProvider::Sglang)
@@ -2443,6 +2484,15 @@ fn apply_env_overrides(config: &mut Config) {
         && let Ok(value) = std::env::var("OLLAMA_MODEL")
     {
         config.default_text_model = Some(value);
+    }
+    if matches!(config.api_provider(), ApiProvider::SiliconFlow)
+        && let Ok(value) = std::env::var("SILICONFLOW_MODEL")
+    {
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .siliconflow
+            .model = Some(value);
     }
     if matches!(config.api_provider(), ApiProvider::Openai)
         && let Ok(value) = std::env::var("OPENAI_MODEL")
@@ -2501,6 +2551,7 @@ fn apply_env_overrides(config: &mut Config) {
                 ApiProvider::Sglang => &mut providers.sglang,
                 ApiProvider::Vllm => &mut providers.vllm,
                 ApiProvider::Ollama => &mut providers.ollama,
+                ApiProvider::SiliconFlow => &mut providers.siliconflow,
             };
             entry.model = Some(value);
         }
@@ -2754,6 +2805,7 @@ pub(crate) fn provider_passes_model_through(provider: ApiProvider) -> bool {
             | ApiProvider::Atlascloud
             | ApiProvider::WanjieArk
             | ApiProvider::Ollama
+            | ApiProvider::SiliconFlow
     )
 }
 
@@ -2778,6 +2830,7 @@ fn default_base_url_for_provider(provider: ApiProvider) -> &'static str {
         ApiProvider::Sglang => DEFAULT_SGLANG_BASE_URL,
         ApiProvider::Vllm => DEFAULT_VLLM_BASE_URL,
         ApiProvider::Ollama => DEFAULT_OLLAMA_BASE_URL,
+        ApiProvider::SiliconFlow => DEFAULT_SILICONFLOW_BASE_URL,
     }
 }
 
@@ -3009,6 +3062,7 @@ fn merge_providers(
             sglang: merge_provider_config(base.sglang, override_cfg.sglang),
             vllm: merge_provider_config(base.vllm, override_cfg.vllm),
             ollama: merge_provider_config(base.ollama, override_cfg.ollama),
+            siliconflow: merge_provider_config(base.siliconflow, override_cfg.siliconflow),
         }),
     }
 }
@@ -3423,6 +3477,9 @@ pub fn active_provider_has_env_api_key(config: &Config) -> bool {
         ApiProvider::Sglang => std::env::var("SGLANG_API_KEY").is_ok_and(|k| !k.trim().is_empty()),
         ApiProvider::Vllm => std::env::var("VLLM_API_KEY").is_ok_and(|k| !k.trim().is_empty()),
         ApiProvider::Ollama => std::env::var("OLLAMA_API_KEY").is_ok_and(|k| !k.trim().is_empty()),
+        ApiProvider::SiliconFlow => {
+            std::env::var("SILICONFLOW_API_KEY").is_ok_and(|k| !k.trim().is_empty())
+        }
     }
 }
 
@@ -3448,6 +3505,7 @@ pub fn has_api_key_for(config: &Config, provider: ApiProvider) -> bool {
         ApiProvider::Sglang => "SGLANG_API_KEY",
         ApiProvider::Vllm => "VLLM_API_KEY",
         ApiProvider::Ollama => "OLLAMA_API_KEY",
+        ApiProvider::SiliconFlow => "SILICONFLOW_API_KEY",
     };
     if std::env::var(env_var).is_ok_and(|k| !k.trim().is_empty()) {
         return true;
@@ -3528,6 +3586,7 @@ pub fn save_api_key_for(provider: ApiProvider, api_key: &str) -> Result<PathBuf>
         ApiProvider::Sglang => "providers.sglang",
         ApiProvider::Vllm => "providers.vllm",
         ApiProvider::Ollama => "providers.ollama",
+        ApiProvider::SiliconFlow => "providers.siliconflow",
     };
 
     // Parse existing TOML (or start fresh) so we can edit the right table
@@ -3564,6 +3623,7 @@ pub fn save_api_key_for(provider: ApiProvider, api_key: &str) -> Result<PathBuf>
         ApiProvider::Sglang => "sglang",
         ApiProvider::Vllm => "vllm",
         ApiProvider::Ollama => "ollama",
+        ApiProvider::SiliconFlow => "siliconflow",
     };
     let entry = providers
         .entry(key_inside.to_string())

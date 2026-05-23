@@ -5437,6 +5437,7 @@ fn render(f: &mut Frame, app: &mut App) {
             crate::config::ApiProvider::Sglang => Some("SGLang"),
             crate::config::ApiProvider::Vllm => Some("vLLM"),
             crate::config::ApiProvider::Ollama => Some("Ollama"),
+            crate::config::ApiProvider::SiliconFlow => Some("SiliconFlow"),
         };
         let status_indicator_started_at = if app.low_motion {
             None
@@ -6201,6 +6202,7 @@ async fn apply_provider_picker_api_key(
             ApiProvider::Sglang => &mut providers.sglang,
             ApiProvider::Vllm => &mut providers.vllm,
             ApiProvider::Ollama => &mut providers.ollama,
+            ApiProvider::SiliconFlow => &mut providers.siliconflow,
         };
         entry.api_key = Some(api_key);
     }

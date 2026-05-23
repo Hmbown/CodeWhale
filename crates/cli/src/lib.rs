@@ -694,11 +694,12 @@ fn provider_slot(provider: ProviderKind) -> &'static str {
         ProviderKind::Sglang => "sglang",
         ProviderKind::Vllm => "vllm",
         ProviderKind::Ollama => "ollama",
+        ProviderKind::SiliconFlow => "siliconflow",
     }
 }
 
 /// Provider order used by the `auth list` and `auth status` outputs.
-const PROVIDER_LIST: [ProviderKind; 11] = [
+const PROVIDER_LIST: [ProviderKind; 12] = [
     ProviderKind::Deepseek,
     ProviderKind::NvidiaNim,
     ProviderKind::Openai,
@@ -710,6 +711,7 @@ const PROVIDER_LIST: [ProviderKind; 11] = [
     ProviderKind::Sglang,
     ProviderKind::Vllm,
     ProviderKind::Ollama,
+    ProviderKind::SiliconFlow,
 ];
 
 #[cfg(test)]
@@ -764,6 +766,7 @@ fn provider_env_vars(provider: ProviderKind) -> &'static [&'static str] {
         ProviderKind::Sglang => &["SGLANG_API_KEY"],
         ProviderKind::Vllm => &["VLLM_API_KEY"],
         ProviderKind::Ollama => &["OLLAMA_API_KEY"],
+        ProviderKind::SiliconFlow => &["SILICONFLOW_API_KEY"],
         ProviderKind::Openai => &["OPENAI_API_KEY"],
         ProviderKind::Atlascloud => &["ATLASCLOUD_API_KEY"],
         ProviderKind::WanjieArk => &[

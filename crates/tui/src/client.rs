@@ -887,7 +887,8 @@ pub(super) fn apply_reasoning_effort(
             | ApiProvider::DeepseekCN
             | ApiProvider::Openrouter
             | ApiProvider::Novita
-            | ApiProvider::Sglang => {
+            | ApiProvider::Sglang
+            | ApiProvider::SiliconFlow => {
                 body["thinking"] = json!({ "type": "disabled" });
             }
             ApiProvider::Fireworks => {}
@@ -920,7 +921,8 @@ pub(super) fn apply_reasoning_effort(
             | ApiProvider::DeepseekCN
             | ApiProvider::Openrouter
             | ApiProvider::Novita
-            | ApiProvider::Sglang => {
+            | ApiProvider::Sglang
+            | ApiProvider::SiliconFlow => {
                 body["reasoning_effort"] = json!("high");
                 body["thinking"] = json!({ "type": "enabled" });
             }
@@ -949,7 +951,8 @@ pub(super) fn apply_reasoning_effort(
             | ApiProvider::DeepseekCN
             | ApiProvider::Openrouter
             | ApiProvider::Novita
-            | ApiProvider::Sglang => {
+            | ApiProvider::Sglang
+            | ApiProvider::SiliconFlow => {
                 body["reasoning_effort"] = json!("max");
                 body["thinking"] = json!({ "type": "enabled" });
             }

@@ -41,6 +41,8 @@ const DEFAULT_VLLM_FLASH_MODEL: &str = "deepseek-ai/DeepSeek-V4-Flash";
 const DEFAULT_VLLM_BASE_URL: &str = "http://localhost:8000/v1";
 const DEFAULT_OLLAMA_MODEL: &str = "deepseek-coder:1.3b";
 const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434/v1";
+const DEFAULT_SILICONFLOW_MODEL: &str = "deepseek-ai/DeepSeek-V4-Pro";
+const DEFAULT_SILICONFLOW_BASE_URL: &str = "https://api.siliconflow.com/v1";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "kebab-case")]
@@ -71,6 +73,7 @@ pub enum ProviderKind {
     Sglang,
     Vllm,
     Ollama,
+    SiliconFlow,
 }
 
 impl ProviderKind {
@@ -88,6 +91,7 @@ impl ProviderKind {
             Self::Sglang => "sglang",
             Self::Vllm => "vllm",
             Self::Ollama => "ollama",
+            Self::SiliconFlow => "siliconflow",
         }
     }
 
@@ -107,6 +111,7 @@ impl ProviderKind {
             "sglang" | "sg-lang" => Some(Self::Sglang),
             "vllm" | "v-llm" => Some(Self::Vllm),
             "ollama" | "ollama-local" => Some(Self::Ollama),
+            "siliconflow" | "sf" => Some(Self::SiliconFlow),
             _ => None,
         }
     }
@@ -145,6 +150,8 @@ pub struct ProvidersToml {
     pub vllm: ProviderConfigToml,
     #[serde(default)]
     pub ollama: ProviderConfigToml,
+    #[serde(default)]
+    pub siliconflow: ProviderConfigToml,
 }
 
 impl ProvidersToml {
@@ -162,6 +169,7 @@ impl ProvidersToml {
             ProviderKind::Sglang => &self.sglang,
             ProviderKind::Vllm => &self.vllm,
             ProviderKind::Ollama => &self.ollama,
+            ProviderKind::SiliconFlow => &self.siliconflow,
         }
     }
 
@@ -178,6 +186,7 @@ impl ProvidersToml {
             ProviderKind::Sglang => &mut self.sglang,
             ProviderKind::Vllm => &mut self.vllm,
             ProviderKind::Ollama => &mut self.ollama,
+            ProviderKind::SiliconFlow => &mut self.siliconflow,
         }
     }
 }
@@ -400,6 +409,10 @@ impl ConfigToml {
         merge_provider_config(&mut self.providers.sglang, &project.providers.sglang);
         merge_provider_config(&mut self.providers.vllm, &project.providers.vllm);
         merge_provider_config(&mut self.providers.ollama, &project.providers.ollama);
+        merge_provider_config(
+            &mut self.providers.siliconflow,
+            &project.providers.siliconflow,
+        );
 
         if project.network.is_some() {
             self.network = project.network;
@@ -500,6 +513,12 @@ impl ConfigToml {
             "providers.ollama.model" => self.providers.ollama.model.clone(),
             "providers.ollama.http_headers" => {
                 serialize_http_headers(&self.providers.ollama.http_headers)
+            }
+            "providers.siliconflow.api_key" => self.providers.siliconflow.api_key.clone(),
+            "providers.siliconflow.base_url" => self.providers.siliconflow.base_url.clone(),
+            "providers.siliconflow.model" => self.providers.siliconflow.model.clone(),
+            "providers.siliconflow.http_headers" => {
+                serialize_http_headers(&self.providers.siliconflow.http_headers)
             }
             _ => self.extras.get(key).map(toml::Value::to_string),
         }
@@ -671,6 +690,18 @@ impl ConfigToml {
             "providers.ollama.http_headers" => {
                 self.providers.ollama.http_headers = parse_http_headers(value)?;
             }
+            "providers.siliconflow.api_key" => {
+                self.providers.siliconflow.api_key = Some(value.to_string());
+            }
+            "providers.siliconflow.base_url" => {
+                self.providers.siliconflow.base_url = Some(value.to_string());
+            }
+            "providers.siliconflow.model" => {
+                self.providers.siliconflow.model = Some(value.to_string());
+            }
+            "providers.siliconflow.http_headers" => {
+                self.providers.siliconflow.http_headers = parse_http_headers(value)?;
+            }
             _ => {
                 self.extras
                     .insert(key.to_string(), toml::Value::String(value.to_string()));
@@ -753,6 +784,10 @@ impl ConfigToml {
             "providers.ollama.base_url" => self.providers.ollama.base_url = None,
             "providers.ollama.model" => self.providers.ollama.model = None,
             "providers.ollama.http_headers" => self.providers.ollama.http_headers.clear(),
+            "providers.siliconflow.api_key" => self.providers.siliconflow.api_key = None,
+            "providers.siliconflow.base_url" => self.providers.siliconflow.base_url = None,
+            "providers.siliconflow.model" => self.providers.siliconflow.model = None,
+            "providers.siliconflow.http_headers" => self.providers.siliconflow.http_headers.clear(),
             _ => {
                 self.extras.remove(key);
             }
@@ -936,6 +971,21 @@ impl ConfigToml {
         if let Some(v) = serialize_http_headers(&self.providers.ollama.http_headers) {
             out.insert("providers.ollama.http_headers".to_string(), v);
         }
+        if let Some(v) = self.providers.siliconflow.api_key.as_ref() {
+            out.insert(
+                "providers.siliconflow.api_key".to_string(),
+                redact_secret(v),
+            );
+        }
+        if let Some(v) = self.providers.siliconflow.base_url.as_ref() {
+            out.insert("providers.siliconflow.base_url".to_string(), v.clone());
+        }
+        if let Some(v) = self.providers.siliconflow.model.as_ref() {
+            out.insert("providers.siliconflow.model".to_string(), v.clone());
+        }
+        if let Some(v) = serialize_http_headers(&self.providers.siliconflow.http_headers) {
+            out.insert("providers.siliconflow.http_headers".to_string(), v);
+        }
 
         for (k, v) in &self.extras {
             out.insert(k.clone(), v.to_string());
@@ -997,6 +1047,7 @@ impl ConfigToml {
                 ProviderKind::Sglang => DEFAULT_SGLANG_BASE_URL.to_string(),
                 ProviderKind::Vllm => DEFAULT_VLLM_BASE_URL.to_string(),
                 ProviderKind::Ollama => DEFAULT_OLLAMA_BASE_URL.to_string(),
+                ProviderKind::SiliconFlow => DEFAULT_SILICONFLOW_BASE_URL.to_string(),
             });
         let auth_mode = cli
             .auth_mode
@@ -1134,7 +1185,10 @@ pub fn load_project_config(workspace: &Path) -> Option<ConfigToml> {
 fn normalize_model_for_provider(provider: ProviderKind, model: &str) -> String {
     if matches!(
         provider,
-        ProviderKind::Atlascloud | ProviderKind::WanjieArk | ProviderKind::Ollama
+        ProviderKind::Atlascloud
+            | ProviderKind::WanjieArk
+            | ProviderKind::Ollama
+            | ProviderKind::SiliconFlow
     ) {
         return model.to_string();
     }
@@ -1201,6 +1255,7 @@ fn default_model_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::Sglang => DEFAULT_SGLANG_MODEL,
         ProviderKind::Vllm => DEFAULT_VLLM_MODEL,
         ProviderKind::Ollama => DEFAULT_OLLAMA_MODEL,
+        ProviderKind::SiliconFlow => DEFAULT_SILICONFLOW_MODEL,
     }
 }
 
@@ -1217,6 +1272,7 @@ fn default_base_url_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::Sglang => DEFAULT_SGLANG_BASE_URL,
         ProviderKind::Vllm => DEFAULT_VLLM_BASE_URL,
         ProviderKind::Ollama => DEFAULT_OLLAMA_BASE_URL,
+        ProviderKind::SiliconFlow => DEFAULT_SILICONFLOW_BASE_URL,
     }
 }
 
@@ -1577,6 +1633,7 @@ struct EnvRuntimeOverrides {
     sglang_base_url: Option<String>,
     vllm_base_url: Option<String>,
     ollama_base_url: Option<String>,
+    siliconflow_base_url: Option<String>,
 }
 
 impl EnvRuntimeOverrides {
@@ -1643,6 +1700,9 @@ impl EnvRuntimeOverrides {
             ollama_base_url: std::env::var("OLLAMA_BASE_URL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
+            siliconflow_base_url: std::env::var("SILICONFLOW_BASE_URL")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
         }
     }
 
@@ -1661,6 +1721,7 @@ impl EnvRuntimeOverrides {
             ProviderKind::Sglang => self.sglang_base_url.clone(),
             ProviderKind::Vllm => self.vllm_base_url.clone(),
             ProviderKind::Ollama => self.ollama_base_url.clone(),
+            ProviderKind::SiliconFlow => self.siliconflow_base_url.clone(),
         }
     }
 
