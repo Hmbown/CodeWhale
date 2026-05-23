@@ -38,6 +38,11 @@ pub enum Method {
     /// Ghostty notification protocol (OSC 777).
     /// Uses `ESC ] 777 ; notify ; title ; message BEL`.
     Ghostty,
+    /// macOS Notification Center via `osascript -e 'display notification …'`.
+    /// Used as the fallback on macOS when no known terminal protocol is detected,
+    /// so Terminal.app users get real Notification Center alerts instead of a
+    /// silent BEL.
+    MacOS,
     /// Suppress all notifications.
     Off,
 }
@@ -71,6 +76,15 @@ fn windows_bell() {
 /// - Windows unknown → `Bel`
 #[must_use]
 fn resolve_method() -> Method {
+
+    // On macOS with an unknown terminal (e.g. Terminal.app), use
+    // osascript so the user gets real Notification Center alerts.
+    // Using cfg!() instead of #[cfg] to avoid an unreachable-code warning
+    // on the `Method::Bel` fallback below.
+    if cfg!(target_os = "macos") {
+        return Method::MacOS;
+    }
+
     let term_program = std::env::var("TERM_PROGRAM").unwrap_or_default();
     match term_program.as_str() {
         "iTerm.app" | "WezTerm" | "Cmux" => return Method::Osc9,
@@ -153,8 +167,8 @@ fn build_escape(method: Method, in_tmux: bool, msg: &str) -> Vec<u8> {
             let seq = format!("\x1b]777;notify;codewhale;{msg}\x07");
             wrap_for_multiplexer(&seq, in_tmux).into_bytes()
         }
-        // Auto and Off should not reach build_escape.
-        Method::Auto | Method::Off => vec![],
+        // Auto, Off, and MacOS should not reach build_escape.
+        Method::Auto | Method::Off | Method::MacOS => vec![],
     }
 }
 
@@ -178,6 +192,14 @@ pub fn notify_done_to<W: Write>(
         Method::Auto => resolve_method(),
         other => other,
     };
+
+    // macOS Notification Center: handled via osascript, not terminal escapes.
+    #[cfg(target_os = "macos")]
+    if effective == Method::MacOS {
+        macos_display_notification(msg);
+        return;
+    }
+
     let bytes = build_escape(effective, in_tmux, msg);
     if bytes.is_empty() {
         return;
@@ -376,6 +398,75 @@ fn beep_sound() {
 /// Pure terminal BEL character.
 fn bell_sound() {
     let _ = io::stdout().write_all(b"\x07");
+}
+
+/// Show a macOS Notification Center alert via `osascript`.
+///
+/// Runs on a dedicated background thread so the caller is not blocked.
+///
+/// The notification includes:
+/// - **Title**: "DeepSeek TUI"
+/// - **Subtitle**: First line of `msg` (when the message contains a newline,
+///   e.g. the response preview from a completed turn)
+/// - **Body**: Remaining lines of `msg`, or the full `msg` if single-line
+/// - **Sound**: Default macOS notification sound
+///
+/// The whole body is capped at 200 **characters** (not bytes) to keep the
+/// bubble readable while correctly handling multi-byte text. Embedded double
+/// quotes are escaped as `\"` so AppleScript tokenises correctly.
+///
+/// This is best-effort: if `osascript` is not available (e.g. headless SSH
+/// session) the error is logged via `tracing::warn!` instead of silently
+/// swallowed.
+#[cfg(target_os = "macos")]
+fn macos_display_notification(msg: &str) {
+    let body = msg.to_string();
+
+    // Spawn on a background thread so we don't block the caller.
+    // osascript itself is fast (~50 ms), but spawning a subprocess
+    // synchronously from an async context steals a tokio thread.
+    let _ = std::thread::Builder::new()
+        .name("osascript-notif".into())
+        .spawn(move || {
+            // Char-bounded truncation (not byte-bounded) so we don't slice
+            // through a multi-byte sequence and emit invalid UTF-8 to the
+            // AppleScript parser.
+            let body_str: String = body.chars().take(200).collect();
+
+            // Escape embedded double-quote characters for AppleScript.
+            let escaped = body_str.replace('"', "\\\"");
+
+            // Build the AppleScript command.
+            // When the message has multiple lines, the first line becomes
+            // the subtitle and the rest becomes the body — this lets turn
+            // notifications show the response preview in the subtitle and
+            // the duration/cost summary in the body.
+            let script = if let Some(idx) = escaped.find('\n') {
+                let subtitle = escaped[..idx].trim();
+                let body_text = escaped[idx + 1..].trim();
+                format!(
+                    "display notification \"{body_text}\" with title \"DeepSeek TUI\" subtitle \"{subtitle}\" sound name \"default\""
+                )
+            } else {
+                format!(
+                    "display notification \"{escaped}\" with title \"DeepSeek TUI\" sound name \"default\""
+                )
+            };
+
+            match std::process::Command::new("osascript")
+                .args(["-e", &script])
+                .output()
+            {
+                Ok(output) if !output.status.success() => {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    tracing::warn!(stderr = %stderr, "osascript notification failed");
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "osascript notification error");
+                }
+                _ => {}
+            }
+        });
 }
 
 /// Return a human-readable duration string, capped at two units so
@@ -722,6 +813,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "macos"))]
     fn auto_detect_picks_osc9_for_iterm() {
         let _lock = env_lock();
         let prev = std::env::var_os("TERM_PROGRAM");
@@ -743,6 +835,7 @@ mod tests {
     /// `LC_TERMINAL=Cmux` instead. Verify the `LC_TERMINAL` fallback probe
     /// correctly resolves to `Osc9`.
     #[test]
+    #[cfg(not(target_os = "macos"))]
     fn auto_detect_picks_osc9_for_cmux_via_lc_terminal() {
         let _lock = env_lock();
         let prev_tp = std::env::var_os("TERM_PROGRAM");
@@ -770,6 +863,7 @@ mod tests {
     /// `LC_TERMINAL` should also match other OSC-9 capable terminals in case
     /// they set it in addition to or instead of `TERM_PROGRAM`.
     #[test]
+    #[cfg(not(target_os = "macos"))]
     fn auto_detect_picks_osc9_for_wezterm_via_lc_terminal() {
         let _lock = env_lock();
         let prev_tp = std::env::var_os("TERM_PROGRAM");
@@ -795,7 +889,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     fn auto_detect_picks_bel_for_unknown_on_unix() {
         let _lock = env_lock();
         let prev_tp = std::env::var_os("TERM_PROGRAM");
@@ -878,7 +972,7 @@ mod tests {
     /// `TERM_PROGRAM` but do set `TERM=xterm-ghostty`. The `$TERM`
     /// fallback should catch them.
     #[test]
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     fn auto_detect_picks_osc9_for_xterm_ghostty_term_fallback() {
         let _lock = env_lock();
         let prev_tp = std::env::var_os("TERM_PROGRAM");
@@ -912,6 +1006,7 @@ mod tests {
 
     /// Ghostty now has its own protocol (OSC 777).
     #[test]
+    #[cfg(not(target_os = "macos"))]
     fn auto_detect_picks_ghostty_from_term_program() {
         let _lock = env_lock();
         let prev = std::env::var_os("TERM_PROGRAM");
@@ -929,6 +1024,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "macos"))]
     fn auto_detect_picks_kitty_from_term_program() {
         let _lock = env_lock();
         let prev = std::env::var_os("TERM_PROGRAM");
@@ -946,7 +1042,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     fn auto_detect_picks_kitty_from_term_fallback() {
         let _lock = env_lock();
         let prev_tp = std::env::var_os("TERM_PROGRAM");
@@ -980,7 +1076,7 @@ mod tests {
     /// When neither `TERM_PROGRAM` nor `TERM` suggests a known capable
     /// terminal, the fallback on Unix is `Bel`.
     #[test]
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     fn auto_detect_falls_back_to_bel_for_unrelated_term() {
         let _lock = env_lock();
         let prev_tp = std::env::var_os("TERM_PROGRAM");
@@ -1009,6 +1105,26 @@ mod tests {
             }
         }
         assert_eq!(resolved, Method::Bel);
+    }
+
+    /// On macOS, `resolve_method()` always returns `MacOS` regardless of
+    /// `$TERM_PROGRAM` so the user gets real Notification Center alerts.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn auto_detect_returns_macos_on_macos() {
+        let _lock = env_lock();
+        let prev_tp = std::env::var_os("TERM_PROGRAM");
+        // SAFETY: test-only; serialised by env_lock().
+        unsafe { std::env::set_var("TERM_PROGRAM", "xterm-256color") };
+        let resolved = resolve_method();
+        // SAFETY: test-only; serialised by env_lock().
+        unsafe {
+            match prev_tp {
+                Some(v) => std::env::set_var("TERM_PROGRAM", v),
+                None => std::env::remove_var("TERM_PROGRAM"),
+            }
+        }
+        assert_eq!(resolved, Method::MacOS);
     }
 
     #[test]
