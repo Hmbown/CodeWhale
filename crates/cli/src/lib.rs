@@ -356,6 +356,11 @@ enum ThreadCommand {
         thread_id: String,
         name: String,
     },
+    /// Remove the custom name from a thread, restoring the default
+    /// `(unnamed)` rendering in `thread list`.
+    ClearName {
+        thread_id: String,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -1227,6 +1232,16 @@ fn run_thread_command(command: ThreadCommand) -> Result<()> {
             println!("renamed {thread_id}");
             Ok(())
         }
+        ThreadCommand::ClearName { thread_id } => {
+            let mut thread = state
+                .get_thread(&thread_id)?
+                .with_context(|| format!("thread not found: {thread_id}"))?;
+            thread.name = None;
+            thread.updated_at = chrono::Utc::now().timestamp();
+            state.upsert_thread(&thread)?;
+            println!("cleared name for {thread_id}");
+            Ok(())
+        }
     }
 }
 
@@ -1872,6 +1887,14 @@ mod tests {
                     ref name
                 }
             })) if thread_id == "thread-6" && name == "My Thread"
+        ));
+
+        let cli = parse_ok(&["deepseek", "thread", "clear-name", "thread-7"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Thread(ThreadArgs {
+                command: ThreadCommand::ClearName { ref thread_id }
+            })) if thread_id == "thread-7"
         ));
     }
 
@@ -2688,6 +2711,7 @@ mod tests {
                     "archive",
                     "unarchive",
                     "set-name",
+                    "clear-name",
                 ],
             ),
             ("sandbox", vec!["check"]),
