@@ -12,7 +12,7 @@ Bindings are not (yet) user-configurable — tracked for a future release (#436,
 | `Ctrl-K`             | Open the command palette (slash-command finder)                |
 | `Ctrl-C`             | Cancel current turn / dismiss modal / arm-then-confirm quit    |
 | `Ctrl-D`             | Quit (only when the composer is empty)                         |
-| `Tab`                | Cycle TUI mode: Plan → Agent → YOLO → Plan                     |
+| `Tab`                | Cycle TUI mode: Plan → Agent → YOLO → Pro Plan → Plan          |
 | `Shift-Tab`          | Cycle reasoning effort: off → high → max → off                 |
 | `Ctrl-R`             | Open the resume-session picker                                 |
 | `Ctrl-L`             | Refresh / clear the screen                                     |

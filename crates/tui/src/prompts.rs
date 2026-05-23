@@ -412,7 +412,7 @@ fn mode_prompt(mode: AppMode) -> &'static str {
     match mode {
         AppMode::Agent => AGENT_MODE,
         AppMode::Yolo => YOLO_MODE,
-        AppMode::Plan => PLAN_MODE,
+        AppMode::Plan | AppMode::ProPlan => PLAN_MODE,
     }
 }
 
@@ -420,14 +420,14 @@ fn default_approval_mode_for_mode(mode: AppMode) -> ApprovalMode {
     match mode {
         AppMode::Agent => ApprovalMode::Suggest,
         AppMode::Yolo => ApprovalMode::Auto,
-        AppMode::Plan => ApprovalMode::Never,
+        AppMode::Plan | AppMode::ProPlan => ApprovalMode::Never,
     }
 }
 
 fn approval_prompt_for_mode(mode: AppMode, approval_mode: ApprovalMode) -> &'static str {
     match mode {
         AppMode::Yolo => AUTO_APPROVAL,
-        AppMode::Plan => NEVER_APPROVAL,
+        AppMode::Plan | AppMode::ProPlan => NEVER_APPROVAL,
         AppMode::Agent => match approval_mode {
             ApprovalMode::Auto => AUTO_APPROVAL,
             ApprovalMode::Suggest => SUGGEST_APPROVAL,
@@ -1340,6 +1340,18 @@ mod tests {
         assert!(
             compose_prompt(AppMode::Plan, Personality::Calm).contains("Approval Policy: Never")
         );
+        assert!(
+            compose_prompt(AppMode::ProPlan, Personality::Calm).contains("Approval Policy: Never")
+        );
+    }
+
+    #[test]
+    fn pro_plan_prompt_reuses_plan_mode_contract() {
+        let prompt = compose_prompt(AppMode::ProPlan, Personality::Calm);
+
+        assert!(prompt.contains("Mode: Plan"));
+        assert!(prompt.contains("design before implementing"));
+        assert!(prompt.contains("All writes and patches are blocked"));
     }
 
     #[test]

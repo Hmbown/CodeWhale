@@ -659,7 +659,7 @@ pub fn mode(app: &mut App, arg: Option<&str>) -> CommandResult {
     };
     match parse_mode_arg(arg) {
         Some(mode) => CommandResult::message(switch_mode(app, mode)),
-        None => CommandResult::error("Usage: /mode [agent|plan|yolo|1|2|3]"),
+        None => CommandResult::error("Usage: /mode [agent|plan|yolo|pro-plan|1|2|3|4]"),
     }
 }
 
@@ -676,6 +676,7 @@ fn parse_mode_arg(arg: &str) -> Option<AppMode> {
         "agent" | "1" => Some(AppMode::Agent),
         "plan" | "2" => Some(AppMode::Plan),
         "yolo" | "3" => Some(AppMode::Yolo),
+        "pro-plan" | "proplan" | "4" => Some(AppMode::ProPlan),
         _ => None,
     }
 }
@@ -685,6 +686,7 @@ fn mode_display_name(mode: AppMode) -> &'static str {
         AppMode::Agent => "Agent",
         AppMode::Plan => "Plan",
         AppMode::Yolo => "YOLO",
+        AppMode::ProPlan => "Pro Plan",
     }
 }
 
@@ -1383,6 +1385,10 @@ mod tests {
         assert_eq!(app.mode, AppMode::Plan);
         let _ = mode(&mut app, Some("3"));
         assert_eq!(app.mode, AppMode::Yolo);
+        let _ = mode(&mut app, Some("4"));
+        assert_eq!(app.mode, AppMode::ProPlan);
+        let _ = mode(&mut app, Some("proplan"));
+        assert_eq!(app.mode, AppMode::ProPlan);
     }
 
     #[test]

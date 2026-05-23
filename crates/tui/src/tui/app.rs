@@ -35,6 +35,7 @@ use crate::tui::clipboard::{ClipboardContent, ClipboardHandler};
 use crate::tui::file_mention::ContextReference;
 use crate::tui::history::{HistoryCell, TranscriptRenderOptions};
 use crate::tui::paste_burst::{FlushResult, PasteBurst};
+use crate::tui::pro_plan::{ProPlanConfig, ProPlanRouter};
 use crate::tui::scrolling::{MouseScrollState, TranscriptLineMeta, TranscriptScroll};
 use crate::tui::selection::{SelectionAutoscroll, TranscriptSelection};
 use crate::tui::streaming::StreamingState;
@@ -127,6 +128,7 @@ pub enum AppMode {
     Agent,
     Yolo,
     Plan,
+    ProPlan,
 }
 
 /// One row in the per-turn cache-telemetry ring (`/cache` debug surface, #263).
@@ -575,6 +577,7 @@ impl AppMode {
         match value.trim().to_ascii_lowercase().as_str() {
             "plan" => Self::Plan,
             "yolo" => Self::Yolo,
+            "pro-plan" | "proplan" => Self::ProPlan,
             _ => Self::Agent,
         }
     }
@@ -585,6 +588,7 @@ impl AppMode {
             Self::Agent => "agent",
             Self::Yolo => "yolo",
             Self::Plan => "plan",
+            Self::ProPlan => "pro-plan",
         }
     }
 
@@ -594,6 +598,7 @@ impl AppMode {
             AppMode::Agent => "AGENT",
             AppMode::Yolo => "YOLO",
             AppMode::Plan => "PLAN",
+            AppMode::ProPlan => "PRO-PLAN",
         }
     }
 
@@ -604,6 +609,9 @@ impl AppMode {
             AppMode::Agent => "Agent mode - autonomous task execution with tools",
             AppMode::Yolo => "YOLO mode - full tool access without approvals",
             AppMode::Plan => "Plan mode - design before implementing",
+            AppMode::ProPlan => {
+                "Pro Plan mode - plan with Pro, execute with Flash, review with Pro"
+            }
         }
     }
 }
@@ -898,6 +906,8 @@ pub struct App {
     pub auto_model: bool,
     /// Last concrete model chosen while `auto_model` is active.
     pub last_effective_model: Option<String>,
+    /// ProPlan phase router (Some only when mode is ProPlan).
+    pub pro_plan_router: Option<ProPlanRouter>,
     /// Current API provider (mirrors `Config::api_provider`).
     /// Updated by `/provider` switches so the UI/commands can read the
     /// active backend without re-deriving it from the live config.
@@ -1016,6 +1026,7 @@ pub struct App {
     #[allow(dead_code)]
     pub yolo: bool,
     yolo_restore: Option<YoloRestoreState>,
+    pro_plan_restore_auto_model: Option<bool>,
     // Clipboard handler
     pub clipboard: ClipboardHandler,
     // Tool approval session allowlist
@@ -1591,7 +1602,11 @@ impl App {
             sticky_status: None,
             last_status_message_seen: None,
             model,
-            auto_model,
+            auto_model: if initial_mode == AppMode::ProPlan {
+                false
+            } else {
+                auto_model
+            },
             last_effective_model: None,
             api_provider: provider,
             reasoning_effort,
@@ -1648,6 +1663,16 @@ impl App {
             hooks,
             yolo: initial_mode == AppMode::Yolo,
             yolo_restore,
+            pro_plan_restore_auto_model: if initial_mode == AppMode::ProPlan {
+                Some(auto_model)
+            } else {
+                None
+            },
+            pro_plan_router: if initial_mode == AppMode::ProPlan {
+                Some(ProPlanRouter::new(ProPlanConfig::default()))
+            } else {
+                None
+            },
             clipboard: ClipboardHandler::new(),
             approval_session_approved: HashSet::new(),
             approval_session_denied: HashSet::new(),
@@ -1850,6 +1875,18 @@ impl App {
             self.plan_tool_used_in_turn = false;
         }
 
+        // ProPlan mode: create / drop the phase router
+        if mode == AppMode::ProPlan {
+            self.pro_plan_router = Some(ProPlanRouter::new(ProPlanConfig::default()));
+            self.pro_plan_restore_auto_model = Some(self.auto_model);
+            self.auto_model = false;
+        } else if previous_mode == AppMode::ProPlan {
+            self.pro_plan_router = None;
+            if let Some(auto_model) = self.pro_plan_restore_auto_model.take() {
+                self.auto_model = auto_model;
+            }
+        }
+
         // Execute mode change hooks
         let context = HookContext::new()
             .with_mode(mode.label())
@@ -1861,12 +1898,13 @@ impl App {
         true
     }
 
-    /// Cycle through modes: Plan → Agent → YOLO → Plan.
+    /// Cycle through modes: Plan → Agent → YOLO → ProPlan → Plan.
     pub fn cycle_mode(&mut self) {
         let next = match self.mode {
             AppMode::Plan => AppMode::Agent,
             AppMode::Agent => AppMode::Yolo,
-            AppMode::Yolo => AppMode::Plan,
+            AppMode::Yolo => AppMode::ProPlan,
+            AppMode::ProPlan => AppMode::Plan,
         };
         let _ = self.set_mode(next);
     }
@@ -1877,7 +1915,8 @@ impl App {
         let next = match self.mode {
             AppMode::Agent => AppMode::Plan,
             AppMode::Yolo => AppMode::Agent,
-            AppMode::Plan => AppMode::Yolo,
+            AppMode::Plan => AppMode::ProPlan,
+            AppMode::ProPlan => AppMode::Yolo,
         };
         let _ = self.set_mode(next);
     }
@@ -4172,6 +4211,9 @@ impl App {
     }
 
     pub fn effective_model_for_budget(&self) -> &str {
+        if let Some(ref router) = self.pro_plan_router {
+            return router.current_model();
+        }
         if self.auto_model {
             return self
                 .last_effective_model
@@ -4183,6 +4225,10 @@ impl App {
     }
 
     pub fn model_display_label(&self) -> String {
+        if self.mode == AppMode::ProPlan {
+            return format!("pro-plan: {}", self.effective_model_for_budget());
+        }
+
         if self.auto_model {
             if let Some(effective) = self.last_effective_model.as_deref()
                 && effective != "auto"
@@ -4257,7 +4303,7 @@ pub enum AppAction {
     /// Open the `/provider` picker modal — DeepSeek / NVIDIA NIM / OpenRouter
     /// / Novita with inline API-key prompt for un-configured providers (#52).
     OpenProviderPicker,
-    /// Open the `/mode` picker modal for Agent / Plan / YOLO.
+    /// Open the `/mode` picker modal for Agent / Plan / YOLO / Pro Plan.
     OpenModePicker,
     /// Open the `/statusline` multi-select picker for footer items.
     OpenStatusPicker,
@@ -5010,7 +5056,13 @@ mod tests {
 
         app.mode = AppMode::Plan;
         app.cycle_mode_reverse();
+        assert_eq!(app.mode, AppMode::ProPlan);
+
+        app.cycle_mode_reverse();
         assert_eq!(app.mode, AppMode::Yolo);
+
+        app.cycle_mode_reverse();
+        assert_eq!(app.mode, AppMode::Agent);
 
         app.mode = AppMode::Agent;
         app.cycle_mode_reverse();
@@ -5102,6 +5154,33 @@ mod tests {
         assert!(!app.allow_shell);
         assert!(!app.trust_mode);
         assert_eq!(app.approval_mode, ApprovalMode::Never);
+    }
+
+    #[test]
+    fn set_mode_pro_plan_temporarily_disables_auto_model_and_restores_on_exit() {
+        let mut options = test_options(false);
+        options.start_in_agent_mode = true; // avoid coupling to settings.default_mode
+        let mut app = App::new(options, &Config::default());
+        app.auto_model = true;
+        app.last_effective_model = Some("deepseek-v4-flash".to_string());
+
+        app.set_mode(AppMode::ProPlan);
+        assert_eq!(app.mode, AppMode::ProPlan);
+        assert!(!app.auto_model);
+        assert!(app.pro_plan_router.is_some());
+        assert_eq!(app.model_display_label(), "pro-plan: deepseek-v4-pro");
+
+        {
+            let router = app.pro_plan_router.as_mut().expect("pro plan router");
+            router.start_execution(false);
+        }
+        assert_eq!(app.model_display_label(), "pro-plan: deepseek-v4-flash");
+
+        app.set_mode(AppMode::Agent);
+        assert_eq!(app.mode, AppMode::Agent);
+        assert!(app.auto_model);
+        assert!(app.pro_plan_router.is_none());
+        assert_eq!(app.model_display_label(), "auto: deepseek-v4-flash");
     }
 
     #[test]

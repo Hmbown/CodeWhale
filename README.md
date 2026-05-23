@@ -83,7 +83,7 @@ It is built around DeepSeek V4 (`deepseek-v4-pro` / `deepseek-v4-flash`), includ
 - **Full tool suite** — file ops, shell execution, git, web search/browse, apply-patch, sub-agents, MCP servers
 - **1M-token context** — context tracking, manual or configured compaction, and prefix-cache telemetry
 - **Prefix-cache stability tracking** — an optional `/statusline` footer chip surfaces how stable the cached prefix has been across recent turns so cost-busting edits are visible before they land
-- **Three modes** — Plan (read-only explore), Agent (interactive with approval), YOLO (auto-approved)
+- **Four modes** — Plan (read-only explore), Agent (interactive with approval), YOLO (auto-approved), Pro Plan (Pro plan/review + Flash execute)
 - **Reasoning-effort tiers** — cycle through `off → high → max` with `Shift + Tab`
 - **Session save/resume/fork** — checkpoint long-running sessions and fork saved conversations into sibling paths with parent lineage shown in the picker
 - **Workspace rollback** — side-git pre/post-turn snapshots with `/restore` and `revert_turn`, without touching your repo's `.git`
@@ -411,6 +411,7 @@ Full shortcut catalog: [docs/KEYBINDINGS.md](docs/KEYBINDINGS.md).
 | **Plan** 🔍 | Read-only investigation — model explores and proposes a plan before making changes; multi-step investigations use `checklist_write` |
 | **Agent** 🤖 | Default interactive mode — multi-step tool use with approval gates; substantial work is tracked with `checklist_write` |
 | **YOLO** ⚡ | Auto-approve all tools in a trusted workspace; multi-step work still keeps a visible checklist |
+| **Pro Plan** 🔄 | Plan and review with `deepseek-v4-pro`, execute with `deepseek-v4-flash`, and keep the normal plan confirmation gate |
 
 ---
 
