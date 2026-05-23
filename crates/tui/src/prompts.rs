@@ -28,6 +28,11 @@ pub struct PromptSessionContext<'a> {
     /// to the system prompt instructing the model to respond in
     /// the resolved session locale.
     pub translation_enabled: bool,
+    /// When false, the user has hidden thinking blocks in the UI.
+    /// The prompt builder injects a language override so
+    /// `reasoning_content` stays in English (saving tokens) while
+    /// the final reply still matches the user's language.
+    pub show_thinking: bool,
 }
 
 /// Conventional location for the structured session relay artifact (#32).
@@ -549,6 +554,7 @@ pub fn system_prompt_for_mode_with_context_and_skills(
             project_context_pack_enabled: true,
             locale_tag: "en",
             translation_enabled: false,
+            show_thinking: true,
         },
     )
 }
@@ -638,6 +644,23 @@ pub fn system_prompt_for_mode_with_context_skills_session_and_approval(
         full_prompt = format!(
             "{full_prompt}\n\n{}",
             translation_output_instruction(session_context.locale_tag)
+        );
+    }
+
+    // 2.3b. Thinking language override — when the user has hidden
+    // thinking blocks in the UI, redirect reasoning_content to
+    // English regardless of user language. This saves tokens
+    // (English is the most token-efficient language) while keeping
+    // the final reply in the user's language as described above.
+    if !session_context.show_thinking {
+        full_prompt.push_str(
+            "\n\n## Thinking Language\n\n\
+             The user has disabled thinking display in settings — they will \
+             never see your `reasoning_content`. Therefore, your internal \
+             thinking MUST be in English regardless of the user's language. \
+             This directive overrides the `## Language` section above for \
+             reasoning_content only. Your final reply must STILL match the \
+             user's language.",
         );
     }
 
@@ -881,6 +904,7 @@ mod tests {
                 project_context_pack_enabled: false,
                 locale_tag: "zh-Hans",
                 translation_enabled: false,
+                show_thinking: true,
             },
             ApprovalMode::Suggest,
         ) {
@@ -950,6 +974,7 @@ mod tests {
                 project_context_pack_enabled: false,
                 locale_tag: "zh-Hans",
                 translation_enabled: false,
+                show_thinking: true,
             },
             ApprovalMode::Suggest,
         ) {
@@ -994,6 +1019,7 @@ mod tests {
                 project_context_pack_enabled: false,
                 locale_tag: "en",
                 translation_enabled: false,
+                show_thinking: true,
             },
             ApprovalMode::Suggest,
         ) {
@@ -1083,6 +1109,7 @@ mod tests {
                 project_context_pack_enabled: true,
                 locale_tag: "ja",
                 translation_enabled: false,
+                show_thinking: true,
             },
         ) {
             SystemPrompt::Text(text) => text,
@@ -1118,6 +1145,7 @@ mod tests {
                 project_context_pack_enabled: false,
                 locale_tag: "en",
                 translation_enabled: false,
+                show_thinking: true,
             },
         ) {
             SystemPrompt::Text(text) => text,
@@ -1145,6 +1173,7 @@ mod tests {
                 project_context_pack_enabled: false,
                 locale_tag: "en",
                 translation_enabled: false,
+                show_thinking: true,
             },
         ) {
             SystemPrompt::Text(text) => text,
@@ -1174,6 +1203,7 @@ mod tests {
                 project_context_pack_enabled: false,
                 locale_tag: "en",
                 translation_enabled: false,
+                show_thinking: true,
             },
         ) {
             SystemPrompt::Text(text) => text,
@@ -1201,6 +1231,7 @@ mod tests {
                 project_context_pack_enabled: true,
                 locale_tag: "en",
                 translation_enabled: false,
+                show_thinking: true,
             },
         ) {
             SystemPrompt::Text(text) => text,
@@ -1395,6 +1426,7 @@ mod tests {
                 project_context_pack_enabled: true,
                 locale_tag: "en",
                 translation_enabled: false,
+                show_thinking: true,
             },
         ) {
             SystemPrompt::Text(text) => text,
@@ -1428,6 +1460,7 @@ mod tests {
                 project_context_pack_enabled: true,
                 locale_tag: "en",
                 translation_enabled: false,
+                show_thinking: true,
             },
         ) {
             SystemPrompt::Text(text) => text,
