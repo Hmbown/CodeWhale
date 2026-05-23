@@ -131,6 +131,17 @@ impl ClipboardHandler {
 
         #[cfg(not(test))]
         {
+            // On Linux try `wl-copy` first. The `arboard` Wayland backend uses
+            // the wlr-data-control-unstable-v1 protocol, which non-wlroots
+            // compositors (niri, River, cosmic-comp, GNOME) do not implement,
+            // so `set_text()` silently returns `Ok(())` without writing
+            // anything. `wl-copy` uses the standard `wl_data_device_manager`
+            // protocol supported by every Wayland compositor.
+            #[cfg(target_os = "linux")]
+            if write_text_with_wlcopy(text).is_ok() {
+                return Ok(());
+            }
+
             self.ensure_clipboard();
             if let Some(clipboard) = self.clipboard.as_mut()
                 && clipboard.set_text(text.to_string()).is_ok()
@@ -198,6 +209,49 @@ fn write_text_with_set_clipboard(text: &str) -> Result<()> {
         return Ok(());
     }
     Err(anyhow::anyhow!("Set-Clipboard failed"))
+}
+
+/// Write text to the Wayland clipboard via the `wl-copy` CLI.
+///
+/// Used on Linux instead of `arboard` because `arboard`'s Wayland backend
+/// targets the wlroots-specific `wlr-data-control-unstable-v1` protocol, which
+/// non-wlroots compositors (niri, River, cosmic-comp, GNOME mutter) do not
+/// expose. `wl-copy` ships with `wl-clipboard` and uses the standard
+/// `wl_data_device_manager` protocol that every Wayland compositor implements.
+#[cfg(all(target_os = "linux", not(test)))]
+fn write_text_with_wlcopy(text: &str) -> Result<()> {
+    write_text_with_wlcopy_using(WLCOPY_BIN, text)
+}
+
+#[cfg(all(target_os = "linux", not(test)))]
+const WLCOPY_BIN: &str = "wl-copy";
+
+/// Inner helper that delegates to an arbitrary stdin-fed command. Parameterised
+/// so tests can exercise both success and failure paths without depending on
+/// `wl-copy` being installed on the build host.
+#[cfg(target_os = "linux")]
+fn write_text_with_wlcopy_using(program: &str, text: &str) -> Result<()> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new(program)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("Failed to run {program}: {e}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(text.as_bytes())
+            .map_err(|e| anyhow::anyhow!("Failed to write to {program}: {e}"))?;
+    }
+    let status = child
+        .wait()
+        .map_err(|e| anyhow::anyhow!("Failed to wait for {program}: {e}"))?;
+    if status.success() {
+        return Ok(());
+    }
+    Err(anyhow::anyhow!("{program} failed"))
 }
 
 #[cfg(not(test))]
@@ -347,6 +401,40 @@ mod tests {
     fn osc52_sequence_wraps_for_tmux_passthrough() {
         let sequence = osc52_sequence("copy", true).expect("sequence");
         assert_eq!(sequence, "\x1bPtmux;\x1b\x1b]52;c;Y29weQ==\x07\x1b\\");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn wlcopy_helper_errors_when_binary_missing() {
+        let err =
+            write_text_with_wlcopy_using("deepseek-tui-nonexistent-clipboard-binary-zzz", "hi")
+                .expect_err("missing binary should fail");
+        assert!(
+            err.to_string().contains("Failed to run"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn wlcopy_helper_errors_when_binary_exits_nonzero() {
+        // `/bin/false` exits 1 immediately and drops stdin. The helper must
+        // surface that as a failure so the caller falls through to arboard /
+        // OSC 52 instead of believing the clipboard write succeeded.
+        let err = write_text_with_wlcopy_using("false", "hi")
+            .expect_err("non-zero exit must be reported as failure");
+        assert!(
+            err.to_string().contains("failed"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn wlcopy_helper_succeeds_when_binary_returns_zero() {
+        // `cat` drains stdin and exits 0 — same observable contract as a
+        // successful `wl-copy` invocation on a supported compositor.
+        write_text_with_wlcopy_using("cat", "hello").expect("cat should succeed");
     }
 
     #[test]
