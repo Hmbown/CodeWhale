@@ -2667,6 +2667,10 @@ impl App {
         (StatusToastLevel::Info, Some(4_000), false)
     }
 
+    fn is_mode_switch_status_message(message: &str) -> bool {
+        message.starts_with("Switched to ") && message.ends_with(" mode")
+    }
+
     pub fn sync_status_message_to_toasts(&mut self) {
         let current = self.status_message.clone();
         if self.last_status_message_seen == current {
@@ -2692,6 +2696,10 @@ impl App {
                     .is_some_and(|toast| matches!(toast.level, StatusToastLevel::Error))
             {
                 self.clear_sticky_status();
+            }
+            if Self::is_mode_switch_status_message(&message) {
+                self.status_toasts
+                    .retain(|toast| !Self::is_mode_switch_status_message(&toast.text));
             }
             self.push_status_toast(message, level, ttl_ms);
         }
@@ -5015,6 +5023,74 @@ mod tests {
         app.mode = AppMode::Agent;
         app.cycle_mode_reverse();
         assert_eq!(app.mode, AppMode::Plan);
+    }
+
+    #[test]
+    fn test_mode_switch_toasts_replace_previous_mode_switch_toast() {
+        let mut app = App::new(test_options(false), &Config::default());
+        let first_mode = match app.mode {
+            AppMode::Plan => AppMode::Agent,
+            AppMode::Agent => AppMode::Yolo,
+            AppMode::Yolo => AppMode::Plan,
+        };
+        let second_mode = match first_mode {
+            AppMode::Plan => AppMode::Yolo,
+            AppMode::Agent => AppMode::Plan,
+            AppMode::Yolo => AppMode::Agent,
+        };
+        let third_mode = match second_mode {
+            AppMode::Plan => AppMode::Yolo,
+            AppMode::Agent => AppMode::Yolo,
+            AppMode::Yolo => AppMode::Plan,
+        };
+
+        app.set_mode(first_mode);
+        app.sync_status_message_to_toasts();
+        assert_eq!(app.status_toasts.len(), 1);
+        assert_eq!(
+            app.status_toasts.back().expect("mode toast").text,
+            format!("Switched to {} mode", first_mode.label())
+        );
+
+        app.set_mode(second_mode);
+        app.sync_status_message_to_toasts();
+        assert_eq!(app.status_toasts.len(), 1);
+        assert_eq!(
+            app.status_toasts.back().expect("mode toast").text,
+            format!("Switched to {} mode", second_mode.label())
+        );
+
+        app.set_mode(third_mode);
+        app.sync_status_message_to_toasts();
+        assert_eq!(app.status_toasts.len(), 1);
+        assert_eq!(
+            app.status_toasts.back().expect("mode toast").text,
+            format!("Switched to {} mode", third_mode.label())
+        );
+    }
+
+    #[test]
+    fn test_mode_switch_toasts_do_not_disrupt_non_mode_toasts() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.status_message = Some("Task queued".to_string());
+        app.sync_status_message_to_toasts();
+
+        app.set_mode(AppMode::Agent);
+        app.sync_status_message_to_toasts();
+        app.set_mode(AppMode::Yolo);
+        app.sync_status_message_to_toasts();
+
+        assert_eq!(app.status_toasts.len(), 2);
+        assert!(
+            app.status_toasts
+                .iter()
+                .any(|toast| toast.text == "Task queued")
+        );
+        assert!(
+            app.status_toasts
+                .iter()
+                .any(|toast| toast.text == "Switched to YOLO mode")
+        );
     }
 
     #[test]
