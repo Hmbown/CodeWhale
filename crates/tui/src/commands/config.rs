@@ -460,8 +460,8 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
                     Err(err) => return CommandResult::error(format!("Failed to save: {err}")),
                 }
             }
-            return CommandResult::message(format!(
-                "base_url = {value} (session only; use --save to persist)"
+            return CommandResult::error(format!(
+                "base_url must be saved with --save; client base URL is loaded from config on startup. Restart and re-open your session after saving."
             ));
         }
         _ => {}
@@ -1815,15 +1815,16 @@ mod tests {
     }
 
     #[test]
-    fn config_command_base_url_without_save_is_session_only_notice() {
+    fn config_command_base_url_without_save_requires_save() {
         let _lock = lock_test_env();
         let mut app = create_test_app();
         let result = config_command(&mut app, Some("base_url https://example.internal.local/v1"));
+        assert!(result.is_error);
         let msg = result.message.unwrap();
 
-        assert_eq!(
-            msg,
-            "base_url = https://example.internal.local/v1 (session only; use --save to persist)"
+        assert!(
+            msg.contains("base_url must be saved with --save"),
+            "got {msg}"
         );
     }
 
