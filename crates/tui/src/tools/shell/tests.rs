@@ -847,8 +847,11 @@ fn issue_1691_quoted_commit_message_round_trips() {
         // Shell program and args depend on detected shell (cmd, pwsh, ...).
         // Verify command is the last arg and push_shell_args round-trips.
         assert!(!spec.program.is_empty(), "program must not be empty");
-        assert_eq!(spec.args.last(), Some(&cmd.to_string()),
-            "the full command string must be the last arg");
+        assert_eq!(
+            spec.args.last(),
+            Some(&cmd.to_string()),
+            "the full command string must be the last arg"
+        );
         let mut built = Command::new(&spec.program);
         push_shell_args(&mut built, &spec.program, &spec.args);
         let got: Vec<String> = built
