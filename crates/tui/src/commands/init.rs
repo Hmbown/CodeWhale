@@ -246,6 +246,21 @@ fn parse_cargo_toml(workspace: &Path) -> Option<String> {
         }
     }
 
+    // Workspace-level dependencies (shared across workspace members).
+    if let Some(ws_deps) = doc
+        .get("workspace")
+        .and_then(|w| w.get("dependencies"))
+        .and_then(|v| v.as_table())
+    {
+        let ws_dep_names: Vec<&str> = ws_deps.keys().map(|k| k.as_str()).collect();
+        if !ws_dep_names.is_empty() {
+            lines.push(format!(
+                "- Workspace dependencies: {}",
+                ws_dep_names.join(", ")
+            ));
+        }
+    }
+
     // Features.
     if let Some(features) = doc.get("features").and_then(|v| v.as_table()) {
         let feat_names: Vec<&str> = features.keys().map(|k| k.as_str()).collect();
@@ -379,7 +394,7 @@ fn gather_git_info(workspace: &Path) -> Option<String> {
 
     // Status summary.
     let status_output = Command::new("git")
-        .args(["status", "--porcelain=v1"])
+        .args(["status", "--porcelain=v1", "--untracked-files=no"])
         .current_dir(workspace)
         .output()
         .ok();
@@ -526,25 +541,33 @@ fn detect_build_systems(workspace: &Path) -> Vec<String> {
 fn detect_test_frameworks(workspace: &Path) -> Vec<String> {
     let mut found: Vec<String> = Vec::new();
 
-    // Rust: check Cargo.toml dev-dependencies.
+    // Rust: check Cargo.toml dev-dependencies (both crate and workspace level).
     if let Ok(raw) = std::fs::read_to_string(workspace.join("Cargo.toml")) {
         if let Ok(doc) = toml::from_str::<toml::Value>(&raw) {
+            let mut dep_keys: Vec<&str> = Vec::new();
             if let Some(dev_deps) = doc.get("dev-dependencies").and_then(|v| v.as_table()) {
-                let dep_keys: Vec<&str> = dev_deps.keys().map(|k| k.as_str()).collect();
+                dep_keys.extend(dev_deps.keys().map(|k| k.as_str()));
+            }
+            if let Some(ws_dev_deps) = doc
+                .get("workspace")
+                .and_then(|w| w.get("dev-dependencies"))
+                .and_then(|v| v.as_table())
+            {
+                dep_keys.extend(ws_dev_deps.keys().map(|k| k.as_str()));
+            }
 
-                let rust_test_frameworks: &[(&str, &str)] = &[
-                    ("tokio-test", "tokio-test"),
-                    ("proptest", "proptest"),
-                    ("quickcheck", "quickcheck"),
-                    ("rstest", "rstest"),
-                    ("criterion", "criterion (benchmark)"),
-                    ("mockall", "mockall"),
-                    ("pretty_assertions", "pretty_assertions"),
-                ];
-                for (dep_key, label) in rust_test_frameworks {
-                    if dep_keys.contains(dep_key) {
-                        found.push((*label).to_string());
-                    }
+            let rust_test_frameworks: &[(&str, &str)] = &[
+                ("tokio-test", "tokio-test"),
+                ("proptest", "proptest"),
+                ("quickcheck", "quickcheck"),
+                ("rstest", "rstest"),
+                ("criterion", "criterion (benchmark)"),
+                ("mockall", "mockall"),
+                ("pretty_assertions", "pretty_assertions"),
+            ];
+            for (dep_key, label) in rust_test_frameworks {
+                if dep_keys.contains(dep_key) {
+                    found.push((*label).to_string());
                 }
             }
         }
@@ -596,11 +619,11 @@ fn detect_test_frameworks(workspace: &Path) -> Vec<String> {
     found
 }
 
-/// Read existing AGENTS.md content (up to 8KB) for in-place update.
+/// Read existing AGENTS.md content (up to 100KB) for in-place update.
 fn read_existing_agents_md(workspace: &Path) -> Option<String> {
     let path = workspace.join("AGENTS.md");
     let meta = std::fs::metadata(&path).ok()?;
-    let limit = 8192usize;
+    let limit = 100 * 1024;
     let len = meta.len() as usize;
     let content = if len > limit {
         let mut f = std::fs::File::open(&path).ok()?;
