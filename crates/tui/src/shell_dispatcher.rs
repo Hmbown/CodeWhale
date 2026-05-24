@@ -1,5 +1,4 @@
 ﻿#![allow(dead_code)]
-#![allow(unused_variables)]
 //! Shell abstraction layer for DeepSeek TUI.
 //!
 //! Detects the user's shell at startup and provides a single entry point for
@@ -238,14 +237,19 @@ impl ShellDispatcher {
         }
 
         // Disable raw mode; guard restores it even on `?` early return.
-        let _ = crossterm::terminal::disable_raw_mode();
-        struct FgRawModeGuard;
+        let raw_was_enabled = crossterm::terminal::is_raw_mode_enabled().unwrap_or(false);
+        if raw_was_enabled {
+            let _ = crossterm::terminal::disable_raw_mode();
+        }
+        struct FgRawModeGuard(bool);
         impl Drop for FgRawModeGuard {
             fn drop(&mut self) {
-                let _ = crossterm::terminal::enable_raw_mode();
+                if self.0 {
+                    let _ = crossterm::terminal::enable_raw_mode();
+                }
             }
         }
-        let _guard = FgRawModeGuard;
+        let _guard = FgRawModeGuard(raw_was_enabled);
 
         let mut cmd = self.build_command(shell_command);
         cmd.current_dir(cwd);
