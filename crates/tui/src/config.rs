@@ -41,6 +41,9 @@ pub const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 pub const DEFAULT_ATLASCLOUD_MODEL: &str = "deepseek-ai/deepseek-v4-flash";
 pub const DEFAULT_ATLASCLOUD_BASE_URL: &str = "https://api.atlascloud.ai/v1";
 pub const DEFAULT_WANJIE_ARK_MODEL: &str = "deepseek-reasoner";
+pub const DEFAULT_VOLCENGINE_MODEL: &str = "DeepSeek-V4-Pro";
+pub const DEFAULT_VOLCENGINE_FLASH_MODEL: &str = "DeepSeek-V4-Flash";
+pub const DEFAULT_VOLCENGINE_BASE_URL: &str = "https://ark.cn-beijing.volces.com/api/coding/v3";
 pub const DEFAULT_WANJIE_ARK_BASE_URL: &str = "https://maas-openapi.wanjiedata.com/api/v1";
 pub const DEFAULT_OPENROUTER_MODEL: &str = "deepseek/deepseek-v4-pro";
 pub const DEFAULT_OPENROUTER_FLASH_MODEL: &str = "deepseek/deepseek-v4-flash";
@@ -85,6 +88,7 @@ pub enum ApiProvider {
     Openai,
     Atlascloud,
     WanjieArk,
+    Volcengine,
     Openrouter,
     Novita,
     Fireworks,
@@ -106,6 +110,7 @@ impl ApiProvider {
             "atlascloud" | "atlas-cloud" | "atlas_cloud" | "atlas" => Some(Self::Atlascloud),
             "wanjie" | "wanjie-ark" | "wanjie_ark" | "ark-wanjie" | "ark_wanjie" | "wanjieark"
             | "wanjie-maas" | "wanjie_maas" | "wanjiemaas" => Some(Self::WanjieArk),
+            "volcengine" | "volcengine-ark" | "volcengine_ark" | "ark" | "volc-ark" | "volcengineark" => Some(Self::Volcengine),
             "openrouter" | "open_router" => Some(Self::Openrouter),
             "novita" => Some(Self::Novita),
             "fireworks" | "fireworks-ai" => Some(Self::Fireworks),
@@ -125,6 +130,7 @@ impl ApiProvider {
             Self::Openai => "openai",
             Self::Atlascloud => "atlascloud",
             Self::WanjieArk => "wanjie-ark",
+            Self::Volcengine => "volcengine",
             Self::Openrouter => "openrouter",
             Self::Novita => "novita",
             Self::Fireworks => "fireworks",
@@ -144,6 +150,7 @@ impl ApiProvider {
             Self::Openai => "OpenAI-compatible",
             Self::Atlascloud => "AtlasCloud",
             Self::WanjieArk => "Wanjie Ark",
+            Self::Volcengine => "Volcengine Ark",
             Self::Openrouter => "OpenRouter",
             Self::Novita => "Novita AI",
             Self::Fireworks => "Fireworks AI",
@@ -162,6 +169,7 @@ impl ApiProvider {
             Self::Openai,
             Self::Atlascloud,
             Self::WanjieArk,
+            Self::Volcengine,
             Self::Openrouter,
             Self::Novita,
             Self::Fireworks,
@@ -297,7 +305,7 @@ pub fn provider_capability(provider: ApiProvider, resolved_model: &str) -> Provi
     // Cache telemetry: returned only by DeepSeek-native and NVIDIA NIM endpoints.
     let cache_telemetry_supported = matches!(
         provider,
-        ApiProvider::Deepseek | ApiProvider::DeepseekCN | ApiProvider::NvidiaNim
+        ApiProvider::Deepseek | ApiProvider::DeepseekCN | ApiProvider::NvidiaNim | ApiProvider::Volcengine
     );
 
     // Request payload mode: all current providers use chat completions.
@@ -423,7 +431,7 @@ pub fn model_completion_names_for_provider(provider: ApiProvider) -> Vec<&'stati
         ApiProvider::WanjieArk => vec![DEFAULT_WANJIE_ARK_MODEL],
         ApiProvider::Sglang => vec![DEFAULT_SGLANG_MODEL, DEFAULT_SGLANG_FLASH_MODEL],
         ApiProvider::Vllm => vec![DEFAULT_VLLM_MODEL, DEFAULT_VLLM_FLASH_MODEL],
-        ApiProvider::Openai | ApiProvider::Atlascloud | ApiProvider::Ollama => {
+        ApiProvider::Openai | ApiProvider::Atlascloud | ApiProvider::Ollama | ApiProvider::Volcengine => {
             OFFICIAL_DEEPSEEK_MODELS.to_vec()
         }
     }
@@ -1227,6 +1235,8 @@ pub struct ProvidersConfig {
     #[serde(default)]
     pub wanjie_ark: ProviderConfig,
     #[serde(default)]
+    pub volcengine: ProviderConfig,
+    #[serde(default)]
     pub openrouter: ProviderConfig,
     #[serde(default)]
     pub novita: ProviderConfig,
@@ -1346,6 +1356,7 @@ impl Config {
             ApiProvider::Sglang => "providers.sglang",
             ApiProvider::Vllm => "providers.vllm",
             ApiProvider::Ollama => "providers.ollama",
+            ApiProvider::Volcengine => "providers.volcengine",
             ApiProvider::NvidiaNim => "providers.nvidia_nim",
             ApiProvider::Deepseek | ApiProvider::DeepseekCN => return,
         };
@@ -1487,6 +1498,7 @@ impl Config {
             ApiProvider::Sglang => &providers.sglang,
             ApiProvider::Vllm => &providers.vllm,
             ApiProvider::Ollama => &providers.ollama,
+        ApiProvider::Volcengine => &providers.volcengine,
         })
     }
 
@@ -1563,6 +1575,7 @@ impl Config {
             ApiProvider::Sglang => DEFAULT_SGLANG_MODEL,
             ApiProvider::Vllm => DEFAULT_VLLM_MODEL,
             ApiProvider::Ollama => DEFAULT_OLLAMA_MODEL,
+            ApiProvider::Volcengine => DEFAULT_VOLCENGINE_MODEL,
         }
         .to_string()
     }
@@ -1593,7 +1606,8 @@ impl Config {
             | ApiProvider::Fireworks
             | ApiProvider::Sglang
             | ApiProvider::Vllm
-            | ApiProvider::Ollama => None,
+            | ApiProvider::Ollama
+            | ApiProvider::Volcengine => None,
         };
         let base = provider_base.or(root_base).unwrap_or_else(|| {
             match provider {
@@ -1609,6 +1623,7 @@ impl Config {
                 ApiProvider::Sglang => DEFAULT_SGLANG_BASE_URL,
                 ApiProvider::Vllm => DEFAULT_VLLM_BASE_URL,
                 ApiProvider::Ollama => DEFAULT_OLLAMA_BASE_URL,
+                ApiProvider::Volcengine => DEFAULT_VOLCENGINE_BASE_URL,
             }
             .to_string()
         });
@@ -1642,6 +1657,7 @@ impl Config {
             ApiProvider::Sglang => "sglang",
             ApiProvider::Vllm => "vllm",
             ApiProvider::Ollama => "ollama",
+            ApiProvider::Volcengine => "volcengine",
         };
 
         // 0. DeepSeek compatibility slot. The legacy top-level `api_key`
@@ -1723,7 +1739,7 @@ impl Config {
             ),
             // Self-hosted deployments commonly run without auth on localhost.
             // Return an empty key and let the client omit the Authorization header.
-            ApiProvider::Sglang | ApiProvider::Vllm | ApiProvider::Ollama => Ok(String::new()),
+            ApiProvider::Sglang | ApiProvider::Vllm | ApiProvider::Ollama | ApiProvider::Volcengine => Ok(String::new()),
         }
     }
 
@@ -2283,6 +2299,13 @@ fn apply_env_overrides(config: &mut Config) {
                     .ollama
                     .base_url = Some(value);
             }
+            ApiProvider::Volcengine => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .volcengine
+                    .base_url = Some(value);
+            }
             ApiProvider::Atlascloud => {
                 config
                     .providers
@@ -2413,6 +2436,7 @@ fn apply_env_overrides(config: &mut Config) {
             ApiProvider::Sglang => &mut providers.sglang,
             ApiProvider::Vllm => &mut providers.vllm,
             ApiProvider::Ollama => &mut providers.ollama,
+            ApiProvider::Volcengine => &mut providers.volcengine,
         };
         let mut provider_headers = entry.http_headers.clone().unwrap_or_default();
         provider_headers.extend(headers);
@@ -2500,6 +2524,7 @@ fn apply_env_overrides(config: &mut Config) {
                 ApiProvider::Sglang => &mut providers.sglang,
                 ApiProvider::Vllm => &mut providers.vllm,
                 ApiProvider::Ollama => &mut providers.ollama,
+                ApiProvider::Volcengine => &mut providers.volcengine,
             };
             entry.model = Some(value);
         }
@@ -2752,6 +2777,7 @@ pub(crate) fn provider_passes_model_through(provider: ApiProvider) -> bool {
         ApiProvider::Openai
             | ApiProvider::Atlascloud
             | ApiProvider::WanjieArk
+            | ApiProvider::Volcengine
             | ApiProvider::Ollama
     )
 }
@@ -2777,6 +2803,7 @@ fn default_base_url_for_provider(provider: ApiProvider) -> &'static str {
         ApiProvider::Sglang => DEFAULT_SGLANG_BASE_URL,
         ApiProvider::Vllm => DEFAULT_VLLM_BASE_URL,
         ApiProvider::Ollama => DEFAULT_OLLAMA_BASE_URL,
+        ApiProvider::Volcengine => DEFAULT_VOLCENGINE_BASE_URL,
     }
 }
 
@@ -3004,6 +3031,7 @@ fn merge_providers(
             sglang: merge_provider_config(base.sglang, override_cfg.sglang),
             vllm: merge_provider_config(base.vllm, override_cfg.vllm),
             ollama: merge_provider_config(base.ollama, override_cfg.ollama),
+            volcengine: merge_provider_config(base.volcengine, override_cfg.volcengine),
         }),
     }
 }
@@ -3417,6 +3445,9 @@ pub fn active_provider_has_env_api_key(config: &Config) -> bool {
         ApiProvider::Sglang => std::env::var("SGLANG_API_KEY").is_ok_and(|k| !k.trim().is_empty()),
         ApiProvider::Vllm => std::env::var("VLLM_API_KEY").is_ok_and(|k| !k.trim().is_empty()),
         ApiProvider::Ollama => std::env::var("OLLAMA_API_KEY").is_ok_and(|k| !k.trim().is_empty()),
+        ApiProvider::Volcengine => std::env::var("VOLCENGINE_API_KEY").is_ok_and(|k| !k.trim().is_empty())
+            || std::env::var("VOLCENGINE_ARK_API_KEY").is_ok_and(|k| !k.trim().is_empty())
+            || std::env::var("ARK_API_KEY").is_ok_and(|k| !k.trim().is_empty()),
     }
 }
 
@@ -3442,6 +3473,7 @@ pub fn has_api_key_for(config: &Config, provider: ApiProvider) -> bool {
         ApiProvider::Sglang => "SGLANG_API_KEY",
         ApiProvider::Vllm => "VLLM_API_KEY",
         ApiProvider::Ollama => "OLLAMA_API_KEY",
+        ApiProvider::Volcengine => "VOLCENGINE_API_KEY",
     };
     if std::env::var(env_var).is_ok_and(|k| !k.trim().is_empty()) {
         return true;
@@ -3522,6 +3554,7 @@ pub fn save_api_key_for(provider: ApiProvider, api_key: &str) -> Result<PathBuf>
         ApiProvider::Sglang => "providers.sglang",
         ApiProvider::Vllm => "providers.vllm",
         ApiProvider::Ollama => "providers.ollama",
+        ApiProvider::Volcengine => "providers.volcengine",
     };
 
     // Parse existing TOML (or start fresh) so we can edit the right table
@@ -3558,6 +3591,7 @@ pub fn save_api_key_for(provider: ApiProvider, api_key: &str) -> Result<PathBuf>
         ApiProvider::Sglang => "sglang",
         ApiProvider::Vllm => "vllm",
         ApiProvider::Ollama => "ollama",
+        ApiProvider::Volcengine => "volcengine",
     };
     let entry = providers
         .entry(key_inside.to_string())

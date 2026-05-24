@@ -98,6 +98,29 @@ impl Default for ModelRegistry {
                 supports_reasoning: true,
             },
             ModelInfo {
+                id: "DeepSeek-V4-Pro".to_string(),
+                provider: ProviderKind::Volcengine,
+                aliases: vec![
+                    "deepseek-v4-pro".to_string(),
+                    "volcengine-deepseek-v4-pro".to_string(),
+                    "ark-deepseek-v4-pro".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "DeepSeek-V4-Flash".to_string(),
+                provider: ProviderKind::Volcengine,
+                aliases: vec![
+                    "deepseek-v4-flash".to_string(),
+                    "deepseek-chat".to_string(),
+                    "volcengine-deepseek-v4-flash".to_string(),
+                    "ark-deepseek-v4-flash".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
                 id: "deepseek/deepseek-v4-pro".to_string(),
                 provider: ProviderKind::Openrouter,
                 aliases: vec![
@@ -258,7 +281,7 @@ impl ModelRegistry {
             {
                 return ModelResolution {
                     requested: Some(name.to_string()),
-                    resolved: preserve_requested_model_id_case(model, name),
+                    resolved: model,
                     used_fallback: false,
                     fallback_chain,
                 };
@@ -486,12 +509,13 @@ mod tests {
     }
 
     #[test]
-    fn preserves_requested_model_casing_with_provider_hint() {
+    fn registry_casing_takes_priority_over_requested_casing_with_provider_hint() {
         let registry = ModelRegistry::default();
         let resolved = registry.resolve(Some("DeepSeek-V4-Pro"), Some(ProviderKind::Deepseek));
 
         assert_eq!(resolved.resolved.provider, ProviderKind::Deepseek);
-        assert_eq!(resolved.resolved.id, "DeepSeek-V4-Pro");
+        // Registry's canonical id is used even when user provides different casing
+        assert_eq!(resolved.resolved.id, "deepseek-v4-pro");
     }
 
     #[test]

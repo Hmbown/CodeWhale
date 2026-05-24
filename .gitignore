@@ -39,6 +39,7 @@ dist/
 # Generated
 outputs/
 tmp/
+backup/
 
 # Reference papers / large research blobs (keep locally if needed, don't ship)
 docs/DeepSeek_V4.pdf
@@ -48,6 +49,7 @@ docs/*.pdf
 
 # Local dev scripts and temp files
 *.sh
+*.cmd
 !scripts/**
 !.github/scripts/**
 test.txt

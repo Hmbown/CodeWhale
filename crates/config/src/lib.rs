@@ -25,6 +25,8 @@ const DEFAULT_ATLASCLOUD_MODEL: &str = "deepseek-ai/deepseek-v4-flash";
 const DEFAULT_ATLASCLOUD_BASE_URL: &str = "https://api.atlascloud.ai/v1";
 const DEFAULT_WANJIE_ARK_MODEL: &str = "deepseek-reasoner";
 const DEFAULT_WANJIE_ARK_BASE_URL: &str = "https://maas-openapi.wanjiedata.com/api/v1";
+const DEFAULT_VOLCENGINE_MODEL: &str = "DeepSeek-V4-Pro";
+const DEFAULT_VOLCENGINE_BASE_URL: &str = "https://ark.cn-beijing.volces.com/api/coding/v3";
 const DEFAULT_OPENROUTER_MODEL: &str = "deepseek/deepseek-v4-pro";
 const DEFAULT_OPENROUTER_FLASH_MODEL: &str = "deepseek/deepseek-v4-flash";
 const DEFAULT_NOVITA_MODEL: &str = "deepseek/deepseek-v4-pro";
@@ -65,6 +67,8 @@ pub enum ProviderKind {
         alias = "wanjie_maas"
     )]
     WanjieArk,
+    #[serde(alias = "volcengine-ark", alias = "volcengine_ark", alias = "ark")]
+    Volcengine,
     Openrouter,
     Novita,
     Fireworks,
@@ -82,6 +86,7 @@ impl ProviderKind {
             Self::Openai => "openai",
             Self::Atlascloud => "atlascloud",
             Self::WanjieArk => "wanjie-ark",
+            Self::Volcengine => "volcengine",
             Self::Openrouter => "openrouter",
             Self::Novita => "novita",
             Self::Fireworks => "fireworks",
@@ -101,6 +106,7 @@ impl ProviderKind {
             "atlascloud" | "atlas-cloud" | "atlas_cloud" | "atlas" => Some(Self::Atlascloud),
             "wanjie" | "wanjie-ark" | "wanjie_ark" | "ark-wanjie" | "ark_wanjie" | "wanjieark"
             | "wanjie-maas" | "wanjie_maas" | "wanjiemaas" => Some(Self::WanjieArk),
+            "volcengine" | "volcengine-ark" | "volcengine_ark" | "ark" | "volc-ark" | "volcengineark" => Some(Self::Volcengine),
             "openrouter" | "open_router" => Some(Self::Openrouter),
             "novita" => Some(Self::Novita),
             "fireworks" | "fireworks-ai" => Some(Self::Fireworks),
@@ -134,6 +140,8 @@ pub struct ProvidersToml {
     #[serde(default)]
     pub wanjie_ark: ProviderConfigToml,
     #[serde(default)]
+    pub volcengine: ProviderConfigToml,
+    #[serde(default)]
     pub openrouter: ProviderConfigToml,
     #[serde(default)]
     pub novita: ProviderConfigToml,
@@ -156,6 +164,7 @@ impl ProvidersToml {
             ProviderKind::Openai => &self.openai,
             ProviderKind::Atlascloud => &self.atlascloud,
             ProviderKind::WanjieArk => &self.wanjie_ark,
+            ProviderKind::Volcengine => &self.volcengine,
             ProviderKind::Openrouter => &self.openrouter,
             ProviderKind::Novita => &self.novita,
             ProviderKind::Fireworks => &self.fireworks,
@@ -172,6 +181,7 @@ impl ProvidersToml {
             ProviderKind::Openai => &mut self.openai,
             ProviderKind::Atlascloud => &mut self.atlascloud,
             ProviderKind::WanjieArk => &mut self.wanjie_ark,
+            ProviderKind::Volcengine => &mut self.volcengine,
             ProviderKind::Openrouter => &mut self.openrouter,
             ProviderKind::Novita => &mut self.novita,
             ProviderKind::Fireworks => &mut self.fireworks,
@@ -462,6 +472,9 @@ impl ConfigToml {
             "providers.wanjie_ark.api_key" => self.providers.wanjie_ark.api_key.clone(),
             "providers.wanjie_ark.base_url" => self.providers.wanjie_ark.base_url.clone(),
             "providers.wanjie_ark.model" => self.providers.wanjie_ark.model.clone(),
+            "providers.volcengine.api_key" => self.providers.volcengine.api_key.clone(),
+            "providers.volcengine.base_url" => self.providers.volcengine.base_url.clone(),
+            "providers.volcengine.model" => self.providers.volcengine.model.clone(),
             "providers.wanjie_ark.http_headers" => {
                 serialize_http_headers(&self.providers.wanjie_ark.http_headers)
             }
@@ -583,6 +596,15 @@ impl ConfigToml {
             }
             "providers.wanjie_ark.model" => {
                 self.providers.wanjie_ark.model = Some(value.to_string());
+            }
+            "providers.volcengine.api_key" => {
+                self.providers.volcengine.api_key = Some(value.to_string());
+            }
+            "providers.volcengine.base_url" => {
+                self.providers.volcengine.base_url = Some(value.to_string());
+            }
+            "providers.volcengine.model" => {
+                self.providers.volcengine.model = Some(value.to_string());
             }
             "providers.wanjie_ark.http_headers" => {
                 self.providers.wanjie_ark.http_headers = parse_http_headers(value)?;
@@ -722,6 +744,9 @@ impl ConfigToml {
             "providers.wanjie_ark.api_key" => self.providers.wanjie_ark.api_key = None,
             "providers.wanjie_ark.base_url" => self.providers.wanjie_ark.base_url = None,
             "providers.wanjie_ark.model" => self.providers.wanjie_ark.model = None,
+            "providers.volcengine.api_key" => self.providers.volcengine.api_key = None,
+            "providers.volcengine.base_url" => self.providers.volcengine.base_url = None,
+            "providers.volcengine.model" => self.providers.volcengine.model = None,
             "providers.wanjie_ark.http_headers" => {
                 self.providers.wanjie_ark.http_headers.clear();
             }
@@ -840,6 +865,15 @@ impl ConfigToml {
         if let Some(v) = serialize_http_headers(&self.providers.atlascloud.http_headers) {
             out.insert("providers.atlascloud.http_headers".to_string(), v);
         }
+        if let Some(v) = self.providers.volcengine.api_key.as_ref() {
+            out.insert("providers.volcengine.api_key".to_string(), redact_secret(v));
+        }
+        if let Some(v) = self.providers.volcengine.base_url.as_ref() {
+            out.insert("providers.volcengine.base_url".to_string(), v.clone());
+        }
+        if let Some(v) = self.providers.volcengine.model.as_ref() {
+            out.insert("providers.volcengine.model".to_string(), v.clone());
+        }
         if let Some(v) = self.providers.wanjie_ark.api_key.as_ref() {
             out.insert("providers.wanjie_ark.api_key".to_string(), redact_secret(v));
         }
@@ -848,6 +882,9 @@ impl ConfigToml {
         }
         if let Some(v) = self.providers.wanjie_ark.model.as_ref() {
             out.insert("providers.wanjie_ark.model".to_string(), v.clone());
+        }
+        if let Some(v) = serialize_http_headers(&self.providers.volcengine.http_headers) {
+            out.insert("providers.volcengine.http_headers".to_string(), v);
         }
         if let Some(v) = serialize_http_headers(&self.providers.wanjie_ark.http_headers) {
             out.insert("providers.wanjie_ark.http_headers".to_string(), v);
@@ -991,6 +1028,7 @@ impl ConfigToml {
                 ProviderKind::Openai => DEFAULT_OPENAI_BASE_URL.to_string(),
                 ProviderKind::Atlascloud => DEFAULT_ATLASCLOUD_BASE_URL.to_string(),
                 ProviderKind::WanjieArk => DEFAULT_WANJIE_ARK_BASE_URL.to_string(),
+                ProviderKind::Volcengine => DEFAULT_VOLCENGINE_BASE_URL.to_string(),
                 ProviderKind::Openrouter => DEFAULT_OPENROUTER_BASE_URL.to_string(),
                 ProviderKind::Novita => DEFAULT_NOVITA_BASE_URL.to_string(),
                 ProviderKind::Fireworks => DEFAULT_FIREWORKS_BASE_URL.to_string(),
@@ -1140,7 +1178,7 @@ pub fn load_project_config(workspace: &Path) -> Option<ConfigToml> {
 fn normalize_model_for_provider(provider: ProviderKind, model: &str) -> String {
     if matches!(
         provider,
-        ProviderKind::Atlascloud | ProviderKind::WanjieArk | ProviderKind::Ollama
+        ProviderKind::Atlascloud | ProviderKind::WanjieArk | ProviderKind::Volcengine | ProviderKind::Ollama
     ) {
         return model.to_string();
     }
@@ -1201,6 +1239,7 @@ fn default_model_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::Openai => DEFAULT_OPENAI_MODEL,
         ProviderKind::Atlascloud => DEFAULT_ATLASCLOUD_MODEL,
         ProviderKind::WanjieArk => DEFAULT_WANJIE_ARK_MODEL,
+        ProviderKind::Volcengine => DEFAULT_VOLCENGINE_MODEL,
         ProviderKind::Openrouter => DEFAULT_OPENROUTER_MODEL,
         ProviderKind::Novita => DEFAULT_NOVITA_MODEL,
         ProviderKind::Fireworks => DEFAULT_FIREWORKS_MODEL,
@@ -1217,6 +1256,7 @@ fn default_base_url_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::Openai => DEFAULT_OPENAI_BASE_URL,
         ProviderKind::Atlascloud => DEFAULT_ATLASCLOUD_BASE_URL,
         ProviderKind::WanjieArk => DEFAULT_WANJIE_ARK_BASE_URL,
+        ProviderKind::Volcengine => DEFAULT_VOLCENGINE_BASE_URL,
         ProviderKind::Openrouter => DEFAULT_OPENROUTER_BASE_URL,
         ProviderKind::Novita => DEFAULT_NOVITA_BASE_URL,
         ProviderKind::Fireworks => DEFAULT_FIREWORKS_BASE_URL,
@@ -1671,6 +1711,7 @@ fn normalize_config_file_path(path: PathBuf) -> Result<PathBuf> {
 struct EnvRuntimeOverrides {
     provider: Option<ProviderKind>,
     model: Option<String>,
+    volcengine_model: Option<String>,
     wanjie_ark_model: Option<String>,
     output_mode: Option<String>,
     auth_mode: Option<String>,
@@ -1684,6 +1725,7 @@ struct EnvRuntimeOverrides {
     nvidia_base_url: Option<String>,
     openai_base_url: Option<String>,
     atlascloud_base_url: Option<String>,
+    volcengine_base_url: Option<String>,
     wanjie_ark_base_url: Option<String>,
     openrouter_base_url: Option<String>,
     novita_base_url: Option<String>,
@@ -1700,6 +1742,10 @@ impl EnvRuntimeOverrides {
                 .ok()
                 .and_then(|v| ProviderKind::parse(&v)),
             model: std::env::var("DEEPSEEK_MODEL").ok(),
+            volcengine_model: std::env::var("VOLCENGINE_MODEL")
+                .or_else(|_| std::env::var("VOLCENGINE_ARK_MODEL"))
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
             wanjie_ark_model: std::env::var("WANJIE_ARK_MODEL")
                 .or_else(|_| std::env::var("WANJIE_MODEL"))
                 .or_else(|_| std::env::var("WANJIE_MAAS_MODEL"))
@@ -1732,6 +1778,11 @@ impl EnvRuntimeOverrides {
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
             atlascloud_base_url: std::env::var("ATLASCLOUD_BASE_URL")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            volcengine_base_url: std::env::var("VOLCENGINE_BASE_URL")
+                .or_else(|_| std::env::var("VOLCENGINE_ARK_BASE_URL"))
+                .or_else(|_| std::env::var("ARK_BASE_URL"))
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
             wanjie_ark_base_url: std::env::var("WANJIE_ARK_BASE_URL")
@@ -1769,6 +1820,7 @@ impl EnvRuntimeOverrides {
             ProviderKind::Openai => self.openai_base_url.clone(),
             ProviderKind::Atlascloud => self.atlascloud_base_url.clone(),
             ProviderKind::WanjieArk => self.wanjie_ark_base_url.clone(),
+            ProviderKind::Volcengine => self.volcengine_base_url.clone(),
             ProviderKind::Openrouter => self.openrouter_base_url.clone(),
             ProviderKind::Novita => self.novita_base_url.clone(),
             ProviderKind::Fireworks => self.fireworks_base_url.clone(),
@@ -1781,6 +1833,7 @@ impl EnvRuntimeOverrides {
     fn model_for(&self, provider: ProviderKind) -> Option<String> {
         match provider {
             ProviderKind::WanjieArk => self.wanjie_ark_model.clone(),
+            ProviderKind::Volcengine => self.volcengine_model.clone(),
             _ => None,
         }
     }
@@ -1832,6 +1885,7 @@ mod tests {
         wanjie_ark_base_url: Option<OsString>,
         wanjie_base_url: Option<OsString>,
         wanjie_maas_base_url: Option<OsString>,
+        volcengine_model: Option<OsString>,
         wanjie_ark_model: Option<OsString>,
         wanjie_model: Option<OsString>,
         wanjie_maas_model: Option<OsString>,
@@ -1867,6 +1921,7 @@ mod tests {
                 wanjie_ark_base_url: env::var_os("WANJIE_ARK_BASE_URL"),
                 wanjie_base_url: env::var_os("WANJIE_BASE_URL"),
                 wanjie_maas_base_url: env::var_os("WANJIE_MAAS_BASE_URL"),
+                volcengine_model: env::var_os("VOLCENGINE_MODEL"),
                 wanjie_ark_model: env::var_os("WANJIE_ARK_MODEL"),
                 wanjie_model: env::var_os("WANJIE_MODEL"),
                 wanjie_maas_model: env::var_os("WANJIE_MAAS_MODEL"),
@@ -1947,6 +2002,7 @@ mod tests {
                 Self::restore_var("WANJIE_ARK_BASE_URL", self.wanjie_ark_base_url.take());
                 Self::restore_var("WANJIE_BASE_URL", self.wanjie_base_url.take());
                 Self::restore_var("WANJIE_MAAS_BASE_URL", self.wanjie_maas_base_url.take());
+                Self::restore_var("VOLCENGINE_MODEL", self.volcengine_model.take());
                 Self::restore_var("WANJIE_ARK_MODEL", self.wanjie_ark_model.take());
                 Self::restore_var("WANJIE_MODEL", self.wanjie_model.take());
                 Self::restore_var("WANJIE_MAAS_MODEL", self.wanjie_maas_model.take());
