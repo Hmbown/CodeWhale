@@ -224,6 +224,7 @@ fn simple_type_name<T: ?Sized>() -> &'static str {
 ///     .current_dir(&workspace)
 ///     .output()?;
 /// ```
+#[allow(dead_code)]
 pub trait ExternalTool {
     /// Candidate binary names, tried in order until one responds to
     /// `--version`.  For single-binary tools (git, gh, node) this is a
@@ -379,6 +380,7 @@ impl ExternalTool for RustC {
 }
 
 /// Rust build tool — used by the `run_tests` tool.
+#[allow(dead_code)]
 pub struct Cargo;
 
 impl ExternalTool for Cargo {
@@ -409,6 +411,7 @@ impl ExternalTool for Cargo {
 /// Delegates to the existing [`resolve_python_interpreter`] so the
 /// multi-candidate ladder (`python3` → `python` → `py -3`) is
 /// shared with legacy callers until they migrate to the trait.
+#[allow(dead_code)]
 pub struct Python;
 
 impl ExternalTool for Python {
@@ -424,6 +427,7 @@ impl ExternalTool for Python {
 /// Node.js runtime — used by the `js_execution` tool.
 /// The binary name `node` is the same on every platform we support,
 /// so this is a single probe rather than a candidate ladder.
+#[allow(dead_code)]
 pub struct Node;
 
 impl ExternalTool for Node {
@@ -439,6 +443,7 @@ impl ExternalTool for Node {
 /// .NET SDK — used by the `dotnet_execution` tool.
 /// Starting with .NET 6, `dotnet run file.cs` can run a single C# file
 /// without a project. The binary is `dotnet` on all platforms.
+#[allow(dead_code)]
 pub struct DotNet;
 
 impl ExternalTool for DotNet {
@@ -469,6 +474,7 @@ impl ExternalTool for DotNet {
 /// Go toolchain — used by the `go_execution` tool.
 ///
 /// `go run file.go` compiles and executes in one step.
+#[allow(dead_code)]
 pub struct Go;
 
 impl ExternalTool for Go {
@@ -501,8 +507,10 @@ impl ExternalTool for Go {
 /// then `ts-node` (most common historically), then `deno` (built-in
 /// TS).  The multi-candidate ladder is similar to Python's
 /// `python3`/`python`/`py -3`.
+#[allow(dead_code)]
 pub struct TypeScript;
 
+#[allow(dead_code)]
 const TS_CANDIDATES: &[&str] = &["tsx", "tsx.cmd", "ts-node", "deno", "npx tsx"];
 
 impl ExternalTool for TypeScript {

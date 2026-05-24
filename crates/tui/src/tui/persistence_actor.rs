@@ -43,11 +43,13 @@ pub enum PersistRequest {
     /// Write a full session snapshot (completed turn, durable save).
     SessionSnapshot(SavedSession),
     /// Write queued/draft offline input for crash recovery.
+    #[allow(dead_code)]
     OfflineQueue {
         state: OfflineQueueState,
         session_id: Option<String>,
     },
     /// Remove the queued/draft offline input file.
+    #[allow(dead_code)]
     ClearOfflineQueue,
     /// Remove the crash-recovery checkpoint file.
     ClearCheckpoint,

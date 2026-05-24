@@ -3575,6 +3575,7 @@ impl App {
 
     /// In a multiline composer, jump to the start of the current line.
     /// On single-line input this is equivalent to `move_cursor_start`.
+    #[allow(dead_code)]
     pub fn move_cursor_line_start(&mut self) {
         let byte_pos = byte_index_at_char(&self.input, self.cursor_position);
         let before = &self.input[..byte_pos];
@@ -3590,6 +3591,7 @@ impl App {
     /// In a multiline composer, jump to the end of the current line
     /// (just before the next `\n` or at the end of input).
     /// On single-line input this is equivalent to `move_cursor_end`.
+    #[allow(dead_code)]
     pub fn move_cursor_line_end(&mut self) {
         let search_start = byte_index_at_char(&self.input, self.cursor_position);
         if let Some(offset) = self.input[search_start..].find('\n') {
@@ -4080,6 +4082,7 @@ impl App {
         Some(input)
     }
 
+    #[allow(dead_code)]
     pub fn restore_last_submitted_prompt_if_empty(&mut self) -> bool {
         if !self.input.is_empty() {
             return false;
@@ -4442,6 +4445,7 @@ impl App {
         self.last_effective_model = None;
     }
 
+    #[allow(dead_code)]
     pub fn model_selection_for_persistence(&self) -> String {
         if self.auto_model || self.model.trim().eq_ignore_ascii_case("auto") {
             "auto".to_string()

@@ -205,6 +205,7 @@ pub fn backup_before_migrate(path: &Path, domain: &str) -> PathBuf {
 /// 3. Bump `CURRENT_VERSION` to match.
 /// 4. Wire `<Domain>Migration::migrate(...)` into the load function in
 ///    the owning module.
+#[allow(dead_code)]
 pub mod registry {
     use super::{MigrationFn, SchemaMigration};
 
