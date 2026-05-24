@@ -824,8 +824,11 @@ fn issue_1691_quoted_commit_message_round_trips() {
         // `sh -c <cmd>` (or bash/zsh): the whole command (with quotes) is a
         // single argv entry. The shell then POSIX-tokenizes it → correct git
         // argv. We never split the command string ourselves.
-        assert!(spec.program == "sh" || spec.program == "bash" || spec.program == "zsh",
-            "expected sh/bash/zsh, got {}", spec.program);
+        assert!(
+            spec.program == "sh" || spec.program == "bash" || spec.program == "zsh",
+            "expected sh/bash/zsh, got {}",
+            spec.program
+        );
         assert_eq!(spec.args, ["-c".to_string(), cmd.to_string()]);
         assert_eq!(spec.args.len(), 2);
 
