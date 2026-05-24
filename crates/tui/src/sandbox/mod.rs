@@ -613,8 +613,11 @@ mod tests {
         }
         #[cfg(not(windows))]
         {
-            assert!(spec.program == "sh" || spec.program == "bash" || spec.program == "zsh",
-                "expected sh/bash/zsh, got {}", spec.program);
+            assert!(
+                spec.program == "sh" || spec.program == "bash" || spec.program == "zsh",
+                "expected sh/bash/zsh, got {}",
+                spec.program
+            );
             assert_eq!(spec.args, vec!["-c".to_string(), cmd.to_string()]);
             // The quoted message is intact in a single argv slot — `sh -c`
             // performs POSIX tokenization, yielding the correct argv:
@@ -623,7 +626,12 @@ mod tests {
             assert!(spec.args[1].contains(r#""feat: complete sub-pages""#));
         }
         // display_command includes the shell wrapper; just check it ends with the command.
-        assert!(spec.display_command().contains(cmd), "expected '{}' to contain '{}'", spec.display_command(), cmd);
+        assert!(
+            spec.display_command().contains(cmd),
+            "expected '{}' to contain '{}'",
+            spec.display_command(),
+            cmd
+        );
     }
 
     #[test]
