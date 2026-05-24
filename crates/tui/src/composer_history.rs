@@ -265,7 +265,6 @@ mod tests {
         // Windows CI runners occasionally schedule the writer thread late
         // or throttle disk I/O, so a short deadline causes spurious
         // failures. 10 s with 50 ms polling is safe even under load.
-        std::thread::sleep(Duration::from_millis(50));
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             let loaded = load_history_from(&path);
