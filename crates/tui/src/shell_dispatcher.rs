@@ -1,4 +1,5 @@
 ﻿#![allow(dead_code)]
+#![allow(unused_variables)]
 //! Shell abstraction layer for DeepSeek TUI.
 //!
 //! Detects the user's shell at startup and provides a single entry point for
