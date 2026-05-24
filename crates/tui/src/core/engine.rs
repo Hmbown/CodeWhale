@@ -384,8 +384,8 @@ impl Engine {
 
         Some(format!(
             "The rejected key came from {env_var}; no saved config key is present.\n\
-             Run `deepseek auth status` to inspect credential sources, then \
-             `deepseek auth set --provider {provider}` to save a valid key in ~/.deepseek/config.toml, \
+             Run `codewhale auth status` to inspect credential sources, then \
+             `codewhale auth set --provider {provider}` to save a valid key in ~/.deepseek/config.toml, \
              or remove the stale export and open a fresh shell.",
             provider = provider.as_str()
         ))

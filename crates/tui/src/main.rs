@@ -1844,45 +1844,45 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
             let (env_var, login_hint) = match config.api_provider() {
                 crate::config::ApiProvider::NvidiaNim => (
                     "NVIDIA_API_KEY",
-                    "deepseek auth set --provider nvidia-nim --api-key \"...\"",
+                    "codewhale auth set --provider nvidia-nim --api-key \"...\"",
                 ),
                 crate::config::ApiProvider::Openai => (
                     "OPENAI_API_KEY",
-                    "deepseek auth set --provider openai --api-key \"...\"",
+                    "codewhale auth set --provider openai --api-key \"...\"",
                 ),
                 crate::config::ApiProvider::Atlascloud => (
                     "ATLASCLOUD_API_KEY",
-                    "deepseek auth set --provider atlascloud --api-key \"...\"",
+                    "codewhale auth set --provider atlascloud --api-key \"...\"",
                 ),
                 crate::config::ApiProvider::WanjieArk => (
                     "WANJIE_ARK_API_KEY",
-                    "deepseek auth set --provider wanjie-ark --api-key \"...\"",
+                    "codewhale auth set --provider wanjie-ark --api-key \"...\"",
                 ),
                 crate::config::ApiProvider::Openrouter => (
                     "OPENROUTER_API_KEY",
-                    "deepseek auth set --provider openrouter --api-key \"...\"",
+                    "codewhale auth set --provider openrouter --api-key \"...\"",
                 ),
                 crate::config::ApiProvider::Novita => (
                     "NOVITA_API_KEY",
-                    "deepseek auth set --provider novita --api-key \"...\"",
+                    "codewhale auth set --provider novita --api-key \"...\"",
                 ),
                 crate::config::ApiProvider::Fireworks => (
                     "FIREWORKS_API_KEY",
-                    "deepseek auth set --provider fireworks --api-key \"...\"",
+                    "codewhale auth set --provider fireworks --api-key \"...\"",
                 ),
                 crate::config::ApiProvider::Sglang => (
                     "SGLANG_API_KEY",
-                    "deepseek auth set --provider sglang --api-key \"...\"",
+                    "codewhale auth set --provider sglang --api-key \"...\"",
                 ),
                 crate::config::ApiProvider::Vllm => (
                     "VLLM_API_KEY",
-                    "deepseek auth set --provider vllm --api-key \"...\"",
+                    "codewhale auth set --provider vllm --api-key \"...\"",
                 ),
                 crate::config::ApiProvider::Ollama => {
-                    ("OLLAMA_API_KEY", "deepseek auth set --provider ollama")
+                    ("OLLAMA_API_KEY", "codewhale auth set --provider ollama")
                 }
                 crate::config::ApiProvider::Deepseek | crate::config::ApiProvider::DeepseekCN => {
-                    ("DEEPSEEK_API_KEY", "deepseek auth set --provider deepseek")
+                    ("DEEPSEEK_API_KEY", "codewhale auth set --provider deepseek")
                 }
             };
             println!(
@@ -2225,7 +2225,7 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
             "✗".truecolor(red_r, red_g, red_b)
         );
         println!(
-            "    Run 'deepseek auth set --provider <name>' to save a key to ~/.deepseek/config.toml."
+            "    Run 'codewhale auth set --provider <name>' to save a key to ~/.deepseek/config.toml."
         );
         false
     };
@@ -2277,21 +2277,21 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
                 );
                 if error_msg.contains("401") || error_msg.contains("Unauthorized") {
                     println!(
-                        "    Invalid API key. Check `deepseek auth status`, DEEPSEEK_API_KEY, or config.toml"
+                        "    Invalid API key. Check `codewhale auth status`, DEEPSEEK_API_KEY, or config.toml"
                     );
                     if matches!(api_key_source, ApiKeySource::Keyring) {
                         println!(
                             "    The rejected key came from the OS keyring via the dispatcher."
                         );
                         println!(
-                            "    Run `deepseek auth status` to inspect config/keyring/env sources."
+                            "    Run `codewhale auth status` to inspect config/keyring/env sources."
                         );
                     } else if matches!(api_key_source, ApiKeySource::Env) {
                         println!(
                             "    The rejected key came from DEEPSEEK_API_KEY; no saved config key is present."
                         );
                         println!(
-                            "    Run `deepseek auth set --provider deepseek` to save a config key that overrides stale env."
+                            "    Run `codewhale auth set --provider deepseek` to save a config key that overrides stale env."
                         );
                     }
                 } else if error_msg.contains("403") || error_msg.contains("Forbidden") {
