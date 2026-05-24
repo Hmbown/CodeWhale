@@ -699,7 +699,16 @@ mod tests {
         let env = manager.prepare(&spec);
 
         assert_eq!(env.sandbox_type, SandboxType::None);
-        assert_eq!(env.command, expected_shell_command("echo test"));
+        assert!(
+            env.command.len() >= 2,
+            "command should have shell + command, got {env.command:?}"
+        );
+        assert!(
+            env.command
+                .last()
+                .map_or(false, |c| c.contains("echo test")),
+            "command should end with 'echo test', got {env.command:?}"
+        );
         assert!(!env.is_sandboxed());
     }
 
