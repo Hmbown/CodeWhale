@@ -708,7 +708,7 @@ mod tests {
             env.command
                 .last()
                 .map_or(false, |c| c.contains("echo test")),
-            "command should end with 'echo test', got {env.command:?}"
+            "command should end with 'echo test', got {:?}", env.command
         );
         assert!(!env.is_sandboxed());
     }
