@@ -701,7 +701,7 @@ mod tests {
         assert_eq!(env.sandbox_type, SandboxType::None);
         assert!(
             env.command.len() >= 2,
-            "command should have shell + command, got {env.command:?}"
+            "command should have shell + command, got {:?}", env.command
         );
         assert!(
             env.command
