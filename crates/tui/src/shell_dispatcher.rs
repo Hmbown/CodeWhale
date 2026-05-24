@@ -1,5 +1,4 @@
 ﻿#![allow(dead_code)]
-#![allow(unused_variables)]
 //! Shell abstraction layer for DeepSeek TUI.
 //!
 //! Detects the user's shell at startup and provides a single entry point for
@@ -142,7 +141,7 @@ impl ShellDispatcher {
                 std::process::id()
             );
             let _ = Self::append_log(&path, &init_line);
-            let detect_line = format!("[{}] detect: {kind:?}\n", now_iso());
+            let detect_line = format!("[{}] detect: {_kind:?}\n", now_iso());
             let _ = Self::append_log(&path, &detect_line);
         }
     }
@@ -159,9 +158,9 @@ impl ShellDispatcher {
     fn append_log_static(path: &str, command: &str) -> std::io::Result<()> {
         // Resolve kind outside the lock — `global_dispatcher()` may trigger
         // `detect()` which calls `log_startup()` which also acquires the mutex.
-        let kind = global_dispatcher().kind();
+        let _kind = global_dispatcher().kind();
         let _lock = LOG_MUTEX.lock();
-        let line = format!("[{}] exec via {kind:?}: {command}\n", now_iso());
+        let line = format!("[{}] exec via {_kind:?}: {command}\n", now_iso());
         Self::append_log(path, &line)
     }
 
@@ -232,7 +231,7 @@ impl ShellDispatcher {
             let _lock = LOG_MUTEX.lock();
             if let Ok(path) = std::env::var("SHELL_DISPATCHER_LOG") {
                 let kind = self.kind();
-                let line = format!("[{}] exec via {kind:?}: {shell_command}\n", now_iso());
+                let line = format!("[{}] exec via {_kind:?}: {shell_command}\n", now_iso());
                 let _ = Self::append_log(&path, &line);
             }
         }
