@@ -80,12 +80,12 @@ impl CommandSpec {
     /// Create a `CommandSpec` for running a shell command via the platform shell.
     pub fn shell(command: &str, cwd: PathBuf, timeout: Duration) -> Self {
         let dispatcher = crate::shell_dispatcher::global_dispatcher();
-        let kind = dispatcher.kind();
 
         #[cfg(windows)]
         let (program, args) = {
             // Force UTF-8 output. cmd.exe uses chcp; PowerShell sets the
             // console output encoding directly. See issue #982.
+            let kind = dispatcher.kind();
             let cmd = if kind.is_powershell() {
                 format!("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; {command}")
             } else {
