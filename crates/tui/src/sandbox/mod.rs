@@ -572,11 +572,12 @@ mod tests {
     fn expected_shell_command(command: &str) -> Vec<String> {
         #[cfg(windows)]
         {
-            vec![
-                "cmd".to_string(),
-                "/C".to_string(),
-                format!("chcp 65001 >NUL & {command}"),
-            ]
+            // Use the ShellDispatcher's detected shell directly.
+            use crate::shell_dispatcher::ShellDispatcher;
+            let kind = ShellDispatcher::detect_shell();
+            let binary = kind.binary().to_string();
+            let flag = kind.command_flag().to_string();
+            vec![binary, flag, command.to_string()]
         }
         #[cfg(not(windows))]
         {
@@ -605,11 +606,10 @@ mod tests {
 
         #[cfg(windows)]
         {
-            assert_eq!(spec.program, "cmd");
-            assert_eq!(
-                spec.args,
-                vec!["/C".to_string(), format!("chcp 65001 >NUL & {cmd}")]
-            );
+            // Program and shell prefix depend on detected shell (cmd, pwsh, powershell).
+            assert!(!spec.program.is_empty(), "program must not be empty");
+            assert_eq!(spec.args.last(), Some(&cmd.to_string()),
+                "the full command string must be the last arg");
         }
         #[cfg(not(windows))]
         {
