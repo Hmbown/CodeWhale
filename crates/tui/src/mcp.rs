@@ -698,6 +698,7 @@ impl SseTransport {
                 let mut data = String::new();
 
                 for line in event_block.lines() {
+                    let line = line.trim_end_matches('\r');
                     if let Some(value) = sse_field_value(line, "event:") {
                         event_type = value;
                     } else if let Some(value) = sse_field_value(line, "data:") {
@@ -1084,7 +1085,12 @@ fn find_sse_event_separator(buffer: &str) -> Option<(usize, usize)> {
 
 fn sse_field_value<'a>(line: &'a str, field: &str) -> Option<&'a str> {
     let value = line.strip_prefix(field)?;
-    Some(value.strip_prefix(' ').unwrap_or(value))
+    Some(
+        value
+            .strip_prefix(' ')
+            .unwrap_or(value)
+            .trim_end_matches('\r'),
+    )
 }
 
 #[async_trait::async_trait]
@@ -3378,6 +3384,18 @@ mod tests {
     }
 
     #[test]
+    fn sse_field_value_strips_trailing_cr() {
+        assert_eq!(
+            sse_field_value("event: endpoint\r", "event:"),
+            Some("endpoint")
+        );
+        assert_eq!(
+            sse_field_value("data: /messages\r", "data:"),
+            Some("/messages")
+        );
+    }
+
+    #[test]
     fn find_sse_event_separator_accepts_lf_and_crlf() {
         assert_eq!(
             find_sse_event_separator("event: endpoint\n\n"),
@@ -3870,6 +3888,92 @@ mod tests {
         assert!(
             post_seen.load(AtomicOrdering::SeqCst),
             "first SSE send should POST to the CRLF-discovered endpoint"
+        );
+
+        cancel_token.cancel();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn sse_connect_accepts_mixed_crlf_lines_with_lf_separator() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering as AtomicOrdering},
+        };
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let post_seen = Arc::new(AtomicBool::new(false));
+        let server_post_seen = Arc::clone(&post_seen);
+        let cancel_token = tokio_util::sync::CancellationToken::new();
+        let server_cancel = cancel_token.clone();
+
+        let server = tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let post_seen = Arc::clone(&server_post_seen);
+                let server_cancel = server_cancel.clone();
+                tokio::spawn(async move {
+                    let mut request = Vec::new();
+                    let mut buf = [0; 1024];
+                    loop {
+                        let n = socket.read(&mut buf).await.unwrap();
+                        if n == 0 {
+                            return;
+                        }
+                        request.extend_from_slice(&buf[..n]);
+                        if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                            break;
+                        }
+                    }
+                    let request = String::from_utf8_lossy(&request);
+                    if request.starts_with("GET /sse ") {
+                        socket
+                            .write_all(
+                                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n",
+                            )
+                            .await
+                            .unwrap();
+                        // CRLF for fields but LF-only event separator.
+                        socket
+                            .write_all(b"event: endpoint\r\ndata: /messages\r\n\n")
+                            .await
+                            .unwrap();
+                        server_cancel.cancelled().await;
+                    } else if request.starts_with("POST /messages ") {
+                        post_seen.store(true, AtomicOrdering::SeqCst);
+                        socket
+                            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                            .await
+                            .unwrap();
+                    }
+                });
+            }
+        });
+
+        let client = reqwest::Client::new();
+        let url = format!("http://{addr}/sse");
+        let mut transport =
+            SseTransport::connect(client, url, cancel_token.clone(), Duration::from_secs(2))
+                .await
+                .unwrap();
+
+        transport
+            .send(json_frame(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize"
+            })))
+            .await
+            .unwrap();
+
+        assert!(
+            post_seen.load(AtomicOrdering::SeqCst),
+            "first SSE send should POST to endpoint stripped of separator CR"
         );
 
         cancel_token.cancel();
