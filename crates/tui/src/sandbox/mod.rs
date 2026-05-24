@@ -608,8 +608,11 @@ mod tests {
         {
             // Program and shell prefix depend on detected shell (cmd, pwsh, powershell).
             assert!(!spec.program.is_empty(), "program must not be empty");
-            assert_eq!(spec.args.last(), Some(&cmd.to_string()),
-                "the full command string must be the last arg");
+            assert_eq!(
+                spec.args.last(),
+                Some(&cmd.to_string()),
+                "the full command string must be the last arg"
+            );
         }
         #[cfg(not(windows))]
         {
