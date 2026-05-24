@@ -419,10 +419,7 @@ impl ToolRegistry {
                     if self.remove_tool(tool_name) {
                         tracing::info!("Tool '{}' disabled via config override", tool_name);
                     } else {
-                        tracing::warn!(
-                            "Cannot disable tool '{}': not registered",
-                            tool_name
-                        );
+                        tracing::warn!("Cannot disable tool '{}': not registered", tool_name);
                     }
                 }
                 _ => {
@@ -432,10 +429,7 @@ impl ToolRegistry {
                         tool_from_override(tool_name, override_cfg, plugin_dir)
                     {
                         self.register(replacement);
-                        tracing::info!(
-                            "Tool '{}' replaced via config override",
-                            tool_name
-                        );
+                        tracing::info!("Tool '{}' replaced via config override", tool_name);
                     }
                 }
             }
@@ -461,7 +455,10 @@ impl ToolRegistry {
             self.register(tool);
         }
         if count > 0 {
-            tracing::info!("Loaded {count} plugin tool(s) from {}", plugin_dir.display());
+            tracing::info!(
+                "Loaded {count} plugin tool(s) from {}",
+                plugin_dir.display()
+            );
         }
     }
 }

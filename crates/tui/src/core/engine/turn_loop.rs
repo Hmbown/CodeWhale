@@ -1121,11 +1121,7 @@ impl Engine {
                             | "exec_wait"
                             | "exec_interact"
                             | CODE_EXECUTION_TOOL_NAME
-                            | DOTNET_EXECUTION_TOOL_NAME
                             | JS_EXECUTION_TOOL_NAME
-                            | GO_EXECUTION_TOOL_NAME
-                            | TS_EXECUTION_TOOL_NAME
-                            | RUST_EXECUTION_TOOL_NAME
                     )
                 {
                     blocked_error = Some(ToolError::permission_denied(format!(
@@ -1197,13 +1193,6 @@ impl Engine {
                     approval_required = true;
                     approval_description =
                         "Run model-provided JavaScript code in local Node.js execution sandbox"
-                            .to_string();
-                    supports_parallel = false;
-                    read_only = false;
-                } else if tool_name == DOTNET_EXECUTION_TOOL_NAME {
-                    approval_required = true;
-                    approval_description =
-                        "Run model-provided C# code in local .NET SDK execution sandbox"
                             .to_string();
                     supports_parallel = false;
                     read_only = false;
@@ -1528,30 +1517,6 @@ impl Engine {
                                 started_at,
                                 result,
                             });
-                            continue;
-                        }
-
-                        if tool_name == DOTNET_EXECUTION_TOOL_NAME {
-                            let started_at = Instant::now();
-                            let result = execute_dotnet_execution_tool(
-                                &tool_input, &self.session.workspace,
-                            ).await;
-                            self.emit_tool_outcome(started_at, tool_id, tool_name,
-                                tool_input, result, &mut outcomes, plan.index).await;
-                            continue;
-                        }
-
-                        // RuntimeTool-based execution (go, ts, rust).
-                        if tool_name == GO_EXECUTION_TOOL_NAME
-                            || tool_name == TS_EXECUTION_TOOL_NAME
-                            || tool_name == RUST_EXECUTION_TOOL_NAME
-                        {
-                            let started_at = Instant::now();
-                            let result = execute_runtime_tool(
-                                &tool_name, &tool_input, &self.session.workspace,
-                            ).await;
-                            self.emit_tool_outcome(started_at, tool_id, tool_name,
-                                tool_input, result, &mut outcomes, plan.index).await;
                             continue;
                         }
 
@@ -1981,6 +1946,7 @@ impl Engine {
     /// event. Extracted to eliminate the identical `started_at → await →
     /// ToolCallComplete → ToolExecOutcome` boilerplate shared by
     /// dotnet_execution and RuntimeTool-based tools (go, ts, rust).
+    #[allow(dead_code)]
     async fn emit_tool_outcome(
         &self,
         started_at: Instant,
@@ -2080,7 +2046,6 @@ fn resolve_auto_effort(reasoning_effort: Option<&str>, messages: &[Message]) -> 
         Some(other) => Some(other.to_string()),
         None => None,
     }
-
 }
 
 fn is_turn_metadata_text(text: &str) -> bool {

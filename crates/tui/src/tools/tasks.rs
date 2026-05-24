@@ -11,10 +11,10 @@ use tokio::process::Command;
 use uuid::Uuid;
 
 use crate::command_safety::{SafetyLevel, analyze_command};
+use crate::dependencies::ExternalTool;
 use crate::task_manager::{
     NewTaskRequest, TaskArtifactRef, TaskAttemptRecord, TaskGateRecord, TaskRecord,
 };
-use crate::dependencies::ExternalTool;
 use crate::tools::shell::{ExecShellTool, ShellWaitTool};
 use crate::tools::spec::{
     ApprovalRequirement, ToolCapability, ToolContext, ToolError, ToolResult, ToolSpec,

@@ -202,9 +202,7 @@ pub fn resolve_node() -> Option<String> {
 /// e.g. turns `deepseek_tui::dependencies::Git` into `Git`.
 fn simple_type_name<T: ?Sized>() -> &'static str {
     let full = std::any::type_name::<T>();
-    full.rsplit("::")
-        .next()
-        .unwrap_or(full)
+    full.rsplit("::").next().unwrap_or(full)
 }
 
 // ---------------------------------------------------------------------------
@@ -505,13 +503,7 @@ impl ExternalTool for Go {
 /// `python3`/`python`/`py -3`.
 pub struct TypeScript;
 
-const TS_CANDIDATES: &[&str] = &[
-    "tsx",
-    "tsx.cmd",
-    "ts-node",
-    "deno",
-    "npx tsx",
-];
+const TS_CANDIDATES: &[&str] = &["tsx", "tsx.cmd", "ts-node", "deno", "npx tsx"];
 
 impl ExternalTool for TypeScript {
     fn candidates() -> &'static [&'static str] {
@@ -773,10 +765,7 @@ mod tests {
             "git --version must succeed when git is available"
         );
         let out = out.unwrap();
-        assert!(
-            out.status.success(),
-            "git --version must exit 0"
-        );
+        assert!(out.status.success(), "git --version must exit 0");
         let stdout = String::from_utf8_lossy(&out.stdout);
         assert!(
             stdout.contains("git version"),
@@ -796,10 +785,7 @@ mod tests {
         let out = out.unwrap();
         // Python --version writes to stdout on 3.x, so just check
         // that it succeeded (exit 0).
-        assert!(
-            out.status.success(),
-            "python --version must exit 0"
-        );
+        assert!(out.status.success(), "python --version must exit 0");
     }
 
     #[test]

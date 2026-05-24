@@ -166,6 +166,11 @@ pub struct EngineConfig {
     pub search_provider: crate::config::SearchProvider,
     /// API key for Tavily or Bocha. `None` for Bing or DuckDuckGo.
     pub search_api_key: Option<String>,
+    /// Per-step DeepSeek API timeout for sub-agent `create_message` requests.
+    /// Resolved from `[subagents] api_timeout_secs` (clamped to 1..=1800)
+    /// once at engine construction, then threaded onto every
+    /// `SubAgentRuntime` the engine builds (#1806, #1808).
+    pub subagent_api_timeout: Duration,
 
     /// Tool override and plugin configuration (`[tools]` table in config.toml).
     /// Applied to the per-turn tool registry after built-in tools are registered.
@@ -211,6 +216,9 @@ impl Default for EngineConfig {
             workshop: None,
             search_provider: crate::config::SearchProvider::default(),
             search_api_key: None,
+            subagent_api_timeout: Duration::from_secs(
+                crate::config::DEFAULT_SUBAGENT_API_TIMEOUT_SECS,
+            ),
             tools: None,
         }
     }
@@ -365,6 +373,7 @@ impl Engine {
             ApiProvider::NvidiaNim => "NVIDIA_API_KEY/NVIDIA_NIM_API_KEY",
             ApiProvider::Openai => "OPENAI_API_KEY",
             ApiProvider::Atlascloud => "ATLASCLOUD_API_KEY",
+            ApiProvider::WanjieArk => "WANJIE_ARK_API_KEY/WANJIE_API_KEY/WANJIE_MAAS_API_KEY",
             ApiProvider::Openrouter => "OPENROUTER_API_KEY",
             ApiProvider::Novita => "NOVITA_API_KEY",
             ApiProvider::Fireworks => "FIREWORKS_API_KEY",
@@ -662,8 +671,15 @@ impl Engine {
                         self.session.reasoning_effort_auto,
                     )
                     .with_max_spawn_depth(self.config.max_spawn_depth)
+                    .with_step_api_timeout(self.config.subagent_api_timeout)
                     .background_runtime();
-                    let route = resolve_subagent_assignment_route(&runtime, None, &prompt).await;
+                    let route = resolve_subagent_assignment_route(
+                        &runtime,
+                        None,
+                        &prompt,
+                        &SubAgentType::General,
+                    )
+                    .await;
                     runtime.model = route.model;
                     runtime.reasoning_effort = route.reasoning_effort;
                     runtime.reasoning_effort_auto = false;
@@ -1069,6 +1085,7 @@ impl Engine {
                             self.session.reasoning_effort_auto,
                         )
                         .with_max_spawn_depth(self.config.max_spawn_depth)
+                        .with_step_api_timeout(self.config.subagent_api_timeout)
                         .with_parent_completion_tx(self.tx_subagent_completion.clone());
                         if let Some(context) = fork_context_for_runtime.clone() {
                             rt = rt.with_fork_context(context);
@@ -1107,8 +1124,11 @@ impl Engine {
         // the default `~/.deepseek/tools/` directory is always checked.
         if let Some(ref mut tool_registry) = tool_registry {
             // Snapshot built-in tool names before any modifications.
-            let names_before: std::collections::HashSet<String> =
-                tool_registry.names().into_iter().map(|s| s.to_string()).collect();
+            let names_before: std::collections::HashSet<String> = tool_registry
+                .names()
+                .into_iter()
+                .map(|s| s.to_string())
+                .collect();
 
             // Resolve the plugin directory. Defaults to `~/.deepseek/tools/`.
             let default_dir = {
@@ -1146,8 +1166,11 @@ impl Engine {
 
             // Diff: any tool name that didn't exist before overrides/plugins
             // is a user-registered tool. These should never be deferred.
-            let names_after: std::collections::HashSet<String> =
-                tool_registry.names().into_iter().map(|s| s.to_string()).collect();
+            let names_after: std::collections::HashSet<String> = tool_registry
+                .names()
+                .into_iter()
+                .map(|s| s.to_string())
+                .collect();
             plugin_tool_names = &names_after - &names_before;
         }
 
@@ -1450,6 +1473,15 @@ impl Engine {
         // `/trust add` / `/trust remove` mutations without an explicit cache
         // refresh hook.
         let trusted = crate::workspace_trust::WorkspaceTrust::load_for(&self.session.workspace);
+        let mut trusted_external_paths = trusted.paths().to_vec();
+        let clipboard_images_dir =
+            crate::tui::clipboard::clipboard_images_dir(&self.session.workspace);
+        if !trusted_external_paths
+            .iter()
+            .any(|path| path == &clipboard_images_dir)
+        {
+            trusted_external_paths.push(clipboard_images_dir);
+        }
         let mut ctx = ToolContext::with_auto_approve(
             self.session.workspace.clone(),
             self.session.trust_mode,
@@ -1462,7 +1494,7 @@ impl Engine {
         .with_shell_manager(self.shell_manager.clone())
         .with_runtime_services(self.config.runtime_services.clone())
         .with_cancel_token(self.cancel_token.clone())
-        .with_trusted_external_paths(trusted.paths().to_vec());
+        .with_trusted_external_paths(trusted_external_paths);
 
         // Hand the user-memory path to tools so the model-callable
         // `remember` tool can append entries (#489). `None` when the
@@ -2043,12 +2075,9 @@ use self::streaming::{
     should_transparently_retry_stream, stream_chunk_timeout_secs,
 };
 use self::tool_catalog::{
-    CODE_EXECUTION_TOOL_NAME, DOTNET_EXECUTION_TOOL_NAME, JS_EXECUTION_TOOL_NAME,
-    GO_EXECUTION_TOOL_NAME, MULTI_TOOL_PARALLEL_NAME,
-    RUST_EXECUTION_TOOL_NAME, TS_EXECUTION_TOOL_NAME,
+    CODE_EXECUTION_TOOL_NAME, JS_EXECUTION_TOOL_NAME, MULTI_TOOL_PARALLEL_NAME,
     REQUEST_USER_INPUT_NAME, active_tools_for_step, build_model_tool_catalog,
-    ensure_advanced_tooling, execute_code_execution_tool, execute_runtime_tool,
-    execute_tool_search,
+    ensure_advanced_tooling, execute_code_execution_tool, execute_tool_search,
     initial_active_tools, is_tool_search_tool, maybe_hydrate_requested_deferred_tool,
     missing_tool_error_message,
 };
@@ -2059,7 +2088,6 @@ use self::tool_catalog::{
 };
 use self::tool_execution::emit_tool_audit;
 use self::tool_setup::sandbox_policy_for_mode;
-use crate::tools::dotnet_execution::execute_dotnet_execution_tool;
 use crate::tools::js_execution::execute_js_execution_tool;
 
 #[cfg(test)]

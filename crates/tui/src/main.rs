@@ -63,9 +63,9 @@ mod runtime_threads;
 mod sandbox;
 mod schema_migration;
 mod seam_manager;
-mod shell_dispatcher;
 mod session_manager;
 mod settings;
+mod shell_dispatcher;
 mod skill_state;
 mod skills;
 mod snapshot;
@@ -1854,6 +1854,10 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
                     "ATLASCLOUD_API_KEY",
                     "deepseek auth set --provider atlascloud --api-key \"...\"",
                 ),
+                crate::config::ApiProvider::WanjieArk => (
+                    "WANJIE_ARK_API_KEY",
+                    "deepseek auth set --provider wanjie-ark --api-key \"...\"",
+                ),
                 crate::config::ApiProvider::Openrouter => (
                     "OPENROUTER_API_KEY",
                     "deepseek auth set --provider openrouter --api-key \"...\"",
@@ -1888,6 +1892,7 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
                     crate::config::ApiProvider::NvidiaNim => "nvidia_nim",
                     crate::config::ApiProvider::Openai => "openai",
                     crate::config::ApiProvider::Atlascloud => "atlascloud",
+                    crate::config::ApiProvider::WanjieArk => "wanjie_ark",
                     crate::config::ApiProvider::Openrouter => "openrouter",
                     crate::config::ApiProvider::Novita => "novita",
                     crate::config::ApiProvider::Fireworks => "fireworks",
@@ -3329,10 +3334,10 @@ fn rustc_version() -> String {
     let Ok(output) = cmd.arg("--version").output() else {
         return "unknown".to_string();
     };
-    String::from_utf8(output.stdout).map(|s| s.trim().to_string()).unwrap_or_else(|_| "unknown".to_string())
+    String::from_utf8(output.stdout)
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|_| "unknown".to_string())
 }
-
-
 
 /// List saved sessions
 fn list_sessions(limit: usize, search: Option<String>) -> Result<()> {
@@ -3742,7 +3747,8 @@ struct GhPullRequest {
 }
 
 fn run_gh_pr_view(number: u32, repo: Option<&str>) -> Result<GhPullRequest> {
-    let mut cmd = crate::dependencies::Gh::command().ok_or_else(|| anyhow::anyhow!("gh not found"))?;
+    let mut cmd =
+        crate::dependencies::Gh::command().ok_or_else(|| anyhow::anyhow!("gh not found"))?;
     cmd.arg("pr").arg("view").arg(number.to_string());
     if let Some(r) = repo {
         cmd.arg("--repo").arg(r);
@@ -3776,7 +3782,8 @@ fn run_gh_pr_view(number: u32, repo: Option<&str>) -> Result<GhPullRequest> {
 }
 
 fn run_gh_pr_diff(number: u32, repo: Option<&str>) -> Result<String> {
-    let mut cmd = crate::dependencies::Gh::command().ok_or_else(|| anyhow::anyhow!("gh not found"))?;
+    let mut cmd =
+        crate::dependencies::Gh::command().ok_or_else(|| anyhow::anyhow!("gh not found"))?;
     cmd.arg("pr").arg("diff").arg(number.to_string());
     if let Some(r) = repo {
         cmd.arg("--repo").arg(r);
@@ -3792,7 +3799,8 @@ fn run_gh_pr_diff(number: u32, repo: Option<&str>) -> Result<String> {
 }
 
 fn run_gh_pr_checkout(number: u32, repo: Option<&str>) -> Result<()> {
-    let mut cmd = crate::dependencies::Gh::command().ok_or_else(|| anyhow::anyhow!("gh not found"))?;
+    let mut cmd =
+        crate::dependencies::Gh::command().ok_or_else(|| anyhow::anyhow!("gh not found"))?;
     cmd.arg("pr").arg("checkout").arg(number.to_string());
     if let Some(r) = repo {
         cmd.arg("--repo").arg(r);
@@ -3866,7 +3874,8 @@ fn format_pr_prompt(number: u32, view: &GhPullRequest, diff: &str) -> String {
 }
 
 fn collect_diff(args: &ReviewArgs) -> Result<String> {
-    let mut cmd = crate::dependencies::Git::command().ok_or_else(|| anyhow::anyhow!("git not found"))?;
+    let mut cmd =
+        crate::dependencies::Git::command().ok_or_else(|| anyhow::anyhow!("git not found"))?;
     cmd.arg("diff");
     if args.staged {
         cmd.arg("--cached");
@@ -3907,7 +3916,8 @@ fn run_apply(args: ApplyArgs) -> Result<()> {
     tmp.write_all(patch.as_bytes())?;
     let tmp_path = tmp.path().to_path_buf();
 
-    let output = crate::dependencies::Git::command().ok_or_else(|| anyhow::anyhow!("git not found"))?
+    let output = crate::dependencies::Git::command()
+        .ok_or_else(|| anyhow::anyhow!("git not found"))?
         .arg("apply")
         .arg("--whitespace=nowarn")
         .arg(&tmp_path)
@@ -5087,6 +5097,7 @@ async fn run_exec_agent(
         lsp_config,
         runtime_services: crate::tools::spec::RuntimeToolServices::default(),
         subagent_model_overrides: config.subagent_model_overrides(),
+        subagent_api_timeout: Duration::from_secs(config.subagent_api_timeout_secs()),
         memory_enabled: config.memory_enabled(),
         memory_path: config.memory_path(),
         vision_config: config.vision_model_config(),

@@ -1,8 +1,10 @@
 //! TUI event loop and rendering logic for `DeepSeek` CLI.
 
+use std::fmt::Write as _;
 use std::io::{self, Stdout, Write};
 use std::path::PathBuf;
-
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -18,6 +20,7 @@ use crossterm::{
 // On Windows the push/pop helpers write the escapes directly; crossterm's
 // PushKeyboardEnhancementFlags / PopKeyboardEnhancementFlags commands are
 // never referenced, so the imports are gated to avoid -D warnings failures.
+use crate::logging;
 #[cfg(not(windows))]
 use crossterm::event::{
     KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
@@ -30,7 +33,6 @@ use ratatui::{
     widgets::Block,
 };
 use tracing;
-use crate::logging;
 
 use crate::audit::log_sensitive_event;
 use crate::automation_manager::{AutomationManager, AutomationSchedulerConfig, spawn_scheduler};
@@ -54,7 +56,7 @@ use crate::session_manager::{
     create_saved_session_with_id_and_mode, create_saved_session_with_mode, update_session,
 };
 use crate::task_manager::{
-    NewTaskRequest, SharedTaskManager, TaskManager, TaskManagerConfig, TaskStatus,
+    NewTaskRequest, SharedTaskManager, TaskManager, TaskManagerConfig, TaskStatus, TaskSummary,
 };
 use crate::tools::spec::RuntimeToolServices;
 use crate::tools::subagent::SubAgentStatus;
@@ -714,6 +716,7 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
             .map(crate::config::LspConfigToml::into_runtime),
         runtime_services: app.runtime_services.clone(),
         subagent_model_overrides: config.subagent_model_overrides(),
+        subagent_api_timeout: Duration::from_secs(config.subagent_api_timeout_secs()),
         memory_enabled: config.memory_enabled(),
         memory_path: config.memory_path(),
         vision_config: config.vision_model_config(),
@@ -731,13 +734,51 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
     }
 }
 
+/// How long after a task finishes it should still appear in the Work
+/// sidebar even if its `ended_at` predates the current TUI session.
+///
+/// Tasks completing during the current session always show (until the
+/// next session boundary). Tasks that completed shortly before the
+/// session also show, so users coming back to a terminal see "you just
+/// finished X". Anything older than this window is hidden.
+const WORK_SIDEBAR_RECENT_COMPLETED_TTL: chrono::Duration = chrono::Duration::hours(2);
+
+/// Choose which durable-task summaries should appear in the Work
+/// sidebar's Tasks panel.
+pub(crate) fn select_work_sidebar_tasks(
+    tasks: Vec<TaskSummary>,
+    session_started_at: chrono::DateTime<chrono::Utc>,
+    now: chrono::DateTime<chrono::Utc>,
+    recent_ttl: chrono::Duration,
+) -> Vec<TaskSummary> {
+    let recent_cutoff = now - recent_ttl;
+    tasks
+        .into_iter()
+        .filter(|task| match task.status {
+            TaskStatus::Queued | TaskStatus::Running => true,
+            TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Canceled => {
+                match task.ended_at {
+                    Some(ended_at) => ended_at >= session_started_at || ended_at >= recent_cutoff,
+                    None => false,
+                }
+            }
+        })
+        .collect()
+}
+
 async fn refresh_active_task_panel(app: &mut App, task_manager: &SharedTaskManager) {
     let tasks = task_manager.list_tasks(None).await;
-    let mut entries: Vec<TaskPanelEntry> = tasks
-        .into_iter()
-        .filter(|task| matches!(task.status, TaskStatus::Queued | TaskStatus::Running))
-        .map(task_summary_to_panel_entry)
-        .collect();
+    let session_started_at = app.session_started_at;
+    let now = chrono::Utc::now();
+    let mut entries: Vec<TaskPanelEntry> = select_work_sidebar_tasks(
+        tasks,
+        session_started_at,
+        now,
+        WORK_SIDEBAR_RECENT_COMPLETED_TTL,
+    )
+    .into_iter()
+    .map(task_summary_to_panel_entry)
+    .collect();
 
     entries.extend(active_rlm_task_entries(app));
 
@@ -843,7 +884,10 @@ async fn run_event_loop(
     loop {
         loop_ticks += 1;
         if loop_ticks % 100 == 0 {
-            logging::info(format!("[FREEZE-DEBUG] event_loop tick={loop_ticks}, mode={:?}, streaming={}", app.mode, app.streaming_state.is_active));
+            logging::info(format!(
+                "[FREEZE-DEBUG] event_loop tick={loop_ticks}, mode={:?}, streaming={}",
+                app.mode, app.streaming_state.is_active
+            ));
         }
 
         if !drain_web_config_events(&mut web_config_session, app, config, &engine_handle).await {
@@ -949,13 +993,28 @@ async fn run_event_loop(
         let mut queued_to_send: Option<QueuedMessage> = None;
         {
             if loop_ticks % 100 == 0 {
-                logging::info(format!("[FREEZE-DEBUG] engine_poll_enter tick={loop_ticks}"));
+                logging::info(format!(
+                    "[FREEZE-DEBUG] engine_poll_enter tick={loop_ticks}"
+                ));
             }
             let mut rx = engine_handle.rx_event.write().await;
             let _poll_start = Instant::now();
             while let Ok(event) = rx.try_recv() {
                 received_engine_event = true;
-                logging::info(format!("[FREEZE-DEBUG] engine_event_rcvd tick={loop_ticks}"));
+                logging::info(format!(
+                    "[FREEZE-DEBUG] engine_event_rcvd tick={loop_ticks}"
+                ));
+                if app.suppress_stream_events_until_turn_complete {
+                    if matches!(event, EngineEvent::TurnStarted { .. }) {
+                        engine_handle.cancel();
+                        continue;
+                    }
+                    if suppress_engine_event_after_local_cancel(&event) {
+                        continue;
+                    }
+                } else if !app.is_loading && ignore_stale_stream_event_while_idle(&event) {
+                    continue;
+                }
                 match event {
                     EngineEvent::MessageStarted { .. } => {
                         logging::info("[FREEZE-DEBUG] EngineEvent::MessageStarted");
@@ -1082,7 +1141,8 @@ async fn run_event_loop(
                             );
                         }
                         logging::info(format!(
-                            "[FREEZE-DEBUG] EngineEvent::MessageComplete chars={complete_char_count}"));
+                            "[FREEZE-DEBUG] EngineEvent::MessageComplete chars={complete_char_count}"
+                        ));
                     }
                     EngineEvent::ThinkingStarted { .. } => {
                         // P2.3: thinking lives in the active cell so it groups
@@ -1302,6 +1362,8 @@ async fn run_event_loop(
                         status,
                         error,
                     } => {
+                        let was_locally_cancelled = app.suppress_stream_events_until_turn_complete;
+                        app.suppress_stream_events_until_turn_complete = false;
                         if !matches!(status, crate::core::events::TurnOutcomeStatus::Completed)
                             || draws_since_last_full_repaint >= PERIODIC_FULL_REPAINT_EVERY_N
                         {
@@ -1329,6 +1391,9 @@ async fn run_event_loop(
                         app.dispatch_started_at = None;
                         app.offline_mode = false;
                         app.streaming_state.reset();
+                        if was_locally_cancelled {
+                            current_streaming_text.clear();
+                        }
                         // Capture elapsed before clearing turn_started_at so
                         // notifications can use the real wall-clock duration.
                         let turn_elapsed =
@@ -2866,9 +2931,11 @@ async fn run_event_loop(
                         }
                         CtrlCDisposition::CancelTurn => {
                             engine_handle.cancel();
+                            mark_active_turn_cancelled_locally(app);
                             app.is_loading = false;
                             app.dispatch_started_at = None;
                             app.streaming_state.reset();
+                            app.suppress_stream_events_until_turn_complete = true;
                             // Optimistically clear the turn-in-progress flag
                             // so the footer wave animation halts immediately —
                             // without this, the strip keeps animating until
@@ -2923,9 +2990,11 @@ async fn run_event_loop(
                         EscapeAction::CancelRequest => {
                             app.backtrack.reset();
                             engine_handle.cancel();
+                            mark_active_turn_cancelled_locally(app);
                             app.is_loading = false;
                             app.dispatch_started_at = None;
                             app.streaming_state.reset();
+                            app.suppress_stream_events_until_turn_complete = true;
                             // Optimistically halt the wave + working label —
                             // engine's TurnComplete will resync with the real
                             // outcome. Fixes #5a (wave kept animating after Esc).
@@ -4653,7 +4722,7 @@ async fn apply_command_result(
                     {
                         let session = config_ui::start_web_editor(app, config).await?;
                         let url = format!("http://{}", session.addr);
-                        let open_err = crate::utils::open_url(&url).err();
+                        let open_err = config_ui::open_browser(&url).err();
                         if let Some(err) = open_err {
                             app.add_message(HistoryCell::System {
                                 content: format!("Failed to open browser automatically: {err}"),
@@ -4723,7 +4792,7 @@ async fn apply_command_result(
                         .push(crate::tui::theme_picker::ThemePickerView::new(original));
                 }
             }
-            AppAction::OpenExternalUrl { url, label } => match crate::utils::open_url(&url) {
+            AppAction::OpenExternalUrl { url, label } => match open_external_url(&url) {
                 Ok(()) => {
                     app.status_message = Some(format!("Opened {label} in your browser"));
                 }
@@ -4877,6 +4946,50 @@ async fn apply_command_result(
     }
 
     Ok(false)
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+fn open_external_url(url: &str) -> Result<()> {
+    spawn_external_url_command(external_url_command(url))
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+fn spawn_external_url_command(mut command: Command) -> Result<()> {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|err| anyhow::anyhow!("failed to launch browser command: {err}"))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+fn open_external_url(_url: &str) -> Result<()> {
+    Err(anyhow::anyhow!(
+        "browser opening is unsupported on this platform"
+    ))
+}
+
+#[cfg(target_os = "macos")]
+fn external_url_command(url: &str) -> Command {
+    let mut command = Command::new("open");
+    command.arg(url);
+    command
+}
+
+#[cfg(target_os = "linux")]
+fn external_url_command(url: &str) -> Command {
+    let mut command = Command::new("xdg-open");
+    command.arg(url);
+    command
+}
+
+#[cfg(target_os = "windows")]
+fn external_url_command(url: &str) -> Command {
+    let mut command = Command::new("cmd");
+    command.args(["/C", "start", "", url]);
+    command
 }
 
 fn apply_workspace_runtime_state(app: &mut App, config: &Config, workspace: PathBuf) {
@@ -5547,6 +5660,7 @@ fn render(f: &mut Frame, app: &mut App) {
             crate::config::ApiProvider::NvidiaNim => Some("NIM"),
             crate::config::ApiProvider::Openai => Some("OpenAI"),
             crate::config::ApiProvider::Atlascloud => Some("Atlas"),
+            crate::config::ApiProvider::WanjieArk => Some("Wanjie"),
             crate::config::ApiProvider::Openrouter => Some("OR"),
             crate::config::ApiProvider::Novita => Some("Novita"),
             crate::config::ApiProvider::Fireworks => Some("Fireworks"),
@@ -6106,9 +6220,11 @@ async fn handle_view_events(
             ViewEvent::ShellControlCancel => {
                 app.backtrack.reset();
                 engine_handle.cancel();
+                mark_active_turn_cancelled_locally(app);
                 app.is_loading = false;
                 app.dispatch_started_at = None;
                 app.streaming_state.reset();
+                app.suppress_stream_events_until_turn_complete = true;
                 app.runtime_turn_status = None;
                 app.finalize_active_cell_as_interrupted();
                 app.finalize_streaming_assistant_as_interrupted();
@@ -6118,6 +6234,53 @@ async fn handle_view_events(
     }
 
     Ok(false)
+}
+
+fn mark_active_turn_cancelled_locally(app: &mut App) {
+    app.is_loading = false;
+    app.dispatch_started_at = None;
+    app.streaming_state.reset();
+    app.runtime_turn_status = None;
+    app.suppress_stream_events_until_turn_complete = true;
+    app.finalize_active_cell_as_interrupted();
+    app.finalize_streaming_assistant_as_interrupted();
+}
+
+fn suppress_engine_event_after_local_cancel(event: &EngineEvent) -> bool {
+    matches!(
+        event,
+        EngineEvent::MessageStarted { .. }
+            | EngineEvent::MessageDelta { .. }
+            | EngineEvent::MessageComplete { .. }
+            | EngineEvent::ThinkingStarted { .. }
+            | EngineEvent::ThinkingDelta { .. }
+            | EngineEvent::ThinkingComplete { .. }
+            | EngineEvent::ToolCallStarted { .. }
+            | EngineEvent::ToolCallProgress { .. }
+            | EngineEvent::ToolCallComplete { .. }
+            | EngineEvent::ApprovalRequired { .. }
+            | EngineEvent::UserInputRequired { .. }
+            | EngineEvent::ElevationRequired { .. }
+            | EngineEvent::SessionUpdated { .. }
+    )
+}
+
+fn ignore_stale_stream_event_while_idle(event: &EngineEvent) -> bool {
+    matches!(
+        event,
+        EngineEvent::MessageStarted { .. }
+            | EngineEvent::MessageDelta { .. }
+            | EngineEvent::MessageComplete { .. }
+            | EngineEvent::ThinkingStarted { .. }
+            | EngineEvent::ThinkingDelta { .. }
+            | EngineEvent::ThinkingComplete { .. }
+            | EngineEvent::ToolCallStarted { .. }
+            | EngineEvent::ToolCallProgress { .. }
+            | EngineEvent::ToolCallComplete { .. }
+            | EngineEvent::ApprovalRequired { .. }
+            | EngineEvent::UserInputRequired { .. }
+            | EngineEvent::ElevationRequired { .. }
+    )
 }
 
 /// Push the new `selected_idx` into the live transcript overlay so the
@@ -6270,6 +6433,7 @@ async fn apply_provider_picker_api_key(
             ApiProvider::NvidiaNim => &mut providers.nvidia_nim,
             ApiProvider::Openai => &mut providers.openai,
             ApiProvider::Atlascloud => &mut providers.atlascloud,
+            ApiProvider::WanjieArk => &mut providers.wanjie_ark,
             ApiProvider::Openrouter => &mut providers.openrouter,
             ApiProvider::Novita => &mut providers.novita,
             ApiProvider::Fireworks => &mut providers.fireworks,
@@ -6908,7 +7072,7 @@ fn maybe_warn_context_pressure(app: &mut App) {
     // suggest /compact at. Non-intrusive: only sets the status message when
     // it's currently empty, so it never stomps on a more important message.
     let effective_warn_threshold = if app.auto_compact {
-        CONTEXT_SUGGEST_COMPACT_THRESHOLD_PERCENT.min(app.auto_compact_threshold_pct)
+        CONTEXT_SUGGEST_COMPACT_THRESHOLD_PERCENT.min(CONTEXT_CRITICAL_THRESHOLD_PERCENT)
     } else {
         CONTEXT_SUGGEST_COMPACT_THRESHOLD_PERCENT
     };
@@ -6918,26 +7082,23 @@ fn maybe_warn_context_pressure(app: &mut App) {
         && app.status_message.is_none()
     {
         let hint = if app.auto_compact {
-            let below_floor =
-                (used as usize) < crate::compaction::MINIMUM_AUTO_COMPACTION_TOKENS;
-            let below_threshold = percent < app.auto_compact_threshold_pct;
+            let below_floor = (used as usize) < crate::compaction::MINIMUM_AUTO_COMPACTION_TOKENS;
+            let below_threshold = percent < CONTEXT_CRITICAL_THRESHOLD_PERCENT;
 
             if below_floor && below_threshold {
                 format!(
                     "Auto-compact enabled but below 500K floor and {:.0}% threshold; won't fire yet.",
-                    app.auto_compact_threshold_pct
+                    CONTEXT_CRITICAL_THRESHOLD_PERCENT
                 )
             } else if below_floor {
-                "Auto-compact enabled but below 500K token floor; won't fire yet."
-                    .to_string()
+                "Auto-compact enabled but below 500K token floor; won't fire yet.".to_string()
             } else if below_threshold {
                 format!(
                     "Auto-compact will fire at {:.0}% (currently {:.0}%).",
-                    app.auto_compact_threshold_pct, percent
+                    CONTEXT_CRITICAL_THRESHOLD_PERCENT, percent
                 )
             } else {
-                "Auto-compaction would fire now; it will run before the next send."
-                    .to_string()
+                "Auto-compaction would fire now; it will run before the next send.".to_string()
             }
         } else {
             "Consider enabling auto_compact or use /compact.".to_string()
@@ -6991,7 +7152,7 @@ fn should_auto_compact_before_send(app: &App) -> bool {
             if (used as usize) < crate::compaction::MINIMUM_AUTO_COMPACTION_TOKENS {
                 return false;
             }
-            pct >= app.auto_compact_threshold_pct
+            pct >= CONTEXT_CRITICAL_THRESHOLD_PERCENT
         })
         .unwrap_or(false)
 }
