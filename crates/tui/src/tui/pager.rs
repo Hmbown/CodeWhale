@@ -491,6 +491,21 @@ fn wrap_text_preserving_spaces(text: &str, width: usize) -> Vec<String> {
     if width == 0 {
         return vec![text.to_string()];
     }
+    if text.is_empty() {
+        return vec![String::new()];
+    }
+
+    let leading_indent = text
+        .chars()
+        .take_while(|ch| ch.is_whitespace())
+        .collect::<String>();
+    let indent_width = display_width(&leading_indent);
+    let continuation_indent = if indent_width < width {
+        leading_indent
+    } else {
+        String::new()
+    };
+
     let mut lines = Vec::new();
     let mut current = String::new();
     let mut current_width = 0usize;
@@ -498,8 +513,28 @@ fn wrap_text_preserving_spaces(text: &str, width: usize) -> Vec<String> {
     for ch in text.chars() {
         let char_width = ch.width().unwrap_or(1);
         if current_width + char_width > width && current_width > 0 {
-            lines.push(std::mem::take(&mut current));
-            current_width = 0;
+            if let Some((break_idx, break_len)) = last_word_break(&current) {
+                let line = current[..break_idx].trim_end().to_string();
+                let mut rest = current[break_idx + break_len..].trim_start().to_string();
+                lines.push(line);
+                current.clear();
+                current_width = 0;
+
+                let rest_width = display_width(&rest);
+                if !rest.is_empty()
+                    && !continuation_indent.is_empty()
+                    && display_width(&continuation_indent) + rest_width <= width
+                {
+                    current.push_str(&continuation_indent);
+                    current_width += display_width(&continuation_indent);
+                }
+                current.push_str(&rest);
+                current_width += rest_width;
+                rest.clear();
+            } else {
+                lines.push(std::mem::take(&mut current));
+                current_width = 0;
+            }
         }
         current.push(ch);
         current_width += char_width;
@@ -512,6 +547,25 @@ fn wrap_text_preserving_spaces(text: &str, width: usize) -> Vec<String> {
     }
 
     lines
+}
+
+fn last_word_break(text: &str) -> Option<(usize, usize)> {
+    let mut seen_non_ws = false;
+    let mut last = None;
+    for (idx, ch) in text.char_indices() {
+        if ch.is_whitespace() {
+            if seen_non_ws {
+                last = Some((idx, ch.len_utf8()));
+            }
+        } else {
+            seen_non_ws = true;
+        }
+    }
+    last
+}
+
+fn display_width(text: &str) -> usize {
+    text.chars().map(|ch| ch.width().unwrap_or(1)).sum()
 }
 
 #[cfg(test)]
@@ -971,6 +1025,20 @@ mod tests {
         }
 
         assert_eq!(p.scroll, bottom);
+    }
+
+    #[test]
+    fn wrap_text_prefers_word_boundaries_for_english() {
+        let lines = wrap_text_preserving_spaces("alpha beta gamma delta", 12);
+
+        assert_eq!(lines, vec!["alpha beta", "gamma delta"]);
+    }
+
+    #[test]
+    fn wrap_text_keeps_continuation_indent() {
+        let lines = wrap_text_preserving_spaces("    alpha beta gamma", 14);
+
+        assert_eq!(lines, vec!["    alpha", "    beta gamma"]);
     }
 
     #[test]

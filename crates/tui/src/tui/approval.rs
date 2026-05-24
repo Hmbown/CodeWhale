@@ -36,9 +36,11 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKi
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use serde_json::Value;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+
+const DIFF_PREVIEW_MAX_BYTES: u64 = 512 * 1024;
 
 /// Determines when tool executions require user approval
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -144,6 +146,9 @@ pub enum ApprovalDiffPreview {
         text: String,
         match_count: usize,
     },
+    /// Existing file is large enough that building a full in-memory diff would
+    /// risk a visible pause in the TUI event loop.
+    SkippedLargeFile { path: String, size: u64, limit: u64 },
 }
 
 impl ApprovalDiffPreview {
@@ -154,9 +159,29 @@ impl ApprovalDiffPreview {
         match self {
             Self::Diff { text, .. } | Self::MissingMatch { text, .. } => text,
             Self::NewFile { content, .. } => content,
-            Self::NoChange { .. } => "",
+            Self::NoChange { .. } | Self::SkippedLargeFile { .. } => "",
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApprovalDetail {
+    pub label: String,
+    pub value: String,
+    pub shell_lines: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RenderedDiffPanel {
+    pub header: String,
+    pub lines: Vec<Line<'static>>,
+}
+
+#[derive(Debug, Clone)]
+struct DiffPanelCache {
+    width: u16,
+    locale: Locale,
+    panel: RenderedDiffPanel,
 }
 
 /// Request for user approval of a tool execution
@@ -177,12 +202,11 @@ pub struct ApprovalRequest {
     /// Lossy / arity-aware fingerprint, used to scope *approvals* so an
     /// "approve for session" covers later flag variants (v0.8.37).
     pub approval_grouping_key: String,
-    /// Current workspace directory, used to annotate cwd as "(current)" and
-    /// to resolve relative paths when reading old file contents for diffs.
-    pub workspace: Option<String>,
     /// Snapshot of the diff/preview state, built once at construction so
     /// renderers never re-read the filesystem mid-render.
     diff_preview: Option<ApprovalDiffPreview>,
+    /// Precomputed popup details, including parsed shell command lines.
+    prominent_details: Vec<ApprovalDetail>,
 }
 
 impl ApprovalRequest {
@@ -209,10 +233,9 @@ impl ApprovalRequest {
         let risk = classify_risk(tool_name, category, params);
         let approval_grouping_key =
             crate::tools::approval_cache::build_approval_grouping_key(tool_name, params).0;
-        // Build the diff snapshot once. Renderers read this cache instead of
-        // hitting the filesystem each frame; relative paths resolve against
-        // `workspace` so a `write_file` invoked from the agent doesn't go
-        // looking for the file in the TUI's CWD.
+        // Build snapshots once. Renderers read these caches instead of doing
+        // path canonicalization, shell parsing, or filesystem reads per frame.
+        let prominent_details = build_prominent_details(category, params, workspace.as_deref());
         let diff_preview = build_diff_preview(tool_name, params, workspace.as_deref());
 
         Self {
@@ -223,72 +246,22 @@ impl ApprovalRequest {
             params: params.clone(),
             approval_key: approval_key.to_string(),
             approval_grouping_key,
-            workspace,
             diff_preview,
+            prominent_details,
         }
     }
 
-    /// Extract the most important param values as (label, value) pairs for
-    /// prominent display in the approval widget.  Returns pairs like
-    /// `[("Command", "npm run build"), ("Dir", "/home/user")]`.
-    pub fn prominent_details(&self) -> Vec<(String, String)> {
-        let mut details = Vec::new();
-        match self.category {
-            ToolCategory::Shell => {
-                // Shell commands stay verbatim — the popup body uses
-                // `Paragraph::wrap`, so it folds long lines on its own and
-                // an in-band `...` truncation just hides the tail of the
-                // command the user is being asked to approve.
-                if let Some(cmd) = param_text(&self.params, &["command", "cmd"]) {
-                    details.push(("Command".into(), cmd));
-                }
-                if let Some(dir) = param_preview(&self.params, &["workdir", "cwd"], 96) {
-                    let is_current = self.workspace.as_ref().is_some_and(|ws| {
-                        let a = std::path::Path::new(&dir);
-                        let b = std::path::Path::new(ws);
-                        a.canonicalize().unwrap_or_else(|_| a.to_path_buf())
-                            == b.canonicalize().unwrap_or_else(|_| b.to_path_buf())
-                    });
-                    let label = if is_current {
-                        "(current)".to_string()
-                    } else {
-                        dir
-                    };
-                    details.push(("Dir".into(), label));
-                }
-            }
-            ToolCategory::FileWrite => {
-                if let Some(path) =
-                    param_preview(&self.params, &["path", "target", "destination"], 200)
-                {
-                    details.push(("File".into(), path));
-                }
-            }
-            ToolCategory::Safe => {
-                if let Some(path) = param_preview(&self.params, &["path", "ref_id", "uri"], 200) {
-                    details.push(("Path".into(), path));
-                }
-            }
-            ToolCategory::Network => {
-                if let Some(target) = param_preview(
-                    &self.params,
-                    &["url", "q", "query", "location", "repo"],
-                    200,
-                ) {
-                    details.push(("Target".into(), target));
-                }
-            }
-            _ => {
-                if let Some(val) = param_preview(
-                    &self.params,
-                    &["command", "path", "url", "q", "query", "ref_id"],
-                    200,
-                ) {
-                    details.push(("Input".into(), val));
-                }
-            }
-        }
-        details
+    /// Extract the most important param values for the approval widget.
+    #[must_use]
+    pub fn prominent_detail_items(&self, locale: Locale) -> Vec<ApprovalDetail> {
+        self.prominent_details
+            .iter()
+            .map(|detail| ApprovalDetail {
+                label: localize_detail_label(&detail.label, locale).to_string(),
+                value: detail.value.clone(),
+                shell_lines: detail.shell_lines.clone(),
+            })
+            .collect()
     }
 
     /// Cached diff/preview snapshot, or `None` when the tool isn't a file
@@ -298,27 +271,20 @@ impl ApprovalRequest {
     pub fn diff_preview(&self) -> Option<&ApprovalDiffPreview> {
         self.diff_preview.as_ref()
     }
+}
 
-    /// Like [`prominent_details`] but with localized labels.
-    pub fn prominent_details_for_locale(&self, locale: Locale) -> Vec<(String, String)> {
-        self.prominent_details()
-            .into_iter()
-            .map(|(label, value)| {
-                let localized = match locale {
-                    Locale::ZhHans => match label.as_str() {
-                        "Command" => "命令",
-                        "Dir" => "目录",
-                        "File" => "文件",
-                        "Path" => "路径",
-                        "Target" => "目标",
-                        "Input" => "输入",
-                        _ => &label,
-                    },
-                    _ => &label,
-                };
-                (localized.to_string(), value)
-            })
-            .collect()
+fn localize_detail_label(label: &str, locale: Locale) -> &str {
+    match locale {
+        Locale::ZhHans => match label {
+            "Command" => "命令",
+            "Dir" => "目录",
+            "File" => "文件",
+            "Path" => "路径",
+            "Target" => "目标",
+            "Input" => "输入",
+            _ => label,
+        },
+        _ => label,
     }
 }
 
@@ -418,6 +384,248 @@ fn param_text(params: &Value, keys: &[&str]) -> Option<String> {
     None
 }
 
+fn build_prominent_details(
+    category: ToolCategory,
+    params: &Value,
+    workspace: Option<&str>,
+) -> Vec<ApprovalDetail> {
+    let mut details = Vec::new();
+    match category {
+        ToolCategory::Shell => {
+            if let Some(cmd) = param_text(params, &["command", "cmd"]) {
+                let shell_lines = format_shell_command_for_approval(&cmd);
+                details.push(ApprovalDetail {
+                    label: "Command".into(),
+                    value: cmd,
+                    shell_lines: Some(shell_lines),
+                });
+            }
+            if let Some(raw_dir) = param_text(params, &["workdir", "cwd"])
+                .or_else(|| param_preview(params, &["workdir", "cwd"], 96))
+            {
+                let is_current = workspace.is_some_and(|ws| paths_equivalent(&raw_dir, ws));
+                let value = if is_current {
+                    "(current)".to_string()
+                } else {
+                    truncate_string_value(&raw_dir, 96)
+                };
+                details.push(ApprovalDetail {
+                    label: "Dir".into(),
+                    value,
+                    shell_lines: None,
+                });
+            }
+        }
+        ToolCategory::FileWrite => {
+            if let Some(path) = param_preview(params, &["path", "target", "destination"], 200) {
+                details.push(ApprovalDetail {
+                    label: "File".into(),
+                    value: path,
+                    shell_lines: None,
+                });
+            }
+        }
+        ToolCategory::Safe => {
+            if let Some(path) = param_preview(params, &["path", "ref_id", "uri"], 200) {
+                details.push(ApprovalDetail {
+                    label: "Path".into(),
+                    value: path,
+                    shell_lines: None,
+                });
+            }
+        }
+        ToolCategory::Network => {
+            if let Some(target) =
+                param_preview(params, &["url", "q", "query", "location", "repo"], 200)
+            {
+                details.push(ApprovalDetail {
+                    label: "Target".into(),
+                    value: target,
+                    shell_lines: None,
+                });
+            }
+        }
+        _ => {
+            if let Some(val) = param_preview(
+                params,
+                &["command", "path", "url", "q", "query", "ref_id"],
+                200,
+            ) {
+                details.push(ApprovalDetail {
+                    label: "Input".into(),
+                    value: val,
+                    shell_lines: None,
+                });
+            }
+        }
+    }
+    details
+}
+
+fn paths_equivalent(left: &str, right: &str) -> bool {
+    let left = Path::new(left);
+    let right = Path::new(right);
+    left.canonicalize().unwrap_or_else(|_| left.to_path_buf())
+        == right.canonicalize().unwrap_or_else(|_| right.to_path_buf())
+}
+
+pub(crate) fn format_shell_command_for_approval(command: &str) -> Vec<String> {
+    if let Some(write) = parse_printf_write_file_command(command) {
+        return format_printf_write_file_preview(write);
+    }
+
+    let mut out = Vec::new();
+    for raw in command.split('\n') {
+        let mut current = String::new();
+        let mut chars = raw.chars().peekable();
+        let mut quote: Option<char> = None;
+        while let Some(ch) = chars.next() {
+            if matches!(ch, '"' | '\'') {
+                if quote == Some(ch) {
+                    quote = None;
+                } else if quote.is_none() {
+                    quote = Some(ch);
+                }
+                current.push(ch);
+                continue;
+            }
+
+            if quote.is_none() && ch == '&' && chars.peek() == Some(&'&') {
+                chars.next();
+                push_shell_clause(&mut out, &mut current, Some("&&"));
+                continue;
+            }
+
+            if quote.is_none() && ch == '|' {
+                push_shell_clause(&mut out, &mut current, Some("|"));
+                continue;
+            }
+
+            if quote.is_none() && ch == ';' {
+                current.push(';');
+                push_shell_clause(&mut out, &mut current, None);
+                continue;
+            }
+
+            if quote.is_none() && matches!(ch, '>' | '<') {
+                current.push(ch);
+                while chars
+                    .peek()
+                    .is_some_and(|next| matches!(next, '>' | '<' | '&'))
+                {
+                    current.push(chars.next().expect("peeked char exists"));
+                }
+                while chars.peek().is_some_and(|next| next.is_whitespace()) {
+                    current.push(chars.next().expect("peeked char exists"));
+                }
+                while chars
+                    .peek()
+                    .is_some_and(|next| !next.is_whitespace() && !matches!(next, '&' | '|' | ';'))
+                {
+                    current.push(chars.next().expect("peeked char exists"));
+                }
+                continue;
+            }
+
+            current.push(ch);
+        }
+        push_shell_clause(&mut out, &mut current, None);
+    }
+
+    if out.is_empty() {
+        vec![String::new()]
+    } else {
+        out
+    }
+}
+
+struct PrintfWriteFilePreview {
+    target: String,
+    lines: Vec<String>,
+}
+
+fn parse_printf_write_file_command(command: &str) -> Option<PrintfWriteFilePreview> {
+    let (before_redirect, after_redirect) = split_unquoted_redirect(command)?;
+    let before_redirect = before_redirect.trim();
+    if !before_redirect.starts_with("printf") {
+        return None;
+    }
+    let tokens = shlex::split(before_redirect)?;
+    if tokens.len() < 3 || tokens.first()?.as_str() != "printf" {
+        return None;
+    }
+    let fmt = tokens.get(1)?.as_str();
+    if fmt != "%s\n" && fmt != "%s\\n" {
+        return None;
+    }
+    let target_tokens = shlex::split(after_redirect.trim_start_matches(['>', '&']).trim_start())?;
+    if target_tokens.len() != 1 {
+        return None;
+    }
+    let target = target_tokens.into_iter().next()?;
+    let lines = tokens.into_iter().skip(2).collect::<Vec<_>>();
+    if lines.is_empty() {
+        return None;
+    }
+    Some(PrintfWriteFilePreview { target, lines })
+}
+
+fn format_printf_write_file_preview(write: PrintfWriteFilePreview) -> Vec<String> {
+    let mut out = Vec::new();
+    out.push("Write file via printf".to_string());
+    out.push(format!("Target: {}", write.target));
+    out.push(format!("Lines: {}", write.lines.len()));
+    out.push(String::new());
+    out.push("Content:".to_string());
+    let total = write.lines.len();
+    for (idx, line) in write.lines.into_iter().enumerate().take(12) {
+        out.push(format!("{:>4}  {}", idx + 1, line));
+    }
+    if total > 12 {
+        out.push(format!("  ... (+{} more lines)", total - 12));
+    }
+    out
+}
+
+fn split_unquoted_redirect(command: &str) -> Option<(&str, &str)> {
+    let mut quote: Option<char> = None;
+    for (idx, ch) in command.char_indices() {
+        if matches!(ch, '"' | '\'') {
+            if quote == Some(ch) {
+                quote = None;
+            } else if quote.is_none() {
+                quote = Some(ch);
+            }
+            continue;
+        }
+        if quote.is_none() && ch == '>' {
+            let before = &command[..idx];
+            let after = &command[idx + ch.len_utf8()..];
+            return Some((before, after));
+        }
+    }
+    None
+}
+
+fn push_shell_clause(out: &mut Vec<String>, current: &mut String, connector: Option<&str>) {
+    let trimmed = current.trim();
+    if !trimmed.is_empty() {
+        let mut line = trimmed.to_string();
+        if let Some(connector) = connector {
+            line.push(' ');
+            line.push_str(connector);
+        }
+        out.push(line);
+    } else if let Some(connector) = connector
+        && let Some(prev) = out.last_mut()
+        && !prev.ends_with(connector)
+    {
+        prev.push(' ');
+        prev.push_str(connector);
+    }
+    current.clear();
+}
+
 /// Resolve a tool-supplied path against the workspace when it's relative.
 /// Absolute paths are returned unchanged so `write_file` to `/etc/foo` still
 /// shows the right diff. The original string flows through if there's no
@@ -465,6 +673,30 @@ fn count_diff_changes(diff: &str) -> (usize, usize) {
     (added, deleted)
 }
 
+enum PreviewFileRead {
+    Content(String),
+    Skipped(ApprovalDiffPreview),
+    Unreadable,
+}
+
+fn read_file_for_diff(resolved: &Path, display_path: &str) -> PreviewFileRead {
+    if let Ok(metadata) = std::fs::metadata(resolved)
+        && metadata.is_file()
+        && metadata.len() > DIFF_PREVIEW_MAX_BYTES
+    {
+        return PreviewFileRead::Skipped(ApprovalDiffPreview::SkippedLargeFile {
+            path: display_path.to_string(),
+            size: metadata.len(),
+            limit: DIFF_PREVIEW_MAX_BYTES,
+        });
+    }
+
+    match std::fs::read_to_string(resolved) {
+        Ok(content) => PreviewFileRead::Content(content),
+        Err(_) => PreviewFileRead::Unreadable,
+    }
+}
+
 /// Build the diff snapshot for an approval request. Reads the filesystem
 /// at most once per request — relative paths resolve against `workspace`
 /// so previews work when the agent is rooted elsewhere from the TUI's CWD.
@@ -479,8 +711,8 @@ pub fn build_diff_preview(
             let search = params.get("search")?.as_str()?;
             let replace = params.get("replace")?.as_str()?;
             let resolved = resolve_workspace_path(path, workspace);
-            match std::fs::read_to_string(&resolved) {
-                Ok(file) => {
+            match read_file_for_diff(&resolved, path) {
+                PreviewFileRead::Content(file) => {
                     let count = file.matches(search).count();
                     if count == 0 {
                         // search isn't present — render the search/replace pair
@@ -513,7 +745,8 @@ pub fn build_diff_preview(
                         }
                     }
                 }
-                Err(_) => {
+                PreviewFileRead::Skipped(preview) => Some(preview),
+                PreviewFileRead::Unreadable => {
                     // File missing — fall back to inputs-only diff. edit_file
                     // would fail at execution anyway, so MissingMatch is the
                     // honest framing.
@@ -530,8 +763,8 @@ pub fn build_diff_preview(
             let path = params.get("path")?.as_str()?;
             let new_content = params.get("content")?.as_str()?;
             let resolved = resolve_workspace_path(path, workspace);
-            match std::fs::read_to_string(&resolved) {
-                Ok(old_content) => {
+            match read_file_for_diff(&resolved, path) {
+                PreviewFileRead::Content(old_content) => {
                     let text = crate::tools::diff_format::make_unified_diff(
                         path,
                         &old_content,
@@ -550,7 +783,8 @@ pub fn build_diff_preview(
                         })
                     }
                 }
-                Err(_) => Some(ApprovalDiffPreview::NewFile {
+                PreviewFileRead::Skipped(preview) => Some(preview),
+                PreviewFileRead::Unreadable => Some(ApprovalDiffPreview::NewFile {
                     path: path.to_string(),
                     content: new_content.to_string(),
                 }),
@@ -582,7 +816,11 @@ pub fn build_diff_preview(
                         continue;
                     };
                     let resolved = resolve_workspace_path(path, workspace);
-                    let old_content = std::fs::read_to_string(&resolved).unwrap_or_default();
+                    let old_content = match read_file_for_diff(&resolved, path) {
+                        PreviewFileRead::Content(content) => content,
+                        PreviewFileRead::Skipped(preview) => return Some(preview),
+                        PreviewFileRead::Unreadable => String::new(),
+                    };
                     let fragment = crate::tools::diff_format::make_unified_diff(
                         path,
                         &old_content,
@@ -715,6 +953,7 @@ pub struct ApprovalView {
     diff_scroll: Cell<usize>,
     diff_total_lines: Cell<usize>,
     diff_visible_lines: Cell<usize>,
+    diff_panel_cache: RefCell<Option<DiffPanelCache>>,
 }
 
 impl ApprovalView {
@@ -735,6 +974,7 @@ impl ApprovalView {
             diff_scroll: Cell::new(0),
             diff_total_lines: Cell::new(0),
             diff_visible_lines: Cell::new(0),
+            diff_panel_cache: RefCell::new(None),
         }
     }
 
@@ -789,6 +1029,33 @@ impl ApprovalView {
         let scroll = self.diff_scroll.get().min(max_scroll);
         self.diff_scroll.set(scroll);
         scroll
+    }
+
+    pub(crate) fn cached_diff_panel(
+        &self,
+        width: u16,
+        locale: Locale,
+    ) -> Option<RenderedDiffPanel> {
+        let cache = self.diff_panel_cache.borrow();
+        let cache = cache.as_ref()?;
+        if cache.width == width && cache.locale == locale {
+            Some(cache.panel.clone())
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn set_cached_diff_panel(
+        &self,
+        width: u16,
+        locale: Locale,
+        panel: RenderedDiffPanel,
+    ) {
+        *self.diff_panel_cache.borrow_mut() = Some(DiffPanelCache {
+            width,
+            locale,
+            panel,
+        });
     }
 
     fn scroll_diff_up(&mut self, amount: usize) {
@@ -1088,6 +1355,12 @@ fn push_approval_changes(
         Some(ApprovalDiffPreview::NewFile { path, content }) => {
             let diff = crate::tools::diff_format::make_unified_diff(path, "", content);
             lines.extend(crate::tui::diff_render::render_diff(&diff, width));
+        }
+        Some(ApprovalDiffPreview::SkippedLargeFile { size, limit, .. }) => {
+            lines.push(Line::from(Span::styled(
+                format!("  (diff preview skipped - file is {size} bytes, limit is {limit} bytes)"),
+                muted_style,
+            )));
         }
         Some(ApprovalDiffPreview::NoChange { .. }) | None => {
             lines.push(Line::from(Span::styled(
@@ -1523,11 +1796,15 @@ mod tests {
             &params,
             "test_key",
         );
-        let details = request.prominent_details();
-        assert_eq!(details[0].0, "Command");
-        assert_eq!(details[0].1, "npm run build");
-        assert_eq!(details[1].0, "Dir");
-        assert_eq!(details[1].1, "/home/user");
+        let details = request.prominent_detail_items(Locale::En);
+        assert_eq!(details[0].label, "Command");
+        assert_eq!(details[0].value, "npm run build");
+        assert_eq!(
+            details[0].shell_lines.as_deref(),
+            Some(&["npm run build".to_string()][..])
+        );
+        assert_eq!(details[1].label, "Dir");
+        assert_eq!(details[1].value, "/home/user");
     }
 
     #[test]
@@ -1541,12 +1818,17 @@ mod tests {
         let params = json!({"command": cmd, "cwd": "/home/user"});
         let request =
             ApprovalRequest::new("test-id", "exec_shell", "Run shell", &params, "test_key");
-        let details = request.prominent_details();
-        assert_eq!(details[0].0, "Command");
+        let details = request.prominent_detail_items(Locale::En);
+        assert_eq!(details[0].label, "Command");
         assert_eq!(
-            details[0].1, cmd,
+            details[0].value, cmd,
             "shell command must be returned verbatim, no `…` truncation",
         );
+        let shell_lines = details[0]
+            .shell_lines
+            .as_ref()
+            .expect("shell command lines should be cached");
+        assert!(shell_lines.iter().any(|line| line.contains("cat /tmp/x")));
     }
 
     #[test]
@@ -1560,9 +1842,9 @@ mod tests {
             "test_key",
             Some("/home/user/project".to_string()),
         );
-        let details = request.prominent_details();
-        assert_eq!(details[1].0, "Dir");
-        assert_eq!(details[1].1, "(current)");
+        let details = request.prominent_detail_items(Locale::En);
+        assert_eq!(details[1].label, "Dir");
+        assert_eq!(details[1].value, "(current)");
     }
 
     #[test]
@@ -1570,9 +1852,9 @@ mod tests {
         let params = json!({"path": "src/main.rs", "content": "fn main() {}"});
         let request =
             ApprovalRequest::new("test-id", "write_file", "Write file", &params, "test_key");
-        let details = request.prominent_details();
-        assert_eq!(details[0].0, "File");
-        assert_eq!(details[0].1, "src/main.rs");
+        let details = request.prominent_detail_items(Locale::En);
+        assert_eq!(details[0].label, "File");
+        assert_eq!(details[0].value, "src/main.rs");
     }
 
     #[test]
@@ -1670,6 +1952,27 @@ mod tests {
             matches!(preview, ApprovalDiffPreview::Diff { .. }),
             "expected Diff variant, got {preview:?}"
         );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_diff_preview_write_file_large_existing_skips_inline_diff() {
+        let path = std::env::temp_dir().join("deepseek_test_diff_large_file.txt");
+        std::fs::write(&path, "x".repeat((DIFF_PREVIEW_MAX_BYTES + 1) as usize)).unwrap();
+        let params = json!({"path": path.display().to_string(), "content": "new content
+"});
+        let request =
+            ApprovalRequest::new("test-id", "write_file", "Write file", &params, "test_key");
+        let preview = request
+            .diff_preview()
+            .expect("large existing file should still produce a preview state");
+        match preview {
+            ApprovalDiffPreview::SkippedLargeFile { size, limit, .. } => {
+                assert!(*size > *limit);
+                assert_eq!(*limit, DIFF_PREVIEW_MAX_BYTES);
+            }
+            other => panic!("expected SkippedLargeFile, got {other:?}"),
+        }
         let _ = std::fs::remove_file(&path);
     }
 

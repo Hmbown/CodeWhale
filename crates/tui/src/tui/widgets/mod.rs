@@ -27,7 +27,7 @@ use crate::palette;
 use crate::tui::app::{App, AppMode, ComposerDensity, VimMode};
 use crate::tui::approval::{
     ApprovalDiffPreview, ApprovalRequest, ApprovalView, ElevationOption, ElevationRequest,
-    RiskLevel, ToolCategory,
+    RenderedDiffPanel, RiskLevel, ToolCategory,
 };
 use crate::tui::history::HistoryCell;
 use crate::tui::scrolling::TranscriptLineMeta;
@@ -1122,7 +1122,7 @@ impl Renderable for ApprovalWidget<'_> {
         lines.push(Line::from(""));
         // Prominent key details (command, path, target) are the default
         // body. Full JSON stays behind `v`.
-        let details = self.request.prominent_details_for_locale(locale);
+        let details = self.request.prominent_detail_items(locale);
         if details.is_empty() {
             lines.push(Line::from(vec![
                 Span::raw("  "),
@@ -1135,13 +1135,14 @@ impl Renderable for ApprovalWidget<'_> {
                 ),
             ]));
         } else {
-            for (label, value) in &details {
+            for detail in &details {
                 if self.request.category == ToolCategory::Shell
-                    && matches!(label.as_str(), "Command" | "命令")
+                    && matches!(detail.label.as_str(), "Command" | "命令")
+                    && let Some(shell_lines) = detail.shell_lines.as_deref()
                 {
-                    push_shell_command_lines(&mut lines, label, value);
+                    push_shell_command_lines(&mut lines, &detail.label, shell_lines);
                 } else {
-                    push_detail_line(&mut lines, label, value);
+                    push_detail_line(&mut lines, &detail.label, &detail.value);
                 }
             }
         }
@@ -1151,7 +1152,19 @@ impl Renderable for ApprovalWidget<'_> {
 
         if let Some(preview) = self.request.diff_preview() {
             let diff_width = card_area.width.saturating_sub(4).max(20);
-            let (header, body_lines) = build_diff_panel(preview, diff_width, locale);
+            let RenderedDiffPanel {
+                header,
+                lines: body_lines,
+            } = self
+                .view
+                .cached_diff_panel(diff_width, locale)
+                .unwrap_or_else(|| {
+                    let (header, lines) = build_diff_panel(preview, diff_width, locale);
+                    let panel = RenderedDiffPanel { header, lines };
+                    self.view
+                        .set_cached_diff_panel(diff_width, locale, panel.clone());
+                    panel
+                });
             let body_height = card_area.height.saturating_sub(4) as usize;
             let footer_rows = match (risk, pending) {
                 (RiskLevel::Destructive, Some(_)) if !details.is_empty() => 2,
@@ -1264,15 +1277,15 @@ impl Renderable for ApprovalWidget<'_> {
                 };
                 // Show what is being confirmed so the user never loses
                 // context between the selection and the commit step.
-                if let Some((label, value)) = details.first() {
+                if let Some(detail) = details.first() {
                     lines.push(Line::from(vec![
                         Span::raw("  "),
                         Span::styled(
-                            confirm_label(locale, label),
+                            confirm_label(locale, &detail.label),
                             Style::default().fg(palette::TEXT_BODY),
                         ),
                         Span::styled(
-                            value.clone(),
+                            detail.value.clone(),
                             Style::default()
                                 .fg(palette::TEXT_BODY)
                                 .add_modifier(Modifier::BOLD),
@@ -1581,6 +1594,13 @@ fn build_diff_panel(
             ));
             (no_change_word(locale).to_string(), vec![line])
         }
+        ApprovalDiffPreview::SkippedLargeFile { size, limit, .. } => {
+            let line = Line::from(Span::styled(
+                skipped_large_file_text(*size, *limit, locale),
+                Style::default().fg(palette::TEXT_MUTED),
+            ));
+            (preview_skipped_word(locale).to_string(), vec![line])
+        }
         ApprovalDiffPreview::MissingMatch {
             path: _,
             text,
@@ -1633,6 +1653,22 @@ fn no_change_word(locale: Locale) -> &'static str {
     match locale {
         Locale::ZhHans => "无变化",
         _ => "No change",
+    }
+}
+
+fn preview_skipped_word(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "预览已跳过",
+        _ => "Preview skipped",
+    }
+}
+
+fn skipped_large_file_text(size: u64, limit: u64, locale: Locale) -> String {
+    match locale {
+        Locale::ZhHans => format!("文件过大，已跳过差异预览（{size} bytes，限制 {limit} bytes）"),
+        _ => format!(
+            "file is too large for an inline diff preview ({size} bytes, limit {limit} bytes)"
+        ),
     }
 }
 
@@ -1696,7 +1732,7 @@ fn push_detail_line(lines: &mut Vec<Line<'static>>, label: &str, value: &str) {
     ]));
 }
 
-fn push_shell_command_lines(lines: &mut Vec<Line<'static>>, label: &str, command: &str) {
+fn push_shell_command_lines(lines: &mut Vec<Line<'static>>, label: &str, command_lines: &[String]) {
     lines.push(Line::from(vec![
         Span::raw("  "),
         Span::styled(
@@ -1707,174 +1743,17 @@ fn push_shell_command_lines(lines: &mut Vec<Line<'static>>, label: &str, command
         ),
     ]));
 
-    for line in format_shell_command_for_approval(command) {
+    for line in command_lines {
         lines.push(Line::from(vec![
             Span::raw("    "),
             Span::styled(
-                line,
+                line.clone(),
                 Style::default()
                     .fg(palette::TEXT_BODY)
                     .add_modifier(Modifier::BOLD),
             ),
         ]));
     }
-}
-
-fn format_shell_command_for_approval(command: &str) -> Vec<String> {
-    if let Some(write) = parse_printf_write_file_command(command) {
-        return format_printf_write_file_preview(write);
-    }
-
-    let mut out = Vec::new();
-    for raw in command.split('\n') {
-        let mut current = String::new();
-        let mut chars = raw.chars().peekable();
-        let mut quote: Option<char> = None;
-        while let Some(ch) = chars.next() {
-            if matches!(ch, '"' | '\'') {
-                if quote == Some(ch) {
-                    quote = None;
-                } else if quote.is_none() {
-                    quote = Some(ch);
-                }
-                current.push(ch);
-                continue;
-            }
-
-            if quote.is_none() && ch == '&' && chars.peek() == Some(&'&') {
-                chars.next();
-                push_shell_clause(&mut out, &mut current, Some("&&"));
-                continue;
-            }
-
-            if quote.is_none() && ch == '|' {
-                push_shell_clause(&mut out, &mut current, Some("|"));
-                continue;
-            }
-
-            if quote.is_none() && ch == ';' {
-                current.push(';');
-                push_shell_clause(&mut out, &mut current, None);
-                continue;
-            }
-
-            if quote.is_none() && matches!(ch, '>' | '<') {
-                current.push(ch);
-                while chars
-                    .peek()
-                    .is_some_and(|next| matches!(next, '>' | '<' | '&'))
-                {
-                    current.push(chars.next().expect("peeked char exists"));
-                }
-                while chars.peek().is_some_and(|next| next.is_whitespace()) {
-                    current.push(chars.next().expect("peeked char exists"));
-                }
-                while chars
-                    .peek()
-                    .is_some_and(|next| !next.is_whitespace() && !matches!(next, '&' | '|' | ';'))
-                {
-                    current.push(chars.next().expect("peeked char exists"));
-                }
-                continue;
-            }
-
-            current.push(ch);
-        }
-        push_shell_clause(&mut out, &mut current, None);
-    }
-
-    if out.is_empty() {
-        vec![String::new()]
-    } else {
-        out
-    }
-}
-
-struct PrintfWriteFilePreview {
-    target: String,
-    lines: Vec<String>,
-}
-
-fn parse_printf_write_file_command(command: &str) -> Option<PrintfWriteFilePreview> {
-    let (before_redirect, after_redirect) = split_unquoted_redirect(command)?;
-    let before_redirect = before_redirect.trim();
-    if !before_redirect.starts_with("printf") {
-        return None;
-    }
-    let tokens = shlex::split(before_redirect)?;
-    if tokens.len() < 3 || tokens.first()?.as_str() != "printf" {
-        return None;
-    }
-    let fmt = tokens.get(1)?.as_str();
-    if fmt != "%s\n" && fmt != "%s\\n" {
-        return None;
-    }
-    let target_tokens = shlex::split(after_redirect.trim_start_matches(['>', '&']).trim_start())?;
-    if target_tokens.len() != 1 {
-        return None;
-    }
-    let target = target_tokens.into_iter().next()?;
-    let lines = tokens.into_iter().skip(2).collect::<Vec<_>>();
-    if lines.is_empty() {
-        return None;
-    }
-    Some(PrintfWriteFilePreview { target, lines })
-}
-
-fn format_printf_write_file_preview(write: PrintfWriteFilePreview) -> Vec<String> {
-    let mut out = Vec::new();
-    out.push("Write file via printf".to_string());
-    out.push(format!("Target: {}", write.target));
-    out.push(format!("Lines: {}", write.lines.len()));
-    out.push(String::new());
-    out.push("Content:".to_string());
-    let total = write.lines.len();
-    for (idx, line) in write.lines.into_iter().enumerate().take(12) {
-        out.push(format!("{:>4}  {}", idx + 1, line));
-    }
-    if total > 12 {
-        out.push(format!("  ... (+{} more lines)", total - 12));
-    }
-    out
-}
-
-fn split_unquoted_redirect(command: &str) -> Option<(&str, &str)> {
-    let mut quote: Option<char> = None;
-    for (idx, ch) in command.char_indices() {
-        if matches!(ch, '"' | '\'') {
-            if quote == Some(ch) {
-                quote = None;
-            } else if quote.is_none() {
-                quote = Some(ch);
-            }
-            continue;
-        }
-        if quote.is_none() && ch == '>' {
-            let before = &command[..idx];
-            let after = &command[idx + ch.len_utf8()..];
-            return Some((before, after));
-        }
-    }
-    None
-}
-
-fn push_shell_clause(out: &mut Vec<String>, current: &mut String, connector: Option<&str>) {
-    let trimmed = current.trim();
-    if !trimmed.is_empty() {
-        let mut line = trimmed.to_string();
-        if let Some(connector) = connector {
-            line.push(' ');
-            line.push_str(connector);
-        }
-        out.push(line);
-    } else if let Some(connector) = connector
-        && let Some(prev) = out.last_mut()
-        && !prev.ends_with(connector)
-    {
-        prev.push(' ');
-        prev.push_str(connector);
-    }
-    current.clear();
 }
 
 fn diff_hidden_hint(locale: Locale) -> &'static str {
