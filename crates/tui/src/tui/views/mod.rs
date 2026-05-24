@@ -3,6 +3,7 @@ use ratatui::{buffer::Buffer, layout::Rect};
 use std::cell::{Cell, RefCell};
 use std::fmt;
 
+use crate::config::Config;
 use crate::localization::{Locale, MessageId, tr};
 use crate::palette;
 use crate::settings::Settings;
@@ -606,6 +607,15 @@ impl ConfigView {
                     .as_deref()
                     .unwrap_or("(config/default)")
                     .to_string(),
+                editable: true,
+                scope: ConfigScope::Saved,
+            },
+            ConfigRow {
+                section: ConfigSection::Model,
+                key: "base_url".to_string(),
+                value: Config::load(None, None)
+                    .map(|config| config.deepseek_base_url())
+                    .unwrap_or_else(|_| "(unavailable)".to_string()),
                 editable: true,
                 scope: ConfigScope::Saved,
             },
@@ -2150,6 +2160,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(keys.contains(&"model"));
         assert!(keys.contains(&"reasoning_effort"));
+        assert!(keys.contains(&"base_url"));
         assert!(keys.contains(&"approval_mode"));
         assert!(keys.contains(&"theme"));
         assert!(keys.contains(&"locale"));
