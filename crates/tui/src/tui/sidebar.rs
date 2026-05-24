@@ -1712,7 +1712,7 @@ fn render_context_panel(f: &mut Frame, area: Rect, app: &App) {
     // ── LSP ──────────────────────────────────────────────────────
     let lsp_label = if app.lsp_enabled { "on" } else { "off" };
     lines.push(Line::from(Span::styled(
-        format!("lsp: {}", lsp_label),
+        format!("lsp: {lsp_label}"),
         Style::default().fg(palette::TEXT_MUTED),
     )));
 
@@ -1738,7 +1738,7 @@ fn render_context_panel(f: &mut Frame, area: Rect, app: &App) {
                 } else if bytes >= 1024 {
                     format!("{:.1} KB", bytes as f64 / 1024.0)
                 } else {
-                    format!("{} B", bytes)
+                    format!("{bytes} B")
                 }
             })
             .unwrap_or_else(|_| "—".to_string());
@@ -2617,7 +2617,7 @@ mod tests {
         };
         let text = lines_to_text(&subagent_panel_lines(&summary, &[], 64, 8));
 
-        assert!(!text[0].contains("No agents"), "header: {:?}", text);
+        assert!(!text[0].contains("No agents"), "header: {text:?}");
         assert!(
             text.iter()
                 .any(|line| line.contains("RLM foreground work active")),

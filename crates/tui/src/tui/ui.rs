@@ -253,7 +253,7 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
     // Terminal probe with timeout to prevent hanging on unresponsive terminals
     let probe_timeout = terminal_probe_timeout(config);
     let enable_raw = tokio::task::spawn_blocking(move || {
-        enable_raw_mode().map_err(|e| anyhow::anyhow!("Failed to enable raw mode: {}", e))
+        enable_raw_mode().map_err(|e| anyhow::anyhow!("Failed to enable raw mode: {e}"))
     });
 
     match tokio::time::timeout(probe_timeout, enable_raw).await {
@@ -2599,7 +2599,7 @@ async fn run_event_loop(
                                 // Insert @path into the composer.
                                 let path_str = rel_path.to_string_lossy().to_string();
                                 app.status_message = Some(format!("Attached @{path_str}"));
-                                app.insert_str(&format!("@{} ", path_str));
+                                app.insert_str(&format!("@{path_str} "));
                             } else {
                                 // Directory was expanded/collapsed; rebuild.
                                 app.needs_redraw = true;
@@ -3684,7 +3684,14 @@ pub(crate) fn apply_engine_error_to_app(
     let recoverable = envelope.recoverable;
     let message = envelope.message.clone();
     let severity = envelope.severity;
+    let turn_was_in_progress =
+        app.is_loading || matches!(app.runtime_turn_status.as_deref(), Some("in_progress"));
     streaming_thinking::finalize_current(app);
+    if turn_was_in_progress {
+        app.finalize_streaming_assistant_as_interrupted();
+        app.finalize_active_cell_as_interrupted();
+        app.runtime_turn_status = Some("failed".to_string());
+    }
     app.streaming_state.reset();
     app.streaming_message_index = None;
     app.streaming_thinking_active_entry = None;
@@ -6891,16 +6898,14 @@ fn maybe_warn_context_pressure(app: &mut App) {
 
     if percent >= CONTEXT_CRITICAL_THRESHOLD_PERCENT {
         app.status_message = Some(format!(
-            "Context critical: {:.0}% ({used}/{max} tokens). {recommendation}",
-            percent
+            "Context critical: {percent:.0}% ({used}/{max} tokens). {recommendation}"
         ));
         return;
     }
 
     if app.status_message.is_none() {
         app.status_message = Some(format!(
-            "Context high: {:.0}% ({used}/{max} tokens). {recommendation}",
-            percent
+            "Context high: {percent:.0}% ({used}/{max} tokens). {recommendation}"
         ));
     }
 }
@@ -7271,7 +7276,7 @@ fn activity_status_line(cell: &HistoryCell) -> Option<String> {
             }
             Some(line)
         }
-        HistoryCell::Error { severity, .. } => Some(format!("Status: {:?}", severity)),
+        HistoryCell::Error { severity, .. } => Some(format!("Status: {severity:?}")),
         HistoryCell::SubAgent(_) => None,
         _ => None,
     }

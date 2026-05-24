@@ -1,6 +1,6 @@
 # CodeWhale
 
-> Terminal coding agent for DeepSeek V4. It runs from the `codewhale` command, streams reasoning blocks, edits local workspaces with approval gates, and includes an auto mode that chooses both model and thinking level per turn.
+> DeepSeek-first agentic terminal for open source and open-weight coding models. It runs from the `codewhale` command, streams reasoning blocks, edits local workspaces with approval gates, and can auto-route each turn to the right DeepSeek model and thinking level.
 
 [简体中文 README](README.zh-CN.md)
 [日本語 README](README.ja-JP.md)
@@ -72,13 +72,13 @@ cargo install codewhale-tui     --locked --force
 
 ## What Is It?
 
-CodeWhale is a coding agent that runs in your terminal. It can read and edit files, run shell commands, search the web, manage git, and coordinate sub-agents from a keyboard-driven TUI.
+CodeWhale is a DeepSeek-first coding agent for open source and open-weight models that runs in your terminal. It can read and edit files, run shell commands, search the web, manage git, and coordinate sub-agents from a keyboard-driven TUI.
 
 It is built around DeepSeek V4 (`deepseek-v4-pro` / `deepseek-v4-flash`), including 1M-token context windows, streaming reasoning blocks, and prefix-cache-aware cost reporting.
 
 ### Key Features
 
-- **Auto mode** — `--model auto` / `/model auto` chooses both the model and thinking level for each turn
+- **Model auto-routing** — `--model auto` / `/model auto` chooses both the model and thinking level for each turn
 - **Thinking-mode streaming** — see DeepSeek reasoning blocks as the model works
 - **Full tool suite** — file ops, shell execution, git, web search/browse, apply-patch, sub-agents, MCP servers
 - **1M-token context** — context tracking, manual or configured compaction, and prefix-cache telemetry
@@ -91,7 +91,8 @@ It is built around DeepSeek V4 (`deepseek-v4-pro` / `deepseek-v4-flash`), includ
 - **Durable task queue** — background tasks can survive restarts
 - **HTTP/SSE runtime API** — `codewhale serve --http` for headless agent workflows
 - **MCP protocol** — connect to Model Context Protocol servers for extended tooling; please see [docs/MCP.md](docs/MCP.md)
-- **Native RLM** (`rlm_open`/`rlm_eval`) — persistent REPL sessions for batched analysis; run cheap `deepseek-v4-flash` children with bounded helpers like `peek`, `search`, `chunk`, and `sub_query_batch`
+- **Fin-powered seams** — cheap `deepseek-v4-flash` with thinking off handles routing, RLM child calls, summaries, and other fast coordination work
+- **Native RLM** (`rlm_open`/`rlm_eval`) — persistent REPL sessions for batched analysis with bounded helpers like `peek`, `search`, `chunk`, and `sub_query_batch`
 - **LSP diagnostics** — inline error/warning surfacing after every edit via rust-analyzer, pyright, typescript-language-server, gopls, clangd
 - **User memory** — optional persistent note file injected into the system prompt for cross-session preferences
 - **Localized UI** — `en`, `ja`, `zh-Hans`, `pt-BR` with auto-detection
@@ -164,18 +165,18 @@ Start with [docs/TENCENT_CLOUD_REMOTE_FIRST.md](docs/TENCENT_CLOUD_REMOTE_FIRST.
 then use [docs/TENCENT_LIGHTHOUSE_HK.md](docs/TENCENT_LIGHTHOUSE_HK.md) for the
 server runbook.
 
-### Auto Mode
+### Model Auto-Routing and Fin
 
 Use `codewhale --model auto` or `/model auto` when you want codewhale to decide how much model and reasoning power a turn needs.
 
-Auto mode controls two settings together:
+Model auto-routing controls two settings together:
 
 - Model: `deepseek-v4-flash` or `deepseek-v4-pro`
 - Thinking: `off`, `high`, or `max`
 
-Before the real turn is sent, the app makes a small `deepseek-v4-flash` routing call with thinking off. That router looks at the latest request and recent context, then selects a concrete model and thinking level for the real request. Short/simple turns can stay on Flash with thinking off; coding, debugging, release work, architecture, security review, or ambiguous multi-step tasks can move up to Pro and/or higher thinking.
+Before the real turn is sent, the app makes a small `deepseek-v4-flash` routing call with thinking off. That fast path is called **Fin**: a low-latency seam for model selection, summaries, RLM children, context maintenance, and other coordination work that should not spend a full reasoning turn. Fin looks at the latest request and recent context, then selects a concrete model and thinking level for the real request. Short/simple turns can stay on Flash with thinking off; coding, debugging, release work, architecture, security review, or ambiguous multi-step tasks can move up to Pro and/or higher thinking.
 
-`auto` is local to codewhale. The upstream API never receives `model: "auto"`; it receives the concrete model and thinking setting chosen for that turn. The TUI shows the selected route, and cost tracking is charged against the model that actually ran. If the router call fails or returns an invalid answer, the app falls back to a local heuristic. Sub-agents inherit auto mode unless you assign them an explicit model.
+`--model auto` and `/model auto` are local to codewhale. The upstream API never receives `model: "auto"`; it receives the concrete model and thinking setting chosen for that turn. The TUI shows the selected route, and cost tracking is charged against the model that actually ran. If the Fin route fails or returns an invalid answer, the app falls back to a local heuristic. Sub-agents inherit model auto-routing unless you assign them an explicit model.
 
 Use a fixed model or fixed thinking level when you want repeatable benchmarking, a strict cost ceiling, or a specific provider/model mapping.
 
@@ -246,6 +247,10 @@ Both binaries are required. Cross-compilation and platform-specific notes: [docs
 
 ### Other API Providers
 
+Official DeepSeek remains the default and first-class path. Other providers are
+additive, with OpenRouter starting from DeepSeek Pro/Flash before broader
+open-model catalogs are enabled.
+
 ```bash
 # NVIDIA NIM
 codewhale auth set --provider nvidia-nim --api-key "YOUR_NVIDIA_API_KEY"
@@ -306,10 +311,10 @@ interfaces, and extension points.
 ```bash
 codewhale                                         # interactive TUI
 codewhale "explain this function"                 # one-shot prompt
-codewhale exec --auto --output-format stream-json "fix this bug"  # NDJSON backend stream
+codewhale exec --auto --output-format stream-json "fix this bug"  # agentic exec with tool auto-approvals
 codewhale exec --resume <SESSION_ID> "follow up"  # continue a non-interactive session
 codewhale --model deepseek-v4-flash "summarize"   # model override
-codewhale --model auto "fix this bug"             # auto-select model + thinking
+codewhale --model auto "fix this bug"             # auto-route model + thinking
 codewhale --yolo                                  # auto-approve tools
 codewhale auth set --provider deepseek            # save API key
 codewhale doctor                                  # check setup & connectivity
@@ -411,6 +416,12 @@ Full shortcut catalog: [docs/KEYBINDINGS.md](docs/KEYBINDINGS.md).
 | **Plan** 🔍 | Read-only investigation — model explores and proposes a plan before making changes; multi-step investigations use `checklist_write` |
 | **Agent** 🤖 | Default interactive mode — multi-step tool use with approval gates; substantial work is tracked with `checklist_write` |
 | **YOLO** ⚡ | Auto-approve all tools in a trusted workspace; multi-step work still keeps a visible checklist |
+
+Modes are separate from model auto-routing. `Tab` cycles Plan / Agent / YOLO,
+while `/model auto` controls model and thinking selection. The `/goal` command
+tracks a session objective and token budget today; a fuller Goal work surface is
+the right future home for persistent objective progress rather than another
+meaning of "auto".
 
 ---
 
@@ -550,7 +561,8 @@ This project ships with help from a growing community of contributors:
 - **[zichen0116](https://github.com/zichen0116)** — CODE_OF_CONDUCT.md (#686)
 - **[dfwqdyl-ui](https://github.com/dfwqdyl-ui)** — model ID case-sensitivity compatibility report (#729)
 - **[Oliver-ZPLiu](https://github.com/Oliver-ZPLiu)** — stale `working...` state bug report, Windows clipboard fallback, MCP Streamable HTTP session fixes, and Homebrew tap automation (#738, #850, #1643, #1631)
-- **[reidliu41](https://github.com/reidliu41)** — resume hint, workspace trust persistence, Ollama provider support, thinking-block stream finalization, CI cache hardening, streaming wrap, and DeepSeek model completions (#863, #870, #921, #1078, #1603, #1628, #1601)
+- **[reidliu41](https://github.com/reidliu41)** — resume hint, workspace trust persistence, Ollama provider support, thinking-block stream finalization, CI cache hardening, streaming wrap, DeepSeek model completions, and help picker selection polish (#863, #870, #921, #1078, #1603, #1628, #1601, #1964)
+- **[cyq1017](https://github.com/cyq1017)** — Unicode `git_status` paths, local/configured skill discovery, and mode-switch toast dedupe (#1953, #1956, #1957)
 - **[xieshutao](https://github.com/xieshutao)** — plain Markdown skill fallback (#869)
 - **[GK012](https://github.com/GK012)** — npm wrapper `--version` fallback (#885)
 - **[y0sif](https://github.com/y0sif)** — parent turn-loop wakeup after direct child sub-agent completion (#901)

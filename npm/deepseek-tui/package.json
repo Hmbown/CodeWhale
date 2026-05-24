@@ -1,6 +1,6 @@
 {
   "name": "deepseek-tui",
-  "version": "0.8.41",
+  "version": "0.8.42",
   "description": "Deprecated. Renamed to `codewhale`. Run `npm install -g codewhale` instead.",
   "author": "Hmbown",
   "license": "MIT",

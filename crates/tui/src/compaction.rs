@@ -1373,7 +1373,7 @@ fn build_formatted_summary_request(
                 }
                 ContentBlock::ToolResult { content, .. } => {
                     let snippet = truncate_chars(content, limits.tool_result_snippet_chars);
-                    let _ = write!(conversation_text, "Tool result: {}\n\n", snippet);
+                    let _ = write!(conversation_text, "Tool result: {snippet}\n\n");
                 }
                 ContentBlock::Thinking { .. } => {
                     // Skip thinking blocks in summary
@@ -1465,9 +1465,9 @@ fn extract_workflow_context(messages: &[Message], workspace: Option<&Path>) -> S
                     .strip_prefix(ws)
                     .unwrap_or(Path::new(file))
                     .display();
-                context.push_str(&format!("- `{}`\n", relative));
+                context.push_str(&format!("- `{relative}`\n"));
             } else {
-                context.push_str(&format!("- `{}`\n", file));
+                context.push_str(&format!("- `{file}`\n"));
             }
         }
         context.push('\n');
@@ -1482,7 +1482,7 @@ fn extract_workflow_context(messages: &[Message], workspace: Option<&Path>) -> S
     if !tasks_identified.is_empty() {
         context.push_str("**Tasks/TODOs Identified:**\n");
         for task in &tasks_identified {
-            context.push_str(&format!("- {}\n", task));
+            context.push_str(&format!("- {task}\n"));
         }
         context.push('\n');
     }

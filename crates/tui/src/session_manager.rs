@@ -1656,10 +1656,9 @@ mod tests {
                     "workspace": "/tmp"
                 }},
                 "messages": [
-                    {{ "role": "user", "content": [ {{ "Text": {{ "text": {body:?} }} }} ] }}
+                    {{ "role": "user", "content": [ {{ "Text": {{ "text": {big_text:?} }} }} ] }}
                 ]
-            }}"#,
-            body = big_text
+            }}"#
         );
 
         let extracted =

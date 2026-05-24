@@ -5,6 +5,10 @@ codewhale has two related concepts:
 - **TUI mode**: what kind of visible interaction you're in (Plan/Agent/YOLO).
 - **Approval mode**: how aggressively the UI asks before executing tools.
 
+Model selection is separate. `--model auto` and `/model auto` route each turn to
+a concrete model and thinking level; they are not TUI modes and are not part of
+the `Tab` cycle.
+
 ## TUI Modes
 
 Press `Tab` to complete composer menus, queue a draft as a next-turn follow-up
@@ -19,6 +23,14 @@ Run `/mode` to open the mode picker, or switch directly with `/mode agent`,
 - **YOLO**: enables shell + trust mode and auto-approves all tools. Use only in trusted repos.
 
 All three modes have access to persistent RLM sessions through `rlm_open`, `rlm_eval`, `rlm_configure`, and `rlm_close`. Inside an RLM Python REPL, `sub_query_batch` fans out 1-16 cheap parallel child calls pinned to `deepseek-v4-flash`. The model reaches for it when work is too large or repetitive for the parent transcript.
+
+The fast `deepseek-v4-flash` / thinking-off path is called Fin in the product
+language. Fin is a seam for routing, summaries, cheap child calls, and
+coordination work; it does not change approval behavior.
+
+`/goal` sets a session objective with an optional token budget. It is goal
+tracking today, not a separate TUI mode. If CodeWhale grows a persistent Goal
+work surface later, it should remain distinct from `--model auto`.
 
 ## Compatibility Notes
 

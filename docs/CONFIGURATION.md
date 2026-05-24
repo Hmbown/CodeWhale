@@ -481,7 +481,9 @@ If you are upgrading from older releases:
   - `[snapshots].enabled` (bool, default `true`)
   - `[snapshots].max_age_days` (int, default `7`)
   - snapshots live under `~/.deepseek/snapshots/<project_hash>/<worktree_hash>/.git` and never use the workspace's own `.git` directory
-- `context.*` (optional): append-only Flash seam manager, currently opt-in.
+- `context.*` (optional): append-only Fin seam manager, currently opt-in.
+  Fin is the fast `deepseek-v4-flash` path with thinking off used for
+  coordination work such as routing, summaries, and context maintenance.
   Thresholds use the active request input estimate, not lifetime summed API
   usage:
   - `[context].enabled` (bool, default `false`)

@@ -583,7 +583,7 @@ impl Renderable for ComposerWidget<'_> {
                     SubmitDisposition::Immediate => {
                         if queue_count > 0 {
                             (
-                                Some(format!("↵ send ({} queued)", queue_count)),
+                                Some(format!("↵ send ({queue_count} queued)")),
                                 palette::DEEPSEEK_SKY,
                             )
                         } else {

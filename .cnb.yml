@@ -11,7 +11,7 @@
   stages:
     - name: feishu bridge tests
       script: |
-        set -euo pipefail
+        set -eu
         cd integrations/feishu-bridge
         npm ci
         npm run check
@@ -27,7 +27,7 @@
   stages:
     - name: install linux dependencies
       script: |
-        set -euo pipefail
+        set -eu
         apt-get update
         apt-get install -y git libdbus-1-dev nodejs npm pkg-config
         if command -v rustup >/dev/null 2>&1; then
@@ -36,7 +36,7 @@
 
     - name: rust workspace gates
       script: |
-        set -euo pipefail
+        set -eu
         ./scripts/release/check-versions.sh
         cargo fmt --all -- --check
         cargo check --workspace --all-targets --locked
@@ -45,8 +45,9 @@
 
     - name: linux npm wrapper smoke
       script: |
-        set -euo pipefail
+        set -eu
         cargo build --release --locked -p codewhale-cli -p codewhale-tui
+        export PATH="$PWD/target/release:$PATH"
         node scripts/release/npm-wrapper-smoke.js
         ./target/release/codewhale --version
         ./target/release/codewhale-tui --version
@@ -63,7 +64,7 @@
   stages:
     - name: install release dependencies
       script: |
-        set -euo pipefail
+        set -eu
         apt-get update
         apt-get install -y curl git libdbus-1-dev nodejs npm pkg-config
         if command -v rustup >/dev/null 2>&1; then
@@ -72,7 +73,7 @@
 
     - name: rust workspace gates
       script: |
-        set -euo pipefail
+        set -eu
         ./scripts/release/check-versions.sh
         cargo fmt --all -- --check
         cargo check --workspace --all-targets --locked
@@ -81,13 +82,14 @@
 
     - name: crate publish dry-run
       script: |
-        set -euo pipefail
+        set -eu
         ./scripts/release/publish-crates.sh dry-run
 
     - name: release binary smoke
       script: |
-        set -euo pipefail
+        set -eu
         cargo build --release --locked -p codewhale-cli -p codewhale-tui
+        export PATH="$PWD/target/release:$PATH"
         node scripts/release/npm-wrapper-smoke.js
         ./target/release/codewhale --version
         ./target/release/codewhale-tui --version
@@ -115,7 +117,7 @@ $:
       stages:
         - name: build linux x64 release assets
           script: |
-            set -euo pipefail
+            set -eu
 
             apt-get update
             apt-get install -y git libdbus-1-dev nodejs pkg-config

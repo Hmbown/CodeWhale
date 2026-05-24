@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Codex-style CLI facade for DeepSeek workspace architecture"
+description = "DeepSeek-first agentic terminal facade for open coding models"
 
 [[bin]]
 name = "codewhale"
@@ -20,13 +20,13 @@ path = "src/bin/deepseek_legacy_shim.rs"
 anyhow.workspace = true
 clap.workspace = true
 clap_complete.workspace = true
-codewhale-agent = { path = "../agent", version = "0.8.41" }
-codewhale-app-server = { path = "../app-server", version = "0.8.41" }
-codewhale-config = { path = "../config", version = "0.8.41" }
-codewhale-execpolicy = { path = "../execpolicy", version = "0.8.41" }
-codewhale-mcp = { path = "../mcp", version = "0.8.41" }
-codewhale-secrets = { path = "../secrets", version = "0.8.41" }
-codewhale-state = { path = "../state", version = "0.8.41" }
+codewhale-agent = { path = "../agent", version = "0.8.42" }
+codewhale-app-server = { path = "../app-server", version = "0.8.42" }
+codewhale-config = { path = "../config", version = "0.8.42" }
+codewhale-execpolicy = { path = "../execpolicy", version = "0.8.42" }
+codewhale-mcp = { path = "../mcp", version = "0.8.42" }
+codewhale-secrets = { path = "../secrets", version = "0.8.42" }
+codewhale-state = { path = "../state", version = "0.8.42" }
 chrono.workspace = true
 dirs.workspace = true
 serde.workspace = true

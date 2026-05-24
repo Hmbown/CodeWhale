@@ -164,7 +164,7 @@ fn append_note(notes_path: &Path, note_content: &str) -> Result<(), String> {
     };
 
     // Write separator and note content
-    if let Err(e) = writeln!(file, "\n---\n{}", note_content) {
+    if let Err(e) = writeln!(file, "\n---\n{note_content}") {
         return Err(format!("Failed to write note: {e}"));
     }
 

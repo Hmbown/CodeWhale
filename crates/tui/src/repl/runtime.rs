@@ -205,9 +205,8 @@ impl PythonRuntime {
 
         let interpreter = resolve_python_interpreter().ok_or_else(|| {
             format!(
-                "no Python interpreter found on PATH (tried {:?}). \
+                "no Python interpreter found on PATH (tried {PYTHON_CANDIDATES:?}). \
                  Install Python 3 and ensure one of these commands works, then restart codewhale.",
-                PYTHON_CANDIDATES,
             )
         })?;
         let (program, interpreter_args) = split_interpreter_spec(&interpreter);
@@ -944,10 +943,11 @@ if _ctx_file:
     except Exception as e:
         _sys.stderr.write(f"[bootstrap] failed to load context: {e}\n")
 content = _context
+_ctx = _context
 
 _BOOTSTRAP_NAMES = {
     "_SID","_REQ","_RESP","_FINAL","_ERR","_RUN","_END","_DONE","_READY",
-    "_rpc","_ctx_file","_context","_slice_chars","_slice_lines","_BOOTSTRAP_NAMES","_main_loop",
+    "_rpc","_ctx_file","_context","_ctx","_slice_chars","_slice_lines","_BOOTSTRAP_NAMES","_main_loop",
     "_emit_final","_json_safe","_slice_text","_prompt_with_slice",
     "_normalize_dependency_mode","_batch_dependency_error",
     "llm_query","llm_query_batched","rlm_query","rlm_query_batched",
@@ -1146,10 +1146,10 @@ mod tests {
             .await
             .expect("spawn");
         let round = rt
-            .execute("print(content == _context, 'context' in globals(), 'ctx' in globals())")
+            .execute("print(content == _context, _ctx == _context, 'context' in globals(), 'ctx' in globals())")
             .await
             .expect("execute");
-        assert!(round.stdout.contains("True False False"));
+        assert!(round.stdout.contains("True True False False"));
         rt.shutdown().await;
     }
 

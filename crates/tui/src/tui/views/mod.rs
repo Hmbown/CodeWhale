@@ -1717,7 +1717,7 @@ impl ModalView for SubAgentsView {
             let mut summary_parts = Vec::new();
             for (label, count, color) in status_summary {
                 summary_parts.push(Line::from(Span::styled(
-                    format!("{}: {}", label, count),
+                    format!("{label}: {count}"),
                     Style::default().fg(color),
                 )));
             }

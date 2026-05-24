@@ -568,7 +568,7 @@ mod tests {
         // Identical query matches start with high bonus.
         let a = score("main", "main.rs").unwrap();
         let b = score("main", "src/very/deep/main.rs").unwrap();
-        assert!(a > b, "a={} b={}", a, b);
+        assert!(a > b, "a={a} b={b}");
     }
 
     #[test]
@@ -591,9 +591,7 @@ mod tests {
         if let Some(inline_score) = inline {
             assert!(
                 boundary > inline_score,
-                "boundary={} inline={}",
-                boundary,
-                inline_score
+                "boundary={boundary} inline={inline_score}"
             );
         }
     }

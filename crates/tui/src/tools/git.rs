@@ -332,7 +332,7 @@ mod tests {
                 .current_dir(root)
                 .status()
                 .expect("git should spawn");
-            assert!(status.success(), "git {:?} failed", args);
+            assert!(status.success(), "git {args:?} failed");
         };
 
         run(&["init", "-q"]);
@@ -347,7 +347,7 @@ mod tests {
                 .current_dir(root)
                 .status()
                 .expect("git should spawn");
-            assert!(status.success(), "git {:?} failed", args);
+            assert!(status.success(), "git {args:?} failed");
         };
         run(&["add", "."]);
         run(&["commit", "-q", "-m", message]);
@@ -438,7 +438,7 @@ mod tests {
                 .current_dir(tmp.path())
                 .status()
                 .expect("git should spawn");
-            assert!(status.success(), "git {:?} failed", args);
+            assert!(status.success(), "git {args:?} failed");
         };
 
         run_git(&["config", "core.quotepath", "true"]);

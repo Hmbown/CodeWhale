@@ -10,7 +10,7 @@ description = "Hook dispatch and notifications parity for DeepSeek workspace arc
 anyhow.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
-codewhale-protocol = { path = "../protocol", version = "0.8.41" }
+codewhale-protocol = { path = "../protocol", version = "0.8.42" }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -180,9 +180,8 @@ impl Engine {
                 if estimated_input > input_budget {
                     if context_recovery_attempts >= MAX_CONTEXT_RECOVERY_ATTEMPTS {
                         let message = format!(
-                            "Context remains above model limit after {} recovery attempts \
-                             (~{} token estimate, ~{} budget). Please run /compact or /clear.",
-                            MAX_CONTEXT_RECOVERY_ATTEMPTS, estimated_input, input_budget
+                            "Context remains above model limit after {MAX_CONTEXT_RECOVERY_ATTEMPTS} recovery attempts \
+                             (~{estimated_input} token estimate, ~{input_budget} budget). Please run /compact or /clear."
                         );
                         turn_error = Some(message.clone());
                         let _ = self
@@ -489,8 +488,7 @@ impl Engine {
                             transparent_stream_retries =
                                 transparent_stream_retries.saturating_add(1);
                             crate::logging::info(format!(
-                                "Transparent stream retry {}/{} (no content received yet): {}",
-                                transparent_stream_retries, MAX_TRANSPARENT_STREAM_RETRIES, message,
+                                "Transparent stream retry {transparent_stream_retries}/{MAX_TRANSPARENT_STREAM_RETRIES} (no content received yet): {message}",
                             ));
                             // Drop the failed stream before issuing the new
                             // request to release the underlying connection.
@@ -585,8 +583,7 @@ impl Engine {
                             caller,
                         } => {
                             crate::logging::info(format!(
-                                "Tool '{}' block start. Initial input: {:?}",
-                                name, input
+                                "Tool '{name}' block start. Initial input: {input:?}"
                             ));
                             current_block_kind = Some(ContentBlockKind::ToolUse);
                             current_tool_indices.insert(index, tool_uses.len());
@@ -604,8 +601,7 @@ impl Engine {
                         }
                         ContentBlockStart::ServerToolUse { id, name, input } => {
                             crate::logging::info(format!(
-                                "Server tool '{}' block start. Initial input: {:?}",
-                                name, input
+                                "Server tool '{name}' block start. Initial input: {input:?}"
                             ));
                             current_block_kind = Some(ContentBlockKind::ToolUse);
                             current_tool_indices.insert(index, tool_uses.len());
@@ -781,14 +777,12 @@ impl Engine {
                 if stream_retry_attempts < MAX_STREAM_RETRIES {
                     stream_retry_attempts = stream_retry_attempts.saturating_add(1);
                     crate::logging::warn(format!(
-                        "Stream died with no content (attempt {}/{}); retrying request",
-                        stream_retry_attempts, MAX_STREAM_RETRIES
+                        "Stream died with no content (attempt {stream_retry_attempts}/{MAX_STREAM_RETRIES}); retrying request"
                     ));
                     let _ = self
                         .tx_event
                         .send(Event::status(format!(
-                            "Connection interrupted; retrying ({}/{})",
-                            stream_retry_attempts, MAX_STREAM_RETRIES
+                            "Connection interrupted; retrying ({stream_retry_attempts}/{MAX_STREAM_RETRIES})"
                         )))
                         .await;
                     // Don't preserve the per-stream `turn_error` — we're
@@ -798,8 +792,7 @@ impl Engine {
                     continue;
                 }
                 crate::logging::warn(format!(
-                    "Stream retry budget exhausted ({} attempts); failing turn",
-                    stream_retry_attempts
+                    "Stream retry budget exhausted ({stream_retry_attempts} attempts); failing turn"
                 ));
             } else if stream_errors == 0 {
                 // Healthy round → reset retry budget so we don't carry over
@@ -1156,8 +1149,7 @@ impl Engine {
                 let tool_input = tool.input.clone();
                 let tool_caller = tool.caller.clone();
                 crate::logging::info(format!(
-                    "Planning tool '{}' with input: {:?}",
-                    tool_name, tool_input
+                    "Planning tool '{tool_name}' with input: {tool_input:?}"
                 ));
 
                 let interactive = (tool_name == "exec_shell"
@@ -1201,8 +1193,7 @@ impl Engine {
                     && let Some(canonical) = registry.resolve(&tool_name)
                 {
                     crate::logging::info(format!(
-                        "Resolved hallucinated tool name '{}' -> '{}'",
-                        tool_name, canonical
+                        "Resolved hallucinated tool name '{tool_name}' -> '{canonical}'"
                     ));
                     tool_def = tool_catalog.iter().find(|d| d.name == canonical);
                     if tool_def.is_some() {
@@ -1281,8 +1272,7 @@ impl Engine {
                             format!("Auto-loaded deferred tool '{tool_name}' after model request.")
                         } else {
                             format!(
-                                "Auto-loaded deferred tool '{}' after resolving '{}'.",
-                                tool_name, requested_tool_name
+                                "Auto-loaded deferred tool '{tool_name}' after resolving '{requested_tool_name}'."
                             )
                         };
                         let _ = self.tx_event.send(Event::status(status)).await;

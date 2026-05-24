@@ -101,7 +101,7 @@ pub fn build_context_inspector_text(app: &App) -> String {
         crate::utils::display_path(&app.workspace)
     );
     if let Some(session_id) = app.current_session_id.as_deref() {
-        let _ = writeln!(out, "Session: {}", session_id);
+        let _ = writeln!(out, "Session: {session_id}");
     }
     let (used, max, percent) = usage;
     let _ = writeln!(

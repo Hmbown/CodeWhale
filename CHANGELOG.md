@@ -7,6 +7,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.42] - 2026-05-24
+
+### Changed
+
+- **CodeWhale now ships with the Brother Whale agent identity prompt.** The
+  built-in system prompt frames the agent as trusted, calm, careful, and
+  responsible, and adds the coordination principle that great intelligence
+  creates spaces where future intelligences can work together.
+- **CodeWhale positioning is clarified as DeepSeek-first and open-model
+  oriented.** README, rebrand notes, crate metadata, and npm package text now
+  describe CodeWhale as an agentic terminal for open source and open-weight
+  coding models while preserving the official DeepSeek provider as first-class.
+- **Model auto-routing is documented separately from TUI modes.** README and
+  modes docs now reserve "mode" for Plan / Agent / YOLO, describe
+  `--model auto` as model/thinking routing, and name the fast
+  `deepseek-v4-flash` thinking-off seam as Fin.
+- **Rebrand shim docs now match the v0.8.x transition window.** The npm and
+  migration notes no longer imply the legacy `deepseek-tui` package/shims
+  expired immediately after v0.8.41.
+
+### Fixed
+
+- **User-authored messages render as literal plain text.** Leading whitespace,
+  whitespace-only lines, repeated spaces, and Markdown-looking `#` / `-` text
+  now survive in transcript history, while assistant messages still render
+  Markdown normally.
+- **English turns stay English after localized context.** The Brother Whale
+  identity and base language rules no longer inject native-script examples into
+  the English prompt path, and the prompt now calls out localized READMEs, issue
+  text, file contents, and tool results as data rather than language signals.
+- **Stream decode failures no longer leave the turn visually stuck.** The UI
+  now marks an active turn failed and flushes live cells as soon as the engine
+  emits a stream error, so the sidebar/footer recover without requiring
+  Ctrl+C (#1960).
+- **RLM contexts now expose `_ctx`.** Persistent RLM REPLs bind `_ctx` as a
+  compatibility alias for the loaded source alongside `_context` and
+  `content`, and the prompt/docs call out the exact names (#1962).
+- **`handle_read` is easier to recover from.** The tool keeps accepting full
+  `var_handle` objects directly, adds `introspect: true` for size/projection
+  hints, and validation failures now include copy-pasteable examples (#1963).
+- **The help picker keeps the selected row visible while scrolling.** `/help`
+  now budgets against the real modal body height, wraps Up/Down navigation,
+  and uses a stronger selected-row highlight (#1964).
+- **Unicode `git_status` paths stay readable.** Chinese and other non-ASCII
+  repository paths now survive status parsing and display cleanly (#1936,
+  #1953).
+- **Project-local and configured skills appear in the slash menu.** Workspace
+  skills and configured skill directories now feed the command picker instead
+  of only the bundled set (#1955, #1956).
+- **Repeated Tab mode switching no longer stacks composer-obscuring toasts.**
+  The mode-switch notification now deduplicates instead of accumulating rows
+  over the composer (#1926, #1957).
+- **Local tool UX surfaces are clearer.** `github_close_pr` now has the same
+  guarded closure workflow as issue close, `handle_read` redirects artifact
+  refs to `retrieve_tool_result`, Plan handoffs use plainer wording, and shell
+  rows/sidebar tasks show the actual running command instead of placeholder
+  labels.
+
+### Thanks
+
+Thanks to **cyq ([@cyq1017](https://github.com/cyq1017))** for the Unicode
+`git_status`, local/configured skill discovery, and mode-switch toast fixes in
+#1953, #1956, and #1957. Thanks to **Reid
+([@reidliu41](https://github.com/reidliu41))** for the help picker scrolling
+and selection fix in #1964.
+
 ## [0.8.41] - 2026-05-23
 
 ### Changed
@@ -4595,7 +4661,8 @@ Welcome — and thank you.
 - Hooks system and config profiles
 - Example skills and launch assets
 
-[Unreleased]: https://github.com/Hmbown/CodeWhale/compare/v0.8.41...HEAD
+[Unreleased]: https://github.com/Hmbown/CodeWhale/compare/v0.8.42...HEAD
+[0.8.42]: https://github.com/Hmbown/CodeWhale/compare/v0.8.41...v0.8.42
 [0.8.41]: https://github.com/Hmbown/CodeWhale/compare/v0.8.40...v0.8.41
 [0.8.40]: https://github.com/Hmbown/CodeWhale/compare/v0.8.39...v0.8.40
 [0.8.39]: https://github.com/Hmbown/CodeWhale/compare/v0.8.38...v0.8.39

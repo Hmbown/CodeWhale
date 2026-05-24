@@ -256,7 +256,7 @@ fn build_mcp_entries(
                         tool.model_name,
                         tool.description
                             .as_ref()
-                            .map_or(String::new(), |desc| format!(" ({})", desc))
+                            .map_or(String::new(), |desc| format!(" ({desc})"))
                     ),
                     command: tool.model_name.clone(),
                     action: CommandPaletteAction::InsertText {

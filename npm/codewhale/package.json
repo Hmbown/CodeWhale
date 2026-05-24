@@ -1,8 +1,8 @@
 {
   "name": "codewhale",
-  "version": "0.8.41",
-  "codewhaleBinaryVersion": "0.8.41",
-  "description": "Install and run the codewhale CLI dispatcher and codewhale-tui terminal UI from GitHub release artifacts.",
+  "version": "0.8.42",
+  "codewhaleBinaryVersion": "0.8.42",
+  "description": "Install and run CodeWhale, a DeepSeek-first agentic terminal for open coding models, from GitHub release artifacts.",
   "author": "Hmbown",
   "license": "MIT",
   "homepage": "https://github.com/Hmbown/CodeWhale",

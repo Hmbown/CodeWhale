@@ -1318,7 +1318,7 @@ impl TaskManager {
                 ),
                 TaskStatus::Canceled => "Task canceled".to_string(),
                 TaskStatus::Queued | TaskStatus::Running => {
-                    format!("Task ended in unexpected state: {}", mode_label)
+                    format!("Task ended in unexpected state: {mode_label}")
                 }
             },
             detail_path: None,

@@ -2459,8 +2459,7 @@ impl RuntimeThreadManager {
                     ..
                 } => {
                     let message = format!(
-                        "Capacity intervention: {action} (~{before_prompt_tokens} -> ~{after_prompt_tokens}) replay={:?} replan={replan_performed}",
-                        replay_outcome
+                        "Capacity intervention: {action} (~{before_prompt_tokens} -> ~{after_prompt_tokens}) replay={replay_outcome:?} replan={replan_performed}"
                     );
                     let item = TurnItemRecord {
                         schema_version: CURRENT_RUNTIME_SCHEMA_VERSION,

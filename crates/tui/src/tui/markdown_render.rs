@@ -168,13 +168,14 @@ pub fn parse(content: &str) -> ParsedMarkdown {
             None => {}
         }
 
-        if raw_line.is_empty() {
+        if trimmed.is_empty() {
+            // Whitespace-only lines are blank paragraphs.
             blocks.push(Block::Blank);
             continue;
         }
 
         blocks.push(Block::Paragraph {
-            text: trimmed.to_string(),
+            text: raw_line.to_string(),
         });
     }
 
@@ -329,6 +330,105 @@ pub fn render_markdown_tagged(
 ) -> Vec<RenderedMarkdownLine> {
     let parsed = parse(content);
     render_parsed_tagged(&parsed, width, base_style)
+}
+
+/// Render plain text: split on newlines, word-wrap each line independently,
+/// preserve leading whitespace and blank lines. No markdown interpretation.
+#[must_use]
+pub fn render_plain_text(content: &str, width: u16, base_style: Style) -> Vec<Line<'static>> {
+    let width = width.max(1) as usize;
+    let mut lines = Vec::new();
+    for raw_line in content.split('\n') {
+        if raw_line.is_empty() {
+            lines.push(Line::from(""));
+        } else {
+            lines.extend(wrap_plain_line(raw_line, width, base_style));
+        }
+    }
+    if lines.is_empty() {
+        lines.push(Line::from(""));
+    }
+    lines
+}
+
+/// Word-wrap a single line at `width`, preserving leading whitespace.
+/// Handles over-long words by char-breaking (same strategy as the markdown
+/// line renderer).
+fn wrap_plain_line(line: &str, width: usize, style: Style) -> Vec<Line<'static>> {
+    if width == 0 || line.is_empty() {
+        return vec![Line::from("")];
+    }
+
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    let mut current_width = 0usize;
+    let mut last_break_pos = None;
+
+    for ch in line.chars() {
+        loop {
+            let ch_width = char_display_width(ch, current_width);
+            if current_width + ch_width <= width || current.is_empty() {
+                break;
+            }
+
+            if let Some(pos) = last_break_pos {
+                if pos == current.len() {
+                    chunks.push(std::mem::take(&mut current));
+                    current_width = 0;
+                    last_break_pos = None;
+                    break;
+                }
+
+                if current[..pos].chars().any(|c| !c.is_whitespace()) {
+                    let tail = current.split_off(pos);
+                    chunks.push(std::mem::take(&mut current));
+                    current = tail;
+                    current_width = plain_display_width(&current);
+                    last_break_pos = last_plain_break_pos(&current);
+                    continue;
+                }
+            }
+
+            chunks.push(std::mem::take(&mut current));
+            current_width = 0;
+            last_break_pos = None;
+            break;
+        }
+
+        let ch_width = char_display_width(ch, current_width);
+        current.push(ch);
+        current_width += ch_width;
+        if ch.is_whitespace() {
+            last_break_pos = Some(current.len());
+        }
+    }
+
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+
+    if chunks.is_empty() {
+        return vec![Line::from("")];
+    }
+
+    chunks
+        .into_iter()
+        .map(|chunk| Line::from(vec![Span::styled(chunk, style)]))
+        .collect()
+}
+
+fn plain_display_width(text: &str) -> usize {
+    let mut width = 0usize;
+    for ch in text.chars() {
+        width += char_display_width(ch, width);
+    }
+    width
+}
+
+fn last_plain_break_pos(text: &str) -> Option<usize> {
+    text.char_indices()
+        .rev()
+        .find_map(|(idx, ch)| ch.is_whitespace().then_some(idx + ch.len_utf8()))
 }
 
 fn parse_heading(line: &str) -> Option<(usize, &str)> {
@@ -1044,6 +1144,18 @@ mod tests {
     use super::*;
     use ratatui::style::Style;
 
+    fn visible_lines(lines: &[Line<'static>]) -> Vec<String> {
+        lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect()
+            })
+            .collect()
+    }
+
     #[test]
     fn underscores_inside_identifiers_render_as_literal_text() {
         // Regression for PR #1455 / @tiger-dog: previously the inline
@@ -1091,6 +1203,41 @@ mod tests {
                 .collect::<String>()
         });
         assert_eq!(direct, two_step);
+    }
+
+    #[test]
+    fn render_plain_text_preserves_literal_markdown_and_spacing() {
+        let source = "  # heading\n- item\n   \nhello    world\n";
+        let lines = render_plain_text(source, 80, Style::default());
+
+        assert_eq!(
+            visible_lines(&lines),
+            vec!["  # heading", "- item", "   ", "hello    world", ""]
+        );
+    }
+
+    #[test]
+    fn render_plain_text_wraps_without_collapsing_spaces() {
+        let source = "alpha    beta gamma";
+        let lines = render_plain_text(source, 12, Style::default());
+        for width in rendered_widths(&lines) {
+            assert!(width <= 12, "rendered width {width} exceeds budget");
+        }
+
+        let combined = visible_lines(&lines).join("");
+        assert_eq!(combined, source);
+    }
+
+    #[test]
+    fn render_plain_text_breaks_overlong_words() {
+        let source = "x".repeat(40);
+        let lines = render_plain_text(&source, 9, Style::default());
+        for width in rendered_widths(&lines) {
+            assert!(width <= 9, "rendered width {width} exceeds budget");
+        }
+
+        let combined = visible_lines(&lines).join("");
+        assert_eq!(combined, source);
     }
 
     #[test]

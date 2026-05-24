@@ -796,8 +796,7 @@ mod tests {
             let elapsed = start.elapsed();
             let per_call_ns = elapsed.as_nanos() as f64 / iters as f64;
             println!(
-                "compute_profile window={window_len:>4}  total={:?}  per-call={per_call_ns:>8.0}ns",
-                elapsed
+                "compute_profile window={window_len:>4}  total={elapsed:?}  per-call={per_call_ns:>8.0}ns"
             );
         }
     }

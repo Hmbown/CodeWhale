@@ -429,13 +429,17 @@ fn selection_to_text_copies_rendered_transcript_block() {
     let selected = selection_to_text(&app).expect("selection text");
     assert!(selected.contains("Note copy system"), "{selected:?}");
     assert!(selected.contains("copy user"), "{selected:?}");
+    // Short completed thinking now renders inline (v0.8.42 thinking-preview
+    // change); it should be selectable/copyable as visible transcript text.
     assert!(
-        !selected.contains("copy thinking"),
-        "raw completed thinking should stay out of live selection text: {selected:?}"
+        selected.contains("copy thinking"),
+        "short completed thinking should be visible inline: {selected:?}"
     );
+    // Short thinking that fits entirely inline doesn't need the Ctrl+O
+    // affordance; only truncated or explicit-summary thinking shows it.
     assert!(
-        selected.contains("Ctrl+O"),
-        "selection should keep the reasoning detail affordance: {selected:?}"
+        !selected.contains("Ctrl+O"),
+        "short completed thinking should not show the detail affordance: {selected:?}"
     );
     assert!(selected.contains("tool output line"), "{selected:?}");
     assert!(selected.contains("copy assistant"), "{selected:?}");
@@ -5156,6 +5160,45 @@ fn recoverable_engine_error_does_not_enter_offline_mode() {
         "expected HistoryCell::Error, got {last:?}"
     );
     let _ = ErrorEnvelope::transient("");
+}
+
+#[test]
+fn stream_error_marks_active_turn_failed_without_waiting_for_turn_complete() {
+    use crate::error_taxonomy::ErrorEnvelope;
+
+    let mut app = create_test_app();
+    app.is_loading = true;
+    app.runtime_turn_id = Some("turn_decode_error".to_string());
+    app.runtime_turn_status = Some("in_progress".to_string());
+    handle_tool_call_started(
+        &mut app,
+        "tool-running",
+        "exec_shell",
+        &serde_json::json!({"command": "cargo test --workspace"}),
+    );
+    assert!(app.active_cell.is_some(), "precondition: live tool cell");
+
+    apply_engine_error_to_app(
+        &mut app,
+        ErrorEnvelope::classify("chunk decode error".to_string(), true),
+    );
+
+    assert!(!app.is_loading);
+    assert_eq!(app.runtime_turn_status.as_deref(), Some("failed"));
+    assert!(
+        app.active_cell.is_none(),
+        "stream error should flush live cells so no row stays visually running"
+    );
+    assert!(
+        app.history.iter().any(|cell| {
+            matches!(
+                cell,
+                crate::tui::history::HistoryCell::Error { message, .. }
+                    if message.contains("chunk decode error")
+            )
+        }),
+        "stream decode error should remain visible in transcript"
+    );
 }
 
 /// Hard failures (auth, billing, malformed request) DO need to flip offline

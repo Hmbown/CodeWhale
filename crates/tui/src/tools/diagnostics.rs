@@ -208,7 +208,7 @@ mod tests {
                 .current_dir(root)
                 .status()
                 .expect("git should spawn");
-            assert!(status.success(), "git {:?} failed", args);
+            assert!(status.success(), "git {args:?} failed");
         };
         run(&["init", "-q"]);
         run(&["config", "user.email", "test@example.com"]);

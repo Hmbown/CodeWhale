@@ -1363,7 +1363,7 @@ impl Engine {
                 "Emergency compaction complete: {before_count} → {after_count} messages ({removed} removed), ~{before_tokens} → ~{after_tokens} tokens"
             );
             if retries_used > 0 {
-                details.push_str(&format!(" ({} retries)", retries_used));
+                details.push_str(&format!(" ({retries_used} retries)"));
             }
             if trimmed > 0 {
                 details.push_str(&format!(", trimmed {trimmed} oldest"));
@@ -1382,8 +1382,7 @@ impl Engine {
 
         let message = format!(
             "Emergency context compaction failed to reduce request below model limit \
-             (estimate ~{} tokens, budget ~{}).",
-            after_tokens, target_budget
+             (estimate ~{after_tokens} tokens, budget ~{target_budget})."
         );
         self.emit_compaction_failed(id, true, message.clone()).await;
         let _ = self.tx_event.send(Event::status(message)).await;

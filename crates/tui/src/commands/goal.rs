@@ -23,8 +23,7 @@ pub fn goal(app: &mut App, arg: Option<&str>) -> CommandResult {
                 .map(|b| format!(" (budget: {b} tokens)"))
                 .unwrap_or_default();
             CommandResult::message(format!(
-                "Goal set: \"{}\"{} — tracking progress.",
-                objective, budget_str
+                "Goal set: \"{objective}\"{budget_str} — tracking progress."
             ))
         }
         _ => {

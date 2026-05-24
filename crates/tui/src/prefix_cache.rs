@@ -65,7 +65,7 @@ impl PrefixFingerprint {
             _ => sha256_hex(b""),
         };
 
-        let combined = format!("{}:{}", system_sha256, tools_sha256);
+        let combined = format!("{system_sha256}:{tools_sha256}");
         let combined_sha256 = sha256_hex(combined.as_bytes());
 
         Self {

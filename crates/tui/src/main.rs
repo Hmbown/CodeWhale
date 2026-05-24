@@ -1918,7 +1918,7 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
                 } else if error_msg.contains("connect") {
                     println!("    Connection failed. Check firewall settings or try again");
                 } else {
-                    println!("    Error: {}", error_msg);
+                    println!("    Error: {error_msg}");
                 }
             }
         }
@@ -3512,7 +3512,7 @@ fn collect_diff(args: &ReviewArgs) -> Result<String> {
 
     let output = cmd
         .output()
-        .map_err(|e| anyhow::anyhow!("Failed to run git diff. Is git installed? ({})", e))?;
+        .map_err(|e| anyhow::anyhow!("Failed to run git diff. Is git installed? ({e})"))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         bail!("git diff failed: {}", stderr.trim());
@@ -3544,7 +3544,7 @@ fn run_apply(args: ApplyArgs) -> Result<()> {
         .arg("--whitespace=nowarn")
         .arg(&tmp_path)
         .output()
-        .map_err(|e| anyhow::anyhow!("Failed to run git apply: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Failed to run git apply: {e}"))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -3966,7 +3966,7 @@ fn run_sandbox_command(args: SandboxArgs) -> Result<()> {
             print!("{}", String::from_utf8_lossy(&stdout));
         }
         if !stderr.is_empty() {
-            eprint!("{}", stderr_str);
+            eprint!("{stderr_str}");
         }
         if sandbox_denied {
             eprintln!(

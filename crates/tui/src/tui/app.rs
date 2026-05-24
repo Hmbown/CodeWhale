@@ -395,7 +395,7 @@ fn remove_char_at(text: &mut String, char_index: usize) -> bool {
 
 fn normalize_paste_text(text: &str) -> String {
     if text.contains('\r') {
-        text.replace("\r\n", "\n").replace('\r', "")
+        text.replace("\r\n", "\n").replace('\r', "\n")
     } else {
         text.to_string()
     }
@@ -5138,8 +5138,10 @@ mod tests {
         let mut options = test_options(false);
         options.workspace = workspace.clone();
         options.skills_dir = configured_dir.clone();
-        let mut config = Config::default();
-        config.skills_dir = Some(configured_dir.to_string_lossy().into_owned());
+        let config = Config {
+            skills_dir: Some(configured_dir.to_string_lossy().into_owned()),
+            ..Default::default()
+        };
         let app = App::new(options, &config);
 
         assert!(
@@ -5784,9 +5786,22 @@ mod tests {
 
         app.insert_paste_text("a\r\nb\rc");
 
-        assert_eq!(app.input, "xa\nbc");
-        assert_eq!(app.cursor_position, "xa\nbc".chars().count());
+        assert_eq!(app.input, "xa\nb\nc");
+        assert_eq!(app.cursor_position, "xa\nb\nc".chars().count());
         assert!(!app.paste_burst.is_active());
+    }
+
+    #[test]
+    fn bracketed_paste_preserves_bare_carriage_return_line_breaks() {
+        let mut app = App::new(test_options(false), &Config::default());
+
+        app.insert_paste_text("alpha\r  indented\r# literal heading\r- literal list");
+
+        assert_eq!(
+            app.input,
+            "alpha\n  indented\n# literal heading\n- literal list"
+        );
+        assert_eq!(app.cursor_position, app.input.chars().count());
     }
 
     #[test]

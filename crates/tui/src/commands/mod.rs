@@ -736,7 +736,7 @@ pub fn rlm(app: &mut App, arg: Option<&str>) -> CommandResult {
     let source_arg = if resolves_to_existing_file(app, &target) {
         format!(r#"file_path: "{target}""#)
     } else {
-        format!("content: {:?}", target)
+        format!("content: {target:?}")
     };
     let message = format!(
         "Open and use a persistent RLM session for this request. Call `rlm_open` with name `slash_rlm` and {source_arg}. Then call `rlm_configure` with `sub_rlm_max_depth: {max_depth}`. Use `rlm_eval` to inspect the context through `peek`, `search`, and `chunk`, and call `finalize(...)` from the REPL when ready. If a `var_handle` is returned, use `handle_read` for bounded slices or projections before answering."
@@ -764,8 +764,7 @@ pub fn agent(_app: &mut App, arg: Option<&str>) -> CommandResult {
         }
     };
     let message = format!(
-        "Open a persistent sub-agent session for this task. Call `agent_open` with name `slash_agent`, `prompt: {:?}`, and `max_depth: {max_depth}`. Use `agent_eval` to wait for the next terminal/current projection and `handle_read` on the returned transcript_handle if you need more detail. Verify any claimed side effects before reporting success.",
-        task
+        "Open a persistent sub-agent session for this task. Call `agent_open` with name `slash_agent`, `prompt: {task:?}`, and `max_depth: {max_depth}`. Use `agent_eval` to wait for the next terminal/current projection and `handle_read` on the returned transcript_handle if you need more detail. Verify any claimed side effects before reporting success."
     );
     CommandResult::with_message_and_action(
         format!("Opening persistent sub-agent at depth {max_depth}..."),
@@ -1227,8 +1226,7 @@ mod tests {
             for alias in command.aliases {
                 assert!(
                     !names.contains(alias),
-                    "alias /{} collides with a command name",
-                    alias
+                    "alias /{alias} collides with a command name"
                 );
                 assert!(aliases.insert(*alias), "duplicate command alias /{alias}");
             }

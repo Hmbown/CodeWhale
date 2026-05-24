@@ -2142,14 +2142,13 @@ pub fn ensure_config_file_exists(path: Option<PathBuf>) -> Result<Option<PathBuf
 # base_url = "https://api.deepseek.com/beta"
 
 # Default model
-default_text_model = "{default_model}"
+default_text_model = "{DEFAULT_TEXT_MODEL}"
 
 # Thinking mode (DeepSeek V4 reasoning effort):
 # "auto" | "off" | "low" | "medium" | "high" | "max"
 # Shift+Tab in the TUI cycles between off / high / max.
 reasoning_effort = "auto"
-"#,
-        default_model = DEFAULT_TEXT_MODEL
+"#
     );
     write_config_file_secure(&config_path, &content)
         .with_context(|| format!("Failed to write config to {}", config_path.display()))?;
@@ -2888,11 +2887,7 @@ fn apply_profile(config: ConfigFile, profile: Option<&str>) -> Result<Config> {
                         }
                     })
                     .unwrap_or_else(|| "none".to_string());
-                anyhow::bail!(
-                    "Profile '{}' not found. Available profiles: {}",
-                    profile_name,
-                    available
-                )
+                anyhow::bail!("Profile '{profile_name}' not found. Available profiles: {available}")
             }
         }
     } else {
@@ -3335,14 +3330,13 @@ api_key = "{key_to_write}"
 # base_url = "https://api.deepseek.com/beta"
 
 # Default model
-default_text_model = "{default_model}"
+default_text_model = "{DEFAULT_TEXT_MODEL}"
 
 # Thinking mode (DeepSeek V4 reasoning effort):
 # "off" | "low" | "medium" | "high" | "max"
 # Shift+Tab in the TUI cycles between off / high / max.
 reasoning_effort = "max"
-"#,
-            default_model = DEFAULT_TEXT_MODEL
+"#
         )
     };
 

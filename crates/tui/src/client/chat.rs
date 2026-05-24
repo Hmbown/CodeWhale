@@ -1604,8 +1604,7 @@ fn log_thinking_mode_violations(body: &Value) {
         let has_tc = msg.get("tool_calls").is_some();
         if reasoning.trim().is_empty() {
             violations.push(format!(
-                "assistant[{idx}] (reasoning_content missing, tool_calls={})",
-                has_tc
+                "assistant[{idx}] (reasoning_content missing, tool_calls={has_tc})"
             ));
         }
     }
@@ -2339,6 +2338,24 @@ mod stream_decoder_tests {
                     ..
                 } if thinking == "plan...")),
             "should yield a ThinkingDelta carrying 'plan...'; got {events:?}"
+        );
+    }
+
+    #[test]
+    fn decoder_accepts_openrouter_reasoning_delta_with_extra_fields() {
+        let events = decode_chunk(
+            r#"{"id":"or-1","choices":[{"delta":{"reasoning":"openrouter thought","reasoning_details":[{"type":"summary","text":"extra"}],"native_finish_reason":null}}],"usage":{"completion_tokens_details":{"reasoning_tokens":3}}}"#,
+        );
+
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                StreamEvent::ContentBlockDelta {
+                    delta: Delta::ThinkingDelta { thinking },
+                    ..
+                } if thinking == "openrouter thought"
+            )),
+            "OpenRouter-style reasoning deltas with extra fields should not crash decoding; got {events:?}"
         );
     }
 

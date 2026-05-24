@@ -35,7 +35,7 @@ fn color_to_rgb(color: Color) -> (u8, u8, u8) {
         Color::LightMagenta => (255, 153, 255),
         Color::Cyan => (0, 255, 255),
         Color::LightCyan => (153, 255, 255),
-        _ => panic!("unsupported color variant for contrast test: {:?}", color),
+        _ => panic!("unsupported color variant for contrast test: {color:?}"),
     }
 }
 
@@ -79,7 +79,7 @@ fn audit_file(path: &Path, violations: &mut Vec<String>) {
 
     for (line_num, line) in content.lines().enumerate() {
         for deprecated in DEPRECATED_DIRECT_COLORS {
-            let pattern = format!("palette::{}", deprecated);
+            let pattern = format!("palette::{deprecated}");
             if line.contains(&pattern) {
                 let is_allowed = ALLOWED_PATTERNS.iter().any(|p| line.contains(p));
                 if !is_allowed {

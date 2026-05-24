@@ -623,10 +623,7 @@ pub(crate) fn footer_cache_spans(app: &App) -> Vec<Span<'static>> {
         palette::STATUS_ERROR
     };
     vec![Span::styled(
-        format!(
-            "Cache: {:.1}% hit | hit {hit_tokens} | miss {miss_tokens}",
-            percent
-        ),
+        format!("Cache: {percent:.1}% hit | hit {hit_tokens} | miss {miss_tokens}"),
         Style::default().fg(color),
     )]
 }

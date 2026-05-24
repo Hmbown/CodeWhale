@@ -399,7 +399,7 @@ pub async fn update_with_registry(
     let marker_body = fs::read_to_string(&marker_path)
         .with_context(|| format!("failed to read {}", marker_path.display()))?;
     let marker: InstalledFromMarker = serde_json::from_str(&marker_body)
-        .with_context(|| format!("malformed {} for {name}", INSTALLED_FROM_MARKER))?;
+        .with_context(|| format!("malformed {INSTALLED_FROM_MARKER} for {name}"))?;
 
     // Re-resolve the URL, taking the existing checksum as a short-circuit hint:
     // we still hit the network so the user gets a useful "no upstream change"
@@ -719,8 +719,7 @@ async fn sync_one_skill(
             return SkillSyncOutcome::Failed {
                 name: name.to_string(),
                 reason: format!(
-                    "download from {url} exceeds compressed size cap ({} bytes)",
-                    compressed_cap
+                    "download from {url} exceeds compressed size cap ({compressed_cap} bytes)"
                 ),
             };
         }

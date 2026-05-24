@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Terminal UI for DeepSeek"
+description = "DeepSeek-first terminal UI for open coding models"
 default-run = "codewhale-tui"
 
 [features]
@@ -27,8 +27,8 @@ path = "src/bin/deepseek_tui_legacy_shim.rs"
 [dependencies]
 anyhow = "1.0.100"
 arboard = "3.4"
-codewhale-secrets = { path = "../secrets", version = "0.8.41" }
-codewhale-tools = { path = "../tools", version = "0.8.41" }
+codewhale-secrets = { path = "../secrets", version = "0.8.42" }
+codewhale-tools = { path = "../tools", version = "0.8.42" }
 schemaui = { version = "0.12.0", default-features = false, optional = true }
 async-stream = "0.3.6"
 async-trait = "0.1"

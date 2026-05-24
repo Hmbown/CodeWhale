@@ -318,20 +318,10 @@ fn render_diff_line(
 
 fn format_line_numbers(old_line: Option<usize>, new_line: Option<usize>, marker: char) -> String {
     let old = old_line
-        .map(|value| {
-            format!(
-                "{value:>LINE_NUMBER_WIDTH$}",
-                LINE_NUMBER_WIDTH = LINE_NUMBER_WIDTH
-            )
-        })
+        .map(|value| format!("{value:>LINE_NUMBER_WIDTH$}"))
         .unwrap_or_else(|| " ".repeat(LINE_NUMBER_WIDTH));
     let new = new_line
-        .map(|value| {
-            format!(
-                "{value:>LINE_NUMBER_WIDTH$}",
-                LINE_NUMBER_WIDTH = LINE_NUMBER_WIDTH
-            )
-        })
+        .map(|value| format!("{value:>LINE_NUMBER_WIDTH$}"))
         .unwrap_or_else(|| " ".repeat(LINE_NUMBER_WIDTH));
     format!("{old} {new} {marker} ")
 }

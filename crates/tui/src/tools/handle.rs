@@ -241,6 +241,10 @@ impl ToolSpec for HandleReadTool {
                     "type": "string",
                     "description": "Small JSONPath subset: $, .field, [index], [*], and ['field']."
                 },
+                "introspect": {
+                    "type": "boolean",
+                    "description": "Return supported projections, size hints, and copy-pasteable examples for this handle."
+                },
                 "max_chars": {
                     "type": "integer",
                     "description": "Maximum characters to return in this projection. Defaults to 12000; hard-capped at 50000."
@@ -296,6 +300,7 @@ impl ToolSpec for HandleReadTool {
                 line_range_projection(record, start, end, max_chars)
             }
             Projection::JsonPath(path) => jsonpath_projection(record, &path, max_chars)?,
+            Projection::Introspect => introspect_projection(record),
         };
 
         ToolResult::json(&output).map_err(|e| ToolError::execution_failed(e.to_string()))
@@ -320,6 +325,7 @@ enum Projection {
         end: usize,
     },
     JsonPath(String),
+    Introspect,
 }
 
 fn parse_handle(value: &Value) -> Result<VarHandle, ToolError> {
@@ -382,12 +388,23 @@ fn parse_projection(input: &Value) -> Result<Projection, ToolError> {
     count += usize::from(input.get("range").is_some());
     count += usize::from(input.get("count").and_then(Value::as_bool).unwrap_or(false));
     count += usize::from(input.get("jsonpath").is_some());
+    count += usize::from(
+        input
+            .get("introspect")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    );
     if count != 1 {
-        return Err(ToolError::invalid_input(
-            "handle_read: provide exactly one of `slice`, `range`, `count: true`, or `jsonpath`",
-        ));
+        return Err(ToolError::invalid_input(projection_usage_hint()));
     }
 
+    if input
+        .get("introspect")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Ok(Projection::Introspect);
+    }
     if input.get("count").and_then(Value::as_bool).unwrap_or(false) {
         return Ok(Projection::Count);
     }
@@ -443,6 +460,14 @@ fn parse_projection(input: &Value) -> Result<Projection, ToolError> {
     Ok(Projection::Range { start, end })
 }
 
+fn projection_usage_hint() -> String {
+    "handle_read: provide exactly one projection: `slice`, `range`, `count: true`, `jsonpath`, or `introspect: true`. \
+     Examples: {\"handle\":{\"kind\":\"var_handle\",\"session_id\":\"rlm:abc\",\"name\":\"final_1\"},\"slice\":{\"start\":0,\"end\":500}}; \
+     {\"handle\":\"rlm:abc/final_1\",\"count\":true}; \
+     {\"handle\":\"rlm:abc/final_1\",\"introspect\":true}."
+        .to_string()
+}
+
 fn count_projection(record: &HandleRecord) -> Value {
     match &record.value {
         HandleValue::Text(text) => json!({
@@ -460,6 +485,33 @@ fn count_projection(record: &HandleRecord) -> Value {
             "bytes": value.to_string().len(),
         }),
     }
+}
+
+fn introspect_projection(record: &HandleRecord) -> Value {
+    let string_handle = format!("{}/{}", record.handle.session_id, record.handle.name);
+    let object_handle = json!(record.handle.clone());
+    let mut projections = vec![
+        json!({"name": "count", "example": {"handle": string_handle, "count": true}}),
+        json!({"name": "slice_chars", "example": {"handle": object_handle.clone(), "slice": {"start": 0, "end": 500}}}),
+        json!({"name": "range_lines", "example": {"handle": object_handle.clone(), "range": {"start": 1, "end": 20}}}),
+    ];
+    if matches!(record.value, HandleValue::Json(_)) {
+        projections.push(
+            json!({"name": "jsonpath", "example": {"handle": object_handle, "jsonpath": "$"}}),
+        );
+    }
+
+    json!({
+        "handle": record.handle,
+        "projection": "introspect",
+        "value_type": match &record.value {
+            HandleValue::Text(_) => "text",
+            HandleValue::Json(value) => json_type(value),
+        },
+        "length": record.handle.length,
+        "repr_preview": record.handle.repr_preview,
+        "projections": projections,
+    })
 }
 
 fn slice_projection(
@@ -795,6 +847,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn handle_read_introspects_object_handle_with_examples() {
+        let ctx = ctx();
+        let handle = {
+            let mut store = ctx.runtime.handle_store.lock().await;
+            store.insert_json("rlm:test", "items", json!({"items": [{"a": 1}]}))
+        };
+
+        let result = HandleReadTool
+            .execute(json!({"handle": handle, "introspect": true}), &ctx)
+            .await
+            .expect("execute");
+        let body: Value = serde_json::from_str(&result.content).expect("json");
+        assert_eq!(body["projection"], "introspect");
+        assert_eq!(body["handle"]["kind"], "var_handle");
+        assert!(
+            body["projections"]
+                .as_array()
+                .expect("projection examples")
+                .iter()
+                .any(|entry| entry["name"] == "jsonpath"),
+            "json handles should advertise jsonpath examples"
+        );
+    }
+
+    #[tokio::test]
     async fn handle_read_projects_jsonpath_subset() {
         let ctx = ctx();
         let handle = {
@@ -830,7 +907,10 @@ mod tests {
             .execute(json!({"handle": handle}), &ctx)
             .await
             .expect_err("projection required");
-        assert!(err.to_string().contains("exactly one"));
+        let message = err.to_string();
+        assert!(message.contains("exactly one"));
+        assert!(message.contains("slice"));
+        assert!(message.contains("introspect"));
     }
 
     #[tokio::test]

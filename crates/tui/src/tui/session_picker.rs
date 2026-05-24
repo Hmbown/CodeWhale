@@ -543,7 +543,7 @@ fn build_list_lines(
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let header = if search_mode {
-        format!("/{}", search_input)
+        format!("/{search_input}")
     } else {
         format!(
             "1-9 history | PgUp/PgDn scroll | Enter resume | / search | s sort | a all | d delete | Sort: {sort_label}"
@@ -656,7 +656,7 @@ fn build_preview_lines(session: &SavedSession) -> Vec<String> {
         session.metadata.message_count, session.metadata.model
     ));
     if let Some(mode) = session.metadata.mode.as_deref() {
-        out.push(format!("Mode: {}", mode));
+        out.push(format!("Mode: {mode}"));
     }
     out.push("".to_string());
 
@@ -993,9 +993,7 @@ mod tests {
             let rendered_width: usize = line.spans.iter().map(|span| span.content.width()).sum();
             assert!(
                 rendered_width <= width as usize,
-                "line width {} exceeded pane width {}",
-                rendered_width,
-                width
+                "line width {rendered_width} exceeded pane width {width}"
             );
         }
     }

@@ -1284,8 +1284,7 @@ fn load_mcp_server_definitions(store: &ConfigStore) -> Vec<McpServerDefinition> 
         Ok(definitions) => definitions,
         Err(err) => {
             eprintln!(
-                "warning: failed to parse persisted MCP server definitions ({}): {}",
-                MCP_SERVER_DEFINITIONS_KEY, err
+                "warning: failed to parse persisted MCP server definitions ({MCP_SERVER_DEFINITIONS_KEY}): {err}"
             );
             Vec::new()
         }
