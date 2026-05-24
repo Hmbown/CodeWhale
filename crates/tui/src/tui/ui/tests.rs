@@ -5729,8 +5729,8 @@ fn composer_arrows_scroll_defaults_follow_platform_with_mouse_capture() {
         ..create_test_options()
     };
     let app = App::new(options, &Config::default());
-    assert_eq!(
-        app.composer_arrows_scroll, false,
+    assert!(
+        !app.composer_arrows_scroll,
         "arrows-scroll should default to false when mouse capture is on"
     );
 }
