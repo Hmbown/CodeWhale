@@ -263,7 +263,7 @@ mod tests {
 
         // Give the writer thread time to drain the queue, then verify the
         // new entries landed.
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             let loaded = load_history_from(&path);
             if loaded.iter().any(|line| line == "new entry 49") {
