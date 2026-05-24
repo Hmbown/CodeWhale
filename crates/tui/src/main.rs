@@ -1575,9 +1575,9 @@ fn resolve_cors_origins(config: &Config, flag_origins: &[String]) -> Vec<String>
 }
 
 fn deepseek_home_dir() -> PathBuf {
-    codewhale_config::codewhale_home()
-        .unwrap_or_else(|_| dirs::home_dir()
-            .map_or_else(|| PathBuf::from(".codewhale"), |h| h.join(".codewhale")))
+    codewhale_config::codewhale_home().unwrap_or_else(|_| {
+        dirs::home_dir().map_or_else(|| PathBuf::from(".codewhale"), |h| h.join(".codewhale"))
+    })
 }
 
 /// Resolve the default tools directory. Mirrors `default_skills_dir` shape.
@@ -2076,10 +2076,10 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
     // State root (v0.8.44)
     println!();
     println!("{}", "State Root:".bold());
-    let code_home = codewhale_config::codewhale_home()
-        .unwrap_or_else(|_| PathBuf::from("~/.codewhale"));
-    let legacy_home = codewhale_config::legacy_deepseek_home()
-        .unwrap_or_else(|_| PathBuf::from("~/.deepseek"));
+    let code_home =
+        codewhale_config::codewhale_home().unwrap_or_else(|_| PathBuf::from("~/.codewhale"));
+    let legacy_home =
+        codewhale_config::legacy_deepseek_home().unwrap_or_else(|_| PathBuf::from("~/.deepseek"));
     let active_root = if code_home.exists() {
         &code_home
     } else if legacy_home.exists() {

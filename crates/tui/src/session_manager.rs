@@ -617,9 +617,8 @@ fn is_git_metadata_entry(path: &Path) -> bool {
 /// v0.8.44: prefers `~/.codewhale/sessions`, falls back to
 /// `~/.deepseek/sessions` for existing installs.
 pub fn default_sessions_dir() -> std::io::Result<PathBuf> {
-    codewhale_config::resolve_state_dir("sessions").map_err(|e| {
-        std::io::Error::new(std::io::ErrorKind::NotFound, e.to_string())
-    })
+    codewhale_config::resolve_state_dir("sessions")
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::NotFound, e.to_string()))
 }
 
 /// Prune snapshots older than `max_age` for `workspace`.
