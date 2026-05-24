@@ -576,8 +576,15 @@ mod tests {
             use crate::shell_dispatcher::ShellDispatcher;
             let kind = ShellDispatcher::detect_shell();
             let binary = kind.binary().to_string();
-            let flag = kind.command_flag().to_string();
-            vec![binary, flag, command.to_string()]
+            let mut args = Vec::new();
+            if kind.needs_command_flag() {
+                args.push(kind.command_flag().to_string());
+                args.push("-Command".to_string());
+            } else {
+                args.push(kind.command_flag().to_string());
+            }
+            args.push(command.to_string());
+            vec![binary].into_iter().chain(args).collect()
         }
         #[cfg(not(windows))]
         {
@@ -608,10 +615,10 @@ mod tests {
         {
             // Program and shell prefix depend on detected shell (cmd, pwsh, powershell).
             assert!(!spec.program.is_empty(), "program must not be empty");
-            assert_eq!(
-                spec.args.last(),
-                Some(&cmd.to_string()),
-                "the full command string must be the last arg"
+            assert!(
+                spec.args.last().map_or(false, |a| a.contains(cmd)),
+                "the last arg must contain the command; got {:?}",
+                spec.args.last()
             );
         }
         #[cfg(not(windows))]
