@@ -698,7 +698,6 @@ impl SseTransport {
                 let mut data = String::new();
 
                 for line in event_block.lines() {
-                    let line = line.trim_end_matches('\r');
                     if let Some(value) = sse_field_value(line, "event:") {
                         event_type = value;
                     } else if let Some(value) = sse_field_value(line, "data:") {
