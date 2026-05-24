@@ -261,13 +261,15 @@ mod tests {
              (likely re-introduced #1927: caller blocked on disk write)"
         );
 
-        // Give the writer thread time to drain the queue, then verify the
-        // new entries landed.
-        let deadline = Instant::now() + Duration::from_secs(5);
+        // Give the writer thread a generous window to drain the queue.
+        // Windows CI runners occasionally schedule the writer thread late
+        // or throttle disk I/O, so a short deadline causes spurious
+        // failures. 10 s with 50 ms polling is safe even under load.
+        std::thread::sleep(Duration::from_millis(50));
+        let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             let loaded = load_history_from(&path);
             if loaded.iter().any(|line| line == "new entry 49") {
-                // Last dispatched entry observed; queue is drained.
                 assert!(loaded.iter().any(|line| line == "new entry 0"));
                 break;
             }
@@ -279,7 +281,7 @@ mod tests {
                     loaded.last()
                 );
             }
-            std::thread::sleep(Duration::from_millis(25));
+            std::thread::sleep(Duration::from_millis(50));
         }
     }
 }
