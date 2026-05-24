@@ -24,7 +24,8 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use std::sync::mpsc::{Sender, channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
+use std::time::Duration;
 
 /// Hard cap on persisted history. Keeps the file small (typical entries
 /// are < 200 chars, so 1000 entries ≈ 200 KB) and bounds startup load
@@ -99,8 +100,8 @@ fn writer_sender() -> &'static Sender<(PathBuf, String)> {
                 // recv() returns Err when all senders have dropped, which
                 // only happens at process shutdown because the singleton
                 // sender lives in a static for the lifetime of the process.
-                while let Ok((path, entry)) = rx.recv() {
-                    append_history_to(&path, &entry);
+                while let Ok(first) = rx.recv() {
+                    append_history_batch(&rx, first);
                 }
             });
         if let Err(err) = spawn_result {
@@ -110,11 +111,47 @@ fn writer_sender() -> &'static Sender<(PathBuf, String)> {
     })
 }
 
-fn append_history_to(path: &Path, entry: &str) {
-    let trimmed = entry.trim();
-    if trimmed.is_empty() || trimmed.starts_with('/') {
-        return;
+fn append_history_batch(rx: &Receiver<(PathBuf, String)>, first: (PathBuf, String)) {
+    let mut pending = vec![first];
+
+    loop {
+        match rx.recv_timeout(Duration::from_millis(2)) {
+            Ok(next) => pending.push(next),
+            Err(RecvTimeoutError::Timeout) => break,
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
     }
+
+    for (path, entries) in group_history_writes_by_path(pending) {
+        append_history_entries_to(&path, entries.iter().map(String::as_str));
+    }
+}
+
+fn group_history_writes_by_path(writes: Vec<(PathBuf, String)>) -> Vec<(PathBuf, Vec<String>)> {
+    let mut grouped: Vec<(PathBuf, Vec<String>)> = Vec::new();
+
+    for (path, entry) in writes {
+        if let Some((_, entries)) = grouped
+            .iter_mut()
+            .find(|(existing_path, _)| existing_path == &path)
+        {
+            entries.push(entry);
+        } else {
+            grouped.push((path, vec![entry]));
+        }
+    }
+
+    grouped
+}
+
+fn append_history_to(path: &Path, entry: &str) {
+    append_history_entries_to(path, std::iter::once(entry));
+}
+
+fn append_history_entries_to<'a>(
+    path: &Path,
+    entries_to_append: impl IntoIterator<Item = &'a str>,
+) {
     if let Some(parent) = path.parent()
         && let Err(err) = fs::create_dir_all(parent)
     {
@@ -125,15 +162,28 @@ fn append_history_to(path: &Path, entry: &str) {
         return;
     }
 
-    // Read existing entries, append the new one, prune from the front
+    // Read existing entries, append the new ones, prune from the front
     // until under the cap, then atomically rewrite.
     let mut entries = load_history_from(path);
-    if entries.last().map(String::as_str) == Some(trimmed) {
-        // De-dupe consecutive duplicates — repeated submission of the
-        // same prompt shouldn't bloat the file.
+    let mut changed = false;
+    for entry in entries_to_append {
+        let trimmed = entry.trim();
+        if trimmed.is_empty() || trimmed.starts_with('/') {
+            continue;
+        }
+        if entries.last().map(String::as_str) == Some(trimmed) {
+            // De-dupe consecutive duplicates — repeated submission of the
+            // same prompt shouldn't bloat the file.
+            continue;
+        }
+        entries.push(trimmed.to_string());
+        changed = true;
+    }
+
+    if !changed {
         return;
     }
-    entries.push(trimmed.to_string());
+
     if entries.len() > MAX_HISTORY_ENTRIES {
         let excess = entries.len() - MAX_HISTORY_ENTRIES;
         entries.drain(0..excess);
@@ -263,7 +313,8 @@ mod tests {
 
         // Give the writer thread time to drain the queue, then verify the
         // new entries landed.
-        let deadline = Instant::now() + Duration::from_secs(5);
+        // Use 10s on Windows (slow CI I/O) vs 5s on other platforms.
+        let deadline = Instant::now() + Duration::from_secs(if cfg!(windows) { 10 } else { 5 });
         loop {
             let loaded = load_history_from(&path);
             if loaded.iter().any(|line| line == "new entry 49") {

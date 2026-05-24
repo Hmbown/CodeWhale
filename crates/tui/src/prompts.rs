@@ -1374,15 +1374,28 @@ mod tests {
 
     #[test]
     fn memory_guidance_matches_constitutional_tier_order() {
+        let guidance = MEMORY_GUIDANCE
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let current_request_at = guidance
+            .find("the user's current request (Tier 2)")
+            .expect("current request tier present");
+        let statutes_at = guidance
+            .find("Statutes (Tier 3)")
+            .expect("statutes tier present");
+        let local_law_at = guidance
+            .find("Local Law (Tier 5)")
+            .expect("local law tier present");
+        let live_evidence_at = guidance
+            .find("live evidence (Tier 6)")
+            .expect("live evidence tier present");
+
         assert!(
-            MEMORY_GUIDANCE.contains("the user's current request\n(Tier 2)"),
+            current_request_at < statutes_at
+                && statutes_at < local_law_at
+                && local_law_at < live_evidence_at,
             "memory guidance must keep the current request above memory and local law"
-        );
-        assert!(
-            MEMORY_GUIDANCE.contains("Statutes (Tier 3)")
-                && MEMORY_GUIDANCE.contains("Local Law (Tier 5)")
-                && MEMORY_GUIDANCE.contains("live evidence (Tier 6)"),
-            "memory guidance must name the updated tier order"
         );
     }
 
