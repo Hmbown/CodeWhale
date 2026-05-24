@@ -782,7 +782,7 @@ mod tests {
         let result = home_dashboard(&mut app);
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
-        assert!(msg.contains("DeepSeek TUI Home Dashboard"));
+        assert!(msg.contains("codewhale Home Dashboard"));
         assert!(msg.contains("Model:"));
         assert!(msg.contains("Mode:"));
         assert!(msg.contains("Workspace:"));
@@ -831,7 +831,7 @@ mod tests {
             !msg.lines()
                 .any(|line| line.trim_start().starts_with("/set "))
         );
-        assert!(!msg.contains("/deepseek"));
+        assert!(!msg.contains("/codewhale"));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use deepseek_state::{SessionSource, StateStore, ThreadListFilters, ThreadMetadata, ThreadStatus};
+use codewhale_state::{SessionSource, StateStore, ThreadListFilters, ThreadMetadata, ThreadStatus};
 
 fn temp_state_path(label: &str) -> PathBuf {
     std::env::temp_dir().join(format!(

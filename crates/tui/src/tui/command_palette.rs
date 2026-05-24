@@ -15,7 +15,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::commands;
 use crate::localization::Locale;
 use crate::palette;
-use crate::skills::SkillRegistry;
+use crate::skills;
 use crate::tools::spec::ApprovalRequirement;
 use crate::tools::spec::ToolCapability;
 use crate::tools::{ToolContext, ToolRegistryBuilder};
@@ -78,7 +78,7 @@ pub fn build_entries(
         });
     }
 
-    let skills = SkillRegistry::discover(skills_dir);
+    let skills = skills::discover_for_workspace_and_dir(workspace, skills_dir);
     for skill in skills.list() {
         entries.push(CommandPaletteEntry {
             section: PaletteSection::Skill,
@@ -798,6 +798,7 @@ impl ModalView for CommandPaletteView {
 mod tests {
     use super::*;
     use std::path::Path;
+    use tempfile::TempDir;
 
     fn palette_entry(
         section: PaletteSection,
@@ -918,6 +919,47 @@ mod tests {
         view.refilter();
         assert_eq!(view.filtered.len(), 1);
         assert_eq!(view.entries[view.filtered[0]].label, "skill:search");
+    }
+
+    #[test]
+    fn command_palette_skills_use_workspace_and_configured_directories() {
+        let tmp = TempDir::new().expect("tempdir");
+        let workspace = tmp.path().join("workspace");
+        let workspace_skill_dir = workspace
+            .join(".agents")
+            .join("skills")
+            .join("workspace-skill");
+        std::fs::create_dir_all(&workspace_skill_dir).expect("create workspace skill dir");
+        std::fs::write(
+            workspace_skill_dir.join("SKILL.md"),
+            "---\nname: workspace-skill\ndescription: Workspace skill\ngithub: https://example.com\n---\nbody",
+        )
+        .expect("write workspace skill");
+
+        let configured_dir = tmp.path().join("configured-skills");
+        let configured_skill_dir = configured_dir.join("configured-skill");
+        std::fs::create_dir_all(&configured_skill_dir).expect("create configured skill dir");
+        std::fs::write(
+            configured_skill_dir.join("SKILL.md"),
+            "---\nname: configured-skill\ndescription: Configured skill\n---\nbody",
+        )
+        .expect("write configured skill");
+
+        let entries = build_entries(
+            Locale::En,
+            configured_dir.as_path(),
+            workspace.as_path(),
+            Path::new("mcp.json"),
+            None,
+        );
+        let skill_labels = entries
+            .iter()
+            .filter(|entry| entry.section == PaletteSection::Skill)
+            .map(|entry| entry.label.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(skill_labels.contains(&"skill:workspace-skill"));
+        assert!(skill_labels.contains(&"skill:configured-skill"));
     }
 
     #[test]

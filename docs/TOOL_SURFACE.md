@@ -115,7 +115,8 @@ Large logs and command outputs should be artifacts with compact summaries in the
 | `github_issue_context` | Read-only issue context via `gh issue view`; large bodies become task artifacts when possible. |
 | `github_pr_context` | Read-only PR context via `gh pr view`; optional diff capture via `gh pr diff --patch`; large bodies/diffs become task artifacts when possible. |
 | `github_comment` | Approval-required issue/PR comment with structured evidence. |
-| `github_close_issue` | Approval-required issue closure. Requires non-empty acceptance criteria and evidence; refuses dirty worktrees unless explicitly allowed. Never close an issue merely because an agent is stopping. |
+| `github_close_issue` | Approval-required issue closure. Requires non-empty acceptance criteria and evidence; refuses dirty worktrees unless explicitly allowed. Never use for PRs. |
+| `github_close_pr` | Approval-required PR closure. Requires the same structured evidence as issue closure and keeps PR wording in tool output/audit records. |
 
 ### PR attempts
 
@@ -258,8 +259,8 @@ while the registry contract stays stable.
 Version smoke:
 
 ```bash
-deepseek --version
-deepseek-tui --version
+codewhale --version
+codewhale-tui --version
 ```
 
 Tool-surface smoke:

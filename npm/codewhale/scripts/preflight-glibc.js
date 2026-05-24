@@ -66,20 +66,20 @@ function detectBinaryRequiredGlibc(filePath) {
 
 function buildFromSourceHint() {
   return [
-    "You can still run DeepSeek TUI by building from source with Cargo:",
+    "You can still run codewhale by building from source with Cargo:",
     "",
     "  # Requires Rust 1.88+ (https://rustup.rs)",
-    "  cargo install deepseek-tui-cli --locked   # provides `deepseek`",
-    "  cargo install deepseek-tui     --locked   # provides `deepseek-tui`",
+    "  cargo install codewhale-cli --locked   # provides `codewhale`",
+    "  cargo install codewhale-tui --locked   # provides `codewhale-tui`",
     "",
     "Or build from a checkout:",
     "",
-    "  git clone https://github.com/Hmbown/DeepSeek-TUI.git",
-    "  cd DeepSeek-TUI",
+    "  git clone https://github.com/Hmbown/CodeWhale.git",
+    "  cd CodeWhale",
     "  cargo install --path crates/cli --locked",
     "  cargo install --path crates/tui --locked",
     "",
-    "See https://github.com/Hmbown/DeepSeek-TUI/blob/main/docs/INSTALL.md",
+    "See https://github.com/Hmbown/CodeWhale/blob/main/docs/INSTALL.md",
   ].join("\n");
 }
 

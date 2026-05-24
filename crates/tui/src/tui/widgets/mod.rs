@@ -333,7 +333,7 @@ impl Renderable for ChatWidget {
 
         let area = _area;
 
-        // Repaint the full chat area with the deepseek-ink background each
+        // Repaint the full chat area with the codewhale-ink background each
         // frame. Ratatui's `Paragraph` only writes cells that contain text,
         // so cells the current frame's paragraph doesn't touch would
         // otherwise hold the *previous* frame's contents (the `:24Z`
@@ -1926,7 +1926,7 @@ fn build_empty_state_lines(app: &App, area: Rect) -> Vec<Line<'static>> {
 
     let body = vec![
         Line::from(Span::styled(
-            format!("{inset}>_ DeepSeek TUI (v{})", env!("CARGO_PKG_VERSION")),
+            format!("{inset}>_ codewhale (v{})", env!("CARGO_PKG_VERSION")),
             Style::default().fg(palette::DEEPSEEK_BLUE).bold(),
         )),
         Line::from(""),
@@ -2557,7 +2557,7 @@ mod tests {
     fn slash_completion_hints_exclude_set_and_deepseek_commands() {
         let hints = slash_completion_hints("/", 128, &[], Locale::En, None, ApiProvider::Deepseek);
         assert!(!hints.iter().any(|hint| hint.name == "/set"));
-        assert!(!hints.iter().any(|hint| hint.name == "/deepseek"));
+        assert!(!hints.iter().any(|hint| hint.name == "/codewhale"));
     }
 
     #[test]
@@ -2809,7 +2809,7 @@ mod tests {
         let mut app = create_test_app();
         app.composer_density = ComposerDensity::Comfortable;
         app.session_title =
-            Some("hello could you please take a look at deepseek-tui and all changes".to_string());
+            Some("hello could you please take a look at codewhale-tui and all changes".to_string());
         let slash_menu_entries = Vec::<SlashMenuEntry>::new();
         let mention_menu_entries = Vec::<String>::new();
         let widget = ComposerWidget::new(&app, 5, &slash_menu_entries, &mention_menu_entries);
@@ -2825,7 +2825,7 @@ mod tests {
         let rendered = buffer_text(&buf, area);
 
         assert!(rendered.contains("Composer"));
-        assert!(!rendered.contains("deepseek-tui"));
+        assert!(!rendered.contains("codewhale-tui"));
         assert!(!rendered.contains("hello could you"));
     }
 
@@ -2951,7 +2951,7 @@ mod tests {
     #[test]
     fn empty_state_shows_startup_context() {
         let mut app = create_test_app();
-        app.workspace = PathBuf::from("/tmp/deepseek-test-workspace");
+        app.workspace = PathBuf::from("/tmp/codewhale-test-workspace");
         app.model = "deepseek-v4-pro".to_string();
 
         let lines = build_empty_state_lines(&app, Rect::new(0, 0, 100, 20));
@@ -2966,9 +2966,9 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(rendered.contains(&format!(">_ DeepSeek TUI (v{})", env!("CARGO_PKG_VERSION"))));
+        assert!(rendered.contains(&format!(">_ codewhale (v{})", env!("CARGO_PKG_VERSION"))));
         assert!(rendered.contains("model: deepseek-v4-pro  /model to switch"));
-        assert!(rendered.contains("directory: /tmp/deepseek-test-workspace"));
+        assert!(rendered.contains("directory: /tmp/codewhale-test-workspace"));
     }
 
     /// Probe: confirm `cell.lines_with_motion` returns no Line whose total
@@ -3449,7 +3449,7 @@ mod tests {
     /// pays the wrap cost; subsequent calls at different offsets should hit
     /// the per-cell cache and be ~constant time regardless of offset.
     ///
-    /// Run with: `cargo test -p deepseek-tui --release bench_transcript_scroll
+    /// Run with: `cargo test -p codewhale-tui --release bench_transcript_scroll
     /// -- --ignored --nocapture`
     // Perf bench prints timing rows to stdout — runs in `cargo test`,
     // never inside the TUI alt-screen.

@@ -802,6 +802,238 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e9b18233253483ce2f65329a24072ec414db782531bdbb7d0bbc4bd2ce6b7e21"
 
 [[package]]
+name = "codewhale-agent"
+version = "0.8.41"
+dependencies = [
+ "codewhale-config",
+ "serde",
+]
+
+[[package]]
+name = "codewhale-app-server"
+version = "0.8.41"
+dependencies = [
+ "anyhow",
+ "axum",
+ "clap",
+ "codewhale-agent",
+ "codewhale-config",
+ "codewhale-core",
+ "codewhale-execpolicy",
+ "codewhale-hooks",
+ "codewhale-mcp",
+ "codewhale-protocol",
+ "codewhale-state",
+ "codewhale-tools",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower-http",
+]
+
+[[package]]
+name = "codewhale-cli"
+version = "0.8.41"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "clap_complete",
+ "codewhale-agent",
+ "codewhale-app-server",
+ "codewhale-config",
+ "codewhale-execpolicy",
+ "codewhale-mcp",
+ "codewhale-secrets",
+ "codewhale-state",
+ "dirs",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "codewhale-config"
+version = "0.8.41"
+dependencies = [
+ "anyhow",
+ "codewhale-secrets",
+ "dirs",
+ "serde",
+ "toml 0.9.11+spec-1.1.0",
+ "tracing",
+]
+
+[[package]]
+name = "codewhale-core"
+version = "0.8.41"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "codewhale-agent",
+ "codewhale-config",
+ "codewhale-execpolicy",
+ "codewhale-hooks",
+ "codewhale-mcp",
+ "codewhale-protocol",
+ "codewhale-state",
+ "codewhale-tools",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "codewhale-execpolicy"
+version = "0.8.41"
+dependencies = [
+ "anyhow",
+ "codewhale-protocol",
+ "serde",
+]
+
+[[package]]
+name = "codewhale-hooks"
+version = "0.8.41"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "codewhale-protocol",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "codewhale-mcp"
+version = "0.8.41"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "codewhale-protocol"
+version = "0.8.41"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "codewhale-secrets"
+version = "0.8.41"
+dependencies = [
+ "dirs",
+ "keyring",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.17",
+ "tracing",
+]
+
+[[package]]
+name = "codewhale-state"
+version = "0.8.41"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "dirs",
+ "rusqlite",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "codewhale-tools"
+version = "0.8.41"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "codewhale-protocol",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "codewhale-tui"
+version = "0.8.41"
+dependencies = [
+ "anyhow",
+ "arboard",
+ "async-stream",
+ "async-trait",
+ "axum",
+ "base64",
+ "chrono",
+ "clap",
+ "clap_complete",
+ "codewhale-secrets",
+ "codewhale-tools",
+ "colored",
+ "crossterm 0.28.1",
+ "dirs",
+ "dotenvy",
+ "fd-lock",
+ "flate2",
+ "futures-util",
+ "ignore",
+ "image",
+ "libc",
+ "multimap",
+ "objc2",
+ "objc2-foundation",
+ "pdf-extract",
+ "portable-pty",
+ "pretty_assertions",
+ "ratatui",
+ "regex",
+ "reqwest",
+ "rustyline 15.0.0",
+ "schemars",
+ "schemaui",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "shellexpand",
+ "shlex",
+ "similar",
+ "starlark",
+ "tar",
+ "tempfile",
+ "thiserror 2.0.17",
+ "tiny_http",
+ "tokio",
+ "tokio-util",
+ "toml 0.9.11+spec-1.1.0",
+ "tower-http",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "unicode-segmentation",
+ "unicode-width 0.2.0",
+ "uuid",
+ "vt100",
+ "wait-timeout",
+ "windows",
+ "wiremock",
+ "zeroize",
+]
+
+[[package]]
+name = "codewhale-tui-core"
+version = "0.8.41"
+
+[[package]]
 name = "colorchoice"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1157,238 +1389,6 @@ dependencies = [
  "serde",
  "serde_json",
 ]
-
-[[package]]
-name = "deepseek-agent"
-version = "0.8.40"
-dependencies = [
- "deepseek-config",
- "serde",
-]
-
-[[package]]
-name = "deepseek-app-server"
-version = "0.8.40"
-dependencies = [
- "anyhow",
- "axum",
- "clap",
- "deepseek-agent",
- "deepseek-config",
- "deepseek-core",
- "deepseek-execpolicy",
- "deepseek-hooks",
- "deepseek-mcp",
- "deepseek-protocol",
- "deepseek-state",
- "deepseek-tools",
- "serde",
- "serde_json",
- "tokio",
- "tower-http",
-]
-
-[[package]]
-name = "deepseek-config"
-version = "0.8.40"
-dependencies = [
- "anyhow",
- "deepseek-secrets",
- "dirs",
- "serde",
- "toml 0.9.11+spec-1.1.0",
- "tracing",
-]
-
-[[package]]
-name = "deepseek-core"
-version = "0.8.40"
-dependencies = [
- "anyhow",
- "chrono",
- "deepseek-agent",
- "deepseek-config",
- "deepseek-execpolicy",
- "deepseek-hooks",
- "deepseek-mcp",
- "deepseek-protocol",
- "deepseek-state",
- "deepseek-tools",
- "serde_json",
- "uuid",
-]
-
-[[package]]
-name = "deepseek-execpolicy"
-version = "0.8.40"
-dependencies = [
- "anyhow",
- "deepseek-protocol",
- "serde",
-]
-
-[[package]]
-name = "deepseek-hooks"
-version = "0.8.40"
-dependencies = [
- "anyhow",
- "async-trait",
- "chrono",
- "deepseek-protocol",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "deepseek-mcp"
-version = "0.8.40"
-dependencies = [
- "anyhow",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "deepseek-protocol"
-version = "0.8.40"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "deepseek-secrets"
-version = "0.8.40"
-dependencies = [
- "dirs",
- "keyring",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.17",
- "tracing",
-]
-
-[[package]]
-name = "deepseek-state"
-version = "0.8.40"
-dependencies = [
- "anyhow",
- "chrono",
- "dirs",
- "rusqlite",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "deepseek-tools"
-version = "0.8.40"
-dependencies = [
- "anyhow",
- "async-trait",
- "deepseek-protocol",
- "serde",
- "serde_json",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "deepseek-tui"
-version = "0.8.40"
-dependencies = [
- "anyhow",
- "arboard",
- "async-stream",
- "async-trait",
- "axum",
- "base64",
- "chrono",
- "clap",
- "clap_complete",
- "colored",
- "crossterm 0.28.1",
- "deepseek-secrets",
- "deepseek-tools",
- "dirs",
- "dotenvy",
- "fd-lock",
- "flate2",
- "futures-util",
- "ignore",
- "image",
- "libc",
- "multimap",
- "objc2",
- "objc2-foundation",
- "pdf-extract",
- "portable-pty",
- "pretty_assertions",
- "ratatui",
- "regex",
- "reqwest",
- "rustyline 15.0.0",
- "schemars",
- "schemaui",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "shellexpand",
- "shlex",
- "similar",
- "starlark",
- "tar",
- "tempfile",
- "thiserror 2.0.17",
- "tiny_http",
- "tokio",
- "tokio-util",
- "toml 0.9.11+spec-1.1.0",
- "tower-http",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "unicode-segmentation",
- "unicode-width 0.2.0",
- "uuid",
- "vt100",
- "wait-timeout",
- "windows",
- "wiremock",
- "zeroize",
-]
-
-[[package]]
-name = "deepseek-tui-cli"
-version = "0.8.40"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "clap_complete",
- "deepseek-agent",
- "deepseek-app-server",
- "deepseek-config",
- "deepseek-execpolicy",
- "deepseek-mcp",
- "deepseek-secrets",
- "deepseek-state",
- "dirs",
- "reqwest",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tempfile",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "deepseek-tui-core"
-version = "0.8.40"
 
 [[package]]
 name = "deltae"

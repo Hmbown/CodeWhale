@@ -791,7 +791,7 @@ fn build_relay_instruction(app: &App, focus: Option<&str>) -> String {
     let mut out = String::new();
     let _ = writeln!(
         out,
-        "Create a compact session relay (接力) for a future DeepSeek TUI thread."
+        "Create a compact session relay (接力) for a future CodeWhale thread."
     );
     let _ = writeln!(out);
     let _ = writeln!(out, "Write or update `.deepseek/handoff.md`.");

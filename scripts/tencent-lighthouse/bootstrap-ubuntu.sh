@@ -6,10 +6,10 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 1
 fi
 
-DEEPSEEK_USER="${DEEPSEEK_USER:-deepseek}"
-DEEPSEEK_ROOT="${DEEPSEEK_ROOT:-/opt/deepseek}"
+DEEPSEEK_USER="${DEEPSEEK_USER:-codewhale}"
+DEEPSEEK_ROOT="${DEEPSEEK_ROOT:-/opt/codewhale}"
 WHALEBRO_ROOT="${WHALEBRO_ROOT:-/opt/whalebro}"
-REPO_URL="${DEEPSEEK_REPO_URL:-https://github.com/Hmbown/DeepSeek-TUI.git}"
+REPO_URL="${DEEPSEEK_REPO_URL:-https://github.com/Hmbown/CodeWhale.git}"
 WHALEBRO_EXTRA_REPOS="${WHALEBRO_EXTRA_REPOS:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -47,10 +47,10 @@ install -d -o "${DEEPSEEK_USER}" -g "${DEEPSEEK_USER}" "${DEEPSEEK_ROOT}/bridge"
 install -d -o "${DEEPSEEK_USER}" -g "${DEEPSEEK_USER}" "${WHALEBRO_ROOT}"
 install -d -o "${DEEPSEEK_USER}" -g "${DEEPSEEK_USER}" "${WHALEBRO_ROOT}/worktrees"
 install -d -m 0750 -o root -g "${DEEPSEEK_USER}" /etc/deepseek
-install -d -m 0700 -o "${DEEPSEEK_USER}" -g "${DEEPSEEK_USER}" /var/lib/deepseek-feishu-bridge
+install -d -m 0700 -o "${DEEPSEEK_USER}" -g "${DEEPSEEK_USER}" /var/lib/codewhale-feishu-bridge
 
-if [[ ! -d "${WHALEBRO_ROOT}/deepseek-tui/.git" ]]; then
-  sudo -u "${DEEPSEEK_USER}" git clone --branch "${REPO_BRANCH}" "${REPO_URL}" "${WHALEBRO_ROOT}/deepseek-tui"
+if [[ ! -d "${WHALEBRO_ROOT}/codewhale/.git" ]]; then
+  sudo -u "${DEEPSEEK_USER}" git clone --branch "${REPO_BRANCH}" "${REPO_URL}" "${WHALEBRO_ROOT}/codewhale"
 fi
 
 for repo_spec in ${WHALEBRO_EXTRA_REPOS}; do
@@ -94,7 +94,7 @@ DEEPSEEK_TRUST_MODE=false
 DEEPSEEK_AUTO_APPROVE=false
 DEEPSEEK_CHAT_ALLOWLIST=
 DEEPSEEK_ALLOW_UNLISTED=false
-FEISHU_THREAD_MAP_PATH=/var/lib/deepseek-feishu-bridge/thread-map.json
+FEISHU_THREAD_MAP_PATH=/var/lib/codewhale-feishu-bridge/thread-map.json
 FEISHU_ALLOW_GROUPS=false
 FEISHU_REQUIRE_PREFIX_IN_GROUP=true
 FEISHU_GROUP_PREFIX=/ds
@@ -116,7 +116,7 @@ Next:
 1. Install Rust 1.88+ for ${DEEPSEEK_USER}; rustup is the usual path.
 2. Build/install both binaries:
    sudo -iu ${DEEPSEEK_USER}
-   cd ${WHALEBRO_ROOT}/deepseek-tui
+   cd ${WHALEBRO_ROOT}/codewhale
    cargo install --path crates/cli --locked --force
    cargo install --path crates/tui --locked --force
 3. Copy integrations/feishu-bridge to ${DEEPSEEK_ROOT}/bridge and run npm install.

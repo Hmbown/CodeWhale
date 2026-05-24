@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-//! Feature flags and metadata for DeepSeek TUI.
+//! Feature flags and metadata for codewhale.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Write as _};

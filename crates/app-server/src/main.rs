@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use deepseek_app_server::{AppServerOptions, run};
+use codewhale_app_server::{AppServerOptions, run};
 
 #[derive(Debug, Parser)]
 #[command(

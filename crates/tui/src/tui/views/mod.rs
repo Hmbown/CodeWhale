@@ -257,7 +257,7 @@ impl ViewStack {
     pub fn push<V: ModalView + 'static>(&mut self, view: V) {
         let kind = view.kind();
         self.views.push(Box::new(view));
-        tracing::debug!(target: "deepseek_tui::view_stack", action = "push", kind = ?kind, depth = self.views.len(), "view pushed");
+        tracing::debug!(target: "codewhale_tui::view_stack", action = "push", kind = ?kind, depth = self.views.len(), "view pushed");
     }
 
     /// Push an already-boxed view back onto the stack. Used by call sites
@@ -266,13 +266,13 @@ impl ViewStack {
     pub fn push_boxed(&mut self, view: Box<dyn ModalView>) {
         let kind = view.kind();
         self.views.push(view);
-        tracing::debug!(target: "deepseek_tui::view_stack", action = "push_boxed", kind = ?kind, depth = self.views.len(), "view pushed");
+        tracing::debug!(target: "codewhale_tui::view_stack", action = "push_boxed", kind = ?kind, depth = self.views.len(), "view pushed");
     }
 
     pub fn pop(&mut self) -> Option<Box<dyn ModalView>> {
         let popped = self.views.pop();
         if let Some(view) = popped.as_ref() {
-            tracing::debug!(target: "deepseek_tui::view_stack", action = "pop", kind = ?view.kind(), depth = self.views.len(), "view popped");
+            tracing::debug!(target: "codewhale_tui::view_stack", action = "pop", kind = ?view.kind(), depth = self.views.len(), "view popped");
         }
         popped
     }
@@ -330,7 +330,7 @@ impl ViewStack {
             ViewAction::None => {}
             ViewAction::Close => {
                 if let Some(view) = self.views.pop() {
-                    tracing::debug!(target: "deepseek_tui::view_stack", action = "close", kind = ?view.kind(), depth = self.views.len(), "view closed via action");
+                    tracing::debug!(target: "codewhale_tui::view_stack", action = "close", kind = ?view.kind(), depth = self.views.len(), "view closed via action");
                 }
             }
             ViewAction::Emit(event) => {
@@ -339,7 +339,7 @@ impl ViewStack {
             ViewAction::EmitAndClose(event) => {
                 events.push(event);
                 if let Some(view) = self.views.pop() {
-                    tracing::debug!(target: "deepseek_tui::view_stack", action = "emit_and_close", kind = ?view.kind(), depth = self.views.len(), "view closed via action");
+                    tracing::debug!(target: "codewhale_tui::view_stack", action = "emit_and_close", kind = ?view.kind(), depth = self.views.len(), "view closed via action");
                 }
             }
         }

@@ -180,7 +180,10 @@ impl ToolSpec for HandleReadTool {
 
     fn description(&self) -> &'static str {
         "Read a bounded projection from a var_handle returned by tools such \
-         as RLM sessions, sub-agents, or large artifact producers. Provide \
+         as RLM sessions or sub-agents. This does not read artifact ids \
+         (`art_...`), tool-call ids (`call_...`), SHA refs, or files; use \
+         retrieve_tool_result for spilled tool results/artifacts and \
+         read_file for workspace files. Provide \
          exactly one projection: `slice` for char/line slices, `range` for \
          one-based line ranges, `count` for metadata counts, or `jsonpath` \
          for a small JSON-path projection. This retrieves from the handle's \
@@ -194,7 +197,7 @@ impl ToolSpec for HandleReadTool {
             "required": ["handle"],
             "properties": {
                 "handle": {
-                    "description": "A var_handle object, or a compact `session_id/name` string.",
+                    "description": "A var_handle object, or a compact `session_id/name` string. Not an `art_...`, `call_...`, SHA, or file path ref.",
                     "oneOf": [
                         {
                             "type": "object",
@@ -321,9 +324,16 @@ enum Projection {
 
 fn parse_handle(value: &Value) -> Result<VarHandle, ToolError> {
     if let Some(raw) = value.as_str() {
+        if looks_like_tool_result_ref(raw) {
+            return Err(ToolError::invalid_input(
+                "handle_read only accepts var_handle objects or `session_id/name` strings. \
+                 This looks like an artifact/tool-result ref; use `retrieve_tool_result` instead.",
+            ));
+        }
         let Some((session_id, name)) = raw.rsplit_once('/') else {
             return Err(ToolError::invalid_input(
-                "handle_read: string handle must use `session_id/name`",
+                "handle_read: string handles must use `session_id/name`. \
+                 For `art_...`, `call_...`, SHA, or file refs, use `retrieve_tool_result`.",
             ));
         };
         return Ok(VarHandle {
@@ -351,6 +361,19 @@ fn parse_handle(value: &Value) -> Result<VarHandle, ToolError> {
         ));
     }
     Ok(handle)
+}
+
+fn looks_like_tool_result_ref(raw: &str) -> bool {
+    let trimmed = raw.trim();
+    let sha_candidate = trimmed
+        .strip_prefix("sha:")
+        .or_else(|| trimmed.strip_prefix("sha_"))
+        .unwrap_or(trimmed);
+    trimmed.starts_with("art_")
+        || trimmed.starts_with("call_")
+        || trimmed.starts_with("tool_result:")
+        || trimmed.ends_with(".txt")
+        || crate::tools::truncate::is_valid_sha256(&sha_candidate.to_ascii_lowercase())
 }
 
 fn parse_projection(input: &Value) -> Result<Projection, ToolError> {
@@ -808,5 +831,17 @@ mod tests {
             .await
             .expect_err("projection required");
         assert!(err.to_string().contains("exactly one"));
+    }
+
+    #[tokio::test]
+    async fn handle_read_points_artifact_refs_to_tool_result_retrieval() {
+        let ctx = ctx();
+        let err = HandleReadTool
+            .execute(json!({"handle": "art_call_abc123", "count": true}), &ctx)
+            .await
+            .expect_err("artifact refs are not var handles");
+        let message = err.to_string();
+        assert!(message.contains("retrieve_tool_result"));
+        assert!(message.contains("artifact/tool-result ref"));
     }
 }

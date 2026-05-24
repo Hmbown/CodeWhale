@@ -72,8 +72,11 @@ impl ToolSpec for GitStatusTool {
             args.push(pathspec.display().to_string());
         }
 
-        let command_str = format_command(&git_ctx.working_dir, &args);
-        let output = run_git_command(&git_ctx.working_dir, &args)?;
+        let mut status_args = vec!["-c".to_string(), "core.quotepath=false".to_string()];
+        status_args.extend(args);
+
+        let command_str = format_command(&git_ctx.working_dir, &status_args);
+        let output = run_git_command(&git_ctx.working_dir, &status_args)?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -418,6 +421,45 @@ mod tests {
                 .and_then(|m| m.get("cached"))
                 .and_then(Value::as_bool)
                 .unwrap_or(false)
+        );
+    }
+
+    #[tokio::test]
+    async fn git_status_reports_unquoted_unicode_paths() {
+        if !git_available() {
+            return;
+        }
+        let tmp = tempdir().expect("tempdir");
+        init_git_repo(tmp.path());
+
+        let run_git = |args: &[&str]| {
+            let status = Command::new("git")
+                .args(args)
+                .current_dir(tmp.path())
+                .status()
+                .expect("git should spawn");
+            assert!(status.success(), "git {:?} failed", args);
+        };
+
+        run_git(&["config", "core.quotepath", "true"]);
+
+        let workdir = tmp.path().join("中文目录");
+        fs::create_dir_all(&workdir).expect("mkdir");
+        let file = workdir.join("新文件.md");
+        fs::write(&file, "hello\n").expect("write");
+        commit_all(tmp.path(), "init unicode path");
+
+        fs::write(&file, "hello\nworld\n").expect("modify");
+
+        let ctx = ToolContext::new(tmp.path());
+        let tool = GitStatusTool;
+        let result = tool.execute(json!({}), &ctx).await.expect("execute");
+
+        assert!(result.success);
+        assert!(
+            result.content.contains("中文目录/新文件.md"),
+            "expected decoded unicode filename in git_status output, got: {}",
+            result.content
         );
     }
 

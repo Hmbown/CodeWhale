@@ -18,7 +18,7 @@ fn format_status(app: &App) -> String {
     let mut out = String::new();
     let (context_used, context_max, context_percent) = context_usage(app);
 
-    let _ = writeln!(out, "DeepSeek TUI Status");
+    let _ = writeln!(out, "codewhale Status");
     let _ = writeln!(out, "===================");
     let _ = writeln!(out);
     push_row(&mut out, "Version:", env!("CARGO_PKG_VERSION"));
@@ -227,7 +227,7 @@ mod tests {
 
         let result = status(&mut app);
         let msg = result.message.expect("status message");
-        assert!(msg.contains("DeepSeek TUI Status"));
+        assert!(msg.contains("codewhale Status"));
         assert!(msg.contains("Provider:"));
         assert!(msg.contains("Model:"));
         assert!(msg.contains("Directory:"));

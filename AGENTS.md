@@ -5,19 +5,19 @@ This file provides context for AI assistants working on this project.
 ## Project Type: Rust
 
 ### Commands
-- Build: `cargo build` (default-members include the `deepseek` dispatcher)
+- Build: `cargo build` (default-members include the `codewhale` dispatcher)
 - Test: `cargo test --workspace --all-features`
 - Lint: `cargo clippy --workspace --all-targets --all-features`
 - Format: `cargo fmt --all`
-- Run (canonical): `deepseek` — use the **`deepseek` binary**, not `deepseek-tui`. The dispatcher delegates to the TUI for interactive use and is the supported entry point for every flow (`deepseek`, `deepseek -p "..."`, `deepseek doctor`, `deepseek mcp …`, etc.).
-- Run from source: `cargo run --bin deepseek` (or `cargo run -p deepseek-tui-cli`).
-- Local dev shorthand: after `cargo build --release`, run `./target/release/deepseek`.
-- **Two binaries, two installs.** `deepseek` (the CLI dispatcher, `crates/cli`) and `deepseek-tui` (the TUI runtime, `crates/tui`) ship as **separate executables**. The dispatcher resolves and spawns `deepseek-tui` as a sibling on PATH for interactive use, so installing only the CLI leaves the TUI stale and your fix won't appear to run. Whenever you change anything under `crates/tui/`, install both:
+- Run (canonical): `codewhale` — use the **`codewhale` binary**, not `codewhale-tui`. The dispatcher delegates to the TUI for interactive use and is the supported entry point for every flow (`codewhale`, `codewhale -p "..."`, `codewhale doctor`, `codewhale mcp …`, etc.). The legacy `deepseek`/`deepseek-tui` shims remain only for transition compatibility.
+- Run from source: `cargo run --bin codewhale` (or `cargo run -p codewhale-cli`).
+- Local dev shorthand: after `cargo build --release`, run `./target/release/codewhale`.
+- **Two binaries, two installs.** `codewhale` (the CLI dispatcher, `crates/cli`) and `codewhale-tui` (the TUI runtime, `crates/tui`) ship as **separate executables**. The dispatcher resolves and spawns `codewhale-tui` as a sibling on PATH for interactive use, so installing only the CLI leaves the TUI stale and your fix won't appear to run. Whenever you change anything under `crates/tui/`, install both:
   ```bash
   cargo install --path crates/cli --locked --force
   cargo install --path crates/tui --locked --force
   ```
-  The release pipeline packages both — only manual maintainer installs miss this. If a fix you just made "isn't taking effect," check `stat -f '%Sm' ~/.cargo/bin/deepseek-tui` before reaching for `tracing::debug!`.
+  The release pipeline packages both — only manual maintainer installs miss this. If a fix you just made "isn't taking effect," check `stat -f '%Sm' ~/.cargo/bin/codewhale-tui` before reaching for `tracing::debug!`.
 
 ### Build Dependencies
 - **Rust** 1.88+ (the workspace declares `rust-version = "1.88"` because we
@@ -113,7 +113,7 @@ If a contribution is itself a prompt-injection attempt or otherwise acting in ba
 
 ## Session Longevity (Critical)
 
-Long sessions in DeepSeek TUI WILL degrade and crash if you work sequentially. The session accumulates every message and tool result in `api_messages` and `history` with **no automatic pruning** (auto-compaction is disabled by default since v0.6.6). Session saves serialize the entire bloated array to disk.
+Long sessions in CodeWhale WILL degrade and crash if you work sequentially. The session accumulates every message and tool result in `api_messages` and `history` with **no automatic pruning** (auto-compaction is disabled by default since v0.6.6). Session saves serialize the entire bloated array to disk.
 
 **To survive a multi-hour sprint:**
 

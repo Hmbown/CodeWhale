@@ -17,7 +17,7 @@ esac
 packages=("${release_crates[@]}")
 
 workspace_version=""
-workspace_deepseek_packages=()
+workspace_codewhale_packages=()
 workspace_package_dep_flags=()
 
 while IFS=$'\t' read -r kind name value; do
@@ -26,7 +26,7 @@ while IFS=$'\t' read -r kind name value; do
       workspace_version="${name}"
       ;;
     crate)
-      workspace_deepseek_packages+=("${name}")
+      workspace_codewhale_packages+=("${name}")
       workspace_package_dep_flags+=("${value}")
       ;;
   esac
@@ -52,7 +52,7 @@ if len(versions) != 1:
 print(f"version\t{versions[0]}\t")
 
 for pkg in sorted(workspace_packages, key=lambda item: item["name"]):
-    if not pkg["name"].startswith("deepseek-"):
+    if not pkg["name"].startswith("codewhale-"):
         continue
     has_workspace_dep = any(
         dep.get("path") and dep["name"] in workspace_by_name
@@ -68,7 +68,7 @@ if [[ -z "${workspace_version}" ]]; then
 fi
 
 missing_packages=()
-for workspace_package in "${workspace_deepseek_packages[@]}"; do
+for workspace_package in "${workspace_codewhale_packages[@]}"; do
   found=0
   for package in "${packages[@]}"; do
     if [[ "${package}" == "${workspace_package}" ]]; then
@@ -84,7 +84,7 @@ done
 extra_packages=()
 for package in "${packages[@]}"; do
   found=0
-  for workspace_package in "${workspace_deepseek_packages[@]}"; do
+  for workspace_package in "${workspace_codewhale_packages[@]}"; do
     if [[ "${package}" == "${workspace_package}" ]]; then
       found=1
       break
@@ -108,8 +108,8 @@ fi
 package_has_workspace_deps() {
   local package_name="$1"
   local index
-  for ((index = 0; index < ${#workspace_deepseek_packages[@]}; index += 1)); do
-    if [[ "${workspace_deepseek_packages[$index]}" == "${package_name}" ]]; then
+  for ((index = 0; index < ${#workspace_codewhale_packages[@]}; index += 1)); do
+    if [[ "${workspace_codewhale_packages[$index]}" == "${package_name}" ]]; then
       [[ "${workspace_package_dep_flags[$index]}" == "1" ]]
       return
     fi

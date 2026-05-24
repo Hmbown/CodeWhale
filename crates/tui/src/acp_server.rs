@@ -143,7 +143,7 @@ impl AcpServer {
             .and_then(Value::as_str)
             .map(PathBuf::from)
             .unwrap_or_else(|| self.default_cwd.clone());
-        let session_id = format!("deepseek-{}", uuid::Uuid::new_v4());
+        let session_id = format!("codewhale-{}", uuid::Uuid::new_v4());
         self.sessions.insert(session_id.clone(), AcpSession { cwd });
         Ok(json!({ "sessionId": session_id }))
     }
@@ -284,8 +284,8 @@ fn initialize_result(client_protocol_version: Option<u64>) -> Value {
             "sessionCapabilities": {}
         },
         "agentInfo": {
-            "name": "deepseek",
-            "title": "DeepSeek TUI",
+            "name": "codewhale",
+            "title": "codewhale",
             "version": env!("CARGO_PKG_VERSION")
         },
         "authMethods": []
@@ -423,7 +423,7 @@ mod tests {
         let result = initialize_result(Some(1));
 
         assert_eq!(result["protocolVersion"], 1);
-        assert_eq!(result["agentInfo"]["name"], "deepseek");
+        assert_eq!(result["agentInfo"]["name"], "codewhale");
         assert_eq!(result["agentCapabilities"]["loadSession"], false);
         assert_eq!(
             result["agentCapabilities"]["promptCapabilities"]["embeddedContext"],

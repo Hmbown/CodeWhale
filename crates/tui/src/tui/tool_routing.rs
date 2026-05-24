@@ -78,7 +78,7 @@ pub(super) fn handle_tool_call_started(
     // simultaneously, which is exactly the case CX#7 fixes.
 
     if is_exec_tool(name) {
-        let command = exec_command_from_input(input).unwrap_or_else(|| "<command>".to_string());
+        let command = exec_target_from_input(input);
         let source = exec_source_from_input(input);
         let interaction = exec_interaction_summary(name, input);
         let mut is_wait = false;
@@ -535,6 +535,29 @@ pub(super) fn handle_tool_call_complete(
             HistoryCell::Tool(ToolCell::Exec(exec)) => {
                 exec.status = status;
                 if let Ok(tool_result) = result.as_ref() {
+                    if let Some(meta_command) = tool_result
+                        .metadata
+                        .as_ref()
+                        .and_then(|m| m.get("command"))
+                        .and_then(serde_json::Value::as_str)
+                        && !meta_command.trim().is_empty()
+                        && (exec.command == "shell job" || exec.command.starts_with("shell job "))
+                    {
+                        exec.command = meta_command.to_string();
+                        if exec.interaction.as_deref().is_some_and(|interaction| {
+                            interaction.starts_with("Waiting for shell job")
+                        }) {
+                            let task_suffix = tool_result
+                                .metadata
+                                .as_ref()
+                                .and_then(|m| m.get("task_id"))
+                                .and_then(serde_json::Value::as_str)
+                                .map(|task_id| format!(" ({task_id})"))
+                                .unwrap_or_default();
+                            exec.interaction =
+                                Some(format!("Waiting for \"{meta_command}\"{task_suffix}"));
+                        }
+                    }
                     exec.duration_ms = tool_result
                         .metadata
                         .as_ref()
@@ -1078,6 +1101,17 @@ fn exec_command_from_input(input: &serde_json::Value) -> Option<String> {
         .map(std::string::ToString::to_string)
 }
 
+fn exec_target_from_input(input: &serde_json::Value) -> String {
+    exec_command_from_input(input).unwrap_or_else(|| {
+        input
+            .get("task_id")
+            .or_else(|| input.get("id"))
+            .and_then(|v| v.as_str())
+            .map(|task_id| format!("shell job {task_id}"))
+            .unwrap_or_else(|| "shell job".to_string())
+    })
+}
+
 fn exec_source_from_input(input: &serde_json::Value) -> ExecSource {
     match input.get("source").and_then(|v| v.as_str()) {
         Some(source) if source.eq_ignore_ascii_case("user") => ExecSource::User,
@@ -1086,7 +1120,7 @@ fn exec_source_from_input(input: &serde_json::Value) -> ExecSource {
 }
 
 fn exec_interaction_summary(name: &str, input: &serde_json::Value) -> Option<(String, bool)> {
-    let command = exec_command_from_input(input).unwrap_or_else(|| "<command>".to_string());
+    let command = exec_target_from_input(input);
     let command_display = format!("\"{command}\"");
     let interaction_input = input
         .get("input")
@@ -1108,6 +1142,14 @@ fn exec_interaction_summary(name: &str, input: &serde_json::Value) -> Option<(St
     }
 
     if is_wait_tool || input.get("wait").and_then(serde_json::Value::as_bool) == Some(true) {
+        if exec_command_from_input(input).is_none()
+            && let Some(task_id) = input
+                .get("task_id")
+                .or_else(|| input.get("id"))
+                .and_then(|v| v.as_str())
+        {
+            return Some((format!("Waiting for shell job {task_id}"), true));
+        }
         return Some((format!("Waited for {command_display}"), true));
     }
 

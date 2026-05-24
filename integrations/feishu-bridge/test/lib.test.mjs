@@ -160,7 +160,7 @@ test("validateBridgeConfig accepts locked-down whalebro DM config", () => {
       DEEPSEEK_WORKSPACE: "/opt/whalebro",
       DEEPSEEK_CHAT_ALLOWLIST: "oc_allowed",
       DEEPSEEK_ALLOW_UNLISTED: "false",
-      FEISHU_THREAD_MAP_PATH: "/var/lib/deepseek-feishu-bridge/thread-map.json",
+      FEISHU_THREAD_MAP_PATH: "/var/lib/codewhale-feishu-bridge/thread-map.json",
       FEISHU_ALLOW_GROUPS: "false",
       FEISHU_REQUIRE_PREFIX_IN_GROUP: "true"
     },
@@ -187,7 +187,7 @@ test("validateBridgeConfig rejects unsafe group pairing and token mismatch", () 
       DEEPSEEK_RUNTIME_TOKEN: "bridge-token",
       DEEPSEEK_WORKSPACE: "/opt/whalebro",
       DEEPSEEK_ALLOW_UNLISTED: "true",
-      FEISHU_THREAD_MAP_PATH: "/var/lib/deepseek-feishu-bridge/thread-map.json",
+      FEISHU_THREAD_MAP_PATH: "/var/lib/codewhale-feishu-bridge/thread-map.json",
       FEISHU_ALLOW_GROUPS: "true",
       FEISHU_REQUIRE_PREFIX_IN_GROUP: "false"
     },

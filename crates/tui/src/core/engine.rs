@@ -298,7 +298,7 @@ pub struct Engine {
     /// can fan completion events back into the engine.
     tx_subagent_completion: mpsc::UnboundedSender<SubAgentCompletion>,
     /// Receiver paired with `tx_subagent_completion`. Drained at the
-    /// turn-loop's empty-tool_uses branch to surface `<deepseek:subagent.done>`
+    /// turn-loop's empty-tool_uses branch to surface `<codewhale:subagent.done>`
     /// sentinels into the parent's transcript before deciding to end the turn.
     pub(super) rx_subagent_completion: mpsc::UnboundedReceiver<SubAgentCompletion>,
     cancel_token: CancellationToken,
@@ -378,8 +378,8 @@ impl Engine {
 
         Some(format!(
             "The rejected key came from {env_var}; no saved config key is present.\n\
-             Run `deepseek auth status` to inspect credential sources, then \
-             `deepseek auth set --provider {provider}` to save a valid key in ~/.deepseek/config.toml, \
+             Run `codewhale auth status` to inspect credential sources, then \
+             `codewhale auth set --provider {provider}` to save a valid key in ~/.deepseek/config.toml, \
              or remove the stale export and open a fresh shell.",
             provider = provider.as_str()
         ))

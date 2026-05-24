@@ -1,6 +1,6 @@
 //! Adaptive stream chunking policy for two-gear streaming.
 //!
-//! Ported from `codex-rs/tui/src/streaming/chunking.rs`, adapted for deepseek-tui's
+//! Ported from `codex-rs/tui/src/streaming/chunking.rs`, adapted for codewhale's
 //! text-based streaming pipeline. The policy is queue-pressure driven and
 //! source-agnostic.
 //!

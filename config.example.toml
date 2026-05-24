@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║                         DeepSeek TUI Configuration                            ║
+# ║                         CodeWhale Configuration                               ║
 # ║                                                                              ║
-# ║  Unofficial CLI for DeepSeek Platform - Not affiliated with DeepSeek Inc.     ║
+# ║  Terminal coding agent for DeepSeek.                                          ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
 # See `docs/CONFIGURATION.md` for how config is loaded (profiles, env overrides, etc.).
@@ -470,7 +470,7 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 # max_workspace_gb = 2  # Snapshots self-disable on first init when the
 #                         # non-excluded workspace exceeds this size in GB
 #                         # (v0.8.32). Default 2 GB protects against running
-#                         # deepseek-tui in directories with hundreds of GB
+#                         # codewhale in directories with hundreds of GB
 #                         # of datasets / model weights / docker dumps where
 #                         # `git add -A` would hang the TUI for hours. Set
 #                         # to 0 to disable the cap (v0.8.31 behaviour);
@@ -530,7 +530,7 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 #
 # [[hooks.hooks]]
 # event = "session_start"
-# command = "echo 'DeepSeek TUI session started'"
+# command = "echo 'CodeWhale session started'"
 #
 # # Inject ephemeral creds into every shell call. Output one
 # # KEY=VALUE per line on stdout (export prefix optional).

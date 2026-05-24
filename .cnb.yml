@@ -1,78 +1,112 @@
 # CNB is a one-way mirror from GitHub. Keep this file source-controlled here;
 # CNB-side edits will be overwritten by the GitHub -> CNB sync workflow.
 
+.feishu_bridge_tests: &feishu_bridge_tests
+  name: feishu bridge tests
+  runner:
+    tags: cnb:arch:amd64
+    cpus: 8
+  docker:
+    image: node:22-bookworm
+  stages:
+    - name: feishu bridge tests
+      script: |
+        set -euo pipefail
+        cd integrations/feishu-bridge
+        npm ci
+        npm run check
+        npm test
+
+.linux_rust_gates: &linux_rust_gates
+  name: linux rust gates
+  runner:
+    tags: cnb:arch:amd64
+    cpus: 16
+  docker:
+    image: rust:1.88-bookworm
+  stages:
+    - name: install linux dependencies
+      script: |
+        set -euo pipefail
+        apt-get update
+        apt-get install -y git libdbus-1-dev nodejs npm pkg-config
+        if command -v rustup >/dev/null 2>&1; then
+          rustup component add rustfmt clippy
+        fi
+
+    - name: rust workspace gates
+      script: |
+        set -euo pipefail
+        ./scripts/release/check-versions.sh
+        cargo fmt --all -- --check
+        cargo check --workspace --all-targets --locked
+        cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+        cargo test --workspace --all-features --locked
+
+    - name: linux npm wrapper smoke
+      script: |
+        set -euo pipefail
+        cargo build --release --locked -p codewhale-cli -p codewhale-tui
+        node scripts/release/npm-wrapper-smoke.js
+        ./target/release/codewhale --version
+        ./target/release/codewhale-tui --version
+        ./target/release/deepseek --version
+        ./target/release/deepseek-tui --version
+
+.linux_release_preflight: &linux_release_preflight
+  name: linux release preflight
+  runner:
+    tags: cnb:arch:amd64
+    cpus: 16
+  docker:
+    image: rust:1.88-bookworm
+  stages:
+    - name: install release dependencies
+      script: |
+        set -euo pipefail
+        apt-get update
+        apt-get install -y curl git libdbus-1-dev nodejs npm pkg-config
+        if command -v rustup >/dev/null 2>&1; then
+          rustup component add rustfmt clippy
+        fi
+
+    - name: rust workspace gates
+      script: |
+        set -euo pipefail
+        ./scripts/release/check-versions.sh
+        cargo fmt --all -- --check
+        cargo check --workspace --all-targets --locked
+        cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+        cargo test --workspace --all-features --locked
+
+    - name: crate publish dry-run
+      script: |
+        set -euo pipefail
+        ./scripts/release/publish-crates.sh dry-run
+
+    - name: release binary smoke
+      script: |
+        set -euo pipefail
+        cargo build --release --locked -p codewhale-cli -p codewhale-tui
+        node scripts/release/npm-wrapper-smoke.js
+        ./target/release/codewhale --version
+        ./target/release/codewhale-tui --version
+        ./target/release/deepseek --version
+        ./target/release/deepseek-tui --version
+
 main:
   push:
-    - docker:
-        image: node:22-bookworm
-      stages:
-        - name: feishu bridge tests
-          script: |
-            set -euo pipefail
-            cd integrations/feishu-bridge
-            npm ci
-            npm run check
-            npm test
+    - *feishu_bridge_tests
+    - *linux_rust_gates
 
-    - docker:
-        image: rust:1.88-bookworm
-      stages:
-        - name: release version check
-          script: |
-            set -euo pipefail
-            apt-get update
-            apt-get install -y git libdbus-1-dev nodejs pkg-config
-            ./scripts/release/check-versions.sh
-
-"work/v*-stability":
+"(fix/*|rebrand/*)":
   push:
-    - name: feishu bridge release preflight
-      runner:
-        tags: cnb:arch:amd64
-        cpus: 8
-      docker:
-        image: node:22-bookworm
-      stages:
-        - name: feishu bridge tests
-          script: |
-            set -euo pipefail
-            cd integrations/feishu-bridge
-            npm ci
-            npm run check
-            npm test
+    - *linux_rust_gates
 
-    - name: linux release preflight
-      runner:
-        tags: cnb:arch:amd64
-        cpus: 16
-      docker:
-        image: rust:1.88-bookworm
-      stages:
-        - name: install release dependencies
-          script: |
-            set -euo pipefail
-            apt-get update
-            apt-get install -y git libdbus-1-dev nodejs npm pkg-config
-            if command -v rustup >/dev/null 2>&1; then
-              rustup component add rustfmt clippy
-            fi
-
-        - name: rust workspace gates
-          script: |
-            set -euo pipefail
-            ./scripts/release/check-versions.sh
-            cargo fmt --all -- --check
-            cargo check --workspace --all-targets --locked
-            cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-            cargo test --workspace --all-features --locked
-
-        - name: release binary smoke
-          script: |
-            set -euo pipefail
-            cargo build --release --locked -p deepseek-tui-cli -p deepseek-tui
-            node scripts/release/npm-wrapper-smoke.js
-            ./target/release/deepseek --version
-            ./target/release/deepseek-tui --version
+"work/v*":
+  push:
+    - *feishu_bridge_tests
+    - *linux_release_preflight
 
 $:
   tag_push:
@@ -87,17 +121,29 @@ $:
             apt-get install -y git libdbus-1-dev nodejs pkg-config
 
             ./scripts/release/check-versions.sh
-            cargo build --release --locked -p deepseek-tui-cli -p deepseek-tui
+            cargo build --release --locked -p codewhale-cli -p codewhale-tui
 
             mkdir -p target/cnb-release
+            cp target/release/codewhale target/cnb-release/codewhale-linux-x64
+            cp target/release/codewhale-tui target/cnb-release/codewhale-tui-linux-x64
             cp target/release/deepseek target/cnb-release/deepseek-linux-x64
             cp target/release/deepseek-tui target/cnb-release/deepseek-tui-linux-x64
-            strip target/cnb-release/deepseek-linux-x64 target/cnb-release/deepseek-tui-linux-x64 || true
+            strip \
+              target/cnb-release/codewhale-linux-x64 \
+              target/cnb-release/codewhale-tui-linux-x64 \
+              target/cnb-release/deepseek-linux-x64 \
+              target/cnb-release/deepseek-tui-linux-x64 \
+              || true
 
             (
               cd target/cnb-release
-              sha256sum deepseek-linux-x64 deepseek-tui-linux-x64 \
-                > deepseek-artifacts-sha256.txt
+              sha256sum \
+                codewhale-linux-x64 \
+                codewhale-tui-linux-x64 \
+                deepseek-linux-x64 \
+                deepseek-tui-linux-x64 \
+                > codewhale-artifacts-sha256.txt
+              cp codewhale-artifacts-sha256.txt deepseek-artifacts-sha256.txt
             )
 
             tag_name="${CNB_BRANCH:-}"
@@ -118,6 +164,9 @@ $:
               echo "Built by CNB from ${commit_sha}."
               echo
               echo "Assets:"
+              echo "- codewhale-linux-x64"
+              echo "- codewhale-tui-linux-x64"
+              echo "- codewhale-artifacts-sha256.txt"
               echo "- deepseek-linux-x64"
               echo "- deepseek-tui-linux-x64"
               echo "- deepseek-artifacts-sha256.txt"
@@ -133,6 +182,9 @@ $:
           image: cnbcool/attachments:latest
           settings:
             attachments:
+              - target/cnb-release/codewhale-linux-x64
+              - target/cnb-release/codewhale-tui-linux-x64
+              - target/cnb-release/codewhale-artifacts-sha256.txt
               - target/cnb-release/deepseek-linux-x64
               - target/cnb-release/deepseek-tui-linux-x64
               - target/cnb-release/deepseek-artifacts-sha256.txt

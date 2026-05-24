@@ -6,8 +6,8 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
 
 use anyhow::{Context, Result, bail};
-use deepseek_secrets::SecretSource;
-pub use deepseek_secrets::Secrets;
+use codewhale_secrets::SecretSource;
+pub use codewhale_secrets::Secrets;
 use serde::{Deserialize, Serialize};
 
 #[cfg(unix)]
@@ -185,7 +185,7 @@ impl ProvidersToml {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ConfigToml {
     /// TUI-compatible DeepSeek API key. Kept at the root so both `deepseek`
-    /// and `deepseek-tui` can share a single config file.
+    /// and `codewhale-tui` can share a single config file.
     pub api_key: Option<String>,
     /// TUI-compatible DeepSeek base URL.
     pub base_url: Option<String>,
@@ -952,7 +952,7 @@ impl ConfigToml {
     #[must_use]
     pub fn resolve_runtime_options(&self, cli: &CliRuntimeOverrides) -> ResolvedRuntimeOptions {
         let no_keyring = Secrets::new(std::sync::Arc::new(
-            deepseek_secrets::InMemoryKeyringStore::new(),
+            codewhale_secrets::InMemoryKeyringStore::new(),
         ));
         self.resolve_runtime_options_with_secrets(cli, &no_keyring)
     }
@@ -1014,7 +1014,7 @@ impl ConfigToml {
         } else if let Some(value) = from_file.clone().filter(|v| !v.trim().is_empty()) {
             (Some(value), Some(RuntimeApiKeySource::ConfigFile))
         } else if should_skip_secret_store_for_provider(provider, &base_url, auth_mode.as_deref()) {
-            match deepseek_secrets::env_for(provider.as_str()) {
+            match codewhale_secrets::env_for(provider.as_str()) {
                 Some(value) => (Some(value), Some(RuntimeApiKeySource::Env)),
                 None => (None, None),
             }
@@ -1420,7 +1420,7 @@ impl ConfigStore {
 
 /// Process-wide default [`Secrets`] façade. The first caller wins; the
 /// lock is exposed so test or CLI code can install an explicit
-/// backend (e.g. an [`deepseek_secrets::InMemoryKeyringStore`]) before
+/// backend (e.g. an [`codewhale_secrets::InMemoryKeyringStore`]) before
 /// any resolver runs.
 pub fn default_secrets() -> &'static Secrets {
     static SECRETS: OnceLock<Secrets> = OnceLock::new();
@@ -1432,7 +1432,7 @@ pub fn default_secrets() -> &'static Secrets {
         #[cfg(test)]
         {
             Secrets::new(std::sync::Arc::new(
-                deepseek_secrets::InMemoryKeyringStore::new(),
+                codewhale_secrets::InMemoryKeyringStore::new(),
             ))
         }
         #[cfg(not(test))]
@@ -1864,17 +1864,17 @@ mod tests {
         }
     }
 
-    impl deepseek_secrets::KeyringStore for RecordingSecretsStore {
-        fn get(&self, key: &str) -> Result<Option<String>, deepseek_secrets::SecretsError> {
+    impl codewhale_secrets::KeyringStore for RecordingSecretsStore {
+        fn get(&self, key: &str) -> Result<Option<String>, codewhale_secrets::SecretsError> {
             self.gets.lock().unwrap().push(key.to_string());
             Ok(self.value.clone())
         }
 
-        fn set(&self, _key: &str, _value: &str) -> Result<(), deepseek_secrets::SecretsError> {
+        fn set(&self, _key: &str, _value: &str) -> Result<(), codewhale_secrets::SecretsError> {
             Ok(())
         }
 
-        fn delete(&self, _key: &str) -> Result<(), deepseek_secrets::SecretsError> {
+        fn delete(&self, _key: &str) -> Result<(), codewhale_secrets::SecretsError> {
             Ok(())
         }
 
@@ -2695,13 +2695,13 @@ mod tests {
 
     #[test]
     fn config_file_resolves_above_env_and_keyring() {
-        use deepseek_secrets::KeyringStore;
+        use codewhale_secrets::KeyringStore;
         let _lock = env_lock();
         let _env = EnvGuard::without_deepseek_runtime_overrides();
         // Safety: env mutation guarded by env_lock().
         unsafe { std::env::set_var("DEEPSEEK_API_KEY", "env-key") };
 
-        let store = std::sync::Arc::new(deepseek_secrets::InMemoryKeyringStore::new());
+        let store = std::sync::Arc::new(codewhale_secrets::InMemoryKeyringStore::new());
         store.set("deepseek", "ring-key").unwrap();
         let secrets = Secrets::new(store);
 
@@ -2728,7 +2728,7 @@ mod tests {
         unsafe { std::env::set_var("DEEPSEEK_API_KEY", "env-key") };
 
         let secrets = Secrets::new(std::sync::Arc::new(
-            deepseek_secrets::InMemoryKeyringStore::new(),
+            codewhale_secrets::InMemoryKeyringStore::new(),
         ));
         let config = ConfigToml::default();
 
@@ -2747,7 +2747,7 @@ mod tests {
         let _env = EnvGuard::without_deepseek_runtime_overrides();
 
         let secrets = Secrets::new(std::sync::Arc::new(
-            deepseek_secrets::InMemoryKeyringStore::new(),
+            codewhale_secrets::InMemoryKeyringStore::new(),
         ));
         let mut config = ConfigToml::default();
         config.providers.deepseek.api_key = Some("file-key".to_string());
@@ -2763,13 +2763,13 @@ mod tests {
 
     #[test]
     fn keyring_resolves_when_config_file_empty_even_if_env_is_set() {
-        use deepseek_secrets::KeyringStore;
+        use codewhale_secrets::KeyringStore;
         let _lock = env_lock();
         let _env = EnvGuard::without_deepseek_runtime_overrides();
         // Safety: env mutation guarded by env_lock().
         unsafe { std::env::set_var("DEEPSEEK_API_KEY", "stale-env-key") };
 
-        let store = std::sync::Arc::new(deepseek_secrets::InMemoryKeyringStore::new());
+        let store = std::sync::Arc::new(codewhale_secrets::InMemoryKeyringStore::new());
         store.set("deepseek", "ring-key").unwrap();
         let secrets = Secrets::new(store);
 
@@ -2784,11 +2784,11 @@ mod tests {
 
     #[test]
     fn cli_flag_still_overrides_keyring() {
-        use deepseek_secrets::KeyringStore;
+        use codewhale_secrets::KeyringStore;
         let _lock = env_lock();
         let _env = EnvGuard::without_deepseek_runtime_overrides();
 
-        let store = std::sync::Arc::new(deepseek_secrets::InMemoryKeyringStore::new());
+        let store = std::sync::Arc::new(codewhale_secrets::InMemoryKeyringStore::new());
         store.set("deepseek", "ring-key").unwrap();
         let secrets = Secrets::new(store);
 

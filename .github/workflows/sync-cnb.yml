@@ -1,13 +1,14 @@
 name: Sync to CNB
 
-# Mirror commits and release tags to cnb.cool/deepseek-tui.com/DeepSeek-TUI
+# Mirror commits and release tags to cnb.cool/codewhale.net/codewhale
 # so users behind GitHub-blocking networks can fetch the source and tagged
 # releases from the Tencent-hosted mirror.
 #
 # Triggers:
 #   * push to main              → mirrors that commit to CNB main
 #   * tag matching v*           → mirrors that tag to CNB
-#   * release stability branches→ mirrors release-candidate refs for CNB preflight
+#   * release work branches     → mirrors release-candidate refs for CNB preflight
+#   * fix/rebrand branches      → mirrors first-party heavy Linux CI refs
 #   * Tencent release branches  → mirrors Feishu/Lighthouse setup branches
 #   * workflow_dispatch         → manual fallback if any of the above fails
 #
@@ -26,7 +27,9 @@ on:
   push:
     branches:
       - main
-      - 'work/v*-stability'
+      - 'work/v*'
+      - 'fix/*'
+      - 'rebrand/*'
       - 'work/v*-feishu-*'
       - 'work/v*-lighthouse*'
     tags: ['v*']
@@ -66,7 +69,7 @@ jobs:
           # special characters. CNB tokens are typically alphanumeric so
           # this is belt-and-suspenders.
           ENCODED_TOKEN="$(printf '%s' "${CNB_TOKEN}" | python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.stdin.read(), safe=""))')"
-          REMOTE_URL="https://cnb:${ENCODED_TOKEN}@cnb.cool/deepseek-tui.com/DeepSeek-TUI.git"
+          REMOTE_URL="https://cnb:${ENCODED_TOKEN}@cnb.cool/codewhale.net/codewhale.git"
           # Use a masked alias so the token never appears in log lines.
           git remote add cnb "${REMOTE_URL}"
 
@@ -111,8 +114,9 @@ jobs:
             # was actually behind GitHub.
             push_with_retry "main" HEAD:refs/heads/main --force
           else
-            # Tencent release-candidate branches are first-class CNB
-            # sources for release preflight and Lighthouse/Feishu bootstrap.
+            # First-party fix/rebrand/release branches are first-class CNB
+            # sources for heavy Linux CI, release preflight, and
+            # Lighthouse/Feishu bootstrap.
             # Mirror the triggering branch exactly so the CNB clone path stays
             # useful before the branch has merged to main or become a release
             # tag.

@@ -976,7 +976,7 @@ pub struct AutoRouteSelection {
 }
 
 pub const AUTO_MODEL_ROUTER_SYSTEM_PROMPT: &str = "\
-You are the DeepSeek TUI auto-routing classifier. Return only compact JSON: \
+You are the codewhale auto-routing classifier. Return only compact JSON: \
 {\"model\":\"deepseek-v4-flash|deepseek-v4-pro\",\"thinking\":\"off|high|max\"}. \
 Use deepseek-v4-flash for trivial, conversational, status, or single-step work. \
 Use deepseek-v4-pro for coding, debugging, release work, multi-step tasks, high-risk decisions, \
@@ -1706,7 +1706,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-default-mode-test-{}-{}",
+            "codewhale-tui-default-mode-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -1731,7 +1731,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-cost-currency-test-{}-{}",
+            "codewhale-tui-cost-currency-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -1757,7 +1757,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-theme-command-test-{}-{}",
+            "codewhale-tui-theme-command-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -1780,7 +1780,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-theme-save-test-{}-{}",
+            "codewhale-tui-theme-save-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -1884,7 +1884,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-logout-test-{}-{}",
+            "codewhale-tui-logout-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -1933,7 +1933,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-statusline-persist-{}-{}",
+            "codewhale-statusline-persist-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -1964,7 +1964,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-statusline-preserve-{}-{}",
+            "codewhale-statusline-preserve-{}-{}",
             std::process::id(),
             nanos
         ));

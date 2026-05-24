@@ -406,10 +406,23 @@ fn sanitize_api_key_text(text: &str) -> String {
 }
 
 fn strip_raw_mouse_report_runs(input: &str, cursor: usize) -> Option<(String, usize)> {
-    let chars: Vec<char> = input.chars().collect();
-    let mut output = String::with_capacity(input.len());
+    // First pass: strip the well-defined control-sequence fragment
+    // shapes that crossterm sometimes hands us as `Char(c)` keystrokes
+    // when its event reader is interrupted mid-sequence during dense
+    // streaming output (#1915). This covers OSC 8 hyperlink fragments
+    // (`]8;;URL`, including the closing `]8;;`) and Kitty keyboard
+    // protocol fragments (`[?…u`, `[>…u`, `[?u`).
+    let (after_fragments, after_fragments_cursor, fragments_changed) =
+        strip_control_sequence_fragments(input, cursor);
+
+    // Second pass: the existing run-based filter handles SGR mouse
+    // reports (`[<35;44;18M`) and the multi-terminator burst shape
+    // (`5;46;18M;48;18M`) introduced in e63a4ba4a. It operates on a
+    // narrow char set so it can't be confused with user-typed text.
+    let chars: Vec<char> = after_fragments.chars().collect();
+    let mut output = String::with_capacity(after_fragments.len());
     let mut new_cursor = 0usize;
-    let mut changed = false;
+    let mut changed = fragments_changed;
     let mut index = 0usize;
 
     while index < chars.len() {
@@ -433,7 +446,7 @@ fn strip_raw_mouse_report_runs(input: &str, cursor: usize) -> Option<(String, us
                 continue;
             }
             for (offset, ch) in run.iter().copied().enumerate() {
-                if start + offset < cursor {
+                if start + offset < after_fragments_cursor {
                     new_cursor += 1;
                 }
                 output.push(ch);
@@ -441,7 +454,7 @@ fn strip_raw_mouse_report_runs(input: &str, cursor: usize) -> Option<(String, us
             continue;
         }
 
-        if index < cursor {
+        if index < after_fragments_cursor {
             new_cursor += 1;
         }
         output.push(chars[index]);
@@ -564,6 +577,155 @@ fn looks_like_raw_mouse_report_fragment(run: &[char]) -> bool {
     run.iter().any(|ch| ch.is_ascii_digit())
         && run.iter().any(|ch| matches!(ch, ';' | ':'))
         && run.iter().any(|ch| matches!(ch, 'M' | 'm'))
+}
+
+/// Scan `input` for control-sequence fragment shapes (#1915) — OSC 8
+/// hyperlinks and Kitty keyboard protocol responses — and excise each
+/// match. Returns `(output, new_cursor, changed)`. Cursor positions
+/// inside an excised fragment are moved to the fragment's start.
+///
+/// The match shapes are deliberately narrow so legitimate text like
+/// `[is this ok?]` or a typed URL survives untouched:
+///
+/// - **OSC 8**: `(\x1b?)] 8 ; ...` consuming everything up to the
+///   first BEL (`\x07`), `\x1b\\`, lone `\\`, or the next `\x1b]8;`
+///   block — terminator characters are optional because crossterm may
+///   have already consumed them.
+/// - **Kitty CSI**: `(\x1b?) [ (? | > | =) ... u` — the `?`/`>`/`=`
+///   private-parameter prefix is what distinguishes a Kitty response
+///   from a user-typed `[…u` (which is exceedingly rare and would
+///   need an explicit private-parameter byte to be a real CSI).
+fn strip_control_sequence_fragments(input: &str, cursor: usize) -> (String, usize, bool) {
+    let chars: Vec<char> = input.chars().collect();
+    let mut output = String::with_capacity(input.len());
+    let mut new_cursor = 0usize;
+    let mut changed = false;
+    let mut index = 0usize;
+
+    while index < chars.len() {
+        if let Some(end) = match_osc8_fragment(&chars, index) {
+            // The excised span contributes nothing to `output`, so
+            // `new_cursor` simply doesn't tick for any of those
+            // characters. A cursor that was inside the span ends up at
+            // the fragment's start position in the rewritten input,
+            // which matches the existing run-stripper's behavior.
+            index = end;
+            changed = true;
+            continue;
+        }
+
+        if let Some(end) = match_kitty_csi_fragment(&chars, index) {
+            index = end;
+            changed = true;
+            continue;
+        }
+
+        if index < cursor {
+            new_cursor += 1;
+        }
+        output.push(chars[index]);
+        index += 1;
+    }
+
+    let cursor = new_cursor.min(char_count(&output));
+    (output, cursor, changed)
+}
+
+/// If an OSC 8 hyperlink fragment starts at `chars[start]`, return its
+/// end index (exclusive). The leading `ESC` is optional because
+/// crossterm's event parser often consumes it before reclassifying the
+/// tail as keystrokes.
+fn match_osc8_fragment(chars: &[char], start: usize) -> Option<usize> {
+    let body_start = if chars.get(start) == Some(&'\x1b')
+        && chars.get(start + 1) == Some(&']')
+        && chars.get(start + 2) == Some(&'8')
+        && chars.get(start + 3) == Some(&';')
+    {
+        start + 4
+    } else if chars.get(start) == Some(&']')
+        && chars.get(start + 1) == Some(&'8')
+        && chars.get(start + 2) == Some(&';')
+    {
+        start + 3
+    } else {
+        return None;
+    };
+
+    // After `]8;` we expect the OSC 8 payload: an optional second `;`
+    // (params separator), then the URL (or empty for the closing
+    // wrapper), then a terminator. We deliberately stop at the first
+    // ASCII whitespace so a typed `]8;` followed by real prose can't
+    // swallow the user's words — real OSC 8 URLs don't contain spaces.
+    let mut end = body_start;
+    while end < chars.len() {
+        let ch = chars[end];
+        // BEL terminator.
+        if ch == '\x07' {
+            return Some(end + 1);
+        }
+        // `ESC \\` string terminator (ST).
+        if ch == '\x1b' && chars.get(end + 1) == Some(&'\\') {
+            return Some(end + 2);
+        }
+        // Lone `\\` — crossterm sometimes delivers ST with the leading
+        // ESC already consumed, leaving just `\\` as a Char keystroke.
+        if ch == '\\' {
+            return Some(end + 1);
+        }
+        // Start of the next OSC 8 wrapper (closing `]8;;` glued to the
+        // body) — close the current fragment here so the next iteration
+        // matches that one separately.
+        if ch == '\x1b' && chars.get(end + 1) == Some(&']') {
+            return Some(end);
+        }
+        if ch == ']' && chars.get(end + 1) == Some(&'8') && chars.get(end + 2) == Some(&';') {
+            return Some(end);
+        }
+        if ch.is_whitespace() {
+            // We never crossed a terminator, so this isn't a real
+            // fragment — give up rather than eat user prose.
+            return None;
+        }
+        end += 1;
+    }
+
+    // Reached end of input without a terminator or whitespace. Treat as
+    // a fragment in flight (its tail will arrive on a later keystroke
+    // and get filtered then).
+    Some(end)
+}
+
+/// If a Kitty keyboard protocol CSI fragment starts at `chars[start]`,
+/// return its end index (exclusive). Shape: `(ESC)? [ (? | > | =)
+/// [0-9;:]* u`. The private-parameter byte (`?`, `>`, `=`) is what
+/// keeps this distinct from text the user might plausibly type.
+fn match_kitty_csi_fragment(chars: &[char], start: usize) -> Option<usize> {
+    let after_csi = if chars.get(start) == Some(&'\x1b') && chars.get(start + 1) == Some(&'[') {
+        start + 2
+    } else if chars.get(start) == Some(&'[') {
+        start + 1
+    } else {
+        return None;
+    };
+
+    let priv_byte = chars.get(after_csi)?;
+    if !matches!(priv_byte, '?' | '>' | '=') {
+        return None;
+    }
+
+    let mut end = after_csi + 1;
+    while end < chars.len() {
+        let ch = chars[end];
+        if ch == 'u' {
+            return Some(end + 1);
+        }
+        if ch.is_ascii_digit() || ch == ';' || ch == ':' {
+            end += 1;
+            continue;
+        }
+        return None;
+    }
+    None
 }
 
 const MAX_SUBMITTED_INPUT_CHARS: usize = 16_000;
@@ -1178,6 +1340,10 @@ pub struct App {
     pub workspace_context_refreshed_at: Option<Instant>,
     /// Cached background tasks for sidebar rendering.
     pub task_panel: Vec<TaskPanelEntry>,
+    /// Wall-clock time when this TUI session started. Used by the Work
+    /// sidebar projection to hide completed durable tasks that finished
+    /// before the current session (bug #1913).
+    pub session_started_at: chrono::DateTime<chrono::Utc>,
     /// Whether the UI needs to be redrawn.
     pub needs_redraw: bool,
     /// When the current thinking block started (for duration tracking).
@@ -1539,7 +1705,7 @@ impl App {
         let plan_state = new_shared_plan_state();
 
         let skills_dir = resolve_skills_dir(&workspace, &global_skills_dir, config);
-        let cached_skills = Self::discover_cached_skills(&workspace);
+        let cached_skills = Self::discover_cached_skills(&workspace, &skills_dir);
 
         let input_history = crate::composer_history::load_history();
         let (initial_input_text, initial_input_cursor) = match initial_input {
@@ -1727,6 +1893,7 @@ impl App {
             workspace_context_cell: std::sync::Arc::new(std::sync::Mutex::new(None)),
             workspace_context_refreshed_at: None,
             task_panel: Vec::new(),
+            session_started_at: chrono::Utc::now(),
             needs_redraw: true,
             thinking_started_at: None,
             is_compacting: false,
@@ -1755,8 +1922,11 @@ impl App {
         }
     }
 
-    fn discover_cached_skills(workspace: &std::path::Path) -> Vec<(String, String)> {
-        crate::skills::discover_in_workspace(workspace)
+    fn discover_cached_skills(
+        workspace: &std::path::Path,
+        skills_dir: &std::path::Path,
+    ) -> Vec<(String, String)> {
+        crate::skills::discover_for_workspace_and_dir(workspace, skills_dir)
             .list()
             .iter()
             .map(|s| (s.name.clone(), s.description.clone()))
@@ -1764,7 +1934,8 @@ impl App {
     }
 
     pub fn refresh_skill_cache(&mut self) {
-        self.cached_skills = Self::discover_cached_skills(&self.workspace);
+        let skills_dir = self.skills_dir.clone();
+        self.cached_skills = Self::discover_cached_skills(&self.workspace, &skills_dir);
     }
 
     pub fn submit_api_key(&mut self) -> Result<SavedCredential, ApiKeyError> {
@@ -2667,6 +2838,10 @@ impl App {
         (StatusToastLevel::Info, Some(4_000), false)
     }
 
+    fn is_mode_switch_status_message(message: &str) -> bool {
+        message.starts_with("Switched to ") && message.ends_with(" mode")
+    }
+
     pub fn sync_status_message_to_toasts(&mut self) {
         let current = self.status_message.clone();
         if self.last_status_message_seen == current {
@@ -2692,6 +2867,10 @@ impl App {
                     .is_some_and(|toast| matches!(toast.level, StatusToastLevel::Error))
             {
                 self.clear_sticky_status();
+            }
+            if Self::is_mode_switch_status_message(&message) {
+                self.status_toasts
+                    .retain(|toast| !Self::is_mode_switch_status_message(&toast.text));
             }
             self.push_status_toast(message, level, ttl_ms);
         }
@@ -4679,6 +4858,112 @@ mod tests {
         assert_eq!(app.input, "Size 12;34M");
     }
 
+    // === Bug #1915: broader terminal control-sequence fragments leaking
+    // into the composer during dense streaming output. The narrow SGR
+    // mouse-report filter installed in e63a4ba4a covers `[<…M` style
+    // bursts, but not OSC 8 hyperlink fragments (`]8;;http…`) or Kitty
+    // keyboard protocol responses (`[?u`, `[>1u`). These can arrive when
+    // crossterm's event reader is mid-sequence and the unparsed tail is
+    // delivered as individual Char(c) keystrokes that land in the input.
+
+    #[test]
+    fn composer_strips_osc8_hyperlink_fragment() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.use_mouse_capture = true;
+        app.insert_str("draft ");
+
+        // OSC 8 prefix with URL body but no terminator delivered yet —
+        // exactly what crossterm hands us if its event reader is
+        // interrupted mid-sequence and the leading ESC is consumed by the
+        // parser before the rest gets reclassified as Char(c).
+        app.insert_str("]8;;https://example.com");
+
+        assert_eq!(app.input, "draft ");
+        assert_eq!(app.cursor_position, "draft ".chars().count());
+    }
+
+    #[test]
+    fn composer_strips_closing_osc8_fragment() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.use_mouse_capture = true;
+        app.insert_str("hello ");
+
+        // The closing wrapper `]8;;` (with a stray ST `\\` from a
+        // chopped escape) can arrive on its own when the parser ate
+        // the start of the sequence in a previous read but caught the
+        // tail as keystrokes.
+        app.insert_str("]8;;\\");
+
+        assert_eq!(app.input, "hello ");
+        assert_eq!(app.cursor_position, "hello ".chars().count());
+    }
+
+    #[test]
+    fn composer_strips_kitty_keyboard_protocol_fragment() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.use_mouse_capture = true;
+        app.insert_str("ready ");
+
+        // Kitty keyboard protocol responses look like `\x1b[?1u`,
+        // `\x1b[>1u`, or `\x1b[?u`. With the ESC consumed, the tail
+        // shape is `[?…u` or `[>…u`.
+        app.insert_str("[?1u[>1u[?u");
+
+        assert_eq!(app.input, "ready ");
+        assert_eq!(app.cursor_position, "ready ".chars().count());
+    }
+
+    #[test]
+    fn composer_strips_mixed_control_sequence_burst() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.use_mouse_capture = true;
+        app.insert_str("hi");
+
+        // Mixed dense burst combining all three fragment families
+        // described in #1915.
+        app.insert_str("[<35;44;18M]8;;https://example.com[?1u");
+
+        assert_eq!(app.input, "hi");
+        assert_eq!(app.cursor_position, 2);
+    }
+
+    #[test]
+    fn composer_keeps_legitimate_url_text_with_mouse_capture_enabled() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.use_mouse_capture = true;
+
+        // URLs typed by the user must survive the filter — only
+        // recognized control-sequence shapes are stripped.
+        app.insert_str("see https://example.com/path?a=1&b=2 for info");
+
+        assert_eq!(app.input, "see https://example.com/path?a=1&b=2 for info");
+    }
+
+    #[test]
+    fn composer_keeps_legitimate_bracket_question_text() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.use_mouse_capture = true;
+
+        // Text that uses brackets, question marks, and lowercase `u` —
+        // shapes that overlap Kitty fragments — must not be eaten.
+        app.insert_str("[is this ok?] sure");
+
+        assert_eq!(app.input, "[is this ok?] sure");
+    }
+
+    #[test]
+    fn composer_keeps_legitimate_closing_bracket_digit_text() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.use_mouse_capture = true;
+
+        // Plain `]8` followed by spaces and words must survive — only
+        // the OSC 8 shape `]8;` (with the mandatory `;` separator)
+        // should be treated as a fragment.
+        app.insert_str("array[]8 elements");
+
+        assert_eq!(app.input, "array[]8 elements");
+    }
+
     // initial_onboarding_state tests
     // These pin the logic that decides whether the TUI shows the
     // onboarding flow (Welcome → Language → ApiKey → …) or goes
@@ -4833,6 +5118,37 @@ mod tests {
                 .any(|(name, description)| name == "foo" && description == "Real foo skill"),
             "cached_skills should fall through to lower-precedence dir when higher-precedence one has an empty stub: {:?}",
             app.cached_skills,
+        );
+    }
+
+    #[test]
+    fn cached_skills_include_configured_directory() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let workspace = tmp.path().join("workspace");
+
+        let configured_dir = tmp.path().join("configured-skills");
+        let configured_skill_dir = configured_dir.join("configured-skill");
+        std::fs::create_dir_all(&configured_skill_dir).expect("configured skill dir");
+        std::fs::write(
+            configured_skill_dir.join("SKILL.md"),
+            "---\nname: configured-skill\ndescription: Configured skill\n---\nbody\n",
+        )
+        .expect("write configured skill");
+
+        let mut options = test_options(false);
+        options.workspace = workspace.clone();
+        options.skills_dir = configured_dir.clone();
+        let mut config = Config::default();
+        config.skills_dir = Some(configured_dir.to_string_lossy().into_owned());
+        let app = App::new(options, &config);
+
+        assert!(
+            app.cached_skills
+                .iter()
+                .any(|(name, description)| name == "configured-skill"
+                    && description == "Configured skill"),
+            "configured skill dir should be merged: {:?}",
+            app.cached_skills
         );
     }
 
@@ -5015,6 +5331,74 @@ mod tests {
         app.mode = AppMode::Agent;
         app.cycle_mode_reverse();
         assert_eq!(app.mode, AppMode::Plan);
+    }
+
+    #[test]
+    fn test_mode_switch_toasts_replace_previous_mode_switch_toast() {
+        let mut app = App::new(test_options(false), &Config::default());
+        let first_mode = match app.mode {
+            AppMode::Plan => AppMode::Agent,
+            AppMode::Agent => AppMode::Yolo,
+            AppMode::Yolo => AppMode::Plan,
+        };
+        let second_mode = match first_mode {
+            AppMode::Plan => AppMode::Yolo,
+            AppMode::Agent => AppMode::Plan,
+            AppMode::Yolo => AppMode::Agent,
+        };
+        let third_mode = match second_mode {
+            AppMode::Plan => AppMode::Yolo,
+            AppMode::Agent => AppMode::Yolo,
+            AppMode::Yolo => AppMode::Plan,
+        };
+
+        app.set_mode(first_mode);
+        app.sync_status_message_to_toasts();
+        assert_eq!(app.status_toasts.len(), 1);
+        assert_eq!(
+            app.status_toasts.back().expect("mode toast").text,
+            format!("Switched to {} mode", first_mode.label())
+        );
+
+        app.set_mode(second_mode);
+        app.sync_status_message_to_toasts();
+        assert_eq!(app.status_toasts.len(), 1);
+        assert_eq!(
+            app.status_toasts.back().expect("mode toast").text,
+            format!("Switched to {} mode", second_mode.label())
+        );
+
+        app.set_mode(third_mode);
+        app.sync_status_message_to_toasts();
+        assert_eq!(app.status_toasts.len(), 1);
+        assert_eq!(
+            app.status_toasts.back().expect("mode toast").text,
+            format!("Switched to {} mode", third_mode.label())
+        );
+    }
+
+    #[test]
+    fn test_mode_switch_toasts_do_not_disrupt_non_mode_toasts() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.status_message = Some("Task queued".to_string());
+        app.sync_status_message_to_toasts();
+
+        app.set_mode(AppMode::Agent);
+        app.sync_status_message_to_toasts();
+        app.set_mode(AppMode::Yolo);
+        app.sync_status_message_to_toasts();
+
+        assert_eq!(app.status_toasts.len(), 2);
+        assert!(
+            app.status_toasts
+                .iter()
+                .any(|toast| toast.text == "Task queued")
+        );
+        assert!(
+            app.status_toasts
+                .iter()
+                .any(|toast| toast.text == "Switched to YOLO mode")
+        );
     }
 
     #[test]

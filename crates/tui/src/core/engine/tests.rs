@@ -94,8 +94,8 @@ fn env_only_auth_error_gets_recovery_hint() {
 
     assert!(message.contains("DEEPSEEK_API_KEY"));
     assert!(message.contains("no saved config key is present"));
-    assert!(message.contains("deepseek auth status"));
-    assert!(message.contains("deepseek auth set --provider deepseek"));
+    assert!(message.contains("codewhale auth status"));
+    assert!(message.contains("codewhale auth set --provider deepseek"));
 }
 
 #[test]
@@ -1874,7 +1874,7 @@ fn filter_tool_call_delta_strips_bracket_marker() {
 fn filter_tool_call_delta_strips_deepseek_xml_marker() {
     let mut in_block = false;
     let visible = filter_tool_call_delta(
-        "before <deepseek:tool_call name=\"x\">payload</deepseek:tool_call> after",
+        "before <codewhale:tool_call name=\"x\">payload</codewhale:tool_call> after",
         &mut in_block,
     );
     assert!(!in_block);

@@ -1,6 +1,6 @@
-# DeepSeek TUI Architecture
+# codewhale Architecture
 
-This document provides an overview of the DeepSeek TUI architecture for developers and contributors.
+This document provides an overview of the codewhale architecture for developers and contributors.
 
 Current boundary note (v0.8.6):
 - `crates/tui` is still the live end-user runtime for the TUI, runtime API, task manager, and tool execution loop.
@@ -178,7 +178,7 @@ drives turns through Chat Completions.
 - **`prompts.rs`** - System prompt templates
 - **`project_doc.rs`** - Project documentation handling
 - **`session.rs`** - Session serialization
-- **`runtime_api.rs`** - HTTP/SSE runtime API (`deepseek serve --http`)
+- **`runtime_api.rs`** - HTTP/SSE runtime API (`codewhale serve --http`)
 - **`runtime_threads.rs`** - Durable thread/turn/item store + replayable event timeline
 - **`task_manager.rs`** - Durable queue, worker pool, task timelines and artifacts
 

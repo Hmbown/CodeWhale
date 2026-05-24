@@ -47,11 +47,11 @@ jobs:
       - name: Workspace tests
         run: cargo test --workspace --all-features --locked
       - name: TUI snapshot parity
-        run: cargo test -p deepseek-tui-core --test snapshot --locked
+        run: cargo test -p codewhale-tui-core --test snapshot --locked
       - name: Protocol schema parity
-        run: cargo test -p deepseek-protocol --test parity_protocol --locked
+        run: cargo test -p codewhale-protocol --test parity_protocol --locked
       - name: State persistence parity
-        run: cargo test -p deepseek-state --test parity_state --locked
+        run: cargo test -p codewhale-state --test parity_state --locked
       - name: Lockfile drift guard
         run: git diff --exit-code -- Cargo.lock
 
@@ -100,7 +100,49 @@ jobs:
     strategy:
       matrix:
         include:
-          # --- deepseek (cli) ---
+          # --- codewhale (cli dispatcher, canonical) ---
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary: codewhale
+            artifact_name: codewhale-linux-x64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            binary: codewhale
+            artifact_name: codewhale-linux-arm64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            binary: codewhale
+            artifact_name: codewhale-macos-x64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            binary: codewhale
+            artifact_name: codewhale-macos-arm64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: codewhale.exe
+            artifact_name: codewhale-windows-x64.exe
+          # --- codewhale-tui (TUI runtime, canonical) ---
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary: codewhale-tui
+            artifact_name: codewhale-tui-linux-x64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            binary: codewhale-tui
+            artifact_name: codewhale-tui-linux-arm64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            binary: codewhale-tui
+            artifact_name: codewhale-tui-macos-x64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            binary: codewhale-tui
+            artifact_name: codewhale-tui-macos-arm64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: codewhale-tui.exe
+            artifact_name: codewhale-tui-windows-x64.exe
+          # --- deepseek (legacy dispatcher shim; removed in v0.9.0) ---
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             binary: deepseek
@@ -121,7 +163,7 @@ jobs:
             target: x86_64-pc-windows-msvc
             binary: deepseek.exe
             artifact_name: deepseek-windows-x64.exe
-          # --- deepseek-tui (TUI) ---
+          # --- deepseek-tui (legacy TUI shim; removed in v0.9.0) ---
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             binary: deepseek-tui
@@ -231,6 +273,12 @@ jobs:
             type=raw,value=latest
       - name: Build and push
         uses: docker/build-push-action@v6
+        env:
+          # The build record is useful in CI, but it is uploaded as a
+          # `.dockerbuild` artifact. The release job intentionally downloads
+          # all binary artifacts, so suppress the extra record artifact there.
+          DOCKER_BUILD_RECORD_UPLOAD: false
+          DOCKER_BUILD_SUMMARY: false
         with:
           context: source
           file: infra/Dockerfile
@@ -253,20 +301,27 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-          pattern: deepseek*
+          # Match both the canonical `codewhale*` artifacts and the legacy
+          # `deepseek*` shim artifacts that ship for the transition release.
+          pattern: '*'
       - name: List artifacts
         run: find artifacts -type f
       - name: Generate checksum manifest
         shell: bash
         run: |
           mkdir -p artifacts/checksums
-          manifest="artifacts/checksums/deepseek-artifacts-sha256.txt"
+          # Canonical manifest used by codewhale's `codewhale update` flow.
+          manifest="artifacts/checksums/codewhale-artifacts-sha256.txt"
           : > "${manifest}"
           while IFS= read -r -d '' file; do
             hash="$(sha256sum "${file}" | awk '{print $1}')"
             base="$(basename "${file}")"
             printf '%s  %s\n' "${hash}" "${base}" >> "${manifest}"
           done < <(find artifacts -type f ! -path 'artifacts/checksums/*' -print0 | sort -z)
+          # Legacy alias manifest so v0.8.40 `deepseek update` clients can
+          # still find a manifest by their hardcoded name. Same content; will
+          # be removed once the legacy shim binaries are retired in v0.9.0.
+          cp "${manifest}" "artifacts/checksums/deepseek-artifacts-sha256.txt"
           cat "${manifest}"
       - uses: softprops/action-gh-release@v1
         with:
@@ -274,12 +329,19 @@ jobs:
           files: artifacts/*/*
           prerelease: false
           body: |
+            > This release renames the project to **CodeWhale**. The legacy
+            > `deepseek` and `deepseek-tui` binaries continue to ship as
+            > deprecation shims for one release cycle; they print a one-line
+            > warning and forward to `codewhale` / `codewhale-tui`. They will
+            > be removed in v0.9.0. See `docs/REBRAND.md` for the full
+            > migration story.
+
             ## Install
 
             ### Recommended — npm (one command, both binaries)
 
             ```bash
-            npm install -g deepseek-tui
+            npm install -g codewhale
             ```
 
             The wrapper downloads both binaries from this Release and places them in the same directory.
@@ -289,19 +351,19 @@ jobs:
             ```bash
             docker run --rm -it \
               -e DEEPSEEK_API_KEY="$DEEPSEEK_API_KEY" \
-              -v ~/.deepseek:/home/deepseek/.deepseek \
-              ghcr.io/hmbown/deepseek-tui:${{ needs.resolve.outputs.tag }}
+              -v ~/.deepseek:/home/codewhale/.deepseek \
+              ghcr.io/hmbown/codewhale:${{ needs.resolve.outputs.tag }}
             ```
 
-            The image ships the `deepseek` dispatcher and `deepseek-tui` runtime. The `latest` tag is also updated on release.
+            The image ships the `codewhale` dispatcher and `codewhale-tui` runtime (plus the legacy `deepseek` / `deepseek-tui` shims during the transition). The `latest` tag is also updated on release.
 
             ### Cargo (Linux / macOS)
 
             ```bash
-            cargo install deepseek-tui-cli deepseek-tui --locked
+            cargo install codewhale-cli codewhale-tui --locked
             ```
 
-            Both crates are required — `deepseek-tui-cli` produces the `deepseek` dispatcher and `deepseek-tui` produces the interactive runtime that the dispatcher delegates to. Installing only one binary will fail at runtime with a `MISSING_COMPANION_BINARY` error.
+            Both crates are required — `codewhale-cli` produces the `codewhale` dispatcher and `codewhale-tui` produces the interactive runtime that the dispatcher delegates to. Installing only one binary will fail at runtime with a `MISSING_COMPANION_BINARY` error.
 
             ### Manual download
 
@@ -309,29 +371,33 @@ jobs:
 
             | Platform | Dispatcher | TUI runtime |
             |---|---|---|
-            | Linux x64 | `deepseek-linux-x64` | `deepseek-tui-linux-x64` |
-            | Linux ARM64 | `deepseek-linux-arm64` | `deepseek-tui-linux-arm64` |
-            | macOS x64 | `deepseek-macos-x64` | `deepseek-tui-macos-x64` |
-            | macOS ARM | `deepseek-macos-arm64` | `deepseek-tui-macos-arm64` |
-            | Windows x64 | `deepseek-windows-x64.exe` | `deepseek-tui-windows-x64.exe` |
+            | Linux x64 | `codewhale-linux-x64` | `codewhale-tui-linux-x64` |
+            | Linux ARM64 | `codewhale-linux-arm64` | `codewhale-tui-linux-arm64` |
+            | macOS x64 | `codewhale-macos-x64` | `codewhale-tui-macos-x64` |
+            | macOS ARM | `codewhale-macos-arm64` | `codewhale-tui-macos-arm64` |
+            | Windows x64 | `codewhale-windows-x64.exe` | `codewhale-tui-windows-x64.exe` |
 
-            Then `chmod +x` both (Unix) and run `./deepseek`.
+            Then `chmod +x` both (Unix) and run `./codewhale`.
+
+            Legacy `deepseek-*` and `deepseek-tui-*` assets are also attached for one release cycle so that existing `deepseek update` invocations on v0.8.40 keep working; they install the deprecation shims, which forward to the canonical binaries.
 
             ### Verify (recommended)
 
-            Download `deepseek-artifacts-sha256.txt` from this Release and verify:
+            Download `codewhale-artifacts-sha256.txt` from this Release and verify:
 
             ```bash
             # Linux
-            sha256sum -c deepseek-artifacts-sha256.txt
+            sha256sum -c codewhale-artifacts-sha256.txt
 
             # macOS
-            shasum -a 256 -c deepseek-artifacts-sha256.txt
+            shasum -a 256 -c codewhale-artifacts-sha256.txt
             ```
+
+            The legacy `deepseek-artifacts-sha256.txt` is also attached for backward compatibility and contains the same hashes.
 
             ## Changelog
 
-            See [CHANGELOG.md](https://github.com/Hmbown/DeepSeek-TUI/blob/main/CHANGELOG.md) for the full notes for this release.
+            See [CHANGELOG.md](https://github.com/Hmbown/CodeWhale/blob/main/CHANGELOG.md) for the full notes for this release.
 
   homebrew:
     needs: [release, resolve]

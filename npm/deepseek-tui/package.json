@@ -1,37 +1,25 @@
 {
   "name": "deepseek-tui",
-  "version": "0.8.40",
-  "deepseekBinaryVersion": "0.8.40",
-  "description": "Install and run deepseek and deepseek-tui binaries from GitHub release artifacts.",
+  "version": "0.8.41",
+  "description": "Deprecated. Renamed to `codewhale`. Run `npm install -g codewhale` instead.",
   "author": "Hmbown",
   "license": "MIT",
-  "homepage": "https://github.com/Hmbown/DeepSeek-TUI",
+  "homepage": "https://github.com/Hmbown/CodeWhale/blob/main/docs/REBRAND.md",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Hmbown/DeepSeek-TUI.git"
+    "url": "git+https://github.com/Hmbown/CodeWhale.git"
   },
   "bugs": {
-    "url": "https://github.com/Hmbown/DeepSeek-TUI/issues"
+    "url": "https://github.com/Hmbown/CodeWhale/issues"
   },
   "keywords": [
+    "deprecated",
     "deepseek",
-    "cli",
-    "tui",
-    "rust",
-    "binary",
-    "terminal"
+    "codewhale"
   ],
   "type": "commonjs",
-  "bin": {
-    "deepseek": "bin/deepseek.js",
-    "deepseek-tui": "bin/deepseek-tui.js"
-  },
   "scripts": {
-    "release:check": "node scripts/verify-release-assets.js",
-    "postinstall": "node scripts/install.js --optional",
-    "prepublishOnly": "node scripts/verify-release-assets.js",
-    "prepack": "node scripts/install.js",
-    "test": "node --test test/*.test.js"
+    "postinstall": "node scripts/deprecation-notice.js"
   },
   "engines": {
     "node": ">=18"
@@ -39,11 +27,8 @@
   "publishConfig": {
     "access": "public"
   },
-  "preferGlobal": true,
   "files": [
-    "bin/*.js",
     "scripts/*.js",
-    "test/*.js",
     "README.md",
     "package.json"
   ]

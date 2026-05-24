@@ -549,7 +549,8 @@ impl ToolRegistryBuilder {
             AutomationReadTool, AutomationResumeTool, AutomationRunTool, AutomationUpdateTool,
         };
         use super::github::{
-            GithubCloseIssueTool, GithubCommentTool, GithubIssueContextTool, GithubPrContextTool,
+            GithubCloseIssueTool, GithubClosePrTool, GithubCommentTool, GithubIssueContextTool,
+            GithubPrContextTool,
         };
         use super::tasks::{
             PrAttemptListTool, PrAttemptPreflightTool, PrAttemptReadTool, PrAttemptRecordTool,
@@ -580,6 +581,7 @@ impl ToolRegistryBuilder {
             .with_tool(Arc::new(AutomationRunTool))
             .with_tool(Arc::new(GithubCommentTool))
             .with_tool(Arc::new(GithubCloseIssueTool))
+            .with_tool(Arc::new(GithubClosePrTool))
     }
 
     /// Include only read-only durable task, PR-attempt, GitHub, and automation

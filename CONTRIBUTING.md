@@ -1,6 +1,6 @@
-# Contributing to DeepSeek TUI
+# Contributing to codewhale
 
-Thank you for your interest in contributing to DeepSeek TUI! This document provides guidelines and instructions for contributing.
+Thank you for your interest in contributing to codewhale! This document provides guidelines and instructions for contributing.
 
 ## Getting Started
 
@@ -14,8 +14,8 @@ Thank you for your interest in contributing to DeepSeek TUI! This document provi
 
 1. Fork and clone the repository:
    ```bash
-   git clone https://github.com/YOUR_USERNAME/DeepSeek-TUI.git
-   cd DeepSeek-TUI
+   git clone https://github.com/YOUR_USERNAME/CodeWhale.git
+   cd CodeWhale
    ```
 
 2. Build the project:
@@ -25,12 +25,12 @@ Thank you for your interest in contributing to DeepSeek TUI! This document provi
 
 3. Run tests:
    ```bash
-   cargo test
+   cargo test --workspace --all-features
    ```
 
 4. Run with development settings:
    ```bash
-   cargo run
+   cargo run --bin codewhale
    ```
 
 ## Development Workflow
@@ -118,14 +118,14 @@ instead of the Harvest path, the highest-leverage things you can do are:
 
 ## Project Structure
 
-DeepSeek TUI is a Cargo workspace. The live runtime and the majority of TUI,
+codewhale is a Cargo workspace. The live runtime and the majority of TUI,
 engine, and tool code currently live in `crates/tui/src/`. Smaller workspace
 crates provide shared abstractions that are being extracted incrementally.
 
 ```
 crates/
-├── tui/           deepseek-tui binary (interactive TUI + runtime API)
-├── cli/           deepseek binary (dispatcher facade)
+├── tui/           codewhale-tui binary (interactive TUI + runtime API)
+├── cli/           codewhale binary (dispatcher facade)
 ├── app-server/    HTTP/SSE + JSON-RPC transport
 ├── core/          Agent loop / session / turn management
 ├── protocol/      Request/response framing
@@ -153,9 +153,9 @@ these crates, including the bottom-up build order.
 
 3. Ensure CI passes:
    ```bash
-   cargo fmt --check
-   cargo clippy
-   cargo test
+   cargo fmt --all -- --check
+   cargo clippy --workspace --all-targets --all-features
+   cargo test --workspace --all-features
    ```
 
 4. Push your branch and create a Pull Request
@@ -201,7 +201,7 @@ When reporting issues, please include:
 
 - Operating system and version
 - Rust version (`rustc --version`)
-- DeepSeek TUI version (`deepseek --version`)
+- codewhale version (`codewhale --version`)
 - Steps to reproduce the issue
 - Expected vs actual behavior
 - Relevant error messages or logs
@@ -212,7 +212,7 @@ Be respectful and inclusive. We welcome contributors of all backgrounds and expe
 
 ## License
 
-By contributing to DeepSeek TUI, you agree that your contributions will be licensed under the MIT License.
+By contributing to codewhale, you agree that your contributions will be licensed under the MIT License.
 
 ## Questions?
 

@@ -2252,6 +2252,7 @@ fn build_shell_delta_tool_result(delta: ShellDeltaResult, context: &ToolContext)
             "summary": summary,
             "stdout_summary": stdout_summary,
             "stderr_summary": stderr_summary,
+            "command": delta.command,
             "stream_delta": true,
         })),
     };

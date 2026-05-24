@@ -608,7 +608,7 @@ fn parse_inline_spans(line: &str, base_style: Style, link_style: Style) -> Vec<I
             let after = &rest[1 + end + 1..];
             // Closing delimiter must not be immediately followed by a
             // letter, digit, or underscore (otherwise it's part of an
-            // identifier like `deepseek_tui`, not italic markup).
+            // identifier like `codewhale_tui`, not italic markup).
             if !after.starts_with(|c: char| c.is_alphanumeric() || c == '_') {
                 out.push(InlineToken::new(inner.to_string(), italic_style, None));
                 rest = after;
@@ -1047,14 +1047,14 @@ mod tests {
     #[test]
     fn underscores_inside_identifiers_render_as_literal_text() {
         // Regression for PR #1455 / @tiger-dog: previously the inline
-        // markdown parser ate the underscore in `deepseek_tui` because
+        // markdown parser ate the underscore in `codewhale_tui` because
         // it matched the `_italic_` pattern without a CommonMark-style
         // boundary check. The closing `_` followed by `t` (a letter)
         // must now be treated as part of the identifier, not as
         // markup. The same rule applies to `*` so identifiers like
         // `crate*foo` round-trip cleanly.
         let cases = [
-            "crate deepseek_tui handles approvals",
+            "crate codewhale_tui handles approvals",
             "see foo_bar_baz for details",
             "look at *not_emphasised*tail",
         ];

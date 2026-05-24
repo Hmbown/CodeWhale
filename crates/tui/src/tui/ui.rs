@@ -54,7 +54,7 @@ use crate::session_manager::{
     create_saved_session_with_id_and_mode, create_saved_session_with_mode, update_session,
 };
 use crate::task_manager::{
-    NewTaskRequest, SharedTaskManager, TaskManager, TaskManagerConfig, TaskStatus,
+    NewTaskRequest, SharedTaskManager, TaskManager, TaskManagerConfig, TaskStatus, TaskSummary,
 };
 use crate::tools::spec::RuntimeToolServices;
 use crate::tools::subagent::SubAgentStatus;
@@ -576,7 +576,7 @@ fn should_show_resume_hint(session_id: Option<&str>) -> bool {
 }
 
 fn resume_hint_text() -> &'static str {
-    "To continue this session, execute deepseek run --continue"
+    "To continue this session, execute codewhale run --continue"
 }
 
 fn terminal_probe_timeout(config: &Config) -> Duration {
@@ -724,13 +724,69 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
     }
 }
 
+/// How long after a task finishes it should still appear in the Work
+/// sidebar even if its `ended_at` predates the current TUI session.
+///
+/// Tasks completing during the current session always show (until the
+/// next session boundary). Tasks that completed shortly before the
+/// session also show, so users coming back to a terminal see "you just
+/// finished X". Anything older than this window is hidden — preventing
+/// the sidebar from accumulating indefinitely (bug #1913).
+const WORK_SIDEBAR_RECENT_COMPLETED_TTL: chrono::Duration = chrono::Duration::hours(2);
+
+/// Choose which durable-task summaries should appear in the Work
+/// sidebar's Tasks panel.
+///
+/// Active tasks (`Queued`/`Running`) are always included. Terminal
+/// tasks (`Completed`/`Failed`/`Canceled`) are kept only if their
+/// `ended_at` falls within the "recent" window — defined as either:
+///
+/// - within the current TUI session (`ended_at >= session_started_at`), or
+/// - within `recent_ttl` of `now` (so a task that finished a few
+///   minutes before the session started still shows).
+///
+/// Anything older than that — including the multi-day-old completed
+/// tasks reported in bug #1913 — is excluded so the sidebar does not
+/// accumulate indefinitely across sessions.
+///
+/// A terminal task missing `ended_at` is treated as not-recent and
+/// dropped: durable tasks always stamp `ended_at` when they reach a
+/// terminal state, so absence of it indicates a record from a much
+/// older schema and isn't worth surfacing.
+pub(crate) fn select_work_sidebar_tasks(
+    tasks: Vec<TaskSummary>,
+    session_started_at: chrono::DateTime<chrono::Utc>,
+    now: chrono::DateTime<chrono::Utc>,
+    recent_ttl: chrono::Duration,
+) -> Vec<TaskSummary> {
+    let recent_cutoff = now - recent_ttl;
+    tasks
+        .into_iter()
+        .filter(|task| match task.status {
+            TaskStatus::Queued | TaskStatus::Running => true,
+            TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Canceled => {
+                match task.ended_at {
+                    Some(ended_at) => ended_at >= session_started_at || ended_at >= recent_cutoff,
+                    None => false,
+                }
+            }
+        })
+        .collect()
+}
+
 async fn refresh_active_task_panel(app: &mut App, task_manager: &SharedTaskManager) {
     let tasks = task_manager.list_tasks(None).await;
-    let mut entries: Vec<TaskPanelEntry> = tasks
-        .into_iter()
-        .filter(|task| matches!(task.status, TaskStatus::Queued | TaskStatus::Running))
-        .map(task_summary_to_panel_entry)
-        .collect();
+    let session_started_at = app.session_started_at;
+    let now = chrono::Utc::now();
+    let mut entries: Vec<TaskPanelEntry> = select_work_sidebar_tasks(
+        tasks,
+        session_started_at,
+        now,
+        WORK_SIDEBAR_RECENT_COMPLETED_TTL,
+    )
+    .into_iter()
+    .map(task_summary_to_panel_entry)
+    .collect();
 
     entries.extend(active_rlm_task_entries(app));
 
@@ -3675,22 +3731,23 @@ pub(crate) fn apply_engine_error_to_app(
 }
 
 fn persist_offline_queue_state(app: &App) {
-    if let Ok(manager) = SessionManager::default_location() {
-        if app.queued_messages.is_empty() && app.queued_draft.is_none() {
-            let _ = manager.clear_offline_queue_state();
-            return;
-        }
-        let state = OfflineQueueState {
-            messages: app
-                .queued_messages
-                .iter()
-                .map(queued_ui_to_session)
-                .collect(),
-            draft: app.queued_draft.as_ref().map(queued_ui_to_session),
-            ..OfflineQueueState::default()
-        };
-        let _ = manager.save_offline_queue_state(&state, app.current_session_id.as_deref());
+    if app.queued_messages.is_empty() && app.queued_draft.is_none() {
+        persistence_actor::persist(PersistRequest::ClearOfflineQueue);
+        return;
     }
+    let state = OfflineQueueState {
+        messages: app
+            .queued_messages
+            .iter()
+            .map(queued_ui_to_session)
+            .collect(),
+        draft: app.queued_draft.as_ref().map(queued_ui_to_session),
+        ..OfflineQueueState::default()
+    };
+    persistence_actor::persist(PersistRequest::OfflineQueue {
+        state,
+        session_id: app.current_session_id.clone(),
+    });
 }
 
 /// Strip ANSI control codes / non-printable bytes from a streaming
@@ -4734,19 +4791,18 @@ async fn apply_command_result(
 
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 fn open_external_url(url: &str) -> Result<()> {
-    let mut command = external_url_command(url);
+    spawn_external_url_command(external_url_command(url))
+}
 
-    let status = command
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+fn spawn_external_url_command(mut command: Command) -> Result<()> {
+    command
+        .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .status()
-        .map_err(|err| anyhow::anyhow!("failed to launch browser command: {err}"))?;
-    if !status.success() {
-        return Err(anyhow::anyhow!(
-            "browser command exited with status {status}"
-        ));
-    }
-    Ok(())
+        .spawn()
+        .map(|_| ())
+        .map_err(|err| anyhow::anyhow!("failed to launch browser command: {err}"))
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]

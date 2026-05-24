@@ -8,7 +8,7 @@
 //!
 //! Threat model: this is a deliberate user opt-in to a path the workspace
 //! sandbox would otherwise refuse. The only access the trust list grants is
-//! through DeepSeek-TUI's own file tools (`read_file`, `write_file`, etc.) —
+//! through CodeWhale's own file tools (`read_file`, `write_file`, etc.) —
 //! it does not loosen the OS sandbox profile (Seatbelt/Landlock) used for
 //! shell commands. Sandbox-profile expansion is tracked separately so a
 //! shell tool can opt into the same paths in a future release.

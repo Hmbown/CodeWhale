@@ -1328,7 +1328,7 @@ impl McpConnection {
             "params": {
                 "protocolVersion": "2024-11-05",
                 "clientInfo": {
-                    "name": "deepseek-tui",
+                    "name": "codewhale-tui",
                     "version": env!("CARGO_PKG_VERSION")
                 },
                 "capabilities": {
@@ -3343,7 +3343,7 @@ mod tests {
             r#"{
                 "mcpServers": {
                     "broken": {
-                        "command": "deepseek-tui-test-this-binary-does-not-exist-9f8e7d6c5b4a",
+                        "command": "codewhale-tui-test-this-binary-does-not-exist-9f8e7d6c5b4a",
                         "args": []
                     }
                 }

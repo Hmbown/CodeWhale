@@ -607,7 +607,7 @@ pub const DEFAULT_MAX_SPAWN_DEPTH: u32 = 3;
 
 /// Terminal-state notification emitted to the engine's parent turn loop
 /// when one of its direct children finishes (issue #756). Carries the
-/// already-rendered `<deepseek:subagent.done>` sentinel that the model
+/// already-rendered `<codewhale:subagent.done>` sentinel that the model
 /// expects in the transcript per `prompts/base.md`.
 #[derive(Debug, Clone)]
 pub struct SubAgentCompletion {
@@ -2421,11 +2421,35 @@ impl ToolSpec for AgentEvalTool {
                 .map_err(|e| ToolError::execution_failed(e.to_string()))?
         };
 
+        // Track whether a supplied follow-up message actually reached the
+        // child. A completed/failed/cancelled session cannot accept input, but
+        // that must NOT abort the whole call: the parent still needs the
+        // session projection (and its `transcript_handle`) to retrieve the
+        // child's full output. Hard-failing here was #1738 — "agent_eval on a
+        // completed session returns 'not running', no way to recover the full
+        // child output".
+        let mut message_delivery: Option<Value> = None;
         if let Some(message) = message {
-            let mut manager = self.manager.write().await;
-            manager
-                .send_input(&agent_id, message, interrupt)
-                .map_err(|e| ToolError::execution_failed(e.to_string()))?;
+            let terminal = {
+                let manager = self.manager.read().await;
+                manager
+                    .get_result(&agent_id)
+                    .map(|snap| snap.status != SubAgentStatus::Running)
+                    .unwrap_or(false)
+            };
+            if terminal {
+                message_delivery = Some(json!({
+                    "delivered": false,
+                    "reason": "session already terminated; follow-up not delivered",
+                    "recover_full_output": "read the returned transcript_handle with handle_read"
+                }));
+            } else {
+                let mut manager = self.manager.write().await;
+                manager
+                    .send_input(&agent_id, message, interrupt)
+                    .map_err(|e| ToolError::execution_failed(e.to_string()))?;
+                message_delivery = Some(json!({ "delivered": true }));
+            }
         }
 
         let (snapshot, timed_out) = if block {
@@ -2448,7 +2472,8 @@ impl ToolSpec for AgentEvalTool {
             "timed_out": timed_out,
             "terminal": projection.terminal,
             "context_mode": projection.context_mode,
-            "timeout_ms": timeout_ms
+            "timeout_ms": timeout_ms,
+            "message_delivery": message_delivery
         }));
         Ok(result)
     }
@@ -3308,12 +3333,12 @@ fn build_initial_subagent_messages(
             .filter(|state| !state.is_empty())
         {
             messages.push(system_text_message(format!(
-                "<deepseek:fork_state>\n{state}\n</deepseek:fork_state>"
+                "<codewhale:fork_state>\n{state}\n</codewhale:fork_state>"
             )));
         }
 
         messages.push(system_text_message(format!(
-            "<deepseek:subagent_context>\n{}\n</deepseek:subagent_context>",
+            "<codewhale:subagent_context>\n{}\n</codewhale:subagent_context>",
             build_subagent_system_prompt(agent_type, assignment)
         )));
     }
@@ -3381,7 +3406,7 @@ async fn run_subagent_task(task: SubAgentTask) {
     // sidebar / cell) AND a structured sentinel the model can recognize
     // on its next turn. Format: human summary on the first line,
     // sentinel on the second. The sentinel uses an opaque tag
-    // (`deepseek:subagent.done`) to avoid collision with normal user
+    // (`codewhale:subagent.done`) to avoid collision with normal user
     // text.
     let (summary, sentinel) = match &result {
         Ok(res) => (
@@ -3448,7 +3473,7 @@ pub(crate) fn emit_parent_completion(
     true
 }
 
-/// Build a `<deepseek:subagent.done>` JSON sentinel for a successful child.
+/// Build a `<codewhale:subagent.done>` JSON sentinel for a successful child.
 /// Intended to surface in the parent's transcript so the model recognizes
 /// child completion and can decide whether to read the full result via
 /// `agent_eval`.
@@ -3465,10 +3490,10 @@ fn subagent_done_sentinel(agent_id: &str, res: &SubAgentResult) -> String {
         "summary_location": "previous_line",
         "details": "agent_eval",
     });
-    format!("<deepseek:subagent.done>{payload}</deepseek:subagent.done>")
+    format!("<codewhale:subagent.done>{payload}</codewhale:subagent.done>")
 }
 
-/// Build a `<deepseek:subagent.done>` sentinel for a failed child.
+/// Build a `<codewhale:subagent.done>` sentinel for a failed child.
 fn subagent_failed_sentinel(agent_id: &str, _err: &str) -> String {
     let payload = json!({
         "agent_id": agent_id,
@@ -3476,7 +3501,7 @@ fn subagent_failed_sentinel(agent_id: &str, _err: &str) -> String {
         "error_location": "previous_line",
         "details": "agent_eval",
     });
-    format!("<deepseek:subagent.done>{payload}</deepseek:subagent.done>")
+    format!("<codewhale:subagent.done>{payload}</codewhale:subagent.done>")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4412,7 +4437,7 @@ async fn subagent_flash_router(
 }
 
 const SUBAGENT_ROUTER_SYSTEM_PROMPT: &str = "\
-You are the DeepSeek TUI sub-agent routing manager. Return only compact JSON: \
+You are the codewhale sub-agent routing manager. Return only compact JSON: \
 {\"model\":\"deepseek-v4-flash|deepseek-v4-pro\",\"thinking\":\"off|high|max\"}. \
 Treat each child assignment like a customer request entering a team queue: decide the least \
 sufficient worker and thinking budget for that assignment. Do not treat being a sub-agent as \

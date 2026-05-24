@@ -5,6 +5,70 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.8.41] - 2026-05-23
+
+### Changed
+
+- **Project renamed to codewhale.** The canonical CLI dispatcher is now
+  `codewhale` (was `deepseek`) and the TUI runtime is `codewhale-tui`
+  (was `deepseek-tui`). The 14 workspace crates are renamed from
+  `deepseek-*` / `deepseek-tui-*` to `codewhale-*` / `codewhale-tui-*`.
+  The npm wrapper package is now `codewhale` (was `deepseek-tui`). See
+  [docs/REBRAND.md](docs/REBRAND.md) for migration notes.
+- **DeepSeek provider integration is unchanged.** `DEEPSEEK_*` env vars,
+  model IDs (`deepseek-v4-pro`, `deepseek-v4-flash`, the legacy
+  `deepseek-chat` / `deepseek-reasoner` aliases), the
+  `https://api.deepseek.com` host, and the `~/.deepseek/` config
+  directory are all preserved.
+
+### Deprecated
+
+- The `deepseek` and `deepseek-tui` binary names continue to ship as
+  tiny shims that print a one-line warning and forward argv to the
+  renamed binaries. They will be removed in v0.9.0.
+- The `deepseek-tui` npm package continues to publish for one release
+  cycle as a no-`bin` deprecation shim whose postinstall directs users
+  to `npm install -g codewhale`. It will be removed in v0.9.0.
+
+### Fixed
+
+- **Windows CI spillover tests are isolated.** Tool-result deduplication
+  tests now use a temporary spillover root guarded by the existing global
+  spillover mutex, removing the shared-state race that made Windows CI fail
+  unrelated PRs (#1943).
+- **Terminated sub-agents keep `agent_eval` recoverable.** Evaluating a
+  completed child session now returns the available transcript result instead
+  of losing the final output (#1738, #1928).
+- **Bare `@/` completions no longer freeze the TUI.** File-mention
+  completion skips bare separator and dot tokens so Windows/WSL2 workspaces
+  do not trigger an eager 4096-entry filesystem walk on the UI thread
+  (#1921, #1929).
+- **Enter paths avoid synchronous UI-thread waits.** Composer history writes,
+  offline queue persistence, feedback URL launching, and clipboard fallback
+  helpers now run off the hot Enter path where appropriate (#1927, #1931,
+  #1940, #1941, #1944).
+- **tmux and screen sessions stop idling as terminal activity.** Terminal
+  multiplexers now force low-motion behavior and pin the fallback footer label
+  so passive animations do not trip activity monitors (#1925, #1942).
+- **Composer sanitization catches OSC 8 and Kitty fragments.** The input
+  sanitizer now strips common hyperlink and keyboard-protocol fragments that
+  leaked into drafts while preserving ordinary prose (#1915, #1933).
+- **The Work sidebar hides stale completed tasks.** Terminal task records older
+  than the current session and outside the recent-completion window no longer
+  crowd active Work sidebar rows (#1913, #1930).
+- **V4 Pro pricing docs reflect permanent rates.** The English, Simplified
+  Chinese, and Japanese READMEs now describe the V4 Pro pricing change as
+  permanent instead of temporary (#1923, #1932).
+
+### Thanks
+
+Thanks to **OpenWarp ([@zerx-lab](https://github.com/zerx-lab))** for
+prioritizing codewhale support and collaborating on terminal-agent UX.
+Thanks to **[@leo119](https://github.com/leo119)** for the update-command
+documentation lineage now preserved through the rename.
+
 ## [0.8.40] - 2026-05-21
 
 ### Added
@@ -4035,7 +4099,7 @@ Welcome — and thank you.
 - Multi-turn tool calls on thinking-mode models no longer return HTTP 400. Every assistant message in the conversation now carries `reasoning_content` when thinking is enabled — not just tool-call rounds — matching DeepSeek's actual API validation, which rejects any assistant message missing the field even though the docs describe non-tool-call reasoning as "ignored".
 - Added a final-pass wire-payload sanitizer in the chat-completions client that forces a non-empty `reasoning_content` placeholder onto any assistant message still missing one at request time. This is the last line of defense after engine-side and build-side substitution, so sessions restored from older checkpoints, sub-agents that append messages directly, and cached prefix mismatches all produce a valid request.
 - On a `reasoning_content`-related 400, the client now logs the offending message indices to make future regressions diagnosable.
-- Stripped phantom `web.run` references from prompts and the `web_search` tool surface ([#25](https://github.com/Hmbown/DeepSeek-TUI/issues/25)).
+- Stripped phantom `web.run` references from prompts and the `web_search` tool surface ([#25](https://github.com/Hmbown/CodeWhale/issues/25)).
 
 ### Changed
 - Header/UI widget refactor in the TUI (`crates/tui/src/tui/ui.rs`, `widgets/header.rs`) — internal cleanup, no user-visible behavior change.
@@ -4531,82 +4595,83 @@ Welcome — and thank you.
 - Hooks system and config profiles
 - Example skills and launch assets
 
-[Unreleased]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.40...HEAD
-[0.8.40]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.39...v0.8.40
-[0.8.39]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.38...v0.8.39
-[0.8.38]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.37...v0.8.38
-[0.8.37]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.36...v0.8.37
-[0.8.36]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.35...v0.8.36
-[0.8.35]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.34...v0.8.35
-[0.8.34]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.33...v0.8.34
-[0.8.33]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.32...v0.8.33
-[0.8.32]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.31...v0.8.32
-[0.8.31]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.30...v0.8.31
-[0.8.30]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.29...v0.8.30
-[0.8.29]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.28...v0.8.29
-[0.8.28]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.27...v0.8.28
-[0.8.27]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.26...v0.8.27
-[0.8.26]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.25...v0.8.26
-[0.8.25]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.24...v0.8.25
-[0.8.24]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.23...v0.8.24
-[0.8.23]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.22...v0.8.23
-[0.8.22]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.21...v0.8.22
-[0.8.21]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.20...v0.8.21
-[0.8.20]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.19...v0.8.20
-[0.8.19]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.18...v0.8.19
-[0.8.18]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.17...v0.8.18
-[0.8.17]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.16...v0.8.17
-[0.8.16]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.15...v0.8.16
-[0.8.15]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.13...v0.8.15
-[0.8.13]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.12...v0.8.13
-[0.8.12]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.11...v0.8.12
-[0.8.11]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.10...v0.8.11
-[0.8.10]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.8...v0.8.10
-[0.8.8]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.7...v0.8.8
-[0.8.7]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.6...v0.8.7
-[0.8.6]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.5...v0.8.6
-[0.8.5]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.4...v0.8.5
-[0.8.4]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.3...v0.8.4
-[0.8.3]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.2...v0.8.3
-[0.8.2]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.1...v0.8.2
-[0.8.1]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.0...v0.8.1
-[0.8.0]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.7.9...v0.8.0
-[0.7.9]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.7.8...v0.7.9
-[0.7.8]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.7.7...v0.7.8
-[0.7.7]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.7.6...v0.7.7
-[0.7.6]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.7.5...v0.7.6
-[0.6.1]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.6.0...v0.6.1
-[0.6.0]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.4.9...v0.6.0
-[0.4.9]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.4.8...v0.4.9
-[0.4.8]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.33...v0.4.8
-[0.3.33]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.32...v0.3.33
-[0.3.32]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.31...v0.3.32
-[0.3.31]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.28...v0.3.31
-[0.3.28]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.27...v0.3.28
-[0.3.23]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.22...v0.3.23
-[0.3.22]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.21...v0.3.22
-[0.3.21]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.17...v0.3.21
-[0.3.17]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.16...v0.3.17
-[0.3.16]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.14...v0.3.16
-[0.3.14]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.13...v0.3.14
-[0.3.13]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.12...v0.3.13
-[0.3.12]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.11...v0.3.12
-[0.3.11]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.10...v0.3.11
-[0.3.10]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.6...v0.3.10
-[0.3.6]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.5...v0.3.6
-[0.3.5]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.4...v0.3.5
-[0.3.4]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.3...v0.3.4
-[0.3.3]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.2...v0.3.3
-[0.3.2]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.1...v0.3.2
-[0.3.1]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.0...v0.3.1
-[0.3.0]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.2.2...v0.3.0
-[0.2.2]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.2.0...v0.2.2
-[0.2.0]: https://github.com/Hmbown/DeepSeek-TUI/releases/tag/v0.2.0
-[0.0.2]: https://github.com/Hmbown/DeepSeek-TUI/releases/tag/v0.0.2
-[0.0.1]: https://github.com/Hmbown/DeepSeek-TUI/releases/tag/v0.0.1
-[0.1.9]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.1.8...v0.1.9
-[0.1.8]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.1.7...v0.1.8
-[0.1.7]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.1.6...v0.1.7
-[0.1.6]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.1.5...v0.1.6
-[0.1.5]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.1.0...v0.1.5
-[0.1.0]: https://github.com/Hmbown/DeepSeek-TUI/releases/tag/v0.1.0
+[Unreleased]: https://github.com/Hmbown/CodeWhale/compare/v0.8.41...HEAD
+[0.8.41]: https://github.com/Hmbown/CodeWhale/compare/v0.8.40...v0.8.41
+[0.8.40]: https://github.com/Hmbown/CodeWhale/compare/v0.8.39...v0.8.40
+[0.8.39]: https://github.com/Hmbown/CodeWhale/compare/v0.8.38...v0.8.39
+[0.8.38]: https://github.com/Hmbown/CodeWhale/compare/v0.8.37...v0.8.38
+[0.8.37]: https://github.com/Hmbown/CodeWhale/compare/v0.8.36...v0.8.37
+[0.8.36]: https://github.com/Hmbown/CodeWhale/compare/v0.8.35...v0.8.36
+[0.8.35]: https://github.com/Hmbown/CodeWhale/compare/v0.8.34...v0.8.35
+[0.8.34]: https://github.com/Hmbown/CodeWhale/compare/v0.8.33...v0.8.34
+[0.8.33]: https://github.com/Hmbown/CodeWhale/compare/v0.8.32...v0.8.33
+[0.8.32]: https://github.com/Hmbown/CodeWhale/compare/v0.8.31...v0.8.32
+[0.8.31]: https://github.com/Hmbown/CodeWhale/compare/v0.8.30...v0.8.31
+[0.8.30]: https://github.com/Hmbown/CodeWhale/compare/v0.8.29...v0.8.30
+[0.8.29]: https://github.com/Hmbown/CodeWhale/compare/v0.8.28...v0.8.29
+[0.8.28]: https://github.com/Hmbown/CodeWhale/compare/v0.8.27...v0.8.28
+[0.8.27]: https://github.com/Hmbown/CodeWhale/compare/v0.8.26...v0.8.27
+[0.8.26]: https://github.com/Hmbown/CodeWhale/compare/v0.8.25...v0.8.26
+[0.8.25]: https://github.com/Hmbown/CodeWhale/compare/v0.8.24...v0.8.25
+[0.8.24]: https://github.com/Hmbown/CodeWhale/compare/v0.8.23...v0.8.24
+[0.8.23]: https://github.com/Hmbown/CodeWhale/compare/v0.8.22...v0.8.23
+[0.8.22]: https://github.com/Hmbown/CodeWhale/compare/v0.8.21...v0.8.22
+[0.8.21]: https://github.com/Hmbown/CodeWhale/compare/v0.8.20...v0.8.21
+[0.8.20]: https://github.com/Hmbown/CodeWhale/compare/v0.8.19...v0.8.20
+[0.8.19]: https://github.com/Hmbown/CodeWhale/compare/v0.8.18...v0.8.19
+[0.8.18]: https://github.com/Hmbown/CodeWhale/compare/v0.8.17...v0.8.18
+[0.8.17]: https://github.com/Hmbown/CodeWhale/compare/v0.8.16...v0.8.17
+[0.8.16]: https://github.com/Hmbown/CodeWhale/compare/v0.8.15...v0.8.16
+[0.8.15]: https://github.com/Hmbown/CodeWhale/compare/v0.8.13...v0.8.15
+[0.8.13]: https://github.com/Hmbown/CodeWhale/compare/v0.8.12...v0.8.13
+[0.8.12]: https://github.com/Hmbown/CodeWhale/compare/v0.8.11...v0.8.12
+[0.8.11]: https://github.com/Hmbown/CodeWhale/compare/v0.8.10...v0.8.11
+[0.8.10]: https://github.com/Hmbown/CodeWhale/compare/v0.8.8...v0.8.10
+[0.8.8]: https://github.com/Hmbown/CodeWhale/compare/v0.8.7...v0.8.8
+[0.8.7]: https://github.com/Hmbown/CodeWhale/compare/v0.8.6...v0.8.7
+[0.8.6]: https://github.com/Hmbown/CodeWhale/compare/v0.8.5...v0.8.6
+[0.8.5]: https://github.com/Hmbown/CodeWhale/compare/v0.8.4...v0.8.5
+[0.8.4]: https://github.com/Hmbown/CodeWhale/compare/v0.8.3...v0.8.4
+[0.8.3]: https://github.com/Hmbown/CodeWhale/compare/v0.8.2...v0.8.3
+[0.8.2]: https://github.com/Hmbown/CodeWhale/compare/v0.8.1...v0.8.2
+[0.8.1]: https://github.com/Hmbown/CodeWhale/compare/v0.8.0...v0.8.1
+[0.8.0]: https://github.com/Hmbown/CodeWhale/compare/v0.7.9...v0.8.0
+[0.7.9]: https://github.com/Hmbown/CodeWhale/compare/v0.7.8...v0.7.9
+[0.7.8]: https://github.com/Hmbown/CodeWhale/compare/v0.7.7...v0.7.8
+[0.7.7]: https://github.com/Hmbown/CodeWhale/compare/v0.7.6...v0.7.7
+[0.7.6]: https://github.com/Hmbown/CodeWhale/compare/v0.7.5...v0.7.6
+[0.6.1]: https://github.com/Hmbown/CodeWhale/compare/v0.6.0...v0.6.1
+[0.6.0]: https://github.com/Hmbown/CodeWhale/compare/v0.4.9...v0.6.0
+[0.4.9]: https://github.com/Hmbown/CodeWhale/compare/v0.4.8...v0.4.9
+[0.4.8]: https://github.com/Hmbown/CodeWhale/compare/v0.3.33...v0.4.8
+[0.3.33]: https://github.com/Hmbown/CodeWhale/compare/v0.3.32...v0.3.33
+[0.3.32]: https://github.com/Hmbown/CodeWhale/compare/v0.3.31...v0.3.32
+[0.3.31]: https://github.com/Hmbown/CodeWhale/compare/v0.3.28...v0.3.31
+[0.3.28]: https://github.com/Hmbown/CodeWhale/compare/v0.3.27...v0.3.28
+[0.3.23]: https://github.com/Hmbown/CodeWhale/compare/v0.3.22...v0.3.23
+[0.3.22]: https://github.com/Hmbown/CodeWhale/compare/v0.3.21...v0.3.22
+[0.3.21]: https://github.com/Hmbown/CodeWhale/compare/v0.3.17...v0.3.21
+[0.3.17]: https://github.com/Hmbown/CodeWhale/compare/v0.3.16...v0.3.17
+[0.3.16]: https://github.com/Hmbown/CodeWhale/compare/v0.3.14...v0.3.16
+[0.3.14]: https://github.com/Hmbown/CodeWhale/compare/v0.3.13...v0.3.14
+[0.3.13]: https://github.com/Hmbown/CodeWhale/compare/v0.3.12...v0.3.13
+[0.3.12]: https://github.com/Hmbown/CodeWhale/compare/v0.3.11...v0.3.12
+[0.3.11]: https://github.com/Hmbown/CodeWhale/compare/v0.3.10...v0.3.11
+[0.3.10]: https://github.com/Hmbown/CodeWhale/compare/v0.3.6...v0.3.10
+[0.3.6]: https://github.com/Hmbown/CodeWhale/compare/v0.3.5...v0.3.6
+[0.3.5]: https://github.com/Hmbown/CodeWhale/compare/v0.3.4...v0.3.5
+[0.3.4]: https://github.com/Hmbown/CodeWhale/compare/v0.3.3...v0.3.4
+[0.3.3]: https://github.com/Hmbown/CodeWhale/compare/v0.3.2...v0.3.3
+[0.3.2]: https://github.com/Hmbown/CodeWhale/compare/v0.3.1...v0.3.2
+[0.3.1]: https://github.com/Hmbown/CodeWhale/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/Hmbown/CodeWhale/compare/v0.2.2...v0.3.0
+[0.2.2]: https://github.com/Hmbown/CodeWhale/compare/v0.2.0...v0.2.2
+[0.2.0]: https://github.com/Hmbown/CodeWhale/releases/tag/v0.2.0
+[0.0.2]: https://github.com/Hmbown/CodeWhale/releases/tag/v0.0.2
+[0.0.1]: https://github.com/Hmbown/CodeWhale/releases/tag/v0.0.1
+[0.1.9]: https://github.com/Hmbown/CodeWhale/compare/v0.1.8...v0.1.9
+[0.1.8]: https://github.com/Hmbown/CodeWhale/compare/v0.1.7...v0.1.8
+[0.1.7]: https://github.com/Hmbown/CodeWhale/compare/v0.1.6...v0.1.7
+[0.1.6]: https://github.com/Hmbown/CodeWhale/compare/v0.1.5...v0.1.6
+[0.1.5]: https://github.com/Hmbown/CodeWhale/compare/v0.1.0...v0.1.5
+[0.1.0]: https://github.com/Hmbown/CodeWhale/releases/tag/v0.1.0

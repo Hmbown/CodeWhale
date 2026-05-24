@@ -1,4 +1,4 @@
-//! Configuration loading and defaults for DeepSeek TUI.
+//! Configuration loading and defaults for codewhale.
 
 use std::collections::HashMap;
 use std::fmt::Write;
@@ -969,7 +969,7 @@ pub struct Config {
     #[serde(default)]
     pub hooks: Option<HooksConfig>,
 
-    /// Provider-specific credentials and defaults shared with the `deepseek` facade.
+    /// Provider-specific credentials and defaults shared with the `codewhale` facade.
     #[serde(default)]
     pub providers: Option<ProvidersConfig>,
 
@@ -1024,7 +1024,7 @@ pub struct Config {
     #[serde(default)]
     pub subagents: Option<SubagentsConfig>,
 
-    /// Runtime API server tuning (`deepseek serve --http`). Currently only
+    /// Runtime API server tuning (`codewhale serve --http`). Currently only
     /// hosts the CORS allow-list extension (whalescale#255 / #561). When the
     /// table is absent, the daemon ships with localhost:3000 / localhost:1420
     /// / tauri://localhost as the only allowed dev origins.
@@ -1099,7 +1099,7 @@ impl SkillsConfig {
     }
 }
 
-/// `[network]` table — mirrors `deepseek_config::NetworkPolicyToml` so the live
+/// `[network]` table — mirrors `codewhale_config::NetworkPolicyToml` so the live
 /// TUI runtime can construct a [`crate::network_policy::NetworkPolicy`]
 /// without reaching into the workspace config crate. See `config.example.toml`
 /// for documentation.
@@ -1656,7 +1656,7 @@ impl Config {
         }
 
         // 1. Config file (provider-scoped slot). This intentionally wins
-        // over ambient env so `deepseek auth set` fixes stale shell exports.
+        // over ambient env so `codewhale auth set` fixes stale shell exports.
         if let Some(configured) = self
             .provider_config_for(provider)
             .and_then(|provider| provider.api_key.clone())
@@ -1667,7 +1667,7 @@ impl Config {
 
         // 2. Environment variables. Do not query platform credential stores
         // here; routine startup and doctor checks must stay prompt-free.
-        if let Some(value) = deepseek_secrets::env_for(slot)
+        if let Some(value) = codewhale_secrets::env_for(slot)
             && !value.trim().is_empty()
         {
             return Ok(value);
@@ -1683,7 +1683,7 @@ impl Config {
                  \n\
                  1. Get a key:  https://platform.deepseek.com/api_keys\n\
                  2. Save it (works in every folder, no OS prompts):\n\
-                        deepseek auth set --provider deepseek\n\
+                        codewhale auth set --provider deepseek\n\
                  \n\
                  Alternatives:\n\
                    • export DEEPSEEK_API_KEY=<your-key>      (current shell only;\n\
@@ -1692,33 +1692,33 @@ impl Config {
                    • api_key = \"<your-key>\"  in ~/.deepseek/config.toml"
             ),
             ApiProvider::NvidiaNim => anyhow::bail!(
-                "NVIDIA NIM API key not found. Run 'deepseek auth set --provider nvidia-nim', \
+                "NVIDIA NIM API key not found. Run 'codewhale auth set --provider nvidia-nim', \
                  set NVIDIA_API_KEY/NVIDIA_NIM_API_KEY, or save api_key in ~/.deepseek/config.toml \
                  with provider = \"nvidia-nim\"."
             ),
             ApiProvider::Openai => anyhow::bail!(
-                "OpenAI-compatible API key not found. Run 'deepseek auth set --provider openai', \
+                "OpenAI-compatible API key not found. Run 'codewhale auth set --provider openai', \
                  set OPENAI_API_KEY, or add [providers.openai] api_key in ~/.deepseek/config.toml."
             ),
             ApiProvider::Atlascloud => anyhow::bail!(
-                "AtlasCloud API key not found. Run 'deepseek auth set --provider atlascloud', \
+                "AtlasCloud API key not found. Run 'codewhale auth set --provider atlascloud', \
                  set ATLASCLOUD_API_KEY, or add [providers.atlascloud] api_key in ~/.deepseek/config.toml."
             ),
             ApiProvider::WanjieArk => anyhow::bail!(
-                "Wanjie Ark API key not found. Run 'deepseek auth set --provider wanjie-ark', \
+                "Wanjie Ark API key not found. Run 'codewhale auth set --provider wanjie-ark', \
                  set WANJIE_ARK_API_KEY/WANJIE_API_KEY/WANJIE_MAAS_API_KEY, or add \
                  [providers.wanjie_ark] api_key in ~/.deepseek/config.toml."
             ),
             ApiProvider::Openrouter => anyhow::bail!(
-                "OpenRouter API key not found. Run 'deepseek auth set --provider openrouter', \
+                "OpenRouter API key not found. Run 'codewhale auth set --provider openrouter', \
                  set OPENROUTER_API_KEY, or add [providers.openrouter] api_key in ~/.deepseek/config.toml."
             ),
             ApiProvider::Novita => anyhow::bail!(
-                "Novita API key not found. Run 'deepseek auth set --provider novita', \
+                "Novita API key not found. Run 'codewhale auth set --provider novita', \
                  set NOVITA_API_KEY, or add [providers.novita] api_key in ~/.deepseek/config.toml."
             ),
             ApiProvider::Fireworks => anyhow::bail!(
-                "Fireworks AI API key not found. Run 'deepseek auth set --provider fireworks', \
+                "Fireworks AI API key not found. Run 'codewhale auth set --provider fireworks', \
                  set FIREWORKS_API_KEY, or add [providers.fireworks] api_key in ~/.deepseek/config.toml."
             ),
             // Self-hosted deployments commonly run without auth on localhost.
@@ -2120,7 +2120,7 @@ fn resolve_load_config_path(path: Option<PathBuf>) -> Option<PathBuf> {
 
 /// Create an inspectable config file on first interactive launch.
 ///
-/// The file intentionally omits `api_key`; onboarding or `deepseek auth set`
+/// The file intentionally omits `api_key`; onboarding or `codewhale auth set`
 /// writes that field after the user supplies a key.
 pub fn ensure_config_file_exists(path: Option<PathBuf>) -> Result<Option<PathBuf>> {
     let config_path = path
@@ -2133,9 +2133,9 @@ pub fn ensure_config_file_exists(path: Option<PathBuf>) -> Result<Option<PathBuf
 
     ensure_parent_dir(&config_path)?;
     let content = format!(
-        r#"# DeepSeek TUI Configuration
+        r#"# codewhale Configuration
 # Get your API key from https://platform.deepseek.com
-# Save it with: deepseek auth set --provider deepseek
+# Save it with: codewhale auth set --provider deepseek
 
 # Base URL (default: https://api.deepseek.com/beta)
 # Set https://api.deepseek.com to opt out of beta features.
@@ -3128,7 +3128,7 @@ pub fn ensure_parent_dir(path: &Path) -> Result<()> {
                     perms.set_mode(mode & !0o077);
                     if let Err(err) = fs::set_permissions(parent, perms) {
                         tracing::warn!(
-                            target: "deepseek::config",
+                            target: "codewhale::config",
                             path = %parent.display(),
                             error = %err,
                             "could not tighten parent dir permissions; \
@@ -3166,7 +3166,7 @@ fn write_config_file_secure(path: &Path, content: &str) -> Result<()> {
         // system's native ACL model is doing the access control.
         if let Err(err) = file.set_permissions(fs::Permissions::from_mode(0o600)) {
             tracing::warn!(
-                target: "deepseek::config",
+                target: "codewhale::config",
                 path = %path.display(),
                 error = %err,
                 "could not enforce 0o600 on config file; filesystem may \
@@ -3186,13 +3186,13 @@ fn write_config_file_secure(path: &Path, content: &str) -> Result<()> {
 /// the caller can show a confirmation message without leaking the key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SavedCredential {
-    /// Stored in **both** the OS keyring and the deepseek config file.
+    /// Stored in **both** the OS keyring and the codewhale config file.
     /// This is the default outcome on platforms with a working keyring
     /// backend: writing both layers defeats the
     /// `keyring → env → config-file` resolution-order shadow that
     /// would otherwise let a stale OS-keyring entry from a previous
     /// install hide the freshly-entered key (#593). The `backend`
-    /// label is the value of [`deepseek_secrets::Secrets::backend_name`]
+    /// label is the value of [`codewhale_secrets::Secrets::backend_name`]
     /// at write time so the toast text can name the actual backend
     /// (`"system keyring"`, `"file-based (~/.deepseek/secrets/)"`).
     KeyringAndConfigFile {
@@ -3201,7 +3201,7 @@ pub enum SavedCredential {
         /// Absolute path to the config file that was also updated.
         path: PathBuf,
     },
-    /// Stored in the deepseek config file only. Fallback when no
+    /// Stored in the codewhale config file only. Fallback when no
     /// keyring backend is reachable, or under `cfg(test)` so unit
     /// tests don't pollute the host keyring.
     ConfigFile(PathBuf),
@@ -3224,7 +3224,7 @@ impl SavedCredential {
 /// Save the active provider's API key.
 ///
 /// **Dual-write strategy (#593):** writes to `~/.deepseek/config.toml`
-/// (always) and to the OS keyring via [`deepseek_secrets::Secrets`]
+/// (always) and to the OS keyring via [`codewhale_secrets::Secrets`]
 /// (when a backend is reachable). The runtime resolves credentials in
 /// `keyring → env → config-file` order; writing to the config file
 /// alone — as v0.8.8 through v0.8.10 did — let a stale keyring entry
@@ -3262,7 +3262,7 @@ pub fn save_api_key(api_key: &str) -> Result<SavedCredential> {
     // cross-test contamination).
     #[cfg(not(test))]
     {
-        let secrets = deepseek_secrets::Secrets::auto_detect();
+        let secrets = codewhale_secrets::Secrets::auto_detect();
         match secrets.set("deepseek", trimmed) {
             Ok(()) => {
                 let backend = secrets.backend_name().to_string();
@@ -3324,7 +3324,7 @@ fn save_api_key_to_config_file(api_key: &str) -> Result<PathBuf> {
     } else {
         // Create new minimal config
         format!(
-            r#"# DeepSeek TUI Configuration
+            r#"# codewhale Configuration
 # Get your API key from https://platform.deepseek.com
 # Or set DEEPSEEK_API_KEY environment variable
 
@@ -4063,7 +4063,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-test-{}-{}",
+            "codewhale-tui-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -4099,7 +4099,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-first-run-config-{}-{}",
+            "codewhale-tui-first-run-config-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -4125,7 +4125,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-workspace-trust-{}-{}",
+            "codewhale-tui-workspace-trust-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -4161,7 +4161,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-existing-project-trust-{}-{}",
+            "codewhale-tui-existing-project-trust-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -4364,7 +4364,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-clear-{}-{}",
+            "codewhale-tui-clear-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -4397,7 +4397,7 @@ api_key = "old-openrouter-key"
         );
         assert!(
             !after.contains("old-provider-key"),
-            "provider-scoped deepseek key must be stripped: {after}"
+            "provider-scoped codewhale key must be stripped: {after}"
         );
         assert!(
             !after.contains("old-openrouter-key"),
@@ -4420,7 +4420,7 @@ api_key = "old-openrouter-key"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-override-{}-{}",
+            "codewhale-tui-override-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -4446,7 +4446,7 @@ api_key = "old-openrouter-key"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-config-over-env-{}-{}",
+            "codewhale-tui-config-over-env-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -4471,7 +4471,7 @@ api_key = "old-openrouter-key"
     fn active_provider_detects_env_only_api_key() -> Result<()> {
         let _lock = lock_test_env();
         let temp_root =
-            env::temp_dir().join(format!("deepseek-tui-env-only-key-{}", std::process::id()));
+            env::temp_dir().join(format!("codewhale-tui-env-only-key-{}", std::process::id()));
         fs::create_dir_all(&temp_root)?;
         let _guard = EnvGuard::new(&temp_root);
 
@@ -4501,7 +4501,7 @@ api_key = "old-openrouter-key"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-sentinel-{}-{}",
+            "codewhale-tui-sentinel-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -4529,7 +4529,7 @@ api_key = "old-openrouter-key"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-tilde-test-{}-{}",
+            "codewhale-tui-tilde-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -4558,7 +4558,7 @@ api_key = "old-openrouter-key"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-load-tilde-test-{}-{}",
+            "codewhale-tui-load-tilde-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -4587,7 +4587,7 @@ api_key = "old-openrouter-key"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-load-fallback-test-{}-{}",
+            "codewhale-tui-load-fallback-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -4646,7 +4646,7 @@ api_key = "old-openrouter-key"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-api-key-test-{}-{}",
+            "codewhale-tui-api-key-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -4693,7 +4693,7 @@ api_key = "old-openrouter-key"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-empty-key-{}-{}",
+            "codewhale-tui-empty-key-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -4726,7 +4726,7 @@ api_key = "old-openrouter-key"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-env-key-not-config-{}-{}",
+            "codewhale-tui-env-key-not-config-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -4839,7 +4839,7 @@ api_key = "old-openrouter-key"
     #[test]
     fn normalize_model_name_rejects_invalid_or_non_deepseek_ids() {
         assert!(normalize_model_name("gpt-4o").is_none());
-        assert!(normalize_model_name("deepseek v4").is_none());
+        assert!(normalize_model_name("codewhale v4").is_none());
         assert!(normalize_model_name("").is_none());
     }
 
@@ -4980,7 +4980,7 @@ api_key = "old-openrouter-key"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-model-env-test-{}-{}",
+            "codewhale-tui-model-env-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5009,7 +5009,7 @@ api_key = "old-openrouter-key"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-http-headers-root-{}-{}",
+            "codewhale-tui-http-headers-root-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5073,7 +5073,7 @@ http_headers = { "X-Model-Provider-Id" = "tongyi" }
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-http-headers-env-{}-{}",
+            "codewhale-tui-http-headers-env-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5127,7 +5127,7 @@ http_headers = { "X-Model-Provider-Id" = "from-file" }
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-nim-model-alias-test-{}-{}",
+            "codewhale-tui-nim-model-alias-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5171,7 +5171,7 @@ http_headers = { "X-Model-Provider-Id" = "from-file" }
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-nim-env-test-{}-{}",
+            "codewhale-tui-nim-env-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5200,7 +5200,7 @@ http_headers = { "X-Model-Provider-Id" = "from-file" }
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-nim-base-url-alias-test-{}-{}",
+            "codewhale-tui-nim-base-url-alias-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5227,7 +5227,7 @@ http_headers = { "X-Model-Provider-Id" = "from-file" }
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-nim-forwarded-base-url-test-{}-{}",
+            "codewhale-tui-nim-forwarded-base-url-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5285,7 +5285,7 @@ http_headers = { "X-Model-Provider-Id" = "from-file" }
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-atlascloud-env-test-{}-{}",
+            "codewhale-tui-atlascloud-env-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5329,7 +5329,7 @@ http_headers = { "X-Model-Provider-Id" = "from-file" }
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-wanjie-env-test-{}-{}",
+            "codewhale-tui-wanjie-env-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5359,7 +5359,7 @@ http_headers = { "X-Model-Provider-Id" = "from-file" }
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-wanjie-table-{}-{}",
+            "codewhale-tui-wanjie-table-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5398,7 +5398,7 @@ model = "account-model-id"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-openai-table-{}-{}",
+            "codewhale-tui-openai-table-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5429,7 +5429,7 @@ model = "glm-5"
         Ok(())
     }
 
-    // Regression for issue #1714: `deepseek --provider openai --model
+    // Regression for issue #1714: `codewhale --provider openai --model
     // MiniMax-M2.7` forwards the choice via DEEPSEEK_MODEL (never
     // OPENAI_MODEL) and uses the DEFAULT base_url. The explicit custom model
     // must pass through verbatim instead of silently becoming a
@@ -5442,7 +5442,7 @@ model = "glm-5"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-1714-passthrough-{}-{}",
+            "codewhale-tui-1714-passthrough-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5495,7 +5495,7 @@ model = "glm-5"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-openai-env-test-{}-{}",
+            "codewhale-tui-openai-env-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5529,7 +5529,7 @@ model = "glm-5"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-openai-forwarded-base-url-test-{}-{}",
+            "codewhale-tui-openai-forwarded-base-url-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5563,7 +5563,7 @@ model = "glm-5"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-or-defaults-{}-{}",
+            "codewhale-tui-or-defaults-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5589,7 +5589,7 @@ model = "glm-5"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-novita-defaults-{}-{}",
+            "codewhale-tui-novita-defaults-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5615,7 +5615,7 @@ model = "glm-5"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-fireworks-defaults-{}-{}",
+            "codewhale-tui-fireworks-defaults-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5641,7 +5641,7 @@ model = "glm-5"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-sglang-defaults-{}-{}",
+            "codewhale-tui-sglang-defaults-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5669,7 +5669,7 @@ model = "glm-5"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-ollama-defaults-{}-{}",
+            "codewhale-tui-ollama-defaults-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5697,7 +5697,7 @@ model = "glm-5"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-ollama-model-test-{}-{}",
+            "codewhale-tui-ollama-model-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5731,7 +5731,7 @@ model = "qwen2.5-coder:7b"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-self-hosted-base-url-test-{}-{}",
+            "codewhale-tui-self-hosted-base-url-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5766,7 +5766,7 @@ model = "qwen2.5-coder:7b"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-ollama-env-test-{}-{}",
+            "codewhale-tui-ollama-env-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5795,7 +5795,7 @@ model = "qwen2.5-coder:7b"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-or-env-key-{}-{}",
+            "codewhale-tui-or-env-key-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5822,7 +5822,7 @@ model = "qwen2.5-coder:7b"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-novita-env-key-{}-{}",
+            "codewhale-tui-novita-env-key-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5849,7 +5849,7 @@ model = "qwen2.5-coder:7b"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-or-base-url-{}-{}",
+            "codewhale-tui-or-base-url-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5876,7 +5876,7 @@ model = "qwen2.5-coder:7b"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-or-table-{}-{}",
+            "codewhale-tui-or-table-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5910,7 +5910,7 @@ base_url = "https://or-table.example/v1"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-or-custom-model-{}-{}",
+            "codewhale-tui-or-custom-model-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5946,7 +5946,7 @@ model = "DeepSeek-V4-Pro"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-novita-table-{}-{}",
+            "codewhale-tui-novita-table-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5979,7 +5979,7 @@ api_key = "novita-table-key"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-has-key-{}-{}",
+            "codewhale-tui-has-key-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -6036,7 +6036,7 @@ api_key = "novita-table-key"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-has-key-cn-{}-{}",
+            "codewhale-tui-has-key-cn-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -6073,7 +6073,7 @@ api_key = "novita-table-key"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-save-key-or-{}-{}",
+            "codewhale-tui-save-key-or-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -6161,7 +6161,7 @@ api_key = "novita-table-key"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-save-key-cn-{}-{}",
+            "codewhale-tui-save-key-cn-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -6188,7 +6188,7 @@ api_key = "novita-table-key"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-nim-provider-table-test-{}-{}",
+            "codewhale-tui-nim-provider-table-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -6227,7 +6227,7 @@ model = "deepseek-v4-pro"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-nim-root-key-precedence-test-{}-{}",
+            "codewhale-tui-nim-root-key-precedence-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -6238,7 +6238,7 @@ model = "deepseek-v4-pro"
         ensure_parent_dir(&config_path)?;
         fs::write(
             &config_path,
-            r#"api_key = "deepseek-root-key"
+            r#"api_key = "codewhale-root-key"
 provider = "nvidia-nim"
 
 [providers.nvidia_nim]
