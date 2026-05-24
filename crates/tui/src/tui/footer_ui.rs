@@ -518,7 +518,7 @@ pub(crate) fn footer_balance_spans(app: &App) -> Vec<Span<'static>> {
         None => return Vec::new(),
     };
     let total = match info.total_balance_f64() {
-        Some(total) if total > 0.0 => total,
+        Some(total) if total >= 0.0 => total,
         _ => return Vec::new(),
     };
     let currency = match info.currency.as_str() {

@@ -848,7 +848,12 @@ fn active_rlm_task_entries(app: &App) -> Vec<TaskPanelEntry> {
 
 /// Shared `reqwest::Client` for balance fetches so connection pools are
 /// reused across successive background polls.
-static BALANCE_CLIENT: LazyLock<::reqwest::Client> = LazyLock::new(|| ::reqwest::Client::new());
+static BALANCE_CLIENT: LazyLock<::reqwest::Client> = LazyLock::new(|| {
+    ::reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .unwrap_or_default()
+});
 
 /// Fetch the DeepSeek account balance from the balance API.
 ///
