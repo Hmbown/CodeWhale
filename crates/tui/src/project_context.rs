@@ -4,6 +4,7 @@
 //! instructions and context to the AI agent. These include:
 //!
 //! - `AGENTS.md` - Project-level agent instructions (primary)
+//! - `DEEPSEEK.md` - DeepSeek TUI-specific project instructions
 //! - `.claude/instructions.md` - Claude-style hidden instructions
 //! - `CLAUDE.md` - Claude-style instructions
 //! - `.deepseek/instructions.md` - Hidden instructions file (legacy)
@@ -21,6 +22,7 @@ use thiserror::Error;
 /// Names of project context files to look for, in priority order.
 const PROJECT_CONTEXT_FILES: &[&str] = &[
     "AGENTS.md",
+    "DEEPSEEK.md",
     ".claude/instructions.md",
     "CLAUDE.md",
     ".deepseek/instructions.md",
