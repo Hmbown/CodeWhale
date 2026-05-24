@@ -2,8 +2,16 @@
 
 > DeepSeek-first agentic terminal for open source and open-weight coding models. It runs from the `codewhale` command, streams reasoning blocks, edits local workspaces with approval gates, and can auto-route each turn to the right DeepSeek model and thinking level.
 
+[![CI](https://github.com/Hmbown/CodeWhale/actions/workflows/ci.yml/badge.svg)](https://github.com/Hmbown/CodeWhale/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/codewhale)](https://www.npmjs.com/package/codewhale)
+[![crates.io](https://img.shields.io/crates/v/codewhale-cli?label=crates.io)](https://crates.io/crates/codewhale-cli)
+[![Sponsor](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-ea4aaa?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/Hmbown)
+[DeepWiki project index](https://deepwiki.com/Hmbown/CodeWhale)
+
 [简体中文 README](README.zh-CN.md)
 [日本語 README](README.ja-JP.md)
+
+[Install](#install) · [Quickstart](#quickstart) · [Usage](#usage) · [Documentation](#documentation) · [Contributing](#contributing) · [Support](#support)
 
 ## Install
 
@@ -60,11 +68,6 @@ brew update && brew upgrade deepseek-tui
 cargo install codewhale-cli --locked --force
 cargo install codewhale-tui     --locked --force
 ```
-
-[![CI](https://github.com/Hmbown/CodeWhale/actions/workflows/ci.yml/badge.svg)](https://github.com/Hmbown/CodeWhale/actions/workflows/ci.yml)
-[![npm](https://img.shields.io/npm/v/codewhale)](https://www.npmjs.com/package/codewhale)
-[![crates.io](https://img.shields.io/crates/v/codewhale-cli?label=crates.io)](https://crates.io/crates/codewhale-cli)
-[DeepWiki project index](https://deepwiki.com/Hmbown/CodeWhale)
 
 ![codewhale screenshot](assets/screenshot.png)
 
@@ -308,10 +311,14 @@ interfaces, and extension points.
 
 ## Usage
 
+All examples use `codewhale`. The short form `codew` works everywhere —
+it's a silent alias that forwards to `codewhale`.
+
 ```bash
 codewhale                                         # interactive TUI
 codewhale "explain this function"                 # one-shot prompt
 codewhale exec --auto --output-format stream-json "fix this bug"  # agentic exec with tool auto-approvals
+codewhale swebench run --instance-id <ID> --issue-file issue.md  # write all_preds.jsonl for SWE-bench
 codewhale exec --resume <SESSION_ID> "follow up"  # continue a non-interactive session
 codewhale --model deepseek-v4-flash "summarize"   # model override
 codewhale --model auto "fix this bug"             # auto-route model + thinking
@@ -363,6 +370,23 @@ docker run --rm -it \
 
 See [docs/DOCKER.md](docs/DOCKER.md) for pinned tags, local image builds,
 volume ownership notes, and non-interactive pipeline usage.
+
+### SWE-bench
+
+CodeWhale can emit SWE-bench-compatible prediction JSONL from a checked-out
+task workspace:
+
+```bash
+codewhale swebench run \
+  --instance-id django__django-12345 \
+  --issue-file issue.md \
+  --predictions-path all_preds.jsonl
+```
+
+`run` uses the same tool-backed automation path as `codewhale exec --auto`,
+then exports the final working-tree diff as `model_patch`. Use
+`codewhale swebench export --instance-id <ID>` when you have already produced
+the diff yourself. See [docs/SWEBENCH.md](docs/SWEBENCH.md) for the full flow.
 
 ### Zed / ACP
 
@@ -530,8 +554,22 @@ without recreating skills the user deliberately deleted.
 | [RELEASE_RUNBOOK.md](docs/RELEASE_RUNBOOK.md) | Release process |
 | [LOCALIZATION.md](docs/LOCALIZATION.md) | UI locale matrix & switching |
 | [OPERATIONS_RUNBOOK.md](docs/OPERATIONS_RUNBOOK.md) | Ops & recovery |
+| [RECURSIVE_SELF_IMPROVEMENT.md](docs/RECURSIVE_SELF_IMPROVEMENT.md) | Copyable prompts for agent-assisted CodeWhale improvements |
 
 Full Changelog: [CHANGELOG.md](CHANGELOG.md).
+
+---
+
+## Support
+
+CodeWhale is MIT-licensed and usable without sponsorship. If it saves you time,
+the clearest way to support ongoing maintenance is
+[GitHub Sponsors](https://github.com/sponsors/Hmbown). One-time support is also
+available through [Buy Me a Coffee](https://www.buymeacoffee.com/hmbown).
+
+Sponsorship helps cover release builds, CI/runtime testing, package publishing,
+and maintainer time for issue triage and review. Feature requests, bug reports,
+and pull requests do not require sponsorship.
 
 ---
 
@@ -554,7 +592,7 @@ This project ships with help from a growing community of contributors:
 - **[toi500](https://github.com/toi500)** — Windows paste fix report
 - **[xsstomy](https://github.com/xsstomy)** — Terminal startup repaint report
 - **[melody0709](https://github.com/melody0709)** — Slash-prefix Enter activation report
-- **[lloydzhou](https://github.com/lloydzhou)** and **[jeoor](https://github.com/jeoor)** — Compaction cost reports; lloydzhou also contributed deterministic environment context (#813, #922) and KV prefix-cache stabilisation (#1080)
+- **[lloydzhou](https://github.com/lloydzhou)** and **[jeoor](https://github.com/jeoor)** — Compaction cost reports and npm installer stream-pause race fix (#1860); lloydzhou also contributed deterministic environment context (#813, #922) and KV prefix-cache stabilisation (#1080)
 - **[Agent-Skill-007](https://github.com/Agent-Skill-007)** — README clarity pass (#685)
 - **[woyxiang](https://github.com/woyxiang)** — Windows install documentation (#696)
 - **[wangfeng](mailto:wangfengcsu@qq.com)** — Pricing/discount info update (#692)
@@ -598,6 +636,72 @@ This project ships with help from a growing community of contributors:
 - **[aboimpinto](https://github.com/aboimpinto)** — Windows alt-screen logging, Home/End composer, and runtime log follow-ups (#1774, #1776, #1748, #1749, #1782, #1783)
 - **[LeoLin990405](https://github.com/LeoLin990405)** — provider model passthrough, reasoning replay, thinking-only turn, and Windows quoting fixes (#1740, #1743, #1742, #1744)
 - **[nightt5879](https://github.com/nightt5879)** — Ctrl+C prompt restore fix (#1764)
+- **[h3c-hexin](https://github.com/h3c-hexin)** — streaming batch tool-call preservation and CLI reasoning-effort passthrough (#1686, #1511)
+- **[hxy91819](https://github.com/hxy91819)** — prefix-cache preservation during tool-result pruning (#1514)
+- **[JiarenWang](https://github.com/JiarenWang)** — Plan-mode read-only enforcement, approval-takeover clamping, Ctrl+H delete fix, and undo context sync (#1123, #962, #958, #1150)
+- **[Liu-Vince](https://github.com/Liu-Vince)** — MCP pagination, markdown indentation preservation, zh-Hans i18n polish, and env-var documentation (#1256, #1179, #1274, #1178)
+- **[linzhiqin2003](https://github.com/linzhiqin2003)** — `--model auto` cost-saving bias, execution-discipline prompts, and declarative-fact memory hygiene (#1385, #1384, #1381)
+- **[lbcheng888](https://github.com/lbcheng888)** — cost persistence across save/restore and transcript scroll fix (#1192, #1211)
+- **[pengyou200902](https://github.com/pengyou200902)** — UTF-8-safe memory truncation, truncation-marker precision, and keybinding docs (#968, #1122, #1095)
+- **[ChaceLyee2101](https://github.com/ChaceLyee2101)** — reasoning-token cost tracking with auto-CNY on zh-Hans and zh-CN README sync (#1505, #1504)
+- **[CrepuscularIRIS](https://github.com/CrepuscularIRIS)** — low-motion mode for Termius/SSH and npx MCP server sandbox fix (#1479, #1346)
+- **[laoye2020](https://github.com/laoye2020)** — Catppuccin, Tokyo Night, Dracula, and Gruvbox themes with `/theme` picker (#1534)
+- **[punkcanyang](https://github.com/punkcanyang)** — Kitty (OSC 99) and Ghostty (OSC 777) desktop notification support (#1426)
+- **[Rene-Kuhm](https://github.com/Rene-Kuhm)** — Spanish (es-419) Latin American localization (#1452)
+- **[sternelee](https://github.com/sternelee)** — DeepSeek prefix-cache stability tracking (#1517)
+- **[ComeFromTheMars](https://github.com/ComeFromTheMars)** — Shift+Up/Down transcript scroll shortcuts (#1432)
+- **[sockerch](https://github.com/sockerch)** — pinyin aliases for all slash commands (#1306)
+- **[Apeiron0w0](https://github.com/Apeiron0w0)** — FocusGained debounce for Tabby terminal flicker loop (#1560)
+- **[greyfreedom](https://github.com/greyfreedom)** — jump-to-latest-transcript button (#969)
+- **[SamhandsomeLee](https://github.com/SamhandsomeLee)** — explicit hidden-file mention completion (#1270)
+- **[dst1213](https://github.com/dst1213)** — quota-error HTTP 400 retry (#1203)
+- **[fuleinist](https://github.com/fuleinist)** — `--yolo` flag forwarding from CLI to TUI (#1233)
+- **[heloanc](https://github.com/heloanc)** — Home/End key composer support (#1246)
+- **[jinpengxuan](https://github.com/jinpengxuan)** — active provider credential preservation during onboarding (#1265)
+- **[lixiasky-back](https://github.com/lixiasky-back)** — verified npm binary adoption (#1339)
+- **[J3y0r](https://github.com/J3y0r)** — workspace-switch command (#1065)
+- **[KhalidAlnujaidi](https://github.com/KhalidAlnujaidi)** — delegate skill bundling (#1144)
+- **[Wenjunyun123](https://github.com/Wenjunyun123)** — docs anchor-offset preservation (#1282)
+- **[whtis](https://github.com/whtis)** — zh-CN README dispatcher-path sync (#1235)
+- **[aqilaziz](https://github.com/aqilaziz)** — memory skill-link fix (#1095)
+- **[wuwuzhijing](https://github.com/wuwuzhijing)** — rsproxy rustup workaround install docs (#1011)
+- **[eltociear](https://github.com/eltociear)** — Japanese README translation (#746)
+- **[Ling](https://github.com/LING71671)** — `grep_files` cancellation-token support and Ctrl+Z composer-draft recovery (#1839, #1911)
+- **[Ben Younes](https://github.com/ousamabenyounes)** — Linux Wayland (non-wlroots) clipboard support (#1938)
+- **[Matt Van Horn](https://github.com/mvanhorn)** — Docker first-run permission fix and runtime system-prompt regression tests (#1699, #1702)
+- **[Kristopher Clark](https://github.com/krisclarkdev)** — compaction user-query preservation fix (#1704)
+- **[tdccccc](https://github.com/tdccccc)** — composer scroll fix and pager mouse-wheel support (#1715, #1716)
+- **[LittleBlacky](https://github.com/LittleBlacky)** — provider-gated `reasoning_content` stream fix (#1680)
+- **[Anaheim](https://github.com/AnaheimEX)** — `rlm_open` blank-source schema validation report (#1712)
+- **[THatch26](https://github.com/THatch26)** — terminal resize paging fix (#1724)
+- **[Alvin](https://github.com/alvin1)** — Zed ACP id compatibility report (#1696)
+- **[knqiufan](https://github.com/knqiufan)** — sub-agent file-write delegation work (#1833)
+- **[IIzzaya](https://github.com/IIzzaya)** — exact-alias-first slash-completion ordering idea (#1811)
+- **[DC](https://github.com/duanchao-lab)** — terminal cleanup-guard idea (#1630)
+- **[imkingjh999](https://github.com/imkingjh999)** — provider/model switching fixes (#1642)
+- **[Photo](https://github.com/eng2007)** — provider-aware `/model` picker catalog work (#1201)
+- **[chennest](https://github.com/chennest)** — diagnostics schema report (#1685)
+- **[kunpeng-ai-lab](https://github.com/kunpeng-ai-lab)** — Windows composer scroll fix (#1578)
+- **[WuMing](https://github.com/asdfg314284230)** — Windows PowerShell flicker fix (#1591)
+- **[maker316](https://github.com/maker316)** — LoopGuard/checklist loop report (#1574)
+- **[lalala](https://github.com/lalala-233)** — approval denial regression report (#1617)
+- **[muyuliyan](https://github.com/muyuliyan)** — `pandoc_convert` validation fix (#1523)
+- **[czf0718](https://github.com/czf0718)** — resize and turn-completion flicker fix (#1537)
+- **[MeAiRobot](https://github.com/MeAiRobot)** — toast overlay composer-input fix (#1485)
+- **[tiger-dog](https://github.com/tiger-dog)** — approval modal collapse and markdown identifier fixes (#1455)
+- **[MMMarcinho](https://github.com/MMMarcinho)** — opt-in `image_analyze` vision tool (#1467)
+- **[lucaszhu-hue](https://github.com/lucaszhu-hue)** — AtlasCloud provider integration (#1436)
+- **[sandofree](https://github.com/sandofree)** — Tavily and Bocha `web_search` backends (#1294)
+- **[zhuangbiaowei](https://github.com/zhuangbiaowei)** — `/change` release-notes command (#1416)
+- **[NorethSea](https://github.com/NorethSea)** — updater companion-binary refresh fix (#1492)
+- **[Jianfengwu2024](https://github.com/Jianfengwu2024)** — Windows MSVC toolchain environment preservation (#1487)
+- **[Fire-dtx](https://github.com/Fire-dtx)** — npm postinstall recoverability work (#1059)
+- **[oooyuy92](https://github.com/oooyuy92)** — long-session palette readability report (#1070, #936)
+- **[qinxianyuzou](https://github.com/qinxianyuzou)** — zh-Hans destructive approval wording (#1087, #1091)
+- **[tyouter](https://github.com/tyouter)** — session title/history preview cleanup (#1510)
+- **[xulongzhe](https://github.com/xulongzhe)** — issue-template and vision-boundary follow-ups (#1530, #1544)
+- **[YaYII](https://github.com/YaYII)** — trusted media path work (#1462)
+- **[47Cid](https://github.com/47Cid)** and **[Jafar Akhondali](https://github.com/JafarAkhondali)** — responsible security disclosures and hardening reports
 
 ---
 
@@ -605,7 +709,10 @@ This project ships with help from a growing community of contributors:
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Pull requests welcome — check the [open issues](https://github.com/Hmbown/CodeWhale/issues) for good first contributions.
 
-Support: [Buy me a coffee](https://www.buymeacoffee.com/hmbown).
+If you want CodeWhale to help improve CodeWhale, start with the
+[recursive self-improvement prompt](docs/RECURSIVE_SELF_IMPROVEMENT.md). It is
+designed to turn one DeepSeek V4 Pro session, or another capable open-weight
+path, into one small, reviewable patch.
 
 > [!Note]
 > *Not affiliated with DeepSeek Inc.*

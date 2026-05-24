@@ -120,8 +120,8 @@ impl DeepSeekClient {
             Err(_elapsed) => {
                 anyhow::bail!(
                     "SSE stream request did not receive response headers after {}s. \
-                     `deepseek doctor` can still pass when non-streaming requests work; \
-                     on Windows or proxy networks, try `DEEPSEEK_FORCE_HTTP1=1` and rerun `deepseek`.",
+                     `codewhale doctor` can still pass when non-streaming requests work; \
+                     on Windows or proxy networks, try `DEEPSEEK_FORCE_HTTP1=1` and rerun `codewhale`.",
                     open_timeout.as_secs()
                 );
             }

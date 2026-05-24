@@ -835,7 +835,7 @@ fn parse_table_row(line: &str) -> Option<Vec<String>> {
         return None;
     }
     let inner = line.trim_matches('|');
-    let cells: Vec<String> = inner.split('|').map(|c| c.trim().to_string()).collect();
+    let cells = split_table_cells(inner);
     // Separator row: every non-empty cell is only dashes/colons/spaces
     if cells
         .iter()
@@ -844,6 +844,38 @@ fn parse_table_row(line: &str) -> Option<Vec<String>> {
         return None;
     }
     Some(cells)
+}
+
+fn split_table_cells(inner: &str) -> Vec<String> {
+    let mut cells = Vec::new();
+    let mut current = String::new();
+    let mut in_code = false;
+    let mut chars = inner.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\\' => {
+                if matches!(chars.peek(), Some('|')) {
+                    current.push('|');
+                    let _ = chars.next();
+                } else {
+                    current.push(ch);
+                }
+            }
+            '`' => {
+                in_code = !in_code;
+                current.push(ch);
+            }
+            '|' if !in_code => {
+                cells.push(current.trim().to_string());
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    cells.push(current.trim().to_string());
+    cells
 }
 
 /// Word-wrap a single cell's text into one or more visual lines, each
@@ -1532,6 +1564,48 @@ mod tests {
         assert!(
             text.contains('\u{2524}'),
             "middle-right junction missing: {text:?}"
+        );
+    }
+
+    #[test]
+    fn table_pipes_inside_inline_code_stay_in_the_cell() {
+        let src = "| Check | Result |\n\
+                   |---|---|\n\
+                   | `strings ~/.cargo/bin/codewhale-tui | grep -c \"Goal mode\"` | 0 matches |\n";
+        let parsed = parse(src);
+
+        let rows: Vec<&Vec<String>> = parsed
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                Block::TableRow(cells) => Some(cells),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(rows.len(), 2, "expected header + data row: {rows:?}");
+        assert_eq!(
+            rows[1],
+            &vec![
+                "`strings ~/.cargo/bin/codewhale-tui | grep -c \"Goal mode\"`".to_string(),
+                "0 matches".to_string(),
+            ]
+        );
+
+        let rendered_lines = visible_lines(&render_markdown(src, 200, Style::default()));
+        let rendered = rendered_lines.join("\n");
+        assert!(
+            rendered.contains("grep -c"),
+            "inline-code command was lost: {rendered}"
+        );
+        let data_line = rendered_lines
+            .iter()
+            .find(|line| line.contains("strings ~/.cargo/bin/codewhale-tui"))
+            .expect("data row should render");
+        assert_eq!(
+            data_line.matches('│').count(),
+            3,
+            "two-column table row should have left, middle, and right separators: {data_line:?}"
         );
     }
 

@@ -18,8 +18,8 @@ export interface RepoFacts {
 }
 
 export const FACTS: RepoFacts = {
-  "generatedAt": "2026-05-14T19:43:39.727Z",
-  "version": "0.8.37",
+  "generatedAt": "2026-05-24T16:01:45.189Z",
+  "version": "0.8.43",
   "crates": [
     "agent",
     "app-server",
@@ -90,7 +90,7 @@ export const FACTS: RepoFacts = {
   ],
   "defaultModel": "deepseek-v4-pro",
   "nodeEngines": ">=18",
-  "toolCount": 68,
+  "toolCount": 69,
   "license": "MIT",
   "latestRelease": null
 };

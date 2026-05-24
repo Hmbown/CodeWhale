@@ -88,6 +88,9 @@ struct Cli {
     api_key: Option<String>,
     #[arg(long)]
     base_url: Option<String>,
+    /// Workspace directory for TUI file tools
+    #[arg(short = 'C', long = "workspace", alias = "cd", value_name = "DIR")]
+    workspace: Option<PathBuf>,
     #[arg(long = "no-alt-screen", hide = true)]
     no_alt_screen: bool,
     #[arg(long = "mouse-capture", conflicts_with = "no_mouse_capture")]
@@ -99,6 +102,9 @@ struct Cli {
     /// YOLO mode: auto-approve all tools
     #[arg(long)]
     yolo: bool,
+    /// Continue the most recent interactive session for this workspace.
+    #[arg(short = 'c', long = "continue")]
+    continue_session: bool,
     #[arg(short = 'p', long = "prompt", value_name = "PROMPT")]
     prompt_flag: Option<String>,
     #[arg(
@@ -129,17 +135,37 @@ enum Commands {
     Init(TuiPassthroughArgs),
     /// Bootstrap MCP config and/or skills directories.
     Setup(TuiPassthroughArgs),
-    /// Run the CodeWhale non-interactive agent command.
+    /// Run a non-interactive prompt through the TUI runtime.
     #[command(after_help = "\
+Examples:
+  codewhale exec \"explain this function\"
+  codewhale exec --auto \"list crates/ with ls\"
+  codewhale exec --auto --output-format stream-json \"fix the failing test\"
+
 Common forwarded flags:
-  --auto                           Enable agentic mode with tool access
+  --auto                           Enable tool-backed agent mode with auto-approvals
   --json                           Emit summary JSON
   --resume <SESSION_ID>            Resume a previous session by ID or prefix
   --session-id <SESSION_ID>        Resume a previous session by ID or prefix
   --continue                       Continue the most recent session for this workspace
   --output-format <FORMAT>         Output format: text or stream-json
+
+Plain `codewhale exec` is a one-shot model response. Use `--auto` for
+non-interactive filesystem/shell tool use, matching the supported automation
+path used by stream-json wrappers.
 ")]
     Exec(TuiPassthroughArgs),
+    /// Generate SWE-bench prediction rows from CodeWhale runs.
+    #[command(after_help = "\
+Examples:
+  codewhale swebench run --instance-id django__django-12345 --issue-file issue.md
+  codewhale swebench export --instance-id django__django-12345 --predictions-path all_preds.jsonl
+
+This command forwards to the TUI runtime. `run` invokes tool-backed agent mode
+and writes a SWE-bench-compatible JSONL prediction row from the resulting
+working-tree diff. `export` only writes the current diff.
+")]
+    Swebench(TuiPassthroughArgs),
     /// Run a CodeWhale-powered code review over a git diff.
     Review(TuiPassthroughArgs),
     /// Apply a patch file or stdin to the working tree.
@@ -482,6 +508,10 @@ fn run() -> Result<()> {
             let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
             delegate_to_tui(&cli, &resolved_runtime, tui_args("exec", args))
         }
+        Some(Commands::Swebench(args)) => {
+            let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
+            delegate_to_tui(&cli, &resolved_runtime, tui_args("swebench", args))
+        }
         Some(Commands::Review(args)) => {
             let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
             delegate_to_tui(&cli, &resolved_runtime, tui_args("review", args))
@@ -528,24 +558,40 @@ fn run() -> Result<()> {
         Some(Commands::Update) => update::run_update(),
         None => {
             let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
-            let mut forwarded = Vec::new();
-            let prompt = cli.prompt_flag.iter().chain(cli.prompt.iter()).fold(
-                String::new(),
-                |mut acc, part| {
-                    if !acc.is_empty() {
-                        acc.push(' ');
-                    }
-                    acc.push_str(part);
-                    acc
-                },
-            );
-            if !prompt.is_empty() {
-                forwarded.push("--prompt".to_string());
-                forwarded.push(prompt);
-            }
+            let forwarded = root_tui_passthrough(&cli)?;
             delegate_to_tui(&cli, &resolved_runtime, forwarded)
         }
     }
+}
+
+fn root_tui_passthrough(cli: &Cli) -> Result<Vec<String>> {
+    let mut forwarded = Vec::new();
+    if cli.continue_session {
+        forwarded.push("--continue".to_string());
+    }
+
+    let prompt =
+        cli.prompt_flag
+            .iter()
+            .chain(cli.prompt.iter())
+            .fold(String::new(), |mut acc, part| {
+                if !acc.is_empty() {
+                    acc.push(' ');
+                }
+                acc.push_str(part);
+                acc
+            });
+    if !prompt.is_empty() {
+        if cli.continue_session {
+            bail!(
+                "`codewhale --continue` resumes the interactive TUI. Use `codewhale exec --continue <PROMPT>` to continue a session non-interactively."
+            );
+        }
+        forwarded.push("--prompt".to_string());
+        forwarded.push(prompt);
+    }
+
+    Ok(forwarded)
 }
 
 fn resolve_runtime_for_dispatch(
@@ -1392,6 +1438,9 @@ fn build_tui_command(
     }
     if let Some(profile) = cli.profile.as_ref() {
         cmd.arg("--profile").arg(profile);
+    }
+    if let Some(workspace) = cli.workspace.as_ref() {
+        cmd.arg("--workspace").arg(workspace);
     }
     // Accepted for older scripts, but no longer forwarded: the interactive TUI
     // always owns the alternate screen to avoid host scrollback hijacking.
@@ -2515,6 +2564,8 @@ mod tests {
             "https://api.openai.com/v1",
             "--api-key",
             "sk-test",
+            "--workspace",
+            "/tmp/workspace",
             "--no-alt-screen",
             "--no-mouse-capture",
             "--skip-onboarding",
@@ -2534,6 +2585,7 @@ mod tests {
         assert_eq!(cli.sandbox_mode.as_deref(), Some("workspace-write"));
         assert_eq!(cli.base_url.as_deref(), Some("https://api.openai.com/v1"));
         assert_eq!(cli.api_key.as_deref(), Some("sk-test"));
+        assert_eq!(cli.workspace, Some(PathBuf::from("/tmp/workspace")));
         assert!(cli.no_alt_screen);
         assert!(cli.no_mouse_capture);
         assert!(!cli.mouse_capture);
@@ -2551,7 +2603,13 @@ mod tests {
         let custom_str = custom.to_string_lossy().into_owned();
         let _bin = ScopedEnvVar::set("DEEPSEEK_TUI_BIN", &custom_str);
 
-        let cli = parse_ok(&["deepseek", "--provider", "openai"]);
+        let cli = parse_ok(&[
+            "deepseek",
+            "--provider",
+            "openai",
+            "--workspace",
+            "/tmp/codewhale-workspace",
+        ]);
         let resolved = ResolvedRuntimeOptions {
             provider: ProviderKind::Openai,
             model: "glm-5".to_string(),
@@ -2593,6 +2651,15 @@ mod tests {
             command_env(&cmd, "DEEPSEEK_API_KEY_SOURCE").as_deref(),
             Some("keyring")
         );
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--workspace", "/tmp/codewhale-workspace"]),
+            "expected workspace forwarding in args: {args:?}"
+        );
     }
 
     #[test]
@@ -2601,6 +2668,27 @@ mod tests {
 
         assert_eq!(cli.prompt_flag.as_deref(), Some("Reply with exactly OK."));
         assert!(cli.prompt.is_empty());
+    }
+
+    #[test]
+    fn parses_top_level_continue_for_interactive_resume() {
+        let cli = parse_ok(&["codewhale", "--continue"]);
+
+        assert!(cli.continue_session);
+        assert!(cli.prompt_flag.is_none());
+        assert!(cli.prompt.is_empty());
+        assert_eq!(root_tui_passthrough(&cli).unwrap(), vec!["--continue"]);
+    }
+
+    #[test]
+    fn top_level_continue_rejects_one_shot_prompt() {
+        let cli = parse_ok(&["codewhale", "--continue", "-p", "follow up"]);
+
+        let err = root_tui_passthrough(&cli).expect_err("prompted continue should be rejected");
+        assert!(
+            err.to_string()
+                .contains("codewhale exec --continue <PROMPT>")
+        );
     }
 
     #[test]
@@ -2663,6 +2751,7 @@ mod tests {
             "--mouse-capture",
             "--no-mouse-capture",
             "--skip-onboarding",
+            "--continue",
             "--prompt",
         ] {
             assert!(

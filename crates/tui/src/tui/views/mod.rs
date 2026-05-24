@@ -1234,6 +1234,18 @@ impl ModalView for ConfigView {
                 }
                 ViewAction::None
             }
+            // Ctrl+H is the legacy ASCII backspace many terminals emit.
+            KeyCode::Char('h')
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT) =>
+            {
+                if !self.filter.is_empty() {
+                    self.update_filter(|filter| {
+                        filter.pop();
+                    });
+                }
+                ViewAction::None
+            }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.clear_filter();
                 ViewAction::None

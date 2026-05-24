@@ -90,7 +90,7 @@ to the model, such as `mcp_<server>_<tool>`.
 
 | Tool | Niche |
 |---|---|
-| `update_plan` | Structured checklist for complex multi-step work. |
+| `update_plan` | Optional high-level strategy metadata for complex multi-phase work; keep `checklist_write` as the primary progress surface. |
 | `task_create` | Create/enqueue a durable background task through `TaskManager`. This is the real executable work object for long-running agent work. |
 | `task_list` | List durable tasks with status and linked runtime ids. |
 | `task_read` | Read durable task detail: thread/turn linkage, timeline, checklist, gates, artifacts, PR attempts, GitHub events. |

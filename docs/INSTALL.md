@@ -282,7 +282,7 @@ The `codewhale` package is listed in Scoop's main bucket:
 
 ```powershell
 scoop update
-scoop install deepseek-tui
+scoop install codewhale
 codewhale --version
 ```
 

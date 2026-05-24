@@ -1106,7 +1106,7 @@ fn plan_choice_from_option_maps_expected_values() {
 
 #[test]
 fn plan_prompt_view_escape_emits_dismiss_event() {
-    let mut view = PlanPromptView::new();
+    let mut view = PlanPromptView::new(None);
 
     let action = view.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
@@ -2955,6 +2955,69 @@ fn apply_slash_menu_selection_uses_skill_command_form() {
 }
 
 #[test]
+fn inline_skill_slash_popup_lists_cached_skills_in_message() {
+    let mut app = create_test_app();
+    app.cached_skills = vec![
+        ("search-files".to_string(), "Search files".to_string()),
+        ("my-review".to_string(), "Review code".to_string()),
+    ];
+    app.input = "please use /".to_string();
+    app.cursor_position = app.input.chars().count();
+
+    let entries = visible_slash_menu_entries(&app, 128);
+
+    assert!(entries.iter().any(|entry| entry.name == "/search-files"));
+    assert!(entries.iter().any(|entry| entry.name == "/my-review"));
+    assert!(entries.iter().all(|entry| entry.is_skill));
+}
+
+#[test]
+fn inline_skill_slash_popup_filters_partial_without_leaking_to_command_position() {
+    let mut app = create_test_app();
+    app.cached_skills = vec![
+        ("search-files".to_string(), "Search files".to_string()),
+        ("my-review".to_string(), "Review code".to_string()),
+    ];
+    app.input = "please use /my".to_string();
+    app.cursor_position = app.input.chars().count();
+
+    let entries = visible_slash_menu_entries(&app, 128);
+
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].name, "/my-review");
+
+    app.input = "/se".to_string();
+    app.cursor_position = app.input.chars().count();
+    let command_entries = visible_slash_menu_entries(&app, 128);
+    assert!(
+        !command_entries
+            .iter()
+            .any(|entry| entry.name == "/search-files" && entry.is_skill),
+        "command-position slash menu should not include inline skill mentions"
+    );
+}
+
+#[test]
+fn apply_slash_menu_selection_splices_inline_skill_mention() {
+    let mut app = create_test_app();
+    app.input = "please use /se here".to_string();
+    app.cursor_position = "please use /se".chars().count();
+    let entries = vec![crate::tui::widgets::SlashMenuEntry {
+        name: "/search-files".to_string(),
+        description: "Search files".to_string(),
+        is_skill: true,
+        alias_hint: None,
+    }];
+
+    assert!(apply_slash_menu_selection(&mut app, &entries, true));
+    assert_eq!(app.input, "please use /search-files here");
+    assert_eq!(
+        app.cursor_position,
+        "please use /search-files".chars().count()
+    );
+}
+
+#[test]
 fn try_autocomplete_slash_command_completes_skill_argument() {
     let mut app = create_test_app();
     app.cached_skills = vec![
@@ -3375,6 +3438,36 @@ fn activity_footer_hint_surfaces_visible_thinking_without_raw_tool_hint() {
 }
 
 #[test]
+fn activity_footer_hint_uses_details_for_subagent_cards() {
+    let mut app = create_test_app();
+    app.history = vec![HistoryCell::SubAgent(
+        crate::tui::history::SubAgentCell::Delegate(
+            crate::tui::widgets::agent_card::DelegateCard::new("agent_123", "general"),
+        ),
+    )];
+    app.resync_history_revisions();
+    let revisions = app.history_revisions.clone();
+    app.viewport.transcript_cache.ensure(
+        &app.history,
+        &revisions,
+        100,
+        app.transcript_render_options(),
+    );
+    app.viewport.last_transcript_top = first_line_for_cell(&app, 0);
+    app.viewport.last_transcript_visible = 4;
+
+    let expected = format!(
+        "{} Activity: sub-agent · {} details",
+        crate::tui::key_shortcuts::activity_shortcut_label(),
+        crate::tui::key_shortcuts::tool_details_shortcut_label()
+    );
+    assert_eq!(
+        selected_detail_footer_label(&app).as_deref(),
+        Some(expected.as_str())
+    );
+}
+
+#[test]
 fn macos_option_v_glyph_is_treated_as_details_shortcut_only_on_macos() {
     let option_v = KeyEvent::new(KeyCode::Char('\u{221A}'), KeyModifiers::NONE);
     assert!(crate::tui::key_shortcuts::is_macos_option_v_legacy_key_for_platform(&option_v, true));
@@ -3558,7 +3651,7 @@ fn active_rlm_task_entries_surface_foreground_rlm_work() {
 
 #[test]
 fn alt_nav_modifiers_require_alt_and_exclude_ctrl_super() {
-    // v0.8.30 — transcript-nav shortcuts (`Alt+G`, `Alt+[`, etc.) require
+    // v0.8.30 — transcript-nav shortcuts (`Alt+[`, `Alt+]`, etc.) require
     // Alt, allow Shift for capital-letter forms, and block Ctrl/Super so
     // they don't collide with clipboard / window shortcuts. Bare and
     // Shift-only modifiers fall through to text insertion now.
@@ -3892,7 +3985,7 @@ fn shell_wait_without_command_uses_task_id_until_command_metadata_arrives() {
             _ => None,
         })
         .expect("exec cell");
-    assert_eq!(exec.command, "shell job shell_33a08c3c");
+    assert_eq!(exec.command, "command shell_33a08c3c");
     assert!(
         exec.interaction
             .as_deref()
@@ -6433,5 +6526,21 @@ mod work_sidebar_projection_tests {
             select_work_sidebar_tasks(vec![at_boundary], session_started_at, now, recent_ttl);
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].id, "boundary");
+    }
+
+    #[test]
+    fn receipt_summary_truncation_does_not_panic_on_multibyte_boundary() {
+        // Build a summary where byte 57 falls mid-character (em dash is 3 bytes).
+        // 56 ASCII chars + em dash ensures byte 57 lands inside the em dash.
+        let prefix = "a".repeat(56); // 56 ASCII bytes
+        let summary = format!("{prefix}— rest of summary"); // byte 56='a', 57-59='—'
+        assert!(summary.len() > 60);
+        // Byte 57 should be inside the em dash (3-byte UTF-8 sequence).
+        assert!(!summary.is_char_boundary(57));
+
+        // The runtime helper should step back to the start of the char
+        // and append the ellipsis without panicking.
+        let truncated = crate::utils::truncate_with_ellipsis(&summary, 60, "…");
+        assert_eq!(truncated, format!("{prefix}…"));
     }
 }

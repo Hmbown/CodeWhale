@@ -61,11 +61,14 @@ count_deps.py
 project_overhaul_prompt.md
 .codex/
 .context/
+.wrangler/
 
 # Local runtime state
+.codewhale/
 .deepseek/
 **/session_*.json
 *.db
+npm/*/bin/downloads/
 
 # Companion app (tracked separately)
 apps/
@@ -92,6 +95,10 @@ apps/
 
 # Maintainer-internal design notes (trade-secret material, never published)
 .private/
+
+# Maintainer-local SWE-bench scratch (instance workspaces, venvs, predictions,
+# Docker harness logs). Never published.
+.swebench/
 
 # Agent handoffs and version-specific setup plans are working-state notes, not
 # public docs. Keep durable setup guidance in docs/runbooks instead.

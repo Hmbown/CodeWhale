@@ -1,4 +1,4 @@
-## Compaction Relay
+## Compaction Relay — Tier 9 (Precedent)
 
 The conversation above this point has been compacted. Below is a structured summary of what was discussed and decided. Read this first — it replaces re-reading the compressed transcript.
 
@@ -24,3 +24,10 @@ The conversation above this point has been compacted. Below is a structured summ
 
 ### Next step
 [The single next action to take when resuming — one line, concrete]
+
+**Staleability:** This handoff is Tier 9 in the Constitutional hierarchy. It
+is useful context but subordinate to live tool output, file contents, the
+current repository state, and the user's current request. A handoff that
+declares a blocker does not bind a user who says to proceed. A handoff that
+claims completion does not override evidence that the work is unfinished.
+Use this summary as orientation, not as law.

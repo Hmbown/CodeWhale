@@ -881,6 +881,7 @@ pub struct ComposerState {
     pub paste_burst: PasteBurst,
     pub input_history: Vec<String>,
     pub draft_history: VecDeque<String>,
+    pub clear_undo_buffer: Option<String>,
     pub history_index: Option<usize>,
     pub(crate) history_navigation_draft: Option<InputHistoryDraft>,
     pub composer_history_search: Option<ComposerHistorySearch>,
@@ -912,6 +913,7 @@ impl Default for ComposerState {
             paste_burst: PasteBurst::default(),
             input_history: Vec::new(),
             draft_history: VecDeque::new(),
+            clear_undo_buffer: None,
             history_index: None,
             history_navigation_draft: None,
             composer_history_search: None,
@@ -965,12 +967,13 @@ impl Default for ViewportState {
     }
 }
 
-/// Goal mode state (#397).
+/// Goal tracking state (#397).
 #[derive(Debug, Clone, Default)]
 pub struct GoalState {
     pub goal_objective: Option<String>,
     pub goal_token_budget: Option<u32>,
     pub goal_started_at: Option<Instant>,
+    pub goal_completed: bool,
 }
 
 /// Session cost and token telemetry state.
@@ -1015,6 +1018,13 @@ impl Default for SessionState {
             last_cache_inspection: None,
         }
     }
+}
+
+/// Evidence collected during a turn for the post-turn receipt.
+#[derive(Debug, Clone)]
+pub struct ToolEvidence {
+    pub tool_name: String,
+    pub summary: String,
 }
 
 /// Global UI state for the TUI.
@@ -1136,6 +1146,9 @@ pub struct App {
     pub context_panel: bool,
     /// File-tree pane state. `None` when hidden; `Some` when visible.
     pub file_tree: Option<crate::tui::file_tree::FileTreeState>,
+    /// Whether the file-tree pane was actually rendered in the last frame.
+    /// Set false when the terminal is too narrow to show the tree.
+    pub file_tree_visible: bool,
     #[allow(dead_code)]
     pub compact_threshold: usize,
     pub max_input_history: usize,
@@ -1340,6 +1353,9 @@ pub struct App {
     pub workspace_context_refreshed_at: Option<Instant>,
     /// Cached background tasks for sidebar rendering.
     pub task_panel: Vec<TaskPanelEntry>,
+    /// Active decision card (v0.8.43 truth-surface). When set, keyboard input
+    /// is routed through the card navigation instead of the composer.
+    pub decision_card: Option<crate::tui::widgets::decision_card::DecisionCard>,
     /// Wall-clock time when this TUI session started. Used by the Work
     /// sidebar projection to hide completed durable tasks that finished
     /// before the current session (bug #1913).
@@ -1391,7 +1407,7 @@ pub struct App {
     /// overrides). Loaded from config and forwarded to the engine.
     pub cycle: CycleConfig,
 
-    // === Goal Mode (#397) ===
+    // === Transcript filtering (#397) ===
     /// Transcript cells the user has collapsed (hidden from view).
     /// Stores **original** virtual cell indices (pre-filtering).
     pub collapsed_cells: HashSet<usize>,
@@ -1411,6 +1427,13 @@ pub struct App {
     /// Derived title for the current session shown in the composer border.
     /// Updated when `EngineEvent::SessionUpdated` fires or a saved session is loaded.
     pub session_title: Option<String>,
+
+    /// Post-turn receipt rendered as transient composer chrome.
+    /// Set when a turn completes; cleared when a new turn starts or after expiry.
+    pub receipt_text: Option<String>,
+    pub receipt_started_at: Option<Instant>,
+    /// Tool evidence collected during the current turn for the receipt.
+    pub tool_evidence: Vec<ToolEvidence>,
 }
 
 /// Message queued while the engine is busy.
@@ -1728,6 +1751,7 @@ impl App {
                 paste_burst: PasteBurst::default(),
                 input_history,
                 draft_history: VecDeque::new(),
+                clear_undo_buffer: None,
                 history_index: None,
                 history_navigation_draft: None,
                 composer_history_search: None,
@@ -1793,6 +1817,7 @@ impl App {
             sidebar_focus,
             context_panel: settings.context_panel,
             file_tree: None,
+            file_tree_visible: false,
             compact_threshold,
             max_input_history,
             allow_shell,
@@ -1893,6 +1918,7 @@ impl App {
             workspace_context_cell: std::sync::Arc::new(std::sync::Mutex::new(None)),
             workspace_context_refreshed_at: None,
             task_panel: Vec::new(),
+            decision_card: None,
             session_started_at: chrono::Utc::now(),
             needs_redraw: true,
             thinking_started_at: None,
@@ -1919,6 +1945,9 @@ impl App {
                 .and_then(|tui| tui.composer_arrows_scroll)
                 .unwrap_or_else(|| default_composer_arrows_scroll(use_mouse_capture)),
             session_title: None,
+            receipt_text: None,
+            receipt_started_at: None,
+            tool_evidence: Vec::new(),
         }
     }
 
@@ -2531,7 +2560,8 @@ impl App {
     }
 
     /// Whether a virtual transcript cell can open a meaningful Alt+V detail
-    /// view.
+    /// view. Thinking cells render their own raw text inline so there is no
+    /// separate "raw" target — only tool / sub-agent cells get the hint.
     #[must_use]
     pub fn cell_has_detail_target(&self, index: usize) -> bool {
         self.tool_detail_record_for_cell(index).is_some()
@@ -2780,6 +2810,39 @@ impl App {
         {
             self.quit_armed_until = None;
             self.needs_redraw = true;
+        }
+    }
+
+    pub const RECEIPT_VISIBLE_DURATION: Duration = Duration::from_secs(8);
+
+    pub fn set_receipt_text(&mut self, text: impl Into<String>) {
+        self.receipt_text = Some(text.into());
+        self.receipt_started_at = Some(Instant::now());
+        self.needs_redraw = true;
+    }
+
+    pub fn clear_receipt(&mut self) {
+        if self.receipt_text.is_some() || self.receipt_started_at.is_some() {
+            self.receipt_text = None;
+            self.receipt_started_at = None;
+            self.needs_redraw = true;
+        }
+    }
+
+    pub fn active_receipt_text(&self) -> Option<&str> {
+        let receipt = self.receipt_text.as_deref()?;
+        let started = self.receipt_started_at?;
+        (started.elapsed() <= Self::RECEIPT_VISIBLE_DURATION).then_some(receipt)
+    }
+
+    /// Tick called from the redraw loop so transient receipts leave the UI
+    /// without waiting for the next keypress.
+    pub fn tick_receipt(&mut self) {
+        if self
+            .receipt_started_at
+            .is_some_and(|started| started.elapsed() > Self::RECEIPT_VISIBLE_DURATION)
+        {
+            self.clear_receipt();
         }
     }
 
@@ -3796,6 +3859,11 @@ impl App {
 
     pub fn stash_current_input_for_recovery(&mut self) {
         let draft = self.input.clone();
+        if draft.trim().is_empty() {
+            self.clear_undo_buffer = None;
+            return;
+        }
+        self.clear_undo_buffer = Some(draft.clone());
         self.remember_draft_for_recovery(draft);
     }
 
@@ -4033,6 +4101,28 @@ impl App {
         true
     }
 
+    /// Restore the last cleared input if the composer is empty.
+    /// Returns `true` if the input was restored.
+    pub fn restore_last_cleared_input_if_empty(&mut self) -> bool {
+        if !self.input.is_empty() {
+            return false;
+        }
+        let Some(saved) = self.clear_undo_buffer.take().filter(|s| !s.is_empty()) else {
+            return false;
+        };
+
+        self.input = saved;
+        self.cursor_position = char_count(&self.input);
+        self.history_index = None;
+        self.history_navigation_draft = None;
+        self.selected_attachment_index = None;
+        self.slash_menu_selected = 0;
+        self.slash_menu_hidden = false;
+        self.needs_redraw = true;
+        self.clear_undo_buffer = None;
+        true
+    }
+
     /// Composer-Enter dispatch. Returns `Some(input)` when the press should
     /// fire a submit; `None` when Enter was absorbed (paste-burst Enter
     /// suppression — see #1073).
@@ -4192,13 +4282,17 @@ impl App {
 
     /// Decide how to route a fresh composer submit.
     ///
-    /// #382: default to Queue when busy — the user shouldn't have to distinguish
-    /// "streaming" from "tool execution". Ctrl+Enter overrides to Steer.
+    /// #382 / v0.8.44: when the model is busy but not actively streaming
+    /// (waiting on tool results, sub-agents, or shell commands), Enter tries
+    /// to steer into the current turn. If steering fails, the message queues.
+    /// During active streaming, Enter always queues to avoid interrupting
+    /// in-flight reasoning. Ctrl+Enter forces Steer in all busy states.
     ///
     /// Truth table:
-    ///   offline=F, busy=F → Immediate
-    ///   offline=F, busy=T → Queue  (was Steer for non-streaming; now unified)
-    ///   offline=T, busy=* → Queue
+    ///   offline=F, busy=F           → Immediate
+    ///   offline=F, busy=T+streaming → Queue
+    ///   offline=F, busy=T+waiting   → Steer (fallback Queue)
+    ///   offline=T, busy=*           → Queue
     #[must_use]
     pub fn decide_submit_disposition(&self) -> SubmitDisposition {
         if self.offline_mode {
@@ -4207,7 +4301,13 @@ impl App {
         if !self.is_loading {
             return SubmitDisposition::Immediate;
         }
-        // Busy: always queue. Ctrl+Enter routes through steer_user_message directly.
+        // Busy but not streaming text: model is waiting on tool results or
+        // sub-agents — steer so the new message reaches the engine promptly
+        // instead of sitting in the queue until the current turn finishes.
+        if self.streaming_message_index.is_none() {
+            return SubmitDisposition::Steer;
+        }
+        // Actively streaming: queue to avoid interrupting in-flight reasoning.
         SubmitDisposition::Queue
     }
 
@@ -5333,6 +5433,10 @@ mod tests {
         app.mode = AppMode::Agent;
         app.cycle_mode_reverse();
         assert_eq!(app.mode, AppMode::Plan);
+
+        app.mode = AppMode::Yolo;
+        app.cycle_mode_reverse();
+        assert_eq!(app.mode, AppMode::Agent);
     }
 
     #[test]
@@ -5344,12 +5448,12 @@ mod tests {
             AppMode::Yolo => AppMode::Plan,
         };
         let second_mode = match first_mode {
-            AppMode::Plan => AppMode::Yolo,
-            AppMode::Agent => AppMode::Plan,
-            AppMode::Yolo => AppMode::Agent,
+            AppMode::Plan => AppMode::Agent,
+            AppMode::Agent => AppMode::Yolo,
+            AppMode::Yolo => AppMode::Plan,
         };
         let third_mode = match second_mode {
-            AppMode::Plan => AppMode::Yolo,
+            AppMode::Plan => AppMode::Agent,
             AppMode::Agent => AppMode::Yolo,
             AppMode::Yolo => AppMode::Plan,
         };
@@ -5767,6 +5871,50 @@ mod tests {
     }
 
     #[test]
+    fn clear_undo_buffer_is_set_on_clear_input_recoverable() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "hello".to_string();
+        app.cursor_position = 5;
+
+        app.clear_input_recoverable();
+
+        assert!(app.input.is_empty());
+        assert_eq!(app.clear_undo_buffer.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn clear_undo_buffer_is_none_when_clearing_empty_input() {
+        let mut app = App::new(test_options(false), &Config::default());
+        assert!(app.input.is_empty());
+
+        app.clear_input_recoverable();
+
+        assert!(app.clear_undo_buffer.is_none());
+    }
+
+    #[test]
+    fn restore_last_cleared_input_restores_saved_draft() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "previous".to_string();
+        app.cursor_position = 8;
+        app.clear_input_recoverable();
+        assert!(app.input.is_empty());
+
+        let restored = app.restore_last_cleared_input_if_empty();
+        assert!(restored);
+        assert_eq!(app.input, "previous");
+        assert!(app.clear_undo_buffer.is_none());
+    }
+
+    #[test]
+    fn restore_last_cleared_input_does_nothing_when_composer_not_empty() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.clear_undo_buffer = Some("old".to_string());
+        app.input = "current".to_string();
+        assert!(!app.restore_last_cleared_input_if_empty());
+    }
+
+    #[test]
     fn composer_paste_flushes_pending_burst_and_normalizes_crlf() {
         let mut app = App::new(test_options(false), &Config::default());
         app.use_paste_burst_detection = true;
@@ -6107,6 +6255,24 @@ mod tests {
     }
 
     #[test]
+    fn receipt_expires_and_requests_redraw() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.set_receipt_text("✓ turn completed");
+        app.receipt_started_at =
+            Some(Instant::now() - App::RECEIPT_VISIBLE_DURATION - Duration::from_millis(10));
+        assert_eq!(app.active_receipt_text(), None);
+
+        app.needs_redraw = false;
+        app.tick_receipt();
+        assert!(app.receipt_text.is_none());
+        assert!(app.receipt_started_at.is_none());
+        assert!(
+            app.needs_redraw,
+            "receipt expiry should repaint composer chrome"
+        );
+    }
+
+    #[test]
     fn quit_armed_tick_is_noop_within_window() {
         let mut app = App::new(test_options(false), &Config::default());
         app.arm_quit();
@@ -6144,13 +6310,14 @@ mod tests {
     }
 
     #[test]
-    fn submit_disposition_queue_when_busy_and_online_not_streaming() {
-        // #382: Busy + not streaming → Queue (was Steer; now unified)
+    fn submit_disposition_steer_when_busy_and_online_not_streaming() {
+        // v0.8.44: Busy + not streaming → Steer (Enter reaches engine during
+        // sub-agent/shell waits instead of silently queueing).
         let mut app = App::new(test_options(false), &Config::default());
         app.is_loading = true;
         app.offline_mode = false;
         // streaming_message_index is None (default) → tool execution phase
-        assert_eq!(app.decide_submit_disposition(), SubmitDisposition::Queue);
+        assert_eq!(app.decide_submit_disposition(), SubmitDisposition::Steer);
     }
 
     #[test]

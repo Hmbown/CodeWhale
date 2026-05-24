@@ -1,7 +1,7 @@
 /**
  * roadmap-feed.ts — fetch the live roadmap from GitHub.
  *
- *   "Shipped"    ← last 8 published Releases on Hmbown/deepseek-tui
+ *   "Shipped"    ← last 8 published Releases on Hmbown/CodeWhale
  *   "Underway"   ← open issues with label `roadmap:underway`
  *   "Considered" ← open issues with label `roadmap:considered`
  *   "Ruled out"  ← issues (open or closed) with label `roadmap:ruled-out`
@@ -12,7 +12,7 @@
  * Categories that come back empty fall through to the page's static items —
  * the maintainer can adopt label-driven roadmap incrementally.
  */
-const REPO = "Hmbown/deepseek-tui";
+const REPO = process.env.GITHUB_REPO ?? "Hmbown/CodeWhale";
 const KV_KEY = "roadmap:feed";
 const KV_TTL = 60 * 30;
 
@@ -39,7 +39,7 @@ interface KVNamespace {
 async function gh<T>(url: string, ghToken?: string): Promise<T | null> {
   const headers: Record<string, string> = {
     Accept: "application/vnd.github+json",
-    "User-Agent": "deepseek-tui-web-roadmap",
+    "User-Agent": "codewhale-web-roadmap",
     "X-GitHub-Api-Version": "2022-11-28",
   };
   if (ghToken) headers["Authorization"] = `Bearer ${ghToken}`;

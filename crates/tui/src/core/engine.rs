@@ -443,6 +443,7 @@ impl Engine {
                     project_context_pack_enabled: config.project_context_pack_enabled,
                     locale_tag: &config.locale_tag,
                     translation_enabled: config.translation_enabled,
+                    model_id: &config.model,
                 },
                 session.approval_mode,
             );
@@ -1817,6 +1818,7 @@ impl Engine {
                 project_context_pack_enabled: self.config.project_context_pack_enabled,
                 locale_tag: &self.config.locale_tag,
                 translation_enabled: self.config.translation_enabled,
+                model_id: &self.config.model,
             },
             self.session.approval_mode,
         );

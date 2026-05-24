@@ -657,7 +657,7 @@ async fn test_exec_shell_cancel_tool_kills_background_process() {
         .expect("cancel");
 
     assert!(result.success);
-    assert!(result.content.contains("Canceled background shell job"));
+    assert!(result.content.contains("Canceled background command"));
     let meta = result.metadata.expect("metadata");
     assert_eq!(meta.get("status").and_then(Value::as_str), Some("Killed"));
 

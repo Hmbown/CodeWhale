@@ -72,9 +72,14 @@ pub(crate) fn render_footer(f: &mut Frame, area: Rect, app: &mut App) {
         // Surface one compact live status row in the footer whenever a turn
         // is live. Tool turns get the current action plus active/done counts;
         // non-tool work falls back to the existing dot-pulse label.
-        props.state_label = active_subagent_status_label(app)
+        let mut label = active_subagent_status_label(app)
             .or_else(|| active_tool_status_label(app))
             .unwrap_or_else(|| crate::tui::widgets::footer_working_label(dot_frame, app.ui_locale));
+        // Append stall reason when the turn has been running > 30 s.
+        if let Some(reason) = stall_reason(app) {
+            label = format!("{label}  ({reason})");
+        }
+        props.state_label = label;
         props.state_color = palette::DEEPSEEK_SKY;
 
         // Water-spout frame source: wall-clock milliseconds. The sine-wave
@@ -96,6 +101,48 @@ pub(crate) fn render_footer(f: &mut Frame, area: Rect, app: &mut App) {
     let widget = FooterWidget::new(props);
     let buf = f.buffer_mut();
     widget.render(area, buf);
+}
+
+/// Classify why a turn that has been running for > 30 s might appear stalled.
+/// Returns a short human-readable reason string, or `None` when the turn has
+/// not been running long enough to classify as stalled.
+pub(crate) fn stall_reason(app: &App) -> Option<&'static str> {
+    let elapsed = app.turn_started_at?.elapsed();
+    if elapsed.as_secs() < 30 {
+        return None;
+    }
+    if app.is_compacting {
+        return Some("compacting context");
+    }
+    if app.is_loading {
+        return Some("waiting for model");
+    }
+    if running_agent_count(app) > 0 {
+        return Some("sub-agents working");
+    }
+    if app.task_panel.iter().any(|task| task.status == "running") {
+        return Some("background jobs running");
+    }
+    let active = app.active_cell.as_ref()?;
+    if active.entries().iter().any(|cell| match cell {
+        crate::tui::history::HistoryCell::Tool(tool) => match tool {
+            crate::tui::history::ToolCell::Exec(exec) => {
+                exec.status == crate::tui::history::ToolStatus::Running
+            }
+            crate::tui::history::ToolCell::Exploring(explore) => explore
+                .entries
+                .iter()
+                .any(|e| e.status == crate::tui::history::ToolStatus::Running),
+            _ => false,
+        },
+        _ => false,
+    }) {
+        return Some("tools executing");
+    }
+    if app.runtime_turn_status.as_deref() == Some("in_progress") {
+        return Some("waiting - no recent activity");
+    }
+    None
 }
 
 /// Whether the footer should animate the water-spout strip. Driven by the

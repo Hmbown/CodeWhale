@@ -35,9 +35,9 @@ pub fn init(app: &mut App) -> CommandResult {
     }
 }
 
-/// If `workspace` is inside a git repository, ensure `.deepseek/` is listed
-/// in the nearest `.gitignore` so that snapshots, instructions, and other
-/// workspace-local state are not accidentally committed.
+/// If `workspace` is inside a git repository, ensure `.codewhale/` and
+/// `.deepseek/` are listed in the nearest `.gitignore` so that snapshots,
+/// instructions, and other workspace-local state are not accidentally committed.
 fn ensure_deepseek_gitignored(workspace: &Path) {
     // Only act if this workspace is a git repo.
     if !workspace.join(".git").exists() {
@@ -45,24 +45,27 @@ fn ensure_deepseek_gitignored(workspace: &Path) {
     }
 
     let gitignore = workspace.join(".gitignore");
-    let entry = ".deepseek/";
+    let entries = [".codewhale/", ".deepseek/"];
 
-    // Read existing contents (if any) and check whether the entry is already present.
-    // Check both with and without trailing slash to catch variants like
-    // ".deepseek" and ".deepseek/".
-    if let Ok(existing) = std::fs::read_to_string(&gitignore) {
+    // Read existing contents once.
+    let existing = std::fs::read_to_string(&gitignore).unwrap_or_default();
+    let mut missing: Vec<&str> = Vec::new();
+    for entry in entries {
         let entry_no_slash = entry.trim_end_matches('/');
-        if existing.lines().any(|line| {
+        let already_ignored = existing.lines().any(|line| {
             let trimmed = line.trim();
             trimmed == entry || trimmed == entry_no_slash
-        }) {
-            return; // already ignored
+        });
+        if !already_ignored {
+            missing.push(entry);
         }
     }
 
-    // Append the entry. If .gitignore doesn't exist yet, create it with a header.
-    // Ensure there's a trailing newline before our entry to avoid joining with
-    // a previous unterminated line.
+    if missing.is_empty() {
+        return;
+    }
+
+    // Append missing entries. If .gitignore doesn't exist yet, create it.
     use std::io::Write;
     if let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
@@ -72,19 +75,19 @@ fn ensure_deepseek_gitignored(workspace: &Path) {
         // If the file is non-empty and doesn't end with a newline, add one first.
         if let Ok(meta) = file.metadata()
             && meta.len() > 0
+            && let Ok(mut f) = std::fs::File::open(&gitignore)
         {
-            // Read last byte to check for trailing newline.
-            if let Ok(mut f) = std::fs::File::open(&gitignore) {
-                use std::io::Seek;
-                if f.seek(std::io::SeekFrom::End(-1)).is_ok() {
-                    let mut buf = [0u8; 1];
-                    if f.read_exact(&mut buf).is_ok() && buf[0] != b'\n' {
-                        let _ = writeln!(file);
-                    }
+            use std::io::Seek;
+            if f.seek(std::io::SeekFrom::End(-1)).is_ok() {
+                let mut buf = [0u8; 1];
+                if f.read_exact(&mut buf).is_ok() && buf[0] != b'\n' {
+                    let _ = writeln!(file);
                 }
             }
         }
-        let _ = writeln!(file, "{entry}");
+        for entry in &missing {
+            let _ = writeln!(file, "{entry}");
+        }
     }
 }
 
@@ -100,15 +103,58 @@ fn generate_project_doc(workspace: &Path) -> String {
     let project_info = detect_project_type(workspace);
     doc.push_str(&project_info);
 
-    // Add standard sections
-    doc.push_str("\n## Guidelines\n\n");
+    // Agent behavior — conventions, gotchas, testing
+    doc.push_str("## Agent Guidance\n\n");
+    doc.push_str("<!-- How should an AI agent approach this project? Fill in tool gotchas, -->\n");
+    doc.push_str("<!-- file patterns to avoid, and anything that helps a model navigate -->\n");
+    doc.push_str("<!-- the codebase without reading every file. -->\n");
+    doc.push('\n');
+    doc.push_str("- **CodeWhale reads this file as:** <!-- WHALE.md (CodeWhale-native) or AGENTS.md (compatible with other agents) -->\n");
+    doc.push_str(
+        "- **Read-only surface:** <!-- Which directories can the agent read but not write? -->\n",
+    );
+    doc.push_str(
+        "- **Never edit:** <!-- Files that are generated, vendored, or owned by another tool -->\n",
+    );
+    doc.push_str("- **Always test with:** <!-- The single command that validates a change (e.g. `cargo test -p foo`) -->\n");
+    doc.push('\n');
+
+    // Architecture — the "big picture" that requires reading multiple files
+    doc.push_str("## Architecture\n\n");
+    doc.push_str("<!-- Describe the high-level structure. What are the key modules and how -->\n");
+    doc.push_str("<!-- do they connect? Focus on the context a new contributor would need. -->\n");
+    doc.push('\n');
+    doc.push_str("### Entry Points\n");
+    doc.push_str(
+        "<!-- Where does execution start? Binary entry, request handler, main loop? -->\n",
+    );
+    doc.push('\n');
+    doc.push_str("### Key Modules\n");
+    doc.push_str("<!-- List the 3-6 most important directories/files and their role -->\n");
+    doc.push('\n');
+    doc.push_str("### Data Flow\n");
+    doc.push_str("<!-- How does a request / event / input travel through the system? -->\n");
+    doc.push('\n');
+
+    // Cache-aware editing — helps maintain prefix-cache hit rates
+    doc.push_str("## Cache Stability\n\n");
+    doc.push_str("<!-- DeepSeek V4 uses a byte-stable prefix cache (128-token granularity). -->\n");
+    doc.push_str(
+        "<!-- Keeping these things stable turn-over-turn saves ~90% on input tokens. -->\n",
+    );
+    doc.push('\n');
+    doc.push_str("- **Frequently-rebuilt files:** <!-- Generated code, lockfiles, build artifacts → mark as cache-churn -->\n");
+    doc.push_str("- **Stable scaffolding:** <!-- Config files, project instructions, model cards → keep byte-stable -->\n");
+    doc.push_str("- **Append, don't reorder:** <!-- New context goes at the end of the request; reordering invalidates cache -->\n");
+    doc.push('\n');
+
+    // Guidelines
+    doc.push_str("## Guidelines\n\n");
     doc.push_str("- Follow existing code style and patterns\n");
     doc.push_str("- Write tests for new functionality\n");
     doc.push_str("- Keep changes focused and atomic\n");
     doc.push_str("- Document public APIs\n");
-
-    doc.push_str("\n## Important Notes\n\n");
-    doc.push_str("<!-- Add project-specific notes here -->\n");
+    doc.push_str("- Update this file when project conventions change\n");
 
     doc
 }

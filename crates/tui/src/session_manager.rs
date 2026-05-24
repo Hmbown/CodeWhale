@@ -242,9 +242,14 @@ impl SessionManager {
         Ok(Self { sessions_dir })
     }
 
-    /// Create a `SessionManager` using the default location (~/.deepseek/sessions)
+    /// Create a `SessionManager` using the default location.
     pub fn default_location() -> std::io::Result<Self> {
         Self::new(default_sessions_dir()?)
+    }
+
+    /// Return the resolved sessions directory path.
+    pub fn sessions_dir(&self) -> &Path {
+        &self.sessions_dir
     }
 
     /// Save a session to disk using atomic write (temp file + fsync + rename).
@@ -478,8 +483,8 @@ impl SessionManager {
         Ok(())
     }
 
-    /// Clean up old sessions to stay within `MAX_SESSIONS` limit
-    fn cleanup_old_sessions(&self) -> std::io::Result<()> {
+    /// Clean up old sessions to stay within `MAX_SESSIONS` limit.
+    pub fn cleanup_old_sessions(&self) -> std::io::Result<()> {
         let sessions = self.list_sessions()?;
 
         if sessions.len() > MAX_SESSIONS {
@@ -607,12 +612,13 @@ fn is_git_metadata_entry(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Resolve the default session directory path (`~/.deepseek/sessions`).
+/// Resolve the default session directory path.
+///
+/// v0.8.44: prefers `~/.codewhale/sessions`, falls back to
+/// `~/.deepseek/sessions` for existing installs.
 pub fn default_sessions_dir() -> std::io::Result<PathBuf> {
-    let home = dirs::home_dir().ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::NotFound, "Home directory not found")
-    })?;
-    Ok(home.join(".deepseek").join("sessions"))
+    codewhale_config::resolve_state_dir("sessions")
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::NotFound, e.to_string()))
 }
 
 /// Prune snapshots older than `max_age` for `workspace`.

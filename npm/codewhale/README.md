@@ -1,6 +1,6 @@
 # codewhale
 
-Install and run CodeWhale, a DeepSeek-first agentic terminal for open coding
+Install and run CodeWhale, the agentic terminal for open-source and open-weight coding
 models, from GitHub release artifacts.
 
 > Previously published as `deepseek-tui`. See `docs/REBRAND.md` in the upstream

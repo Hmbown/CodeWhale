@@ -6,10 +6,10 @@ export async function generateMetadata({ params }: { params: Promise<{ locale: s
   const { locale } = await params;
   const isZh = locale === "zh";
   return {
-    title: isZh ? "文档 · DeepSeek TUI" : "Docs · DeepSeek TUI",
+    title: isZh ? "文档 · CodeWhale" : "Docs · CodeWhale",
     description: isZh
-      ? "DeepSeek TUI 的工作原理：模式、工具、沙箱、MCP、配置、钩子。"
-      : "How DeepSeek TUI works: modes, tools, sandbox, MCP, config, hooks.",
+      ? "CodeWhale 的工作原理：模式、工具、沙箱、MCP、配置、钩子。"
+      : "How CodeWhale works: modes, tools, sandbox, MCP, config, hooks.",
   };
 }
 
@@ -21,6 +21,7 @@ const sectionsEn = [
   { id: "mcp", label: "MCP" },
   { id: "skills", label: "Skills" },
   { id: "providers", label: "Providers" },
+  { id: "fin", label: "Fin" },
   { id: "shortcuts", label: "Shortcuts" },
 ];
 
@@ -32,6 +33,7 @@ const sectionsZh = [
   { id: "mcp", label: "MCP" },
   { id: "skills", label: "技能" },
   { id: "providers", label: "提供商" },
+  { id: "fin", label: "Fin" },
   { id: "shortcuts", label: "快捷键" },
 ];
 
@@ -55,7 +57,7 @@ export default async function DocsPage({ params }: { params: Promise<{ locale: s
             </h1>
             <p className="mt-5 max-w-3xl text-ink-soft text-lg leading-[1.9] tracking-wide">
               工作原理简述。完整的架构讲解请参阅仓库中的
-              <Link href="https://github.com/Hmbown/deepseek-tui/blob/main/docs/ARCHITECTURE.md" className="body-link mx-1">docs/ARCHITECTURE.md</Link>。
+              <Link href="https://github.com/Hmbown/CodeWhale/blob/main/docs/ARCHITECTURE.md" className="body-link mx-1">docs/ARCHITECTURE.md</Link>。
             </p>
           </section>
 
@@ -119,7 +121,7 @@ export default async function DocsPage({ params }: { params: Promise<{ locale: s
                     { group: "Git / 诊断 / 测试", tools: "git_status · git_diff · diagnostics · run_tests" },
                     { group: "子 Agent", tools: "agent_open · agent_eval · agent_close —— 持久会话，并行执行，通过 var_handle 读取大结果" },
                     { group: "递归 LM (RLM)", tools: "rlm_open · rlm_eval · rlm_configure · rlm_close —— 沙箱 Python REPL，内置 peek/search/chunk/sub_query_batch 等辅助函数" },
-                    { group: "MCP", tools: "mcp_<server>_<tool>——从 ~/.deepseek/mcp.json 自动注册" },
+                    { group: "MCP", tools: "mcp_<server>_<tool>——从 ~/.codewhale/mcp.json 自动注册" },
                   ].map((row) => (
                     <div key={row.group} className="grid md:grid-cols-12 gap-0 hairline-t py-3 px-4 hover:bg-paper-deep transition-colors min-w-0">
                       <div className="md:col-span-3 font-display text-sm font-semibold">{row.group}</div>
@@ -161,7 +163,7 @@ export default async function DocsPage({ params }: { params: Promise<{ locale: s
                   配置 <span className="font-cjk text-indigo text-2xl ml-2">Configuration</span>
                 </h2>
                 <pre className="code-block mt-5">
-{`# ~/.deepseek/config.toml
+{`# ~/.codewhale/config.toml
 api_key = "sk-..."
 base_url = "https://api.deepseek.com"
 default_text_model = "${facts.defaultModel ?? "deepseek-v4-pro"}"  # 默认模型；deepseek-v4-flash 用于快速 / 子智能体
@@ -177,10 +179,10 @@ default_timeout_secs = 30
 
 [[hooks.hooks]]
 event = "session_start"                     # 也支持: tool_call_before / tool_call_after
-command = "~/.deepseek/hooks/pre.sh"        # / message_submit / mode_change / on_error / shell_env`}
+command = "~/.codewhale/hooks/pre.sh"        # / message_submit / mode_change / on_error / shell_env`}
                 </pre>
                 <p className="mt-4 text-sm text-ink-soft">
-                  完整参考：<Link className="body-link" href="https://github.com/Hmbown/deepseek-tui/blob/main/config.example.toml">config.example.toml</Link>。
+                  完整参考：<Link className="body-link" href="https://github.com/Hmbown/CodeWhale/blob/main/config.example.toml">config.example.toml</Link>。
                 </p>
               </section>
 
@@ -190,9 +192,9 @@ command = "~/.deepseek/hooks/pre.sh"        # / message_submit / mode_change / o
                   MCP 服务器 <span className="font-cjk text-indigo text-2xl ml-2">MCP</span>
                 </h2>
                 <p className="text-ink-soft mt-3 leading-[1.9] tracking-wide">
-                  <code className="inline">deepseek</code> 双向支持模型上下文协议（Model Context Protocol）：作为客户端从
-                  <code className="inline">~/.deepseek/mcp.json</code> 加载服务器，同时也可作为服务器暴露工具
-                  （<code className="inline">deepseek mcp</code>）。工具以 <code className="inline">mcp_&lt;server&gt;_&lt;tool&gt;</code> 形式呈现。
+                  <code className="inline">codewhale</code> 双向支持模型上下文协议（Model Context Protocol）：作为客户端从
+                  <code className="inline">~/.codewhale/mcp.json</code> 加载服务器，同时也可作为服务器暴露工具
+                  （<code className="inline">codewhale mcp</code>）。工具以 <code className="inline">mcp_&lt;server&gt;_&lt;tool&gt;</code> 形式呈现。
                 </p>
                 <pre className="code-block mt-5">
 {`{
@@ -216,10 +218,31 @@ command = "~/.deepseek/hooks/pre.sh"        # / message_submit / mode_change / o
                   技能 <span className="font-cjk text-indigo text-2xl ml-2">Skills</span>
                 </h2>
                 <p className="text-ink-soft mt-3 leading-[1.9] tracking-wide">
-                  技能是 <code className="inline">~/.deepseek/skills/&lt;name&gt;/</code> 下的一个文件夹，
+                  技能是 <code className="inline">~/.codewhale/skills/&lt;name&gt;/</code> 下的一个文件夹，
                   根目录包含 <code className="inline">SKILL.md</code>。Agent 启动时加载技能名称和描述，
                   在需要时通过 Skill 工具拉取完整内容。
                 </p>
+              </section>
+
+              {/* Fin */}
+              <section id="fin" className="scroll-mt-32">
+                <h2 className="font-display text-3xl mb-1">
+                  Fin 智能路由 <span className="font-cjk text-indigo text-2xl ml-2">Fin</span>
+                </h2>
+                <p className="text-ink-soft mt-3 leading-[1.9] tracking-wide">
+                  Fin 是 CodeWhale 的模型自动路由层。它会分析每个任务的特征——复杂度、上下文大小、工具需求——然后自动将请求分发到最合适的模型后端。
+                </p>
+                <div className="hairline-t hairline-b mt-6 grid md:grid-cols-2 col-rule">
+                  {[
+                    { name: "Fast lane", cn: "快速通道", desc: "轻量任务（文件查找、fetch、简单 shell 命令）自动路由到 flash 级模型，降低延迟与成本。" },
+                    { name: "Deep lane", cn: "深度通道", desc: "复杂推理、大型重构、多步规划自动升级到全尺寸推理模型。" },
+                  ].map((l) => (
+                    <div key={l.name} className="p-5">
+                      <div className="font-display text-lg text-indigo mb-1">{l.name} <span className="font-cjk text-sm ml-1.5">{l.cn}</span></div>
+                      <p className="text-sm text-ink-soft leading-[1.9] tracking-wide">{l.desc}</p>
+                    </div>
+                  ))}
+                </div>
               </section>
 
               {/* 提供商 */}
@@ -228,7 +251,7 @@ command = "~/.deepseek/hooks/pre.sh"        # / message_submit / mode_change / o
                   提供商 <span className="font-cjk text-indigo text-2xl ml-2">Providers</span>
                 </h2>
                 <p className="text-ink-soft mt-3 leading-[1.9] tracking-wide">
-                  使用 <code className="inline">deepseek auth set --provider &lt;id&gt;</code> 切换。下表为
+                  使用 <code className="inline">codewhale auth set --provider &lt;id&gt;</code> 切换。下表为
                   <code className="inline">crates/tui/src/config.rs</code> 中 <code className="inline">ApiProvider</code> 枚举的实时投影
                   ，目前共 {facts.providers.length} 个。
                 </p>
@@ -241,6 +264,11 @@ command = "~/.deepseek/hooks/pre.sh"        # / message_submit / mode_change / o
                     </div>
                   ))}
                 </div>
+                <p className="mt-5 text-ink-soft leading-[1.9] tracking-wide">
+                  开放模型平台方向：CodeWhale 正在扩展对
+                  <strong> OpenRouter</strong>、<strong> Hugging Face</strong> 和<strong> 自托管</strong> 模型的支持，
+                  为您提供完全自主的模型选择——从云端 API 到本地部署均可覆盖。
+                </p>
               </section>
 
               {/* 快捷键 */}
@@ -282,7 +310,7 @@ command = "~/.deepseek/hooks/pre.sh"        # / message_submit / mode_change / o
             </h1>
             <p className="mt-5 max-w-3xl text-ink-soft text-lg leading-relaxed">
               The short version of how it works. For the full architecture walk-through, see
-              <Link href="https://github.com/Hmbown/deepseek-tui/blob/main/docs/ARCHITECTURE.md" className="body-link mx-1">docs/ARCHITECTURE.md</Link>
+              <Link href="https://github.com/Hmbown/CodeWhale/blob/main/docs/ARCHITECTURE.md" className="body-link mx-1">docs/ARCHITECTURE.md</Link>
               in the repo.
             </p>
           </section>
@@ -345,7 +373,7 @@ command = "~/.deepseek/hooks/pre.sh"        # / message_submit / mode_change / o
                     { group: "Git / diag / test", tools: "git_status · git_diff · diagnostics · run_tests" },
                     { group: "Sub-agents", tools: "agent_open · agent_eval · agent_close — persistent sessions, parallel execution, bounded result retrieval via var_handle" },
                     { group: "Recursive LM (RLM)", tools: "rlm_open · rlm_eval · rlm_configure · rlm_close — sandboxed Python REPL with peek/search/chunk/sub_query_batch helpers" },
-                    { group: "MCP", tools: "mcp_<server>_<tool> — auto-registered from ~/.deepseek/mcp.json" },
+                    { group: "MCP", tools: "mcp_<server>_<tool> — auto-registered from ~/.codewhale/mcp.json" },
                   ].map((row) => (
                     <div key={row.group} className="grid md:grid-cols-12 gap-0 hairline-t py-3 px-4 hover:bg-paper-deep transition-colors min-w-0">
                       <div className="md:col-span-3 font-display text-sm font-semibold">{row.group}</div>
@@ -385,7 +413,7 @@ command = "~/.deepseek/hooks/pre.sh"        # / message_submit / mode_change / o
                   Configuration <span className="font-cjk text-indigo text-2xl ml-2">配置</span>
                 </h2>
                 <pre className="code-block mt-5">
-{`# ~/.deepseek/config.toml
+{`# ~/.codewhale/config.toml
 api_key = "sk-..."
 base_url = "https://api.deepseek.com"
 default_text_model = "${facts.defaultModel ?? "deepseek-v4-pro"}"  # default; deepseek-v4-flash is the fast / sub-agent option
@@ -401,10 +429,10 @@ default_timeout_secs = 30
 
 [[hooks.hooks]]
 event = "session_start"                     # or: tool_call_before / tool_call_after
-command = "~/.deepseek/hooks/pre.sh"        # / message_submit / mode_change / on_error / shell_env`}
+command = "~/.codewhale/hooks/pre.sh"        # / message_submit / mode_change / on_error / shell_env`}
                 </pre>
                 <p className="mt-4 text-sm text-ink-soft">
-                  Full reference: <Link className="body-link" href="https://github.com/Hmbown/deepseek-tui/blob/main/config.example.toml">config.example.toml</Link>.
+                  Full reference: <Link className="body-link" href="https://github.com/Hmbown/CodeWhale/blob/main/config.example.toml">config.example.toml</Link>.
                 </p>
               </section>
 
@@ -413,9 +441,9 @@ command = "~/.deepseek/hooks/pre.sh"        # / message_submit / mode_change / o
                   MCP Servers <span className="font-cjk text-indigo text-2xl ml-2">MCP</span>
                 </h2>
                 <p className="text-ink-soft mt-3 leading-relaxed">
-                  <code className="inline">deepseek</code> speaks the Model Context Protocol both ways: as a client (loads
-                  servers from <code className="inline">~/.deepseek/mcp.json</code>) and as a server
-                  (<code className="inline">deepseek mcp</code>). Tools surface as <code className="inline">mcp_&lt;server&gt;_&lt;tool&gt;</code>.
+                  <code className="inline">codewhale</code> speaks the Model Context Protocol both ways: as a client (loads
+                  servers from <code className="inline">~/.codewhale/mcp.json</code>) and as a server
+                  (<code className="inline">codewhale mcp</code>). Tools surface as <code className="inline">mcp_&lt;server&gt;_&lt;tool&gt;</code>.
                 </p>
                 <pre className="code-block mt-5">
 {`{
@@ -438,10 +466,31 @@ command = "~/.deepseek/hooks/pre.sh"        # / message_submit / mode_change / o
                   Skills <span className="font-cjk text-indigo text-2xl ml-2">技能</span>
                 </h2>
                 <p className="text-ink-soft mt-3 leading-relaxed">
-                  A skill is a folder under <code className="inline">~/.deepseek/skills/&lt;name&gt;/</code>
+                  A skill is a folder under <code className="inline">~/.codewhale/skills/&lt;name&gt;/</code>
                   with a <code className="inline">SKILL.md</code> at the root. The agent loads skill names + descriptions on
                   startup and can pull in the full body via the Skill tool when relevant.
                 </p>
+              </section>
+
+              {/* Fin */}
+              <section id="fin" className="scroll-mt-32">
+                <h2 className="font-display text-3xl mb-1">
+                  Fin <span className="font-cjk text-indigo text-2xl ml-2">智能路由</span>
+                </h2>
+                <p className="text-ink-soft mt-3 leading-relaxed">
+                  Fin is CodeWhale's model auto-routing layer. It analyses each task's profile — complexity, context size, tool needs — and dispatches to the best model backend automatically.
+                </p>
+                <div className="hairline-t hairline-b mt-6 grid md:grid-cols-2 col-rule">
+                  {[
+                    { name: "Fast lane", cn: "快速通道", desc: "Lightweight tasks (file ops, fetch, simple shell) auto-route to flash-tier models for lower latency and cost." },
+                    { name: "Deep lane", cn: "深度通道", desc: "Complex reasoning, large refactors, multi-step plans auto-upgrade to full-size reasoning models." },
+                  ].map((l) => (
+                    <div key={l.name} className="p-5">
+                      <div className="font-display text-lg text-indigo mb-1">{l.name} <span className="font-cjk text-sm ml-1.5">{l.cn}</span></div>
+                      <p className="text-sm text-ink-soft leading-relaxed">{l.desc}</p>
+                    </div>
+                  ))}
+                </div>
               </section>
 
               <section id="providers" className="scroll-mt-32">
@@ -449,7 +498,7 @@ command = "~/.deepseek/hooks/pre.sh"        # / message_submit / mode_change / o
                   Providers <span className="font-cjk text-indigo text-2xl ml-2">提供商</span>
                 </h2>
                 <p className="text-ink-soft mt-3 leading-relaxed">
-                  Switch with <code className="inline">deepseek auth set --provider &lt;id&gt;</code>. The
+                  Switch with <code className="inline">codewhale auth set --provider &lt;id&gt;</code>. The
                   table below is a live projection of the <code className="inline">ApiProvider</code> enum
                   in <code className="inline">crates/tui/src/config.rs</code> — currently {facts.providers.length} providers.
                 </p>
@@ -462,6 +511,11 @@ command = "~/.deepseek/hooks/pre.sh"        # / message_submit / mode_change / o
                     </div>
                   ))}
                 </div>
+                <p className="mt-5 text-ink-soft leading-relaxed">
+                  Open-model platform direction: CodeWhale is expanding support for
+                  <strong> OpenRouter</strong>, <strong> Hugging Face</strong>, and <strong> self-hosted</strong> models,
+                  giving you full sovereignty over model choice — from cloud APIs to local deployments.
+                </p>
               </section>
 
               <section id="shortcuts" className="scroll-mt-32">

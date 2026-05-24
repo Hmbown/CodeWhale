@@ -22,15 +22,16 @@ Run `/mode` to open the mode picker, or switch directly with `/mode agent`,
 - **Agent**: multi-step tool use. Approvals for shell and paid tools (file writes are allowed without a prompt).
 - **YOLO**: enables shell + trust mode and auto-approves all tools. Use only in trusted repos.
 
-All three modes have access to persistent RLM sessions through `rlm_open`, `rlm_eval`, `rlm_configure`, and `rlm_close`. Inside an RLM Python REPL, `sub_query_batch` fans out 1-16 cheap parallel child calls pinned to `deepseek-v4-flash`. The model reaches for it when work is too large or repetitive for the parent transcript.
+All action-capable modes have access to persistent RLM sessions through `rlm_open`, `rlm_eval`, `rlm_configure`, and `rlm_close`. Inside an RLM Python REPL, `sub_query_batch` fans out 1-16 cheap parallel child calls pinned to `deepseek-v4-flash`. The model reaches for it when work is too large or repetitive for the parent transcript.
 
 The fast `deepseek-v4-flash` / thinking-off path is called Fin in the product
 language. Fin is a seam for routing, summaries, cheap child calls, and
 coordination work; it does not change approval behavior.
 
-`/goal` sets a session objective with an optional token budget. It is goal
-tracking today, not a separate TUI mode. If CodeWhale grows a persistent Goal
-work surface later, it should remain distinct from `--model auto`.
+`/goal` sets a session objective with an optional token budget and keeps that
+objective visible as Work context. It does not change the active TUI mode,
+approval mode, or model route. This remains distinct from `--model auto`, which
+only controls model and thinking selection.
 
 ## Compatibility Notes
 
@@ -90,9 +91,10 @@ See `MCP.md`.
 Run `codewhale --help` for the canonical list. Common flags:
 
 - `-p, --prompt <TEXT>`: one-shot prompt mode (prints and exits)
-- `codewhale exec --output-format stream-json <PROMPT>`: emit one JSON object per line for harnesses and backend wrappers
+- `codewhale exec --auto --output-format stream-json <PROMPT>`: run the tool-backed non-interactive agent and emit one JSON object per line for harnesses and backend wrappers
 - `codewhale exec --resume <ID|PREFIX> <PROMPT>` / `--session-id <ID|PREFIX>`: continue a saved session non-interactively
 - `codewhale exec --continue <PROMPT>`: continue the most recent saved session for this workspace non-interactively
+- `codewhale swebench run --instance-id <ID> --issue-file <PATH>`: run the tool-backed agent on one SWE-bench task and write/update a prediction JSONL row
 - `codewhale fork <ID|PREFIX>` / `codewhale fork --last`: copy a saved session into a new sibling session; forked sessions retain additive parent-session metadata and show that lineage in session listings
 - `--model <MODEL>`: when using the `codewhale` facade, forward a DeepSeek model override to the TUI
 - `--workspace <DIR>`: workspace root for file tools

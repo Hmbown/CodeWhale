@@ -1,6 +1,6 @@
-# deepseek-tui-web
+# codewhale-web
 
-Community site for [deepseek-tui](https://github.com/Hmbown/deepseek-tui) — lives at **deepseek-tui.com**.
+Community site for [CodeWhale](https://github.com/Hmbown/CodeWhale) — lives at **codewhale.net**.
 
 Next.js 15 (App Router) + Tailwind, deployed to Cloudflare Workers via [`@opennextjs/cloudflare`](https://opennext.js.org/cloudflare). Curated "Today's Dispatch" content is regenerated every 6 hours by a Cloudflare Cron Trigger that calls `deepseek-v4-flash` to summarise recent repo activity, and stored in Workers KV.
 
@@ -19,14 +19,14 @@ Required env (only for the curator + private-repo rate limits):
 | ------------------- | ------------------------------------------------- | -------------------- |
 | `DEEPSEEK_API_KEY`  | DeepSeek platform key (`sk-...`)                  | only for `/api/cron?task=curate` |
 | `GITHUB_TOKEN`      | Fine-grained PAT, public-repo read scope          | optional (raises rate limit) |
-| `GITHUB_REPO`       | Defaults to `Hmbown/deepseek-tui`                 | optional             |
+| `GITHUB_REPO`       | Defaults to `Hmbown/CodeWhale`                    | optional             |
 | `CRON_SECRET`       | Shared secret for manual cron invocation          | optional             |
 
 The site renders fine without any of them — `Today's Dispatch` falls back to a static editorial; the GitHub feed shows "feed not yet loaded".
 
 ## Deploy to Cloudflare
 
-You already own `deepseek-tui.com` on Cloudflare and have a Workers Paid plan. The deploy is two steps:
+You already own `codewhale.net` on Cloudflare and have a Workers Paid plan. The deploy is two steps:
 
 1. **Provision KV namespaces once:**
 
@@ -48,12 +48,12 @@ You already own `deepseek-tui.com` on Cloudflare and have a Workers Paid plan. T
    npm run deploy                           # builds with OpenNext + uploads
    ```
 
-3. **Point the domain:** in the Cloudflare dashboard, add a Worker route for `deepseek-tui.com/*` → `deepseek-tui-web` (the deploy command will offer this if the zone is already on your account).
+3. **Point the domain:** in the Cloudflare dashboard, add a Worker route for `codewhale.net/*` → the deployed Worker (currently named `deepseek-tui-web` unless the Worker is renamed during deploy).
 
 The first cron run happens within 6 hours; you can also kick it manually:
 
 ```bash
-curl -H "x-cron-secret: $CRON_SECRET" "https://deepseek-tui.com/api/cron?task=curate"
+curl -H "x-cron-secret: $CRON_SECRET" "https://codewhale.net/api/cron?task=curate"
 ```
 
 ## What's where

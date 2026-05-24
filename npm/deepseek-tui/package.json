@@ -1,9 +1,19 @@
 {
   "name": "deepseek-tui",
-  "version": "0.8.42",
-  "description": "Deprecated. Renamed to `codewhale`. Run `npm install -g codewhale` instead.",
+  "version": "0.8.44",
+  "description": "Legacy compatibility package. Renamed to `codewhale`; run `npm install -g codewhale` for new installs.",
   "author": "Hmbown",
   "license": "MIT",
+  "funding": [
+    {
+      "type": "github",
+      "url": "https://github.com/sponsors/Hmbown"
+    },
+    {
+      "type": "buymeacoffee",
+      "url": "https://www.buymeacoffee.com/hmbown"
+    }
+  ],
   "homepage": "https://github.com/Hmbown/CodeWhale/blob/main/docs/REBRAND.md",
   "repository": {
     "type": "git",
@@ -13,7 +23,7 @@
     "url": "https://github.com/Hmbown/CodeWhale/issues"
   },
   "keywords": [
-    "deprecated",
+    "compatibility",
     "deepseek",
     "codewhale"
   ],

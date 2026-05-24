@@ -1096,6 +1096,31 @@ impl Engine {
                 // code fell straight through to this `break`, emitting nothing
                 // and leaving the UI spinner hung. Surface a status now —
                 // safe because the turn can no longer resume.
+                // #1961: Before breaking, drain any sub-agent completions that
+                // arrived between the last hold check and now. If a child finished
+                // while we were running the thinking-only check, surface its
+                // sentinel rather than delaying it to the next turn.
+                let mut late_completions: Vec<crate::tools::subagent::SubAgentCompletion> =
+                    Vec::new();
+                while let Ok(c) = self.rx_subagent_completion.try_recv() {
+                    late_completions.push(c);
+                }
+                if !late_completions.is_empty() {
+                    let count = late_completions.len();
+                    for c in late_completions {
+                        self.add_session_message(subagent_completion_runtime_message(&c.payload))
+                            .await;
+                    }
+                    let _ = self
+                        .tx_event
+                        .send(Event::status(format!(
+                            "Resuming turn with {count} late sub-agent completion(s)"
+                        )))
+                        .await;
+                    turn.next_step();
+                    continue;
+                }
+
                 if thinking_only_no_sendable {
                     let holding_for_subagents = {
                         let running = {
@@ -1179,7 +1204,7 @@ impl Engine {
                     )
                 {
                     blocked_error = Some(ToolError::permission_denied(format!(
-                        "Tool '{tool_name}' is unavailable in Plan mode"
+                        "'{tool_name}' is not available in Plan mode — switch to Agent, Goal, or YOLO mode to run commands and code."
                     )));
                 }
 

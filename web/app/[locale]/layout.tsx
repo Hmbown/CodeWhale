@@ -11,18 +11,18 @@ export async function generateMetadata({ params }: { params: Promise<{ locale: s
   const { locale } = await params;
   const isZh = locale === "zh";
   return {
-    title: isZh ? "DeepSeek TUI · 终端原生编程智能体" : "DeepSeek TUI · 深度求索 终端",
+    title: isZh ? "CodeWhale · 终端原生编程智能体" : "CodeWhale · 深度求索 终端",
     description: isZh
-      ? "基于 DeepSeek V4 的开源终端编程智能体。支持 100 万 token 上下文、MCP 协议、沙箱执行。"
-      : "Terminal-native coding agent built on DeepSeek V4. Open source. Community site for installation, docs, roadmap, and live activity from the Hmbown/deepseek-tui repo.",
-    metadataBase: new URL("https://deepseek-tui.com"),
+      ? "面向开源模型的终端编程智能体。DeepSeek V4 为一级模型。支持 100 万 token 上下文、MCP 协议、沙箱执行。"
+      : "Terminal-native coding agent for open-source and open-weight models across providers. DeepSeek V4 is first-class. Community site for installation, docs, roadmap, and live activity.",
+    metadataBase: new URL("https://codewhale.net"),
     openGraph: {
-      title: isZh ? "DeepSeek TUI · 终端原生编程智能体" : "DeepSeek TUI",
+      title: isZh ? "CodeWhale · 终端原生编程智能体" : "CodeWhale",
       description: isZh
-        ? "基于 DeepSeek V4 的开源终端编程智能体。"
-        : "Terminal-native coding agent built on DeepSeek V4.",
-      url: "https://deepseek-tui.com",
-      siteName: "DeepSeek TUI",
+        ? "面向开源模型的终端编程智能体。"
+        : "Terminal-native coding agent for open-source and open-weight models across providers.",
+      url: "https://codewhale.net",
+      siteName: "CodeWhale",
       type: "website",
     },
     twitter: { card: "summary_large_image" },

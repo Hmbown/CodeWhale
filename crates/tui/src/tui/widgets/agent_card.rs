@@ -101,11 +101,18 @@ impl DelegateCard {
     #[must_use]
     pub fn render_lines(&self, _width: u16) -> Vec<Line<'static>> {
         let mut lines = Vec::with_capacity(self.actions.len() + 3);
+        let role = readable_agent_role(&self.agent_type);
+        let short_id = crate::session_manager::truncate_id(&self.agent_id).to_string();
+        let detail = if let Some(ref summary) = self.summary {
+            truncate_action(summary, 72)
+        } else {
+            short_id
+        };
         lines.push(card_header(
             ToolFamily::Delegate,
             self.status,
-            &self.agent_type,
-            &self.agent_id,
+            &role,
+            &detail,
         ));
         if self.truncated {
             lines.push(Line::from(Span::styled(
@@ -363,6 +370,21 @@ fn card_header(
         Span::raw(" "),
         Span::styled(detail.to_string(), Style::default().fg(palette::TEXT_MUTED)),
     ])
+}
+
+/// Map agent types to human-readable role labels (#1981).
+fn readable_agent_role(agent_type: &str) -> String {
+    match agent_type.to_ascii_lowercase().as_str() {
+        "general" => "worker".to_string(),
+        "explore" => "scout".to_string(),
+        "plan" => "planner".to_string(),
+        "review" => "reviewer".to_string(),
+        "implementer" => "builder".to_string(),
+        "verifier" => "verifier".to_string(),
+        "tool_agent" | "tool-agent" | "fin" => "executor".to_string(),
+        "custom" => "specialist".to_string(),
+        other => other.to_string(),
+    }
 }
 
 fn truncate_action(text: &str, max: usize) -> String {

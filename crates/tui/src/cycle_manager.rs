@@ -291,7 +291,7 @@ impl StructuredState {
         }
 
         if let Some(plan) = self.plan_snapshot.as_ref() {
-            out.push_str("\nStrategy\n");
+            out.push_str("\nStrategy metadata\n");
             if let Some(explanation) = plan.explanation.as_ref() {
                 out.push_str(&format!("{explanation}\n\n"));
             }

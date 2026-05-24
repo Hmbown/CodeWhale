@@ -186,7 +186,11 @@ impl SandboxPolicy {
                     .map(|root| {
                         let mut read_only_subpaths = Vec::new();
 
-                        // Protect .deepseek directories from modification
+                        // Protect .codewhale/ and .deepseek/ directories from modification
+                        let codewhale_dir = root.join(".codewhale");
+                        if codewhale_dir.is_dir() {
+                            read_only_subpaths.push(codewhale_dir);
+                        }
                         let deepseek_dir = root.join(".deepseek");
                         if deepseek_dir.is_dir() {
                             read_only_subpaths.push(deepseek_dir);

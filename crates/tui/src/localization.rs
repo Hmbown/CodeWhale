@@ -422,6 +422,7 @@ pub enum MessageId {
     HomeYoloModeCaution,
     HomePlanModeTip,
     HomePlanModeChecklistTip,
+    HomeGoalModeTip,
     // Onboarding screens — language picker.
     OnboardLanguageTitle,
     OnboardLanguageBlurb,
@@ -658,6 +659,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::HomeYoloModeCaution,
     MessageId::HomePlanModeTip,
     MessageId::HomePlanModeChecklistTip,
+    MessageId::HomeGoalModeTip,
     MessageId::OnboardLanguageTitle,
     MessageId::OnboardLanguageBlurb,
     MessageId::OnboardLanguageFooter,
@@ -937,7 +939,7 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CmdInitDescription => "Generate AGENTS.md for project",
         MessageId::CmdLspDescription => "Toggle LSP diagnostics on or off",
         MessageId::CmdShareDescription => "Export current session as a shareable web URL",
-        MessageId::CmdJobsDescription => "Inspect and control background shell jobs",
+        MessageId::CmdJobsDescription => "Inspect and control background commands",
         MessageId::CmdLinksDescription => "Show DeepSeek dashboard and docs links",
         MessageId::CmdLoadDescription => "Load session from file",
         MessageId::CmdLogoutDescription => "Clear API key and return to setup",
@@ -1157,6 +1159,7 @@ fn english(id: MessageId) -> &'static str {
         MessageId::HomeYoloModeCaution => "  Be careful with destructive operations!",
         MessageId::HomePlanModeTip => "Plan mode - Design before implementing",
         MessageId::HomePlanModeChecklistTip => "  Use /mode plan to create structured checklists",
+        MessageId::HomeGoalModeTip => "Goal tracking - Set /goal <objective> to pursue objectives",
         // Onboarding — language picker.
         MessageId::OnboardLanguageTitle => "Choose your language",
         MessageId::OnboardLanguageBlurb => {
@@ -1544,6 +1547,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::HomePlanModeChecklistTip => {
             "  /mode plan を使って構造化されたチェックリストを作成"
         }
+        MessageId::HomeGoalModeTip => "Goal 追跡 - /goal <目標> で持続的な目標を追跡",
         // Onboarding — language picker.
         MessageId::OnboardLanguageTitle => "言語を選択",
         MessageId::OnboardLanguageBlurb => {
@@ -1859,6 +1863,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::HomeYoloModeCaution => "  请小心破坏性操作！",
         MessageId::HomePlanModeTip => "Plan 模式 - 先设计再实现",
         MessageId::HomePlanModeChecklistTip => "  使用 /mode plan 创建结构化检查清单",
+        MessageId::HomeGoalModeTip => "Goal 跟踪 - 设置 /goal <目标> 以跟踪持久目标",
         // Onboarding — language picker.
         MessageId::OnboardLanguageTitle => "选择语言",
         MessageId::OnboardLanguageBlurb => {
@@ -2229,6 +2234,9 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::HomePlanModeTip => "Modo Plan - Planeje antes de implementar",
         MessageId::HomePlanModeChecklistTip => {
             "  Use /mode plan para criar checklists estruturados"
+        }
+        MessageId::HomeGoalModeTip => {
+            "Rastreamento de Goal - Use /goal <objetivo> para rastrear um objetivo persistente"
         }
         // Onboarding — language picker.
         MessageId::OnboardLanguageTitle => "Escolha o idioma",
@@ -2622,6 +2630,9 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::HomePlanModeTip => "Modo Plan - Planear antes de implementar",
         MessageId::HomePlanModeChecklistTip => {
             "  Usa /mode plan para crear checklists estructurados"
+        }
+        MessageId::HomeGoalModeTip => {
+            "Seguimiento de Goal - Usa /goal <objetivo> para seguir un objetivo persistente"
         }
         MessageId::OnboardLanguageTitle => "Elige el idioma",
         MessageId::OnboardLanguageBlurb => {

@@ -12,13 +12,21 @@ use crate::tui::session_picker::SessionPickerView;
 
 use super::CommandResult;
 
-/// Save session to file
+/// Save session to file.
+///
+/// When an explicit path is given, the session is exported there
+/// (user-visible explicit export).  Without a path, v0.8.44 saves
+/// into the managed session directory (`~/.codewhale/sessions`
+/// or legacy `~/.deepseek/sessions`) so repo-local `session_*.json`
+/// artifacts are no longer created by default.
 pub fn save(app: &mut App, path: Option<&str>) -> CommandResult {
     let save_path = if let Some(p) = path {
         PathBuf::from(p)
     } else {
+        let dir = crate::session_manager::default_sessions_dir()
+            .unwrap_or_else(|_| app.workspace.clone());
         let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-        PathBuf::from(format!("session_{timestamp}.json"))
+        dir.join(format!("session_{timestamp}.json"))
     };
 
     let messages = app.api_messages.clone();

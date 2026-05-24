@@ -1757,7 +1757,7 @@ async fn code_execution_runs_python_and_returns_result_payload() {
 }
 
 #[test]
-fn plan_mode_catalog_skips_code_execution_tool() {
+fn plan_mode_catalog_skips_code_execution_tool_but_agent_keeps_it() {
     let mut plan_catalog = vec![api_tool("read_file")];
     ensure_advanced_tooling(&mut plan_catalog, AppMode::Plan);
     assert!(

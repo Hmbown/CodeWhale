@@ -37,7 +37,7 @@ impl LoopGuard {
         *count = count.saturating_add(1);
         if *count >= IDENTICAL_CALL_BLOCK_THRESHOLD {
             return AttemptDecision::Block(format!(
-                "Blocked: this exact call (`{tool}` with these arguments) has already run {count} times this turn. Stop retrying it unchanged. Either change the arguments or pick a different tool."
+                "This call (`{tool}`) has already been made {count} times this turn with the same arguments — try a different approach or change the arguments."
             ));
         }
         AttemptDecision::Proceed
@@ -133,7 +133,7 @@ mod tests {
             panic!("third identical call should be blocked");
         };
         assert!(message.contains("read_file"));
-        assert!(message.contains("already run 3 times"));
+        assert!(message.contains("already been made 3 times"));
     }
 
     #[test]

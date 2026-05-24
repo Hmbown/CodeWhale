@@ -1,8 +1,8 @@
 {
-  "name": "deepseek-tui-web",
+  "name": "codewhale-web",
   "version": "0.1.0",
   "private": true,
-  "description": "Community site for deepseek-tui — deepseek-tui.com",
+  "description": "Community site for CodeWhale — codewhale.net",
   "scripts": {
     "dev": "node scripts/derive-facts.mjs && next dev",
     "prebuild": "node scripts/derive-facts.mjs",

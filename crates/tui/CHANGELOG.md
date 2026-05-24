@@ -7,6 +7,151 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.44] - 2026-05-24
+
+### Added
+
+- **`codew` convenience alias.** `codew` is a short-form command that silently
+  forwards to `codewhale`. Six fewer keystrokes, same binary. Ships with the
+  Rust `codewhale-cli` crate and the npm `codewhale` package (#2013).
+- **Session picker inline rename.** Press `r` in the session picker (Ctrl+R)
+  to rename the selected session inline. Type the new title, Enter to confirm,
+  Esc to cancel (#1600).
+- **Plan detail display.** The \"Plan Confirmation\" modal now shows the plan
+  explanation and step list from `update_plan` so you can review what was
+  proposed before accepting (#834).
+- **Agent team UX.** Delegate cards in the transcript now show human-readable
+  roles (scout, builder, reviewer, verifier, executor) and the completion
+  summary instead of raw `agent_xxx` IDs (#1981).
+- **`--continue` / `-c` CLI flag.** `codewhale --continue` resumes your most
+  recent interactive session for the current workspace.
+
+### Changed
+
+- **App state migrates to `~/.codewhale/`.** New installs write product-owned
+  state (config, sessions, tasks, skills, logs, etc.) under `~/.codewhale/`.
+  `~/.deepseek/` continues to work as a compatibility fallback — no data loss,
+  no forced migration. `CODEWHALE_HOME` and `CODEWHALE_CONFIG_PATH` env vars
+  are now supported alongside existing `DEEPSEEK_*` vars (#2011).
+- **Project config overlay prefers `.codewhale/config.toml`** before
+  `.deepseek/config.toml`. Both are read; the CodeWhale root takes precedence.
+- **Doctor reports active state root** and whether legacy `~/.deepseek/`
+  state is also present.
+- **README contributor acknowledgements are current for this release.**
+  Thanks @jeoor, @LING71671, and @ousamabenyounes for the fixes and reports
+  now reflected in the public credits.
+- **Harvested-contribution credit audit completed.** The README Thanks list now
+  includes previously missed community helpers whose code, reports, or review
+  notes were already credited in older changelog entries but not in the public
+  contributor surface: @mvanhorn, @krisclarkdev, @tdccccc, @LittleBlacky,
+  @AnaheimEX, @THatch26, @alvin1, @knqiufan, @IIzzaya, @duanchao-lab,
+  @imkingjh999, @eng2007, @chennest, @kunpeng-ai-lab, @asdfg314284230,
+  @maker316, @lalala-233, @muyuliyan, @czf0718, @MeAiRobot, @tiger-dog,
+  @MMMarcinho, @lucaszhu-hue, @sandofree, @zhuangbiaowei, @NorethSea,
+  @Jianfengwu2024, @Fire-dtx, @oooyuy92, @qinxianyuzou, @tyouter,
+  @xulongzhe, @YaYII, @47Cid, and @JafarAkhondali.
+- **Harvest guidance now requires GitHub-visible attribution.** Maintainer
+  harvests should preserve the original commit author where possible or add
+  `Co-authored-by` trailers from the original PR commits, in addition to the
+  existing `Harvested from PR #N by @handle` trailer and changelog credit.
+- **Enter now steers when busy-waiting.** When the model is busy but not
+  actively streaming (waiting on tool results, sub-agents, or shell
+  commands), pressing Enter tries to steer your message into the current
+  turn instead of silently queueing it. During active streaming, Enter
+  still queues to avoid interrupting in-flight reasoning (#2009).
+
+### Fixed
+
+- **`/save` no longer creates repo-local `session_*.json`.** Default saves
+  now go to the managed sessions directory instead of the current workspace.
+  Explicit `/save path/to/file.json` exports still work as before (#2010).
+- **Boot-time session prune** caps managed sessions at 50 on every startup,
+  preventing unbounded growth of `~/.codewhale/sessions/`.
+- **Checkpoint path resolution** no longer hardcodes `~/.deepseek/` — uses
+  the resolved session directory instead.
+- **Plain startup no longer auto-opens the session picker.** `codewhale` and
+  `codew` start in a fresh composer again even when saved sessions exist.
+  Use `/sessions`, Ctrl+R, `--resume`, or `--continue` when you want to resume.
+- **Work sidebar now refreshes immediately** after `checklist_write`,
+  `checklist_update`, and `update_plan` tool calls, matching the existing
+  `todo_write` behavior instead of relying on the 2.5s periodic poll (#1787).
+
+## [0.8.43] - 2026-05-24
+
+### Fixed
+
+- **`grep_files` now respects the cancellation token.** Long-running file
+  searches cancel promptly instead of running to completion after the user
+  aborts (#1839). Thanks @LING71671.
+- **npm installer stream-pause race condition fixed.** The install script now
+  pauses HTTP response streams immediately, preventing early data loss that
+  caused "Invalid checksum manifest line" errors (#1860). Thanks @jeoor.
+- **Ctrl+Z restores the last cleared composer draft.** Pressing Ctrl+Z in an
+  empty composer recovers the text that was last cleared with Ctrl+U or
+  Ctrl+S, matching the muscle memory users expect from other editors (#1911).
+  Thanks @LING71671.
+- **Clipboard works on non-wlroots Wayland compositors.** The Linux clipboard
+  path now tries `wl-copy` before `arboard`, fixing silent copy failures on
+  niri, River, cosmic-comp, and GNOME mutter (#1938). Thanks @ousamabenyounes.
+
+### Added
+
+- **`/goal` remains the persistent objective surface.** Use `/goal <objective>`
+  to set a goal and `/goal done` to mark it complete. Goal status appears in
+  the Work sidebar with elapsed time, but it does not change Plan / Agent /
+  YOLO mode or approval behavior. A tabbed Ralph-style Goal loop is deferred to
+  v0.8.44 (#2007).
+- **Post-turn receipts cite evidence for every completed turn.** When a turn
+  finishes, a receipt line shows in the transcript tail with a summary of
+  tool calls, file changes, and evidence that supports the agent's claims.
+  Tool evidence is collected per-turn and flushed on new dispatch.
+- **Stall reason classification.** When a turn has been running for more than
+  30 seconds, the footer now appends a classified reason: "waiting for model",
+  "tools executing", "sub-agents working", "compacting context", or "waiting —
+  no recent activity".
+- **Decision card widget for structured user input.** When Brother Whale needs
+  a choice, it surfaces a bordered card with numbered options, keyboard
+  navigation (1-9 / j/k / arrows), and Enter/Esc to confirm or cancel.
+- **Tasks sidebar now shows fuller turn IDs and supports copy-to-clipboard.**
+  Turn ID prefixes are widened from 12 to 16 characters for disambiguation,
+  background job status is presented as "X running, Y completed" instead of
+  ambiguous "X active (Y running)", and `y` / `Y` yank affordances copy the
+  current turn ID or full status line to the system clipboard (#1975).
+
+### Changed
+
+- **Contributor count and acknowledgement surfaces refreshed.** The website
+  fallback contributor count now reflects 98 live GitHub contributors (up from
+  the stale 91). All three README translations (English, 中文, 日本語) now
+  include 30+ previously unlisted contributors whose PRs were merged since
+  April 2026.
+- **README and web surface rebrand refinements.** Crate descriptions, npm
+  package text, and website copy now consistently position CodeWhale as
+  open-model-first and provider-spanning, with DeepSeek V4 as the first-class
+  path.
+- **New contributor names added to README acknowledgements.** Thanks to
+  @Apeiron0w0, @aqilaziz, @ChaceLyee2101, @ComeFromTheMars, @CrepuscularIRIS,
+  @dst1213, @eltociear, @fuleinist, @greyfreedom, @h3c-hexin, @heloanc,
+  @hxy91819, @J3y0r, @JiarenWang, @jinpengxuan, @KhalidAlnujaidi, @laoye2020,
+  @lbcheng888, @linzhiqin2003, @Liu-Vince, @lixiasky-back, @pengyou200902,
+  @punkcanyang, @Rene-Kuhm, @SamhandsomeLee, @sockerch, @sternelee,
+  @Wenjunyun123, @whtis, and @wuwuzhijing for the translations, typo fixes,
+  docs polish, and small UX improvements that landed across the 0.8.42 →
+  0.8.43 cycle.
+
+### Security
+
+- **Thinking blocks can be collapsed/expanded via keyboard.** Space on an
+  empty composer toggles the focused thinking cell between collapsed and
+  expanded, complementing the existing mouse right-click context menu (#1972).
+- **Sub-agent completion events no longer delayed to the next turn.** The turn
+  loop now drains late-arriving sub-agent completions at the final checkpoint
+  before breaking, so child-agent sentinels surface immediately instead of
+  appearing in the following turn (#1961).
+- **`codewhale doctor` now referenced correctly in SSE timeout errors.**
+  The error message shown when SSE streams fail to connect now points users to
+  `codewhale doctor` (not the legacy `deepseek doctor`).
+
 ## [0.8.42] - 2026-05-24
 
 ### Changed
@@ -3762,7 +3907,7 @@ Welcome — and thank you.
   compaction defaults are enabled, transcript history is bounded, persisted
   sessions are capped, and oversized history folds into archived context
   placeholders instead of freezing the TUI.
-- **v0.8.6 feature batch** (#373-#402) — adds Goal mode, cache-hit chips,
+- **v0.8.6 feature batch** (#373-#402) — adds goal tracking, cache-hit chips,
   cycle-boundary visualization, file-tree pane, `/share`, `/model auto`,
   user-defined slash commands, `/profile`, LSP diagnostic wiring,
   crash-recovery, self-update, `/init`, `/diff`, patch-aware `/undo`,
@@ -4661,7 +4806,9 @@ Welcome — and thank you.
 - Hooks system and config profiles
 - Example skills and launch assets
 
-[Unreleased]: https://github.com/Hmbown/CodeWhale/compare/v0.8.42...HEAD
+[Unreleased]: https://github.com/Hmbown/CodeWhale/compare/v0.8.44...HEAD
+[0.8.44]: https://github.com/Hmbown/CodeWhale/compare/v0.8.43...v0.8.44
+[0.8.43]: https://github.com/Hmbown/CodeWhale/compare/v0.8.42...v0.8.43
 [0.8.42]: https://github.com/Hmbown/CodeWhale/compare/v0.8.41...v0.8.42
 [0.8.41]: https://github.com/Hmbown/CodeWhale/compare/v0.8.40...v0.8.41
 [0.8.40]: https://github.com/Hmbown/CodeWhale/compare/v0.8.39...v0.8.40

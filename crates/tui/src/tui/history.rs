@@ -182,13 +182,7 @@ impl HistoryCell {
     /// `transcript_lines`.
     pub fn lines(&self, width: u16) -> Vec<Line<'static>> {
         match self {
-            HistoryCell::User { content } => render_plain_message(
-                USER_GLYPH,
-                user_label_style(),
-                user_body_style(),
-                content,
-                width,
-            ),
+            HistoryCell::User { content } => render_user_message(content, width),
             HistoryCell::Assistant { content, streaming } => render_message(
                 ASSISTANT_GLYPH,
                 assistant_label_style_for(*streaming, /*low_motion*/ false),
@@ -286,13 +280,7 @@ impl HistoryCell {
                 lines
             }
             HistoryCell::Tool(cell) => cell.lines_with_motion(width, options.low_motion),
-            HistoryCell::User { content } => render_plain_message(
-                USER_GLYPH,
-                user_label_style(),
-                user_body_style(),
-                content,
-                width,
-            ),
+            HistoryCell::User { content } => render_user_message(content, width),
             HistoryCell::Assistant { content, streaming } => render_message(
                 ASSISTANT_GLYPH,
                 assistant_label_style_for(*streaming, options.low_motion),
@@ -2296,6 +2284,35 @@ fn render_plain_message(
     lines
 }
 
+fn render_user_message(content: &str, width: u16) -> Vec<Line<'static>> {
+    render_plain_message(
+        USER_GLYPH,
+        user_label_style(),
+        user_body_style(),
+        content,
+        width,
+    )
+    .into_iter()
+    .map(|line| apply_user_message_highlight(line, width))
+    .collect()
+}
+
+fn apply_user_message_highlight(mut line: Line<'static>, width: u16) -> Line<'static> {
+    let bg = palette::SURFACE_ELEVATED;
+    line.style = line.style.bg(bg);
+
+    let target_width = usize::from(width);
+    let line_width = line.width();
+    if line_width < target_width {
+        line.spans.push(Span::styled(
+            " ".repeat(target_width - line_width),
+            Style::default().bg(bg),
+        ));
+    }
+
+    line
+}
+
 fn render_command_mode(command: &str, width: u16, mode: RenderMode) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let cap = match mode {
@@ -2778,7 +2795,7 @@ fn truncate_text(text: &str, max_len: usize) -> String {
 }
 
 fn user_label_style() -> Style {
-    Style::default().fg(palette::TEXT_MUTED)
+    Style::default().fg(palette::USER_BODY)
 }
 
 fn user_body_style() -> Style {
@@ -3836,6 +3853,13 @@ mod tests {
         let lines = cell.lines(80);
         let head = &lines[0];
         assert_eq!(head.spans[0].content.as_ref(), USER_GLYPH);
+        assert_eq!(head.spans[0].style.fg, Some(palette::USER_BODY));
+        assert_eq!(head.style.bg, Some(palette::SURFACE_ELEVATED));
+        assert_eq!(head.width(), 80);
+        assert!(
+            head.spans.iter().any(|span| span.style.bg.is_none()),
+            "content spans should keep their own styles and inherit the line background"
+        );
         // No "You" literal anywhere in the rendered head line.
         let visible: String = head
             .spans
@@ -3847,15 +3871,49 @@ mod tests {
     }
 
     #[test]
+    fn user_cell_wraps_fill_transcript_rows() {
+        let cell = HistoryCell::User {
+            content: "hello world this prompt wraps onto multiple transcript lines".to_string(),
+        };
+        let lines = cell.lines(18);
+
+        assert!(lines.len() > 1, "expected wrapped user message");
+        assert!(
+            lines
+                .iter()
+                .all(|line| line.style.bg == Some(palette::SURFACE_ELEVATED)),
+            "wrapped user message lines should keep the highlighted block background"
+        );
+        assert!(
+            lines.iter().all(|line| line.width() == 18),
+            "wrapped user message lines should fill the rendered row width"
+        );
+    }
+
+    #[test]
+    fn user_transcript_lines_do_not_append_visual_padding() {
+        let cell = HistoryCell::User {
+            content: "hello".to_string(),
+        };
+        let lines = cell.transcript_lines(80);
+        let head = &lines[0];
+        let visible: String = head.spans.iter().map(|s| s.content.as_ref()).collect();
+
+        assert_eq!(visible, format!("{USER_GLYPH} hello"));
+        assert!(head.width() < 80);
+        assert_eq!(head.style.bg, None);
+    }
+
+    #[test]
     fn user_cell_renders_plain_text_without_markdown_interpretation() {
         let cell = HistoryCell::User {
             content: "  # heading\n- item\n   \nhello    world".to_string(),
         };
         let visible: Vec<String> = cell.lines(80).iter().map(line_text).collect();
 
-        assert_eq!(visible[0], format!("{USER_GLYPH}   # heading"));
+        assert_eq!(visible[0].trim_end(), format!("{USER_GLYPH}   # heading"));
         assert!(
-            visible[1].ends_with("- item"),
+            visible[1].trim_end().ends_with("- item"),
             "dash-prefixed text must remain literal: {visible:?}"
         );
         assert!(
@@ -3863,7 +3921,7 @@ mod tests {
             "whitespace-only lines must survive: {visible:?}"
         );
         assert!(
-            visible[3].ends_with("hello    world"),
+            visible[3].trim_end().ends_with("hello    world"),
             "internal spacing must remain literal: {visible:?}"
         );
         assert!(
@@ -3891,6 +3949,7 @@ mod tests {
             "assistant label dropped: {visible:?}"
         );
         assert!(visible.contains("ready"));
+        assert_ne!(head.style.bg, Some(palette::SURFACE_ELEVATED));
     }
 
     #[test]

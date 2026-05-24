@@ -219,11 +219,21 @@ impl ModalView for PagerView {
                     self.search_input.pop();
                     return ViewAction::None;
                 }
+                // Ctrl+H is the legacy ASCII backspace many terminals emit.
+                KeyCode::Char('h')
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                {
+                    self.search_input.pop();
+                    return ViewAction::None;
+                }
                 KeyCode::Char(c) => {
                     self.search_input.push(c);
                     return ViewAction::None;
                 }
-                _ => {}
+                // All other keys (Up/Down, PageUp/PageDown, etc.) are captured
+                // in search mode so they don't fall through to the pager body.
+                _ => return ViewAction::None,
             }
         }
 

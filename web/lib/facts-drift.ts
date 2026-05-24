@@ -14,7 +14,7 @@
 import type { RepoFacts, ProviderFact } from "./facts.generated";
 import { FACTS as BUILD_FACTS } from "./facts.generated";
 
-const RAW_BASE = "https://raw.githubusercontent.com/Hmbown/deepseek-tui/main";
+const RAW_BASE = "https://raw.githubusercontent.com/Hmbown/CodeWhale/main";
 const KV_KEY = "facts:current";
 const LOG_KEY = "facts:drift-log";
 
@@ -25,7 +25,7 @@ interface KVNamespace {
 
 async function fetchText(path: string, ghToken?: string): Promise<string | null> {
   const headers: Record<string, string> = {
-    "User-Agent": "deepseek-tui-web-drift",
+    "User-Agent": "codewhale-web-drift",
   };
   if (ghToken) headers["Authorization"] = `Bearer ${ghToken}`;
   try {
@@ -39,10 +39,10 @@ async function fetchText(path: string, ghToken?: string): Promise<string | null>
 
 async function fetchListing(dir: string, ghToken?: string): Promise<string[] | null> {
   // Use GitHub Contents API to list a directory.
-  const url = `https://api.github.com/repos/Hmbown/deepseek-tui/contents/${dir}?ref=main`;
+  const url = `https://api.github.com/repos/Hmbown/CodeWhale/contents/${dir}?ref=main`;
   const headers: Record<string, string> = {
     "Accept": "application/vnd.github+json",
-    "User-Agent": "deepseek-tui-web-drift",
+    "User-Agent": "codewhale-web-drift",
     "X-GitHub-Api-Version": "2022-11-28",
   };
   if (ghToken) headers["Authorization"] = `Bearer ${ghToken}`;
@@ -110,12 +110,12 @@ function deriveSandboxBackends(files: string[]): string[] {
 async function fetchLatestRelease(ghToken?: string): Promise<string | null> {
   const headers: Record<string, string> = {
     Accept: "application/vnd.github+json",
-    "User-Agent": "deepseek-tui-web-drift",
+    "User-Agent": "codewhale-web-drift",
     "X-GitHub-Api-Version": "2022-11-28",
   };
   if (ghToken) headers["Authorization"] = `Bearer ${ghToken}`;
   try {
-    const r = await fetch("https://api.github.com/repos/Hmbown/deepseek-tui/releases/latest", { headers });
+    const r = await fetch("https://api.github.com/repos/Hmbown/CodeWhale/releases/latest", { headers });
     if (!r.ok) return null;
     const j = (await r.json()) as { tag_name?: string };
     return j.tag_name ?? null;
@@ -137,7 +137,7 @@ export async function deriveFactsFromRemote(ghToken?: string): Promise<RepoFacts
     fetchText("Cargo.toml", ghToken),
     fetchText("crates/tui/src/config.rs", ghToken),
     fetchListing("crates/tui/src/sandbox", ghToken),
-    fetchText("npm/deepseek-tui/package.json", ghToken),
+    fetchText("npm/codewhale/package.json", ghToken),
     fetchText("LICENSE", ghToken),
     fetchListing("crates/tui/src/tools", ghToken),
     fetchLatestRelease(ghToken),

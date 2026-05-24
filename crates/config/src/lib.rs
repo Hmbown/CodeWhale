@@ -1120,15 +1120,21 @@ fn merge_provider_config(target: &mut ProviderConfigToml, source: &ProviderConfi
     }
 }
 
-/// Load a project-level config from `$WORKSPACE/.deepseek/config.toml`.
-/// Returns `None` if the file doesn't exist or can't be parsed.
+/// Load a project-level config from the workspace.
+///
+/// Checks `$WORKSPACE/.codewhale/config.toml` first, falling back to
+/// `$WORKSPACE/.deepseek/config.toml` for backward compatibility.
+/// Returns `None` if neither file exists or can't be parsed.
 pub fn load_project_config(workspace: &Path) -> Option<ConfigToml> {
-    let path = workspace.join(".deepseek").join(CONFIG_FILE_NAME);
-    if !path.exists() {
-        return None;
+    for dir in [CODEWHALE_APP_DIR, LEGACY_APP_DIR] {
+        let path = workspace.join(dir).join(CONFIG_FILE_NAME);
+        if path.exists()
+            && let Ok(raw) = fs::read_to_string(&path)
+        {
+            return toml::from_str(&raw).ok();
+        }
     }
-    let raw = fs::read_to_string(&path).ok()?;
-    toml::from_str(&raw).ok()
+    None
 }
 
 fn normalize_model_for_provider(provider: ProviderKind, model: &str) -> String {
@@ -1442,9 +1448,80 @@ pub fn default_secrets() -> &'static Secrets {
     })
 }
 
+// ── CodeWhale state root (v0.8.44) ──────────────────────────────────
+//
+// v0.8.44 migrates product-owned app state from ~/.deepseek/ to
+// ~/.codewhale/ while keeping ~/.deepseek/ as a compatibility fallback.
+// New installs write to ~/.codewhale/. Existing installs with only
+// ~/.deepseek/ continue working without data loss.
+
+/// Canonical CodeWhale app directory name under $HOME.
+pub const CODEWHALE_APP_DIR: &str = ".codewhale";
+
+/// Legacy DeepSeek-branded app directory name (compatibility fallback).
+pub const LEGACY_APP_DIR: &str = ".deepseek";
+
+/// Resolve the primary CodeWhale home directory.
+///
+/// `$CODEWHALE_HOME` takes precedence when set. Otherwise defaults to
+/// `$HOME/.codewhale`. This is the write target for new product state.
+pub fn codewhale_home() -> Result<PathBuf> {
+    if let Ok(val) = std::env::var("CODEWHALE_HOME") {
+        let trimmed = val.trim();
+        if !trimmed.is_empty() {
+            return Ok(PathBuf::from(trimmed));
+        }
+    }
+    let home = dirs::home_dir().context("failed to resolve home directory")?;
+    Ok(home.join(CODEWHALE_APP_DIR))
+}
+
+/// Resolve the legacy DeepSeek home directory (`$HOME/.deepseek`).
+///
+/// Always returns the legacy path regardless of whether it exists.
+pub fn legacy_deepseek_home() -> Result<PathBuf> {
+    let home = dirs::home_dir().context("failed to resolve home directory")?;
+    Ok(home.join(LEGACY_APP_DIR))
+}
+
+/// Resolve a state subdirectory, preferring the CodeWhale root if
+/// it already exists, otherwise falling back to the legacy root.
+///
+/// This is the read-path resolver: it returns the primary path when
+/// migration has occurred or on a fresh install, but keeps reading
+/// from the legacy path for users who haven't migrated yet.
+pub fn resolve_state_dir(subdir: &str) -> Result<PathBuf> {
+    let primary = codewhale_home()?.join(subdir);
+    if primary.exists() {
+        return Ok(primary);
+    }
+    let legacy = legacy_deepseek_home()?.join(subdir);
+    if legacy.exists() {
+        return Ok(legacy);
+    }
+    // Neither exists — return primary for first-write creation.
+    Ok(primary)
+}
+
+/// Ensure a state subdirectory exists under the primary CodeWhale root,
+/// creating it if necessary. This is the write-path resolver.
+pub fn ensure_state_dir(subdir: &str) -> Result<PathBuf> {
+    let dir = codewhale_home()?.join(subdir);
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("failed to create {}/", dir.display()))?;
+    Ok(dir)
+}
+
 pub fn resolve_config_path(explicit: Option<PathBuf>) -> Result<PathBuf> {
     let path = if let Some(path) = explicit {
         path
+    } else if let Ok(path) = std::env::var("CODEWHALE_CONFIG_PATH") {
+        let trimmed = path.trim();
+        if !trimmed.is_empty() {
+            PathBuf::from(trimmed)
+        } else {
+            return default_config_path();
+        }
     } else if let Ok(path) = std::env::var("DEEPSEEK_CONFIG_PATH") {
         let trimmed = path.trim();
         if !trimmed.is_empty() {
@@ -1459,8 +1536,45 @@ pub fn resolve_config_path(explicit: Option<PathBuf>) -> Result<PathBuf> {
 }
 
 pub fn default_config_path() -> Result<PathBuf> {
-    let home = dirs::home_dir().context("failed to resolve home directory for config path")?;
-    Ok(home.join(".deepseek").join(CONFIG_FILE_NAME))
+    // Prefer ~/.codewhale/config.toml when it exists (fresh install or
+    // migrated), otherwise fall back to ~/.deepseek/config.toml.
+    let primary = codewhale_home()?.join(CONFIG_FILE_NAME);
+    if primary.exists() {
+        return Ok(primary);
+    }
+    let legacy = legacy_deepseek_home()?.join(CONFIG_FILE_NAME);
+    if legacy.exists() {
+        return Ok(legacy);
+    }
+    // Neither exists — return primary so first write creates it there.
+    Ok(primary)
+}
+
+/// v0.8.44: one-time migration from `~/.deepseek/config.toml` to
+/// `~/.codewhale/config.toml`. Called on first launch after the config
+/// is loaded; copies the legacy file if the primary doesn't exist yet.
+/// Never overwrites an existing primary config.
+pub fn migrate_config_if_needed() -> Result<()> {
+    let primary = codewhale_home()?.join(CONFIG_FILE_NAME);
+    if primary.exists() {
+        return Ok(());
+    }
+    let legacy = legacy_deepseek_home()?.join(CONFIG_FILE_NAME);
+    if !legacy.exists() {
+        return Ok(());
+    }
+    // Copy the config to the new home.
+    if let Some(parent) = primary.parent() {
+        std::fs::create_dir_all(parent).context("failed to create codewhale config directory")?;
+    }
+    std::fs::copy(&legacy, &primary)
+        .context("failed to migrate config from deepseek to codewhale home")?;
+    tracing::info!(
+        "Migrated config from {} to {}",
+        legacy.display(),
+        primary.display()
+    );
+    Ok(())
 }
 
 fn parse_bool(raw: &str) -> Result<bool> {

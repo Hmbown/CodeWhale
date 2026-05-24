@@ -2194,7 +2194,7 @@ pub(crate) fn expand_path(path: &str) -> PathBuf {
 }
 
 fn default_skills_dir() -> Option<PathBuf> {
-    effective_home_dir().map(|home| home.join(".deepseek").join("skills"))
+    effective_home_dir().map(|home| home.join(".codewhale").join("skills"))
 }
 
 fn default_mcp_config_path() -> Option<PathBuf> {

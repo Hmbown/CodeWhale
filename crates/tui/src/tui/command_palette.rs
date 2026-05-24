@@ -639,11 +639,19 @@ impl ModalView for CommandPaletteView {
                     ViewAction::None
                 }
             }
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Up => {
                 self.move_selection(-1);
                 ViewAction::None
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Down => {
+                self.move_selection(1);
+                ViewAction::None
+            }
+            KeyCode::Char('k') if self.query.is_empty() => {
+                self.move_selection(-1);
+                ViewAction::None
+            }
+            KeyCode::Char('j') if self.query.is_empty() => {
                 self.move_selection(1);
                 ViewAction::None
             }
@@ -656,6 +664,15 @@ impl ModalView for CommandPaletteView {
                 ViewAction::None
             }
             KeyCode::Backspace => {
+                self.query.pop();
+                self.refilter();
+                ViewAction::None
+            }
+            // Ctrl+H is the legacy ASCII backspace many terminals emit.
+            KeyCode::Char('h')
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT) =>
+            {
                 self.query.pop();
                 self.refilter();
                 ViewAction::None

@@ -577,6 +577,7 @@ function httpRequest(rawUrl, opts = {}) {
       try {
         req = client.request(reqOptions, (response) => {
           res = response;
+          response.pause();
           armStallTimer();
           response.on("data", () => {
             armStallTimer();
@@ -649,6 +650,7 @@ function httpRequest(rawUrl, opts = {}) {
             },
             (response) => {
               res = response;
+              response.pause();
               armStallTimer();
               response.on("data", () => armStallTimer());
               response.on("end", () => cleanup());
@@ -712,6 +714,7 @@ function httpRequest(rawUrl, opts = {}) {
             try {
               req = https.request(reqOptions, (response) => {
                 res = response;
+                response.pause();
                 armStallTimer();
                 response.on("data", () => armStallTimer());
                 response.on("end", () => cleanup());
@@ -944,6 +947,7 @@ async function downloadText(url, options = {}) {
         resolve(chunks.join(""));
       });
       response.on("error", reject);
+      response.resume();
     });
   }, context);
 }

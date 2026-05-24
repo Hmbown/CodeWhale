@@ -7,11 +7,21 @@ use super::CommandResult;
 /// Set or show the current goal
 pub fn goal(app: &mut App, arg: Option<&str>) -> CommandResult {
     match arg {
-        Some("clear") | Some("reset") | Some("done") => {
+        Some("clear") | Some("reset") => {
             app.goal.goal_objective = None;
             app.goal.goal_token_budget = None;
             app.goal.goal_started_at = None;
+            app.goal.goal_completed = false;
             CommandResult::message("Goal cleared.")
+        }
+        Some("done") | Some("complete") => {
+            app.goal.goal_completed = true;
+            let elapsed = app
+                .goal
+                .goal_started_at
+                .map(|t| crate::tui::notifications::humanize_duration(t.elapsed()))
+                .unwrap_or_else(|| "unknown".to_string());
+            CommandResult::message(format!("Goal marked complete! Elapsed: {elapsed}"))
         }
         Some(text) if !text.is_empty() => {
             // Parse optional budget: "/goal Implement login | budget: 50000"
@@ -19,6 +29,7 @@ pub fn goal(app: &mut App, arg: Option<&str>) -> CommandResult {
             app.goal.goal_objective = Some(objective.clone());
             app.goal.goal_token_budget = budget;
             app.goal.goal_started_at = Some(std::time::Instant::now());
+            app.goal.goal_completed = false;
             let budget_str = budget
                 .map(|b| format!(" (budget: {b} tokens)"))
                 .unwrap_or_default();
@@ -50,7 +61,14 @@ pub fn goal(app: &mut App, arg: Option<&str>) -> CommandResult {
                         format!(" | tokens: {used}/{b} ({pct:.0}%)")
                     })
                     .unwrap_or_default();
-                CommandResult::message(format!("Goal: \"{obj}\" — elapsed: {elapsed}{budget_str}"))
+                let status = if app.goal.goal_completed {
+                    " [COMPLETED]"
+                } else {
+                    ""
+                };
+                CommandResult::message(format!(
+                    "Goal{status}: \"{obj}\" — elapsed: {elapsed}{budget_str}"
+                ))
             } else {
                 CommandResult::message(
                     "No goal set. Use /goal <objective> [budget: N] to set one.\n\
