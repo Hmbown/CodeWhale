@@ -5,7 +5,9 @@ use std::time::Duration;
 
 use super::CommandResult;
 use crate::client::DeepSeekClient;
-use crate::config::{COMMON_DEEPSEEK_MODELS, clear_api_key, normalize_model_name_for_provider};
+use crate::config::{
+    COMMON_DEEPSEEK_MODELS, Config, clear_api_key, normalize_model_name_for_provider,
+};
 use crate::config_ui::{ConfigUiMode, parse_mode};
 use crate::llm_client::LlmClient;
 use crate::localization::resolve_locale;
@@ -122,6 +124,15 @@ fn show_single_setting(app: &App, key: &str) -> CommandResult {
             }
         }
         "approval_mode" | "approval" => Some(app.approval_mode.label().to_string()),
+        "base_url" => {
+            let config = match Config::load(None, None) {
+                Ok(config) => config,
+                Err(err) => {
+                    return CommandResult::error(format!("Failed to load config: {err}"));
+                }
+            };
+            Some(config.deepseek_base_url())
+        }
         "locale" | "language" => Some(locale_display(app.ui_locale).to_string()),
         "theme" | "ui_theme" => {
             Some(crate::palette::theme_label_for_mode(app.ui_theme.mode).to_string())
@@ -432,6 +443,26 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
                 )
             };
             return CommandResult::message(message);
+        }
+        "base_url" => {
+            let value = value.trim();
+            if value.is_empty() {
+                return CommandResult::error("base_url cannot be empty");
+            }
+            if persist {
+                match persist_root_string_key("base_url", value) {
+                    Ok(path) => {
+                        return CommandResult::message(format!(
+                            "base_url = {value} (saved to {})",
+                            path.display()
+                        ));
+                    }
+                    Err(err) => return CommandResult::error(format!("Failed to save: {err}")),
+                }
+            }
+            return CommandResult::message(format!(
+                "base_url = {value} (session only; use --save to persist)"
+            ));
         }
         _ => {}
     }
@@ -1748,6 +1779,81 @@ mod tests {
         let settings_path = Settings::path().unwrap();
         let saved = fs::read_to_string(settings_path).unwrap();
         assert!(saved.contains("cost_currency = \"cny\""));
+    }
+
+    #[test]
+    fn config_command_base_url_save_persists_value() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "deepseek-tui-base-url-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root).unwrap();
+        let _guard = EnvGuard::new(&temp_root);
+
+        let mut app = create_test_app();
+        let result = config_command(
+            &mut app,
+            Some("base_url https://example.internal.local/v1 --save"),
+        );
+        let msg = result.message.unwrap();
+        let saved_path = config_toml_path().unwrap();
+        let saved = fs::read_to_string(&saved_path).unwrap();
+
+        assert_eq!(
+            msg,
+            format!(
+                "base_url = https://example.internal.local/v1 (saved to {})",
+                saved_path.display()
+            )
+        );
+        assert!(saved.contains("base_url = \"https://example.internal.local/v1\""));
+    }
+
+    #[test]
+    fn config_command_base_url_without_save_is_session_only_notice() {
+        let _lock = lock_test_env();
+        let mut app = create_test_app();
+        let result = config_command(&mut app, Some("base_url https://example.internal.local/v1"));
+        let msg = result.message.unwrap();
+
+        assert_eq!(
+            msg,
+            "base_url = https://example.internal.local/v1 (session only; use --save to persist)"
+        );
+    }
+
+    #[test]
+    fn config_command_base_url_reads_current_value_from_config() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "deepseek-tui-base-url-show-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root).unwrap();
+        let _guard = EnvGuard::new(&temp_root);
+
+        let config_path = temp_root.join(".deepseek").join("config.toml");
+        fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+        fs::write(
+            &config_path,
+            "base_url = \"https://api.from-config.local/v1\"\n",
+        )
+        .unwrap();
+
+        let mut app = create_test_app();
+        let result = config_command(&mut app, Some("base_url"));
+        let msg = result.message.unwrap();
+
+        assert_eq!(msg, "base_url = https://api.from-config.local/v1");
     }
 
     #[test]

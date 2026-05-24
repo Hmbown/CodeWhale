@@ -758,6 +758,10 @@ impl Settings {
             ("show_thinking", "Show model thinking: on/off"),
             ("show_tool_details", "Show detailed tool output: on/off"),
             (
+                "base_url",
+                "HTTP base URL for DeepSeek-compatible endpoints.",
+            ),
+            (
                 "locale",
                 "UI locale and default model language: auto, en, ja, zh-Hans, pt-BR, es-419",
             ),
