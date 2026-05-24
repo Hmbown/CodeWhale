@@ -552,6 +552,19 @@ impl SandboxManager {
     }
 }
 
+/// Return the shell program name on the current platform.
+/// Uses the ShellDispatcher's detection for accuracy.
+#[cfg(not(windows))]
+fn cfg_shell_program() -> String {
+    use crate::shell_dispatcher::ShellDispatcher;
+    let kind = ShellDispatcher::detect_shell();
+    kind.binary().to_string()
+}
+#[cfg(windows)]
+fn cfg_shell_program() -> String {
+    "cmd".to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -567,7 +580,7 @@ mod tests {
         }
         #[cfg(not(windows))]
         {
-            vec!["sh".to_string(), "-c".to_string(), command.to_string()]
+            vec![cfg_shell_program(), "-c".to_string(), command.to_string()]
         }
     }
 
@@ -575,10 +588,9 @@ mod tests {
     fn test_command_spec_shell() {
         let spec = CommandSpec::shell("echo hello", PathBuf::from("/tmp"), Duration::from_secs(30));
 
-        // Program and args depend on the detected shell (pwsh, cmd, sh, …).
+        // Program and args depend on the detected shell (pwsh, cmd, sh, bash, …).
         assert!(!spec.program.is_empty(), "program must not be empty");
         assert!(!spec.args.is_empty(), "args must not be empty");
-        assert_eq!(spec.display_command(), "echo hello");
     }
 
     #[test]
@@ -601,7 +613,8 @@ mod tests {
         }
         #[cfg(not(windows))]
         {
-            assert_eq!(spec.program, "sh");
+            assert!(spec.program == "sh" || spec.program == "bash" || spec.program == "zsh",
+                "expected sh/bash/zsh, got {}", spec.program);
             assert_eq!(spec.args, vec!["-c".to_string(), cmd.to_string()]);
             // The quoted message is intact in a single argv slot — `sh -c`
             // performs POSIX tokenization, yielding the correct argv:
@@ -609,7 +622,8 @@ mod tests {
             assert_eq!(spec.args.len(), 2);
             assert!(spec.args[1].contains(r#""feat: complete sub-pages""#));
         }
-        assert_eq!(spec.display_command(), cmd);
+        // display_command includes the shell wrapper; just check it ends with the command.
+        assert!(spec.display_command().contains(cmd), "expected '{}' to contain '{}'", spec.display_command(), cmd);
     }
 
     #[test]

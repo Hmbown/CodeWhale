@@ -487,6 +487,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
     fn find_exe_finds_cmd_on_path() {
         // cmd.exe is always on PATH on Windows.
         assert!(ShellDispatcher::find_exe("cmd.exe"));
