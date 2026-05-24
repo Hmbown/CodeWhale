@@ -273,7 +273,7 @@ impl ShellDispatcher {
 
     // -- Detection --------------------------------------------------------
 
-    fn detect_shell() -> ShellKind {
+    pub fn detect_shell() -> ShellKind {
         // 1. $SHELL environment variable (WSL, Git Bash, MSYS2, or Unix)
         if let Ok(shell) = std::env::var("SHELL") {
             let lower = shell.to_lowercase();
