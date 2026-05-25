@@ -40,6 +40,23 @@ docker run --rm -it \
 > `--registry=https://registry.npmmirror.com`, or use the
 > [Cargo mirror](#china--mirror-friendly-installation) below.
 
+### GENmicon Pi Package Developer Preview
+
+This branch also contains a project-local Pi package for the GENmicon
+Pi-native game driver rebuild:
+
+```bash
+cd packages/genmicon-pi
+npm install --legacy-peer-deps
+npm run typecheck
+npm test
+```
+
+The package is loaded from `.pi/settings.json` as `./packages/genmicon-pi`.
+It registers GENmicon commands, game-safe tools, player/diagnostic UI models,
+skills, prompts, and a theme. Deterministic game authority remains in
+`crates/game` via the `genmicon-game-runtime` JSON helper.
+
 [![CI](https://github.com/Hmbown/DeepSeek-TUI/actions/workflows/ci.yml/badge.svg)](https://github.com/Hmbown/DeepSeek-TUI/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/deepseek-tui)](https://www.npmjs.com/package/deepseek-tui)
 [![crates.io](https://img.shields.io/crates/v/deepseek-tui-cli?label=crates.io)](https://crates.io/crates/deepseek-tui-cli)

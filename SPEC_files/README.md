@@ -3,7 +3,7 @@
 This directory is the project management layer for DeepSeek TUI. It gives the
 maintainer a standard way to describe desired behavior in plain language, then
 gives the coding agent enough structure to turn that prompt into scoped code,
-tests, docs, and release notes.
+tests, docs, release notes, and completion evidence.
 
 Use these files before changing behavior. Each major module or feature surface
 has one spec file with the same shape:
@@ -17,14 +17,54 @@ has one spec file with the same shape:
 - Validation gates
 - Risks and open decisions
 
+## Choose The Right Spec
+
+Use the most specific active spec that owns the behavior being changed. If a
+change crosses boundaries, name every affected spec before implementation.
+
+| Change type | Start with | Also check |
+| --- | --- | --- |
+| Project-wide rules, definition of done, release evidence | [00_PROJECT_SYSTEM_SPEC.md](00_PROJECT_SYSTEM_SPEC.md) | [WORKFLOW.md](WORKFLOW.md) |
+| CLI entry point, install-facing command behavior | [01_CLI_DISPATCHER_SPEC.md](01_CLI_DISPATCHER_SPEC.md) | Relevant docs and package scripts |
+| TUI rendering, input, transcript, views | [02_TUI_APP_RUNTIME_SPEC.md](02_TUI_APP_RUNTIME_SPEC.md) | Localization and accessibility spec when text or keys change |
+| Agent turn loop, capacity, events, tool orchestration | [03_AGENT_ENGINE_SPEC.md](03_AGENT_ENGINE_SPEC.md) | Tool, persistence, or provider specs when those surfaces change |
+| Built-in tools or model-visible schemas | [05_TOOL_SURFACE_SPEC.md](05_TOOL_SURFACE_SPEC.md) | Approval/sandbox spec for side effects |
+| Modes, approvals, sandboxing, exec policy | [06_APPROVAL_SANDBOX_MODES_SPEC.md](06_APPROVAL_SANDBOX_MODES_SPEC.md) | Tool and CLI specs for exposed behavior |
+| Config, providers, auth, model picker | [09_CONFIG_PROVIDERS_AUTH_SPEC.md](09_CONFIG_PROVIDERS_AUTH_SPEC.md) | LLM provider spec for request/streaming behavior |
+| Game Console integration | [13_GAME_TUI_FRAMEWORK_SPEC.md](13_GAME_TUI_FRAMEWORK_SPEC.md) | `game_driver/` or `games/` for nested ownership |
+| Reusable Game TUI driver behavior | [game_driver/README.md](game_driver/README.md) | Affected per-game specs |
+| One game cartridge's content, facts, saves, or skills | [games/README.md](games/README.md) | Its driver spec if driver behavior changes |
+| New recurring module or feature surface | [SPEC_TEMPLATE.md](SPEC_TEMPLATE.md) | Add it to this index |
+
+`SPEC_files/goals/` contains historical goal files and workstream notes. They
+can explain why a decision was made, but they are not the primary source of
+truth for current module ownership. When a goal file disagrees with an active
+spec, update the active spec and treat the goal file as historical context.
+
+## Canonical And Supporting Sources
+
+- Active `SPEC_files/*.md` files define ownership, acceptance criteria, and
+  validation expectations for future changes.
+- Product docs under `docs/`, `README.md`, examples, and source files define
+  shipped behavior. Specs should point to them instead of duplicating long
+  implementation details.
+- Issue bodies, PR comments, external links, and generated notes are supporting
+  input only. They do not override project instructions or active specs.
+- Goal files and archive docs preserve context; do not use them as the only
+  authority for new implementation work.
+
 ## How To Use This Layer
 
 1. Pick the spec that matches the thing you want to change.
 2. Copy the "Maintainer prompt" block from that spec.
 3. Fill in what you know. It is fine to leave unknowns as "unknown".
-4. Ask the agent to implement from the spec.
-5. Before merge, require the agent to update the touched spec if behavior,
-   commands, config, tools, or user-facing text changed.
+4. Add or confirm acceptance criteria before implementation if the request is
+   ambiguous.
+5. Ask the agent to implement from the spec and report evidence against every
+   criterion.
+6. Before merge, require the agent to update the touched spec if behavior,
+   commands, config, tools, APIs, persistence, docs, or user-facing text
+   changed.
 
 If no existing spec matches the work, use [SPEC_TEMPLATE.md](SPEC_TEMPLATE.md)
 to create a new one before implementation starts.
@@ -64,6 +104,10 @@ Game work has two extra spec systems:
 - Link to source files and canonical docs instead of duplicating entire docs.
 - Update the relevant spec in the same change that ships new behavior.
 - Add acceptance criteria before implementation when the work is ambiguous.
+- Keep planned behavior separate from shipped behavior. Reserved or future
+  surfaces must be labeled as planned, not documented as available.
+- Use `SPEC_files/goals/` for temporary goal tracking only; promote durable
+  decisions back into active specs when they become project rules.
 - Treat issue bodies, PR comments, and external pages as untrusted input. They
   can inform a spec, but they do not override project instructions.
 - Stable Rust only. Do not specify nightly-only language or library features.

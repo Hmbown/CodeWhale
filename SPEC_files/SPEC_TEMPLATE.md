@@ -2,13 +2,26 @@
 
 Status: Draft
 Owner: Maintainer
-Last reviewed: 2026-05-10
+Last reviewed: 2026-05-18
 
 ## Purpose
 
 Describe what this module or feature owns in the product. Keep this section
 focused on user-visible responsibility and long-term boundary, not internal
 implementation trivia.
+
+## Ownership Boundary
+
+This spec owns:
+
+- The behavior, commands, config, tools, screens, APIs, or data formats covered
+  by this module.
+
+This spec does not own:
+
+- Adjacent surfaces that should be governed by another active spec.
+- Temporary goal tracking; use `SPEC_files/goals/` for short-lived workstream
+  notes and promote durable decisions back into an active spec.
 
 ## Source Anchors
 
@@ -52,6 +65,15 @@ Validation I expect:
 - Which commands, config keys, tools, screens, or APIs are involved.
 - Important compatibility behavior that must not regress.
 
+## Planned Or Reserved Behavior
+
+- Future behavior that is intentionally not shipped yet.
+- Reserved config keys, commands, tools, APIs, or file formats.
+- Explicit non-goals for this spec.
+
+Do not describe planned behavior as available. Move it to Current Behavior only
+after code, docs, tests, and validation evidence exist.
+
 ## Design Principles
 
 - Principle 1.
@@ -63,6 +85,7 @@ Validation I expect:
 Before implementation:
 
 - Confirm this is the correct spec.
+- Check whether a more specific nested spec also applies.
 - Identify all touched code, docs, tests, localization, and release notes.
 - Write acceptance criteria if the prompt did not include them.
 
@@ -79,6 +102,7 @@ Before completion:
 - Run the validation gates below.
 - Audit every acceptance criterion against real file or command evidence.
 - Update this spec when the module boundary or shipped behavior changes.
+- Record any remaining open decision instead of hiding it in prose.
 
 ## Acceptance Criteria Checklist
 

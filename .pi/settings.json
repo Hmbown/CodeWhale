@@ -1,0 +1,11 @@
+{
+  "packages": [
+    {
+      "source": "./packages/genmicon-pi",
+      "extensions": ["extensions/index.ts"],
+      "skills": ["skills/**/SKILL.md"],
+      "prompts": ["prompts/*.md"],
+      "themes": ["themes/genmicon.json"]
+    }
+  ]
+}

@@ -1,0 +1,50 @@
+{
+  "name": "genmicon-pi",
+  "version": "0.1.0",
+  "description": "Pi-native GENmicon game driver package.",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "genmicon",
+    "game-driver",
+    "tui"
+  ],
+  "license": "MIT",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --test --import tsx tests/*.test.ts"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/index.ts"
+    ],
+    "skills": [
+      "./skills"
+    ],
+    "prompts": [
+      "./prompts"
+    ],
+    "themes": [
+      "./themes"
+    ]
+  },
+  "files": [
+    "extensions",
+    "skills",
+    "prompts",
+    "themes",
+    "README.md"
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "tsx": "^4.20.0",
+    "typebox": "^1.1.38",
+    "typescript": "^5.8.0"
+  }
+}

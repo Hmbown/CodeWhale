@@ -2,7 +2,7 @@
 
 Status: Active
 Owner: Maintainer
-Last reviewed: 2026-05-10
+Last reviewed: 2026-05-18
 
 ## Purpose
 
@@ -13,6 +13,11 @@ versioning.
 
 Do not put a single game's plot, characters, endings, or save facts here. Those
 belong under `SPEC_files/games/`.
+
+Use this directory when the same driver behavior can apply to more than one
+game cartridge. If the change only alters one game's content, fixed facts,
+starting save, or player-facing story contract, start in `SPEC_files/games/`
+instead.
 
 ## Driver Spec Index
 
@@ -44,14 +49,22 @@ Validation I expect:
 ## Driver Boundary Rules
 
 - Drivers are reusable genre/runtime packages, not game content packages.
+- Drivers own reusable manifest fields, script function contracts, role
+  templates, validation rules, and version compatibility.
 - Driver prompts and skills can define genre policy, mechanics, and reusable
   role behavior.
+- Drivers do not own cartridge-only plot beats, character canon, endings,
+  fixed facts, or save fixture contents.
 - Driver files must resolve under the installed driver root.
 - Model-visible driver functions must be declared in `driver.toml`.
 - Driver functions must be deterministic and cannot mutate saves directly.
 - Save files lock the concrete resolved driver version.
 - V1 does not migrate saves across driver versions unless a future spec adds a
   migration contract.
+
+When driver behavior changes, update both the shared driver spec and every
+affected concrete driver spec. If the change affects a cartridge's player
+contract or save expectations, update that game's spec too.
 
 ## Concrete Driver File Layout
 
@@ -70,6 +83,14 @@ The runtime expects this install shape:
 Local example games can carry local drivers under their own `drivers/`
 directory. Future globally managed driver installation remains a planned
 surface, not a shipped marketplace.
+
+## Pi-Native Package Integration
+
+The Pi-native rebuild consumes drivers through `packages/genmicon-pi` game
+tools and the deterministic `crates/game` runtime helper. Drivers may provide
+skills, prompts, declared functions, and templates as game/driver resources,
+but they do not install Pi tools, change active-tool policy, or own session
+state. Save files continue to lock the exact resolved driver version.
 
 ## Completion Rules
 

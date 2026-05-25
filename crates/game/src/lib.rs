@@ -4,6 +4,7 @@
 //! clients, shell execution, network clients, Python, or external game runtimes.
 
 pub mod agents;
+pub mod cli;
 pub mod demo;
 pub mod driver;
 pub mod error;

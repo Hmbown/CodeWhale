@@ -1,0 +1,12 @@
+{
+  "name": "genmicon",
+  "displayName": "GENmicon",
+  "colors": {
+    "accent": "#7C3AED",
+    "surface": "#111827",
+    "text": "#F9FAFB",
+    "muted": "#9CA3AF",
+    "warning": "#F59E0B",
+    "success": "#10B981"
+  }
+}

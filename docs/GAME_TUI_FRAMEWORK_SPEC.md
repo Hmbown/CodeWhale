@@ -1378,6 +1378,13 @@ This scaffold is considered sufficient for engineering work when:
   and NPC manager responsibilities without giving NPCs sealed answers.
 - state changes remain committed only through `game_commit_turn`.
 
+Pi-native transition note:
+
+- The rebuild path now lives in `packages/genmicon-pi/` with Pi package
+  commands, game-safe tools, renderers, prompts, skills, and diagnostics. The
+  Rust `crates/game` runtime remains the deterministic save/driver authority
+  through `genmicon-game-runtime`; it does not own Pi sessions or model loops.
+
 ## Tests And Acceptance Criteria
 
 Runtime crate tests:

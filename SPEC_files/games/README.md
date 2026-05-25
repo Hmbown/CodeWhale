@@ -2,7 +2,7 @@
 
 Status: Active
 Owner: Maintainer
-Last reviewed: 2026-05-10
+Last reviewed: 2026-05-18
 
 ## Purpose
 
@@ -12,6 +12,10 @@ content files, save schema expectations, skills, endings, and driver dependency.
 
 Do not put reusable driver rules here unless they are overridden by the game.
 Reusable driver behavior belongs under `SPEC_files/game_driver/`.
+
+Use this directory when the change is specific to one playable cartridge. If
+the same rule should apply to multiple games through a shared genre/runtime
+contract, start in `SPEC_files/game_driver/` instead.
 
 ## Game Spec Index
 
@@ -41,11 +45,17 @@ Validation I expect:
 
 - A game owns story, characters, action grammar, content, saves, endings,
   game-specific skills, and local fixtures.
-- A game depends on a driver; it does not redefine reusable driver internals.
+- A game depends on a driver; it can constrain or override driver behavior only
+  for that cartridge and must not silently redefine reusable driver internals.
 - Fixed facts live in content files and authoritative saves, not only in prose.
 - Runtime truth lives in save files and committed turn logs.
 - New facts entering narration or state must follow the game's fact policy.
 - Every game spec should name the driver spec it depends on.
+- Reusable driver manifest fields, deterministic script functions, role
+  templates, and version compatibility belong in `SPEC_files/game_driver/`.
+- Pi package sessions, transcripts, and compaction summaries are derived
+  context only. Restart/resume must reconstruct play context from
+  `STATE.json`, `TURN_LOG.jsonl`, and runtime render/status snapshots.
 
 ## Completion Rules
 

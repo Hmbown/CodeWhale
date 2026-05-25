@@ -166,6 +166,14 @@ Game TUI should extend this idea for games:
 - auto-loaded game skills cannot expand the player tool profile, escape game or
   driver roots, override save authority, or change approval/sandbox policy
 
+Pi-native transition:
+
+- Treat `packages/genmicon-pi` as the active integration point for GENmicon
+  commands, tools, prompts, skills, renderers, and diagnostics.
+- Treat `crates/game` and `genmicon-game-runtime` as deterministic runtime
+  authority only.
+- Do not rebuild a separate GENmicon agent/session kernel beside Pi.
+
 ## Sub-Agent Runtime
 
 Use current TUI sub-agents as scoped game processors.

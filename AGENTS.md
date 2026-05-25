@@ -67,6 +67,32 @@ See README.md for project overview, docs/ARCHITECTURE.md for internals.
   config remains a reserved/planned surface until the config loader and
   `/config` UI use it.
 
+### GENmicon Pi-native rebuild
+
+- `.specify/memory/constitution.md`,
+  `SPEC_files/16_GENMICON_PROJECT_INTENTION_SPEC.md`, and
+  `SPEC_files/17_PI_BASED_REFACTOR_PLAN_SPEC.md` define the fresh GENmicon
+  direction. For refactor work under that direction, build on Pi's established
+  package, extension, session, compaction, provider, tool, command, renderer,
+  skill, prompt, theme, and TUI component features.
+- Do not create a parallel GENmicon agent/session/tool/package runtime beside
+  Pi unless the implementation plan records a constitution-compliant exception.
+- Treat Pi packages as the preferred distribution boundary for GENmicon
+  extensions, skills, prompts, themes, cartridge resources, and driver-facing
+  resources. Review or pin package sources and filter loaded resources before
+  enabling them in player mode.
+- Keep the deterministic game runtime boundary focused on manifest validation,
+  path canonicalization, save commits, lookup, render snapshots, and declared
+  driver functions. That runtime is called from Pi tools; it does not replace
+  Pi's agent harness.
+- Current Pi-native rebuild code lives in `packages/genmicon-pi/` and the
+  JSON helper `crates/game/src/bin/genmicon-game-runtime.rs`. The removed
+  `crates/kernel` scaffold was a duplicate Pi-like agent/session/tool loop and
+  must not be reintroduced as a parallel GENmicon runtime.
+- The project-local `.pi/settings.json` loads only the reviewed local
+  GENmicon package resources. Remote npm/git package sources remain out of
+  player mode until pinned, reviewed, filtered, and tested.
+
 ## Active Code Map
 
 This workspace is a multi-crate Rust project, but the live end-user runtime is
@@ -232,3 +258,7 @@ Long sessions in DeepSeek TUI WILL degrade and crash if you work sequentially. T
 6. **After every 3 turns, check:** context under 60%? Sub-agents still running? PRs ready to push? `cargo check` still passes?
 
 **The "mismanaged genius" problem:** The system prompt was written for a less capable model and treats sub-agents, RLM, and parallel execution as specialty escape hatches. The model *can* do all of this — the prompt just doesn't encourage it strongly enough. We fixed this in v0.8.6 (see `PROMPT_ANALYSIS.md`).
+
+<!-- SPECKIT START -->
+Current Spec Kit feature plan: `specs/001-pi-native-game-driver/plan.md`.
+<!-- SPECKIT END -->
