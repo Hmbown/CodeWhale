@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use reqwest::StatusCode;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -117,6 +118,71 @@ pub struct AvailableModel {
     pub id: String,
     pub owned_by: Option<String>,
     pub created: Option<u64>,
+}
+
+/// Human-readable account balance details for transcript display.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderBalanceReport {
+    pub provider: ApiProvider,
+    pub message: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeepSeekBalanceResponse {
+    is_available: bool,
+    #[serde(default)]
+    balance_infos: Vec<DeepSeekBalanceInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeepSeekBalanceInfo {
+    currency: String,
+    total_balance: String,
+    granted_balance: String,
+    topped_up_balance: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenRouterCreditsResponse {
+    data: OpenRouterCreditsData,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenRouterCreditsData {
+    total_credits: FlexibleAmount,
+    total_usage: FlexibleAmount,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenRouterKeyResponse {
+    data: OpenRouterKeyData,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenRouterKeyData {
+    #[serde(default)]
+    label: Option<String>,
+    #[serde(default)]
+    usage: Option<FlexibleAmount>,
+    #[serde(default)]
+    limit: Option<FlexibleAmount>,
+    #[serde(default)]
+    limit_remaining: Option<FlexibleAmount>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct FlexibleAmount(f64);
+
+impl<'de> Deserialize<'de> for FlexibleAmount {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        value_as_f64(&value)
+            .map(Self)
+            .ok_or_else(|| serde::de::Error::custom("expected numeric amount"))
+    }
 }
 
 /// Client for DeepSeek's OpenAI-compatible APIs.
@@ -407,6 +473,46 @@ pub(super) fn api_url(base_url: &str, path: &str) -> String {
     format!("{}/{}", versioned.trim_end_matches('/'), path)
 }
 
+pub(super) fn deepseek_balance_url(base_url: &str) -> String {
+    format!("{}/user/balance", deepseek_balance_root_url(base_url))
+}
+
+fn deepseek_balance_root_url(base_url: &str) -> String {
+    let trimmed = base_url.trim_end_matches('/');
+    trimmed
+        .rsplit_once('/')
+        .filter(|(_, segment)| {
+            segment.eq_ignore_ascii_case("v1") || segment.eq_ignore_ascii_case("beta")
+        })
+        .map(|(base, _)| base)
+        .unwrap_or(trimmed)
+        .to_string()
+}
+
+pub(super) fn openrouter_credits_url(base_url: &str) -> String {
+    api_url(base_url, "credits")
+}
+
+pub(super) fn openrouter_key_url(base_url: &str) -> String {
+    api_url(base_url, "key")
+}
+
+pub(super) fn novita_balance_url(base_url: &str) -> Result<String> {
+    Ok(format!(
+        "{}/openapi/v1/billing/balance/detail",
+        origin_url(base_url)?
+    ))
+}
+
+fn origin_url(base_url: &str) -> Result<String> {
+    let mut url = reqwest::Url::parse(base_url)
+        .with_context(|| format!("Invalid provider base URL '{base_url}'"))?;
+    url.set_path("");
+    url.set_query(None);
+    url.set_fragment(None);
+    Ok(url.as_str().trim_end_matches('/').to_string())
+}
+
 // === DeepSeekClient ===
 
 /// Returns true when DEEPSEEK_FORCE_HTTP1 is set to a truthy value
@@ -639,6 +745,65 @@ impl DeepSeekClient {
         parse_models_response(&response_text)
     }
 
+    /// Fetch and format the active provider's account balance for TUI display.
+    pub async fn balance_report(&self) -> Result<ProviderBalanceReport> {
+        match self.api_provider {
+            ApiProvider::Deepseek | ApiProvider::DeepseekCN => self.deepseek_balance_report().await,
+            ApiProvider::Openrouter => self.openrouter_balance_report().await,
+            ApiProvider::Novita => self.novita_balance_report().await,
+            provider => anyhow::bail!(
+                "Balance check is not supported for {} yet. Check the provider dashboard for account balance details.",
+                provider.display_name()
+            ),
+        }
+    }
+
+    async fn deepseek_balance_report(&self) -> Result<ProviderBalanceReport> {
+        let url = deepseek_balance_url(&self.base_url);
+        let payload = self.send_balance_request(&url).await?;
+        parse_deepseek_balance_report(self.api_provider, &payload)
+    }
+
+    async fn openrouter_balance_report(&self) -> Result<ProviderBalanceReport> {
+        let credits_url = openrouter_credits_url(&self.base_url);
+        let response = self
+            .send_with_retry_matching(
+                || self.http_client.get(&credits_url),
+                |status| {
+                    status.is_success()
+                        || matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
+                },
+            )
+            .await?;
+
+        if matches!(
+            response.status(),
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+        ) {
+            return self.openrouter_key_balance_report().await;
+        }
+
+        let payload = response.text().await.unwrap_or_default();
+        parse_openrouter_credits_report(&payload)
+    }
+
+    async fn openrouter_key_balance_report(&self) -> Result<ProviderBalanceReport> {
+        let url = openrouter_key_url(&self.base_url);
+        let payload = self.send_balance_request(&url).await?;
+        parse_openrouter_key_report(&payload)
+    }
+
+    async fn novita_balance_report(&self) -> Result<ProviderBalanceReport> {
+        let url = novita_balance_url(&self.base_url)?;
+        let payload = self.send_balance_request(&url).await?;
+        parse_novita_balance_report(&payload)
+    }
+
+    async fn send_balance_request(&self, url: &str) -> Result<String> {
+        let response = self.send_with_retry(|| self.http_client.get(url)).await?;
+        Ok(response.text().await.unwrap_or_default())
+    }
+
     async fn wait_for_rate_limit(&self) {
         let maybe_delay = {
             let mut limiter = self.rate_limiter.lock().await;
@@ -695,6 +860,19 @@ impl DeepSeekClient {
     where
         F: FnMut() -> reqwest::RequestBuilder,
     {
+        self.send_with_retry_matching(&mut build, |status| status.is_success())
+            .await
+    }
+
+    async fn send_with_retry_matching<F, A>(
+        &self,
+        mut build: F,
+        accept_status: A,
+    ) -> Result<reqwest::Response>
+    where
+        F: FnMut() -> reqwest::RequestBuilder,
+        A: Fn(StatusCode) -> bool + Copy,
+    {
         let retry_cfg: LlmRetryConfig = self.retry.clone().into();
         let request_result = with_retry(
             &retry_cfg,
@@ -707,7 +885,7 @@ impl DeepSeekClient {
                         .await
                         .map_err(|err| LlmError::from_reqwest(&err))?;
                     let status = response.status();
-                    if status.is_success() {
+                    if accept_status(status) {
                         return Ok(response);
                     }
                     let retry_after = extract_retry_after(response.headers());
@@ -847,6 +1025,200 @@ pub(super) fn parse_models_response(payload: &str) -> Result<Vec<AvailableModel>
     models.sort_by(|a, b| a.id.cmp(&b.id));
     models.dedup_by(|a, b| a.id == b.id);
     Ok(models)
+}
+
+pub(super) fn parse_deepseek_balance_report(
+    provider: ApiProvider,
+    payload: &str,
+) -> Result<ProviderBalanceReport> {
+    let parsed: DeepSeekBalanceResponse =
+        serde_json::from_str(payload).context("Failed to parse DeepSeek balance JSON")?;
+
+    let mut message = format!(
+        "{} balance\nStatus: {}",
+        provider.display_name(),
+        if parsed.is_available {
+            "available"
+        } else {
+            "unavailable"
+        }
+    );
+    if parsed.balance_infos.is_empty() {
+        message.push_str("\nNo currency balances returned.");
+    } else {
+        for info in parsed.balance_infos {
+            message.push_str(&format!(
+                "\n{}: total {}, granted {}, topped up {}",
+                info.currency,
+                format_provider_amount(&info.total_balance),
+                format_provider_amount(&info.granted_balance),
+                format_provider_amount(&info.topped_up_balance)
+            ));
+        }
+    }
+
+    Ok(ProviderBalanceReport { provider, message })
+}
+
+pub(super) fn parse_openrouter_credits_report(payload: &str) -> Result<ProviderBalanceReport> {
+    let parsed: OpenRouterCreditsResponse =
+        serde_json::from_str(payload).context("Failed to parse OpenRouter credits JSON")?;
+    let total = parsed.data.total_credits.0;
+    let usage = parsed.data.total_usage.0;
+    let remaining = total - usage;
+    let message = format!(
+        "OpenRouter balance\nCredits: total {}, used {}, remaining {}",
+        format_usd(total),
+        format_usd(usage),
+        format_usd(remaining)
+    );
+    Ok(ProviderBalanceReport {
+        provider: ApiProvider::Openrouter,
+        message,
+    })
+}
+
+pub(super) fn parse_openrouter_key_report(payload: &str) -> Result<ProviderBalanceReport> {
+    let parsed: OpenRouterKeyResponse =
+        serde_json::from_str(payload).context("Failed to parse OpenRouter key JSON")?;
+    let data = parsed.data;
+    let label = data
+        .label
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("unnamed key");
+    let usage = data.usage.map(|amount| amount.0);
+    let limit = data.limit.map(|amount| amount.0);
+    let remaining = data
+        .limit_remaining
+        .map(|amount| amount.0)
+        .or_else(|| limit.zip(usage).map(|(limit, usage)| limit - usage));
+
+    let mut message = format!("OpenRouter key balance\nKey: {label}");
+    match usage {
+        Some(value) => message.push_str(&format!("\nUsage: {}", format_usd(value))),
+        None => message.push_str("\nUsage: unavailable"),
+    }
+    if let Some(value) = limit {
+        message.push_str(&format!("\nLimit: {}", format_usd(value)));
+    }
+    if let Some(value) = remaining {
+        message.push_str(&format!("\nRemaining: {}", format_usd(value)));
+    }
+
+    Ok(ProviderBalanceReport {
+        provider: ApiProvider::Openrouter,
+        message,
+    })
+}
+
+pub(super) fn parse_novita_balance_report(payload: &str) -> Result<ProviderBalanceReport> {
+    let parsed: Value =
+        serde_json::from_str(payload).context("Failed to parse Novita balance JSON")?;
+    let data = parsed.get("data").unwrap_or(&parsed);
+    let available = novita_amount_from_keys(
+        data,
+        &[
+            "available_balance",
+            "availableBalance",
+            "available",
+            "balance",
+        ],
+    )?
+    .unwrap_or(0.0);
+    let cash =
+        novita_amount_from_keys(data, &["cash_balance", "cashBalance", "cash"])?.unwrap_or(0.0);
+    let credit_limit =
+        novita_amount_from_keys(data, &["credit_limit", "creditLimit"])?.unwrap_or(0.0);
+    let pending_charges = novita_amount_from_keys(
+        data,
+        &[
+            "pending_charge",
+            "pendingCharge",
+            "pending_charges",
+            "pendingCharges",
+        ],
+    )?
+    .unwrap_or(0.0);
+    let outstanding_invoices = novita_amount_from_keys(
+        data,
+        &[
+            "outstanding_invoice",
+            "outstandingInvoice",
+            "outstanding_invoices",
+            "outstandingInvoices",
+        ],
+    )?
+    .unwrap_or(0.0);
+
+    let message = format!(
+        "Novita AI balance\nAvailable: {}\nCash: {}\nCredit limit: {}\nPending charges: {}\nOutstanding invoices: {}",
+        format_usd(available),
+        format_usd(cash),
+        format_usd(credit_limit),
+        format_usd(pending_charges),
+        format_usd(outstanding_invoices)
+    );
+
+    Ok(ProviderBalanceReport {
+        provider: ApiProvider::Novita,
+        message,
+    })
+}
+
+fn novita_amount_from_keys(data: &Value, keys: &[&str]) -> Result<Option<f64>> {
+    for key in keys {
+        if let Some(value) = data.get(*key) {
+            if value.is_null() {
+                return Ok(None);
+            }
+            let raw = value_as_f64(value).ok_or_else(|| {
+                anyhow::anyhow!("Novita balance field '{key}' is not a numeric string")
+            })?;
+            return Ok(Some(raw / 10_000.0));
+        }
+    }
+    Ok(None)
+}
+
+fn value_as_f64(value: &Value) -> Option<f64> {
+    match value {
+        Value::Number(number) => number.as_f64(),
+        Value::String(text) => text.trim().parse::<f64>().ok(),
+        _ => None,
+    }
+}
+
+fn format_provider_amount(raw: &str) -> String {
+    raw.trim()
+        .parse::<f64>()
+        .map(|value| format_decimal(value, 6, 0))
+        .unwrap_or_else(|_| raw.trim().to_string())
+}
+
+fn format_usd(value: f64) -> String {
+    format!("${}", format_decimal(value, 4, 2))
+}
+
+fn format_decimal(value: f64, max_decimals: usize, min_decimals: usize) -> String {
+    if !value.is_finite() {
+        return value.to_string();
+    }
+    let mut text = format!("{value:.precision$}", precision = max_decimals);
+    if let Some(dot) = text.find('.') {
+        while text.len().saturating_sub(dot + 1) > min_decimals && text.ends_with('0') {
+            text.pop();
+        }
+        if min_decimals == 0 && text.ends_with('.') {
+            text.pop();
+        }
+    }
+    if text == "-0" || text == "-0.00" {
+        "0.00".to_string()
+    } else {
+        text
+    }
 }
 
 pub(super) fn system_to_instructions(system: Option<SystemPrompt>) -> Option<String> {
@@ -1108,10 +1480,37 @@ mod tests {
         parse_chat_message, parse_sse_chunk, sanitize_thinking_mode_messages, tool_to_chat,
         tool_to_chat_for_base_url,
     };
+    use crate::config::{ProviderConfig, ProvidersConfig};
     use crate::models::{
         ContentBlock, ContentBlockStart, Delta, Message, MessageRequest, StreamEvent, Tool,
     };
     use serde_json::json;
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn balance_test_config(provider: ApiProvider, base_url: &str) -> Config {
+        let mut config = Config {
+            provider: Some(provider.as_str().to_string()),
+            api_key: Some("sk-test".to_string()),
+            base_url: Some(base_url.to_string()),
+            ..Config::default()
+        };
+        let provider_config = ProviderConfig {
+            api_key: Some("sk-test".to_string()),
+            base_url: Some(base_url.to_string()),
+            ..ProviderConfig::default()
+        };
+        let mut providers = ProvidersConfig::default();
+        match provider {
+            ApiProvider::Deepseek => providers.deepseek = provider_config,
+            ApiProvider::DeepseekCN => providers.deepseek_cn = provider_config,
+            ApiProvider::Openrouter => providers.openrouter = provider_config,
+            ApiProvider::Novita => providers.novita = provider_config,
+            _ => {}
+        }
+        config.providers = Some(providers);
+        config
+    }
 
     #[test]
     fn tool_name_roundtrip_dot() {
@@ -1224,6 +1623,231 @@ mod tests {
             ),
             "https://openai-compatible.example/api/coding/paas/v4/models"
         );
+    }
+
+    #[test]
+    fn balance_urls_follow_provider_rules() {
+        assert_eq!(
+            deepseek_balance_url("https://api.deepseek.com/v1"),
+            "https://api.deepseek.com/user/balance"
+        );
+        assert_eq!(
+            deepseek_balance_url("https://api.deepseek.com/beta"),
+            "https://api.deepseek.com/user/balance"
+        );
+        assert_eq!(
+            deepseek_balance_url("https://deepseek-proxy.example/custom/v4"),
+            "https://deepseek-proxy.example/custom/v4/user/balance"
+        );
+        assert_eq!(
+            openrouter_credits_url("https://openrouter.ai/api/v1"),
+            "https://openrouter.ai/api/v1/credits"
+        );
+        assert_eq!(
+            openrouter_key_url("https://openrouter.ai/api/v1"),
+            "https://openrouter.ai/api/v1/key"
+        );
+        assert_eq!(
+            novita_balance_url("https://api.novita.ai/v3/openai").unwrap(),
+            "https://api.novita.ai/openapi/v1/billing/balance/detail"
+        );
+        assert_eq!(
+            novita_balance_url("https://novita-proxy.example/custom/v1").unwrap(),
+            "https://novita-proxy.example/openapi/v1/billing/balance/detail"
+        );
+    }
+
+    #[test]
+    fn parse_deepseek_balance_formats_currency_lines() {
+        let payload = json!({
+            "is_available": true,
+            "balance_infos": [{
+                "currency": "CNY",
+                "total_balance": "100.000000",
+                "granted_balance": "25.500000",
+                "topped_up_balance": "74.500000"
+            }]
+        })
+        .to_string();
+
+        let report =
+            parse_deepseek_balance_report(ApiProvider::Deepseek, &payload).expect("report");
+
+        assert_eq!(report.provider, ApiProvider::Deepseek);
+        assert!(report.message.contains("DeepSeek balance"));
+        assert!(report.message.contains("Status: available"));
+        assert!(report.message.contains("CNY: total 100"));
+        assert!(report.message.contains("granted 25.5"));
+        assert!(report.message.contains("topped up 74.5"));
+    }
+
+    #[test]
+    fn parse_openrouter_credits_formats_remaining_balance() {
+        let payload = json!({
+            "data": {
+                "total_credits": 10.0,
+                "total_usage": 3.25
+            }
+        })
+        .to_string();
+
+        let report = parse_openrouter_credits_report(&payload).expect("report");
+
+        assert_eq!(report.provider, ApiProvider::Openrouter);
+        assert!(report.message.contains("OpenRouter balance"));
+        assert!(report.message.contains("total $10.00"));
+        assert!(report.message.contains("used $3.25"));
+        assert!(report.message.contains("remaining $6.75"));
+    }
+
+    #[test]
+    fn parse_openrouter_key_formats_fallback_details() {
+        let payload = json!({
+            "data": {
+                "label": "dev-key",
+                "usage": 1.25,
+                "limit": 10,
+                "limit_remaining": 8.75
+            }
+        })
+        .to_string();
+
+        let report = parse_openrouter_key_report(&payload).expect("report");
+
+        assert_eq!(report.provider, ApiProvider::Openrouter);
+        assert!(report.message.contains("OpenRouter key balance"));
+        assert!(report.message.contains("Key: dev-key"));
+        assert!(report.message.contains("Usage: $1.25"));
+        assert!(report.message.contains("Limit: $10.00"));
+        assert!(report.message.contains("Remaining: $8.75"));
+    }
+
+    #[test]
+    fn parse_novita_balance_converts_ten_thousandth_usd_units() {
+        let payload = json!({
+            "availableBalance": "123456",
+            "cashBalance": "100000",
+            "creditLimit": "500000",
+            "outstandingInvoices": "0"
+        })
+        .to_string();
+
+        let report = parse_novita_balance_report(&payload).expect("report");
+
+        assert_eq!(report.provider, ApiProvider::Novita);
+        assert!(report.message.contains("Novita AI balance"));
+        assert!(report.message.contains("Available: $12.3456"));
+        assert!(report.message.contains("Cash: $10.00"));
+        assert!(report.message.contains("Credit limit: $50.00"));
+        assert!(report.message.contains("Pending charges: $0.00"));
+        assert!(report.message.contains("Outstanding invoices: $0.00"));
+    }
+
+    #[tokio::test]
+    async fn balance_report_fetches_deepseek_success() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/user/balance"))
+            .and(header("authorization", "Bearer sk-test"))
+            .and(header("x-balance-test", "yes"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "is_available": true,
+                "balance_infos": [{
+                    "currency": "USD",
+                    "total_balance": "12.50",
+                    "granted_balance": "2.50",
+                    "topped_up_balance": "10.00"
+                }]
+            })))
+            .mount(&server)
+            .await;
+
+        let mut config =
+            balance_test_config(ApiProvider::Deepseek, &format!("{}/v1", server.uri()));
+        config.http_headers = Some(HashMap::from([(
+            "X-Balance-Test".to_string(),
+            "yes".to_string(),
+        )]));
+        let client = DeepSeekClient::new(&config).expect("client");
+        let report = client.balance_report().await.expect("balance report");
+
+        assert_eq!(report.provider, ApiProvider::Deepseek);
+        assert!(report.message.contains("USD: total 12.5"));
+    }
+
+    #[tokio::test]
+    async fn balance_report_surfaces_http_error_body() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/credits"))
+            .respond_with(ResponseTemplate::new(402).set_body_string("payment required"))
+            .mount(&server)
+            .await;
+
+        let config =
+            balance_test_config(ApiProvider::Openrouter, &format!("{}/api/v1", server.uri()));
+        let client = DeepSeekClient::new(&config).expect("client");
+        let error = client
+            .balance_report()
+            .await
+            .expect_err("balance should fail");
+        let message = error.to_string();
+
+        assert!(message.contains("402"));
+        assert!(message.contains("payment required"));
+    }
+
+    #[tokio::test]
+    async fn balance_report_surfaces_invalid_api_key_body() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/user/balance"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("invalid api key"))
+            .mount(&server)
+            .await;
+
+        let config = balance_test_config(ApiProvider::Deepseek, &format!("{}/v1", server.uri()));
+        let client = DeepSeekClient::new(&config).expect("client");
+        let error = client
+            .balance_report()
+            .await
+            .expect_err("balance should fail");
+        let message = error.to_string();
+
+        assert!(message.contains("Authentication failed"));
+        assert!(message.contains("invalid api key"));
+    }
+
+    #[tokio::test]
+    async fn balance_report_falls_back_from_openrouter_credits_to_key() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/credits"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("credits denied"))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/key"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": {
+                    "label": "fallback-key",
+                    "usage": "2.50",
+                    "limit": "10.00",
+                    "limit_remaining": "7.50"
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let config =
+            balance_test_config(ApiProvider::Openrouter, &format!("{}/api/v1", server.uri()));
+        let client = DeepSeekClient::new(&config).expect("client");
+        let report = client.balance_report().await.expect("balance report");
+
+        assert_eq!(report.provider, ApiProvider::Openrouter);
+        assert!(report.message.contains("OpenRouter key balance"));
+        assert!(report.message.contains("Key: fallback-key"));
+        assert!(report.message.contains("Remaining: $7.50"));
     }
 
     #[test]

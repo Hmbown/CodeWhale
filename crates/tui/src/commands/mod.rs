@@ -1505,19 +1505,22 @@ mod tests {
     }
 
     #[test]
-    fn balance_command_reports_scaffold_without_claiming_dispatch() {
-        let mut app = create_test_app();
-        app.api_provider = ApiProvider::Deepseek;
+    fn balance_command_dispatches_for_supported_providers() {
+        for provider in [
+            ApiProvider::Deepseek,
+            ApiProvider::DeepseekCN,
+            ApiProvider::Openrouter,
+            ApiProvider::Novita,
+        ] {
+            let mut app = create_test_app();
+            app.api_provider = provider;
 
-        let result = execute("/balance", &mut app);
-        let msg = result
-            .message
-            .expect("balance scaffold should explain current state");
+            let result = execute("/balance", &mut app);
 
-        assert!(!result.is_error);
-        assert!(msg.contains("DeepSeek"));
-        assert!(msg.contains("not wired"));
-        assert!(!msg.contains("sent"));
+            assert!(!result.is_error);
+            assert!(result.message.is_none());
+            assert!(matches!(result.action, Some(AppAction::FetchBalance)));
+        }
     }
 
     #[test]

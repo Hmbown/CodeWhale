@@ -3685,6 +3685,14 @@ async fn fetch_available_models(config: &Config) -> Result<Vec<String>> {
     Ok(ids)
 }
 
+async fn fetch_provider_balance(config: &Config) -> Result<String> {
+    use crate::client::DeepSeekClient;
+
+    let client = DeepSeekClient::new(config)?;
+    let report = tokio::time::timeout(Duration::from_secs(20), client.balance_report()).await??;
+    Ok(report.message)
+}
+
 async fn run_cache_warmup(app: &App, config: &Config) -> Result<Usage> {
     let client = DeepSeekClient::new(config)?;
     let reasoning_effort = if app.reasoning_effort == ReasoningEffort::Auto {
@@ -4633,6 +4641,21 @@ async fn apply_command_result(
                                 content: format!("Failed to fetch models: {error}"),
                             });
                         }
+                    }
+                }
+            }
+            AppAction::FetchBalance => {
+                app.status_message = Some("Fetching provider balance...".to_string());
+                match fetch_provider_balance(config).await {
+                    Ok(message) => {
+                        app.add_message(HistoryCell::System { content: message });
+                        app.status_message = Some("Balance check complete".to_string());
+                    }
+                    Err(error) => {
+                        app.add_message(HistoryCell::System {
+                            content: format!("Failed to fetch balance: {error}"),
+                        });
+                        app.status_message = Some("Balance check failed".to_string());
                     }
                 }
             }
