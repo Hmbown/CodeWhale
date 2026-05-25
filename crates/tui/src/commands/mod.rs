@@ -5,6 +5,7 @@
 
 mod anchor;
 mod attachment;
+mod balance;
 mod change;
 mod config;
 mod core;
@@ -518,6 +519,13 @@ pub const COMMANDS: &[CommandInfo] = &[
         usage: "/cost",
         description_id: MessageId::CmdCostDescription,
     },
+    // Balance query (#2019)
+    CommandInfo {
+        name: "balance",
+        aliases: &[],
+        usage: "/balance",
+        description_id: MessageId::CmdCostDescription, // reuse cost description for now
+    },
     // Profile switching (#390)
     CommandInfo {
         name: "profile",
@@ -603,6 +611,7 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "translate" | "translation" | "transale" => core::translate(app),
         "tokens" => debug::tokens(app),
         "cost" => debug::cost(app),
+        "balance" => balance::balance(app),
         "cache" => debug::cache(app, arg),
 
         // ChangeLog command
