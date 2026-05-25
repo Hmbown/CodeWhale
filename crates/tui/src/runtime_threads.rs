@@ -1723,27 +1723,6 @@ impl RuntimeThreadManager {
         )
         .await?;
 
-        let ended_at = Utc::now();
-        let mut turn = self.store.load_turn(turn_id)?;
-        turn.status = RuntimeTurnStatus::Interrupted;
-        turn.ended_at = Some(ended_at);
-        turn.duration_ms = turn.started_at.map(|start| duration_ms(start, ended_at));
-        self.store.save_turn(&turn)?;
-
-        let mut thread = self.get_thread(thread_id).await?;
-        thread.latest_turn_id = Some(turn_id.to_string());
-        thread.updated_at = Utc::now();
-        self.store.save_thread(&thread)?;
-
-        self.emit_event(
-            thread_id,
-            Some(turn_id),
-            None,
-            "turn.completed",
-            json!({ "turn": turn.clone() }),
-        )
-        .await?;
-
         {
             let mut active = self.active.lock().await;
             if let Some(state) = active.engines.get_mut(thread_id)
@@ -1757,7 +1736,7 @@ impl RuntimeThreadManager {
             touch_lru(&mut active.lru, thread_id);
         }
 
-        Ok(turn)
+        self.store.load_turn(turn_id)
     }
 
     pub async fn steer_turn(
