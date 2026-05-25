@@ -1398,6 +1398,7 @@ dependencies = [
  "serde_json",
 ]
 
+[[package]]
 name = "deltae"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
