@@ -33,6 +33,9 @@ use std::time::Duration;
 pub const MAX_HISTORY_ENTRIES: usize = 1000;
 
 const HISTORY_FILE_NAME: &str = "composer_history.txt";
+// Prevent a steady stream of test/UI writes from delaying persistence
+// indefinitely while waiting for a 2ms idle window.
+const WRITER_BATCH_LIMIT: usize = 128;
 
 fn default_history_path() -> Option<PathBuf> {
     dirs::home_dir().map(|home| home.join(".deepseek").join(HISTORY_FILE_NAME))
@@ -114,7 +117,7 @@ fn writer_sender() -> &'static Sender<(PathBuf, String)> {
 fn append_history_batch(rx: &Receiver<(PathBuf, String)>, first: (PathBuf, String)) {
     let mut pending = vec![first];
 
-    loop {
+    while pending.len() < WRITER_BATCH_LIMIT {
         match rx.recv_timeout(Duration::from_millis(2)) {
             Ok(next) => pending.push(next),
             Err(RecvTimeoutError::Timeout) => break,
