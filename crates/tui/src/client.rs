@@ -783,7 +783,7 @@ impl DeepSeekClient {
             return self.openrouter_key_balance_report().await;
         }
 
-        let payload = response.text().await.unwrap_or_default();
+        let payload = response.text().await.context("Failed to read OpenRouter credits response body")?;
         parse_openrouter_credits_report(&payload)
     }
 
