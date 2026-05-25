@@ -5938,31 +5938,19 @@ async fn handle_view_events(
                 approval_key,
                 approval_grouping_key,
             } => {
-                if decision == ReviewDecision::ApprovedForSession {
-                    // Store the tool name (backward compat) and the lossy
-                    // grouping key so later flag variants of the same
-                    // command family are also auto-approved (v0.8.37).
-                    app.approval_session_approved.insert(tool_name.clone());
-                    app.approval_session_approved
-                        .insert(approval_grouping_key.clone());
-                }
-
-                match decision {
-                    ReviewDecision::Approved | ReviewDecision::ApprovedForSession => {
-                        let _ = engine_handle.approve_tool_call(tool_id).await;
-                    }
-                    ReviewDecision::Denied | ReviewDecision::Abort => {
-                        // Cache the denial so the model retry-loop doesn't
-                        // re-prompt for the exact same approval_key (#360).
-                        // Only the key (per-call unique) is stored — NOT
-                        // the tool_name, which would block all future
-                        // invocations of the same tool type (#1377).
-                        if !timed_out {
-                            app.approval_session_denied.insert(approval_key);
-                        }
-                        let _ = engine_handle.deny_tool_call(tool_id).await;
-                    }
-                }
+                apply_approval_decision(
+                    app,
+                    engine_handle,
+                    ApprovalDecisionEvent {
+                        tool_id,
+                        tool_name,
+                        decision,
+                        timed_out,
+                        approval_key,
+                        approval_grouping_key,
+                    },
+                )
+                .await;
 
                 if timed_out {
                     app.add_message(HistoryCell::System {
@@ -6233,6 +6221,52 @@ async fn handle_view_events(
     }
 
     Ok(false)
+}
+
+struct ApprovalDecisionEvent {
+    tool_id: String,
+    tool_name: String,
+    decision: ReviewDecision,
+    timed_out: bool,
+    approval_key: String,
+    approval_grouping_key: String,
+}
+
+async fn apply_approval_decision(
+    app: &mut App,
+    engine_handle: &mut EngineHandle,
+    event: ApprovalDecisionEvent,
+) {
+    if event.decision == ReviewDecision::ApprovedForSession {
+        // Store the tool name (backward compat) and the lossy grouping key so
+        // later flag variants of the same command family are also auto-approved
+        // (v0.8.37).
+        app.approval_session_approved
+            .insert(event.tool_name.clone());
+        app.approval_session_approved
+            .insert(event.approval_grouping_key.clone());
+    }
+
+    match event.decision {
+        ReviewDecision::Approved | ReviewDecision::ApprovedForSession => {
+            let _ = engine_handle.approve_tool_call(event.tool_id).await;
+        }
+        ReviewDecision::Denied => {
+            // Cache the denial so the model retry-loop doesn't re-prompt for
+            // the exact same approval_key (#360). Only the key (per-call
+            // unique) is stored — NOT the tool_name, which would block all
+            // future invocations of the same tool type (#1377).
+            if !event.timed_out {
+                app.approval_session_denied.insert(event.approval_key);
+            }
+            let _ = engine_handle.deny_tool_call(event.tool_id).await;
+        }
+        ReviewDecision::Abort => {
+            engine_handle.cancel();
+            mark_active_turn_cancelled_locally(app);
+            app.status_message = Some("Request cancelled".to_string());
+        }
+    }
 }
 
 fn mark_active_turn_cancelled_locally(app: &mut App) {

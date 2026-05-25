@@ -28,6 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Approval prompts use a one-step confirmation flow.** Enter now commits the
+  selected approval option directly, destructive warnings remain visible, and
+  abort cancels the active turn instead of only denying the current tool call.
+  Thanks @reidliu41 (#2143).
+- **Model picker selection survives Esc.** Dismissing the model picker with Esc
+  no longer loses the highlighted selection. Thanks @reidliu41 (#2056).
 - **Slash recovery no longer restores command tails in the composer.**
   Resuming a session or recovering from a crash no longer leaves stale
   slash-command text (e.g. `/sessions`) in the composer input (#2047, #2032).

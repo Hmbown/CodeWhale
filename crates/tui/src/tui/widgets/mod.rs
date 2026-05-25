@@ -1015,13 +1015,10 @@ impl Renderable for ComposerWidget<'_> {
 
 /// Codex-style full-screen approval takeover (#129).
 ///
-/// The widget reads its mutable state (selected option, staged
-/// confirmation) directly from the [`ApprovalView`] so the destructive
-/// variant can render its "Press Y again to confirm" banner without
-/// touching internal fields. Rendering reflows to fill most of the
-/// transcript area instead of a centered popup; on small terminals it
-/// falls back to a 65×22 card so existing snapshot tests still see a
-/// coherent layout.
+/// The widget reads its selected option and locale directly from the
+/// [`ApprovalView`]. Rendering reflows to fill most of the transcript
+/// area instead of a centered popup; on small terminals it falls back to
+/// a 65×22 card so existing snapshot tests still see a coherent layout.
 pub struct ApprovalWidget<'a> {
     request: &'a ApprovalRequest,
     view: &'a ApprovalView,
@@ -1038,8 +1035,8 @@ impl<'a> ApprovalWidget<'a> {
 /// terminal can hold.
 const APPROVAL_CARD_HORIZONTAL_PAD: u16 = 6;
 const APPROVAL_CARD_VERTICAL_PAD: u16 = 2;
-/// Minimum card height — anything tighter and the destructive variant's
-/// confirmation banner overlaps the option list.
+/// Minimum card height — anything tighter and the approval controls
+/// overlap the option list.
 const APPROVAL_CARD_MIN_HEIGHT: u16 = 18;
 /// Minimum card width — anything tighter makes approval copy wrap too
 /// aggressively on small terminals.
@@ -1164,120 +1161,49 @@ impl Renderable for ApprovalWidget<'_> {
         lines.push(Line::from(""));
 
         let options = approval_options_for(risk, locale);
-        let pending = self.view.pending_confirm();
 
         for (i, opt) in options.iter().enumerate() {
             let is_selected = i == self.view.selected();
-            let staged = pending.is_some_and(|p| p == opt.option);
             let label_color = if opt.dangerous {
                 palette_colors.accent
             } else {
                 palette::TEXT_BODY
             };
 
-            let row_style = if is_selected {
-                Style::default()
-                    .fg(palette::SELECTION_TEXT)
-                    .bg(palette::SELECTION_BG)
-            } else {
-                Style::default()
-            };
+            let option_style = approval_option_style(is_selected, label_color);
+            let shortcut_style = approval_option_style(is_selected, palette_colors.shortcut);
 
-            let mut spans = vec![
+            let spans = vec![
                 Span::raw("  "),
                 Span::styled(
                     format!("[{}] ", opt.key_hint),
-                    Style::default()
-                        .fg(palette_colors.shortcut)
-                        .add_modifier(Modifier::BOLD),
+                    shortcut_style.add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(opt.label.to_string(), row_style.fg(label_color)),
+                Span::styled(opt.label.to_string(), option_style),
             ];
-            if staged {
-                spans.push(Span::raw("  "));
-                spans.push(Span::styled(
-                    staged_marker(locale),
-                    Style::default()
-                        .fg(palette_colors.accent)
-                        .add_modifier(Modifier::BOLD),
-                ));
-            }
             lines.push(Line::from(spans));
         }
 
-        // Variant-specific footer: benign nudges single-key approve;
-        // destructive shows either the standing prompt or the
-        // confirmation banner when an approve key has been staged.
+        // Footer: Enter commits the highlighted row; y/a/d remain direct
+        // shortcuts for users who do not want to move the selection.
         lines.push(Line::from(""));
-        match (risk, pending) {
-            (RiskLevel::Benign, _) => {
-                lines.push(Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled(
-                        single_key_prefix(locale),
-                        Style::default().fg(palette::TEXT_HINT),
-                    ),
-                    Span::styled(
-                        single_key_value(locale),
-                        Style::default()
-                            .fg(palette_colors.accent)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        footer_controls(locale),
-                        Style::default().fg(palette::TEXT_HINT),
-                    ),
-                ]));
-            }
-            (RiskLevel::Destructive, Some(opt)) => {
-                let again_key = match opt {
-                    crate::tui::approval::ApprovalOption::ApproveOnce => confirm_key_once(locale),
-                    crate::tui::approval::ApprovalOption::ApproveAlways => {
-                        confirm_key_always(locale)
-                    }
-                    _ => "Enter",
-                };
-                lines.push(Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled(
-                        destructive_confirm_prefix(locale),
-                        Style::default()
-                            .fg(palette_colors.accent)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        again_key.to_string(),
-                        Style::default()
-                            .fg(palette::DEEPSEEK_INK)
-                            .bg(palette_colors.accent)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        destructive_confirm_suffix(locale),
-                        Style::default().fg(palette::TEXT_HINT),
-                    ),
-                ]));
-            }
-            (RiskLevel::Destructive, None) => {
-                lines.push(Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled(
-                        two_key_prefix(locale),
-                        Style::default().fg(palette::TEXT_HINT),
-                    ),
-                    Span::styled(
-                        two_key_value(locale),
-                        Style::default()
-                            .fg(palette_colors.accent)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        footer_controls(locale),
-                        Style::default().fg(palette::TEXT_HINT),
-                    ),
-                ]));
-            }
-        }
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(
+                selection_hint_prefix(locale),
+                Style::default().fg(palette::TEXT_HINT),
+            ),
+            Span::styled(
+                selection_hint_value(locale),
+                Style::default()
+                    .fg(palette_colors.accent)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                footer_controls(locale),
+                Style::default().fg(palette::TEXT_HINT),
+            ),
+        ]));
 
         let title = format!(
             " {} {} — {} ",
@@ -1375,6 +1301,21 @@ fn approval_palette(risk: RiskLevel) -> ApprovalColors {
     }
 }
 
+fn approval_selected_style() -> Style {
+    Style::default()
+        .fg(palette::SELECTION_TEXT)
+        .bg(palette::DEEPSEEK_BLUE)
+        .add_modifier(Modifier::BOLD)
+}
+
+fn approval_option_style(is_selected: bool, color: Color) -> Style {
+    if is_selected {
+        approval_selected_style()
+    } else {
+        Style::default().fg(color)
+    }
+}
+
 fn risk_badge_text(risk: RiskLevel, locale: Locale) -> &'static str {
     match (locale, risk) {
         (Locale::ZhHans, RiskLevel::Benign) => "审查",
@@ -1438,24 +1379,6 @@ fn label_params(locale: Locale) -> &'static str {
     }
 }
 
-fn staged_marker(locale: Locale) -> &'static str {
-    match locale {
-        Locale::ZhHans => "(待确认)",
-        _ => "(staged)",
-    }
-}
-
-fn single_key_prefix(locale: Locale) -> &'static str {
-    match locale {
-        Locale::ZhHans => "单键批准：",
-        _ => "Single key approves: ",
-    }
-}
-
-fn single_key_value(_locale: Locale) -> &'static str {
-    "Enter / 1 / y"
-}
-
 fn footer_controls(locale: Locale) -> &'static str {
     match locale {
         Locale::ZhHans => "  ·  v：完整参数  ·  Esc：终止",
@@ -1463,79 +1386,45 @@ fn footer_controls(locale: Locale) -> &'static str {
     }
 }
 
-fn destructive_confirm_prefix(locale: Locale) -> &'static str {
+fn selection_hint_prefix(locale: Locale) -> &'static str {
     match locale {
-        Locale::ZhHans => "确认破坏性操作：再次按 ",
-        _ => "Confirm destructive action — press ",
+        Locale::ZhHans => "选择：",
+        _ => "Choose: ",
     }
 }
 
-fn destructive_confirm_suffix(locale: Locale) -> &'static str {
+fn selection_hint_value(locale: Locale) -> &'static str {
     match locale {
-        Locale::ZhHans => " 执行；按其他键取消。",
-        _ => " again to commit, anything else cancels.",
-    }
-}
-
-fn confirm_key_once(locale: Locale) -> &'static str {
-    match locale {
-        Locale::ZhHans => "Enter 或 y",
-        _ => "Enter or y",
-    }
-}
-
-fn confirm_key_always(locale: Locale) -> &'static str {
-    match locale {
-        Locale::ZhHans => "Enter 或 a",
-        _ => "Enter or a",
-    }
-}
-
-fn two_key_prefix(locale: Locale) -> &'static str {
-    match locale {
-        Locale::ZhHans => "两次按键确认：",
-        _ => "Two keys to approve: ",
-    }
-}
-
-fn two_key_value(locale: Locale) -> &'static str {
-    match locale {
-        Locale::ZhHans => "先按 y/a，再按一次 y/a",
-        _ => "y/a then y/a again",
+        Locale::ZhHans => "Enter 执行选中项，或直接按 y/a/d",
+        _ => "Enter selected option, or press y/a/d directly",
     }
 }
 
 struct ApprovalOptionRow {
-    option: crate::tui::approval::ApprovalOption,
     label: &'static str,
     key_hint: &'static str,
     dangerous: bool,
 }
 
 fn approval_options_for(risk: RiskLevel, locale: Locale) -> [ApprovalOptionRow; 4] {
-    use crate::tui::approval::ApprovalOption as O;
     let dangerous = matches!(risk, RiskLevel::Destructive);
     [
         ApprovalOptionRow {
-            option: O::ApproveOnce,
             label: option_approve_once(locale),
             key_hint: "1 / y",
             dangerous,
         },
         ApprovalOptionRow {
-            option: O::ApproveAlways,
             label: option_approve_always(locale),
             key_hint: "2 / a",
             dangerous,
         },
         ApprovalOptionRow {
-            option: O::Deny,
             label: option_deny(locale),
             key_hint: "3 / d / n",
             dangerous: false,
         },
         ApprovalOptionRow {
-            option: O::Abort,
             label: option_abort(locale),
             key_hint: "Esc",
             dangerous: false,
@@ -3477,6 +3366,43 @@ mod tests {
             let mut buf = Buffer::empty(area);
             widget.render(area, &mut buf);
         }
+    }
+
+    #[test]
+    fn approval_selected_destructive_option_uses_contrasting_highlight() {
+        let request = crate::tui::approval::ApprovalRequest::new(
+            "approval-1",
+            "exec_shell",
+            "Run git commit",
+            &serde_json::json!({ "command": "git commit -m fix" }),
+            "exec_shell:git commit",
+        );
+        let view = crate::tui::approval::ApprovalView::new(request.clone());
+        let widget = ApprovalWidget::new(&request, &view);
+        let area = Rect::new(0, 0, 100, 30);
+        let mut buf = Buffer::empty(area);
+
+        widget.render(area, &mut buf);
+
+        let selected_row = (area.y..area.y.saturating_add(area.height))
+            .find(|&y| {
+                (area.x..area.x.saturating_add(area.width))
+                    .any(|x| buf[(x, y)].bg == palette::DEEPSEEK_BLUE)
+            })
+            .expect("selected approval row should use blue background");
+        let highlighted_cells = (area.x..area.x.saturating_add(area.width))
+            .filter(|&x| {
+                let cell = &buf[(x, selected_row)];
+                !cell.symbol().trim().is_empty()
+                    && cell.bg == palette::DEEPSEEK_BLUE
+                    && cell.fg == palette::SELECTION_TEXT
+            })
+            .count();
+
+        assert!(
+            highlighted_cells >= 4,
+            "selected destructive option should render visible blue/white text"
+        );
     }
 
     /// Regression for issue #65: after `App::handle_resize`, the chat widget
