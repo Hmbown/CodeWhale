@@ -31,6 +31,7 @@ enum ProviderArg {
     Openrouter,
     Novita,
     Fireworks,
+    Moonshot,
     Sglang,
     Vllm,
     Ollama,
@@ -47,6 +48,7 @@ impl From<ProviderArg> for ProviderKind {
             ProviderArg::Openrouter => ProviderKind::Openrouter,
             ProviderArg::Novita => ProviderKind::Novita,
             ProviderArg::Fireworks => ProviderKind::Fireworks,
+            ProviderArg::Moonshot => ProviderKind::Moonshot,
             ProviderArg::Sglang => ProviderKind::Sglang,
             ProviderArg::Vllm => ProviderKind::Vllm,
             ProviderArg::Ollama => ProviderKind::Ollama,
@@ -737,6 +739,7 @@ fn provider_slot(provider: ProviderKind) -> &'static str {
         ProviderKind::Openrouter => "openrouter",
         ProviderKind::Novita => "novita",
         ProviderKind::Fireworks => "fireworks",
+        ProviderKind::Moonshot => "moonshot",
         ProviderKind::Sglang => "sglang",
         ProviderKind::Vllm => "vllm",
         ProviderKind::Ollama => "ollama",
@@ -744,7 +747,7 @@ fn provider_slot(provider: ProviderKind) -> &'static str {
 }
 
 /// Provider order used by the `auth list` and `auth status` outputs.
-const PROVIDER_LIST: [ProviderKind; 11] = [
+const PROVIDER_LIST: [ProviderKind; 12] = [
     ProviderKind::Deepseek,
     ProviderKind::NvidiaNim,
     ProviderKind::Openai,
@@ -753,6 +756,7 @@ const PROVIDER_LIST: [ProviderKind; 11] = [
     ProviderKind::Openrouter,
     ProviderKind::Novita,
     ProviderKind::Fireworks,
+    ProviderKind::Moonshot,
     ProviderKind::Sglang,
     ProviderKind::Vllm,
     ProviderKind::Ollama,
@@ -807,6 +811,7 @@ fn provider_env_vars(provider: ProviderKind) -> &'static [&'static str] {
         ProviderKind::Novita => &["NOVITA_API_KEY"],
         ProviderKind::NvidiaNim => &["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY", "DEEPSEEK_API_KEY"],
         ProviderKind::Fireworks => &["FIREWORKS_API_KEY"],
+        ProviderKind::Moonshot => &["MOONSHOT_API_KEY", "KIMI_API_KEY"],
         ProviderKind::Sglang => &["SGLANG_API_KEY"],
         ProviderKind::Vllm => &["VLLM_API_KEY"],
         ProviderKind::Ollama => &["OLLAMA_API_KEY"],
@@ -2120,6 +2125,18 @@ mod tests {
             Some(Commands::Auth(AuthArgs {
                 command: AuthCommand::Set {
                     provider: ProviderArg::Fireworks,
+                    api_key: None,
+                    api_key_stdin: false,
+                }
+            }))
+        ));
+
+        let cli = parse_ok(&["deepseek", "auth", "set", "--provider", "moonshot"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Auth(AuthArgs {
+                command: AuthCommand::Set {
+                    provider: ProviderArg::Moonshot,
                     api_key: None,
                     api_key_stdin: false,
                 }

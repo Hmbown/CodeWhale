@@ -289,12 +289,12 @@ impl ModalView for ProviderPickerView {
                 }
                 KeyCode::Enter => {
                     let provider = self.selected_provider();
-                    if provider == ApiProvider::Moonshot && kimi_cli_credentials_present() {
+                    if self.selected_has_key() {
+                        ViewAction::EmitAndClose(ViewEvent::ProviderPickerApplied { provider })
+                    } else if provider == ApiProvider::Moonshot && kimi_cli_credentials_present() {
                         ViewAction::EmitAndClose(ViewEvent::ProviderPickerKimiOAuthEnabled {
                             provider,
                         })
-                    } else if self.selected_has_key() {
-                        ViewAction::EmitAndClose(ViewEvent::ProviderPickerApplied { provider })
                     } else {
                         self.stage = Stage::KeyEntry;
                         self.api_key_input.clear();

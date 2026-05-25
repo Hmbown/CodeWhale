@@ -432,7 +432,7 @@ pub fn model_completion_names_for_provider(provider: ApiProvider) -> Vec<&'stati
         ApiProvider::Openrouter => vec![DEFAULT_OPENROUTER_MODEL, DEFAULT_OPENROUTER_FLASH_MODEL],
         ApiProvider::Novita => vec![DEFAULT_NOVITA_MODEL, DEFAULT_NOVITA_FLASH_MODEL],
         ApiProvider::Fireworks => vec![DEFAULT_FIREWORKS_MODEL],
-        ApiProvider::Moonshot => vec![DEFAULT_MOONSHOT_MODEL, DEFAULT_KIMI_CODE_MODEL],
+        ApiProvider::Moonshot => vec![DEFAULT_MOONSHOT_MODEL],
         ApiProvider::WanjieArk => vec![DEFAULT_WANJIE_ARK_MODEL],
         ApiProvider::Sglang => vec![DEFAULT_SGLANG_MODEL, DEFAULT_SGLANG_FLASH_MODEL],
         ApiProvider::Vllm => vec![DEFAULT_VLLM_MODEL, DEFAULT_VLLM_FLASH_MODEL],
@@ -1694,6 +1694,14 @@ impl Config {
             return Ok(configured.clone());
         }
 
+        if provider == ApiProvider::Moonshot
+            && self
+                .provider_config_for(provider)
+                .is_some_and(provider_config_uses_kimi_oauth)
+        {
+            return kimi_cli_oauth_access_token();
+        }
+
         // 1. Config file (provider-scoped slot). This intentionally wins
         // over ambient env so `codewhale auth set` fixes stale shell exports.
         if let Some(configured) = self
@@ -1702,14 +1710,6 @@ impl Config {
             && !configured.trim().is_empty()
         {
             return Ok(configured);
-        }
-
-        if provider == ApiProvider::Moonshot
-            && self
-                .provider_config_for(provider)
-                .is_some_and(provider_config_uses_kimi_oauth)
-        {
-            return kimi_cli_oauth_access_token();
         }
 
         // 2. Environment variables. Do not query platform credential stores
@@ -3839,13 +3839,17 @@ fn kimi_cli_oauth_access_token() -> Result<String> {
 }
 
 fn kimi_oauth_access_token_is_fresh(credential: &KimiOAuthCredential) -> bool {
+    let Some(now) = now_unix_secs() else {
+        return false;
+    };
+
     credential
         .access_token
         .as_deref()
         .is_some_and(|token| !token.trim().is_empty())
         && credential
             .expires_at
-            .is_some_and(|expires_at| expires_at - now_unix_secs() > 60.0)
+            .is_some_and(|expires_at| expires_at - now > 60.0)
 }
 
 fn refresh_kimi_oauth_token(refresh_token: &str) -> Result<KimiOAuthCredential> {
@@ -3857,16 +3861,16 @@ fn refresh_kimi_oauth_token(refresh_token: &str) -> Result<KimiOAuthCredential> 
         .timeout(Duration::from_secs(15))
         .build()
         .context("Failed to build Kimi OAuth refresh client")?;
+    let params = [
+        ("client_id", KIMI_CODE_CLIENT_ID),
+        ("grant_type", "refresh_token"),
+        ("refresh_token", refresh_token),
+    ];
     let response = client
         .post(url)
         .header("X-Msh-Platform", "kimi_cli")
         .header("X-Msh-Version", env!("CARGO_PKG_VERSION"))
-        .header("Content-Type", "application/x-www-form-urlencoded")
-        .body(format!(
-            "client_id={}&grant_type=refresh_token&refresh_token={}",
-            percent_encode_form(KIMI_CODE_CLIENT_ID),
-            percent_encode_form(refresh_token)
-        ))
+        .form(&params)
         .send()
         .context("Kimi OAuth refresh request failed")?;
     let status = response.status();
@@ -3877,8 +3881,10 @@ fn refresh_kimi_oauth_token(refresh_token: &str) -> Result<KimiOAuthCredential> 
     let mut refreshed: KimiOAuthCredential = response
         .json()
         .context("Failed to parse Kimi OAuth refresh response")?;
-    if let Some(expires_in) = refreshed.expires_in {
-        refreshed.expires_at = Some(now_unix_secs() + expires_in);
+    if let Some(expires_in) = refreshed.expires_in
+        && let Some(now) = now_unix_secs()
+    {
+        refreshed.expires_at = Some(now + expires_in);
     }
     Ok(refreshed)
 }
@@ -3898,43 +3904,31 @@ fn kimi_cli_oauth_credentials_path() -> Result<PathBuf> {
 }
 
 fn write_kimi_oauth_credential(path: &Path, credential: &KimiOAuthCredential) -> Result<()> {
-    let serialized =
-        serde_json::to_vec(credential).context("Failed to serialize Kimi OAuth credentials")?;
-    let mut options = fs::OpenOptions::new();
-    options.create(true).truncate(true).write(true);
+    let serialized = serde_json::to_vec_pretty(credential)
+        .context("Failed to serialize Kimi OAuth credentials")?;
+    crate::utils::write_atomic(path, &serialized).with_context(|| {
+        format!(
+            "Failed to write Kimi OAuth credentials to {}",
+            path.display()
+        )
+    })?;
     #[cfg(unix)]
-    {
-        options.mode(0o600);
+    if let Err(err) = fs::set_permissions(path, fs::Permissions::from_mode(0o600)) {
+        tracing::warn!(
+            target: "codewhale::config",
+            path = %path.display(),
+            error = %err,
+            "could not enforce 0o600 on Kimi OAuth credentials; relying on host ACLs"
+        );
     }
-    let mut file = options
-        .open(path)
-        .with_context(|| format!("Failed to update {}", path.display()))?;
-    file.write_all(&serialized)
-        .with_context(|| format!("Failed to write {}", path.display()))?;
     Ok(())
 }
 
-fn now_unix_secs() -> f64 {
+fn now_unix_secs() -> Option<f64> {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_secs_f64())
-        .unwrap_or(0.0)
-}
-
-fn percent_encode_form(input: &str) -> String {
-    let mut out = String::new();
-    for byte in input.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(byte as char)
-            }
-            b' ' => out.push('+'),
-            _ => {
-                let _ = write!(&mut out, "%{byte:02X}");
-            }
-        }
-    }
-    out
+        .ok()
 }
 
 #[must_use]
@@ -4093,6 +4087,16 @@ mod tests {
         novita_base_url: Option<OsString>,
         fireworks_api_key: Option<OsString>,
         fireworks_base_url: Option<OsString>,
+        moonshot_api_key: Option<OsString>,
+        moonshot_base_url: Option<OsString>,
+        moonshot_model: Option<OsString>,
+        kimi_api_key: Option<OsString>,
+        kimi_base_url: Option<OsString>,
+        kimi_model: Option<OsString>,
+        kimi_model_name: Option<OsString>,
+        kimi_share_dir: Option<OsString>,
+        kimi_code_oauth_host: Option<OsString>,
+        kimi_oauth_host: Option<OsString>,
         sglang_api_key: Option<OsString>,
         sglang_base_url: Option<OsString>,
         sglang_model: Option<OsString>,
@@ -4145,6 +4149,16 @@ mod tests {
             let novita_base_url_prev = env::var_os("NOVITA_BASE_URL");
             let fireworks_api_key_prev = env::var_os("FIREWORKS_API_KEY");
             let fireworks_base_url_prev = env::var_os("FIREWORKS_BASE_URL");
+            let moonshot_api_key_prev = env::var_os("MOONSHOT_API_KEY");
+            let moonshot_base_url_prev = env::var_os("MOONSHOT_BASE_URL");
+            let moonshot_model_prev = env::var_os("MOONSHOT_MODEL");
+            let kimi_api_key_prev = env::var_os("KIMI_API_KEY");
+            let kimi_base_url_prev = env::var_os("KIMI_BASE_URL");
+            let kimi_model_prev = env::var_os("KIMI_MODEL");
+            let kimi_model_name_prev = env::var_os("KIMI_MODEL_NAME");
+            let kimi_share_dir_prev = env::var_os("KIMI_SHARE_DIR");
+            let kimi_code_oauth_host_prev = env::var_os("KIMI_CODE_OAUTH_HOST");
+            let kimi_oauth_host_prev = env::var_os("KIMI_OAUTH_HOST");
             let sglang_api_key_prev = env::var_os("SGLANG_API_KEY");
             let sglang_base_url_prev = env::var_os("SGLANG_BASE_URL");
             let sglang_model_prev = env::var_os("SGLANG_MODEL");
@@ -4192,6 +4206,16 @@ mod tests {
                 env::remove_var("NOVITA_BASE_URL");
                 env::remove_var("FIREWORKS_API_KEY");
                 env::remove_var("FIREWORKS_BASE_URL");
+                env::remove_var("MOONSHOT_API_KEY");
+                env::remove_var("MOONSHOT_BASE_URL");
+                env::remove_var("MOONSHOT_MODEL");
+                env::remove_var("KIMI_API_KEY");
+                env::remove_var("KIMI_BASE_URL");
+                env::remove_var("KIMI_MODEL");
+                env::remove_var("KIMI_MODEL_NAME");
+                env::remove_var("KIMI_SHARE_DIR");
+                env::remove_var("KIMI_CODE_OAUTH_HOST");
+                env::remove_var("KIMI_OAUTH_HOST");
                 env::remove_var("SGLANG_API_KEY");
                 env::remove_var("SGLANG_BASE_URL");
                 env::remove_var("SGLANG_MODEL");
@@ -4239,6 +4263,16 @@ mod tests {
                 novita_base_url: novita_base_url_prev,
                 fireworks_api_key: fireworks_api_key_prev,
                 fireworks_base_url: fireworks_base_url_prev,
+                moonshot_api_key: moonshot_api_key_prev,
+                moonshot_base_url: moonshot_base_url_prev,
+                moonshot_model: moonshot_model_prev,
+                kimi_api_key: kimi_api_key_prev,
+                kimi_base_url: kimi_base_url_prev,
+                kimi_model: kimi_model_prev,
+                kimi_model_name: kimi_model_name_prev,
+                kimi_share_dir: kimi_share_dir_prev,
+                kimi_code_oauth_host: kimi_code_oauth_host_prev,
+                kimi_oauth_host: kimi_oauth_host_prev,
                 sglang_api_key: sglang_api_key_prev,
                 sglang_base_url: sglang_base_url_prev,
                 sglang_model: sglang_model_prev,
@@ -4295,6 +4329,16 @@ mod tests {
                 Self::restore_var("NOVITA_BASE_URL", self.novita_base_url.take());
                 Self::restore_var("FIREWORKS_API_KEY", self.fireworks_api_key.take());
                 Self::restore_var("FIREWORKS_BASE_URL", self.fireworks_base_url.take());
+                Self::restore_var("MOONSHOT_API_KEY", self.moonshot_api_key.take());
+                Self::restore_var("MOONSHOT_BASE_URL", self.moonshot_base_url.take());
+                Self::restore_var("MOONSHOT_MODEL", self.moonshot_model.take());
+                Self::restore_var("KIMI_API_KEY", self.kimi_api_key.take());
+                Self::restore_var("KIMI_BASE_URL", self.kimi_base_url.take());
+                Self::restore_var("KIMI_MODEL", self.kimi_model.take());
+                Self::restore_var("KIMI_MODEL_NAME", self.kimi_model_name.take());
+                Self::restore_var("KIMI_SHARE_DIR", self.kimi_share_dir.take());
+                Self::restore_var("KIMI_CODE_OAUTH_HOST", self.kimi_code_oauth_host.take());
+                Self::restore_var("KIMI_OAUTH_HOST", self.kimi_oauth_host.take());
                 Self::restore_var("SGLANG_API_KEY", self.sglang_api_key.take());
                 Self::restore_var("SGLANG_BASE_URL", self.sglang_base_url.take());
                 Self::restore_var("SGLANG_MODEL", self.sglang_model.take());
@@ -5185,6 +5229,14 @@ api_key = "old-openrouter-key"
         assert_eq!(
             model_completion_names_for_provider(ApiProvider::Deepseek),
             vec!["deepseek-v4-pro", "deepseek-v4-flash"]
+        );
+    }
+
+    #[test]
+    fn model_completion_names_for_moonshot_excludes_oauth_only_kimi_code_model() {
+        assert_eq!(
+            model_completion_names_for_provider(ApiProvider::Moonshot),
+            vec![DEFAULT_MOONSHOT_MODEL]
         );
     }
 
@@ -6320,6 +6372,64 @@ api_key = "novita-table-key"
         assert_eq!(config.api_provider(), ApiProvider::Novita);
         assert_eq!(config.deepseek_api_key()?, "novita-table-key");
         assert_eq!(config.deepseek_base_url(), DEFAULT_NOVITA_BASE_URL);
+        Ok(())
+    }
+
+    #[test]
+    fn moonshot_kimi_oauth_reads_fresh_cli_credential() -> Result<()> {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-tui-kimi-oauth-key-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
+
+        let kimi_share_dir = temp_root.join(".kimi");
+        let credential_dir = kimi_share_dir.join("credentials");
+        fs::create_dir_all(&credential_dir)?;
+        unsafe { env::set_var("KIMI_SHARE_DIR", &kimi_share_dir) };
+
+        let expires_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64()
+            + 3600.0;
+        let credential = json!({
+            "access_token": "fresh-oauth-token",
+            "refresh_token": "refresh-token",
+            "expires_at": expires_at,
+            "scope": "openid profile email",
+            "token_type": "Bearer",
+        });
+        fs::write(
+            credential_dir.join(KIMI_CODE_CREDENTIAL_FILE),
+            serde_json::to_string(&credential)?,
+        )?;
+
+        let config_path = temp_root.join(".deepseek").join("config.toml");
+        ensure_parent_dir(&config_path)?;
+        fs::write(
+            &config_path,
+            r#"provider = "moonshot"
+
+[providers.moonshot]
+auth_mode = "kimi_oauth"
+api_key = "stale-api-key"
+"#,
+        )?;
+
+        let config = Config::load(None, None)?;
+        assert_eq!(config.api_provider(), ApiProvider::Moonshot);
+        assert_eq!(config.deepseek_base_url(), DEFAULT_KIMI_CODE_BASE_URL);
+        assert_eq!(config.default_model(), DEFAULT_KIMI_CODE_MODEL);
+        assert_eq!(config.deepseek_api_key()?, "fresh-oauth-token");
+        assert!(has_api_key_for(&config, ApiProvider::Moonshot));
         Ok(())
     }
 

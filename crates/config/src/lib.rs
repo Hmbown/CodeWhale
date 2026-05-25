@@ -1028,9 +1028,13 @@ impl ConfigToml {
         // shell still exports an old key. When the file is empty, the injected
         // secrets façade recovers configured secret-store credentials before
         // falling back to ambient env.
+        let uses_kimi_oauth = provider == ProviderKind::Moonshot
+            && auth_mode.as_deref().is_some_and(auth_mode_uses_kimi_oauth);
         let from_file = provider_cfg.api_key.clone().or(root_deepseek_api_key);
         let (api_key, api_key_source) = if let Some(value) = cli.api_key.clone() {
             (Some(value), Some(RuntimeApiKeySource::Cli))
+        } else if uses_kimi_oauth {
+            (None, None)
         } else if let Some(value) = from_file.clone().filter(|v| !v.trim().is_empty()) {
             (Some(value), Some(RuntimeApiKeySource::ConfigFile))
         } else if should_skip_secret_store_for_provider(provider, &base_url, auth_mode.as_deref()) {
@@ -1281,7 +1285,7 @@ fn should_skip_secret_store_for_provider(
 
     matches!(
         provider,
-        ProviderKind::Moonshot | ProviderKind::Sglang | ProviderKind::Vllm | ProviderKind::Ollama
+        ProviderKind::Sglang | ProviderKind::Vllm | ProviderKind::Ollama
     ) || base_url_uses_local_host(base_url)
 }
 
@@ -1894,6 +1898,13 @@ mod tests {
         novita_base_url: Option<OsString>,
         fireworks_api_key: Option<OsString>,
         fireworks_base_url: Option<OsString>,
+        moonshot_api_key: Option<OsString>,
+        moonshot_base_url: Option<OsString>,
+        moonshot_model: Option<OsString>,
+        kimi_api_key: Option<OsString>,
+        kimi_base_url: Option<OsString>,
+        kimi_model: Option<OsString>,
+        kimi_model_name: Option<OsString>,
         sglang_api_key: Option<OsString>,
         sglang_base_url: Option<OsString>,
         vllm_api_key: Option<OsString>,
@@ -1929,6 +1940,13 @@ mod tests {
                 novita_base_url: env::var_os("NOVITA_BASE_URL"),
                 fireworks_api_key: env::var_os("FIREWORKS_API_KEY"),
                 fireworks_base_url: env::var_os("FIREWORKS_BASE_URL"),
+                moonshot_api_key: env::var_os("MOONSHOT_API_KEY"),
+                moonshot_base_url: env::var_os("MOONSHOT_BASE_URL"),
+                moonshot_model: env::var_os("MOONSHOT_MODEL"),
+                kimi_api_key: env::var_os("KIMI_API_KEY"),
+                kimi_base_url: env::var_os("KIMI_BASE_URL"),
+                kimi_model: env::var_os("KIMI_MODEL"),
+                kimi_model_name: env::var_os("KIMI_MODEL_NAME"),
                 sglang_api_key: env::var_os("SGLANG_API_KEY"),
                 sglang_base_url: env::var_os("SGLANG_BASE_URL"),
                 vllm_api_key: env::var_os("VLLM_API_KEY"),
@@ -1962,6 +1980,13 @@ mod tests {
                 env::remove_var("NOVITA_BASE_URL");
                 env::remove_var("FIREWORKS_API_KEY");
                 env::remove_var("FIREWORKS_BASE_URL");
+                env::remove_var("MOONSHOT_API_KEY");
+                env::remove_var("MOONSHOT_BASE_URL");
+                env::remove_var("MOONSHOT_MODEL");
+                env::remove_var("KIMI_API_KEY");
+                env::remove_var("KIMI_BASE_URL");
+                env::remove_var("KIMI_MODEL");
+                env::remove_var("KIMI_MODEL_NAME");
                 env::remove_var("SGLANG_API_KEY");
                 env::remove_var("SGLANG_BASE_URL");
                 env::remove_var("VLLM_API_KEY");
@@ -2009,6 +2034,13 @@ mod tests {
                 Self::restore_var("NOVITA_BASE_URL", self.novita_base_url.take());
                 Self::restore_var("FIREWORKS_API_KEY", self.fireworks_api_key.take());
                 Self::restore_var("FIREWORKS_BASE_URL", self.fireworks_base_url.take());
+                Self::restore_var("MOONSHOT_API_KEY", self.moonshot_api_key.take());
+                Self::restore_var("MOONSHOT_BASE_URL", self.moonshot_base_url.take());
+                Self::restore_var("MOONSHOT_MODEL", self.moonshot_model.take());
+                Self::restore_var("KIMI_API_KEY", self.kimi_api_key.take());
+                Self::restore_var("KIMI_BASE_URL", self.kimi_base_url.take());
+                Self::restore_var("KIMI_MODEL", self.kimi_model.take());
+                Self::restore_var("KIMI_MODEL_NAME", self.kimi_model_name.take());
                 Self::restore_var("SGLANG_API_KEY", self.sglang_api_key.take());
                 Self::restore_var("SGLANG_BASE_URL", self.sglang_base_url.take());
                 Self::restore_var("VLLM_API_KEY", self.vllm_api_key.take());
@@ -2534,6 +2566,8 @@ mod tests {
         assert_eq!(resolved.auth_mode.as_deref(), Some("kimi_oauth"));
         assert_eq!(resolved.base_url, DEFAULT_KIMI_CODE_BASE_URL);
         assert_eq!(resolved.model, DEFAULT_KIMI_CODE_MODEL);
+        assert_eq!(resolved.api_key, None);
+        assert_eq!(resolved.api_key_source, None);
     }
 
     #[test]
@@ -2648,6 +2682,25 @@ mod tests {
 
         assert_eq!(resolved.api_key.as_deref(), Some("secret-store-key"));
         assert_eq!(store.gets.lock().unwrap().as_slice(), ["ollama"]);
+    }
+
+    #[test]
+    fn moonshot_api_key_mode_can_use_secret_store_by_default() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        let store = Arc::new(RecordingSecretsStore::with_value("secret-store-key"));
+        let secrets = Secrets::new(store.clone());
+        let config = ConfigToml {
+            provider: ProviderKind::Moonshot,
+            ..ConfigToml::default()
+        };
+
+        let resolved =
+            config.resolve_runtime_options_with_secrets(&CliRuntimeOverrides::default(), &secrets);
+
+        assert_eq!(resolved.api_key.as_deref(), Some("secret-store-key"));
+        assert_eq!(resolved.api_key_source, Some(RuntimeApiKeySource::Keyring));
+        assert_eq!(store.gets.lock().unwrap().as_slice(), ["moonshot"]);
     }
 
     #[test]
