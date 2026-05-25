@@ -1895,9 +1895,15 @@ fn append_subagent_group(
 
         lines.push(Line::from(vec![
             Span::raw("  "),
-            Span::styled(display_name, Style::default().fg(palette::TEXT_PRIMARY)),
+            Span::styled(
+                display_name,
+                Style::default().fg(palette::TEXT_PRIMARY),
+            ),
             Span::raw(" "),
-            Span::styled(format!("{id:<11}"), Style::default().fg(palette::TEXT_DIM)),
+            Span::styled(
+                format!("{id:<11}"),
+                Style::default().fg(palette::TEXT_DIM),
+            ),
             Span::styled(
                 format!("{kind:<9}"),
                 Style::default().fg(palette::TEXT_MUTED),
