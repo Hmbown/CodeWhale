@@ -2684,6 +2684,7 @@ impl RuntimeThreadManager {
                     id,
                     tool_name,
                     description,
+                    input,
                     intent_summary,
                     ..
                 } => {
@@ -2697,6 +2698,7 @@ impl RuntimeThreadManager {
                             "approval_id": id,
                             "tool_name": tool_name,
                             "description": description,
+                            "input": input,
                             "intent_summary": intent_summary,
                         }),
                     )

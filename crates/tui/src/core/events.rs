@@ -249,8 +249,8 @@ pub enum Event {
         id: String,
         tool_name: String,
         description: String,
-        /// Tool parameters for approval display. Carried on the event so the
-        /// TUI does not need to reconstruct them from `pending_tool_uses`.
+        /// Finalized tool input used for approval display and persistent rule generation.
+        /// Carried on the event so the TUI does not need to reconstruct it.
         input: Value,
         /// Exact-argument fingerprint, used to scope *denials* (#1617).
         approval_key: String,
