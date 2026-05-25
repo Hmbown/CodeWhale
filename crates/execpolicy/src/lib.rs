@@ -555,9 +555,7 @@ fn command_rule_matches(
     arity_dict: &BashArityDict,
 ) -> bool {
     match decision {
-        PermissionDecision::Deny => {
-            normalize_command(command).starts_with(&normalize_command(pattern))
-        }
+        PermissionDecision::Deny => command_prefix_matches(pattern, command),
         PermissionDecision::Allow | PermissionDecision::Ask => {
             arity_dict.allow_rule_matches(pattern, command)
         }
@@ -604,6 +602,17 @@ fn normalize_command(value: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn command_prefix_matches(pattern: &str, command: &str) -> bool {
+    let pattern = normalize_command(pattern);
+    if pattern.is_empty() {
+        return false;
+    }
+    let command = normalize_command(command);
+    command
+        .strip_prefix(&pattern)
+        .is_some_and(|suffix| suffix.is_empty() || suffix.starts_with(' '))
 }
 
 fn normalize_path_pattern(value: &str) -> String {
@@ -710,6 +719,20 @@ mod tests {
             decision.reason(),
             "Command blocked by deny rule (tool 'exec_shell', command 'git status')"
         );
+    }
+
+    #[test]
+    fn denied_prefix_respects_command_word_boundaries() {
+        let engine = ExecPolicyEngine::new(vec![], vec!["ls".to_string()]);
+
+        let blocked = engine.check(exec_ctx("ls -la")).unwrap();
+        assert!(!blocked.allow);
+        assert_eq!(blocked.requirement.phase(), "forbidden");
+
+        let separate_binary = engine.check(exec_ctx("ls-remote origin")).unwrap();
+        assert!(separate_binary.allow);
+        assert!(separate_binary.requires_approval);
+        assert_eq!(separate_binary.matched_rule, None);
     }
 
     #[test]
