@@ -196,6 +196,11 @@ enum TranslationEvent {
 enum VoiceInputEvent {
     Finished { result: Result<String> },
 }
+
+#[derive(Debug)]
+enum BalanceEvent {
+    Finished { result: Result<String> },
+}
 // Reset scroll region (`\x1b[r`), origin mode (`\x1b[?6l`), and home the cursor
 // (`\x1b[H`) before letting ratatui's diff renderer repaint. The destructive
 // `\x1b[2J\x1b[3J` pair was previously appended here to also wipe the visible
@@ -869,6 +874,7 @@ async fn run_event_loop(
         tokio::sync::mpsc::unbounded_channel::<TranslationEvent>();
     let (voice_input_tx, mut voice_input_rx) =
         tokio::sync::mpsc::unbounded_channel::<VoiceInputEvent>();
+    let (balance_tx, mut balance_rx) = tokio::sync::mpsc::unbounded_channel::<BalanceEvent>();
     let mut pending_translations = 0usize;
     let mut pending_thinking_translations = 0usize;
     let mut last_queue_state = (app.queued_messages.clone(), app.queued_draft.clone());
@@ -989,6 +995,7 @@ async fn run_event_loop(
         }
 
         drain_voice_input_events(app, &mut voice_input_rx);
+        drain_balance_events(app, &mut balance_rx);
 
         if last_task_refresh.elapsed() >= Duration::from_millis(2500) {
             refresh_active_task_panel(app, &task_manager).await;
@@ -2005,6 +2012,7 @@ async fn run_event_loop(
                 &mut engine_handle,
                 &mut web_config_session,
                 voice_input_tx.clone(),
+                balance_tx.clone(),
                 events,
             )
             .await?
@@ -2304,6 +2312,7 @@ async fn run_event_loop(
                     &mut engine_handle,
                     &mut web_config_session,
                     voice_input_tx.clone(),
+                    balance_tx.clone(),
                     events,
                 )
                 .await?
@@ -2686,6 +2695,7 @@ async fn run_event_loop(
                     &mut engine_handle,
                     &mut web_config_session,
                     voice_input_tx.clone(),
+                    balance_tx.clone(),
                     events,
                 )
                 .await?
@@ -3233,6 +3243,7 @@ async fn run_event_loop(
                                 &task_manager,
                                 config,
                                 &mut web_config_session,
+                                balance_tx.clone(),
                                 &input,
                             )
                             .await?
@@ -3282,6 +3293,7 @@ async fn run_event_loop(
                                 &task_manager,
                                 config,
                                 &mut web_config_session,
+                                balance_tx.clone(),
                                 &input,
                             )
                             .await?
@@ -3358,6 +3370,7 @@ async fn run_event_loop(
                                 &task_manager,
                                 config,
                                 &mut web_config_session,
+                                balance_tx.clone(),
                                 &input,
                             )
                             .await?
@@ -4554,6 +4567,7 @@ async fn apply_command_result(
     #[cfg_attr(not(feature = "web"), allow(unused_variables))] web_config_session: &mut Option<
         WebConfigSession,
     >,
+    balance_tx: tokio::sync::mpsc::UnboundedSender<BalanceEvent>,
     result: commands::CommandResult,
 ) -> Result<bool> {
     if let Some(msg) = result.message {
@@ -4646,18 +4660,12 @@ async fn apply_command_result(
             }
             AppAction::FetchBalance => {
                 app.status_message = Some("Fetching provider balance...".to_string());
-                match fetch_provider_balance(config).await {
-                    Ok(message) => {
-                        app.add_message(HistoryCell::System { content: message });
-                        app.status_message = Some("Balance check complete".to_string());
-                    }
-                    Err(error) => {
-                        app.add_message(HistoryCell::System {
-                            content: format!("Failed to fetch balance: {error}"),
-                        });
-                        app.status_message = Some("Balance check failed".to_string());
-                    }
-                }
+                app.needs_redraw = true;
+                let config = config.clone();
+                tokio::spawn(async move {
+                    let result = fetch_provider_balance(&config).await;
+                    let _ = balance_tx.send(BalanceEvent::Finished { result });
+                });
             }
             AppAction::CacheWarmup => {
                 app.status_message = Some("Warming DeepSeek cache...".to_string());
@@ -5275,6 +5283,7 @@ async fn execute_command_input(
     task_manager: &SharedTaskManager,
     config: &mut Config,
     web_config_session: &mut Option<WebConfigSession>,
+    balance_tx: tokio::sync::mpsc::UnboundedSender<BalanceEvent>,
     input: &str,
 ) -> Result<bool> {
     let result = commands::execute(input, app);
@@ -5306,6 +5315,7 @@ async fn execute_command_input(
         task_manager,
         config,
         web_config_session,
+        balance_tx,
         result,
     )
     .await
@@ -5379,6 +5389,31 @@ fn drain_voice_input_events(
                             content: format!("Voice input failed: {err}"),
                         });
                         app.status_message = Some("Voice input failed".to_string());
+                    }
+                }
+                app.needs_redraw = true;
+            }
+        }
+    }
+}
+
+fn drain_balance_events(
+    app: &mut App,
+    balance_rx: &mut tokio::sync::mpsc::UnboundedReceiver<BalanceEvent>,
+) {
+    while let Ok(event) = balance_rx.try_recv() {
+        match event {
+            BalanceEvent::Finished { result } => {
+                match result {
+                    Ok(message) => {
+                        app.add_message(HistoryCell::System { content: message });
+                        app.status_message = Some("Balance check complete".to_string());
+                    }
+                    Err(error) => {
+                        app.add_message(HistoryCell::System {
+                            content: format!("Failed to fetch balance: {error}"),
+                        });
+                        app.status_message = Some("Balance check failed".to_string());
                     }
                 }
                 app.needs_redraw = true;
@@ -6001,6 +6036,7 @@ async fn handle_view_events(
     engine_handle: &mut EngineHandle,
     web_config_session: &mut Option<WebConfigSession>,
     voice_input_tx: tokio::sync::mpsc::UnboundedSender<VoiceInputEvent>,
+    balance_tx: tokio::sync::mpsc::UnboundedSender<BalanceEvent>,
     events: Vec<ViewEvent>,
 ) -> Result<bool> {
     for event in events {
@@ -6014,6 +6050,7 @@ async fn handle_view_events(
                         task_manager,
                         config,
                         &mut *web_config_session,
+                        balance_tx.clone(),
                         &command,
                     )
                     .await?

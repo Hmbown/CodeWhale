@@ -1125,12 +1125,9 @@ pub(super) fn parse_novita_balance_report(payload: &str) -> Result<ProviderBalan
             "available",
             "balance",
         ],
-    )?
-    .unwrap_or(0.0);
-    let cash =
-        novita_amount_from_keys(data, &["cash_balance", "cashBalance", "cash"])?.unwrap_or(0.0);
-    let credit_limit =
-        novita_amount_from_keys(data, &["credit_limit", "creditLimit"])?.unwrap_or(0.0);
+    )?;
+    let cash = novita_amount_from_keys(data, &["cash_balance", "cashBalance", "cash"])?;
+    let credit_limit = novita_amount_from_keys(data, &["credit_limit", "creditLimit"])?;
     let pending_charges = novita_amount_from_keys(
         data,
         &[
@@ -1139,8 +1136,7 @@ pub(super) fn parse_novita_balance_report(payload: &str) -> Result<ProviderBalan
             "pending_charges",
             "pendingCharges",
         ],
-    )?
-    .unwrap_or(0.0);
+    )?;
     let outstanding_invoices = novita_amount_from_keys(
         data,
         &[
@@ -1149,16 +1145,37 @@ pub(super) fn parse_novita_balance_report(payload: &str) -> Result<ProviderBalan
             "outstanding_invoices",
             "outstandingInvoices",
         ],
-    )?
-    .unwrap_or(0.0);
+    )?;
+
+    if [
+        available,
+        cash,
+        credit_limit,
+        pending_charges,
+        outstanding_invoices,
+    ]
+    .iter()
+    .all(Option::is_none)
+    {
+        let provider_message = parsed
+            .get("message")
+            .or_else(|| data.get("message"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|message| !message.is_empty());
+        if let Some(message) = provider_message {
+            anyhow::bail!("Novita balance response did not include balance fields: {message}");
+        }
+        anyhow::bail!("Novita balance response did not include balance fields");
+    }
 
     let message = format!(
         "Novita AI balance\nAvailable: {}\nCash: {}\nCredit limit: {}\nPending charges: {}\nOutstanding invoices: {}",
-        format_usd(available),
-        format_usd(cash),
-        format_usd(credit_limit),
-        format_usd(pending_charges),
-        format_usd(outstanding_invoices)
+        format_usd(available.unwrap_or(0.0)),
+        format_usd(cash.unwrap_or(0.0)),
+        format_usd(credit_limit.unwrap_or(0.0)),
+        format_usd(pending_charges.unwrap_or(0.0)),
+        format_usd(outstanding_invoices.unwrap_or(0.0))
     );
 
     Ok(ProviderBalanceReport {
@@ -1214,11 +1231,10 @@ fn format_decimal(value: f64, max_decimals: usize, min_decimals: usize) -> Strin
             text.pop();
         }
     }
-    if text == "-0" || text == "-0.00" {
-        "0.00".to_string()
-    } else {
-        text
+    if text.starts_with('-') && text[1..].chars().all(|ch| ch == '0' || ch == '.') {
+        text.remove(0);
     }
+    text
 }
 
 pub(super) fn system_to_instructions(system: Option<SystemPrompt>) -> Option<String> {
@@ -1741,6 +1757,29 @@ mod tests {
         assert!(report.message.contains("Credit limit: $50.00"));
         assert!(report.message.contains("Pending charges: $0.00"));
         assert!(report.message.contains("Outstanding invoices: $0.00"));
+    }
+
+    #[test]
+    fn parse_novita_balance_errors_when_no_balance_fields_present() {
+        let payload = json!({
+            "code": 400,
+            "message": "invalid key"
+        })
+        .to_string();
+
+        let error = parse_novita_balance_report(&payload).expect_err("missing fields should fail");
+        let message = error.to_string();
+
+        assert!(message.contains("did not include balance fields"));
+        assert!(message.contains("invalid key"));
+    }
+
+    #[test]
+    fn balance_format_decimal_strips_negative_zero_consistently() {
+        assert_eq!(format_decimal(-0.0, 6, 0), "0");
+        assert_eq!(format_decimal(-0.0, 4, 2), "0.00");
+        assert_eq!(format_decimal(-0.0004, 3, 3), "0.000");
+        assert_eq!(format_decimal(-0.001, 3, 3), "-0.001");
     }
 
     #[tokio::test]
