@@ -1595,12 +1595,17 @@ pub fn subagent_panel_lines(
         if lines.len() >= max_rows {
             break;
         }
+        let is_completed = !matches!(row.status.as_str(), "running");
         let (marker, color) = agent_status_marker(row.status.as_str());
         let label = format!("{marker} {} {}", row.role, row.name);
         lines.push(Line::from(Span::styled(
             truncate_line_to_width(&label, content_width.max(1)),
             Style::default().fg(color),
         )));
+
+        if is_completed {
+            continue;
+        }
 
         if lines.len() >= max_rows {
             break;
