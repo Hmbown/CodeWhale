@@ -778,6 +778,7 @@ This project ships with help from a growing community of contributors:
 - **[zhuangbiaowei](https://github.com/zhuangbiaowei)** — `/change` release-notes command (#1416)
 - **[NorethSea](https://github.com/NorethSea)** — updater companion-binary refresh fix (#1492)
 - **[Jianfengwu2024](https://github.com/Jianfengwu2024)** — Windows MSVC toolchain environment preservation (#1487)
+- **[Ben Gao](https://github.com/gaord)** — "Remember for this tool" active-turn auto-approve sync (#2047, supersedes #2041)
 - **[Fire-dtx](https://github.com/Fire-dtx)** — npm postinstall recoverability work (#1059)
 - **[oooyuy92](https://github.com/oooyuy92)** — long-session palette readability report (#1070, #936)
 - **[qinxianyuzou](https://github.com/qinxianyuzou)** — zh-Hans destructive approval wording (#1087, #1091)

@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Voice input in the command palette.** Type `/voice` or select the Voice
+  action to speak a turn via a configured STT helper; footer status keeps you
+  informed while recording (#2047).
+- **RLM session objects.** `rlm_session_objects` lists the active session
+  prompt, history, and transcript as symbolic session:// refs, and `rlm_open`
+  now accepts `session_object` to inspect them without copying into the parent
+  context. Includes the RLM branching roadmap (#2047).
 - **`/balance` command scaffold.** `codewhale /balance` now has an honest
   placeholder command surface for the provider-billing work, instead of
   silently pretending balance lookup exists before the provider capability
@@ -33,6 +40,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Slash-command recovery no longer leaves stale drafts.** Restored sessions
+  no longer resurrect `/sessions` and other slash-command tails as retry
+  drafts in the composer (#2047).
+- **\"Remember for this tool\" applies to the current turn.** Checking
+  \"Remember\" now syncs `ActiveTurnState.auto_approve` so subsequent tool
+  calls in the same turn are auto-approved, not just future turns (#2047,
+  supersedes #2041). Thanks @gaord for the reproduction and fix.
 - **User messages stand out in the transcript.** The TUI now gives user turns
   a clearer visual treatment so request/answer boundaries are easier to see
   (#1995, closes #1672). Thanks @reidliu41 for the focused fix and
