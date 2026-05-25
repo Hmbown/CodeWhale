@@ -306,7 +306,7 @@ pub fn format_permission_rules_preview(rules: &[ToolPermissionRule]) -> String {
 
 fn format_permission_rule_preview(rule: &ToolPermissionRule) -> String {
     let mut lines = vec![
-        "[[permissions.rules]]".to_string(),
+        "[[rules]]".to_string(),
         format!("tool = {}", toml_string(&rule.tool)),
         format!(
             "decision = {}",
@@ -906,6 +906,7 @@ impl ApprovalView {
 
     /// The staged option, if any. `None` in the benign variant or when
     /// no approve key has been pressed yet.
+    #[cfg(test)]
     pub(crate) fn pending_confirm(&self) -> Option<ApprovalOption> {
         self.pending_confirm
     }
@@ -1566,7 +1567,7 @@ mod tests {
         let preview = request
             .permission_rule_preview()
             .expect("exec_shell should produce a preview");
-        assert!(preview.contains("[[permissions.rules]]"));
+        assert!(preview.contains("[[rules]]"));
         assert!(preview.contains("tool = \"exec_shell\""));
         assert!(preview.contains("decision = \"allow\""));
         assert!(preview.contains("command = \"cargo test --workspace\""));
@@ -2118,10 +2119,7 @@ mod tests {
 
             let action = view.handle_key(create_key_event(code));
             assert!(matches!(action, ViewAction::None));
-            assert_eq!(
-                view.pending_confirm(),
-                Some(ApprovalOption::ApproveAlways)
-            );
+            assert_eq!(view.pending_confirm(), Some(ApprovalOption::ApproveAlways));
 
             let action = view.handle_key(create_key_event(code));
             assert!(
@@ -2149,10 +2147,7 @@ mod tests {
 
         let action = view.handle_key(create_key_event(KeyCode::Char('a')));
         assert!(matches!(action, ViewAction::None));
-        assert_eq!(
-            view.pending_confirm(),
-            Some(ApprovalOption::ApproveAlways)
-        );
+        assert_eq!(view.pending_confirm(), Some(ApprovalOption::ApproveAlways));
     }
 
     #[test]
