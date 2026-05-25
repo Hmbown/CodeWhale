@@ -934,11 +934,17 @@ impl Engine {
         // work on the blocking pool so the async runtime stays responsive;
         // failure is non-fatal (the helper logs at WARN).
         if self.config.snapshots_enabled {
+            // Clone the user prompt now — `content` is moved into
+            // `user_text_message_with_turn_metadata` below, so we need
+            // a copy for both pre- and post-turn snapshot labels. The
+            // label carries a truncated first line so `/restore`
+            // listings are human-readable.
+            let snapshot_prompt = content.clone();
             let pre_workspace = self.session.workspace.clone();
             let pre_seq = self.turn_counter;
             let pre_cap = self.config.snapshots_max_workspace_bytes;
             let _ = tokio::task::spawn_blocking(move || {
-                pre_turn_snapshot(&pre_workspace, pre_seq, pre_cap)
+                pre_turn_snapshot(&pre_workspace, pre_seq, pre_cap, Some(&snapshot_prompt))
             })
             .await;
         }
@@ -948,6 +954,10 @@ impl Engine {
         // so the footer doesn't display a stale failure row across
         // turns (#499).
         crate::retry_status::clear();
+
+        // Clone user prompt for post-turn snapshot label before `content`
+        // is moved into `user_text_message_with_turn_metadata` below.
+        let snapshot_prompt_post = content.clone();
 
         // Check if we have the appropriate client
         if self.deepseek_client.is_none() {
@@ -1158,11 +1168,18 @@ impl Engine {
         // paste immediately (#234). The git work proceeds on the blocking
         // pool without forcing the engine loop to await it.
         if self.config.snapshots_enabled {
+            // `snapshot_prompt_post` was cloned from `content` above,
+            // before `content` was moved into the session messages.
             let post_workspace = self.session.workspace.clone();
             let post_seq = self.turn_counter;
             let post_cap = self.config.snapshots_max_workspace_bytes;
             crate::utils::spawn_blocking_supervised("post-turn-snapshot", move || {
-                post_turn_snapshot(&post_workspace, post_seq, post_cap);
+                post_turn_snapshot(
+                    &post_workspace,
+                    post_seq,
+                    post_cap,
+                    Some(&snapshot_prompt_post),
+                );
             });
         }
     }
