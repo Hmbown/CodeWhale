@@ -60,6 +60,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stop/cancel requests are not stuck behind long synchronous filesystem walks
   (#2035). Thanks @h3c-hexin for the overlapping cancellation report and
   implementation notes in #2044.
+- **`/model` picker remembers your choice on Esc.** Navigating the two-pane
+  picker and pressing Esc now applies the last-highlighted model instead of
+  discarding it. Opening and immediately pressing Esc still cancels cleanly
+  (#2037).
+- **Finished sub-agents auto-collapse in the sidebar.** Completed, cancelled,
+  and failed sub-agents no longer take space in the agent panel; only running
+  agents remain visible. The header still shows the full count (#2040).
+- **Whale dark palette refreshed.** Elevated surfaces (+14% brightness),
+  selection background (+20%), and borders (+10% contrast) for better
+  layer separation and focus clarity (#2012, #2015).
 
 ## [0.8.44] - 2026-05-24
 
