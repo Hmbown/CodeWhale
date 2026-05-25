@@ -1466,9 +1466,13 @@ fn foreground_rlm_running(app: &App) -> bool {
 }
 
 fn sidebar_agent_rows(app: &App) -> Vec<SidebarAgentRow> {
+    // #2040: only show running (not finished) agents in the sidebar.
+    // Completed/Cancelled/Failed/Interrupted agents auto-collapse to keep
+    // the panel scannable. They remain visible in the transcript.
     let mut rows: Vec<SidebarAgentRow> = app
         .subagent_cache
         .iter()
+        .filter(|agent| matches!(agent.status, SubAgentStatus::Running))
         .map(|agent| {
             let progress = app
                 .agent_progress
