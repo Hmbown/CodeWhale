@@ -2283,10 +2283,10 @@ mod tests {
         let engine = config.exec_policy_engine();
 
         let allowed = engine
-            .check(deepseek_execpolicy::ExecPolicyContext {
+            .check(codewhale_execpolicy::ExecPolicyContext {
                 command: "git status --porcelain",
                 cwd: ".",
-                ask_for_approval: deepseek_execpolicy::AskForApproval::UnlessTrusted,
+                ask_for_approval: codewhale_execpolicy::AskForApproval::UnlessTrusted,
                 sandbox_mode: Some("workspace-write"),
             })
             .expect("policy decision");
@@ -2294,10 +2294,10 @@ mod tests {
         assert!(!allowed.requires_approval);
 
         let denied = engine
-            .check(deepseek_execpolicy::ExecPolicyContext {
+            .check(codewhale_execpolicy::ExecPolicyContext {
                 command: "git status --dangerous",
                 cwd: ".",
-                ask_for_approval: deepseek_execpolicy::AskForApproval::UnlessTrusted,
+                ask_for_approval: codewhale_execpolicy::AskForApproval::UnlessTrusted,
                 sandbox_mode: Some("workspace-write"),
             })
             .expect("policy decision");
