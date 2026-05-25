@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.45] - 2026-05-25
+
+### Added
+
+- **`/balance` command scaffold.** `codewhale /balance` now has an honest
+  placeholder command surface for the provider-billing work, instead of
+  silently pretending balance lookup exists before the provider capability
+  layer is ready (#2035).
+- **Deterministic sub-agent nicknames.** Sub-agents now receive stable
+  whale-species names in the TUI while preserving the raw agent id in the
+  detail popup, making parallel child work easier to scan (#2035).
+
+### Changed
+
+- **Migration FAQ for DeepSeek-TUI users.** README and rebrand docs now spell
+  out the new Cargo install commands, how to uninstall old `deepseek-tui` /
+  `deepseek-tui-cli` packages, which `.deepseek` files are safe to clean up,
+  and how `~/.codewhale/` / `.codewhale/` take over without breaking legacy
+  `DEEPSEEK_*` env vars.
+- **CNB automation guidance is gated.** The CNB mirror docs now distinguish
+  trusted push/web/API-triggered pipelines from untrusted issue, PR, and NPC
+  comment events, and recommend using CodeWhale automation to open PRs rather
+  than recursively self-merging release changes.
+
+### Fixed
+
+- **User messages stand out in the transcript.** The TUI now gives user turns
+  a clearer visual treatment so request/answer boundaries are easier to see
+  (#1995, closes #1672). Thanks @reidliu41 for the focused fix and
+  @lpeng1711694086-lang for the original report.
+- **`SKILL.md` YAML block scalars parse correctly.** Skill descriptions using
+  YAML `|` or `>` block scalar syntax now reach `/skills`, `load_skill`, and
+  model prompt context as the intended description text (#1908, closes #1907).
+  Thanks @zlh124 for the parser-level repro, implementation, and tests.
+- **Large file walks are easier to interrupt.** `file_search` traversal is
+  cancellable, and `list_dir` runs behind a blocking worker with a timeout so
+  stop/cancel requests are not stuck behind long synchronous filesystem walks
+  (#2035). Thanks @h3c-hexin for the overlapping cancellation report and
+  implementation notes in #2044.
+
 ## [0.8.44] - 2026-05-24
 
 ### Added
@@ -4806,7 +4846,8 @@ Welcome — and thank you.
 - Hooks system and config profiles
 - Example skills and launch assets
 
-[Unreleased]: https://github.com/Hmbown/CodeWhale/compare/v0.8.44...HEAD
+[Unreleased]: https://github.com/Hmbown/CodeWhale/compare/v0.8.45...HEAD
+[0.8.45]: https://github.com/Hmbown/CodeWhale/compare/v0.8.44...v0.8.45
 [0.8.44]: https://github.com/Hmbown/CodeWhale/compare/v0.8.43...v0.8.44
 [0.8.43]: https://github.com/Hmbown/CodeWhale/compare/v0.8.42...v0.8.43
 [0.8.42]: https://github.com/Hmbown/CodeWhale/compare/v0.8.41...v0.8.42

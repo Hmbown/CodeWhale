@@ -13,19 +13,24 @@ npm uninstall -g deepseek-tui      # or cargo uninstall deepseek-tui-cli deepsee
                                     # or brew uninstall deepseek-tui
 
 # 2. Install under the new name.
-npm install -g codewhale            # or cargo install codewhale-cli codewhale-tui --locked
+npm install -g codewhale            # or install both Cargo crates below
                                     # or brew install deepseek-tui (Homebrew tap still
                                     #     uses the legacy name during the transition;
                                     #     it installs the new binaries underneath.)
+
+cargo install codewhale-cli --locked --force
+cargo install codewhale-tui --locked --force
 
 # 3. Run with the new command.
 codewhale doctor
 codewhale
 ```
 
-Your `~/.deepseek/config.toml`, `~/.deepseek/sessions/`, `~/.deepseek/skills/`,
-`~/.deepseek/tasks/`, and `~/.deepseek/mcp.json` are untouched. Existing
-`DEEPSEEK_*` environment variables continue to work.
+New CodeWhale-owned state prefers `~/.codewhale/`. Existing
+`~/.deepseek/config.toml`, `~/.deepseek/sessions/`, `~/.deepseek/skills/`,
+`~/.deepseek/tasks/`, and `~/.deepseek/mcp.json` remain readable during the
+transition so upgrades do not lose data. Existing `DEEPSEEK_*` environment
+variables continue to work.
 
 ## What got renamed
 
@@ -52,9 +57,11 @@ Anything that targets the DeepSeek provider API stays exactly as it was:
   aliases `deepseek-chat` and `deepseek-reasoner`.
 - **Hosts**: `api.deepseek.com` (global) and `api.deepseeki.com` (China
   fallback).
-- **Config directory**: `~/.deepseek/`. Renaming this would invalidate
-  every existing install's saved API key, sessions, skills, MCP config,
-  and audit log.
+- **DeepSeek provider environment variables**: the `DEEPSEEK_*` names remain
+  supported because they target the provider integration and existing shell
+  profiles.
+- **Legacy data compatibility**: `~/.deepseek/` remains a readable fallback for
+  existing installs. New CodeWhale-owned state prefers `~/.codewhale/`.
 - **GitHub repository URL**: `https://github.com/Hmbown/CodeWhale`.
   The old `Hmbown/DeepSeek-TUI` URL redirects there during the transition.
 - **Homebrew tap and formula** (`Hmbown/homebrew-deepseek-tui`): still
@@ -88,7 +95,8 @@ npm install -g codewhale
 
 ```bash
 cargo uninstall deepseek-tui-cli deepseek-tui 2>/dev/null || true
-cargo install codewhale-cli codewhale-tui --locked
+cargo install codewhale-cli --locked --force
+cargo install codewhale-tui --locked --force
 ```
 
 Or in a checkout:
@@ -117,14 +125,45 @@ A second checksum manifest, `deepseek-artifacts-sha256.txt`, is attached as
 an alias of `codewhale-artifacts-sha256.txt` so v0.8.40's hardcoded lookup
 still verifies.
 
+## Cleaning up old files
+
+Global `~/.deepseek/` may contain saved sessions, skills, MCP config, memory,
+logs, tool-output spillover files, and older settings. Do not delete it as a
+first upgrade step. Run:
+
+```bash
+codewhale doctor
+codewhale auth status
+```
+
+If `~/.codewhale/config.toml` now has the config you expect, you can archive or
+remove only the legacy files you have verified are no longer needed.
+
+For repositories, prefer the new project overlay location:
+
+```bash
+mkdir -p .codewhale
+cp -n .deepseek/config.toml .codewhale/config.toml 2>/dev/null || true
+```
+
+Project-local generated scratch such as `.deepseek/pastes`,
+`.deepseek/snapshots`, and old `.deepseek/handoff.md` files can be deleted once
+you no longer need those drafts or rollback snapshots. If these directories are
+private local agent state, add both names to `.gitignore`:
+
+```gitignore
+.codewhale/
+.deepseek/
+```
+
 ## Why the name change
 
 CodeWhale is a shorter, terminal-friendlier handle for the same terminal
 coding agent and the longer-term product direction: a DeepSeek-first agentic
 terminal for open source and open-weight coding models. The project name,
 command names, package names, release assets, Docker image, and CNB mirror move
-to CodeWhale; the official DeepSeek provider, model IDs, env vars, and
-`~/.deepseek/` config surface remain first-class.
+to CodeWhale; the official DeepSeek provider, model IDs, and env vars remain
+first-class.
 
 ## Reporting issues with the rename
 

@@ -36,6 +36,29 @@ GitHub refs to CNB, so pipeline files created only on the CNB side will be
 overwritten. Submit `.cnb.yml` changes through GitHub PRs and let the one-way
 mirror carry them to CNB.
 
+## Event triggers and NPC safety
+
+CNB can run pipelines from several event families: push and tag events, issue
+events, PR events, scheduled tasks, page-triggered `web_trigger*` buttons,
+API-triggered `api_trigger*` runs, and NPC mentions such as
+`issue.comment@npc` and `pull_request.comment@npc`.
+
+That is enough to build a CodeWhale-assisted maintenance lane, but not an
+ungated self-update loop. Treat issue, PR, and NPC comment events as untrusted:
+do not expose release secrets, deploy keys, npm/crates credentials, or direct
+`main` push rights to them. The safe shape is:
+
+1. A trusted `push`, `web_trigger*`, or protected `api_trigger*` pipeline runs
+   CodeWhale against a checked-out branch.
+2. CodeWhale writes a normal branch with code/docs changes.
+3. The pipeline opens or updates a PR and posts the verification summary.
+4. A maintainer reviews, merges, tags, and publishes through the normal release
+   gates.
+
+For documentation on CNB trigger rules and NPC events, see
+<https://docs.cnb.cool/en/build/trigger-rule.html> and
+<https://docs.cnb.cool/zh/build/npc.html>.
+
 ## CNB tag releases
 
 When CNB receives a `v*` tag, the root `.cnb.yml` tag pipeline builds Linux x64

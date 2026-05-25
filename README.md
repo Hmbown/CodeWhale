@@ -11,7 +11,7 @@
 [简体中文 README](README.zh-CN.md)
 [日本語 README](README.ja-JP.md)
 
-[Install](#install) · [Quickstart](#quickstart) · [Usage](#usage) · [Documentation](#documentation) · [Contributing](#contributing) · [Support](#support)
+[Install](#install) · [Quickstart](#quickstart) · [Usage](#usage) · [FAQ](#faq) · [Documentation](#documentation) · [Contributing](#contributing) · [Support](#support)
 
 ## Install
 
@@ -44,7 +44,7 @@ brew install deepseek-tui
 docker volume create codewhale-home
 docker run --rm -it \
   -e DEEPSEEK_API_KEY="$DEEPSEEK_API_KEY" \
-  -v codewhale-home:/home/codewhale/.deepseek \
+  -v codewhale-home:/home/codewhale \
   -v "$PWD:/workspace" \
   -w /workspace \
   ghcr.io/hmbown/codewhale:latest
@@ -68,6 +68,19 @@ brew update && brew upgrade deepseek-tui
 cargo install codewhale-cli --locked --force
 cargo install codewhale-tui     --locked --force
 ```
+
+Coming from the old DeepSeek-TUI Cargo install path? Reinstall under the new
+crate names and remove the legacy packages when you are ready:
+
+```bash
+cargo uninstall deepseek-tui-cli deepseek-tui 2>/dev/null || true
+cargo install codewhale-cli --locked --force
+cargo install codewhale-tui --locked --force
+```
+
+The `deepseek` and `deepseek-tui` commands remain compatibility shims through
+the v0.8.x line, but new installs and docs use `codewhale` and
+`codewhale-tui`.
 
 ![codewhale screenshot](assets/screenshot.png)
 
@@ -135,12 +148,12 @@ codewhale --model auto
 
 Prebuilt binaries are published for **Linux x64**, **Linux ARM64** (v0.8.8+), **macOS x64**, **macOS ARM64**, and **Windows x64**. For other targets (musl, riscv64, FreeBSD, etc.), see [Install from source](#install-from-source) or [docs/INSTALL.md](docs/INSTALL.md).
 
-On first launch you'll be prompted for your [DeepSeek API key](https://platform.deepseek.com/api_keys). The key is saved to `~/.deepseek/config.toml` so it works from any directory without OS credential prompts.
+On first launch you'll be prompted for your [DeepSeek API key](https://platform.deepseek.com/api_keys). The key is saved to `~/.codewhale/config.toml` so it works from any directory without OS credential prompts. Existing `~/.deepseek/config.toml` files are still read and copied forward when it is safe to do so.
 
 You can also set it ahead of time:
 
 ```bash
-codewhale auth set --provider deepseek   # saves to ~/.deepseek/config.toml
+codewhale auth set --provider deepseek   # saves to ~/.codewhale/config.toml
 codewhale auth status                    # shows the active credential source
 
 export DEEPSEEK_API_KEY="YOUR_KEY"      # env var alternative; use ~/.zshenv for non-interactive shells
@@ -362,7 +375,7 @@ docker volume create codewhale-home
 
 docker run --rm -it \
   -e DEEPSEEK_API_KEY="$DEEPSEEK_API_KEY" \
-  -v codewhale-home:/home/codewhale/.deepseek \
+  -v codewhale-home:/home/codewhale \
   -v "$PWD:/workspace" \
   -w /workspace \
   ghcr.io/hmbown/codewhale:latest
@@ -456,7 +469,13 @@ meaning of "auto".
 
 ## Configuration
 
-User config: `~/.deepseek/config.toml`. Project overlay: `<workspace>/.deepseek/config.toml` (denied: `api_key`, `base_url`, `provider`, `mcp_config_path`). [config.example.toml](config.example.toml) has every option.
+User config: `~/.codewhale/config.toml`. Legacy `~/.deepseek/config.toml`
+continues to work as a fallback and is copied into the CodeWhale home when the
+new config does not exist. Project overlay:
+`<workspace>/.codewhale/config.toml`, with legacy
+`<workspace>/.deepseek/config.toml` still read for older repositories. Project
+overlays cannot set `api_key`, `base_url`, `provider`, or `mcp_config_path`.
+[config.example.toml](config.example.toml) has every option.
 
 Key environment variables:
 
@@ -509,7 +528,7 @@ Legacy aliases `deepseek-chat` / `deepseek-reasoner` map to `deepseek-v4-flash` 
 
 ## Publishing Your Own Skill
 
-codewhale discovers skills from workspace directories (`.agents/skills` → `skills` → `.opencode/skills` → `.claude/skills` → `.cursor/skills`) and global directories (`~/.agents/skills` → `~/.claude/skills` → `~/.deepseek/skills`). Each skill is a directory with a `SKILL.md` file:
+codewhale discovers skills from workspace directories (`.agents/skills` → `skills` → `.opencode/skills` → `.claude/skills` → `.cursor/skills` → `.codewhale/skills` → `.deepseek/skills`) and global directories (`~/.agents/skills` → `~/.claude/skills` → `~/.codewhale/skills` → `~/.deepseek/skills`). Each skill is a directory with a `SKILL.md` file:
 
 ```text
 ~/.agents/skills/my-skill/
@@ -534,8 +553,66 @@ First launch also installs bundled system skills for common workflows:
 `skill-creator`, `delegate`, `v4-best-practices`, `plugin-creator`,
 `skill-installer`, `mcp-builder`, `documents`, `presentations`,
 `spreadsheets`, `pdf`, and `feishu`. These live under
-`~/.deepseek/skills` and are versioned so new bundles are added on upgrade
-without recreating skills the user deliberately deleted.
+`~/.codewhale/skills` for new installs. Legacy `~/.deepseek/skills` remains
+discoverable so existing custom skills do not disappear during the rename.
+
+---
+
+## FAQ
+
+### I used `cargo install deepseek-tui --locked`. Do I need to reinstall?
+
+Yes. The old packages were kept as compatibility shims during the rename, but
+new Cargo installs should use the CodeWhale crate names:
+
+```bash
+cargo uninstall deepseek-tui-cli deepseek-tui 2>/dev/null || true
+cargo install codewhale-cli --locked --force
+cargo install codewhale-tui --locked --force
+codewhale --version
+```
+
+Both Cargo packages matter: `codewhale-cli` provides the `codewhale` dispatcher,
+and `codewhale-tui` provides the interactive runtime that the dispatcher starts.
+
+### Can I delete old `.deepseek` files from my repos?
+
+Usually, but inspect them first. Copy project config from
+`.deepseek/config.toml` to `.codewhale/config.toml` before removing the legacy
+file, and move project skills to `.codewhale/skills` or `.agents/skills` when
+you want them to remain active. Generated scratch directories such as
+`.deepseek/pastes`,
+`.deepseek/snapshots`, and old handoff files can be removed once you no longer
+need those drafts or rollback snapshots.
+
+For private local agent state, add these to your repository's `.gitignore`:
+
+```gitignore
+.codewhale/
+.deepseek/
+```
+
+Do not delete global `~/.deepseek/` blindly. It may contain sessions, skills,
+MCP config, memory, or older logs you still want. Run `codewhale doctor` and
+`codewhale auth status` after upgrading; once the new `~/.codewhale/` state is
+working, archive or remove only the legacy files you have verified are no
+longer needed.
+
+### Do `DEEPSEEK_*` environment variables still work?
+
+Yes. CodeWhale is still DeepSeek-first, and renaming `DEEPSEEK_API_KEY`,
+`DEEPSEEK_BASE_URL`, or existing provider/model variables would break working
+shell profiles. Keep those variables as-is unless you are deliberately cleaning
+up your own shell config.
+
+### Can CNB or a CodeWhale NPC update CodeWhale automatically?
+
+CNB supports push/tag pipelines, manual `web_trigger` deploy buttons, API
+triggers, issue/PR comment events, and NPC comment events. That makes a
+CodeWhale-assisted update loop possible, but it should stay gated: the safe
+shape is "open or update a PR, run release checks, then let a maintainer merge
+and tag." Do not give untrusted issue, PR, or NPC comment events release
+secrets or permission to merge to `main`.
 
 ---
 
