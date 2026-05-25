@@ -1723,19 +1723,6 @@ impl RuntimeThreadManager {
         )
         .await?;
 
-        {
-            let mut active = self.active.lock().await;
-            if let Some(state) = active.engines.get_mut(thread_id)
-                && state
-                    .active_turn
-                    .as_ref()
-                    .is_some_and(|t| t.turn_id == turn_id)
-            {
-                state.active_turn = None;
-            }
-            touch_lru(&mut active.lru, thread_id);
-        }
-
         self.store.load_turn(turn_id)
     }
 
