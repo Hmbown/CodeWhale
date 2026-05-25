@@ -2021,8 +2021,16 @@ impl Engine {
 }
 
 fn subagent_completion_runtime_message(payload: &str) -> Message {
+    // Role is "user", not "system": some OpenAI-compatible backends apply a
+    // strict chat template (e.g. vLLM serving Qwen3) that requires any system
+    // message to be messages[0]. A system message appended mid-conversation
+    // makes the template raise "System message must be at the beginning",
+    // which surfaces as a 400 BadRequest and breaks the whole sub-agent
+    // hand-off in the parent turn. The `visibility="internal"` tag already
+    // tells the model this is a runtime event rather than user input, so the
+    // role carries no semantic weight here — only template-compatibility cost.
     Message {
-        role: "system".to_string(),
+        role: "user".to_string(),
         content: vec![ContentBlock::Text {
             text: format!(
                 "<codewhale:runtime_event kind=\"subagent_completion\" visibility=\"internal\">\n\
@@ -2122,12 +2130,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn subagent_completion_handoff_is_internal_system_message() {
+    fn subagent_completion_handoff_is_internal_user_message() {
         let message = subagent_completion_runtime_message(
             "Build passed\n<codewhale:subagent.done>{\"agent_id\":\"agent_a\"}</codewhale:subagent.done>",
         );
 
-        assert_eq!(message.role, "system");
+        // Must be "user", not "system": a system message appended mid-stream
+        // trips strict chat templates (vLLM/Qwen3) into a 400 BadRequest
+        // ("System message must be at the beginning"). The internal-event
+        // framing lives in the text + visibility tag, not the role.
+        assert_eq!(message.role, "user");
         let text = match &message.content[0] {
             ContentBlock::Text { text, .. } => text,
             other => panic!("expected text block, got {other:?}"),
