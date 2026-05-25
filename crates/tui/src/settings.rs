@@ -273,6 +273,11 @@ pub struct Settings {
     /// `binary_unavailable` response with an install hint, matching the
     /// pre-v0.8.32 behavior.
     pub prefer_external_pdftotext: bool,
+    /// Optional command that records/transcribes voice input and writes the
+    /// final UTF-8 transcript to stdout. Triggered by the command palette.
+    pub voice_input_command: Option<String>,
+    /// Timeout for the configured voice input command, in seconds.
+    pub voice_input_timeout_secs: u64,
 }
 
 impl Default for Settings {
@@ -315,6 +320,8 @@ impl Default for Settings {
             status_indicator: "whale".to_string(),
             synchronized_output: "auto".to_string(),
             prefer_external_pdftotext: false,
+            voice_input_command: None,
+            voice_input_timeout_secs: crate::tui::voice_input::default_timeout_secs(),
         }
     }
 }
@@ -363,6 +370,11 @@ impl Settings {
                 .to_string();
             s.background_color = normalize_optional_background_color(s.background_color.as_deref());
             s.theme = normalize_settings_theme(&s.theme).to_string();
+            let voice_input_command =
+                normalize_optional_voice_input_command(s.voice_input_command.as_deref());
+            s.voice_input_command = voice_input_command;
+            s.voice_input_timeout_secs =
+                crate::tui::voice_input::clamp_timeout_secs(s.voice_input_timeout_secs);
             s.default_model = s.default_model.as_deref().and_then(normalize_default_model);
             s.reasoning_effort = s
                 .reasoning_effort
@@ -383,6 +395,15 @@ impl Settings {
         if env_truthy("NO_ANIMATIONS") {
             self.low_motion = true;
             self.fancy_animations = false;
+        }
+        if let Ok(value) = std::env::var("DEEPSEEK_VOICE_INPUT_COMMAND") {
+            self.voice_input_command = normalize_optional_voice_input_command(Some(&value));
+        }
+        if let Ok(value) = std::env::var("DEEPSEEK_VOICE_INPUT_TIMEOUT_SECS")
+            && let Ok(timeout_secs) = value.trim().parse::<u64>()
+        {
+            self.voice_input_timeout_secs =
+                crate::tui::voice_input::clamp_timeout_secs(timeout_secs);
         }
         // VS Code (TERM_PROGRAM=vscode, #1356), Ghostty (TERM_PROGRAM=ghostty,
         // #1445), and a few VTE terminals (#1470) produce visible flicker at
@@ -583,6 +604,22 @@ impl Settings {
             "prefer_external_pdftotext" | "external_pdftotext" | "pdftotext" => {
                 self.prefer_external_pdftotext = parse_bool(value)?;
             }
+            "voice_input_command" | "voice_command" | "dictation_command" => {
+                self.voice_input_command = normalize_optional_voice_input_command(Some(value));
+            }
+            "voice_input_timeout_secs" | "voice_timeout" | "dictation_timeout" => {
+                let timeout_secs: u64 = value.parse().map_err(|_| {
+                    anyhow::anyhow!(
+                        "Failed to update setting: invalid voice input timeout '{value}'. Expected a number from 1 to 600."
+                    )
+                })?;
+                if !(1..=600).contains(&timeout_secs) {
+                    anyhow::bail!(
+                        "Failed to update setting: voice input timeout must be between 1 and 600 seconds."
+                    );
+                }
+                self.voice_input_timeout_secs = timeout_secs;
+            }
             "default_mode" | "mode" => {
                 let normalized = normalize_mode(value);
                 if !["agent", "plan", "yolo"].contains(&normalized) {
@@ -711,6 +748,16 @@ impl Settings {
             "  prefer_external_pdftotext: {}",
             self.prefer_external_pdftotext
         ));
+        lines.push(format!(
+            "  voice_input_command: {}",
+            self.voice_input_command
+                .as_deref()
+                .unwrap_or("(not configured)")
+        ));
+        lines.push(format!(
+            "  voice_input_timeout_secs: {}",
+            self.voice_input_timeout_secs
+        ));
         lines.push(format!("  default_mode:       {}", self.default_mode));
         lines.push(format!(
             "  sidebar_width:      {}%",
@@ -802,6 +849,14 @@ impl Settings {
             (
                 "prefer_external_pdftotext",
                 "Route PDF reads through Poppler's pdftotext instead of the bundled pure-Rust extractor: on/off (default off)",
+            ),
+            (
+                "voice_input_command",
+                "Command run by command-palette Voice input; stdout must be the transcript, or none/default to disable",
+            ),
+            (
+                "voice_input_timeout_secs",
+                "Voice input command timeout in seconds: 1-600 (default 60)",
             ),
             ("default_mode", "Default mode: agent, plan, yolo"),
             ("sidebar_width", "Sidebar width percentage: 10-50"),
@@ -1023,6 +1078,24 @@ fn normalize_background_color_setting(value: &str) -> Result<Option<String>> {
     })
 }
 
+fn normalize_optional_voice_input_command(value: Option<&str>) -> Option<String> {
+    value.and_then(normalize_voice_input_command)
+}
+
+fn normalize_voice_input_command(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty()
+        || matches!(
+            trimmed.to_ascii_lowercase().as_str(),
+            "default" | "none" | "off" | "false" | "disabled"
+        )
+    {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
 fn normalize_sidebar_focus(value: &str) -> &str {
     match value.trim().to_ascii_lowercase().as_str() {
         "work" | "plan" | "todos" => "work",
@@ -1233,6 +1306,39 @@ mod tests {
             .set("session_panel", "off")
             .expect("disable context panel via alias");
         assert!(!settings.context_panel);
+    }
+
+    #[test]
+    fn voice_input_settings_normalize_and_clear() {
+        let mut settings = Settings::default();
+        assert!(settings.voice_input_command.is_none());
+        assert_eq!(
+            settings.voice_input_timeout_secs,
+            crate::tui::voice_input::default_timeout_secs()
+        );
+
+        settings
+            .set("voice_input_command", r#"python3 "/tmp/voice helper.py""#)
+            .expect("set voice command");
+        assert_eq!(
+            settings.voice_input_command.as_deref(),
+            Some(r#"python3 "/tmp/voice helper.py""#)
+        );
+
+        settings
+            .set("voice_input_timeout_secs", "120")
+            .expect("set timeout");
+        assert_eq!(settings.voice_input_timeout_secs, 120);
+
+        settings
+            .set("voice_command", "none")
+            .expect("clear voice command");
+        assert!(settings.voice_input_command.is_none());
+
+        let err = settings
+            .set("voice_timeout", "0")
+            .expect_err("timeout must be bounded");
+        assert!(err.to_string().contains("between 1 and 600"));
     }
 
     #[test]

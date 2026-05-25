@@ -250,6 +250,8 @@ fallbacks after saved config and keyring credentials:
 - `DEEPSEEK_FORCE_HTTP1` (`1|true|yes|on` pins the HTTP client to HTTP/1.1, disabling HTTP/2; useful on Windows or behind proxies that mishandle long-lived H2 streams)
 - `DEEPSEEK_HOME` (override the base data directory; defaults to `~/.deepseek`)
 - `DEEPSEEK_AUTOMATIONS_DIR` (override the automations storage directory; defaults to `~/.deepseek/automations`)
+- `DEEPSEEK_VOICE_INPUT_COMMAND` (command used by command-palette Voice input; stdout must be the final transcript)
+- `DEEPSEEK_VOICE_INPUT_TIMEOUT_SECS` (voice input command timeout, clamped to `1..=600`, default `60`)
 - `DEEPSEEK_CAPACITY_ENABLED`
 - `DEEPSEEK_CAPACITY_LOW_RISK_MAX`
 - `DEEPSEEK_CAPACITY_MEDIUM_RISK_MAX`
@@ -370,10 +372,58 @@ Common settings keys:
 - `max_history` (number of submitted input history entries; cleared drafts are
   also kept locally for composer history search)
 - `default_model` (model name override)
+- `voice_input_command` (command run by command-palette Voice input; stdout is
+  inserted into the composer as transcript text)
+- `voice_input_timeout_secs` (1-600 seconds, default 60)
 
 Only `agent`, `plan`, and `yolo` are visible modes in the UI. Switch between
 them with `/mode`. For compatibility, older settings files with
 `default_mode = "normal"` still load as `agent`.
+
+### Voice Input
+
+Voice input is intentionally a command bridge instead of a built-in speech SDK.
+The configured command owns microphone permission, recording, and
+speech-to-text. CodeWhale runs it in the background with a listening status,
+reads stdout, trims surrounding whitespace, and inserts the transcript into the
+composer at the cursor.
+Open it from the command palette with `Ctrl+K`, then search `Voice input`.
+
+```toml
+voice_input_command = "codewhale-voice"
+voice_input_timeout_secs = 60
+```
+
+The command must:
+
+- exit `0` on success
+- write only the final transcript to stdout
+- write diagnostics to stderr
+- avoid putting API keys directly in the command string; read secrets from the
+  environment or OS key store instead
+
+Platform helper patterns:
+
+- macOS: use a small helper around a local STT tool or Apple's Speech framework,
+  then set `voice_input_command = "codewhale-voice"`. Apple's framework supports
+  live and recorded speech recognition, but microphone and speech permissions
+  belong in the helper, not the terminal UI.
+- Windows: use a PowerShell, .NET, or WinRT helper around
+  `Windows.Media.SpeechRecognition`. Prefer forward slashes in configured paths,
+  for example
+  `voice_input_command = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:/Users/me/bin/codewhale-voice.ps1"`.
+- HarmonyOS/Huawei devices: use a native, ArkTS/Java, or device-bridge helper
+  that calls the platform/Huawei ASR capability and prints UTF-8 transcript text.
+  This keeps the Rust TUI portable while letting the HarmonyOS side own device
+  permissions and SDK packaging.
+
+Useful native references for helper authors:
+
+- Apple Speech framework: <https://developer.apple.com/documentation/speech/>
+- Windows speech recognition APIs:
+  <https://learn.microsoft.com/en-us/windows/apps/develop/input/speech-recognition>
+- Huawei ML Kit ASR codelab:
+  <https://developer.huawei.com/consumer/en/codelab/AirTouch/>
 
 Localization scope is tracked in [LOCALIZATION.md](LOCALIZATION.md). The v0.7.6
 core pack covers high-visibility TUI chrome only; provider/tool schemas,

@@ -105,7 +105,7 @@ use crate::tui::workspace_context;
 
 use super::app::{
     App, AppAction, AppMode, OnboardingState, QueuedMessage, ReasoningEffort, SidebarFocus,
-    StatusToastLevel, SubmitDisposition, TaskPanelEntry, TuiOptions,
+    StatusToastLevel, SubmitDisposition, TaskPanelEntry, TuiOptions, VoiceInputState,
     looks_like_slash_command_input,
 };
 use super::approval::{
@@ -190,6 +190,11 @@ enum TranslationEvent {
         placeholder: String,
         translated: anyhow::Result<String>,
     },
+}
+
+#[derive(Debug)]
+enum VoiceInputEvent {
+    Finished { result: Result<String> },
 }
 // Reset scroll region (`\x1b[r`), origin mode (`\x1b[?6l`), and home the cursor
 // (`\x1b[H`) before letting ratatui's diff renderer repaint. The destructive
@@ -862,6 +867,8 @@ async fn run_event_loop(
     let mut current_streaming_text = String::new();
     let (translation_tx, mut translation_rx) =
         tokio::sync::mpsc::unbounded_channel::<TranslationEvent>();
+    let (voice_input_tx, mut voice_input_rx) =
+        tokio::sync::mpsc::unbounded_channel::<VoiceInputEvent>();
     let mut pending_translations = 0usize;
     let mut pending_thinking_translations = 0usize;
     let mut last_queue_state = (app.queued_messages.clone(), app.queued_draft.clone());
@@ -980,6 +987,8 @@ async fn run_event_loop(
                 }
             }
         }
+
+        drain_voice_input_events(app, &mut voice_input_rx);
 
         if last_task_refresh.elapsed() >= Duration::from_millis(2500) {
             refresh_active_task_panel(app, &task_manager).await;
@@ -1995,6 +2004,7 @@ async fn run_event_loop(
                 &task_manager,
                 &mut engine_handle,
                 &mut web_config_session,
+                voice_input_tx.clone(),
                 events,
             )
             .await?
@@ -2007,7 +2017,10 @@ async fn run_event_loop(
         if reconcile_turn_liveness(app, Instant::now(), has_running_agents) {
             app.needs_redraw = true;
         }
-        if (app.is_loading || has_running_agents || app.is_compacting)
+        if (app.is_loading
+            || has_running_agents
+            || app.is_compacting
+            || app.voice_input_state.is_some())
             && last_status_frame.elapsed()
                 >= Duration::from_millis(status_animation_interval_ms(app))
         {
@@ -2101,7 +2114,11 @@ async fn run_event_loop(
             app.needs_redraw = false;
         }
 
-        let mut poll_timeout = if app.is_loading || has_running_agents || app.is_compacting {
+        let mut poll_timeout = if app.is_loading
+            || has_running_agents
+            || app.is_compacting
+            || app.voice_input_state.is_some()
+        {
             Duration::from_millis(active_poll_ms(app))
         } else {
             Duration::from_millis(idle_poll_ms(app))
@@ -2286,6 +2303,7 @@ async fn run_event_loop(
                     &task_manager,
                     &mut engine_handle,
                     &mut web_config_session,
+                    voice_input_tx.clone(),
                     events,
                 )
                 .await?
@@ -2667,6 +2685,7 @@ async fn run_event_loop(
                     &task_manager,
                     &mut engine_handle,
                     &mut web_config_session,
+                    voice_input_tx.clone(),
                     events,
                 )
                 .await?
@@ -5269,6 +5288,82 @@ async fn execute_command_input(
     .await
 }
 
+fn start_voice_input(
+    app: &mut App,
+    voice_input_tx: tokio::sync::mpsc::UnboundedSender<VoiceInputEvent>,
+) {
+    if app.voice_input_state.is_some() {
+        app.status_message = Some("Voice input is already listening".to_string());
+        app.needs_redraw = true;
+        return;
+    }
+
+    let settings = match crate::settings::Settings::load() {
+        Ok(settings) => settings,
+        Err(err) => {
+            app.add_message(HistoryCell::System {
+                content: format!("Voice input unavailable: failed to load settings: {err}"),
+            });
+            app.status_message = Some("Voice input unavailable".to_string());
+            return;
+        }
+    };
+
+    let Some(command_line) = settings.voice_input_command.clone() else {
+        app.add_message(HistoryCell::System {
+            content: "Voice input is not configured. Set `voice_input_command` in settings.toml or export `DEEPSEEK_VOICE_INPUT_COMMAND`. Open the command palette and choose Voice input after configuring it. The command must write the transcript to stdout.".to_string(),
+        });
+        app.status_message = Some("Voice input not configured".to_string());
+        return;
+    };
+
+    let timeout_secs = settings.voice_input_timeout_secs;
+    let workspace = app.workspace.clone();
+    app.voice_input_state = Some(VoiceInputState::new(Instant::now()));
+    app.status_message =
+        Some("Voice input listening - transcript will appear in the composer".to_string());
+    app.needs_redraw = true;
+
+    tokio::spawn(async move {
+        let result = crate::tui::voice_input::run_configured_voice_command(
+            &command_line,
+            timeout_secs,
+            &workspace,
+        )
+        .await;
+        let _ = voice_input_tx.send(VoiceInputEvent::Finished { result });
+    });
+}
+
+fn drain_voice_input_events(
+    app: &mut App,
+    voice_input_rx: &mut tokio::sync::mpsc::UnboundedReceiver<VoiceInputEvent>,
+) {
+    while let Ok(event) = voice_input_rx.try_recv() {
+        match event {
+            VoiceInputEvent::Finished { result } => {
+                app.voice_input_state = None;
+                match result {
+                    Ok(transcript) => {
+                        let char_count = transcript.chars().count();
+                        app.insert_str(&transcript);
+                        app.status_message = Some(format!(
+                            "Voice transcript inserted ({char_count} chars) - edit, then Enter to send"
+                        ));
+                    }
+                    Err(err) => {
+                        app.add_message(HistoryCell::System {
+                            content: format!("Voice input failed: {err}"),
+                        });
+                        app.status_message = Some("Voice input failed".to_string());
+                    }
+                }
+                app.needs_redraw = true;
+            }
+        }
+    }
+}
+
 async fn steer_user_message(
     app: &mut App,
     engine_handle: &EngineHandle,
@@ -5882,6 +5977,7 @@ async fn handle_view_events(
     task_manager: &SharedTaskManager,
     engine_handle: &mut EngineHandle,
     web_config_session: &mut Option<WebConfigSession>,
+    voice_input_tx: tokio::sync::mpsc::UnboundedSender<VoiceInputEvent>,
     events: Vec<ViewEvent>,
 ) -> Result<bool> {
     for event in events {
@@ -5911,6 +6007,9 @@ async fn handle_view_events(
                 }
                 crate::tui::views::CommandPaletteAction::OpenTextPager { title, content } => {
                     open_text_pager(app, title, content);
+                }
+                crate::tui::views::CommandPaletteAction::VoiceInput => {
+                    start_voice_input(app, voice_input_tx.clone());
                 }
             },
             ViewEvent::OpenTextPager { title, content } => {

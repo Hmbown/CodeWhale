@@ -429,6 +429,11 @@ ACP workflows outside the built-in Zed slice.
 | `@path` | Attach file/directory context in composer |
 | `↑` (at composer start) | Select attachment row for removal |
 
+Voice input is available from the command palette (`Ctrl+K`, then search
+`Voice input`) after configuring `voice_input_command`; the helper
+records/transcribes audio, CodeWhale shows a listening status while it runs, and
+the final transcript is inserted into the composer for editing.
+
 Full shortcut catalog: [docs/KEYBINDINGS.md](docs/KEYBINDINGS.md).
 
 ---

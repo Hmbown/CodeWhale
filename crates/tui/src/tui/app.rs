@@ -129,6 +129,18 @@ pub enum AppMode {
     Plan,
 }
 
+#[derive(Debug, Clone)]
+pub struct VoiceInputState {
+    pub started_at: Instant,
+}
+
+impl VoiceInputState {
+    #[must_use]
+    pub fn new(started_at: Instant) -> Self {
+        Self { started_at }
+    }
+}
+
 /// One row in the per-turn cache-telemetry ring (`/cache` debug surface, #263).
 #[derive(Debug, Clone)]
 pub struct TurnCacheRecord {
@@ -1062,6 +1074,8 @@ pub struct App {
     pub sticky_status: Option<StatusToast>,
     /// Last status text already promoted from `status_message` into toast state.
     pub last_status_message_seen: Option<String>,
+    /// Active external speech-to-text helper launched from the command palette.
+    pub voice_input_state: Option<VoiceInputState>,
     pub model: String,
     /// When true, the model is auto-selected based on request complexity
     /// rather than using a fixed model. The `/model auto` command sets this.
@@ -1780,6 +1794,7 @@ impl App {
             status_toasts: VecDeque::new(),
             sticky_status: None,
             last_status_message_seen: None,
+            voice_input_state: None,
             model,
             auto_model,
             last_effective_model: None,

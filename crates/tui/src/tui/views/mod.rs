@@ -45,6 +45,7 @@ pub enum CommandPaletteAction {
     ExecuteCommand { command: String },
     InsertText { text: String },
     OpenTextPager { title: String, content: String },
+    VoiceInput,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

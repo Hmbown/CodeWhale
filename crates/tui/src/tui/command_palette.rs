@@ -23,6 +23,7 @@ use crate::tui::views::{CommandPaletteAction, ModalKind, ModalView, ViewAction, 
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum PaletteSection {
+    Action,
     Command,
     Skill,
     Tool,
@@ -53,6 +54,14 @@ pub fn build_entries(
     mcp_snapshot: Option<&crate::mcp::McpManagerSnapshot>,
 ) -> Vec<CommandPaletteEntry> {
     let mut entries = Vec::new();
+
+    entries.push(CommandPaletteEntry {
+        section: PaletteSection::Action,
+        label: "Voice input".to_string(),
+        description: "Listen, transcribe, and insert editable text into the composer".to_string(),
+        command: "voice input dictate microphone speech".to_string(),
+        action: CommandPaletteAction::VoiceInput,
+    });
 
     for command in commands::COMMANDS {
         let mut description = command.palette_description_for(locale);
@@ -363,6 +372,7 @@ fn parse_section_term(term: &str) -> Option<(PaletteSection, String)> {
 
     let query = query.to_ascii_lowercase();
     let section = match section {
+        "a" | "action" | "actions" => PaletteSection::Action,
         "c" | "cmd" | "command" | "commands" => PaletteSection::Command,
         "s" | "skill" | "skills" => PaletteSection::Skill,
         "t" | "tool" | "tools" => PaletteSection::Tool,
@@ -375,6 +385,7 @@ fn parse_section_term(term: &str) -> Option<(PaletteSection, String)> {
 
 fn section_tag(section: PaletteSection) -> &'static str {
     match section {
+        PaletteSection::Action => "action",
         PaletteSection::Command => "command",
         PaletteSection::Skill => "skill",
         PaletteSection::Tool => "tool",
@@ -384,10 +395,11 @@ fn section_tag(section: PaletteSection) -> &'static str {
 
 fn section_rank(section: PaletteSection) -> usize {
     match section {
-        PaletteSection::Command => 0,
-        PaletteSection::Skill => 1,
-        PaletteSection::Tool => 2,
-        PaletteSection::Mcp => 3,
+        PaletteSection::Action => 0,
+        PaletteSection::Command => 1,
+        PaletteSection::Skill => 2,
+        PaletteSection::Tool => 3,
+        PaletteSection::Mcp => 4,
     }
 }
 
@@ -566,6 +578,7 @@ impl CommandPaletteView {
 
     fn format_section_label(section: PaletteSection, count: usize) -> Line<'static> {
         let title = match section {
+            PaletteSection::Action => "Actions",
             PaletteSection::Command => "Commands",
             PaletteSection::Skill => "Skills",
             PaletteSection::Tool => "Tools",
@@ -724,12 +737,14 @@ impl ModalView for CommandPaletteView {
         lines.push(Line::from(""));
 
         let visible = popup_height.saturating_sub(7) as usize;
+        let mut action_count = 0usize;
         let mut command_count = 0usize;
         let mut skill_count = 0usize;
         let mut tool_count = 0usize;
         let mut mcp_count = 0usize;
         for idx in &self.filtered {
             match self.entries[*idx].section {
+                PaletteSection::Action => action_count += 1,
                 PaletteSection::Command => command_count += 1,
                 PaletteSection::Skill => skill_count += 1,
                 PaletteSection::Tool => tool_count += 1,
@@ -756,6 +771,7 @@ impl ModalView for CommandPaletteView {
                         lines.push(Line::from(""));
                     }
                     let count = match entry.section {
+                        PaletteSection::Action => action_count,
                         PaletteSection::Command => command_count,
                         PaletteSection::Skill => skill_count,
                         PaletteSection::Tool => tool_count,
@@ -996,8 +1012,27 @@ mod tests {
 
         assert!(command_labels.contains(&"/config"));
         assert!(command_labels.contains(&"/links"));
+        assert!(!command_labels.contains(&"/voice"));
         assert!(!command_labels.contains(&"/set"));
         assert!(!command_labels.contains(&"/deepseek"));
+    }
+
+    #[test]
+    fn command_palette_includes_voice_input_action() {
+        let entries = build_entries(
+            Locale::En,
+            Path::new("."),
+            Path::new("."),
+            Path::new("mcp.json"),
+            None,
+        );
+        let voice = entries
+            .iter()
+            .find(|entry| entry.section == PaletteSection::Action && entry.label == "Voice input")
+            .expect("voice input action");
+
+        assert!(voice.description.contains("composer"));
+        assert!(matches!(voice.action, CommandPaletteAction::VoiceInput));
     }
 
     #[test]
