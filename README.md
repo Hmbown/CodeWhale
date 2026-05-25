@@ -95,7 +95,7 @@ It is built around DeepSeek V4 (`deepseek-v4-pro` / `deepseek-v4-flash`), includ
 - **HTTP/SSE runtime API** — `codewhale serve --http` for headless agent workflows
 - **MCP protocol** — connect to Model Context Protocol servers for extended tooling; please see [docs/MCP.md](docs/MCP.md)
 - **Fin-powered seams** — cheap `deepseek-v4-flash` with thinking off handles routing, RLM child calls, summaries, and other fast coordination work
-- **Native RLM** (`rlm_open`/`rlm_eval`) — persistent REPL sessions for batched analysis with bounded helpers like `peek`, `search`, `chunk`, and `sub_query_batch`
+- **Native RLM** (`rlm_session_objects`/`rlm_open`/`rlm_eval`) — persistent REPL sessions for batched analysis with bounded helpers like `peek`, `search`, `chunk`, and `sub_query_batch`; active prompt/history objects are opened by symbolic refs instead of pasted into the parent transcript
 - **LSP diagnostics** — inline error/warning surfacing after every edit via rust-analyzer, pyright, typescript-language-server, gopls, clangd
 - **User memory** — optional persistent note file injected into the system prompt for cross-session preferences
 - **Localized UI** — `en`, `ja`, `zh-Hans`, `pt-BR` with auto-detection

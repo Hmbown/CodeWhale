@@ -54,6 +54,7 @@ test.txt
 TODO*.md
 todo*.md
 CLAUDE.md
+AGENTS.md
 NEXT_SESSION.md
 AI_HANDOFF.md
 result.json

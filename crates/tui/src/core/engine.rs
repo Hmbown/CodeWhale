@@ -1416,6 +1416,13 @@ impl Engine {
         .with_features(self.config.features.clone())
         .with_shell_manager(self.shell_manager.clone())
         .with_runtime_services(self.config.runtime_services.clone())
+        .with_session_objects(crate::rlm::session::SessionObjectSnapshot::new(
+            self.session.id.clone(),
+            self.session.model.clone(),
+            self.session.workspace.clone(),
+            self.session.system_prompt.clone(),
+            self.session.messages.clone(),
+        ))
         .with_cancel_token(self.cancel_token.clone())
         .with_trusted_external_paths(trusted_external_paths);
 

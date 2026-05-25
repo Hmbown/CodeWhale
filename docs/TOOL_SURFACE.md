@@ -169,10 +169,19 @@ RLM is now persistent as well:
 
 | Tool | Niche |
 |---|---|
+| `rlm_session_objects` | List compact cards for the active prompt, session metadata, transcript, latest user message, and per-message refs. |
 | `rlm_open` | Open a named Python REPL over a file, inline content, or URL. |
 | `rlm_eval` | Run bounded Python against that session, using deterministic code and in-REPL semantic helpers such as `sub_query_batch`. |
 | `rlm_configure` | Adjust output feedback, child-query timeout/depth, and session-sharing settings. |
 | `rlm_close` | Shut down the Python runtime and return final session stats. |
+
+`rlm_open` also accepts `session_object`, a stable ref returned by
+`rlm_session_objects`, such as `session://active/system_prompt`,
+`session://active/transcript`, or `session://active/messages/0`. This loads
+the selected object into the RLM REPL and returns only metadata to the parent
+transcript. Transcript objects keep thinking blocks and large tool results as
+compact metadata; inspect large payloads through returned `var_handle` values
+and `handle_read`, not by asking the parent transcript to paste the raw text.
 
 Large RLM outputs should come back as `var_handle`s. Use `handle_read` for
 bounded text slices, line ranges, counts, or JSONPath projections instead of

@@ -663,8 +663,11 @@ impl ToolRegistryBuilder {
     /// Include persistent RLM session tools.
     #[must_use]
     pub fn with_rlm_tool(self, client: Option<DeepSeekClient>, _root_model: String) -> Self {
-        use super::rlm::{RlmCloseTool, RlmConfigureTool, RlmEvalTool, RlmOpenTool};
-        self.with_tool(Arc::new(RlmOpenTool))
+        use super::rlm::{
+            RlmCloseTool, RlmConfigureTool, RlmEvalTool, RlmOpenTool, RlmSessionObjectsTool,
+        };
+        self.with_tool(Arc::new(RlmSessionObjectsTool))
+            .with_tool(Arc::new(RlmOpenTool))
             .with_tool(Arc::new(RlmEvalTool::new(client)))
             .with_tool(Arc::new(RlmConfigureTool))
             .with_tool(Arc::new(RlmCloseTool))

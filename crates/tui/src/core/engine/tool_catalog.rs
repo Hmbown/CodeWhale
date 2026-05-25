@@ -63,6 +63,7 @@ pub(super) fn should_default_defer_tool(name: &str, mode: AppMode) -> bool {
             | "rlm_eval"
             | "rlm_configure"
             | "rlm_close"
+            | "rlm_session_objects"
             | "handle_read"
             | "recall_archive"
             | "notify"
