@@ -833,6 +833,30 @@ impl RuntimeThreadManager {
         }
     }
 
+    pub async fn submit_user_input(
+        &self,
+        thread_id: &str,
+        input_id: &str,
+        response: crate::tools::user_input::UserInputResponse,
+    ) -> Result<bool> {
+        let active = self.active.lock().await;
+        let Some(state) = active.engines.get(thread_id) else {
+            bail!("thread '{thread_id}' not loaded");
+        };
+        state.engine.submit_user_input(input_id, response).await?;
+        Ok(true)
+    }
+
+    #[allow(dead_code)]
+    pub async fn cancel_user_input(&self, thread_id: &str, input_id: &str) -> Result<bool> {
+        let active = self.active.lock().await;
+        let Some(state) = active.engines.get(thread_id) else {
+            bail!("thread '{thread_id}' not loaded");
+        };
+        state.engine.cancel_user_input(input_id).await?;
+        Ok(true)
+    }
+
     #[allow(dead_code)]
     pub fn pending_approvals_count(&self) -> usize {
         self.pending_approvals
@@ -1699,7 +1723,41 @@ impl RuntimeThreadManager {
         )
         .await?;
 
-        self.store.load_turn(turn_id)
+        let ended_at = Utc::now();
+        let mut turn = self.store.load_turn(turn_id)?;
+        turn.status = RuntimeTurnStatus::Interrupted;
+        turn.ended_at = Some(ended_at);
+        turn.duration_ms = turn.started_at.map(|start| duration_ms(start, ended_at));
+        self.store.save_turn(&turn)?;
+
+        let mut thread = self.get_thread(thread_id).await?;
+        thread.latest_turn_id = Some(turn_id.to_string());
+        thread.updated_at = Utc::now();
+        self.store.save_thread(&thread)?;
+
+        self.emit_event(
+            thread_id,
+            Some(turn_id),
+            None,
+            "turn.completed",
+            json!({ "turn": turn.clone() }),
+        )
+        .await?;
+
+        {
+            let mut active = self.active.lock().await;
+            if let Some(state) = active.engines.get_mut(thread_id)
+                && state
+                    .active_turn
+                    .as_ref()
+                    .is_some_and(|t| t.turn_id == turn_id)
+            {
+                state.active_turn = None;
+            }
+            touch_lru(&mut active.lru, thread_id);
+        }
+
+        Ok(turn)
     }
 
     pub async fn steer_turn(
@@ -2781,6 +2839,19 @@ impl RuntimeThreadManager {
                             let _ = engine.deny_tool_call(tool_id).await;
                         }
                     }
+                }
+                EngineEvent::UserInputRequired { id, request } => {
+                    self.emit_event(
+                        &thread_id,
+                        Some(&turn_id),
+                        None,
+                        "user_input.required",
+                        json!({
+                            "id": id,
+                            "request": request,
+                        }),
+                    )
+                    .await?;
                 }
                 EngineEvent::Status { message } => {
                     let item = TurnItemRecord {
