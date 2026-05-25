@@ -51,7 +51,7 @@ $binDir = "$env:LOCALAPPDATA\Programs\CodeWhale\bin"
 New-Item -ItemType Directory -Force -Path $binDir
 
 # 2. Download binaries (adjust URL to your mirror or release tag)
-$tag = "v0.9.0"  # replace with desired version
+$tag = (Invoke-RestMethod -Uri "https://api.github.com/repos/Hmbown/CodeWhale/releases/latest").tag_name
 Invoke-WebRequest -Uri "https://github.com/Hmbown/CodeWhale/releases/download/$tag/codewhale-x64.exe"     -OutFile "$binDir\codewhale.exe"
 Invoke-WebRequest -Uri "https://github.com/Hmbown/CodeWhale/releases/download/$tag/codewhale-tui-x64.exe" -OutFile "$binDir\codewhale-tui.exe"
 

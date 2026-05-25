@@ -25,6 +25,7 @@
 !include "StrFunc.nsh"
 
 ${StrStr}
+${UnStrStr}
 
 ;--------------------------------
 ; General
@@ -127,11 +128,9 @@ Section "Uninstall"
 
   ; Remove from current-user PATH
   ReadRegStr $0 HKCU "Environment" "Path"
-  ${StrStr} $1 $0 "$INSTDIR\bin"
+  ${un.StrStr} $1 $0 "$INSTDIR\bin"
   StrCmp $1 "" path_clean_done
     ; Remove the entry
-    ; Build new PATH without the install dir
-    ; This handles: "...\path;$INSTDIR\bin" and "$INSTDIR\bin;...\path" and standalone
     Push "$0"
     Push "$INSTDIR\bin"
     Call un.RemoveFromPath
@@ -146,7 +145,7 @@ Section "Uninstall"
 SectionEnd
 
 ;--------------------------------
-; Helper: Remove a directory from PATH
+; Helper: Remove a directory from PATH (uninstaller version)
 ; Input: PATH string (on stack), directory to remove (on stack)
 ; Output: cleaned PATH (on stack)
 ;--------------------------------
@@ -154,44 +153,43 @@ Function un.RemoveFromPath
   Exch $R0 ; directory to remove
   Exch
   Exch $R1 ; original PATH
-  Push $R2
-  Push $R3
-  Push $R4
+  Push $R2 ; prefix
+  Push $R3 ; suffix
+  Push $R4 ; match result
 
-  StrCpy $R2 ""
-  StrCpy $R3 ""
+  ${un.StrStr} $R4 $R1 $R0
+  StrCmp $R4 "" done
 
-  loop:
-    ${StrStr} $R4 $R1 $R0
-    StrCmp $R4 "" done
-    ; Found — get substring before match
-    StrLen $R4 $R4
-    StrLen $R3 $R1
-    IntOp $R3 $R3 - $R4
-    StrCpy $R2 $R1 $R3
-    ; Get substring after match + dir length
-    StrLen $R3 $R0
-    IntOp $R4 $R4 - $R3
-    StrCpy $R3 $R1 "" $R4
-    ; Strip leading semicolon from remainder
-    StrCpy $R4 $R3 1
-    StrCmp $R4 ";" 0 +2
-      StrCpy $R3 $R3 "" 1
-    ; Strip trailing semicolon from prefix
-    StrLen $R4 $R2
-    IntOp $R4 $R4 - 1
-    StrCpy $R4 $R2 1 $R4
-    StrCmp $R4 ";" 0 +2
-      StrCpy $R2 $R2 $R4
-    ; Concatenate
-    StrCmp $R2 "" 0 +2
-      StrCpy $R2 $R3
-      Goto done
-    StrCmp $R3 "" 0 +2
-      StrCpy $R1 $R2
-      Goto done
-    StrCpy $R1 "$R2;$R3"
+  ; Calculate prefix
+  StrLen $R2 $R1
+  StrLen $R3 $R4
+  IntOp $R3 $R2 - $R3 ; Match offset
+  StrCpy $R2 $R1 $R3   ; Prefix string
+
+  ; Calculate suffix
+  StrLen $R4 $R0
+  IntOp $R4 $R3 + $R4 ; Suffix offset = Match offset + Dir length
+  StrCpy $R3 $R1 "" $R4 ; Suffix string
+
+  ; Clean up semicolons
+  StrCpy $R4 $R3 1
+  StrCmp $R4 ";" 0 +2
+    StrCpy $R3 $R3 "" 1 ; Strip leading semicolon from suffix
+
+  StrLen $R4 $R2
+  IntOp $R4 $R4 - 1
+  StrCpy $R0 $R2 1 $R4
+  StrCmp $R0 ";" 0 +2
+    StrCpy $R2 $R2 $R4 ; Strip trailing semicolon from prefix
+
+  ; Concatenate
+  StrCmp $R2 "" 0 +3
+    StrCpy $R1 $R3
     Goto done
+  StrCmp $R3 "" 0 +3
+    StrCpy $R1 $R2
+    Goto done
+  StrCpy $R1 "$R2;$R3"
 
   done:
     Pop $R4
