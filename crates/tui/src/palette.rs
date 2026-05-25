@@ -40,7 +40,7 @@ pub const GRAYSCALE_BORDER_RGB: (u8, u8, u8) = (96, 96, 96); // #606060
 pub const GRAYSCALE_SELECTION_RGB: (u8, u8, u8) = (62, 62, 62); // #3E3E3E
 
 // New semantic colors
-pub const BORDER_COLOR_RGB: (u8, u8, u8) = (42, 74, 127); // #2A4A7F
+pub const BORDER_COLOR_RGB: (u8, u8, u8) = (52, 84, 137); // #345489 (v0.8.45: +10% contrast)
 
 pub const DEEPSEEK_BLUE: Color = Color::Rgb(
     DEEPSEEK_BLUE_RGB.0,
@@ -210,7 +210,7 @@ pub const STATUS_NEUTRAL: Color = Color::Rgb(160, 160, 160); // #A0A0A0
 #[allow(dead_code)]
 pub const SURFACE_PANEL: Color = Color::Rgb(21, 33, 52); // #152134
 #[allow(dead_code)]
-pub const SURFACE_ELEVATED: Color = Color::Rgb(28, 42, 64); // #1C2A40
+pub const SURFACE_ELEVATED: Color = Color::Rgb(32, 48, 72); // #203048 (v0.8.45: +14% brightness for better layer separation)
 pub const SURFACE_REASONING: Color = Color::Rgb(54, 44, 26); // #362C1A
 pub const SURFACE_REASONING_TINT: Color = Color::Rgb(16, 24, 37); // #101825
 #[allow(dead_code)]
@@ -244,7 +244,7 @@ pub const MODE_YOLO: Color = Color::Rgb(255, 100, 100); // Warning red
 pub const MODE_PLAN: Color = Color::Rgb(255, 170, 60); // Orange
 pub const MODE_GOAL: Color = Color::Rgb(100, 220, 160); // Mint green
 
-pub const SELECTION_BG: Color = Color::Rgb(26, 44, 74);
+pub const SELECTION_BG: Color = Color::Rgb(34, 54, 88); // #223658 (v0.8.45: +20% brightness)
 #[allow(dead_code)]
 pub const COMPOSER_BG: Color = DEEPSEEK_SLATE;
 
@@ -347,6 +347,16 @@ pub struct UiTheme {
     pub border: Color,
 }
 
+/// Default Whale dark palette — deep ocean blues with sky-blue accents.
+///
+/// Design: high-contrast text on low-blue dark surfaces, DeepSeek brand colors
+/// for mode indicators, amber warnings, and mint-green goal tracking. Panel
+/// surfaces are slightly lighter than the base to create depth without harsh
+/// brightness jumps.
+///
+/// Refreshed v0.8.45: elevated surfaces lightened for better layer separation;
+/// selection background brightened for clearer focus indication; border contrast
+/// increased by 10%.
 pub const UI_THEME: UiTheme = UiTheme {
     name: "whale",
     mode: PaletteMode::Dark,
