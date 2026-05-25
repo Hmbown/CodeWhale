@@ -174,6 +174,11 @@ pub fn load(app: &mut App, path: Option<&str>) -> CommandResult {
     app.workspace.clone_from(&session.metadata.workspace);
     app.session.total_tokens = u32::try_from(session.metadata.total_tokens).unwrap_or(u32::MAX);
     app.session.total_conversation_tokens = app.session.total_tokens;
+    // Accumulated token breakdown is per-runtime-session; zero on load.
+    app.session.total_input_tokens = 0;
+    app.session.total_cache_hit_tokens = 0;
+    app.session.total_cache_miss_tokens = 0;
+    app.session.total_output_tokens = 0;
     app.session.session_cost = 0.0;
     app.session.session_cost_cny = 0.0;
     app.session.subagent_cost = 0.0;

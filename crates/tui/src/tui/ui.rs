@@ -1434,6 +1434,27 @@ async fn run_event_loop(
                             .session
                             .total_conversation_tokens
                             .saturating_add(turn_tokens);
+                        app.session.total_input_tokens = app
+                            .session
+                            .total_input_tokens
+                            .saturating_add(usage.input_tokens);
+                        app.session.total_output_tokens = app
+                            .session
+                            .total_output_tokens
+                            .saturating_add(usage.output_tokens);
+                        app.session.total_cache_hit_tokens = app
+                            .session
+                            .total_cache_hit_tokens
+                            .saturating_add(usage.prompt_cache_hit_tokens.unwrap_or(0));
+                        let cache_miss = usage.prompt_cache_miss_tokens.unwrap_or_else(|| {
+                            usage
+                                .input_tokens
+                                .saturating_sub(usage.prompt_cache_hit_tokens.unwrap_or(0))
+                        });
+                        app.session.total_cache_miss_tokens = app
+                            .session
+                            .total_cache_miss_tokens
+                            .saturating_add(cache_miss);
                         app.session.last_prompt_tokens = Some(usage.input_tokens);
                         app.session.last_completion_tokens = Some(usage.output_tokens);
                         app.session.last_prompt_cache_hit_tokens = usage.prompt_cache_hit_tokens;
@@ -6606,8 +6627,12 @@ fn apply_loaded_session(app: &mut App, config: &Config, session: &SavedSession) 
     app.session.last_prompt_cache_hit_tokens = None;
     app.session.last_prompt_cache_miss_tokens = None;
     app.session.last_reasoning_replay_tokens = None;
+    // Accumulated token breakdown is per-runtime-session; reset on load.
+    app.session.total_input_tokens = 0;
+    app.session.total_cache_hit_tokens = 0;
+    app.session.total_cache_miss_tokens = 0;
+    app.session.total_output_tokens = 0;
     app.session.turn_cache_history.clear();
-    app.current_session_id = Some(session.metadata.id.clone());
     app.session_artifacts = session.artifacts.clone();
     app.session_title = Some(session.metadata.title.clone());
     app.workspace_context = None;

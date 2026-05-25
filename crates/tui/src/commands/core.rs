@@ -55,6 +55,10 @@ pub fn clear(app: &mut App) -> CommandResult {
     app.queued_draft = None;
     app.session.total_tokens = 0;
     app.session.total_conversation_tokens = 0;
+    app.session.total_input_tokens = 0;
+    app.session.total_cache_hit_tokens = 0;
+    app.session.total_cache_miss_tokens = 0;
+    app.session.total_output_tokens = 0;
     app.session.session_cost = 0.0;
     app.session.session_cost_cny = 0.0;
     app.session.subagent_cost = 0.0;

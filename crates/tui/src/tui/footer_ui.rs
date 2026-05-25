@@ -518,6 +518,7 @@ pub(crate) fn render_footer_from(
             S::ContextPercent => footer_context_percent_spans(app),
             S::GitBranch => footer_git_branch_spans(app),
             S::LastToolElapsed | S::RateLimit => Vec::new(),
+            S::Tokens => footer_session_tokens_spans(app),
             _ => continue,
         };
         if chip.is_empty() {
@@ -591,6 +592,25 @@ pub(crate) fn footer_cost_spans(app: &App) -> Vec<Span<'static>> {
 
 pub(crate) fn should_show_footer_cost(displayed_cost: f64) -> bool {
     displayed_cost.is_finite() && displayed_cost > 0.0
+}
+
+/// Session token-usage chip for the footer right cluster.
+///
+/// Renders the accumulated input / cache-hit / output token breakdown
+/// since the current runtime session started (not persisted across
+/// restarts). Returns empty when no tokens have been recorded yet.
+pub(crate) fn footer_session_tokens_spans(app: &App) -> Vec<Span<'static>> {
+    let session = &app.session;
+    if session.total_input_tokens == 0 && session.total_output_tokens == 0 {
+        return Vec::new();
+    }
+    let in_str = format_token_count_compact(u64::from(session.total_input_tokens));
+    let cache_str = format_token_count_compact(u64::from(session.total_cache_hit_tokens));
+    let out_str = format_token_count_compact(u64::from(session.total_output_tokens));
+    vec![Span::styled(
+        format!("{in_str} in · {cache_str} cch · {out_str} out"),
+        Style::default().fg(palette::TEXT_MUTED),
+    )]
 }
 
 /// Test-only helper retained as a parity reference for `FooterWidget`'s

@@ -66,6 +66,24 @@ fn format_status(app: &App) -> String {
     push_row(&mut out, "Cache hit/miss:", &cache_summary(app));
     push_row(
         &mut out,
+        "Session input:",
+        &app.session.total_input_tokens.to_string(),
+    );
+    push_row(
+        &mut out,
+        "Session cache:",
+        &format!(
+            "{} hit / {} miss",
+            app.session.total_cache_hit_tokens, app.session.total_cache_miss_tokens
+        ),
+    );
+    push_row(
+        &mut out,
+        "Session output:",
+        &app.session.total_output_tokens.to_string(),
+    );
+    push_row(
+        &mut out,
         "Total tokens:",
         &app.session.total_tokens.to_string(),
     );
