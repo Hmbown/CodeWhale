@@ -865,6 +865,15 @@ impl RuntimeThreadManager {
                 err
             );
         }
+
+        {
+            let mut active = self.active.lock().await;
+            if let Some(state) = active.engines.get_mut(thread_id) {
+                if let Some(turn) = state.active_turn.as_mut() {
+                    turn.auto_approve = true;
+                }
+            }
+        }
     }
 
     #[must_use]
