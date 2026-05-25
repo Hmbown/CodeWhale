@@ -3510,12 +3510,6 @@ async fn run_subagent_task(task: SubAgentTask) {
     )
     .await;
 
-    let mut manager = task.manager_handle.write().await;
-    match &result {
-        Ok(res) => manager.update_from_result(&task.agent_id, res.clone()),
-        Err(err) => manager.update_failed(&task.agent_id, err.to_string()),
-    }
-
     // Emit BOTH a human-friendly summary (rendered in the parent's
     // sidebar / cell) AND a structured sentinel the model can recognize
     // on its next turn. Format: human summary on the first line,
@@ -3548,16 +3542,24 @@ async fn run_subagent_task(task: SubAgentTask) {
     }
 
     let payload = format!("{summary}\n{sentinel}");
+    let agent_id = task.agent_id.clone();
 
     // Wake the engine's parent turn loop if this is one of its direct
-    // children (issue #756). Gating by `spawn_depth == 1` means the parent
-    // only sees completions for agents it directly orchestrated, not for
-    // grandchildren spawned recursively inside its children.
-    emit_parent_completion(&task.runtime, &task.agent_id, &payload);
+    // children (issue #756). Issue #1961 also requires emit to happen
+    // before marking the manager terminal state so the parent can observe the
+    // completion while its "running children" gate is still open. If we
+    // update first, the parent can finalize before the completion arrives.
+    emit_parent_completion(&task.runtime, &agent_id, &payload);
+
+    let mut manager = task.manager_handle.write().await;
+    match &result {
+        Ok(res) => manager.update_from_result(&agent_id, res.clone()),
+        Err(err) => manager.update_failed(&agent_id, err.to_string()),
+    }
 
     if let Some(event_tx) = task.runtime.event_tx {
         let _ = event_tx.try_send(Event::AgentComplete {
-            id: task.agent_id,
+            id: agent_id.clone(),
             result: payload,
         });
     }
