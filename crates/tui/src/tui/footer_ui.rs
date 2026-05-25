@@ -461,7 +461,9 @@ pub(crate) fn render_footer_from(
         Vec::new()
     };
     let agents = if has(S::Agents) {
-        crate::tui::widgets::footer_agents_chip(running_agent_count(app), app.ui_locale)
+        let mut spans = crate::tui::widgets::footer_agents_chip(running_agent_count(app), app.ui_locale);
+        spans.extend(crate::tui::widgets::footer_shell_chip(app));
+        spans
     } else {
         Vec::new()
     };
@@ -606,6 +608,7 @@ pub(crate) fn footer_auxiliary_spans(app: &App, max_width: usize) -> Vec<Span<'s
     let coherence_spans = footer_coherence_spans(app);
     let agents_spans =
         crate::tui::widgets::footer_agents_chip(running_agent_count(app), app.ui_locale);
+    let shell_spans = crate::tui::widgets::footer_shell_chip(app);
     let replay_spans = footer_reasoning_replay_spans(app);
     let cache_spans = footer_cache_spans(app);
     let cost_spans = footer_cost_spans(app);
@@ -623,6 +626,7 @@ pub(crate) fn footer_auxiliary_spans(app: &App, max_width: usize) -> Vec<Span<'s
     let parts: Vec<&Vec<Span<'static>>> = [
         &coherence_spans,
         &agents_spans,
+        &shell_spans,
         &replay_spans,
         &prefix_spans,
         &cache_spans,

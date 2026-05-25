@@ -173,6 +173,20 @@ pub fn footer_agents_chip(running: usize, locale: Locale) -> Vec<Span<'static>> 
     )]
 }
 
+/// Build a shell-running status chip for the footer. Shows "shell running"
+/// when a foreground shell is executing, so users can see the engine is working.
+#[must_use]
+pub fn footer_shell_chip(app: &crate::tui::app::App) -> Vec<Span<'static>> {
+    use crate::tui::ui::active_foreground_shell_running;
+    if !active_foreground_shell_running(app) {
+        return Vec::new();
+    }
+    vec![Span::styled(
+        "shell running",
+        Style::default().fg(palette::DEEPSEEK_AQUA),
+    )]
+}
+
 /// Build the cumulative-elapsed chip ("worked 3h 12m") for the
 /// footer's right cluster (#448). Hidden during the first minute of
 /// a session so a fresh launch doesn't render a noisy `worked 5s`
