@@ -30,7 +30,7 @@ use crate::localization::Locale;
 use crate::sandbox::SandboxPolicy;
 use crate::tui::views::{ModalKind, ModalView, ViewAction, ViewEvent};
 use crate::tui::widgets::{ApprovalWidget, ElevationWidget, Renderable};
-use codewhale_execpolicy::{PermissionDecision, ToolPermissionRule};
+use codewhale_execpolicy::{PermissionDecision, ToolPermissionRule, normalize_path_pattern};
 use crossterm::event::{KeyCode, KeyEvent};
 use serde_json::Value;
 use std::path::{Component, Path, PathBuf};
@@ -431,7 +431,10 @@ fn normalize_persistent_permission_path(raw: &str, workspace: Option<&Path>) -> 
         normalize_path(raw_path)
     };
 
-    let path = permission_path_to_string(&normalized);
+    let mut path = normalize_path_pattern(&permission_path_to_string(&normalized));
+    if path.is_empty() {
+        path = ".".to_string();
+    }
     if path_contains_glob_metachar(&path) {
         return None;
     }

@@ -328,8 +328,7 @@ pub fn persist_status_items(items: &[crate::config::StatusItem]) -> anyhow::Resu
     tui_table.insert("status_items".to_string(), toml::Value::Array(array));
 
     let body = toml::to_string_pretty(&doc).context("failed to serialize config.toml")?;
-    fs::write(&path, body)
-        .with_context(|| format!("failed to write config at {}", path.display()))?;
+    write_config_toml(&path, &body)?;
     Ok(path)
 }
 
@@ -360,8 +359,7 @@ pub fn persist_root_string_key(
         .context("config.toml root must be a table")?;
     table.insert(key.to_string(), toml::Value::String(value.to_string()));
     let body = toml::to_string_pretty(&doc).context("failed to serialize config.toml")?;
-    fs::write(&path, body)
-        .with_context(|| format!("failed to write config at {}", path.display()))?;
+    write_config_toml(&path, &body)?;
     Ok(path)
 }
 
@@ -399,9 +397,15 @@ pub fn persist_permission_rules(
     append_permission_rules(rules_entry, rules)?;
 
     let body = doc.to_string();
-    fs::write(&path, body)
-        .with_context(|| format!("failed to write config at {}", path.display()))?;
+    write_config_toml(&path, &body)?;
     Ok(path)
+}
+
+fn write_config_toml(path: &Path, body: &str) -> anyhow::Result<()> {
+    use anyhow::Context;
+
+    crate::utils::write_atomic(path, body.as_bytes())
+        .with_context(|| format!("failed to write config at {}", path.display()))
 }
 
 fn append_permission_rules(

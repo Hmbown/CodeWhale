@@ -485,6 +485,54 @@ fn typed_permission_parses_apply_patch_paths_with_diff_timestamps() {
     assert!(matches!(decision, ToolPermissionOverride::Allow { .. }));
 }
 
+#[test]
+fn typed_permission_ignores_diff_like_hunk_content() {
+    let engine = permission_engine_with_rules(vec![
+        codewhale_execpolicy::ToolPermissionRule::file_path(
+            "apply_patch",
+            codewhale_execpolicy::PermissionDecision::Allow,
+            "docs/**",
+        ),
+        codewhale_execpolicy::ToolPermissionRule::file_path(
+            "apply_patch",
+            codewhale_execpolicy::PermissionDecision::Deny,
+            "secrets/**",
+        ),
+    ]);
+
+    let decision = tool_permission_override_for_call(
+        &engine,
+        "apply_patch",
+        &json!({
+            "patch": "--- a/docs/a.md\n+++ b/docs/a.md\n@@ -1,2 +1,2 @@\n--- secrets/token.txt\n+++ secrets/token.txt\n"
+        }),
+        permission_test_workspace(),
+    );
+
+    assert!(matches!(decision, ToolPermissionOverride::Allow { .. }));
+}
+
+#[test]
+fn typed_permission_parses_multiple_unified_files_without_git_headers() {
+    let engine =
+        permission_engine_with_rules(vec![codewhale_execpolicy::ToolPermissionRule::file_path(
+            "apply_patch",
+            codewhale_execpolicy::PermissionDecision::Allow,
+            "docs/**",
+        )]);
+
+    let decision = tool_permission_override_for_call(
+        &engine,
+        "apply_patch",
+        &json!({
+            "patch": "--- a/docs/a.md\n+++ b/docs/a.md\n@@ -1 +1 @@\n-old\n+new\n--- a/docs/b.md\n+++ b/docs/b.md\n@@ -1 +1 @@\n-old\n+new\n"
+        }),
+        permission_test_workspace(),
+    );
+
+    assert!(matches!(decision, ToolPermissionOverride::Allow { .. }));
+}
+
 fn api_tool(name: &str) -> Tool {
     Tool {
         tool_type: Some("function".to_string()),

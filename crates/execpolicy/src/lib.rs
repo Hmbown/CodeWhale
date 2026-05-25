@@ -656,7 +656,9 @@ fn command_prefix_matches(pattern: &str, command: &str) -> bool {
         .is_some_and(|suffix| suffix.is_empty() || suffix.starts_with(' '))
 }
 
-fn normalize_path_pattern(value: &str) -> String {
+/// Normalize permission path patterns to slash-separated paths with `.` and
+/// safe `..` segments collapsed.
+pub fn normalize_path_pattern(value: &str) -> String {
     let raw = value.trim().replace('\\', "/");
     let absolute = raw.starts_with('/');
     let mut segments = Vec::new();

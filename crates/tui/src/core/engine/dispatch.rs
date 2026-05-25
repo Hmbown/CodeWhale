@@ -17,6 +17,7 @@
 
 use codewhale_execpolicy::{
     ExecPolicyEngine, PermissionDecision, ToolPermissionCheck, ToolPermissionContext,
+    normalize_path_pattern,
 };
 use serde_json::{Value, json};
 use std::path::{Component, Path, PathBuf};
@@ -375,22 +376,113 @@ fn apply_patch_permission_paths(input: &Value) -> Vec<String> {
 fn parse_unified_diff_permission_paths(patch: &str) -> Vec<String> {
     let mut paths = Vec::new();
     let mut old_path: Option<String> = None;
+    let mut state = DiffHeaderState::ExpectOld;
 
     for line in patch.lines() {
-        if let Some(stripped) = line.strip_prefix("--- ") {
-            old_path = normalize_diff_permission_path(stripped);
+        if line.starts_with("diff --git ") || line.starts_with("Index: ") {
+            old_path = None;
+            state = DiffHeaderState::ExpectOld;
             continue;
         }
-        if let Some(stripped) = line.strip_prefix("+++ ") {
-            let new_path = normalize_diff_permission_path(stripped);
-            if let Some(path) = new_path.or_else(|| old_path.clone()) {
-                push_unique_path(&mut paths, &path);
+
+        state = match state {
+            DiffHeaderState::ExpectOld => {
+                if let Some(stripped) = line.strip_prefix("--- ") {
+                    old_path = normalize_diff_permission_path(stripped);
+                    DiffHeaderState::ExpectNew
+                } else {
+                    DiffHeaderState::ExpectOld
+                }
             }
-            old_path = None;
-        }
+            DiffHeaderState::ExpectNew => {
+                if let Some(stripped) = line.strip_prefix("+++ ") {
+                    let new_path = normalize_diff_permission_path(stripped);
+                    if let Some(path) = new_path.or_else(|| old_path.clone()) {
+                        push_unique_path(&mut paths, &path);
+                    }
+                    old_path = None;
+                    DiffHeaderState::AfterHeader
+                } else if let Some(stripped) = line.strip_prefix("--- ") {
+                    old_path = normalize_diff_permission_path(stripped);
+                    DiffHeaderState::ExpectNew
+                } else {
+                    old_path = None;
+                    DiffHeaderState::ExpectOld
+                }
+            }
+            DiffHeaderState::AfterHeader => {
+                if let Some((old_remaining, new_remaining)) = parse_unified_hunk_counts(line) {
+                    DiffHeaderState::InHunk {
+                        old_remaining,
+                        new_remaining,
+                    }
+                } else if let Some(stripped) = line.strip_prefix("--- ") {
+                    old_path = normalize_diff_permission_path(stripped);
+                    DiffHeaderState::ExpectNew
+                } else {
+                    DiffHeaderState::AfterHeader
+                }
+            }
+            DiffHeaderState::InHunk {
+                old_remaining,
+                new_remaining,
+            } => update_diff_hunk_state(line, old_remaining, new_remaining),
+        };
     }
 
     paths
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DiffHeaderState {
+    ExpectOld,
+    ExpectNew,
+    AfterHeader,
+    InHunk {
+        old_remaining: usize,
+        new_remaining: usize,
+    },
+}
+
+fn parse_unified_hunk_counts(line: &str) -> Option<(usize, usize)> {
+    let header = line.strip_prefix("@@ ")?;
+    let header = header.split(" @@").next()?;
+    let mut parts = header.split_whitespace();
+    let old_remaining = parse_unified_hunk_range_count(parts.next()?, '-')?;
+    let new_remaining = parse_unified_hunk_range_count(parts.next()?, '+')?;
+    Some((old_remaining, new_remaining))
+}
+
+fn parse_unified_hunk_range_count(raw: &str, prefix: char) -> Option<usize> {
+    let range = raw.strip_prefix(prefix)?;
+    range
+        .split_once(',')
+        .map(|(_, count)| count.parse().ok())
+        .unwrap_or(Some(1))
+}
+
+fn update_diff_hunk_state(
+    line: &str,
+    old_remaining: usize,
+    new_remaining: usize,
+) -> DiffHeaderState {
+    let (old_remaining, new_remaining) = match line.as_bytes().first().copied() {
+        Some(b' ') => (
+            old_remaining.saturating_sub(1),
+            new_remaining.saturating_sub(1),
+        ),
+        Some(b'-') => (old_remaining.saturating_sub(1), new_remaining),
+        Some(b'+') => (old_remaining, new_remaining.saturating_sub(1)),
+        _ => (old_remaining, new_remaining),
+    };
+    if old_remaining == 0 && new_remaining == 0 {
+        DiffHeaderState::ExpectOld
+    } else {
+        DiffHeaderState::InHunk {
+            old_remaining,
+            new_remaining,
+        }
+    }
 }
 
 fn normalize_diff_permission_path(raw: &str) -> Option<String> {
@@ -402,7 +494,8 @@ fn normalize_diff_permission_path(raw: &str) -> Option<String> {
         .strip_prefix("a/")
         .or_else(|| raw.strip_prefix("b/"))
         .unwrap_or(&raw);
-    Some(raw.to_string())
+    let path = normalize_path_pattern(raw);
+    (!path.is_empty()).then_some(path)
 }
 
 fn diff_permission_path_token(raw: &str) -> Option<String> {
