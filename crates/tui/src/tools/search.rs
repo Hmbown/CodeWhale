@@ -347,7 +347,7 @@ fn collect_files_recursive(
     Ok(())
 }
 
-fn check_cancelled(cancel_token: Option<&CancellationToken>) -> Result<(), ToolError> {
+pub(super) fn check_cancelled(cancel_token: Option<&CancellationToken>) -> Result<(), ToolError> {
     if cancel_token.is_some_and(CancellationToken::is_cancelled) {
         return Err(ToolError::execution_failed(
             "search cancelled before completion",
