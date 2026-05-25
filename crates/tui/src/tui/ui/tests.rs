@@ -1328,6 +1328,24 @@ fn apply_loaded_session_restores_dangling_user_tail_as_retry_draft() {
 }
 
 #[test]
+fn apply_loaded_session_does_not_restore_slash_command_tail_as_retry_draft() {
+    let mut app = create_test_app();
+    let session = saved_session_with_messages(vec![text_message("user", "/sessions")]);
+
+    let recovered = apply_loaded_session(&mut app, &Config::default(), &session);
+
+    assert!(!recovered);
+    assert_eq!(app.input, "");
+    assert!(app.queued_draft.is_none());
+    assert_eq!(app.api_messages.len(), 1);
+    assert!(
+        app.history
+            .iter()
+            .any(|cell| matches!(cell, HistoryCell::User { .. }))
+    );
+}
+
+#[test]
 fn apply_loaded_session_resets_unpersisted_telemetry() {
     let mut app = create_test_app();
     app.session.session_cost = 1.25;

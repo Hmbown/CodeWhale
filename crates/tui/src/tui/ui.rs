@@ -6662,6 +6662,9 @@ fn recover_interrupted_user_tail(messages: &[Message]) -> (Vec<Message>, Option<
     let Some(display) = retry_display_from_user_message(last) else {
         return (recovered, None);
     };
+    if looks_like_slash_command_input(&display) {
+        return (recovered, None);
+    }
     recovered.pop();
     (recovered, Some(QueuedMessage::new(display, None)))
 }
