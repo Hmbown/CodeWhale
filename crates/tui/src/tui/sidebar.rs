@@ -2207,6 +2207,7 @@ mod tests {
                     source: ExecSource::Assistant,
                     interaction: None,
                     output_summary: None,
+                    live_output: None,
                 })),
             );
         }
@@ -2239,6 +2240,7 @@ mod tests {
                 source: ExecSource::Assistant,
                 interaction: None,
                 output_summary: None,
+                live_output: None,
             })),
         );
         app.active_cell = Some(active);
@@ -2373,6 +2375,7 @@ mod tests {
                 source: ExecSource::Assistant,
                 interaction: None,
                 output_summary: Some("2 checks pending".to_string()),
+                live_output: None,
             })));
         }
 
@@ -2413,6 +2416,7 @@ mod tests {
             source: ExecSource::Assistant,
             interaction: None,
             output_summary: Some("test failed".to_string()),
+            live_output: None,
         })));
 
         let text = lines_to_text(&task_panel_lines(&app, 80, 8));
@@ -2442,6 +2446,7 @@ mod tests {
             source: ExecSource::Assistant,
             interaction: None,
             output_summary: None,
+            live_output: None,
         })));
 
         let text = lines_to_text(&task_panel_lines(&app, 80, 8));

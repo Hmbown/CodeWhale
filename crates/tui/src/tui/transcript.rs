@@ -562,6 +562,7 @@ mod tests {
             output: None,
             started_at: None,
             duration_ms: None,
+            live_output: None,
             source: ExecSource::Assistant,
             interaction: None,
             output_summary: None,

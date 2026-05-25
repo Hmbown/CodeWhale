@@ -2063,6 +2063,8 @@ async fn run_event_loop(
         // Expire the "Press Ctrl+C again to quit" prompt silently after its
         // window. Triggers a redraw if the prompt was visible.
         app.tick_quit_armed();
+        // Poll shell manager for live output of running exec cells
+        app.poll_shell_progress();
         app.tick_receipt();
         // While the user is drag-selecting past the transcript edge, advance
         // the viewport on a fixed cadence and extend the selection head so a

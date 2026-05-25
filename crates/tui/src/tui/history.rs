@@ -657,6 +657,10 @@ pub struct ExecCell {
     pub interaction: Option<String>,
     /// Cached output summary — avoids re-parsing JSON every frame.
     pub output_summary: Option<String>,
+    /// Live incremental output shown while the command is still running.
+    /// Polled from the shell manager during idle frames and displayed
+    /// before the final output is available.
+    pub live_output: Option<String>,
 }
 
 impl ExecCell {
@@ -710,6 +714,13 @@ impl ExecCell {
             if let Some(output) = self.output.as_ref() {
                 lines.extend(render_exec_output_mode(
                     output,
+                    width,
+                    TOOL_OUTPUT_LINE_LIMIT,
+                    mode,
+                ));
+            } else if let Some(live) = self.live_output.as_ref() {
+                lines.extend(render_exec_output_mode(
+                    live,
                     width,
                     TOOL_OUTPUT_LINE_LIMIT,
                     mode,
