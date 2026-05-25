@@ -747,6 +747,23 @@ impl ConfigView {
                 scope: ConfigScope::Saved,
             },
             ConfigRow {
+                section: ConfigSection::Composer,
+                key: "voice_input_command".to_string(),
+                value: settings
+                    .voice_input_command
+                    .clone()
+                    .unwrap_or_else(|| "(not configured)".to_string()),
+                editable: true,
+                scope: ConfigScope::Saved,
+            },
+            ConfigRow {
+                section: ConfigSection::Composer,
+                key: "voice_input_timeout_secs".to_string(),
+                value: settings.voice_input_timeout_secs.to_string(),
+                editable: true,
+                scope: ConfigScope::Saved,
+            },
+            ConfigRow {
                 section: ConfigSection::Sidebar,
                 key: "sidebar_width".to_string(),
                 value: settings.sidebar_width_percent.to_string(),
@@ -1129,6 +1146,8 @@ fn config_hint_for_key(key: &str) -> &'static str {
         "max_history" => "integer (0 allowed)",
         "default_model" => "deepseek-v4-pro | deepseek-v4-flash | deepseek-* | none/default",
         "reasoning_effort" => "auto | off | low | medium | high | max | default",
+        "voice_input_command" => "command string | none/default",
+        "voice_input_timeout_secs" => "1..=600",
         "mcp_config_path" => "path to mcp.json",
         _ => "",
     }
@@ -2182,6 +2201,8 @@ mod tests {
         assert!(keys.contains(&"composer_border"));
         assert!(keys.contains(&"composer_vim_mode"));
         assert!(keys.contains(&"bracketed_paste"));
+        assert!(keys.contains(&"voice_input_command"));
+        assert!(keys.contains(&"voice_input_timeout_secs"));
         assert!(keys.contains(&"context_panel"));
         assert!(keys.contains(&"cost_currency"));
         assert!(keys.contains(&"prefer_external_pdftotext"));
