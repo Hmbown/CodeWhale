@@ -2653,6 +2653,7 @@ impl RuntimeThreadManager {
                     id,
                     tool_name,
                     description,
+                    input,
                     ..
                 } => {
                     self.emit_event(
@@ -2665,6 +2666,7 @@ impl RuntimeThreadManager {
                             "approval_id": id,
                             "tool_name": tool_name,
                             "description": description,
+                            "input": input,
                         }),
                     )
                     .await?;
@@ -4173,6 +4175,7 @@ mod tests {
                 id: "tool_stale".to_string(),
                 tool_name: "exec_command".to_string(),
                 description: "stale approval".to_string(),
+                input: json!({}),
             })
             .await?;
 
@@ -4246,6 +4249,7 @@ mod tests {
                 id: "tool_external_allow".to_string(),
                 tool_name: "exec_command".to_string(),
                 description: "external allow".to_string(),
+                input: json!({}),
             })
             .await?;
 
@@ -4323,6 +4327,7 @@ mod tests {
                 id: "tool_external_deny".to_string(),
                 tool_name: "exec_command".to_string(),
                 description: "external deny".to_string(),
+                input: json!({}),
             })
             .await?;
 
@@ -4509,6 +4514,7 @@ mod tests {
                 id: "tool_remember".to_string(),
                 tool_name: "exec_command".to_string(),
                 description: "remember=true".to_string(),
+                input: json!({}),
             })
             .await?;
 

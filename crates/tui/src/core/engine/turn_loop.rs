@@ -1731,6 +1731,7 @@ impl Engine {
                                     id: tool_id.clone(),
                                     tool_name: tool_name.clone(),
                                     description: plan.approval_description.clone(),
+                                    input: tool_input.clone(),
                                     approval_key,
                                     approval_grouping_key,
                                 })
