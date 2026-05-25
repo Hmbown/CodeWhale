@@ -611,7 +611,7 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "translate" | "translation" | "transale" => core::translate(app),
         "tokens" => debug::tokens(app),
         "cost" => debug::cost(app),
-        "balance" => balance::balance(app),
+        "balance" => balance::balance(app, arg),
         "cache" => debug::cache(app, arg),
 
         // ChangeLog command

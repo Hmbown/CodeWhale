@@ -38,6 +38,7 @@ impl Engine {
         mode: AppMode,
         todo_list: SharedTodoList,
         plan_state: SharedPlanState,
+        goal_state: crate::tools::goal::SharedGoalState,
     ) -> ToolRegistryBuilder {
         let mut builder = if mode == AppMode::Plan {
             ToolRegistryBuilder::new()
@@ -52,11 +53,13 @@ impl Engine {
                 .with_runtime_read_only_task_tools()
                 .with_todo_tool(todo_list)
                 .with_plan_tool(plan_state)
+                .with_goal_tools(goal_state.clone())
         } else {
             ToolRegistryBuilder::new()
                 .with_agent_tools(self.session.allow_shell)
                 .with_todo_tool(todo_list)
                 .with_plan_tool(plan_state)
+                .with_goal_tools(goal_state.clone())
         };
 
         builder = builder

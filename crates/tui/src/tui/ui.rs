@@ -699,6 +699,7 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         capacity: crate::core::capacity::CapacityControllerConfig::from_app_config(config),
         todos: app.todos.clone(),
         plan_state: app.plan_state.clone(),
+        goal_state: app.goal.clone(),
         max_spawn_depth: crate::tools::subagent::DEFAULT_MAX_SPAWN_DEPTH,
         network_policy: config.network.clone().map(|toml_cfg| {
             crate::network_policy::NetworkPolicyDecider::with_default_audit(toml_cfg.into_runtime())
@@ -3674,6 +3675,29 @@ fn apply_alt_0_shortcut(app: &mut App, modifiers: KeyModifiers) {
     }
 }
 
+async fn fetch_balance(
+    config: &mut Config,
+    provider: ApiProvider,
+) -> Result<crate::client::ProviderBalance> {
+    use crate::client::DeepSeekClient;
+
+    // Temporarily switch the config to the requested provider so
+    // DeepSeekClient::new picks up the right API key and base URL.
+    let previous_provider = config.provider.clone();
+    config.provider = Some(provider.as_str().to_string());
+    let result = tokio::time::timeout(Duration::from_secs(20), async {
+        let client = DeepSeekClient::new(&*config)?;
+        client.check_balance().await
+    })
+    .await;
+    config.provider = previous_provider;
+    match result {
+        Ok(Ok(balance)) => Ok(balance),
+        Ok(Err(err)) => Err(err),
+        Err(_elapsed) => anyhow::bail!("Balance check timed out after 20 seconds"),
+    }
+}
+
 async fn fetch_available_models(config: &Config) -> Result<Vec<String>> {
     use crate::client::DeepSeekClient;
 
@@ -4633,6 +4657,22 @@ async fn apply_command_result(
                                 content: format!("Failed to fetch models: {error}"),
                             });
                         }
+                    }
+                }
+            }
+            AppAction::CheckBalance { provider } => {
+                app.status_message =
+                    Some(format!("Checking {} balance...", provider.display_name()));
+                match fetch_balance(config, provider).await {
+                    Ok(balance) => {
+                        let message = format_helpers::balance_result(&balance, app);
+                        app.add_message(HistoryCell::System { content: message });
+                        app.status_message = Some("Balance check complete".to_string());
+                    }
+                    Err(error) => {
+                        let err_msg = format!("Balance check failed: {error}");
+                        app.add_message(HistoryCell::System { content: err_msg });
+                        app.status_message = Some("Balance check failed".to_string());
                     }
                 }
             }

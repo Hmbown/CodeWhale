@@ -1,62 +1,46 @@
 //! Balance: query the active provider's account balance or credit status.
 //!
-//! Live balance dispatch is planned for a future release (#2019). Until then,
-//! this command prints the provider's billing endpoint and instructions for
-//! manual balance checking, plus the current session cost summary.
+//! Dispatches an async balance check via `AppAction::CheckBalance` for
+//! providers with known billing endpoints. Unsupported providers return
+//! a clear message immediately.
 
 use crate::config::ApiProvider;
-use crate::tui::app::App;
+use crate::tui::app::{App, AppAction};
 
 use super::CommandResult;
 
 /// Query provider account balance / credits.
-pub fn balance(app: &mut App) -> CommandResult {
-    let provider = app.api_provider;
-    let session_cost = app.displayed_session_cost_for_currency(app.cost_currency);
-    let cost_label = app.format_cost_amount(session_cost);
-    let token_usage = app.session.total_conversation_tokens;
-
-    let provider_info = match provider {
-        ApiProvider::Deepseek | ApiProvider::DeepseekCN => {
-            format!(
-                "DeepSeek billing: https://platform.deepseek.com/usage\n\
-                 API balance endpoint: GET https://api.deepseek.com/user/balance\n\
-                 (Requires Bearer token auth with your API key)\n\n\
-                 Live balance dispatch is planned for a future release (#2019).\n\
-                 For now, check your balance on the DeepSeek Platform dashboard."
-            )
+///
+/// `/balance` defaults to the active provider; `/balance <provider>` lets
+/// the user target a specific provider by name (e.g. `deepseek`, `openrouter`).
+pub fn balance(app: &mut App, arg: Option<&str>) -> CommandResult {
+    let provider = if let Some(arg) = arg {
+        match ApiProvider::parse(arg) {
+            Some(p) => p,
+            None => {
+                return CommandResult::error(format!(
+                    "Unknown provider '{}'. Supported: deepseek, openrouter, novita.",
+                    arg
+                ));
+            }
         }
-        ApiProvider::Openrouter => {
-            format!(
-                "OpenRouter credits: https://openrouter.ai/credits\n\
-                 Live balance dispatch is planned for a future release (#2019)."
-            )
-        }
-        ApiProvider::Novita => {
-            format!(
-                "Novita billing: check your provider dashboard.\n\
-                 Live balance dispatch is planned for a future release (#2019)."
-            )
-        }
-        ApiProvider::Fireworks => {
-            format!(
-                "Fireworks billing: https://fireworks.ai/account/billing\n\
-                 Live balance dispatch is planned for a future release (#2019)."
-            )
-        }
-        _ => {
-            format!(
-                "Balance check is not supported for {} yet.\n\
-                 Check the provider dashboard for account balance details.",
-                provider.display_name()
-            )
-        }
+    } else {
+        app.api_provider
     };
 
-    CommandResult::message(format!(
-        "{provider_info}\n\n\
-         This session: {cost_label}  |  {token_usage} tokens"
-    ))
+    match provider {
+        ApiProvider::Deepseek | ApiProvider::DeepseekCN | ApiProvider::Openrouter => {
+            CommandResult::action(AppAction::CheckBalance { provider })
+        }
+        ApiProvider::Novita => CommandResult::message(format!(
+            "Balance check for {} is not yet implemented. Check the provider dashboard for account balance details.",
+            provider.display_name()
+        )),
+        _ => CommandResult::message(format!(
+            "Balance check is not supported for {}. Check the provider dashboard for account balance details.",
+            provider.display_name()
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -92,20 +76,55 @@ mod tests {
     }
 
     #[test]
-    fn test_balance_shows_deepseek_info() {
+    fn test_balance_deepseek_returns_check_balance_action() {
         let mut app = create_test_app();
         app.api_provider = ApiProvider::Deepseek;
-        let result = balance(&mut app);
-        let msg = result.message.unwrap();
-        assert!(msg.contains("platform.deepseek.com"));
-        assert!(msg.contains("/user/balance"));
+        let result = balance(&mut app, None);
+        assert!(
+            matches!(
+                result.action,
+                Some(AppAction::CheckBalance {
+                    provider: ApiProvider::Deepseek
+                })
+            ),
+            "expected CheckBalance action for DeepSeek, got {:?}",
+            result.action
+        );
     }
 
     #[test]
-    fn test_balance_shows_session_cost() {
+    fn test_balance_explicit_provider() {
         let mut app = create_test_app();
-        let result = balance(&mut app);
+        app.api_provider = ApiProvider::Ollama;
+        let result = balance(&mut app, Some("deepseek"));
+        assert!(
+            matches!(
+                result.action,
+                Some(AppAction::CheckBalance {
+                    provider: ApiProvider::Deepseek
+                })
+            ),
+            "expected CheckBalance for explicit deepseek, got {:?}",
+            result.action
+        );
+    }
+
+    #[test]
+    fn test_balance_unknown_provider_returns_error() {
+        let mut app = create_test_app();
+        let result = balance(&mut app, Some("unknown_provider"));
+        assert!(result.is_error);
+        assert!(result.message.unwrap().contains("Unknown provider"));
+    }
+
+    #[test]
+    fn test_balance_unsupported_provider_returns_message() {
+        let mut app = create_test_app();
+        app.api_provider = ApiProvider::Ollama;
+        let result = balance(&mut app, None);
+        assert!(result.message.is_some());
+        assert!(!result.is_error);
         let msg = result.message.unwrap();
-        assert!(msg.contains("tokens"));
+        assert!(msg.contains("not supported"));
     }
 }

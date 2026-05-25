@@ -122,6 +122,8 @@ pub struct EngineConfig {
     pub todos: SharedTodoList,
     /// Shared Plan state.
     pub plan_state: SharedPlanState,
+    /// Shared Goal state (LLM-as-judge).
+    pub goal_state: crate::tools::goal::SharedGoalState,
     /// Maximum sub-agent recursion depth (default 3). See
     /// `SubAgentRuntime::max_spawn_depth`. Override via
     /// `[runtime] max_spawn_depth = N` in `~/.deepseek/config.toml`.
@@ -194,6 +196,7 @@ impl Default for EngineConfig {
             capacity: CapacityControllerConfig::default(),
             todos: new_shared_todo_list(),
             plan_state: new_shared_plan_state(),
+            goal_state: Arc::new(std::sync::Mutex::new(crate::tui::app::GoalState::default())),
             max_spawn_depth: crate::tools::subagent::DEFAULT_MAX_SPAWN_DEPTH,
             network_policy: None,
             snapshots_enabled: true,
@@ -1006,7 +1009,9 @@ impl Engine {
         let plan_state = self.config.plan_state.clone();
 
         let tool_context = self.build_tool_context(mode, auto_approve);
-        let builder = self.build_turn_tool_registry_builder(mode, todo_list, plan_state);
+        let goal_state = self.config.goal_state.clone();
+        let builder =
+            self.build_turn_tool_registry_builder(mode, todo_list, plan_state, goal_state);
 
         let fork_context_for_runtime = if self.config.features.enabled(Feature::Subagents) {
             let state = StructuredState::capture(

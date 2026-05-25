@@ -1113,6 +1113,106 @@ impl DeepSeekClient {
             .ok_or_else(|| anyhow::anyhow!("FIM response missing choices[0].text"))?;
         Ok(text.to_string())
     }
+    /// Query the provider's billing/balance endpoint and return structured
+    /// balance information.
+    ///
+    /// Supported providers:
+    /// - DeepSeek / DeepSeekCN: `GET /user/balance`
+    /// - OpenRouter: `GET /api/v1/credits`
+    ///
+    /// Unsupported providers return an `Err` with a descriptive message.
+    pub async fn check_balance(&self) -> Result<ProviderBalance> {
+        match self.api_provider {
+            ApiProvider::Deepseek | ApiProvider::DeepseekCN => self.check_deepseek_balance().await,
+            ApiProvider::Openrouter => self.check_openrouter_balance().await,
+            _ => anyhow::bail!(
+                "Balance check is not supported for {}. Check the provider dashboard for account balance details.",
+                self.api_provider.display_name()
+            ),
+        }
+    }
+
+    async fn check_deepseek_balance(&self) -> Result<ProviderBalance> {
+        let base = unversioned_base_url(&self.base_url);
+        let url = format!("{}/user/balance", base);
+        let response = self.send_with_retry(|| self.http_client.get(&url)).await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let error_text = bounded_error_text(response, ERROR_BODY_MAX_BYTES).await;
+            anyhow::bail!("Balance check failed: HTTP {status}: {error_text}");
+        }
+
+        let response_text = response.text().await.unwrap_or_default();
+        let value: serde_json::Value =
+            serde_json::from_str(&response_text).context("Failed to parse balance response")?;
+
+        let is_available = value.get("is_available").and_then(|v| v.as_bool());
+
+        let balance_infos = value.get("balance_infos").and_then(|v| v.as_array());
+
+        // Pick the first balance_info entry (DeepSeek typically returns one).
+        let info = balance_infos.and_then(|arr| arr.first());
+
+        Ok(ProviderBalance {
+            provider: self.api_provider,
+            is_available,
+            currency: info
+                .and_then(|i| i.get("currency"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            total_balance: info
+                .and_then(|i| i.get("total_balance"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            topped_up_balance: info
+                .and_then(|i| i.get("topped_up_balance"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            granted_balance: info
+                .and_then(|i| i.get("granted_balance"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            total_credits: None,
+            total_usage: None,
+        })
+    }
+
+    async fn check_openrouter_balance(&self) -> Result<ProviderBalance> {
+        let base = unversioned_base_url(&self.base_url);
+        let url = format!("{}/api/v1/credits", base);
+        let response = self.send_with_retry(|| self.http_client.get(&url)).await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let error_text = bounded_error_text(response, ERROR_BODY_MAX_BYTES).await;
+            anyhow::bail!("Balance check failed: HTTP {status}: {error_text}");
+        }
+
+        let response_text = response.text().await.unwrap_or_default();
+        let value: serde_json::Value = serde_json::from_str(&response_text)
+            .context("Failed to parse OpenRouter credits response")?;
+
+        let data = value.get("data");
+
+        Ok(ProviderBalance {
+            provider: self.api_provider,
+            is_available: None,
+            currency: None,
+            total_balance: data
+                .and_then(|d| d.get("total_credits"))
+                .and_then(|v| v.as_f64())
+                .map(|c| format!("{c:.2}")),
+            topped_up_balance: None,
+            granted_balance: None,
+            total_credits: data
+                .and_then(|d| d.get("total_credits"))
+                .and_then(|v| v.as_f64()),
+            total_usage: data
+                .and_then(|d| d.get("total_usage"))
+                .and_then(|v| v.as_f64()),
+        })
+    }
 }
 
 mod chat;

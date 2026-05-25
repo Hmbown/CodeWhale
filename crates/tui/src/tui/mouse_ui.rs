@@ -92,6 +92,25 @@ pub(crate) fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEv
                 return Vec::new();
             }
 
+            // #2018: clicking on a tool-cell header line opens the detail popup
+            // so low-information rows (e.g. "file_search returned 0 results") are
+            // inspectable with a single click. Clicking on output text still starts
+            // a normal text selection.
+            if let Some(point) = selection_point_from_mouse(app, mouse) {
+                if let Some((cell_index, line_in_cell)) = app
+                    .viewport
+                    .transcript_cache
+                    .line_meta()
+                    .get(point.line_index)
+                    .and_then(|m| m.cell_line())
+                {
+                    if line_in_cell == 0 && app.cell_has_detail_target(cell_index) {
+                        open_details_pager_for_cell(app, cell_index);
+                        return Vec::new();
+                    }
+                }
+            }
+
             if let Some(point) = selection_point_from_mouse(app, mouse) {
                 app.viewport.transcript_selection.anchor = Some(point);
                 app.viewport.transcript_selection.head = Some(point);

@@ -4569,6 +4569,10 @@ pub enum AppAction {
     SendMessage(String),
     ListSubAgents,
     FetchModels,
+    /// Query the provider's billing/balance endpoint (#2019).
+    CheckBalance {
+        provider: ApiProvider,
+    },
     CacheWarmup,
     /// Switch the active LLM backend (DeepSeek vs NVIDIA NIM) without
     /// restarting the process. The runtime rebuilds its API client from

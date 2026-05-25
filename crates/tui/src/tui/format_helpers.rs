@@ -74,6 +74,73 @@ pub(super) fn available_models_message(current_model: &str, models: &[String]) -
     lines.join("\n")
 }
 
+/// Build the multi-line balance result message for the `/balance` command.
+pub(super) fn balance_result(balance: &crate::client::ProviderBalance, app: &App) -> String {
+    use crate::config::ApiProvider;
+
+    let mut lines: Vec<String> = Vec::new();
+
+    match balance.provider {
+        ApiProvider::Deepseek | ApiProvider::DeepseekCN => {
+            lines.push(format!(
+                "{} Account Balance",
+                balance.provider.display_name()
+            ));
+            lines.push("─".repeat(40));
+            match balance.is_available {
+                Some(true) => {}
+                Some(false) => {
+                    lines.push("Balance endpoint reports: unavailable".to_string());
+                }
+                None => {}
+            }
+            if let Some(ref currency) = balance.currency {
+                lines.push(format!("Currency: {currency}"));
+            }
+            if let Some(ref total) = balance.total_balance {
+                lines.push(format!("Total balance: {total}"));
+            }
+            if let Some(ref topped_up) = balance.topped_up_balance {
+                lines.push(format!("Topped-up balance: {topped_up}"));
+            }
+            if let Some(ref granted) = balance.granted_balance {
+                lines.push(format!("Granted balance: {granted}"));
+            }
+        }
+        ApiProvider::Openrouter => {
+            lines.push("OpenRouter Credits".to_string());
+            lines.push("─".repeat(40));
+            if let Some(credits) = balance.total_credits {
+                lines.push(format!("Total credits purchased: {credits:.2}"));
+            }
+            if let Some(usage) = balance.total_usage {
+                lines.push(format!("Total usage: {usage:.2}"));
+            }
+            if let (Some(credits), Some(usage)) = (balance.total_credits, balance.total_usage) {
+                let remaining = credits - usage;
+                lines.push(format!("Remaining credits: {remaining:.2}"));
+            }
+        }
+        _ => {
+            lines.push(format!(
+                "Balance info for {}",
+                balance.provider.display_name()
+            ));
+        }
+    }
+
+    // Append session cost summary for context
+    let session_total = app.displayed_session_cost_for_currency(app.cost_currency);
+    let cost_label = app.format_cost_amount(session_total);
+    lines.push(String::new());
+    lines.push(format!(
+        "This session (estimated): {cost_label}  |  {} tokens",
+        app.session.total_conversation_tokens
+    ));
+
+    lines.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
