@@ -535,6 +535,7 @@ pub fn env_for(name: &str) -> Option<String> {
             &["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY", "DEEPSEEK_API_KEY"]
         }
         "fireworks" | "fireworks-ai" => &["FIREWORKS_API_KEY"],
+        "moonshot" | "moonshot-ai" | "kimi" | "kimi-k2" => &["MOONSHOT_API_KEY", "KIMI_API_KEY"],
         "sglang" | "sg-lang" => &["SGLANG_API_KEY"],
         "vllm" | "v-llm" => &["VLLM_API_KEY"],
         "ollama" | "ollama-local" => &["OLLAMA_API_KEY"],

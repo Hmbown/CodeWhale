@@ -6,9 +6,6 @@ use serde::{Deserialize, Serialize};
 /// newer V4 alias and do not carry an explicit `*k` suffix.
 pub const LEGACY_DEEPSEEK_CONTEXT_WINDOW_TOKENS: u32 = 128_000;
 pub const DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS: u32 = 1_000_000;
-pub const OPENAI_GPT_5_4_CONTEXT_WINDOW_TOKENS: u32 = 1_050_000;
-pub const OPENAI_GPT_5_CONTEXT_WINDOW_TOKENS: u32 = 400_000;
-pub const OPENAI_GPT_4_1_CONTEXT_WINDOW_TOKENS: u32 = 1_047_576;
 /// Last-resort compaction trigger when [`context_window_for_model`] returns
 /// `None` (an unrecognised model id). v0.8.11 raised this from `50_000` to
 /// `102_400` (80% of [`LEGACY_DEEPSEEK_CONTEXT_WINDOW_TOKENS`]) so unknown
@@ -229,21 +226,6 @@ pub fn context_window_for_model(model: &str) -> Option<u32> {
     if lower.contains("claude") {
         return Some(200_000);
     }
-    if lower.starts_with("gpt-5.4-mini") || lower.starts_with("gpt-5.4-nano") {
-        return Some(OPENAI_GPT_5_CONTEXT_WINDOW_TOKENS);
-    }
-    if lower.starts_with("gpt-5.5") || lower.starts_with("gpt-5.4") {
-        return Some(OPENAI_GPT_5_4_CONTEXT_WINDOW_TOKENS);
-    }
-    if lower.starts_with("gpt-5") || lower.contains("codex") {
-        return Some(OPENAI_GPT_5_CONTEXT_WINDOW_TOKENS);
-    }
-    if lower.starts_with("gpt-4.1") {
-        return Some(OPENAI_GPT_4_1_CONTEXT_WINDOW_TOKENS);
-    }
-    if lower.starts_with("gpt-4o") {
-        return Some(LEGACY_DEEPSEEK_CONTEXT_WINDOW_TOKENS);
-    }
     None
 }
 
@@ -439,26 +421,6 @@ mod tests {
         assert_eq!(
             context_window_for_model("deepseek-v3.2-2k-preview"),
             Some(LEGACY_DEEPSEEK_CONTEXT_WINDOW_TOKENS)
-        );
-    }
-
-    #[test]
-    fn openai_models_map_to_current_context_windows() {
-        assert_eq!(
-            context_window_for_model("gpt-5.5"),
-            Some(OPENAI_GPT_5_4_CONTEXT_WINDOW_TOKENS)
-        );
-        assert_eq!(
-            context_window_for_model("gpt-5.3-codex"),
-            Some(OPENAI_GPT_5_CONTEXT_WINDOW_TOKENS)
-        );
-        assert_eq!(
-            context_window_for_model("gpt-5.4-mini"),
-            Some(OPENAI_GPT_5_CONTEXT_WINDOW_TOKENS)
-        );
-        assert_eq!(
-            context_window_for_model("gpt-4.1"),
-            Some(OPENAI_GPT_4_1_CONTEXT_WINDOW_TOKENS)
         );
     }
 

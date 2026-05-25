@@ -4848,7 +4848,7 @@ Welcome — and thank you.
 - Hooks system and config profiles
 - Example skills and launch assets
 
-[Unreleased]: https://github.com/Hmbown/CodeWhale/compare/v0.8.44...HEAD
+[Unreleased]: https://github.com/Hmbown/CodeWhale/compare/v0.8.45...HEAD
 [0.8.45]: https://github.com/Hmbown/CodeWhale/compare/v0.8.44...v0.8.45
 [0.8.44]: https://github.com/Hmbown/CodeWhale/compare/v0.8.43...v0.8.44
 [0.8.43]: https://github.com/Hmbown/CodeWhale/compare/v0.8.42...v0.8.43

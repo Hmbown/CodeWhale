@@ -45,7 +45,7 @@ fd-lock = "4.0.4"
 futures-util = "0.3.31"
 ratatui = "0.30"
 regex = "1.11"
-reqwest = { version = "0.13.1", default-features = false, features = ["blocking", "json", "stream", "multipart", "rustls", "http2", "gzip", "brotli"] }
+reqwest = { version = "0.13.1", default-features = false, features = ["blocking", "json", "stream", "multipart", "form", "rustls", "http2", "gzip", "brotli"] }
 similar = "2"
 rustyline = "15.0.0"
 serde = { version = "1.0.228", features = ["derive"] }

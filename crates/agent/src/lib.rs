@@ -74,102 +74,18 @@ impl Default for ModelRegistry {
                 supports_reasoning: true,
             },
             ModelInfo {
-                id: "gpt-4.1".to_string(),
+                id: "deepseek-v4-pro".to_string(),
                 provider: ProviderKind::Openai,
-                aliases: vec!["gpt4.1".to_string()],
-                supports_tools: true,
-                supports_reasoning: false,
-            },
-            ModelInfo {
-                id: "gpt-4.1-mini".to_string(),
-                provider: ProviderKind::Openai,
-                aliases: vec!["gpt4.1-mini".to_string()],
-                supports_tools: true,
-                supports_reasoning: false,
-            },
-            ModelInfo {
-                id: "gpt-5.5".to_string(),
-                provider: ProviderKind::Openai,
-                aliases: vec!["gpt5.5".to_string()],
+                aliases: vec!["openai-compatible-deepseek-v4-pro".to_string()],
                 supports_tools: true,
                 supports_reasoning: true,
             },
             ModelInfo {
-                id: "gpt-5.4".to_string(),
+                id: "deepseek-v4-flash".to_string(),
                 provider: ProviderKind::Openai,
-                aliases: vec!["gpt5.4".to_string()],
+                aliases: vec!["openai-compatible-deepseek-v4-flash".to_string()],
                 supports_tools: true,
                 supports_reasoning: true,
-            },
-            ModelInfo {
-                id: "gpt-5.4-mini".to_string(),
-                provider: ProviderKind::Openai,
-                aliases: vec!["gpt5.4-mini".to_string()],
-                supports_tools: true,
-                supports_reasoning: true,
-            },
-            ModelInfo {
-                id: "gpt-5.4-nano".to_string(),
-                provider: ProviderKind::Openai,
-                aliases: vec!["gpt5.4-nano".to_string()],
-                supports_tools: true,
-                supports_reasoning: true,
-            },
-            ModelInfo {
-                id: "gpt-5.3-codex".to_string(),
-                provider: ProviderKind::Openai,
-                aliases: vec!["gpt5.3-codex".to_string(), "gpt-5-codex".to_string()],
-                supports_tools: true,
-                supports_reasoning: true,
-            },
-            ModelInfo {
-                id: "gpt-5.1".to_string(),
-                provider: ProviderKind::Openai,
-                aliases: vec!["gpt5.1".to_string()],
-                supports_tools: true,
-                supports_reasoning: true,
-            },
-            ModelInfo {
-                id: "gpt-5".to_string(),
-                provider: ProviderKind::Openai,
-                aliases: vec!["gpt5".to_string()],
-                supports_tools: true,
-                supports_reasoning: true,
-            },
-            ModelInfo {
-                id: "gpt-5-mini".to_string(),
-                provider: ProviderKind::Openai,
-                aliases: vec!["gpt5-mini".to_string()],
-                supports_tools: true,
-                supports_reasoning: true,
-            },
-            ModelInfo {
-                id: "gpt-5-nano".to_string(),
-                provider: ProviderKind::Openai,
-                aliases: vec!["gpt5-nano".to_string()],
-                supports_tools: true,
-                supports_reasoning: true,
-            },
-            ModelInfo {
-                id: "gpt-4.1-nano".to_string(),
-                provider: ProviderKind::Openai,
-                aliases: vec!["gpt4.1-nano".to_string()],
-                supports_tools: true,
-                supports_reasoning: false,
-            },
-            ModelInfo {
-                id: "gpt-4o".to_string(),
-                provider: ProviderKind::Openai,
-                aliases: vec![],
-                supports_tools: true,
-                supports_reasoning: false,
-            },
-            ModelInfo {
-                id: "gpt-4o-mini".to_string(),
-                provider: ProviderKind::Openai,
-                aliases: vec![],
-                supports_tools: true,
-                supports_reasoning: false,
             },
             ModelInfo {
                 id: "deepseek-reasoner".to_string(),
@@ -231,6 +147,17 @@ impl Default for ModelRegistry {
                 aliases: vec![
                     "deepseek-v4-pro".to_string(),
                     "fireworks-deepseek-v4-pro".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "kimi-k2.6".to_string(),
+                provider: ProviderKind::Moonshot,
+                aliases: vec![
+                    "kimi".to_string(),
+                    "kimi-k2".to_string(),
+                    "moonshot-kimi-k2.6".to_string(),
                 ],
                 supports_tools: true,
                 supports_reasoning: true,
@@ -435,35 +362,6 @@ mod tests {
 
         assert_eq!(resolved.resolved.provider, ProviderKind::NvidiaNim);
         assert_eq!(resolved.resolved.id, "deepseek-ai/deepseek-v4-pro");
-    }
-
-    #[test]
-    fn openai_default_preserves_stable_runtime_default() {
-        let registry = ModelRegistry::default();
-        let resolved = registry.resolve(None, Some(ProviderKind::Openai));
-
-        assert_eq!(resolved.resolved.provider, ProviderKind::Openai);
-        assert_eq!(resolved.resolved.id, "gpt-4.1");
-        assert!(resolved.resolved.supports_tools);
-        assert!(!resolved.resolved.supports_reasoning);
-    }
-
-    #[test]
-    fn openai_codex_alias_resolves_to_current_codex_model() {
-        let registry = ModelRegistry::default();
-        let resolved = registry.resolve(Some("gpt-5-codex"), Some(ProviderKind::Openai));
-
-        assert_eq!(resolved.resolved.provider, ProviderKind::Openai);
-        assert_eq!(resolved.resolved.id, "gpt-5.3-codex");
-    }
-
-    #[test]
-    fn openai_gpt_4o_requested_model_is_not_rewritten_to_gpt_4_1() {
-        let registry = ModelRegistry::default();
-        let resolved = registry.resolve(Some("gpt-4o"), Some(ProviderKind::Openai));
-
-        assert_eq!(resolved.resolved.provider, ProviderKind::Openai);
-        assert_eq!(resolved.resolved.id, "gpt-4o");
     }
 
     #[test]
