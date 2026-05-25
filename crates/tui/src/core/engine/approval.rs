@@ -19,7 +19,7 @@ use super::Engine;
 pub(super) enum ApprovalDecision {
     Approved {
         id: String,
-        persistent_rules: Vec<deepseek_execpolicy::ToolPermissionRule>,
+        persistent_rules: Vec<codewhale_execpolicy::ToolPermissionRule>,
     },
     Denied {
         id: String,
@@ -97,7 +97,7 @@ impl Engine {
                         } if id == tool_id => {
                             if !persistent_rules.is_empty() {
                                 self.config.exec_policy_engine.add_ruleset(
-                                    deepseek_execpolicy::Ruleset::user(vec![], vec![])
+                                    codewhale_execpolicy::Ruleset::user(vec![], vec![])
                                         .with_rules(persistent_rules),
                                 );
                             }

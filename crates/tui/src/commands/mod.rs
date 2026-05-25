@@ -736,7 +736,7 @@ pub fn persist_root_string_key(
 
 /// Persist generated tool permission rules to `~/.deepseek/config.toml`.
 pub fn persist_permission_rules(
-    rules: &[deepseek_execpolicy::ToolPermissionRule],
+    rules: &[codewhale_execpolicy::ToolPermissionRule],
 ) -> anyhow::Result<std::path::PathBuf> {
     config::persist_permission_rules(rules)
 }

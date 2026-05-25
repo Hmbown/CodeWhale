@@ -98,7 +98,7 @@ pub enum ViewEvent {
         /// Lossy / arity-aware fingerprint, used to scope *approvals*.
         approval_grouping_key: String,
         /// Persistent allow rules the approval UI generated for "save this rule".
-        persistent_rules: Vec<deepseek_execpolicy::ToolPermissionRule>,
+        persistent_rules: Vec<codewhale_execpolicy::ToolPermissionRule>,
     },
     ElevationDecision {
         tool_id: String,

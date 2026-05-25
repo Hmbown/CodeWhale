@@ -60,7 +60,7 @@ impl EngineHandle {
     pub async fn approve_tool_call_with_rules(
         &self,
         id: impl Into<String>,
-        persistent_rules: Vec<deepseek_execpolicy::ToolPermissionRule>,
+        persistent_rules: Vec<codewhale_execpolicy::ToolPermissionRule>,
     ) -> Result<()> {
         self.tx_approval
             .send(ApprovalDecision::Approved {

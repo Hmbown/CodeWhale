@@ -366,7 +366,7 @@ pub fn persist_root_string_key(
 }
 
 pub fn persist_permission_rules(
-    rules: &[deepseek_execpolicy::ToolPermissionRule],
+    rules: &[codewhale_execpolicy::ToolPermissionRule],
 ) -> anyhow::Result<PathBuf> {
     use anyhow::Context;
     use std::fs;
@@ -406,7 +406,7 @@ pub fn persist_permission_rules(
 
 fn append_permission_rules(
     rules_item: &mut toml_edit::Item,
-    rules: &[deepseek_execpolicy::ToolPermissionRule],
+    rules: &[codewhale_execpolicy::ToolPermissionRule],
 ) -> anyhow::Result<()> {
     match rules_item {
         toml_edit::Item::ArrayOfTables(array) => {
@@ -438,7 +438,7 @@ fn append_permission_rules(
 }
 
 fn permission_rule_to_toml_table(
-    rule: &deepseek_execpolicy::ToolPermissionRule,
+    rule: &codewhale_execpolicy::ToolPermissionRule,
 ) -> toml_edit::Table {
     let mut table = toml_edit::Table::new();
     table["tool"] = toml_edit::value(rule.tool.clone());
@@ -453,7 +453,7 @@ fn permission_rule_to_toml_table(
 }
 
 fn permission_rule_to_toml_inline_table(
-    rule: &deepseek_execpolicy::ToolPermissionRule,
+    rule: &codewhale_execpolicy::ToolPermissionRule,
 ) -> toml_edit::Value {
     let mut table = toml_edit::InlineTable::new();
     table.insert("tool", toml_edit::Value::from(rule.tool.clone()));
@@ -472,7 +472,7 @@ fn permission_rule_to_toml_inline_table(
 
 fn permission_toml_table_matches_rule(
     table: &toml_edit::Table,
-    rule: &deepseek_execpolicy::ToolPermissionRule,
+    rule: &codewhale_execpolicy::ToolPermissionRule,
 ) -> bool {
     table.get("tool").and_then(toml_edit::Item::as_str) == Some(rule.tool.as_str())
         && table.get("decision").and_then(toml_edit::Item::as_str)
@@ -483,7 +483,7 @@ fn permission_toml_table_matches_rule(
 
 fn permission_toml_value_matches_rule(
     value: &toml_edit::Value,
-    rule: &deepseek_execpolicy::ToolPermissionRule,
+    rule: &codewhale_execpolicy::ToolPermissionRule,
 ) -> bool {
     let Some(table) = value.as_inline_table() else {
         return false;
@@ -506,11 +506,11 @@ fn optional_toml_value_str_matches(
     value.and_then(toml_edit::Value::as_str) == expected
 }
 
-fn permission_decision_label(decision: deepseek_execpolicy::PermissionDecision) -> &'static str {
+fn permission_decision_label(decision: codewhale_execpolicy::PermissionDecision) -> &'static str {
     match decision {
-        deepseek_execpolicy::PermissionDecision::Allow => "allow",
-        deepseek_execpolicy::PermissionDecision::Deny => "deny",
-        deepseek_execpolicy::PermissionDecision::Ask => "ask",
+        codewhale_execpolicy::PermissionDecision::Allow => "allow",
+        codewhale_execpolicy::PermissionDecision::Deny => "deny",
+        codewhale_execpolicy::PermissionDecision::Ask => "ask",
     }
 }
 
@@ -2382,13 +2382,13 @@ mod tests {
         )
         .unwrap();
 
-        let cargo_rule = deepseek_execpolicy::ToolPermissionRule::exec_shell(
-            deepseek_execpolicy::PermissionDecision::Allow,
+        let cargo_rule = codewhale_execpolicy::ToolPermissionRule::exec_shell(
+            codewhale_execpolicy::PermissionDecision::Allow,
             "cargo test",
         );
-        let docs_rule = deepseek_execpolicy::ToolPermissionRule::file_path(
+        let docs_rule = codewhale_execpolicy::ToolPermissionRule::file_path(
             "read_file",
-            deepseek_execpolicy::PermissionDecision::Allow,
+            codewhale_execpolicy::PermissionDecision::Allow,
             "docs/README.md",
         );
         let written =
