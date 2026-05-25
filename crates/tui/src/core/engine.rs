@@ -1287,15 +1287,8 @@ impl Engine {
         removed
     }
 
-    async fn recover_context_overflow(
-        &mut self,
-        client: &DeepSeekClient,
-        reason: &str,
-        requested_output_tokens: u32,
-    ) -> bool {
-        let Some(target_budget) =
-            context_input_budget(&self.session.model, requested_output_tokens)
-        else {
+    async fn recover_context_overflow(&mut self, client: &DeepSeekClient, reason: &str) -> bool {
+        let Some(target_budget) = context_input_budget(&self.session.model) else {
             return false;
         };
 
@@ -1971,9 +1964,9 @@ mod handle;
 pub(crate) use context::compact_tool_result_for_context;
 use context::{
     COMPACTION_SUMMARY_MARKER, MAX_CONTEXT_RECOVERY_ATTEMPTS, MIN_RECENT_MESSAGES_TO_KEEP,
-    TURN_MAX_OUTPUT_TOKENS, context_input_budget, effective_max_output_tokens,
-    estimate_input_tokens_conservative, extract_compaction_summary_prompt,
-    is_context_length_error_message, summarize_text, turn_response_headroom_tokens,
+    context_input_budget, effective_max_output_tokens, estimate_input_tokens_conservative,
+    extract_compaction_summary_prompt, is_context_length_error_message, summarize_text,
+    turn_response_headroom_tokens,
 };
 mod dispatch;
 mod loop_guard;

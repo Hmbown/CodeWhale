@@ -173,9 +173,7 @@ impl Engine {
                 continue;
             }
 
-            if let Some(input_budget) =
-                context_input_budget(&self.session.model, TURN_MAX_OUTPUT_TOKENS)
-            {
+            if let Some(input_budget) = context_input_budget(&self.session.model) {
                 let estimated_input = self.estimated_input_tokens();
                 if estimated_input > input_budget {
                     if context_recovery_attempts >= MAX_CONTEXT_RECOVERY_ATTEMPTS {
@@ -192,11 +190,7 @@ impl Engine {
                     }
 
                     if self
-                        .recover_context_overflow(
-                            &client,
-                            "preflight token budget",
-                            TURN_MAX_OUTPUT_TOKENS,
-                        )
+                        .recover_context_overflow(&client, "preflight token budget")
                         .await
                     {
                         context_recovery_attempts = context_recovery_attempts.saturating_add(1);
@@ -326,11 +320,7 @@ impl Engine {
                     if is_context_length_error_message(&message)
                         && context_recovery_attempts < MAX_CONTEXT_RECOVERY_ATTEMPTS
                         && self
-                            .recover_context_overflow(
-                                &client,
-                                "provider context-length rejection",
-                                TURN_MAX_OUTPUT_TOKENS,
-                            )
+                            .recover_context_overflow(&client, "provider context-length rejection")
                             .await
                     {
                         context_recovery_attempts = context_recovery_attempts.saturating_add(1);
