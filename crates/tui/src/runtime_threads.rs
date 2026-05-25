@@ -841,7 +841,7 @@ impl RuntimeThreadManager {
     ) -> Result<bool> {
         let active = self.active.lock().await;
         let Some(state) = active.engines.get(thread_id) else {
-            bail!("thread '{thread_id}' not loaded");
+            bail!("thread '{thread_id}' not found");
         };
         state.engine.submit_user_input(input_id, response).await?;
         Ok(true)
@@ -851,7 +851,7 @@ impl RuntimeThreadManager {
     pub async fn cancel_user_input(&self, thread_id: &str, input_id: &str) -> Result<bool> {
         let active = self.active.lock().await;
         let Some(state) = active.engines.get(thread_id) else {
-            bail!("thread '{thread_id}' not loaded");
+            bail!("thread '{thread_id}' not found");
         };
         state.engine.cancel_user_input(input_id).await?;
         Ok(true)
