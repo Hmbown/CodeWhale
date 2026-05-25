@@ -3,9 +3,9 @@
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::fs;
-#[cfg(unix)]
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -50,6 +50,10 @@ pub const DEFAULT_NOVITA_FLASH_MODEL: &str = "deepseek/deepseek-v4-flash";
 pub const DEFAULT_NOVITA_BASE_URL: &str = "https://api.novita.ai/v1";
 pub const DEFAULT_FIREWORKS_MODEL: &str = "accounts/fireworks/models/deepseek-v4-pro";
 pub const DEFAULT_FIREWORKS_BASE_URL: &str = "https://api.fireworks.ai/inference/v1";
+pub const DEFAULT_MOONSHOT_MODEL: &str = "kimi-k2.6";
+pub const DEFAULT_MOONSHOT_BASE_URL: &str = "https://api.moonshot.ai/v1";
+pub const DEFAULT_KIMI_CODE_MODEL: &str = "kimi-for-coding";
+pub const DEFAULT_KIMI_CODE_BASE_URL: &str = "https://api.kimi.com/coding/v1";
 pub const DEFAULT_SGLANG_MODEL: &str = "deepseek-ai/DeepSeek-V4-Pro";
 pub const DEFAULT_SGLANG_FLASH_MODEL: &str = "deepseek-ai/DeepSeek-V4-Flash";
 pub const DEFAULT_SGLANG_BASE_URL: &str = "http://localhost:30000/v1";
@@ -88,6 +92,7 @@ pub enum ApiProvider {
     Openrouter,
     Novita,
     Fireworks,
+    Moonshot,
     Sglang,
     Vllm,
     Ollama,
@@ -109,6 +114,7 @@ impl ApiProvider {
             "openrouter" | "open_router" => Some(Self::Openrouter),
             "novita" => Some(Self::Novita),
             "fireworks" | "fireworks-ai" => Some(Self::Fireworks),
+            "moonshot" | "moonshot-ai" | "kimi" | "kimi-k2" => Some(Self::Moonshot),
             "sglang" | "sg-lang" => Some(Self::Sglang),
             "vllm" | "v-llm" => Some(Self::Vllm),
             "ollama" | "ollama-local" => Some(Self::Ollama),
@@ -128,6 +134,7 @@ impl ApiProvider {
             Self::Openrouter => "openrouter",
             Self::Novita => "novita",
             Self::Fireworks => "fireworks",
+            Self::Moonshot => "moonshot",
             Self::Sglang => "sglang",
             Self::Vllm => "vllm",
             Self::Ollama => "ollama",
@@ -147,6 +154,7 @@ impl ApiProvider {
             Self::Openrouter => "OpenRouter",
             Self::Novita => "Novita AI",
             Self::Fireworks => "Fireworks AI",
+            Self::Moonshot => "Moonshot/Kimi",
             Self::Sglang => "SGLang",
             Self::Vllm => "vLLM",
             Self::Ollama => "Ollama",
@@ -165,6 +173,7 @@ impl ApiProvider {
             Self::Openrouter,
             Self::Novita,
             Self::Fireworks,
+            Self::Moonshot,
             Self::Sglang,
             Self::Vllm,
             Self::Ollama,
@@ -233,7 +242,10 @@ pub enum RequestPayloadMode {
 /// in the API payload (after normalization / provider-specific mapping).
 #[must_use]
 pub fn provider_capability(provider: ApiProvider, resolved_model: &str) -> ProviderCapability {
-    if matches!(provider, ApiProvider::Openai | ApiProvider::Atlascloud) {
+    if matches!(
+        provider,
+        ApiProvider::Openai | ApiProvider::Atlascloud | ApiProvider::Moonshot
+    ) {
         return ProviderCapability {
             provider,
             resolved_model: resolved_model.to_string(),
@@ -420,6 +432,7 @@ pub fn model_completion_names_for_provider(provider: ApiProvider) -> Vec<&'stati
         ApiProvider::Openrouter => vec![DEFAULT_OPENROUTER_MODEL, DEFAULT_OPENROUTER_FLASH_MODEL],
         ApiProvider::Novita => vec![DEFAULT_NOVITA_MODEL, DEFAULT_NOVITA_FLASH_MODEL],
         ApiProvider::Fireworks => vec![DEFAULT_FIREWORKS_MODEL],
+        ApiProvider::Moonshot => vec![DEFAULT_MOONSHOT_MODEL, DEFAULT_KIMI_CODE_MODEL],
         ApiProvider::WanjieArk => vec![DEFAULT_WANJIE_ARK_MODEL],
         ApiProvider::Sglang => vec![DEFAULT_SGLANG_MODEL, DEFAULT_SGLANG_FLASH_MODEL],
         ApiProvider::Vllm => vec![DEFAULT_VLLM_MODEL, DEFAULT_VLLM_FLASH_MODEL],
@@ -922,6 +935,7 @@ pub struct Config {
     /// Optional extra HTTP headers sent to model API requests.
     pub http_headers: Option<HashMap<String, String>>,
     pub default_text_model: Option<String>,
+    pub auth_mode: Option<String>,
     /// DeepSeek reasoning-effort tier: `"off" | "low" | "medium" | "high" | "max"`.
     /// Defaults to `"max"` at runtime if unset.
     pub reasoning_effort: Option<String>,
@@ -1209,6 +1223,7 @@ pub struct ProviderConfig {
     pub api_key: Option<String>,
     pub base_url: Option<String>,
     pub model: Option<String>,
+    pub auth_mode: Option<String>,
     pub http_headers: Option<HashMap<String, String>>,
 }
 
@@ -1232,6 +1247,8 @@ pub struct ProvidersConfig {
     pub novita: ProviderConfig,
     #[serde(default)]
     pub fireworks: ProviderConfig,
+    #[serde(default)]
+    pub moonshot: ProviderConfig,
     #[serde(default)]
     pub sglang: ProviderConfig,
     #[serde(default)]
@@ -1343,6 +1360,7 @@ impl Config {
             ApiProvider::Openrouter => "providers.openrouter",
             ApiProvider::Novita => "providers.novita",
             ApiProvider::Fireworks => "providers.fireworks",
+            ApiProvider::Moonshot => "providers.moonshot",
             ApiProvider::Sglang => "providers.sglang",
             ApiProvider::Vllm => "providers.vllm",
             ApiProvider::Ollama => "providers.ollama",
@@ -1484,6 +1502,7 @@ impl Config {
             ApiProvider::Openrouter => &providers.openrouter,
             ApiProvider::Novita => &providers.novita,
             ApiProvider::Fireworks => &providers.fireworks,
+            ApiProvider::Moonshot => &providers.moonshot,
             ApiProvider::Sglang => &providers.sglang,
             ApiProvider::Vllm => &providers.vllm,
             ApiProvider::Ollama => &providers.ollama,
@@ -1550,6 +1569,13 @@ impl Config {
         {
             return model_for_provider(provider, normalized);
         }
+        if provider == ApiProvider::Moonshot
+            && self
+                .provider_config()
+                .is_some_and(provider_config_uses_kimi_oauth)
+        {
+            return DEFAULT_KIMI_CODE_MODEL.to_string();
+        }
 
         match provider {
             ApiProvider::Deepseek | ApiProvider::DeepseekCN => DEFAULT_TEXT_MODEL,
@@ -1560,6 +1586,7 @@ impl Config {
             ApiProvider::Openrouter => DEFAULT_OPENROUTER_MODEL,
             ApiProvider::Novita => DEFAULT_NOVITA_MODEL,
             ApiProvider::Fireworks => DEFAULT_FIREWORKS_MODEL,
+            ApiProvider::Moonshot => DEFAULT_MOONSHOT_MODEL,
             ApiProvider::Sglang => DEFAULT_SGLANG_MODEL,
             ApiProvider::Vllm => DEFAULT_VLLM_MODEL,
             ApiProvider::Ollama => DEFAULT_OLLAMA_MODEL,
@@ -1591,6 +1618,7 @@ impl Config {
             | ApiProvider::Openrouter
             | ApiProvider::Novita
             | ApiProvider::Fireworks
+            | ApiProvider::Moonshot
             | ApiProvider::Sglang
             | ApiProvider::Vllm
             | ApiProvider::Ollama => None,
@@ -1606,6 +1634,16 @@ impl Config {
                 ApiProvider::Openrouter => DEFAULT_OPENROUTER_BASE_URL,
                 ApiProvider::Novita => DEFAULT_NOVITA_BASE_URL,
                 ApiProvider::Fireworks => DEFAULT_FIREWORKS_BASE_URL,
+                ApiProvider::Moonshot => {
+                    if self
+                        .provider_config()
+                        .is_some_and(provider_config_uses_kimi_oauth)
+                    {
+                        DEFAULT_KIMI_CODE_BASE_URL
+                    } else {
+                        DEFAULT_MOONSHOT_BASE_URL
+                    }
+                }
                 ApiProvider::Sglang => DEFAULT_SGLANG_BASE_URL,
                 ApiProvider::Vllm => DEFAULT_VLLM_BASE_URL,
                 ApiProvider::Ollama => DEFAULT_OLLAMA_BASE_URL,
@@ -1639,6 +1677,7 @@ impl Config {
             ApiProvider::Openrouter => "openrouter",
             ApiProvider::Novita => "novita",
             ApiProvider::Fireworks => "fireworks",
+            ApiProvider::Moonshot => "moonshot",
             ApiProvider::Sglang => "sglang",
             ApiProvider::Vllm => "vllm",
             ApiProvider::Ollama => "ollama",
@@ -1663,6 +1702,14 @@ impl Config {
             && !configured.trim().is_empty()
         {
             return Ok(configured);
+        }
+
+        if provider == ApiProvider::Moonshot
+            && self
+                .provider_config_for(provider)
+                .is_some_and(provider_config_uses_kimi_oauth)
+        {
+            return kimi_cli_oauth_access_token();
         }
 
         // 2. Environment variables. Do not query platform credential stores
@@ -1720,6 +1767,11 @@ impl Config {
             ApiProvider::Fireworks => anyhow::bail!(
                 "Fireworks AI API key not found. Run 'codewhale auth set --provider fireworks', \
                  set FIREWORKS_API_KEY, or add [providers.fireworks] api_key in ~/.deepseek/config.toml."
+            ),
+            ApiProvider::Moonshot => anyhow::bail!(
+                "Moonshot/Kimi API key not found. Run 'codewhale auth set --provider moonshot', \
+                 set MOONSHOT_API_KEY/KIMI_API_KEY, add [providers.moonshot] api_key, \
+                 or run `kimi login` and set [providers.moonshot] auth_mode = \"kimi_oauth\"."
             ),
             // Self-hosted deployments commonly run without auth on localhost.
             // Return an empty key and let the client omit the Authorization header.
@@ -2262,6 +2314,13 @@ fn apply_env_overrides(config: &mut Config) {
                     .fireworks
                     .base_url = Some(value);
             }
+            ApiProvider::Moonshot => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .moonshot
+                    .base_url = Some(value);
+            }
             ApiProvider::Sglang => {
                 config
                     .providers
@@ -2368,6 +2427,17 @@ fn apply_env_overrides(config: &mut Config) {
             .fireworks
             .base_url = Some(value);
     }
+    if matches!(config.api_provider(), ApiProvider::Moonshot)
+        && let Ok(value) =
+            std::env::var("MOONSHOT_BASE_URL").or_else(|_| std::env::var("KIMI_BASE_URL"))
+        && !value.trim().is_empty()
+    {
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .moonshot
+            .base_url = Some(value);
+    }
     if matches!(config.api_provider(), ApiProvider::Sglang)
         && let Ok(value) = std::env::var("SGLANG_BASE_URL")
         && !value.trim().is_empty()
@@ -2410,6 +2480,7 @@ fn apply_env_overrides(config: &mut Config) {
             ApiProvider::Openrouter => &mut providers.openrouter,
             ApiProvider::Novita => &mut providers.novita,
             ApiProvider::Fireworks => &mut providers.fireworks,
+            ApiProvider::Moonshot => &mut providers.moonshot,
             ApiProvider::Sglang => &mut providers.sglang,
             ApiProvider::Vllm => &mut providers.vllm,
             ApiProvider::Ollama => &mut providers.ollama,
@@ -2468,6 +2539,17 @@ fn apply_env_overrides(config: &mut Config) {
             .wanjie_ark
             .model = Some(value);
     }
+    if matches!(config.api_provider(), ApiProvider::Moonshot)
+        && let Ok(value) = std::env::var("MOONSHOT_MODEL")
+            .or_else(|_| std::env::var("KIMI_MODEL_NAME"))
+            .or_else(|_| std::env::var("KIMI_MODEL"))
+    {
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .moonshot
+            .model = Some(value);
+    }
     if let Ok(value) =
         std::env::var("DEEPSEEK_MODEL").or_else(|_| std::env::var("DEEPSEEK_DEFAULT_TEXT_MODEL"))
     {
@@ -2497,6 +2579,7 @@ fn apply_env_overrides(config: &mut Config) {
                 ApiProvider::Openrouter => &mut providers.openrouter,
                 ApiProvider::Novita => &mut providers.novita,
                 ApiProvider::Fireworks => &mut providers.fireworks,
+                ApiProvider::Moonshot => &mut providers.moonshot,
                 ApiProvider::Sglang => &mut providers.sglang,
                 ApiProvider::Vllm => &mut providers.vllm,
                 ApiProvider::Ollama => &mut providers.ollama,
@@ -2724,6 +2807,12 @@ fn normalize_model_config(config: &mut Config) {
         {
             providers.fireworks.model = Some(normalized);
         }
+        if let Some(model) = providers.moonshot.model.as_deref()
+            && !provider_entry_uses_custom_base_url(ApiProvider::Moonshot, &providers.moonshot)
+            && let Some(normalized) = normalize_model_for_provider(ApiProvider::Moonshot, model)
+        {
+            providers.moonshot.model = Some(normalized);
+        }
         if let Some(model) = providers.sglang.model.as_deref()
             && !provider_entry_uses_custom_base_url(ApiProvider::Sglang, &providers.sglang)
             && let Some(normalized) = normalize_model_for_provider(ApiProvider::Sglang, model)
@@ -2752,6 +2841,7 @@ pub(crate) fn provider_passes_model_through(provider: ApiProvider) -> bool {
         ApiProvider::Openai
             | ApiProvider::Atlascloud
             | ApiProvider::WanjieArk
+            | ApiProvider::Moonshot
             | ApiProvider::Ollama
     )
 }
@@ -2774,6 +2864,7 @@ fn default_base_url_for_provider(provider: ApiProvider) -> &'static str {
         ApiProvider::Openrouter => DEFAULT_OPENROUTER_BASE_URL,
         ApiProvider::Novita => DEFAULT_NOVITA_BASE_URL,
         ApiProvider::Fireworks => DEFAULT_FIREWORKS_BASE_URL,
+        ApiProvider::Moonshot => DEFAULT_MOONSHOT_BASE_URL,
         ApiProvider::Sglang => DEFAULT_SGLANG_BASE_URL,
         ApiProvider::Vllm => DEFAULT_VLLM_BASE_URL,
         ApiProvider::Ollama => DEFAULT_OLLAMA_BASE_URL,
@@ -2786,6 +2877,27 @@ fn base_url_is_custom_for_provider(provider: ApiProvider, base_url: &str) -> boo
 
 fn provider_preserves_custom_base_url_model(provider: ApiProvider, base_url: &str) -> bool {
     base_url_is_custom_for_provider(provider, base_url)
+}
+
+fn provider_config_uses_kimi_oauth(config: &ProviderConfig) -> bool {
+    config
+        .auth_mode
+        .as_deref()
+        .is_some_and(auth_mode_uses_kimi_oauth)
+}
+
+fn auth_mode_uses_kimi_oauth(mode: &str) -> bool {
+    matches!(
+        normalize_auth_mode(mode).as_str(),
+        "kimi" | "kimi_oauth" | "kimi_cli" | "oauth"
+    )
+}
+
+fn normalize_auth_mode(mode: &str) -> String {
+    mode.trim()
+        .to_ascii_lowercase()
+        .replace('-', "_")
+        .replace(' ', "_")
 }
 
 fn base_url_uses_local_host(base_url: &str) -> bool {
@@ -2902,6 +3014,7 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
         base_url: override_cfg.base_url.or(base.base_url),
         http_headers: override_cfg.http_headers.or(base.http_headers),
         default_text_model: override_cfg.default_text_model.or(base.default_text_model),
+        auth_mode: override_cfg.auth_mode.or(base.auth_mode),
         reasoning_effort: override_cfg.reasoning_effort.or(base.reasoning_effort),
         tools_file: override_cfg.tools_file.or(base.tools_file),
         skills_dir: override_cfg.skills_dir.or(base.skills_dir),
@@ -2979,6 +3092,7 @@ fn merge_provider_config(base: ProviderConfig, override_cfg: ProviderConfig) -> 
         api_key: override_cfg.api_key.or(base.api_key),
         base_url: override_cfg.base_url.or(base.base_url),
         model: override_cfg.model.or(base.model),
+        auth_mode: override_cfg.auth_mode.or(base.auth_mode),
         http_headers: override_cfg.http_headers.or(base.http_headers),
     }
 }
@@ -3001,6 +3115,7 @@ fn merge_providers(
             openrouter: merge_provider_config(base.openrouter, override_cfg.openrouter),
             novita: merge_provider_config(base.novita, override_cfg.novita),
             fireworks: merge_provider_config(base.fireworks, override_cfg.fireworks),
+            moonshot: merge_provider_config(base.moonshot, override_cfg.moonshot),
             sglang: merge_provider_config(base.sglang, override_cfg.sglang),
             vllm: merge_provider_config(base.vllm, override_cfg.vllm),
             ollama: merge_provider_config(base.ollama, override_cfg.ollama),
@@ -3373,6 +3488,14 @@ pub fn has_api_key(config: &Config) -> bool {
 pub fn active_provider_has_config_api_key(config: &Config) -> bool {
     let provider = config.api_provider();
 
+    if provider == ApiProvider::Moonshot
+        && config
+            .provider_config_for(provider)
+            .is_some_and(provider_config_uses_kimi_oauth)
+    {
+        return kimi_cli_credentials_present();
+    }
+
     if config
         .provider_config_for(provider)
         .and_then(|entry| entry.api_key.as_ref())
@@ -3414,6 +3537,10 @@ pub fn active_provider_has_env_api_key(config: &Config) -> bool {
         ApiProvider::Fireworks => {
             std::env::var("FIREWORKS_API_KEY").is_ok_and(|k| !k.trim().is_empty())
         }
+        ApiProvider::Moonshot => {
+            std::env::var("MOONSHOT_API_KEY").is_ok_and(|k| !k.trim().is_empty())
+                || std::env::var("KIMI_API_KEY").is_ok_and(|k| !k.trim().is_empty())
+        }
         ApiProvider::Sglang => std::env::var("SGLANG_API_KEY").is_ok_and(|k| !k.trim().is_empty()),
         ApiProvider::Vllm => std::env::var("VLLM_API_KEY").is_ok_and(|k| !k.trim().is_empty()),
         ApiProvider::Ollama => std::env::var("OLLAMA_API_KEY").is_ok_and(|k| !k.trim().is_empty()),
@@ -3439,6 +3566,7 @@ pub fn has_api_key_for(config: &Config, provider: ApiProvider) -> bool {
         ApiProvider::Openrouter => "OPENROUTER_API_KEY",
         ApiProvider::Novita => "NOVITA_API_KEY",
         ApiProvider::Fireworks => "FIREWORKS_API_KEY",
+        ApiProvider::Moonshot => "MOONSHOT_API_KEY",
         ApiProvider::Sglang => "SGLANG_API_KEY",
         ApiProvider::Vllm => "VLLM_API_KEY",
         ApiProvider::Ollama => "OLLAMA_API_KEY",
@@ -3456,6 +3584,19 @@ pub fn has_api_key_for(config: &Config, provider: ApiProvider) -> bool {
             || std::env::var("WANJIE_MAAS_API_KEY").is_ok_and(|k| !k.trim().is_empty()))
     {
         return true;
+    }
+    if matches!(provider, ApiProvider::Moonshot)
+        && std::env::var("KIMI_API_KEY").is_ok_and(|k| !k.trim().is_empty())
+    {
+        return true;
+    }
+
+    if provider == ApiProvider::Moonshot
+        && config
+            .provider_config_for(provider)
+            .is_some_and(provider_config_uses_kimi_oauth)
+    {
+        return kimi_cli_credentials_present();
     }
 
     // Self-hosted providers typically run without authentication.
@@ -3519,6 +3660,7 @@ pub fn save_api_key_for(provider: ApiProvider, api_key: &str) -> Result<PathBuf>
         ApiProvider::Openrouter => "providers.openrouter",
         ApiProvider::Novita => "providers.novita",
         ApiProvider::Fireworks => "providers.fireworks",
+        ApiProvider::Moonshot => "providers.moonshot",
         ApiProvider::Sglang => "providers.sglang",
         ApiProvider::Vllm => "providers.vllm",
         ApiProvider::Ollama => "providers.ollama",
@@ -3555,6 +3697,7 @@ pub fn save_api_key_for(provider: ApiProvider, api_key: &str) -> Result<PathBuf>
         ApiProvider::Openrouter => "openrouter",
         ApiProvider::Novita => "novita",
         ApiProvider::Fireworks => "fireworks",
+        ApiProvider::Moonshot => "moonshot",
         ApiProvider::Sglang => "sglang",
         ApiProvider::Vllm => "vllm",
         ApiProvider::Ollama => "ollama",
@@ -3582,6 +3725,221 @@ pub fn save_api_key_for(provider: ApiProvider, api_key: &str) -> Result<PathBuf>
     );
 
     Ok(config_path)
+}
+
+pub fn save_provider_auth_mode_for(provider: ApiProvider, auth_mode: &str) -> Result<PathBuf> {
+    let config_path = default_config_path()
+        .context("Failed to resolve config path: home directory not found.")?;
+    ensure_parent_dir(&config_path)?;
+
+    let mut doc: toml::Value = if config_path.exists() {
+        let raw = fs::read_to_string(&config_path)?;
+        toml::from_str(&raw)
+            .with_context(|| format!("Failed to parse config at {}", config_path.display()))?
+    } else {
+        toml::Value::Table(toml::value::Table::new())
+    };
+
+    let table = doc
+        .as_table_mut()
+        .context("Config root must be a TOML table.")?;
+    let providers = table
+        .entry("providers".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()))
+        .as_table_mut()
+        .context("`providers` must be a table.")?;
+    let key_inside = provider_config_key(provider).context("provider auth mode key")?;
+    let entry = providers
+        .entry(key_inside.to_string())
+        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()))
+        .as_table_mut()
+        .with_context(|| format!("`providers.{key_inside}` must be a table."))?;
+    entry.insert(
+        "auth_mode".to_string(),
+        toml::Value::String(auth_mode.to_string()),
+    );
+
+    let serialized = toml::to_string_pretty(&doc).context("failed to serialize updated config")?;
+    write_config_file_secure(&config_path, &serialized)
+        .with_context(|| format!("Failed to write config to {}", config_path.display()))?;
+    log_sensitive_event(
+        "credential.auth_mode.set",
+        json!({
+            "backend": "config_file",
+            "provider": provider.as_str(),
+            "auth_mode": auth_mode,
+            "config_path": config_path.display().to_string(),
+        }),
+    );
+    Ok(config_path)
+}
+
+fn provider_config_key(provider: ApiProvider) -> Result<&'static str> {
+    match provider {
+        ApiProvider::Deepseek | ApiProvider::DeepseekCN => {
+            anyhow::bail!("DeepSeek stores auth at the root config level")
+        }
+        ApiProvider::NvidiaNim => Ok("nvidia_nim"),
+        ApiProvider::Openai => Ok("openai"),
+        ApiProvider::Atlascloud => Ok("atlascloud"),
+        ApiProvider::WanjieArk => Ok("wanjie_ark"),
+        ApiProvider::Openrouter => Ok("openrouter"),
+        ApiProvider::Novita => Ok("novita"),
+        ApiProvider::Fireworks => Ok("fireworks"),
+        ApiProvider::Moonshot => Ok("moonshot"),
+        ApiProvider::Sglang => Ok("sglang"),
+        ApiProvider::Vllm => Ok("vllm"),
+        ApiProvider::Ollama => Ok("ollama"),
+    }
+}
+
+const KIMI_CODE_CLIENT_ID: &str = "17e5f671-d194-4dfb-9706-5516cb48c098";
+const KIMI_CODE_CREDENTIAL_FILE: &str = "kimi-code.json";
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct KimiOAuthCredential {
+    access_token: Option<String>,
+    refresh_token: Option<String>,
+    expires_at: Option<f64>,
+    expires_in: Option<f64>,
+    scope: Option<String>,
+    token_type: Option<String>,
+}
+
+fn kimi_cli_oauth_access_token() -> Result<String> {
+    let path = kimi_cli_oauth_credentials_path()?;
+    let raw = fs::read_to_string(&path).with_context(|| {
+        format!(
+            "Kimi OAuth credentials not found at {}. Run `kimi login`, then set \
+             [providers.moonshot] auth_mode = \"kimi_oauth\".",
+            path.display()
+        )
+    })?;
+    let mut credential: KimiOAuthCredential =
+        serde_json::from_str(&raw).context("Failed to parse Kimi OAuth credentials")?;
+
+    if kimi_oauth_access_token_is_fresh(&credential) {
+        return credential
+            .access_token
+            .filter(|token| !token.trim().is_empty())
+            .context("Kimi OAuth access token is empty");
+    }
+
+    let refresh_token = credential
+        .refresh_token
+        .as_deref()
+        .filter(|token| !token.trim().is_empty())
+        .context("Kimi OAuth refresh token is empty. Run `kimi login` again.")?;
+    credential = refresh_kimi_oauth_token(refresh_token)?;
+    write_kimi_oauth_credential(&path, &credential)?;
+    credential
+        .access_token
+        .filter(|token| !token.trim().is_empty())
+        .context("Kimi OAuth refresh returned an empty access token")
+}
+
+fn kimi_oauth_access_token_is_fresh(credential: &KimiOAuthCredential) -> bool {
+    credential
+        .access_token
+        .as_deref()
+        .is_some_and(|token| !token.trim().is_empty())
+        && credential
+            .expires_at
+            .is_some_and(|expires_at| expires_at - now_unix_secs() > 60.0)
+}
+
+fn refresh_kimi_oauth_token(refresh_token: &str) -> Result<KimiOAuthCredential> {
+    let oauth_host = std::env::var("KIMI_CODE_OAUTH_HOST")
+        .or_else(|_| std::env::var("KIMI_OAUTH_HOST"))
+        .unwrap_or_else(|_| "https://auth.kimi.com".to_string());
+    let url = format!("{}/api/oauth/token", oauth_host.trim_end_matches('/'));
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .context("Failed to build Kimi OAuth refresh client")?;
+    let response = client
+        .post(url)
+        .header("X-Msh-Platform", "kimi_cli")
+        .header("X-Msh-Version", env!("CARGO_PKG_VERSION"))
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body(format!(
+            "client_id={}&grant_type=refresh_token&refresh_token={}",
+            percent_encode_form(KIMI_CODE_CLIENT_ID),
+            percent_encode_form(refresh_token)
+        ))
+        .send()
+        .context("Kimi OAuth refresh request failed")?;
+    let status = response.status();
+    if !status.is_success() {
+        anyhow::bail!("Kimi OAuth refresh failed with HTTP {status}. Run `kimi login` again.");
+    }
+
+    let mut refreshed: KimiOAuthCredential = response
+        .json()
+        .context("Failed to parse Kimi OAuth refresh response")?;
+    if let Some(expires_in) = refreshed.expires_in {
+        refreshed.expires_at = Some(now_unix_secs() + expires_in);
+    }
+    Ok(refreshed)
+}
+
+fn kimi_cli_oauth_credentials_path() -> Result<PathBuf> {
+    let share_dir = std::env::var("KIMI_SHARE_DIR")
+        .map(PathBuf::from)
+        .or_else(|_| {
+            effective_home_dir()
+                .map(|home| home.join(".kimi"))
+                .ok_or(std::env::VarError::NotPresent)
+        })
+        .context("Failed to resolve Kimi share directory")?;
+    Ok(share_dir
+        .join("credentials")
+        .join(KIMI_CODE_CREDENTIAL_FILE))
+}
+
+fn write_kimi_oauth_credential(path: &Path, credential: &KimiOAuthCredential) -> Result<()> {
+    let serialized =
+        serde_json::to_vec(credential).context("Failed to serialize Kimi OAuth credentials")?;
+    let mut options = fs::OpenOptions::new();
+    options.create(true).truncate(true).write(true);
+    #[cfg(unix)]
+    {
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(path)
+        .with_context(|| format!("Failed to update {}", path.display()))?;
+    file.write_all(&serialized)
+        .with_context(|| format!("Failed to write {}", path.display()))?;
+    Ok(())
+}
+
+fn now_unix_secs() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs_f64())
+        .unwrap_or(0.0)
+}
+
+fn percent_encode_form(input: &str) -> String {
+    let mut out = String::new();
+    for byte in input.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char)
+            }
+            b' ' => out.push('+'),
+            _ => {
+                let _ = write!(&mut out, "%{byte:02X}");
+            }
+        }
+    }
+    out
+}
+
+#[must_use]
+pub fn kimi_cli_credentials_present() -> bool {
+    kimi_cli_oauth_credentials_path().is_ok_and(|path| path.exists())
 }
 
 /// Clear the API key from config-file storage.

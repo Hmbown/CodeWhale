@@ -26,7 +26,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Widget},
 };
 
-use crate::config::{ApiProvider, Config, has_api_key_for};
+use crate::config::{ApiProvider, Config, has_api_key_for, kimi_cli_credentials_present};
 use crate::palette;
 use crate::tui::views::{ModalKind, ModalView, ViewAction, ViewEvent};
 
@@ -94,6 +94,7 @@ impl ProviderPickerView {
             ApiProvider::Openrouter => "OPENROUTER_API_KEY",
             ApiProvider::Novita => "NOVITA_API_KEY",
             ApiProvider::Fireworks => "FIREWORKS_API_KEY",
+            ApiProvider::Moonshot => "MOONSHOT_API_KEY / KIMI_API_KEY",
             ApiProvider::Sglang => "SGLANG_API_KEY",
             ApiProvider::Vllm => "VLLM_API_KEY",
             ApiProvider::Ollama => "OLLAMA_API_KEY",
@@ -102,6 +103,9 @@ impl ProviderPickerView {
 
     fn provider_hint(provider: ApiProvider, has_key: bool) -> String {
         match provider {
+            ApiProvider::Moonshot if kimi_cli_credentials_present() => {
+                "(Kimi CLI OAuth ready)".to_string()
+            }
             ApiProvider::Ollama => "self-hosted; defaults to http://localhost:11434".to_string(),
             ApiProvider::Sglang | ApiProvider::Vllm if has_key => {
                 "(configured; optional key)".to_string()
@@ -285,7 +289,11 @@ impl ModalView for ProviderPickerView {
                 }
                 KeyCode::Enter => {
                     let provider = self.selected_provider();
-                    if self.selected_has_key() {
+                    if provider == ApiProvider::Moonshot && kimi_cli_credentials_present() {
+                        ViewAction::EmitAndClose(ViewEvent::ProviderPickerKimiOAuthEnabled {
+                            provider,
+                        })
+                    } else if self.selected_has_key() {
                         ViewAction::EmitAndClose(ViewEvent::ProviderPickerApplied { provider })
                     } else {
                         self.stage = Stage::KeyEntry;
@@ -400,6 +408,7 @@ mod tests {
                 "OpenRouter",
                 "Novita AI",
                 "Fireworks AI",
+                "Moonshot/Kimi",
                 "SGLang",
                 "vLLM",
                 "Ollama"

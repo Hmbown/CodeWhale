@@ -152,6 +152,17 @@ impl Default for ModelRegistry {
                 supports_reasoning: true,
             },
             ModelInfo {
+                id: "kimi-k2.6".to_string(),
+                provider: ProviderKind::Moonshot,
+                aliases: vec![
+                    "kimi".to_string(),
+                    "kimi-k2".to_string(),
+                    "moonshot-kimi-k2.6".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
                 id: "deepseek-ai/DeepSeek-V4-Pro".to_string(),
                 provider: ProviderKind::Sglang,
                 aliases: vec![

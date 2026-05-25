@@ -904,6 +904,7 @@ pub(super) fn apply_reasoning_effort(
             ApiProvider::Openai
             | ApiProvider::Atlascloud
             | ApiProvider::WanjieArk
+            | ApiProvider::Moonshot
             | ApiProvider::Ollama => {}
             ApiProvider::NvidiaNim => {
                 body["chat_template_kwargs"] = json!({
@@ -941,6 +942,7 @@ pub(super) fn apply_reasoning_effort(
             ApiProvider::Openai
             | ApiProvider::Atlascloud
             | ApiProvider::WanjieArk
+            | ApiProvider::Moonshot
             | ApiProvider::Ollama => {}
             ApiProvider::NvidiaNim => {
                 body["chat_template_kwargs"] = json!({
@@ -970,6 +972,7 @@ pub(super) fn apply_reasoning_effort(
             ApiProvider::Openai
             | ApiProvider::Atlascloud
             | ApiProvider::WanjieArk
+            | ApiProvider::Moonshot
             | ApiProvider::Ollama => {}
             ApiProvider::NvidiaNim => {
                 body["chat_template_kwargs"] = json!({
