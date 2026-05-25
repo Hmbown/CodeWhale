@@ -697,6 +697,8 @@ pub enum StatusItem {
     LastToolElapsed,
     /// Remaining rate-limit budget (placeholder until wired).
     RateLimit,
+    /// DeepSeek account balance, refreshed once per turn completion.
+    Balance,
 }
 
 impl StatusItem {
@@ -715,6 +717,9 @@ impl StatusItem {
             StatusItem::Agents,
             StatusItem::ReasoningReplay,
             StatusItem::Cache,
+            // Balance is provider-specific (DeepSeek / DeepSeek CN only) and
+            // stays opt-in via `/statusline` — it should not crowd the default
+            // footer for users on other providers.
         ]
     }
 
@@ -735,6 +740,7 @@ impl StatusItem {
             StatusItem::GitBranch => "git_branch",
             StatusItem::LastToolElapsed => "last_tool_elapsed",
             StatusItem::RateLimit => "rate_limit",
+            StatusItem::Balance => "balance",
         }
     }
 
@@ -755,6 +761,7 @@ impl StatusItem {
             StatusItem::GitBranch => "Git branch",
             StatusItem::LastToolElapsed => "Last tool elapsed",
             StatusItem::RateLimit => "Rate-limit remaining",
+            StatusItem::Balance => "Account balance",
         }
     }
 
@@ -776,6 +783,7 @@ impl StatusItem {
             StatusItem::GitBranch => "current workspace branch",
             StatusItem::LastToolElapsed => "ms of the most recent tool call (placeholder)",
             StatusItem::RateLimit => "remaining requests in the budget (placeholder)",
+            StatusItem::Balance => "topped-up + granted balance from DeepSeek",
         }
     }
 
@@ -786,6 +794,7 @@ impl StatusItem {
             StatusItem::Mode,
             StatusItem::Model,
             StatusItem::Cost,
+            StatusItem::Balance,
             StatusItem::Status,
             StatusItem::Coherence,
             StatusItem::Agents,
@@ -804,8 +813,25 @@ impl StatusItem {
     pub fn is_left_cluster(self) -> bool {
         matches!(
             self,
-            StatusItem::Mode | StatusItem::Model | StatusItem::Cost | StatusItem::Status
+            StatusItem::Mode
+                | StatusItem::Model
+                | StatusItem::Cost
+                | StatusItem::Status
+                | StatusItem::Balance
         )
+    }
+
+    /// Whether this item is relevant for `provider`.  Provider-specific
+    /// items return `false` for unsupported providers so the picker doesn't
+    /// offer toggles that can never show useful data.
+    #[must_use]
+    pub fn is_available_for(self, provider: ApiProvider) -> bool {
+        match self {
+            StatusItem::Balance => {
+                matches!(provider, ApiProvider::Deepseek | ApiProvider::DeepseekCN)
+            }
+            _ => true,
+        }
     }
 }
 
@@ -6954,5 +6980,24 @@ model = "deepseek-ai/deepseek-v4-pro"
         let json = serde_json::to_value(&cap).unwrap();
         let deserialized: ProviderCapability = serde_json::from_value(json).unwrap();
         assert_eq!(cap, deserialized);
+    }
+
+    #[test]
+    fn status_item_balance_available_only_for_deepseek_providers() {
+        // Balance item should only be offered for DeepSeek / DeepSeekCN.
+        assert!(StatusItem::Balance.is_available_for(ApiProvider::Deepseek));
+        assert!(StatusItem::Balance.is_available_for(ApiProvider::DeepseekCN));
+        // Sanity: all other known providers should hide the Balance toggle.
+        assert!(!StatusItem::Balance.is_available_for(ApiProvider::Openrouter));
+        assert!(!StatusItem::Balance.is_available_for(ApiProvider::Novita));
+        assert!(!StatusItem::Balance.is_available_for(ApiProvider::NvidiaNim));
+        assert!(!StatusItem::Balance.is_available_for(ApiProvider::Fireworks));
+        assert!(!StatusItem::Balance.is_available_for(ApiProvider::Sglang));
+        assert!(!StatusItem::Balance.is_available_for(ApiProvider::Vllm));
+        assert!(!StatusItem::Balance.is_available_for(ApiProvider::Ollama));
+        assert!(!StatusItem::Balance.is_available_for(ApiProvider::Openai));
+        assert!(!StatusItem::Balance.is_available_for(ApiProvider::Atlascloud));
+        // Other StatusItem variants should be available everywhere.
+        assert!(StatusItem::Mode.is_available_for(ApiProvider::Ollama));
     }
 }

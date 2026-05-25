@@ -5,7 +5,7 @@ use std::io::{self, Stdout, Write};
 use std::path::PathBuf;
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 use std::process::{Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -856,6 +856,41 @@ fn active_rlm_task_entries(app: &App) -> Vec<TaskPanelEntry> {
         .collect()
 }
 
+/// Shared `reqwest::Client` for balance fetches so connection pools are
+/// reused across successive background polls.
+static BALANCE_CLIENT: LazyLock<::reqwest::Client> = LazyLock::new(|| {
+    ::reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .unwrap_or_default()
+});
+
+/// Fetch the DeepSeek account balance from the balance API.
+///
+/// Returns `None` on any error (network, auth, parse) — callers should treat
+/// a `None` return as "balance unknown" and keep the previous value.
+async fn fetch_deepseek_balance(api_key: &str) -> Option<crate::pricing::BalanceInfo> {
+    let url = "https://api.deepseek.com/user/balance";
+    let client = &*BALANCE_CLIENT;
+    let response = client
+        .get(url)
+        .header("Authorization", format!("Bearer {api_key}"))
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        tracing::debug!(
+            "balance API returned {}: {}",
+            response.status().as_u16(),
+            response.text().await.unwrap_or_default()
+        );
+        return None;
+    }
+    let body: crate::pricing::BalanceResponse = response.json().await.ok()?;
+    // Return the first balance entry (typically the user's primary currency).
+    body.balance_infos.into_iter().next()
+}
+
 #[allow(clippy::too_many_lines)]
 async fn run_event_loop(
     terminal: &mut AppTerminal,
@@ -1524,6 +1559,25 @@ async fn run_event_loop(
                             persistence_actor::persist(PersistRequest::SessionSnapshot(session));
                         }
                         persistence_actor::persist(PersistRequest::ClearCheckpoint);
+
+                        // Refresh DeepSeek account balance after each completed
+                        // turn so the footer balance chip stays current without
+                        // adding latency to any request path.
+                        if app.api_provider == ApiProvider::Deepseek
+                            || app.api_provider == ApiProvider::DeepseekCN
+                        {
+                            let cell = app.balance_cell.clone();
+                            let api_key = config.deepseek_api_key().unwrap_or_default();
+                            if !api_key.is_empty() {
+                                tokio::spawn(async move {
+                                    if let Some(info) = fetch_deepseek_balance(&api_key).await {
+                                        if let Ok(mut guard) = cell.lock() {
+                                            *guard = Some(info);
+                                        }
+                                    }
+                                });
+                            }
+                        }
 
                         if app.mode == AppMode::Plan
                             && app.plan_tool_used_in_turn
@@ -4776,6 +4830,7 @@ async fn apply_command_result(
                     app.view_stack
                         .push(crate::tui::views::status_picker::StatusPickerView::new(
                             &app.status_items,
+                            app.api_provider,
                         ));
                 }
             }

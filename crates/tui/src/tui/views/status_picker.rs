@@ -9,6 +9,8 @@
 //! The picker enumerates [`StatusItem::all`] so adding a new variant in
 //! `crates/tui/src/config.rs` automatically surfaces a new row here.
 
+use std::cell::Cell;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     buffer::Buffer,
@@ -18,7 +20,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Padding, Paragraph, Widget},
 };
 
-use crate::config::StatusItem;
+use crate::config::{ApiProvider, StatusItem};
 use crate::palette;
 use crate::tui::views::{ModalKind, ModalView, ViewAction, ViewEvent};
 
@@ -35,18 +37,30 @@ pub struct StatusPickerView {
     cursor: usize,
     /// Snapshot of `app.status_items` at open time so Esc reverts cleanly.
     original: Vec<StatusItem>,
+    /// First visible row index. Auto-adjusted by `render` and `move_*` so
+    /// every item stays reachable regardless of popup height. Uses `Cell`
+    /// because `render` takes `&self`.
+    scroll_offset: Cell<usize>,
+    /// Number of item rows that fit in the popup, updated on each `render`.
+    visible_rows: Cell<usize>,
 }
 
 impl StatusPickerView {
     #[must_use]
-    pub fn new(active: &[StatusItem]) -> Self {
-        let rows: Vec<StatusItem> = StatusItem::all().to_vec();
+    pub fn new(active: &[StatusItem], provider: ApiProvider) -> Self {
+        let rows: Vec<StatusItem> = StatusItem::all()
+            .iter()
+            .filter(|item| item.is_available_for(provider))
+            .copied()
+            .collect();
         let selected: Vec<bool> = rows.iter().map(|item| active.contains(item)).collect();
         Self {
             rows,
             selected,
             cursor: 0,
             original: active.to_vec(),
+            scroll_offset: Cell::new(0),
+            visible_rows: Cell::new(0),
         }
     }
 
@@ -65,12 +79,29 @@ impl StatusPickerView {
         if self.cursor > 0 {
             self.cursor -= 1;
         }
+        self.scroll_to_cursor();
     }
 
     fn move_down(&mut self) {
         let max = self.rows.len().saturating_sub(1);
         if self.cursor < max {
             self.cursor += 1;
+        }
+        self.scroll_to_cursor();
+    }
+
+    /// Keep the cursor row inside the visible window.
+    fn scroll_to_cursor(&self) {
+        let visible = self.visible_rows.get();
+        if visible == 0 {
+            return;
+        }
+        let offset = self.scroll_offset.get();
+        if self.cursor < offset {
+            self.scroll_offset.set(self.cursor);
+        } else if self.cursor >= offset + visible {
+            self.scroll_offset
+                .set(self.cursor.saturating_sub(visible.saturating_sub(1)));
         }
     }
 
@@ -155,8 +186,11 @@ impl ModalView for StatusPickerView {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         let popup_width = 64.min(area.width.saturating_sub(4)).max(40);
         // Two header lines + one row per StatusItem + one footer hint line.
+        // When the full list is taller than the screen, cap the popup so it
+        // stays on-screen and let the scroll offset handle overflow.
         let needed_height = (self.rows.len() as u16).saturating_add(4);
-        let popup_height = needed_height.min(area.height.saturating_sub(4)).max(8);
+        let max_fit = area.height.saturating_sub(4).max(8);
+        let popup_height = needed_height.min(max_fit);
 
         let popup_area = Rect {
             x: area.x + (area.width.saturating_sub(popup_width)) / 2,
@@ -194,16 +228,31 @@ impl ModalView for StatusPickerView {
         let inner = block.inner(popup_area);
         block.render(popup_area, buf);
 
-        let mut lines: Vec<Line> = Vec::with_capacity(self.rows.len() + 2);
+        // Four non-item lines (header, blank, footer hint, and one for
+        // the bottom border decoration), rest is item rows.
+        let visible = (inner.height as usize).saturating_sub(4).max(1);
+        self.visible_rows.set(visible);
+
+        // Auto-scroll so the cursor stays inside the visible window,
+        // then clamp to a valid range.
+        self.scroll_to_cursor();
+        let offset = self
+            .scroll_offset
+            .get()
+            .min(self.rows.len().saturating_sub(visible));
+
+        let mut lines: Vec<Line> = Vec::with_capacity(visible + 2);
         lines.push(Line::from(Span::styled(
             "Pick the chips you want in the footer:",
             Style::default().fg(palette::TEXT_MUTED),
         )));
         lines.push(Line::from(""));
 
-        for (idx, item) in self.rows.iter().enumerate() {
-            let checked = *self.selected.get(idx).unwrap_or(&false);
-            let is_cursor = idx == self.cursor;
+        let end = (offset + visible).min(self.rows.len());
+        for (idx, item) in self.rows[offset..end].iter().enumerate() {
+            let real_idx = offset + idx;
+            let checked = *self.selected.get(real_idx).unwrap_or(&false);
+            let is_cursor = real_idx == self.cursor;
             let mark = if checked { "[x]" } else { "[ ]" };
 
             let row_style = if is_cursor {
@@ -246,14 +295,14 @@ mod tests {
     #[test]
     fn opens_with_active_items_pre_selected() {
         let active = StatusItem::default_footer();
-        let view = StatusPickerView::new(&active);
+        let view = StatusPickerView::new(&active, ApiProvider::Deepseek);
         assert_eq!(view.current_selection(), active);
     }
 
     #[test]
     fn space_toggles_current_row_and_emits_live_preview() {
         let active = StatusItem::default_footer();
-        let mut view = StatusPickerView::new(&active);
+        let mut view = StatusPickerView::new(&active, ApiProvider::Deepseek);
         // Cursor starts at row 0 = StatusItem::Mode (currently checked).
         let action = view.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
         match action {
@@ -268,7 +317,7 @@ mod tests {
     #[test]
     fn enter_emits_final_save() {
         let active = StatusItem::default_footer();
-        let mut view = StatusPickerView::new(&active);
+        let mut view = StatusPickerView::new(&active, ApiProvider::Deepseek);
         let action = view.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         match action {
             ViewAction::EmitAndClose(ViewEvent::StatusItemsUpdated { final_save, .. }) => {
@@ -281,7 +330,7 @@ mod tests {
     #[test]
     fn esc_reverts_to_snapshot() {
         let active = StatusItem::default_footer();
-        let mut view = StatusPickerView::new(&active);
+        let mut view = StatusPickerView::new(&active, ApiProvider::Deepseek);
         // Toggle a few items off so the working set diverges from snapshot.
         view.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
         view.move_down();
@@ -299,7 +348,7 @@ mod tests {
     #[test]
     fn select_all_and_select_none_keys_work() {
         let active: Vec<StatusItem> = Vec::new();
-        let mut view = StatusPickerView::new(&active);
+        let mut view = StatusPickerView::new(&active, ApiProvider::Deepseek);
         let action = view.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
         match action {
             ViewAction::Emit(ViewEvent::StatusItemsUpdated { items, .. }) => {
@@ -319,7 +368,7 @@ mod tests {
     #[test]
     fn arrow_keys_move_cursor_within_bounds() {
         let active = StatusItem::default_footer();
-        let mut view = StatusPickerView::new(&active);
+        let mut view = StatusPickerView::new(&active, ApiProvider::Deepseek);
         assert_eq!(view.cursor, 0);
         view.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         assert_eq!(view.cursor, 1);
@@ -330,5 +379,15 @@ mod tests {
             view.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         }
         assert_eq!(view.cursor, StatusItem::all().len() - 1);
+    }
+
+    #[test]
+    fn balance_excluded_for_non_deepseek_provider() {
+        let active = StatusItem::default_footer();
+        let view = StatusPickerView::new(&active, ApiProvider::Openrouter);
+        // Balance should not appear as a row for non-DeepSeek providers.
+        assert!(!view.rows.contains(&StatusItem::Balance));
+        // Mode should still be present.
+        assert!(view.rows.contains(&StatusItem::Mode));
     }
 }
