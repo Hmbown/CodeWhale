@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::fs;
+#[cfg(unix)]
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
