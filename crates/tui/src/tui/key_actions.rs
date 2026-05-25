@@ -1,9 +1,7 @@
 //! Keyboard event action handlers extracted from `ui.rs`.
 //!
 //! Each function handles a focused subset of keyboard input so the
-//! main event loop stays lean. Functions that need to signal a
-//! control-flow change (shutdown, return to caller) communicate via
-//! [`KeyActionResult`].
+//! main event loop stays lean.
 
 use crossterm::event::{KeyCode, KeyEvent};
 
@@ -15,6 +13,11 @@ use super::app::App;
 ///
 /// Returns `true` when the key was consumed (caller should `continue`).
 pub fn handle_file_tree_key(app: &mut App, key: &KeyEvent) -> bool {
+    // Guard: do not intercept keys when the file-tree pane is not visible.
+    if !app.file_tree_visible {
+        return false;
+    }
+
     // Esc closes the tree even when entries are still loading.
     if key.code == KeyCode::Esc && app.file_tree.is_some() {
         app.file_tree = None;
@@ -42,7 +45,7 @@ pub fn handle_file_tree_key(app: &mut App, key: &KeyEvent) -> bool {
             if let Some(rel_path) = file_tree.activate() {
                 let path_str = rel_path.to_string_lossy().to_string();
                 app.status_message = Some(format!("Attached @{path_str}"));
-                app.insert_str(&format!("@{} ", path_str));
+                app.insert_str(&format!("@{path_str} "));
             } else {
                 app.needs_redraw = true;
             }
