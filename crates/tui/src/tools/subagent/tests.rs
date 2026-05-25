@@ -803,6 +803,7 @@ async fn test_wait_for_result_reports_timeout_when_still_running() {
     let manager = Arc::new(RwLock::new(SubAgentManager::new(PathBuf::from("."), 2)));
     let (input_tx, _input_rx) = mpsc::unbounded_channel();
     let agent = SubAgent::new(
+        "test_agent_1".to_string(),
         SubAgentType::Explore,
         "prompt".to_string(),
         make_assignment(),
@@ -834,6 +835,7 @@ async fn agent_eval_on_completed_session_returns_full_projection_not_running_err
     let manager = Arc::new(RwLock::new(SubAgentManager::new(PathBuf::from("."), 1)));
     let (input_tx, _input_rx) = mpsc::unbounded_channel();
     let mut agent = SubAgent::new(
+        "test_agent_2".to_string(),
         SubAgentType::Explore,
         "analyze 14 issues".to_string(),
         make_assignment(),
@@ -887,6 +889,7 @@ async fn test_running_count_counts_only_agents_with_live_task_handles() {
     let mut manager = SubAgentManager::new(PathBuf::from("."), 1);
     let (input_tx, _input_rx) = mpsc::unbounded_channel();
     let mut agent = SubAgent::new(
+        "test_agent_3".to_string(),
         SubAgentType::Explore,
         "prompt".to_string(),
         make_assignment(),
@@ -918,6 +921,7 @@ fn test_running_count_ignores_running_status_without_task_handle() {
     let mut manager = SubAgentManager::new(PathBuf::from("."), 1);
     let (input_tx, _input_rx) = mpsc::unbounded_channel();
     let mut agent = SubAgent::new(
+        "test_agent_4".to_string(),
         SubAgentType::Explore,
         "prompt".to_string(),
         make_assignment(),
@@ -938,6 +942,7 @@ async fn test_running_count_ignores_finished_task_handles() {
     let mut manager = SubAgentManager::new(PathBuf::from("."), 1);
     let (input_tx, _input_rx) = mpsc::unbounded_channel();
     let mut agent = SubAgent::new(
+        "test_agent_5".to_string(),
         SubAgentType::Explore,
         "prompt".to_string(),
         make_assignment(),
@@ -966,6 +971,7 @@ fn test_assign_updates_running_agent_and_sends_message() {
     let mut manager = SubAgentManager::new(PathBuf::from("."), 2);
     let (input_tx, mut input_rx) = mpsc::unbounded_channel();
     let agent = SubAgent::new(
+        "test_agent_6".to_string(),
         SubAgentType::General,
         "work".to_string(),
         make_assignment(),
@@ -1003,6 +1009,7 @@ fn test_assign_rejects_message_for_non_running_agent() {
     let mut manager = SubAgentManager::new(PathBuf::from("."), 1);
     let (input_tx, _input_rx) = mpsc::unbounded_channel();
     let mut agent = SubAgent::new(
+        "test_agent_7".to_string(),
         SubAgentType::Explore,
         "prompt".to_string(),
         make_assignment(),
@@ -1027,6 +1034,7 @@ fn test_assign_updates_non_running_metadata_without_message() {
     let mut manager = SubAgentManager::new(PathBuf::from("."), 1);
     let (input_tx, _input_rx) = mpsc::unbounded_channel();
     let mut agent = SubAgent::new(
+        "test_agent_8".to_string(),
         SubAgentType::Plan,
         "prompt".to_string(),
         make_assignment(),
@@ -1062,6 +1070,7 @@ fn test_persist_and_reload_marks_running_agent_as_interrupted() {
     let mut manager = SubAgentManager::new(workspace.clone(), 2).with_state_path(state_path);
     let (input_tx, _input_rx) = mpsc::unbounded_channel();
     let running = SubAgent::new(
+        "test_agent_9_running".to_string(),
         SubAgentType::General,
         "work".to_string(),
         make_assignment(),
@@ -1760,6 +1769,7 @@ fn insert_prior_session_agent(
 ) {
     let (input_tx, _input_rx) = mpsc::unbounded_channel();
     let mut agent = SubAgent::new(
+        id.to_string(),
         SubAgentType::General,
         "old prompt".to_string(),
         make_assignment(),

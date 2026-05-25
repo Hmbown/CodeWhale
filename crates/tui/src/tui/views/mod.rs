@@ -1548,6 +1548,7 @@ pub(crate) fn subagent_view_agents(
                 SubAgentStatus::Running,
                 progress,
                 Some("live"),
+                None, // live rows compute nickname from agent manager on render
             ));
         }
     }
@@ -1565,6 +1566,7 @@ pub(crate) fn subagent_view_agents(
                     lifecycle_to_subagent_status(card.status),
                     card.summary.as_deref().unwrap_or(card.agent_type.as_str()),
                     Some("transcript"),
+                    None, // transcript-derived rows get nickname from manager on render
                 ));
             }
             HistoryCell::SubAgent(SubAgentCell::Fanout(card)) => {
@@ -1581,6 +1583,7 @@ pub(crate) fn subagent_view_agents(
                             lifecycle_to_subagent_status(worker.status),
                             &objective,
                             Some(card.kind.as_str()),
+                            None, // fanout worker rows get nickname from manager on render
                         ));
                     }
                 }
@@ -1607,6 +1610,7 @@ fn live_subagent_result(
     status: SubAgentStatus,
     objective: &str,
     role: Option<&str>,
+    nickname: Option<String>,
 ) -> SubAgentResult {
     SubAgentResult {
         name: agent_id.to_string(),
@@ -1619,7 +1623,7 @@ fn live_subagent_result(
             role: role.map(str::to_string),
         },
         model: String::new(),
-        nickname: None,
+        nickname,
         status,
         result: None,
         steps_taken: 0,
@@ -1861,14 +1865,24 @@ fn append_subagent_group(
 
     for agent in agents {
         let id = truncate_view_text(&agent.agent_id, 11);
+        let display_name = agent
+            .nickname
+            .as_deref()
+            .map(|nick| format!("{nick:<12}"))
+            .unwrap_or_else(|| format!("{id:<12}"));
         let kind = format_agent_type(&agent.agent_type);
         let (status, status_style, status_detail) = format_agent_status(&agent.status);
 
         lines.push(Line::from(vec![
             Span::raw("  "),
             Span::styled(
-                format!("{id:<12}"),
+                display_name,
                 Style::default().fg(palette::TEXT_PRIMARY),
+            ),
+            Span::raw(" "),
+            Span::styled(
+                format!("{id:<11}"),
+                Style::default().fg(palette::TEXT_DIM),
             ),
             Span::styled(
                 format!("{kind:<9}"),
