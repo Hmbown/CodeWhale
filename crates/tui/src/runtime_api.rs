@@ -519,7 +519,10 @@ pub fn build_router(state: RuntimeApiState) -> Router {
         .route("/v1/threads/{id}/compact", post(compact_thread))
         .route("/v1/threads/{id}/events", get(stream_thread_events))
         .route("/v1/approvals/{approval_id}", post(decide_approval))
-        .route("/v1/user-input/{thread_id}/{input_id}", post(submit_user_input))
+        .route(
+            "/v1/user-input/{thread_id}/{input_id}",
+            post(submit_user_input),
+        )
         .route("/v1/tasks", get(list_tasks).post(create_task))
         .route("/v1/tasks/{id}", get(get_task))
         .route("/v1/tasks/{id}/cancel", post(cancel_task))
