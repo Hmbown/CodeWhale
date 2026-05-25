@@ -617,6 +617,17 @@ pub enum SearchProvider {
 
 impl SearchProvider {
     #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "bing" => Some(Self::Bing),
+            "duckduckgo" | "duck-duck-go" | "duck_duck_go" | "ddg" => Some(Self::DuckDuckGo),
+            "tavily" => Some(Self::Tavily),
+            "bocha" => Some(Self::Bocha),
+            _ => None,
+        }
+    }
+
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Bing => "bing",
@@ -625,6 +636,30 @@ impl SearchProvider {
             Self::Bocha => "bocha",
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchProviderSource {
+    Default,
+    Config,
+    EnvOverride,
+}
+
+impl SearchProviderSource {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Config => "config",
+            Self::EnvOverride => "env override",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SearchProviderResolution {
+    pub provider: SearchProvider,
+    pub source: SearchProviderSource,
 }
 
 /// Web search provider configuration (`[search]` table in config.toml).
@@ -1258,6 +1293,35 @@ struct RequirementsFile {
 // === Config Loading ===
 
 impl Config {
+    #[must_use]
+    pub fn search_provider_resolution(&self) -> SearchProviderResolution {
+        if let Ok(raw) = std::env::var("DEEPSEEK_SEARCH_PROVIDER")
+            && let Some(provider) = SearchProvider::parse(&raw)
+        {
+            return SearchProviderResolution {
+                provider,
+                source: SearchProviderSource::EnvOverride,
+            };
+        }
+
+        if let Some(provider) = self.search.as_ref().and_then(|search| search.provider) {
+            return SearchProviderResolution {
+                provider,
+                source: SearchProviderSource::Config,
+            };
+        }
+
+        SearchProviderResolution {
+            provider: SearchProvider::default(),
+            source: SearchProviderSource::Default,
+        }
+    }
+
+    #[must_use]
+    pub fn search_provider(&self) -> SearchProvider {
+        self.search_provider_resolution().provider
+    }
+
     /// Return `true` if the `[auto] cost_saving = true` opt-in is set
     /// (#1207). When true, the auto-mode router biases toward
     /// `deepseek-v4-flash` for ambiguous requests instead of escalating to
@@ -3696,6 +3760,79 @@ mod tests {
             config.search.and_then(|search| search.provider),
             Some(SearchProvider::DuckDuckGo)
         );
+    }
+
+    #[test]
+    fn search_provider_resolution_reports_default_source() {
+        let _guard = lock_test_env();
+        let prev = env::var_os("DEEPSEEK_SEARCH_PROVIDER");
+        unsafe { env::remove_var("DEEPSEEK_SEARCH_PROVIDER") };
+
+        let resolution = Config::default().search_provider_resolution();
+
+        unsafe { EnvGuard::restore_var("DEEPSEEK_SEARCH_PROVIDER", prev) };
+        assert_eq!(resolution.provider, SearchProvider::Bing);
+        assert_eq!(resolution.source, SearchProviderSource::Default);
+    }
+
+    #[test]
+    fn search_provider_resolution_reports_config_source() {
+        let _guard = lock_test_env();
+        let prev = env::var_os("DEEPSEEK_SEARCH_PROVIDER");
+        unsafe { env::remove_var("DEEPSEEK_SEARCH_PROVIDER") };
+        let config: Config = toml::from_str(
+            r#"
+            [search]
+            provider = "tavily"
+            "#,
+        )
+        .expect("search config");
+
+        let resolution = config.search_provider_resolution();
+
+        unsafe { EnvGuard::restore_var("DEEPSEEK_SEARCH_PROVIDER", prev) };
+        assert_eq!(resolution.provider, SearchProvider::Tavily);
+        assert_eq!(resolution.source, SearchProviderSource::Config);
+    }
+
+    #[test]
+    fn search_provider_resolution_reports_env_override_source() {
+        let _guard = lock_test_env();
+        let prev = env::var_os("DEEPSEEK_SEARCH_PROVIDER");
+        unsafe { env::set_var("DEEPSEEK_SEARCH_PROVIDER", "bocha") };
+        let config: Config = toml::from_str(
+            r#"
+            [search]
+            provider = "duckduckgo"
+            "#,
+        )
+        .expect("search config");
+
+        let resolution = config.search_provider_resolution();
+
+        unsafe { EnvGuard::restore_var("DEEPSEEK_SEARCH_PROVIDER", prev) };
+        assert_eq!(resolution.provider, SearchProvider::Bocha);
+        assert_eq!(resolution.source, SearchProviderSource::EnvOverride);
+    }
+
+    #[test]
+    fn search_provider_resolution_ignores_invalid_env_override() {
+        let _guard = lock_test_env();
+        let prev = env::var_os("DEEPSEEK_SEARCH_PROVIDER");
+        unsafe { env::set_var("DEEPSEEK_SEARCH_PROVIDER", "not-a-provider") };
+        let config: Config = toml::from_str(
+            r#"
+            [search]
+            provider = "tavily"
+            "#,
+        )
+        .expect("search config");
+
+        let resolution = config.search_provider_resolution();
+
+        unsafe { EnvGuard::restore_var("DEEPSEEK_SEARCH_PROVIDER", prev) };
+        assert_eq!(resolution.provider, SearchProvider::Tavily);
+        assert_eq!(resolution.source, SearchProviderSource::Config);
     }
 
     struct EnvGuard {
