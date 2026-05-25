@@ -34,6 +34,7 @@
     "wrangler": "^4.86.0"
   },
   "overrides": {
-    "postcss": "$postcss"
+    "postcss": "$postcss",
+    "qs": ">=6.15.2"
   }
 }
