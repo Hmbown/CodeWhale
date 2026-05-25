@@ -370,7 +370,7 @@ pub fn persist_permission_rules(
     use std::fs;
     use toml_edit::{ArrayOfTables, DocumentMut, Item, Table};
 
-    let path = config_toml_path()?;
+    let path = config_toml_path(None)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create config directory {}", parent.display()))?;
@@ -518,26 +518,9 @@ fn permission_decision_label(decision: codewhale_execpolicy::PermissionDecision)
     }
 }
 
-/// Resolve the path to `~/.deepseek/config.toml` (or
-/// `$DEEPSEEK_CONFIG_PATH`). Mirrors what `Config::load` accepts so we
-/// never write to a different file than the one we read.
+/// Resolve the user config path using the same precedence as config loading.
 pub(super) fn config_toml_path(config_path: Option<&Path>) -> anyhow::Result<PathBuf> {
-    use anyhow::Context;
-    if let Some(path) = config_path {
-        return Ok(expand_path(path.to_string_lossy().as_ref()));
-    }
-    if let Ok(env) = std::env::var("DEEPSEEK_CONFIG_PATH") {
-        let trimmed = env.trim();
-        if !trimmed.is_empty() {
-            return Ok(PathBuf::from(trimmed));
-        }
-    }
-    let home = dirs::home_dir().context("failed to resolve home directory for config.toml path")?;
-    let primary = home.join(".codewhale").join("config.toml");
-    if primary.exists() {
-        return Ok(primary);
-    }
-    Ok(home.join(".deepseek").join("config.toml"))
+    codewhale_config::resolve_config_path(config_path.map(Path::to_path_buf))
 }
 
 /// Modify a setting at runtime
@@ -1503,6 +1486,7 @@ mod tests {
     struct EnvGuard {
         home: Option<OsString>,
         userprofile: Option<OsString>,
+        codewhale_config_path: Option<OsString>,
         deepseek_config_path: Option<OsString>,
         _lock: std::sync::MutexGuard<'static, ()>,
     }
@@ -1515,18 +1499,21 @@ mod tests {
             let config_str = OsString::from(config_path.as_os_str());
             let home_prev = env::var_os("HOME");
             let userprofile_prev = env::var_os("USERPROFILE");
+            let codewhale_config_prev = env::var_os("CODEWHALE_CONFIG_PATH");
             let deepseek_config_prev = env::var_os("DEEPSEEK_CONFIG_PATH");
 
             // Safety: test-only environment mutation guarded by process-wide mutex.
             unsafe {
                 env::set_var("HOME", &home_str);
                 env::set_var("USERPROFILE", &home_str);
+                env::remove_var("CODEWHALE_CONFIG_PATH");
                 env::set_var("DEEPSEEK_CONFIG_PATH", &config_str);
             }
 
             Self {
                 home: home_prev,
                 userprofile: userprofile_prev,
+                codewhale_config_path: codewhale_config_prev,
                 deepseek_config_path: deepseek_config_prev,
                 _lock: lock,
             }
@@ -1556,6 +1543,18 @@ mod tests {
                 // Safety: test-only environment mutation guarded by a global mutex.
                 unsafe {
                     env::remove_var("USERPROFILE");
+                }
+            }
+
+            if let Some(value) = self.codewhale_config_path.take() {
+                // Safety: test-only environment mutation guarded by a global mutex.
+                unsafe {
+                    env::set_var("CODEWHALE_CONFIG_PATH", value);
+                }
+            } else {
+                // Safety: test-only environment mutation guarded by a global mutex.
+                unsafe {
+                    env::remove_var("CODEWHALE_CONFIG_PATH");
                 }
             }
 
@@ -2423,5 +2422,40 @@ mod tests {
 
         let config = Config::load(Some(written), None).expect("written config should load");
         assert_eq!(config.permissions.rules, vec![cargo_rule, docs_rule]);
+    }
+
+    #[test]
+    fn persist_permission_rules_prefers_codewhale_config_path() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-permission-rules-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root).unwrap();
+        let _guard = EnvGuard::new(&temp_root);
+
+        let codewhale_path = temp_root.join(".codewhale").join("config.toml");
+        let codewhale_config_str = OsString::from(codewhale_path.as_os_str());
+        unsafe {
+            env::set_var("CODEWHALE_CONFIG_PATH", &codewhale_config_str);
+        }
+
+        let rule = codewhale_execpolicy::ToolPermissionRule::file_path(
+            "write_file",
+            codewhale_execpolicy::PermissionDecision::Allow,
+            "src/testfile2",
+        );
+        let written = persist_permission_rules(&[rule]).expect("persist should succeed");
+
+        assert_eq!(written, codewhale_path);
+        assert!(written.exists());
+        assert!(
+            !temp_root.join(".deepseek").join("config.toml").exists(),
+            "persist should not fall back to legacy config when CODEWHALE_CONFIG_PATH is set"
+        );
     }
 }
