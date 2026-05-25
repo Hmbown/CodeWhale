@@ -435,7 +435,7 @@ impl Engine {
         }
 
         if !refreshed {
-            let target_budget = context_input_budget(&self.session.model, TURN_MAX_OUTPUT_TOKENS)
+            let target_budget = context_input_budget(&self.session.model)
                 .unwrap_or(self.config.compaction.token_threshold.max(1));
             if self.estimated_input_tokens() > target_budget {
                 let trimmed = self.trim_oldest_messages_to_budget(target_budget);

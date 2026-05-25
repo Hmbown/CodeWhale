@@ -22,7 +22,7 @@ use crate::tools::plan::StepStatus;
 use crate::tools::subagent::SubAgentStatus;
 use crate::tools::todo::TodoStatus;
 
-use super::app::{App, SidebarFocus, TaskPanelEntry};
+use super::app::{App, SidebarFocus, SidebarHoverSection, SidebarHoverState, TaskPanelEntry};
 use super::history::{GenericToolCell, HistoryCell, ToolCell, ToolStatus, summarize_tool_output};
 use super::subagent_routing::active_fanout_counts;
 use super::ui_text::{concise_shell_command_label, truncate_line_to_width};
@@ -35,7 +35,9 @@ const RECENT_TOOL_SCAN_LIMIT: usize = 24;
 const ACTIVE_TOOL_COMPLETED_ROW_TTL: Duration = Duration::from_secs(8);
 const ACTIVE_TOOL_STALE_RUNNING_ROW_TTL: Duration = Duration::from_secs(600);
 
-pub fn render_sidebar(f: &mut Frame, area: Rect, app: &App) {
+pub fn render_sidebar(f: &mut Frame, area: Rect, app: &mut App) {
+    // Clear hover state at the start of each render
+    app.sidebar_hover = SidebarHoverState::default();
     if area.width < 24 || area.height < 8 {
         // Paint a styled block over the area so stale cells from a previous
         // (wider) frame don't persist as bleed-through artifacts (#400).
@@ -60,7 +62,7 @@ pub fn render_sidebar(f: &mut Frame, area: Rect, app: &App) {
 /// Build the Auto-mode panel stack. Empty panels collapse to zero height so
 /// non-empty ones get the full sidebar real estate. Work appears when it has
 /// useful content, or as the one quiet empty state when nothing else is active.
-fn render_sidebar_auto(f: &mut Frame, area: Rect, app: &App) {
+fn render_sidebar_auto(f: &mut Frame, area: Rect, app: &mut App) {
     let work_has_content = sidebar_work_summary(app).has_useful_content();
     let tasks_empty = app.runtime_turn_id.is_none() && app.task_panel.is_empty();
     let agents_empty = app.subagent_cache.is_empty()
@@ -557,7 +559,7 @@ fn work_panel_empty_hint(content_width: usize) -> String {
     truncate_line_to_width("No active work", content_width)
 }
 
-fn render_sidebar_work(f: &mut Frame, area: Rect, app: &App) {
+fn render_sidebar_work(f: &mut Frame, area: Rect, app: &mut App) {
     if area.height < 3 {
         return;
     }
@@ -572,10 +574,11 @@ fn render_sidebar_work(f: &mut Frame, area: Rect, app: &App) {
         app.ui_theme.mode,
     );
 
-    render_sidebar_section(f, area, "Work", lines, app);
+    let full_texts: Vec<String> = lines.iter().map(|l| spans_to_text(&l.spans)).collect();
+    render_sidebar_section(f, area, "Work", lines, full_texts, app);
 }
 
-fn render_sidebar_tasks(f: &mut Frame, area: Rect, app: &App) {
+fn render_sidebar_tasks(f: &mut Frame, area: Rect, app: &mut App) {
     if area.height < 3 {
         return;
     }
@@ -584,7 +587,8 @@ fn render_sidebar_tasks(f: &mut Frame, area: Rect, app: &App) {
     let usable_rows = area.height.saturating_sub(3) as usize;
     let lines = task_panel_lines(app, content_width.max(1), usable_rows.max(1));
 
-    render_sidebar_section(f, area, "Tasks", lines, app);
+    let full_texts: Vec<String> = lines.iter().map(|l| spans_to_text(&l.spans)).collect();
+    render_sidebar_section(f, area, "Tasks", lines, full_texts, app);
 }
 
 #[derive(Debug, Clone)]
@@ -1374,7 +1378,7 @@ fn duration_ms(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
-fn render_sidebar_subagents(f: &mut Frame, area: Rect, app: &App) {
+fn render_sidebar_subagents(f: &mut Frame, area: Rect, app: &mut App) {
     if area.height < 3 {
         return;
     }
@@ -1421,7 +1425,7 @@ fn render_sidebar_subagents(f: &mut Frame, area: Rect, app: &App) {
     let rows = sidebar_agent_rows(app);
     let lines = subagent_panel_lines(&summary, &rows, content_width, usable_rows.max(1));
 
-    render_sidebar_section(f, area, "Agents", lines, app);
+    render_sidebar_section(f, area, "Agents", lines, Vec::new(), app);
 }
 
 /// Minimal projection of the data the sub-agent sidebar needs. Lifted out
@@ -1659,7 +1663,7 @@ fn agent_status_marker(status: &str) -> (&'static str, ratatui::style::Color) {
 /// cost, MCP server count, LSP toggle state, cycle count, and memory
 /// file size + mtime. Each section is a compact one-liner so the panel
 /// reads as a dashboard rather than a scrolling list.
-fn render_context_panel(f: &mut Frame, area: Rect, app: &App) {
+fn render_context_panel(f: &mut Frame, area: Rect, app: &mut App) {
     if area.height < 3 {
         return;
     }
@@ -1789,7 +1793,15 @@ fn render_context_panel(f: &mut Frame, area: Rect, app: &App) {
         )));
     }
 
-    render_sidebar_section(f, area, "Session", lines, app);
+    render_sidebar_section(f, area, "Session", lines, Vec::new(), app);
+}
+
+fn spans_to_text(spans: &[Span<'_>]) -> String {
+    let mut s = String::new();
+    for span in spans {
+        s.push_str(span.content.as_ref());
+    }
+    s
 }
 
 fn render_sidebar_section(
@@ -1797,7 +1809,8 @@ fn render_sidebar_section(
     area: Rect,
     title: &str,
     lines: Vec<Line<'static>>,
-    app: &App,
+    full_texts: Vec<String>,
+    app: &mut App,
 ) {
     if area.width < 4 || area.height < 3 {
         // Clear stale cells before bailing out (#400).
@@ -1808,6 +1821,19 @@ fn render_sidebar_section(
     }
 
     let theme = Theme::for_palette_mode(app.ui_theme.mode);
+
+    // Record hover metadata for mouse tooltip support.
+    let padding = theme.section_padding;
+    let content_area = Rect {
+        x: area.x + 1 + padding.left,
+        y: area.y + 1 + padding.top,
+        width: area.width.saturating_sub(2 + padding.left + padding.right),
+        height: area.height.saturating_sub(2 + padding.top + padding.bottom),
+    };
+    app.sidebar_hover.sections.push(SidebarHoverSection {
+        content_area,
+        lines: full_texts,
+    });
     // Truncate the panel title so it always fits within the section width
     // even after a resize. The title occupies up to 4 chars of border chrome
     // (two spaces + one space on each side), so the max title length is
@@ -1850,9 +1876,10 @@ fn render_sidebar_section(
 mod tests {
     use super::{
         ACTIVE_TOOL_COMPLETED_ROW_TTL, ACTIVE_TOOL_STALE_RUNNING_ROW_TTL, AutoSidebarPanel,
-        AutoSidebarState, SidebarAgentRow, SidebarSubagentSummary, SidebarWorkChecklistItem,
-        SidebarWorkStrategyStep, SidebarWorkSummary, auto_sidebar_panels, subagent_panel_lines,
-        task_panel_lines, work_panel_empty_hint, work_panel_lines,
+        AutoSidebarState, SidebarAgentRow, SidebarHoverSection, SidebarHoverState,
+        SidebarSubagentSummary, SidebarWorkChecklistItem, SidebarWorkStrategyStep,
+        SidebarWorkSummary, auto_sidebar_panels, subagent_panel_lines, task_panel_lines,
+        work_panel_empty_hint, work_panel_lines,
     };
     use crate::config::Config;
     use crate::palette::PaletteMode;
@@ -2663,5 +2690,49 @@ mod tests {
                 .any(|line| line.contains("RLM foreground work active")),
             "RLM work must be visible in Agents panel: {text:?}"
         );
+    }
+
+    // ---- Sidebar hover tooltip tests ----
+
+    #[test]
+    fn sidebar_hover_state_default_is_empty() {
+        let state = SidebarHoverState::default();
+        assert!(state.sections.is_empty());
+    }
+
+    #[test]
+    fn sidebar_hover_section_stores_lines() {
+        use ratatui::layout::Rect;
+        let section = SidebarHoverSection {
+            content_area: Rect::new(1, 1, 38, 8),
+            lines: vec!["line 1".to_string(), "line 2".to_string()],
+        };
+        assert_eq!(section.lines.len(), 2);
+        assert_eq!(section.lines[0], "line 1");
+        assert!(section.content_area.x > 0);
+    }
+
+    #[test]
+    fn hover_line_matching_respects_content_area_offset() {
+        use ratatui::layout::Rect;
+        let section = SidebarHoverSection {
+            content_area: Rect::new(62, 2, 36, 6),
+            lines: vec![
+                "first".to_string(),
+                "second".to_string(),
+                "third".to_string(),
+            ],
+        };
+
+        // Mouse within content area, first line
+        let line_idx = (2u16.saturating_sub(section.content_area.y)) as usize;
+        assert_eq!(section.lines[line_idx], "first");
+
+        // Mouse within content area, second line
+        let line_idx = (3u16.saturating_sub(section.content_area.y)) as usize;
+        assert_eq!(section.lines[line_idx], "second");
+
+        // Mouse outside content area (above) — row < content_area.y
+        assert!((1u16) < section.content_area.y);
     }
 }

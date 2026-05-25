@@ -1827,7 +1827,8 @@ fn vim_mode_style(mode: VimMode) -> Style {
 
 fn composer_top_right_chrome(app: &App, area_width: u16) -> Option<Line<'static>> {
     let receipt = app.active_receipt_text();
-    if !app.composer.vim_enabled && receipt.is_none() {
+    let session_title = app.session_title.as_deref();
+    if !app.composer.vim_enabled && receipt.is_none() && session_title.is_none() {
         return None;
     }
 
@@ -1866,14 +1867,35 @@ fn composer_top_right_chrome(app: &App, area_width: u16) -> Option<Line<'static>
         )));
     }
 
+    let mut spans: Vec<Span> = Vec::new();
     if app.composer.vim_enabled {
-        return Some(Line::from(Span::styled(
+        spans.push(Span::styled(
             truncate_display_width(app.composer.vim_mode.label(), max_width),
             vim_mode_style(app.composer.vim_mode),
-        )));
+        ));
     }
-
-    None
+    if let Some(title) = session_title {
+        let used: usize = spans
+            .iter()
+            .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+            .sum();
+        let sep = if spans.is_empty() { 0 } else { 2 };
+        let remaining = max_width.saturating_sub(used + sep);
+        if remaining >= 4 {
+            if !spans.is_empty() {
+                spans.push(Span::raw("  "));
+            }
+            spans.push(Span::styled(
+                truncate_display_width(title, remaining),
+                Style::default().fg(palette::TEXT_MUTED),
+            ));
+        }
+    }
+    if spans.is_empty() {
+        None
+    } else {
+        Some(Line::from(spans))
+    }
 }
 
 fn should_render_empty_state(app: &App) -> bool {
@@ -2771,11 +2793,10 @@ mod tests {
     }
 
     #[test]
-    fn composer_border_does_not_render_session_title() {
+    fn composer_border_renders_session_title() {
         let mut app = create_test_app();
         app.composer_density = ComposerDensity::Comfortable;
-        app.session_title =
-            Some("hello could you please take a look at codewhale-tui and all changes".to_string());
+        app.session_title = Some("my-session".to_string());
         let slash_menu_entries = Vec::<SlashMenuEntry>::new();
         let mention_menu_entries = Vec::<String>::new();
         let widget = ComposerWidget::new(&app, 5, &slash_menu_entries, &mention_menu_entries);
@@ -2791,8 +2812,7 @@ mod tests {
         let rendered = buffer_text(&buf, area);
 
         assert!(rendered.contains("Composer"));
-        assert!(!rendered.contains("codewhale-tui"));
-        assert!(!rendered.contains("hello could you"));
+        assert!(rendered.contains("my-session"));
     }
 
     #[test]

@@ -997,6 +997,22 @@ pub struct SessionState {
     pub last_cache_inspection: Option<PromptInspection>,
 }
 
+/// Sidebar hover state for mouse tooltip support.
+#[derive(Debug, Clone, Default)]
+pub struct SidebarHoverState {
+    /// Rendered sections with their areas and full-text lines.
+    pub sections: Vec<SidebarHoverSection>,
+}
+
+/// Per-section metadata for sidebar hover detection.
+#[derive(Debug, Clone)]
+pub struct SidebarHoverSection {
+    /// Content area within the section (inside border + padding).
+    pub content_area: Rect,
+    /// Full original text for each content line rendered.
+    pub lines: Vec<String>,
+}
+
 impl Default for SessionState {
     fn default() -> Self {
         Self {
@@ -1142,6 +1158,12 @@ pub struct App {
     pub transcript_spacing: TranscriptSpacing,
     pub sidebar_width_percent: u16,
     pub sidebar_focus: SidebarFocus,
+    /// Sidebar hover state for mouse tooltip support.
+    pub sidebar_hover: SidebarHoverState,
+    /// Current hover tooltip text, if any.
+    pub sidebar_hover_tooltip: Option<String>,
+    /// Last known mouse position for tooltip placement.
+    pub last_mouse_pos: Option<(u16, u16)>,
     /// Whether the session-context panel is enabled (#504).
     pub context_panel: bool,
     /// File-tree pane state. `None` when hidden; `Some` when visible.
@@ -1815,6 +1837,9 @@ impl App {
             transcript_spacing,
             sidebar_width_percent,
             sidebar_focus,
+            sidebar_hover: SidebarHoverState::default(),
+            sidebar_hover_tooltip: None,
+            last_mouse_pos: None,
             context_panel: settings.context_panel,
             file_tree: None,
             file_tree_visible: false,

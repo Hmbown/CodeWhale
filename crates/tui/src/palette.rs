@@ -1414,8 +1414,7 @@ fn grayscale_bg_from_luma(luma: u8) -> Color {
 }
 
 fn luma(r: u8, g: u8, b: u8) -> u8 {
-    let weighted = u32::from(r) * 299 + u32::from(g) * 587 + u32::from(b) * 114;
-    (weighted / 1000) as u8
+    ((u32::from(r) * 299 + u32::from(g) * 587 + u32::from(b) * 114 + 500) / 1000) as u8
 }
 // === Color depth + brightness helpers (v0.6.6 UI redesign) ===
 

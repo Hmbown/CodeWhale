@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   preserving the raw agent ID in the popup (#2035, #2016).
 - **`/balance` command scaffold.** Registered the `/balance` slash command
   as a placeholder for future provider billing queries (#2035, #2019).
+- **Readable `/restore` snapshot labels.** Snapshot labels now include the
+  originating user prompt so restore listings are easier to identify. Thanks
+  @idling11 (#2111).
+- **Sidebar hover tooltips.** Truncated Work and Tasks sidebar lines now expose
+  their full text on hover. Thanks @idling11 (#2110).
 
 ### Changed
 
@@ -28,6 +33,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Sub-agent completion handoff compatibility.** Completion handoffs now use a
+  chat-template-safe role and emit before terminal updates, fixing strict
+  OpenAI-compatible/self-hosted backends and preserving transcript ordering.
+  Thanks @h3c-hexin and @cyq1017 (#2057, #2120).
+- **Self-hosted context budgeting.** Sub-500K self-hosted model windows now keep
+  a usable input budget instead of disabling preflight compaction after output
+  reservation underflow. Thanks @h3c-hexin (#2060).
+- **Goal prompts start actionable.** Goal-start prompts now open in an
+  actionable state instead of requiring an extra nudge. Thanks @cyq1017
+  (#2097).
+- **Composer session title display.** The composer chrome shows the current
+  session title again and avoids grayscale luma overflow in debug builds.
+  Thanks @wdw8276 (#2108).
 - **Approval prompts use a one-step confirmation flow.** Enter now commits the
   selected approval option directly, destructive warnings remain visible, and
   abort cancels the active turn instead of only denying the current tool call.

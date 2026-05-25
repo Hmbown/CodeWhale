@@ -1,5 +1,6 @@
 use super::*;
 
+use super::context::TURN_MAX_OUTPUT_TOKENS;
 use crate::models::SystemBlock;
 use crate::test_support::lock_test_env;
 use crate::tools::spec::ToolCapability;
@@ -916,7 +917,7 @@ fn detects_context_length_errors_from_provider_payloads() {
 fn context_budget_reserves_output_and_headroom() {
     // V4 has a 1M context window — the only family that comfortably hosts
     // a 256K output reservation without saturating the input budget to 0.
-    let budget = context_input_budget("deepseek-v4-pro", TURN_MAX_OUTPUT_TOKENS)
+    let budget = context_input_budget("deepseek-v4-pro")
         .expect("deepseek-v4-pro should have a known context window");
     let v4_window: usize = 1_000_000;
     let expected = v4_window - (TURN_MAX_OUTPUT_TOKENS as usize) - 1_024usize;
@@ -943,31 +944,24 @@ fn effective_max_output_tokens_caps_api_request_for_large_window_models() {
 }
 
 #[test]
-fn internal_context_budget_unaffected_by_api_request_cap() {
-    // The internal context budget (used for compaction/preflight/recovery)
-    // must still use the full TURN_MAX_OUTPUT_TOKENS headroom, NOT the
-    // smaller API request cap. This ensures long-context V4 sessions don't
-    // compact prematurely.
-    let internal_budget = context_input_budget("deepseek-v4-pro", TURN_MAX_OUTPUT_TOKENS)
-        .expect("V4 should have a known context window");
-    let api_cap_budget = context_input_budget(
-        "deepseek-v4-pro",
-        effective_max_output_tokens("deepseek-v4-pro"),
-    )
-    .expect("V4 should have a known context window");
-
-    // Internal budget reserves 262K for output; API-cap budget would only
-    // reserve 64K. Internal budget must be smaller (more conservative).
-    assert!(
-        internal_budget < api_cap_budget,
-        "Internal budget ({internal_budget}) should be smaller than API-cap budget ({api_cap_budget}) \
-         because it reserves more headroom for output"
-    );
-
-    // Verify the internal budget is what the compaction logic actually uses.
+fn internal_context_budget_tiers_reserved_output_by_window() {
+    // Large-context (>=500K) models reserve the full TURN_MAX_OUTPUT_TOKENS
+    // headroom so long V4 sessions don't compact prematurely.
+    let internal_budget =
+        context_input_budget("deepseek-v4-pro").expect("V4 should have a known context window");
     let v4_window: usize = 1_000_000;
     let expected_internal = v4_window - (TURN_MAX_OUTPUT_TOKENS as usize) - 1_024usize;
     assert_eq!(internal_budget, expected_internal);
+
+    // Sub-500K windows cross into the effective-cap branch: a 256K self-hosted
+    // deployment must yield a usable positive budget rather than None. The
+    // previous formula reserved the full 262K and computed 256K - 262K - 1K,
+    // which underflowed to None and silently disabled preflight/recovery.
+    let small_window_budget = context_input_budget("qwen3-32b-256k")
+        .expect("a 256K-suffix model must yield Some budget via the effective-cap branch");
+    let effective_output = effective_max_output_tokens("qwen3-32b-256k") as usize;
+    let expected_small = 256_000 - effective_output - 1_024;
+    assert_eq!(small_window_budget, expected_small);
 }
 
 #[test]
