@@ -157,6 +157,11 @@ pub enum ViewEvent {
         provider: crate::config::ApiProvider,
         api_key: String,
     },
+    /// Emitted by the `/provider` picker when Kimi CLI OAuth credentials can
+    /// be reused for Moonshot/Kimi dispatch.
+    ProviderPickerKimiOAuthEnabled {
+        provider: crate::config::ApiProvider,
+    },
     /// Emitted by the `/mode` picker when the user chooses a mode.
     ModeSelected {
         mode: crate::tui::app::AppMode,

@@ -1861,6 +1861,10 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
                     "FIREWORKS_API_KEY",
                     "codewhale auth set --provider fireworks --api-key \"...\"",
                 ),
+                crate::config::ApiProvider::Moonshot => (
+                    "MOONSHOT_API_KEY/KIMI_API_KEY",
+                    "codewhale auth set --provider moonshot --api-key \"...\"",
+                ),
                 crate::config::ApiProvider::Sglang => (
                     "SGLANG_API_KEY",
                     "codewhale auth set --provider sglang --api-key \"...\"",
@@ -1887,6 +1891,7 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
                     crate::config::ApiProvider::Openrouter => "openrouter",
                     crate::config::ApiProvider::Novita => "novita",
                     crate::config::ApiProvider::Fireworks => "fireworks",
+                    crate::config::ApiProvider::Moonshot => "moonshot",
                     crate::config::ApiProvider::Sglang => "sglang",
                     crate::config::ApiProvider::Vllm => "vllm",
                     crate::config::ApiProvider::Ollama => "ollama",
@@ -2153,6 +2158,11 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
             crate::config::ApiProvider::Fireworks,
             "fireworks",
             &["FIREWORKS_API_KEY"][..],
+        ),
+        (
+            crate::config::ApiProvider::Moonshot,
+            "moonshot",
+            &["MOONSHOT_API_KEY", "KIMI_API_KEY"][..],
         ),
         (
             crate::config::ApiProvider::Sglang,

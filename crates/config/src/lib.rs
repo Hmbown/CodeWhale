@@ -30,6 +30,10 @@ const DEFAULT_OPENROUTER_FLASH_MODEL: &str = "deepseek/deepseek-v4-flash";
 const DEFAULT_NOVITA_MODEL: &str = "deepseek/deepseek-v4-pro";
 const DEFAULT_NOVITA_FLASH_MODEL: &str = "deepseek/deepseek-v4-flash";
 const DEFAULT_FIREWORKS_MODEL: &str = "accounts/fireworks/models/deepseek-v4-pro";
+const DEFAULT_MOONSHOT_MODEL: &str = "kimi-k2.6";
+const DEFAULT_MOONSHOT_BASE_URL: &str = "https://api.moonshot.ai/v1";
+const DEFAULT_KIMI_CODE_MODEL: &str = "kimi-for-coding";
+const DEFAULT_KIMI_CODE_BASE_URL: &str = "https://api.kimi.com/coding/v1";
 const DEFAULT_SGLANG_MODEL: &str = "deepseek-ai/DeepSeek-V4-Pro";
 const DEFAULT_SGLANG_FLASH_MODEL: &str = "deepseek-ai/DeepSeek-V4-Flash";
 const DEFAULT_OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
@@ -68,6 +72,7 @@ pub enum ProviderKind {
     Openrouter,
     Novita,
     Fireworks,
+    Moonshot,
     Sglang,
     Vllm,
     Ollama,
@@ -85,6 +90,7 @@ impl ProviderKind {
             Self::Openrouter => "openrouter",
             Self::Novita => "novita",
             Self::Fireworks => "fireworks",
+            Self::Moonshot => "moonshot",
             Self::Sglang => "sglang",
             Self::Vllm => "vllm",
             Self::Ollama => "ollama",
@@ -104,6 +110,7 @@ impl ProviderKind {
             "openrouter" | "open_router" => Some(Self::Openrouter),
             "novita" => Some(Self::Novita),
             "fireworks" | "fireworks-ai" => Some(Self::Fireworks),
+            "moonshot" | "moonshot-ai" | "kimi" | "kimi-k2" => Some(Self::Moonshot),
             "sglang" | "sg-lang" => Some(Self::Sglang),
             "vllm" | "v-llm" => Some(Self::Vllm),
             "ollama" | "ollama-local" => Some(Self::Ollama),
@@ -117,6 +124,7 @@ pub struct ProviderConfigToml {
     pub api_key: Option<String>,
     pub base_url: Option<String>,
     pub model: Option<String>,
+    pub auth_mode: Option<String>,
     #[serde(default)]
     pub http_headers: BTreeMap<String, String>,
 }
@@ -140,6 +148,8 @@ pub struct ProvidersToml {
     #[serde(default)]
     pub fireworks: ProviderConfigToml,
     #[serde(default)]
+    pub moonshot: ProviderConfigToml,
+    #[serde(default)]
     pub sglang: ProviderConfigToml,
     #[serde(default)]
     pub vllm: ProviderConfigToml,
@@ -159,6 +169,7 @@ impl ProvidersToml {
             ProviderKind::Openrouter => &self.openrouter,
             ProviderKind::Novita => &self.novita,
             ProviderKind::Fireworks => &self.fireworks,
+            ProviderKind::Moonshot => &self.moonshot,
             ProviderKind::Sglang => &self.sglang,
             ProviderKind::Vllm => &self.vllm,
             ProviderKind::Ollama => &self.ollama,
@@ -175,6 +186,7 @@ impl ProvidersToml {
             ProviderKind::Openrouter => &mut self.openrouter,
             ProviderKind::Novita => &mut self.novita,
             ProviderKind::Fireworks => &mut self.fireworks,
+            ProviderKind::Moonshot => &mut self.moonshot,
             ProviderKind::Sglang => &mut self.sglang,
             ProviderKind::Vllm => &mut self.vllm,
             ProviderKind::Ollama => &mut self.ollama,
@@ -979,6 +991,12 @@ impl ConfigToml {
         let root_deepseek_model = (provider == ProviderKind::Deepseek)
             .then(|| self.default_text_model.clone())
             .flatten();
+        let auth_mode = cli
+            .auth_mode
+            .clone()
+            .or_else(|| env.auth_mode.clone())
+            .or_else(|| provider_cfg.auth_mode.clone())
+            .or_else(|| self.auth_mode.clone());
         let base_url = cli
             .base_url
             .clone()
@@ -994,23 +1012,29 @@ impl ConfigToml {
                 ProviderKind::Openrouter => DEFAULT_OPENROUTER_BASE_URL.to_string(),
                 ProviderKind::Novita => DEFAULT_NOVITA_BASE_URL.to_string(),
                 ProviderKind::Fireworks => DEFAULT_FIREWORKS_BASE_URL.to_string(),
+                ProviderKind::Moonshot => {
+                    if auth_mode.as_deref().is_some_and(auth_mode_uses_kimi_oauth) {
+                        DEFAULT_KIMI_CODE_BASE_URL.to_string()
+                    } else {
+                        DEFAULT_MOONSHOT_BASE_URL.to_string()
+                    }
+                }
                 ProviderKind::Sglang => DEFAULT_SGLANG_BASE_URL.to_string(),
                 ProviderKind::Vllm => DEFAULT_VLLM_BASE_URL.to_string(),
                 ProviderKind::Ollama => DEFAULT_OLLAMA_BASE_URL.to_string(),
             });
-        let auth_mode = cli
-            .auth_mode
-            .clone()
-            .or_else(|| env.auth_mode.clone())
-            .or_else(|| self.auth_mode.clone());
         // CLI flag wins outright. Otherwise: config-file → injected secrets/env.
         // This makes `deepseek auth set` a reliable fix even when the user's
         // shell still exports an old key. When the file is empty, the injected
         // secrets façade recovers configured secret-store credentials before
         // falling back to ambient env.
+        let uses_kimi_oauth = provider == ProviderKind::Moonshot
+            && auth_mode.as_deref().is_some_and(auth_mode_uses_kimi_oauth);
         let from_file = provider_cfg.api_key.clone().or(root_deepseek_api_key);
         let (api_key, api_key_source) = if let Some(value) = cli.api_key.clone() {
             (Some(value), Some(RuntimeApiKeySource::Cli))
+        } else if uses_kimi_oauth {
+            (None, None)
         } else if let Some(value) = from_file.clone().filter(|v| !v.trim().is_empty()) {
             (Some(value), Some(RuntimeApiKeySource::ConfigFile))
         } else if should_skip_secret_store_for_provider(provider, &base_url, auth_mode.as_deref()) {
@@ -1045,7 +1069,15 @@ impl ConfigToml {
             .or_else(|| provider_cfg.model.clone())
             .or(root_deepseek_model)
             .or_else(|| self.model.clone())
-            .unwrap_or_else(|| default_model_for_provider(provider).to_string());
+            .unwrap_or_else(|| {
+                if provider == ProviderKind::Moonshot
+                    && auth_mode.as_deref().is_some_and(auth_mode_uses_kimi_oauth)
+                {
+                    DEFAULT_KIMI_CODE_MODEL.to_string()
+                } else {
+                    default_model_for_provider(provider).to_string()
+                }
+            });
         let model =
             if explicit_model && provider_preserves_custom_base_url_model(provider, &base_url) {
                 model.trim().to_string()
@@ -1174,6 +1206,7 @@ fn normalize_model_for_provider(provider: ProviderKind, model: &str) -> String {
         (ProviderKind::Fireworks, "deepseek-v4-pro" | "deepseek-v4pro") => {
             DEFAULT_FIREWORKS_MODEL.to_string()
         }
+        (ProviderKind::Moonshot, "kimi-k2.6" | "kimi-k2") => DEFAULT_MOONSHOT_MODEL.to_string(),
         (ProviderKind::Sglang, "deepseek-v4-pro" | "deepseek-v4pro") => {
             DEFAULT_SGLANG_MODEL.to_string()
         }
@@ -1204,6 +1237,7 @@ fn default_model_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::Openrouter => DEFAULT_OPENROUTER_MODEL,
         ProviderKind::Novita => DEFAULT_NOVITA_MODEL,
         ProviderKind::Fireworks => DEFAULT_FIREWORKS_MODEL,
+        ProviderKind::Moonshot => DEFAULT_MOONSHOT_MODEL,
         ProviderKind::Sglang => DEFAULT_SGLANG_MODEL,
         ProviderKind::Vllm => DEFAULT_VLLM_MODEL,
         ProviderKind::Ollama => DEFAULT_OLLAMA_MODEL,
@@ -1220,6 +1254,7 @@ fn default_base_url_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::Openrouter => DEFAULT_OPENROUTER_BASE_URL,
         ProviderKind::Novita => DEFAULT_NOVITA_BASE_URL,
         ProviderKind::Fireworks => DEFAULT_FIREWORKS_BASE_URL,
+        ProviderKind::Moonshot => DEFAULT_MOONSHOT_BASE_URL,
         ProviderKind::Sglang => DEFAULT_SGLANG_BASE_URL,
         ProviderKind::Vllm => DEFAULT_VLLM_BASE_URL,
         ProviderKind::Ollama => DEFAULT_OLLAMA_BASE_URL,
@@ -1279,6 +1314,17 @@ fn auth_mode_disables_api_key(auth_mode: Option<&str>) -> bool {
                 value.as_str(),
                 "none" | "off" | "disabled" | "no_auth" | "no-auth" | "anonymous"
             )
+    )
+}
+
+fn auth_mode_uses_kimi_oauth(auth_mode: &str) -> bool {
+    matches!(
+        auth_mode
+            .trim()
+            .to_ascii_lowercase()
+            .replace('-', "_")
+            .as_str(),
+        "kimi" | "kimi_oauth" | "kimi_cli" | "oauth"
     )
 }
 
@@ -1672,6 +1718,7 @@ struct EnvRuntimeOverrides {
     provider: Option<ProviderKind>,
     model: Option<String>,
     wanjie_ark_model: Option<String>,
+    moonshot_model: Option<String>,
     output_mode: Option<String>,
     auth_mode: Option<String>,
     log_level: Option<String>,
@@ -1688,6 +1735,7 @@ struct EnvRuntimeOverrides {
     openrouter_base_url: Option<String>,
     novita_base_url: Option<String>,
     fireworks_base_url: Option<String>,
+    moonshot_base_url: Option<String>,
     sglang_base_url: Option<String>,
     vllm_base_url: Option<String>,
     ollama_base_url: Option<String>,
@@ -1703,6 +1751,11 @@ impl EnvRuntimeOverrides {
             wanjie_ark_model: std::env::var("WANJIE_ARK_MODEL")
                 .or_else(|_| std::env::var("WANJIE_MODEL"))
                 .or_else(|_| std::env::var("WANJIE_MAAS_MODEL"))
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            moonshot_model: std::env::var("MOONSHOT_MODEL")
+                .or_else(|_| std::env::var("KIMI_MODEL_NAME"))
+                .or_else(|_| std::env::var("KIMI_MODEL"))
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
             output_mode: std::env::var("DEEPSEEK_OUTPUT_MODE").ok(),
@@ -1748,6 +1801,10 @@ impl EnvRuntimeOverrides {
             fireworks_base_url: std::env::var("FIREWORKS_BASE_URL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
+            moonshot_base_url: std::env::var("MOONSHOT_BASE_URL")
+                .or_else(|_| std::env::var("KIMI_BASE_URL"))
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
             sglang_base_url: std::env::var("SGLANG_BASE_URL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
@@ -1772,6 +1829,7 @@ impl EnvRuntimeOverrides {
             ProviderKind::Openrouter => self.openrouter_base_url.clone(),
             ProviderKind::Novita => self.novita_base_url.clone(),
             ProviderKind::Fireworks => self.fireworks_base_url.clone(),
+            ProviderKind::Moonshot => self.moonshot_base_url.clone(),
             ProviderKind::Sglang => self.sglang_base_url.clone(),
             ProviderKind::Vllm => self.vllm_base_url.clone(),
             ProviderKind::Ollama => self.ollama_base_url.clone(),
@@ -1781,6 +1839,7 @@ impl EnvRuntimeOverrides {
     fn model_for(&self, provider: ProviderKind) -> Option<String> {
         match provider {
             ProviderKind::WanjieArk => self.wanjie_ark_model.clone(),
+            ProviderKind::Moonshot => self.moonshot_model.clone(),
             _ => None,
         }
     }
@@ -1839,6 +1898,13 @@ mod tests {
         novita_base_url: Option<OsString>,
         fireworks_api_key: Option<OsString>,
         fireworks_base_url: Option<OsString>,
+        moonshot_api_key: Option<OsString>,
+        moonshot_base_url: Option<OsString>,
+        moonshot_model: Option<OsString>,
+        kimi_api_key: Option<OsString>,
+        kimi_base_url: Option<OsString>,
+        kimi_model: Option<OsString>,
+        kimi_model_name: Option<OsString>,
         sglang_api_key: Option<OsString>,
         sglang_base_url: Option<OsString>,
         vllm_api_key: Option<OsString>,
@@ -1874,6 +1940,13 @@ mod tests {
                 novita_base_url: env::var_os("NOVITA_BASE_URL"),
                 fireworks_api_key: env::var_os("FIREWORKS_API_KEY"),
                 fireworks_base_url: env::var_os("FIREWORKS_BASE_URL"),
+                moonshot_api_key: env::var_os("MOONSHOT_API_KEY"),
+                moonshot_base_url: env::var_os("MOONSHOT_BASE_URL"),
+                moonshot_model: env::var_os("MOONSHOT_MODEL"),
+                kimi_api_key: env::var_os("KIMI_API_KEY"),
+                kimi_base_url: env::var_os("KIMI_BASE_URL"),
+                kimi_model: env::var_os("KIMI_MODEL"),
+                kimi_model_name: env::var_os("KIMI_MODEL_NAME"),
                 sglang_api_key: env::var_os("SGLANG_API_KEY"),
                 sglang_base_url: env::var_os("SGLANG_BASE_URL"),
                 vllm_api_key: env::var_os("VLLM_API_KEY"),
@@ -1907,6 +1980,13 @@ mod tests {
                 env::remove_var("NOVITA_BASE_URL");
                 env::remove_var("FIREWORKS_API_KEY");
                 env::remove_var("FIREWORKS_BASE_URL");
+                env::remove_var("MOONSHOT_API_KEY");
+                env::remove_var("MOONSHOT_BASE_URL");
+                env::remove_var("MOONSHOT_MODEL");
+                env::remove_var("KIMI_API_KEY");
+                env::remove_var("KIMI_BASE_URL");
+                env::remove_var("KIMI_MODEL");
+                env::remove_var("KIMI_MODEL_NAME");
                 env::remove_var("SGLANG_API_KEY");
                 env::remove_var("SGLANG_BASE_URL");
                 env::remove_var("VLLM_API_KEY");
@@ -1954,6 +2034,13 @@ mod tests {
                 Self::restore_var("NOVITA_BASE_URL", self.novita_base_url.take());
                 Self::restore_var("FIREWORKS_API_KEY", self.fireworks_api_key.take());
                 Self::restore_var("FIREWORKS_BASE_URL", self.fireworks_base_url.take());
+                Self::restore_var("MOONSHOT_API_KEY", self.moonshot_api_key.take());
+                Self::restore_var("MOONSHOT_BASE_URL", self.moonshot_base_url.take());
+                Self::restore_var("MOONSHOT_MODEL", self.moonshot_model.take());
+                Self::restore_var("KIMI_API_KEY", self.kimi_api_key.take());
+                Self::restore_var("KIMI_BASE_URL", self.kimi_base_url.take());
+                Self::restore_var("KIMI_MODEL", self.kimi_model.take());
+                Self::restore_var("KIMI_MODEL_NAME", self.kimi_model_name.take());
                 Self::restore_var("SGLANG_API_KEY", self.sglang_api_key.take());
                 Self::restore_var("SGLANG_BASE_URL", self.sglang_base_url.take());
                 Self::restore_var("VLLM_API_KEY", self.vllm_api_key.take());
@@ -2356,6 +2443,11 @@ mod tests {
             ProviderKind::parse("fireworks-ai"),
             Some(ProviderKind::Fireworks)
         );
+        assert_eq!(ProviderKind::parse("kimi"), Some(ProviderKind::Moonshot));
+        assert_eq!(
+            ProviderKind::parse("moonshot-ai"),
+            Some(ProviderKind::Moonshot)
+        );
         assert_eq!(ProviderKind::parse("sg-lang"), Some(ProviderKind::Sglang));
         assert_eq!(ProviderKind::parse("v-llm"), Some(ProviderKind::Vllm));
         assert_eq!(ProviderKind::parse("vllm"), Some(ProviderKind::Vllm));
@@ -2440,6 +2532,42 @@ mod tests {
         assert_eq!(resolved.provider, ProviderKind::Fireworks);
         assert_eq!(resolved.base_url, DEFAULT_FIREWORKS_BASE_URL);
         assert_eq!(resolved.model, DEFAULT_FIREWORKS_MODEL);
+    }
+
+    #[test]
+    fn moonshot_provider_defaults_to_kimi_k2() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        let config = ConfigToml {
+            provider: ProviderKind::Moonshot,
+            ..ConfigToml::default()
+        };
+
+        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::Moonshot);
+        assert_eq!(resolved.base_url, DEFAULT_MOONSHOT_BASE_URL);
+        assert_eq!(resolved.model, DEFAULT_MOONSHOT_MODEL);
+    }
+
+    #[test]
+    fn moonshot_kimi_oauth_uses_kimi_code_endpoint_and_model() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        let mut config = ConfigToml {
+            provider: ProviderKind::Moonshot,
+            ..ConfigToml::default()
+        };
+        config.providers.moonshot.auth_mode = Some("kimi_oauth".to_string());
+
+        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::Moonshot);
+        assert_eq!(resolved.auth_mode.as_deref(), Some("kimi_oauth"));
+        assert_eq!(resolved.base_url, DEFAULT_KIMI_CODE_BASE_URL);
+        assert_eq!(resolved.model, DEFAULT_KIMI_CODE_MODEL);
+        assert_eq!(resolved.api_key, None);
+        assert_eq!(resolved.api_key_source, None);
     }
 
     #[test]
@@ -2554,6 +2682,25 @@ mod tests {
 
         assert_eq!(resolved.api_key.as_deref(), Some("secret-store-key"));
         assert_eq!(store.gets.lock().unwrap().as_slice(), ["ollama"]);
+    }
+
+    #[test]
+    fn moonshot_api_key_mode_can_use_secret_store_by_default() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        let store = Arc::new(RecordingSecretsStore::with_value("secret-store-key"));
+        let secrets = Secrets::new(store.clone());
+        let config = ConfigToml {
+            provider: ProviderKind::Moonshot,
+            ..ConfigToml::default()
+        };
+
+        let resolved =
+            config.resolve_runtime_options_with_secrets(&CliRuntimeOverrides::default(), &secrets);
+
+        assert_eq!(resolved.api_key.as_deref(), Some("secret-store-key"));
+        assert_eq!(resolved.api_key_source, Some(RuntimeApiKeySource::Keyring));
+        assert_eq!(store.gets.lock().unwrap().as_slice(), ["moonshot"]);
     }
 
     #[test]

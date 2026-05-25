@@ -38,7 +38,10 @@ use crate::automation_manager::{AutomationManager, AutomationSchedulerConfig, sp
 use crate::client::{DeepSeekClient, build_cache_warmup_request};
 use crate::commands;
 use crate::compaction::estimate_input_tokens_conservative;
-use crate::config::{ApiProvider, Config, DEFAULT_NVIDIA_NIM_BASE_URL};
+use crate::config::{
+    ApiProvider, Config, DEFAULT_NVIDIA_NIM_BASE_URL, ProviderConfig, ProvidersConfig,
+    save_provider_auth_mode_for,
+};
 use crate::config_ui::{self, ConfigUiMode, WebConfigSession, WebConfigSessionEvent};
 use crate::core::engine::{EngineConfig, EngineHandle, spawn_engine};
 use crate::core::events::Event as EngineEvent;
@@ -5752,6 +5755,7 @@ fn render(f: &mut Frame, app: &mut App) {
             crate::config::ApiProvider::Openrouter => Some("OR"),
             crate::config::ApiProvider::Novita => Some("Novita"),
             crate::config::ApiProvider::Fireworks => Some("Fireworks"),
+            crate::config::ApiProvider::Moonshot => Some("Kimi"),
             crate::config::ApiProvider::Sglang => Some("SGLang"),
             crate::config::ApiProvider::Vllm => Some("vLLM"),
             crate::config::ApiProvider::Ollama => Some("Ollama"),
@@ -6292,6 +6296,17 @@ async fn handle_view_events(
             ViewEvent::ProviderPickerApiKeySubmitted { provider, api_key } => {
                 apply_provider_picker_api_key(app, engine_handle, config, provider, api_key).await;
             }
+            ViewEvent::ProviderPickerKimiOAuthEnabled { provider } => {
+                apply_provider_picker_auth_mode(
+                    app,
+                    engine_handle,
+                    config,
+                    provider,
+                    "kimi_oauth",
+                    "Linked Kimi CLI OAuth",
+                )
+                .await;
+            }
             ViewEvent::ModeSelected { mode } => {
                 let msg = commands::switch_mode(app, mode);
                 app.add_message(HistoryCell::System { content: msg });
@@ -6499,7 +6514,7 @@ async fn apply_provider_picker_api_key(
     provider: ApiProvider,
     api_key: String,
 ) {
-    use crate::config::{ProviderConfig, ProvidersConfig, save_api_key_for};
+    use crate::config::save_api_key_for;
 
     match save_api_key_for(provider, &api_key) {
         Ok(path) => {
@@ -6541,6 +6556,7 @@ async fn apply_provider_picker_api_key(
             ApiProvider::Openrouter => &mut providers.openrouter,
             ApiProvider::Novita => &mut providers.novita,
             ApiProvider::Fireworks => &mut providers.fireworks,
+            ApiProvider::Moonshot => &mut providers.moonshot,
             ApiProvider::Sglang => &mut providers.sglang,
             ApiProvider::Vllm => &mut providers.vllm,
             ApiProvider::Ollama => &mut providers.ollama,
@@ -6549,6 +6565,55 @@ async fn apply_provider_picker_api_key(
     }
 
     switch_provider(app, engine_handle, config, provider, None).await;
+}
+
+async fn apply_provider_picker_auth_mode(
+    app: &mut App,
+    engine_handle: &mut EngineHandle,
+    config: &mut Config,
+    provider: ApiProvider,
+    auth_mode: &str,
+    status_prefix: &str,
+) {
+    match save_provider_auth_mode_for(provider, auth_mode) {
+        Ok(path) => {
+            set_provider_auth_mode_in_memory(config, provider, auth_mode.to_string());
+            app.status_message = Some(format!("{status_prefix}; saved to {}", path.display()));
+            app.api_key_env_only = false;
+        }
+        Err(err) => {
+            app.add_message(HistoryCell::System {
+                content: format!(
+                    "Failed to save {} auth mode: {err}\nProvider unchanged.",
+                    provider.as_str()
+                ),
+            });
+            return;
+        }
+    }
+
+    switch_provider(app, engine_handle, config, provider, None).await;
+}
+
+fn set_provider_auth_mode_in_memory(config: &mut Config, provider: ApiProvider, auth_mode: String) {
+    let providers = config
+        .providers
+        .get_or_insert_with(ProvidersConfig::default);
+    let entry: &mut ProviderConfig = match provider {
+        ApiProvider::Deepseek | ApiProvider::DeepseekCN => return,
+        ApiProvider::NvidiaNim => &mut providers.nvidia_nim,
+        ApiProvider::Openai => &mut providers.openai,
+        ApiProvider::Atlascloud => &mut providers.atlascloud,
+        ApiProvider::WanjieArk => &mut providers.wanjie_ark,
+        ApiProvider::Openrouter => &mut providers.openrouter,
+        ApiProvider::Novita => &mut providers.novita,
+        ApiProvider::Fireworks => &mut providers.fireworks,
+        ApiProvider::Moonshot => &mut providers.moonshot,
+        ApiProvider::Sglang => &mut providers.sglang,
+        ApiProvider::Vllm => &mut providers.vllm,
+        ApiProvider::Ollama => &mut providers.ollama,
+    };
+    entry.auth_mode = Some(auth_mode);
 }
 
 fn apply_loaded_session(app: &mut App, config: &Config, session: &SavedSession) -> bool {
