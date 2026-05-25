@@ -368,29 +368,27 @@ pub fn persist_permission_rules(
 ) -> anyhow::Result<PathBuf> {
     use anyhow::Context;
     use std::fs;
-    use toml_edit::{ArrayOfTables, DocumentMut, Item, Table};
+    use toml_edit::{ArrayOfTables, DocumentMut, Item};
 
-    let path = config_toml_path(None)?;
+    let path = permissions_toml_path()?;
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create config directory {}", parent.display()))?;
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "failed to create permissions directory {}",
+                parent.display()
+            )
+        })?;
     }
 
     let mut doc: DocumentMut = if path.exists() {
         let raw = fs::read_to_string(&path)
-            .with_context(|| format!("failed to read config at {}", path.display()))?;
+            .with_context(|| format!("failed to read permissions at {}", path.display()))?;
         raw.parse()
-            .with_context(|| format!("failed to parse config at {}", path.display()))?
+            .with_context(|| format!("failed to parse permissions at {}", path.display()))?
     } else {
         DocumentMut::new()
     };
-    let permissions_entry = doc
-        .entry("permissions")
-        .or_insert_with(|| Item::Table(Table::new()));
-    let permissions_table = permissions_entry
-        .as_table_mut()
-        .context("`permissions` section in config.toml must be a table")?;
-    let rules_entry = permissions_table
+    let rules_entry = doc
         .entry("rules")
         .or_insert_with(|| Item::ArrayOfTables(ArrayOfTables::new()));
 
@@ -425,7 +423,7 @@ fn append_permission_rules(
         }
         toml_edit::Item::Value(value) => {
             let Some(array) = value.as_array_mut() else {
-                anyhow::bail!("`permissions.rules` in config.toml must be an array");
+                anyhow::bail!("`rules` in permissions.toml must be an array");
             };
             for rule in rules {
                 if !array
@@ -436,7 +434,7 @@ fn append_permission_rules(
                 }
             }
         }
-        _ => anyhow::bail!("`permissions.rules` in config.toml must be an array"),
+        _ => anyhow::bail!("`rules` in permissions.toml must be an array"),
     }
     Ok(())
 }
@@ -521,6 +519,10 @@ fn permission_decision_label(decision: codewhale_execpolicy::PermissionDecision)
 /// Resolve the user config path using the same precedence as config loading.
 pub(super) fn config_toml_path(config_path: Option<&Path>) -> anyhow::Result<PathBuf> {
     codewhale_config::resolve_config_path(config_path.map(Path::to_path_buf))
+}
+
+pub(super) fn permissions_toml_path() -> anyhow::Result<PathBuf> {
+    codewhale_config::resolve_permissions_path(None)
 }
 
 /// Modify a setting at runtime
@@ -2364,7 +2366,7 @@ mod tests {
     }
 
     #[test]
-    fn persist_permission_rules_writes_deduped_rules_and_preserves_config() {
+    fn persist_permission_rules_writes_deduped_rules_to_permissions_toml() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -2381,9 +2383,11 @@ mod tests {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(
             &path,
-            "# user config header\napi_key = \"sentinel-key\" # keep inline\nmodel = \"deepseek-v4-pro\"\n\n[permissions]\n# user permission notes\n",
+            "# user config header\napi_key = \"sentinel-key\" # keep inline\nmodel = \"deepseek-v4-pro\"\n",
         )
         .unwrap();
+        let permissions_path = temp_root.join(".deepseek").join("permissions.toml");
+        fs::write(&permissions_path, "# user permission notes\n").unwrap();
 
         let cargo_rule = codewhale_execpolicy::ToolPermissionRule::exec_shell(
             codewhale_execpolicy::PermissionDecision::Allow,
@@ -2398,29 +2402,37 @@ mod tests {
             persist_permission_rules(&[cargo_rule.clone(), cargo_rule.clone(), docs_rule.clone()])
                 .expect("persist should succeed");
 
+        assert_eq!(written, permissions_path);
+
+        let config_body = fs::read_to_string(&path).expect("config file should be readable");
+        assert!(
+            config_body.contains("# user config header"),
+            "permission persistence should not rewrite config.toml: {config_body}"
+        );
+        assert!(
+            config_body.contains("# keep inline"),
+            "permission persistence should not rewrite config.toml: {config_body}"
+        );
+        assert!(
+            config_body.contains("api_key = \"sentinel-key\""),
+            "config.toml lost api_key: {config_body}"
+        );
+        assert!(
+            config_body.contains("model = \"deepseek-v4-pro\""),
+            "config.toml lost model: {config_body}"
+        );
+
         let body = fs::read_to_string(&written).expect("written file should be readable");
-        assert!(
-            body.contains("# user config header"),
-            "round-trip lost top-level comment: {body}"
-        );
-        assert!(
-            body.contains("# keep inline"),
-            "round-trip lost inline comment: {body}"
-        );
         assert!(
             body.contains("# user permission notes"),
             "round-trip lost permissions comment: {body}"
         );
         assert!(
-            body.contains("api_key = \"sentinel-key\""),
-            "round-trip lost api_key: {body}"
-        );
-        assert!(
-            body.contains("model = \"deepseek-v4-pro\""),
-            "round-trip lost model: {body}"
+            body.contains("[[rules]]"),
+            "expected top-level rules in {body}"
         );
 
-        let config = Config::load(Some(written), None).expect("written config should load");
+        let config = Config::load(Some(path), None).expect("config and permissions should load");
         assert_eq!(config.permissions.rules, vec![cargo_rule, docs_rule]);
     }
 
@@ -2451,7 +2463,10 @@ mod tests {
         );
         let written = persist_permission_rules(&[rule]).expect("persist should succeed");
 
-        assert_eq!(written, codewhale_path);
+        assert_eq!(
+            written,
+            temp_root.join(".codewhale").join("permissions.toml")
+        );
         assert!(written.exists());
         assert!(
             !temp_root.join(".deepseek").join("config.toml").exists(),

@@ -1540,17 +1540,6 @@ fn hidden_rule_preview_line(locale: Locale, hidden: usize) -> String {
     }
 }
 
-fn single_key_prefix(locale: Locale) -> &'static str {
-    match locale {
-        Locale::ZhHans => "单键批准：",
-        _ => "Single key approves: ",
-    }
-}
-
-fn single_key_value(_locale: Locale) -> &'static str {
-    "Enter / 1 / y"
-}
-
 fn footer_controls(locale: Locale) -> &'static str {
     match locale {
         Locale::ZhHans => "  ·  v：完整参数  ·  Esc：终止",

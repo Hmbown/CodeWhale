@@ -6838,7 +6838,7 @@ struct ApprovalDecisionEvent {
     timed_out: bool,
     approval_key: String,
     approval_grouping_key: String,
-    persistent_rules: Vec<deepseek_execpolicy::ToolPermissionRule>,
+    persistent_rules: Vec<codewhale_execpolicy::ToolPermissionRule>,
 }
 
 async fn apply_approval_decision(

@@ -1615,6 +1615,7 @@ impl Config {
             Config::default()
         };
 
+        apply_user_permissions_file(&mut config, path.as_deref())?;
         apply_env_overrides(&mut config);
         apply_managed_overrides(&mut config)?;
         apply_requirements(&mut config)?;
@@ -3677,6 +3678,30 @@ fn load_single_config_file(path: &Path) -> Result<Config> {
     Ok(parsed.base)
 }
 
+fn apply_user_permissions_file(config: &mut Config, config_path: Option<&Path>) -> Result<()> {
+    let Some(config_path) = config_path else {
+        return Ok(());
+    };
+    let permissions_path = codewhale_config::permissions_path_for_config_path(config_path);
+    if !permissions_path.exists() {
+        return Ok(());
+    }
+    let contents = fs::read_to_string(&permissions_path).with_context(|| {
+        format!(
+            "Failed to read permissions file: {}",
+            permissions_path.display()
+        )
+    })?;
+    let permissions: PermissionsConfig = toml::from_str(&contents).with_context(|| {
+        format!(
+            "Failed to parse permissions file: {}",
+            permissions_path.display()
+        )
+    })?;
+    config.permissions.rules.extend(permissions.rules);
+    Ok(())
+}
+
 fn apply_managed_overrides(config: &mut Config) -> Result<()> {
     let path = config
         .managed_config_path
@@ -5313,6 +5338,42 @@ path = "secrets/**"
                 "src/**",
             )
         );
+    }
+
+    #[test]
+    fn config_loads_sibling_permissions_toml_for_exec_policy_engine() -> Result<()> {
+        let _guard = lock_test_env();
+        let temp = tempfile::tempdir()?;
+        let _env = EnvGuard::new(temp.path());
+        let config_path = temp.path().join("config.toml");
+        fs::write(&config_path, "auto_allow = [\"git status\"]\n")?;
+        fs::write(
+            temp.path().join("permissions.toml"),
+            r#"
+[[rules]]
+tool = "read_file"
+decision = "ask"
+path = "secrets/**"
+"#,
+        )?;
+
+        let config = Config::load(Some(config_path), None)?;
+        assert_eq!(config.auto_allow, ["git status"]);
+
+        let decision = config.exec_policy_engine().check_tool_permission(
+            codewhale_execpolicy::ToolPermissionContext {
+                tool: "read_file",
+                command: None,
+                path: Some("secrets/token.txt"),
+                workspace_root: None,
+            },
+        );
+
+        assert_eq!(
+            decision.decision,
+            Some(codewhale_execpolicy::PermissionDecision::Ask)
+        );
+        Ok(())
     }
 
     #[test]

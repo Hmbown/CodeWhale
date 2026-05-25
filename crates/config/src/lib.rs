@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 pub const CONFIG_FILE_NAME: &str = "config.toml";
+pub const PERMISSIONS_FILE_NAME: &str = "permissions.toml";
 const DEFAULT_DEEPSEEK_MODEL: &str = "deepseek-v4-pro";
 const DEFAULT_NVIDIA_NIM_MODEL: &str = "deepseek-ai/deepseek-v4-pro";
 const DEFAULT_NVIDIA_NIM_FLASH_MODEL: &str = "deepseek-ai/deepseek-v4-flash";
@@ -492,6 +493,10 @@ impl ConfigToml {
     pub fn permission_ruleset(&self) -> Ruleset {
         Ruleset::user(self.auto_allow.clone(), self.auto_deny.clone())
             .with_rules(self.permissions.rules.clone())
+    }
+
+    pub fn append_permissions(&mut self, permissions: PermissionsToml) {
+        self.permissions.rules.extend(permissions.rules);
     }
 
     #[must_use]
@@ -1693,26 +1698,26 @@ pub struct ResolvedRuntimeOptions {
 pub struct ConfigStore {
     path: PathBuf,
     pub config: ConfigToml,
+    permissions: PermissionsToml,
 }
 
 impl ConfigStore {
     pub fn load(path: Option<PathBuf>) -> Result<Self> {
         let path = resolve_config_path(path)?;
-        if !path.exists() {
-            return Ok(Self {
-                path,
-                config: ConfigToml::default(),
-            });
-        }
-
-        let raw = fs::read_to_string(&path)
-            .with_context(|| format!("failed to read config at {}", path.display()))?;
-        let parsed: ConfigToml = toml::from_str(&raw)
-            .with_context(|| format!("failed to parse config at {}", path.display()))?;
+        let parsed = if path.exists() {
+            let raw = fs::read_to_string(&path)
+                .with_context(|| format!("failed to read config at {}", path.display()))?;
+            toml::from_str(&raw)
+                .with_context(|| format!("failed to parse config at {}", path.display()))?
+        } else {
+            ConfigToml::default()
+        };
+        let permissions = load_sibling_permissions(&path)?;
 
         Ok(Self {
             path,
             config: parsed,
+            permissions,
         })
     }
 
@@ -1753,6 +1758,13 @@ impl ConfigStore {
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    #[must_use]
+    pub fn effective_config(&self) -> ConfigToml {
+        let mut config = self.config.clone();
+        config.append_permissions(self.permissions.clone());
+        config
     }
 }
 
@@ -1889,6 +1901,37 @@ pub fn resolve_config_path(explicit: Option<PathBuf>) -> Result<PathBuf> {
         return default_config_path();
     };
     normalize_config_file_path(path)
+}
+
+pub fn permissions_path_for_config_path(config_path: &Path) -> PathBuf {
+    config_path.with_file_name(PERMISSIONS_FILE_NAME)
+}
+
+pub fn resolve_permissions_path(config_path: Option<PathBuf>) -> Result<PathBuf> {
+    Ok(permissions_path_for_config_path(&resolve_config_path(
+        config_path,
+    )?))
+}
+
+fn load_sibling_permissions(config_path: &Path) -> Result<PermissionsToml> {
+    let permissions_path = permissions_path_for_config_path(config_path);
+    if !permissions_path.exists() {
+        return Ok(PermissionsToml::default());
+    }
+
+    let raw = fs::read_to_string(&permissions_path).with_context(|| {
+        format!(
+            "failed to read permissions at {}",
+            permissions_path.display()
+        )
+    })?;
+    let permissions: PermissionsToml = toml::from_str(&raw).with_context(|| {
+        format!(
+            "failed to parse permissions at {}",
+            permissions_path.display()
+        )
+    })?;
+    Ok(permissions)
 }
 
 pub fn default_config_path() -> Result<PathBuf> {
@@ -2303,6 +2346,52 @@ mod tests {
             .expect("policy decision");
         assert!(!denied.allow);
         assert_eq!(denied.requirement.phase(), "forbidden");
+    }
+
+    #[test]
+    fn config_store_loads_sibling_permissions_toml() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "codewhale-permissions-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).expect("mkdir");
+        let config_path = dir.join(CONFIG_FILE_NAME);
+        fs::write(&config_path, "auto_allow = [\"git status\"]\n").expect("write config");
+        fs::write(
+            dir.join(PERMISSIONS_FILE_NAME),
+            r#"
+[[rules]]
+tool = "read_file"
+decision = "ask"
+path = "secrets/**"
+"#,
+        )
+        .expect("write permissions");
+
+        let store = ConfigStore::load(Some(config_path)).expect("load config store");
+
+        assert_eq!(store.config.auto_allow, ["git status"]);
+        assert!(
+            store.config.permissions.rules.is_empty(),
+            "sibling permissions must not be written back into config.toml"
+        );
+        let effective = store.effective_config();
+        assert_eq!(
+            effective.permissions.rules,
+            vec![ToolPermissionRule::file_path(
+                "read_file",
+                PermissionDecision::Ask,
+                "secrets/**"
+            )]
+        );
+
+        let _ = fs::remove_dir_all(dir);
     }
 
     struct EnvGuard {
@@ -3077,6 +3166,7 @@ mod tests {
                 api_key: Some("new-secret".to_string()),
                 ..ConfigToml::default()
             },
+            permissions: PermissionsToml::default(),
         };
         store.save().expect("save");
 

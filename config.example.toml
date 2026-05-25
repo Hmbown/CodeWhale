@@ -169,9 +169,11 @@ sandbox_mode = "workspace-write" # read-only | workspace-write | danger-full-acc
 # auto_allow = []
 # auto_deny = ["rm -rf"]
 #
-# Typed persistent permission rules. These are intentionally conservative:
-# shell commands use the same arity-aware matching as auto_allow, and file
-# paths are workspace-relative globs.
+# Typed persistent permission rules. User-approved persistent rules are written
+# to a sibling permissions.toml file as top-level [[rules]] entries so this
+# config file does not grow without bound. The config.toml form below remains
+# supported for manual configuration. Shell commands use the same arity-aware
+# matching as auto_allow, and file paths are workspace-relative globs.
 #
 # [[permissions.rules]]
 # tool = "exec_shell"
