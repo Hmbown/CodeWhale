@@ -801,7 +801,7 @@ impl DeepSeekClient {
 
     async fn send_balance_request(&self, url: &str) -> Result<String> {
         let response = self.send_with_retry(|| self.http_client.get(url)).await?;
-        Ok(response.text().await.unwrap_or_default())
+        response.text().await.context("Failed to read balance response body")
     }
 
     async fn wait_for_rate_limit(&self) {
