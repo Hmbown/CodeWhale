@@ -15,6 +15,7 @@ use codewhale_app_server::{
 };
 use codewhale_config::{
     CliRuntimeOverrides, ConfigStore, ProviderKind, ResolvedRuntimeOptions, RuntimeApiKeySource,
+    codex_auth_file_path, codex_oauth_access_token,
 };
 use codewhale_execpolicy::{AskForApproval, ExecPolicyContext, ExecPolicyEngine};
 use codewhale_mcp::{McpServerDefinition, run_stdio_server};
@@ -25,6 +26,7 @@ use codewhale_state::{StateStore, ThreadListFilters};
 enum ProviderArg {
     Deepseek,
     NvidiaNim,
+    #[value(alias = "codex", alias = "chatgpt", alias = "openai-compatible")]
     Openai,
     Atlascloud,
     WanjieArk,
@@ -180,7 +182,7 @@ working-tree diff. `export` only writes the current diff.
     Serve(TuiPassthroughArgs),
     /// Generate shell completions for the TUI binary.
     Completions(TuiPassthroughArgs),
-    /// Save a provider API key to the shared user config file.
+    /// Configure provider credentials.
     Login(LoginArgs),
     /// Remove saved authentication state.
     Logout,
@@ -257,10 +259,17 @@ struct TuiPassthroughArgs {
 
 #[derive(Debug, Args)]
 struct LoginArgs {
-    #[arg(long, value_enum, default_value_t = ProviderArg::Deepseek, hide = true)]
-    provider: ProviderArg,
+    #[arg(long, value_enum, hide = true)]
+    provider: Option<ProviderArg>,
     #[arg(long)]
     api_key: Option<String>,
+    #[arg(
+        long = "codex-oauth",
+        alias = "with-access-token",
+        help = "Use Codex/ChatGPT OAuth from CODEX_ACCESS_TOKEN or ~/.codex/auth.json",
+        default_value_t = false
+    )]
+    codex_oauth: bool,
     #[arg(long, default_value_t = false, hide = true)]
     chatgpt: bool,
     #[arg(long, default_value_t = false, hide = true)]
@@ -426,6 +435,12 @@ struct AppServerArgs {
     port: u16,
     #[arg(long)]
     config: Option<PathBuf>,
+    #[arg(long = "auth-token")]
+    auth_token: Option<String>,
+    #[arg(long, default_value_t = false)]
+    insecure_no_auth: bool,
+    #[arg(long = "cors-origin")]
+    cors_origin: Vec<String>,
     #[arg(long, default_value_t = false)]
     stdio: bool,
 }
@@ -652,23 +667,56 @@ fn run_login_command_with_secrets(
     args: LoginArgs,
     secrets: &Secrets,
 ) -> Result<()> {
-    let provider: ProviderKind = args.provider.into();
+    let token_mode = args.chatgpt || args.codex_oauth || args.device_code;
+    let provider: ProviderKind = args
+        .provider
+        .unwrap_or(if token_mode {
+            ProviderArg::Openai
+        } else {
+            ProviderArg::Deepseek
+        })
+        .into();
     store.config.provider = provider;
 
-    if args.chatgpt {
+    if args.chatgpt || args.codex_oauth {
+        if provider != ProviderKind::Openai {
+            bail!("Codex OAuth can only be used with the openai provider");
+        }
         let token = match args.token {
-            Some(token) => token,
-            None => read_api_key_from_stdin()?,
+            Some(token) => Some(token),
+            None if args.chatgpt && !args.codex_oauth => Some(read_api_key_from_stdin()?),
+            None => None,
         };
-        store.config.auth_mode = Some("chatgpt".to_string());
-        store.config.chatgpt_access_token = Some(token);
+        let has_dynamic_token = token.is_some() || codex_oauth_access_token().is_some();
+        store.config.auth_mode = Some(if args.codex_oauth {
+            "codex_oauth".to_string()
+        } else {
+            "chatgpt".to_string()
+        });
+        store.config.chatgpt_access_token = token;
         store.config.device_code_session = None;
         store.save()?;
-        println!("logged in using chatgpt token mode ({})", provider.as_str());
+        let source = if store.config.chatgpt_access_token.is_some() {
+            "stored access token".to_string()
+        } else if has_dynamic_token {
+            "Codex CLI access token".to_string()
+        } else {
+            let path = codex_auth_file_path()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "$CODEX_HOME/auth.json".to_string());
+            format!("Codex CLI access token (not found yet; run `codex login`, expected {path})")
+        };
+        println!(
+            "logged in using Codex OAuth token mode ({}) via {source}",
+            provider.as_str()
+        );
         return Ok(());
     }
 
     if args.device_code {
+        if provider != ProviderKind::Openai {
+            bail!("device-code auth can only be used with the openai provider");
+        }
         let token = match args.token {
             Some(token) => token,
             None => read_api_key_from_stdin()?,
@@ -873,10 +921,16 @@ fn clear_provider_api_key_from_keyring(secrets: &Secrets, provider: ProviderKind
 fn auth_status_lines(store: &ConfigStore, secrets: &Secrets) -> Vec<String> {
     let provider = store.config.provider;
     let config_key = provider_config_api_key(store, provider);
+    let oauth_token = provider_oauth_token(store, provider);
     let keyring_key = provider_keyring_api_key(secrets, provider);
     let env_key = provider_env_value(provider);
 
-    let active_source = if config_key.is_some() {
+    let active_source = if oauth_token.is_some() {
+        oauth_token
+            .as_ref()
+            .map(|(label, _)| *label)
+            .unwrap_or("oauth")
+    } else if config_key.is_some() {
         "config"
     } else if keyring_key.is_some() {
         "secret store"
@@ -885,8 +939,10 @@ fn auth_status_lines(store: &ConfigStore, secrets: &Secrets) -> Vec<String> {
     } else {
         "missing"
     };
-    let active_last4 = config_key
-        .map(last4_label)
+    let active_last4 = oauth_token
+        .as_ref()
+        .map(|(_, token)| last4_label(token))
+        .or_else(|| config_key.map(last4_label))
         .or_else(|| keyring_key.as_deref().map(last4_label))
         .or_else(|| env_key.as_ref().map(|(_, value)| last4_label(value)));
     let active_label = active_last4
@@ -904,8 +960,16 @@ fn auth_status_lines(store: &ConfigStore, secrets: &Secrets) -> Vec<String> {
 
     vec![
         format!("provider: {}", provider.as_str()),
+        format!(
+            "auth mode: {}",
+            store.config.auth_mode.as_deref().unwrap_or("api_key")
+        ),
         format!("active source: {active_label}"),
-        "lookup order: config -> secret store -> env".to_string(),
+        if oauth_token.is_some() {
+            "lookup order: oauth token -> config -> secret store -> env".to_string()
+        } else {
+            "lookup order: config -> secret store -> env".to_string()
+        },
         format!(
             "config file: {} ({})",
             store.path().display(),
@@ -918,6 +982,55 @@ fn auth_status_lines(store: &ConfigStore, secrets: &Secrets) -> Vec<String> {
         ),
         format!("env var: {env_var_label} ({env_status})"),
     ]
+}
+
+fn provider_oauth_token(
+    store: &ConfigStore,
+    provider: ProviderKind,
+) -> Option<(&'static str, String)> {
+    if provider != ProviderKind::Openai {
+        return None;
+    }
+    let auth_mode = store
+        .config
+        .auth_mode
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    if matches!(auth_mode.as_str(), "device-code" | "device_code" | "device") {
+        return store
+            .config
+            .device_code_session
+            .clone()
+            .filter(|token| !token.trim().is_empty())
+            .map(|token| ("device code session", token));
+    }
+
+    if matches!(
+        auth_mode.as_str(),
+        "chatgpt"
+            | "chat-gpt"
+            | "codex"
+            | "codex-oauth"
+            | "codex_oauth"
+            | "oauth"
+            | "access-token"
+            | "access_token"
+            | "with-access-token"
+            | "with_access_token"
+    ) {
+        return store
+            .config
+            .chatgpt_access_token
+            .clone()
+            .filter(|token| !token.trim().is_empty())
+            .map(|token| ("chatgpt token", token))
+            .or_else(|| codex_oauth_access_token().map(|token| ("codex oauth", token)));
+    }
+
+    None
 }
 
 fn source_status(value: Option<&str>, missing_label: &str) -> String {
@@ -1312,7 +1425,16 @@ fn run_app_server_command(args: AppServerArgs) -> Result<()> {
     runtime.block_on(run_app_server(AppServerOptions {
         listen,
         config_path: args.config,
+        auth_token: args.auth_token.or_else(app_server_token_from_env),
+        insecure_no_auth: args.insecure_no_auth,
+        cors_origins: args.cors_origin,
     }))
+}
+
+fn app_server_token_from_env() -> Option<String> {
+    std::env::var("CODEWHALE_APP_SERVER_TOKEN")
+        .ok()
+        .or_else(|| std::env::var("DEEPSEEK_APP_SERVER_TOKEN").ok())
 }
 
 fn run_mcp_server_command(store: &mut ConfigStore) -> Result<()> {
@@ -1479,6 +1601,9 @@ fn build_tui_command(
     cmd.env("DEEPSEEK_MODEL", &resolved_runtime.model);
     cmd.env("DEEPSEEK_BASE_URL", &resolved_runtime.base_url);
     cmd.env("DEEPSEEK_PROVIDER", resolved_runtime.provider.as_str());
+    if let Some(auth_mode) = resolved_runtime.auth_mode.as_ref() {
+        cmd.env("DEEPSEEK_AUTH_MODE", auth_mode);
+    }
     if !resolved_runtime.http_headers.is_empty() {
         let encoded = resolved_runtime
             .http_headers
@@ -2035,8 +2160,9 @@ mod tests {
         run_login_command_with_secrets(
             &mut store,
             LoginArgs {
-                provider: ProviderArg::Deepseek,
+                provider: Some(ProviderArg::Deepseek),
                 api_key: Some("sk-test".to_string()),
+                codex_oauth: false,
                 chatgpt: false,
                 device_code: false,
                 token: None,
@@ -2057,6 +2183,41 @@ mod tests {
         let saved = std::fs::read_to_string(&path).expect("config should be written");
         assert!(saved.contains("api_key = \"sk-test\""));
         assert!(saved.contains("default_text_model = \"deepseek-v4-pro\""));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn codex_oauth_login_defaults_to_openai_without_copying_codex_token() {
+        let _lock = env_lock();
+        let codex_home = tempfile::TempDir::new().expect("tempdir");
+        let codex_home_str = codex_home.path().to_string_lossy().into_owned();
+        let _codex_home = ScopedEnvVar::set("CODEX_HOME", &codex_home_str);
+        let nanos = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default();
+        let path = std::env::temp_dir().join(format!(
+            "deepseek-cli-codex-oauth-login-test-{}-{nanos}.toml",
+            std::process::id()
+        ));
+        let mut store = ConfigStore::load(Some(path.clone())).expect("store should load");
+        let secrets = no_keyring_secrets();
+
+        run_login_command_with_secrets(
+            &mut store,
+            LoginArgs {
+                provider: None,
+                api_key: None,
+                codex_oauth: true,
+                chatgpt: false,
+                device_code: false,
+                token: None,
+            },
+            &secrets,
+        )
+        .expect("codex oauth login should write config");
+
+        assert_eq!(store.config.provider, ProviderKind::Openai);
+        assert_eq!(store.config.auth_mode.as_deref(), Some("codex_oauth"));
+        assert_eq!(store.config.chatgpt_access_token, None);
 
         let _ = std::fs::remove_file(path);
     }
@@ -2392,6 +2553,30 @@ mod tests {
     }
 
     #[test]
+    fn auth_status_reports_codex_oauth_source_with_last4() {
+        let nanos = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default();
+        let path = std::env::temp_dir().join(format!(
+            "deepseek-cli-auth-codex-oauth-status-test-{}-{nanos}.toml",
+            std::process::id()
+        ));
+        let mut store = ConfigStore::load(Some(path.clone())).expect("store should load");
+        store.config.provider = ProviderKind::Openai;
+        store.config.auth_mode = Some("codex_oauth".to_string());
+        store.config.chatgpt_access_token = Some("codex-token-7777".to_string());
+        let secrets = no_keyring_secrets();
+
+        let output = auth_status_lines(&store, &secrets).join("\n");
+
+        assert!(output.contains("provider: openai"));
+        assert!(output.contains("auth mode: codex_oauth"));
+        assert!(output.contains("active source: chatgpt token (last4: ...7777)"));
+        assert!(output.contains("lookup order: oauth token -> config -> secret store -> env"));
+        assert!(!output.contains("codex-token-7777"));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn dispatch_keyring_recovery_self_heals_into_config_file() {
         use codewhale_secrets::{InMemoryKeyringStore, KeyringStore};
         use std::sync::Arc;
@@ -2650,6 +2835,10 @@ mod tests {
         assert_eq!(
             command_env(&cmd, "DEEPSEEK_API_KEY_SOURCE").as_deref(),
             Some("keyring")
+        );
+        assert_eq!(
+            command_env(&cmd, "DEEPSEEK_AUTH_MODE").as_deref(),
+            Some("api_key")
         );
         let args: Vec<String> = cmd
             .get_args()

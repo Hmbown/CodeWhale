@@ -54,6 +54,13 @@ pub enum ProviderKind {
     )]
     Deepseek,
     NvidiaNim,
+    #[serde(
+        alias = "open-ai",
+        alias = "codex",
+        alias = "chatgpt",
+        alias = "openai-compatible",
+        alias = "openai_compatible"
+    )]
     Openai,
     Atlascloud,
     #[serde(
@@ -97,7 +104,8 @@ impl ProviderKind {
             "deepseek" | "deep-seek" | "deepseek-cn" | "deepseek_china" | "deepseekcn"
             | "deepseek-china" => Some(Self::Deepseek),
             "nvidia" | "nvidia-nim" | "nvidia_nim" | "nim" => Some(Self::NvidiaNim),
-            "openai" | "open-ai" => Some(Self::Openai),
+            "openai" | "open-ai" | "codex" | "chatgpt" | "openai-compatible"
+            | "openai_compatible" => Some(Self::Openai),
             "atlascloud" | "atlas-cloud" | "atlas_cloud" | "atlas" => Some(Self::Atlascloud),
             "wanjie" | "wanjie-ark" | "wanjie_ark" | "ark-wanjie" | "ark_wanjie" | "wanjieark"
             | "wanjie-maas" | "wanjie_maas" | "wanjiemaas" => Some(Self::WanjieArk),
@@ -331,91 +339,61 @@ pub struct LspConfigToml {
 }
 
 impl ConfigToml {
-    /// Merge project-level overrides from `$WORKSPACE/.deepseek/config.toml`.
-    /// Only populated fields in `project` are applied; everything else
-    /// keeps its global value. Provider-specific sub-tables are merged
-    /// field-by-field so a project can set just `providers.deepseek.model`
-    /// without needing to repeat `api_key` or `base_url`.
+    /// Merge safe project-level overrides from `$WORKSPACE/.codewhale/config.toml`
+    /// or legacy `$WORKSPACE/.deepseek/config.toml`.
+    ///
+    /// Repo-local config is untrusted input. This helper intentionally ignores
+    /// credentials, endpoints, provider selection, auth/session values, telemetry,
+    /// network policy, skill registry, LSP command tables, and unknown extras.
+    /// Approval and sandbox values may only tighten the existing user/global
+    /// posture.
     pub fn merge_project_overrides(&mut self, project: ConfigToml) {
-        // Check provider override condition before moving fields.
-        let has_api_key = project.api_key.is_some();
-
-        // Top-level scalar fields: apply when the project has a value.
-        if has_api_key {
-            self.api_key = project.api_key;
-        }
-        if project.base_url.is_some() {
-            self.base_url = project.base_url;
-        }
-        if !project.http_headers.is_empty() {
-            self.http_headers = project.http_headers;
-        }
         if project.default_text_model.is_some() {
             self.default_text_model = project.default_text_model;
         }
         if project.model.is_some() {
             self.model = project.model;
         }
-        if project.auth_mode.is_some() {
-            self.auth_mode = project.auth_mode;
-        }
         if project.output_mode.is_some() {
             self.output_mode = project.output_mode;
         }
-        if project.telemetry.is_some() {
-            self.telemetry = project.telemetry;
+        if project.log_level.is_some() {
+            self.log_level = project.log_level;
         }
-        if project.approval_policy.is_some() {
-            self.approval_policy = project.approval_policy;
+        if let Some(policy) = project.approval_policy
+            && project_approval_policy_is_allowed(self.approval_policy.as_deref(), &policy)
+        {
+            self.approval_policy = Some(policy);
         }
-        if project.sandbox_mode.is_some() {
-            self.sandbox_mode = project.sandbox_mode;
-        }
-        // Provider is only overridden if explicitly set (non-default).
-        if project.provider != ProviderKind::Deepseek || has_api_key {
-            self.provider = project.provider;
+        if let Some(mode) = project.sandbox_mode
+            && project_sandbox_mode_is_allowed(self.sandbox_mode.as_deref(), &mode)
+        {
+            self.sandbox_mode = Some(mode);
         }
 
-        // Merge provider sub-tables field-by-field.
-        merge_provider_config(&mut self.providers.deepseek, &project.providers.deepseek);
-        merge_provider_config(
+        merge_project_provider_config(&mut self.providers.deepseek, &project.providers.deepseek);
+        merge_project_provider_config(
             &mut self.providers.nvidia_nim,
             &project.providers.nvidia_nim,
         );
-        merge_provider_config(&mut self.providers.openai, &project.providers.openai);
-        merge_provider_config(
+        merge_project_provider_config(&mut self.providers.openai, &project.providers.openai);
+        merge_project_provider_config(
             &mut self.providers.atlascloud,
             &project.providers.atlascloud,
         );
-        merge_provider_config(
+        merge_project_provider_config(
             &mut self.providers.wanjie_ark,
             &project.providers.wanjie_ark,
         );
-        merge_provider_config(
+        merge_project_provider_config(
             &mut self.providers.openrouter,
             &project.providers.openrouter,
         );
-        merge_provider_config(&mut self.providers.novita, &project.providers.novita);
-        merge_provider_config(&mut self.providers.fireworks, &project.providers.fireworks);
-        merge_provider_config(&mut self.providers.sglang, &project.providers.sglang);
-        merge_provider_config(&mut self.providers.vllm, &project.providers.vllm);
-        merge_provider_config(&mut self.providers.ollama, &project.providers.ollama);
-
-        if project.network.is_some() {
-            self.network = project.network;
-        }
-        if project.skills.is_some() {
-            self.skills = project.skills;
-        }
-        if project.snapshots.is_some() {
-            self.snapshots = project.snapshots;
-        }
-        if project.lsp.is_some() {
-            self.lsp = project.lsp;
-        }
-        for (k, v) in project.extras {
-            self.extras.insert(k, v);
-        }
+        merge_project_provider_config(&mut self.providers.novita, &project.providers.novita);
+        merge_project_provider_config(&mut self.providers.fireworks, &project.providers.fireworks);
+        merge_project_provider_config(&mut self.providers.sglang, &project.providers.sglang);
+        merge_project_provider_config(&mut self.providers.vllm, &project.providers.vllm);
+        merge_project_provider_config(&mut self.providers.ollama, &project.providers.ollama);
     }
 
     #[must_use]
@@ -1009,8 +987,11 @@ impl ConfigToml {
         // secrets façade recovers configured secret-store credentials before
         // falling back to ambient env.
         let from_file = provider_cfg.api_key.clone().or(root_deepseek_api_key);
+        let oauth_token = oauth_token_for_provider(provider, auth_mode.as_deref(), self);
         let (api_key, api_key_source) = if let Some(value) = cli.api_key.clone() {
             (Some(value), Some(RuntimeApiKeySource::Cli))
+        } else if let Some((value, source)) = oauth_token {
+            (Some(value), Some(source))
         } else if let Some(value) = from_file.clone().filter(|v| !v.trim().is_empty()) {
             (Some(value), Some(RuntimeApiKeySource::ConfigFile))
         } else if should_skip_secret_store_for_provider(provider, &base_url, auth_mode.as_deref()) {
@@ -1105,18 +1086,57 @@ impl ConfigToml {
     }
 }
 
-fn merge_provider_config(target: &mut ProviderConfigToml, source: &ProviderConfigToml) {
-    if source.api_key.is_some() {
-        target.api_key = source.api_key.clone();
-    }
-    if source.base_url.is_some() {
-        target.base_url = source.base_url.clone();
-    }
+fn merge_project_provider_config(target: &mut ProviderConfigToml, source: &ProviderConfigToml) {
     if source.model.is_some() {
         target.model = source.model.clone();
     }
-    if !source.http_headers.is_empty() {
-        target.http_headers = source.http_headers.clone();
+}
+
+#[must_use]
+pub fn project_approval_policy_is_allowed(current: Option<&str>, project: &str) -> bool {
+    let Some(project_rank) = approval_policy_rank(project) else {
+        return false;
+    };
+    match current.and_then(approval_policy_rank) {
+        Some(current_rank) => project_rank >= current_rank,
+        None => project_rank >= 2,
+    }
+}
+
+#[must_use]
+pub fn project_sandbox_mode_is_allowed(current: Option<&str>, project: &str) -> bool {
+    let normalized_project = project.trim().to_ascii_lowercase();
+    if normalized_project == "external-sandbox" {
+        return current
+            .map(|value| value.trim().eq_ignore_ascii_case("external-sandbox"))
+            .unwrap_or(false);
+    }
+
+    let Some(project_rank) = sandbox_mode_rank(project) else {
+        return false;
+    };
+    match current.and_then(sandbox_mode_rank) {
+        Some(current_rank) => project_rank >= current_rank,
+        None => project_rank >= 2,
+    }
+}
+
+fn approval_policy_rank(value: &str) -> Option<u8> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(0),
+        "suggest" | "suggested" | "on-request" | "untrusted" => Some(1),
+        "never" | "deny" | "denied" => Some(2),
+        _ => None,
+    }
+}
+
+fn sandbox_mode_rank(value: &str) -> Option<u8> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "danger-full-access" => Some(0),
+        "external-sandbox" => Some(0),
+        "workspace-write" => Some(1),
+        "read-only" => Some(2),
+        _ => None,
     }
 }
 
@@ -1282,6 +1302,115 @@ fn auth_mode_disables_api_key(auth_mode: Option<&str>) -> bool {
     )
 }
 
+fn oauth_token_for_provider(
+    provider: ProviderKind,
+    auth_mode: Option<&str>,
+    config: &ConfigToml,
+) -> Option<(String, RuntimeApiKeySource)> {
+    if provider != ProviderKind::Openai {
+        return None;
+    }
+
+    if auth_mode_uses_device_code_session(auth_mode) {
+        return config
+            .device_code_session
+            .clone()
+            .and_then(non_empty_secret)
+            .map(|token| (token, RuntimeApiKeySource::DeviceCodeSession));
+    }
+
+    if auth_mode_uses_codex_oauth(auth_mode) {
+        return config
+            .chatgpt_access_token
+            .clone()
+            .and_then(non_empty_secret)
+            .map(|token| (token, RuntimeApiKeySource::ChatgptToken))
+            .or_else(|| {
+                codex_oauth_access_token().map(|token| (token, RuntimeApiKeySource::CodexOAuth))
+            });
+    }
+
+    None
+}
+
+fn auth_mode_uses_codex_oauth(auth_mode: Option<&str>) -> bool {
+    matches!(
+        normalized_auth_mode(auth_mode).as_deref(),
+        Some(
+            "chatgpt"
+                | "chat-gpt"
+                | "codex"
+                | "codex-oauth"
+                | "codex_oauth"
+                | "oauth"
+                | "access-token"
+                | "access_token"
+                | "with-access-token"
+                | "with_access_token"
+        )
+    )
+}
+
+fn auth_mode_uses_device_code_session(auth_mode: Option<&str>) -> bool {
+    matches!(
+        normalized_auth_mode(auth_mode).as_deref(),
+        Some("device-code" | "device_code" | "device")
+    )
+}
+
+fn normalized_auth_mode(auth_mode: Option<&str>) -> Option<String> {
+    auth_mode
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase())
+}
+
+fn non_empty_secret(value: String) -> Option<String> {
+    (!value.trim().is_empty()).then_some(value)
+}
+
+#[derive(Deserialize)]
+struct CodexAuthJson {
+    tokens: Option<CodexAuthTokens>,
+}
+
+#[derive(Deserialize)]
+struct CodexAuthTokens {
+    access_token: Option<String>,
+}
+
+/// Return the active Codex CLI OAuth access token, if Codex has one locally.
+///
+/// This is only used when the caller explicitly selects a Codex/ChatGPT OAuth
+/// auth mode. It never prints or persists the token.
+#[must_use]
+pub fn codex_oauth_access_token() -> Option<String> {
+    for key in [
+        "CODEX_ACCESS_TOKEN",
+        "CHATGPT_ACCESS_TOKEN",
+        "OPENAI_ACCESS_TOKEN",
+    ] {
+        if let Ok(value) = std::env::var(key)
+            && !value.trim().is_empty()
+        {
+            return Some(value);
+        }
+    }
+
+    let raw = fs::read_to_string(codex_auth_file_path()?).ok()?;
+    let parsed: CodexAuthJson = serde_json::from_str(&raw).ok()?;
+    parsed.tokens?.access_token.and_then(non_empty_secret)
+}
+
+/// Path to the Codex CLI auth file used for explicit OAuth import mode.
+#[must_use]
+pub fn codex_auth_file_path() -> Option<PathBuf> {
+    std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|home| home.join(".codex")))
+        .map(|dir| dir.join("auth.json"))
+}
+
 fn base_url_uses_local_host(base_url: &str) -> bool {
     let Some(host) = base_url_host(base_url) else {
         return false;
@@ -1324,6 +1453,9 @@ pub struct CliRuntimeOverrides {
 pub enum RuntimeApiKeySource {
     Cli,
     ConfigFile,
+    ChatgptToken,
+    DeviceCodeSession,
+    CodexOAuth,
     Keyring,
     Env,
 }
@@ -1334,6 +1466,9 @@ impl RuntimeApiKeySource {
         match self {
             Self::Cli => "cli",
             Self::ConfigFile => "config",
+            Self::ChatgptToken => "chatgpt-token",
+            Self::DeviceCodeSession => "device-code-session",
+            Self::CodexOAuth => "codex-oauth",
             Self::Keyring => "keyring",
             Self::Env => "env",
         }
@@ -1845,6 +1980,10 @@ mod tests {
         vllm_base_url: Option<OsString>,
         ollama_api_key: Option<OsString>,
         ollama_base_url: Option<OsString>,
+        codex_access_token: Option<OsString>,
+        chatgpt_access_token: Option<OsString>,
+        openai_access_token: Option<OsString>,
+        codex_home: Option<OsString>,
     }
 
     impl EnvGuard {
@@ -1880,6 +2019,10 @@ mod tests {
                 vllm_base_url: env::var_os("VLLM_BASE_URL"),
                 ollama_api_key: env::var_os("OLLAMA_API_KEY"),
                 ollama_base_url: env::var_os("OLLAMA_BASE_URL"),
+                codex_access_token: env::var_os("CODEX_ACCESS_TOKEN"),
+                chatgpt_access_token: env::var_os("CHATGPT_ACCESS_TOKEN"),
+                openai_access_token: env::var_os("OPENAI_ACCESS_TOKEN"),
+                codex_home: env::var_os("CODEX_HOME"),
             };
             // Safety: test-only environment mutation guarded by a module mutex.
             unsafe {
@@ -1913,6 +2056,10 @@ mod tests {
                 env::remove_var("VLLM_BASE_URL");
                 env::remove_var("OLLAMA_API_KEY");
                 env::remove_var("OLLAMA_BASE_URL");
+                env::remove_var("CODEX_ACCESS_TOKEN");
+                env::remove_var("CHATGPT_ACCESS_TOKEN");
+                env::remove_var("OPENAI_ACCESS_TOKEN");
+                env::remove_var("CODEX_HOME");
             }
             guard
         }
@@ -1960,6 +2107,10 @@ mod tests {
                 Self::restore_var("VLLM_BASE_URL", self.vllm_base_url.take());
                 Self::restore_var("OLLAMA_API_KEY", self.ollama_api_key.take());
                 Self::restore_var("OLLAMA_BASE_URL", self.ollama_base_url.take());
+                Self::restore_var("CODEX_ACCESS_TOKEN", self.codex_access_token.take());
+                Self::restore_var("CHATGPT_ACCESS_TOKEN", self.chatgpt_access_token.take());
+                Self::restore_var("OPENAI_ACCESS_TOKEN", self.openai_access_token.take());
+                Self::restore_var("CODEX_HOME", self.codex_home.take());
             }
         }
     }
@@ -2286,6 +2437,87 @@ mod tests {
     }
 
     #[test]
+    fn project_merge_denies_credentials_endpoints_and_provider_selection() {
+        let mut base = ConfigToml {
+            provider: ProviderKind::Deepseek,
+            api_key: Some("user-key".to_string()),
+            base_url: Some("https://api.deepseek.com".to_string()),
+            default_text_model: Some("deepseek-v4-flash".to_string()),
+            ..ConfigToml::default()
+        };
+        base.providers.openrouter.api_key = Some("user-openrouter-key".to_string());
+
+        let mut project = ConfigToml {
+            provider: ProviderKind::Openrouter,
+            api_key: Some("attacker-key".to_string()),
+            base_url: Some("https://evil.example/v1".to_string()),
+            default_text_model: Some("deepseek-v4-pro".to_string()),
+            auth_mode: Some("codex".to_string()),
+            telemetry: Some(true),
+            ..ConfigToml::default()
+        };
+        project.providers.openrouter.api_key = Some("attacker-openrouter-key".to_string());
+        project.providers.openrouter.base_url = Some("https://evil.example/openrouter".to_string());
+        project.providers.openrouter.model = Some("deepseek/deepseek-v4-pro".to_string());
+
+        base.merge_project_overrides(project);
+
+        assert_eq!(base.provider, ProviderKind::Deepseek);
+        assert_eq!(base.api_key.as_deref(), Some("user-key"));
+        assert_eq!(base.base_url.as_deref(), Some("https://api.deepseek.com"));
+        assert_eq!(base.auth_mode, None);
+        assert_eq!(base.telemetry, None);
+        assert_eq!(
+            base.providers.openrouter.api_key.as_deref(),
+            Some("user-openrouter-key")
+        );
+        assert_eq!(base.providers.openrouter.base_url, None);
+        assert_eq!(base.default_text_model.as_deref(), Some("deepseek-v4-pro"));
+        assert_eq!(
+            base.providers.openrouter.model.as_deref(),
+            Some("deepseek/deepseek-v4-pro")
+        );
+    }
+
+    #[test]
+    fn project_merge_only_tightens_approval_and_sandbox_policy() {
+        let mut strict = ConfigToml {
+            approval_policy: Some("never".to_string()),
+            sandbox_mode: Some("read-only".to_string()),
+            ..ConfigToml::default()
+        };
+        strict.merge_project_overrides(ConfigToml {
+            approval_policy: Some("on-request".to_string()),
+            sandbox_mode: Some("workspace-write".to_string()),
+            ..ConfigToml::default()
+        });
+        assert_eq!(strict.approval_policy.as_deref(), Some("never"));
+        assert_eq!(strict.sandbox_mode.as_deref(), Some("read-only"));
+
+        let mut permissive = ConfigToml {
+            approval_policy: Some("auto".to_string()),
+            sandbox_mode: Some("workspace-write".to_string()),
+            ..ConfigToml::default()
+        };
+        permissive.merge_project_overrides(ConfigToml {
+            approval_policy: Some("never".to_string()),
+            sandbox_mode: Some("read-only".to_string()),
+            ..ConfigToml::default()
+        });
+        assert_eq!(permissive.approval_policy.as_deref(), Some("never"));
+        assert_eq!(permissive.sandbox_mode.as_deref(), Some("read-only"));
+
+        let mut unset = ConfigToml::default();
+        unset.merge_project_overrides(ConfigToml {
+            approval_policy: Some("on-request".to_string()),
+            sandbox_mode: Some("workspace-write".to_string()),
+            ..ConfigToml::default()
+        });
+        assert_eq!(unset.approval_policy, None);
+        assert_eq!(unset.sandbox_mode, None);
+    }
+
+    #[test]
     fn list_values_redacts_unicode_api_key_without_byte_slicing() {
         let config = ConfigToml {
             api_key: Some("密钥密钥密钥密钥123456789".to_string()),
@@ -2554,6 +2786,56 @@ mod tests {
 
         assert_eq!(resolved.api_key.as_deref(), Some("secret-store-key"));
         assert_eq!(store.gets.lock().unwrap().as_slice(), ["ollama"]);
+    }
+
+    #[test]
+    fn openai_codex_oauth_mode_uses_config_token_before_secret_store() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        let store = Arc::new(RecordingSecretsStore::with_value("stale-openai-key"));
+        let secrets = Secrets::new(store.clone());
+        let config = ConfigToml {
+            provider: ProviderKind::Openai,
+            auth_mode: Some("codex_oauth".to_string()),
+            chatgpt_access_token: Some("codex-access-token".to_string()),
+            ..ConfigToml::default()
+        };
+
+        let resolved =
+            config.resolve_runtime_options_with_secrets(&CliRuntimeOverrides::default(), &secrets);
+
+        assert_eq!(resolved.provider, ProviderKind::Openai);
+        assert_eq!(resolved.api_key.as_deref(), Some("codex-access-token"));
+        assert_eq!(
+            resolved.api_key_source,
+            Some(RuntimeApiKeySource::ChatgptToken)
+        );
+        assert!(
+            store.gets.lock().unwrap().is_empty(),
+            "configured OAuth token should avoid probing the secret store"
+        );
+    }
+
+    #[test]
+    fn openai_codex_oauth_mode_can_use_codex_access_token_env() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        // Safety: test-only environment mutation guarded by a module mutex.
+        unsafe { env::set_var("CODEX_ACCESS_TOKEN", "codex-env-token") };
+
+        let config = ConfigToml {
+            provider: ProviderKind::Openai,
+            auth_mode: Some("codex-oauth".to_string()),
+            ..ConfigToml::default()
+        };
+
+        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.api_key.as_deref(), Some("codex-env-token"));
+        assert_eq!(
+            resolved.api_key_source,
+            Some(RuntimeApiKeySource::CodexOAuth)
+        );
     }
 
     #[test]

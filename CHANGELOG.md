@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.45] - 2026-05-25
+
+### Added
+
+- **RLM session objects.** `rlm_open` can now load `session://` refs,
+  exposing the active prompt, history, and session data as symbolic objects
+  inside RLM REPLs (#2047).
+- **Deterministic whale-species sub-agent names.** Sub-agents now get stable,
+  human-readable whale-species nicknames (e.g. "Beluga", "Orca") while
+  preserving the raw agent ID in the popup (#2035, #2016).
+- **`/balance` command scaffold.** Registered the `/balance` slash command
+  as a placeholder for future provider billing queries (#2035, #2019).
+
+### Changed
+
+- **AGENTS.md is now maintainer-local.** The project instructions file no
+  longer ships as a tracked repo file; it lives in maintainer-local ignored
+  state (#2047).
+
+### Fixed
+
+- **Slash recovery no longer restores command tails in the composer.**
+  Resuming a session or recovering from a crash no longer leaves stale
+  slash-command text (e.g. `/sessions`) in the composer input (#2047, #2032).
+- **Remembered tool approvals now update the live active turn.**
+  When the "remember" checkbox is set on an approval dialog, the active
+  turn's auto-approve flag flips immediately instead of waiting for the
+  next turn. Thanks @gaord (#2047, #2041).
+- **YAML block scalars in SKILL.md frontmatter.** Multi-line descriptions
+  using `>` or `|` indicators are now parsed correctly — folded block
+  scalars join non-empty lines with spaces, literal scalars preserve
+  newlines, and all three chomping modes (strip/clip/keep) are supported.
+  Thanks @zlh124 (#1908, #1907).
+- **User messages highlighted in the transcript.** User-authored messages
+  now render with a full-row background in the live TUI transcript, making
+  it easier to scan prior turns. Assistant and system messages are
+  unaffected. Thanks @reidliu41 (#1995, #1672).
+- **Cancellable `list_dir` and `file_search`.** Long directory walks and
+  file searches now respond to user cancel/stop requests with a 30-second
+  fallback timeout, preventing the TUI from hanging on deep or slow
+  filesystems (#2035).
+
 ## [0.8.44] - 2026-05-24
 
 ### Added
@@ -4807,6 +4849,7 @@ Welcome — and thank you.
 - Example skills and launch assets
 
 [Unreleased]: https://github.com/Hmbown/CodeWhale/compare/v0.8.44...HEAD
+[0.8.45]: https://github.com/Hmbown/CodeWhale/compare/v0.8.44...v0.8.45
 [0.8.44]: https://github.com/Hmbown/CodeWhale/compare/v0.8.43...v0.8.44
 [0.8.43]: https://github.com/Hmbown/CodeWhale/compare/v0.8.42...v0.8.43
 [0.8.42]: https://github.com/Hmbown/CodeWhale/compare/v0.8.41...v0.8.42

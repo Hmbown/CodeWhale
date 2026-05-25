@@ -75,6 +75,22 @@ pub const COMMON_DEEPSEEK_MODELS: &[&str] = &[
     "deepseek/deepseek-v4-flash",
 ];
 pub const OFFICIAL_DEEPSEEK_MODELS: &[&str] = &["deepseek-v4-pro", "deepseek-v4-flash"];
+pub const OPENAI_CHAT_COMPLETIONS_MODELS: &[&str] = &[
+    "gpt-5.5",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.4-nano",
+    "gpt-5.3-codex",
+    "gpt-5.1",
+    "gpt-5",
+    "gpt-5-mini",
+    "gpt-5-nano",
+    "gpt-4.1",
+    "gpt-4.1-mini",
+    "gpt-4.1-nano",
+    "gpt-4o",
+    "gpt-4o-mini",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -102,7 +118,8 @@ impl ApiProvider {
                 Some(Self::DeepseekCN)
             }
             "nvidia" | "nvidia-nim" | "nvidia_nim" | "nim" => Some(Self::NvidiaNim),
-            "openai" | "open-ai" => Some(Self::Openai),
+            "openai" | "open-ai" | "codex" | "chatgpt" | "openai-compatible"
+            | "openai_compatible" => Some(Self::Openai),
             "atlascloud" | "atlas-cloud" | "atlas_cloud" | "atlas" => Some(Self::Atlascloud),
             "wanjie" | "wanjie-ark" | "wanjie_ark" | "ark-wanjie" | "ark_wanjie" | "wanjieark"
             | "wanjie-maas" | "wanjie_maas" | "wanjiemaas" => Some(Self::WanjieArk),
@@ -423,9 +440,8 @@ pub fn model_completion_names_for_provider(provider: ApiProvider) -> Vec<&'stati
         ApiProvider::WanjieArk => vec![DEFAULT_WANJIE_ARK_MODEL],
         ApiProvider::Sglang => vec![DEFAULT_SGLANG_MODEL, DEFAULT_SGLANG_FLASH_MODEL],
         ApiProvider::Vllm => vec![DEFAULT_VLLM_MODEL, DEFAULT_VLLM_FLASH_MODEL],
-        ApiProvider::Openai | ApiProvider::Atlascloud | ApiProvider::Ollama => {
-            OFFICIAL_DEEPSEEK_MODELS.to_vec()
-        }
+        ApiProvider::Openai => OPENAI_CHAT_COMPLETIONS_MODELS.to_vec(),
+        ApiProvider::Atlascloud | ApiProvider::Ollama => OFFICIAL_DEEPSEEK_MODELS.to_vec(),
     }
 }
 
@@ -4828,6 +4844,15 @@ api_key = "old-openrouter-key"
             model_completion_names_for_provider(ApiProvider::Deepseek),
             vec!["deepseek-v4-pro", "deepseek-v4-flash"]
         );
+    }
+
+    #[test]
+    fn model_completion_names_for_openai_include_codex_models() {
+        let names = model_completion_names_for_provider(ApiProvider::Openai);
+
+        assert!(names.contains(&"gpt-5.3-codex"));
+        assert!(names.contains(&"gpt-5.5"));
+        assert!(names.contains(&"gpt-4.1"));
     }
 
     #[test]

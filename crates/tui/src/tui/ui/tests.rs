@@ -1286,6 +1286,7 @@ fn saved_session_with_messages(messages: Vec<Message>) -> SavedSession {
             cost: crate::session_manager::SessionCostSnapshot::default(),
             parent_session_id: None,
             forked_from_message_count: None,
+            cumulative_turn_secs: 0,
         },
         messages,
         system_prompt: None,

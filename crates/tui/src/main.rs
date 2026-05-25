@@ -69,6 +69,7 @@ mod snapshot;
 mod task_manager;
 #[cfg(test)]
 mod test_support;
+mod theme_qa_audit;
 mod tools;
 mod tui;
 mod utils;
@@ -4651,38 +4652,46 @@ fn merge_project_config(config: &mut Config, workspace: &Path) {
 
     // String fields a project may legitimately override (model,
     // approval/sandbox tightening, notes path, reasoning effort).
-    // Loosening *values* like `approval_policy = "auto"` and
-    // `sandbox_mode = "danger-full-access"` are denied unconditionally
-    // — those are pure escalation regardless of the user's prior
-    // value. Sub-tightening comparisons (e.g. user `"never"` →
-    // project `"on-request"`) stay v0.8.9 follow-up because they
-    // need a richer ordering check.
     for (key, field) in [
         ("model", &mut config.default_text_model),
         ("reasoning_effort", &mut config.reasoning_effort),
-        ("approval_policy", &mut config.approval_policy),
-        ("sandbox_mode", &mut config.sandbox_mode),
         ("notes_path", &mut config.notes_path),
     ] {
         if let Some(v) = table.get(key).and_then(toml::Value::as_str)
             && !v.is_empty()
         {
-            // #417 escalation deny: project cannot push the session
-            // to the loosest values. Other strings flow through the
-            // existing config validator on load.
-            let is_escalation = matches!(
-                (key, v),
-                ("approval_policy", "auto") | ("sandbox_mode", "danger-full-access")
-            );
-            if is_escalation {
-                eprintln!(
-                    "warning: project-scope `{key} = \"{v}\"` is ignored — \
-                     project config cannot escalate to the loosest value. \
-                     (See #417.)"
-                );
-                continue;
-            }
             *field = Some(v.to_string());
+        }
+    }
+
+    if let Some(v) = table.get("approval_policy").and_then(toml::Value::as_str)
+        && !v.is_empty()
+    {
+        if codewhale_config::project_approval_policy_is_allowed(
+            config.approval_policy.as_deref(),
+            v,
+        ) {
+            config.approval_policy = Some(v.to_string());
+        } else {
+            eprintln!(
+                "warning: project-scope `approval_policy = \"{v}\"` is ignored — \
+                 project config can only tighten the user's approval policy. \
+                 (See #417.)"
+            );
+        }
+    }
+
+    if let Some(v) = table.get("sandbox_mode").and_then(toml::Value::as_str)
+        && !v.is_empty()
+    {
+        if codewhale_config::project_sandbox_mode_is_allowed(config.sandbox_mode.as_deref(), v) {
+            config.sandbox_mode = Some(v.to_string());
+        } else {
+            eprintln!(
+                "warning: project-scope `sandbox_mode = \"{v}\"` is ignored — \
+                 project config can only tighten the user's sandbox mode. \
+                 (See #417.)"
+            );
         }
     }
 
@@ -6287,6 +6296,42 @@ approval_policy = "auto"
             Some("never"),
             "user's strict approval_policy must survive a project escalation attempt"
         );
+    }
+
+    #[test]
+    fn project_overlay_preserves_user_policy_when_project_tries_intermediate_loosening() {
+        let tmp = workspace_with_project_config(
+            r#"
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+"#,
+        );
+        let mut config = Config {
+            approval_policy: Some("never".to_string()),
+            sandbox_mode: Some("read-only".to_string()),
+            ..Config::default()
+        };
+        merge_project_config(&mut config, tmp.path());
+        assert_eq!(config.approval_policy.as_deref(), Some("never"));
+        assert_eq!(config.sandbox_mode.as_deref(), Some("read-only"));
+    }
+
+    #[test]
+    fn project_overlay_can_tighten_user_policy() {
+        let tmp = workspace_with_project_config(
+            r#"
+approval_policy = "never"
+sandbox_mode = "read-only"
+"#,
+        );
+        let mut config = Config {
+            approval_policy: Some("on-request".to_string()),
+            sandbox_mode: Some("workspace-write".to_string()),
+            ..Config::default()
+        };
+        merge_project_config(&mut config, tmp.path());
+        assert_eq!(config.approval_policy.as_deref(), Some("never"));
+        assert_eq!(config.sandbox_mode.as_deref(), Some("read-only"));
     }
 
     #[test]

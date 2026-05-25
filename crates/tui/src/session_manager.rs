@@ -132,6 +132,11 @@ pub struct SessionMetadata {
     /// current saved sessions are linear JSON files, not per-entry trees.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub forked_from_message_count: Option<usize>,
+    /// Cumulative turn duration in seconds (sum of completed turn elapsed
+    /// times). Persisted so the footer "worked" chip survives restarts
+    /// (#2038).
+    #[serde(default)]
+    pub cumulative_turn_secs: u64,
 }
 
 /// Cost and high-water-mark fields persisted with each session.
@@ -723,6 +728,7 @@ pub fn create_saved_session_with_id_and_mode(
             cost: SessionCostSnapshot::default(),
             parent_session_id: None,
             forked_from_message_count: None,
+            cumulative_turn_secs: 0,
         },
         messages: capped_messages,
         system_prompt: merge_truncation_note(
@@ -1045,6 +1051,7 @@ mod tests {
                 cost: SessionCostSnapshot::default(),
                 parent_session_id: None,
                 forked_from_message_count: None,
+                cumulative_turn_secs: 0,
             },
             system_prompt: None,
             context_references: Vec::new(),
@@ -1075,6 +1082,7 @@ mod tests {
                 cost: SessionCostSnapshot::default(),
                 parent_session_id: None,
                 forked_from_message_count: None,
+                cumulative_turn_secs: 0,
             },
             system_prompt: None,
             context_references: Vec::new(),

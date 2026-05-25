@@ -129,18 +129,6 @@ pub enum AppMode {
     Plan,
 }
 
-#[derive(Debug, Clone)]
-pub struct VoiceInputState {
-    pub started_at: Instant,
-}
-
-impl VoiceInputState {
-    #[must_use]
-    pub fn new(started_at: Instant) -> Self {
-        Self { started_at }
-    }
-}
-
 /// One row in the per-turn cache-telemetry ring (`/cache` debug surface, #263).
 #[derive(Debug, Clone)]
 pub struct TurnCacheRecord {
@@ -1074,8 +1062,6 @@ pub struct App {
     pub sticky_status: Option<StatusToast>,
     /// Last status text already promoted from `status_message` into toast state.
     pub last_status_message_seen: Option<String>,
-    /// Active external speech-to-text helper launched from the command palette.
-    pub voice_input_state: Option<VoiceInputState>,
     pub model: String,
     /// When true, the model is auto-selected based on request complexity
     /// rather than using a fixed model. The `/model auto` command sets this.
@@ -1794,7 +1780,6 @@ impl App {
             status_toasts: VecDeque::new(),
             sticky_status: None,
             last_status_message_seen: None,
-            voice_input_state: None,
             model,
             auto_model,
             last_effective_model: None,
@@ -2195,6 +2180,9 @@ impl App {
         metadata.cost.subagent_cost_cny = self.session.subagent_cost_cny;
         metadata.cost.displayed_cost_high_water_usd = self.session.displayed_cost_high_water;
         metadata.cost.displayed_cost_high_water_cny = self.session.displayed_cost_high_water_cny;
+        // Persist cumulative turn duration so the footer "worked" chip
+        // survives session save/restore (#2038).
+        metadata.cumulative_turn_secs = self.cumulative_turn_duration.as_secs();
     }
 
     /// Recompute the displayed cost high-water mark. Called any time a cost
@@ -2252,6 +2240,18 @@ impl App {
 
     pub fn format_cost_amount_precise(&self, amount: f64) -> String {
         crate::pricing::format_cost_amount_precise(amount, self.cost_currency)
+    }
+
+    /// Estimated cost saved by the last turn's cache-hit tokens in the
+    /// configured display currency.  Returns `None` when the model's pricing
+    /// is unknown or there were no cache hits.
+    pub fn last_turn_cache_savings(&self) -> Option<f64> {
+        let hit_tokens = self.session.last_prompt_cache_hit_tokens?;
+        let estimate = crate::pricing::calculate_cache_savings(&self.model, hit_tokens)?;
+        Some(match self.cost_currency {
+            crate::pricing::CostCurrency::Usd => estimate.usd,
+            crate::pricing::CostCurrency::Cny => estimate.cny,
+        })
     }
 
     /// Fold the oldest [`Self::HISTORY_FOLD_BATCH`] cells into a single

@@ -201,6 +201,25 @@ fn calculate_turn_cost_from_usage_with_pricing(pricing: CurrencyPricing, usage: 
     hit_cost + miss_cost + output_cost
 }
 
+/// Estimate how much money was saved by serving `cache_hit_tokens` from the
+/// prefix cache instead of billing them at the cache-miss rate.  Returns `None`
+/// when the model's pricing is unknown or the number of cache-hit tokens is
+/// zero (nothing to save).
+#[must_use]
+pub fn calculate_cache_savings(model: &str, cache_hit_tokens: u32) -> Option<CostEstimate> {
+    if cache_hit_tokens == 0 {
+        return None;
+    }
+    let pricing = pricing_for_model(model)?;
+    let tokens = cache_hit_tokens as f64 / 1_000_000.0;
+    Some(CostEstimate {
+        usd: tokens
+            * (pricing.usd.input_cache_miss_per_million - pricing.usd.input_cache_hit_per_million),
+        cny: tokens
+            * (pricing.cny.input_cache_miss_per_million - pricing.cny.input_cache_hit_per_million),
+    })
+}
+
 /// Format a USD cost for compact display.
 #[must_use]
 #[allow(dead_code)]
