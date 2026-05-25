@@ -5250,7 +5250,7 @@ api_key = "old-openrouter-key"
 
     #[test]
     fn normalize_model_name_rejects_invalid_or_non_deepseek_ids() {
-        assert!(normalize_model_name("gpt-4o").is_none());
+        assert!(normalize_model_name("qwen3-coder").is_none());
         assert!(normalize_model_name("codewhale v4").is_none());
         assert!(normalize_model_name("").is_none());
     }

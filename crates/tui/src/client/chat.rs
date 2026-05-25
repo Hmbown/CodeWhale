@@ -3093,7 +3093,7 @@ mod alias_thinking_detection_tests {
         // `reasoning_content` on providers that reject the field.
         assert!(!requires_reasoning_content("deepseek-v3"));
         assert!(!requires_reasoning_content("deepseek-coder"));
-        assert!(!requires_reasoning_content("gpt-4o"));
+        assert!(!requires_reasoning_content("qwen3-coder"));
         assert!(!requires_reasoning_content("claude-sonnet-4-6"));
     }
 
@@ -3169,7 +3169,7 @@ mod alias_thinking_detection_tests {
         // openai provider must continue to have reasoning_content stripped.
         assert!(!should_replay_reasoning_content_for_provider(
             ApiProvider::Openai,
-            "gpt-4o",
+            "qwen3-coder",
             None,
         ));
         assert!(!should_replay_reasoning_content_for_provider(
@@ -3211,7 +3211,7 @@ mod alias_thinking_detection_tests {
         // parser keeps inlining any `reasoning_content` it emits as text.
         assert!(!is_reasoning_model_for_stream(
             ApiProvider::Openai,
-            "gpt-4o"
+            "qwen3-coder"
         ));
         assert!(!is_reasoning_model_for_stream(
             ApiProvider::Openai,
@@ -3220,7 +3220,7 @@ mod alias_thinking_detection_tests {
         // Non-DeepSeek model on a reasoning-aware provider is also unchanged.
         assert!(!is_reasoning_model_for_stream(
             ApiProvider::Deepseek,
-            "gpt-4o"
+            "qwen3-coder"
         ));
     }
 
@@ -3230,7 +3230,7 @@ mod alias_thinking_detection_tests {
         // model identity, or stream parsing and message sanitisation disagree
         // about where reasoning tokens live. Effort=None isolates the
         // model/provider dimension shared by both.
-        for model in ["deepseek-v4-pro", "deepseek-reasoner", "gpt-4o"] {
+        for model in ["deepseek-v4-pro", "deepseek-reasoner", "qwen3-coder"] {
             for provider in [ApiProvider::Openai, ApiProvider::Deepseek] {
                 assert_eq!(
                     is_reasoning_model_for_stream(provider, model),

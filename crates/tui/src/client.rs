@@ -1289,7 +1289,7 @@ mod tests {
         // and DOES replay reasoning_content — see
         // `deepseek_model_on_openai_provider_still_replays_reasoning_content`.
         let request = MessageRequest {
-            model: "gpt-4o".to_string(),
+            model: "qwen3-coder".to_string(),
             messages: vec![Message {
                 role: "assistant".to_string(),
                 content: vec![
@@ -2748,7 +2748,7 @@ mod tests {
         // DeepSeek reasoning model on the openai provider still gets sanitized
         // (see chat.rs `deepseek_model_on_openai_provider_still_replays_*`).
         let mut body = json!({
-            "model": "gpt-4o",
+            "model": "qwen3-coder",
             "messages": [
                 { "role": "user", "content": "hi" },
                 {
@@ -2759,8 +2759,12 @@ mod tests {
             ]
         });
 
-        let result =
-            sanitize_thinking_mode_messages(&mut body, "gpt-4o", Some("max"), ApiProvider::Openai);
+        let result = sanitize_thinking_mode_messages(
+            &mut body,
+            "qwen3-coder",
+            Some("max"),
+            ApiProvider::Openai,
+        );
 
         assert!(result.is_none());
         let assistant = body["messages"]
