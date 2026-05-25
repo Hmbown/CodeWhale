@@ -606,9 +606,10 @@ fn command_rule_matches(
 fn path_pattern_matches(pattern: &str, path: &str, workspace_root: Option<&str>) -> bool {
     let pattern = normalize_path_pattern(pattern);
     let path = normalize_path_for_matching(path, workspace_root);
-    match pattern.strip_suffix("/**") {
-        Some(prefix) if path.starts_with(&format!("{prefix}/")) => return true,
-        _ => {}
+    if let Some(prefix) = pattern.strip_suffix("/**")
+        && (path == prefix || path.starts_with(&format!("{prefix}/")))
+    {
+        return true;
     }
     if !pattern.contains('*') && !pattern.contains('?') {
         return pattern == path;

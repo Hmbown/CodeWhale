@@ -324,19 +324,19 @@ fn typed_permission_matches_legacy_file_tool_aliases() {
 #[test]
 fn typed_permission_exact_saved_alias_allow_beats_broad_alias_ask() {
     let engine = permission_engine_with_rules(vec![
-        deepseek_execpolicy::ToolPermissionRule::file_path(
+        codewhale_execpolicy::ToolPermissionRule::file_path(
             "file_edit",
-            deepseek_execpolicy::PermissionDecision::Ask,
+            codewhale_execpolicy::PermissionDecision::Ask,
             "src/**",
         ),
-        deepseek_execpolicy::ToolPermissionRule::file_path(
+        codewhale_execpolicy::ToolPermissionRule::file_path(
             "edit_file",
-            deepseek_execpolicy::PermissionDecision::Allow,
+            codewhale_execpolicy::PermissionDecision::Allow,
             "src/main.rs",
         ),
-        deepseek_execpolicy::ToolPermissionRule::file_path(
+        codewhale_execpolicy::ToolPermissionRule::file_path(
             "file_edit",
-            deepseek_execpolicy::PermissionDecision::Allow,
+            codewhale_execpolicy::PermissionDecision::Allow,
             "src/main.rs",
         ),
     ]);
@@ -397,14 +397,14 @@ fn typed_permission_requires_all_apply_patch_paths_to_be_allowed() {
 #[test]
 fn typed_permission_checks_apply_patch_diff_even_when_path_field_is_present() {
     let engine = permission_engine_with_rules(vec![
-        deepseek_execpolicy::ToolPermissionRule::file_path(
+        codewhale_execpolicy::ToolPermissionRule::file_path(
             "apply_patch",
-            deepseek_execpolicy::PermissionDecision::Allow,
+            codewhale_execpolicy::PermissionDecision::Allow,
             "docs/**",
         ),
-        deepseek_execpolicy::ToolPermissionRule::file_path(
+        codewhale_execpolicy::ToolPermissionRule::file_path(
             "apply_patch",
-            deepseek_execpolicy::PermissionDecision::Deny,
+            codewhale_execpolicy::PermissionDecision::Deny,
             "secrets/**",
         ),
     ]);
