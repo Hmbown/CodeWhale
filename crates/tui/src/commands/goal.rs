@@ -1,6 +1,6 @@
 //! /goal command — set a session objective with token budget and progress tracking.
 
-use crate::tui::app::App;
+use crate::tui::app::{App, AppAction};
 
 use super::CommandResult;
 
@@ -26,6 +26,10 @@ pub fn goal(app: &mut App, arg: Option<&str>) -> CommandResult {
         Some(text) if !text.is_empty() => {
             // Parse optional budget: "/goal Implement login | budget: 50000"
             let (objective, budget) = parse_goal_budget(text);
+            let objective = objective.trim().to_string();
+            if objective.is_empty() || objective.chars().all(|c| c == '|') {
+                return CommandResult::error("Usage: /goal <objective> [budget: N]");
+            }
             app.goal.goal_objective = Some(objective.clone());
             app.goal.goal_token_budget = budget;
             app.goal.goal_started_at = Some(std::time::Instant::now());
@@ -33,9 +37,10 @@ pub fn goal(app: &mut App, arg: Option<&str>) -> CommandResult {
             let budget_str = budget
                 .map(|b| format!(" (budget: {b} tokens)"))
                 .unwrap_or_default();
-            CommandResult::message(format!(
-                "Goal set: \"{objective}\"{budget_str} — tracking progress."
-            ))
+            CommandResult::with_message_and_action(
+                format!("Goal set: \"{objective}\"{budget_str} — tracking progress."),
+                AppAction::SendMessage(objective),
+            )
         }
         _ => {
             // Show current goal
@@ -102,6 +107,7 @@ fn parse_goal_budget(text: &str) -> (String, Option<u32>) {
 mod tests {
     use super::*;
     use crate::config::Config;
+    use crate::tui::app::AppAction;
     use crate::tui::app::{App, TuiOptions};
     use std::path::PathBuf;
 
@@ -139,6 +145,34 @@ mod tests {
             app.goal.goal_objective.as_deref(),
             Some("Fix the login bug")
         );
+        assert!(matches!(
+            result.action,
+            Some(AppAction::SendMessage(msg)) if msg == "Fix the login bug"
+        ));
+    }
+
+    #[test]
+    fn test_execute_goal_dispatched_as_sendmessage() {
+        let mut app = create_test_app();
+        let result = crate::commands::execute("/goal Implement login flow", &mut app);
+        assert!(
+            result
+                .message
+                .is_some_and(|message| message.contains("Goal set"))
+        );
+        assert!(matches!(
+            result.action,
+            Some(AppAction::SendMessage(content))
+                if content == "Implement login flow".to_string()
+        ));
+    }
+
+    #[test]
+    fn test_execute_goal_without_argument_shows_state() {
+        let mut app = create_test_app();
+        let result = crate::commands::execute("/goal", &mut app);
+        assert!(result.action.is_none());
+        assert!(matches!(result.message.as_deref(), Some(value) if value.contains("No goal set")));
     }
 
     #[test]
@@ -147,6 +181,46 @@ mod tests {
         let _ = goal(&mut app, Some("Refactor auth | budget: 50000"));
         assert_eq!(app.goal.goal_objective.as_deref(), Some("Refactor auth"));
         assert_eq!(app.goal.goal_token_budget, Some(50_000));
+        assert!(app.goal.goal_started_at.is_some());
+    }
+
+    #[test]
+    fn test_set_goal_rejects_budget_only_objective() {
+        let mut app = create_test_app();
+        app.goal.goal_objective = Some("existing objective".to_string());
+        app.goal.goal_token_budget = Some(10_000);
+
+        let result = crate::commands::execute("/goal budget: 50000", &mut app);
+        assert!(result.is_error);
+        assert!(result.action.is_none());
+        assert!(
+            result
+                .message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Usage: /goal")
+        );
+        assert_eq!(
+            app.goal.goal_objective.as_deref(),
+            Some("existing objective")
+        );
+        assert_eq!(app.goal.goal_token_budget, Some(10_000));
+
+        let pipe_result = crate::commands::execute("/goal | budget: 50000", &mut app);
+        assert!(pipe_result.is_error);
+        assert!(pipe_result.action.is_none());
+        assert!(
+            pipe_result
+                .message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Usage: /goal")
+        );
+        assert_eq!(
+            app.goal.goal_objective.as_deref(),
+            Some("existing objective")
+        );
+        assert_eq!(app.goal.goal_token_budget, Some(10_000));
     }
 
     #[test]
