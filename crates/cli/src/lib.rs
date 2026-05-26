@@ -2912,6 +2912,7 @@ mod tests {
         }
     }
 
+    #[test]
     fn parses_top_level_prompt_flag_for_canonical_one_shot() {
         let cli = parse_ok(&["deepseek", "-p", "Reply with exactly OK."]);
 
