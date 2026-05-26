@@ -266,6 +266,13 @@ chmod +x ~/.local/bin/codewhale ~/.local/bin/codewhale-tui
 codewhale --version
 ```
 
+> **macOS Gatekeeper note.** If you downloaded the binaries with a browser,
+> macOS may block them with "Apple cannot verify" warnings. Clear the quarantine
+> attribute on both binaries and retry:
+> ```bash
+> xattr -d com.apple.quarantine ~/.local/bin/codewhale ~/.local/bin/codewhale-tui 2>/dev/null || true
+> ```
+
 Verify integrity against the per-release SHA-256 manifest:
 
 ```bash
