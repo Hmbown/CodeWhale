@@ -648,9 +648,9 @@ impl SnapshotsConfig {
 #[serde(rename_all = "snake_case")]
 pub enum SearchProvider {
     /// Bing HTML scraping. No API key needed.
-    #[default]
     Bing,
     /// DuckDuckGo HTML scraping with Bing fallback. No API key needed.
+    #[default]
     #[serde(alias = "duckduckgo")]
     DuckDuckGo,
     /// Tavily AI Search API (<https://tavily.com>). Requires api_key.
@@ -714,7 +714,7 @@ pub struct SearchProviderResolution {
 /// Web search provider configuration (`[search]` table in config.toml).
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct SearchConfig {
-    /// Search provider: `bing` | `duckduckgo` | `tavily` | `bocha` | `metaso`. Default: `bing`.
+    /// Search provider: `bing` | `duckduckgo` | `tavily` | `bocha` | `metaso`. Default: `duckduckgo`.
     #[serde(default)]
     pub provider: Option<SearchProvider>,
     /// API key for Tavily, Bocha, or Metaso. Not required for Bing or DuckDuckGo.
@@ -1105,9 +1105,9 @@ pub struct Config {
     #[serde(default)]
     pub snapshots: Option<SnapshotsConfig>,
 
-    /// Web search provider configuration. When absent, defaults to Bing.
-    /// Set `provider` to `duckduckgo`, `tavily`, or `bocha` to use those
-    /// services instead; Tavily and Bocha also require an `api_key`.
+    /// Web search provider configuration. When absent, defaults to DuckDuckGo.
+    /// Set `provider` to `bing`, `tavily`, or `bocha` to use those services
+    /// instead; Tavily and Bocha also require an `api_key`.
     #[serde(default)]
     pub search: Option<SearchConfig>,
 
@@ -4208,8 +4208,8 @@ mod tests {
     }
 
     #[test]
-    fn search_provider_defaults_to_bing() {
-        assert_eq!(SearchProvider::default(), SearchProvider::Bing);
+    fn search_provider_defaults_to_duckduckgo() {
+        assert_eq!(SearchProvider::default(), SearchProvider::DuckDuckGo);
     }
 
     #[test]
@@ -4254,7 +4254,7 @@ mod tests {
         let resolution = Config::default().search_provider_resolution();
 
         unsafe { EnvGuard::restore_var("DEEPSEEK_SEARCH_PROVIDER", prev) };
-        assert_eq!(resolution.provider, SearchProvider::Bing);
+        assert_eq!(resolution.provider, SearchProvider::DuckDuckGo);
         assert_eq!(resolution.source, SearchProviderSource::Default);
     }
 

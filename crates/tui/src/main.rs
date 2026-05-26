@@ -3163,11 +3163,11 @@ fn doctor_search_provider_line(config: &Config) -> String {
     let switch_hint = if matches!(
         (search_provider.provider, search_provider.source),
         (
-            crate::config::SearchProvider::Bing,
+            crate::config::SearchProvider::DuckDuckGo,
             crate::config::SearchProviderSource::Default
         )
     ) {
-        "; set [search] provider = \"duckduckgo\" | \"tavily\" | \"bocha\" to switch"
+        "; set [search] provider = \"bing\" | \"tavily\" | \"bocha\" to switch"
     } else {
         ""
     };
@@ -5701,7 +5701,7 @@ mod doctor_endpoint_tests {
     }
 
     #[test]
-    fn doctor_search_provider_line_includes_default_source_and_switch_hint() {
+    fn doctor_search_provider_line_includes_duckduckgo_default_source_and_switch_hint() {
         let _guard = crate::test_support::lock_test_env();
         let prev = std::env::var_os("DEEPSEEK_SEARCH_PROVIDER");
         unsafe { std::env::remove_var("DEEPSEEK_SEARCH_PROVIDER") };
@@ -5712,9 +5712,10 @@ mod doctor_endpoint_tests {
             Some(value) => unsafe { std::env::set_var("DEEPSEEK_SEARCH_PROVIDER", value) },
             None => unsafe { std::env::remove_var("DEEPSEEK_SEARCH_PROVIDER") },
         }
-        assert!(line.contains("search_provider: bing"));
+        assert!(line.contains("search_provider: duckduckgo"));
         assert!(line.contains("source: default"));
         assert!(line.contains("[search] provider"));
+        assert!(line.contains("provider = \"bing\""));
     }
 
     #[test]
