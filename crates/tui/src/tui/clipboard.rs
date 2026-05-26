@@ -442,7 +442,12 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn wlcopy_helper_succeeds_when_binary_returns_zero() {
-        let result = write_text_with_wlcopy_using_argv("true", "test");
+        // Use `cat` instead of `true` because `true` exits immediately
+        // without reading stdin, causing EPIPE before we can check the
+        // exit status.  `cat` consumes stdin until EOF (when we drop the
+        // pipe) and then exits 0, faithfully modelling a successful
+        // wl-copy invocation.
+        let result = write_text_with_wlcopy_using_argv("cat", "test");
         assert!(result.is_ok());
     }
 
