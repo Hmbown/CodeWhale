@@ -90,6 +90,116 @@ pub(crate) async fn run_configured_voice_command(
         .ok_or_else(|| anyhow!("voice input command produced no transcript on stdout"))
 }
 
+
+/// Check whether the configured voice input command is likely to work.
+/// Returns a list of diagnostic messages (empty = no issues found).
+pub(crate) async fn diagnose_voice_setup(
+    command_line: &str,
+    _cwd: &Path,
+) -> Vec<String> {
+    let mut issues = Vec::new();
+
+    let trimmed = command_line.trim();
+    if trimmed.is_empty() {
+        issues.push("voice_input_command is not configured".to_string());
+        return issues;
+    }
+
+    let (program, _args) = match parse_voice_command(command_line) {
+        Ok(pair) => pair,
+        Err(e) => {
+            issues.push(format!("Failed to parse voice command: {e}"));
+            return issues;
+        }
+    };
+
+    // Check the binary exists on PATH / is executable
+    let probe = tokio::process::Command::new(&program)
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await;
+    match probe {
+        Ok(status) if !status.success() => {
+            issues.push(format!(
+                "Executable `{program}` exists but returned code {status} on --version. It may need a different invocation."
+            ));
+        }
+        Err(e) => {
+            issues.push(format!(
+                "Cannot spawn `{program}`: {e}. Check that it is installed and on PATH."
+            ));
+        }
+        _ => {}
+    }
+
+    issues
+}
+
+/// Returns true when the given key chord is known to be consumed by the
+/// terminal's own input layer before it reaches the TUI keybinding
+/// handler. Use this when writing shortcut-detection tests.
+///
+/// Chords consumed by the terminal (before the TUI sees them):
+///   Ctrl-K  — kill-line (macOS Terminal, iTerm2, Windows Terminal, tmux)
+///   Ctrl-W  — unix-word-rubout
+///   Ctrl-U  — kill-line-from-start
+///   Ctrl-O  — operated-on / execute
+///   Ctrl-Y  — yank
+///
+/// Safe chords (forwarded in Raw mode on most terminals):
+///   Ctrl-C, Ctrl-L, Ctrl-G, Ctrl-], Ctrl-[ (Esc), F-keys, Alt-combos
+///
+/// NOTE: This is a best-effort heuristic for tests. Actual terminal
+/// behaviour depends on stty settings and the terminal emulator.
+#[cfg(test)]
+fn chord_likely_reaches_tui(chord: &str) -> bool {
+    let consumed: &[&str] = &["Ctrl-K", "Ctrl-W", "Ctrl-U", "Ctrl-T", "Ctrl-O", "Ctrl-Y"];
+    !consumed.contains(&chord)
+}
+
+#[cfg(test)]
+mod terminal_detection_tests {
+    use super::*;
+
+    #[test]
+    fn ctrl_k_consumed_by_most_terminals() {
+        assert!(!chord_likely_reaches_tui("Ctrl-K"),
+            "Ctrl-K is consumed by most terminals and should be reported as unsafe");
+    }
+
+    #[test]
+    fn ctrl_l_reaches_tui() {
+        assert!(chord_likely_reaches_tui("Ctrl-L"));
+        assert!(chord_likely_reaches_tui("Ctrl-C"));
+    }
+
+    #[test]
+    fn voice_shortcut_candidates() {
+        let candidates = [
+            ("Ctrl-L",    true),
+            ("Ctrl-C",    true),
+            ("Ctrl-G",    true),
+            ("Ctrl-]",    true),
+            ("Alt-Space", true),
+            ("F2",        true),
+            ("F3",        true),
+            ("Ctrl-K",    false),
+            ("Ctrl-W",    false),
+            ("Ctrl-U",    false),
+            ("Ctrl-O",    false),
+        ];
+        for (chord, expected_safe) in candidates {
+            assert_eq!(
+                chord_likely_reaches_tui(chord),
+                expected_safe,
+                "Chord {chord} safety mismatch",
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
