@@ -540,7 +540,7 @@ impl ToolSpec for EditFileTool {
         let path_str = required_str(&input, "path")?;
         let search = required_str(&input, "search")?;
         let replace = required_str(&input, "replace")?;
-        let fuzz = optional_bool(&input, "fuzz", false);
+        let _fuzz = optional_bool(&input, "fuzz", false);
 
         if search == replace {
             return Err(ToolError::invalid_input(

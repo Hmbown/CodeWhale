@@ -91,7 +91,7 @@ pub(crate) fn render_footer(f: &mut Frame, area: Rect, app: &mut App) {
                 let base = if app.is_loading {
                     crate::tui::widgets::footer_working_label(dot_frame, app.ui_locale)
                 } else if app.is_compacting {
-                    "compacting"
+                    "compacting".to_string()
                 } else {
                     crate::tui::widgets::footer_working_label(dot_frame, app.ui_locale)
                 };

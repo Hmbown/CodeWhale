@@ -18,7 +18,7 @@ export interface RepoFacts {
 }
 
 export const FACTS: RepoFacts = {
-  "generatedAt": "2026-05-26T03:03:01.383Z",
+  "generatedAt": "2026-05-26T15:45:43.239Z",
   "version": "0.8.45",
   "crates": [
     "agent",
@@ -37,8 +37,11 @@ export const FACTS: RepoFacts = {
     "tui-core"
   ],
   "sandboxBackends": [
+    "bwrap",
     "landlock (Linux)",
-    "seatbelt (macOS)"
+    "process_hardening",
+    "seatbelt (macOS)",
+    "seccomp"
   ],
   "providers": [
     {

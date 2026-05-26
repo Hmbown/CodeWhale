@@ -52,7 +52,7 @@ pub fn run_update(beta: bool) -> Result<()> {
     }
 
     // Step 2: Download the aggregated SHA256 checksum manifest if available
-    let checksum_manifest = match select_checksum_manifest_asset(&release) {
+    let checksum_manifest = match select_checksum_manifest_asset(release) {
         Some(checksum_asset) => {
             println!("Downloading {}...", checksum_asset.name);
             let checksum_bytes =
@@ -76,7 +76,7 @@ pub fn run_update(beta: bool) -> Result<()> {
     // Step 3: Download and verify every colocated binary in the install.
     let mut downloads = Vec::new();
     for target in &targets {
-        let asset = select_platform_asset(&release, &target.asset_stem).with_context(|| {
+        let asset = select_platform_asset(release, &target.asset_stem).with_context(|| {
             format!(
                 "no asset found for platform {} in release {latest_tag}. \
                      Available assets: {}",

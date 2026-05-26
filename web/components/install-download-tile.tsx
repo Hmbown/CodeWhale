@@ -76,7 +76,6 @@ export function InstallDownloadTile({
 
   const { zip, sha } = ASSETS[arch];
   const ghproxy = `https://ghproxy.com/${zip}`;
-  const jsdelivr = `https://cdn.jsdelivr.net/gh/Hmbown/CodeWhale@latest/${zip.split("/").pop()}`;
 
   return (
     <div>

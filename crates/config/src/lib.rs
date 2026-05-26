@@ -388,7 +388,7 @@ impl ConfigToml {
             self.tools = project.tools;
         }
         // Provider is only overridden if explicitly set (non-default).
-        if project.provider != ProviderKind::Deepseek || has_api_key {
+        if project.provider != ProviderKind::Deepseek {
             self.provider = project.provider;
         }
 

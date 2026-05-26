@@ -94,11 +94,26 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
             <p className="mt-6 text-lg text-ink-soft leading-relaxed max-w-2xl">
               <span className="font-cjk text-indigo font-semibold">CodeWhale</span>
               {isZh
-                ? " 是围绕 DeepSeek V4 Pro 和 Flash 构建的运行框架。规则、工具、证据和反馈循环——帮助模型持续工作，并且不断进步。DeepSeek V4 参与了部分编写。更好的框架让 V4 更有效，更有效的 V4 又让框架变得更好——这是个正向循环。"
-                : " is a harness built around DeepSeek V4 Pro and Flash. Rules, tools, evidence, and feedback loops that help the model keep working — and keep improving. DeepSeek V4 helped write parts of it. A better harness makes V4 more effective, and a more effective V4 makes the harness better — it loops."}
+                ? " 就是那个框架——围绕 DeepSeek V4 Pro 和 Flash 构建，用规则、工具、证据和反馈循环让模型持续工作并不断进步。DeepSeek V4 参与了编写。V4 越强，框架越强——每一轮对话留下更好的提示词和更清晰的交接，下一轮从更高起点出发。这个递归循环正是项目的核心使命：借助国际开源社区，构建一个让 V4 自主管理环境的自改进框架。"
+                : " is that harness — built around DeepSeek V4 Pro and Flash, with rules, tools, evidence, and feedback loops that help the model keep working and keep improving. DeepSeek V4 helped write it. As V4 improves, the harness improves with it. Each turn leaves behind better prompts and better handoffs — so the next turn starts stronger. That's the recursive loop at the heart of this project: an international open source community building a harness that lets V4 manage its own environment, turn after turn."}
             </p>
 
-            <div className="mt-8 flex flex-wrap items-stretch sm:items-center gap-3">
+            {/* MISSION CALLOUT */}
+            <div className="mt-6 px-4 py-3 bg-indigo-pale border-l-4 border-indigo text-sm leading-relaxed max-w-2xl">
+              {isZh ? (
+                <>
+                  <span className="font-display text-indigo font-semibold mr-1">使命</span>
+                  构建一个递归自改进的 DeepSeek V4 运行框架——通过国际开源社区的力量，让 V4 在每一轮对话中学会更好地管理自己的环境。
+                </>
+              ) : (
+                <>
+                  <span className="font-display text-indigo font-semibold mr-1">Mission</span>
+                  Build a recursive, self-improving harness for DeepSeek V4 — by leveraging the international open source community and V4's own ability to manage its environment, turn after turn.
+                </>
+              )}
+            </div>
+
+            <div className="mt-6 flex flex-wrap items-stretch sm:items-center gap-3">
               <Link
                 href={isZh ? "/zh/install" : "/install"}
                 className="flex-1 sm:flex-none text-center px-5 py-3 bg-ink text-paper font-mono text-sm uppercase tracking-wider hover:bg-indigo transition-colors"
@@ -165,61 +180,66 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
 
       <StatGrid stats={stats} />
 
-      {/* WHAT IT IS */}
+      {/* WHAT IT IS — the core ideas behind the harness */}
       <section className="mx-auto max-w-[1400px] px-6 py-16">
-        <div className="flex items-baseline gap-4 mb-8 hairline-b pb-4">
+        <div className="flex items-baseline gap-4 mb-2 hairline-b pb-4">
           <Seal char="是" />
           <h2 className="font-display">
-            {isZh ? "它到底是什么" : "What it actually is"}
+            {isZh ? "核心思想" : "The ideas that make it what it is"}
           </h2>
         </div>
+        <p className={`mb-8 text-ink-soft max-w-2xl ${isZh ? "leading-[1.9] tracking-wide" : "text-sm leading-relaxed"}`}>
+          {isZh
+            ? "一个模型回答问题，一个智能体完成任务。区别在于框架——围绕模型构建的规则、工具、证据和反馈循环的运行环境。CodeWhale 围绕三条原则运作。"
+            : "A model answers a question. An agent finishes a task. The difference is the harness — the operating environment that surrounds the model with rules, tools, evidence, and feedback loops. CodeWhale operates on three principles."}
+        </p>
 
         <div className="grid md:grid-cols-3 gap-0 col-rule hairline-t hairline-b">
           {isZh ? (
             <>
               <div className="p-6">
                 <div className="eyebrow mb-3">01 · 宪政层级</div>
-                <h3 className="font-display text-xl mb-3">用户意图高于一切</h3>
+                <h3 className="font-display text-xl mb-3">七层权威链，从不模糊</h3>
                 <p className="text-sm text-ink-soft leading-[1.9]">
-                  实时证据高于假设。验证高于自信。清晰的权威链让模型无需猜测该服从哪条指令。
+                  《宪法》第七条定义了九层权威层级——用户当前消息覆盖过时项目规则，实时工具输出覆盖假设，验证覆盖自信。模型不需要猜测该服从哪条指令。
                 </p>
               </div>
               <div className="p-6">
-                <div className="eyebrow mb-3">02 · 反馈驱动</div>
-                <h3 className="font-display text-xl mb-3">失败是信号，不是终点</h3>
+                <div className="eyebrow mb-3">02 · 自己写的框架</div>
+                <h3 className="font-display text-xl mb-3">DeepSeek V4 参与构建</h3>
                 <p className="text-sm text-ink-soft leading-[1.9]">
-                  失败的命令、失败的测试、LSP 错误。框架让失败可读。每一次节拍都是模型可以调谐的信息，逐轮迭代。
+                  V4 编写了框架的部分代码。每一轮对话的缓存前缀让《宪法》的实际成本接近免费。V4 越强，框架越强；框架越强，V4 在其中越高效——递归循环。
                 </p>
               </div>
               <div className="p-6">
-                <div className="eyebrow mb-3">03 · 自我修正</div>
-                <h3 className="font-display text-xl mb-3">恢复内建于环境</h3>
+                <div className="eyebrow mb-3">03 · 开源协作</div>
+                <h3 className="font-display text-xl mb-3">国际社区，小补丁驱动</h3>
                 <p className="text-sm text-ink-soft leading-[1.9]">
-                  子智能体、回滚、会话分叉、交接。模型不需要一次就全对。恢复机制从底层支持试错。
+                  100:1 贡献模型——一个提示词、大量智能体小时、一个小补丁、一次维护者审查。无 CLA，无赞助商优先通道。每一条内容都被阅读。
                 </p>
               </div>
             </>
           ) : (
             <>
               <div className="p-6">
-                <div className="eyebrow mb-3">01 · constitutional</div>
-                <h3 className="font-display text-xl mb-3">User intent above everything</h3>
+                <div className="eyebrow mb-3">01 · constitutional hierarchy</div>
+                <h3 className="font-display text-xl mb-3">Seven tiers of authority, never ambiguous</h3>
                 <p className="text-sm text-ink-soft leading-relaxed">
-                  Live evidence above assumptions. Verification above confidence. A clear chain of authority so the model never guesses which instruction to follow.
+                  Article VII of the Constitution ranks nine sources from the Articles themselves to prior-session handoffs. The user's current message outranks stale project rules. Live tool output outranks assumptions. Verification outranks confidence. The model never guesses which instruction to follow.
                 </p>
               </div>
               <div className="p-6">
-                <div className="eyebrow mb-3">02 · feedback-driven</div>
-                <h3 className="font-display text-xl mb-3">Failure is signal, not a dead end</h3>
+                <div className="eyebrow mb-3">02 · self-written harness</div>
+                <h3 className="font-display text-xl mb-3">DeepSeek V4 helped build it</h3>
                 <p className="text-sm text-ink-soft leading-relaxed">
-                  Failed commands, failing tests, LSP errors. The harness makes failure legible. Each beat is information the model can tune against, turn after turn.
+                  V4 wrote parts of this harness. DeepSeek's prefix caching makes the Constitution nearly free to reference every turn. As V4 improves, the harness improves with it. A more effective V4 makes the harness better — the recursive loop that defines this project.
                 </p>
               </div>
               <div className="p-6">
-                <div className="eyebrow mb-3">03 · self-correcting</div>
-                <h3 className="font-display text-xl mb-3">Recovery built into the environment</h3>
+                <div className="eyebrow mb-3">03 · open by design</div>
+                <h3 className="font-display text-xl mb-3">International community, small patches</h3>
                 <p className="text-sm text-ink-soft leading-relaxed">
-                  Sub-agents, rollback, session forks, handoffs. The model doesn't have to get everything right the first time. Recovery is built into the environment.
+                  The 100-to-1 contribution model: one prompt, many agent-hours, one small patch, one maintainer review. No CLA. No sponsor lockouts. The maintainer reads everything personally, issues are triaged in the open, releases cut from main.
                 </p>
               </div>
             </>

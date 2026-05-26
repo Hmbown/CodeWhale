@@ -356,16 +356,16 @@ impl ToolSpec for RlmEvalTool {
             "new_vars": [],
             "final": final_handle,
         });
-        if let Some(stdout_preview) = stdout_preview {
+        if let Some(ref stdout_preview) = stdout_preview {
             output["stdout_preview"] = json!(stdout_preview);
         }
-        if let Some(stderr_preview) = stderr_preview {
+        if let Some(ref stderr_preview) = stderr_preview {
             output["stderr_preview"] = json!(stderr_preview);
         }
-        if let (Some(h), Some(c)) = (stdout_handle, stdout_preview) {
+        if let (Some(h), Some(_)) = (stdout_handle, &stdout_preview) {
             output["stdout_handle"] = json!(h);
         }
-        if let (Some(h), Some(c)) = (stderr_handle, stderr_preview) {
+        if let (Some(h), Some(_)) = (stderr_handle, &stderr_preview) {
             output["stderr_handle"] = json!(h);
         }
         if let Some(confidence) = round.final_confidence.clone() {

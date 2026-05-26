@@ -484,6 +484,7 @@ fn tools_always_load_overrides_default_native_deferral() {
 
 #[test]
 #[ignore = "one-shot metric for scripts/measure-tool-catalog.py"]
+#[allow(clippy::print_stderr)]
 fn print_agent_tool_catalog_metrics() {
     let tmp = tempdir().expect("tempdir");
     let context = crate::tools::ToolContext::new(tmp.path().to_path_buf());
@@ -532,7 +533,7 @@ fn print_agent_tool_catalog_metrics() {
             / baseline_json.len() as f64
     };
 
-    println!(
+    eprintln!(
         "TOOL_CATALOG_METRICS {}",
         serde_json::json!({
             "baseline_tools": baseline_catalog.len(),

@@ -1584,7 +1584,7 @@ async fn run_event_loop(
                                     let _ = write!(receipt, " · {}: {summary}", evidence.tool_name);
                                 }
                             }
-                            app.set_receipt_text(receipt);
+                            app.set_receipt_text(receipt.clone());
                             // Mirror as a persistent status toast (10s TTL).
                             // The footer bar visibly shows status toasts,
                             // which is more glanceable than the composer
