@@ -2733,6 +2733,84 @@ mod tests {
     }
 
     #[test]
+    fn build_tui_command_forwards_provider_env_vars_for_all_providers() {
+        let _lock = env_lock();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let custom = dir
+            .path()
+            .join(format!("custom-tui{}", std::env::consts::EXE_SUFFIX));
+        std::fs::write(&custom, b"").unwrap();
+        let custom_str = custom.to_string_lossy().into_owned();
+        let _bin = ScopedEnvVar::set("DEEPSEEK_TUI_BIN", &custom_str);
+
+        // (provider, cli flag, extra env vars that must be forwarded besides DEEPSEEK_API_KEY)
+        let cases: &[(ProviderKind, &str, &[&str])] = &[
+            (ProviderKind::Openrouter, "openrouter", &["OPENROUTER_API_KEY"]),
+            (ProviderKind::Novita, "novita", &["NOVITA_API_KEY"]),
+            (
+                ProviderKind::NvidiaNim,
+                "nvidia-nim",
+                &["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"],
+            ),
+            (ProviderKind::Fireworks, "fireworks", &["FIREWORKS_API_KEY"]),
+            (ProviderKind::Sglang, "sglang", &["SGLANG_API_KEY"]),
+            (ProviderKind::Vllm, "vllm", &["VLLM_API_KEY"]),
+            (ProviderKind::Ollama, "ollama", &["OLLAMA_API_KEY"]),
+            (
+                ProviderKind::Atlascloud,
+                "atlascloud",
+                &["ATLASCLOUD_API_KEY"],
+            ),
+            (
+                ProviderKind::WanjieArk,
+                "wanjie-ark",
+                &["WANJIE_ARK_API_KEY", "WANJIE_API_KEY", "WANJIE_MAAS_API_KEY"],
+            ),
+        ];
+
+        for &(provider, flag, expected_vars) in cases {
+            let cli = parse_ok(&[
+                "codewhale",
+                "--provider",
+                flag,
+                "--workspace",
+                "/tmp/codewhale-workspace",
+            ]);
+            let resolved = ResolvedRuntimeOptions {
+                provider,
+                model: "test-model".to_string(),
+                api_key: Some("test-key".to_string()),
+                api_key_source: Some(RuntimeApiKeySource::Env),
+                base_url: "http://localhost:8000/v1".to_string(),
+                auth_mode: Some("api_key".to_string()),
+                output_mode: None,
+                log_level: None,
+                telemetry: false,
+                approval_policy: None,
+                sandbox_mode: None,
+                yolo: None,
+                http_headers: std::collections::BTreeMap::new(),
+            };
+
+            let cmd = build_tui_command(&cli, &resolved, Vec::new())
+                .unwrap_or_else(|e| panic!("{flag}: {e}"));
+
+            assert_eq!(
+                command_env(&cmd, "DEEPSEEK_API_KEY").as_deref(),
+                Some("test-key"),
+                "{flag}: DEEPSEEK_API_KEY not forwarded"
+            );
+            for var in expected_vars {
+                assert_eq!(
+                    command_env(&cmd, var).as_deref(),
+                    Some("test-key"),
+                    "{flag}: {var} not forwarded"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn parses_top_level_prompt_flag_for_canonical_one_shot() {
         let cli = parse_ok(&["deepseek", "-p", "Reply with exactly OK."]);
 
