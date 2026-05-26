@@ -1648,9 +1648,9 @@ pub fn default_tasks_dir() -> PathBuf {
         return PathBuf::from(path);
     }
     if let Some(home) = dirs::home_dir() {
-        return home.join(".deepseek").join("tasks");
+        return home.join(".codewhale").join("tasks");
     }
-    PathBuf::from(".deepseek").join("tasks")
+    PathBuf::from(".codewhale").join("tasks")
 }
 
 /// Wait for a task to reach a terminal status (tests and API helpers).

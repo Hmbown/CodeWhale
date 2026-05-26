@@ -379,6 +379,10 @@ pub(super) fn config_toml_path(config_path: Option<&Path>) -> anyhow::Result<Pat
         }
     }
     let home = dirs::home_dir().context("failed to resolve home directory for config.toml path")?;
+    let primary = home.join(".codewhale").join("config.toml");
+    if primary.exists() {
+        return Ok(primary);
+    }
     Ok(home.join(".deepseek").join("config.toml"))
 }
 

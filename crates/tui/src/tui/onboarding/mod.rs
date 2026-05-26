@@ -128,7 +128,11 @@ pub fn tips_lines(app: &App) -> Vec<ratatui::text::Line<'static>> {
 }
 
 pub fn default_marker_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|home| home.join(".deepseek").join(".onboarded"))
+    dirs::home_dir().map(|home| {
+        let primary = home.join(".codewhale").join(".onboarded");
+        if primary.exists() { return primary; }
+        home.join(".deepseek").join(".onboarded")
+    })
 }
 
 pub fn is_onboarded() -> bool {

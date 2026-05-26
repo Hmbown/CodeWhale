@@ -2200,7 +2200,13 @@ pub(crate) fn effective_home_dir() -> Option<PathBuf> {
 }
 
 fn home_config_path() -> Option<PathBuf> {
-    effective_home_dir().map(|home| home.join(".deepseek").join("config.toml"))
+    effective_home_dir().map(|home| {
+        let primary = home.join(".codewhale").join("config.toml");
+        if primary.exists() {
+            return primary;
+        }
+        home.join(".deepseek").join("config.toml")
+    })
 }
 
 #[must_use]
@@ -2363,7 +2369,11 @@ fn default_managed_config_path() -> Option<PathBuf> {
     }
     #[cfg(not(unix))]
     {
-        effective_home_dir().map(|home| home.join(".deepseek").join("managed_config.toml"))
+        effective_home_dir().map(|home| {
+            let primary = home.join(".codewhale").join("managed_config.toml");
+            if primary.exists() { return primary; }
+            home.join(".deepseek").join("managed_config.toml")
+        })
     }
 }
 
@@ -2374,7 +2384,11 @@ fn default_requirements_path() -> Option<PathBuf> {
     }
     #[cfg(not(unix))]
     {
-        effective_home_dir().map(|home| home.join(".deepseek").join("requirements.toml"))
+        effective_home_dir().map(|home| {
+            let primary = home.join(".codewhale").join("requirements.toml");
+            if primary.exists() { return primary; }
+            home.join(".deepseek").join("requirements.toml")
+        })
     }
 }
 
@@ -2399,15 +2413,27 @@ fn default_skills_dir() -> Option<PathBuf> {
 }
 
 fn default_mcp_config_path() -> Option<PathBuf> {
-    effective_home_dir().map(|home| home.join(".deepseek").join("mcp.json"))
+    effective_home_dir().map(|home| {
+        let primary = home.join(".codewhale").join("mcp.json");
+        if primary.exists() { return primary; }
+        home.join(".deepseek").join("mcp.json")
+    })
 }
 
 fn default_notes_path() -> Option<PathBuf> {
-    effective_home_dir().map(|home| home.join(".deepseek").join("notes.txt"))
+    effective_home_dir().map(|home| {
+        let primary = home.join(".codewhale").join("notes.txt");
+        if primary.exists() { return primary; }
+        home.join(".deepseek").join("notes.txt")
+    })
 }
 
 fn default_memory_path() -> Option<PathBuf> {
-    effective_home_dir().map(|home| home.join(".deepseek").join("memory.md"))
+    effective_home_dir().map(|home| {
+        let primary = home.join(".codewhale").join("memory.md");
+        if primary.exists() { return primary; }
+        home.join(".deepseek").join("memory.md")
+    })
 }
 
 // === Environment Overrides ===

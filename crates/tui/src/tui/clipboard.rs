@@ -279,7 +279,7 @@ fn osc52_sequence(text: &str, in_tmux: bool) -> Result<String> {
 /// `<workspace>/clipboard-images/` if the home dir is unavailable.
 pub(crate) fn clipboard_images_dir(workspace: &Path) -> PathBuf {
     if let Some(home) = dirs::home_dir() {
-        return home.join(".deepseek").join("clipboard-images");
+        return home.join(".codewhale").join("clipboard-images");
     }
     workspace.join("clipboard-images")
 }

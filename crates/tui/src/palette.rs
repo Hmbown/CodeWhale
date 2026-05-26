@@ -8,7 +8,7 @@ use std::process::Command;
 pub const WHALE_BG_RGB: (u8, u8, u8) = (10, 17, 32); // #0A1120 Deep Navy
 pub const WHALE_PANEL_RGB: (u8, u8, u8) = (22, 34, 56); // #162238
 pub const WHALE_ELEVATED_RGB: (u8, u8, u8) = (36, 52, 78); // #24344E
-pub const WHALE_SELECTION_RGB: (u8, u8, u8) = (48, 68, 100); // #304464
+pub const WHALE_SELECTION_RGB: (u8, u8, u8) = (40, 56, 84); // #283854 — darker to avoid bright pop on deep navy
 pub const WHALE_TEXT_BODY_RGB: (u8, u8, u8) = (246, 242, 232); // #F6F2E8 Whale Ivory
 pub const WHALE_TEXT_SOFT_RGB: (u8, u8, u8) = (217, 224, 234); // #D9E0EA
 pub const WHALE_TEXT_MUTED_RGB: (u8, u8, u8) = (169, 180, 199); // #A9B4C7 Mist Gray
@@ -244,7 +244,11 @@ pub const TEXT_ACCENT: Color = Color::Rgb(
     WHALE_ACCENT_SECONDARY_RGB.1,
     WHALE_ACCENT_SECONDARY_RGB.2,
 );
-pub const SELECTION_TEXT: Color = Color::White;
+pub const SELECTION_TEXT: Color = Color::Rgb(
+    WHALE_TEXT_BODY_RGB.0,
+    WHALE_TEXT_BODY_RGB.1,
+    WHALE_TEXT_BODY_RGB.2,
+); // Ivory — softer than pure white
 pub const TEXT_SOFT: Color = Color::Rgb(
     WHALE_TEXT_SOFT_RGB.0,
     WHALE_TEXT_SOFT_RGB.1,
