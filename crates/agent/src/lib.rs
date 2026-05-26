@@ -74,84 +74,6 @@ impl Default for ModelRegistry {
                 supports_reasoning: true,
             },
             ModelInfo {
-                id: "deepseek-v4-pro".to_string(),
-                provider: ProviderKind::Openai,
-                aliases: vec!["openai-compatible-deepseek-v4-pro".to_string()],
-                supports_tools: true,
-                supports_reasoning: true,
-            },
-            ModelInfo {
-                id: "deepseek-v4-flash".to_string(),
-                provider: ProviderKind::Openai,
-                aliases: vec!["openai-compatible-deepseek-v4-flash".to_string()],
-                supports_tools: true,
-                supports_reasoning: true,
-            },
-            ModelInfo {
-                id: "deepseek-reasoner".to_string(),
-                provider: ProviderKind::WanjieArk,
-                aliases: vec![
-                    "wanjie-deepseek-reasoner".to_string(),
-                    "ark-wanjie-deepseek-reasoner".to_string(),
-                ],
-                supports_tools: true,
-                supports_reasoning: true,
-            },
-            ModelInfo {
-                id: "deepseek/deepseek-v4-pro".to_string(),
-                provider: ProviderKind::Openrouter,
-                aliases: vec![
-                    "deepseek-v4-pro".to_string(),
-                    "openrouter-deepseek-v4-pro".to_string(),
-                ],
-                supports_tools: true,
-                supports_reasoning: true,
-            },
-            ModelInfo {
-                id: "deepseek/deepseek-v4-flash".to_string(),
-                provider: ProviderKind::Openrouter,
-                aliases: vec![
-                    "deepseek-v4-flash".to_string(),
-                    "deepseek-chat".to_string(),
-                    "deepseek-reasoner".to_string(),
-                    "openrouter-deepseek-v4-flash".to_string(),
-                ],
-                supports_tools: true,
-                supports_reasoning: true,
-            },
-            ModelInfo {
-                id: "deepseek/deepseek-v4-pro".to_string(),
-                provider: ProviderKind::Novita,
-                aliases: vec![
-                    "deepseek-v4-pro".to_string(),
-                    "novita-deepseek-v4-pro".to_string(),
-                ],
-                supports_tools: true,
-                supports_reasoning: true,
-            },
-            ModelInfo {
-                id: "deepseek/deepseek-v4-flash".to_string(),
-                provider: ProviderKind::Novita,
-                aliases: vec![
-                    "deepseek-v4-flash".to_string(),
-                    "deepseek-chat".to_string(),
-                    "deepseek-reasoner".to_string(),
-                    "novita-deepseek-v4-flash".to_string(),
-                ],
-                supports_tools: true,
-                supports_reasoning: true,
-            },
-            ModelInfo {
-                id: "accounts/fireworks/models/deepseek-v4-pro".to_string(),
-                provider: ProviderKind::Fireworks,
-                aliases: vec![
-                    "deepseek-v4-pro".to_string(),
-                    "fireworks-deepseek-v4-pro".to_string(),
-                ],
-                supports_tools: true,
-                supports_reasoning: true,
-            },
-            ModelInfo {
                 id: "kimi-k2.6".to_string(),
                 provider: ProviderKind::Moonshot,
                 aliases: vec![
@@ -374,70 +296,12 @@ mod tests {
     }
 
     #[test]
-    fn openrouter_default_uses_namespaced_model_id() {
-        let registry = ModelRegistry::default();
-        let resolved = registry.resolve(None, Some(ProviderKind::Openrouter));
-
-        assert_eq!(resolved.resolved.provider, ProviderKind::Openrouter);
-        assert_eq!(resolved.resolved.id, "deepseek/deepseek-v4-pro");
-    }
-
-    #[test]
-    fn wanjie_ark_default_uses_reasoner_model_id() {
-        let registry = ModelRegistry::default();
-        let resolved = registry.resolve(None, Some(ProviderKind::WanjieArk));
-
-        assert_eq!(resolved.resolved.provider, ProviderKind::WanjieArk);
-        assert_eq!(resolved.resolved.id, "deepseek-reasoner");
-        assert!(resolved.resolved.supports_reasoning);
-    }
-
-    #[test]
-    fn novita_default_uses_namespaced_model_id() {
-        let registry = ModelRegistry::default();
-        let resolved = registry.resolve(None, Some(ProviderKind::Novita));
-
-        assert_eq!(resolved.resolved.provider, ProviderKind::Novita);
-        assert_eq!(resolved.resolved.id, "deepseek/deepseek-v4-pro");
-    }
-
-    #[test]
-    fn fireworks_default_uses_canonical_model_id() {
-        let registry = ModelRegistry::default();
-        let resolved = registry.resolve(None, Some(ProviderKind::Fireworks));
-
-        assert_eq!(resolved.resolved.provider, ProviderKind::Fireworks);
-        assert_eq!(
-            resolved.resolved.id,
-            "accounts/fireworks/models/deepseek-v4-pro"
-        );
-    }
-
-    #[test]
     fn sglang_default_uses_canonical_model_id() {
         let registry = ModelRegistry::default();
         let resolved = registry.resolve(None, Some(ProviderKind::Sglang));
 
         assert_eq!(resolved.resolved.provider, ProviderKind::Sglang);
         assert_eq!(resolved.resolved.id, "deepseek-ai/DeepSeek-V4-Pro");
-    }
-
-    #[test]
-    fn deepseek_v4_flash_alias_resolves_to_openrouter_when_provider_hinted() {
-        let registry = ModelRegistry::default();
-        let resolved = registry.resolve(Some("deepseek-v4-flash"), Some(ProviderKind::Openrouter));
-
-        assert_eq!(resolved.resolved.provider, ProviderKind::Openrouter);
-        assert_eq!(resolved.resolved.id, "deepseek/deepseek-v4-flash");
-    }
-
-    #[test]
-    fn deepseek_v4_flash_alias_resolves_to_novita_when_provider_hinted() {
-        let registry = ModelRegistry::default();
-        let resolved = registry.resolve(Some("deepseek-v4-flash"), Some(ProviderKind::Novita));
-
-        assert_eq!(resolved.resolved.provider, ProviderKind::Novita);
-        assert_eq!(resolved.resolved.id, "deepseek/deepseek-v4-flash");
     }
 
     #[test]
