@@ -230,6 +230,9 @@ pub struct ToolPermissionContext<'a> {
     pub tool: &'a str,
     pub command: Option<&'a str>,
     pub path: Option<&'a str>,
+    /// Workspace root used to normalize absolute tool paths before matching
+    /// workspace-relative path rules.
+    pub workspace_root: Option<&'a str>,
 }
 
 impl<'a> ToolPermissionContext<'a> {
@@ -239,6 +242,7 @@ impl<'a> ToolPermissionContext<'a> {
             tool: "exec_shell",
             command: Some(command),
             path: None,
+            workspace_root: None,
         }
     }
 }
@@ -541,7 +545,7 @@ fn tool_rule_matches(
         let Some(path) = ctx.path else {
             return false;
         };
-        if !path_pattern_matches(path_rule, path) {
+        if !path_pattern_matches(path_rule, path, ctx.workspace_root) {
             return false;
         }
     }
@@ -562,11 +566,11 @@ fn command_rule_matches(
     }
 }
 
-fn path_pattern_matches(pattern: &str, path: &str) -> bool {
+fn path_pattern_matches(pattern: &str, path: &str, workspace_root: Option<&str>) -> bool {
     let pattern = normalize_path_pattern(pattern);
-    let path = normalize_path_pattern(path);
+    let path = normalize_path_for_matching(path, workspace_root);
     if let Some(prefix) = pattern.strip_suffix("/**")
-        && (path == prefix || path.starts_with(&format!("{prefix}/")))
+        && path.starts_with(&format!("{prefix}/"))
     {
         return true;
     }
@@ -644,6 +648,24 @@ fn normalize_path_pattern(value: &str) -> String {
     } else {
         normalized
     }
+}
+
+fn normalize_path_for_matching(path: &str, workspace_root: Option<&str>) -> String {
+    let path = normalize_path_pattern(path);
+    let Some(workspace_root) = workspace_root else {
+        return path;
+    };
+    let workspace_root = normalize_path_pattern(workspace_root);
+    if workspace_root.is_empty() {
+        return path;
+    }
+    if path == workspace_root {
+        return String::new();
+    }
+    let workspace_prefix = format!("{workspace_root}/");
+    path.strip_prefix(&workspace_prefix)
+        .unwrap_or(&path)
+        .to_string()
 }
 
 fn first_token(command: &str) -> String {
@@ -911,6 +933,7 @@ mod tests {
             tool: "file_edit",
             command: None,
             path: Some("./docs/guide/setup.md"),
+            workspace_root: None,
         });
 
         assert_eq!(decision.decision, Some(PermissionDecision::Allow));
@@ -918,17 +941,51 @@ mod tests {
 
     #[test]
     fn path_star_does_not_cross_directory_separator() {
-        assert!(path_pattern_matches("docs/*.md", "docs/readme.md"));
-        assert!(!path_pattern_matches("docs/*.md", "docs/guides/readme.md"));
+        assert!(path_pattern_matches("docs/*.md", "docs/readme.md", None));
+        assert!(!path_pattern_matches(
+            "docs/*.md",
+            "docs/guides/readme.md",
+            None
+        ));
+    }
+
+    #[test]
+    fn path_double_star_requires_child_path() {
+        assert!(path_pattern_matches("docs/**", "docs/readme.md", None));
+        assert!(!path_pattern_matches("docs/**", "docs", None));
     }
 
     #[test]
     fn path_rules_normalize_dot_segments() {
-        assert!(path_pattern_matches("src/**", "src/./lib.rs"));
-        assert!(!path_pattern_matches("src/**", "src/../secret.txt"));
-        assert!(!path_pattern_matches("src/**", "../src/lib.rs"));
-        assert!(path_pattern_matches("/foo", "/../foo"));
-        assert!(!path_pattern_matches("/src/**", "/src/../secret.txt"));
+        assert!(path_pattern_matches("src/**", "src/./lib.rs", None));
+        assert!(!path_pattern_matches("src/**", "src/../secret.txt", None));
+        assert!(!path_pattern_matches("src/**", "../src/lib.rs", None));
+        assert!(path_pattern_matches("/foo", "/../foo", None));
+        assert!(!path_pattern_matches("/src/**", "/src/../secret.txt", None));
+    }
+
+    #[test]
+    fn path_rules_match_absolute_paths_inside_workspace_root() {
+        let engine =
+            ExecPolicyEngine::with_rulesets(vec![Ruleset::user(vec![], vec![]).with_rules(vec![
+                ToolPermissionRule::file_path("file_edit", PermissionDecision::Deny, "secret.toml"),
+            ])]);
+
+        let denied = engine.check_tool_permission(ToolPermissionContext {
+            tool: "file_edit",
+            command: None,
+            path: Some("/workspace/project/secret.toml"),
+            workspace_root: Some("/workspace/project"),
+        });
+        assert_eq!(denied.decision, Some(PermissionDecision::Deny));
+
+        let outside_workspace = engine.check_tool_permission(ToolPermissionContext {
+            tool: "file_edit",
+            command: None,
+            path: Some("/workspace/other/secret.toml"),
+            workspace_root: Some("/workspace/project"),
+        });
+        assert_eq!(outside_workspace.decision, None);
     }
 
     #[test]
@@ -942,6 +999,7 @@ mod tests {
             tool: "agent_spawn",
             command: None,
             path: None,
+            workspace_root: None,
         });
 
         assert_eq!(decision.decision, Some(PermissionDecision::Ask));
