@@ -21,7 +21,7 @@ use crate::tui::markdown_render;
 use std::process::Command;
 const TOOL_COMMAND_LINE_LIMIT: usize = 3;
 const TOOL_OUTPUT_LINE_LIMIT: usize = 6;
-const TOOL_TEXT_LIMIT: usize = 180;
+const TOOL_TEXT_LIMIT: usize = 300;
 const TOOL_HEADER_SUMMARY_LIMIT: usize = 56;
 const TOOL_OUTPUT_HEAD_LINES: usize = 2;
 const TOOL_OUTPUT_TAIL_LINES: usize = 2;
