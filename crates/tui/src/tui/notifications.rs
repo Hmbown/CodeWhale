@@ -8,8 +8,8 @@
 //! - **BEL** — audible bell (`\x07`) as a last-resort fallback.
 //!
 //! When `method = "auto"`, the resolver picks the best method for the
-//! current terminal; Windows falls back to `Off` to avoid the error chime
-//! (#583).
+//! current terminal; Windows falls back to `Bel`, which is routed through
+//! `MessageBeep(MB_OK)` for an audible default notification sound.
 
 #[cfg(target_os = "windows")]
 use windows::Win32::System::Diagnostics::Debug::MessageBeep;
@@ -68,7 +68,7 @@ fn windows_bell() {
 /// - `$TERM` contains `ghostty` → `Osc9` (cmux etc.)
 /// - `$TERM` contains `kitty` → `Kitty`
 /// - Unix unknown → `Bel`
-/// - Windows unknown → `Off`
+/// - Windows unknown → `Bel`
 #[must_use]
 fn resolve_method() -> Method {
     let term_program = std::env::var("TERM_PROGRAM").unwrap_or_default();
@@ -199,8 +199,8 @@ pub fn notify_done_to<W: Write>(
 ///
 /// With `method = Auto`, selects the best protocol for the current terminal
 /// (OSC 9, Kitty OSC 99, Ghostty OSC 777, or Bel). The unknown-terminal
-/// fallback is platform-aware — `Bel` on macOS / Linux, `Off` on Windows
-/// (where BEL maps to the `SystemAsterisk` / `MB_OK` error chime, #583).
+/// fallback is platform-aware: `Bel` on every platform, with Windows routing
+/// it through `MessageBeep(MB_OK)` for a default system notification sound.
 /// See [`resolve_method`] for the canonical resolution table. Pass
 /// `in_tmux = true` (i.e. `$TMUX` is non-empty at runtime) to wrap OSC
 /// sequences in a DCS passthrough.
@@ -620,7 +620,9 @@ mod tests {
     /// when the test harness runs them in parallel threads.
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     fn capture(
@@ -827,12 +829,11 @@ mod tests {
         assert_eq!(resolved, Method::Bel);
     }
 
-    /// #583: on Windows, an unknown TERM_PROGRAM resolves to `Off`
-    /// (not `Bel`) so the post-turn notification doesn't ring the
-    /// `SystemAsterisk` / `MB_OK` chime.
+    /// #2166: on Windows, an unknown TERM_PROGRAM resolves to `Bel` so
+    /// `windows_bell()` can route the notification through `MessageBeep`.
     #[test]
     #[cfg(target_os = "windows")]
-    fn auto_detect_picks_off_for_unknown_on_windows() {
+    fn auto_detect_picks_bel_for_unknown_on_windows() {
         let _lock = env_lock();
         let prev = std::env::var_os("TERM_PROGRAM");
         // SAFETY: test-only; serialised by env_lock().
@@ -845,7 +846,7 @@ mod tests {
                 None => std::env::remove_var("TERM_PROGRAM"),
             }
         }
-        assert_eq!(resolved, Method::Off);
+        assert_eq!(resolved, Method::Bel);
     }
 
     /// #583: known OSC-9 terminals must still resolve to `Osc9` on
