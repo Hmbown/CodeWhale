@@ -183,8 +183,9 @@ impl ToolContext {
     pub fn new(workspace: impl Into<PathBuf>) -> Self {
         let workspace = workspace.into();
         let shell_manager = new_shared_shell_manager(workspace.clone());
-        let notes_path = workspace.join(".deepseek").join("notes.md");
-        let mcp_config_path = workspace.join(".deepseek").join("mcp.json");
+        // Prefer .codewhale, fall back to .deepseek for project-local state
+        let notes_path = codewhale_config::resolve_project_state_dir(&workspace, "notes.md").1;
+        let mcp_config_path = codewhale_config::resolve_project_state_dir(&workspace, "mcp.json").1;
         Self {
             workspace,
             shell_manager,
