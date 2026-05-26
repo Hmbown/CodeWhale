@@ -311,6 +311,10 @@ codewhale --provider wanjie-ark --model deepseek-reasoner
 codewhale auth set --provider openrouter --api-key "YOUR_OPENROUTER_API_KEY"
 codewhale --provider openrouter --model deepseek/deepseek-v4-pro
 
+# Xiaomi MiMo
+codewhale auth set --provider xiaomi-mimo --api-key "YOUR_XIAOMI_MIMO_API_KEY"
+codewhale --provider xiaomi-mimo --model mimo-v2.5-pro
+
 # Novita
 codewhale auth set --provider novita --api-key "YOUR_NOVITA_API_KEY"
 codewhale --provider novita --model deepseek/deepseek-v4-pro
@@ -477,15 +481,16 @@ Key environment variables:
 | `DEEPSEEK_HTTP_HEADERS` | Optional custom model request headers, e.g. `X-Model-Provider-Id=your-model-provider` |
 | `DEEPSEEK_MODEL` | Default model |
 | `DEEPSEEK_STREAM_IDLE_TIMEOUT_SECS` | Stream idle timeout in seconds, default `300`, clamped to `1..=3600` |
-| `CODEWHALE_PROVIDER` / `DEEPSEEK_PROVIDER` | `deepseek` (default), `nvidia-nim`, `openai`, `atlascloud`, `wanjie-ark`, `openrouter`, `novita`, `fireworks`, `moonshot`, `sglang`, `vllm`, `ollama` |
+| `CODEWHALE_PROVIDER` / `DEEPSEEK_PROVIDER` | `deepseek` (default), `nvidia-nim`, `openai`, `atlascloud`, `wanjie-ark`, `openrouter`, `xiaomi-mimo`, `novita`, `fireworks`, `moonshot`, `sglang`, `vllm`, `ollama` |
 | `DEEPSEEK_PROFILE` | Config profile name |
 | `DEEPSEEK_MEMORY` | Set to `on` to enable user memory |
 | `DEEPSEEK_ALLOW_INSECURE_HTTP=1` | Allow non-local `http://` API base URLs on trusted networks |
-| `NVIDIA_API_KEY` / `OPENAI_API_KEY` / `ATLASCLOUD_API_KEY` / `WANJIE_ARK_API_KEY` / `OPENROUTER_API_KEY` / `NOVITA_API_KEY` / `FIREWORKS_API_KEY` / `MOONSHOT_API_KEY` / `KIMI_API_KEY` / `SGLANG_API_KEY` / `VLLM_API_KEY` / `OLLAMA_API_KEY` | Provider auth |
+| `NVIDIA_API_KEY` / `OPENAI_API_KEY` / `ATLASCLOUD_API_KEY` / `WANJIE_ARK_API_KEY` / `OPENROUTER_API_KEY` / `XIAOMI_MIMO_API_KEY` / `MIMO_API_KEY` / `NOVITA_API_KEY` / `FIREWORKS_API_KEY` / `MOONSHOT_API_KEY` / `KIMI_API_KEY` / `SGLANG_API_KEY` / `VLLM_API_KEY` / `OLLAMA_API_KEY` | Provider auth |
 | `OPENAI_BASE_URL` / `OPENAI_MODEL` | Generic OpenAI-compatible endpoint and model ID |
 | `ATLASCLOUD_BASE_URL` / `ATLASCLOUD_MODEL` | AtlasCloud endpoint and model override |
 | `WANJIE_ARK_BASE_URL` / `WANJIE_ARK_MODEL` | Wanjie Ark endpoint and model override |
 | `OPENROUTER_BASE_URL` | OpenRouter endpoint override |
+| `XIAOMI_MIMO_BASE_URL` / `MIMO_BASE_URL` / `XIAOMI_MIMO_MODEL` / `MIMO_MODEL` | Xiaomi MiMo endpoint and model override |
 | `NOVITA_BASE_URL` | Novita endpoint override |
 | `FIREWORKS_BASE_URL` | Fireworks endpoint override |
 | `SGLANG_BASE_URL` | Self-hosted SGLang endpoint |

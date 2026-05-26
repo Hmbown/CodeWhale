@@ -882,6 +882,7 @@ pub(super) fn apply_reasoning_effort(
             ApiProvider::Deepseek
             | ApiProvider::DeepseekCN
             | ApiProvider::Openrouter
+            | ApiProvider::XiaomiMimo
             | ApiProvider::Novita
             | ApiProvider::Sglang => {
                 body["thinking"] = json!({ "type": "disabled" });
@@ -930,6 +931,9 @@ pub(super) fn apply_reasoning_effort(
                 body["reasoning_effort"] = json!(value);
                 body["thinking"] = json!({ "type": "enabled" });
             }
+            ApiProvider::XiaomiMimo => {
+                body["thinking"] = json!({ "type": "enabled" });
+            }
             ApiProvider::Fireworks => {
                 body["reasoning_effort"] = json!("high");
             }
@@ -965,6 +969,9 @@ pub(super) fn apply_reasoning_effort(
             }
             ApiProvider::Openrouter | ApiProvider::Novita => {
                 body["reasoning_effort"] = json!("xhigh");
+                body["thinking"] = json!({ "type": "enabled" });
+            }
+            ApiProvider::XiaomiMimo => {
                 body["thinking"] = json!({ "type": "enabled" });
             }
             ApiProvider::Fireworks => {
@@ -2042,6 +2049,29 @@ mod tests {
                 Some("enabled")
             );
         }
+    }
+
+    #[test]
+    fn reasoning_effort_uses_xiaomi_mimo_thinking_parameter_only() {
+        for input in ["low", "medium", "max", "xhigh"] {
+            let mut body = json!({});
+            apply_reasoning_effort(&mut body, Some(input), ApiProvider::XiaomiMimo);
+
+            assert_eq!(
+                body.pointer("/thinking/type").and_then(Value::as_str),
+                Some("enabled"),
+                "MiMo thinking mapping for {input}"
+            );
+            assert!(body.get("reasoning_effort").is_none());
+        }
+
+        let mut body = json!({});
+        apply_reasoning_effort(&mut body, Some("off"), ApiProvider::XiaomiMimo);
+        assert_eq!(
+            body.pointer("/thinking/type").and_then(Value::as_str),
+            Some("disabled")
+        );
+        assert!(body.get("reasoning_effort").is_none());
     }
 
     #[test]
