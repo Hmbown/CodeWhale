@@ -10,14 +10,13 @@
 # Active provider + DeepSeek defaults
 # ─────────────────────────────────────────────────────────────────────────────────
 # Choose which provider to use by default. Per-provider credentials live in the
-# `[providers.*]` sections near the bottom of
-# this file — keeping both stored at once means `/provider deepseek` and
-# `/provider nvidia-nim` (or `--provider openai`, `--provider wanjie-ark`,
-# `--provider fireworks`, `/provider sglang`, `/provider vllm`, `/provider ollama`)
-# toggle without having to re-enter keys. Top-level `api_key` / `base_url` are
-# still read as DeepSeek defaults when `[providers.deepseek]` is absent
-# (backward compatibility).
-provider = "deepseek" # deepseek | deepseek-cn | nvidia-nim | openai | atlascloud | wanjie-ark | openrouter | novita | fireworks | sglang | vllm | ollama
+# `[providers.*]` sections near the bottom of this file — keeping multiple
+# stored at once means `/provider deepseek` and `/provider nvidia-nim` (or
+# `--provider moonshot`, `/provider sglang`, `/provider vllm`,
+# `/provider ollama`) toggle without having to re-enter keys. Top-level
+# `api_key` / `base_url` are still read as DeepSeek defaults when
+# `[providers.deepseek]` is absent (backward compatibility).
+provider = "deepseek" # deepseek | deepseek-cn | nvidia-nim | moonshot | sglang | vllm | ollama
 api_key = "YOUR_DEEPSEEK_API_KEY" # must be non-empty
 base_url = "https://api.deepseek.com/beta"
 # provider = "deepseek-cn"                       # legacy alias (official host is still https://api.deepseek.com)
@@ -32,14 +31,11 @@ base_url = "https://api.deepseek.com/beta"
 # DeepSeek V4 family:
 #   deepseek-v4-pro             — flagship reasoning model on DeepSeek Platform
 #   deepseek-v4-flash           — fast, cost-efficient (legacy aliases: deepseek-chat, deepseek-reasoner)
-#   deepseek-ai/deepseek-v4-pro   — NVIDIA NIM-hosted Pro model ID
-#   deepseek-ai/deepseek-v4-flash — NVIDIA NIM-hosted Flash model ID
-#   gpt-4.1                         — default generic OpenAI-compatible model ID
-#   deepseek-ai/deepseek-v4-flash   — default AtlasCloud model ID
-#   deepseek-reasoner               — default Wanjie Ark model ID
-#   accounts/fireworks/models/deepseek-v4-pro — Fireworks AI Pro model ID
-#   deepseek-ai/DeepSeek-V4-Pro    — SGLang self-hosted Pro model ID
-#   deepseek-ai/DeepSeek-V4-Flash  — SGLang self-hosted Flash model ID
+#   deepseek-ai/deepseek-v4-pro    — NVIDIA NIM-hosted Pro model ID
+#   deepseek-ai/deepseek-v4-flash  — NVIDIA NIM-hosted Flash model ID
+#   deepseek-ai/DeepSeek-V4-Pro    — SGLang/vLLM self-hosted Pro model ID
+#   deepseek-ai/DeepSeek-V4-Flash  — SGLang/vLLM self-hosted Flash model ID
+#   kimi-k2.6                      — Moonshot/Kimi K2.6 (passthrough)
 default_text_model = "deepseek-v4-pro"
 
 # ─────────────────────────────────────────────────────────────────────────────────
@@ -156,17 +152,14 @@ max_subagents = 10 # optional (1-20)
 # Per-provider credentials (peer providers — NIM is first-class, not a flag)
 # ─────────────────────────────────────────────────────────────────────────────────
 # Providers can be stored at once; `provider = "..."` (top of file) or
-# `/provider deepseek` / `/provider nvidia-nim` / `--provider openai` /
-# `--provider wanjie-ark` / `/provider fireworks` switches between them without
-# having to re-enter keys. Env vars override anything set here:
+# `/provider deepseek` / `/provider nvidia-nim` / `--provider moonshot` /
+# `/provider sglang` / `/provider vllm` / `/provider ollama` switches between
+# them without having to re-enter keys. Env vars override anything set here:
 #   DeepSeek: DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
 #   NIM:      NVIDIA_API_KEY (or NVIDIA_NIM_API_KEY), NIM_BASE_URL
 #             (or NVIDIA_NIM_BASE_URL / NVIDIA_BASE_URL), NVIDIA_NIM_MODEL
-#   OpenAI-compatible: OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL
-#   Wanjie Ark: WANJIE_ARK_API_KEY (or WANJIE_API_KEY), WANJIE_ARK_BASE_URL, WANJIE_ARK_MODEL
-#   OpenRouter: OPENROUTER_API_KEY, OPENROUTER_BASE_URL, OPENROUTER_MODEL
-#   Novita:     NOVITA_API_KEY, NOVITA_BASE_URL, NOVITA_MODEL
-#   Fireworks:  FIREWORKS_API_KEY, FIREWORKS_BASE_URL
+#   Moonshot/Kimi: MOONSHOT_API_KEY (or KIMI_API_KEY), MOONSHOT_BASE_URL
+#                  (or KIMI_BASE_URL), MOONSHOT_MODEL (or KIMI_MODEL)
 #   SGLang:    SGLANG_BASE_URL, SGLANG_MODEL, optional SGLANG_API_KEY
 #   vLLM:      VLLM_BASE_URL, VLLM_MODEL, optional VLLM_API_KEY
 #   Ollama:    OLLAMA_BASE_URL, OLLAMA_MODEL, optional OLLAMA_API_KEY
@@ -184,44 +177,13 @@ max_subagents = 10 # optional (1-20)
 # base_url = "https://integrate.api.nvidia.com/v1"
 # model = "deepseek-ai/deepseek-v4-pro"     # or deepseek-ai/deepseek-v4-flash
 
-# Generic OpenAI-compatible endpoint. Use the built-in `openai` provider for
-# third-party gateways; do not invent a custom provider name. For non-local
-# http:// gateways, launch with DEEPSEEK_ALLOW_INSECURE_HTTP=1 only on a
-# trusted network.
-[providers.openai]
-# api_key = "YOUR_OPENAI_COMPATIBLE_API_KEY"
-# base_url = "https://api.openai.com/v1"
-# model = "gpt-4.1"
-
-# AtlasCloud OpenAI-compatible endpoint (https://www.atlascloud.ai/docs/models/llm)
-[providers.atlascloud]
-# api_key = "YOUR_ATLASCLOUD_API_KEY"
-# base_url = "https://api.atlascloud.ai/v1"
-# model = "deepseek-ai/deepseek-v4-flash"
-
-# Wanjie Ark / 万界方舟 OpenAI-compatible endpoint
-[providers.wanjie_ark]
-# api_key = "YOUR_WANJIE_API_KEY"
-# base_url = "https://maas-openapi.wanjiedata.com/api/v1"
-# model = "deepseek-reasoner"                # or the exact model ID enabled on your Wanjie account
-
-# OpenRouter — multi-provider gateway (https://openrouter.ai)
-[providers.openrouter]
-# api_key = "YOUR_OPENROUTER_API_KEY"
-# base_url = "https://openrouter.ai/api/v1"
-# model = "deepseek/deepseek-v4-pro"         # or deepseek/deepseek-v4-flash
-
-# Novita AI-hosted inference (https://novita.ai)
-[providers.novita]
-# api_key = "YOUR_NOVITA_API_KEY"
-# base_url = "https://api.novita.ai/v1"
-# model = "deepseek/deepseek-v4-pro"         # or deepseek/deepseek-v4-flash
-
-# Fireworks AI-hosted DeepSeek V4 (https://fireworks.ai)
-[providers.fireworks]
-# api_key = "YOUR_FIREWORKS_API_KEY"
-# base_url = "https://api.fireworks.ai/inference/v1"
-# model = "accounts/fireworks/models/deepseek-v4-pro"
+# Moonshot/Kimi — official Moonshot API (https://platform.moonshot.ai) or
+# Kimi-for-coding OAuth (https://www.kimi.com/code).
+[providers.moonshot]
+# api_key = "YOUR_MOONSHOT_OR_KIMI_API_KEY"
+# base_url = "https://api.moonshot.ai/v1"
+# model = "kimi-k2.6"
+# auth_mode = "kimi_oauth"  # switch to the Kimi-for-coding OAuth path
 
 # Self-hosted SGLang OpenAI-compatible server
 [providers.sglang]

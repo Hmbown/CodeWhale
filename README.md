@@ -250,42 +250,18 @@ Both binaries are required. Cross-compilation and platform-specific notes: [docs
 
 ### Other API Providers
 
-Official DeepSeek remains the default and first-class path. Other providers are
-additive, with OpenRouter starting from DeepSeek Pro/Flash before broader
-open-model catalogs are enabled.
+Official DeepSeek remains the default and first-class path. v0.8.45 also
+supports NVIDIA NIM (documented DeepSeek-on-NVIDIA escape hatch), Moonshot/Kimi
+(K2.6), and self-hosted SGLang / vLLM / Ollama endpoints.
 
 ```bash
 # NVIDIA NIM
 codewhale auth set --provider nvidia-nim --api-key "YOUR_NVIDIA_API_KEY"
 codewhale --provider nvidia-nim
 
-# AtlasCloud
-codewhale auth set --provider atlascloud --api-key "YOUR_ATLASCLOUD_API_KEY"
-codewhale --provider atlascloud
-
-# Wanjie Ark
-codewhale auth set --provider wanjie-ark --api-key "YOUR_WANJIE_API_KEY"
-codewhale --provider wanjie-ark --model deepseek-reasoner
-
-# OpenRouter
-codewhale auth set --provider openrouter --api-key "YOUR_OPENROUTER_API_KEY"
-codewhale --provider openrouter --model deepseek/deepseek-v4-pro
-
-# Novita
-codewhale auth set --provider novita --api-key "YOUR_NOVITA_API_KEY"
-codewhale --provider novita --model deepseek/deepseek-v4-pro
-
-# Fireworks
-codewhale auth set --provider fireworks --api-key "YOUR_FIREWORKS_API_KEY"
-codewhale --provider fireworks --model deepseek-v4-pro
-
 # Moonshot/Kimi
 codewhale auth set --provider moonshot --api-key "YOUR_MOONSHOT_OR_KIMI_API_KEY"
 codewhale --provider moonshot --model kimi-k2.6
-
-# Generic OpenAI-compatible endpoint
-codewhale auth set --provider openai --api-key "YOUR_OPENAI_COMPATIBLE_API_KEY"
-OPENAI_BASE_URL="https://openai-compatible.example/v4" codewhale --provider openai --model deepseek-v4-pro
 
 # Self-hosted SGLang
 SGLANG_BASE_URL="http://localhost:30000/v1" codewhale --provider sglang --model deepseek-v4-flash
@@ -294,12 +270,12 @@ SGLANG_BASE_URL="http://localhost:30000/v1" codewhale --provider sglang --model 
 VLLM_BASE_URL="http://localhost:8000/v1" codewhale --provider vllm --model deepseek-v4-flash
 
 # Self-hosted Ollama
-ollama pull codewhale-coder:1.3b
-codewhale --provider ollama --model codewhale-coder:1.3b
+ollama pull deepseek-coder:1.3b
+codewhale --provider ollama --model deepseek-coder:1.3b
 ```
 
 Inside the TUI, `/provider` opens the provider picker and `/model` opens the
-local model/thinking picker. `/provider openrouter` and `/model <id>` switch
+local model/thinking picker. `/provider moonshot` and `/model <id>` switch
 directly, while `/models` explicitly fetches and lists live API models when the
 active provider supports model listing.
 
@@ -466,18 +442,12 @@ Key environment variables:
 | `DEEPSEEK_HTTP_HEADERS` | Optional custom model request headers, e.g. `X-Model-Provider-Id=your-model-provider` |
 | `DEEPSEEK_MODEL` | Default model |
 | `DEEPSEEK_STREAM_IDLE_TIMEOUT_SECS` | Stream idle timeout in seconds, default `300`, clamped to `1..=3600` |
-| `DEEPSEEK_PROVIDER` | `codewhale` (default), `nvidia-nim`, `openai`, `atlascloud`, `wanjie-ark`, `openrouter`, `novita`, `fireworks`, `moonshot`, `sglang`, `vllm`, `ollama` |
+| `DEEPSEEK_PROVIDER` | `deepseek` (default), `nvidia-nim`, `moonshot`, `sglang`, `vllm`, `ollama` |
 | `DEEPSEEK_PROFILE` | Config profile name |
 | `DEEPSEEK_MEMORY` | Set to `on` to enable user memory |
 | `DEEPSEEK_ALLOW_INSECURE_HTTP=1` | Allow non-local `http://` API base URLs on trusted networks |
-| `NVIDIA_API_KEY` / `OPENAI_API_KEY` / `ATLASCLOUD_API_KEY` / `WANJIE_ARK_API_KEY` / `OPENROUTER_API_KEY` / `NOVITA_API_KEY` / `FIREWORKS_API_KEY` / `MOONSHOT_API_KEY` / `KIMI_API_KEY` / `SGLANG_API_KEY` / `VLLM_API_KEY` / `OLLAMA_API_KEY` | Provider auth |
-| `OPENAI_BASE_URL` / `OPENAI_MODEL` | Generic OpenAI-compatible endpoint and model ID |
-| `ATLASCLOUD_BASE_URL` / `ATLASCLOUD_MODEL` | AtlasCloud endpoint and model override |
-| `WANJIE_ARK_BASE_URL` / `WANJIE_ARK_MODEL` | Wanjie Ark endpoint and model override |
+| `NVIDIA_API_KEY` / `MOONSHOT_API_KEY` / `KIMI_API_KEY` / `SGLANG_API_KEY` / `VLLM_API_KEY` / `OLLAMA_API_KEY` | Provider auth |
 | `MOONSHOT_BASE_URL` / `KIMI_BASE_URL` / `MOONSHOT_MODEL` / `KIMI_MODEL` | Moonshot/Kimi endpoint and model override |
-| `OPENROUTER_BASE_URL` | OpenRouter endpoint override |
-| `NOVITA_BASE_URL` | Novita endpoint override |
-| `FIREWORKS_BASE_URL` | Fireworks endpoint override |
 | `SGLANG_BASE_URL` | Self-hosted SGLang endpoint |
 | `SGLANG_MODEL` | Self-hosted SGLang model ID |
 | `VLLM_BASE_URL` | Self-hosted vLLM endpoint |

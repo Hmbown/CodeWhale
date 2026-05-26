@@ -198,7 +198,7 @@ The memory file lives entirely on your machine in `~/.deepseek/`.
 It's never uploaded to any cloud service — the TUI only ever
 includes it inline in the system prompt that the LLM provider
 receives, and only when memory is enabled. If you switch providers
-(DeepSeek / NVIDIA NIM / Fireworks / etc.) the same memory file is
+(DeepSeek / NVIDIA NIM / Moonshot / etc.) the same memory file is
 used; the file is provider-agnostic.
 
 The file is per-user, not per-project. If you want project-specific

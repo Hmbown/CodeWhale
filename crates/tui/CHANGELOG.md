@@ -30,6 +30,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **AGENTS.md is now maintainer-local.** The project instructions file no
   longer ships as a tracked repo file; it lives in maintainer-local ignored
   state (#2047).
+- **Supported provider set narrowed.** v0.8.45 ships with DeepSeek (default,
+  on the official endpoint plus the documented NVIDIA NIM escape hatch),
+  Moonshot/Kimi (K2.6 — Kimi OAuth path included), and the self-hosted
+  SGLang, vLLM, and Ollama backends. The generic OpenAI-compatible
+  provider, AtlasCloud, Wanjie Ark, OpenRouter, Novita, and Fireworks
+  surfaces are removed from runtime, pickers, completions, secrets, docs,
+  and examples for this release.
 
 ### Fixed
 
