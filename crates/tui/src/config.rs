@@ -63,6 +63,9 @@ pub const DEFAULT_VLLM_FLASH_MODEL: &str = "deepseek-ai/DeepSeek-V4-Flash";
 pub const DEFAULT_VLLM_BASE_URL: &str = "http://localhost:8000/v1";
 pub const DEFAULT_OLLAMA_MODEL: &str = "deepseek-coder:1.3b";
 pub const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434/v1";
+pub const DEFAULT_XIAOMI_MODEL: &str = "mimo-v2.5-pro";
+pub const DEFAULT_XIAOMI_FLASH_MODEL: &str = "mimo-v2-flash";
+pub const DEFAULT_XIAOMI_BASE_URL: &str = "https://api.xiaomimimo.com/v1";
 /// Legacy `deepseek-cn` provider alias.
 ///
 /// DeepSeek's official API host is the same worldwide. Keep this alias for
@@ -97,6 +100,7 @@ pub enum ApiProvider {
     Sglang,
     Vllm,
     Ollama,
+    Xiaomi,
 }
 
 impl ApiProvider {
@@ -119,6 +123,7 @@ impl ApiProvider {
             "sglang" | "sg-lang" => Some(Self::Sglang),
             "vllm" | "v-llm" => Some(Self::Vllm),
             "ollama" | "ollama-local" => Some(Self::Ollama),
+            "xiaomi" | "mimo" | "xiaomi-mimo" | "xiaomi_mimo" => Some(Self::Xiaomi),
             _ => None,
         }
     }
@@ -139,6 +144,7 @@ impl ApiProvider {
             Self::Sglang => "sglang",
             Self::Vllm => "vllm",
             Self::Ollama => "ollama",
+            Self::Xiaomi => "xiaomi",
         }
     }
 
@@ -159,6 +165,7 @@ impl ApiProvider {
             Self::Sglang => "SGLang",
             Self::Vllm => "vLLM",
             Self::Ollama => "Ollama",
+            Self::Xiaomi => "Xiaomi MiMo",
         }
     }
 
@@ -178,6 +185,7 @@ impl ApiProvider {
             Self::Sglang,
             Self::Vllm,
             Self::Ollama,
+            Self::Xiaomi,
         ]
     }
 }
@@ -266,6 +274,26 @@ pub fn provider_capability(provider: ApiProvider, resolved_model: &str) -> Provi
             context_window: 8192,
             max_output: 4096,
             thinking_supported: false,
+            cache_telemetry_supported: false,
+            request_payload_mode: RequestPayloadMode::ChatCompletions,
+            alias_deprecation: None,
+        };
+    }
+
+    if matches!(provider, ApiProvider::Xiaomi) {
+        let model_lower = resolved_model.to_ascii_lowercase();
+        let is_pro = model_lower.contains("pro");
+        let (context_window, max_output) = if is_pro {
+            (1_000_000, 128_000)
+        } else {
+            (256_000, 64_000)
+        };
+        return ProviderCapability {
+            provider,
+            resolved_model: resolved_model.to_string(),
+            context_window,
+            max_output,
+            thinking_supported: true,
             cache_telemetry_supported: false,
             request_payload_mode: RequestPayloadMode::ChatCompletions,
             alias_deprecation: None,
@@ -452,6 +480,7 @@ pub fn model_completion_names_for_provider(provider: ApiProvider) -> Vec<&'stati
         ApiProvider::Openai | ApiProvider::Atlascloud | ApiProvider::Ollama => {
             OFFICIAL_DEEPSEEK_MODELS.to_vec()
         }
+        ApiProvider::Xiaomi => vec![DEFAULT_XIAOMI_MODEL, DEFAULT_XIAOMI_FLASH_MODEL],
     }
 }
 
@@ -1506,6 +1535,7 @@ impl Config {
             ApiProvider::Sglang => "providers.sglang",
             ApiProvider::Vllm => "providers.vllm",
             ApiProvider::Ollama => "providers.ollama",
+            ApiProvider::Xiaomi => "providers.xiaomi",
             ApiProvider::NvidiaNim => "providers.nvidia_nim",
             ApiProvider::Deepseek | ApiProvider::DeepseekCN => return,
         };
@@ -1648,6 +1678,7 @@ impl Config {
             ApiProvider::Sglang => &providers.sglang,
             ApiProvider::Vllm => &providers.vllm,
             ApiProvider::Ollama => &providers.ollama,
+            ApiProvider::Xiaomi => &providers.xiaomi,
         })
     }
 
@@ -1738,6 +1769,7 @@ impl Config {
             ApiProvider::Sglang => DEFAULT_SGLANG_MODEL,
             ApiProvider::Vllm => DEFAULT_VLLM_MODEL,
             ApiProvider::Ollama => DEFAULT_OLLAMA_MODEL,
+            ApiProvider::Xiaomi => DEFAULT_XIAOMI_MODEL,
         }
         .to_string()
     }
@@ -1769,7 +1801,8 @@ impl Config {
             | ApiProvider::Moonshot
             | ApiProvider::Sglang
             | ApiProvider::Vllm
-            | ApiProvider::Ollama => None,
+            | ApiProvider::Ollama
+            | ApiProvider::Xiaomi => None,
         };
         let base = provider_base.or(root_base).unwrap_or_else(|| {
             match provider {
@@ -1795,6 +1828,7 @@ impl Config {
                 ApiProvider::Sglang => DEFAULT_SGLANG_BASE_URL,
                 ApiProvider::Vllm => DEFAULT_VLLM_BASE_URL,
                 ApiProvider::Ollama => DEFAULT_OLLAMA_BASE_URL,
+                ApiProvider::Xiaomi => DEFAULT_XIAOMI_BASE_URL,
             }
             .to_string()
         });
@@ -1829,6 +1863,7 @@ impl Config {
             ApiProvider::Sglang => "sglang",
             ApiProvider::Vllm => "vllm",
             ApiProvider::Ollama => "ollama",
+            ApiProvider::Xiaomi => "xiaomi",
         };
 
         // 0. DeepSeek compatibility slot. The legacy top-level `api_key`
@@ -1921,6 +1956,10 @@ impl Config {
                  set MOONSHOT_API_KEY/KIMI_API_KEY, or add [providers.moonshot] api_key. \
                  For a Kimi Code plan key, set [providers.moonshot] base_url = \
                  \"https://api.kimi.com/coding/v1\" and model = \"kimi-for-coding\"."
+            ),
+            ApiProvider::Xiaomi => anyhow::bail!(
+                "Xiaomi MiMo API key not found. Run 'codewhale auth set --provider xiaomi', \
+                 set MIMO_API_KEY, or add [providers.xiaomi] api_key in ~/.deepseek/config.toml."
             ),
             // Self-hosted deployments commonly run without auth on localhost.
             // Return an empty key and let the client omit the Authorization header.
@@ -2545,6 +2584,13 @@ fn apply_env_overrides(config: &mut Config) {
                     .ollama
                     .base_url = Some(value);
             }
+            ApiProvider::Xiaomi => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .xiaomi
+                    .base_url = Some(value);
+            }
             ApiProvider::Atlascloud => {
                 config
                     .providers
@@ -2687,6 +2733,7 @@ fn apply_env_overrides(config: &mut Config) {
             ApiProvider::Sglang => &mut providers.sglang,
             ApiProvider::Vllm => &mut providers.vllm,
             ApiProvider::Ollama => &mut providers.ollama,
+            ApiProvider::Xiaomi => &mut providers.xiaomi,
         };
         let mut provider_headers = entry.http_headers.clone().unwrap_or_default();
         provider_headers.extend(headers);
@@ -2714,6 +2761,21 @@ fn apply_env_overrides(config: &mut Config) {
     }
     if matches!(config.api_provider(), ApiProvider::Ollama)
         && let Ok(value) = std::env::var("OLLAMA_MODEL")
+    {
+        config.default_text_model = Some(value);
+    }
+    if matches!(config.api_provider(), ApiProvider::Xiaomi)
+        && let Ok(value) = std::env::var("MIMO_BASE_URL")
+        && !value.trim().is_empty()
+    {
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .xiaomi
+            .base_url = Some(value);
+    }
+    if matches!(config.api_provider(), ApiProvider::Xiaomi)
+        && let Ok(value) = std::env::var("MIMO_MODEL")
     {
         config.default_text_model = Some(value);
     }
@@ -2791,6 +2853,7 @@ fn apply_env_overrides(config: &mut Config) {
                 ApiProvider::Sglang => &mut providers.sglang,
                 ApiProvider::Vllm => &mut providers.vllm,
                 ApiProvider::Ollama => &mut providers.ollama,
+                ApiProvider::Xiaomi => &mut providers.xiaomi,
             };
             entry.model = Some(value);
         }
@@ -3051,6 +3114,7 @@ pub(crate) fn provider_passes_model_through(provider: ApiProvider) -> bool {
             | ApiProvider::WanjieArk
             | ApiProvider::Moonshot
             | ApiProvider::Ollama
+            | ApiProvider::Xiaomi
     )
 }
 
@@ -3076,6 +3140,7 @@ fn default_base_url_for_provider(provider: ApiProvider) -> &'static str {
         ApiProvider::Sglang => DEFAULT_SGLANG_BASE_URL,
         ApiProvider::Vllm => DEFAULT_VLLM_BASE_URL,
         ApiProvider::Ollama => DEFAULT_OLLAMA_BASE_URL,
+        ApiProvider::Xiaomi => DEFAULT_XIAOMI_BASE_URL,
     }
 }
 
@@ -3758,6 +3823,7 @@ pub fn active_provider_has_env_api_key(config: &Config) -> bool {
         ApiProvider::Sglang => std::env::var("SGLANG_API_KEY").is_ok_and(|k| !k.trim().is_empty()),
         ApiProvider::Vllm => std::env::var("VLLM_API_KEY").is_ok_and(|k| !k.trim().is_empty()),
         ApiProvider::Ollama => std::env::var("OLLAMA_API_KEY").is_ok_and(|k| !k.trim().is_empty()),
+        ApiProvider::Xiaomi => std::env::var("MIMO_API_KEY").is_ok_and(|k| !k.trim().is_empty()),
     }
 }
 
@@ -3784,6 +3850,7 @@ pub fn has_api_key_for(config: &Config, provider: ApiProvider) -> bool {
         ApiProvider::Sglang => "SGLANG_API_KEY",
         ApiProvider::Vllm => "VLLM_API_KEY",
         ApiProvider::Ollama => "OLLAMA_API_KEY",
+        ApiProvider::Xiaomi => "MIMO_API_KEY",
     };
     if std::env::var(env_var).is_ok_and(|k| !k.trim().is_empty()) {
         return true;
@@ -3878,6 +3945,7 @@ pub fn save_api_key_for(provider: ApiProvider, api_key: &str) -> Result<PathBuf>
         ApiProvider::Sglang => "providers.sglang",
         ApiProvider::Vllm => "providers.vllm",
         ApiProvider::Ollama => "providers.ollama",
+        ApiProvider::Xiaomi => "providers.xiaomi",
     };
 
     // Parse existing TOML (or start fresh) so we can edit the right table
@@ -3915,6 +3983,7 @@ pub fn save_api_key_for(provider: ApiProvider, api_key: &str) -> Result<PathBuf>
         ApiProvider::Sglang => "sglang",
         ApiProvider::Vllm => "vllm",
         ApiProvider::Ollama => "ollama",
+        ApiProvider::Xiaomi => "xiaomi",
     };
     let entry = providers
         .entry(key_inside.to_string())
@@ -4004,6 +4073,7 @@ fn provider_config_key(provider: ApiProvider) -> Result<&'static str> {
         ApiProvider::Sglang => Ok("sglang"),
         ApiProvider::Vllm => Ok("vllm"),
         ApiProvider::Ollama => Ok("ollama"),
+        ApiProvider::Xiaomi => Ok("xiaomi"),
     }
 }
 

@@ -537,6 +537,7 @@ pub fn env_for(name: &str) -> Option<String> {
         "sglang" | "sg-lang" => &["SGLANG_API_KEY"],
         "vllm" | "v-llm" => &["VLLM_API_KEY"],
         "ollama" | "ollama-local" => &["OLLAMA_API_KEY"],
+        "xiaomi" | "mimo" | "xiaomi-mimo" => &["MIMO_API_KEY"],
         "openai" => &["OPENAI_API_KEY"],
         "atlascloud" | "atlas-cloud" | "atlas_cloud" | "atlas" => &["ATLASCLOUD_API_KEY"],
         "wanjie" | "wanjie-ark" | "wanjie_ark" | "ark-wanjie" | "ark_wanjie" | "wanjieark"

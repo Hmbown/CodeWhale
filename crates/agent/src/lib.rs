@@ -213,6 +213,25 @@ impl Default for ModelRegistry {
                 supports_tools: true,
                 supports_reasoning: false,
             },
+            ModelInfo {
+                id: "mimo-v2.5-pro".to_string(),
+                provider: ProviderKind::Xiaomi,
+                aliases: vec![
+                    "mimo-pro".to_string(),
+                    "mimo-v2-pro".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "mimo-v2-flash".to_string(),
+                provider: ProviderKind::Xiaomi,
+                aliases: vec![
+                    "mimo-flash".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
         ];
         Self::new(models)
     }
