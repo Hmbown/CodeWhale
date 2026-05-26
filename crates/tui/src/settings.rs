@@ -1317,19 +1317,27 @@ mod tests {
         let prev_tmux = std::env::var_os("TMUX");
         let prev_sty = std::env::var_os("STY");
         let prev_term_program = std::env::var_os("TERM_PROGRAM");
+        let prev_ssh_client = std::env::var_os("SSH_CLIENT");
+        let prev_ssh_tty = std::env::var_os("SSH_TTY");
+        let prev_tilix_id = std::env::var_os("TILIX_ID");
+        let prev_terminator_uuid = std::env::var_os("TERMINATOR_UUID");
 
         // The test is about NO_ANIMATIONS only. On Windows CI, an unmarked
         // console host now independently enables low_motion, so mark the host
         // as non-legacy while checking falsy spellings.
         // Clear multiplexer markers for the same reason: they also force
         // low_motion independently of NO_ANIMATIONS.
-        // Clear TERM_PROGRAM as they also force low_motion in vscode, ghostty
-        // and Termius.
+        // Clear TERM_PROGRAM, SSH, and other terminal-specific variables as they
+        // also force low_motion independently of NO_ANIMATIONS.
         // SAFETY: serialised by the guard.
         unsafe {
             std::env::remove_var("TMUX");
             std::env::remove_var("STY");
             std::env::remove_var("TERM_PROGRAM");
+            std::env::remove_var("SSH_CLIENT");
+            std::env::remove_var("SSH_TTY");
+            std::env::remove_var("TILIX_ID");
+            std::env::remove_var("TERMINATOR_UUID");
         }
         #[cfg(windows)]
         unsafe {
@@ -1371,6 +1379,22 @@ mod tests {
             match prev_term_program {
                 Some(v) => std::env::set_var("TERM_PROGRAM", v),
                 None => std::env::remove_var("TERM_PROGRAM"),
+            }
+            match prev_ssh_client {
+                Some(v) => std::env::set_var("SSH_CLIENT", v),
+                None => std::env::remove_var("SSH_CLIENT"),
+            }
+            match prev_ssh_tty {
+                Some(v) => std::env::set_var("SSH_TTY", v),
+                None => std::env::remove_var("SSH_TTY"),
+            }
+            match prev_tilix_id {
+                Some(v) => std::env::set_var("TILIX_ID", v),
+                None => std::env::remove_var("TILIX_ID"),
+            }
+            match prev_terminator_uuid {
+                Some(v) => std::env::set_var("TERMINATOR_UUID", v),
+                None => std::env::remove_var("TERMINATOR_UUID"),
             }
         }
     }
