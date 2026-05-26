@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Composer text selection with copy/cut.** Mouse drag and Shift+Arrow
+  selection in the composer input box, with Ctrl+C copy and Ctrl+X cut
+  support. Home, End, Ctrl+A, and Ctrl+E now clear the selection (#2228).
+- **Copy transcript without visual-wrap newlines.** Transcript copy now
+  strips visual-wrap column line breaks from paragraphs, producing clean
+  text for pasting into editors or prompts (#1906).
+- **Configurable base URL in /config view.** The `/config` panel now
+  displays the effective DeepSeek base URL (#1967).
+- **CNB mirror support for China-friendly downloads.** Added
+  `CODEWHALE_RELEASE_BASE_URL` and `CODEWHALE_USE_CNB_MIRROR` to
+  both npm install scripts and Rust self-updater (#2222).
+- **[✓] completion markers.** Checklist, plan, and tool completion
+  markers now render as `[✓]` instead of `[x]` (#1935).
+
+### Changed
+
+- **Project context loading now logs the source file.** (#2227)
+- **macOS onboarding and empty-state layout pinned to top** instead
+  of vertically centered (#1837).
+- **State-root migration continues.** Migrated 15+ storage paths to
+  prefer `~/.codewhale` with `~/.deepseek` fallback (#2231).
+- **READMEs updated for the CodeWhale rename.** All three READMEs now
+  reference canonical `~/.codewhale` paths.
+
+### Fixed
+
+- **Deadlock when spawning multiple concurrent sub-agents.** Replaced
+  `RwLock`-based serialisation with a `Semaphore(1)` (#1856).
+- **Steered/queued messages now render in correct transcript order.**
+  `steer_user_message` now flushes the active cell before inserting (#2225).
+- **Session save test updated for managed sessions directory.** (#2223).
+- **Loop guard reports Failed on halt.** Turn outcome correctly reports
+  `Failed` instead of `Completed` when the loop guard trips (#1859).
+- **DEEPSEEK_YOLO env honoured on startup.** The `--yolo` flag is now
+  correctly merged with the `DEEPSEEK_YOLO` environment variable (#1870).
+
+### Community
+
+Thanks to contributors whose PRs landed in this release:
+**@Fire-dtx** (#1856),
+**@imkingjh999** (#2228),
+**@harvey2011888** (#1859),
+**@victorcheng2333** (#1870),
+**@IIzzaya** (#1935),
+**@PurplePulse** (#1837),
+**@cyq1017** (#1967),
+**@knqiufan** (#1906).
+
 ## [0.8.46] - 2026-05-26
 
 ### Added
