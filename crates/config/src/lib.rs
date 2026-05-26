@@ -1793,7 +1793,9 @@ impl EnvRuntimeOverrides {
                 .and_then(|v| ProviderKind::parse(&v)),
             model: std::env::var("CODEWHALE_MODEL")
                 .or_else(|_| std::env::var("DEEPSEEK_MODEL"))
-                .ok(),
+                .or_else(|_| std::env::var("DEEPSEEK_DEFAULT_TEXT_MODEL"))
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
             wanjie_ark_model: std::env::var("WANJIE_ARK_MODEL")
                 .or_else(|_| std::env::var("WANJIE_MODEL"))
                 .or_else(|_| std::env::var("WANJIE_MAAS_MODEL"))
@@ -1925,6 +1927,7 @@ mod tests {
         deepseek_base_url: Option<OsString>,
         deepseek_http_headers: Option<OsString>,
         deepseek_model: Option<OsString>,
+        deepseek_default_text_model: Option<OsString>,
         deepseek_provider: Option<OsString>,
         deepseek_auth_mode: Option<OsString>,
         nvidia_api_key: Option<OsString>,
@@ -1970,6 +1973,7 @@ mod tests {
                 deepseek_base_url: env::var_os("DEEPSEEK_BASE_URL"),
                 deepseek_http_headers: env::var_os("DEEPSEEK_HTTP_HEADERS"),
                 deepseek_model: env::var_os("DEEPSEEK_MODEL"),
+                deepseek_default_text_model: env::var_os("DEEPSEEK_DEFAULT_TEXT_MODEL"),
                 deepseek_provider: env::var_os("DEEPSEEK_PROVIDER"),
                 deepseek_auth_mode: env::var_os("DEEPSEEK_AUTH_MODE"),
                 codewhale_provider: env::var_os("CODEWHALE_PROVIDER"),
@@ -2013,6 +2017,7 @@ mod tests {
                 env::remove_var("DEEPSEEK_BASE_URL");
                 env::remove_var("DEEPSEEK_HTTP_HEADERS");
                 env::remove_var("DEEPSEEK_MODEL");
+                env::remove_var("DEEPSEEK_DEFAULT_TEXT_MODEL");
                 env::remove_var("DEEPSEEK_PROVIDER");
                 env::remove_var("DEEPSEEK_AUTH_MODE");
                 env::remove_var("CODEWHALE_PROVIDER");
@@ -2070,6 +2075,10 @@ mod tests {
                 Self::restore_var("DEEPSEEK_BASE_URL", self.deepseek_base_url.take());
                 Self::restore_var("DEEPSEEK_HTTP_HEADERS", self.deepseek_http_headers.take());
                 Self::restore_var("DEEPSEEK_MODEL", self.deepseek_model.take());
+                Self::restore_var(
+                    "DEEPSEEK_DEFAULT_TEXT_MODEL",
+                    self.deepseek_default_text_model.take(),
+                );
                 Self::restore_var("DEEPSEEK_PROVIDER", self.deepseek_provider.take());
                 Self::restore_var("DEEPSEEK_AUTH_MODE", self.deepseek_auth_mode.take());
                 Self::restore_var("CODEWHALE_PROVIDER", self.codewhale_provider.take());
@@ -2881,7 +2890,24 @@ mod tests {
         // Safety: test-only env mutation guarded by env_lock().
         unsafe {
             env::set_var("CODEWHALE_PROVIDER", "moonshot");
-            env::set_var("CODEWHALE_MODEL", "kimi-k2.6");
+            env::set_var("CODEWHALE_MODEL", "custom-kimi-test-model");
+        }
+        let config = ConfigToml::default();
+
+        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::Moonshot);
+        assert_eq!(resolved.model, "custom-kimi-test-model");
+    }
+
+    #[test]
+    fn blank_codewhale_model_env_alias_does_not_override_default_for_active_provider() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        // Safety: test-only env mutation guarded by env_lock().
+        unsafe {
+            env::set_var("CODEWHALE_PROVIDER", "moonshot");
+            env::set_var("CODEWHALE_MODEL", "   ");
         }
         let config = ConfigToml::default();
 
@@ -2889,6 +2915,23 @@ mod tests {
 
         assert_eq!(resolved.provider, ProviderKind::Moonshot);
         assert_eq!(resolved.model, DEFAULT_MOONSHOT_MODEL);
+    }
+
+    #[test]
+    fn deepseek_default_text_model_legacy_alias_still_overrides_active_provider_model() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        // Safety: test-only env mutation guarded by env_lock().
+        unsafe {
+            env::set_var("CODEWHALE_PROVIDER", "moonshot");
+            env::set_var("DEEPSEEK_DEFAULT_TEXT_MODEL", "legacy-env-model");
+        }
+        let config = ConfigToml::default();
+
+        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::Moonshot);
+        assert_eq!(resolved.model, "legacy-env-model");
     }
 
     #[test]

@@ -202,7 +202,7 @@ If a profile is selected but missing, codewhale exits with an error listing avai
 Most runtime environment variables override config values. API-key variables are
 fallbacks after saved config and keyring credentials.
 
-The four user-facing slots — provider, model, base URL — expose `CODEWHALE_*`
+The three user-facing slots — provider, model, base URL — expose `CODEWHALE_*`
 aliases. When both forms are set the `CODEWHALE_*` value wins; the
 `DEEPSEEK_*` form is kept for older shells:
 

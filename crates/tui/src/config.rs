@@ -2272,15 +2272,21 @@ fn default_memory_path() -> Option<PathBuf> {
 // === Environment Overrides ===
 
 /// Read a CodeWhale env var, preferring the `CODEWHALE_*` form over the
-/// legacy `DEEPSEEK_*` form. Used for the four user-facing slots (provider,
-/// model, base URL, API key) so external setup can switch to the
-/// product-scoped names without breaking shells that still export the
-/// legacy ones.
+/// legacy `DEEPSEEK_*` form. Empty values are ignored so a blank shell export
+/// does not erase configured provider settings.
 fn codewhale_env_var(
     codewhale_name: &str,
     legacy_name: &str,
 ) -> Result<String, std::env::VarError> {
-    std::env::var(codewhale_name).or_else(|_| std::env::var(legacy_name))
+    std::env::var(codewhale_name)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            std::env::var(legacy_name)
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
+        .ok_or(std::env::VarError::NotPresent)
 }
 
 fn apply_env_overrides(config: &mut Config) {
@@ -2570,9 +2576,13 @@ fn apply_env_overrides(config: &mut Config) {
             .moonshot
             .model = Some(value);
     }
-    if let Ok(value) = std::env::var("CODEWHALE_MODEL")
-        .or_else(|_| std::env::var("DEEPSEEK_MODEL"))
-        .or_else(|_| std::env::var("DEEPSEEK_DEFAULT_TEXT_MODEL"))
+    if let Some(value) = codewhale_env_var("CODEWHALE_MODEL", "DEEPSEEK_MODEL")
+        .ok()
+        .or_else(|| {
+            std::env::var("DEEPSEEK_DEFAULT_TEXT_MODEL")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
     {
         // The CLI `--model` handoff always sets DEEPSEEK_MODEL, never the
         // provider-specific *_MODEL var. The legacy root `default_text_model`
