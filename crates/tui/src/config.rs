@@ -500,9 +500,9 @@ pub struct TuiConfig {
     /// - Unset (default) — fall back to the `[notifications]` defaults.
     pub notification_condition: Option<NotificationCondition>,
     /// When `true`, plain Up/Down on an empty composer scroll the
-    /// transcript instead of recalling input history.  Useful for
-    /// terminals that map trackpad gestures to arrow keys.  Default:
-    /// `false` (plain arrows always navigate input history, #1117).
+    /// transcript instead of recalling input history. Useful for
+    /// terminals that map mouse-wheel gestures to arrow keys. Default:
+    /// `true` only when mouse capture is off; otherwise `false`.
     #[serde(default)]
     pub composer_arrows_scroll: Option<bool>,
 }

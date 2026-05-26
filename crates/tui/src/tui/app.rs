@@ -1580,8 +1580,8 @@ fn default_composer_arrows_scroll(use_mouse_capture: bool) -> bool {
     default_composer_arrows_scroll_for_platform(use_mouse_capture, cfg!(windows))
 }
 
-fn default_composer_arrows_scroll_for_platform(use_mouse_capture: bool, is_windows: bool) -> bool {
-    is_windows || !use_mouse_capture
+fn default_composer_arrows_scroll_for_platform(use_mouse_capture: bool, _is_windows: bool) -> bool {
+    !use_mouse_capture
 }
 
 impl App {
@@ -4754,8 +4754,13 @@ mod tests {
     }
 
     #[test]
-    fn composer_arrows_scroll_default_is_true_on_windows_even_with_mouse_capture() {
-        assert!(default_composer_arrows_scroll_for_platform(true, true));
+    fn composer_arrows_scroll_default_is_false_with_mouse_capture_on_windows() {
+        assert!(!default_composer_arrows_scroll_for_platform(true, true));
+    }
+
+    #[test]
+    fn composer_arrows_scroll_default_is_true_without_mouse_capture_on_windows() {
+        assert!(default_composer_arrows_scroll_for_platform(false, true));
     }
 
     #[test]
