@@ -12,8 +12,8 @@ If you just want the short version, see the
 
 ## 1. Supported platforms
 
-`codewhale-tui` ships prebuilt binaries for these
-platform/architecture combinations from v0.8.8 onward:
+CodeWhale ships matched `codewhale` and `codewhale-tui` prebuilt binaries for
+these platform/architecture combinations from v0.8.8 onward:
 
 | Platform     | Architecture | npm install | `cargo install` | GitHub release asset                                  |
 | ------------ | ------------ | :---------: | :-------------: | ----------------------------------------------------- |
@@ -49,7 +49,7 @@ systems such as Alpine should use [Build from source](#7-build-from-source).
 
 Official release binaries are published only from
 `https://github.com/Hmbown/CodeWhale/releases` and the npm package named
-`codewhale-tui`. Do not install release assets from look-alike repositories,
+`codewhale`. Do not install release assets from look-alike repositories,
 archives, or search-result mirrors unless you deliberately trust that mirror.
 
 Every GitHub release includes `codewhale-artifacts-sha256.txt`. If you download

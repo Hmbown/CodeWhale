@@ -7,11 +7,12 @@
 
 ## Install
 
-`codewhale` is distributed as Rust binaries: the dispatcher command
-(`codewhale`) and the companion TUI runtime (`codewhale-tui`). Pick whichever
-install path you already use; they all put the same commands on your `PATH`.
-The npm package is an installer/wrapper for the release binaries, not the
-agent runtime itself.
+`codewhale` installs as a matched pair of self-contained Rust release binaries:
+the `codewhale` dispatcher command and the sibling `codewhale-tui` runtime it
+launches for interactive sessions. npm, Homebrew, and Docker install both for
+you; Cargo and manual installs must put both binaries in the same directory
+(normally a directory on your `PATH`). The npm package is only an
+installer/wrapper for those release binaries; the agent does not run on Node.
 
 ```bash
 # 1. npm — easiest if you already use Node. The package downloads the
@@ -25,12 +26,14 @@ cargo install codewhale-cli --locked   # `codewhale` (entry point)
 cargo install codewhale-tui     --locked   # `codewhale-tui` (TUI binary)
 
 # 3. Homebrew — macOS package manager.
+#    The tap/formula name is legacy; it installs codewhale and codewhale-tui.
 brew tap Hmbown/deepseek-tui
 brew install deepseek-tui
 
-# 4. Direct download — no package manager or toolchain.
+# 4. Direct download — platform archive from GitHub Releases.
 #    https://github.com/Hmbown/CodeWhale/releases
-#    Prebuilt for Linux x64/ARM64, macOS x64/ARM64, Windows x64.
+#    Archives include both codewhale and codewhale-tui plus an install script.
+#    Individual binaries are also attached for scripts; keep the pair together.
 
 # 5. Docker — prebuilt release image.
 docker volume create codewhale-home
@@ -84,83 +87,10 @@ CodeWhale is that harness, built around DeepSeek V4 and guided by three ideas:
 | **Clear jurisdiction** | A written Constitution with nine tiers of authority. User intent outranks stale instructions. Verification outranks confidence. |
 | **Recursive improvement** | V4 helped write the harness. As the harness improves, V4 becomes more effective — and helps improve the harness further. Each turn starts stronger. |
 
-It's open source, self-contained in a single binary, and built for the terminal.
+It's open source, terminal-native, and packaged as a matched `codewhale` /
+`codewhale-tui` Rust binary pair.
 
-
-## Install
-
-`codewhale` is distributed as Rust binaries: the dispatcher command
-(`codewhale`) and the companion TUI runtime (`codewhale-tui`). Pick whichever
-install path you already use; they all put the same commands on your `PATH`.
-The npm package is an installer/wrapper for the release binaries, not the
-agent runtime itself.
-
-```bash
-# 1. npm — easiest if you already use Node. The package downloads the
-#    matching prebuilt Rust binaries from GitHub Releases.
-npm install -g codewhale
-
-# 2. Cargo — no Node needed. Requires Rust 1.88+ (the crates use the
-#    2024 edition; older toolchains fail with "feature `edition2024` is
-#    required"). Run `rustup update` first, or use a non-Cargo path below.
-cargo install codewhale-cli --locked   # `codewhale` (entry point)
-cargo install codewhale-tui     --locked   # `codewhale-tui` (TUI binary)
-
-# 3. Homebrew — macOS package manager.
-brew tap Hmbown/deepseek-tui
-brew install deepseek-tui
-
-# 4. Direct download — no package manager or toolchain.
-#    https://github.com/Hmbown/CodeWhale/releases
-#    Prebuilt for Linux x64/ARM64, macOS x64/ARM64, Windows x64.
-
-# 5. Docker — prebuilt release image.
-docker volume create codewhale-home
-docker run --rm -it \
-  -e DEEPSEEK_API_KEY="$DEEPSEEK_API_KEY" \
-  -v codewhale-home:/home/codewhale/.deepseek \
-  -v "$PWD:/workspace" \
-  -w /workspace \
-  ghcr.io/hmbown/codewhale:latest
-```
-
-> In mainland China, speed up the npm path with
-> `--registry=https://registry.npmmirror.com`, or use the
-> [Cargo mirror](#china--mirror-friendly-installation) below.
->
-> Download safety: official release binaries live under
-> `https://github.com/Hmbown/CodeWhale/releases`. For manual downloads,
-> verify the SHA-256 manifest and avoid look-alike repositories or search-result
-> mirrors. See [download safety and checksums](docs/INSTALL.md#2-download-safety-and-checksums).
-
-Already installed? Use the updater that matches the install path:
-
-```bash
-codewhale update                         # release-binary updater
-npm install -g codewhale@latest      # npm wrapper
-brew update && brew upgrade deepseek-tui
-cargo install codewhale-cli --locked --force
-cargo install codewhale-tui     --locked --force
-```
-
-[![CI](https://github.com/Hmbown/CodeWhale/actions/workflows/ci.yml/badge.svg)](https://github.com/Hmbown/CodeWhale/actions/workflows/ci.yml)
-[![npm](https://img.shields.io/npm/v/codewhale)](https://www.npmjs.com/package/codewhale)
-[![crates.io](https://img.shields.io/crates/v/codewhale-cli?label=crates.io)](https://crates.io/crates/codewhale-cli)
-[DeepWiki project index](https://deepwiki.com/Hmbown/CodeWhale)
-
-![codewhale screenshot](assets/screenshot.png)
-
----
-
-## What Is It?
-
-A model answers a question. An agent finishes a task. The difference is the harness — the operating environment that surrounds the model with rules, tools, evidence, and feedback loops.
-
-CodeWhale is that harness, built around DeepSeek V4 Pro and Flash. It started as a personal tool because the maintainer got tired of models losing track mid-task, obeying stale instructions over the user's current request, or giving up when a command failed. What emerged was a system that keeps the model oriented: a constitutional prompt hierarchy, structured trust boundaries, parallel sub-agents, prefix-cache-aware context management, and verification beats that give the model enough signal to self-correct.
-
-DeepSeek V4 helped write parts of this harness. That matters because it means CodeWhale is already the most effective way to use V4 — and as V4 improves, the harness improves with it. Each turn leaves behind better prompts, better rules, and better handoffs. The next turn starts from a stronger position.
-
-### How the harness works
+## How the Harness Works
 
 Agentic models deal with conflicting information at scale: user intent,
 project rules, system defaults, tool output, and stale memory all compete
@@ -244,7 +174,7 @@ codewhale --version
 codewhale --model auto
 ```
 
-Prebuilt binaries are published for **Linux x64**, **Linux ARM64** (v0.8.8+), **macOS x64**, **macOS ARM64**, and **Windows x64**. For other targets (musl, riscv64, FreeBSD, etc.), see [Install from source](#install-from-source) or [docs/INSTALL.md](docs/INSTALL.md).
+Prebuilt binary pairs and platform archives are published for **Linux x64**, **Linux ARM64** (v0.8.8+), **macOS x64**, **macOS ARM64**, and **Windows x64**. For other targets (musl, riscv64, FreeBSD, etc.), see [Install from source](#install-from-source) or [docs/INSTALL.md](docs/INSTALL.md).
 
 On first launch you'll be prompted for your [DeepSeek API key](https://platform.deepseek.com/api_keys). The key is saved to `~/.deepseek/config.toml` so it works from any directory without OS credential prompts.
 
@@ -330,7 +260,7 @@ version with `codewhale --version`:
 
 ```bash
 scoop update
-scoop install deepseek-tui
+scoop install codewhale
 codewhale --version
 ```
 
