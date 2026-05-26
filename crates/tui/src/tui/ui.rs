@@ -106,6 +106,8 @@ use crate::tui::views::subagent_view_agents;
 use crate::tui::vim_mode;
 use crate::tui::workspace_context;
 
+use super::key_actions;
+
 use super::app::{
     App, AppAction, AppMode, OnboardingState, QueuedMessage, ReasoningEffort, SidebarFocus,
     StatusToastLevel, SubmitDisposition, TaskPanelEntry, TuiOptions,
@@ -2772,47 +2774,9 @@ async fn run_event_loop(
                 continue;
             }
 
-            // File-tree navigation: intercept keys when the file-tree pane is
-            // visible so Up/Down/Enter/Esc operate on the tree rather than
-            // falling through to composer or modal handlers.
-            if app.file_tree_visible {
-                match key.code {
-                    KeyCode::Up => {
-                        if let Some(state) = app.file_tree.as_mut() {
-                            state.cursor_up();
-                        }
-                        app.needs_redraw = true;
-                        continue;
-                    }
-                    KeyCode::Down => {
-                        if let Some(state) = app.file_tree.as_mut() {
-                            state.cursor_down();
-                        }
-                        app.needs_redraw = true;
-                        continue;
-                    }
-                    KeyCode::Enter => {
-                        if let Some(state) = app.file_tree.as_mut() {
-                            if let Some(rel_path) = state.activate() {
-                                // Insert @path into the composer.
-                                let path_str = rel_path.to_string_lossy().to_string();
-                                app.status_message = Some(format!("Attached @{path_str}"));
-                                app.insert_str(&format!("@{path_str} "));
-                            } else {
-                                // Directory was expanded/collapsed; rebuild.
-                                app.needs_redraw = true;
-                            }
-                        }
-                        continue;
-                    }
-                    KeyCode::Esc => {
-                        app.file_tree = None;
-                        app.status_message = Some("File tree closed".to_string());
-                        app.needs_redraw = true;
-                        continue;
-                    }
-                    _ => {}
-                }
+            // File-tree navigation: delegated to key_actions module.
+            if key_actions::handle_file_tree_key(app, &key) {
+                continue;
             }
 
             if app.is_history_search_active() {
