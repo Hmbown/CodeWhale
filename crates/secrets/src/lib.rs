@@ -526,27 +526,16 @@ impl Secrets {
 pub fn env_for(name: &str) -> Option<String> {
     let candidates: &[&str] = match name.to_ascii_lowercase().as_str() {
         "deepseek" => &["DEEPSEEK_API_KEY"],
-        "openrouter" => &["OPENROUTER_API_KEY"],
-        "novita" => &["NOVITA_API_KEY"],
         // NVIDIA NIM falls back to `DEEPSEEK_API_KEY` last because the
         // catalog endpoint accepts the same DeepSeek-issued key when no
         // dedicated NVIDIA token is set. This mirrors pre-v0.7 behaviour.
         "nvidia" | "nvidia-nim" | "nvidia_nim" | "nim" => {
             &["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY", "DEEPSEEK_API_KEY"]
         }
-        "fireworks" | "fireworks-ai" => &["FIREWORKS_API_KEY"],
         "moonshot" | "moonshot-ai" | "kimi" | "kimi-k2" => &["MOONSHOT_API_KEY", "KIMI_API_KEY"],
         "sglang" | "sg-lang" => &["SGLANG_API_KEY"],
         "vllm" | "v-llm" => &["VLLM_API_KEY"],
         "ollama" | "ollama-local" => &["OLLAMA_API_KEY"],
-        "openai" => &["OPENAI_API_KEY"],
-        "atlascloud" | "atlas-cloud" | "atlas_cloud" | "atlas" => &["ATLASCLOUD_API_KEY"],
-        "wanjie" | "wanjie-ark" | "wanjie_ark" | "ark-wanjie" | "ark_wanjie" | "wanjieark"
-        | "wanjie-maas" | "wanjie_maas" | "wanjiemaas" => &[
-            "WANJIE_ARK_API_KEY",
-            "WANJIE_API_KEY",
-            "WANJIE_MAAS_API_KEY",
-        ],
         _ => return None,
     };
     for var in candidates {
@@ -576,19 +565,13 @@ mod tests {
     fn clear_known_envs() {
         for var in [
             "DEEPSEEK_API_KEY",
-            "OPENROUTER_API_KEY",
-            "NOVITA_API_KEY",
             "NVIDIA_API_KEY",
             "NVIDIA_NIM_API_KEY",
-            "FIREWORKS_API_KEY",
+            "MOONSHOT_API_KEY",
+            "KIMI_API_KEY",
             "SGLANG_API_KEY",
             "VLLM_API_KEY",
             "OLLAMA_API_KEY",
-            "OPENAI_API_KEY",
-            "ATLASCLOUD_API_KEY",
-            "WANJIE_ARK_API_KEY",
-            "WANJIE_API_KEY",
-            "WANJIE_MAAS_API_KEY",
             SECRET_BACKEND_ENV,
         ] {
             // Safety: tests serialise on env_lock(); the broader
@@ -741,42 +724,30 @@ mod tests {
     }
 
     #[test]
-    fn atlascloud_env_aliases_resolve() {
+    fn moonshot_env_aliases_resolve() {
         let _guard = env_lock();
         clear_known_envs();
-        unsafe { std::env::set_var("ATLASCLOUD_API_KEY", "atlas-key") };
+        // Safety: env mutation guarded by env_lock().
+        unsafe { std::env::set_var("MOONSHOT_API_KEY", "kimi-key") };
 
-        assert_eq!(env_for("atlascloud").as_deref(), Some("atlas-key"));
-        assert_eq!(env_for("atlas").as_deref(), Some("atlas-key"));
-        assert_eq!(env_for("atlas-cloud").as_deref(), Some("atlas-key"));
+        assert_eq!(env_for("moonshot").as_deref(), Some("kimi-key"));
+        assert_eq!(env_for("moonshot-ai").as_deref(), Some("kimi-key"));
+        assert_eq!(env_for("kimi").as_deref(), Some("kimi-key"));
+        assert_eq!(env_for("kimi-k2").as_deref(), Some("kimi-key"));
 
         clear_known_envs();
     }
 
     #[test]
-    fn wanjie_ark_env_aliases_resolve() {
+    fn dropped_providers_return_none_from_env_for() {
         let _guard = env_lock();
         clear_known_envs();
-        unsafe { std::env::set_var("WANJIE_API_KEY", "wanjie-key") };
-
-        assert_eq!(env_for("wanjie-ark").as_deref(), Some("wanjie-key"));
-        assert_eq!(env_for("ark_wanjie").as_deref(), Some("wanjie-key"));
-        assert_eq!(env_for("wanjie-maas").as_deref(), Some("wanjie-key"));
-
-        clear_known_envs();
-    }
-
-    #[test]
-    fn fireworks_env_aliases_resolve() {
-        let _lock = env_lock();
-        clear_known_envs();
-        // Safety: env mutation guarded by env_lock().
-        unsafe { std::env::set_var("FIREWORKS_API_KEY", "fw-key") };
-
-        assert_eq!(env_for("fireworks").as_deref(), Some("fw-key"));
-        assert_eq!(env_for("fireworks-ai").as_deref(), Some("fw-key"));
-        // Safety: env mutation guarded by env_lock().
-        unsafe { std::env::remove_var("FIREWORKS_API_KEY") };
+        assert!(env_for("openai").is_none());
+        assert!(env_for("openrouter").is_none());
+        assert!(env_for("novita").is_none());
+        assert!(env_for("fireworks").is_none());
+        assert!(env_for("atlascloud").is_none());
+        assert!(env_for("wanjie-ark").is_none());
     }
 
     #[test]
