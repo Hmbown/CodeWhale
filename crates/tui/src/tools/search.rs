@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 /// Maximum number of results to return to avoid overwhelming output
@@ -20,6 +21,11 @@ const MAX_RESULTS: usize = 100;
 
 /// Maximum file size to search (skip large binaries)
 const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024; // 10MB
+
+/// Hard cap on a single grep_files run. The directory walk plus per-file regex
+/// is synchronous blocking work; without this it can run for minutes on a large
+/// tree. Mirrors the file_search tool so both blocking searches behave the same.
+const GREP_FILES_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Result of a grep match
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -149,98 +155,152 @@ impl ToolSpec for GrepFilesTool {
         // Resolve search path
         let search_path = context.resolve_path(path_str)?;
 
-        let cancel_token = context.cancel_token.as_ref();
+        let workspace = context.workspace.clone();
+        let cancel_token = context.cancel_token.clone();
 
-        // Collect files to search
-        let files = collect_files(
-            &search_path,
-            &include_patterns,
-            &exclude_patterns,
-            cancel_token,
-        )?;
+        // The directory walk and per-file regex are synchronous blocking work.
+        // Run them on a blocking worker bounded by a hard timeout so a huge tree
+        // can't pin the async runtime and leave the stop button unresponsive.
+        let result = run_blocking_grep(GREP_FILES_TIMEOUT, cancel_token.clone(), move || {
+            let cancel_token = cancel_token.as_ref();
 
-        // Search files
-        let mut results: Vec<GrepMatch> = Vec::new();
-        let mut files_searched = 0;
-        let mut total_matches = 0;
+            // Collect files to search
+            let files = collect_files(
+                &search_path,
+                &include_patterns,
+                &exclude_patterns,
+                cancel_token,
+            )?;
 
-        for file_path in files {
-            check_cancelled(cancel_token)?;
+            // Search files
+            let mut results: Vec<GrepMatch> = Vec::new();
+            let mut files_searched = 0;
+            let mut total_matches = 0;
 
-            if results.len() >= max_results {
-                break;
-            }
-
-            // Skip files that are too large
-            if let Ok(metadata) = fs::metadata(&file_path)
-                && metadata.len() > MAX_FILE_SIZE
-            {
-                continue;
-            }
-
-            // Read file content
-            let Ok(file_content) = fs::read_to_string(&file_path) else {
-                continue; // Skip binary or unreadable files
-            };
-
-            files_searched += 1;
-            let lines: Vec<&str> = file_content.lines().collect();
-
-            for (line_idx, line) in lines.iter().enumerate() {
+            for file_path in files {
                 check_cancelled(cancel_token)?;
 
-                if regex.is_match(line) {
-                    total_matches += 1;
+                if results.len() >= max_results {
+                    break;
+                }
 
-                    // Get context lines
-                    let context_before: Vec<String> = (line_idx.saturating_sub(context_lines)
-                        ..line_idx)
-                        .filter_map(|i| lines.get(i).map(|s| (*s).to_string()))
-                        .collect();
+                // Skip files that are too large
+                if let Ok(metadata) = fs::metadata(&file_path)
+                    && metadata.len() > MAX_FILE_SIZE
+                {
+                    continue;
+                }
 
-                    let context_after: Vec<String> = ((line_idx + 1)
-                        ..=(line_idx + context_lines).min(lines.len() - 1))
-                        .filter_map(|i| lines.get(i).map(|s| (*s).to_string()))
-                        .collect();
+                // Read file content
+                let Ok(file_content) = fs::read_to_string(&file_path) else {
+                    continue; // Skip binary or unreadable files
+                };
 
-                    // Get relative path from workspace
-                    let relative_path = file_path
-                        .strip_prefix(&context.workspace)
-                        .unwrap_or(&file_path)
-                        .to_string_lossy()
-                        .to_string();
+                files_searched += 1;
+                let lines: Vec<&str> = file_content.lines().collect();
 
-                    results.push(GrepMatch {
-                        file: relative_path,
-                        line_number: line_idx + 1,
-                        line: (*line).to_string(),
-                        context_before,
-                        context_after,
-                    });
+                for (line_idx, line) in lines.iter().enumerate() {
+                    check_cancelled(cancel_token)?;
 
-                    if results.len() >= max_results {
-                        break;
+                    if regex.is_match(line) {
+                        total_matches += 1;
+
+                        // Get context lines
+                        let context_before: Vec<String> = (line_idx.saturating_sub(context_lines)
+                            ..line_idx)
+                            .filter_map(|i| lines.get(i).map(|s| (*s).to_string()))
+                            .collect();
+
+                        let context_after: Vec<String> = ((line_idx + 1)
+                            ..=(line_idx + context_lines).min(lines.len() - 1))
+                            .filter_map(|i| lines.get(i).map(|s| (*s).to_string()))
+                            .collect();
+
+                        // Get relative path from workspace
+                        let relative_path = file_path
+                            .strip_prefix(&workspace)
+                            .unwrap_or(&file_path)
+                            .to_string_lossy()
+                            .to_string();
+
+                        results.push(GrepMatch {
+                            file: relative_path,
+                            line_number: line_idx + 1,
+                            line: (*line).to_string(),
+                            context_before,
+                            context_after,
+                        });
+
+                        if results.len() >= max_results {
+                            break;
+                        }
                     }
                 }
             }
-        }
 
-        let matches_json: Vec<Value> = results
-            .iter()
-            .map(|item| grep_match_to_json(item, context_lines))
-            .collect();
+            let matches_json: Vec<Value> = results
+                .iter()
+                .map(|item| grep_match_to_json(item, context_lines))
+                .collect();
 
-        // Build result. When context_lines == 1, return the single context
-        // line as a string instead of a one-item array. That keeps the common
-        // "show just the adjacent line" case easy for model callers to read.
-        let result = json!({
-            "matches": matches_json,
-            "total_matches": total_matches,
-            "files_searched": files_searched,
-            "truncated": total_matches > max_results,
-        });
+            // Build result. When context_lines == 1, return the single context
+            // line as a string instead of a one-item array. That keeps the common
+            // "show just the adjacent line" case easy for model callers to read.
+            Ok(json!({
+                "matches": matches_json,
+                "total_matches": total_matches,
+                "files_searched": files_searched,
+                "truncated": total_matches > max_results,
+            }))
+        })
+        .await?;
 
         ToolResult::json(&result).map_err(|e| ToolError::execution_failed(e.to_string()))
+    }
+}
+
+/// Run the synchronous grep walk on a blocking worker, cancellable via the
+/// token and bounded by `timeout`. Mirrors `run_blocking_file_search`.
+async fn run_blocking_grep<F>(
+    timeout: Duration,
+    cancel_token: Option<CancellationToken>,
+    search: F,
+) -> Result<Value, ToolError>
+where
+    F: FnOnce() -> Result<Value, ToolError> + Send + 'static,
+{
+    if cancel_token
+        .as_ref()
+        .is_some_and(CancellationToken::is_cancelled)
+    {
+        return Err(grep_cancelled());
+    }
+
+    let task = tokio::task::spawn_blocking(search);
+    let result = match cancel_token {
+        Some(token) => {
+            tokio::select! {
+                biased;
+                () = token.cancelled() => return Err(grep_cancelled()),
+                result = tokio::time::timeout(timeout, task) => result,
+            }
+        }
+        None => tokio::time::timeout(timeout, task).await,
+    };
+
+    let joined = result.map_err(|_| grep_timeout(timeout))?;
+    joined.map_err(|err| {
+        ToolError::execution_failed(format!("grep_files worker failed before completion: {err}"))
+    })?
+}
+
+fn grep_cancelled() -> ToolError {
+    ToolError::execution_failed("grep_files cancelled before completion")
+}
+
+fn grep_timeout(timeout: Duration) -> ToolError {
+    ToolError::Timeout {
+        seconds: timeout.as_secs().max(1),
     }
 }
 
