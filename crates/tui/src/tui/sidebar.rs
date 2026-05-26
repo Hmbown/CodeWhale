@@ -1606,6 +1606,12 @@ pub fn subagent_panel_lines(
             Style::default().fg(color),
         )));
 
+        // Auto-collapse finished sub-agents: hide detail lines for completed
+        // agents so the sidebar stays compact when work is done.
+        if row.status == "done" {
+            continue;
+        }
+
         if lines.len() >= max_rows {
             break;
         }

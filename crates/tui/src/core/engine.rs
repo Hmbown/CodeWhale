@@ -171,6 +171,10 @@ pub struct EngineConfig {
     /// once at engine construction, then threaded onto every
     /// `SubAgentRuntime` the engine builds (#1806, #1808).
     pub subagent_api_timeout: Duration,
+    /// When true and `/usr/bin/bwrap` is present on Linux, route exec_shell
+    /// through bubblewrap instead of relying solely on Landlock (#2184).
+    #[allow(dead_code)] // Wired through ShellManager in follow-up PR
+    pub prefer_bwrap: bool,
 }
 
 impl Default for EngineConfig {
@@ -214,6 +218,7 @@ impl Default for EngineConfig {
             subagent_api_timeout: Duration::from_secs(
                 crate::config::DEFAULT_SUBAGENT_API_TIMEOUT_SECS,
             ),
+            prefer_bwrap: false,
         }
     }
 }

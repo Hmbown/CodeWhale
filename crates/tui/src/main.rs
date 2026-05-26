@@ -732,6 +732,11 @@ enum SandboxCommand {
 async fn main() -> Result<()> {
     configure_windows_console_utf8();
 
+    // ── Process hardening (#2183) ─────────────────────────────────────────
+    // MUST run before Tokio is booted and before any threads are spawned.
+    // See crates/tui/src/sandbox/process_hardening.rs for ordering rationale.
+    crate::sandbox::process_hardening::apply_process_hardening();
+
     // Set up process panic hook before anything else — writes crash dumps
     // to ~/.deepseek/crashes/ even if the panic happens before tokio is up,
     // and restores the terminal so a panicked TUI doesn't leave the user's
@@ -5138,6 +5143,7 @@ async fn run_exec_agent(
         runtime_services: crate::tools::spec::RuntimeToolServices::default(),
         subagent_model_overrides: config.subagent_model_overrides(),
         subagent_api_timeout: std::time::Duration::from_secs(config.subagent_api_timeout_secs()),
+        prefer_bwrap: config.prefer_bwrap.unwrap_or(false),
         memory_enabled: config.memory_enabled(),
         memory_path: config.memory_path(),
         vision_config: config.vision_model_config(),

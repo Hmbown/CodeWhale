@@ -714,6 +714,7 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         runtime_services: app.runtime_services.clone(),
         subagent_model_overrides: config.subagent_model_overrides(),
         subagent_api_timeout: Duration::from_secs(config.subagent_api_timeout_secs()),
+        prefer_bwrap: config.prefer_bwrap.unwrap_or(false),
         memory_enabled: config.memory_enabled(),
         memory_path: config.memory_path(),
         vision_config: config.vision_model_config(),
@@ -940,10 +941,10 @@ async fn run_event_loop(
         if let Some(ref handle) = version_check {
             done = handle.is_finished();
         }
-        if done {
-            if let Ok(Some(hint)) = version_check.take().unwrap().await {
-                app.version_hint = Some(hint);
-            }
+        if done
+            && let Ok(Some(hint)) = version_check.take().unwrap().await
+        {
+            app.version_hint = Some(hint);
         }
 
         if !drain_web_config_events(&mut web_config_session, app, config, &engine_handle).await {

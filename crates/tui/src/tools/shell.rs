@@ -622,6 +622,15 @@ impl ShellManager {
         &self.sandbox_policy
     }
 
+    /// Enable or disable bubblewrap passthrough (#2184).
+    ///
+    /// When enabled and `/usr/bin/bwrap` is present on Linux, exec_shell
+    /// commands are routed through bubblewrap for filesystem isolation.
+    #[allow(dead_code)] // Wired from EngineConfig in follow-up PR
+    pub fn set_prefer_bwrap(&mut self, prefer: bool) {
+        self.sandbox_manager.set_prefer_bwrap(prefer);
+    }
+
     /// Request that the active foreground shell wait detach and leave its
     /// process running in the background job table.
     pub fn request_foreground_background(&mut self) {

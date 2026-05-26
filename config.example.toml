@@ -131,6 +131,21 @@ sandbox_mode = "workspace-write" # read-only | workspace-write | danger-full-acc
 # The backend uses a 30-second HTTP timeout. Background, interactive, and
 # TTY modes are not supported with external backends — all commands run
 # synchronously via HTTP.
+# ─────────────────────────────────────────────────────────────────────────────────
+# Bubblewrap (Linux only, additional filesystem isolation)
+# ─────────────────────────────────────────────────────────────────────────────────
+# When set to true and `/usr/bin/bwrap` is present, exec_shell commands are
+# routed through bubblewrap instead of relying solely on Landlock. Bubblewrap
+# creates a read-only view of the root filesystem with write access limited to
+# the working directory. Install separately:
+#
+#   Ubuntu/Debian:  apt install bubblewrap
+#   Fedora:         dnf install bubblewrap
+#   Arch:           pacman -S bubblewrap
+#
+# prefer_bwrap = false  # default — use Landlock only
+#
+# Env override: DEEPSEEK_PREFER_BWRAP=true
 
 # auto_allow entries match by command prefix, not raw string.
 # See command_safety.rs for the prefix dictionary.

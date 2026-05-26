@@ -474,9 +474,16 @@ pub(crate) fn render_footer_from(
         props.model.clear();
     }
 
+    // Shell-running chip: visible whenever a foreground shell command is
+    // active, regardless of user-configured status items.
+    let shell_chip = crate::tui::widgets::footer_shell_chip(active_foreground_shell_running(app));
+
     // Right-cluster extension chips: append in `items` order so user
     // ordering is preserved across the new variants.
     let mut extra: Vec<Span<'static>> = Vec::new();
+    if !shell_chip.is_empty() {
+        extra.extend(shell_chip);
+    }
     for item in items {
         let chip = match *item {
             S::PrefixStability => prefix_stability.clone(),
@@ -619,6 +626,9 @@ pub(crate) fn footer_auxiliary_spans(app: &App, max_width: usize) -> Vec<Span<'s
         })
         .unwrap_or_default();
 
+    let shell_spans =
+        crate::tui::widgets::footer_shell_chip(active_foreground_shell_running(app));
+
     let parts: Vec<&Vec<Span<'static>>> = [
         &coherence_spans,
         &agents_spans,
@@ -626,6 +636,7 @@ pub(crate) fn footer_auxiliary_spans(app: &App, max_width: usize) -> Vec<Span<'s
         &prefix_spans,
         &cache_spans,
         &cost_spans,
+        &shell_spans,
     ]
     .iter()
     .filter(|spans| !spans.is_empty())

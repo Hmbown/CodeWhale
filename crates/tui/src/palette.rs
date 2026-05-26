@@ -4,17 +4,17 @@ use ratatui::style::Color;
 #[cfg(target_os = "macos")]
 use std::process::Command;
 
-// v0.8.45 Whale dark palette — refreshed ocean/navy identity.
-pub const WHALE_BG_RGB: (u8, u8, u8) = (13, 21, 37); // #0D1525 Deep Navy
-pub const WHALE_PANEL_RGB: (u8, u8, u8) = (19, 29, 48); // #131D30
-pub const WHALE_ELEVATED_RGB: (u8, u8, u8) = (26, 40, 64); // #1A2840
-pub const WHALE_SELECTION_RGB: (u8, u8, u8) = (30, 50, 82); // #1E3252
+// v0.8.46 Whale dark palette — improved contrast and layer separation.
+pub const WHALE_BG_RGB: (u8, u8, u8) = (10, 17, 32); // #0A1120 Deep Navy
+pub const WHALE_PANEL_RGB: (u8, u8, u8) = (22, 34, 56); // #162238
+pub const WHALE_ELEVATED_RGB: (u8, u8, u8) = (36, 52, 78); // #24344E
+pub const WHALE_SELECTION_RGB: (u8, u8, u8) = (48, 68, 100); // #304464
 pub const WHALE_TEXT_BODY_RGB: (u8, u8, u8) = (246, 242, 232); // #F6F2E8 Whale Ivory
 pub const WHALE_TEXT_SOFT_RGB: (u8, u8, u8) = (217, 224, 234); // #D9E0EA
 pub const WHALE_TEXT_MUTED_RGB: (u8, u8, u8) = (169, 180, 199); // #A9B4C7 Mist Gray
-pub const WHALE_TEXT_HINT_RGB: (u8, u8, u8) = (122, 134, 158); // #7A869E
+pub const WHALE_TEXT_HINT_RGB: (u8, u8, u8) = (138, 150, 174); // #8A96AE
 #[allow(dead_code)]
-pub const WHALE_TEXT_DIM_RGB: (u8, u8, u8) = (107, 120, 146); // #6B7892
+pub const WHALE_TEXT_DIM_RGB: (u8, u8, u8) = (118, 130, 156); // #76829C
 pub const WHALE_ACCENT_PRIMARY_RGB: (u8, u8, u8) = (246, 196, 83); // #F6C453 Signal Gold
 pub const WHALE_ACCENT_SECONDARY_RGB: (u8, u8, u8) = (79, 209, 197); // #4FD1C5 Seafoam
 pub const WHALE_ACCENT_ACTION_RGB: (u8, u8, u8) = (255, 122, 89); // #FF7A59 Coral Spark
@@ -26,10 +26,10 @@ pub const WHALE_ERROR_TEXT_RGB: (u8, u8, u8) = (255, 214, 222); // #FFD6DE Error
 pub const WHALE_WARNING_RGB: (u8, u8, u8) = (240, 160, 48); // #F0A030
 pub const WHALE_SUCCESS_RGB: (u8, u8, u8) = (79, 209, 197); // #4FD1C5 Seafoam
 pub const WHALE_INFO_RGB: (u8, u8, u8) = (106, 174, 242); // #6AAEF2 Sky
-pub const WHALE_BORDER_RGB: (u8, u8, u8) = (42, 74, 127); // #2A4A7F
+pub const WHALE_BORDER_RGB: (u8, u8, u8) = (52, 88, 145); // #345891
 pub const WHALE_REASONING_TEXT_RGB: (u8, u8, u8) = (224, 153, 72); // #E09948
 pub const WHALE_REASONING_SURFACE_RGB: (u8, u8, u8) = (42, 34, 24); // #2A2218
-pub const WHALE_REASONING_TINT_RGB: (u8, u8, u8) = (20, 30, 42); // #141E2A
+pub const WHALE_REASONING_TINT_RGB: (u8, u8, u8) = (24, 36, 52); // #182434
 pub const WHALE_DIFF_ADDED_RGB: (u8, u8, u8) = (87, 199, 133); // #57C785
 #[allow(dead_code)]
 pub const WHALE_DIFF_DELETED_RGB: (u8, u8, u8) = (255, 92, 122); // #FF5C7A Rose Red
@@ -39,11 +39,11 @@ pub const WHALE_MODE_AGENT_RGB: (u8, u8, u8) = (80, 150, 255); // #5096FF
 pub const WHALE_MODE_YOLO_RGB: (u8, u8, u8) = (255, 100, 100); // #FF6464
 pub const WHALE_MODE_PLAN_RGB: (u8, u8, u8) = (246, 196, 83); // #F6C453 Signal Gold
 pub const WHALE_MODE_GOAL_RGB: (u8, u8, u8) = (100, 220, 160); // #64DCA0
-pub const WHALE_TOOL_LIVE_RGB: (u8, u8, u8) = (133, 184, 234); // #85B8EA
-pub const WHALE_TOOL_ISSUE_RGB: (u8, u8, u8) = (192, 143, 153); // #C08F99
+pub const WHALE_TOOL_LIVE_RGB: (u8, u8, u8) = (140, 190, 238); // #8CBEEE
+pub const WHALE_TOOL_ISSUE_RGB: (u8, u8, u8) = (198, 150, 160); // #C696A0
 pub const WHALE_TOOL_OUTPUT_RGB: (u8, u8, u8) = (194, 208, 224); // #C2D0E0
-pub const WHALE_TOOL_SURFACE_RGB: (u8, u8, u8) = (24, 34, 53); // #182235
-pub const WHALE_TOOL_ACTIVE_RGB: (u8, u8, u8) = (31, 45, 69); // #1F2D45
+pub const WHALE_TOOL_SURFACE_RGB: (u8, u8, u8) = (28, 40, 62); // #1C283E
+pub const WHALE_TOOL_ACTIVE_RGB: (u8, u8, u8) = (38, 54, 80); // #263650
 
 // Backward-compatible aliases for existing call sites.
 pub const DEEPSEEK_BLUE_RGB: (u8, u8, u8) = WHALE_ACCENT_PRIMARY_RGB;

@@ -210,10 +210,18 @@ impl ToolSpec for WebSearchTool {
                 ToolError::execution_failed(format!("Failed to build HTTP client: {e}"))
             })?;
 
+        // Track whether Bing was tried and returned zero, so we can surface
+        // the fallback in the result message (#2130).
+        let mut bing_was_empty = false;
+
         if matches!(context.search_provider, SearchProvider::Bing) {
             check_policy(decider, BING_HOST)?;
             let results = run_bing_search(&client, &query, max_results).await?;
-            return search_tool_result(query, "bing", results, None);
+            if !results.is_empty() {
+                return search_tool_result(query, "bing", results, None);
+            }
+            // Bing returned zero results — fall through to DuckDuckGo.
+            bing_was_empty = true;
         }
 
         // Per-domain network policy gate (#135). The "host" for web search is
@@ -250,7 +258,14 @@ impl ToolSpec for WebSearchTool {
 
         let mut results = parse_duckduckgo_results(&body, max_results);
         let mut source = "duckduckgo";
-        let mut message_suffix = None;
+        let mut message_suffix: Option<&str> = None;
+
+        // When Bing returned zero and we fell through to DuckDuckGo, surface
+        // the fallback in the result message (#2130).
+        if bing_was_empty && !results.is_empty() {
+            message_suffix = Some("Bing returned no results; used DuckDuckGo fallback");
+        }
+
         if results.is_empty() {
             let duckduckgo_blocked = is_duckduckgo_challenge(&body);
             // Bing is a separate host — gate it independently so a deny on

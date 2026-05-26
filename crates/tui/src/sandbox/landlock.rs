@@ -290,18 +290,32 @@ pub fn create_landlock_wrapper(
     cmd
 }
 
-/// Detect if a failure was caused by Landlock denial
+/// Detect if a failure was caused by Landlock or seccomp denial.
+///
+/// Checks both Landlock-specific patterns (EACCES/EPERM) and seccomp-specific
+/// patterns (Bad system call / SIGSYS). Seccomp violations are reported through
+/// the same `was_denied` path so callers don't need to distinguish which layer
+/// blocked the operation.
 #[cfg(target_os = "linux")]
 pub fn detect_denial(exit_code: i32, stderr: &str) -> bool {
     if exit_code == 0 {
         return false;
     }
 
-    // Landlock denials typically result in EACCES or EPERM
-    stderr.contains("Permission denied")
+    // Landlock denials typically result in EACCES or EPERM.
+    let landlock_denial = stderr.contains("Permission denied")
         || stderr.contains("Operation not permitted")
         || stderr.contains("EACCES")
-        || stderr.contains("EPERM")
+        || stderr.contains("EPERM");
+
+    // Seccomp denials (#2182): SIGSYS (exit code 31 or "Bad system call").
+    let seccomp_denial = exit_code == 31
+        || stderr.contains("Bad system call")
+        || stderr.contains("bad system call")
+        || stderr.contains("SIGSYS")
+        || stderr.contains("seccomp");
+
+    landlock_denial || seccomp_denial
 }
 
 // Stub implementations for non-Linux platforms
