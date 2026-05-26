@@ -1,5 +1,5 @@
 [package]
-name = "deepseek-tui-core"
+name = "codewhale-tui-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

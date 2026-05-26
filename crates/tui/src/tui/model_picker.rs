@@ -3,7 +3,8 @@
 //!
 //! Two side-by-side panes — Models on the left, Thinking effort on the
 //! right. Tab swaps focus, ↑/↓ moves within the focused pane, Enter applies
-//! both and closes the modal, Esc cancels.
+//! both and closes the modal. Esc closes immediately when nothing moved; after
+//! a selection move it keeps the highlighted choice.
 //!
 //! The effort pane intentionally only exposes `Off / High / Max`. Per
 //! DeepSeek's [Thinking Mode docs](https://api-docs.deepseek.com/guides/reasoning_model),
@@ -61,6 +62,7 @@ pub struct ModelPickerView {
     selected_model_idx: usize,
     selected_effort_idx: usize,
     focus: Pane,
+    selection_touched: bool,
     /// True when the active model is one we don't list — we still show it
     /// so the picker doesn't quietly forget the user's chosen IDs.
     show_custom_model_row: bool,
@@ -108,6 +110,7 @@ impl ModelPickerView {
             selected_model_idx,
             selected_effort_idx,
             focus: Pane::Model,
+            selection_touched: false,
             show_custom_model_row,
             hide_deepseek_models,
         }
@@ -146,36 +149,42 @@ impl ModelPickerView {
         PICKER_EFFORTS[self.selected_effort_idx]
     }
 
-    fn move_up(&mut self) {
+    fn move_up(&mut self) -> bool {
         match self.focus {
             Pane::Model => {
                 if self.selected_model_idx > 0 {
                     self.selected_model_idx -= 1;
+                    return true;
                 }
             }
             Pane::Effort => {
                 if self.selected_effort_idx > 0 {
                     self.selected_effort_idx -= 1;
+                    return true;
                 }
             }
         }
+        false
     }
 
-    fn move_down(&mut self) {
+    fn move_down(&mut self) -> bool {
         match self.focus {
             Pane::Model => {
                 let max = self.model_row_count().saturating_sub(1);
                 if self.selected_model_idx < max {
                     self.selected_model_idx += 1;
+                    return true;
                 }
             }
             Pane::Effort => {
                 let max = PICKER_EFFORTS.len().saturating_sub(1);
                 if self.selected_effort_idx < max {
                     self.selected_effort_idx += 1;
+                    return true;
                 }
             }
         }
+        false
     }
 
     fn toggle_focus(&mut self) {
@@ -265,14 +274,15 @@ impl ModalView for ModelPickerView {
 
     fn handle_key(&mut self, key: KeyEvent) -> ViewAction {
         match key.code {
+            KeyCode::Esc if self.selection_touched => ViewAction::EmitAndClose(self.build_event()),
             KeyCode::Esc => ViewAction::Close,
             KeyCode::Enter => ViewAction::EmitAndClose(self.build_event()),
             KeyCode::Up => {
-                self.move_up();
+                self.selection_touched |= self.move_up();
                 ViewAction::None
             }
             KeyCode::Down => {
-                self.move_down();
+                self.selection_touched |= self.move_down();
                 ViewAction::None
             }
             KeyCode::Tab | KeyCode::Right | KeyCode::Left | KeyCode::BackTab => {
@@ -567,7 +577,7 @@ mod tests {
     }
 
     #[test]
-    fn esc_closes_without_emitting() {
+    fn immediate_esc_closes_without_emitting() {
         let (app, _lock) = create_test_app();
         let mut view = ModelPickerView::new(&app);
         let action = view.handle_key(KeyEvent::new(
@@ -575,6 +585,33 @@ mod tests {
             crossterm::event::KeyModifiers::NONE,
         ));
         assert!(matches!(action, ViewAction::Close));
+    }
+
+    #[test]
+    fn esc_after_selection_move_applies_highlighted_model() {
+        let (app, _lock) = create_test_app();
+        let mut view = ModelPickerView::new(&app);
+        view.handle_key(KeyEvent::new(
+            KeyCode::Down,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+
+        let action = view.handle_key(KeyEvent::new(
+            KeyCode::Esc,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+
+        match action {
+            ViewAction::EmitAndClose(ViewEvent::ModelPickerApplied {
+                model,
+                previous_model,
+                ..
+            }) => {
+                assert_eq!(previous_model, "deepseek-v4-pro");
+                assert_eq!(model, "deepseek-v4-flash");
+            }
+            other => panic!("expected Esc to apply highlighted model, got {other:?}"),
+        }
     }
 
     #[test]

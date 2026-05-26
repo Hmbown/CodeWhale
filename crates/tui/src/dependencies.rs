@@ -219,7 +219,7 @@ mod tests {
     fn probe_executable_returns_false_for_unknown_binary() {
         // Pick a name we're confident isn't on any developer's PATH.
         // If this ever starts failing locally, rename it.
-        assert!(!probe_executable("deepseek-tui-imaginary-binary-xyz123"));
+        assert!(!probe_executable("codewhale-tui-imaginary-binary-xyz123"));
     }
 
     #[test]

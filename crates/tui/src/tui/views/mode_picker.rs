@@ -149,7 +149,7 @@ impl ModalView for ModePickerView {
 
         let mut lines = Vec::with_capacity(MODE_ROWS.len() + 1);
         lines.push(Line::from(Span::styled(
-            "Choose how DeepSeek TUI should operate:",
+            "Choose how CodeWhale should operate:",
             Style::default().fg(palette::TEXT_MUTED),
         )));
 

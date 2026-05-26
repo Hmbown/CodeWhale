@@ -141,7 +141,7 @@ pub fn user_commands_matching(prefix: &str, workspace: Option<&Path>) -> Vec<Str
     load_user_commands(workspace)
         .into_iter()
         .filter(|(name, _)| name.starts_with(&prefix))
-        .map(|(name, _)| format!("/{}", name))
+        .map(|(name, _)| format!("/{name}"))
         .collect()
 }
 

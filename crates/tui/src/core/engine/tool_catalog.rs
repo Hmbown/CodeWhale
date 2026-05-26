@@ -63,6 +63,7 @@ pub(super) fn should_default_defer_tool(name: &str, mode: AppMode) -> bool {
             | "rlm_eval"
             | "rlm_configure"
             | "rlm_close"
+            | "rlm_session_objects"
             | "handle_read"
             | "recall_archive"
             | "notify"
@@ -689,7 +690,7 @@ pub(super) async fn execute_code_execution_tool(
         ToolError::execution_failed(format!(
             "code_execution: no Python interpreter found on PATH (tried {:?}). \
              Install Python 3 and ensure one of these is on PATH, then restart \
-             deepseek-tui.",
+             codewhale.",
             crate::dependencies::PYTHON_CANDIDATES,
         ))
     })?;

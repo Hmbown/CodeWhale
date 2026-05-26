@@ -81,7 +81,7 @@ pub(crate) fn ocr_image_path(image_path: &Path) -> Result<String, ToolError> {
     }
 
     Err(ToolError::execution_failed(
-        "image_ocr: no local OCR backend is available. On macOS, update to a version with the Vision framework; on Linux/Windows install tesseract and restart deepseek-tui.",
+        "image_ocr: no local OCR backend is available. On macOS, update to a version with the Vision framework; on Linux/Windows install tesseract and restart codewhale.",
     ))
 }
 

@@ -7,7 +7,7 @@ use crate::hooks::HookEvent;
 use crate::tools::ReviewOutput;
 use crate::tools::spec::{ToolError, ToolResult};
 use crate::tui::active_cell::ActiveCell;
-use crate::tui::app::{App, ToolDetailRecord};
+use crate::tui::app::{App, ToolDetailRecord, ToolEvidence};
 use crate::tui::history::{
     DiffPreviewCell, ExecCell, ExecSource, ExploringEntry, GenericToolCell, HistoryCell,
     McpToolCell, PatchSummaryCell, PlanStep, PlanUpdateCell, ReviewCell, ToolCell, ToolStatus,
@@ -78,7 +78,7 @@ pub(super) fn handle_tool_call_started(
     // simultaneously, which is exactly the case CX#7 fixes.
 
     if is_exec_tool(name) {
-        let command = exec_command_from_input(input).unwrap_or_else(|| "<command>".to_string());
+        let command = exec_target_from_input(input);
         let source = exec_source_from_input(input);
         let interaction = exec_interaction_summary(name, input);
         let mut is_wait = false;
@@ -535,6 +535,29 @@ pub(super) fn handle_tool_call_complete(
             HistoryCell::Tool(ToolCell::Exec(exec)) => {
                 exec.status = status;
                 if let Ok(tool_result) = result.as_ref() {
+                    if let Some(meta_command) = tool_result
+                        .metadata
+                        .as_ref()
+                        .and_then(|m| m.get("command"))
+                        .and_then(serde_json::Value::as_str)
+                        && !meta_command.trim().is_empty()
+                        && (exec.command == "command" || exec.command.starts_with("command "))
+                    {
+                        exec.command = meta_command.to_string();
+                        if exec.interaction.as_deref().is_some_and(|interaction| {
+                            interaction.starts_with("Waiting for command")
+                        }) {
+                            let task_suffix = tool_result
+                                .metadata
+                                .as_ref()
+                                .and_then(|m| m.get("task_id"))
+                                .and_then(serde_json::Value::as_str)
+                                .map(|task_id| format!(" ({task_id})"))
+                                .unwrap_or_default();
+                            exec.interaction =
+                                Some(format!("Waiting for \"{meta_command}\"{task_suffix}"));
+                        }
+                    }
                     exec.duration_ms = tool_result
                         .metadata
                         .as_ref()
@@ -670,6 +693,22 @@ pub(super) fn handle_tool_call_complete(
             .with_tool_result(&result_text, success, None);
         let _ = app.execute_hooks(HookEvent::ToolCallAfter, &context);
     }
+
+    // Collect evidence for the post-turn receipt.
+    let evidence_summary = match result.as_ref() {
+        Ok(tool_result) => {
+            if tool_result.success {
+                summarize_tool_output(&tool_result.content)
+            } else {
+                format!("failed: {}", summarize_tool_output(&tool_result.content))
+            }
+        }
+        Err(err) => format!("error: {err}"),
+    };
+    app.tool_evidence.push(ToolEvidence {
+        tool_name: name.to_string(),
+        summary: evidence_summary,
+    });
 }
 
 fn refresh_active_tool_completion_timestamp(app: &mut App, cell_index: usize) {
@@ -1078,6 +1117,17 @@ fn exec_command_from_input(input: &serde_json::Value) -> Option<String> {
         .map(std::string::ToString::to_string)
 }
 
+fn exec_target_from_input(input: &serde_json::Value) -> String {
+    exec_command_from_input(input).unwrap_or_else(|| {
+        input
+            .get("task_id")
+            .or_else(|| input.get("id"))
+            .and_then(|v| v.as_str())
+            .map(|task_id| format!("command {task_id}"))
+            .unwrap_or_else(|| "command".to_string())
+    })
+}
+
 fn exec_source_from_input(input: &serde_json::Value) -> ExecSource {
     match input.get("source").and_then(|v| v.as_str()) {
         Some(source) if source.eq_ignore_ascii_case("user") => ExecSource::User,
@@ -1086,7 +1136,7 @@ fn exec_source_from_input(input: &serde_json::Value) -> ExecSource {
 }
 
 fn exec_interaction_summary(name: &str, input: &serde_json::Value) -> Option<(String, bool)> {
-    let command = exec_command_from_input(input).unwrap_or_else(|| "<command>".to_string());
+    let command = exec_target_from_input(input);
     let command_display = format!("\"{command}\"");
     let interaction_input = input
         .get("input")
@@ -1108,6 +1158,14 @@ fn exec_interaction_summary(name: &str, input: &serde_json::Value) -> Option<(St
     }
 
     if is_wait_tool || input.get("wait").and_then(serde_json::Value::as_bool) == Some(true) {
+        if exec_command_from_input(input).is_none()
+            && let Some(task_id) = input
+                .get("task_id")
+                .or_else(|| input.get("id"))
+                .and_then(|v| v.as_str())
+        {
+            return Some((format!("Waiting for command {task_id}"), true));
+        }
         return Some((format!("Waited for {command_display}"), true));
     }
 

@@ -1,4 +1,4 @@
-//! Tool specification traits for the DeepSeek TUI agent system.
+//! Tool specification traits for the CodeWhale agent system.
 //!
 //! This module defines the core abstractions for tools:
 //! - `ToolSpec`: The main trait that all tools must implement
@@ -16,12 +16,13 @@ use tokio_util::sync::CancellationToken;
 use crate::features::Features;
 use crate::lsp::LspManager;
 use crate::network_policy::NetworkPolicyDecider;
+use crate::rlm::session::SessionObjectSnapshot;
 use crate::rlm::session::{SharedRlmSessionStore, new_shared_rlm_session_store};
 use crate::sandbox::backend::SandboxBackend;
 use crate::tools::handle::{SharedHandleStore, new_shared_handle_store};
 use crate::tools::shell::{SharedShellManager, new_shared_shell_manager};
 #[allow(unused_imports)]
-pub use deepseek_tools::{
+pub use codewhale_tools::{
     ApprovalRequirement, ToolCapability, ToolError, ToolResult, optional_bool, optional_str,
     optional_u64, required_str, required_u64,
 };
@@ -133,6 +134,10 @@ pub struct ToolContext {
     /// Durable runtime services for task, gate, PR-attempt, GitHub evidence,
     /// and automation tools.
     pub runtime: RuntimeToolServices,
+    /// Snapshot of the active prompt/session/history exposed as symbolic RLM
+    /// objects. Tools only receive compact cards unless explicitly opening a
+    /// bounded object through `rlm_open`.
+    pub session_objects: Option<SessionObjectSnapshot>,
     /// Cancellation token for the active engine turn. Tools that may wait on
     /// external work should observe this so UI cancel can interrupt them.
     pub cancel_token: Option<CancellationToken>,
@@ -194,6 +199,7 @@ impl ToolContext {
             trusted_external_paths: Vec::new(),
             network_policy: None,
             runtime: RuntimeToolServices::default(),
+            session_objects: None,
             cancel_token: None,
             sandbox_backend: None,
             memory_path: None,
@@ -230,6 +236,7 @@ impl ToolContext {
             trusted_external_paths: Vec::new(),
             network_policy: None,
             runtime: RuntimeToolServices::default(),
+            session_objects: None,
             cancel_token: None,
             sandbox_backend: None,
             memory_path: None,
@@ -266,6 +273,7 @@ impl ToolContext {
             trusted_external_paths: Vec::new(),
             network_policy: None,
             runtime: RuntimeToolServices::default(),
+            session_objects: None,
             cancel_token: None,
             sandbox_backend: None,
             memory_path: None,
@@ -288,6 +296,13 @@ impl ToolContext {
     #[must_use]
     pub fn with_runtime_services(mut self, runtime: RuntimeToolServices) -> Self {
         self.runtime = runtime;
+        self
+    }
+
+    /// Attach active prompt/history/session symbolic objects for RLM tools.
+    #[must_use]
+    pub fn with_session_objects(mut self, snapshot: SessionObjectSnapshot) -> Self {
+        self.session_objects = Some(snapshot);
         self
     }
 

@@ -7,24 +7,24 @@ export async function generateMetadata({ params }: { params: Promise<{ locale: s
   const { locale } = await params;
   const isZh = locale === "zh";
   return {
-    title: isZh ? "安装 · DeepSeek TUI" : "Install · DeepSeek TUI",
+    title: isZh ? "安装 · CodeWhale" : "Install · CodeWhale",
     description: isZh
-      ? "通过 Cargo 安装 deepseek-tui。其他方式：npm、Homebrew、预编译二进制、Docker、国内镜像。"
-      : "Install deepseek-tui via Cargo. Other ways: npm, Homebrew, prebuilt binary, Docker, source.",
+      ? "通过 Cargo 安装 codewhale-cli。其他方式：npm、Homebrew、预编译二进制、Docker、国内镜像。"
+      : "Install codewhale-cli via Cargo. Other ways: npm, Homebrew, prebuilt binary, Docker, source.",
   };
 }
 
-const CARGO_INSTALL = `cargo install deepseek-tui-cli --locked`;
-const FIRST_RUN = `deepseek`;
-const VERIFY = `deepseek --version
-deepseek doctor`;
+const CARGO_INSTALL = `cargo install codewhale-cli --locked`;
+const FIRST_RUN = `codewhale`;
+const VERIFY = `codewhale --version
+codewhale doctor`;
 
-const UPDATE = `deepseek update`;
+const UPDATE = `codewhale update`;
 
 const SET_KEY_BASH = `export DEEPSEEK_API_KEY=sk-...`;
-const SET_KEY_AUTH = `deepseek auth set --provider deepseek --api-key sk-...`;
+const SET_KEY_AUTH = `codewhale auth set --provider deepseek --api-key sk-...`;
 
-const NPM_INSTALL = `npm install -g deepseek-tui`;
+const NPM_INSTALL = `npm install -g codewhale`;
 
 const TUNA_CONFIG = `# ~/.cargo/config.toml
 [source.crates-io]
@@ -32,30 +32,30 @@ replace-with = "tuna"
 
 [source.tuna]
 registry = "sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/"`;
-const TUNA_INSTALL = `cargo install deepseek-tui-cli --locked`;
+const TUNA_INSTALL = `cargo install codewhale-cli --locked`;
 const NPMMIRROR = `npm config set registry https://registry.npmmirror.com
-npm install -g deepseek-tui`;
+npm install -g codewhale`;
 
 const BREW = `brew tap Hmbown/deepseek-tui
 brew install deepseek-tui`;
 
-const DOCKER = `git clone https://github.com/Hmbown/deepseek-tui
-cd deepseek-tui
-docker build -t deepseek-tui .
+const DOCKER = `git clone https://github.com/Hmbown/CodeWhale
+cd codewhale
+docker build -t codewhale .
 
 docker run --rm -it \\
   -e DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY \\
-  -v ~/.deepseek:/home/deepseek/.deepseek \\
+  -v ~/.deepseek:/home/codewhale/.deepseek \\
   -v "$PWD:/work" -w /work \\
-  deepseek-tui`;
+  codewhale`;
 
-const FROM_SOURCE = `git clone https://github.com/Hmbown/deepseek-tui
-cd deepseek-tui
+const FROM_SOURCE = `git clone https://github.com/Hmbown/CodeWhale
+cd codewhale
 cargo build --release --locked
 
 # Install both binaries from the local checkout
-cargo install --path crates/cli --locked   # deepseek
-cargo install --path crates/tui --locked   # deepseek-tui`;
+cargo install --path crates/cli --locked   # codewhale
+cargo install --path crates/tui --locked   # codewhale-tui`;
 
 const CONFIG_TREE = `~/.deepseek/
 ├── config.toml      api keys, model, hooks, profiles
@@ -108,14 +108,14 @@ export default async function InstallPage({ params }: { params: Promise<{ locale
         <p className="mt-4 text-sm text-ink-soft leading-relaxed max-w-2xl">
           {isZh ? (
             <>
-              编译并安装 <code className="inline">deepseek</code> 到 <code className="inline">~/.cargo/bin</code>。
+              编译并安装 <code className="inline">codewhale</code> 到 <code className="inline">~/.cargo/bin</code>。
               需要 Rust 1.88+——如未安装可访问{" "}
               <a href="https://rustup.rs" className="body-link">rustup.rs</a>。
               下方「其他安装方式」列出了不用 Rust 工具链、国内镜像、Homebrew、预编译二进制等替代选项。
             </>
           ) : (
             <>
-              Compiles and installs <code className="inline">deepseek</code> to{" "}
+              Compiles and installs <code className="inline">codewhale</code> to{" "}
               <code className="inline">~/.cargo/bin</code>. Requires Rust 1.88+ — install via{" "}
               <a href="https://rustup.rs" className="body-link">rustup.rs</a> if you don&apos;t have it.
               See <a href="#other-ways" className="body-link">Other ways to install</a> below for
@@ -137,13 +137,13 @@ export default async function InstallPage({ params }: { params: Promise<{ locale
         <p className="mt-4 text-sm text-ink-soft leading-relaxed max-w-2xl">
           {isZh ? (
             <>
-              <code className="inline">deepseek doctor</code> 检查 API 密钥、网络、沙箱可用性、
+              <code className="inline">codewhale doctor</code> 检查 API 密钥、网络、沙箱可用性、
               MCP 服务器，并将完整报告写入{" "}
               <code className="inline">~/.deepseek/doctor.log</code>。
             </>
           ) : (
             <>
-              <code className="inline">deepseek doctor</code> checks your API key, network,
+              <code className="inline">codewhale doctor</code> checks your API key, network,
               sandbox availability, and MCP servers. Full report is written to{" "}
               <code className="inline">~/.deepseek/doctor.log</code>.
             </>
@@ -166,17 +166,17 @@ export default async function InstallPage({ params }: { params: Promise<{ locale
               检查 GitHub Releases 是否有新版本并就地替换二进制。
               通过 Homebrew 或 npm 安装的话，使用包管理器升级更稳：
               <code className="inline">brew upgrade deepseek-tui</code> 或{" "}
-              <code className="inline">npm update -g deepseek-tui</code>。
+              <code className="inline">npm update -g codewhale</code>。
               Cargo 安装的可以重跑{" "}
-              <code className="inline">cargo install deepseek-tui-cli --locked --force</code>。
+              <code className="inline">cargo install codewhale-cli --locked --force</code>。
             </>
           ) : (
             <>
               Checks GitHub Releases for a newer version and replaces the binary in place. If you
               installed via Homebrew or npm, prefer the package manager instead:{" "}
               <code className="inline">brew upgrade deepseek-tui</code> or{" "}
-              <code className="inline">npm update -g deepseek-tui</code>. Cargo users can re-run{" "}
-              <code className="inline">cargo install deepseek-tui-cli --locked --force</code>.
+              <code className="inline">npm update -g codewhale</code>. Cargo users can re-run{" "}
+              <code className="inline">cargo install codewhale-cli --locked --force</code>.
             </>
           )}
         </p>
@@ -232,7 +232,7 @@ export default async function InstallPage({ params }: { params: Promise<{ locale
             <div className="font-display text-lg mb-2">
               {isZh ? "③ 在项目目录中运行" : "③ Run it in a project"}
             </div>
-            <InstallCodeBlock cmd={`cd path/to/project\ndeepseek`} copyLabel={copyLabel} copiedLabel={copiedLabel} />
+            <InstallCodeBlock cmd={`cd path/to/project\ncodewhale`} copyLabel={copyLabel} copiedLabel={copiedLabel} />
             <p className="mt-3 text-sm text-ink-soft leading-relaxed">
               {isZh ? (
                 <>
@@ -265,8 +265,8 @@ export default async function InstallPage({ params }: { params: Promise<{ locale
           </h2>
           <p className="text-sm text-ink-soft max-w-2xl mb-10">
             {isZh
-              ? "如果上面的 Cargo 路径不适合你，从下面找到匹配你情况的一条。每条都安装同一个 deepseek 二进制。"
-              : "If the Cargo path above doesn't fit your setup, pick the row that matches your situation. Every path installs the same deepseek binary."}
+              ? "如果上面的 Cargo 路径不适合你，从下面找到匹配你情况的一条。每条都安装同一个 codewhale 二进制。"
+              : "If the Cargo path above doesn't fit your setup, pick the row that matches your situation. Every path installs the same codewhale binary."}
           </p>
 
           <div className="space-y-10">
@@ -280,14 +280,14 @@ export default async function InstallPage({ params }: { params: Promise<{ locale
                 {isZh ? (
                   <>
                     npm 包装器会从 GitHub Releases 下载对应平台的预编译二进制。需要 Node 18+。
-                    安装后会同时提供 <code className="inline">deepseek</code> 和{" "}
-                    <code className="inline">deepseek-tui</code> 两个命令。
+                    安装后会同时提供 <code className="inline">codewhale</code> 和{" "}
+                    <code className="inline">codewhale-tui</code> 两个命令。
                   </>
                 ) : (
                   <>
                     The npm wrapper downloads the prebuilt binary from GitHub Releases for your
-                    platform. Requires Node 18+. Installs both <code className="inline">deepseek</code>{" "}
-                    and <code className="inline">deepseek-tui</code> on PATH.
+                    platform. Requires Node 18+. Installs both <code className="inline">codewhale</code>{" "}
+                    and <code className="inline">codewhale-tui</code> on PATH.
                   </>
                 )}
               </p>
@@ -324,14 +324,14 @@ export default async function InstallPage({ params }: { params: Promise<{ locale
                 {isZh ? (
                   <>
                     npm 包装器仍会从{" "}
-                    <code className="inline">github.com/Hmbown/deepseek-tui/releases</code>{" "}
+                    <code className="inline">github.com/Hmbown/CodeWhale/releases</code>{" "}
                     下载二进制，国内可能较慢。Cargo + Tuna 完全绕开 GitHub。
                     DeepSeek API（<code className="inline">api.deepseek.com</code>）在国内直连，无需代理。
                   </>
                 ) : (
                   <>
                     The npm wrapper still downloads the binary from{" "}
-                    <code className="inline">github.com/Hmbown/deepseek-tui/releases</code>, which can
+                    <code className="inline">github.com/Hmbown/CodeWhale/releases</code>, which can
                     be slow over GFW. Cargo + Tuna routes around GitHub entirely. The DeepSeek API
                     at <code className="inline">api.deepseek.com</code> is reachable from mainland
                     China without a proxy.
@@ -397,40 +397,73 @@ export default async function InstallPage({ params }: { params: Promise<{ locale
       <section className="mx-auto max-w-[1100px] px-6 py-12">
         <div className="flex items-baseline gap-4 mb-5">
           <Seal char="件" />
-          <div className="eyebrow">
-            {isZh ? "06 · 配置文件位置" : "06 · Where config lives"}
-          </div>
+          <div className="eyebrow">{isZh ? "06 · 配置文件在哪" : "06 · Where config lives"}</div>
         </div>
-        <h2 className="font-display text-3xl mb-6">
-          {isZh ? "配置文件位置" : "Where config lives"}
-        </h2>
-
-        <InstallCodeBlock
-          cmd={isZh ? CONFIG_TREE_ZH : CONFIG_TREE}
-          copyLabel={copyLabel}
-          copiedLabel={copiedLabel}
-        />
-
+        <InstallCodeBlock cmd={isZh ? CONFIG_TREE_ZH : CONFIG_TREE} copyLabel={copyLabel} copiedLabel={copiedLabel} />
         <p className="mt-4 text-sm text-ink-soft leading-relaxed max-w-2xl">
           {isZh ? (
             <>
-              所有用户配置存放在 <code className="inline">~/.deepseek/</code>。仓库根目录下的{" "}
-              <code className="inline">.deepseek/</code> 用于项目级覆盖。
-              完整字段参考{" "}
-              <Link href={isZh ? "/zh/docs" : "/docs"} className="body-link">
-                {isZh ? "文档" : "the docs"}
-              </Link>
-              。
+              项目级 <code className="inline">./.deepseek/</code> 目录是可选的——每个仓库可有独立的 MCP 服务器、钩子、
+              技能和配置覆盖（例如提供商密钥）。
+              首次运行时，如果缺少配置文件，系统会询问是否交互式创建。
             </>
           ) : (
             <>
-              All user-level configuration goes under <code className="inline">~/.deepseek/</code>.
-              Per-project overrides live in <code className="inline">.deepseek/</code> at the repo
-              root. Full field reference in{" "}
-              <Link href="/docs" className="body-link">the docs</Link>.
+              The project-scoped <code className="inline">./.deepseek/</code> directory is optional —
+              each repo can carry its own MCP servers, hooks, skills, and config overrides (e.g.
+              provider keys). On first run the app asks whether to interactively create a config
+              file if one is missing.
             </>
           )}
         </p>
+      </section>
+
+      {/* ⑦ NEXT STEPS */}
+      <section className="bg-paper-deep hairline-t hairline-b">
+        <div className="mx-auto max-w-[1100px] px-6 py-12">
+          <div className="flex items-baseline gap-4 mb-5">
+            <Seal char="续" />
+            <div className="eyebrow">{isZh ? "07 · 下一步" : "07 · Next steps"}</div>
+          </div>
+          <div className="grid md:grid-cols-3 gap-0 col-rule hairline-t hairline-b">
+            <Link
+              href={isZh ? "/zh/docs" : "/docs"}
+              className="p-6 hover:bg-paper-deep transition-colors"
+            >
+              <div className="font-display text-xl mb-2">Docs</div>
+              <div className="text-sm text-ink-soft mb-3">
+                {isZh ? "模式、工具、配置、提供商、MCP" : "Modes, tools, config, providers, MCP"}
+              </div>
+              <span className="font-mono text-[0.7rem] uppercase tracking-widest text-indigo">
+                {isZh ? "阅读文档 →" : "Read docs →"}
+              </span>
+            </Link>
+            <Link
+              href={isZh ? "/zh/faq" : "/faq"}
+              className="p-6 hover:bg-paper-deep transition-colors"
+            >
+              <div className="font-display text-xl mb-2">FAQ</div>
+              <div className="text-sm text-ink-soft mb-3">
+                {isZh ? "安装、配置、模型、提供商等常见问题" : "Common questions on install, config, models, providers"}
+              </div>
+              <span className="font-mono text-[0.7rem] uppercase tracking-widest text-indigo">
+                {isZh ? "查看 FAQ →" : "See FAQ →"}
+              </span>
+            </Link>
+            <Link
+              href={isZh ? "/zh/roadmap" : "/roadmap"}
+              className="p-6 hover:bg-paper-deep transition-colors"
+            >
+              <div className="font-display text-xl mb-2">Roadmap</div>
+              <div className="text-sm text-ink-soft mb-3">
+                {isZh ? "已发布、进行中、考虑中、暂不考虑" : "Shipped, underway, considered, ruled out"}
+              </div>
+              <span className="font-mono text-[0.7rem] uppercase tracking-widest text-indigo">
+                {isZh ? "查看路线图 →" : "View roadmap →"}
+              </span>
+            </Link>
+          </div>
+        </div>
       </section>
     </>
   );

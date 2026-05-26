@@ -1,6 +1,6 @@
-# Contributing to DeepSeek TUI
+# Contributing to codewhale
 
-Thank you for your interest in contributing to DeepSeek TUI! This document provides guidelines and instructions for contributing.
+Thank you for your interest in contributing to codewhale! This document provides guidelines and instructions for contributing.
 
 ## Getting Started
 
@@ -14,8 +14,8 @@ Thank you for your interest in contributing to DeepSeek TUI! This document provi
 
 1. Fork and clone the repository:
    ```bash
-   git clone https://github.com/YOUR_USERNAME/DeepSeek-TUI.git
-   cd DeepSeek-TUI
+   git clone https://github.com/YOUR_USERNAME/CodeWhale.git
+   cd CodeWhale
    ```
 
 2. Build the project:
@@ -25,12 +25,12 @@ Thank you for your interest in contributing to DeepSeek TUI! This document provi
 
 3. Run tests:
    ```bash
-   cargo test
+   cargo test --workspace --all-features
    ```
 
 4. Run with development settings:
    ```bash
-   cargo run
+   cargo run --bin codewhale
    ```
 
 ## Development Workflow
@@ -95,6 +95,11 @@ When this happens:
 - The harvested commit's message includes `Harvested from PR #N by
   @your-handle`. This is the contract: that line is your credit and the
   signal that your contribution shipped.
+- If the maintainer copies or adapts your code, the harvested commit also
+  keeps attribution with the original author identity when possible: either by
+  preserving the commit author on a cherry-pick or by adding a
+  `Co-authored-by: Name <email>` trailer from the original PR commit. This is
+  what lets GitHub's contribution surfaces recognize more than prose credit.
 - The `CHANGELOG.md` entry for the next release credits you by handle.
 - The auto-close workflow closes your PR with a templated thank-you and
   a link to the commit on `main`.
@@ -116,16 +121,31 @@ instead of the Harvest path, the highest-leverage things you can do are:
    these without prior discussion are unlikely to merge directly even
    when the change is well-implemented.
 
+## Agent-Assisted Improvements
+
+CodeWhale is allowed to help improve CodeWhale, but the contribution still has
+to be shaped for human review. The recommended workflow is the
+[recursive self-improvement prompt](docs/RECURSIVE_SELF_IMPROVEMENT.md): run it
+from a fresh fork or branch, let the agent find exactly one small friction point,
+and stop after one patch. DeepSeek V4 Pro is the first-class path for this loop
+today, but the review shape matters more than the provider.
+
+The useful output is not "ideas for improvement." The useful output is a
+specific reproduction, a minimal diff, focused checks, and a PR description that
+explains the trade-off. Do not use an agent to touch auth, credentials, sandbox
+policy, publishing/release plumbing, provider policy, telemetry, sponsorship,
+branding, or global prompts without prior maintainer sign-off.
+
 ## Project Structure
 
-DeepSeek TUI is a Cargo workspace. The live runtime and the majority of TUI,
+codewhale is a Cargo workspace. The live runtime and the majority of TUI,
 engine, and tool code currently live in `crates/tui/src/`. Smaller workspace
 crates provide shared abstractions that are being extracted incrementally.
 
 ```
 crates/
-├── tui/           deepseek-tui binary (interactive TUI + runtime API)
-├── cli/           deepseek binary (dispatcher facade)
+├── tui/           codewhale-tui binary (interactive TUI + runtime API)
+├── cli/           codewhale binary (dispatcher facade)
 ├── app-server/    HTTP/SSE + JSON-RPC transport
 ├── core/          Agent loop / session / turn management
 ├── protocol/      Request/response framing
@@ -153,9 +173,9 @@ these crates, including the bottom-up build order.
 
 3. Ensure CI passes:
    ```bash
-   cargo fmt --check
-   cargo clippy
-   cargo test
+   cargo fmt --all -- --check
+   cargo clippy --workspace --all-targets --all-features
+   cargo test --workspace --all-features
    ```
 
 4. Push your branch and create a Pull Request
@@ -201,7 +221,7 @@ When reporting issues, please include:
 
 - Operating system and version
 - Rust version (`rustc --version`)
-- DeepSeek TUI version (`deepseek --version`)
+- codewhale version (`codewhale --version`)
 - Steps to reproduce the issue
 - Expected vs actual behavior
 - Relevant error messages or logs
@@ -212,7 +232,7 @@ Be respectful and inclusive. We welcome contributors of all backgrounds and expe
 
 ## License
 
-By contributing to DeepSeek TUI, you agree that your contributions will be licensed under the MIT License.
+By contributing to codewhale, you agree that your contributions will be licensed under the MIT License.
 
 ## Questions?
 

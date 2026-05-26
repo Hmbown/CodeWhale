@@ -13,7 +13,7 @@ use crate::tui::app::AppMode;
 use crate::tui::approval::ApprovalMode;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone)]
 pub struct PromptSessionContext<'a> {
     pub user_memory_block: Option<&'a str>,
     pub goal_objective: Option<&'a str>,
@@ -28,6 +28,25 @@ pub struct PromptSessionContext<'a> {
     /// to the system prompt instructing the model to respond in
     /// the resolved session locale.
     pub translation_enabled: bool,
+    /// Active model identifier injected into the Constitutional
+    /// preamble ("You are {model_id}, running inside CodeWhale").
+    /// Defaults to `"codewhale"` when the caller doesn't supply one,
+    /// preserving backward compatibility with existing call sites
+    /// that predate dynamic model injection.
+    pub model_id: &'a str,
+}
+
+impl Default for PromptSessionContext<'_> {
+    fn default() -> Self {
+        Self {
+            user_memory_block: None,
+            goal_objective: None,
+            project_context_pack_enabled: true,
+            locale_tag: "en",
+            translation_enabled: false,
+            model_id: "codewhale",
+        }
+    }
 }
 
 /// Conventional location for the structured session relay artifact (#32).
@@ -168,8 +187,7 @@ fn load_handoff_block(workspace: &Path) -> Option<String> {
         return None;
     }
     Some(format!(
-        "## Previous Session Relay\n\nThe previous session in this workspace left a relay artifact at `{}`. Consider it the first artifact to read on this turn — open blockers, in-flight changes, and recent decisions live there. Update or rewrite it before exiting if state changes materially.\n\n{}",
-        HANDOFF_RELATIVE_PATH, trimmed
+        "## Previous Session Relay\n\nThe previous session in this workspace left a relay artifact at `{HANDOFF_RELATIVE_PATH}`. Consider it the first artifact to read on this turn — open blockers, in-flight changes, and recent decisions live there. Update or rewrite it before exiting if state changes materially.\n\n{trimmed}"
     ))
 }
 
@@ -277,7 +295,7 @@ pub(crate) fn locale_reinforcement_closer(locale_tag: &str) -> Option<&'static s
 }
 
 const LOCALE_PREAMBLE_ZH_HANS: &str = "## 语言要求\n\n\
-你正在 DeepSeek TUI 中运行。无论任务上下文（代码、错误日志、文件名）\
+你正在 codewhale 中运行。无论任务上下文（代码、错误日志、文件名）\
 是英文，无论系统提示的其余部分是英文，你都必须用简体中文进行 \
 `reasoning_content`（内部思考）和最终回复。代码、文件路径、工具名称\
 （例如 `read_file`、`exec_shell`）、环境变量、命令行参数和 URL \
@@ -286,7 +304,7 @@ const LOCALE_PREAMBLE_ZH_HANS: &str = "## 语言要求\n\n\
 如果用户明确要求（例如 \"think in English\"），则覆盖此规则。";
 
 const LOCALE_PREAMBLE_JA: &str = "## 言語要件\n\n\
-DeepSeek TUI を実行しています。タスクコンテキスト（コード、エラーログ、\
+codewhale を実行しています。タスクコンテキスト（コード、エラーログ、\
 ファイル名）が英語であっても、システムプロンプトの他の部分が英語で\
 あっても、`reasoning_content`（内部思考）と最終的な返信は日本語で\
 行ってください。コード、ファイルパス、ツール名（例：`read_file`、\
@@ -297,7 +315,7 @@ DeepSeek TUI を実行しています。タスクコンテキスト（コード�
 \"think in English\"）はこのルールを上書きします。";
 
 const LOCALE_PREAMBLE_PT_BR: &str = "## Requisito de Idioma\n\n\
-Você está rodando dentro do DeepSeek TUI. Escreva tanto \
+Você está rodando dentro do codewhale. Escreva tanto \
 `reasoning_content` (seu pensamento interno) quanto a resposta final \
 em português do Brasil, mesmo quando o contexto da tarefa (código, \
 logs de erro, nomes de arquivos) estiver em inglês e mesmo quando o \
@@ -444,6 +462,30 @@ fn approval_prompt_for_mode(mode: AppMode, approval_mode: ApprovalMode) -> &'sta
 ///
 /// Each layer is separated by a blank line for readability in the
 /// rendered prompt (the model sees them as contiguous sections).
+/// Substitute the `{model_id}` template in the Constitutional preamble
+/// with the active model identifier. The base prompt is a compile-time
+/// constant; this function produces a per-session variant so the prompt
+/// says "You are deepseek-v4-pro" or "You are deepseek-v4-flash" instead
+/// of a static placeholder.
+fn apply_model_template(prompt: &str, model_id: &str) -> String {
+    prompt.replace("{model_id}", model_id)
+}
+
+/// Authority recap block — appended at the end of the system prompt,
+/// just before the user's first message. Uses recency bias constructively:
+/// this is the last thing the model reads before generating, so it
+/// reinforces the Constitutional hierarchy without occupying cache-stable
+/// prefix space.
+const AUTHORITY_RECAP: &str = "\
+## Authority Recap
+
+The Constitution of CodeWhale (Articles I-VII) governs your behavior.
+Tier 1 rules — truthfulness, user agency, tool-use mandate, verification
+duty — are non-negotiable. The user's next message is the highest
+directive within Constitutional bounds. Personality, memory, and handoff
+context are subordinate to the Constitution, the Statutes, and the user's
+current request. When in doubt, consult Article VII: The Hierarchy of Law.";
+
 pub fn compose_prompt(mode: AppMode, personality: Personality) -> String {
     compose_prompt_with_approval(mode, personality, default_approval_mode_for_mode(mode))
 }
@@ -453,8 +495,19 @@ pub fn compose_prompt_with_approval(
     personality: Personality,
     approval_mode: ApprovalMode,
 ) -> String {
+    compose_prompt_with_approval_and_model(mode, personality, approval_mode, "codewhale")
+}
+
+/// Compose with explicit model ID for dynamic identity injection.
+/// The model_id replaces `{model_id}` in the Constitutional preamble.
+pub fn compose_prompt_with_approval_and_model(
+    mode: AppMode,
+    personality: Personality,
+    approval_mode: ApprovalMode,
+    model_id: &str,
+) -> String {
     let parts: [&str; 4] = [
-        BASE_PROMPT.trim(),
+        &apply_model_template(BASE_PROMPT.trim(), model_id),
         personality.prompt().trim(),
         mode_prompt(mode).trim(),
         approval_prompt_for_mode(mode, approval_mode).trim(),
@@ -479,6 +532,14 @@ fn compose_mode_prompt(mode: AppMode) -> String {
 
 fn compose_mode_prompt_with_approval(mode: AppMode, approval_mode: ApprovalMode) -> String {
     compose_prompt_with_approval(mode, Personality::Calm, approval_mode)
+}
+
+fn compose_mode_prompt_with_approval_and_model(
+    mode: AppMode,
+    approval_mode: ApprovalMode,
+    model_id: &str,
+) -> String {
+    compose_prompt_with_approval_and_model(mode, Personality::Calm, approval_mode, model_id)
 }
 
 // ── Public API ────────────────────────────────────────────────────────
@@ -549,6 +610,7 @@ pub fn system_prompt_for_mode_with_context_and_skills(
             project_context_pack_enabled: true,
             locale_tag: "en",
             translation_enabled: false,
+            model_id: "codewhale",
         },
     )
 }
@@ -581,7 +643,8 @@ pub fn system_prompt_for_mode_with_context_skills_session_and_approval(
     session_context: PromptSessionContext<'_>,
     approval_mode: ApprovalMode,
 ) -> SystemPrompt {
-    let mode_prompt = compose_mode_prompt_with_approval(mode, approval_mode);
+    let mode_prompt =
+        compose_mode_prompt_with_approval_and_model(mode, approval_mode, session_context.model_id);
 
     // Load project context from workspace
     let project_context = load_project_context_with_parents(workspace);
@@ -597,10 +660,11 @@ pub fn system_prompt_for_mode_with_context_skills_session_and_approval(
     let preamble = locale_reinforcement_preamble(session_context.locale_tag);
 
     // 1–2. Mode prompt + project context.
-    // `load_project_context_with_parents` auto-generates .deepseek/instructions.md
-    // when no context file exists, so the fallback should always be available.
+    // `load_project_context_with_parents` auto-generates .codewhale/instructions.md
+    // (or .deepseek/instructions.md as fallback) when no context file exists,
+    // so the fallback should always be available.
     let mut full_prompt = if let Some(project_block) = project_context.as_system_block() {
-        format!("{}\n\n{}", mode_prompt, project_block)
+        format!("{mode_prompt}\n\n{project_block}")
     } else {
         // Extremely unlikely: context generation failed (e.g. filesystem error).
         // Use mode prompt alone rather than panic.
@@ -726,7 +790,12 @@ pub fn system_prompt_for_mode_with_context_skills_session_and_approval(
         full_prompt = format!("{full_prompt}\n\n{handoff_block}");
     }
 
-    // 7. Locale-native closing reinforcement (#1118 follow-up #2). The
+    // 7a. Authority recap — the final tier reminder before user messages.
+    // Uses recency bias constructively: this is the last content the model
+    // sees before the user's turn, reinforcing the Constitutional hierarchy.
+    full_prompt = format!("{full_prompt}\n\n{AUTHORITY_RECAP}");
+
+    // 8. Locale-native closing reinforcement (#1118 follow-up #2). The
     // opening preamble alone wasn't enough — community feedback (the
     // WeChat thread about XML-tagged bilingual bookends) flagged that as
     // English context accumulates turn-over-turn, the model's recency
@@ -765,6 +834,18 @@ mod tests {
     /// agent prompt's own discussion of the convention).
     const HANDOFF_BLOCK_MARKER: &str = "left a relay artifact at `.deepseek/handoff.md`";
 
+    fn contains_cjk(text: &str) -> bool {
+        text.chars().any(|ch| {
+            matches!(
+                ch,
+                '\u{3040}'..='\u{30ff}'
+                    | '\u{3400}'..='\u{4dbf}'
+                    | '\u{4e00}'..='\u{9fff}'
+                    | '\u{f900}'..='\u{faff}'
+            )
+        })
+    }
+
     #[test]
     fn base_prompt_carries_execution_discipline_block() {
         // The XML-tagged execution-discipline block is the contract —
@@ -789,6 +870,118 @@ mod tests {
     }
 
     #[test]
+    fn base_prompt_carries_constitutional_preamble() {
+        // Pin the load-bearing Constitutional anchors. The exact prose
+        // can evolve, but CodeWhale must keep the Brother Whale preamble,
+        // the coordination principle, and the hierarchy of law.
+        for phrase in [
+            "We begin with Brother Whale",
+            "Brother Whale is the founding intelligence",
+            "Every model that runs here is Brother Whale",
+            "future intelligences can better coordinate",
+            "Article II — The Primacy of Truth",
+            "Article VII — The Hierarchy of Law",
+        ] {
+            assert!(
+                BASE_PROMPT.contains(phrase),
+                "BASE_PROMPT missing Constitutional phrase {phrase:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn constitutional_hierarchy_keeps_case_command_above_local_law() {
+        let case_at = BASE_PROMPT
+            .find("2. **Case Command.**")
+            .expect("case command tier present");
+        let statute_at = BASE_PROMPT
+            .find("3. **Statutes.**")
+            .expect("statutes tier present");
+        let local_law_at = BASE_PROMPT
+            .find("5. **Local Law.**")
+            .expect("local law tier present");
+
+        assert!(
+            case_at < statute_at && statute_at < local_law_at,
+            "Article VII must keep the current user request above runtime guidance and local law"
+        );
+        assert!(
+            BASE_PROMPT.contains("actual runtime gates still determine what tools can execute"),
+            "Article VII must distinguish prompt authority from executable runtime gates"
+        );
+    }
+
+    #[test]
+    fn base_prompt_contains_model_id_template() {
+        assert!(
+            BASE_PROMPT.contains("{model_id}"),
+            "BASE_PROMPT must contain the {{model_id}} template for dynamic injection"
+        );
+    }
+
+    #[test]
+    fn apply_model_template_replaces_placeholder() {
+        let result = apply_model_template("You are {model_id}", "deepseek-v4-pro");
+        assert_eq!(result, "You are deepseek-v4-pro");
+        assert!(!result.contains("{model_id}"));
+    }
+
+    #[test]
+    fn compose_prompt_injects_model_id() {
+        let prompt = compose_prompt_with_approval_and_model(
+            AppMode::Agent,
+            Personality::Calm,
+            ApprovalMode::Suggest,
+            "deepseek-v4-flash",
+        );
+        assert!(
+            prompt.contains("You are deepseek-v4-flash"),
+            "composed prompt must contain the injected model id"
+        );
+        assert!(
+            !prompt.contains("{model_id}"),
+            "composed prompt must not contain the raw template placeholder"
+        );
+    }
+
+    #[test]
+    fn authority_recap_appears_in_full_prompt() {
+        let tmp = tempdir().expect("tempdir");
+        let text = match system_prompt_for_mode_with_context_skills_session_and_approval(
+            AppMode::Agent,
+            tmp.path(),
+            None,
+            None,
+            None,
+            PromptSessionContext::default(),
+            ApprovalMode::Suggest,
+        ) {
+            SystemPrompt::Text(text) => text,
+            SystemPrompt::Blocks(_) => panic!("expected text system prompt"),
+        };
+        assert!(
+            text.contains("## Authority Recap"),
+            "full system prompt must contain the authority recap"
+        );
+        assert!(
+            text.contains("The Constitution of CodeWhale (Articles I-VII) governs your behavior"),
+            "authority recap must reference the Constitution"
+        );
+    }
+
+    #[test]
+    fn calm_personality_declares_tier_8_subordination() {
+        assert!(
+            CALM_PERSONALITY.contains("Tier 8"),
+            "Calm personality must identify as Tier 8"
+        );
+        assert!(
+            CALM_PERSONALITY.contains("cannot override"),
+            "Calm personality must have a subordination clause"
+        );
+    }
+
+    #[test]
     fn execution_discipline_is_at_the_end_for_cache_stability() {
         // DeepSeek's prefix cache keys on a leading byte-stable run, so
         // the new sections must be appended, not interleaved earlier.
@@ -800,6 +993,18 @@ mod tests {
         assert!(
             language_at < persistence_at,
             "execution-discipline block must come after the early sections"
+        );
+    }
+
+    #[test]
+    fn plan_mode_prompt_uses_update_plan_as_confirmation_handoff() {
+        assert!(
+            PLAN_MODE.contains("call `update_plan`"),
+            "Plan mode must tell the model to finish plans through update_plan"
+        );
+        assert!(
+            PLAN_MODE.contains("accept / revise / exit prompt"),
+            "Plan mode must explain why update_plan is the UI handoff signal"
         );
     }
 
@@ -881,6 +1086,7 @@ mod tests {
                 project_context_pack_enabled: false,
                 locale_tag: "zh-Hans",
                 translation_enabled: false,
+                model_id: "codewhale",
             },
             ApprovalMode::Suggest,
         ) {
@@ -888,7 +1094,7 @@ mod tests {
             SystemPrompt::Blocks(_) => panic!("expected text system prompt"),
         };
         let preamble_marker = "## 语言要求";
-        let base_marker = "You are DeepSeek TUI";
+        let base_marker = "You are codewhale";
         let preamble_pos = text
             .find(preamble_marker)
             .expect("zh-Hans preamble should be present");
@@ -950,6 +1156,7 @@ mod tests {
                 project_context_pack_enabled: false,
                 locale_tag: "zh-Hans",
                 translation_enabled: false,
+                model_id: "codewhale",
             },
             ApprovalMode::Suggest,
         ) {
@@ -994,6 +1201,7 @@ mod tests {
                 project_context_pack_enabled: false,
                 locale_tag: "en",
                 translation_enabled: false,
+                model_id: "codewhale",
             },
             ApprovalMode::Suggest,
         ) {
@@ -1025,6 +1233,10 @@ mod tests {
             !text.contains("Reforço de Idioma"),
             "English locale must not get a pt-BR closer: {text:?}"
         );
+        assert!(
+            !contains_cjk(&text),
+            "English system prompt should avoid native-script priming tokens: {text:?}"
+        );
     }
 
     #[test]
@@ -1039,28 +1251,27 @@ mod tests {
             lang.contains("reasoning_content"),
             "language section must explicitly call out reasoning_content"
         );
-        // Bold "must both be in Simplified Chinese" anchor — strong
-        // emphasis aimed at the failure mode V4 falls into where it
-        // mirrors the user message for the final reply but defaults to
-        // English for thinking.
         assert!(
-            lang.contains("must both be in Simplified Chinese"),
-            "expected the bold Simplified Chinese requirement"
+            lang.contains("latest user message"),
+            "latest user message must be the primary language signal"
         );
-        // "overwhelmingly English" — addresses the specific trigger
-        // where a Chinese question lands on a codebase whose system
-        // prompt and context are English-heavy.
         assert!(
-            lang.contains("overwhelmingly English"),
-            "expected the context-is-English caveat"
+            lang.contains("clearly English") && lang.contains("must stay English"),
+            "English user turns must stay English even after localized context"
+        );
+        assert!(
+            lang.contains("Simplified Chinese")
+                && lang.contains("must both be in Simplified Chinese"),
+            "Chinese user turns must still steer reasoning_content and replies"
+        );
+        assert!(
+            lang.contains("README.zh-CN.md") && lang.contains("tool results"),
+            "localized docs and tool results must be named as non-language signals"
         );
         // Explicit-user-override clause keeps the prompt useful for the
         // opposite preference (#1118 commenters who want English
         // thinking for token-cost reasons).
-        for phrase in [
-            "think in English",
-            "\u{7528}\u{82F1}\u{6587}\u{601D}\u{8003}",
-        ] {
+        for phrase in ["think in English", "reason in Chinese"] {
             assert!(
                 lang.contains(phrase),
                 "expected the user-override example `{phrase}`"
@@ -1083,6 +1294,7 @@ mod tests {
                 project_context_pack_enabled: true,
                 locale_tag: "ja",
                 translation_enabled: false,
+                model_id: "codewhale",
             },
         ) {
             SystemPrompt::Text(text) => text,
@@ -1118,6 +1330,7 @@ mod tests {
                 project_context_pack_enabled: false,
                 locale_tag: "en",
                 translation_enabled: false,
+                model_id: "codewhale",
             },
         ) {
             SystemPrompt::Text(text) => text,
@@ -1145,6 +1358,7 @@ mod tests {
                 project_context_pack_enabled: false,
                 locale_tag: "en",
                 translation_enabled: false,
+                model_id: "codewhale",
             },
         ) {
             SystemPrompt::Text(text) => text,
@@ -1155,6 +1369,33 @@ mod tests {
         assert!(
             mem_at < guide_at,
             "guidance must come after the user memory block"
+        );
+    }
+
+    #[test]
+    fn memory_guidance_matches_constitutional_tier_order() {
+        let guidance = MEMORY_GUIDANCE
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let current_request_at = guidance
+            .find("the user's current request (Tier 2)")
+            .expect("current request tier present");
+        let statutes_at = guidance
+            .find("Statutes (Tier 3)")
+            .expect("statutes tier present");
+        let local_law_at = guidance
+            .find("Local Law (Tier 5)")
+            .expect("local law tier present");
+        let live_evidence_at = guidance
+            .find("live evidence (Tier 6)")
+            .expect("live evidence tier present");
+
+        assert!(
+            current_request_at < statutes_at
+                && statutes_at < local_law_at
+                && local_law_at < live_evidence_at,
+            "memory guidance must keep the current request above memory and local law"
         );
     }
 
@@ -1174,6 +1415,7 @@ mod tests {
                 project_context_pack_enabled: false,
                 locale_tag: "en",
                 translation_enabled: false,
+                model_id: "codewhale",
             },
         ) {
             SystemPrompt::Text(text) => text,
@@ -1201,6 +1443,7 @@ mod tests {
                 project_context_pack_enabled: true,
                 locale_tag: "en",
                 translation_enabled: false,
+                model_id: "codewhale",
             },
         ) {
             SystemPrompt::Text(text) => text,
@@ -1262,7 +1505,7 @@ mod tests {
     fn compose_prompt_includes_all_layers() {
         let prompt = compose_prompt(AppMode::Agent, Personality::Calm);
         // Base layer
-        assert!(prompt.contains("You are DeepSeek TUI"));
+        assert!(prompt.contains("You are codewhale"));
         // Personality layer
         assert!(prompt.contains("Personality: Calm"));
         // Mode layer
@@ -1321,7 +1564,7 @@ mod tests {
     #[test]
     fn compose_prompt_deterministic_order() {
         let prompt = compose_prompt(AppMode::Yolo, Personality::Calm);
-        let base_pos = prompt.find("You are DeepSeek TUI").unwrap();
+        let base_pos = prompt.find("You are codewhale").unwrap();
         let personality_pos = prompt.find("Personality: Calm").unwrap();
         let mode_pos = prompt.find("Mode: YOLO").unwrap();
         let approval_pos = prompt.find("Approval Policy: Auto").unwrap();
@@ -1395,6 +1638,7 @@ mod tests {
                 project_context_pack_enabled: true,
                 locale_tag: "en",
                 translation_enabled: false,
+                model_id: "codewhale",
             },
         ) {
             SystemPrompt::Text(text) => text,
@@ -1428,6 +1672,7 @@ mod tests {
                 project_context_pack_enabled: true,
                 locale_tag: "en",
                 translation_enabled: false,
+                model_id: "codewhale",
             },
         ) {
             SystemPrompt::Text(text) => text,
@@ -1487,12 +1732,33 @@ mod tests {
              falling back to the environment locale"
         );
         assert!(
+            prompt.contains("If the latest user message is clearly English"),
+            "English user text must not drift after non-English context"
+        );
+        assert!(
+            prompt.contains("localized READMEs") && prompt.contains("tool results"),
+            "file/tool context must not become a language signal"
+        );
+        assert!(
             prompt.contains("even when the `lang` field in `## Environment` is `en`"),
             "Chinese user text must override an English resolved locale for reasoning_content"
         );
         assert!(
             prompt.contains("Use the `lang` field only when"),
             "environment locale should be an ambiguity fallback, not the primary language source"
+        );
+    }
+
+    #[test]
+    fn english_base_prompt_avoids_native_script_language_priming() {
+        let prompt = compose_prompt(AppMode::Agent, Personality::Calm);
+        assert!(
+            !contains_cjk(&prompt),
+            "English base prompt should keep native-script reinforcement in locale bookends only"
+        );
+        assert!(
+            !prompt.contains("multilingual coding agent"),
+            "identity should not prime language switching; language belongs in the Language section"
         );
     }
 
@@ -1524,10 +1790,16 @@ mod tests {
     #[test]
     fn workspace_orientation_guidance_present() {
         let prompt = compose_prompt(AppMode::Agent, Personality::Calm);
-        assert!(prompt.contains("Workspace Orientation"));
-        assert!(prompt.contains("canonical project root"));
+        // Workspace orientation guidance is now distributed across the
+        // Constitutional preamble (project context loading) and the
+        // Local Law tier (AGENTS.md/instructions.md). Verify the
+        // key guidance anchors are still present.
         assert!(prompt.contains("AGENTS.md"));
-        assert!(prompt.contains("explore` / `explorer"));
+        assert!(prompt.contains("Local Law"));
+        assert!(
+            prompt.contains("CLAUDE.md"),
+            "CLAUDE.md must be listed as a project instruction source"
+        );
     }
 
     #[test]
@@ -1581,7 +1853,7 @@ mod tests {
     fn subagent_done_sentinel_section_present() {
         let prompt = compose_prompt(AppMode::Agent, Personality::Calm);
         assert!(prompt.contains("Internal Sub-agent Completion Events"));
-        assert!(prompt.contains("<deepseek:subagent.done>"));
+        assert!(prompt.contains("<codewhale:subagent.done>"));
         assert!(prompt.contains("not user input"));
         assert!(prompt.contains("Integration protocol"));
         assert!(prompt.contains("Do not tell the user they pasted sentinels"));
@@ -1590,14 +1862,16 @@ mod tests {
     #[test]
     fn preamble_rhythm_section_present() {
         let prompt = compose_prompt(AppMode::Agent, Personality::Calm);
-        assert!(prompt.contains("Preamble Rhythm"));
-        assert!(prompt.contains("I'll start by reading the module structure"));
+        // Preamble rhythm is now part of the Calm personality overlay.
+        // Verify the load-bearing guidance is still present.
+        assert!(prompt.contains("In preambles, name the action"));
+        assert!(prompt.contains("Reading the module tree"));
     }
 
     #[test]
     fn legacy_constants_still_available() {
         // Verify the legacy .txt constant still compiles and contains expected content
-        assert!(!AGENT_PROMPT.is_empty());
+        assert!(AGENT_PROMPT.lines().next().is_some());
     }
 
     // ── Cache-prefix stability harness (#263 step 2) ───────────────────────

@@ -83,7 +83,7 @@ pub async fn execute_js_execution_tool(
         ToolError::execution_failed(
             "js_execution: no Node.js runtime found on PATH (tried `node`). \
              Install Node 18+ and ensure `node` is on PATH, then restart \
-             deepseek-tui."
+             codewhale."
                 .to_string(),
         )
     })?;

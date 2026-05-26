@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>DeepSeek TUI — 终端原生编程智能体</title>
+  <title>CodeWhale — DeepSeek V4 的最强智能体运行框架</title>
   <link rel="alternate" hreflang="en" href="../">
   <style>
     :root {
@@ -418,9 +418,9 @@
     <div class="nav-brand">deepseek<span>-tui</span></div>
     <ul class="nav-links">
       <li><a href="#install">安装</a></li>
-      <li><a href="https://github.com/Hmbown/DeepSeek-TUI" target="_blank" rel="noopener">GitHub</a></li>
-      <li><a href="https://github.com/Hmbown/DeepSeek-TUI/tree/main/docs" target="_blank" rel="noopener">文档</a></li>
-      <li><a href="https://github.com/Hmbown/DeepSeek-TUI/issues" target="_blank" rel="noopener">社区</a></li>
+      <li><a href="https://github.com/Hmbown/CodeWhale" target="_blank" rel="noopener">GitHub</a></li>
+      <li><a href="https://github.com/Hmbown/CodeWhale/tree/main/docs" target="_blank" rel="noopener">文档</a></li>
+      <li><a href="https://github.com/Hmbown/CodeWhale/issues" target="_blank" rel="noopener">社区</a></li>
       <li><a href="../" class="lang-switch" title="Switch to English">EN</a></li>
     </ul>
   </div>
@@ -429,9 +429,9 @@
 <main class="container">
 
   <div class="hero" id="install">
-    <div class="hero-badge"><span class="dot"></span>v0.8.10 现已发布</div>
-    <h1>面向 <span class="accent">DeepSeek&nbsp;V4</span><br>的终端原生编程智能体</h1>
-    <p class="lead">100 万 token 上下文。思考模式推理流。单一二进制，零依赖——开箱自带 MCP 客户端、沙箱和持久化任务队列。</p>
+    <div class="hero-badge"><span class="dot"></span>v0.8.45 现已发布</div>
+    <h1>面向 <span class="accent">DeepSeek&nbsp;V4</span><br>的最强智能体运行框架</h1>
+    <p class="lead">规则、工具、证据和反馈循环——帮助模型持续工作直到任务完成。100 万 token 上下文、思考模式流式推理、OS 级沙箱——单一二进制，零依赖。</p>
 
     <div class="terminal">
       <div class="terminal-header">
@@ -442,48 +442,48 @@
       </div>
       <div class="terminal-body">
         <span class="prompt">$</span>
-        <span>npm i -g deepseek-tui</span>
+        <span>npm i -g codewhale</span>
         <span class="cursor"></span>
         <button class="btn-copy" onclick="copyInstall()" id="copyBtn">复制</button>
       </div>
     </div>
 
     <div class="hero-actions">
-      <a class="btn btn-primary" href="https://github.com/Hmbown/DeepSeek-TUI" target="_blank" rel="noopener">在 GitHub 上查看</a>
-      <a class="btn btn-secondary" href="https://www.buymeacoffee.com/hmbown" target="_blank" rel="noopener">赞助支持</a>
+      <a class="btn btn-primary" href="https://github.com/Hmbown/CodeWhale" target="_blank" rel="noopener">在 GitHub 上查看</a>
+      <a class="btn btn-secondary" href="https://github.com/sponsors/Hmbown" target="_blank" rel="noopener">GitHub 赞助</a>
     </div>
   </div>
 
   <div class="screenshot-wrap">
-    <img src="https://raw.githubusercontent.com/Hmbown/DeepSeek-TUI/main/assets/screenshot.png" alt="DeepSeek TUI 截图" loading="lazy">
+    <img src="https://raw.githubusercontent.com/Hmbown/CodeWhale/main/assets/screenshot.png" alt="DeepSeek TUI 截图" loading="lazy">
   </div>
 
   <section>
-    <h2><span class="icon">▸</span>核心功能</h2>
+    <h2><span class="icon">▸</span>框架如何工作</h2>
     <div class="feature-grid">
       <div class="feature-card">
-        <h3>100 万上下文</h3>
-        <p>为 DeepSeek V4 构建，支持智能压缩和前缀缓存感知成本优化。</p>
+        <h3>宪政层级</h3>
+        <p>用户意图优先于陈旧记忆。实时证据优先于假设。每一轮都有清晰的权威链。</p>
       </div>
       <div class="feature-card">
-        <h3>思考流式输出</h3>
-        <p>实时观察模型思维链展开，在最终答案到达前看到推理过程。</p>
+        <h3>结构化信任</h3>
+        <p>Plan（只读）、Agent（审批门控）、YOLO（自动批准）。OS 级沙箱支撑每一个边界。</p>
       </div>
       <div class="feature-card">
-        <h3>原生 RLM</h3>
-        <p>并行调度 1–16 个低成本子任务，用于批量分析和并行推理。</p>
+        <h3>反馈节拍</h3>
+        <p>失败的命令和失败的测试不是死胡同——它们是模型可以逐轮调谐的信号。</p>
       </div>
       <div class="feature-card">
-        <h3>完整工具集</h3>
-        <p>文件操作、Shell、Git、网页搜索、补丁应用、子智能体和 MCP 服务器。</p>
+        <h3>连续性</h3>
+        <p>记忆跨会话持久化。交接在压缩后仍然存活。会话可保存、恢复和分叉。</p>
       </div>
       <div class="feature-card">
-        <h3>三种模式</h3>
-        <p>Plan（只读探索）、Agent（交互审批）、YOLO（自动批准），适配任意工作流。</p>
+        <h3>分布式工作</h3>
+        <p>子智能体并发运行，一次最多 20 个。结果以结构化完成事件形式到达。</p>
       </div>
       <div class="feature-card">
-        <h3>持久化会话</h3>
-        <p>保存、恢复、回滚工作区状态，不影响项目自身的 .git 仓库。</p>
+        <h3>适度智能</h3>
+        <p>Fin 处理路由和摘要，Pro 负责架构和调试。每个问题匹配恰当的智能量。</p>
       </div>
     </div>
   </section>
@@ -523,8 +523,8 @@ deepseek --version</code></pre>
 export RUSTUP_UPDATE_ROOT=https://mirrors.tuna.tsinghua.edu.cn/rustup/rustup
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh</code></pre>
       <p>配置 Cargo 镜像后从源码构建：</p>
-      <pre><code>git clone https://github.com/Hmbown/DeepSeek-TUI.git
-cd DeepSeek-TUI
+      <pre><code>git clone https://github.com/Hmbown/CodeWhale.git
+cd CodeWhale
 cargo install --path crates/cli --locked
 cargo install --path crates/tui --locked</code></pre>
     </details>
@@ -534,14 +534,14 @@ cargo install --path crates/tui --locked</code></pre>
       <p>直接从 GitHub Releases 下载对应平台的二进制文件，放到 <code>PATH</code> 目录即可：</p>
       <pre><code>mkdir -p ~/.local/bin
 curl -L -o ~/.local/bin/deepseek \
-  https://github.com/Hmbown/DeepSeek-TUI/releases/latest/download/deepseek-linux-x64
+  https://github.com/Hmbown/CodeWhale/releases/latest/download/deepseek-linux-x64
 curl -L -o ~/.local/bin/deepseek-tui \
-  https://github.com/Hmbown/DeepSeek-TUI/releases/latest/download/deepseek-tui-linux-x64
+  https://github.com/Hmbown/CodeWhale/releases/latest/download/deepseek-tui-linux-x64
 chmod +x ~/.local/bin/deepseek ~/.local/bin/deepseek-tui</code></pre>
       <p>macOS 用户将 <code>linux-x64</code> 替换为 <code>macos-arm64</code> 或 <code>macos-x64</code>，并将 <code>sha256sum</code> 替换为 <code>shasum -a 256</code>。</p>
     </details>
 
-    <p style="margin-top:1rem;font-size:0.875rem;">完整平台安装指南：<a href="https://github.com/Hmbown/DeepSeek-TUI/blob/main/docs/INSTALL.md" target="_blank" rel="noopener">docs/INSTALL.md</a> · <a href="../../README.zh-CN.md">简体中文 README</a></p>
+    <p style="margin-top:1rem;font-size:0.875rem;">完整平台安装指南：<a href="https://github.com/Hmbown/CodeWhale/blob/main/docs/INSTALL.md" target="_blank" rel="noopener">docs/INSTALL.md</a> · <a href="../../README.zh-CN.md">简体中文 README</a></p>
   </section>
 
 </main>
@@ -549,10 +549,10 @@ chmod +x ~/.local/bin/deepseek ~/.local/bin/deepseek-tui</code></pre>
 <footer>
   <div class="container">
     <div class="footer-links">
-      <a href="https://github.com/Hmbown/DeepSeek-TUI" target="_blank" rel="noopener">GitHub</a>
-      <a href="https://github.com/Hmbown/DeepSeek-TUI/tree/main/docs" target="_blank" rel="noopener">文档</a>
-      <a href="https://github.com/Hmbown/DeepSeek-TUI/issues" target="_blank" rel="noopener">Issues</a>
-      <a href="https://www.buymeacoffee.com/hmbown" target="_blank" rel="noopener">赞助</a>
+      <a href="https://github.com/Hmbown/CodeWhale" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/Hmbown/CodeWhale/tree/main/docs" target="_blank" rel="noopener">文档</a>
+      <a href="https://github.com/Hmbown/CodeWhale/issues" target="_blank" rel="noopener">Issues</a>
+      <a href="https://github.com/sponsors/Hmbown" target="_blank" rel="noopener">GitHub 赞助</a>
       <a href="mailto:security@deepseek-tui.com">安全</a>
     </div>
     <p class="disclaimer">本项目与 DeepSeek Inc. 无隶属关系。</p>
@@ -562,7 +562,7 @@ chmod +x ~/.local/bin/deepseek ~/.local/bin/deepseek-tui</code></pre>
 
 <script>
   function copyInstall() {
-    navigator.clipboard.writeText('npm i -g deepseek-tui').then(() => {
+    navigator.clipboard.writeText('npm i -g codewhale').then(() => {
       const btn = document.getElementById('copyBtn');
       btn.textContent = '已复制';
       btn.classList.add('copied');

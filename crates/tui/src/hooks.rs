@@ -719,7 +719,7 @@ impl HookExecutor {
                     stdout: String::new(),
                     stderr: String::new(),
                     duration: started.elapsed(),
-                    error: Some(format!("Hook timed out after {}s", timeout_secs)),
+                    error: Some(format!("Hook timed out after {timeout_secs}s")),
                 }
             }
             Err(e) => HookResult {

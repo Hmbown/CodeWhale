@@ -484,9 +484,7 @@ impl Secrets {
 
     /// Resolve a secret with `secret store → env → none` precedence.
     ///
-    /// `name` is the canonical provider name (`"deepseek"`,
-    /// `"openrouter"`, `"novita"`, `"nvidia"`/`"nvidia-nim"`, `"openai"`,
-    /// or `"atlascloud"`).
+    /// `name` is the canonical provider name or a supported provider alias.
     /// Empty strings on either layer are treated as "not set".
     #[must_use]
     pub fn resolve(&self, name: &str) -> Option<String> {
@@ -535,6 +533,7 @@ pub fn env_for(name: &str) -> Option<String> {
             &["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY", "DEEPSEEK_API_KEY"]
         }
         "fireworks" | "fireworks-ai" => &["FIREWORKS_API_KEY"],
+        "moonshot" | "moonshot-ai" | "kimi" | "kimi-k2" => &["MOONSHOT_API_KEY", "KIMI_API_KEY"],
         "sglang" | "sg-lang" => &["SGLANG_API_KEY"],
         "vllm" | "v-llm" => &["VLLM_API_KEY"],
         "ollama" | "ollama-local" => &["OLLAMA_API_KEY"],
@@ -776,6 +775,21 @@ mod tests {
         assert_eq!(env_for("fireworks-ai").as_deref(), Some("fw-key"));
         // Safety: env mutation guarded by env_lock().
         unsafe { std::env::remove_var("FIREWORKS_API_KEY") };
+    }
+
+    #[test]
+    fn moonshot_kimi_env_aliases_resolve() {
+        let _lock = env_lock();
+        clear_known_envs();
+        // Safety: env mutation guarded by env_lock().
+        unsafe { std::env::set_var("KIMI_API_KEY", "kimi-key") };
+
+        assert_eq!(env_for("moonshot").as_deref(), Some("kimi-key"));
+        assert_eq!(env_for("moonshot-ai").as_deref(), Some("kimi-key"));
+        assert_eq!(env_for("kimi").as_deref(), Some("kimi-key"));
+        assert_eq!(env_for("kimi-k2").as_deref(), Some("kimi-key"));
+        // Safety: env mutation guarded by env_lock().
+        unsafe { std::env::remove_var("KIMI_API_KEY") };
     }
 
     #[test]

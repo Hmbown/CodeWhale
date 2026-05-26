@@ -469,7 +469,18 @@ fn add_local_reference_completions(
 }
 
 fn should_try_local_reference_completion(needle: &str) -> bool {
-    !needle.is_empty() && (needle.starts_with('.') || needle.contains('/') || needle.contains('\\'))
+    if needle.is_empty() {
+        return false;
+    }
+    // A bare separator or dot isn't an actionable path yet. Without this
+    // guard, a single `@/` keystroke triggers a `LOCAL_REFERENCE_SCAN_LIMIT`
+    // (4096-path) walk on the UI thread for #1921 — on WSL2 with a
+    // `/mnt/c/...` workspace each entry crosses Windows-host I/O and the
+    // composer appears frozen for seconds to minutes.
+    if matches!(needle, "/" | "\\" | "." | "..") {
+        return false;
+    }
+    needle.starts_with('.') || needle.contains('/') || needle.contains('\\')
 }
 
 fn local_reference_paths(root: &Path, limit: usize) -> Vec<PathBuf> {
@@ -1666,5 +1677,61 @@ mod tests {
             result.is_err(),
             "snapshot.pack must not resolve via fuzzy index"
         );
+    }
+
+    /// Regression for #1921 — typing `@/` (or `@.`) must NOT trigger the
+    /// `local_reference_paths` walk, which scans up to
+    /// `LOCAL_REFERENCE_SCAN_LIMIT` paths on the UI thread. On WSL2 with a
+    /// `/mnt/c/...` workspace this hangs the composer for seconds to minutes.
+    #[test]
+    fn should_try_local_reference_completion_skips_bare_separators_and_dots() {
+        // The trigger gate must reject bare separators/dots.
+        assert!(!should_try_local_reference_completion("/"));
+        assert!(!should_try_local_reference_completion("\\"));
+        assert!(!should_try_local_reference_completion("."));
+        assert!(!should_try_local_reference_completion(".."));
+        // Empty string was already rejected; keep that.
+        assert!(!should_try_local_reference_completion(""));
+
+        // Actionable references must still trigger.
+        assert!(should_try_local_reference_completion("./foo"));
+        assert!(should_try_local_reference_completion("../bar"));
+        assert!(should_try_local_reference_completion(".env"));
+        assert!(should_try_local_reference_completion("path/"));
+        assert!(should_try_local_reference_completion("path/to/file"));
+        assert!(should_try_local_reference_completion("/usr"));
+    }
+
+    /// Regression for #1921 — `completions("/", N)` must return without
+    /// invoking `local_reference_paths`, even on a workspace large enough
+    /// to expose the original 4096-path walk. We can't assert "doesn't
+    /// touch the disk", but we can assert the call completes promptly and
+    /// stays within the requested limit.
+    #[test]
+    fn completions_for_bare_slash_does_not_trigger_local_reference_walk() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        // Lay out enough files that a runaway walk would be visibly slow,
+        // but the bounded path returns near-instantly. Depth-1 entries are
+        // enough; we don't need to stress the filesystem.
+        for i in 0..40 {
+            std::fs::write(root.join(format!("file_{i}.txt")), "x").unwrap();
+        }
+        let ws = Workspace::with_cwd(root.to_path_buf(), None);
+
+        let start = std::time::Instant::now();
+        let entries = ws.completions("/", 64);
+        let elapsed = start.elapsed();
+
+        // Behavioral assertions:
+        // 1. The call returns within a generous bound. Real freezes on
+        //    WSL2 were tens of seconds; a 2s budget is comfortable for a
+        //    40-file tmp dir on any CI host.
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "completions(\"/\") took too long: {elapsed:?} (likely re-introduced #1921)"
+        );
+        // 2. Results stay within the requested cap.
+        assert!(entries.len() <= 64);
     }
 }

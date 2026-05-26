@@ -150,7 +150,7 @@ impl ToolSpec for PandocConvertTool {
                 "pandoc_convert: pandoc binary not found on PATH. \
                  Install pandoc (macOS: `brew install pandoc`; \
                  Debian/Ubuntu: `apt install pandoc`; \
-                 Windows: `winget install JohnMacFarlane.Pandoc`) and restart deepseek-tui.",
+                 Windows: `winget install JohnMacFarlane.Pandoc`) and restart codewhale.",
             )
         })?;
 

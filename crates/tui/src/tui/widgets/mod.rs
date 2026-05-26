@@ -10,6 +10,7 @@ pub mod key_hint;
 // the composer area in `ui.rs`. `pub mod` (vs the usual `pub use` pattern)
 // keeps the unused-imports lint quiet until then.
 pub mod agent_card;
+pub mod decision_card;
 pub mod pending_input_preview;
 mod renderable;
 pub mod tool_card;
@@ -333,7 +334,7 @@ impl Renderable for ChatWidget {
 
         let area = _area;
 
-        // Repaint the full chat area with the deepseek-ink background each
+        // Repaint the full chat area with the codewhale-ink background each
         // frame. Ratatui's `Paragraph` only writes cells that contain text,
         // so cells the current frame's paragraph doesn't touch would
         // otherwise hold the *previous* frame's contents (the `:24Z`
@@ -583,7 +584,7 @@ impl Renderable for ComposerWidget<'_> {
                     SubmitDisposition::Immediate => {
                         if queue_count > 0 {
                             (
-                                Some(format!("↵ send ({} queued)", queue_count)),
+                                Some(format!("↵ send ({queue_count} queued)")),
                                 palette::DEEPSEEK_SKY,
                             )
                         } else {
@@ -637,21 +638,11 @@ impl Renderable for ComposerWidget<'_> {
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(border_color))
                 .style(background);
-            // Top-right corner: keep only editor state here. Session titles
-            // belong in session/history surfaces, not in the input chrome.
-            if self.app.composer.vim_enabled {
-                let color = match self.app.composer.vim_mode {
-                    VimMode::Normal => palette::TEXT_MUTED,
-                    VimMode::Insert => palette::DEEPSEEK_SKY,
-                    VimMode::Visual => palette::MODE_PLAN,
-                };
-                block = block.title_top(
-                    Line::from(Span::styled(
-                        self.app.composer.vim_mode.label(),
-                        Style::default().fg(color).bold(),
-                    ))
-                    .right_aligned(),
-                );
+            // Top-right corner: editor state plus transient turn receipts.
+            // Receipts are lifecycle chrome, not transcript content; they
+            // should appear briefly without displacing conversation rows.
+            if let Some(chrome) = composer_top_right_chrome(self.app, area.width) {
+                block = block.title_top(chrome.right_aligned());
             }
             if let Some(hint_line) = hint_line {
                 block = block.title_bottom(hint_line);
@@ -1024,13 +1015,10 @@ impl Renderable for ComposerWidget<'_> {
 
 /// Codex-style full-screen approval takeover (#129).
 ///
-/// The widget reads its mutable state (selected option, staged
-/// confirmation) directly from the [`ApprovalView`] so the destructive
-/// variant can render its "Press Y again to confirm" banner without
-/// touching internal fields. Rendering reflows to fill most of the
-/// transcript area instead of a centered popup; on small terminals it
-/// falls back to a 65×22 card so existing snapshot tests still see a
-/// coherent layout.
+/// The widget reads its selected option and locale directly from the
+/// [`ApprovalView`]. Rendering reflows to fill most of the transcript
+/// area instead of a centered popup; on small terminals it falls back to
+/// a 65×22 card so existing snapshot tests still see a coherent layout.
 pub struct ApprovalWidget<'a> {
     request: &'a ApprovalRequest,
     view: &'a ApprovalView,
@@ -1047,8 +1035,8 @@ impl<'a> ApprovalWidget<'a> {
 /// terminal can hold.
 const APPROVAL_CARD_HORIZONTAL_PAD: u16 = 6;
 const APPROVAL_CARD_VERTICAL_PAD: u16 = 2;
-/// Minimum card height — anything tighter and the destructive variant's
-/// confirmation banner overlaps the option list.
+/// Minimum card height — anything tighter and the approval controls
+/// overlap the option list.
 const APPROVAL_CARD_MIN_HEIGHT: u16 = 18;
 /// Minimum card width — anything tighter makes approval copy wrap too
 /// aggressively on small terminals.
@@ -1173,120 +1161,49 @@ impl Renderable for ApprovalWidget<'_> {
         lines.push(Line::from(""));
 
         let options = approval_options_for(risk, locale);
-        let pending = self.view.pending_confirm();
 
         for (i, opt) in options.iter().enumerate() {
             let is_selected = i == self.view.selected();
-            let staged = pending.is_some_and(|p| p == opt.option);
             let label_color = if opt.dangerous {
                 palette_colors.accent
             } else {
                 palette::TEXT_BODY
             };
 
-            let row_style = if is_selected {
-                Style::default()
-                    .fg(palette::SELECTION_TEXT)
-                    .bg(palette::SELECTION_BG)
-            } else {
-                Style::default()
-            };
+            let option_style = approval_option_style(is_selected, label_color);
+            let shortcut_style = approval_option_style(is_selected, palette_colors.shortcut);
 
-            let mut spans = vec![
+            let spans = vec![
                 Span::raw("  "),
                 Span::styled(
                     format!("[{}] ", opt.key_hint),
-                    Style::default()
-                        .fg(palette_colors.shortcut)
-                        .add_modifier(Modifier::BOLD),
+                    shortcut_style.add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(opt.label.to_string(), row_style.fg(label_color)),
+                Span::styled(opt.label.to_string(), option_style),
             ];
-            if staged {
-                spans.push(Span::raw("  "));
-                spans.push(Span::styled(
-                    staged_marker(locale),
-                    Style::default()
-                        .fg(palette_colors.accent)
-                        .add_modifier(Modifier::BOLD),
-                ));
-            }
             lines.push(Line::from(spans));
         }
 
-        // Variant-specific footer: benign nudges single-key approve;
-        // destructive shows either the standing prompt or the
-        // confirmation banner when an approve key has been staged.
+        // Footer: Enter commits the highlighted row; y/a/d remain direct
+        // shortcuts for users who do not want to move the selection.
         lines.push(Line::from(""));
-        match (risk, pending) {
-            (RiskLevel::Benign, _) => {
-                lines.push(Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled(
-                        single_key_prefix(locale),
-                        Style::default().fg(palette::TEXT_HINT),
-                    ),
-                    Span::styled(
-                        single_key_value(locale),
-                        Style::default()
-                            .fg(palette_colors.accent)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        footer_controls(locale),
-                        Style::default().fg(palette::TEXT_HINT),
-                    ),
-                ]));
-            }
-            (RiskLevel::Destructive, Some(opt)) => {
-                let again_key = match opt {
-                    crate::tui::approval::ApprovalOption::ApproveOnce => confirm_key_once(locale),
-                    crate::tui::approval::ApprovalOption::ApproveAlways => {
-                        confirm_key_always(locale)
-                    }
-                    _ => "Enter",
-                };
-                lines.push(Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled(
-                        destructive_confirm_prefix(locale),
-                        Style::default()
-                            .fg(palette_colors.accent)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        again_key.to_string(),
-                        Style::default()
-                            .fg(palette::DEEPSEEK_INK)
-                            .bg(palette_colors.accent)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        destructive_confirm_suffix(locale),
-                        Style::default().fg(palette::TEXT_HINT),
-                    ),
-                ]));
-            }
-            (RiskLevel::Destructive, None) => {
-                lines.push(Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled(
-                        two_key_prefix(locale),
-                        Style::default().fg(palette::TEXT_HINT),
-                    ),
-                    Span::styled(
-                        two_key_value(locale),
-                        Style::default()
-                            .fg(palette_colors.accent)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        footer_controls(locale),
-                        Style::default().fg(palette::TEXT_HINT),
-                    ),
-                ]));
-            }
-        }
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(
+                selection_hint_prefix(locale),
+                Style::default().fg(palette::TEXT_HINT),
+            ),
+            Span::styled(
+                selection_hint_value(locale),
+                Style::default()
+                    .fg(palette_colors.accent)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                footer_controls(locale),
+                Style::default().fg(palette::TEXT_HINT),
+            ),
+        ]));
 
         let title = format!(
             " {} {} — {} ",
@@ -1384,6 +1301,21 @@ fn approval_palette(risk: RiskLevel) -> ApprovalColors {
     }
 }
 
+fn approval_selected_style() -> Style {
+    Style::default()
+        .fg(palette::SELECTION_TEXT)
+        .bg(palette::DEEPSEEK_BLUE)
+        .add_modifier(Modifier::BOLD)
+}
+
+fn approval_option_style(is_selected: bool, color: Color) -> Style {
+    if is_selected {
+        approval_selected_style()
+    } else {
+        Style::default().fg(color)
+    }
+}
+
 fn risk_badge_text(risk: RiskLevel, locale: Locale) -> &'static str {
     match (locale, risk) {
         (Locale::ZhHans, RiskLevel::Benign) => "审查",
@@ -1447,24 +1379,6 @@ fn label_params(locale: Locale) -> &'static str {
     }
 }
 
-fn staged_marker(locale: Locale) -> &'static str {
-    match locale {
-        Locale::ZhHans => "(待确认)",
-        _ => "(staged)",
-    }
-}
-
-fn single_key_prefix(locale: Locale) -> &'static str {
-    match locale {
-        Locale::ZhHans => "单键批准：",
-        _ => "Single key approves: ",
-    }
-}
-
-fn single_key_value(_locale: Locale) -> &'static str {
-    "Enter / 1 / y"
-}
-
 fn footer_controls(locale: Locale) -> &'static str {
     match locale {
         Locale::ZhHans => "  ·  v：完整参数  ·  Esc：终止",
@@ -1472,79 +1386,45 @@ fn footer_controls(locale: Locale) -> &'static str {
     }
 }
 
-fn destructive_confirm_prefix(locale: Locale) -> &'static str {
+fn selection_hint_prefix(locale: Locale) -> &'static str {
     match locale {
-        Locale::ZhHans => "确认破坏性操作：再次按 ",
-        _ => "Confirm destructive action — press ",
+        Locale::ZhHans => "选择：",
+        _ => "Choose: ",
     }
 }
 
-fn destructive_confirm_suffix(locale: Locale) -> &'static str {
+fn selection_hint_value(locale: Locale) -> &'static str {
     match locale {
-        Locale::ZhHans => " 执行；按其他键取消。",
-        _ => " again to commit, anything else cancels.",
-    }
-}
-
-fn confirm_key_once(locale: Locale) -> &'static str {
-    match locale {
-        Locale::ZhHans => "Enter 或 y",
-        _ => "Enter or y",
-    }
-}
-
-fn confirm_key_always(locale: Locale) -> &'static str {
-    match locale {
-        Locale::ZhHans => "Enter 或 a",
-        _ => "Enter or a",
-    }
-}
-
-fn two_key_prefix(locale: Locale) -> &'static str {
-    match locale {
-        Locale::ZhHans => "两次按键确认：",
-        _ => "Two keys to approve: ",
-    }
-}
-
-fn two_key_value(locale: Locale) -> &'static str {
-    match locale {
-        Locale::ZhHans => "先按 y/a，再按一次 y/a",
-        _ => "y/a then y/a again",
+        Locale::ZhHans => "Enter 执行选中项，或直接按 y/a/d",
+        _ => "Enter selected option, or press y/a/d directly",
     }
 }
 
 struct ApprovalOptionRow {
-    option: crate::tui::approval::ApprovalOption,
     label: &'static str,
     key_hint: &'static str,
     dangerous: bool,
 }
 
 fn approval_options_for(risk: RiskLevel, locale: Locale) -> [ApprovalOptionRow; 4] {
-    use crate::tui::approval::ApprovalOption as O;
     let dangerous = matches!(risk, RiskLevel::Destructive);
     [
         ApprovalOptionRow {
-            option: O::ApproveOnce,
             label: option_approve_once(locale),
             key_hint: "1 / y",
             dangerous,
         },
         ApprovalOptionRow {
-            option: O::ApproveAlways,
             label: option_approve_always(locale),
             key_hint: "2 / a",
             dangerous,
         },
         ApprovalOptionRow {
-            option: O::Deny,
             label: option_deny(locale),
             key_hint: "3 / d / n",
             dangerous: false,
         },
         ApprovalOptionRow {
-            option: O::Abort,
             label: option_abort(locale),
             key_hint: "Esc",
             dangerous: false,
@@ -1910,6 +1790,114 @@ fn char_display_width(ch: char) -> usize {
     }
 }
 
+fn truncate_display_width(text: &str, max_width: usize) -> String {
+    if max_width == 0 {
+        return String::new();
+    }
+    if UnicodeWidthStr::width(text) <= max_width {
+        return text.to_string();
+    }
+    if max_width <= 3 {
+        return text.chars().take(max_width).collect();
+    }
+
+    let mut out = String::new();
+    let mut width = 0usize;
+    let limit = max_width.saturating_sub(3);
+    for ch in text.chars() {
+        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if width + ch_width > limit {
+            break;
+        }
+        out.push(ch);
+        width += ch_width;
+    }
+    out.push_str("...");
+    out
+}
+
+fn vim_mode_style(mode: VimMode) -> Style {
+    let color = match mode {
+        VimMode::Normal => palette::TEXT_MUTED,
+        VimMode::Insert => palette::DEEPSEEK_SKY,
+        VimMode::Visual => palette::MODE_PLAN,
+    };
+    Style::default().fg(color).bold()
+}
+
+fn composer_top_right_chrome(app: &App, area_width: u16) -> Option<Line<'static>> {
+    let receipt = app.active_receipt_text();
+    let session_title = app.session_title.as_deref();
+    if !app.composer.vim_enabled && receipt.is_none() && session_title.is_none() {
+        return None;
+    }
+
+    // Leave room for the left title and both borders. On narrow panes, skip
+    // extra chrome rather than letting status text collide with "Composer".
+    let max_width = usize::from(area_width.saturating_sub(18));
+    if max_width < 4 {
+        return None;
+    }
+
+    let receipt_style = Style::default()
+        .fg(palette::STATUS_SUCCESS)
+        .add_modifier(Modifier::DIM);
+    if let Some(receipt) = receipt {
+        let receipt_text = receipt.trim();
+        if app.composer.vim_enabled {
+            let vim_label = app.composer.vim_mode.label();
+            let vim_width = UnicodeWidthStr::width(vim_label);
+            let sep_width = UnicodeWidthStr::width(" · ");
+            if vim_width + sep_width + 4 <= max_width {
+                let receipt_width = max_width.saturating_sub(vim_width + sep_width);
+                return Some(Line::from(vec![
+                    Span::styled(vim_label.to_string(), vim_mode_style(app.composer.vim_mode)),
+                    Span::styled(" · ", Style::default().fg(palette::TEXT_MUTED)),
+                    Span::styled(
+                        truncate_display_width(receipt_text, receipt_width),
+                        receipt_style,
+                    ),
+                ]));
+            }
+        }
+
+        return Some(Line::from(Span::styled(
+            truncate_display_width(receipt_text, max_width),
+            receipt_style,
+        )));
+    }
+
+    let mut spans: Vec<Span> = Vec::new();
+    if app.composer.vim_enabled {
+        spans.push(Span::styled(
+            truncate_display_width(app.composer.vim_mode.label(), max_width),
+            vim_mode_style(app.composer.vim_mode),
+        ));
+    }
+    if let Some(title) = session_title {
+        let used: usize = spans
+            .iter()
+            .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+            .sum();
+        let sep = if spans.is_empty() { 0 } else { 2 };
+        let remaining = max_width.saturating_sub(used + sep);
+        if remaining >= 4 {
+            if !spans.is_empty() {
+                spans.push(Span::raw("  "));
+            }
+            spans.push(Span::styled(
+                truncate_display_width(title, remaining),
+                Style::default().fg(palette::TEXT_MUTED),
+            ));
+        }
+    }
+    if spans.is_empty() {
+        None
+    } else {
+        Some(Line::from(spans))
+    }
+}
+
 fn should_render_empty_state(app: &App) -> bool {
     app.history.is_empty() && !app.is_loading && !app.is_compacting
 }
@@ -1926,7 +1914,7 @@ fn build_empty_state_lines(app: &App, area: Rect) -> Vec<Line<'static>> {
 
     let body = vec![
         Line::from(Span::styled(
-            format!("{inset}>_ DeepSeek TUI (v{})", env!("CARGO_PKG_VERSION")),
+            format!("{inset}>_ codewhale (v{})", env!("CARGO_PKG_VERSION")),
             Style::default().fg(palette::DEEPSEEK_BLUE).bold(),
         )),
         Line::from(""),
@@ -2557,7 +2545,7 @@ mod tests {
     fn slash_completion_hints_exclude_set_and_deepseek_commands() {
         let hints = slash_completion_hints("/", 128, &[], Locale::En, None, ApiProvider::Deepseek);
         assert!(!hints.iter().any(|hint| hint.name == "/set"));
-        assert!(!hints.iter().any(|hint| hint.name == "/deepseek"));
+        assert!(!hints.iter().any(|hint| hint.name == "/codewhale"));
     }
 
     #[test]
@@ -2805,11 +2793,10 @@ mod tests {
     }
 
     #[test]
-    fn composer_border_does_not_render_session_title() {
+    fn composer_border_renders_session_title() {
         let mut app = create_test_app();
         app.composer_density = ComposerDensity::Comfortable;
-        app.session_title =
-            Some("hello could you please take a look at deepseek-tui and all changes".to_string());
+        app.session_title = Some("my-session".to_string());
         let slash_menu_entries = Vec::<SlashMenuEntry>::new();
         let mention_menu_entries = Vec::<String>::new();
         let widget = ComposerWidget::new(&app, 5, &slash_menu_entries, &mention_menu_entries);
@@ -2825,8 +2812,31 @@ mod tests {
         let rendered = buffer_text(&buf, area);
 
         assert!(rendered.contains("Composer"));
-        assert!(!rendered.contains("deepseek-tui"));
-        assert!(!rendered.contains("hello could you"));
+        assert!(rendered.contains("my-session"));
+    }
+
+    #[test]
+    fn composer_border_renders_active_turn_receipt() {
+        let mut app = create_test_app();
+        app.composer_density = ComposerDensity::Comfortable;
+        app.set_receipt_text("✓ turn completed · 2 tool(s) used");
+        let slash_menu_entries = Vec::<SlashMenuEntry>::new();
+        let mention_menu_entries = Vec::<String>::new();
+        let widget = ComposerWidget::new(&app, 5, &slash_menu_entries, &mention_menu_entries);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 96,
+            height: 5,
+        };
+        let mut buf = Buffer::empty(area);
+
+        widget.render(area, &mut buf);
+        let rendered = buffer_text(&buf, area);
+
+        assert!(rendered.contains("Composer"));
+        assert!(rendered.contains("turn completed"));
+        assert!(rendered.contains("tool(s) used"));
     }
 
     #[test]
@@ -2951,7 +2961,7 @@ mod tests {
     #[test]
     fn empty_state_shows_startup_context() {
         let mut app = create_test_app();
-        app.workspace = PathBuf::from("/tmp/deepseek-test-workspace");
+        app.workspace = PathBuf::from("/tmp/codewhale-test-workspace");
         app.model = "deepseek-v4-pro".to_string();
 
         let lines = build_empty_state_lines(&app, Rect::new(0, 0, 100, 20));
@@ -2966,9 +2976,9 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(rendered.contains(&format!(">_ DeepSeek TUI (v{})", env!("CARGO_PKG_VERSION"))));
+        assert!(rendered.contains(&format!(">_ codewhale (v{})", env!("CARGO_PKG_VERSION"))));
         assert!(rendered.contains("model: deepseek-v4-pro  /model to switch"));
-        assert!(rendered.contains("directory: /tmp/deepseek-test-workspace"));
+        assert!(rendered.contains("directory: /tmp/codewhale-test-workspace"));
     }
 
     /// Probe: confirm `cell.lines_with_motion` returns no Line whose total
@@ -3100,6 +3110,35 @@ mod tests {
         assert_eq!(
             buf[(area.x + area.width - 1, area.y + area.height - 1)].bg,
             custom
+        );
+    }
+
+    #[test]
+    fn chat_widget_does_not_render_turn_receipt_as_transcript_content() {
+        let mut app = create_test_app();
+        for i in 0..8 {
+            app.add_message(HistoryCell::Assistant {
+                content: format!("assistant line {i}"),
+                streaming: false,
+            });
+        }
+        app.set_receipt_text("✓ turn completed · 2 tool(s) used");
+
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 48,
+            height: 6,
+        };
+        let mut buf = Buffer::empty(area);
+        let widget = ChatWidget::new(&mut app, area);
+        widget.render(area, &mut buf);
+        let rendered = buffer_text(&buf, area);
+
+        assert!(!rendered.contains("turn completed"));
+        assert!(
+            rendered.contains("assistant line 7"),
+            "receipt should not displace the latest transcript line: {rendered:?}"
         );
     }
 
@@ -3349,6 +3388,43 @@ mod tests {
         }
     }
 
+    #[test]
+    fn approval_selected_destructive_option_uses_contrasting_highlight() {
+        let request = crate::tui::approval::ApprovalRequest::new(
+            "approval-1",
+            "exec_shell",
+            "Run git commit",
+            &serde_json::json!({ "command": "git commit -m fix" }),
+            "exec_shell:git commit",
+        );
+        let view = crate::tui::approval::ApprovalView::new(request.clone());
+        let widget = ApprovalWidget::new(&request, &view);
+        let area = Rect::new(0, 0, 100, 30);
+        let mut buf = Buffer::empty(area);
+
+        widget.render(area, &mut buf);
+
+        let selected_row = (area.y..area.y.saturating_add(area.height))
+            .find(|&y| {
+                (area.x..area.x.saturating_add(area.width))
+                    .any(|x| buf[(x, y)].bg == palette::DEEPSEEK_BLUE)
+            })
+            .expect("selected approval row should use blue background");
+        let highlighted_cells = (area.x..area.x.saturating_add(area.width))
+            .filter(|&x| {
+                let cell = &buf[(x, selected_row)];
+                !cell.symbol().trim().is_empty()
+                    && cell.bg == palette::DEEPSEEK_BLUE
+                    && cell.fg == palette::SELECTION_TEXT
+            })
+            .count();
+
+        assert!(
+            highlighted_cells >= 4,
+            "selected destructive option should render visible blue/white text"
+        );
+    }
+
     /// Regression for issue #65: after `App::handle_resize`, the chat widget
     /// must produce a clean render at the new width — no stale wrapping,
     /// no panic, no content exceeding the requested width. Cycling through
@@ -3449,7 +3525,7 @@ mod tests {
     /// pays the wrap cost; subsequent calls at different offsets should hit
     /// the per-cell cache and be ~constant time regardless of offset.
     ///
-    /// Run with: `cargo test -p deepseek-tui --release bench_transcript_scroll
+    /// Run with: `cargo test -p codewhale-tui --release bench_transcript_scroll
     /// -- --ignored --nocapture`
     // Perf bench prints timing rows to stdout — runs in `cargo test`,
     // never inside the TUI alt-screen.

@@ -354,9 +354,35 @@ pub(super) fn estimate_input_tokens_conservative(
         .saturating_add(framing_overhead)
 }
 
-pub(super) fn context_input_budget(model: &str, requested_output_tokens: u32) -> Option<usize> {
-    let window = usize::try_from(context_window_for_model(model)?).ok()?;
-    let output = usize::try_from(requested_output_tokens).ok()?;
+/// Context windows at or above this size reserve the full
+/// [`TURN_MAX_OUTPUT_TOKENS`] (262K) when computing the internal input budget,
+/// leaving room for V4-class interleaved thinking. Below it, the reservation
+/// falls back to [`effective_max_output_tokens`] so a smaller self-hosted
+/// window does not underflow to a negative budget.
+const INTERNAL_BUDGET_LARGE_WINDOW_THRESHOLD: u32 = 500_000;
+
+/// Internal input-side token budget for a model: `window - reserved_output -
+/// headroom`. Used by the preflight check, emergency recovery, and capacity
+/// trimming to decide when to compact.
+///
+/// The reserved-output term is window-dependent:
+///   * `window >= 500K` (V4-class large-context) -> [`TURN_MAX_OUTPUT_TOKENS`]
+///     (262K). Preserves the "leave room for interleaved thinking" contract.
+///   * `window < 500K` (smaller / self-hosted, e.g. a 256K vLLM Qwen window)
+///     -> [`effective_max_output_tokens`], i.e. what the API actually caps
+///     output at. Reserving the full 262K here would compute
+///     `256K - 262K - 1K`, which underflows `checked_sub` to `None` and
+///     *silently disables every preflight and emergency recovery path* — the
+///     session then runs until the provider hard-rejects on context length.
+pub(super) fn context_input_budget(model: &str) -> Option<usize> {
+    let window_tokens = context_window_for_model(model)?;
+    let window = usize::try_from(window_tokens).ok()?;
+    let reserved_output = if window_tokens >= INTERNAL_BUDGET_LARGE_WINDOW_THRESHOLD {
+        TURN_MAX_OUTPUT_TOKENS
+    } else {
+        effective_max_output_tokens(model)
+    };
+    let output = usize::try_from(reserved_output).ok()?;
     window
         .checked_sub(output)
         .and_then(|v| v.checked_sub(CONTEXT_HEADROOM_TOKENS))

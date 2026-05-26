@@ -1,19 +1,19 @@
 const path = require("path");
 const os = require("os");
 
-const CHECKSUM_MANIFEST = "deepseek-artifacts-sha256.txt";
+const CHECKSUM_MANIFEST = "codewhale-artifacts-sha256.txt";
 
 const ASSET_MATRIX = {
   linux: {
-    x64: ["deepseek-linux-x64", "deepseek-tui-linux-x64"],
-    arm64: ["deepseek-linux-arm64", "deepseek-tui-linux-arm64"],
+    x64: ["codewhale-linux-x64", "codewhale-tui-linux-x64"],
+    arm64: ["codewhale-linux-arm64", "codewhale-tui-linux-arm64"],
   },
   darwin: {
-    x64: ["deepseek-macos-x64", "deepseek-tui-macos-x64"],
-    arm64: ["deepseek-macos-arm64", "deepseek-tui-macos-arm64"],
+    x64: ["codewhale-macos-x64", "codewhale-tui-macos-x64"],
+    arm64: ["codewhale-macos-arm64", "codewhale-tui-macos-arm64"],
   },
   win32: {
-    x64: ["deepseek-windows-x64.exe", "deepseek-tui-windows-x64.exe"],
+    x64: ["codewhale-windows-x64.exe", "codewhale-tui-windows-x64.exe"],
   },
 };
 
@@ -47,7 +47,7 @@ function detectBinaryNames() {
   return {
     platform,
     arch,
-    deepseek: pair[0],
+    codewhale: pair[0],
     tui: pair[1],
   };
 }
@@ -55,20 +55,20 @@ function detectBinaryNames() {
 function unsupportedBuildHint() {
   return [
     "No prebuilt binary is available for this platform/architecture combo.",
-    "You can still run DeepSeek TUI by building from source with Cargo:",
+    "You can still run codewhale by building from source with Cargo:",
     "",
     "  # Requires Rust 1.88+ (https://rustup.rs)",
-    "  cargo install deepseek-tui-cli --locked   # provides `deepseek`",
-    "  cargo install deepseek-tui     --locked   # provides `deepseek-tui`",
+    "  cargo install codewhale-cli --locked   # provides `codewhale`",
+    "  cargo install codewhale-tui --locked   # provides `codewhale-tui`",
     "",
     "Or build from a checkout:",
     "",
-    "  git clone https://github.com/Hmbown/DeepSeek-TUI.git",
-    "  cd DeepSeek-TUI",
+    "  git clone https://github.com/Hmbown/CodeWhale.git",
+    "  cd CodeWhale",
     "  cargo install --path crates/cli --locked",
     "  cargo install --path crates/tui --locked",
     "",
-    "See https://github.com/Hmbown/DeepSeek-TUI/blob/main/docs/INSTALL.md",
+    "See https://github.com/Hmbown/CodeWhale/blob/main/docs/INSTALL.md",
     "for cross-compilation, mirror, and Linux ARM64 specifics.",
   ].join("\n");
 }
@@ -77,7 +77,7 @@ function executableName(base, platform) {
   return platform === "win32" ? `${base}.exe` : base;
 }
 
-function releaseBaseUrl(version, repo = "Hmbown/DeepSeek-TUI") {
+function releaseBaseUrl(version, repo = "Hmbown/CodeWhale") {
   const override =
     process.env.DEEPSEEK_TUI_RELEASE_BASE_URL || process.env.DEEPSEEK_RELEASE_BASE_URL;
   if (override) {
@@ -87,11 +87,11 @@ function releaseBaseUrl(version, repo = "Hmbown/DeepSeek-TUI") {
   return `https://github.com/${repo}/releases/download/v${version}/`;
 }
 
-function releaseAssetUrl(baseName, version, repo = "Hmbown/DeepSeek-TUI") {
+function releaseAssetUrl(baseName, version, repo = "Hmbown/CodeWhale") {
   return new URL(baseName, releaseBaseUrl(version, repo)).toString();
 }
 
-function checksumManifestUrl(version, repo = "Hmbown/DeepSeek-TUI") {
+function checksumManifestUrl(version, repo = "Hmbown/CodeWhale") {
   return releaseAssetUrl(CHECKSUM_MANIFEST, version, repo);
 }
 

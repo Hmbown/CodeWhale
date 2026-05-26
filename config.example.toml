@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║                         DeepSeek TUI Configuration                            ║
+# ║                         CodeWhale Configuration                               ║
 # ║                                                                              ║
-# ║  Unofficial CLI for DeepSeek Platform - Not affiliated with DeepSeek Inc.     ║
+# ║  Terminal coding agent for DeepSeek.                                          ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
 # See `docs/CONFIGURATION.md` for how config is loaded (profiles, env overrides, etc.).
@@ -164,7 +164,9 @@ max_subagents = 10 # optional (1-20)
 #             (or NVIDIA_NIM_BASE_URL / NVIDIA_BASE_URL), NVIDIA_NIM_MODEL
 #   OpenAI-compatible: OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL
 #   Wanjie Ark: WANJIE_ARK_API_KEY (or WANJIE_API_KEY), WANJIE_ARK_BASE_URL, WANJIE_ARK_MODEL
-#   Fireworks: FIREWORKS_API_KEY, FIREWORKS_BASE_URL
+#   OpenRouter: OPENROUTER_API_KEY, OPENROUTER_BASE_URL, OPENROUTER_MODEL
+#   Novita:     NOVITA_API_KEY, NOVITA_BASE_URL, NOVITA_MODEL
+#   Fireworks:  FIREWORKS_API_KEY, FIREWORKS_BASE_URL
 #   SGLang:    SGLANG_BASE_URL, SGLANG_MODEL, optional SGLANG_API_KEY
 #   vLLM:      VLLM_BASE_URL, VLLM_MODEL, optional VLLM_API_KEY
 #   Ollama:    OLLAMA_BASE_URL, OLLAMA_MODEL, optional OLLAMA_API_KEY
@@ -202,6 +204,18 @@ max_subagents = 10 # optional (1-20)
 # api_key = "YOUR_WANJIE_API_KEY"
 # base_url = "https://maas-openapi.wanjiedata.com/api/v1"
 # model = "deepseek-reasoner"                # or the exact model ID enabled on your Wanjie account
+
+# OpenRouter — multi-provider gateway (https://openrouter.ai)
+[providers.openrouter]
+# api_key = "YOUR_OPENROUTER_API_KEY"
+# base_url = "https://openrouter.ai/api/v1"
+# model = "deepseek/deepseek-v4-pro"         # or deepseek/deepseek-v4-flash
+
+# Novita AI-hosted inference (https://novita.ai)
+[providers.novita]
+# api_key = "YOUR_NOVITA_API_KEY"
+# base_url = "https://api.novita.ai/v1"
+# model = "deepseek/deepseek-v4-pro"         # or deepseek/deepseek-v4-flash
 
 # Fireworks AI-hosted DeepSeek V4 (https://fireworks.ai)
 [providers.fireworks]
@@ -470,7 +484,7 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 # max_workspace_gb = 2  # Snapshots self-disable on first init when the
 #                         # non-excluded workspace exceeds this size in GB
 #                         # (v0.8.32). Default 2 GB protects against running
-#                         # deepseek-tui in directories with hundreds of GB
+#                         # codewhale in directories with hundreds of GB
 #                         # of datasets / model weights / docker dumps where
 #                         # `git add -A` would hang the TUI for hours. Set
 #                         # to 0 to disable the cap (v0.8.31 behaviour);
@@ -530,7 +544,7 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 #
 # [[hooks.hooks]]
 # event = "session_start"
-# command = "echo 'DeepSeek TUI session started'"
+# command = "echo 'CodeWhale session started'"
 #
 # # Inject ephemeral creds into every shell call. Output one
 # # KEY=VALUE per line on stdout (export prefix optional).

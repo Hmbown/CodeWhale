@@ -164,7 +164,7 @@ impl ToolSpec for ImageAnalyzeTool {
                     let response = client
                         .post(&url)
                         .header("Content-Type", "application/json")
-                        .header("Authorization", format!("Bearer {}", api_key))
+                        .header("Authorization", format!("Bearer {api_key}"))
                         .json(&payload)
                         .send()
                         .await

@@ -255,7 +255,7 @@ mod tests {
     #[test]
     fn concise_shell_command_label_prefers_gh_pr_checks_over_wrappers() {
         let label = concise_shell_command_label(
-            "cd /tmp/repo && sleep 15 && gh pr checks 1611 --repo Hmbown/DeepSeek-TUI",
+            "cd /tmp/repo && sleep 15 && gh pr checks 1611 --repo Hmbown/CodeWhale",
             80,
         );
         assert_eq!(label, "gh pr checks 1611");

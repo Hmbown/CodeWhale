@@ -77,7 +77,7 @@ fn parse_duration_secs(s: &str) -> Result<i64> {
             'd' | 'h' | 'm' | 's' => {
                 let n: i64 = num_buf
                     .parse()
-                    .map_err(|_| anyhow::anyhow!("invalid duration component: {:?}", num_buf))?;
+                    .map_err(|_| anyhow::anyhow!("invalid duration component: {num_buf:?}"))?;
                 num_buf.clear();
                 let factor = match ch {
                     'd' => 86_400,
@@ -88,7 +88,7 @@ fn parse_duration_secs(s: &str) -> Result<i64> {
                 };
                 total += n * factor;
             }
-            _ => anyhow::bail!("unrecognised character {:?} in duration {:?}", ch, s),
+            _ => anyhow::bail!("unrecognised character {ch:?} in duration {s:?}"),
         }
     }
 
@@ -99,7 +99,7 @@ fn parse_duration_secs(s: &str) -> Result<i64> {
     }
 
     if total == 0 {
-        anyhow::bail!("duration {:?} resolved to zero seconds", s);
+        anyhow::bail!("duration {s:?} resolved to zero seconds");
     }
 
     Ok(total)
@@ -796,7 +796,7 @@ fn print_human(rollup: &Rollup) {
             let mut cats: Vec<(&String, &u64)> = rollup.capacity.by_category.iter().collect();
             cats.sort_by(|a, b| b.1.cmp(a.1));
             cats.iter()
-                .map(|(k, v)| format!("{} {}", v, k))
+                .map(|(k, v)| format!("{v} {k}"))
                 .collect::<Vec<_>>()
                 .join(", ")
         };

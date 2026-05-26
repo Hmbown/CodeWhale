@@ -5,6 +5,7 @@
 
 mod anchor;
 mod attachment;
+mod balance;
 mod change;
 mod config;
 mod core;
@@ -518,6 +519,13 @@ pub const COMMANDS: &[CommandInfo] = &[
         usage: "/cost",
         description_id: MessageId::CmdCostDescription,
     },
+    // Balance query (#2019)
+    CommandInfo {
+        name: "balance",
+        aliases: &[],
+        usage: "/balance",
+        description_id: MessageId::CmdBalanceDescription,
+    },
     // Profile switching (#390)
     CommandInfo {
         name: "profile",
@@ -603,6 +611,7 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "translate" | "translation" | "transale" => core::translate(app),
         "tokens" => debug::tokens(app),
         "cost" => debug::cost(app),
+        "balance" => balance::balance(app),
         "cache" => debug::cache(app, arg),
 
         // ChangeLog command
@@ -736,7 +745,7 @@ pub fn rlm(app: &mut App, arg: Option<&str>) -> CommandResult {
     let source_arg = if resolves_to_existing_file(app, &target) {
         format!(r#"file_path: "{target}""#)
     } else {
-        format!("content: {:?}", target)
+        format!("content: {target:?}")
     };
     let message = format!(
         "Open and use a persistent RLM session for this request. Call `rlm_open` with name `slash_rlm` and {source_arg}. Then call `rlm_configure` with `sub_rlm_max_depth: {max_depth}`. Use `rlm_eval` to inspect the context through `peek`, `search`, and `chunk`, and call `finalize(...)` from the REPL when ready. If a `var_handle` is returned, use `handle_read` for bounded slices or projections before answering."
@@ -764,8 +773,7 @@ pub fn agent(_app: &mut App, arg: Option<&str>) -> CommandResult {
         }
     };
     let message = format!(
-        "Open a persistent sub-agent session for this task. Call `agent_open` with name `slash_agent`, `prompt: {:?}`, and `max_depth: {max_depth}`. Use `agent_eval` to wait for the next terminal/current projection and `handle_read` on the returned transcript_handle if you need more detail. Verify any claimed side effects before reporting success.",
-        task
+        "Open a persistent sub-agent session for this task. Call `agent_open` with name `slash_agent`, `prompt: {task:?}`, and `max_depth: {max_depth}`. Use `agent_eval` to wait for the next terminal/current projection and `handle_read` on the returned transcript_handle if you need more detail. Verify any claimed side effects before reporting success."
     );
     CommandResult::with_message_and_action(
         format!("Opening persistent sub-agent at depth {max_depth}..."),
@@ -791,7 +799,7 @@ fn build_relay_instruction(app: &App, focus: Option<&str>) -> String {
     let mut out = String::new();
     let _ = writeln!(
         out,
-        "Create a compact session relay (接力) for a future DeepSeek TUI thread."
+        "Create a compact session relay (接力) for a future CodeWhale thread."
     );
     let _ = writeln!(out);
     let _ = writeln!(out, "Write or update `.deepseek/handoff.md`.");
@@ -1064,7 +1072,7 @@ fn suggest_command_names(input: &str, limit: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
+    use crate::config::{ApiProvider, Config};
     use crate::tools::plan::{PlanItemArg, StepStatus, UpdatePlanArgs};
     use crate::tools::todo::TodoStatus;
     use crate::tui::app::{App, AppAction, TuiOptions};
@@ -1227,8 +1235,7 @@ mod tests {
             for alias in command.aliases {
                 assert!(
                     !names.contains(alias),
-                    "alias /{} collides with a command name",
-                    alias
+                    "alias /{alias} collides with a command name"
                 );
                 assert!(aliases.insert(*alias), "duplicate command alias /{alias}");
             }
@@ -1485,6 +1492,48 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn balance_command_has_own_help_text() {
+        let info = get_command_info("balance").expect("balance command should be registered");
+        assert_eq!(info.description_id, MessageId::CmdBalanceDescription);
+        assert!(
+            info.description_for(Locale::En)
+                .contains("provider account balance")
+        );
+    }
+
+    #[test]
+    fn balance_command_reports_scaffold_without_claiming_dispatch() {
+        let mut app = create_test_app();
+        app.api_provider = ApiProvider::Deepseek;
+
+        let result = execute("/balance", &mut app);
+        let msg = result
+            .message
+            .expect("balance scaffold should explain current state");
+
+        assert!(!result.is_error);
+        assert!(msg.contains("DeepSeek"));
+        assert!(msg.contains("not wired"));
+        assert!(!msg.contains("sent"));
+    }
+
+    #[test]
+    fn balance_command_reports_unsupported_provider_clearly() {
+        let mut app = create_test_app();
+        app.api_provider = ApiProvider::Ollama;
+
+        let result = execute("/balance", &mut app);
+        let msg = result
+            .message
+            .expect("unsupported providers should return a clear message");
+
+        assert!(!result.is_error);
+        assert!(msg.contains("Ollama"));
+        assert!(msg.contains("not supported"));
+        assert!(msg.contains("dashboard"));
     }
 
     #[test]

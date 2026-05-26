@@ -7,10 +7,18 @@
 //! endpoint, so we materialize the bytes to disk instead of base64-embedding
 //! them in the request).
 
+#[cfg(any(not(test), all(test, unix)))]
+use std::io::Write;
 #[cfg(not(test))]
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
-#[cfg(all(any(target_os = "macos", target_os = "windows"), not(test)))]
+#[cfg(any(
+    all(test, unix),
+    all(
+        any(target_os = "macos", target_os = "windows", target_os = "linux"),
+        not(test)
+    )
+))]
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -131,6 +139,11 @@ impl ClipboardHandler {
 
         #[cfg(not(test))]
         {
+            #[cfg(target_os = "linux")]
+            if write_text_with_wlcopy(text).is_ok() {
+                return Ok(());
+            }
+
             self.ensure_clipboard();
             if let Some(clipboard) = self.clipboard.as_mut()
                 && clipboard.set_text(text.to_string()).is_ok()
@@ -161,43 +174,75 @@ impl ClipboardHandler {
 
 #[cfg(all(target_os = "macos", not(test)))]
 fn write_text_with_pbcopy(text: &str) -> Result<()> {
-    let mut child = Command::new("pbcopy")
-        .stdin(Stdio::piped())
-        .spawn()
-        .map_err(|e| anyhow::anyhow!("Failed to run pbcopy: {e}"))?;
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(text.as_bytes())
-            .map_err(|e| anyhow::anyhow!("Failed to write to pbcopy: {e}"))?;
-    }
-    let status = child
-        .wait()
-        .map_err(|e| anyhow::anyhow!("Failed to wait for pbcopy: {e}"))?;
-    if status.success() {
-        return Ok(());
-    }
-    Err(anyhow::anyhow!("pbcopy failed"))
+    write_text_with_stdin_command("pbcopy", &[], text, "pbcopy")
 }
 
 #[cfg(all(target_os = "windows", not(test)))]
 fn write_text_with_set_clipboard(text: &str) -> Result<()> {
-    let mut child = Command::new("powershell.exe")
-        .args(["-NoProfile", "-Command", "Set-Clipboard -Value $input"])
+    write_text_with_stdin_command(
+        "powershell.exe",
+        &["-NoProfile", "-Command", "Set-Clipboard -Value $input"],
+        text,
+        "Set-Clipboard",
+    )
+}
+
+#[cfg(all(target_os = "linux", not(test)))]
+fn write_text_with_wlcopy(text: &str) -> Result<()> {
+    write_text_with_wlcopy_using_argv("wl-copy", text)
+}
+
+#[cfg(target_os = "linux")]
+fn write_text_with_wlcopy_using_argv(program: &str, text: &str) -> Result<()> {
+    let mut child = Command::new(program)
         .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()
-        .map_err(|e| anyhow::anyhow!("Failed to run Set-Clipboard: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("Failed to run {program}: {e}"))?;
     if let Some(mut stdin) = child.stdin.take() {
         stdin
             .write_all(text.as_bytes())
-            .map_err(|e| anyhow::anyhow!("Failed to write to Set-Clipboard: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("Failed to write to {program}: {e}"))?;
     }
+    // stdin is dropped here, closing the pipe so wl-copy flushes.
     let status = child
         .wait()
-        .map_err(|e| anyhow::anyhow!("Failed to wait for Set-Clipboard: {e}"))?;
-    if status.success() {
-        return Ok(());
+        .map_err(|e| anyhow::anyhow!("Failed to wait on {program}: {e}"))?;
+    if !status.success() {
+        bail!("{program} exited with {status}");
     }
-    Err(anyhow::anyhow!("Set-Clipboard failed"))
+    Ok(())
+}
+
+#[cfg(any(
+    all(test, unix),
+    all(any(target_os = "macos", target_os = "windows"), not(test))
+))]
+fn write_text_with_stdin_command(
+    program: &str,
+    args: &[&str],
+    text: &str,
+    label: &str,
+) -> Result<()> {
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("Failed to run {label}: {e}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(text.as_bytes())
+            .map_err(|e| anyhow::anyhow!("Failed to write to {label}: {e}"))?;
+    }
+    let _ = std::thread::Builder::new()
+        .name("clipboard-wait".to_string())
+        .spawn(move || {
+            let _ = child.wait();
+        });
+    Ok(())
 }
 
 #[cfg(not(test))]
@@ -325,6 +370,48 @@ mod tests {
         assert_eq!(&header[..8], b"\x89PNG\r\n\x1a\n");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn stdin_clipboard_command_returns_before_helper_exits() {
+        use std::time::{Duration, Instant};
+
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("clipboard.txt");
+        let script = dir.path().join("slow-clipboard.sh");
+        std::fs::write(&script, "#!/bin/sh\ncat > \"$1\"\nsleep 1\n").unwrap();
+
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = std::fs::metadata(&script).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&script, permissions).unwrap();
+
+        let started = Instant::now();
+        write_text_with_stdin_command(
+            script.to_str().unwrap(),
+            &[marker.to_str().unwrap()],
+            "copied",
+            "test-clipboard",
+        )
+        .unwrap();
+        assert!(
+            started.elapsed() < Duration::from_millis(250),
+            "clipboard helper wait leaked onto caller path"
+        );
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut last_body = String::new();
+        while Instant::now() < deadline {
+            if let Ok(body) = std::fs::read_to_string(&marker) {
+                if body == "copied" {
+                    return;
+                }
+                last_body = body;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        panic!("clipboard helper did not receive stdin; last body: {last_body:?}");
+    }
+
     #[test]
     fn pasted_image_labels_format_correctly() {
         let p = PastedImage {
@@ -335,6 +422,28 @@ mod tests {
         };
         assert_eq!(p.short_label(), "1024x768 PNG");
         assert_eq!(p.size_label(), "235KB");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn wlcopy_helper_errors_when_binary_missing() {
+        let result =
+            write_text_with_wlcopy_using_argv("/nonexistent/path/to/wlcopy_binary_xyz", "test");
+        assert!(result.is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn wlcopy_helper_errors_when_binary_exits_nonzero() {
+        let result = write_text_with_wlcopy_using_argv("false", "test");
+        assert!(result.is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn wlcopy_helper_succeeds_when_binary_returns_zero() {
+        let result = write_text_with_wlcopy_using_argv("true", "test");
+        assert!(result.is_ok());
     }
 
     #[test]

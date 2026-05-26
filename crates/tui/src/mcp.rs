@@ -1282,10 +1282,7 @@ impl McpConnection {
                 stderr_tail,
             })
         } else {
-            anyhow::bail!(
-                "MCP server '{}' config must have either 'command' or 'url'",
-                name
-            );
+            anyhow::bail!("MCP server '{name}' config must have either 'command' or 'url'");
         };
 
         let mut conn = Self {
@@ -1328,7 +1325,7 @@ impl McpConnection {
             "params": {
                 "protocolVersion": "2024-11-05",
                 "clientInfo": {
-                    "name": "deepseek-tui",
+                    "name": "codewhale-tui",
                     "version": env!("CARGO_PKG_VERSION")
                 },
                 "capabilities": {
@@ -1950,7 +1947,7 @@ impl McpPool {
                 // Format: mcp_{server}_{resource_name}
                 // Note: resource names might contain spaces, we should probably slugify them
                 let safe_name = resource.name.replace(' ', "_").to_lowercase();
-                resources.push((format!("mcp_{}_{}", server, safe_name), resource));
+                resources.push((format!("mcp_{server}_{safe_name}"), resource));
             }
         }
         resources
@@ -1963,7 +1960,7 @@ impl McpPool {
         for (server, conn) in &self.connections {
             for template in conn.resource_templates() {
                 let safe_name = template.name.replace(' ', "_").to_lowercase();
-                templates.push((format!("mcp_{}_{}", server, safe_name), template));
+                templates.push((format!("mcp_{server}_{safe_name}"), template));
             }
         }
         templates
@@ -2082,11 +2079,11 @@ impl McpPool {
     /// Parse a prefixed name into (server_name, tool_name)
     fn parse_prefixed_name<'a>(&self, prefixed_name: &'a str) -> Result<(&'a str, &'a str)> {
         if !prefixed_name.starts_with("mcp_") {
-            anyhow::bail!("Invalid MCP tool name: {}", prefixed_name);
+            anyhow::bail!("Invalid MCP tool name: {prefixed_name}");
         }
         let rest = &prefixed_name[4..];
         let Some((server, tool)) = rest.split_once('_') else {
-            anyhow::bail!("Invalid MCP tool name format: {}", prefixed_name);
+            anyhow::bail!("Invalid MCP tool name format: {prefixed_name}");
         };
         Ok((server, tool))
     }
@@ -3343,7 +3340,7 @@ mod tests {
             r#"{
                 "mcpServers": {
                     "broken": {
-                        "command": "deepseek-tui-test-this-binary-does-not-exist-9f8e7d6c5b4a",
+                        "command": "codewhale-tui-test-this-binary-does-not-exist-9f8e7d6c5b4a",
                         "args": []
                     }
                 }

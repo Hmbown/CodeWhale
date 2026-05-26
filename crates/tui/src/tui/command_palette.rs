@@ -15,7 +15,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::commands;
 use crate::localization::Locale;
 use crate::palette;
-use crate::skills::SkillRegistry;
+use crate::skills;
 use crate::tools::spec::ApprovalRequirement;
 use crate::tools::spec::ToolCapability;
 use crate::tools::{ToolContext, ToolRegistryBuilder};
@@ -23,6 +23,7 @@ use crate::tui::views::{CommandPaletteAction, ModalKind, ModalView, ViewAction, 
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum PaletteSection {
+    Action,
     Command,
     Skill,
     Tool,
@@ -78,7 +79,7 @@ pub fn build_entries(
         });
     }
 
-    let skills = SkillRegistry::discover(skills_dir);
+    let skills = skills::discover_for_workspace_and_dir(workspace, skills_dir);
     for skill in skills.list() {
         entries.push(CommandPaletteEntry {
             section: PaletteSection::Skill,
@@ -256,7 +257,7 @@ fn build_mcp_entries(
                         tool.model_name,
                         tool.description
                             .as_ref()
-                            .map_or(String::new(), |desc| format!(" ({})", desc))
+                            .map_or(String::new(), |desc| format!(" ({desc})"))
                     ),
                     command: tool.model_name.clone(),
                     action: CommandPaletteAction::InsertText {
@@ -363,6 +364,7 @@ fn parse_section_term(term: &str) -> Option<(PaletteSection, String)> {
 
     let query = query.to_ascii_lowercase();
     let section = match section {
+        "a" | "action" | "actions" => PaletteSection::Action,
         "c" | "cmd" | "command" | "commands" => PaletteSection::Command,
         "s" | "skill" | "skills" => PaletteSection::Skill,
         "t" | "tool" | "tools" => PaletteSection::Tool,
@@ -375,6 +377,7 @@ fn parse_section_term(term: &str) -> Option<(PaletteSection, String)> {
 
 fn section_tag(section: PaletteSection) -> &'static str {
     match section {
+        PaletteSection::Action => "action",
         PaletteSection::Command => "command",
         PaletteSection::Skill => "skill",
         PaletteSection::Tool => "tool",
@@ -384,10 +387,11 @@ fn section_tag(section: PaletteSection) -> &'static str {
 
 fn section_rank(section: PaletteSection) -> usize {
     match section {
-        PaletteSection::Command => 0,
-        PaletteSection::Skill => 1,
-        PaletteSection::Tool => 2,
-        PaletteSection::Mcp => 3,
+        PaletteSection::Action => 0,
+        PaletteSection::Command => 1,
+        PaletteSection::Skill => 2,
+        PaletteSection::Tool => 3,
+        PaletteSection::Mcp => 4,
     }
 }
 
@@ -566,6 +570,7 @@ impl CommandPaletteView {
 
     fn format_section_label(section: PaletteSection, count: usize) -> Line<'static> {
         let title = match section {
+            PaletteSection::Action => "Actions",
             PaletteSection::Command => "Commands",
             PaletteSection::Skill => "Skills",
             PaletteSection::Tool => "Tools",
@@ -639,11 +644,19 @@ impl ModalView for CommandPaletteView {
                     ViewAction::None
                 }
             }
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Up => {
                 self.move_selection(-1);
                 ViewAction::None
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Down => {
+                self.move_selection(1);
+                ViewAction::None
+            }
+            KeyCode::Char('k') if self.query.is_empty() => {
+                self.move_selection(-1);
+                ViewAction::None
+            }
+            KeyCode::Char('j') if self.query.is_empty() => {
                 self.move_selection(1);
                 ViewAction::None
             }
@@ -656,6 +669,15 @@ impl ModalView for CommandPaletteView {
                 ViewAction::None
             }
             KeyCode::Backspace => {
+                self.query.pop();
+                self.refilter();
+                ViewAction::None
+            }
+            // Ctrl+H is the legacy ASCII backspace many terminals emit.
+            KeyCode::Char('h')
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT) =>
+            {
                 self.query.pop();
                 self.refilter();
                 ViewAction::None
@@ -707,12 +729,14 @@ impl ModalView for CommandPaletteView {
         lines.push(Line::from(""));
 
         let visible = popup_height.saturating_sub(7) as usize;
+        let mut action_count = 0usize;
         let mut command_count = 0usize;
         let mut skill_count = 0usize;
         let mut tool_count = 0usize;
         let mut mcp_count = 0usize;
         for idx in &self.filtered {
             match self.entries[*idx].section {
+                PaletteSection::Action => action_count += 1,
                 PaletteSection::Command => command_count += 1,
                 PaletteSection::Skill => skill_count += 1,
                 PaletteSection::Tool => tool_count += 1,
@@ -739,6 +763,7 @@ impl ModalView for CommandPaletteView {
                         lines.push(Line::from(""));
                     }
                     let count = match entry.section {
+                        PaletteSection::Action => action_count,
                         PaletteSection::Command => command_count,
                         PaletteSection::Skill => skill_count,
                         PaletteSection::Tool => tool_count,
@@ -798,6 +823,7 @@ impl ModalView for CommandPaletteView {
 mod tests {
     use super::*;
     use std::path::Path;
+    use tempfile::TempDir;
 
     fn palette_entry(
         section: PaletteSection,
@@ -921,6 +947,47 @@ mod tests {
     }
 
     #[test]
+    fn command_palette_skills_use_workspace_and_configured_directories() {
+        let tmp = TempDir::new().expect("tempdir");
+        let workspace = tmp.path().join("workspace");
+        let workspace_skill_dir = workspace
+            .join(".agents")
+            .join("skills")
+            .join("workspace-skill");
+        std::fs::create_dir_all(&workspace_skill_dir).expect("create workspace skill dir");
+        std::fs::write(
+            workspace_skill_dir.join("SKILL.md"),
+            "---\nname: workspace-skill\ndescription: Workspace skill\ngithub: https://example.com\n---\nbody",
+        )
+        .expect("write workspace skill");
+
+        let configured_dir = tmp.path().join("configured-skills");
+        let configured_skill_dir = configured_dir.join("configured-skill");
+        std::fs::create_dir_all(&configured_skill_dir).expect("create configured skill dir");
+        std::fs::write(
+            configured_skill_dir.join("SKILL.md"),
+            "---\nname: configured-skill\ndescription: Configured skill\n---\nbody",
+        )
+        .expect("write configured skill");
+
+        let entries = build_entries(
+            Locale::En,
+            configured_dir.as_path(),
+            workspace.as_path(),
+            Path::new("mcp.json"),
+            None,
+        );
+        let skill_labels = entries
+            .iter()
+            .filter(|entry| entry.section == PaletteSection::Skill)
+            .map(|entry| entry.label.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(skill_labels.contains(&"skill:workspace-skill"));
+        assert!(skill_labels.contains(&"skill:configured-skill"));
+    }
+
+    #[test]
     fn command_palette_command_entries_include_links_and_config_but_not_removed_commands() {
         let entries = build_entries(
             Locale::En,
@@ -937,6 +1004,7 @@ mod tests {
 
         assert!(command_labels.contains(&"/config"));
         assert!(command_labels.contains(&"/links"));
+        assert!(!command_labels.contains(&"/voice"));
         assert!(!command_labels.contains(&"/set"));
         assert!(!command_labels.contains(&"/deepseek"));
     }

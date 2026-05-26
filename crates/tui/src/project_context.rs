@@ -1,11 +1,13 @@
-//! Project context loading for DeepSeek TUI.
+//! Project context loading for CodeWhale.
 //!
 //! This module handles loading project-specific context files that provide
 //! instructions and context to the AI agent. These include:
 //!
-//! - `AGENTS.md` - Project-level agent instructions (primary)
+//! - `WHALE.md` - CodeWhale-native project instructions (highest priority)
+//! - `AGENTS.md` - Generic agent instructions (compatible with other agents)
 //! - `.claude/instructions.md` - Claude-style hidden instructions
 //! - `CLAUDE.md` - Claude-style instructions
+//! - `.codewhale/instructions.md` - Hidden instructions file (new)
 //! - `.deepseek/instructions.md` - Hidden instructions file (legacy)
 //!
 //! The loaded content is injected into the system prompt to give the agent
@@ -19,16 +21,25 @@ use serde::Serialize;
 use thiserror::Error;
 
 /// Names of project context files to look for, in priority order.
+/// WHALE.md is the CodeWhale-native convention; AGENTS.md and CLAUDE.md
+/// provide compatibility with other coding agents. `.codewhale/` is the
+/// new config directory; `.deepseek/` is the legacy fallback.
 const PROJECT_CONTEXT_FILES: &[&str] = &[
+    "WHALE.md",
     "AGENTS.md",
     ".claude/instructions.md",
     "CLAUDE.md",
+    ".codewhale/instructions.md",
     ".deepseek/instructions.md",
 ];
 
 /// User-level project instructions loaded as a fallback when the workspace and
-/// its parents do not define project context.
-const GLOBAL_AGENTS_RELATIVE_PATH: &[&str] = &[".deepseek", "AGENTS.md"];
+/// its parents do not define project context. `.codewhale/` takes priority
+/// over `.deepseek/` for both WHALE.md and AGENTS.md.
+const GLOBAL_AGENTS_RELATIVE_PATH: &[&str] = &[".codewhale", "AGENTS.md"];
+const GLOBAL_AGENTS_LEGACY_PATH: &[&str] = &[".deepseek", "AGENTS.md"];
+const GLOBAL_WHALE_RELATIVE_PATH: &[&str] = &[".codewhale", "WHALE.md"];
+const GLOBAL_WHALE_LEGACY_PATH: &[&str] = &[".deepseek", "WHALE.md"];
 
 /// Maximum size for project context files (to prevent loading huge files)
 const MAX_CONTEXT_SIZE: usize = 100 * 1024; // 100KB
@@ -493,34 +504,60 @@ fn merge_global_and_project_instructions(
 
 fn load_global_agents_context(workspace: &Path, home_dir: Option<&Path>) -> Option<ProjectContext> {
     let home = home_dir?;
-    let mut path = home.to_path_buf();
-    for component in GLOBAL_AGENTS_RELATIVE_PATH {
-        path.push(component);
-    }
 
-    if !(path.exists() && path.is_file()) {
-        return None;
-    }
+    // Priority order:
+    // 1. ~/.codewhale/WHALE.md      (CodeWhale-native)
+    // 2. ~/.codewhale/AGENTS.md     (new config directory)
+    // 3. ~/.deepseek/WHALE.md       (legacy fallback)
+    // 4. ~/.deepseek/AGENTS.md      (legacy fallback)
+    let candidates: &[&[&str]] = &[
+        GLOBAL_WHALE_RELATIVE_PATH,
+        GLOBAL_AGENTS_RELATIVE_PATH,
+        GLOBAL_WHALE_LEGACY_PATH,
+        GLOBAL_AGENTS_LEGACY_PATH,
+    ];
 
-    let mut ctx = ProjectContext::empty(workspace.to_path_buf());
-    match load_context_file(&path) {
-        Ok(content) => {
-            ctx.instructions = Some(content);
-            ctx.source_path = Some(path);
+    let mut warnings = Vec::new();
+
+    for candidate in candidates {
+        let mut path = home.to_path_buf();
+        for component in *candidate {
+            path.push(component);
         }
-        Err(error) => ctx.warnings.push(error.to_string()),
+
+        if path.exists() && path.is_file() {
+            match load_context_file(&path) {
+                Ok(content) => {
+                    let mut ctx = ProjectContext::empty(workspace.to_path_buf());
+                    ctx.instructions = Some(content);
+                    ctx.source_path = Some(path);
+                    ctx.warnings = warnings;
+                    return Some(ctx);
+                }
+                Err(error) => warnings.push(error.to_string()),
+            }
+        }
     }
-    Some(ctx)
+
+    if !warnings.is_empty() {
+        let mut ctx = ProjectContext::empty(workspace.to_path_buf());
+        ctx.warnings = warnings;
+        return Some(ctx);
+    }
+
+    None
 }
 
 /// Generate a context file from project tree + summary and write it to
-/// `.deepseek/instructions.md`. Returns the generated content on success.
+/// `.codewhale/instructions.md` (or `.deepseek/instructions.md` as legacy
+/// fallback). Returns the generated content on success.
 fn auto_generate_context(workspace: &Path) -> Option<String> {
-    let deepseek_dir = workspace.join(".deepseek");
-    let instructions_path = deepseek_dir.join("instructions.md");
+    let codewhale_dir = workspace.join(".codewhale");
+    let instructions_path = codewhale_dir.join("instructions.md");
+    let legacy_instructions_path = workspace.join(".deepseek/instructions.md");
 
-    // Don't overwrite an existing file
-    if instructions_path.exists() {
+    // Don't overwrite an existing file (check both locations)
+    if instructions_path.exists() || legacy_instructions_path.exists() {
         return None;
     }
 
@@ -529,15 +566,15 @@ fn auto_generate_context(workspace: &Path) -> Option<String> {
 
     let content = format!(
         "# Project Structure (Auto-generated)\n\n\
-         > This file was automatically generated by DeepSeek TUI.\n\
+         > This file was automatically generated by CodeWhale.\n\
          > You can edit or delete it at any time.\n\n\
          **Summary:** {summary}\n\n\
          **Tree:**\n```\n{tree}\n```"
     );
 
-    // Create .deepseek/ directory if needed
-    if let Err(e) = std::fs::create_dir_all(&deepseek_dir) {
-        tracing::warn!("Failed to create .deepseek/ directory: {e}");
+    // Create .codewhale/ directory
+    if let Err(e) = std::fs::create_dir_all(&codewhale_dir) {
+        tracing::warn!("Failed to create .codewhale/ directory: {e}");
         return None;
     }
 
@@ -612,7 +649,7 @@ pub fn create_default_agents_md(workspace: &Path) -> std::io::Result<PathBuf> {
 
     let default_content = r#"# Project Agent Instructions
 
-This file provides guidance to AI agents (DeepSeek TUI, Claude Code, etc.) when working with code in this repository.
+This file provides guidance to AI agents (CodeWhale, Claude Code, etc.) when working with code in this repository.
 
 ## File Location
 

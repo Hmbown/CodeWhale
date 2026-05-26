@@ -11,8 +11,10 @@ use super::spec::{
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::Duration;
+use tokio_util::sync::CancellationToken;
 
 // === ReadFileTool ===
 
@@ -761,6 +763,8 @@ fn punctuation_normalized_matches(contents: &str, search: &str) -> Vec<(usize, u
 /// Tool for listing directory contents.
 pub struct ListDirTool;
 
+const LIST_DIR_TIMEOUT: Duration = Duration::from_secs(30);
+
 #[async_trait]
 impl ToolSpec for ListDirTool {
     fn name(&self) -> &'static str {
@@ -796,27 +800,104 @@ impl ToolSpec for ListDirTool {
         let path_str = optional_str(&input, "path").unwrap_or(".");
         let dir_path = context.resolve_path(path_str)?;
 
-        let mut entries = Vec::new();
-
-        for entry in fs::read_dir(&dir_path).map_err(|e| {
-            ToolError::execution_failed(format!(
-                "Failed to read directory {}: {}",
-                dir_path.display(),
-                e
-            ))
-        })? {
-            let entry = entry.map_err(|e| ToolError::execution_failed(e.to_string()))?;
-            let file_type = entry
-                .file_type()
-                .map_err(|e| ToolError::execution_failed(e.to_string()))?;
-
-            entries.push(json!({
-                "name": entry.file_name().to_string_lossy().to_string(),
-                "is_dir": file_type.is_dir(),
-            }));
-        }
+        let entries =
+            list_dir_entries_async(dir_path, context.cancel_token.clone(), LIST_DIR_TIMEOUT)
+                .await?;
 
         ToolResult::json(&entries).map_err(|e| ToolError::execution_failed(e.to_string()))
+    }
+}
+
+async fn list_dir_entries_async(
+    dir_path: PathBuf,
+    cancel_token: Option<CancellationToken>,
+    timeout: Duration,
+) -> Result<Vec<Value>, ToolError> {
+    let worker_cancel_token = cancel_token.clone();
+    run_blocking_list_dir(timeout, cancel_token, move || {
+        list_dir_entries(&dir_path, worker_cancel_token.as_ref())
+    })
+    .await
+}
+
+async fn run_blocking_list_dir<F>(
+    timeout: Duration,
+    cancel_token: Option<CancellationToken>,
+    list_dir: F,
+) -> Result<Vec<Value>, ToolError>
+where
+    F: FnOnce() -> Result<Vec<Value>, ToolError> + Send + 'static,
+{
+    if cancel_token
+        .as_ref()
+        .is_some_and(CancellationToken::is_cancelled)
+    {
+        return Err(list_dir_cancelled());
+    }
+
+    let task = tokio::task::spawn_blocking(list_dir);
+    let result = match cancel_token {
+        Some(token) => {
+            tokio::select! {
+                biased;
+                () = token.cancelled() => return Err(list_dir_cancelled()),
+                result = tokio::time::timeout(timeout, task) => result,
+            }
+        }
+        None => tokio::time::timeout(timeout, task).await,
+    };
+
+    let joined = result.map_err(|_| list_dir_timeout(timeout))?;
+    joined.map_err(|err| {
+        ToolError::execution_failed(format!("list_dir worker failed before completion: {err}"))
+    })?
+}
+
+fn list_dir_entries(
+    dir_path: &Path,
+    cancel_token: Option<&CancellationToken>,
+) -> Result<Vec<Value>, ToolError> {
+    check_list_dir_cancelled(cancel_token)?;
+
+    let mut entries = Vec::new();
+
+    for entry in fs::read_dir(dir_path).map_err(|e| {
+        ToolError::execution_failed(format!(
+            "Failed to read directory {}: {}",
+            dir_path.display(),
+            e
+        ))
+    })? {
+        check_list_dir_cancelled(cancel_token)?;
+
+        let entry = entry.map_err(|e| ToolError::execution_failed(e.to_string()))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|e| ToolError::execution_failed(e.to_string()))?;
+
+        entries.push(json!({
+            "name": entry.file_name().to_string_lossy().to_string(),
+            "is_dir": file_type.is_dir(),
+        }));
+    }
+
+    Ok(entries)
+}
+
+fn check_list_dir_cancelled(cancel_token: Option<&CancellationToken>) -> Result<(), ToolError> {
+    if cancel_token.is_some_and(CancellationToken::is_cancelled) {
+        return Err(list_dir_cancelled());
+    }
+    Ok(())
+}
+
+fn list_dir_cancelled() -> ToolError {
+    ToolError::execution_failed("list_dir cancelled before completion")
+}
+
+fn list_dir_timeout(timeout: Duration) -> ToolError {
+    ToolError::Timeout {
+        seconds: timeout.as_secs().max(1),
     }
 }
 
@@ -1645,6 +1726,41 @@ mod tests {
 
         assert!(result.success);
         assert!(result.content.contains("nested.txt"));
+    }
+
+    #[tokio::test]
+    async fn test_list_dir_respects_cancel_token() {
+        let tmp = tempdir().expect("tempdir");
+        fs::write(tmp.path().join("file.txt"), "").expect("write");
+        let cancel_token = CancellationToken::new();
+        cancel_token.cancel();
+        let ctx = ToolContext::new(tmp.path().to_path_buf()).with_cancel_token(cancel_token);
+
+        let tool = ListDirTool;
+        let err = tool
+            .execute(json!({}), &ctx)
+            .await
+            .expect_err("cancelled list_dir should return an error");
+
+        assert!(
+            format!("{err:?}").contains("cancelled"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_dir_blocking_wrapper_reports_timeout() {
+        let err = run_blocking_list_dir(Duration::from_millis(1), None, || {
+            std::thread::sleep(Duration::from_millis(50));
+            Ok(Vec::new())
+        })
+        .await
+        .expect_err("slow list_dir worker should time out");
+
+        assert!(
+            matches!(err, ToolError::Timeout { seconds: 1 }),
+            "unexpected error: {err:?}"
+        );
     }
 
     #[test]

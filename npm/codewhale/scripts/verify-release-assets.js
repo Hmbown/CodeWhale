@@ -13,13 +13,13 @@ function resolveBinaryVersion() {
   const configuredVersion =
     process.env.DEEPSEEK_TUI_VERSION ||
     process.env.DEEPSEEK_VERSION ||
-    pkg.deepseekBinaryVersion ||
+    pkg.codewhaleBinaryVersion || pkg.deepseekBinaryVersion ||
     pkg.version;
   return String(configuredVersion).trim();
 }
 
 function resolveRepo() {
-  return process.env.DEEPSEEK_TUI_GITHUB_REPO || process.env.DEEPSEEK_GITHUB_REPO || "Hmbown/DeepSeek-TUI";
+  return process.env.DEEPSEEK_TUI_GITHUB_REPO || process.env.DEEPSEEK_GITHUB_REPO || "Hmbown/CodeWhale";
 }
 
 function requestStatus(url, method = "HEAD", redirects = 0) {
@@ -33,7 +33,7 @@ function requestStatus(url, method = "HEAD", redirects = 0) {
       {
         method,
         headers: {
-          "User-Agent": "deepseek-tui-npm-release-check",
+          "User-Agent": "codewhale-npm-release-check",
         },
       },
       (res) => {
@@ -71,7 +71,7 @@ async function downloadText(url) {
         url,
         {
           headers: {
-            "User-Agent": "deepseek-tui-npm-release-check",
+            "User-Agent": "codewhale-npm-release-check",
           },
         },
         (res) => {

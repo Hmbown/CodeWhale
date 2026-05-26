@@ -1,7 +1,7 @@
-//! Self-update for the `deepseek` binary.
+//! Self-update for the `codewhale` binary.
 //!
 //! The `update` subcommand fetches the latest release from
-//! `github.com/Hmbown/DeepSeek-TUI/releases/latest`, downloads the
+//! `github.com/Hmbown/CodeWhale/releases/latest`, downloads the
 //! platform-correct binary, verifies its SHA256 checksum, and atomically
 //! replaces the currently running binary.
 
@@ -11,14 +11,14 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use std::io::Write;
 
-const CHECKSUM_MANIFEST_ASSET: &str = "deepseek-artifacts-sha256.txt";
-const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/Hmbown/DeepSeek-TUI/releases/latest";
-const CNB_REPO_URL: &str = "https://cnb.cool/deepseek-tui.com/DeepSeek-TUI";
+const CHECKSUM_MANIFEST_ASSET: &str = "codewhale-artifacts-sha256.txt";
+const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/Hmbown/CodeWhale/releases/latest";
+const CNB_REPO_URL: &str = "https://cnb.cool/codewhale.net/codewhale";
 const RELEASE_BASE_URL_ENV: &str = "DEEPSEEK_TUI_RELEASE_BASE_URL";
 const LEGACY_RELEASE_BASE_URL_ENV: &str = "DEEPSEEK_RELEASE_BASE_URL";
 const UPDATE_VERSION_ENV: &str = "DEEPSEEK_TUI_VERSION";
 const LEGACY_UPDATE_VERSION_ENV: &str = "DEEPSEEK_VERSION";
-const UPDATE_USER_AGENT: &str = "deepseek-tui-updater";
+const UPDATE_USER_AGENT: &str = "codewhale-updater";
 
 /// Run the self-update workflow.
 pub fn run_update() -> Result<()> {
@@ -134,19 +134,19 @@ pub(crate) fn binary_prefix_for_exe(current_exe: &Path) -> &'static str {
     let exe_name = current_exe
         .file_name()
         .and_then(|name| name.to_str())
-        .unwrap_or("deepseek");
-    if exe_name.contains("deepseek-tui") {
-        "deepseek-tui"
+        .unwrap_or("codewhale");
+    if exe_name.contains("codewhale-tui") {
+        "codewhale-tui"
     } else {
-        "deepseek"
+        "codewhale"
     }
 }
 
 fn sibling_prefix_for(prefix: &str) -> &'static str {
-    if prefix == "deepseek-tui" {
-        "deepseek"
+    if prefix == "codewhale-tui" {
+        "codewhale"
     } else {
-        "deepseek-tui"
+        "codewhale-tui"
     }
 }
 
@@ -337,7 +337,7 @@ fn release_from_mirror_base_url(
         browser_download_url: mirror_asset_url(base_url, CHECKSUM_MANIFEST_ASSET),
     }];
 
-    for prefix in ["deepseek", "deepseek-tui"] {
+    for prefix in ["codewhale", "codewhale-tui"] {
         let name = release_asset_name_for_prefix(prefix, os, rust_arch);
         assets.push(Asset {
             browser_download_url: mirror_asset_url(base_url, &name),
@@ -357,10 +357,10 @@ fn update_network_fallback_hint() -> String {
         "GitHub release downloads may be blocked or slow on this network.\n\
          For mainland China, use one of these fallback paths:\n\
            1. Source build from the CNB mirror, installing both shipped binaries:\n\
-              cargo install --git {CNB_REPO_URL} --tag vX.Y.Z deepseek-tui-cli --locked --force\n\
-              cargo install --git {CNB_REPO_URL} --tag vX.Y.Z deepseek-tui --locked --force\n\
+              cargo install --git {CNB_REPO_URL} --tag vX.Y.Z codewhale-cli --locked --force\n\
+              cargo install --git {CNB_REPO_URL} --tag vX.Y.Z codewhale-tui --locked --force\n\
            2. Use a binary asset mirror:\n\
-              {RELEASE_BASE_URL_ENV}=https://<mirror>/<release-assets>/ {UPDATE_VERSION_ENV}=X.Y.Z deepseek update\n\
+              {RELEASE_BASE_URL_ENV}=https://<mirror>/<release-assets>/ {UPDATE_VERSION_ENV}=X.Y.Z codewhale update\n\
          The mirror directory must contain {CHECKSUM_MANIFEST_ASSET} and the platform binaries."
     )
 }
@@ -428,7 +428,7 @@ fn replace_binary(target: &Path, new_bytes: &[u8]) -> Result<()> {
         .unwrap_or_else(|| Path::new("."));
 
     let mut tmp = tempfile::Builder::new()
-        .prefix(".deepseek-update-")
+        .prefix(".codewhale-update-")
         .tempfile_in(parent)
         .with_context(|| format!("failed to create temp file in {}", parent.display()))?;
     tmp.write_all(new_bytes)
@@ -532,46 +532,57 @@ mod tests {
     /// Verify binary prefix detection for dispatcher vs TUI binary.
     #[test]
     fn test_binary_prefix_detection() {
-        // TUI binary should use deepseek-tui prefix
+        // TUI binary should use codewhale-tui prefix
         assert_eq!(
-            binary_prefix_for_exe(Path::new("deepseek-tui")),
-            "deepseek-tui"
+            binary_prefix_for_exe(Path::new("codewhale-tui")),
+            "codewhale-tui"
         );
         assert_eq!(
-            binary_prefix_for_exe(Path::new("deepseek-tui.exe")),
-            "deepseek-tui"
+            binary_prefix_for_exe(Path::new("codewhale-tui.exe")),
+            "codewhale-tui"
         );
         assert_eq!(
-            binary_prefix_for_exe(Path::new("/usr/local/bin/deepseek-tui")),
-            "deepseek-tui"
+            binary_prefix_for_exe(Path::new("/usr/local/bin/codewhale-tui")),
+            "codewhale-tui"
         );
 
-        // Dispatcher binary should use deepseek prefix
-        assert_eq!(binary_prefix_for_exe(Path::new("deepseek")), "deepseek");
-        assert_eq!(binary_prefix_for_exe(Path::new("deepseek.exe")), "deepseek");
+        // Dispatcher binary should use codewhale prefix
+        assert_eq!(binary_prefix_for_exe(Path::new("codewhale")), "codewhale");
         assert_eq!(
-            binary_prefix_for_exe(Path::new("/usr/local/bin/deepseek")),
-            "deepseek"
+            binary_prefix_for_exe(Path::new("codewhale.exe")),
+            "codewhale"
+        );
+        assert_eq!(
+            binary_prefix_for_exe(Path::new("/usr/local/bin/codewhale")),
+            "codewhale"
         );
 
         // Fallback for unknown names
-        assert_eq!(binary_prefix_for_exe(Path::new("other-binary")), "deepseek");
+        assert_eq!(
+            binary_prefix_for_exe(Path::new("other-binary")),
+            "codewhale"
+        );
     }
 
     #[test]
     fn test_release_asset_stem_for_supported_platforms() {
         let cases = [
-            ("deepseek", "macos", "aarch64", "deepseek-macos-arm64"),
-            ("deepseek", "macos", "x86_64", "deepseek-macos-x64"),
-            ("deepseek", "linux", "x86_64", "deepseek-linux-x64"),
-            ("deepseek", "windows", "x86_64", "deepseek-windows-x64"),
+            ("codewhale", "macos", "aarch64", "codewhale-macos-arm64"),
+            ("codewhale", "macos", "x86_64", "codewhale-macos-x64"),
+            ("codewhale", "linux", "x86_64", "codewhale-linux-x64"),
+            ("codewhale", "windows", "x86_64", "codewhale-windows-x64"),
             (
-                "deepseek-tui",
+                "codewhale-tui",
                 "macos",
                 "aarch64",
-                "deepseek-tui-macos-arm64",
+                "codewhale-tui-macos-arm64",
             ),
-            ("deepseek-tui", "linux", "x86_64", "deepseek-tui-linux-x64"),
+            (
+                "codewhale-tui",
+                "linux",
+                "x86_64",
+                "codewhale-tui-linux-x64",
+            ),
         ];
 
         for (exe, os, arch, expected) in cases {
@@ -584,10 +595,10 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let dispatcher = dir
             .path()
-            .join(format!("deepseek{}", std::env::consts::EXE_SUFFIX));
+            .join(format!("codewhale{}", std::env::consts::EXE_SUFFIX));
         let tui = dir
             .path()
-            .join(format!("deepseek-tui{}", std::env::consts::EXE_SUFFIX));
+            .join(format!("codewhale-tui{}", std::env::consts::EXE_SUFFIX));
         std::fs::write(&dispatcher, b"dispatcher").unwrap();
         std::fs::write(&tui, b"tui").unwrap();
 
@@ -598,8 +609,8 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(paths, vec![dispatcher.as_path(), tui.as_path()]);
-        assert!(targets[0].asset_stem.starts_with("deepseek-"));
-        assert!(targets[1].asset_stem.starts_with("deepseek-tui-"));
+        assert!(targets[0].asset_stem.starts_with("codewhale-"));
+        assert!(targets[1].asset_stem.starts_with("codewhale-tui-"));
     }
 
     #[test]
@@ -607,37 +618,37 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let dispatcher = dir
             .path()
-            .join(format!("deepseek{}", std::env::consts::EXE_SUFFIX));
+            .join(format!("codewhale{}", std::env::consts::EXE_SUFFIX));
         std::fs::write(&dispatcher, b"dispatcher").unwrap();
 
         let targets = update_targets_for_exe(&dispatcher);
 
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].path, dispatcher);
-        assert!(targets[0].asset_stem.starts_with("deepseek-"));
+        assert!(targets[0].asset_stem.starts_with("codewhale-"));
     }
 
     #[test]
     fn test_asset_matching_accepts_binary_assets_and_rejects_checksums() {
         assert!(asset_matches_platform(
-            "deepseek-macos-arm64",
-            "deepseek-macos-arm64"
+            "codewhale-macos-arm64",
+            "codewhale-macos-arm64"
         ));
         assert!(asset_matches_platform(
-            "deepseek-macos-arm64.tar.gz",
-            "deepseek-macos-arm64"
+            "codewhale-macos-arm64.tar.gz",
+            "codewhale-macos-arm64"
         ));
         assert!(asset_matches_platform(
-            "deepseek-tui-windows-x64.exe",
-            "deepseek-tui-windows-x64"
+            "codewhale-tui-windows-x64.exe",
+            "codewhale-tui-windows-x64"
         ));
         assert!(!asset_matches_platform(
-            "deepseek-tui-windows-x64.exe.sha256",
-            "deepseek-tui-windows-x64"
+            "codewhale-tui-windows-x64.exe.sha256",
+            "codewhale-tui-windows-x64"
         ));
         assert!(!asset_matches_platform(
-            "deepseek-macos-aarch64.tar.gz",
-            "deepseek-macos-arm64"
+            "codewhale-macos-aarch64.tar.gz",
+            "codewhale-macos-arm64"
         ));
     }
 
@@ -663,18 +674,18 @@ mod tests {
     #[test]
     fn parse_checksum_manifest_accepts_sha256sum_format() {
         let manifest = "\
-2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824  deepseek-macos-arm64
-E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  *deepseek-windows-x64.exe
+2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824  codewhale-macos-arm64
+E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  *codewhale-windows-x64.exe
 ";
         let checksums = parse_checksum_manifest(manifest).expect("valid manifest");
 
         assert_eq!(
-            checksums.get("deepseek-macos-arm64").map(String::as_str),
+            checksums.get("codewhale-macos-arm64").map(String::as_str),
             Some("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")
         );
         assert_eq!(
             checksums
-                .get("deepseek-windows-x64.exe")
+                .get("codewhale-windows-x64.exe")
                 .map(String::as_str),
             Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
         );
@@ -682,7 +693,7 @@ E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  *deepseek-wind
 
     #[test]
     fn parse_checksum_manifest_rejects_malformed_lines() {
-        let err = parse_checksum_manifest("not-a-hash  deepseek-macos-arm64")
+        let err = parse_checksum_manifest("not-a-hash  codewhale-macos-arm64")
             .expect_err("invalid manifest line should fail");
         assert!(
             err.to_string().contains("invalid SHA256 manifest line"),
@@ -694,11 +705,11 @@ E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  *deepseek-wind
     fn expected_sha256_from_manifest_requires_matching_asset() {
         let manifest =
             "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824  other-asset\n";
-        let err = expected_sha256_from_manifest(manifest, "deepseek-macos-arm64")
+        let err = expected_sha256_from_manifest(manifest, "codewhale-macos-arm64")
             .expect_err("missing asset should fail");
         assert!(
             err.to_string()
-                .contains("checksum manifest is missing deepseek-macos-arm64"),
+                .contains("checksum manifest is missing codewhale-macos-arm64"),
             "unexpected error: {err:#}"
         );
     }
@@ -706,7 +717,7 @@ E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  *deepseek-wind
     #[test]
     fn test_replace_binary_creates_and_replaces() {
         let dir = tempfile::TempDir::new().unwrap();
-        let target = dir.path().join("deepseek-test");
+        let target = dir.path().join("codewhale-test");
         // Write initial content
         std::fs::write(&target, b"old binary").unwrap();
 
@@ -718,30 +729,30 @@ E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  *deepseek-wind
     #[test]
     fn test_replace_binary_creates_new_file() {
         let dir = tempfile::TempDir::new().unwrap();
-        let target = dir.path().join("deepseek-new-test");
+        let target = dir.path().join("codewhale-new-test");
 
         replace_binary(&target, b"fresh binary").unwrap();
         let content = std::fs::read_to_string(&target).unwrap();
         assert_eq!(content, "fresh binary");
     }
 
-    /// Mocked GitHub release payload covering both the dispatcher (`deepseek`)
-    /// and the legacy TUI (`deepseek-tui`) binaries across our published
+    /// Mocked GitHub release payload covering both the dispatcher (`codewhale`)
+    /// and the legacy TUI (`codewhale-tui`) binaries across our published
     /// platform/arch matrix, plus a checksum sibling that must never be picked
     /// as the primary binary.
     fn mocked_release() -> Release {
         let json = r#"{
           "tag_name": "v0.8.8",
           "assets": [
-            { "name": "deepseek-linux-x64",          "browser_download_url": "https://example.invalid/deepseek-linux-x64" },
-            { "name": "deepseek-macos-x64",          "browser_download_url": "https://example.invalid/deepseek-macos-x64" },
-            { "name": "deepseek-macos-arm64",        "browser_download_url": "https://example.invalid/deepseek-macos-arm64" },
-            { "name": "deepseek-windows-x64.exe",    "browser_download_url": "https://example.invalid/deepseek-windows-x64.exe" },
-            { "name": "deepseek-windows-x64.exe.sha256", "browser_download_url": "https://example.invalid/deepseek-windows-x64.exe.sha256" },
-            { "name": "deepseek-tui-linux-x64",      "browser_download_url": "https://example.invalid/deepseek-tui-linux-x64" },
-            { "name": "deepseek-tui-macos-x64",      "browser_download_url": "https://example.invalid/deepseek-tui-macos-x64" },
-            { "name": "deepseek-tui-macos-arm64",    "browser_download_url": "https://example.invalid/deepseek-tui-macos-arm64" },
-            { "name": "deepseek-tui-windows-x64.exe","browser_download_url": "https://example.invalid/deepseek-tui-windows-x64.exe" }
+            { "name": "codewhale-linux-x64",          "browser_download_url": "https://example.invalid/codewhale-linux-x64" },
+            { "name": "codewhale-macos-x64",          "browser_download_url": "https://example.invalid/codewhale-macos-x64" },
+            { "name": "codewhale-macos-arm64",        "browser_download_url": "https://example.invalid/codewhale-macos-arm64" },
+            { "name": "codewhale-windows-x64.exe",    "browser_download_url": "https://example.invalid/codewhale-windows-x64.exe" },
+            { "name": "codewhale-windows-x64.exe.sha256", "browser_download_url": "https://example.invalid/codewhale-windows-x64.exe.sha256" },
+            { "name": "codewhale-tui-linux-x64",      "browser_download_url": "https://example.invalid/codewhale-tui-linux-x64" },
+            { "name": "codewhale-tui-macos-x64",      "browser_download_url": "https://example.invalid/codewhale-tui-macos-x64" },
+            { "name": "codewhale-tui-macos-arm64",    "browser_download_url": "https://example.invalid/codewhale-tui-macos-arm64" },
+            { "name": "codewhale-tui-windows-x64.exe","browser_download_url": "https://example.invalid/codewhale-tui-windows-x64.exe" }
           ]
         }"#;
         serde_json::from_str(json).expect("mock release JSON")
@@ -751,14 +762,14 @@ E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  *deepseek-wind
     fn mocked_release_selects_dispatcher_asset_for_supported_platforms() {
         let release = mocked_release();
         let cases = [
-            ("macos", "aarch64", "deepseek-macos-arm64"),
-            ("macos", "x86_64", "deepseek-macos-x64"),
-            ("linux", "x86_64", "deepseek-linux-x64"),
-            ("windows", "x86_64", "deepseek-windows-x64.exe"),
+            ("macos", "aarch64", "codewhale-macos-arm64"),
+            ("macos", "x86_64", "codewhale-macos-x64"),
+            ("linux", "x86_64", "codewhale-linux-x64"),
+            ("windows", "x86_64", "codewhale-windows-x64.exe"),
         ];
 
         for (os, arch, expected) in cases {
-            let stem = release_asset_stem_for(Path::new("/usr/local/bin/deepseek"), os, arch);
+            let stem = release_asset_stem_for(Path::new("/usr/local/bin/codewhale"), os, arch);
             let asset = select_platform_asset(&release, &stem)
                 .unwrap_or_else(|| panic!("no asset for {os}/{arch} (stem {stem})"));
             assert_eq!(asset.name, expected, "{os}/{arch}");
@@ -768,10 +779,13 @@ E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  *deepseek-wind
     #[test]
     fn mocked_release_selects_tui_asset_when_tui_binary_invokes_update() {
         let release = mocked_release();
-        let stem =
-            release_asset_stem_for(Path::new("/usr/local/bin/deepseek-tui"), "macos", "aarch64");
+        let stem = release_asset_stem_for(
+            Path::new("/usr/local/bin/codewhale-tui"),
+            "macos",
+            "aarch64",
+        );
         let asset = select_platform_asset(&release, &stem).expect("TUI platform asset");
-        assert_eq!(asset.name, "deepseek-tui-macos-arm64");
+        assert_eq!(asset.name, "codewhale-tui-macos-arm64");
     }
 
     #[test]
@@ -787,19 +801,19 @@ E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  *deepseek-wind
         assert_eq!(release.assets[0].name, CHECKSUM_MANIFEST_ASSET);
         assert_eq!(
             release.assets[0].browser_download_url,
-            "https://mirror.example/releases/v0.8.36/deepseek-artifacts-sha256.txt"
+            "https://mirror.example/releases/v0.8.36/codewhale-artifacts-sha256.txt"
         );
 
         let dispatcher =
-            select_platform_asset(&release, "deepseek-linux-x64").expect("dispatcher asset");
+            select_platform_asset(&release, "codewhale-linux-x64").expect("dispatcher asset");
         assert_eq!(
             dispatcher.browser_download_url,
-            "https://mirror.example/releases/v0.8.36/deepseek-linux-x64"
+            "https://mirror.example/releases/v0.8.36/codewhale-linux-x64"
         );
-        let tui = select_platform_asset(&release, "deepseek-tui-linux-x64").expect("tui asset");
+        let tui = select_platform_asset(&release, "codewhale-tui-linux-x64").expect("tui asset");
         assert_eq!(
             tui.browser_download_url,
-            "https://mirror.example/releases/v0.8.36/deepseek-tui-linux-x64"
+            "https://mirror.example/releases/v0.8.36/codewhale-tui-linux-x64"
         );
     }
 
@@ -814,12 +828,12 @@ E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  *deepseek-wind
 
         assert_eq!(release.tag_name, "v0.8.36");
         assert!(
-            select_platform_asset(&release, "deepseek-windows-x64")
-                .is_some_and(|asset| asset.name == "deepseek-windows-x64.exe")
+            select_platform_asset(&release, "codewhale-windows-x64")
+                .is_some_and(|asset| asset.name == "codewhale-windows-x64.exe")
         );
         assert!(
-            select_platform_asset(&release, "deepseek-tui-windows-x64")
-                .is_some_and(|asset| asset.name == "deepseek-tui-windows-x64.exe")
+            select_platform_asset(&release, "codewhale-tui-windows-x64")
+                .is_some_and(|asset| asset.name == "codewhale-tui-windows-x64.exe")
         );
     }
 
@@ -830,8 +844,8 @@ E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  *deepseek-wind
         assert!(hint.contains(CNB_REPO_URL), "{hint}");
         assert!(hint.contains(RELEASE_BASE_URL_ENV), "{hint}");
         assert!(hint.contains(UPDATE_VERSION_ENV), "{hint}");
-        assert!(hint.contains("deepseek-tui-cli"), "{hint}");
-        assert!(hint.contains("deepseek-tui --locked"), "{hint}");
+        assert!(hint.contains("codewhale-cli"), "{hint}");
+        assert!(hint.contains("codewhale-tui --locked"), "{hint}");
     }
 
     fn serve_http_once(
@@ -868,8 +882,8 @@ E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  *deepseek-wind
         let body = br#"{
           "tag_name": "v9.9.9",
           "assets": [
-            { "name": "deepseek-linux-x64", "browser_download_url": "http://example.invalid/deepseek-linux-x64" },
-            { "name": "deepseek-artifacts-sha256.txt", "browser_download_url": "http://example.invalid/deepseek-artifacts-sha256.txt" }
+            { "name": "codewhale-linux-x64", "browser_download_url": "http://example.invalid/codewhale-linux-x64" },
+            { "name": "codewhale-artifacts-sha256.txt", "browser_download_url": "http://example.invalid/codewhale-artifacts-sha256.txt" }
           ]
         }"#;
         let (url, request_rx, handle) = serve_http_once("200 OK", "application/json", body);
@@ -886,7 +900,7 @@ E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  *deepseek-wind
             "got {request:?}"
         );
         assert!(
-            request_lower.contains("user-agent: deepseek-tui-updater"),
+            request_lower.contains("user-agent: codewhale-updater"),
             "got {request:?}"
         );
         handle.join().expect("test server thread");
@@ -917,7 +931,7 @@ E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  *deepseek-wind
         let request_lower = request.to_ascii_lowercase();
         assert!(request.starts_with("GET /release "), "got {request:?}");
         assert!(
-            request_lower.contains("user-agent: deepseek-tui-updater"),
+            request_lower.contains("user-agent: codewhale-updater"),
             "got {request:?}"
         );
         handle.join().expect("test server thread");

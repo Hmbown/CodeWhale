@@ -55,7 +55,7 @@ pub enum Mode {
 
 /// Single-line footer hint. Kept short so it fits on narrow terminals.
 const FOOTER_HINT: &str =
-    " j/k scroll  Space/b page  g/G top/bottom  End=resume tail  q/Esc close ";
+    " j/k scroll  Space/C-b page  g/G top/bottom  End=resume tail  q/Esc close ";
 
 /// Snapshot of one cell, refreshed every frame from `App`. Owns the cell so
 /// the overlay's `render(&self)` can wrap without re-borrowing `App`.

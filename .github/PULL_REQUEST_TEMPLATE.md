@@ -2,9 +2,9 @@
 
 ## Testing
 
-- [ ] `cargo test --all-features`
 - [ ] `cargo fmt --all -- --check`
-- [ ] `cargo clippy --all-targets --all-features`
+- [ ] `cargo clippy --workspace --all-targets --all-features`
+- [ ] `cargo test --workspace --all-features`
 
 ## Checklist
 

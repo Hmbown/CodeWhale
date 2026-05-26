@@ -2252,6 +2252,7 @@ fn build_shell_delta_tool_result(delta: ShellDeltaResult, context: &ToolContext)
             "summary": summary,
             "stdout_summary": stdout_summary,
             "stderr_summary": stderr_summary,
+            "command": delta.command,
             "stream_delta": true,
         })),
     };
@@ -2441,7 +2442,7 @@ impl ToolSpec for ShellCancelTool {
                 .map_err(|err| ToolError::execution_failed(err.to_string()))?;
             if results.is_empty() {
                 return Ok(ToolResult {
-                    content: "No running background shell jobs.".to_string(),
+                    content: "No running background commands.".to_string(),
                     success: true,
                     metadata: Some(json!({
                         "status": "Noop",
@@ -2457,7 +2458,7 @@ impl ToolSpec for ShellCancelTool {
                 .collect::<Vec<_>>();
             return Ok(ToolResult {
                 content: format!(
-                    "Canceled {} background shell job{}: {}",
+                    "Canceled {} background command{}: {}",
                     task_ids.len(),
                     if task_ids.len() == 1 { "" } else { "s" },
                     task_ids.join(", ")
@@ -2480,7 +2481,7 @@ impl ToolSpec for ShellCancelTool {
             .clone()
             .unwrap_or_else(|| task_id.to_string());
         Ok(ToolResult {
-            content: format!("Canceled background shell job: {task_id}"),
+            content: format!("Canceled background command: {task_id}"),
             success: true,
             metadata: Some(json!({
                 "status": format!("{:?}", result.status),

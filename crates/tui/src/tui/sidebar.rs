@@ -5,7 +5,7 @@
 //! reads from `App` snapshots; mutation lives in the main app loop.
 
 use std::fmt::Write;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ratatui::{
     Frame,
@@ -22,7 +22,7 @@ use crate::tools::plan::StepStatus;
 use crate::tools::subagent::SubAgentStatus;
 use crate::tools::todo::TodoStatus;
 
-use super::app::{App, SidebarFocus, TaskPanelEntry};
+use super::app::{App, SidebarFocus, SidebarHoverSection, SidebarHoverState, TaskPanelEntry};
 use super::history::{GenericToolCell, HistoryCell, ToolCell, ToolStatus, summarize_tool_output};
 use super::subagent_routing::active_fanout_counts;
 use super::ui_text::{concise_shell_command_label, truncate_line_to_width};
@@ -35,7 +35,9 @@ const RECENT_TOOL_SCAN_LIMIT: usize = 24;
 const ACTIVE_TOOL_COMPLETED_ROW_TTL: Duration = Duration::from_secs(8);
 const ACTIVE_TOOL_STALE_RUNNING_ROW_TTL: Duration = Duration::from_secs(600);
 
-pub fn render_sidebar(f: &mut Frame, area: Rect, app: &App) {
+pub fn render_sidebar(f: &mut Frame, area: Rect, app: &mut App) {
+    // Clear hover state at the start of each render
+    app.sidebar_hover = SidebarHoverState::default();
     if area.width < 24 || area.height < 8 {
         // Paint a styled block over the area so stale cells from a previous
         // (wider) frame don't persist as bleed-through artifacts (#400).
@@ -60,7 +62,7 @@ pub fn render_sidebar(f: &mut Frame, area: Rect, app: &App) {
 /// Build the Auto-mode panel stack. Empty panels collapse to zero height so
 /// non-empty ones get the full sidebar real estate. Work appears when it has
 /// useful content, or as the one quiet empty state when nothing else is active.
-fn render_sidebar_auto(f: &mut Frame, area: Rect, app: &App) {
+fn render_sidebar_auto(f: &mut Frame, area: Rect, app: &mut App) {
     let work_has_content = sidebar_work_summary(app).has_useful_content();
     let tasks_empty = app.runtime_turn_id.is_none() && app.task_panel.is_empty();
     let agents_empty = app.subagent_cache.is_empty()
@@ -167,6 +169,8 @@ struct SidebarWorkStrategyStep {
 struct SidebarWorkSummary {
     goal_objective: Option<String>,
     goal_token_budget: Option<u32>,
+    goal_completed: bool,
+    goal_started_at: Option<Instant>,
     tokens_used: u32,
     cycle_count: u32,
     checklist_completion_pct: u8,
@@ -226,6 +230,8 @@ fn sidebar_work_summary(app: &App) -> SidebarWorkSummary {
     let mut summary = SidebarWorkSummary {
         goal_objective: app.goal.goal_objective.clone(),
         goal_token_budget: app.goal.goal_token_budget,
+        goal_completed: app.goal.goal_completed,
+        goal_started_at: app.goal.goal_started_at,
         tokens_used: app.session.total_conversation_tokens,
         cycle_count: app.cycle_count,
         ..SidebarWorkSummary::default()
@@ -328,15 +334,41 @@ fn push_work_goal_lines(
         return;
     }
 
-    lines.push(Line::from(Span::styled(
-        format!(
-            "◆ {}",
-            truncate_line_to_width(objective, content_width.saturating_sub(2).max(1))
-        ),
+    let icon = if summary.goal_completed { "✓" } else { "◆" };
+    let status_style = if summary.goal_completed {
+        Style::default()
+            .fg(palette::STATUS_SUCCESS)
+            .add_modifier(ratatui::style::Modifier::BOLD)
+    } else {
         Style::default()
             .fg(palette::STATUS_WARNING)
-            .add_modifier(ratatui::style::Modifier::BOLD),
+            .add_modifier(ratatui::style::Modifier::BOLD)
+    };
+
+    lines.push(Line::from(Span::styled(
+        format!(
+            "{} {}",
+            icon,
+            truncate_line_to_width(objective, content_width.saturating_sub(2).max(1))
+        ),
+        status_style,
     )));
+
+    // Elapsed time
+    if let Some(started) = summary.goal_started_at
+        && lines.len() < max_rows
+    {
+        let elapsed = crate::tui::notifications::humanize_duration(started.elapsed());
+        let elapsed_str = if summary.goal_completed {
+            format!("completed in {elapsed}")
+        } else {
+            format!("elapsed: {elapsed}")
+        };
+        lines.push(Line::from(Span::styled(
+            truncate_line_to_width(&elapsed_str, content_width),
+            Style::default().fg(palette::TEXT_MUTED),
+        )));
+    }
 
     if let Some(budget) = summary.goal_token_budget
         && lines.len() < max_rows
@@ -466,7 +498,7 @@ fn push_work_strategy_lines(
         let total = pending + in_progress + completed;
         lines.push(Line::from(vec![
             Span::styled(
-                "Strategy ",
+                "Strategy metadata ",
                 Style::default().fg(theme.plan_summary_color).bold(),
             ),
             Span::styled(
@@ -480,7 +512,7 @@ fn push_work_strategy_lines(
         ]));
     } else {
         lines.push(Line::from(Span::styled(
-            "Strategy",
+            "Strategy metadata",
             Style::default().fg(theme.plan_summary_color).bold(),
         )));
     }
@@ -527,7 +559,7 @@ fn work_panel_empty_hint(content_width: usize) -> String {
     truncate_line_to_width("No active work", content_width)
 }
 
-fn render_sidebar_work(f: &mut Frame, area: Rect, app: &App) {
+fn render_sidebar_work(f: &mut Frame, area: Rect, app: &mut App) {
     if area.height < 3 {
         return;
     }
@@ -542,10 +574,11 @@ fn render_sidebar_work(f: &mut Frame, area: Rect, app: &App) {
         app.ui_theme.mode,
     );
 
-    render_sidebar_section(f, area, "Work", lines, app);
+    let full_texts: Vec<String> = lines.iter().map(|l| spans_to_text(&l.spans)).collect();
+    render_sidebar_section(f, area, "Work", lines, full_texts, app);
 }
 
-fn render_sidebar_tasks(f: &mut Frame, area: Rect, app: &App) {
+fn render_sidebar_tasks(f: &mut Frame, area: Rect, app: &mut App) {
     if area.height < 3 {
         return;
     }
@@ -554,7 +587,8 @@ fn render_sidebar_tasks(f: &mut Frame, area: Rect, app: &App) {
     let usable_rows = area.height.saturating_sub(3) as usize;
     let lines = task_panel_lines(app, content_width.max(1), usable_rows.max(1));
 
-    render_sidebar_section(f, area, "Tasks", lines, app);
+    let full_texts: Vec<String> = lines.iter().map(|l| spans_to_text(&l.spans)).collect();
+    render_sidebar_section(f, area, "Tasks", lines, full_texts, app);
 }
 
 #[derive(Debug, Clone)]
@@ -574,9 +608,13 @@ fn task_panel_lines(app: &App, content_width: usize, max_rows: usize) -> Vec<Lin
             .as_deref()
             .unwrap_or("unknown")
             .to_string();
+        // Show enough of the turn id prefix to identify it for
+        // task_read / task_cancel. A UUID needs ~13 chars before the
+        // first hyphen; 16 chars gives a safe prefix for disambiguation.
+        let turn_prefix = truncate_line_to_width(turn_id, 16);
         lines.push(Line::from(Span::styled(
             truncate_line_to_width(
-                &format!("turn {} ({status})", truncate_line_to_width(turn_id, 12)),
+                &format!("turn {turn_prefix} ({status})",),
                 content_width.max(1),
             ),
             Style::default().fg(palette::DEEPSEEK_SKY),
@@ -595,24 +633,18 @@ fn task_panel_lines(app: &App, content_width: usize, max_rows: usize) -> Vec<Lin
             .iter()
             .filter(|task| task.status == "running")
             .count();
-        lines.push(Line::from(vec![
-            Span::styled(
-                if running == background_rows.len() {
-                    format!("Background jobs: {running} running")
-                } else {
-                    format!("Background jobs: {} active", background_rows.len())
-                },
-                Style::default().fg(palette::DEEPSEEK_SKY).bold(),
-            ),
-            Span::styled(
-                if running == background_rows.len() {
-                    String::new()
-                } else {
-                    format!(" ({running} running)")
-                },
-                Style::default().fg(palette::TEXT_MUTED),
-            ),
-        ]));
+        let done = background_rows.len().saturating_sub(running);
+        let label = if running == 0 {
+            format!("Background commands: {done} completed")
+        } else if done == 0 {
+            format!("Background commands: {running} running")
+        } else {
+            format!("Background commands: {running} running, {done} completed")
+        };
+        lines.push(Line::from(Span::styled(
+            label,
+            Style::default().fg(palette::DEEPSEEK_SKY).bold(),
+        )));
 
         let max_items = max_rows.saturating_sub(lines.len());
         for task in background_rows.iter().take(max_items) {
@@ -628,12 +660,7 @@ fn task_panel_lines(app: &App, content_width: usize, max_rows: usize) -> Vec<Lin
                 .duration_ms
                 .map(format_duration_ms)
                 .unwrap_or_else(|| "-".to_string());
-            let label = format!(
-                "{} {} {}",
-                truncate_line_to_width(&task.id, 10),
-                task.status,
-                duration
-            );
+            let (label, detail) = background_task_labels(task, &duration);
             lines.push(Line::from(Span::styled(
                 truncate_line_to_width(&label, content_width.max(1)),
                 Style::default().fg(color),
@@ -641,10 +668,7 @@ fn task_panel_lines(app: &App, content_width: usize, max_rows: usize) -> Vec<Lin
             lines.push(Line::from(Span::styled(
                 format!(
                     "  {}",
-                    truncate_line_to_width(
-                        &task.prompt_summary,
-                        content_width.saturating_sub(2).max(1)
-                    )
+                    truncate_line_to_width(&detail, content_width.saturating_sub(2).max(1))
                 ),
                 Style::default().fg(palette::TEXT_DIM),
             )));
@@ -672,6 +696,19 @@ fn task_panel_lines(app: &App, content_width: usize, max_rows: usize) -> Vec<Lin
         }
     }
 
+    // Yank hint: surface the keyboard path for copying the focused task/turn ID.
+    if lines.len() + 1 < max_rows
+        && app.runtime_turn_id.is_some()
+        && app.sidebar_focus == SidebarFocus::Tasks
+    {
+        lines.push(Line::from(Span::styled(
+            "y → copy turn id  ·  Y → copy full status",
+            Style::default()
+                .fg(palette::TEXT_DIM)
+                .add_modifier(ratatui::style::Modifier::ITALIC),
+        )));
+    }
+
     if lines.is_empty()
         || (lines.len() == 1
             && app.runtime_turn_id.is_some()
@@ -692,6 +729,26 @@ fn push_sidebar_label(lines: &mut Vec<Line<'static>>, label: &str, color: ratatu
         label.to_string(),
         Style::default().fg(color).bold(),
     )));
+}
+
+fn background_task_labels(task: &TaskPanelEntry, duration: &str) -> (String, String) {
+    if let Some(command) = task.prompt_summary.strip_prefix("shell: ") {
+        let command = concise_shell_command_label(command, 96);
+        return (
+            format!("{} {} {}", task.status, command, duration),
+            format!("{} \u{00B7} command", task.id),
+        );
+    }
+
+    (
+        format!(
+            "{} {} {}",
+            truncate_line_to_width(&task.id, 10),
+            task.status,
+            duration
+        ),
+        task.prompt_summary.clone(),
+    )
 }
 
 fn active_tool_rows(app: &App) -> Vec<SidebarToolRow> {
@@ -1019,9 +1076,9 @@ fn failure_summary_with_hint(summary: &str) -> String {
 
 fn friendly_generic_tool_name(name: &str) -> &str {
     match name {
-        "task_shell_start" => "start shell job",
-        "task_shell_wait" => "wait shell job",
-        "task_shell_write" => "write shell job",
+        "task_shell_start" => "start command",
+        "task_shell_wait" => "wait command",
+        "task_shell_write" => "write command",
         _ => name,
     }
 }
@@ -1030,7 +1087,7 @@ fn generic_tool_sidebar_summary(generic: &GenericToolCell) -> String {
     match generic.name.as_str() {
         "task_shell_start" => compact_join([
             generic.input_summary.clone().unwrap_or_default(),
-            "background shell job".to_string(),
+            "background command".to_string(),
         ]),
         "task_shell_wait" => compact_join([
             generic.input_summary.clone().unwrap_or_default(),
@@ -1231,7 +1288,7 @@ fn is_ci_poll_row(row: &SidebarToolRow) -> bool {
 }
 
 fn is_shell_wait_poll_row(row: &SidebarToolRow) -> bool {
-    row.status == ToolStatus::Running && row.name == "wait shell job"
+    row.status == ToolStatus::Running && row.name == "wait command"
 }
 
 fn shell_wait_poll_key(row: &SidebarToolRow) -> String {
@@ -1321,7 +1378,7 @@ fn duration_ms(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
-fn render_sidebar_subagents(f: &mut Frame, area: Rect, app: &App) {
+fn render_sidebar_subagents(f: &mut Frame, area: Rect, app: &mut App) {
     if area.height < 3 {
         return;
     }
@@ -1368,7 +1425,7 @@ fn render_sidebar_subagents(f: &mut Frame, area: Rect, app: &App) {
     let rows = sidebar_agent_rows(app);
     let lines = subagent_panel_lines(&summary, &rows, content_width, usable_rows.max(1));
 
-    render_sidebar_section(f, area, "Agents", lines, app);
+    render_sidebar_section(f, area, "Agents", lines, Vec::new(), app);
 }
 
 /// Minimal projection of the data the sub-agent sidebar needs. Lifted out
@@ -1606,7 +1663,7 @@ fn agent_status_marker(status: &str) -> (&'static str, ratatui::style::Color) {
 /// cost, MCP server count, LSP toggle state, cycle count, and memory
 /// file size + mtime. Each section is a compact one-liner so the panel
 /// reads as a dashboard rather than a scrolling list.
-fn render_context_panel(f: &mut Frame, area: Rect, app: &App) {
+fn render_context_panel(f: &mut Frame, area: Rect, app: &mut App) {
     if area.height < 3 {
         return;
     }
@@ -1700,7 +1757,7 @@ fn render_context_panel(f: &mut Frame, area: Rect, app: &App) {
     // ── LSP ──────────────────────────────────────────────────────
     let lsp_label = if app.lsp_enabled { "on" } else { "off" };
     lines.push(Line::from(Span::styled(
-        format!("lsp: {}", lsp_label),
+        format!("lsp: {lsp_label}"),
         Style::default().fg(palette::TEXT_MUTED),
     )));
 
@@ -1726,7 +1783,7 @@ fn render_context_panel(f: &mut Frame, area: Rect, app: &App) {
                 } else if bytes >= 1024 {
                     format!("{:.1} KB", bytes as f64 / 1024.0)
                 } else {
-                    format!("{} B", bytes)
+                    format!("{bytes} B")
                 }
             })
             .unwrap_or_else(|_| "—".to_string());
@@ -1736,7 +1793,15 @@ fn render_context_panel(f: &mut Frame, area: Rect, app: &App) {
         )));
     }
 
-    render_sidebar_section(f, area, "Session", lines, app);
+    render_sidebar_section(f, area, "Session", lines, Vec::new(), app);
+}
+
+fn spans_to_text(spans: &[Span<'_>]) -> String {
+    let mut s = String::new();
+    for span in spans {
+        s.push_str(span.content.as_ref());
+    }
+    s
 }
 
 fn render_sidebar_section(
@@ -1744,7 +1809,8 @@ fn render_sidebar_section(
     area: Rect,
     title: &str,
     lines: Vec<Line<'static>>,
-    app: &App,
+    full_texts: Vec<String>,
+    app: &mut App,
 ) {
     if area.width < 4 || area.height < 3 {
         // Clear stale cells before bailing out (#400).
@@ -1755,6 +1821,19 @@ fn render_sidebar_section(
     }
 
     let theme = Theme::for_palette_mode(app.ui_theme.mode);
+
+    // Record hover metadata for mouse tooltip support.
+    let padding = theme.section_padding;
+    let content_area = Rect {
+        x: area.x + 1 + padding.left,
+        y: area.y + 1 + padding.top,
+        width: area.width.saturating_sub(2 + padding.left + padding.right),
+        height: area.height.saturating_sub(2 + padding.top + padding.bottom),
+    };
+    app.sidebar_hover.sections.push(SidebarHoverSection {
+        content_area,
+        lines: full_texts,
+    });
     // Truncate the panel title so it always fits within the section width
     // even after a resize. The title occupies up to 4 chars of border chrome
     // (two spaces + one space on each side), so the max title length is
@@ -1797,9 +1876,10 @@ fn render_sidebar_section(
 mod tests {
     use super::{
         ACTIVE_TOOL_COMPLETED_ROW_TTL, ACTIVE_TOOL_STALE_RUNNING_ROW_TTL, AutoSidebarPanel,
-        AutoSidebarState, SidebarAgentRow, SidebarSubagentSummary, SidebarWorkChecklistItem,
-        SidebarWorkStrategyStep, SidebarWorkSummary, auto_sidebar_panels, subagent_panel_lines,
-        task_panel_lines, work_panel_empty_hint, work_panel_lines,
+        AutoSidebarState, SidebarAgentRow, SidebarHoverSection, SidebarHoverState,
+        SidebarSubagentSummary, SidebarWorkChecklistItem, SidebarWorkStrategyStep,
+        SidebarWorkSummary, auto_sidebar_panels, subagent_panel_lines, task_panel_lines,
+        work_panel_empty_hint, work_panel_lines,
     };
     use crate::config::Config;
     use crate::palette::PaletteMode;
@@ -1995,7 +2075,7 @@ mod tests {
         };
         let text = lines_to_text(&work_panel_lines(&summary, 80, 16, PaletteMode::Dark));
         assert!(
-            text.iter().any(|line| line == "Strategy"),
+            text.iter().any(|line| line == "Strategy metadata"),
             "non-empty plan should show strategy label: {text:?}"
         );
         assert!(
@@ -2051,7 +2131,7 @@ mod tests {
             .push(HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
                 name: "read_file".to_string(),
                 status: ToolStatus::Success,
-                input_summary: Some("deepseek-tui/CHANGELOG.md".to_string()),
+                input_summary: Some("codewhale-tui/CHANGELOG.md".to_string()),
                 output: Some("done".to_string()),
                 prompts: None,
                 spillover_path: None,
@@ -2211,8 +2291,32 @@ mod tests {
             "running shell command should not render as both live and background: {text:?}"
         );
         assert!(
-            !text.iter().any(|line| line.contains("Background jobs")),
+            !text.iter().any(|line| line.contains("Background commands")),
             "duplicate background shell row should be hidden: {text:?}"
+        );
+    }
+
+    #[test]
+    fn tasks_panel_puts_background_shell_command_on_primary_row() {
+        let mut app = create_test_app();
+        app.task_panel.push(TaskPanelEntry {
+            id: "shell_33a08c3c".to_string(),
+            status: "running".to_string(),
+            prompt_summary: "shell: cd /tmp/repo && cargo test --workspace --all-features"
+                .to_string(),
+            duration_ms: Some(178_000),
+        });
+
+        let text = lines_to_text(&task_panel_lines(&app, 96, 8));
+
+        assert!(
+            text.iter()
+                .any(|line| line.contains("running cargo test --workspace --all-features")),
+            "background shell headline should show the command, not only the shell id: {text:?}"
+        );
+        assert!(
+            text.iter().any(|line| line.contains("shell_33a08c3c")),
+            "shell id should remain available as detail: {text:?}"
         );
     }
 
@@ -2287,7 +2391,7 @@ mod tests {
         let mut app = create_test_app();
         for _ in 0..3 {
             app.history.push(HistoryCell::Tool(ToolCell::Exec(ExecCell {
-                command: "cd /tmp/repo && sleep 15 && gh pr checks 1616 --repo Hmbown/DeepSeek-TUI"
+                command: "cd /tmp/repo && sleep 15 && gh pr checks 1616 --repo Hmbown/CodeWhale"
                     .to_string(),
                 status: ToolStatus::Failed,
                 output: Some("Lint pending\nTest pending".to_string()),
@@ -2328,7 +2432,7 @@ mod tests {
     fn tasks_panel_failed_shell_rows_point_to_activity_details() {
         let mut app = create_test_app();
         app.history.push(HistoryCell::Tool(ToolCell::Exec(ExecCell {
-            command: "cargo test -p deepseek-tui".to_string(),
+            command: "cargo test -p codewhale-tui".to_string(),
             status: ToolStatus::Failed,
             output: Some("test failed".to_string()),
             started_at: None,
@@ -2402,7 +2506,7 @@ mod tests {
         let text = lines_to_text(&task_panel_lines(&app, 80, 6));
 
         assert!(
-            text.iter().any(|line| line.contains("[~] wait shell job")),
+            text.iter().any(|line| line.contains("[~] wait command")),
             "shell helper should render as a user-facing activity: {text:?}"
         );
         assert!(
@@ -2436,7 +2540,7 @@ mod tests {
 
         assert_eq!(
             text.iter()
-                .filter(|line| line.contains("[~] wait shell job"))
+                .filter(|line| line.contains("[~] wait command"))
                 .count(),
             1,
             "duplicate waits for the same shell job should collapse: {text:?}"
@@ -2580,11 +2684,55 @@ mod tests {
         };
         let text = lines_to_text(&subagent_panel_lines(&summary, &[], 64, 8));
 
-        assert!(!text[0].contains("No agents"), "header: {:?}", text);
+        assert!(!text[0].contains("No agents"), "header: {text:?}");
         assert!(
             text.iter()
                 .any(|line| line.contains("RLM foreground work active")),
             "RLM work must be visible in Agents panel: {text:?}"
         );
+    }
+
+    // ---- Sidebar hover tooltip tests ----
+
+    #[test]
+    fn sidebar_hover_state_default_is_empty() {
+        let state = SidebarHoverState::default();
+        assert!(state.sections.is_empty());
+    }
+
+    #[test]
+    fn sidebar_hover_section_stores_lines() {
+        use ratatui::layout::Rect;
+        let section = SidebarHoverSection {
+            content_area: Rect::new(1, 1, 38, 8),
+            lines: vec!["line 1".to_string(), "line 2".to_string()],
+        };
+        assert_eq!(section.lines.len(), 2);
+        assert_eq!(section.lines[0], "line 1");
+        assert!(section.content_area.x > 0);
+    }
+
+    #[test]
+    fn hover_line_matching_respects_content_area_offset() {
+        use ratatui::layout::Rect;
+        let section = SidebarHoverSection {
+            content_area: Rect::new(62, 2, 36, 6),
+            lines: vec![
+                "first".to_string(),
+                "second".to_string(),
+                "third".to_string(),
+            ],
+        };
+
+        // Mouse within content area, first line
+        let line_idx = (2u16.saturating_sub(section.content_area.y)) as usize;
+        assert_eq!(section.lines[line_idx], "first");
+
+        // Mouse within content area, second line
+        let line_idx = (3u16.saturating_sub(section.content_area.y)) as usize;
+        assert_eq!(section.lines[line_idx], "second");
+
+        // Mouse outside content area (above) — row < content_area.y
+        assert!((1u16) < section.content_area.y);
     }
 }
