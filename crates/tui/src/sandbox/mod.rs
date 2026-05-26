@@ -824,7 +824,7 @@ mod tests {
         #[cfg(target_os = "linux")]
         {
             let marker = env.env.get("DEEPSEEK_SANDBOX");
-            assert!(marker.map_or(true, |v| v != "bwrap"));
+            assert!(marker.is_none_or(|v| v != "bwrap"));
         }
         let _ = env;
     }

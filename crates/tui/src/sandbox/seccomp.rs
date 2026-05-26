@@ -276,40 +276,37 @@ pub fn apply_seccomp_filter() -> std::io::Result<()> {
     ];
 
     // Build the BPF program.
-    let mut filter = Vec::<sock_filter>::new();
-
-    // Instruction 0: load architecture from seccomp_data.arch
-    filter.push(sock_filter {
-        code: BPF_LD | BPF_W | BPF_ABS,
-        jt: 0,
-        jf: 0,
-        k: 4, // offset of arch in seccomp_data
-    });
-
-    // Instruction 1: compare with AUDIT_ARCH_X86_64
-    // If match, jump to next instruction; if not, kill process
-    filter.push(sock_filter {
-        code: BPF_JMP | BPF_JEQ,
-        jt: 0,
-        jf: 1, // jump 1 forward (to KILL) if arch doesn't match
-        k: AUDIT_ARCH_X86_64,
-    });
-
-    // Instruction 2: KILL (wrong architecture)
-    filter.push(sock_filter {
-        code: BPF_RET,
-        jt: 0,
-        jf: 0,
-        k: SECCOMP_RET_KILL_PROCESS,
-    });
-
-    // Instruction 3: load syscall number from seccomp_data.nr
-    filter.push(sock_filter {
-        code: BPF_LD | BPF_W | BPF_ABS,
-        jt: 0,
-        jf: 0,
-        k: 0, // offset of nr in seccomp_data
-    });
+    let mut filter = vec![
+        // Instruction 0: load architecture from seccomp_data.arch
+        sock_filter {
+            code: BPF_LD | BPF_W | BPF_ABS,
+            jt: 0,
+            jf: 0,
+            k: 4, // offset of arch in seccomp_data
+        },
+        // Instruction 1: compare with AUDIT_ARCH_X86_64
+        // If match, jump to next instruction; if not, kill process
+        sock_filter {
+            code: BPF_JMP | BPF_JEQ,
+            jt: 0,
+            jf: 1, // jump 1 forward (to KILL) if arch doesn't match
+            k: AUDIT_ARCH_X86_64,
+        },
+        // Instruction 2: KILL (wrong architecture)
+        sock_filter {
+            code: BPF_RET,
+            jt: 0,
+            jf: 0,
+            k: SECCOMP_RET_KILL_PROCESS,
+        },
+        // Instruction 3: load syscall number from seccomp_data.nr
+        sock_filter {
+            code: BPF_LD | BPF_W | BPF_ABS,
+            jt: 0,
+            jf: 0,
+            k: 0, // offset of nr in seccomp_data
+        },
+    ];
 
     // For each allowed syscall, add a compare+jump to ALLOW.
     // We use a linear scan for simplicity: each JEQ instruction jumps
