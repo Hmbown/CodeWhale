@@ -275,11 +275,12 @@ Both binaries are required. Cross-compilation and platform-specific notes: [docs
 
 ### Providers
 
-Official DeepSeek remains the default and first-class path. v0.8.45 supports
-all 12 provider IDs in this order: `deepseek`, `nvidia-nim`, `openai`,
-`atlascloud`, `wanjie-ark`, `openrouter`, `novita`, `fireworks`, `moonshot`,
-`sglang`, `vllm`, and `ollama`. Other providers are additive, with OpenRouter
-starting from DeepSeek Pro/Flash before broader open-model catalogs are enabled.
+CodeWhale v0.8.45 focuses on delivering the highest-quality experience on
+DeepSeek first. The project's broader goal remains to become a strong harness
+for open-source and open-weight coding models — additional first-class
+provider paths are planned for v0.9.0. Backend provider infrastructure for
+other OpenAI-compatible endpoints and self-hosted runtimes is available under
+the same `--provider` flag for advanced users who need it today.
 
 ```bash
 # DeepSeek (default)
@@ -313,24 +314,6 @@ codewhale --provider novita --model deepseek/deepseek-v4-pro
 # Fireworks
 codewhale auth set --provider fireworks --api-key "YOUR_FIREWORKS_API_KEY"
 codewhale --provider fireworks --model deepseek-v4-pro
-
-# Kimi Code plan API key
-codewhale auth set --provider moonshot --api-key "YOUR_KIMI_CODE_API_KEY"
-codewhale config set providers.moonshot.auth_mode api_key
-codewhale config set providers.moonshot.base_url https://api.kimi.com/coding/v1
-codewhale config set providers.moonshot.model kimi-for-coding
-codewhale --provider moonshot
-
-# Kimi/Moonshot Platform API key
-codewhale auth set --provider moonshot --api-key "YOUR_MOONSHOT_OR_KIMI_API_KEY"
-codewhale config set providers.moonshot.auth_mode api_key
-codewhale config set providers.moonshot.base_url https://api.moonshot.ai/v1
-codewhale config set providers.moonshot.model kimi-k2.6
-codewhale --provider moonshot
-
-# Kimi through OpenRouter's catalog
-codewhale auth set --provider openrouter --api-key "YOUR_OPENROUTER_API_KEY"
-codewhale --provider openrouter --model moonshotai/kimi-k2.6
 
 # Self-hosted SGLang
 SGLANG_BASE_URL="http://localhost:30000/v1" codewhale --provider sglang --model deepseek-v4-flash
@@ -506,21 +489,23 @@ Key environment variables:
 
 | Variable | Purpose |
 |---|---|
+| `CODEWHALE_PROVIDER` | Active provider. Public alias for `DEEPSEEK_PROVIDER`; wins when both are set. |
+| `CODEWHALE_MODEL` | Default model for the active provider. Public alias for `DEEPSEEK_MODEL`. |
+| `CODEWHALE_BASE_URL` | Base URL for the active provider. Public alias for `DEEPSEEK_BASE_URL`. |
 | `DEEPSEEK_API_KEY` | API key |
-| `DEEPSEEK_BASE_URL` | API base URL |
+| `DEEPSEEK_BASE_URL` | API base URL (legacy alias of `CODEWHALE_BASE_URL`) |
 | `DEEPSEEK_HTTP_HEADERS` | Optional custom model request headers, e.g. `X-Model-Provider-Id=your-model-provider` |
-| `DEEPSEEK_MODEL` | Default model |
+| `DEEPSEEK_MODEL` | Default model (legacy alias of `CODEWHALE_MODEL`) |
 | `DEEPSEEK_STREAM_IDLE_TIMEOUT_SECS` | Stream idle timeout in seconds, default `300`, clamped to `1..=3600` |
-| `DEEPSEEK_PROVIDER` | `deepseek` (default), `nvidia-nim`, `openai`, `atlascloud`, `wanjie-ark`, `openrouter`, `novita`, `fireworks`, `moonshot`, `sglang`, `vllm`, `ollama` |
+| `DEEPSEEK_PROVIDER` | Legacy alias of `CODEWHALE_PROVIDER`. Accepts `deepseek` (default), `nvidia-nim`, `openai`, `atlascloud`, `wanjie-ark`, `openrouter`, `novita`, `fireworks`, `sglang`, `vllm`, `ollama`. |
 | `DEEPSEEK_PROFILE` | Config profile name |
 | `DEEPSEEK_MEMORY` | Set to `on` to enable user memory |
 | `DEEPSEEK_ALLOW_INSECURE_HTTP=1` | Allow non-local `http://` API base URLs on trusted networks |
-| `NVIDIA_API_KEY` / `NVIDIA_NIM_API_KEY` / `OPENAI_API_KEY` / `ATLASCLOUD_API_KEY` / `WANJIE_ARK_API_KEY` / `WANJIE_API_KEY` / `WANJIE_MAAS_API_KEY` / `OPENROUTER_API_KEY` / `NOVITA_API_KEY` / `FIREWORKS_API_KEY` / `MOONSHOT_API_KEY` / `KIMI_API_KEY` / `SGLANG_API_KEY` / `VLLM_API_KEY` / `OLLAMA_API_KEY` | Provider auth |
+| `NVIDIA_API_KEY` / `NVIDIA_NIM_API_KEY` / `OPENAI_API_KEY` / `ATLASCLOUD_API_KEY` / `WANJIE_ARK_API_KEY` / `WANJIE_API_KEY` / `WANJIE_MAAS_API_KEY` / `OPENROUTER_API_KEY` / `NOVITA_API_KEY` / `FIREWORKS_API_KEY` / `SGLANG_API_KEY` / `VLLM_API_KEY` / `OLLAMA_API_KEY` | Provider auth |
 | `NVIDIA_NIM_BASE_URL` / `NIM_BASE_URL` / `NVIDIA_BASE_URL` | NVIDIA NIM endpoint override |
 | `OPENAI_BASE_URL` / `OPENAI_MODEL` | Generic OpenAI-compatible endpoint and model ID |
 | `ATLASCLOUD_BASE_URL` / `ATLASCLOUD_MODEL` | AtlasCloud endpoint and model override |
 | `WANJIE_ARK_BASE_URL` / `WANJIE_BASE_URL` / `WANJIE_MAAS_BASE_URL` / `WANJIE_ARK_MODEL` / `WANJIE_MODEL` / `WANJIE_MAAS_MODEL` | Wanjie Ark endpoint and model override |
-| `MOONSHOT_BASE_URL` / `KIMI_BASE_URL` / `MOONSHOT_MODEL` / `KIMI_MODEL_NAME` / `KIMI_MODEL` | Moonshot/Kimi endpoint and model override. For a Kimi Code plan API key, use `KIMI_BASE_URL=https://api.kimi.com/coding/v1` and `KIMI_MODEL=kimi-for-coding`. |
 | `OPENROUTER_BASE_URL` | OpenRouter endpoint override |
 | `NOVITA_BASE_URL` | Novita endpoint override |
 | `FIREWORKS_BASE_URL` | Fireworks endpoint override |
