@@ -473,6 +473,70 @@ fn model_tool_catalog_applies_native_and_mcp_deferral() {
 }
 
 #[test]
+fn agent_catalog_keeps_edit_file_loaded_when_fuzz_is_omitted() {
+    let (engine, _handle) = Engine::new(EngineConfig::default(), &Config::default());
+    let registry = engine
+        .build_turn_tool_registry_builder(
+            AppMode::Agent,
+            engine.config.todos.clone(),
+            engine.config.plan_state.clone(),
+        )
+        .build(engine.build_tool_context(AppMode::Agent, false));
+    let always_load = HashSet::new();
+    let catalog = build_model_tool_catalog(
+        registry.to_api_tools_with_cache(true),
+        vec![],
+        AppMode::Agent,
+        &always_load,
+    );
+    let edit = catalog
+        .iter()
+        .find(|tool| tool.name == "edit_file")
+        .expect("edit_file registered");
+
+    assert_eq!(edit.defer_loading, Some(false));
+    let required = edit.input_schema["required"]
+        .as_array()
+        .expect("edit_file schema should include required fields");
+    assert!(required.iter().any(|field| field.as_str() == Some("path")));
+    assert!(
+        required
+            .iter()
+            .any(|field| field.as_str() == Some("search"))
+    );
+    assert!(
+        required
+            .iter()
+            .any(|field| field.as_str() == Some("replace"))
+    );
+    assert!(!required.iter().any(|field| field.as_str() == Some("fuzz")));
+    assert_eq!(
+        edit.input_schema["properties"]["fuzz"]["type"].as_str(),
+        Some("boolean")
+    );
+
+    let active_at_batch_start = initial_active_tools(&catalog);
+    assert!(active_at_batch_start.contains("edit_file"));
+    let mut hydrated_this_batch = HashSet::new();
+    assert!(
+        maybe_hydrate_requested_deferred_tool(
+            "edit_file",
+            &json!({
+                "path": "src/foo.rs",
+                "search": "before",
+                "replace": "after"
+            }),
+            &catalog,
+            &active_at_batch_start,
+            &mut hydrated_this_batch,
+        )
+        .is_none(),
+        "loaded edit_file calls without fuzz should execute instead of hydrating the schema"
+    );
+    assert!(hydrated_this_batch.is_empty());
+}
+
+#[test]
 fn tools_always_load_overrides_default_native_deferral() {
     let always_load = HashSet::from(["git_show".to_string()]);
     assert!(!should_default_defer_tool(

@@ -1476,6 +1476,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_edit_file_accepts_omitted_and_explicit_fuzz() {
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+        let tool = EditFileTool;
+
+        for (file_name, fuzz) in [
+            ("fuzz_omitted.txt", None),
+            ("fuzz_false.txt", Some(false)),
+            ("fuzz_true.txt", Some(true)),
+        ] {
+            let test_file = tmp.path().join(file_name);
+            fs::write(&test_file, "hello world").expect("write");
+
+            let mut input = serde_json::Map::from_iter([
+                ("path".to_string(), json!(file_name)),
+                ("search".to_string(), json!("hello")),
+                ("replace".to_string(), json!("hi")),
+            ]);
+            if let Some(fuzz) = fuzz {
+                input.insert("fuzz".to_string(), json!(fuzz));
+            }
+
+            let result = tool
+                .execute(Value::Object(input), &ctx)
+                .await
+                .expect("execute");
+
+            assert!(result.success, "{file_name}: {}", result.content);
+            assert!(result.content.contains("Replaced 1 occurrence"));
+            let edited = fs::read_to_string(&test_file).expect("read");
+            assert_eq!(edited, "hi world");
+        }
+    }
+
+    #[tokio::test]
     async fn test_edit_file_single_match_has_no_multi_match_warning() {
         let tmp = tempdir().expect("tempdir");
         let ctx = ToolContext::new(tmp.path().to_path_buf());
@@ -1827,7 +1862,13 @@ mod tests {
             .get("required")
             .and_then(|value| value.as_array())
             .expect("edit schema should include required array");
-        assert_eq!(required.len(), 3);
+        let required_fields: Vec<_> = required.iter().filter_map(|value| value.as_str()).collect();
+        assert_eq!(required_fields, vec!["path", "search", "replace"]);
+        assert!(!required_fields.contains(&"fuzz"));
+        assert_eq!(
+            edit_schema["properties"]["fuzz"]["type"].as_str(),
+            Some("boolean")
+        );
         let search_desc = edit_schema["properties"]["search"]["description"]
             .as_str()
             .expect("search description");
