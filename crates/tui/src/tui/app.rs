@@ -3591,7 +3591,11 @@ impl App {
     /// Returns `true` when bytes were moved into the kill buffer.
     pub fn kill_to_end_of_line(&mut self) -> bool {
         self.clear_input_history_navigation();
-        if self.delete_selection() {
+        if let Some((start, end)) = self.selection_range() {
+            let sb = byte_index_at_char(&self.input, start);
+            let eb = byte_index_at_char(&self.input, end);
+            self.kill_buffer = self.input[sb..eb].to_string();
+            self.delete_selection();
             return true;
         }
         let total_chars = char_count(&self.input);

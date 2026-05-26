@@ -2971,9 +2971,12 @@ async fn run_event_loop(
                 {
                     let sel = app.selected_text();
                     if !sel.is_empty() {
-                        let _ = app.clipboard.write_text(&sel);
-                        app.push_status_toast("Copied to clipboard", StatusToastLevel::Info, None);
-                        app.clear_selection();
+                        if app.clipboard.write_text(&sel).is_ok() {
+                            app.push_status_toast("Copied to clipboard", StatusToastLevel::Info, None);
+                            app.clear_selection();
+                        } else {
+                            app.push_status_toast("Copy failed", StatusToastLevel::Error, None);
+                        }
                     } else {
                         copy_active_selection(app);
                     }
@@ -3496,6 +3499,7 @@ async fn run_event_loop(
                     app.move_cursor_left();
                 }
                 KeyCode::Left if is_word_cursor_modifier(key.modifiers) => {
+                    app.clear_selection();
                     app.move_cursor_word_backward();
                 }
                 KeyCode::Left => {
@@ -3509,6 +3513,7 @@ async fn run_event_loop(
                     app.move_cursor_right();
                 }
                 KeyCode::Right if is_word_cursor_modifier(key.modifiers) => {
+                    app.clear_selection();
                     app.move_cursor_word_forward();
                 }
                 KeyCode::Right => {
@@ -3641,9 +3646,12 @@ async fn run_event_loop(
                 KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     let sel = app.selected_text();
                     if !sel.is_empty() {
-                        let _ = app.clipboard.write_text(&sel);
-                        app.push_status_toast("Cut to clipboard", StatusToastLevel::Info, None);
-                        app.delete_selection();
+                        if app.clipboard.write_text(&sel).is_ok() {
+                            app.push_status_toast("Cut to clipboard", StatusToastLevel::Info, None);
+                            app.delete_selection();
+                        } else {
+                            app.push_status_toast("Cut failed", StatusToastLevel::Error, None);
+                        }
                     } else {
                         let new_mode = match app.mode {
                             AppMode::Plan => AppMode::Agent,
