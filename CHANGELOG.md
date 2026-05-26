@@ -14,11 +14,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   support. Home, End, Ctrl+A, and Ctrl+E now clear the selection to prevent
   accidental deletions on the next keystroke (#2228).
 
+### Changed
+
+- **Project context loading now logs the source file.** A tracing info
+  line is emitted when AGENTS.md, CLAUDE.md, or another context file is
+  successfully loaded into the system prompt, making it easier to verify
+  which file was used during prompt assembly (#2227).
+
 ### Fixed
 
 - **Deadlock when spawning multiple concurrent sub-agents.** Replaced
   `RwLock`-based serialisation with a `Semaphore(1)` in `ToolCallRuntime`,
   preventing re-entrant tool calls from deadlocking on the same lock (#1856).
+
+### Community
+
+Thanks to contributors whose PRs landed in this release:
+**@Fire-dtx** (#1856),
+**@imkingjh999** (#2228).
 
 ## [0.8.46] - 2026-05-26
 
