@@ -30,10 +30,12 @@ use crate::localization::Locale;
 use crate::sandbox::SandboxPolicy;
 use crate::tui::views::{ModalKind, ModalView, ViewAction, ViewEvent};
 use crate::tui::widgets::{ApprovalWidget, ElevationWidget, Renderable};
-use codewhale_execpolicy::{PermissionDecision, ToolPermissionRule, normalize_path_pattern};
+use codewhale_execpolicy::{
+    PermissionDecision, ToolPermissionRule, normalize_path_pattern, normalize_permission_path,
+};
 use crossterm::event::{KeyCode, KeyEvent};
 use serde_json::Value;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 /// Determines when tool executions require user approval
@@ -413,22 +415,22 @@ fn normalize_persistent_permission_path(raw: &str, workspace: Option<&Path>) -> 
     let normalized = if let Some(workspace) = workspace {
         let workspace = absolute_normalized_workspace(workspace);
         let candidate = if raw_path.is_absolute() {
-            normalize_path(raw_path)
+            normalize_permission_path(raw_path)
         } else {
-            normalize_path(&workspace.join(raw_path))
+            normalize_permission_path(&workspace.join(raw_path))
         };
         candidate
             .strip_prefix(&workspace)
-            .map(normalize_path)
+            .map(normalize_permission_path)
             .unwrap_or_else(|_| {
                 if raw_path.is_absolute() {
                     candidate
                 } else {
-                    normalize_path(raw_path)
+                    normalize_permission_path(raw_path)
                 }
             })
     } else {
-        normalize_path(raw_path)
+        normalize_permission_path(raw_path)
     };
 
     let mut path = normalize_path_pattern(&permission_path_to_string(&normalized));
@@ -449,51 +451,7 @@ fn absolute_normalized_workspace(workspace: &Path) -> PathBuf {
             .map(|current_dir| current_dir.join(workspace))
             .unwrap_or_else(|_| workspace.to_path_buf())
     };
-    normalize_path(&workspace)
-}
-
-fn normalize_path(path: &Path) -> PathBuf {
-    let mut prefix: Option<std::ffi::OsString> = None;
-    let mut is_root = false;
-    let mut stack: Vec<std::ffi::OsString> = Vec::new();
-
-    for component in path.components() {
-        match component {
-            Component::Prefix(prefix_component) => {
-                prefix = Some(prefix_component.as_os_str().to_owned());
-            }
-            Component::RootDir => {
-                is_root = true;
-            }
-            Component::CurDir => {}
-            Component::ParentDir => {
-                let parent = Component::ParentDir.as_os_str();
-                if let Some(last) = stack.pop() {
-                    if last == parent {
-                        stack.push(last);
-                        stack.push(parent.to_owned());
-                    }
-                } else if !is_root {
-                    stack.push(parent.to_owned());
-                }
-            }
-            Component::Normal(part) => {
-                stack.push(part.to_owned());
-            }
-        }
-    }
-
-    let mut normalized = PathBuf::new();
-    if let Some(prefix) = prefix {
-        normalized.push(prefix);
-    }
-    if is_root {
-        normalized.push(Path::new(std::path::MAIN_SEPARATOR_STR));
-    }
-    for part in stack {
-        normalized.push(part);
-    }
-    normalized
+    normalize_permission_path(&workspace)
 }
 
 fn permission_path_to_string(path: &Path) -> String {

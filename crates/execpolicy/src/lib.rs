@@ -1,6 +1,9 @@
 pub mod bash_arity;
 
-use std::collections::HashSet;
+use std::{
+    collections::HashSet,
+    path::{Component, Path, PathBuf},
+};
 
 use anyhow::Result;
 use bash_arity::BashArityDict;
@@ -607,7 +610,7 @@ fn path_pattern_matches(pattern: &str, path: &str, workspace_root: Option<&str>)
     let pattern = normalize_path_pattern(pattern);
     let path = normalize_path_for_matching(path, workspace_root);
     if let Some(prefix) = pattern.strip_suffix("/**")
-        && (path == prefix || path.starts_with(&format!("{prefix}/")))
+        && path.starts_with(&format!("{prefix}/"))
     {
         return true;
     }
@@ -687,6 +690,52 @@ pub fn normalize_path_pattern(value: &str) -> String {
     } else {
         normalized
     }
+}
+
+/// Normalize a filesystem path for permission matching and rule generation.
+#[must_use]
+pub fn normalize_permission_path(path: &Path) -> PathBuf {
+    let mut prefix: Option<std::ffi::OsString> = None;
+    let mut is_root = false;
+    let mut stack: Vec<std::ffi::OsString> = Vec::new();
+
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix_component) => {
+                prefix = Some(prefix_component.as_os_str().to_owned());
+            }
+            Component::RootDir => {
+                is_root = true;
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                let parent = Component::ParentDir.as_os_str();
+                if let Some(last) = stack.pop() {
+                    if last == parent {
+                        stack.push(last);
+                        stack.push(parent.to_owned());
+                    }
+                } else if !is_root {
+                    stack.push(parent.to_owned());
+                }
+            }
+            Component::Normal(part) => {
+                stack.push(part.to_owned());
+            }
+        }
+    }
+
+    let mut normalized = PathBuf::new();
+    if let Some(prefix) = prefix {
+        normalized.push(prefix);
+    }
+    if is_root {
+        normalized.push(Path::new(std::path::MAIN_SEPARATOR_STR));
+    }
+    for part in stack {
+        normalized.push(part);
+    }
+    normalized
 }
 
 fn normalize_path_for_matching(path: &str, workspace_root: Option<&str>) -> String {
@@ -1040,6 +1089,7 @@ mod tests {
             tool: "file_edit",
             command: None,
             path: Some("src/main.rs"),
+            workspace_root: None,
         });
 
         assert_eq!(decision.decision, Some(PermissionDecision::Allow));
@@ -1076,6 +1126,18 @@ mod tests {
         assert!(!path_pattern_matches("src/**", "../src/lib.rs", None));
         assert!(path_pattern_matches("/foo", "/../foo", None));
         assert!(!path_pattern_matches("/src/**", "/src/../secret.txt", None));
+    }
+
+    #[test]
+    fn normalize_permission_path_collapses_dot_segments() {
+        assert_eq!(
+            normalize_permission_path(Path::new("/../foo")),
+            PathBuf::from("/foo")
+        );
+        assert_eq!(
+            normalize_permission_path(Path::new("src/../docs/./guide.md")),
+            PathBuf::from("docs/guide.md")
+        );
     }
 
     #[test]
