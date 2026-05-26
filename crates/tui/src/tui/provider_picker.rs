@@ -479,7 +479,8 @@ mod tests {
                 "Moonshot/Kimi",
                 "SGLang",
                 "vLLM",
-                "Ollama"
+                "Ollama",
+                "Xiaomi MiMo"
             ]
         );
     }

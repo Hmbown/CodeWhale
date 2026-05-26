@@ -1381,6 +1381,8 @@ pub struct ProvidersConfig {
     pub vllm: ProviderConfig,
     #[serde(default)]
     pub ollama: ProviderConfig,
+    #[serde(default)]
+    pub xiaomi: ProviderConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -3398,6 +3400,7 @@ fn merge_providers(
             sglang: merge_provider_config(base.sglang, override_cfg.sglang),
             vllm: merge_provider_config(base.vllm, override_cfg.vllm),
             ollama: merge_provider_config(base.ollama, override_cfg.ollama),
+            xiaomi: merge_provider_config(base.xiaomi, override_cfg.xiaomi),
         }),
     }
 }
