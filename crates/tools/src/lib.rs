@@ -8,7 +8,11 @@ use async_trait::async_trait;
 use codewhale_protocol::{ToolKind, ToolOutput, ToolPayload};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock};
+
+tokio::task_local! {
+    static TOOL_EXECUTION_LOCK_HELD: ();
+}
 
 /// Capabilities that a tool may have or require.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -311,15 +315,36 @@ pub trait ToolHandler: Send + Sync {
 
 #[derive(Debug)]
 pub struct ToolCallRuntime {
-    /// Serialise non-parallel tool executions. Capacity 1 ensures at most one
-    /// serial tool runs at a time, and blocks parallel tools while it runs.
-    serial_semaphore: Arc<Semaphore>,
+    /// Preserve read/write tool execution semantics: parallel-safe tools may
+    /// overlap, while serial tools run exclusively.
+    execution_lock: Arc<RwLock<()>>,
 }
 
 impl Default for ToolCallRuntime {
     fn default() -> Self {
         Self {
-            serial_semaphore: Arc::new(Semaphore::new(1)),
+            execution_lock: Arc::new(RwLock::new(())),
+        }
+    }
+}
+
+#[derive(Debug)]
+enum ToolExecutionGuard {
+    Parallel(#[allow(dead_code)] OwnedRwLockReadGuard<()>),
+    Serial(#[allow(dead_code)] OwnedRwLockWriteGuard<()>),
+    Reentrant,
+}
+
+impl ToolCallRuntime {
+    async fn acquire(&self, supports_parallel: bool) -> ToolExecutionGuard {
+        if TOOL_EXECUTION_LOCK_HELD.try_with(|_| ()).is_ok() {
+            return ToolExecutionGuard::Reentrant;
+        }
+
+        if supports_parallel {
+            ToolExecutionGuard::Parallel(self.execution_lock.clone().read_owned().await)
+        } else {
+            ToolExecutionGuard::Serial(self.execution_lock.clone().write_owned().await)
         }
     }
 }
@@ -389,22 +414,17 @@ impl ToolRegistry {
             source: call.source,
         };
 
-        if configured.supports_parallel_tool_calls {
-            // Parallel tools wait for any in-flight serial tool to finish,
-            // but do not hold the permit so other parallel tools may run concurrently.
-            drop(self.runtime.serial_semaphore.acquire().await
-                .map_err(|_| FunctionCallError::Cancelled { name: call.name })?);
-            self.execute_with_timeout(handler, configured.spec.timeout_ms, invocation)
-                .await
-        } else {
-            // Serial tools hold the semaphore for the full execution duration,
-            // preventing other serial AND parallel tools from starting.
-            let _permit = self.runtime.serial_semaphore.acquire().await
-                .map_err(|_| FunctionCallError::Cancelled { name: call.name })?;
-            self.execute_with_timeout(handler, configured.spec.timeout_ms, invocation)
-                .await
-            // _permit dropped here, releasing the semaphore.
-        }
+        let _guard = self
+            .runtime
+            .acquire(configured.supports_parallel_tool_calls)
+            .await;
+
+        TOOL_EXECUTION_LOCK_HELD
+            .scope(
+                (),
+                self.execute_with_timeout(handler, configured.spec.timeout_ms, invocation),
+            )
+            .await
     }
 
     async fn execute_with_timeout(
