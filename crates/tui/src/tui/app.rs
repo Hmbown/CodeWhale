@@ -4829,17 +4829,18 @@ mod tests {
         let config_path = tmp.path().join("config.toml");
         std::fs::write(
             tmp.path().join("settings.toml"),
-            "default_provider = \"openai\"\n",
+            "default_provider = \"moonshot\"\n",
         )
         .expect("settings");
         let _config_path = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
         let _deepseek_key = EnvVarGuard::remove("DEEPSEEK_API_KEY");
-        let _openai_key = EnvVarGuard::remove("OPENAI_API_KEY");
+        let _moonshot_key = EnvVarGuard::remove("MOONSHOT_API_KEY");
+        let _kimi_key = EnvVarGuard::remove("KIMI_API_KEY");
 
         let config = Config {
             providers: Some(ProvidersConfig {
-                openai: ProviderConfig {
-                    api_key: Some("openai-config-key".to_string()),
+                moonshot: ProviderConfig {
+                    api_key: Some("moonshot-config-key".to_string()),
                     ..ProviderConfig::default()
                 },
                 ..ProvidersConfig::default()
@@ -4849,10 +4850,10 @@ mod tests {
 
         let app = App::new(test_options(false), &config);
 
-        assert_eq!(app.api_provider, ApiProvider::Openai);
+        assert_eq!(app.api_provider, ApiProvider::Moonshot);
         assert!(
             !app.onboarding_needs_api_key,
-            "OpenAI provider config key should satisfy startup auth without a DeepSeek key"
+            "Moonshot provider config key should satisfy startup auth without a DeepSeek key"
         );
         assert_ne!(app.onboarding, OnboardingState::ApiKey);
         assert!(!app.api_key_env_only);

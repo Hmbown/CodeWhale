@@ -365,12 +365,6 @@ impl Engine {
         let env_var = match provider {
             ApiProvider::Deepseek | ApiProvider::DeepseekCN => "DEEPSEEK_API_KEY",
             ApiProvider::NvidiaNim => "NVIDIA_API_KEY/NVIDIA_NIM_API_KEY",
-            ApiProvider::Openai => "OPENAI_API_KEY",
-            ApiProvider::Atlascloud => "ATLASCLOUD_API_KEY",
-            ApiProvider::WanjieArk => "WANJIE_ARK_API_KEY/WANJIE_API_KEY/WANJIE_MAAS_API_KEY",
-            ApiProvider::Openrouter => "OPENROUTER_API_KEY",
-            ApiProvider::Novita => "NOVITA_API_KEY",
-            ApiProvider::Fireworks => "FIREWORKS_API_KEY",
             ApiProvider::Moonshot => "MOONSHOT_API_KEY/KIMI_API_KEY",
             ApiProvider::Sglang => "SGLANG_API_KEY",
             ApiProvider::Vllm => "VLLM_API_KEY",

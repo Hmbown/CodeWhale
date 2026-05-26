@@ -1838,30 +1838,6 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
                     "NVIDIA_API_KEY",
                     "codewhale auth set --provider nvidia-nim --api-key \"...\"",
                 ),
-                crate::config::ApiProvider::Openai => (
-                    "OPENAI_API_KEY",
-                    "codewhale auth set --provider openai --api-key \"...\"",
-                ),
-                crate::config::ApiProvider::Atlascloud => (
-                    "ATLASCLOUD_API_KEY",
-                    "codewhale auth set --provider atlascloud --api-key \"...\"",
-                ),
-                crate::config::ApiProvider::WanjieArk => (
-                    "WANJIE_ARK_API_KEY",
-                    "codewhale auth set --provider wanjie-ark --api-key \"...\"",
-                ),
-                crate::config::ApiProvider::Openrouter => (
-                    "OPENROUTER_API_KEY",
-                    "codewhale auth set --provider openrouter --api-key \"...\"",
-                ),
-                crate::config::ApiProvider::Novita => (
-                    "NOVITA_API_KEY",
-                    "codewhale auth set --provider novita --api-key \"...\"",
-                ),
-                crate::config::ApiProvider::Fireworks => (
-                    "FIREWORKS_API_KEY",
-                    "codewhale auth set --provider fireworks --api-key \"...\"",
-                ),
                 crate::config::ApiProvider::Moonshot => (
                     "MOONSHOT_API_KEY/KIMI_API_KEY",
                     "codewhale auth set --provider moonshot --api-key \"...\"",
@@ -1886,12 +1862,6 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
                 "✗".truecolor(red_r, red_g, red_b),
                 match config.api_provider() {
                     crate::config::ApiProvider::NvidiaNim => "nvidia_nim",
-                    crate::config::ApiProvider::Openai => "openai",
-                    crate::config::ApiProvider::Atlascloud => "atlascloud",
-                    crate::config::ApiProvider::WanjieArk => "wanjie_ark",
-                    crate::config::ApiProvider::Openrouter => "openrouter",
-                    crate::config::ApiProvider::Novita => "novita",
-                    crate::config::ApiProvider::Fireworks => "fireworks",
                     crate::config::ApiProvider::Moonshot => "moonshot",
                     crate::config::ApiProvider::Sglang => "sglang",
                     crate::config::ApiProvider::Vllm => "vllm",
@@ -2125,40 +2095,6 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
             crate::config::ApiProvider::NvidiaNim,
             "nvidia-nim",
             &["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"][..],
-        ),
-        (
-            crate::config::ApiProvider::Openai,
-            "openai",
-            &["OPENAI_API_KEY"][..],
-        ),
-        (
-            crate::config::ApiProvider::Atlascloud,
-            "atlascloud",
-            &["ATLASCLOUD_API_KEY"][..],
-        ),
-        (
-            crate::config::ApiProvider::WanjieArk,
-            "wanjie-ark",
-            &[
-                "WANJIE_ARK_API_KEY",
-                "WANJIE_API_KEY",
-                "WANJIE_MAAS_API_KEY",
-            ][..],
-        ),
-        (
-            crate::config::ApiProvider::Openrouter,
-            "openrouter",
-            &["OPENROUTER_API_KEY"][..],
-        ),
-        (
-            crate::config::ApiProvider::Novita,
-            "novita",
-            &["NOVITA_API_KEY"][..],
-        ),
-        (
-            crate::config::ApiProvider::Fireworks,
-            "fireworks",
-            &["FIREWORKS_API_KEY"][..],
         ),
         (
             crate::config::ApiProvider::Moonshot,

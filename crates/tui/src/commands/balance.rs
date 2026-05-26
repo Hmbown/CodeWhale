@@ -13,10 +13,7 @@ use super::CommandResult;
 pub fn balance(app: &mut App) -> CommandResult {
     let provider = app.api_provider;
     match provider {
-        ApiProvider::Deepseek
-        | ApiProvider::DeepseekCN
-        | ApiProvider::Openrouter
-        | ApiProvider::Novita => CommandResult::message(format!(
+        ApiProvider::Deepseek | ApiProvider::DeepseekCN => CommandResult::message(format!(
             "Balance check for {} is planned, but provider balance network dispatch is not wired in this build yet.",
             provider.display_name()
         )),

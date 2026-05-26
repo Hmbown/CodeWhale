@@ -27,7 +27,7 @@ pub fn provider(app: &mut App, args: Option<&str>) -> CommandResult {
 
     let Some(target) = ApiProvider::parse(name) else {
         return CommandResult::error(format!(
-            "Unknown provider '{name}'. Expected: deepseek, nvidia-nim, openai, atlascloud, wanjie-ark, openrouter, novita, fireworks, sglang, vllm, or ollama."
+            "Unknown provider '{name}'. Expected: deepseek, nvidia-nim, moonshot, sglang, vllm, or ollama."
         ));
     };
 
@@ -111,71 +111,19 @@ mod tests {
         let result = provider(&mut app, Some("anthropic"));
         let msg = result.message.expect("expected error message");
         assert!(msg.contains("Unknown provider"));
-        assert!(msg.contains("openrouter"));
-        assert!(msg.contains("novita"));
+        assert!(msg.contains("moonshot"));
+        assert!(msg.contains("sglang"));
         assert!(result.action.is_none());
     }
 
     #[test]
-    fn switch_to_openrouter_emits_action() {
+    fn switch_to_moonshot_emits_action() {
         let mut app = create_test_app();
-        let result = provider(&mut app, Some("openrouter"));
+        let result = provider(&mut app, Some("moonshot"));
         match result.action {
             Some(AppAction::SwitchProvider { provider, model }) => {
-                assert_eq!(provider, ApiProvider::Openrouter);
+                assert_eq!(provider, ApiProvider::Moonshot);
                 assert_eq!(model, None);
-            }
-            other => panic!("expected SwitchProvider, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn switch_to_atlascloud_emits_action() {
-        let mut app = create_test_app();
-        let result = provider(&mut app, Some("atlascloud"));
-        match result.action {
-            Some(AppAction::SwitchProvider { provider, model }) => {
-                assert_eq!(provider, ApiProvider::Atlascloud);
-                assert_eq!(model, None);
-            }
-            other => panic!("expected SwitchProvider, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn switch_to_wanjie_ark_preserves_model_id() {
-        let mut app = create_test_app();
-        let result = provider(&mut app, Some("ark-wanjie account-model-id"));
-        match result.action {
-            Some(AppAction::SwitchProvider { provider, model }) => {
-                assert_eq!(provider, ApiProvider::WanjieArk);
-                assert_eq!(model.as_deref(), Some("account-model-id"));
-            }
-            other => panic!("expected SwitchProvider, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn switch_to_novita_emits_action() {
-        let mut app = create_test_app();
-        let result = provider(&mut app, Some("novita"));
-        match result.action {
-            Some(AppAction::SwitchProvider { provider, model }) => {
-                assert_eq!(provider, ApiProvider::Novita);
-                assert_eq!(model, None);
-            }
-            other => panic!("expected SwitchProvider, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn switch_to_fireworks_emits_action() {
-        let mut app = create_test_app();
-        let result = provider(&mut app, Some("fireworks pro"));
-        match result.action {
-            Some(AppAction::SwitchProvider { provider, model }) => {
-                assert_eq!(provider, ApiProvider::Fireworks);
-                assert_eq!(model.as_deref(), Some("deepseek-v4-pro"));
             }
             other => panic!("expected SwitchProvider, got {other:?}"),
         }

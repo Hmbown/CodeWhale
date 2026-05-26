@@ -1698,9 +1698,6 @@ fn provider_accepts_reasoning_content(provider: ApiProvider) -> bool {
         ApiProvider::Deepseek
             | ApiProvider::DeepseekCN
             | ApiProvider::NvidiaNim
-            | ApiProvider::Openrouter
-            | ApiProvider::Novita
-            | ApiProvider::Fireworks
             | ApiProvider::Sglang
     )
 }
@@ -2342,9 +2339,12 @@ mod stream_decoder_tests {
     }
 
     #[test]
-    fn decoder_accepts_openrouter_reasoning_delta_with_extra_fields() {
+    fn decoder_accepts_reasoning_delta_with_extra_provider_specific_fields() {
+        // Defensive: third-party OpenAI-compatible providers sometimes attach
+        // extra fields (reasoning_details, native_finish_reason) alongside the
+        // reasoning delta. The decoder must ignore those rather than crash.
         let events = decode_chunk(
-            r#"{"id":"or-1","choices":[{"delta":{"reasoning":"openrouter thought","reasoning_details":[{"type":"summary","text":"extra"}],"native_finish_reason":null}}],"usage":{"completion_tokens_details":{"reasoning_tokens":3}}}"#,
+            r#"{"id":"or-1","choices":[{"delta":{"reasoning":"a thought","reasoning_details":[{"type":"summary","text":"extra"}],"native_finish_reason":null}}],"usage":{"completion_tokens_details":{"reasoning_tokens":3}}}"#,
         );
 
         assert!(
@@ -2353,9 +2353,9 @@ mod stream_decoder_tests {
                 StreamEvent::ContentBlockDelta {
                     delta: Delta::ThinkingDelta { thinking },
                     ..
-                } if thinking == "openrouter thought"
+                } if thinking == "a thought"
             )),
-            "OpenRouter-style reasoning deltas with extra fields should not crash decoding; got {events:?}"
+            "reasoning deltas with extra provider-specific fields should not crash decoding; got {events:?}"
         );
     }
 
@@ -3128,93 +3128,44 @@ mod alias_thinking_detection_tests {
     }
 
     #[test]
-    fn generic_openai_provider_does_not_accept_reasoning_content_semantics() {
-        assert!(!provider_accepts_reasoning_content(ApiProvider::Openai));
+    fn provider_accept_reasoning_set_matches_approved_providers() {
         assert!(provider_accepts_reasoning_content(ApiProvider::Deepseek));
+        assert!(provider_accepts_reasoning_content(ApiProvider::DeepseekCN));
         assert!(provider_accepts_reasoning_content(ApiProvider::NvidiaNim));
+        assert!(provider_accepts_reasoning_content(ApiProvider::Sglang));
+        assert!(!provider_accepts_reasoning_content(ApiProvider::Moonshot));
+        assert!(!provider_accepts_reasoning_content(ApiProvider::Vllm));
+        assert!(!provider_accepts_reasoning_content(ApiProvider::Ollama));
     }
 
     #[test]
-    fn deepseek_model_on_openai_provider_still_replays_reasoning_content() {
-        // #1739 / #1694: a DeepSeek thinking model pointed at a
-        // DeepSeek-compatible endpoint via the generic `openai` provider must
-        // still replay reasoning_content, even though the provider itself does
-        // not accept the field. Otherwise the thinking-mode API returns 400.
-        assert!(should_replay_reasoning_content_for_provider(
-            ApiProvider::Openai,
-            "deepseek-v4-flash",
-            None,
-        ));
-        assert!(should_replay_reasoning_content_for_provider(
-            ApiProvider::Openai,
-            "deepseek-v4-pro",
-            None,
-        ));
-        assert!(should_replay_reasoning_content_for_provider(
-            ApiProvider::Openai,
-            "deepseek-reasoner",
-            Some("medium"),
-        ));
-        // The documented escape hatch still wins over model detection.
-        assert!(!should_replay_reasoning_content_for_provider(
-            ApiProvider::Openai,
-            "deepseek-v4-flash",
-            Some("off"),
-        ));
-    }
-
-    #[test]
-    fn generic_model_on_openai_provider_still_strips_reasoning_content() {
-        // #1542 no-regression guard: a genuine non-DeepSeek model on the
-        // openai provider must continue to have reasoning_content stripped.
-        assert!(!should_replay_reasoning_content_for_provider(
-            ApiProvider::Openai,
-            "qwen3-coder",
-            None,
-        ));
-        assert!(!should_replay_reasoning_content_for_provider(
-            ApiProvider::Openai,
-            "claude-sonnet-4-6",
-            None,
-        ));
-    }
-
-    #[test]
-    fn stream_classifies_deepseek_model_on_openai_provider_as_reasoning() {
-        // #1739: the SSE parser must treat a DeepSeek thinking model on the
-        // generic `openai` provider (DeepSeek-compatible endpoint) as a
-        // reasoning model, or incoming `reasoning_content` tokens are stored
-        // as answer text and the subsequent replay still 400s.
-        assert!(is_reasoning_model_for_stream(
-            ApiProvider::Openai,
-            "deepseek-v4-flash"
-        ));
-        assert!(is_reasoning_model_for_stream(
-            ApiProvider::Openai,
-            "deepseek-v4-pro"
-        ));
-        assert!(is_reasoning_model_for_stream(
-            ApiProvider::Openai,
-            "deepseek-reasoner"
-        ));
-        // Native DeepSeek provider was already correct; stays correct.
-        assert!(is_reasoning_model_for_stream(
+    fn stream_classifies_deepseek_models_on_supported_providers_as_reasoning() {
+        // #1739: the SSE parser must treat a DeepSeek thinking model as a
+        // reasoning model on each provider that hosts it. Otherwise incoming
+        // `reasoning_content` tokens are stored as answer text and the
+        // subsequent replay 400s.
+        for provider in [
             ApiProvider::Deepseek,
-            "deepseek-v4-pro"
-        ));
+            ApiProvider::DeepseekCN,
+            ApiProvider::NvidiaNim,
+            ApiProvider::Sglang,
+        ] {
+            assert!(is_reasoning_model_for_stream(provider, "deepseek-v4-flash"));
+            assert!(is_reasoning_model_for_stream(provider, "deepseek-v4-pro"));
+            assert!(is_reasoning_model_for_stream(provider, "deepseek-reasoner"));
+        }
     }
 
     #[test]
     fn stream_does_not_classify_generic_model_as_reasoning() {
-        // #1542 no-regression guard: a genuine non-DeepSeek model on the
-        // openai provider must NOT be treated as a reasoning model, so the
-        // parser keeps inlining any `reasoning_content` it emits as text.
+        // Non-reasoning model names must NOT be treated as reasoning even on
+        // providers that accept reasoning_content.
         assert!(!is_reasoning_model_for_stream(
-            ApiProvider::Openai,
+            ApiProvider::NvidiaNim,
             "qwen3-coder"
         ));
         assert!(!is_reasoning_model_for_stream(
-            ApiProvider::Openai,
+            ApiProvider::NvidiaNim,
             "claude-sonnet-4-6"
         ));
         // Non-DeepSeek model on a reasoning-aware provider is also unchanged.
@@ -3231,7 +3182,12 @@ mod alias_thinking_detection_tests {
         // about where reasoning tokens live. Effort=None isolates the
         // model/provider dimension shared by both.
         for model in ["deepseek-v4-pro", "deepseek-reasoner", "qwen3-coder"] {
-            for provider in [ApiProvider::Openai, ApiProvider::Deepseek] {
+            for provider in [
+                ApiProvider::Deepseek,
+                ApiProvider::DeepseekCN,
+                ApiProvider::NvidiaNim,
+                ApiProvider::Sglang,
+            ] {
                 assert_eq!(
                     is_reasoning_model_for_stream(provider, model),
                     should_replay_reasoning_content_for_provider(provider, model, None),

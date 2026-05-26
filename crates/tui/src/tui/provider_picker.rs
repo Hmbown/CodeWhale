@@ -88,12 +88,6 @@ impl ProviderPickerView {
         match provider {
             ApiProvider::Deepseek | ApiProvider::DeepseekCN => "DEEPSEEK_API_KEY",
             ApiProvider::NvidiaNim => "NVIDIA_API_KEY",
-            ApiProvider::Openai => "OPENAI_API_KEY",
-            ApiProvider::Atlascloud => "ATLASCLOUD_API_KEY",
-            ApiProvider::WanjieArk => "WANJIE_ARK_API_KEY",
-            ApiProvider::Openrouter => "OPENROUTER_API_KEY",
-            ApiProvider::Novita => "NOVITA_API_KEY",
-            ApiProvider::Fireworks => "FIREWORKS_API_KEY",
             ApiProvider::Moonshot => "MOONSHOT_API_KEY / KIMI_API_KEY",
             ApiProvider::Sglang => "SGLANG_API_KEY",
             ApiProvider::Vllm => "VLLM_API_KEY",
@@ -402,12 +396,6 @@ mod tests {
             vec![
                 "DeepSeek",
                 "NVIDIA NIM",
-                "OpenAI-compatible",
-                "AtlasCloud",
-                "Wanjie Ark",
-                "OpenRouter",
-                "Novita AI",
-                "Fireworks AI",
                 "Moonshot/Kimi",
                 "SGLang",
                 "vLLM",
@@ -435,9 +423,9 @@ mod tests {
     #[test]
     fn picker_marks_active_provider_as_initial_selection() {
         let config = Config::default();
-        let picker = ProviderPickerView::new(ApiProvider::Openrouter, &config);
-        assert_eq!(picker.selected_provider(), ApiProvider::Openrouter);
-        assert_eq!(picker.active_provider, ApiProvider::Openrouter);
+        let picker = ProviderPickerView::new(ApiProvider::NvidiaNim, &config);
+        assert_eq!(picker.selected_provider(), ApiProvider::NvidiaNim);
+        assert_eq!(picker.active_provider, ApiProvider::NvidiaNim);
     }
 
     #[test]
@@ -445,8 +433,8 @@ mod tests {
         let config = Config::default();
         let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
         // Move to OpenRouter, which has no key in default config.
-        move_to_provider(&mut picker, ApiProvider::Openrouter);
-        assert_eq!(picker.selected_provider(), ApiProvider::Openrouter);
+        move_to_provider(&mut picker, ApiProvider::NvidiaNim);
+        assert_eq!(picker.selected_provider(), ApiProvider::NvidiaNim);
         let action = picker.handle_key(key(KeyCode::Enter));
         assert!(matches!(action, ViewAction::None));
         assert_eq!(picker.stage, Stage::KeyEntry);
@@ -476,7 +464,7 @@ mod tests {
         let config = Config::default();
         let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
         // Navigate to Novita and trigger key entry.
-        move_to_provider(&mut picker, ApiProvider::Novita);
+        move_to_provider(&mut picker, ApiProvider::NvidiaNim);
         picker.handle_key(key(KeyCode::Enter));
         assert_eq!(picker.stage, Stage::KeyEntry);
         for c in "novita-key".chars() {
@@ -488,7 +476,7 @@ mod tests {
                 provider,
                 api_key,
             }) => {
-                assert_eq!(provider, ApiProvider::Novita);
+                assert_eq!(provider, ApiProvider::NvidiaNim);
                 assert_eq!(api_key, "novita-key");
             }
             other => panic!("expected ProviderPickerApiKeySubmitted, got {other:?}"),
@@ -499,7 +487,7 @@ mod tests {
     fn key_entry_esc_returns_to_list_without_emitting() {
         let config = Config::default();
         let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
-        move_to_provider(&mut picker, ApiProvider::Openrouter);
+        move_to_provider(&mut picker, ApiProvider::NvidiaNim);
         picker.handle_key(key(KeyCode::Enter));
         assert_eq!(picker.stage, Stage::KeyEntry);
         picker.handle_key(key(KeyCode::Char('a')));
@@ -521,7 +509,7 @@ mod tests {
     fn key_entry_strips_whitespace_chars() {
         let config = Config::default();
         let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
-        move_to_provider(&mut picker, ApiProvider::Openrouter);
+        move_to_provider(&mut picker, ApiProvider::NvidiaNim);
         picker.handle_key(key(KeyCode::Enter));
         assert_eq!(picker.stage, Stage::KeyEntry);
         for c in "abc def".chars() {

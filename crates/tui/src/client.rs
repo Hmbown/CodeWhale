@@ -879,14 +879,9 @@ pub(super) fn apply_reasoning_effort(
     let normalized = effort.trim().to_ascii_lowercase();
     match normalized.as_str() {
         "off" | "disabled" | "none" | "false" => match provider {
-            ApiProvider::Deepseek
-            | ApiProvider::DeepseekCN
-            | ApiProvider::Openrouter
-            | ApiProvider::Novita
-            | ApiProvider::Sglang => {
+            ApiProvider::Deepseek | ApiProvider::DeepseekCN | ApiProvider::Sglang => {
                 body["thinking"] = json!({ "type": "disabled" });
             }
-            ApiProvider::Fireworks => {}
             // vLLM is an OpenAI-protocol server, not an Anthropic-protocol one.
             // For Qwen3 / DeepSeek-R1 / other reasoning models hosted via vLLM,
             // the canonical OpenAI extension to disable thinking is
@@ -901,11 +896,7 @@ pub(super) fn apply_reasoning_effort(
                     "enable_thinking": false,
                 });
             }
-            ApiProvider::Openai
-            | ApiProvider::Atlascloud
-            | ApiProvider::WanjieArk
-            | ApiProvider::Moonshot
-            | ApiProvider::Ollama => {}
+            ApiProvider::Moonshot | ApiProvider::Ollama => {}
             ApiProvider::NvidiaNim => {
                 body["chat_template_kwargs"] = json!({
                     "thinking": false,
@@ -918,32 +909,13 @@ pub(super) fn apply_reasoning_effort(
                 body["reasoning_effort"] = json!("high");
                 body["thinking"] = json!({ "type": "enabled" });
             }
-            // OpenRouter/Novita: pass through the actual user-chosen value.
-            // OpenRouter's unified scale is none/minimal/low/medium/high/xhigh;
-            // DeepSeek models hosted there accept those directly.
-            ApiProvider::Openrouter | ApiProvider::Novita => {
-                let value = match normalized.as_str() {
-                    "low" | "minimal" => "low",
-                    "medium" | "mid" => "medium",
-                    _ => "high",
-                };
-                body["reasoning_effort"] = json!(value);
-                body["thinking"] = json!({ "type": "enabled" });
-            }
-            ApiProvider::Fireworks => {
-                body["reasoning_effort"] = json!("high");
-            }
             ApiProvider::Vllm => {
                 body["chat_template_kwargs"] = json!({
                     "enable_thinking": true,
                 });
                 body["reasoning_effort"] = json!("high");
             }
-            ApiProvider::Openai
-            | ApiProvider::Atlascloud
-            | ApiProvider::WanjieArk
-            | ApiProvider::Moonshot
-            | ApiProvider::Ollama => {}
+            ApiProvider::Moonshot | ApiProvider::Ollama => {}
             ApiProvider::NvidiaNim => {
                 body["chat_template_kwargs"] = json!({
                     "thinking": true,
@@ -956,24 +928,13 @@ pub(super) fn apply_reasoning_effort(
                 body["reasoning_effort"] = json!("max");
                 body["thinking"] = json!({ "type": "enabled" });
             }
-            ApiProvider::Openrouter | ApiProvider::Novita => {
-                body["reasoning_effort"] = json!("xhigh");
-                body["thinking"] = json!({ "type": "enabled" });
-            }
-            ApiProvider::Fireworks => {
-                body["reasoning_effort"] = json!("max");
-            }
             ApiProvider::Vllm => {
                 body["chat_template_kwargs"] = json!({
                     "enable_thinking": true,
                 });
                 body["reasoning_effort"] = json!("max");
             }
-            ApiProvider::Openai
-            | ApiProvider::Atlascloud
-            | ApiProvider::WanjieArk
-            | ApiProvider::Moonshot
-            | ApiProvider::Ollama => {}
+            ApiProvider::Moonshot | ApiProvider::Ollama => {}
             ApiProvider::NvidiaNim => {
                 body["chat_template_kwargs"] = json!({
                     "thinking": true,
@@ -1106,8 +1067,7 @@ pub(crate) fn build_cache_warmup_request(request: &MessageRequest) -> MessageReq
 mod tests {
     use super::*;
     use crate::client::chat::{
-        build_chat_messages, build_chat_messages_for_request,
-        build_chat_messages_for_request_and_provider, count_reasoning_replay_chars,
+        build_chat_messages, build_chat_messages_for_request, count_reasoning_replay_chars,
         parse_chat_message, parse_sse_chunk, sanitize_thinking_mode_messages, tool_to_chat,
         tool_to_chat_for_base_url,
     };
@@ -1277,55 +1237,6 @@ mod tests {
             assistant.get("reasoning_content").and_then(Value::as_str),
             Some("plan"),
             "thinking-mode models keep reasoning_content while still in the current turn"
-        );
-    }
-
-    #[test]
-    fn generic_openai_provider_drops_reasoning_content_for_non_deepseek_models() {
-        // #1542 intent (narrowed by #1739/#1694): a *genuine non-DeepSeek*
-        // model on the generic openai provider must not carry DeepSeek-only
-        // `reasoning_content`. A DeepSeek reasoning model on the openai
-        // provider (DeepSeek-compatible endpoint) is now covered separately
-        // and DOES replay reasoning_content — see
-        // `deepseek_model_on_openai_provider_still_replays_reasoning_content`.
-        let request = MessageRequest {
-            model: "qwen3-coder".to_string(),
-            messages: vec![Message {
-                role: "assistant".to_string(),
-                content: vec![
-                    ContentBlock::Thinking {
-                        thinking: "plan".to_string(),
-                    },
-                    ContentBlock::Text {
-                        text: "done".to_string(),
-                        cache_control: None,
-                    },
-                ],
-            }],
-            max_tokens: 16,
-            system: None,
-            tools: None,
-            tool_choice: None,
-            metadata: None,
-            thinking: None,
-            reasoning_effort: Some("max".to_string()),
-            stream: None,
-            temperature: None,
-            top_p: None,
-        };
-
-        let openai = build_chat_messages_for_request_and_provider(&request, ApiProvider::Openai);
-        let generic_assistant = openai
-            .iter()
-            .find(|value| value.get("role").and_then(Value::as_str) == Some("assistant"))
-            .expect("assistant message");
-        assert_eq!(
-            generic_assistant.get("content").and_then(Value::as_str),
-            Some("done")
-        );
-        assert!(
-            generic_assistant.get("reasoning_content").is_none(),
-            "generic OpenAI-compatible providers reject DeepSeek-only reasoning_content (#1542)"
         );
     }
 
@@ -1930,47 +1841,6 @@ mod tests {
             body.pointer("/chat_template_kwargs/reasoning_effort")
                 .is_none()
         );
-    }
-
-    #[test]
-    fn reasoning_effort_uses_openai_compatible_shape_for_fireworks() {
-        let mut body = json!({});
-        apply_reasoning_effort(&mut body, Some("max"), ApiProvider::Fireworks);
-
-        assert_eq!(
-            body.get("reasoning_effort").and_then(Value::as_str),
-            Some("max")
-        );
-        assert!(
-            body.get("thinking").is_none(),
-            "Fireworks strict-validates OpenAI-compatible requests and rejects top-level thinking"
-        );
-    }
-
-    #[test]
-    fn reasoning_effort_maps_openrouter_scale_without_deepseek_max_label() {
-        for (input, expected) in [
-            ("low", "low"),
-            ("minimal", "low"),
-            ("medium", "medium"),
-            ("mid", "medium"),
-            ("high", "high"),
-            ("max", "xhigh"),
-            ("xhigh", "xhigh"),
-        ] {
-            let mut body = json!({});
-            apply_reasoning_effort(&mut body, Some(input), ApiProvider::Openrouter);
-
-            assert_eq!(
-                body.get("reasoning_effort").and_then(Value::as_str),
-                Some(expected),
-                "OpenRouter effort mapping for {input}"
-            );
-            assert_eq!(
-                body.pointer("/thinking/type").and_then(Value::as_str),
-                Some("enabled")
-            );
-        }
     }
 
     #[test]
@@ -2739,46 +2609,6 @@ mod tests {
         let chars = count_reasoning_replay_chars(&body);
         // "(reasoning omitted)" is 19 bytes.
         assert_eq!(chars, 19);
-    }
-
-    #[test]
-    fn sanitize_thinking_mode_skips_generic_openai_provider() {
-        // #1542 intent (narrowed by #1739/#1694): the sanitizer only skips for
-        // a *genuine non-DeepSeek* model on the generic openai provider. A
-        // DeepSeek reasoning model on the openai provider still gets sanitized
-        // (see chat.rs `deepseek_model_on_openai_provider_still_replays_*`).
-        let mut body = json!({
-            "model": "qwen3-coder",
-            "messages": [
-                { "role": "user", "content": "hi" },
-                {
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [{ "id": "1", "type": "function" }]
-                }
-            ]
-        });
-
-        let result = sanitize_thinking_mode_messages(
-            &mut body,
-            "qwen3-coder",
-            Some("max"),
-            ApiProvider::Openai,
-        );
-
-        assert!(result.is_none());
-        let assistant = body["messages"]
-            .as_array()
-            .and_then(|messages| {
-                messages
-                    .iter()
-                    .find(|message| message["role"] == "assistant")
-            })
-            .expect("assistant message");
-        assert!(
-            assistant.get("reasoning_content").is_none(),
-            "generic OpenAI-compatible provider payload must not get reasoning_content (#1542)"
-        );
     }
 
     #[test]
