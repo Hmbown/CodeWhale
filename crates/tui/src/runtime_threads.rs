@@ -1434,7 +1434,7 @@ impl RuntimeThreadManager {
 
             if let Some(assistant_text) = assistant_text {
                 let asst_summary = if assistant_text.len() > SUMMARY_LIMIT {
-                    format!("{}...", &assistant_text[..SUMMARY_LIMIT.saturating_sub(3)])
+                    crate::utils::truncate_with_ellipsis(&assistant_text, SUMMARY_LIMIT, "...")
                 } else {
                     assistant_text.clone()
                 };
