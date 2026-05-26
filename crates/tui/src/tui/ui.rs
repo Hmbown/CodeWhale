@@ -916,7 +916,14 @@ async fn run_event_loop(
             let json: serde_json::Value = resp.json().await.ok()?;
             let tag = json["tag_name"].as_str()?;
             let latest = tag.trim_start_matches('v');
-            if latest != current {
+            // Compare semver so dev builds (e.g. "0.8.46-pre") don't
+            // trigger false hints. Falls back to string compare on
+            // unparseable versions.
+            let newer = match (parse_semver(latest), parse_semver(&current)) {
+                (Some(l), Some(c)) => l > c,
+                _ => latest != current,
+            };
+            if newer {
                 Some(format!(
                     "v{latest} available — run `codewhale update` and restart"
                 ))
@@ -8006,6 +8013,16 @@ fn extract_reasoning_header(text: &str) -> Option<String> {
     } else {
         Some(header.to_string())
     }
+}
+
+/// Parse a `major.minor.patch` version string into a comparable tuple.
+/// Returns `None` on any parse failure (non-semver, dev suffixes, etc.).
+fn parse_semver(v: &str) -> Option<(u32, u32, u32)> {
+    let mut parts = v.splitn(3, '.');
+    let major = parts.next()?.parse::<u32>().ok()?;
+    let minor = parts.next()?.parse::<u32>().ok()?;
+    let patch = parts.next().unwrap_or("0").parse::<u32>().ok()?;
+    Some((major, minor, patch))
 }
 
 #[cfg(test)]
