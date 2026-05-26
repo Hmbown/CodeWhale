@@ -496,7 +496,7 @@ impl ToolSpec for EditFileTool {
     }
 
     fn description(&self) -> &'static str {
-        "Replace text in a single file via exact search/replace. Use this instead of `sed -i` in `exec_shell` for one unambiguous in-place edit. `search` matches exactly by default, including whitespace and indentation; set `fuzz: true` to tolerate leading-indentation differences. Returns a compact unified diff, not the full file. For structural, multi-block, or cross-file changes, use `apply_patch` or `write_file` instead."
+        "Replace text in a single file via exact search/replace. Use this instead of `sed -i` in `exec_shell` for one unambiguous in-place edit. `search` matches exactly by default; when no exact match is found the tool retries with leading-whitespace-tolerant fuzzy matching automatically. The optional `fuzz` parameter is accepted for backward compatibility and is no longer needed. Returns a compact unified diff, not the full file. For structural, multi-block, or cross-file changes, use `apply_patch` or `write_file` instead."
     }
 
     fn input_schema(&self) -> Value {
@@ -517,7 +517,7 @@ impl ToolSpec for EditFileTool {
                 },
                 "fuzz": {
                     "type": "boolean",
-                    "description": "When true, tolerate leading whitespace differences on each searched line (default false)"
+                    "description": "Deprecated: fuzzy fallback is now automatic. Accepted for backward compatibility but ignored."
                 }
             },
             "required": ["path", "search", "replace"]
@@ -555,7 +555,7 @@ impl ToolSpec for EditFileTool {
         })?;
 
         let count = contents.matches(search).count();
-        let (updated, count, fuzz_kind) = if count == 0 && fuzz {
+        let (updated, count, fuzz_kind) = if count == 0 {
             // First fallback: tolerate indentation differences.
             let indent_matches = leading_whitespace_fuzzy_matches(&contents, search);
             match indent_matches.as_slice() {
@@ -600,11 +600,6 @@ impl ToolSpec for EditFileTool {
                     )));
                 }
             }
-        } else if count == 0 {
-            return Err(ToolError::execution_failed(format!(
-                "Search string not found in {}",
-                file_path.display()
-            )));
         } else {
             (contents.replace(search, replace), count, None)
         };
