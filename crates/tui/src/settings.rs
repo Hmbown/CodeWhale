@@ -1316,15 +1316,20 @@ mod tests {
         let prev_wt_session = std::env::var_os("WT_SESSION");
         let prev_tmux = std::env::var_os("TMUX");
         let prev_sty = std::env::var_os("STY");
+        let prev_term_program = std::env::var_os("TERM_PROGRAM");
+
         // The test is about NO_ANIMATIONS only. On Windows CI, an unmarked
         // console host now independently enables low_motion, so mark the host
         // as non-legacy while checking falsy spellings.
         // Clear multiplexer markers for the same reason: they also force
         // low_motion independently of NO_ANIMATIONS.
+        // Clear TERM_PROGRAM as they also force low_motion in vscode, ghostty
+        // and Termius.
         // SAFETY: serialised by the guard.
         unsafe {
             std::env::remove_var("TMUX");
             std::env::remove_var("STY");
+            std::env::remove_var("TERM_PROGRAM");
         }
         #[cfg(windows)]
         unsafe {
@@ -1362,6 +1367,10 @@ mod tests {
             match prev_sty {
                 Some(v) => std::env::set_var("STY", v),
                 None => std::env::remove_var("STY"),
+            }
+            match prev_term_program {
+                Some(v) => std::env::set_var("TERM_PROGRAM", v),
+                None => std::env::remove_var("TERM_PROGRAM"),
             }
         }
     }
