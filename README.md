@@ -90,7 +90,7 @@ It is built around DeepSeek V4 (`deepseek-v4-pro` / `deepseek-v4-flash`), includ
 - **Reasoning-effort tiers** — cycle through `off → high → max` with `Shift + Tab`
 - **Session save/resume/fork** — checkpoint long-running sessions and fork saved conversations into sibling paths with parent lineage shown in the picker
 - **Workspace rollback** — side-git pre/post-turn snapshots with `/restore` and `revert_turn`, without touching your repo's `.git`
-- **OS-level sandbox** — Seatbelt on macOS, Landlock on Linux, Job Objects on Windows; shell commands run with workspace-scoped filesystem access only
+- **Approval + platform sandbox controls** — Seatbelt on macOS and Landlock on Linux where available; Windows uses the same approval flow and terminal/runtime protections while OS-level filesystem isolation remains a tracked helper contract
 - **Durable task queue** — background tasks can survive restarts
 - **HTTP/SSE runtime API** — `codewhale serve --http` for headless agent workflows
 - **MCP protocol** — connect to Model Context Protocol servers for extended tooling; please see [docs/MCP.md](docs/MCP.md)
@@ -210,12 +210,37 @@ codewhale --version
 
 Prebuilt binaries can also be downloaded from [GitHub Releases](https://github.com/Hmbown/CodeWhale/releases). Use `DEEPSEEK_TUI_RELEASE_BASE_URL` for mirrored release assets.
 
-### Windows (Scoop)
+### Windows
 
-[Scoop](https://scoop.sh) is a Windows package manager. The `codewhale` package is listed
-in Scoop's main bucket, but that manifest updates independently and can lag the
-GitHub/npm/Cargo release. Run `scoop update` first, then verify the installed
-version with `codewhale --version`:
+Windows x64 is a first-class release target. Use npm or direct GitHub release
+downloads when you need the newest v0.8.45 binary; Cargo also works when Rust
+1.88+ and the MSVC toolchain are installed.
+
+```powershell
+npm install -g codewhale
+codewhale --version
+
+cargo install codewhale-cli --locked --force
+cargo install codewhale-tui     --locked --force
+```
+
+Current Windows terminal behavior:
+
+- interactive sessions always use the TUI-owned alternate screen; the old
+  `--no-alt-screen` flag is accepted for script compatibility but no longer
+  disables the interactive alternate screen
+- runtime logs stay out of the alternate-screen buffer when `RUST_LOG` or
+  `DEEPSEEK_LOG_LEVEL` is enabled
+- mouse capture defaults on in Windows Terminal, ConEmu, and Cmder, but stays
+  off in legacy console hosts and JetBrains terminals; use `--mouse-capture` or
+  `--no-mouse-capture` to override
+- mouse-wheel-as-arrow terminals keep composer history usable by routing empty
+  composer Up/Down to transcript scrolling where appropriate
+
+[Scoop](https://scoop.sh) is also supported. The `deepseek-tui` package is
+listed in Scoop's main bucket, but that manifest updates independently and can
+lag the GitHub/npm/Cargo release. Run `scoop update` first, then verify the
+installed version with `codewhale --version`:
 
 ```bash
 scoop update
@@ -248,16 +273,26 @@ Both binaries are required. Cross-compilation and platform-specific notes: [docs
 
 </details>
 
-### Other API Providers
+### Providers
 
-Official DeepSeek remains the default and first-class path. Other providers are
-additive, with OpenRouter starting from DeepSeek Pro/Flash before broader
-open-model catalogs are enabled.
+Official DeepSeek remains the default and first-class path. v0.8.45 supports
+all 12 provider IDs in this order: `deepseek`, `nvidia-nim`, `openai`,
+`atlascloud`, `wanjie-ark`, `openrouter`, `novita`, `fireworks`, `moonshot`,
+`sglang`, `vllm`, and `ollama`. Other providers are additive, with OpenRouter
+starting from DeepSeek Pro/Flash before broader open-model catalogs are enabled.
 
 ```bash
+# DeepSeek (default)
+codewhale auth set --provider deepseek --api-key "YOUR_DEEPSEEK_API_KEY"
+codewhale --provider deepseek --model deepseek-v4-pro
+
 # NVIDIA NIM
 codewhale auth set --provider nvidia-nim --api-key "YOUR_NVIDIA_API_KEY"
 codewhale --provider nvidia-nim
+
+# Generic OpenAI-compatible endpoint
+codewhale auth set --provider openai --api-key "YOUR_OPENAI_COMPATIBLE_API_KEY"
+OPENAI_BASE_URL="https://openai-compatible.example/v4" codewhale --provider openai --model deepseek-v4-pro
 
 # AtlasCloud
 codewhale auth set --provider atlascloud --api-key "YOUR_ATLASCLOUD_API_KEY"
@@ -283,9 +318,11 @@ codewhale --provider fireworks --model deepseek-v4-pro
 codewhale auth set --provider moonshot --api-key "YOUR_MOONSHOT_OR_KIMI_API_KEY"
 codewhale --provider moonshot --model kimi-k2.6
 
-# Generic OpenAI-compatible endpoint
-codewhale auth set --provider openai --api-key "YOUR_OPENAI_COMPATIBLE_API_KEY"
-OPENAI_BASE_URL="https://openai-compatible.example/v4" codewhale --provider openai --model deepseek-v4-pro
+# Moonshot/Kimi with Kimi CLI OAuth
+kimi login
+mkdir -p ~/.deepseek
+printf 'provider = "moonshot"\n\n[providers.moonshot]\nauth_mode = "kimi_oauth"\n' >> ~/.deepseek/config.toml
+codewhale --provider moonshot --model kimi-for-coding
 
 # Self-hosted SGLang
 SGLANG_BASE_URL="http://localhost:30000/v1" codewhale --provider sglang --model deepseek-v4-flash
@@ -466,15 +503,16 @@ Key environment variables:
 | `DEEPSEEK_HTTP_HEADERS` | Optional custom model request headers, e.g. `X-Model-Provider-Id=your-model-provider` |
 | `DEEPSEEK_MODEL` | Default model |
 | `DEEPSEEK_STREAM_IDLE_TIMEOUT_SECS` | Stream idle timeout in seconds, default `300`, clamped to `1..=3600` |
-| `DEEPSEEK_PROVIDER` | `codewhale` (default), `nvidia-nim`, `openai`, `atlascloud`, `wanjie-ark`, `openrouter`, `novita`, `fireworks`, `moonshot`, `sglang`, `vllm`, `ollama` |
+| `DEEPSEEK_PROVIDER` | `deepseek` (default), `nvidia-nim`, `openai`, `atlascloud`, `wanjie-ark`, `openrouter`, `novita`, `fireworks`, `moonshot`, `sglang`, `vllm`, `ollama` |
 | `DEEPSEEK_PROFILE` | Config profile name |
 | `DEEPSEEK_MEMORY` | Set to `on` to enable user memory |
 | `DEEPSEEK_ALLOW_INSECURE_HTTP=1` | Allow non-local `http://` API base URLs on trusted networks |
-| `NVIDIA_API_KEY` / `OPENAI_API_KEY` / `ATLASCLOUD_API_KEY` / `WANJIE_ARK_API_KEY` / `OPENROUTER_API_KEY` / `NOVITA_API_KEY` / `FIREWORKS_API_KEY` / `MOONSHOT_API_KEY` / `KIMI_API_KEY` / `SGLANG_API_KEY` / `VLLM_API_KEY` / `OLLAMA_API_KEY` | Provider auth |
+| `NVIDIA_API_KEY` / `NVIDIA_NIM_API_KEY` / `OPENAI_API_KEY` / `ATLASCLOUD_API_KEY` / `WANJIE_ARK_API_KEY` / `WANJIE_API_KEY` / `WANJIE_MAAS_API_KEY` / `OPENROUTER_API_KEY` / `NOVITA_API_KEY` / `FIREWORKS_API_KEY` / `MOONSHOT_API_KEY` / `KIMI_API_KEY` / `SGLANG_API_KEY` / `VLLM_API_KEY` / `OLLAMA_API_KEY` | Provider auth |
+| `NVIDIA_NIM_BASE_URL` / `NIM_BASE_URL` / `NVIDIA_BASE_URL` | NVIDIA NIM endpoint override |
 | `OPENAI_BASE_URL` / `OPENAI_MODEL` | Generic OpenAI-compatible endpoint and model ID |
 | `ATLASCLOUD_BASE_URL` / `ATLASCLOUD_MODEL` | AtlasCloud endpoint and model override |
-| `WANJIE_ARK_BASE_URL` / `WANJIE_ARK_MODEL` | Wanjie Ark endpoint and model override |
-| `MOONSHOT_BASE_URL` / `KIMI_BASE_URL` / `MOONSHOT_MODEL` / `KIMI_MODEL` | Moonshot/Kimi endpoint and model override |
+| `WANJIE_ARK_BASE_URL` / `WANJIE_BASE_URL` / `WANJIE_MAAS_BASE_URL` / `WANJIE_ARK_MODEL` / `WANJIE_MODEL` / `WANJIE_MAAS_MODEL` | Wanjie Ark endpoint and model override |
+| `MOONSHOT_BASE_URL` / `KIMI_BASE_URL` / `MOONSHOT_MODEL` / `KIMI_MODEL_NAME` / `KIMI_MODEL` | Moonshot/Kimi endpoint and model override |
 | `OPENROUTER_BASE_URL` | OpenRouter endpoint override |
 | `NOVITA_BASE_URL` | Novita endpoint override |
 | `FIREWORKS_BASE_URL` | Fireworks endpoint override |
