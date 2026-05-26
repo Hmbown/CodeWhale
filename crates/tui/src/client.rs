@@ -937,7 +937,14 @@ pub(super) fn apply_reasoning_effort(
                 body["chat_template_kwargs"] = json!({
                     "enable_thinking": true,
                 });
-                body["reasoning_effort"] = json!("high");
+                // vLLM supports low/medium/high natively — pass through the
+                // user-chosen value instead of hard-coding "high".
+                let value = match normalized.as_str() {
+                    "low" | "minimal" => "low",
+                    "medium" | "mid" => "medium",
+                    _ => "high",
+                };
+                body["reasoning_effort"] = json!(value);
             }
             ApiProvider::Openai
             | ApiProvider::Atlascloud
@@ -967,7 +974,9 @@ pub(super) fn apply_reasoning_effort(
                 body["chat_template_kwargs"] = json!({
                     "enable_thinking": true,
                 });
-                body["reasoning_effort"] = json!("max");
+                // vLLM only supports none/low/medium/high — downgrade
+                // "max" to "high" instead of sending an invalid value.
+                body["reasoning_effort"] = json!("high");
             }
             ApiProvider::Openai
             | ApiProvider::Atlascloud
