@@ -32,6 +32,7 @@ pub(super) fn is_tool_search_tool(name: &str) -> bool {
 pub(super) const DEFAULT_ACTIVE_NATIVE_TOOLS: &[&str] = &[
     "agent_open",
     "apply_patch",
+    "checklist_write",
     "edit_file",
     "exec_shell",
     "fetch_url",
@@ -42,6 +43,10 @@ pub(super) const DEFAULT_ACTIVE_NATIVE_TOOLS: &[&str] = &[
     "list_dir",
     "read_file",
     "run_tests",
+    "task_create",
+    "task_list",
+    "task_read",
+    "update_plan",
     "web_search",
     "write_file",
 ];
