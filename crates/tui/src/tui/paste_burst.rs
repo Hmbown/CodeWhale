@@ -231,7 +231,16 @@ impl PasteBurst {
     /// part of table-data paste. The buffer was flushed upstream; only the
     /// active state is reset so `burst_window_until` stays alive and a trailing
     /// Enter is still absorbed as a newline (#2134).
+    ///
+    /// # Panics
+    ///
+    /// Panics in debug builds if `buffer` is non-empty — the caller must flush
+    /// via [`flush_before_modified_input`] first.
     pub fn deactivate_keep_window(&mut self) {
+        debug_assert!(
+            self.buffer.is_empty(),
+            "buffer must be flushed before deactivating"
+        );
         self.consecutive_plain_char_burst = 0;
         self.last_plain_char_time = None;
         self.active = false;
