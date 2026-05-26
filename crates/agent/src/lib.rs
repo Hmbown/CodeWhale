@@ -224,6 +224,16 @@ impl Default for ModelRegistry {
                 supports_reasoning: true,
             },
             ModelInfo {
+                id: "mimo-v2.5".to_string(),
+                provider: ProviderKind::Xiaomi,
+                aliases: vec![
+                    "mimo-omni".to_string(),
+                    "mimo-v2-omni".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
                 id: "mimo-v2-flash".to_string(),
                 provider: ProviderKind::Xiaomi,
                 aliases: vec![

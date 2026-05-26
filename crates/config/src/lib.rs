@@ -46,7 +46,7 @@ const DEFAULT_VLLM_BASE_URL: &str = "http://localhost:8000/v1";
 const DEFAULT_OLLAMA_MODEL: &str = "deepseek-coder:1.3b";
 const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434/v1";
 const DEFAULT_XIAOMI_MODEL: &str = "mimo-v2.5-pro";
-const DEFAULT_XIAOMI_BASE_URL: &str = "https://api.xiaomimimo.com/v1";
+const DEFAULT_XIAOMI_BASE_URL: &str = "https://token-plan-cn.xiaomimimo.com/v1";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "kebab-case")]

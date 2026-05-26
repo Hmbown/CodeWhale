@@ -65,7 +65,7 @@ pub const DEFAULT_OLLAMA_MODEL: &str = "deepseek-coder:1.3b";
 pub const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434/v1";
 pub const DEFAULT_XIAOMI_MODEL: &str = "mimo-v2.5-pro";
 pub const DEFAULT_XIAOMI_FLASH_MODEL: &str = "mimo-v2-flash";
-pub const DEFAULT_XIAOMI_BASE_URL: &str = "https://api.xiaomimimo.com/v1";
+pub const DEFAULT_XIAOMI_BASE_URL: &str = "https://token-plan-cn.xiaomimimo.com/v1";
 /// Legacy `deepseek-cn` provider alias.
 ///
 /// DeepSeek's official API host is the same worldwide. Keep this alias for
@@ -282,11 +282,12 @@ pub fn provider_capability(provider: ApiProvider, resolved_model: &str) -> Provi
 
     if matches!(provider, ApiProvider::Xiaomi) {
         let model_lower = resolved_model.to_ascii_lowercase();
-        let is_pro = model_lower.contains("pro");
-        let (context_window, max_output) = if is_pro {
-            (1_000_000, 128_000)
-        } else {
+        let is_flash = model_lower.contains("flash");
+        let (context_window, max_output) = if is_flash {
             (256_000, 64_000)
+        } else {
+            // mimo-v2.5-pro and mimo-v2.5 (omni) both have 1M context
+            (1_000_000, 128_000)
         };
         return ProviderCapability {
             provider,

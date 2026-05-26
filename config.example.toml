@@ -263,11 +263,11 @@ max_subagents = 10 # optional (1-20)
 # base_url = "http://localhost:11434/v1"
 # model = "deepseek-coder:1.3b"             # or any local Ollama tag
 
-# Xiaomi MiMo (https://platform.xiaomimimo.com)
+# Xiaomi MiMo Token Plan (https://platform.xiaomimimo.com/docs/zh-CN/price/tokenplan/quick-access)
 [providers.xiaomi]
-# api_key = "YOUR_MIMO_API_KEY"
-# base_url = "https://api.xiaomimimo.com/v1"
-# model = "mimo-v2.5-pro"                   # or mimo-v2-flash
+# api_key = "tp-YOUR_MIMO_API_KEY"           # Token Plan key (tp-xxxxx)
+# base_url = "https://token-plan-cn.xiaomimimo.com/v1"  # cn / sgp / ams cluster
+# model = "mimo-v2.5-pro"                    # mimo-v2.5-pro | mimo-v2.5 | mimo-v2-flash
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Web Search Provider
