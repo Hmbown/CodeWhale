@@ -25,13 +25,13 @@ path = "src/bin/deepseek_legacy_shim.rs"
 anyhow.workspace = true
 clap.workspace = true
 clap_complete.workspace = true
-codewhale-agent = { path = "../agent", version = "0.8.45" }
-codewhale-app-server = { path = "../app-server", version = "0.8.45" }
-codewhale-config = { path = "../config", version = "0.8.45" }
-codewhale-execpolicy = { path = "../execpolicy", version = "0.8.45" }
-codewhale-mcp = { path = "../mcp", version = "0.8.45" }
-codewhale-secrets = { path = "../secrets", version = "0.8.45" }
-codewhale-state = { path = "../state", version = "0.8.45" }
+codewhale-agent = { path = "../agent", version = "0.8.46" }
+codewhale-app-server = { path = "../app-server", version = "0.8.46" }
+codewhale-config = { path = "../config", version = "0.8.46" }
+codewhale-execpolicy = { path = "../execpolicy", version = "0.8.46" }
+codewhale-mcp = { path = "../mcp", version = "0.8.46" }
+codewhale-secrets = { path = "../secrets", version = "0.8.46" }
+codewhale-state = { path = "../state", version = "0.8.46" }
 chrono.workspace = true
 dirs.workspace = true
 serde.workspace = true

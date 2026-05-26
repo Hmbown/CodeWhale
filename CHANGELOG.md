@@ -83,7 +83,7 @@ Thanks to new contributors whose PRs landed in this release:
 **@zhuangbiaowei** (#2145),
 **@aboimpinto** (#1872),
 and continuing contributors **@reidliu41**, **@cyq1017**, **@idling11**,
-**@h3c-hexin**, **@wdw8276**, and **@zlh124**.
+**@h3c-hexin**, **@wdw8276**, **@zlh124**, and **@jeoor**.
 
 ## [0.8.45] - 2026-05-25
 
@@ -4968,7 +4968,8 @@ Welcome — and thank you.
 - Hooks system and config profiles
 - Example skills and launch assets
 
-[Unreleased]: https://github.com/Hmbown/CodeWhale/compare/v0.8.45...HEAD
+[Unreleased]: https://github.com/Hmbown/CodeWhale/compare/v0.8.46...HEAD
+[0.8.46]: https://github.com/Hmbown/CodeWhale/compare/v0.8.45...v0.8.46
 [0.8.45]: https://github.com/Hmbown/CodeWhale/compare/v0.8.44...v0.8.45
 [0.8.44]: https://github.com/Hmbown/CodeWhale/compare/v0.8.43...v0.8.44
 [0.8.43]: https://github.com/Hmbown/CodeWhale/compare/v0.8.42...v0.8.43
