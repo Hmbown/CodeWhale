@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Kimi Code API-key setup.** `codewhale config set providers.moonshot.*`
   now writes the Moonshot/Kimi provider table, and Kimi Code API-key
   endpoints default to `kimi-for-coding` without using the Kimi CLI OAuth path.
+  A root DeepSeek `default_text_model` no longer overrides that Kimi Code
+  model when switching providers.
 
 ## [0.8.45] - 2026-05-25
 
