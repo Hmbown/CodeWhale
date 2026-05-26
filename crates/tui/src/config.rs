@@ -1554,6 +1554,19 @@ impl Config {
                 }
             }
         }
+        let moonshot_config = (provider == ApiProvider::Moonshot)
+            .then(|| self.provider_config())
+            .flatten();
+        let moonshot_uses_kimi_code = moonshot_config.is_some_and(|config| {
+            provider_config_uses_kimi_oauth(config)
+                || config
+                    .base_url
+                    .as_deref()
+                    .is_some_and(moonshot_base_url_uses_kimi_code)
+        });
+        if moonshot_uses_kimi_code {
+            return DEFAULT_KIMI_CODE_MODEL.to_string();
+        }
         if let Some(model) = self.default_text_model.as_deref()
             && (provider_passes_model_through(provider)
                 || self.active_provider_preserves_custom_base_url_model())
@@ -1569,19 +1582,6 @@ impl Config {
             && let Some(normalized) = normalize_model_name(model)
         {
             return model_for_provider(provider, normalized);
-        }
-        let moonshot_config = (provider == ApiProvider::Moonshot)
-            .then(|| self.provider_config())
-            .flatten();
-        let moonshot_uses_kimi_code = moonshot_config.is_some_and(|config| {
-            provider_config_uses_kimi_oauth(config)
-                || config
-                    .base_url
-                    .as_deref()
-                    .is_some_and(moonshot_base_url_uses_kimi_code)
-        });
-        if moonshot_uses_kimi_code {
-            return DEFAULT_KIMI_CODE_MODEL.to_string();
         }
 
         match provider {
@@ -2271,11 +2271,23 @@ fn default_memory_path() -> Option<PathBuf> {
 
 // === Environment Overrides ===
 
+/// Read a CodeWhale env var, preferring the `CODEWHALE_*` form over the
+/// legacy `DEEPSEEK_*` form. Used for the four user-facing slots (provider,
+/// model, base URL, API key) so external setup can switch to the
+/// product-scoped names without breaking shells that still export the
+/// legacy ones.
+fn codewhale_env_var(
+    codewhale_name: &str,
+    legacy_name: &str,
+) -> Result<String, std::env::VarError> {
+    std::env::var(codewhale_name).or_else(|_| std::env::var(legacy_name))
+}
+
 fn apply_env_overrides(config: &mut Config) {
-    if let Ok(value) = std::env::var("DEEPSEEK_PROVIDER") {
+    if let Ok(value) = codewhale_env_var("CODEWHALE_PROVIDER", "DEEPSEEK_PROVIDER") {
         config.provider = Some(value);
     }
-    if let Ok(value) = std::env::var("DEEPSEEK_BASE_URL") {
+    if let Ok(value) = codewhale_env_var("CODEWHALE_BASE_URL", "DEEPSEEK_BASE_URL") {
         match config.api_provider() {
             ApiProvider::Deepseek | ApiProvider::DeepseekCN => {
                 config.base_url = Some(value);
@@ -2558,8 +2570,9 @@ fn apply_env_overrides(config: &mut Config) {
             .moonshot
             .model = Some(value);
     }
-    if let Ok(value) =
-        std::env::var("DEEPSEEK_MODEL").or_else(|_| std::env::var("DEEPSEEK_DEFAULT_TEXT_MODEL"))
+    if let Ok(value) = std::env::var("CODEWHALE_MODEL")
+        .or_else(|_| std::env::var("DEEPSEEK_MODEL"))
+        .or_else(|_| std::env::var("DEEPSEEK_DEFAULT_TEXT_MODEL"))
     {
         // The CLI `--model` handoff always sets DEEPSEEK_MODEL, never the
         // provider-specific *_MODEL var. The legacy root `default_text_model`
@@ -4075,6 +4088,9 @@ mod tests {
         deepseek_http_headers: Option<OsString>,
         deepseek_model: Option<OsString>,
         deepseek_default_text_model: Option<OsString>,
+        codewhale_provider: Option<OsString>,
+        codewhale_model: Option<OsString>,
+        codewhale_base_url: Option<OsString>,
         nvidia_api_key: Option<OsString>,
         nvidia_nim_api_key: Option<OsString>,
         nim_base_url: Option<OsString>,
@@ -4137,6 +4153,9 @@ mod tests {
             let http_headers_prev = env::var_os("DEEPSEEK_HTTP_HEADERS");
             let model_prev = env::var_os("DEEPSEEK_MODEL");
             let default_text_model_prev = env::var_os("DEEPSEEK_DEFAULT_TEXT_MODEL");
+            let codewhale_provider_prev = env::var_os("CODEWHALE_PROVIDER");
+            let codewhale_model_prev = env::var_os("CODEWHALE_MODEL");
+            let codewhale_base_url_prev = env::var_os("CODEWHALE_BASE_URL");
             let nvidia_api_key_prev = env::var_os("NVIDIA_API_KEY");
             let nvidia_nim_api_key_prev = env::var_os("NVIDIA_NIM_API_KEY");
             let nim_base_url_prev = env::var_os("NIM_BASE_URL");
@@ -4194,6 +4213,9 @@ mod tests {
                 env::remove_var("DEEPSEEK_HTTP_HEADERS");
                 env::remove_var("DEEPSEEK_MODEL");
                 env::remove_var("DEEPSEEK_DEFAULT_TEXT_MODEL");
+                env::remove_var("CODEWHALE_PROVIDER");
+                env::remove_var("CODEWHALE_MODEL");
+                env::remove_var("CODEWHALE_BASE_URL");
                 env::remove_var("NVIDIA_API_KEY");
                 env::remove_var("NVIDIA_NIM_API_KEY");
                 env::remove_var("NIM_BASE_URL");
@@ -4251,6 +4273,9 @@ mod tests {
                 deepseek_http_headers: http_headers_prev,
                 deepseek_model: model_prev,
                 deepseek_default_text_model: default_text_model_prev,
+                codewhale_provider: codewhale_provider_prev,
+                codewhale_model: codewhale_model_prev,
+                codewhale_base_url: codewhale_base_url_prev,
                 nvidia_api_key: nvidia_api_key_prev,
                 nvidia_nim_api_key: nvidia_nim_api_key_prev,
                 nim_base_url: nim_base_url_prev,
@@ -4317,6 +4342,9 @@ mod tests {
                     "DEEPSEEK_DEFAULT_TEXT_MODEL",
                     self.deepseek_default_text_model.take(),
                 );
+                Self::restore_var("CODEWHALE_PROVIDER", self.codewhale_provider.take());
+                Self::restore_var("CODEWHALE_MODEL", self.codewhale_model.take());
+                Self::restore_var("CODEWHALE_BASE_URL", self.codewhale_base_url.take());
                 Self::restore_var("NVIDIA_API_KEY", self.nvidia_api_key.take());
                 Self::restore_var("NVIDIA_NIM_API_KEY", self.nvidia_nim_api_key.take());
                 Self::restore_var("NIM_BASE_URL", self.nim_base_url.take());
@@ -6481,6 +6509,162 @@ base_url = "https://api.kimi.com/coding/v1"
         assert_eq!(config.default_model(), DEFAULT_KIMI_CODE_MODEL);
         assert_eq!(config.deepseek_api_key()?, "kimi-code-key");
         assert!(has_api_key_for(&config, ApiProvider::Moonshot));
+        Ok(())
+    }
+
+    /// Regression for issue #2160: a stale root `default_text_model` carried
+    /// over from a DeepSeek setup must not steer the Kimi Code endpoint to
+    /// `deepseek-v4-pro`. The user-facing trigger here is the legacy
+    /// `DEEPSEEK_PROVIDER` env var (still produced by the `codewhale
+    /// --provider moonshot` dispatcher for compat); the test also has a
+    /// `CODEWHALE_PROVIDER` twin below for the public env path.
+    #[test]
+    fn moonshot_kimi_code_model_overrides_root_deepseek_default() -> Result<()> {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-tui-kimi-code-root-model-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
+
+        let config_path = temp_root.join(".deepseek").join("config.toml");
+        ensure_parent_dir(&config_path)?;
+        fs::write(
+            &config_path,
+            r#"provider = "deepseek"
+default_text_model = "deepseek-v4-pro"
+
+[providers.moonshot]
+api_key = "kimi-code-key"
+base_url = "https://api.kimi.com/coding/v1"
+"#,
+        )?;
+        // Safety: test-only env mutation guarded by lock_test_env().
+        unsafe { env::set_var("DEEPSEEK_PROVIDER", "moonshot") };
+
+        let config = Config::load(None, None)?;
+        assert_eq!(config.api_provider(), ApiProvider::Moonshot);
+        assert_eq!(config.deepseek_base_url(), DEFAULT_KIMI_CODE_BASE_URL);
+        assert_eq!(config.default_model(), DEFAULT_KIMI_CODE_MODEL);
+        Ok(())
+    }
+
+    /// Same regression as above, but driven by the public `CODEWHALE_PROVIDER`
+    /// env var. Documents the recommended user-facing setup path: never
+    /// `DEEPSEEK_PROVIDER=moonshot`, always `CODEWHALE_PROVIDER=moonshot`
+    /// (or `codewhale --provider moonshot`, which also resolves through
+    /// this code path internally).
+    #[test]
+    fn moonshot_kimi_code_model_resolves_via_codewhale_provider_env() -> Result<()> {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-tui-kimi-code-cw-env-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
+
+        let config_path = temp_root.join(".deepseek").join("config.toml");
+        ensure_parent_dir(&config_path)?;
+        fs::write(
+            &config_path,
+            r#"provider = "deepseek"
+default_text_model = "deepseek-v4-pro"
+
+[providers.moonshot]
+api_key = "kimi-code-key"
+base_url = "https://api.kimi.com/coding/v1"
+"#,
+        )?;
+        // Safety: test-only env mutation guarded by lock_test_env().
+        unsafe { env::set_var("CODEWHALE_PROVIDER", "moonshot") };
+
+        let config = Config::load(None, None)?;
+        assert_eq!(config.api_provider(), ApiProvider::Moonshot);
+        assert_eq!(config.deepseek_base_url(), DEFAULT_KIMI_CODE_BASE_URL);
+        assert_eq!(config.default_model(), DEFAULT_KIMI_CODE_MODEL);
+        Ok(())
+    }
+
+    /// `CODEWHALE_PROVIDER` wins when both it and the legacy
+    /// `DEEPSEEK_PROVIDER` are set, so a user adding the new alias to their
+    /// shell isn't surprised by a stale legacy export.
+    #[test]
+    fn codewhale_provider_env_takes_precedence_over_deepseek_provider() -> Result<()> {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-tui-cw-vs-ds-provider-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
+
+        let config_path = temp_root.join(".deepseek").join("config.toml");
+        ensure_parent_dir(&config_path)?;
+        fs::write(&config_path, "provider = \"deepseek\"\n")?;
+        // Safety: test-only env mutation guarded by lock_test_env().
+        unsafe {
+            env::set_var("CODEWHALE_PROVIDER", "moonshot");
+            env::set_var("DEEPSEEK_PROVIDER", "openrouter");
+        }
+
+        let config = Config::load(None, None)?;
+        assert_eq!(config.api_provider(), ApiProvider::Moonshot);
+        Ok(())
+    }
+
+    /// Moonshot Platform path: when [providers.moonshot] is empty (or
+    /// missing) and no Kimi Code endpoint is configured, the resolver
+    /// defaults to the Moonshot Platform base URL and the `kimi-k2.6`
+    /// model. This is the "I have a Moonshot Platform API key, not a
+    /// Kimi Code plan key" path.
+    #[test]
+    fn moonshot_platform_defaults_to_kimi_k26() -> Result<()> {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-tui-moonshot-platform-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
+
+        let config_path = temp_root.join(".deepseek").join("config.toml");
+        ensure_parent_dir(&config_path)?;
+        fs::write(
+            &config_path,
+            r#"provider = "moonshot"
+
+[providers.moonshot]
+api_key = "moonshot-platform-key"
+"#,
+        )?;
+
+        let config = Config::load(None, None)?;
+        assert_eq!(config.api_provider(), ApiProvider::Moonshot);
+        assert_eq!(config.deepseek_base_url(), DEFAULT_MOONSHOT_BASE_URL);
+        assert_eq!(config.default_model(), DEFAULT_MOONSHOT_MODEL);
+        assert_eq!(config.deepseek_api_key()?, "moonshot-platform-key");
         Ok(())
     }
 

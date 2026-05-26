@@ -506,12 +506,15 @@ Key environment variables:
 
 | Variable | Purpose |
 |---|---|
+| `CODEWHALE_PROVIDER` | Active provider. Same value set as `DEEPSEEK_PROVIDER`; this is the public alias and wins when both are set. |
+| `CODEWHALE_MODEL` | Default model for the active provider. Public alias for `DEEPSEEK_MODEL`. |
+| `CODEWHALE_BASE_URL` | Base URL for the active provider. Public alias for `DEEPSEEK_BASE_URL`. |
 | `DEEPSEEK_API_KEY` | API key |
-| `DEEPSEEK_BASE_URL` | API base URL |
+| `DEEPSEEK_BASE_URL` | API base URL (legacy alias of `CODEWHALE_BASE_URL`) |
 | `DEEPSEEK_HTTP_HEADERS` | Optional custom model request headers, e.g. `X-Model-Provider-Id=your-model-provider` |
-| `DEEPSEEK_MODEL` | Default model |
+| `DEEPSEEK_MODEL` | Default model (legacy alias of `CODEWHALE_MODEL`) |
 | `DEEPSEEK_STREAM_IDLE_TIMEOUT_SECS` | Stream idle timeout in seconds, default `300`, clamped to `1..=3600` |
-| `DEEPSEEK_PROVIDER` | `deepseek` (default), `nvidia-nim`, `openai`, `atlascloud`, `wanjie-ark`, `openrouter`, `novita`, `fireworks`, `moonshot`, `sglang`, `vllm`, `ollama` |
+| `DEEPSEEK_PROVIDER` | Legacy alias of `CODEWHALE_PROVIDER`. Accepts `deepseek` (default), `nvidia-nim`, `openai`, `atlascloud`, `wanjie-ark`, `openrouter`, `novita`, `fireworks`, `moonshot`, `sglang`, `vllm`, `ollama`. |
 | `DEEPSEEK_PROFILE` | Config profile name |
 | `DEEPSEEK_MEMORY` | Set to `on` to enable user memory |
 | `DEEPSEEK_ALLOW_INSECURE_HTTP=1` | Allow non-local `http://` API base URLs on trusted networks |

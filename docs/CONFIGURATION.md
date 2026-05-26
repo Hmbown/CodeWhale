@@ -200,13 +200,22 @@ If a profile is selected but missing, codewhale exits with an error listing avai
 ## Environment Variables
 
 Most runtime environment variables override config values. API-key variables are
-fallbacks after saved config and keyring credentials:
+fallbacks after saved config and keyring credentials.
+
+The four user-facing slots — provider, model, base URL — expose `CODEWHALE_*`
+aliases. When both forms are set the `CODEWHALE_*` value wins; the
+`DEEPSEEK_*` form is kept for older shells:
+
+- `CODEWHALE_PROVIDER` (preferred) / `DEEPSEEK_PROVIDER` (legacy alias) —
+  `deepseek|nvidia-nim|openai|atlascloud|wanjie-ark|openrouter|novita|fireworks|moonshot|sglang|vllm|ollama`
+- `CODEWHALE_MODEL` (preferred) / `DEEPSEEK_MODEL` (legacy alias) — default model for the active provider
+- `CODEWHALE_BASE_URL` (preferred) / `DEEPSEEK_BASE_URL` (legacy alias) — base URL for the active provider
+
+Remaining variables:
 
 - `DEEPSEEK_API_KEY`
-- `DEEPSEEK_BASE_URL`
 - `DEEPSEEK_HTTP_HEADERS` (custom model request headers, comma-separated `name=value` pairs)
-- `DEEPSEEK_PROVIDER` (`codewhale|nvidia-nim|openai|atlascloud|wanjie-ark|openrouter|novita|fireworks|moonshot|sglang|vllm|ollama`)
-- `DEEPSEEK_MODEL` or `DEEPSEEK_DEFAULT_TEXT_MODEL`
+- `DEEPSEEK_DEFAULT_TEXT_MODEL` (extra legacy alias of `DEEPSEEK_MODEL`)
 - `DEEPSEEK_STREAM_IDLE_TIMEOUT_SECS` (stream idle timeout in seconds; default `300`, clamped to `1..=3600`)
 - `DEEPSEEK_STREAM_OPEN_TIMEOUT_SECS` (connection setup + response-header wait in seconds; default `45`, clamped to `5..=300`; distinct from the per-chunk idle timeout)
 - `NVIDIA_API_KEY` or `NVIDIA_NIM_API_KEY` (preferred when provider is `nvidia-nim`; falls back to `DEEPSEEK_API_KEY`)

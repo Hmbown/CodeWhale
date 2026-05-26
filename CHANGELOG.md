@@ -7,11 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`CODEWHALE_*` env aliases.** `CODEWHALE_PROVIDER`, `CODEWHALE_MODEL`,
+  and `CODEWHALE_BASE_URL` are public aliases that take precedence over
+  the legacy `DEEPSEEK_*` forms. The `DEEPSEEK_*` names remain accepted
+  for back-compat. Recommended setup paths are `codewhale --provider <name>`,
+  `provider = "<name>"` in `~/.codewhale/config.toml`, or
+  `CODEWHALE_PROVIDER=<name>` — never `DEEPSEEK_PROVIDER=<name>` in
+  user-facing docs.
+
 ### Fixed
 
 - **Kimi Code API-key setup.** `codewhale config set providers.moonshot.*`
   now writes the Moonshot/Kimi provider table, and Kimi Code API-key
   endpoints default to `kimi-for-coding` without using the Kimi CLI OAuth path.
+- **Kimi Code model precedence.** When `[providers.moonshot]` points at the
+  Kimi Code endpoint, the resolver now returns `kimi-for-coding` even when
+  a root DeepSeek `default_text_model` (e.g. `deepseek-v4-pro`) is still in
+  the config from a previous setup.
 
 ## [0.8.45] - 2026-05-25
 

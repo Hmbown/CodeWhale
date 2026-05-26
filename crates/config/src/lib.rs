@@ -1787,10 +1787,13 @@ struct EnvRuntimeOverrides {
 impl EnvRuntimeOverrides {
     fn load() -> Self {
         Self {
-            provider: std::env::var("DEEPSEEK_PROVIDER")
+            provider: std::env::var("CODEWHALE_PROVIDER")
+                .or_else(|_| std::env::var("DEEPSEEK_PROVIDER"))
                 .ok()
                 .and_then(|v| ProviderKind::parse(&v)),
-            model: std::env::var("DEEPSEEK_MODEL").ok(),
+            model: std::env::var("CODEWHALE_MODEL")
+                .or_else(|_| std::env::var("DEEPSEEK_MODEL"))
+                .ok(),
             wanjie_ark_model: std::env::var("WANJIE_ARK_MODEL")
                 .or_else(|_| std::env::var("WANJIE_MODEL"))
                 .or_else(|_| std::env::var("WANJIE_MAAS_MODEL"))
@@ -1816,7 +1819,8 @@ impl EnvRuntimeOverrides {
                 .ok()
                 .and_then(|value| parse_http_headers(&value).ok())
                 .filter(|headers| !headers.is_empty()),
-            deepseek_base_url: std::env::var("DEEPSEEK_BASE_URL")
+            deepseek_base_url: std::env::var("CODEWHALE_BASE_URL")
+                .or_else(|_| std::env::var("DEEPSEEK_BASE_URL"))
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
             nvidia_base_url: std::env::var("NVIDIA_NIM_BASE_URL")
@@ -1954,6 +1958,9 @@ mod tests {
         vllm_base_url: Option<OsString>,
         ollama_api_key: Option<OsString>,
         ollama_base_url: Option<OsString>,
+        codewhale_provider: Option<OsString>,
+        codewhale_model: Option<OsString>,
+        codewhale_base_url: Option<OsString>,
     }
 
     impl EnvGuard {
@@ -1965,6 +1972,9 @@ mod tests {
                 deepseek_model: env::var_os("DEEPSEEK_MODEL"),
                 deepseek_provider: env::var_os("DEEPSEEK_PROVIDER"),
                 deepseek_auth_mode: env::var_os("DEEPSEEK_AUTH_MODE"),
+                codewhale_provider: env::var_os("CODEWHALE_PROVIDER"),
+                codewhale_model: env::var_os("CODEWHALE_MODEL"),
+                codewhale_base_url: env::var_os("CODEWHALE_BASE_URL"),
                 nvidia_api_key: env::var_os("NVIDIA_API_KEY"),
                 nvidia_nim_api_key: env::var_os("NVIDIA_NIM_API_KEY"),
                 nim_base_url: env::var_os("NIM_BASE_URL"),
@@ -2005,6 +2015,9 @@ mod tests {
                 env::remove_var("DEEPSEEK_MODEL");
                 env::remove_var("DEEPSEEK_PROVIDER");
                 env::remove_var("DEEPSEEK_AUTH_MODE");
+                env::remove_var("CODEWHALE_PROVIDER");
+                env::remove_var("CODEWHALE_MODEL");
+                env::remove_var("CODEWHALE_BASE_URL");
                 env::remove_var("NVIDIA_API_KEY");
                 env::remove_var("NVIDIA_NIM_API_KEY");
                 env::remove_var("NIM_BASE_URL");
@@ -2059,6 +2072,9 @@ mod tests {
                 Self::restore_var("DEEPSEEK_MODEL", self.deepseek_model.take());
                 Self::restore_var("DEEPSEEK_PROVIDER", self.deepseek_provider.take());
                 Self::restore_var("DEEPSEEK_AUTH_MODE", self.deepseek_auth_mode.take());
+                Self::restore_var("CODEWHALE_PROVIDER", self.codewhale_provider.take());
+                Self::restore_var("CODEWHALE_MODEL", self.codewhale_model.take());
+                Self::restore_var("CODEWHALE_BASE_URL", self.codewhale_base_url.take());
                 Self::restore_var("NVIDIA_API_KEY", self.nvidia_api_key.take());
                 Self::restore_var("NVIDIA_NIM_API_KEY", self.nvidia_nim_api_key.take());
                 Self::restore_var("NIM_BASE_URL", self.nim_base_url.take());
@@ -2408,6 +2424,55 @@ mod tests {
         );
     }
 
+    /// End-to-end smoke for the preferred Kimi Code setup path:
+    ///   1. Start from a fresh root config that uses DeepSeek defaults.
+    ///   2. Mutate it through the same key-value setters the
+    ///      `codewhale config set providers.moonshot.*` CLI invokes.
+    ///   3. Switch the active provider through `CODEWHALE_PROVIDER` —
+    ///      the public env alias — without ever touching the legacy
+    ///      `DEEPSEEK_PROVIDER` name.
+    ///   4. Resolve the runtime and confirm the doctor/runtime values.
+    ///
+    /// No real API key is required; the `api_key` here is just a
+    /// non-empty placeholder.
+    #[test]
+    fn moonshot_kimi_code_smoke_config_set_then_resolve() -> Result<()> {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+
+        let mut config = ConfigToml {
+            provider: ProviderKind::Deepseek,
+            default_text_model: Some("deepseek-v4-pro".to_string()),
+            ..ConfigToml::default()
+        };
+
+        // Same key paths a user would run via `codewhale config set`.
+        config.set_value("providers.moonshot.api_key", "kimi-code-key-placeholder")?;
+        config.set_value("providers.moonshot.auth_mode", "api_key")?;
+        config.set_value("providers.moonshot.base_url", DEFAULT_KIMI_CODE_BASE_URL)?;
+        config.set_value("providers.moonshot.model", DEFAULT_KIMI_CODE_MODEL)?;
+
+        // Public env alias for the active-provider switch.
+        // Safety: test-only env mutation guarded by env_lock().
+        unsafe { env::set_var("CODEWHALE_PROVIDER", "moonshot") };
+
+        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::Moonshot);
+        assert_eq!(resolved.base_url, DEFAULT_KIMI_CODE_BASE_URL);
+        assert_eq!(resolved.model, DEFAULT_KIMI_CODE_MODEL);
+        assert_eq!(resolved.auth_mode.as_deref(), Some("api_key"));
+        assert_eq!(
+            resolved.api_key.as_deref(),
+            Some("kimi-code-key-placeholder")
+        );
+        assert_eq!(
+            resolved.api_key_source,
+            Some(RuntimeApiKeySource::ConfigFile)
+        );
+        Ok(())
+    }
+
     #[test]
     fn moonshot_provider_config_values_round_trip() -> Result<()> {
         let mut config = ConfigToml::default();
@@ -2755,6 +2820,75 @@ mod tests {
             resolved.api_key_source,
             Some(RuntimeApiKeySource::ConfigFile)
         );
+    }
+
+    /// `CODEWHALE_PROVIDER` is the user-facing env alias for switching the
+    /// active provider. It must be honored by the runtime resolver and win
+    /// over a root `provider = "deepseek"` config entry.
+    #[test]
+    fn codewhale_provider_env_switches_active_provider() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        // Safety: test-only env mutation guarded by env_lock().
+        unsafe {
+            env::set_var("CODEWHALE_PROVIDER", "moonshot");
+        }
+        let mut config = ConfigToml {
+            provider: ProviderKind::Deepseek,
+            ..ConfigToml::default()
+        };
+        config.providers.moonshot.api_key = Some("kimi-code-key".to_string());
+        config.providers.moonshot.base_url = Some(DEFAULT_KIMI_CODE_BASE_URL.to_string());
+
+        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::Moonshot);
+        assert_eq!(resolved.base_url, DEFAULT_KIMI_CODE_BASE_URL);
+        assert_eq!(resolved.model, DEFAULT_KIMI_CODE_MODEL);
+        assert_eq!(resolved.api_key.as_deref(), Some("kimi-code-key"));
+    }
+
+    /// When both `CODEWHALE_PROVIDER` and the legacy `DEEPSEEK_PROVIDER`
+    /// are set, the public alias wins — a user adopting `CODEWHALE_*` in a
+    /// fresh shell config is not tripped up by a stale legacy export still
+    /// living in their dotfiles.
+    #[test]
+    fn codewhale_provider_env_wins_over_deepseek_provider_env() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        // Safety: test-only env mutation guarded by env_lock().
+        unsafe {
+            env::set_var("CODEWHALE_PROVIDER", "moonshot");
+            env::set_var("DEEPSEEK_PROVIDER", "openrouter");
+        }
+        let config = ConfigToml {
+            provider: ProviderKind::Deepseek,
+            ..ConfigToml::default()
+        };
+
+        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::Moonshot);
+    }
+
+    /// `CODEWHALE_MODEL` is the user-facing env alias for picking a model
+    /// against the active provider. It must be honored by the runtime
+    /// resolver in place of `DEEPSEEK_MODEL`.
+    #[test]
+    fn codewhale_model_env_alias_overrides_default_for_active_provider() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        // Safety: test-only env mutation guarded by env_lock().
+        unsafe {
+            env::set_var("CODEWHALE_PROVIDER", "moonshot");
+            env::set_var("CODEWHALE_MODEL", "kimi-k2.6");
+        }
+        let config = ConfigToml::default();
+
+        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::Moonshot);
+        assert_eq!(resolved.model, DEFAULT_MOONSHOT_MODEL);
     }
 
     #[test]
