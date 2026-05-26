@@ -2637,6 +2637,7 @@ mod tests {
             command_env(&cmd, "DEEPSEEK_API_KEY_SOURCE").as_deref(),
             Some("keyring")
         );
+        assert_eq!(command_env(&cmd, "DEEPSEEK_AUTH_MODE"), None);
         let args: Vec<String> = cmd
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
