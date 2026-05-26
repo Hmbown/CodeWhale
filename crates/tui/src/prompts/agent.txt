@@ -11,6 +11,6 @@ flow.
 ## Sub-agent completion sentinel
 
 When you open a sub-agent via `agent_open`, the child runs independently.
-You will receive a `<deepseek:subagent.done>` element in the transcript when it finishes.
+You will receive a `<codewhale:subagent.done>` element in the transcript when it finishes.
 Read its `summary` field and integrate the work — do not re-do what the child already did.
 You can also call `agent_eval` with the agent name or id to pull the current structured projection or transcript handle.

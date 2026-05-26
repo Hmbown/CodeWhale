@@ -490,14 +490,12 @@ impl ToolRegistryBuilder {
         }
     }
 
-    /// Include the `image_ocr` tool only when the `tesseract`
-    /// binary is present on this host. Probe-then-decide mirroring
-    /// `with_pandoc_tools` — when tesseract is missing the tool
-    /// stays out of the catalog, so the model never tries to call
-    /// an OCR engine the host can't actually run.
+    /// Include the `image_ocr` tool only when a local OCR backend is present.
+    /// macOS uses the built-in Vision framework, while other platforms use
+    /// Tesseract when installed.
     #[must_use]
     pub fn with_image_ocr_tools(self) -> Self {
-        if crate::dependencies::resolve_tesseract().is_some() {
+        if super::image_ocr::ocr_available() {
             use super::image_ocr::ImageOcrTool;
             self.with_tool(Arc::new(ImageOcrTool))
         } else {
@@ -551,7 +549,8 @@ impl ToolRegistryBuilder {
             AutomationReadTool, AutomationResumeTool, AutomationRunTool, AutomationUpdateTool,
         };
         use super::github::{
-            GithubCloseIssueTool, GithubCommentTool, GithubIssueContextTool, GithubPrContextTool,
+            GithubCloseIssueTool, GithubClosePrTool, GithubCommentTool, GithubIssueContextTool,
+            GithubPrContextTool,
         };
         use super::tasks::{
             PrAttemptListTool, PrAttemptPreflightTool, PrAttemptReadTool, PrAttemptRecordTool,
@@ -582,6 +581,7 @@ impl ToolRegistryBuilder {
             .with_tool(Arc::new(AutomationRunTool))
             .with_tool(Arc::new(GithubCommentTool))
             .with_tool(Arc::new(GithubCloseIssueTool))
+            .with_tool(Arc::new(GithubClosePrTool))
     }
 
     /// Include only read-only durable task, PR-attempt, GitHub, and automation
@@ -663,8 +663,11 @@ impl ToolRegistryBuilder {
     /// Include persistent RLM session tools.
     #[must_use]
     pub fn with_rlm_tool(self, client: Option<DeepSeekClient>, _root_model: String) -> Self {
-        use super::rlm::{RlmCloseTool, RlmConfigureTool, RlmEvalTool, RlmOpenTool};
-        self.with_tool(Arc::new(RlmOpenTool))
+        use super::rlm::{
+            RlmCloseTool, RlmConfigureTool, RlmEvalTool, RlmOpenTool, RlmSessionObjectsTool,
+        };
+        self.with_tool(Arc::new(RlmSessionObjectsTool))
+            .with_tool(Arc::new(RlmOpenTool))
             .with_tool(Arc::new(RlmEvalTool::new(client)))
             .with_tool(Arc::new(RlmConfigureTool))
             .with_tool(Arc::new(RlmCloseTool))
@@ -848,13 +851,17 @@ impl ToolRegistryBuilder {
         manager: super::subagent::SharedSubAgentManager,
         runtime: super::subagent::SubAgentRuntime,
     ) -> Self {
-        use super::subagent::{AgentCloseTool, AgentEvalTool, AgentOpenTool};
+        use super::subagent::{AgentCloseTool, AgentEvalTool, AgentOpenTool, ToolAgentTool};
 
         self.with_tool(Arc::new(AgentOpenTool::new(
             manager.clone(),
             runtime.clone(),
         )))
         .with_tool(Arc::new(AgentEvalTool::new(manager.clone())))
+        .with_tool(Arc::new(ToolAgentTool::new(
+            manager.clone(),
+            runtime.clone(),
+        )))
         .with_tool(Arc::new(AgentCloseTool::new(manager)))
     }
 

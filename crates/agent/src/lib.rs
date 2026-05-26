@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use deepseek_config::ProviderKind;
+use codewhale_config::ProviderKind;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,18 +74,28 @@ impl Default for ModelRegistry {
                 supports_reasoning: true,
             },
             ModelInfo {
-                id: "gpt-4.1".to_string(),
+                id: "deepseek-v4-pro".to_string(),
                 provider: ProviderKind::Openai,
-                aliases: vec!["gpt4.1".to_string(), "gpt-4o".to_string()],
+                aliases: vec!["openai-compatible-deepseek-v4-pro".to_string()],
                 supports_tools: true,
                 supports_reasoning: true,
             },
             ModelInfo {
-                id: "gpt-4.1-mini".to_string(),
+                id: "deepseek-v4-flash".to_string(),
                 provider: ProviderKind::Openai,
-                aliases: vec!["gpt-4o-mini".to_string()],
+                aliases: vec!["openai-compatible-deepseek-v4-flash".to_string()],
                 supports_tools: true,
-                supports_reasoning: false,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "deepseek-reasoner".to_string(),
+                provider: ProviderKind::WanjieArk,
+                aliases: vec![
+                    "wanjie-deepseek-reasoner".to_string(),
+                    "ark-wanjie-deepseek-reasoner".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: true,
             },
             ModelInfo {
                 id: "deepseek/deepseek-v4-pro".to_string(),
@@ -137,6 +147,17 @@ impl Default for ModelRegistry {
                 aliases: vec![
                     "deepseek-v4-pro".to_string(),
                     "fireworks-deepseek-v4-pro".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "kimi-k2.6".to_string(),
+                provider: ProviderKind::Moonshot,
+                aliases: vec![
+                    "kimi".to_string(),
+                    "kimi-k2".to_string(),
+                    "moonshot-kimi-k2.6".to_string(),
                 ],
                 supports_tools: true,
                 supports_reasoning: true,
@@ -359,6 +380,16 @@ mod tests {
 
         assert_eq!(resolved.resolved.provider, ProviderKind::Openrouter);
         assert_eq!(resolved.resolved.id, "deepseek/deepseek-v4-pro");
+    }
+
+    #[test]
+    fn wanjie_ark_default_uses_reasoner_model_id() {
+        let registry = ModelRegistry::default();
+        let resolved = registry.resolve(None, Some(ProviderKind::WanjieArk));
+
+        assert_eq!(resolved.resolved.provider, ProviderKind::WanjieArk);
+        assert_eq!(resolved.resolved.id, "deepseek-reasoner");
+        assert!(resolved.resolved.supports_reasoning);
     }
 
     #[test]

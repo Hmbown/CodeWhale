@@ -8,7 +8,7 @@ const path = require("path");
 const { spawn } = require("child_process");
 
 const repoRoot = path.resolve(__dirname, "..", "..");
-const packageDir = path.join(repoRoot, "npm", "deepseek-tui");
+const packageDir = path.join(repoRoot, "npm", "codewhale");
 const prepareAssetsScript = path.join(
   repoRoot,
   "scripts",
@@ -133,7 +133,7 @@ function parsePackJson(stdout) {
 }
 
 async function main() {
-  const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "deepseek-npm-smoke-"));
+  const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "codewhale-npm-smoke-"));
   const releaseAssetsDir = path.join(tempRoot, "release-assets");
   const packDir = path.join(tempRoot, "pack");
   const installDir = path.join(tempRoot, "install");
@@ -165,11 +165,11 @@ async function main() {
 
     await runCommand("npm", ["init", "-y"], { cwd: installDir });
     await runCommand("npm", ["install", tarball], { cwd: installDir, env });
-    await runCommand("npx", ["--no-install", "deepseek", "doctor", "--help"], {
+    await runCommand("npx", ["--no-install", "codewhale", "doctor", "--help"], {
       cwd: installDir,
       env,
     });
-    await runCommand("npx", ["--no-install", "deepseek-tui", "--help"], {
+    await runCommand("npx", ["--no-install", "codewhale-tui", "--help"], {
       cwd: installDir,
       env,
     });

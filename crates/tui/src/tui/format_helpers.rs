@@ -29,7 +29,7 @@ pub(super) fn cache_warmup_result(usage: &Usage) -> String {
     )
 }
 
-/// Format prefix stability info for the TUI footer chip.
+/// Format prefix stability info for the opt-in TUI footer chip.
 pub(super) fn prefix_stability_chip(app: &App) -> Option<(String, ratatui::style::Color)> {
     let pct = app.prefix_stability_pct?;
     let changes = app.prefix_change_count;
@@ -49,10 +49,10 @@ pub(super) fn prefix_stability_chip(app: &App) -> Option<(String, ratatui::style
     };
 
     let label = if changes == 0 {
-        format!("P {pct}%")
+        format!("cache prefix {pct}%")
     } else {
         format!(
-            "P {pct}% ({changes} change{})",
+            "cache prefix {pct}% ({changes} change{})",
             if changes == 1 { "" } else { "s" }
         )
     };

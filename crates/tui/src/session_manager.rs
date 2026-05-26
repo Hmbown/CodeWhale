@@ -125,6 +125,18 @@ pub struct SessionMetadata {
     /// Accumulated cost data for persisted billing and high-water mark.
     #[serde(default)]
     pub cost: SessionCostSnapshot,
+    /// Source session id when this session was created with `deepseek fork`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_session_id: Option<String>,
+    /// Source message count at fork time. This is intentionally coarse:
+    /// current saved sessions are linear JSON files, not per-entry trees.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forked_from_message_count: Option<usize>,
+    /// Cumulative turn duration in seconds (sum of completed turn elapsed
+    /// times). Persisted so the footer "worked" chip survives restarts
+    /// (#2038).
+    #[serde(default)]
+    pub cumulative_turn_secs: u64,
 }
 
 /// Cost and high-water-mark fields persisted with each session.
@@ -168,6 +180,12 @@ impl SessionMetadata {
     #[allow(dead_code)]
     pub fn copy_cost_from(&mut self, other: &SessionMetadata) {
         self.cost = other.cost;
+    }
+
+    /// Record additive lineage metadata for a forked saved session.
+    pub fn mark_forked_from(&mut self, parent: &SessionMetadata) {
+        self.parent_session_id = Some(parent.id.clone());
+        self.forked_from_message_count = Some(parent.message_count);
     }
 }
 
@@ -229,9 +247,14 @@ impl SessionManager {
         Ok(Self { sessions_dir })
     }
 
-    /// Create a `SessionManager` using the default location (~/.deepseek/sessions)
+    /// Create a `SessionManager` using the default location.
     pub fn default_location() -> std::io::Result<Self> {
         Self::new(default_sessions_dir()?)
+    }
+
+    /// Return the resolved sessions directory path.
+    pub fn sessions_dir(&self) -> &Path {
+        &self.sessions_dir
     }
 
     /// Save a session to disk using atomic write (temp file + fsync + rename).
@@ -465,8 +488,8 @@ impl SessionManager {
         Ok(())
     }
 
-    /// Clean up old sessions to stay within `MAX_SESSIONS` limit
-    fn cleanup_old_sessions(&self) -> std::io::Result<()> {
+    /// Clean up old sessions to stay within `MAX_SESSIONS` limit.
+    pub fn cleanup_old_sessions(&self) -> std::io::Result<()> {
         let sessions = self.list_sessions()?;
 
         if sessions.len() > MAX_SESSIONS {
@@ -594,12 +617,13 @@ fn is_git_metadata_entry(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Resolve the default session directory path (`~/.deepseek/sessions`).
+/// Resolve the default session directory path.
+///
+/// v0.8.44: prefers `~/.codewhale/sessions`, falls back to
+/// `~/.deepseek/sessions` for existing installs.
 pub fn default_sessions_dir() -> std::io::Result<PathBuf> {
-    let home = dirs::home_dir().ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::NotFound, "Home directory not found")
-    })?;
-    Ok(home.join(".deepseek").join("sessions"))
+    codewhale_config::resolve_state_dir("sessions")
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::NotFound, e.to_string()))
 }
 
 /// Prune snapshots older than `max_age` for `workspace`.
@@ -702,6 +726,9 @@ pub fn create_saved_session_with_id_and_mode(
             workspace: workspace.to_path_buf(),
             mode: mode.map(str::to_string),
             cost: SessionCostSnapshot::default(),
+            parent_session_id: None,
+            forked_from_message_count: None,
+            cumulative_turn_secs: 0,
         },
         messages: capped_messages,
         system_prompt: merge_truncation_note(
@@ -949,12 +976,18 @@ fn truncate_title(s: &str, max_len: usize) -> String {
 pub fn format_session_line(meta: &SessionMetadata) -> String {
     let age = format_age(&meta.updated_at);
     let truncated_title = truncate_title(extract_title(&meta.title), 40);
+    let fork_label = meta
+        .parent_session_id
+        .as_deref()
+        .map(|parent| format!(" | fork {}", truncate_id(parent)))
+        .unwrap_or_default();
 
     format!(
-        "{} | {} | {} msgs | {}",
+        "{} | {} | {} msgs{} | {}",
         truncate_id(&meta.id),
         truncated_title,
         meta.message_count,
+        fork_label,
         age
     )
 }
@@ -1016,6 +1049,9 @@ mod tests {
                 workspace: workspace.to_path_buf(),
                 mode: None,
                 cost: SessionCostSnapshot::default(),
+                parent_session_id: None,
+                forked_from_message_count: None,
+                cumulative_turn_secs: 0,
             },
             system_prompt: None,
             context_references: Vec::new(),
@@ -1044,6 +1080,9 @@ mod tests {
                 workspace: workspace.to_path_buf(),
                 mode: Some("yolo".to_string()),
                 cost: SessionCostSnapshot::default(),
+                parent_session_id: None,
+                forked_from_message_count: None,
+                cumulative_turn_secs: 0,
             },
             system_prompt: None,
             context_references: Vec::new(),
@@ -1631,10 +1670,9 @@ mod tests {
                     "workspace": "/tmp"
                 }},
                 "messages": [
-                    {{ "role": "user", "content": [ {{ "Text": {{ "text": {body:?} }} }} ] }}
+                    {{ "role": "user", "content": [ {{ "Text": {{ "text": {big_text:?} }} }} ] }}
                 ]
-            }}"#,
-            body = big_text
+            }}"#
         );
 
         let extracted =
@@ -1687,6 +1725,44 @@ mod tests {
 
         let session: SavedSession = serde_json::from_str(json).expect("legacy session loads");
         assert!(session.artifacts.is_empty());
+        assert!(session.metadata.parent_session_id.is_none());
+        assert!(session.metadata.forked_from_message_count.is_none());
+    }
+
+    #[test]
+    fn fork_lineage_metadata_round_trips_and_formats() {
+        let tmp = tempdir().expect("tempdir");
+        let manager = SessionManager::new(tmp.path().join("sessions")).expect("new");
+        let parent = create_saved_session(
+            &[
+                make_test_message("user", "try approach A"),
+                make_test_message("assistant", "A looks viable"),
+            ],
+            "deepseek-v4-pro",
+            Path::new("/tmp"),
+            42,
+            None,
+        );
+        let mut forked = create_saved_session(
+            &parent.messages,
+            &parent.metadata.model,
+            &parent.metadata.workspace,
+            parent.metadata.total_tokens,
+            None,
+        );
+        forked.metadata.mark_forked_from(&parent.metadata);
+
+        manager.save_session(&forked).expect("save fork");
+        let loaded = manager
+            .load_session(&forked.metadata.id)
+            .expect("load fork");
+
+        assert_eq!(
+            loaded.metadata.parent_session_id.as_deref(),
+            Some(parent.metadata.id.as_str())
+        );
+        assert_eq!(loaded.metadata.forked_from_message_count, Some(2));
+        assert!(format_session_line(&loaded.metadata).contains("fork "));
     }
 
     #[test]

@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use super::CommandResult;
 use crate::client::DeepSeekClient;
-use crate::config::{COMMON_DEEPSEEK_MODELS, clear_api_key, normalize_model_name};
+use crate::config::{COMMON_DEEPSEEK_MODELS, clear_api_key, normalize_model_name_for_provider};
 use crate::config_ui::{ConfigUiMode, parse_mode};
 use crate::llm_client::LlmClient;
 use crate::localization::resolve_locale;
@@ -213,6 +213,7 @@ fn show_single_setting(app: &App, key: &str) -> CommandResult {
                 .default_model
                 .unwrap_or_else(|| "(default)".to_string())
         }),
+        "reasoning_effort" | "effort" => Some(app.reasoning_effort.as_setting().to_string()),
         "prefer_external_pdftotext" | "external_pdftotext" | "pdftotext" => Settings::load()
             .ok()
             .map(|settings| settings.prefer_external_pdftotext.to_string()),
@@ -370,9 +371,7 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
         "model" => {
             // Support "/model auto" — auto-select model based on request complexity
             if value.trim().eq_ignore_ascii_case("auto") {
-                app.auto_model = true;
-                app.model = "auto".to_string();
-                app.last_effective_model = None;
+                app.set_model_selection("auto".to_string());
                 app.reasoning_effort = ReasoningEffort::Auto;
                 app.last_effective_reasoning_effort = None;
                 app.update_model_compaction_budget();
@@ -384,15 +383,13 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
                 );
             }
             // Clear auto mode when a specific model is set
-            app.auto_model = false;
-            app.last_effective_model = None;
-            let Some(model) = normalize_model_name(value) else {
+            let Some(model) = normalize_model_name_for_provider(app.api_provider, value) else {
                 return CommandResult::error(format!(
                     "Invalid model '{value}'. Expected a DeepSeek model ID. Common models: {}",
                     COMMON_DEEPSEEK_MODELS.join(", ")
                 ));
             };
-            app.model = model.clone();
+            app.set_model_selection(model.clone());
             app.update_model_compaction_budget();
             app.session.last_prompt_tokens = None;
             app.session.last_completion_tokens = None;
@@ -550,9 +547,7 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
         }
         "default_model" => {
             if let Some(ref model) = settings.default_model {
-                app.auto_model = model.trim().eq_ignore_ascii_case("auto");
-                app.model.clone_from(model);
-                app.last_effective_model = None;
+                app.set_model_selection(model.clone());
                 if app.auto_model {
                     app.reasoning_effort = ReasoningEffort::Auto;
                     app.last_effective_reasoning_effort = None;
@@ -562,6 +557,19 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
                 app.session.last_completion_tokens = None;
                 action = Some(AppAction::UpdateCompaction(app.compaction_config()));
             }
+        }
+        "reasoning_effort" | "effort" => {
+            app.reasoning_effort = if app.auto_model {
+                ReasoningEffort::Auto
+            } else {
+                settings
+                    .reasoning_effort
+                    .as_deref()
+                    .map_or_else(ReasoningEffort::default, ReasoningEffort::from_setting)
+            };
+            app.last_effective_reasoning_effort = None;
+            app.update_model_compaction_budget();
+            action = Some(AppAction::UpdateCompaction(app.compaction_config()));
         }
         "sidebar_width" | "sidebar" => {
             app.sidebar_width_percent = settings.sidebar_width_percent;
@@ -586,6 +594,10 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
             .background_color
             .clone()
             .unwrap_or_else(|| "default".to_string()),
+        "reasoning_effort" | "effort" => settings
+            .reasoning_effort
+            .clone()
+            .unwrap_or_else(|| "config/default".to_string()),
         "composer_vim_mode" | "vim_mode" | "vim" => settings.composer_vim_mode.clone(),
         _ => value.to_string(),
     };
@@ -964,7 +976,7 @@ pub struct AutoRouteSelection {
 }
 
 pub const AUTO_MODEL_ROUTER_SYSTEM_PROMPT: &str = "\
-You are the DeepSeek TUI auto-routing classifier. Return only compact JSON: \
+You are the codewhale auto-routing classifier. Return only compact JSON: \
 {\"model\":\"deepseek-v4-flash|deepseek-v4-pro\",\"thinking\":\"off|high|max\"}. \
 Use deepseek-v4-flash for trivial, conversational, status, or single-step work. \
 Use deepseek-v4-pro for coding, debugging, release work, multi-step tasks, high-risk decisions, \
@@ -1694,7 +1706,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-default-mode-test-{}-{}",
+            "codewhale-tui-default-mode-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -1719,7 +1731,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-cost-currency-test-{}-{}",
+            "codewhale-tui-cost-currency-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -1745,7 +1757,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-theme-command-test-{}-{}",
+            "codewhale-tui-theme-command-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -1768,7 +1780,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-theme-save-test-{}-{}",
+            "codewhale-tui-theme-save-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -1872,7 +1884,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-logout-test-{}-{}",
+            "codewhale-tui-logout-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -1921,7 +1933,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-statusline-persist-{}-{}",
+            "codewhale-statusline-persist-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -1952,7 +1964,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-statusline-preserve-{}-{}",
+            "codewhale-statusline-preserve-{}-{}",
             std::process::id(),
             nanos
         ));

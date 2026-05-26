@@ -97,7 +97,7 @@ fn add_anchor(app: &mut App, text: &str) -> CommandResult {
     };
 
     // Write separator and anchor content.
-    if let Err(e) = writeln!(file, "\n---\n{}", text) {
+    if let Err(e) = writeln!(file, "\n---\n{text}") {
         return CommandResult::error(format!("Failed to write anchor: {e}"));
     }
 

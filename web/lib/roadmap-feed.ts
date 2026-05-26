@@ -1,7 +1,7 @@
 /**
  * roadmap-feed.ts — fetch the live roadmap from GitHub.
  *
- *   "Shipped"    ← last 8 published Releases on Hmbown/deepseek-tui
+ *   "Shipped"    ← last 8 published Releases on Hmbown/CodeWhale
  *   "Underway"   ← open issues with label `roadmap:underway`
  *   "Considered" ← open issues with label `roadmap:considered`
  *   "Ruled out"  ← issues (open or closed) with label `roadmap:ruled-out`
@@ -12,7 +12,7 @@
  * Categories that come back empty fall through to the page's static items —
  * the maintainer can adopt label-driven roadmap incrementally.
  */
-const REPO = "Hmbown/deepseek-tui";
+const REPO = process.env.GITHUB_REPO ?? "Hmbown/CodeWhale";
 const KV_KEY = "roadmap:feed";
 const KV_TTL = 60 * 30;
 
@@ -39,7 +39,7 @@ interface KVNamespace {
 async function gh<T>(url: string, ghToken?: string): Promise<T | null> {
   const headers: Record<string, string> = {
     Accept: "application/vnd.github+json",
-    "User-Agent": "deepseek-tui-web-roadmap",
+    "User-Agent": "codewhale-web-roadmap",
     "X-GitHub-Api-Version": "2022-11-28",
   };
   if (ghToken) headers["Authorization"] = `Bearer ${ghToken}`;
@@ -54,6 +54,20 @@ async function gh<T>(url: string, ghToken?: string): Promise<T | null> {
 
 interface GhRelease { tag_name: string; name: string | null; body: string | null; html_url: string; prerelease: boolean; draft: boolean }
 interface GhIssue { number: number; title: string; html_url: string; body: string | null; state: string; pull_request?: unknown }
+
+const FALLBACK_SHIPPED: RoadmapItem[] = [
+  {
+    title: "v0.8.45",
+    note: "Moonshot/Kimi provider support, API-key setup guidance, provider-surface sync, and current Windows install/runtime guidance",
+    href: "https://github.com/Hmbown/CodeWhale/releases/tag/v0.8.45",
+  },
+];
+
+function withPinnedShipped(items: RoadmapItem[]): RoadmapItem[] {
+  const seen = new Set(items.map((item) => item.title));
+  const pinned = FALLBACK_SHIPPED.filter((item) => !seen.has(item.title));
+  return [...pinned, ...items];
+}
 
 function summarizeReleaseBody(body: string | null): string {
   if (!body) return "";
@@ -100,17 +114,19 @@ export async function fetchRoadmap(ghToken?: string): Promise<RoadmapFeed> {
     fetchByLabel("roadmap:ruled-out", ghToken, "all"),
   ]);
 
-  const shipped: RoadmapItem[] = (releases ?? [])
+  const shipped: RoadmapItem[] = releases
+    ? releases
     .filter((r) => !r.draft)
     .map((r) => ({
       title: r.name?.trim() || r.tag_name,
       note: summarizeReleaseBody(r.body) || r.tag_name,
       href: r.html_url,
-    }));
+    }))
+    : FALLBACK_SHIPPED;
 
   return {
     generatedAt: new Date().toISOString(),
-    shipped,
+    shipped: withPinnedShipped(shipped),
     underway,
     considered,
     ruledOut,
@@ -121,7 +137,10 @@ export async function getCachedRoadmap(kv: KVNamespace | undefined, ghToken: str
   try {
     if (kv) {
       const cached = await kv.get(KV_KEY);
-      if (cached) return JSON.parse(cached) as RoadmapFeed;
+      if (cached) {
+        const parsed = JSON.parse(cached) as RoadmapFeed;
+        return { ...parsed, shipped: withPinnedShipped(parsed.shipped ?? []) };
+      }
     }
     const fresh = await fetchRoadmap(ghToken);
     if (kv) {

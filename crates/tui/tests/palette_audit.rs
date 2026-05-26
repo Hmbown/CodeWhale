@@ -1,8 +1,8 @@
 //! Palette audit tests to prevent color drift.
 //!
 //! These tests ensure that deprecated colors (like DEEPSEEK_AQUA) are not used
-//! directly in user-visible code. The palette should only use DeepSeek brand
-//! colors: blue, sky, red (plus neutral shades).
+//! directly in user-visible code. Backward-compatible DeepSeek aliases should
+//! point at the current CodeWhale semantic tokens instead of stale brand RGBs.
 
 use std::fs;
 use std::path::Path;
@@ -35,7 +35,7 @@ fn color_to_rgb(color: Color) -> (u8, u8, u8) {
         Color::LightMagenta => (255, 153, 255),
         Color::Cyan => (0, 255, 255),
         Color::LightCyan => (153, 255, 255),
-        _ => panic!("unsupported color variant for contrast test: {:?}", color),
+        _ => panic!("unsupported color variant for contrast test: {color:?}"),
     }
 }
 
@@ -79,7 +79,7 @@ fn audit_file(path: &Path, violations: &mut Vec<String>) {
 
     for (line_num, line) in content.lines().enumerate() {
         for deprecated in DEPRECATED_DIRECT_COLORS {
-            let pattern = format!("palette::{}", deprecated);
+            let pattern = format!("palette::{deprecated}");
             if line.contains(&pattern) {
                 let is_allowed = ALLOWED_PATTERNS.iter().any(|p| line.contains(p));
                 if !is_allowed {
@@ -133,35 +133,35 @@ fn audit_no_direct_aqua_usage() {
 }
 
 #[test]
-fn verify_status_success_uses_sky() {
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let palette_path = Path::new(manifest_dir).join("src/palette.rs");
-    let content = fs::read_to_string(&palette_path).expect("Failed to read palette.rs");
-
-    assert!(
-        content.contains("pub const STATUS_SUCCESS: Color = DEEPSEEK_SKY;"),
-        "STATUS_SUCCESS should use DEEPSEEK_SKY, not DEEPSEEK_AQUA"
+fn verify_status_success_uses_success_token() {
+    assert_eq!(
+        palette::STATUS_SUCCESS,
+        Color::Rgb(
+            palette::WHALE_SUCCESS_RGB.0,
+            palette::WHALE_SUCCESS_RGB.1,
+            palette::WHALE_SUCCESS_RGB.2
+        ),
+        "STATUS_SUCCESS should use the current success token"
+    );
+    assert_ne!(
+        palette::STATUS_SUCCESS,
+        palette::DEEPSEEK_AQUA,
+        "STATUS_SUCCESS should not regress to deprecated aqua"
     );
 }
 
 #[test]
-fn verify_brand_colors_defined() {
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let palette_path = Path::new(manifest_dir).join("src/palette.rs");
-    let content = fs::read_to_string(&palette_path).expect("Failed to read palette.rs");
+fn verify_brand_aliases_follow_whale_tokens() {
+    assert_eq!(palette::WHALE_ACCENT_PRIMARY_RGB, (246, 196, 83));
+    assert_eq!(palette::WHALE_INFO_RGB, (106, 174, 242));
+    assert_eq!(palette::WHALE_ERROR_RGB, (255, 92, 122));
 
-    assert!(
-        content.contains("DEEPSEEK_BLUE_RGB: (u8, u8, u8) = (53, 120, 229);"),
-        "DEEPSEEK_BLUE should be #3578E5"
+    assert_eq!(
+        palette::DEEPSEEK_BLUE_RGB,
+        palette::WHALE_ACCENT_PRIMARY_RGB
     );
-    assert!(
-        content.contains("DEEPSEEK_SKY_RGB: (u8, u8, u8) = (106, 174, 242);"),
-        "DEEPSEEK_SKY should be #6AAEF2"
-    );
-    assert!(
-        content.contains("DEEPSEEK_RED_RGB: (u8, u8, u8) = (226, 80, 96);"),
-        "DEEPSEEK_RED should be #E25060"
-    );
+    assert_eq!(palette::DEEPSEEK_SKY_RGB, palette::WHALE_INFO_RGB);
+    assert_eq!(palette::DEEPSEEK_RED_RGB, palette::WHALE_ERROR_RGB);
 }
 
 #[test]

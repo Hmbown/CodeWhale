@@ -9,10 +9,10 @@ export async function generateMetadata({ params }: { params: Promise<{ locale: s
   const { locale } = await params;
   const isZh = locale === "zh";
   return {
-    title: isZh ? "路线图 · DeepSeek TUI" : "Roadmap · DeepSeek TUI",
+    title: isZh ? "路线图 · CodeWhale" : "Roadmap · CodeWhale",
     description: isZh
       ? "已确认、正在评估和已排除的功能规划。"
-      : "What's confirmed, what's being weighed, what's been ruled out for deepseek-tui.",
+      : "What's confirmed, what's being weighed, what's been ruled out for CodeWhale.",
   };
 }
 
@@ -26,10 +26,12 @@ const tracksEn = [
       { title: "Sub-agent parallel execution", note: "agent_open / agent_eval / agent_close; up to 10 concurrent sessions with bounded result handles" },
       { title: "RLM batched processing", note: "Persistent sandboxed Python REPL with 1–16 cheap parallel children for long-input analysis" },
       { title: "Three operating modes", note: "Plan (read-only), Agent (default), YOLO (auto-approved); orthogonal suggest / auto / never approval" },
-      { title: "Per-platform sandbox", note: "seatbelt (macOS), landlock (Linux); Windows containment via restricted tokens (limited)" },
+      { title: "Per-platform controls", note: "seatbelt (macOS), landlock (Linux); Windows keeps approvals and terminal/runtime protections while OS sandbox work remains tracked" },
       { title: "Durable sessions + tasks", note: "Save, resume, rollback; background task queue with replayable timelines under ~/.deepseek/tasks/" },
-      { title: "Bidirectional MCP", note: "Consume tools from external servers; expose as server via `deepseek mcp`; ~/.deepseek/mcp.json" },
+      { title: "Bidirectional MCP", note: "Consume tools from external servers; expose as server via `codewhale mcp`; ~/.deepseek/mcp.json" },
       { title: "Skills + unified slash palette", note: "~/.deepseek/skills/ auto-loading; /help, /mode, /status, /config, /trust, /feedback" },
+      { title: "v0.8.45 provider surface", note: "DeepSeek, NVIDIA NIM, OpenAI-compatible, AtlasCloud, Wanjie Ark, OpenRouter, Novita, Fireworks, Moonshot/Kimi, SGLang, vLLM, and Ollama" },
+      { title: "Moonshot/Kimi API-key setup", note: "Kimi Code plan and Kimi/Moonshot Platform API-key paths for Moonshot/Kimi sessions" },
     ],
   },
   {
@@ -41,6 +43,8 @@ const tracksEn = [
       { title: "Memory typed store", note: "SQLite + FTS5 backend with graph-structured agent memory and multi-signal recall (#534–#536)" },
       { title: "Feishu / Lark bot", note: "Chat-platform frontend over the existing runtime API (#757)" },
       { title: "Chinese-market & i18n", note: "Locale-aware UI, platform refinements, region-specific search backends (#755)" },
+      { title: "Model Lab", note: "Curated model discovery and benchmarking for open-weight and self-hosted workflows" },
+      { title: "Provider billing and catalogs", note: "/balance capability layer plus richer live model catalogs for providers that expose listing endpoints" },
     ],
   },
   {
@@ -52,6 +56,7 @@ const tracksEn = [
       { title: "Exa web-search backend", note: "Bundled alternative to the existing DDG + Bing path (#431)" },
       { title: "Homebrew core formula", note: "Tap exists; pursuing homebrew-core inclusion" },
       { title: "Native Windows installer", note: "MSI / WinGet; Scoop manifest already ships" },
+      { title: "Unsloth / NeMo / Arcee fine-tune integration", note: "One-click fine-tuning workflows backed by Unsloth, NVIDIA NeMo, and Arcee toolkits" },
     ],
   },
   {
@@ -63,6 +68,16 @@ const tracksEn = [
       { title: "Hosted SaaS dashboard", note: "The terminal IS the dashboard; the website is informational only" },
       { title: "Required login / accounts", note: "Bring your own API key, that's it" },
       { title: "Sponsored model promotion", note: "Model picker stays neutral — no paid placement" },
+    ],
+  },
+  {
+    title: "Open model platform",
+    cn: "开放模型平台",
+    color: "indigo",
+    items: [
+      { title: "Community model registry", note: "Discover, share, and rate community fine-tuned models with reproducible recipes" },
+      { title: "One-click deploy", note: "Deploy any model to RunPod, Replicate, or your own infra with a single command" },
+      { title: "Model benchmarking dashboard", note: "Transparent, reproducible benchmarks across providers, quantization levels, and hardware" },
     ],
   },
 ];
@@ -77,10 +92,12 @@ const tracksZh = [
       { title: "子 Agent 并行执行", note: "agent_open / agent_eval / agent_close；最多 10 个并发会话，通过 var_handle 有界读取结果" },
       { title: "RLM 批量处理", note: "持久沙箱 Python REPL，支持 1–16 路廉价并行子调用，处理长文本分析" },
       { title: "三种运行模式", note: "Plan（只读）、Agent（默认）、YOLO（自动批准）；审批模式正交（建议/自动/拒绝）" },
-      { title: "跨平台沙箱", note: "seatbelt（macOS）、landlock（Linux）；Windows 通过受限令牌实现基础隔离（功能有限）" },
+      { title: "跨平台控制", note: "seatbelt（macOS）、landlock（Linux）；Windows 保留审批与终端运行时保护，OS 沙箱仍在跟踪中" },
       { title: "持久化会话 + 后台任务", note: "保存、恢复、回滚；后台任务队列，可回放时间线，位于 ~/.deepseek/tasks/" },
-      { title: "双向 MCP 协议", note: "消费外部服务器工具；通过 `deepseek mcp` 暴露为服务器；~/.deepseek/mcp.json" },
+      { title: "双向 MCP 协议", note: "消费外部服务器工具；通过 `codewhale mcp` 暴露为服务器；~/.deepseek/mcp.json" },
       { title: "技能 + 统一命令面板", note: "~/.deepseek/skills/ 自动加载；/help、/mode、/status、/config、/trust、/feedback" },
+      { title: "v0.8.45 提供商表面", note: "DeepSeek、NVIDIA NIM、OpenAI 兼容、AtlasCloud、Wanjie Ark、OpenRouter、Novita、Fireworks、Moonshot/Kimi、SGLang、vLLM、Ollama" },
+      { title: "Moonshot/Kimi API-key 设置", note: "Kimi Code 会员与 Kimi/Moonshot 平台 API key 路径" },
     ],
   },
   {
@@ -92,6 +109,8 @@ const tracksZh = [
       { title: "记忆类型化存储", note: "SQLite + FTS5 后端，图结构 Agent 记忆，多信号召回（#534–#536）" },
       { title: "飞书 / Lark 机器人", note: "基于现有 runtime API 的聊天平台前端（#757）" },
       { title: "中国市场与国际化改进", note: "本地化 UI、平台优化、区域搜索引擎（#755）" },
+      { title: "模型实验室", note: "面向开放权重和自托管工作流的模型发现与基准测试" },
+      { title: "提供商账单与目录", note: "/balance 能力层，以及对支持列表接口的提供商提供更完整的实时模型目录" },
     ],
   },
   {
@@ -103,6 +122,7 @@ const tracksZh = [
       { title: "Exa 网页搜索后端", note: "内建替代 DDG + Bing 的搜索路由（#431）" },
       { title: "Homebrew 核心仓库", note: "Tap 已有；正在争取进入 homebrew-core" },
       { title: "Windows 原生安装器", note: "MSI / WinGet；Scoop 清单已发布" },
+      { title: "Unsloth / NeMo / Arcee 微调集成", note: "一键微调工作流，由 Unsloth、NVIDIA NeMo 和 Arcee 工具链驱动" },
     ],
   },
   {
@@ -116,12 +136,23 @@ const tracksZh = [
       { title: "赞助商模型推广", note: "模型选择器保持中立——无付费推荐位" },
     ],
   },
+  {
+    title: "开放模型平台",
+    cn: "Open model platform",
+    color: "indigo",
+    items: [
+      { title: "社区模型注册中心", note: "发现、分享和评价社区微调模型，附带可复现的配方" },
+      { title: "一键部署", note: "一条命令将任意模型部署到 RunPod、Replicate 或自有基础设施" },
+      { title: "模型基准测试面板", note: "跨提供商、量化级别和硬件的透明、可复现基准测试" },
+    ],
+  },
 ];
 
 const colorFor = (c: string) =>
   c === "jade" ? "border-jade text-jade" :
   c === "ochre" ? "border-ochre text-ochre" :
   c === "cobalt" ? "border-cobalt text-cobalt" :
+  c === "indigo" ? "border-indigo text-indigo" :
   "border-ink-mute text-ink-mute";
 
 export default async function RoadmapPage({ params }: { params: Promise<{ locale: string }> }) {
@@ -172,7 +203,7 @@ export default async function RoadmapPage({ params }: { params: Promise<{ locale
             </h1>
             <p className="mt-5 max-w-3xl text-ink-soft text-lg leading-[1.9] tracking-wide">
               已确认的功能、正在权衡的方案、以及已被排除的方向。未列在此页的内容均可在{" "}
-              <Link href="https://github.com/Hmbown/deepseek-tui/discussions/new?category=ideas" className="body-link">
+              <Link href="https://github.com/Hmbown/CodeWhale/discussions/new?category=ideas" className="body-link">
                 Discussions
               </Link>{" "}
               中讨论。
@@ -217,13 +248,13 @@ export default async function RoadmapPage({ params }: { params: Promise<{ locale
               </div>
               <div className="lg:col-span-4 flex flex-col gap-3">
                 <Link
-                  href="https://github.com/Hmbown/deepseek-tui/discussions/new?category=ideas"
+                  href="https://github.com/Hmbown/CodeWhale/discussions/new?category=ideas"
                   className="px-5 py-3 bg-indigo text-paper font-mono text-sm uppercase tracking-wider text-center hover:bg-indigo-deep transition-colors"
                 >
                   提交想法 →
                 </Link>
                 <Link
-                  href="https://github.com/Hmbown/deepseek-tui/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22"
+                  href="https://github.com/Hmbown/CodeWhale/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22"
                   className="px-5 py-3 hairline-t hairline-b hairline-l hairline-r border-paper-deep/30 font-mono text-sm uppercase tracking-wider text-center hover:bg-paper hover:text-ink transition-colors"
                 >
                   Good first issues →
@@ -245,7 +276,7 @@ export default async function RoadmapPage({ params }: { params: Promise<{ locale
             <p className="mt-5 max-w-3xl text-ink-soft text-lg leading-relaxed">
               What's confirmed, what's being weighed, what's been ruled out. Anything not on this page
               is fair game for{" "}
-              <Link href="https://github.com/Hmbown/deepseek-tui/discussions/new?category=ideas" className="body-link">
+              <Link href="https://github.com/Hmbown/CodeWhale/discussions/new?category=ideas" className="body-link">
                 discussion
               </Link>.
             </p>
@@ -290,13 +321,13 @@ export default async function RoadmapPage({ params }: { params: Promise<{ locale
               </div>
               <div className="lg:col-span-4 flex flex-col gap-3">
                 <Link
-                  href="https://github.com/Hmbown/deepseek-tui/discussions/new?category=ideas"
+                  href="https://github.com/Hmbown/CodeWhale/discussions/new?category=ideas"
                   className="px-5 py-3 bg-indigo text-paper font-mono text-sm uppercase tracking-wider text-center hover:bg-indigo-deep transition-colors"
                 >
                   Propose an idea →
                 </Link>
                 <Link
-                  href="https://github.com/Hmbown/deepseek-tui/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22"
+                  href="https://github.com/Hmbown/CodeWhale/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22"
                   className="px-5 py-3 hairline-t hairline-b hairline-l hairline-r border-paper-deep/30 font-mono text-sm uppercase tracking-wider text-center hover:bg-paper hover:text-ink transition-colors"
                 >
                   Good first issues →

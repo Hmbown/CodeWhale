@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use deepseek_protocol::{ToolKind, ToolOutput, ToolPayload};
-use deepseek_tools::{
+use codewhale_protocol::{ToolKind, ToolOutput, ToolPayload};
+use codewhale_tools::{
     ToolCall, ToolCallSource, ToolHandler, ToolInvocation, ToolRegistry, ToolSpec,
 };
 use serde_json::json;
@@ -22,7 +22,7 @@ impl ToolHandler for EchoHandler {
     async fn handle(
         &self,
         invocation: ToolInvocation,
-    ) -> std::result::Result<ToolOutput, deepseek_tools::FunctionCallError> {
+    ) -> std::result::Result<ToolOutput, codewhale_tools::FunctionCallError> {
         Ok(ToolOutput::Function {
             body: Some(json!({
                 "tool": invocation.tool_name,

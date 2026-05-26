@@ -7,6 +7,10 @@
 
 use super::*;
 
+fn loop_guard_block_tool_result(message: String) -> ToolResult {
+    ToolResult::error(message).with_metadata(json!({"loop_guard": "identical_tool_call"}))
+}
+
 impl Engine {
     pub(super) async fn handle_deepseek_turn(
         &mut self,
@@ -169,16 +173,13 @@ impl Engine {
                 continue;
             }
 
-            if let Some(input_budget) =
-                context_input_budget(&self.session.model, TURN_MAX_OUTPUT_TOKENS)
-            {
+            if let Some(input_budget) = context_input_budget(&self.session.model) {
                 let estimated_input = self.estimated_input_tokens();
                 if estimated_input > input_budget {
                     if context_recovery_attempts >= MAX_CONTEXT_RECOVERY_ATTEMPTS {
                         let message = format!(
-                            "Context remains above model limit after {} recovery attempts \
-                             (~{} token estimate, ~{} budget). Please run /compact or /clear.",
-                            MAX_CONTEXT_RECOVERY_ATTEMPTS, estimated_input, input_budget
+                            "Context remains above model limit after {MAX_CONTEXT_RECOVERY_ATTEMPTS} recovery attempts \
+                             (~{estimated_input} token estimate, ~{input_budget} budget). Please run /compact or /clear."
                         );
                         turn_error = Some(message.clone());
                         let _ = self
@@ -189,11 +190,7 @@ impl Engine {
                     }
 
                     if self
-                        .recover_context_overflow(
-                            &client,
-                            "preflight token budget",
-                            TURN_MAX_OUTPUT_TOKENS,
-                        )
+                        .recover_context_overflow(&client, "preflight token budget")
                         .await
                     {
                         context_recovery_attempts = context_recovery_attempts.saturating_add(1);
@@ -305,7 +302,14 @@ impl Engine {
             // first call) so we can resend it on a transparent retry below
             // when the wire dies before any content was streamed (#103).
             let stream_request = request;
-            let stream_result = client.create_message_stream(stream_request.clone()).await;
+            let stream_result = tokio::select! {
+                biased;
+                () = self.cancel_token.cancelled() => {
+                    let _ = self.tx_event.send(Event::status("Request cancelled")).await;
+                    return (TurnOutcomeStatus::Interrupted, None);
+                }
+                result = client.create_message_stream(stream_request.clone()) => result,
+            };
             let stream = match stream_result {
                 Ok(s) => {
                     context_recovery_attempts = 0;
@@ -316,11 +320,7 @@ impl Engine {
                     if is_context_length_error_message(&message)
                         && context_recovery_attempts < MAX_CONTEXT_RECOVERY_ATTEMPTS
                         && self
-                            .recover_context_overflow(
-                                &client,
-                                "provider context-length rejection",
-                                TURN_MAX_OUTPUT_TOKENS,
-                            )
+                            .recover_context_overflow(&client, "provider context-length rejection")
                             .await
                     {
                         context_recovery_attempts = context_recovery_attempts.saturating_add(1);
@@ -351,7 +351,17 @@ impl Engine {
                 ..Usage::default()
             };
             let mut current_block_kind: Option<ContentBlockKind> = None;
-            let mut current_tool_index: Option<usize> = None;
+            // Map block_index → tool_uses position. Required because the
+            // OpenAI-compatible streaming parser emits multiple
+            // ContentBlockStart::ToolUse events back-to-back (one per
+            // tool_call in a batch) before any ContentBlockStop arrives —
+            // all Stops are flushed together at `finish_reason`. A single
+            // Option<usize> gets overwritten by each new Start; the first
+            // Stop then takes the last index, and every subsequent Stop
+            // takes `None`, dropping ToolCallStarted events for every
+            // tool call except the last one in the batch.
+            let mut current_tool_indices: std::collections::HashMap<u32, usize> =
+                std::collections::HashMap::new();
             let mut in_tool_call_block = false;
             let mut fake_wrapper_notice_emitted = false;
             let mut pending_message_complete = false;
@@ -377,6 +387,7 @@ impl Engine {
             // Process stream events
             loop {
                 let poll_outcome = tokio::select! {
+                    biased;
                     _ = self.cancel_token.cancelled() => None,
                     result = tokio::time::timeout(chunk_timeout, stream.next()) => {
                         match result {
@@ -467,13 +478,17 @@ impl Engine {
                             transparent_stream_retries =
                                 transparent_stream_retries.saturating_add(1);
                             crate::logging::info(format!(
-                                "Transparent stream retry {}/{} (no content received yet): {}",
-                                transparent_stream_retries, MAX_TRANSPARENT_STREAM_RETRIES, message,
+                                "Transparent stream retry {transparent_stream_retries}/{MAX_TRANSPARENT_STREAM_RETRIES} (no content received yet): {message}",
                             ));
                             // Drop the failed stream before issuing the new
                             // request to release the underlying connection.
                             drop(stream);
-                            match client.create_message_stream(stream_request.clone()).await {
+                            let retry_stream_result = tokio::select! {
+                                biased;
+                                () = self.cancel_token.cancelled() => break,
+                                result = client.create_message_stream(stream_request.clone()) => result,
+                            };
+                            match retry_stream_result {
                                 Ok(fresh) => {
                                     stream = fresh;
                                     stream_start = Instant::now();
@@ -558,11 +573,10 @@ impl Engine {
                             caller,
                         } => {
                             crate::logging::info(format!(
-                                "Tool '{}' block start. Initial input: {:?}",
-                                name, input
+                                "Tool '{name}' block start. Initial input: {input:?}"
                             ));
                             current_block_kind = Some(ContentBlockKind::ToolUse);
-                            current_tool_index = Some(tool_uses.len());
+                            current_tool_indices.insert(index, tool_uses.len());
                             // ToolCallStarted is deferred to ContentBlockStop —
                             // see `final_tool_input`. Emitting here would ship
                             // the placeholder `{}` and the cell would render
@@ -577,11 +591,10 @@ impl Engine {
                         }
                         ContentBlockStart::ServerToolUse { id, name, input } => {
                             crate::logging::info(format!(
-                                "Server tool '{}' block start. Initial input: {:?}",
-                                name, input
+                                "Server tool '{name}' block start. Initial input: {input:?}"
                             ));
                             current_block_kind = Some(ContentBlockKind::ToolUse);
-                            current_tool_index = Some(tool_uses.len());
+                            current_tool_indices.insert(index, tool_uses.len());
                             tool_uses.push(ToolUseState {
                                 id,
                                 name,
@@ -630,8 +643,8 @@ impl Engine {
                             }
                         }
                         Delta::InputJsonDelta { partial_json } => {
-                            if let Some(index) = current_tool_index
-                                && let Some(tool_state) = tool_uses.get_mut(index)
+                            if let Some(&tool_idx) = current_tool_indices.get(&index)
+                                && let Some(tool_state) = tool_uses.get_mut(tool_idx)
                             {
                                 tool_state.input_buffer.push_str(&partial_json);
                                 crate::logging::info(format!(
@@ -665,9 +678,15 @@ impl Engine {
                             }
                             Some(ContentBlockKind::ToolUse) | None => {}
                         }
-                        if matches!(stopped_kind, Some(ContentBlockKind::ToolUse))
-                            && let Some(index) = current_tool_index.take()
-                            && let Some(tool_state) = tool_uses.get_mut(index)
+                        // Route the Stop using event.index (via
+                        // `current_tool_indices`) rather than the single
+                        // `current_block_kind` slot. In an OpenAI batch
+                        // tool-call stream every Stop after the first sees
+                        // `stopped_kind = None` because `take()` cleared the
+                        // slot, so the original `matches!(stopped_kind, …)`
+                        // check would skip every tool except the last.
+                        if let Some(tool_idx) = current_tool_indices.remove(&index)
+                            && let Some(tool_state) = tool_uses.get_mut(tool_idx)
                         {
                             crate::logging::info(format!(
                                 "Tool '{}' block stop. Buffer: '{}', Current input: {:?}",
@@ -726,6 +745,11 @@ impl Engine {
                 }
             }
 
+            if self.cancel_token.is_cancelled() {
+                let _ = self.tx_event.send(Event::status("Request cancelled")).await;
+                return (TurnOutcomeStatus::Interrupted, None);
+            }
+
             // #103 Phase 3 — transparent retry. The inner loop above bails
             // when reqwest yields chunk decode errors three times in a row;
             // most of the time those are recoverable proxy / HTTP/2 issues
@@ -743,14 +767,12 @@ impl Engine {
                 if stream_retry_attempts < MAX_STREAM_RETRIES {
                     stream_retry_attempts = stream_retry_attempts.saturating_add(1);
                     crate::logging::warn(format!(
-                        "Stream died with no content (attempt {}/{}); retrying request",
-                        stream_retry_attempts, MAX_STREAM_RETRIES
+                        "Stream died with no content (attempt {stream_retry_attempts}/{MAX_STREAM_RETRIES}); retrying request"
                     ));
                     let _ = self
                         .tx_event
                         .send(Event::status(format!(
-                            "Connection interrupted; retrying ({}/{})",
-                            stream_retry_attempts, MAX_STREAM_RETRIES
+                            "Connection interrupted; retrying ({stream_retry_attempts}/{MAX_STREAM_RETRIES})"
                         )))
                         .await;
                     // Don't preserve the per-stream `turn_error` — we're
@@ -760,8 +782,7 @@ impl Engine {
                     continue;
                 }
                 crate::logging::warn(format!(
-                    "Stream retry budget exhausted ({} attempts); failing turn",
-                    stream_retry_attempts
+                    "Stream retry budget exhausted ({stream_retry_attempts} attempts); failing turn"
                 ));
             } else if stream_errors == 0 {
                 // Healthy round → reset retry budget so we don't carry over
@@ -847,6 +868,17 @@ impl Engine {
                 )
             });
 
+            // Issue #1727: did this turn produce ONLY a reasoning/thinking
+            // block — empty content, no tool calls (e.g. gpt-oss via ollama's
+            // harmony→OpenAI shim mapping to `reasoning_content`)? We do NOT
+            // surface anything here: after this point the same turn can still
+            // CONTINUE for pending steers (~below) or sub-agent completions,
+            // and emitting now would show a spurious "turn ended" notice right
+            // before the turn resumes. Capture the fact and decide later, at
+            // the point the turn is certain to be finishing with no sendable
+            // content (see the `tool_uses.is_empty()` tail).
+            let thinking_only_no_sendable = !has_sendable_assistant_content;
+
             // Add assistant message to session
             if has_sendable_assistant_content {
                 self.add_session_message(Message {
@@ -875,7 +907,7 @@ impl Engine {
                 // streaming with no tool calls — but if it has direct children
                 // still running (or completions queued from children that
                 // finished while we were inferring), surface their
-                // `<deepseek:subagent.done>` sentinels into the transcript and
+                // `<codewhale:subagent.done>` sentinels into the transcript and
                 // resume instead of ending the turn. This fulfils the contract
                 // already documented in `prompts/base.md`: the parent is
                 // promised it'll see the sentinel when a child finishes.
@@ -1044,6 +1076,64 @@ impl Engine {
                     continue;
                 }
 
+                // Issue #1727: the turn is now genuinely finishing with no
+                // sendable content. Control only reaches here when there were
+                // no pending steers (`continue`d above), no sub-agent
+                // completions to resume with, and we were not holding for
+                // running children (the `should_hold_turn_for_subagents`
+                // branch above would have awaited / `continue`d / returned).
+                // If the assistant produced ONLY a reasoning block, the prior
+                // code fell straight through to this `break`, emitting nothing
+                // and leaving the UI spinner hung. Surface a status now —
+                // safe because the turn can no longer resume.
+                // #1961: Before breaking, drain any sub-agent completions that
+                // arrived between the last hold check and now. If a child finished
+                // while we were running the thinking-only check, surface its
+                // sentinel rather than delaying it to the next turn.
+                let mut late_completions: Vec<crate::tools::subagent::SubAgentCompletion> =
+                    Vec::new();
+                while let Ok(c) = self.rx_subagent_completion.try_recv() {
+                    late_completions.push(c);
+                }
+                if !late_completions.is_empty() {
+                    let count = late_completions.len();
+                    for c in late_completions {
+                        self.add_session_message(subagent_completion_runtime_message(&c.payload))
+                            .await;
+                    }
+                    let _ = self
+                        .tx_event
+                        .send(Event::status(format!(
+                            "Resuming turn with {count} late sub-agent completion(s)"
+                        )))
+                        .await;
+                    turn.next_step();
+                    continue;
+                }
+
+                if thinking_only_no_sendable {
+                    let holding_for_subagents = {
+                        let running = {
+                            let mgr = self.subagent_manager.read().await;
+                            mgr.running_count()
+                        };
+                        should_hold_turn_for_subagents(0, running)
+                    };
+                    if should_emit_thinking_only_status(
+                        tool_uses.is_empty(),
+                        turn_error.is_none(),
+                        self.cancel_token.is_cancelled(),
+                        !pending_steers.is_empty(),
+                        holding_for_subagents,
+                    ) {
+                        let message = "Model returned reasoning but no answer or tool call; \
+                                       turn ended without output. Send a follow-up to retry."
+                            .to_string();
+                        crate::logging::warn(&message);
+                        let _ = self.tx_event.send(Event::status(message)).await;
+                    }
+                }
+
                 break;
             }
 
@@ -1074,8 +1164,7 @@ impl Engine {
                 let tool_input = tool.input.clone();
                 let tool_caller = tool.caller.clone();
                 crate::logging::info(format!(
-                    "Planning tool '{}' with input: {:?}",
-                    tool_name, tool_input
+                    "Planning tool '{tool_name}' with input: {tool_input:?}"
                 ));
 
                 let interactive = (tool_name == "exec_shell"
@@ -1105,7 +1194,7 @@ impl Engine {
                     )
                 {
                     blocked_error = Some(ToolError::permission_denied(format!(
-                        "Tool '{tool_name}' is unavailable in Plan mode"
+                        "'{tool_name}' is not available in Plan mode — switch to Agent, Goal, or YOLO mode to run commands and code."
                     )));
                 }
 
@@ -1119,8 +1208,7 @@ impl Engine {
                     && let Some(canonical) = registry.resolve(&tool_name)
                 {
                     crate::logging::info(format!(
-                        "Resolved hallucinated tool name '{}' -> '{}'",
-                        tool_name, canonical
+                        "Resolved hallucinated tool name '{tool_name}' -> '{canonical}'"
                     ));
                     tool_def = tool_catalog.iter().find(|d| d.name == canonical);
                     if tool_def.is_some() {
@@ -1199,8 +1287,7 @@ impl Engine {
                             format!("Auto-loaded deferred tool '{tool_name}' after model request.")
                         } else {
                             format!(
-                                "Auto-loaded deferred tool '{}' after resolving '{}'.",
-                                tool_name, requested_tool_name
+                                "Auto-loaded deferred tool '{tool_name}' after resolving '{requested_tool_name}'."
                             )
                         };
                         let _ = self.tx_event.send(Event::status(status)).await;
@@ -1214,10 +1301,7 @@ impl Engine {
                         loop_guard.record_attempt(&tool_name, &tool_input)
                 {
                     crate::logging::warn(message.clone());
-                    guard_result = Some(
-                        ToolResult::success(message)
-                            .with_metadata(json!({"loop_guard": "identical_tool_call"})),
-                    );
+                    guard_result = Some(loop_guard_block_tool_result(message));
                 }
 
                 plans.push(ToolExecutionPlan {
@@ -1580,6 +1664,12 @@ impl Engine {
                                 &tool_input,
                             )
                             .0;
+                            let approval_grouping_key =
+                                crate::tools::approval_cache::build_approval_grouping_key(
+                                    &tool_name,
+                                    &tool_input,
+                                )
+                                .0;
                             let _ = self
                                 .tx_event
                                 .send(Event::ApprovalRequired {
@@ -1587,6 +1677,7 @@ impl Engine {
                                     tool_name: tool_name.clone(),
                                     description: plan.approval_description.clone(),
                                     approval_key,
+                                    approval_grouping_key,
                                 })
                                 .await;
 
@@ -1920,17 +2011,25 @@ impl Engine {
 }
 
 fn subagent_completion_runtime_message(payload: &str) -> Message {
+    // Role is "user", not "system": some OpenAI-compatible backends apply a
+    // strict chat template (e.g. vLLM serving Qwen3) that requires any system
+    // message to be messages[0]. A system message appended mid-conversation
+    // makes the template raise "System message must be at the beginning",
+    // which surfaces as a 400 BadRequest and breaks the whole sub-agent
+    // hand-off in the parent turn. The `visibility="internal"` tag already
+    // tells the model this is a runtime event rather than user input, so the
+    // role carries no semantic weight here — only template-compatibility cost.
     Message {
-        role: "system".to_string(),
+        role: "user".to_string(),
         content: vec![ContentBlock::Text {
             text: format!(
-                "<deepseek:runtime_event kind=\"subagent_completion\" visibility=\"internal\">\n\
+                "<codewhale:runtime_event kind=\"subagent_completion\" visibility=\"internal\">\n\
 This is an internal runtime event, not user input. Use the sub-agent completion \
 data below to continue coordinating the current task. Do not tell the user they \
 pasted sentinels, do not explain the sentinel protocol, and do not quote the raw \
 XML unless the user explicitly asks to debug sub-agent internals.\n\n\
 {payload}\n\
-</deepseek:runtime_event>"
+</codewhale:runtime_event>"
             ),
             cache_control: None,
         }],
@@ -1939,6 +2038,27 @@ XML unless the user explicitly asks to debug sub-agent internals.\n\n\
 
 fn should_hold_turn_for_subagents(queued_completions: usize, running_children: usize) -> bool {
     queued_completions > 0 || running_children > 0
+}
+
+/// Issue #1727: decide whether to surface a "thinking-only, no output" status.
+///
+/// Reached when the assistant turn had no sendable content (no Text, no
+/// ToolUse — only a reasoning/thinking block). We notify the user *only* when
+/// the turn is genuinely finishing: no tool uses to dispatch, no `turn_error`
+/// already surfaced for this turn, the request wasn't cancelled, AND the turn
+/// is not about to CONTINUE — there are no pending steers and we are not
+/// holding the turn open for running sub-agents. The status must fire at the
+/// point the turn truly ends; emitting it earlier (at the persist site) would
+/// show a spurious "turn ended" notice immediately before the turn resumed
+/// for a steer or a sub-agent completion.
+fn should_emit_thinking_only_status(
+    tool_uses_empty: bool,
+    turn_error_is_none: bool,
+    cancelled: bool,
+    steers_pending: bool,
+    holding_for_subagents: bool,
+) -> bool {
+    tool_uses_empty && turn_error_is_none && !cancelled && !steers_pending && !holding_for_subagents
 }
 
 /// Resolve an `"auto"` reasoning-effort tier to a concrete value.
@@ -2000,19 +2120,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn subagent_completion_handoff_is_internal_system_message() {
+    fn subagent_completion_handoff_is_internal_user_message() {
         let message = subagent_completion_runtime_message(
-            "Build passed\n<deepseek:subagent.done>{\"agent_id\":\"agent_a\"}</deepseek:subagent.done>",
+            "Build passed\n<codewhale:subagent.done>{\"agent_id\":\"agent_a\"}</codewhale:subagent.done>",
         );
 
-        assert_eq!(message.role, "system");
+        // Must be "user", not "system": a system message appended mid-stream
+        // trips strict chat templates (vLLM/Qwen3) into a 400 BadRequest
+        // ("System message must be at the beginning"). The internal-event
+        // framing lives in the text + visibility tag, not the role.
+        assert_eq!(message.role, "user");
         let text = match &message.content[0] {
             ContentBlock::Text { text, .. } => text,
             other => panic!("expected text block, got {other:?}"),
         };
         assert!(text.contains("internal runtime event, not user input"));
         assert!(text.contains("Do not tell the user they pasted sentinels"));
-        assert!(text.contains("<deepseek:subagent.done>"));
+        assert!(text.contains("<codewhale:subagent.done>"));
         assert!(text.contains("Build passed"));
     }
 
@@ -2021,6 +2145,148 @@ mod tests {
         assert!(should_hold_turn_for_subagents(1, 0));
         assert!(should_hold_turn_for_subagents(0, 1));
         assert!(!should_hold_turn_for_subagents(0, 0));
+    }
+
+    /// Regression test for issue #1727 (P0, release-blocking).
+    ///
+    /// When a model (e.g. gpt-oss via ollama's harmony→OpenAI shim) returns
+    /// ONLY a reasoning/thinking block — empty `content`, no `tool_calls` —
+    /// `has_sendable_assistant_content` is false, so no assistant message is
+    /// persisted. Previously the code also emitted NO event and fell straight
+    /// through to finishing the turn: the UI spinner stayed up forever with no
+    /// error, looking hung.
+    ///
+    /// This pins the decision: a clean turn end (no tool uses to dispatch, no
+    /// `turn_error`, not cancelled, no pending steers, not holding for
+    /// sub-agents) must surface a status. We must NOT spam the status when the
+    /// turn is ending for another reason (error already shown, cancelled),
+    /// when there are tool uses still to dispatch, or — critically (the
+    /// MEDIUM review finding) — when the turn is about to CONTINUE because a
+    /// steer is pending or sub-agents are still running. Emitting at the old
+    /// persist site fired before those continuations were known.
+    ///
+    /// Limitation: this tests the extracted pure decision, not the full async
+    /// `handle_deepseek_turn` loop (driving it would need a mock DeepSeek
+    /// client + session + channels — far beyond a surgical fix and unlike any
+    /// existing turn-loop test, which all pin pure helpers the same way). The
+    /// wiring at the `tool_uses.is_empty()` tail (capture-then-decide, with the
+    /// live steer/sub-agent signals) is reviewed by inspection — consistent
+    /// with how the other turn-loop helpers in this module are tested.
+    #[test]
+    fn thinking_only_turn_emits_status_only_on_clean_end() {
+        // Thinking-only response, turn genuinely ending (no tool uses, no
+        // error, not cancelled, no steers pending, not holding for
+        // sub-agents) → surface a status so the user isn't left staring at a
+        // hung spinner.
+        assert!(should_emit_thinking_only_status(
+            true, true, false, false, false
+        ));
+
+        // Tool uses still pending → the normal dispatch path handles it; no
+        // thinking-only status.
+        assert!(!should_emit_thinking_only_status(
+            false, true, false, false, false
+        ));
+
+        // A turn_error was already surfaced → don't double-report.
+        assert!(!should_emit_thinking_only_status(
+            true, false, false, false, false
+        ));
+
+        // Request was cancelled → cancellation status already covers it.
+        assert!(!should_emit_thinking_only_status(
+            true, true, true, false, false
+        ));
+
+        // A steer is pending → the turn will resume with the steer; emitting
+        // "turn ended" now would be a spurious notice right before the turn
+        // continues (the MEDIUM correctness finding).
+        assert!(!should_emit_thinking_only_status(
+            true, true, false, true, false
+        ));
+
+        // Sub-agents are still running / completions queued → the turn is
+        // held open and will resume; do not claim it ended.
+        assert!(!should_emit_thinking_only_status(
+            true, true, false, false, true
+        ));
+    }
+
+    /// Regression test for the OpenAI streaming batch tool_calls bug.
+    ///
+    /// Background: when an OpenAI-compatible backend (vLLM, Ollama, LM Studio,
+    /// etc.) streams a response containing multiple `tool_calls` in the same
+    /// assistant message, the streaming parser emits the events in this order:
+    ///
+    /// ```text
+    /// ContentBlockStart::ToolUse { index: 0, .. }   // tool #1
+    /// ContentBlockDelta { index: 0, .. }            // its arguments
+    /// ContentBlockStart::ToolUse { index: 1, .. }   // tool #2
+    /// ContentBlockDelta { index: 1, .. }
+    /// …
+    /// ContentBlockStart::ToolUse { index: N-1, .. }
+    /// ContentBlockDelta { index: N-1, .. }
+    /// ContentBlockStop { index: 0 }                 // ── only flushed at
+    /// ContentBlockStop { index: 1 }                 //    finish_reason
+    /// …                                             //    (see chat.rs
+    /// ContentBlockStop { index: N-1 }               //    L2050-L2064)
+    /// ```
+    ///
+    /// All Starts arrive before any Stop. The fix replaces the single
+    /// `current_tool_index: Option<usize>` slot (overwritten by each Start)
+    /// with a `HashMap<u32 block_index, usize tool_uses_idx>` that survives
+    /// every Start and routes each Stop to the right `tool_uses` entry.
+    ///
+    /// This test confirms the invariant: feed 7 Starts then 7 Stops, expect
+    /// all 7 indices to come back out in order.
+    #[test]
+    fn batch_tool_calls_preserve_all_tool_use_indices() {
+        let mut current_tool_indices: std::collections::HashMap<u32, usize> =
+            std::collections::HashMap::new();
+
+        // Simulate `ContentBlockStart::ToolUse { index: i }` for 7 tools.
+        for block_index in 0..7u32 {
+            current_tool_indices.insert(block_index, block_index as usize);
+        }
+        assert_eq!(current_tool_indices.len(), 7);
+
+        // Now drain via `ContentBlockStop { index: i }` in the same order.
+        let mut recovered: Vec<(u32, usize)> = (0..7u32)
+            .map(|block_index| {
+                let tool_idx = current_tool_indices
+                    .remove(&block_index)
+                    .expect("each block_index must route to a tool_uses entry");
+                (block_index, tool_idx)
+            })
+            .collect();
+        recovered.sort_by_key(|(block_index, _)| *block_index);
+        let expected: Vec<(u32, usize)> = (0..7u32).map(|i| (i, i as usize)).collect();
+        assert_eq!(
+            recovered, expected,
+            "every Stop must recover the tool_uses index pushed by its matching Start"
+        );
+        assert!(
+            current_tool_indices.is_empty(),
+            "all entries must drain after their Stops"
+        );
+    }
+
+    #[test]
+    fn loop_guard_block_tool_result_counts_as_failure() {
+        let result = loop_guard_block_tool_result("Blocked: repeated call".to_string());
+
+        assert!(
+            !result.success,
+            "LoopGuard blocks must count as tool failures so repeated blocked calls can trip halt handling"
+        );
+        assert_eq!(
+            result
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("loop_guard"))
+                .and_then(|v| v.as_str()),
+            Some("identical_tool_call")
+        );
     }
 
     #[test]

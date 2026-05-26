@@ -3,7 +3,7 @@
 //! Sandbox module for secure command execution.
 //!
 //! This module provides sandboxing capabilities for shell commands executed by
-//! DeepSeek TUI. Sandboxing restricts what system resources a command can access,
+//! CodeWhale. Sandboxing restricts what system resources a command can access,
 //! preventing accidental or malicious damage to the system.
 //!
 //! # Platform Support
@@ -573,6 +573,37 @@ mod tests {
             assert_eq!(spec.args, vec!["-c", "echo hello"]);
         }
         assert_eq!(spec.display_command(), "echo hello");
+    }
+
+    #[test]
+    fn test_command_spec_shell_quoted_arg_not_split() {
+        // Regression for #1691: a `-m` message containing spaces must remain a
+        // single, unsplit argv entry. The shell command string is passed
+        // verbatim as ONE argument (`sh -c <cmd>` / `cmd /C <payload>`); we
+        // must never tokenize it ourselves into `feat:` / `complete` /
+        // `sub-pages"`.
+        let cmd = r#"git commit -m "feat: complete sub-pages""#;
+        let spec = CommandSpec::shell(cmd, PathBuf::from("/tmp"), Duration::from_secs(30));
+
+        #[cfg(windows)]
+        {
+            assert_eq!(spec.program, "cmd");
+            assert_eq!(
+                spec.args,
+                vec!["/C".to_string(), format!("chcp 65001 >NUL & {cmd}")]
+            );
+        }
+        #[cfg(not(windows))]
+        {
+            assert_eq!(spec.program, "sh");
+            assert_eq!(spec.args, vec!["-c".to_string(), cmd.to_string()]);
+            // The quoted message is intact in a single argv slot — `sh -c`
+            // performs POSIX tokenization, yielding the correct argv:
+            // ["git","commit","-m","feat: complete sub-pages"].
+            assert_eq!(spec.args.len(), 2);
+            assert!(spec.args[1].contains(r#""feat: complete sub-pages""#));
+        }
+        assert_eq!(spec.display_command(), cmd);
     }
 
     #[test]

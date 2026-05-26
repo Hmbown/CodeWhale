@@ -1,5 +1,6 @@
 use super::*;
 
+use super::context::TURN_MAX_OUTPUT_TOKENS;
 use crate::models::SystemBlock;
 use crate::test_support::lock_test_env;
 use crate::tools::spec::ToolCapability;
@@ -94,8 +95,8 @@ fn env_only_auth_error_gets_recovery_hint() {
 
     assert!(message.contains("DEEPSEEK_API_KEY"));
     assert!(message.contains("no saved config key is present"));
-    assert!(message.contains("deepseek auth status"));
-    assert!(message.contains("deepseek auth set --provider deepseek"));
+    assert!(message.contains("codewhale auth status"));
+    assert!(message.contains("codewhale auth set --provider deepseek"));
 }
 
 #[test]
@@ -401,6 +402,7 @@ fn non_yolo_mode_retains_default_defer_policy() {
     assert!(!should_default_defer_tool("exec_shell", AppMode::Agent));
     assert!(should_default_defer_tool("exec_shell", AppMode::Plan));
     assert!(!should_default_defer_tool("read_file", AppMode::Agent));
+    assert!(!should_default_defer_tool("write_file", AppMode::Agent));
     assert!(should_default_defer_tool(
         "mcp_read_resource",
         AppMode::Agent
@@ -412,6 +414,7 @@ fn model_tool_catalog_applies_native_and_mcp_deferral() {
     let catalog = build_model_tool_catalog(
         vec![
             api_tool("read_file"),
+            api_tool("write_file"),
             api_tool("exec_shell"),
             api_tool("project_map"),
         ],
@@ -427,6 +430,7 @@ fn model_tool_catalog_applies_native_and_mcp_deferral() {
     };
 
     assert_eq!(defer_loading("read_file"), Some(false));
+    assert_eq!(defer_loading("write_file"), Some(false));
     assert_eq!(defer_loading("exec_shell"), Some(false));
     assert_eq!(defer_loading("project_map"), Some(true));
     assert_eq!(defer_loading("list_mcp_resources"), Some(false));
@@ -913,7 +917,7 @@ fn detects_context_length_errors_from_provider_payloads() {
 fn context_budget_reserves_output_and_headroom() {
     // V4 has a 1M context window — the only family that comfortably hosts
     // a 256K output reservation without saturating the input budget to 0.
-    let budget = context_input_budget("deepseek-v4-pro", TURN_MAX_OUTPUT_TOKENS)
+    let budget = context_input_budget("deepseek-v4-pro")
         .expect("deepseek-v4-pro should have a known context window");
     let v4_window: usize = 1_000_000;
     let expected = v4_window - (TURN_MAX_OUTPUT_TOKENS as usize) - 1_024usize;
@@ -940,31 +944,24 @@ fn effective_max_output_tokens_caps_api_request_for_large_window_models() {
 }
 
 #[test]
-fn internal_context_budget_unaffected_by_api_request_cap() {
-    // The internal context budget (used for compaction/preflight/recovery)
-    // must still use the full TURN_MAX_OUTPUT_TOKENS headroom, NOT the
-    // smaller API request cap. This ensures long-context V4 sessions don't
-    // compact prematurely.
-    let internal_budget = context_input_budget("deepseek-v4-pro", TURN_MAX_OUTPUT_TOKENS)
-        .expect("V4 should have a known context window");
-    let api_cap_budget = context_input_budget(
-        "deepseek-v4-pro",
-        effective_max_output_tokens("deepseek-v4-pro"),
-    )
-    .expect("V4 should have a known context window");
-
-    // Internal budget reserves 262K for output; API-cap budget would only
-    // reserve 64K. Internal budget must be smaller (more conservative).
-    assert!(
-        internal_budget < api_cap_budget,
-        "Internal budget ({internal_budget}) should be smaller than API-cap budget ({api_cap_budget}) \
-         because it reserves more headroom for output"
-    );
-
-    // Verify the internal budget is what the compaction logic actually uses.
+fn internal_context_budget_tiers_reserved_output_by_window() {
+    // Large-context (>=500K) models reserve the full TURN_MAX_OUTPUT_TOKENS
+    // headroom so long V4 sessions don't compact prematurely.
+    let internal_budget =
+        context_input_budget("deepseek-v4-pro").expect("V4 should have a known context window");
     let v4_window: usize = 1_000_000;
     let expected_internal = v4_window - (TURN_MAX_OUTPUT_TOKENS as usize) - 1_024usize;
     assert_eq!(internal_budget, expected_internal);
+
+    // Sub-500K windows cross into the effective-cap branch: a 256K self-hosted
+    // deployment must yield a usable positive budget rather than None. The
+    // previous formula reserved the full 262K and computed 256K - 262K - 1K,
+    // which underflowed to None and silently disabled preflight/recovery.
+    let small_window_budget = context_input_budget("qwen3-32b-256k")
+        .expect("a 256K-suffix model must yield Some budget via the effective-cap branch");
+    let effective_output = effective_max_output_tokens("qwen3-32b-256k") as usize;
+    let expected_small = 256_000 - effective_output - 1_024;
+    assert_eq!(small_window_budget, expected_small);
 }
 
 #[test]
@@ -1295,6 +1292,51 @@ fn refresh_system_prompt_is_noop_when_unchanged() {
 
     assert_eq!(engine.session.last_system_prompt_hash, first_hash);
     assert_eq!(engine.session.system_prompt, first_prompt);
+}
+
+fn sync_runtime_system_prompt_override(engine: &mut Engine, system_prompt: SystemPrompt) {
+    engine.session.compaction_summary_prompt =
+        extract_compaction_summary_prompt(Some(system_prompt.clone()));
+    engine.session.system_prompt = Some(system_prompt);
+    engine.session.system_prompt_override = true;
+}
+
+#[test]
+fn text_system_prompt_override_via_runtime_sync_survives_refresh() {
+    let tmp = tempdir().expect("tempdir");
+    let config = EngineConfig {
+        workspace: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    let (mut engine, _handle) = Engine::new(config, &Config::default());
+    let prompt = SystemPrompt::Text("TANGERINE-7".to_string());
+    let expected = Some(prompt.clone());
+
+    sync_runtime_system_prompt_override(&mut engine, prompt);
+    engine.refresh_system_prompt(AppMode::Agent);
+
+    assert_eq!(engine.session.system_prompt, expected);
+}
+
+#[test]
+fn blocks_system_prompt_override_via_runtime_sync_survives_mode_change_refresh() {
+    let tmp = tempdir().expect("tempdir");
+    let config = EngineConfig {
+        workspace: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    let (mut engine, _handle) = Engine::new(config, &Config::default());
+    let prompt = SystemPrompt::Blocks(vec![SystemBlock {
+        block_type: "text".to_string(),
+        text: "TANGERINE-7".to_string(),
+        cache_control: None,
+    }]);
+    let expected = Some(prompt.clone());
+
+    sync_runtime_system_prompt_override(&mut engine, prompt);
+    engine.refresh_system_prompt(AppMode::Plan);
+
+    assert_eq!(engine.session.system_prompt, expected);
 }
 
 #[test]
@@ -1709,7 +1751,7 @@ async fn code_execution_runs_python_and_returns_result_payload() {
 }
 
 #[test]
-fn plan_mode_catalog_skips_code_execution_tool() {
+fn plan_mode_catalog_skips_code_execution_tool_but_agent_keeps_it() {
     let mut plan_catalog = vec![api_tool("read_file")];
     ensure_advanced_tooling(&mut plan_catalog, AppMode::Plan);
     assert!(
@@ -1826,7 +1868,7 @@ fn filter_tool_call_delta_strips_bracket_marker() {
 fn filter_tool_call_delta_strips_deepseek_xml_marker() {
     let mut in_block = false;
     let visible = filter_tool_call_delta(
-        "before <deepseek:tool_call name=\"x\">payload</deepseek:tool_call> after",
+        "before <codewhale:tool_call name=\"x\">payload</codewhale:tool_call> after",
         &mut in_block,
     );
     assert!(!in_block);

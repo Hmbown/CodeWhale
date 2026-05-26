@@ -1318,7 +1318,7 @@ impl TaskManager {
                 ),
                 TaskStatus::Canceled => "Task canceled".to_string(),
                 TaskStatus::Queued | TaskStatus::Running => {
-                    format!("Task ended in unexpected state: {}", mode_label)
+                    format!("Task ended in unexpected state: {mode_label}")
                 }
             },
             detail_path: None,
@@ -1814,7 +1814,7 @@ mod tests {
                         "gate": {
                             "id": "gate_test",
                             "gate": "test",
-                            "command": "cargo test -p deepseek-tui --lib",
+                            "command": "cargo test -p codewhale-tui --lib",
                             "cwd": ".",
                             "exit_code": 0,
                             "status": "passed",

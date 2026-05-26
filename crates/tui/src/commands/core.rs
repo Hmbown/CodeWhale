@@ -3,7 +3,7 @@
 use std::fmt::Write;
 use std::path::PathBuf;
 
-use crate::config::{COMMON_DEEPSEEK_MODELS, normalize_model_name};
+use crate::config::{COMMON_DEEPSEEK_MODELS, normalize_model_name_for_provider};
 use crate::localization::{MessageId, tr};
 use crate::tui::app::{App, AppAction, AppMode, ReasoningEffort};
 use crate::tui::views::{HelpView, ModalKind, SubAgentsView, subagent_view_agents};
@@ -57,6 +57,11 @@ pub fn clear(app: &mut App) -> CommandResult {
     app.session.total_conversation_tokens = 0;
     app.session.session_cost = 0.0;
     app.session.session_cost_cny = 0.0;
+    app.session.subagent_cost = 0.0;
+    app.session.subagent_cost_cny = 0.0;
+    app.session.subagent_cost_event_seqs.clear();
+    app.session.displayed_cost_high_water = 0.0;
+    app.session.displayed_cost_high_water_cny = 0.0;
     let todos_cleared = app.clear_todos();
     app.tool_log.clear();
     app.tool_cells.clear();
@@ -69,7 +74,9 @@ pub fn clear(app: &mut App) -> CommandResult {
     app.session.last_completion_tokens = None;
     app.session.last_prompt_cache_hit_tokens = None;
     app.session.last_prompt_cache_miss_tokens = None;
+    app.session.last_reasoning_replay_tokens = None;
     app.session.turn_cache_history.clear();
+    app.session.last_cache_inspection = None;
     app.current_session_id = None;
     let locale = app.ui_locale;
     let message = if todos_cleared {
@@ -121,7 +128,7 @@ pub fn model(app: &mut App, model_name: Option<&str>) -> CommandResult {
                 AppAction::UpdateCompaction(app.compaction_config()),
             );
         }
-        let Some(model_id) = normalize_model_name(name) else {
+        let Some(model_id) = normalize_model_name_for_provider(app.api_provider, name) else {
             return CommandResult::error(format!(
                 "Invalid model '{name}'. Expected auto or a DeepSeek model ID. Common models: {}",
                 COMMON_DEEPSEEK_MODELS.join(", ")
@@ -370,6 +377,7 @@ pub fn translate(app: &mut App) -> CommandResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::client::PromptInspection;
     use crate::config::Config;
     use crate::models::Message;
     use crate::tui::app::{App, AppMode, TuiOptions, TurnCacheRecord};
@@ -523,8 +531,19 @@ mod tests {
         app.session.total_conversation_tokens = 123;
         app.session.session_cost = 0.42;
         app.session.session_cost_cny = 3.05;
+        app.session.subagent_cost = 0.11;
+        app.session.subagent_cost_cny = 0.80;
+        app.session.subagent_cost_event_seqs.insert(7);
+        app.session.displayed_cost_high_water = 0.53;
+        app.session.displayed_cost_high_water_cny = 3.85;
         app.session.last_prompt_cache_hit_tokens = Some(70);
         app.session.last_prompt_cache_miss_tokens = Some(30);
+        app.session.last_reasoning_replay_tokens = Some(12);
+        app.session.last_cache_inspection = Some(PromptInspection {
+            base_static_prefix_hash: "base".to_string(),
+            full_request_prefix_hash: "full".to_string(),
+            layers: Vec::new(),
+        });
         app.push_turn_cache_record(TurnCacheRecord {
             input_tokens: 100,
             output_tokens: 25,
@@ -540,9 +559,16 @@ mod tests {
         assert_eq!(app.session.total_conversation_tokens, 0);
         assert_eq!(app.session.session_cost, 0.0);
         assert_eq!(app.session.session_cost_cny, 0.0);
+        assert_eq!(app.session.subagent_cost, 0.0);
+        assert_eq!(app.session.subagent_cost_cny, 0.0);
+        assert!(app.session.subagent_cost_event_seqs.is_empty());
+        assert_eq!(app.session.displayed_cost_high_water, 0.0);
+        assert_eq!(app.session.displayed_cost_high_water_cny, 0.0);
         assert_eq!(app.session.last_prompt_cache_hit_tokens, None);
         assert_eq!(app.session.last_prompt_cache_miss_tokens, None);
+        assert_eq!(app.session.last_reasoning_replay_tokens, None);
         assert!(app.session.turn_cache_history.is_empty());
+        assert_eq!(app.session.last_cache_inspection, None);
     }
 
     #[test]
@@ -756,7 +782,7 @@ mod tests {
         let result = home_dashboard(&mut app);
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
-        assert!(msg.contains("DeepSeek TUI Home Dashboard"));
+        assert!(msg.contains("codewhale Home Dashboard"));
         assert!(msg.contains("Model:"));
         assert!(msg.contains("Mode:"));
         assert!(msg.contains("Workspace:"));
@@ -805,7 +831,7 @@ mod tests {
             !msg.lines()
                 .any(|line| line.trim_start().starts_with("/set "))
         );
-        assert!(!msg.contains("/deepseek"));
+        assert!(!msg.contains("/codewhale"));
     }
 
     #[test]

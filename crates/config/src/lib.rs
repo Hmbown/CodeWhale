@@ -6,8 +6,8 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
 
 use anyhow::{Context, Result, bail};
-use deepseek_secrets::SecretSource;
-pub use deepseek_secrets::Secrets;
+use codewhale_secrets::SecretSource;
+pub use codewhale_secrets::Secrets;
 use serde::{Deserialize, Serialize};
 
 #[cfg(unix)]
@@ -17,17 +17,23 @@ pub const CONFIG_FILE_NAME: &str = "config.toml";
 const DEFAULT_DEEPSEEK_MODEL: &str = "deepseek-v4-pro";
 const DEFAULT_NVIDIA_NIM_MODEL: &str = "deepseek-ai/deepseek-v4-pro";
 const DEFAULT_NVIDIA_NIM_FLASH_MODEL: &str = "deepseek-ai/deepseek-v4-flash";
-const DEFAULT_OPENAI_MODEL: &str = "gpt-4.1";
+const DEFAULT_OPENAI_MODEL: &str = "deepseek-v4-pro";
 const DEFAULT_DEEPSEEK_BASE_URL: &str = "https://api.deepseek.com/beta";
 const DEFAULT_NVIDIA_NIM_BASE_URL: &str = "https://integrate.api.nvidia.com/v1";
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const DEFAULT_ATLASCLOUD_MODEL: &str = "deepseek-ai/deepseek-v4-flash";
 const DEFAULT_ATLASCLOUD_BASE_URL: &str = "https://api.atlascloud.ai/v1";
+const DEFAULT_WANJIE_ARK_MODEL: &str = "deepseek-reasoner";
+const DEFAULT_WANJIE_ARK_BASE_URL: &str = "https://maas-openapi.wanjiedata.com/api/v1";
 const DEFAULT_OPENROUTER_MODEL: &str = "deepseek/deepseek-v4-pro";
 const DEFAULT_OPENROUTER_FLASH_MODEL: &str = "deepseek/deepseek-v4-flash";
 const DEFAULT_NOVITA_MODEL: &str = "deepseek/deepseek-v4-pro";
 const DEFAULT_NOVITA_FLASH_MODEL: &str = "deepseek/deepseek-v4-flash";
 const DEFAULT_FIREWORKS_MODEL: &str = "accounts/fireworks/models/deepseek-v4-pro";
+const DEFAULT_MOONSHOT_MODEL: &str = "kimi-k2.6";
+const DEFAULT_MOONSHOT_BASE_URL: &str = "https://api.moonshot.ai/v1";
+const DEFAULT_KIMI_CODE_MODEL: &str = "kimi-for-coding";
+const DEFAULT_KIMI_CODE_BASE_URL: &str = "https://api.kimi.com/coding/v1";
 const DEFAULT_SGLANG_MODEL: &str = "deepseek-ai/DeepSeek-V4-Pro";
 const DEFAULT_SGLANG_FLASH_MODEL: &str = "deepseek-ai/DeepSeek-V4-Flash";
 const DEFAULT_OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
@@ -44,13 +50,30 @@ const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434/v1";
 #[serde(rename_all = "kebab-case")]
 pub enum ProviderKind {
     #[default]
+    #[serde(
+        alias = "deepseek-cn",
+        alias = "deepseek_china",
+        alias = "deepseekcn",
+        alias = "deepseek-china"
+    )]
     Deepseek,
     NvidiaNim,
+    #[serde(alias = "open-ai")]
     Openai,
     Atlascloud,
+    #[serde(
+        alias = "wanjie",
+        alias = "wanjie_ark",
+        alias = "ark-wanjie",
+        alias = "ark_wanjie",
+        alias = "wanjie-maas",
+        alias = "wanjie_maas"
+    )]
+    WanjieArk,
     Openrouter,
     Novita,
     Fireworks,
+    Moonshot,
     Sglang,
     Vllm,
     Ollama,
@@ -64,9 +87,11 @@ impl ProviderKind {
             Self::NvidiaNim => "nvidia-nim",
             Self::Openai => "openai",
             Self::Atlascloud => "atlascloud",
+            Self::WanjieArk => "wanjie-ark",
             Self::Openrouter => "openrouter",
             Self::Novita => "novita",
             Self::Fireworks => "fireworks",
+            Self::Moonshot => "moonshot",
             Self::Sglang => "sglang",
             Self::Vllm => "vllm",
             Self::Ollama => "ollama",
@@ -76,13 +101,17 @@ impl ProviderKind {
     #[must_use]
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
-            "deepseek" | "deep-seek" => Some(Self::Deepseek),
+            "deepseek" | "deep-seek" | "deepseek-cn" | "deepseek_china" | "deepseekcn"
+            | "deepseek-china" => Some(Self::Deepseek),
             "nvidia" | "nvidia-nim" | "nvidia_nim" | "nim" => Some(Self::NvidiaNim),
             "openai" | "open-ai" => Some(Self::Openai),
             "atlascloud" | "atlas-cloud" | "atlas_cloud" | "atlas" => Some(Self::Atlascloud),
+            "wanjie" | "wanjie-ark" | "wanjie_ark" | "ark-wanjie" | "ark_wanjie" | "wanjieark"
+            | "wanjie-maas" | "wanjie_maas" | "wanjiemaas" => Some(Self::WanjieArk),
             "openrouter" | "open_router" => Some(Self::Openrouter),
             "novita" => Some(Self::Novita),
             "fireworks" | "fireworks-ai" => Some(Self::Fireworks),
+            "moonshot" | "moonshot-ai" | "kimi" | "kimi-k2" => Some(Self::Moonshot),
             "sglang" | "sg-lang" => Some(Self::Sglang),
             "vllm" | "v-llm" => Some(Self::Vllm),
             "ollama" | "ollama-local" => Some(Self::Ollama),
@@ -96,6 +125,7 @@ pub struct ProviderConfigToml {
     pub api_key: Option<String>,
     pub base_url: Option<String>,
     pub model: Option<String>,
+    pub auth_mode: Option<String>,
     #[serde(default)]
     pub http_headers: BTreeMap<String, String>,
 }
@@ -111,11 +141,15 @@ pub struct ProvidersToml {
     #[serde(default)]
     pub atlascloud: ProviderConfigToml,
     #[serde(default)]
+    pub wanjie_ark: ProviderConfigToml,
+    #[serde(default)]
     pub openrouter: ProviderConfigToml,
     #[serde(default)]
     pub novita: ProviderConfigToml,
     #[serde(default)]
     pub fireworks: ProviderConfigToml,
+    #[serde(default)]
+    pub moonshot: ProviderConfigToml,
     #[serde(default)]
     pub sglang: ProviderConfigToml,
     #[serde(default)]
@@ -132,9 +166,11 @@ impl ProvidersToml {
             ProviderKind::NvidiaNim => &self.nvidia_nim,
             ProviderKind::Openai => &self.openai,
             ProviderKind::Atlascloud => &self.atlascloud,
+            ProviderKind::WanjieArk => &self.wanjie_ark,
             ProviderKind::Openrouter => &self.openrouter,
             ProviderKind::Novita => &self.novita,
             ProviderKind::Fireworks => &self.fireworks,
+            ProviderKind::Moonshot => &self.moonshot,
             ProviderKind::Sglang => &self.sglang,
             ProviderKind::Vllm => &self.vllm,
             ProviderKind::Ollama => &self.ollama,
@@ -147,9 +183,11 @@ impl ProvidersToml {
             ProviderKind::NvidiaNim => &mut self.nvidia_nim,
             ProviderKind::Openai => &mut self.openai,
             ProviderKind::Atlascloud => &mut self.atlascloud,
+            ProviderKind::WanjieArk => &mut self.wanjie_ark,
             ProviderKind::Openrouter => &mut self.openrouter,
             ProviderKind::Novita => &mut self.novita,
             ProviderKind::Fireworks => &mut self.fireworks,
+            ProviderKind::Moonshot => &mut self.moonshot,
             ProviderKind::Sglang => &mut self.sglang,
             ProviderKind::Vllm => &mut self.vllm,
             ProviderKind::Ollama => &mut self.ollama,
@@ -160,7 +198,7 @@ impl ProvidersToml {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ConfigToml {
     /// TUI-compatible DeepSeek API key. Kept at the root so both `deepseek`
-    /// and `deepseek-tui` can share a single config file.
+    /// and `codewhale-tui` can share a single config file.
     pub api_key: Option<String>,
     /// TUI-compatible DeepSeek base URL.
     pub base_url: Option<String>,
@@ -173,8 +211,6 @@ pub struct ConfigToml {
     pub provider: ProviderKind,
     pub model: Option<String>,
     pub auth_mode: Option<String>,
-    pub chatgpt_access_token: Option<String>,
-    pub device_code_session: Option<String>,
     pub output_mode: Option<String>,
     pub log_level: Option<String>,
     pub telemetry: Option<bool>,
@@ -306,87 +342,61 @@ pub struct LspConfigToml {
 }
 
 impl ConfigToml {
-    /// Merge project-level overrides from `$WORKSPACE/.deepseek/config.toml`.
-    /// Only populated fields in `project` are applied; everything else
-    /// keeps its global value. Provider-specific sub-tables are merged
-    /// field-by-field so a project can set just `providers.deepseek.model`
-    /// without needing to repeat `api_key` or `base_url`.
+    /// Merge safe project-level overrides from `$WORKSPACE/.codewhale/config.toml`
+    /// or legacy `$WORKSPACE/.deepseek/config.toml`.
+    ///
+    /// Repo-local config is untrusted input. This helper intentionally ignores
+    /// credentials, endpoints, provider selection, auth/session values, telemetry,
+    /// network policy, skill registry, LSP command tables, and unknown extras.
+    /// Approval and sandbox values may only tighten the existing user/global
+    /// posture.
     pub fn merge_project_overrides(&mut self, project: ConfigToml) {
-        // Check provider override condition before moving fields.
-        let has_api_key = project.api_key.is_some();
-
-        // Top-level scalar fields: apply when the project has a value.
-        if has_api_key {
-            self.api_key = project.api_key;
-        }
-        if project.base_url.is_some() {
-            self.base_url = project.base_url;
-        }
-        if !project.http_headers.is_empty() {
-            self.http_headers = project.http_headers;
-        }
         if project.default_text_model.is_some() {
             self.default_text_model = project.default_text_model;
         }
         if project.model.is_some() {
             self.model = project.model;
         }
-        if project.auth_mode.is_some() {
-            self.auth_mode = project.auth_mode;
-        }
         if project.output_mode.is_some() {
             self.output_mode = project.output_mode;
         }
-        if project.telemetry.is_some() {
-            self.telemetry = project.telemetry;
+        if project.log_level.is_some() {
+            self.log_level = project.log_level;
         }
-        if project.approval_policy.is_some() {
-            self.approval_policy = project.approval_policy;
+        if let Some(policy) = project.approval_policy
+            && project_approval_policy_is_allowed(self.approval_policy.as_deref(), &policy)
+        {
+            self.approval_policy = Some(policy);
         }
-        if project.sandbox_mode.is_some() {
-            self.sandbox_mode = project.sandbox_mode;
-        }
-        // Provider is only overridden if explicitly set (non-default).
-        if project.provider != ProviderKind::Deepseek || has_api_key {
-            self.provider = project.provider;
+        if let Some(mode) = project.sandbox_mode
+            && project_sandbox_mode_is_allowed(self.sandbox_mode.as_deref(), &mode)
+        {
+            self.sandbox_mode = Some(mode);
         }
 
-        // Merge provider sub-tables field-by-field.
-        merge_provider_config(&mut self.providers.deepseek, &project.providers.deepseek);
-        merge_provider_config(
+        merge_project_provider_config(&mut self.providers.deepseek, &project.providers.deepseek);
+        merge_project_provider_config(
             &mut self.providers.nvidia_nim,
             &project.providers.nvidia_nim,
         );
-        merge_provider_config(&mut self.providers.openai, &project.providers.openai);
-        merge_provider_config(
+        merge_project_provider_config(&mut self.providers.openai, &project.providers.openai);
+        merge_project_provider_config(
             &mut self.providers.atlascloud,
             &project.providers.atlascloud,
         );
-        merge_provider_config(
+        merge_project_provider_config(
+            &mut self.providers.wanjie_ark,
+            &project.providers.wanjie_ark,
+        );
+        merge_project_provider_config(
             &mut self.providers.openrouter,
             &project.providers.openrouter,
         );
-        merge_provider_config(&mut self.providers.novita, &project.providers.novita);
-        merge_provider_config(&mut self.providers.fireworks, &project.providers.fireworks);
-        merge_provider_config(&mut self.providers.sglang, &project.providers.sglang);
-        merge_provider_config(&mut self.providers.vllm, &project.providers.vllm);
-        merge_provider_config(&mut self.providers.ollama, &project.providers.ollama);
-
-        if project.network.is_some() {
-            self.network = project.network;
-        }
-        if project.skills.is_some() {
-            self.skills = project.skills;
-        }
-        if project.snapshots.is_some() {
-            self.snapshots = project.snapshots;
-        }
-        if project.lsp.is_some() {
-            self.lsp = project.lsp;
-        }
-        for (k, v) in project.extras {
-            self.extras.insert(k, v);
-        }
+        merge_project_provider_config(&mut self.providers.novita, &project.providers.novita);
+        merge_project_provider_config(&mut self.providers.fireworks, &project.providers.fireworks);
+        merge_project_provider_config(&mut self.providers.sglang, &project.providers.sglang);
+        merge_project_provider_config(&mut self.providers.vllm, &project.providers.vllm);
+        merge_project_provider_config(&mut self.providers.ollama, &project.providers.ollama);
     }
 
     #[must_use]
@@ -399,8 +409,6 @@ impl ConfigToml {
             "default_text_model" => self.default_text_model.clone(),
             "model" => self.model.clone(),
             "auth.mode" => self.auth_mode.clone(),
-            "auth.chatgpt_access_token" => self.chatgpt_access_token.clone(),
-            "auth.device_code_session" => self.device_code_session.clone(),
             "output_mode" => self.output_mode.clone(),
             "log_level" => self.log_level.clone(),
             "telemetry" => self.telemetry.map(|v| v.to_string()),
@@ -430,6 +438,12 @@ impl ConfigToml {
             "providers.atlascloud.http_headers" => {
                 serialize_http_headers(&self.providers.atlascloud.http_headers)
             }
+            "providers.wanjie_ark.api_key" => self.providers.wanjie_ark.api_key.clone(),
+            "providers.wanjie_ark.base_url" => self.providers.wanjie_ark.base_url.clone(),
+            "providers.wanjie_ark.model" => self.providers.wanjie_ark.model.clone(),
+            "providers.wanjie_ark.http_headers" => {
+                serialize_http_headers(&self.providers.wanjie_ark.http_headers)
+            }
             "providers.openrouter.api_key" => self.providers.openrouter.api_key.clone(),
             "providers.openrouter.base_url" => self.providers.openrouter.base_url.clone(),
             "providers.openrouter.model" => self.providers.openrouter.model.clone(),
@@ -447,6 +461,13 @@ impl ConfigToml {
             "providers.fireworks.model" => self.providers.fireworks.model.clone(),
             "providers.fireworks.http_headers" => {
                 serialize_http_headers(&self.providers.fireworks.http_headers)
+            }
+            "providers.moonshot.api_key" => self.providers.moonshot.api_key.clone(),
+            "providers.moonshot.base_url" => self.providers.moonshot.base_url.clone(),
+            "providers.moonshot.model" => self.providers.moonshot.model.clone(),
+            "providers.moonshot.auth_mode" => self.providers.moonshot.auth_mode.clone(),
+            "providers.moonshot.http_headers" => {
+                serialize_http_headers(&self.providers.moonshot.http_headers)
             }
             "providers.sglang.api_key" => self.providers.sglang.api_key.clone(),
             "providers.sglang.base_url" => self.providers.sglang.base_url.clone(),
@@ -493,8 +514,6 @@ impl ConfigToml {
             "default_text_model" => self.default_text_model = Some(value.to_string()),
             "model" => self.model = Some(value.to_string()),
             "auth.mode" => self.auth_mode = Some(value.to_string()),
-            "auth.chatgpt_access_token" => self.chatgpt_access_token = Some(value.to_string()),
-            "auth.device_code_session" => self.device_code_session = Some(value.to_string()),
             "output_mode" => self.output_mode = Some(value.to_string()),
             "log_level" => self.log_level = Some(value.to_string()),
             "telemetry" => {
@@ -539,6 +558,18 @@ impl ConfigToml {
             }
             "providers.atlascloud.http_headers" => {
                 self.providers.atlascloud.http_headers = parse_http_headers(value)?;
+            }
+            "providers.wanjie_ark.api_key" => {
+                self.providers.wanjie_ark.api_key = Some(value.to_string());
+            }
+            "providers.wanjie_ark.base_url" => {
+                self.providers.wanjie_ark.base_url = Some(value.to_string());
+            }
+            "providers.wanjie_ark.model" => {
+                self.providers.wanjie_ark.model = Some(value.to_string());
+            }
+            "providers.wanjie_ark.http_headers" => {
+                self.providers.wanjie_ark.http_headers = parse_http_headers(value)?;
             }
             "providers.nvidia_nim.api_key" => {
                 self.providers.nvidia_nim.api_key = Some(value.to_string());
@@ -587,6 +618,21 @@ impl ConfigToml {
             }
             "providers.fireworks.http_headers" => {
                 self.providers.fireworks.http_headers = parse_http_headers(value)?;
+            }
+            "providers.moonshot.api_key" => {
+                self.providers.moonshot.api_key = Some(value.to_string());
+            }
+            "providers.moonshot.base_url" => {
+                self.providers.moonshot.base_url = Some(value.to_string());
+            }
+            "providers.moonshot.model" => {
+                self.providers.moonshot.model = Some(value.to_string());
+            }
+            "providers.moonshot.auth_mode" => {
+                self.providers.moonshot.auth_mode = Some(value.to_string());
+            }
+            "providers.moonshot.http_headers" => {
+                self.providers.moonshot.http_headers = parse_http_headers(value)?;
             }
             "providers.sglang.api_key" => {
                 self.providers.sglang.api_key = Some(value.to_string());
@@ -641,8 +687,6 @@ impl ConfigToml {
             "default_text_model" => self.default_text_model = None,
             "model" => self.model = None,
             "auth.mode" => self.auth_mode = None,
-            "auth.chatgpt_access_token" => self.chatgpt_access_token = None,
-            "auth.device_code_session" => self.device_code_session = None,
             "output_mode" => self.output_mode = None,
             "log_level" => self.log_level = None,
             "telemetry" => self.telemetry = None,
@@ -672,6 +716,12 @@ impl ConfigToml {
             "providers.atlascloud.base_url" => self.providers.atlascloud.base_url = None,
             "providers.atlascloud.model" => self.providers.atlascloud.model = None,
             "providers.atlascloud.http_headers" => self.providers.atlascloud.http_headers.clear(),
+            "providers.wanjie_ark.api_key" => self.providers.wanjie_ark.api_key = None,
+            "providers.wanjie_ark.base_url" => self.providers.wanjie_ark.base_url = None,
+            "providers.wanjie_ark.model" => self.providers.wanjie_ark.model = None,
+            "providers.wanjie_ark.http_headers" => {
+                self.providers.wanjie_ark.http_headers.clear();
+            }
             "providers.nvidia_nim.api_key" => self.providers.nvidia_nim.api_key = None,
             "providers.nvidia_nim.base_url" => self.providers.nvidia_nim.base_url = None,
             "providers.nvidia_nim.model" => self.providers.nvidia_nim.model = None,
@@ -688,6 +738,11 @@ impl ConfigToml {
             "providers.fireworks.base_url" => self.providers.fireworks.base_url = None,
             "providers.fireworks.model" => self.providers.fireworks.model = None,
             "providers.fireworks.http_headers" => self.providers.fireworks.http_headers.clear(),
+            "providers.moonshot.api_key" => self.providers.moonshot.api_key = None,
+            "providers.moonshot.base_url" => self.providers.moonshot.base_url = None,
+            "providers.moonshot.model" => self.providers.moonshot.model = None,
+            "providers.moonshot.auth_mode" => self.providers.moonshot.auth_mode = None,
+            "providers.moonshot.http_headers" => self.providers.moonshot.http_headers.clear(),
             "providers.sglang.api_key" => self.providers.sglang.api_key = None,
             "providers.sglang.base_url" => self.providers.sglang.base_url = None,
             "providers.sglang.model" => self.providers.sglang.model = None,
@@ -729,12 +784,6 @@ impl ConfigToml {
         }
         if let Some(v) = self.auth_mode.as_ref() {
             out.insert("auth.mode".to_string(), v.clone());
-        }
-        if let Some(v) = self.chatgpt_access_token.as_ref() {
-            out.insert("auth.chatgpt_access_token".to_string(), redact_secret(v));
-        }
-        if let Some(v) = self.device_code_session.as_ref() {
-            out.insert("auth.device_code_session".to_string(), redact_secret(v));
         }
         if let Some(v) = self.output_mode.as_ref() {
             out.insert("output_mode".to_string(), v.clone());
@@ -787,6 +836,18 @@ impl ConfigToml {
         if let Some(v) = serialize_http_headers(&self.providers.atlascloud.http_headers) {
             out.insert("providers.atlascloud.http_headers".to_string(), v);
         }
+        if let Some(v) = self.providers.wanjie_ark.api_key.as_ref() {
+            out.insert("providers.wanjie_ark.api_key".to_string(), redact_secret(v));
+        }
+        if let Some(v) = self.providers.wanjie_ark.base_url.as_ref() {
+            out.insert("providers.wanjie_ark.base_url".to_string(), v.clone());
+        }
+        if let Some(v) = self.providers.wanjie_ark.model.as_ref() {
+            out.insert("providers.wanjie_ark.model".to_string(), v.clone());
+        }
+        if let Some(v) = serialize_http_headers(&self.providers.wanjie_ark.http_headers) {
+            out.insert("providers.wanjie_ark.http_headers".to_string(), v);
+        }
         if let Some(v) = self.providers.nvidia_nim.api_key.as_ref() {
             out.insert("providers.nvidia_nim.api_key".to_string(), redact_secret(v));
         }
@@ -834,6 +895,21 @@ impl ConfigToml {
         }
         if let Some(v) = serialize_http_headers(&self.providers.fireworks.http_headers) {
             out.insert("providers.fireworks.http_headers".to_string(), v);
+        }
+        if let Some(v) = self.providers.moonshot.api_key.as_ref() {
+            out.insert("providers.moonshot.api_key".to_string(), redact_secret(v));
+        }
+        if let Some(v) = self.providers.moonshot.base_url.as_ref() {
+            out.insert("providers.moonshot.base_url".to_string(), v.clone());
+        }
+        if let Some(v) = self.providers.moonshot.model.as_ref() {
+            out.insert("providers.moonshot.model".to_string(), v.clone());
+        }
+        if let Some(v) = self.providers.moonshot.auth_mode.as_ref() {
+            out.insert("providers.moonshot.auth_mode".to_string(), v.clone());
+        }
+        if let Some(v) = serialize_http_headers(&self.providers.moonshot.http_headers) {
+            out.insert("providers.moonshot.http_headers".to_string(), v);
         }
         if let Some(v) = self.providers.sglang.api_key.as_ref() {
             out.insert("providers.sglang.api_key".to_string(), redact_secret(v));
@@ -887,7 +963,7 @@ impl ConfigToml {
     #[must_use]
     pub fn resolve_runtime_options(&self, cli: &CliRuntimeOverrides) -> ResolvedRuntimeOptions {
         let no_keyring = Secrets::new(std::sync::Arc::new(
-            deepseek_secrets::InMemoryKeyringStore::new(),
+            codewhale_secrets::InMemoryKeyringStore::new(),
         ));
         self.resolve_runtime_options_with_secrets(cli, &no_keyring)
     }
@@ -914,6 +990,12 @@ impl ConfigToml {
         let root_deepseek_model = (provider == ProviderKind::Deepseek)
             .then(|| self.default_text_model.clone())
             .flatten();
+        let auth_mode = cli
+            .auth_mode
+            .clone()
+            .or_else(|| env.auth_mode.clone())
+            .or_else(|| provider_cfg.auth_mode.clone())
+            .or_else(|| self.auth_mode.clone());
         let base_url = cli
             .base_url
             .clone()
@@ -925,30 +1007,37 @@ impl ConfigToml {
                 ProviderKind::NvidiaNim => DEFAULT_NVIDIA_NIM_BASE_URL.to_string(),
                 ProviderKind::Openai => DEFAULT_OPENAI_BASE_URL.to_string(),
                 ProviderKind::Atlascloud => DEFAULT_ATLASCLOUD_BASE_URL.to_string(),
+                ProviderKind::WanjieArk => DEFAULT_WANJIE_ARK_BASE_URL.to_string(),
                 ProviderKind::Openrouter => DEFAULT_OPENROUTER_BASE_URL.to_string(),
                 ProviderKind::Novita => DEFAULT_NOVITA_BASE_URL.to_string(),
                 ProviderKind::Fireworks => DEFAULT_FIREWORKS_BASE_URL.to_string(),
+                ProviderKind::Moonshot => {
+                    if auth_mode.as_deref().is_some_and(auth_mode_uses_kimi_oauth) {
+                        DEFAULT_KIMI_CODE_BASE_URL.to_string()
+                    } else {
+                        DEFAULT_MOONSHOT_BASE_URL.to_string()
+                    }
+                }
                 ProviderKind::Sglang => DEFAULT_SGLANG_BASE_URL.to_string(),
                 ProviderKind::Vllm => DEFAULT_VLLM_BASE_URL.to_string(),
                 ProviderKind::Ollama => DEFAULT_OLLAMA_BASE_URL.to_string(),
             });
-        let auth_mode = cli
-            .auth_mode
-            .clone()
-            .or_else(|| env.auth_mode.clone())
-            .or_else(|| self.auth_mode.clone());
         // CLI flag wins outright. Otherwise: config-file → injected secrets/env.
         // This makes `deepseek auth set` a reliable fix even when the user's
         // shell still exports an old key. When the file is empty, the injected
         // secrets façade recovers configured secret-store credentials before
         // falling back to ambient env.
+        let uses_kimi_oauth = provider == ProviderKind::Moonshot
+            && auth_mode.as_deref().is_some_and(auth_mode_uses_kimi_oauth);
         let from_file = provider_cfg.api_key.clone().or(root_deepseek_api_key);
         let (api_key, api_key_source) = if let Some(value) = cli.api_key.clone() {
             (Some(value), Some(RuntimeApiKeySource::Cli))
+        } else if uses_kimi_oauth {
+            (None, None)
         } else if let Some(value) = from_file.clone().filter(|v| !v.trim().is_empty()) {
             (Some(value), Some(RuntimeApiKeySource::ConfigFile))
         } else if should_skip_secret_store_for_provider(provider, &base_url, auth_mode.as_deref()) {
-            match deepseek_secrets::env_for(provider.as_str()) {
+            match codewhale_secrets::env_for(provider.as_str()) {
                 Some(value) => (Some(value), Some(RuntimeApiKeySource::Env)),
                 None => (None, None),
             }
@@ -967,6 +1056,7 @@ impl ConfigToml {
 
         let explicit_model = cli.model.is_some()
             || env.model.is_some()
+            || env.model_for(provider).is_some()
             || provider_cfg.model.is_some()
             || root_deepseek_model.is_some()
             || self.model.is_some();
@@ -974,10 +1064,20 @@ impl ConfigToml {
             .model
             .clone()
             .or_else(|| env.model.clone())
+            .or_else(|| env.model_for(provider))
             .or_else(|| provider_cfg.model.clone())
             .or(root_deepseek_model)
             .or_else(|| self.model.clone())
-            .unwrap_or_else(|| default_model_for_provider(provider).to_string());
+            .unwrap_or_else(|| {
+                if provider == ProviderKind::Moonshot
+                    && (auth_mode.as_deref().is_some_and(auth_mode_uses_kimi_oauth)
+                        || moonshot_base_url_uses_kimi_code(&base_url))
+                {
+                    DEFAULT_KIMI_CODE_MODEL.to_string()
+                } else {
+                    default_model_for_provider(provider).to_string()
+                }
+            });
         let model =
             if explicit_model && provider_preserves_custom_base_url_model(provider, &base_url) {
                 model.trim().to_string()
@@ -1037,34 +1137,82 @@ impl ConfigToml {
     }
 }
 
-fn merge_provider_config(target: &mut ProviderConfigToml, source: &ProviderConfigToml) {
-    if source.api_key.is_some() {
-        target.api_key = source.api_key.clone();
-    }
-    if source.base_url.is_some() {
-        target.base_url = source.base_url.clone();
-    }
+fn merge_project_provider_config(target: &mut ProviderConfigToml, source: &ProviderConfigToml) {
     if source.model.is_some() {
         target.model = source.model.clone();
     }
-    if !source.http_headers.is_empty() {
-        target.http_headers = source.http_headers.clone();
+}
+
+#[must_use]
+pub fn project_approval_policy_is_allowed(current: Option<&str>, project: &str) -> bool {
+    let Some(project_rank) = approval_policy_rank(project) else {
+        return false;
+    };
+    match current.and_then(approval_policy_rank) {
+        Some(current_rank) => project_rank >= current_rank,
+        None => project_rank >= 2,
     }
 }
 
-/// Load a project-level config from `$WORKSPACE/.deepseek/config.toml`.
-/// Returns `None` if the file doesn't exist or can't be parsed.
-pub fn load_project_config(workspace: &Path) -> Option<ConfigToml> {
-    let path = workspace.join(".deepseek").join(CONFIG_FILE_NAME);
-    if !path.exists() {
-        return None;
+#[must_use]
+pub fn project_sandbox_mode_is_allowed(current: Option<&str>, project: &str) -> bool {
+    let normalized_project = project.trim().to_ascii_lowercase();
+    if normalized_project == "external-sandbox" {
+        return current
+            .map(|value| value.trim().eq_ignore_ascii_case("external-sandbox"))
+            .unwrap_or(false);
     }
-    let raw = fs::read_to_string(&path).ok()?;
-    toml::from_str(&raw).ok()
+
+    let Some(project_rank) = sandbox_mode_rank(project) else {
+        return false;
+    };
+    match current.and_then(sandbox_mode_rank) {
+        Some(current_rank) => project_rank >= current_rank,
+        None => project_rank >= 2,
+    }
+}
+
+fn approval_policy_rank(value: &str) -> Option<u8> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(0),
+        "suggest" | "suggested" | "on-request" | "untrusted" => Some(1),
+        "never" | "deny" | "denied" => Some(2),
+        _ => None,
+    }
+}
+
+fn sandbox_mode_rank(value: &str) -> Option<u8> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "danger-full-access" => Some(0),
+        "external-sandbox" => Some(0),
+        "workspace-write" => Some(1),
+        "read-only" => Some(2),
+        _ => None,
+    }
+}
+
+/// Load a project-level config from the workspace.
+///
+/// Checks `$WORKSPACE/.codewhale/config.toml` first, falling back to
+/// `$WORKSPACE/.deepseek/config.toml` for backward compatibility.
+/// Returns `None` if neither file exists or can't be parsed.
+pub fn load_project_config(workspace: &Path) -> Option<ConfigToml> {
+    for dir in [CODEWHALE_APP_DIR, LEGACY_APP_DIR] {
+        let path = workspace.join(dir).join(CONFIG_FILE_NAME);
+        if path.exists()
+            && let Ok(raw) = fs::read_to_string(&path)
+        {
+            return toml::from_str(&raw).ok();
+        }
+    }
+    None
 }
 
 fn normalize_model_for_provider(provider: ProviderKind, model: &str) -> String {
-    if matches!(provider, ProviderKind::Atlascloud | ProviderKind::Ollama) {
+    if matches!(
+        provider,
+        ProviderKind::Atlascloud | ProviderKind::WanjieArk | ProviderKind::Ollama
+    ) {
         return model.to_string();
     }
 
@@ -1097,6 +1245,7 @@ fn normalize_model_for_provider(provider: ProviderKind, model: &str) -> String {
         (ProviderKind::Fireworks, "deepseek-v4-pro" | "deepseek-v4pro") => {
             DEFAULT_FIREWORKS_MODEL.to_string()
         }
+        (ProviderKind::Moonshot, "kimi-k2.6" | "kimi-k2") => DEFAULT_MOONSHOT_MODEL.to_string(),
         (ProviderKind::Sglang, "deepseek-v4-pro" | "deepseek-v4pro") => {
             DEFAULT_SGLANG_MODEL.to_string()
         }
@@ -1123,9 +1272,11 @@ fn default_model_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::NvidiaNim => DEFAULT_NVIDIA_NIM_MODEL,
         ProviderKind::Openai => DEFAULT_OPENAI_MODEL,
         ProviderKind::Atlascloud => DEFAULT_ATLASCLOUD_MODEL,
+        ProviderKind::WanjieArk => DEFAULT_WANJIE_ARK_MODEL,
         ProviderKind::Openrouter => DEFAULT_OPENROUTER_MODEL,
         ProviderKind::Novita => DEFAULT_NOVITA_MODEL,
         ProviderKind::Fireworks => DEFAULT_FIREWORKS_MODEL,
+        ProviderKind::Moonshot => DEFAULT_MOONSHOT_MODEL,
         ProviderKind::Sglang => DEFAULT_SGLANG_MODEL,
         ProviderKind::Vllm => DEFAULT_VLLM_MODEL,
         ProviderKind::Ollama => DEFAULT_OLLAMA_MODEL,
@@ -1138,13 +1289,22 @@ fn default_base_url_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::NvidiaNim => DEFAULT_NVIDIA_NIM_BASE_URL,
         ProviderKind::Openai => DEFAULT_OPENAI_BASE_URL,
         ProviderKind::Atlascloud => DEFAULT_ATLASCLOUD_BASE_URL,
+        ProviderKind::WanjieArk => DEFAULT_WANJIE_ARK_BASE_URL,
         ProviderKind::Openrouter => DEFAULT_OPENROUTER_BASE_URL,
         ProviderKind::Novita => DEFAULT_NOVITA_BASE_URL,
         ProviderKind::Fireworks => DEFAULT_FIREWORKS_BASE_URL,
+        ProviderKind::Moonshot => DEFAULT_MOONSHOT_BASE_URL,
         ProviderKind::Sglang => DEFAULT_SGLANG_BASE_URL,
         ProviderKind::Vllm => DEFAULT_VLLM_BASE_URL,
         ProviderKind::Ollama => DEFAULT_OLLAMA_BASE_URL,
     }
+}
+
+fn moonshot_base_url_uses_kimi_code(base_url: &str) -> bool {
+    let normalized = base_url.trim_end_matches('/').to_ascii_lowercase();
+    normalized == DEFAULT_KIMI_CODE_BASE_URL
+        || normalized == "https://api.kimi.com/coding"
+        || normalized.starts_with("https://api.kimi.com/coding/")
 }
 
 fn base_url_is_custom_for_provider(provider: ProviderKind, base_url: &str) -> bool {
@@ -1200,6 +1360,17 @@ fn auth_mode_disables_api_key(auth_mode: Option<&str>) -> bool {
                 value.as_str(),
                 "none" | "off" | "disabled" | "no_auth" | "no-auth" | "anonymous"
             )
+    )
+}
+
+fn auth_mode_uses_kimi_oauth(auth_mode: &str) -> bool {
+    matches!(
+        auth_mode
+            .trim()
+            .to_ascii_lowercase()
+            .replace('-', "_")
+            .as_str(),
+        "kimi" | "kimi_oauth" | "kimi_cli" | "oauth"
     )
 }
 
@@ -1347,7 +1518,7 @@ impl ConfigStore {
 
 /// Process-wide default [`Secrets`] façade. The first caller wins; the
 /// lock is exposed so test or CLI code can install an explicit
-/// backend (e.g. an [`deepseek_secrets::InMemoryKeyringStore`]) before
+/// backend (e.g. an [`codewhale_secrets::InMemoryKeyringStore`]) before
 /// any resolver runs.
 pub fn default_secrets() -> &'static Secrets {
     static SECRETS: OnceLock<Secrets> = OnceLock::new();
@@ -1359,7 +1530,7 @@ pub fn default_secrets() -> &'static Secrets {
         #[cfg(test)]
         {
             Secrets::new(std::sync::Arc::new(
-                deepseek_secrets::InMemoryKeyringStore::new(),
+                codewhale_secrets::InMemoryKeyringStore::new(),
             ))
         }
         #[cfg(not(test))]
@@ -1369,9 +1540,80 @@ pub fn default_secrets() -> &'static Secrets {
     })
 }
 
+// ── CodeWhale state root (v0.8.44) ──────────────────────────────────
+//
+// v0.8.44 migrates product-owned app state from ~/.deepseek/ to
+// ~/.codewhale/ while keeping ~/.deepseek/ as a compatibility fallback.
+// New installs write to ~/.codewhale/. Existing installs with only
+// ~/.deepseek/ continue working without data loss.
+
+/// Canonical CodeWhale app directory name under $HOME.
+pub const CODEWHALE_APP_DIR: &str = ".codewhale";
+
+/// Legacy DeepSeek-branded app directory name (compatibility fallback).
+pub const LEGACY_APP_DIR: &str = ".deepseek";
+
+/// Resolve the primary CodeWhale home directory.
+///
+/// `$CODEWHALE_HOME` takes precedence when set. Otherwise defaults to
+/// `$HOME/.codewhale`. This is the write target for new product state.
+pub fn codewhale_home() -> Result<PathBuf> {
+    if let Ok(val) = std::env::var("CODEWHALE_HOME") {
+        let trimmed = val.trim();
+        if !trimmed.is_empty() {
+            return Ok(PathBuf::from(trimmed));
+        }
+    }
+    let home = dirs::home_dir().context("failed to resolve home directory")?;
+    Ok(home.join(CODEWHALE_APP_DIR))
+}
+
+/// Resolve the legacy DeepSeek home directory (`$HOME/.deepseek`).
+///
+/// Always returns the legacy path regardless of whether it exists.
+pub fn legacy_deepseek_home() -> Result<PathBuf> {
+    let home = dirs::home_dir().context("failed to resolve home directory")?;
+    Ok(home.join(LEGACY_APP_DIR))
+}
+
+/// Resolve a state subdirectory, preferring the CodeWhale root if
+/// it already exists, otherwise falling back to the legacy root.
+///
+/// This is the read-path resolver: it returns the primary path when
+/// migration has occurred or on a fresh install, but keeps reading
+/// from the legacy path for users who haven't migrated yet.
+pub fn resolve_state_dir(subdir: &str) -> Result<PathBuf> {
+    let primary = codewhale_home()?.join(subdir);
+    if primary.exists() {
+        return Ok(primary);
+    }
+    let legacy = legacy_deepseek_home()?.join(subdir);
+    if legacy.exists() {
+        return Ok(legacy);
+    }
+    // Neither exists — return primary for first-write creation.
+    Ok(primary)
+}
+
+/// Ensure a state subdirectory exists under the primary CodeWhale root,
+/// creating it if necessary. This is the write-path resolver.
+pub fn ensure_state_dir(subdir: &str) -> Result<PathBuf> {
+    let dir = codewhale_home()?.join(subdir);
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("failed to create {}/", dir.display()))?;
+    Ok(dir)
+}
+
 pub fn resolve_config_path(explicit: Option<PathBuf>) -> Result<PathBuf> {
     let path = if let Some(path) = explicit {
         path
+    } else if let Ok(path) = std::env::var("CODEWHALE_CONFIG_PATH") {
+        let trimmed = path.trim();
+        if !trimmed.is_empty() {
+            PathBuf::from(trimmed)
+        } else {
+            return default_config_path();
+        }
     } else if let Ok(path) = std::env::var("DEEPSEEK_CONFIG_PATH") {
         let trimmed = path.trim();
         if !trimmed.is_empty() {
@@ -1386,8 +1628,45 @@ pub fn resolve_config_path(explicit: Option<PathBuf>) -> Result<PathBuf> {
 }
 
 pub fn default_config_path() -> Result<PathBuf> {
-    let home = dirs::home_dir().context("failed to resolve home directory for config path")?;
-    Ok(home.join(".deepseek").join(CONFIG_FILE_NAME))
+    // Prefer ~/.codewhale/config.toml when it exists (fresh install or
+    // migrated), otherwise fall back to ~/.deepseek/config.toml.
+    let primary = codewhale_home()?.join(CONFIG_FILE_NAME);
+    if primary.exists() {
+        return Ok(primary);
+    }
+    let legacy = legacy_deepseek_home()?.join(CONFIG_FILE_NAME);
+    if legacy.exists() {
+        return Ok(legacy);
+    }
+    // Neither exists — return primary so first write creates it there.
+    Ok(primary)
+}
+
+/// v0.8.44: one-time migration from `~/.deepseek/config.toml` to
+/// `~/.codewhale/config.toml`. Called on first launch after the config
+/// is loaded; copies the legacy file if the primary doesn't exist yet.
+/// Never overwrites an existing primary config.
+pub fn migrate_config_if_needed() -> Result<()> {
+    let primary = codewhale_home()?.join(CONFIG_FILE_NAME);
+    if primary.exists() {
+        return Ok(());
+    }
+    let legacy = legacy_deepseek_home()?.join(CONFIG_FILE_NAME);
+    if !legacy.exists() {
+        return Ok(());
+    }
+    // Copy the config to the new home.
+    if let Some(parent) = primary.parent() {
+        std::fs::create_dir_all(parent).context("failed to create codewhale config directory")?;
+    }
+    std::fs::copy(&legacy, &primary)
+        .context("failed to migrate config from deepseek to codewhale home")?;
+    tracing::info!(
+        "Migrated config from {} to {}",
+        legacy.display(),
+        primary.display()
+    );
+    Ok(())
 }
 
 fn parse_bool(raw: &str) -> Result<bool> {
@@ -1453,10 +1732,7 @@ fn redact_secret(secret: &str) -> String {
 
 #[must_use]
 pub fn is_sensitive_config_key(key: &str) -> bool {
-    matches!(
-        key,
-        "api_key" | "auth.chatgpt_access_token" | "auth.device_code_session"
-    ) || key.ends_with(".api_key")
+    key == "api_key" || key.ends_with(".api_key")
 }
 
 fn normalize_config_file_path(path: PathBuf) -> Result<PathBuf> {
@@ -1484,6 +1760,8 @@ fn normalize_config_file_path(path: PathBuf) -> Result<PathBuf> {
 struct EnvRuntimeOverrides {
     provider: Option<ProviderKind>,
     model: Option<String>,
+    wanjie_ark_model: Option<String>,
+    moonshot_model: Option<String>,
     output_mode: Option<String>,
     auth_mode: Option<String>,
     log_level: Option<String>,
@@ -1496,9 +1774,11 @@ struct EnvRuntimeOverrides {
     nvidia_base_url: Option<String>,
     openai_base_url: Option<String>,
     atlascloud_base_url: Option<String>,
+    wanjie_ark_base_url: Option<String>,
     openrouter_base_url: Option<String>,
     novita_base_url: Option<String>,
     fireworks_base_url: Option<String>,
+    moonshot_base_url: Option<String>,
     sglang_base_url: Option<String>,
     vllm_base_url: Option<String>,
     ollama_base_url: Option<String>,
@@ -1511,6 +1791,16 @@ impl EnvRuntimeOverrides {
                 .ok()
                 .and_then(|v| ProviderKind::parse(&v)),
             model: std::env::var("DEEPSEEK_MODEL").ok(),
+            wanjie_ark_model: std::env::var("WANJIE_ARK_MODEL")
+                .or_else(|_| std::env::var("WANJIE_MODEL"))
+                .or_else(|_| std::env::var("WANJIE_MAAS_MODEL"))
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            moonshot_model: std::env::var("MOONSHOT_MODEL")
+                .or_else(|_| std::env::var("KIMI_MODEL_NAME"))
+                .or_else(|_| std::env::var("KIMI_MODEL"))
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
             output_mode: std::env::var("DEEPSEEK_OUTPUT_MODE").ok(),
             auth_mode: std::env::var("DEEPSEEK_AUTH_MODE").ok(),
             log_level: std::env::var("DEEPSEEK_LOG_LEVEL").ok(),
@@ -1540,6 +1830,11 @@ impl EnvRuntimeOverrides {
             atlascloud_base_url: std::env::var("ATLASCLOUD_BASE_URL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
+            wanjie_ark_base_url: std::env::var("WANJIE_ARK_BASE_URL")
+                .or_else(|_| std::env::var("WANJIE_BASE_URL"))
+                .or_else(|_| std::env::var("WANJIE_MAAS_BASE_URL"))
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
             openrouter_base_url: std::env::var("OPENROUTER_BASE_URL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
@@ -1547,6 +1842,10 @@ impl EnvRuntimeOverrides {
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
             fireworks_base_url: std::env::var("FIREWORKS_BASE_URL")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            moonshot_base_url: std::env::var("MOONSHOT_BASE_URL")
+                .or_else(|_| std::env::var("KIMI_BASE_URL"))
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
             sglang_base_url: std::env::var("SGLANG_BASE_URL")
@@ -1569,12 +1868,22 @@ impl EnvRuntimeOverrides {
             ProviderKind::NvidiaNim => self.nvidia_base_url.clone(),
             ProviderKind::Openai => self.openai_base_url.clone(),
             ProviderKind::Atlascloud => self.atlascloud_base_url.clone(),
+            ProviderKind::WanjieArk => self.wanjie_ark_base_url.clone(),
             ProviderKind::Openrouter => self.openrouter_base_url.clone(),
             ProviderKind::Novita => self.novita_base_url.clone(),
             ProviderKind::Fireworks => self.fireworks_base_url.clone(),
+            ProviderKind::Moonshot => self.moonshot_base_url.clone(),
             ProviderKind::Sglang => self.sglang_base_url.clone(),
             ProviderKind::Vllm => self.vllm_base_url.clone(),
             ProviderKind::Ollama => self.ollama_base_url.clone(),
+        }
+    }
+
+    fn model_for(&self, provider: ProviderKind) -> Option<String> {
+        match provider {
+            ProviderKind::WanjieArk => self.wanjie_ark_model.clone(),
+            ProviderKind::Moonshot => self.moonshot_model.clone(),
+            _ => None,
         }
     }
 }
@@ -1621,10 +1930,24 @@ mod tests {
         nvidia_nim_base_url: Option<OsString>,
         openrouter_api_key: Option<OsString>,
         openrouter_base_url: Option<OsString>,
+        wanjie_ark_api_key: Option<OsString>,
+        wanjie_ark_base_url: Option<OsString>,
+        wanjie_base_url: Option<OsString>,
+        wanjie_maas_base_url: Option<OsString>,
+        wanjie_ark_model: Option<OsString>,
+        wanjie_model: Option<OsString>,
+        wanjie_maas_model: Option<OsString>,
         novita_api_key: Option<OsString>,
         novita_base_url: Option<OsString>,
         fireworks_api_key: Option<OsString>,
         fireworks_base_url: Option<OsString>,
+        moonshot_api_key: Option<OsString>,
+        moonshot_base_url: Option<OsString>,
+        moonshot_model: Option<OsString>,
+        kimi_api_key: Option<OsString>,
+        kimi_base_url: Option<OsString>,
+        kimi_model: Option<OsString>,
+        kimi_model_name: Option<OsString>,
         sglang_api_key: Option<OsString>,
         sglang_base_url: Option<OsString>,
         vllm_api_key: Option<OsString>,
@@ -1649,10 +1972,24 @@ mod tests {
                 nvidia_nim_base_url: env::var_os("NVIDIA_NIM_BASE_URL"),
                 openrouter_api_key: env::var_os("OPENROUTER_API_KEY"),
                 openrouter_base_url: env::var_os("OPENROUTER_BASE_URL"),
+                wanjie_ark_api_key: env::var_os("WANJIE_ARK_API_KEY"),
+                wanjie_ark_base_url: env::var_os("WANJIE_ARK_BASE_URL"),
+                wanjie_base_url: env::var_os("WANJIE_BASE_URL"),
+                wanjie_maas_base_url: env::var_os("WANJIE_MAAS_BASE_URL"),
+                wanjie_ark_model: env::var_os("WANJIE_ARK_MODEL"),
+                wanjie_model: env::var_os("WANJIE_MODEL"),
+                wanjie_maas_model: env::var_os("WANJIE_MAAS_MODEL"),
                 novita_api_key: env::var_os("NOVITA_API_KEY"),
                 novita_base_url: env::var_os("NOVITA_BASE_URL"),
                 fireworks_api_key: env::var_os("FIREWORKS_API_KEY"),
                 fireworks_base_url: env::var_os("FIREWORKS_BASE_URL"),
+                moonshot_api_key: env::var_os("MOONSHOT_API_KEY"),
+                moonshot_base_url: env::var_os("MOONSHOT_BASE_URL"),
+                moonshot_model: env::var_os("MOONSHOT_MODEL"),
+                kimi_api_key: env::var_os("KIMI_API_KEY"),
+                kimi_base_url: env::var_os("KIMI_BASE_URL"),
+                kimi_model: env::var_os("KIMI_MODEL"),
+                kimi_model_name: env::var_os("KIMI_MODEL_NAME"),
                 sglang_api_key: env::var_os("SGLANG_API_KEY"),
                 sglang_base_url: env::var_os("SGLANG_BASE_URL"),
                 vllm_api_key: env::var_os("VLLM_API_KEY"),
@@ -1675,10 +2012,24 @@ mod tests {
                 env::remove_var("NVIDIA_NIM_BASE_URL");
                 env::remove_var("OPENROUTER_API_KEY");
                 env::remove_var("OPENROUTER_BASE_URL");
+                env::remove_var("WANJIE_ARK_API_KEY");
+                env::remove_var("WANJIE_ARK_BASE_URL");
+                env::remove_var("WANJIE_BASE_URL");
+                env::remove_var("WANJIE_MAAS_BASE_URL");
+                env::remove_var("WANJIE_ARK_MODEL");
+                env::remove_var("WANJIE_MODEL");
+                env::remove_var("WANJIE_MAAS_MODEL");
                 env::remove_var("NOVITA_API_KEY");
                 env::remove_var("NOVITA_BASE_URL");
                 env::remove_var("FIREWORKS_API_KEY");
                 env::remove_var("FIREWORKS_BASE_URL");
+                env::remove_var("MOONSHOT_API_KEY");
+                env::remove_var("MOONSHOT_BASE_URL");
+                env::remove_var("MOONSHOT_MODEL");
+                env::remove_var("KIMI_API_KEY");
+                env::remove_var("KIMI_BASE_URL");
+                env::remove_var("KIMI_MODEL");
+                env::remove_var("KIMI_MODEL_NAME");
                 env::remove_var("SGLANG_API_KEY");
                 env::remove_var("SGLANG_BASE_URL");
                 env::remove_var("VLLM_API_KEY");
@@ -1715,10 +2066,24 @@ mod tests {
                 Self::restore_var("NVIDIA_NIM_BASE_URL", self.nvidia_nim_base_url.take());
                 Self::restore_var("OPENROUTER_API_KEY", self.openrouter_api_key.take());
                 Self::restore_var("OPENROUTER_BASE_URL", self.openrouter_base_url.take());
+                Self::restore_var("WANJIE_ARK_API_KEY", self.wanjie_ark_api_key.take());
+                Self::restore_var("WANJIE_ARK_BASE_URL", self.wanjie_ark_base_url.take());
+                Self::restore_var("WANJIE_BASE_URL", self.wanjie_base_url.take());
+                Self::restore_var("WANJIE_MAAS_BASE_URL", self.wanjie_maas_base_url.take());
+                Self::restore_var("WANJIE_ARK_MODEL", self.wanjie_ark_model.take());
+                Self::restore_var("WANJIE_MODEL", self.wanjie_model.take());
+                Self::restore_var("WANJIE_MAAS_MODEL", self.wanjie_maas_model.take());
                 Self::restore_var("NOVITA_API_KEY", self.novita_api_key.take());
                 Self::restore_var("NOVITA_BASE_URL", self.novita_base_url.take());
                 Self::restore_var("FIREWORKS_API_KEY", self.fireworks_api_key.take());
                 Self::restore_var("FIREWORKS_BASE_URL", self.fireworks_base_url.take());
+                Self::restore_var("MOONSHOT_API_KEY", self.moonshot_api_key.take());
+                Self::restore_var("MOONSHOT_BASE_URL", self.moonshot_base_url.take());
+                Self::restore_var("MOONSHOT_MODEL", self.moonshot_model.take());
+                Self::restore_var("KIMI_API_KEY", self.kimi_api_key.take());
+                Self::restore_var("KIMI_BASE_URL", self.kimi_base_url.take());
+                Self::restore_var("KIMI_MODEL", self.kimi_model.take());
+                Self::restore_var("KIMI_MODEL_NAME", self.kimi_model_name.take());
                 Self::restore_var("SGLANG_API_KEY", self.sglang_api_key.take());
                 Self::restore_var("SGLANG_BASE_URL", self.sglang_base_url.take());
                 Self::restore_var("VLLM_API_KEY", self.vllm_api_key.take());
@@ -1743,17 +2108,17 @@ mod tests {
         }
     }
 
-    impl deepseek_secrets::KeyringStore for RecordingSecretsStore {
-        fn get(&self, key: &str) -> Result<Option<String>, deepseek_secrets::SecretsError> {
+    impl codewhale_secrets::KeyringStore for RecordingSecretsStore {
+        fn get(&self, key: &str) -> Result<Option<String>, codewhale_secrets::SecretsError> {
             self.gets.lock().unwrap().push(key.to_string());
             Ok(self.value.clone())
         }
 
-        fn set(&self, _key: &str, _value: &str) -> Result<(), deepseek_secrets::SecretsError> {
+        fn set(&self, _key: &str, _value: &str) -> Result<(), codewhale_secrets::SecretsError> {
             Ok(())
         }
 
-        fn delete(&self, _key: &str) -> Result<(), deepseek_secrets::SecretsError> {
+        fn delete(&self, _key: &str) -> Result<(), codewhale_secrets::SecretsError> {
             Ok(())
         }
 
@@ -2022,7 +2387,6 @@ mod tests {
     fn get_display_value_redacts_sensitive_keys() {
         let mut config = ConfigToml {
             api_key: Some("sk-deepseek-secret".to_string()),
-            chatgpt_access_token: Some("chatgpt-access-secret".to_string()),
             ..ConfigToml::default()
         };
         config.providers.openrouter.api_key = Some("openrouter-secret-value".to_string());
@@ -2034,12 +2398,6 @@ mod tests {
         );
         assert_eq!(
             config
-                .get_display_value("auth.chatgpt_access_token")
-                .as_deref(),
-            Some("chat***cret")
-        );
-        assert_eq!(
-            config
                 .get_display_value("providers.openrouter.api_key")
                 .as_deref(),
             Some("open***alue")
@@ -2048,6 +2406,133 @@ mod tests {
             config.get_display_value("model").as_deref(),
             Some("deepseek-v4-pro")
         );
+    }
+
+    #[test]
+    fn moonshot_provider_config_values_round_trip() -> Result<()> {
+        let mut config = ConfigToml::default();
+
+        config.set_value("providers.moonshot.api_key", "moonshot-secret-value")?;
+        config.set_value("providers.moonshot.base_url", DEFAULT_KIMI_CODE_BASE_URL)?;
+        config.set_value("providers.moonshot.model", DEFAULT_KIMI_CODE_MODEL)?;
+        config.set_value("providers.moonshot.auth_mode", "api_key")?;
+        config.set_value("providers.moonshot.http_headers", "X-Test=ok")?;
+
+        assert_eq!(
+            config
+                .get_display_value("providers.moonshot.api_key")
+                .as_deref(),
+            Some("moon***alue")
+        );
+        assert_eq!(
+            config.get_value("providers.moonshot.base_url").as_deref(),
+            Some(DEFAULT_KIMI_CODE_BASE_URL)
+        );
+        assert_eq!(
+            config.get_value("providers.moonshot.model").as_deref(),
+            Some(DEFAULT_KIMI_CODE_MODEL)
+        );
+        assert_eq!(
+            config.get_value("providers.moonshot.auth_mode").as_deref(),
+            Some("api_key")
+        );
+        assert_eq!(
+            config
+                .list_values()
+                .get("providers.moonshot.api_key")
+                .map(String::as_str),
+            Some("moon***alue")
+        );
+
+        config.unset_value("providers.moonshot.auth_mode")?;
+        config.unset_value("providers.moonshot.base_url")?;
+        config.unset_value("providers.moonshot.model")?;
+
+        assert_eq!(config.get_value("providers.moonshot.auth_mode"), None);
+        assert_eq!(config.get_value("providers.moonshot.base_url"), None);
+        assert_eq!(config.get_value("providers.moonshot.model"), None);
+        Ok(())
+    }
+
+    #[test]
+    fn project_merge_denies_credentials_endpoints_and_provider_selection() {
+        let mut base = ConfigToml {
+            provider: ProviderKind::Deepseek,
+            api_key: Some("user-key".to_string()),
+            base_url: Some("https://api.deepseek.com".to_string()),
+            default_text_model: Some("deepseek-v4-flash".to_string()),
+            ..ConfigToml::default()
+        };
+        base.providers.openrouter.api_key = Some("user-openrouter-key".to_string());
+
+        let mut project = ConfigToml {
+            provider: ProviderKind::Openrouter,
+            api_key: Some("attacker-key".to_string()),
+            base_url: Some("https://evil.example/v1".to_string()),
+            default_text_model: Some("deepseek-v4-pro".to_string()),
+            auth_mode: Some("oauth".to_string()),
+            telemetry: Some(true),
+            ..ConfigToml::default()
+        };
+        project.providers.openrouter.api_key = Some("attacker-openrouter-key".to_string());
+        project.providers.openrouter.base_url = Some("https://evil.example/openrouter".to_string());
+        project.providers.openrouter.model = Some("deepseek/deepseek-v4-pro".to_string());
+
+        base.merge_project_overrides(project);
+
+        assert_eq!(base.provider, ProviderKind::Deepseek);
+        assert_eq!(base.api_key.as_deref(), Some("user-key"));
+        assert_eq!(base.base_url.as_deref(), Some("https://api.deepseek.com"));
+        assert_eq!(base.auth_mode, None);
+        assert_eq!(base.telemetry, None);
+        assert_eq!(
+            base.providers.openrouter.api_key.as_deref(),
+            Some("user-openrouter-key")
+        );
+        assert_eq!(base.providers.openrouter.base_url, None);
+        assert_eq!(base.default_text_model.as_deref(), Some("deepseek-v4-pro"));
+        assert_eq!(
+            base.providers.openrouter.model.as_deref(),
+            Some("deepseek/deepseek-v4-pro")
+        );
+    }
+
+    #[test]
+    fn project_merge_only_tightens_approval_and_sandbox_policy() {
+        let mut strict = ConfigToml {
+            approval_policy: Some("never".to_string()),
+            sandbox_mode: Some("read-only".to_string()),
+            ..ConfigToml::default()
+        };
+        strict.merge_project_overrides(ConfigToml {
+            approval_policy: Some("on-request".to_string()),
+            sandbox_mode: Some("workspace-write".to_string()),
+            ..ConfigToml::default()
+        });
+        assert_eq!(strict.approval_policy.as_deref(), Some("never"));
+        assert_eq!(strict.sandbox_mode.as_deref(), Some("read-only"));
+
+        let mut permissive = ConfigToml {
+            approval_policy: Some("auto".to_string()),
+            sandbox_mode: Some("workspace-write".to_string()),
+            ..ConfigToml::default()
+        };
+        permissive.merge_project_overrides(ConfigToml {
+            approval_policy: Some("never".to_string()),
+            sandbox_mode: Some("read-only".to_string()),
+            ..ConfigToml::default()
+        });
+        assert_eq!(permissive.approval_policy.as_deref(), Some("never"));
+        assert_eq!(permissive.sandbox_mode.as_deref(), Some("read-only"));
+
+        let mut unset = ConfigToml::default();
+        unset.merge_project_overrides(ConfigToml {
+            approval_policy: Some("on-request".to_string()),
+            sandbox_mode: Some("workspace-write".to_string()),
+            ..ConfigToml::default()
+        });
+        assert_eq!(unset.approval_policy, None);
+        assert_eq!(unset.sandbox_mode, None);
     }
 
     #[test]
@@ -2121,6 +2606,11 @@ mod tests {
             ProviderKind::parse("fireworks-ai"),
             Some(ProviderKind::Fireworks)
         );
+        assert_eq!(ProviderKind::parse("kimi"), Some(ProviderKind::Moonshot));
+        assert_eq!(
+            ProviderKind::parse("moonshot-ai"),
+            Some(ProviderKind::Moonshot)
+        );
         assert_eq!(ProviderKind::parse("sg-lang"), Some(ProviderKind::Sglang));
         assert_eq!(ProviderKind::parse("v-llm"), Some(ProviderKind::Vllm));
         assert_eq!(ProviderKind::parse("vllm"), Some(ProviderKind::Vllm));
@@ -2129,6 +2619,34 @@ mod tests {
             ProviderKind::parse("ollama-local"),
             Some(ProviderKind::Ollama)
         );
+        assert_eq!(
+            ProviderKind::parse("wanjie-ark"),
+            Some(ProviderKind::WanjieArk)
+        );
+        assert_eq!(
+            ProviderKind::parse("ark_wanjie"),
+            Some(ProviderKind::WanjieArk)
+        );
+
+        let parsed: ConfigToml =
+            toml::from_str("provider = \"ark-wanjie\"").expect("wanjie provider alias");
+        assert_eq!(parsed.provider, ProviderKind::WanjieArk);
+    }
+
+    #[test]
+    fn provider_kind_accepts_legacy_deepseek_cn_aliases() {
+        for alias in [
+            "deepseek-cn",
+            "deepseek_china",
+            "deepseekcn",
+            "deepseek-china",
+        ] {
+            assert_eq!(ProviderKind::parse(alias), Some(ProviderKind::Deepseek));
+
+            let parsed: ConfigToml =
+                toml::from_str(&format!("provider = \"{alias}\"")).expect("legacy provider alias");
+            assert_eq!(parsed.provider, ProviderKind::Deepseek);
+        }
     }
 
     #[test]
@@ -2177,6 +2695,82 @@ mod tests {
         assert_eq!(resolved.provider, ProviderKind::Fireworks);
         assert_eq!(resolved.base_url, DEFAULT_FIREWORKS_BASE_URL);
         assert_eq!(resolved.model, DEFAULT_FIREWORKS_MODEL);
+    }
+
+    #[test]
+    fn moonshot_provider_defaults_to_kimi_k2() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        let config = ConfigToml {
+            provider: ProviderKind::Moonshot,
+            ..ConfigToml::default()
+        };
+
+        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::Moonshot);
+        assert_eq!(resolved.base_url, DEFAULT_MOONSHOT_BASE_URL);
+        assert_eq!(resolved.model, DEFAULT_MOONSHOT_MODEL);
+    }
+
+    #[test]
+    fn moonshot_kimi_oauth_uses_kimi_code_endpoint_and_model() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        let mut config = ConfigToml {
+            provider: ProviderKind::Moonshot,
+            ..ConfigToml::default()
+        };
+        config.providers.moonshot.auth_mode = Some("kimi_oauth".to_string());
+
+        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::Moonshot);
+        assert_eq!(resolved.auth_mode.as_deref(), Some("kimi_oauth"));
+        assert_eq!(resolved.base_url, DEFAULT_KIMI_CODE_BASE_URL);
+        assert_eq!(resolved.model, DEFAULT_KIMI_CODE_MODEL);
+        assert_eq!(resolved.api_key, None);
+        assert_eq!(resolved.api_key_source, None);
+    }
+
+    #[test]
+    fn moonshot_kimi_code_api_key_endpoint_defaults_to_kimi_for_coding() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        let mut config = ConfigToml {
+            provider: ProviderKind::Moonshot,
+            ..ConfigToml::default()
+        };
+        config.providers.moonshot.api_key = Some("kimi-code-key".to_string());
+        config.providers.moonshot.base_url = Some(DEFAULT_KIMI_CODE_BASE_URL.to_string());
+
+        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::Moonshot);
+        assert_eq!(resolved.auth_mode, None);
+        assert_eq!(resolved.base_url, DEFAULT_KIMI_CODE_BASE_URL);
+        assert_eq!(resolved.model, DEFAULT_KIMI_CODE_MODEL);
+        assert_eq!(resolved.api_key.as_deref(), Some("kimi-code-key"));
+        assert_eq!(
+            resolved.api_key_source,
+            Some(RuntimeApiKeySource::ConfigFile)
+        );
+    }
+
+    #[test]
+    fn wanjie_ark_provider_defaults_to_openai_compatible_endpoint_and_model() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        let config = ConfigToml {
+            provider: ProviderKind::WanjieArk,
+            ..ConfigToml::default()
+        };
+
+        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::WanjieArk);
+        assert_eq!(resolved.base_url, DEFAULT_WANJIE_ARK_BASE_URL);
+        assert_eq!(resolved.model, DEFAULT_WANJIE_ARK_MODEL);
     }
 
     #[test]
@@ -2275,6 +2869,25 @@ mod tests {
 
         assert_eq!(resolved.api_key.as_deref(), Some("secret-store-key"));
         assert_eq!(store.gets.lock().unwrap().as_slice(), ["ollama"]);
+    }
+
+    #[test]
+    fn moonshot_api_key_mode_can_use_secret_store_by_default() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        let store = Arc::new(RecordingSecretsStore::with_value("secret-store-key"));
+        let secrets = Secrets::new(store.clone());
+        let config = ConfigToml {
+            provider: ProviderKind::Moonshot,
+            ..ConfigToml::default()
+        };
+
+        let resolved =
+            config.resolve_runtime_options_with_secrets(&CliRuntimeOverrides::default(), &secrets);
+
+        assert_eq!(resolved.api_key.as_deref(), Some("secret-store-key"));
+        assert_eq!(resolved.api_key_source, Some(RuntimeApiKeySource::Keyring));
+        assert_eq!(store.gets.lock().unwrap().as_slice(), ["moonshot"]);
     }
 
     #[test]
@@ -2387,6 +3000,27 @@ mod tests {
         assert_eq!(resolved.provider, ProviderKind::Fireworks);
         assert_eq!(resolved.api_key.as_deref(), Some("fw-env-key"));
         assert_eq!(resolved.base_url, DEFAULT_FIREWORKS_BASE_URL);
+    }
+
+    #[test]
+    fn wanjie_ark_env_api_key_and_base_url_fall_back_when_config_missing() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        // Safety: test-only environment mutation guarded by a module mutex.
+        unsafe {
+            env::set_var("DEEPSEEK_PROVIDER", "wanjie-ark");
+            env::set_var("WANJIE_ARK_API_KEY", "wanjie-env-key");
+            env::set_var("WANJIE_ARK_BASE_URL", "https://wanjie.example/api/v1");
+            env::set_var("WANJIE_ARK_MODEL", "account-model-id");
+        }
+
+        let resolved =
+            ConfigToml::default().resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::WanjieArk);
+        assert_eq!(resolved.api_key.as_deref(), Some("wanjie-env-key"));
+        assert_eq!(resolved.base_url, "https://wanjie.example/api/v1");
+        assert_eq!(resolved.model, "account-model-id");
     }
 
     #[test]
@@ -2509,13 +3143,13 @@ mod tests {
 
     #[test]
     fn config_file_resolves_above_env_and_keyring() {
-        use deepseek_secrets::KeyringStore;
+        use codewhale_secrets::KeyringStore;
         let _lock = env_lock();
         let _env = EnvGuard::without_deepseek_runtime_overrides();
         // Safety: env mutation guarded by env_lock().
         unsafe { std::env::set_var("DEEPSEEK_API_KEY", "env-key") };
 
-        let store = std::sync::Arc::new(deepseek_secrets::InMemoryKeyringStore::new());
+        let store = std::sync::Arc::new(codewhale_secrets::InMemoryKeyringStore::new());
         store.set("deepseek", "ring-key").unwrap();
         let secrets = Secrets::new(store);
 
@@ -2542,7 +3176,7 @@ mod tests {
         unsafe { std::env::set_var("DEEPSEEK_API_KEY", "env-key") };
 
         let secrets = Secrets::new(std::sync::Arc::new(
-            deepseek_secrets::InMemoryKeyringStore::new(),
+            codewhale_secrets::InMemoryKeyringStore::new(),
         ));
         let config = ConfigToml::default();
 
@@ -2561,7 +3195,7 @@ mod tests {
         let _env = EnvGuard::without_deepseek_runtime_overrides();
 
         let secrets = Secrets::new(std::sync::Arc::new(
-            deepseek_secrets::InMemoryKeyringStore::new(),
+            codewhale_secrets::InMemoryKeyringStore::new(),
         ));
         let mut config = ConfigToml::default();
         config.providers.deepseek.api_key = Some("file-key".to_string());
@@ -2577,13 +3211,13 @@ mod tests {
 
     #[test]
     fn keyring_resolves_when_config_file_empty_even_if_env_is_set() {
-        use deepseek_secrets::KeyringStore;
+        use codewhale_secrets::KeyringStore;
         let _lock = env_lock();
         let _env = EnvGuard::without_deepseek_runtime_overrides();
         // Safety: env mutation guarded by env_lock().
         unsafe { std::env::set_var("DEEPSEEK_API_KEY", "stale-env-key") };
 
-        let store = std::sync::Arc::new(deepseek_secrets::InMemoryKeyringStore::new());
+        let store = std::sync::Arc::new(codewhale_secrets::InMemoryKeyringStore::new());
         store.set("deepseek", "ring-key").unwrap();
         let secrets = Secrets::new(store);
 
@@ -2598,11 +3232,11 @@ mod tests {
 
     #[test]
     fn cli_flag_still_overrides_keyring() {
-        use deepseek_secrets::KeyringStore;
+        use codewhale_secrets::KeyringStore;
         let _lock = env_lock();
         let _env = EnvGuard::without_deepseek_runtime_overrides();
 
-        let store = std::sync::Arc::new(deepseek_secrets::InMemoryKeyringStore::new());
+        let store = std::sync::Arc::new(codewhale_secrets::InMemoryKeyringStore::new());
         store.set("deepseek", "ring-key").unwrap();
         let secrets = Secrets::new(store);
 

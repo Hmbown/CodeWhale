@@ -69,11 +69,54 @@ impl Drop for ConfigPathEnvGuard {
     }
 }
 
+struct SettingsHomeGuard {
+    _tmp: TempDir,
+    previous_home: Option<OsString>,
+    previous_userprofile: Option<OsString>,
+    _lock: MutexGuard<'static, ()>,
+}
+
+impl SettingsHomeGuard {
+    fn new() -> Self {
+        let lock = crate::test_support::lock_test_env();
+        let tmp = TempDir::new().expect("settings tempdir");
+        let previous_home = std::env::var_os("HOME");
+        let previous_userprofile = std::env::var_os("USERPROFILE");
+        // Safety: test-only environment mutation guarded by a global mutex.
+        unsafe {
+            std::env::set_var("HOME", tmp.path());
+            std::env::set_var("USERPROFILE", tmp.path());
+        }
+        Self {
+            _tmp: tmp,
+            previous_home,
+            previous_userprofile,
+            _lock: lock,
+        }
+    }
+}
+
+impl Drop for SettingsHomeGuard {
+    fn drop(&mut self) {
+        // Safety: test-only environment mutation guarded by a global mutex.
+        unsafe {
+            match self.previous_home.take() {
+                Some(previous) => std::env::set_var("HOME", previous),
+                None => std::env::remove_var("HOME"),
+            }
+            match self.previous_userprofile.take() {
+                Some(previous) => std::env::set_var("USERPROFILE", previous),
+                None => std::env::remove_var("USERPROFILE"),
+            }
+        }
+    }
+}
+
 #[test]
 fn resume_hint_uses_canonical_resume_command() {
     assert_eq!(
         resume_hint_text(),
-        "To continue this session, execute deepseek run --continue"
+        "To continue this session, execute codewhale run --continue"
     );
     assert!(should_show_resume_hint(Some(
         "019dd9d6-4f44-7c83-9863-59674a12b827"
@@ -386,13 +429,17 @@ fn selection_to_text_copies_rendered_transcript_block() {
     let selected = selection_to_text(&app).expect("selection text");
     assert!(selected.contains("Note copy system"), "{selected:?}");
     assert!(selected.contains("copy user"), "{selected:?}");
+    // Short completed thinking now renders inline (v0.8.42 thinking-preview
+    // change); it should be selectable/copyable as visible transcript text.
     assert!(
-        !selected.contains("copy thinking"),
-        "raw completed thinking should stay out of live selection text: {selected:?}"
+        selected.contains("copy thinking"),
+        "short completed thinking should be visible inline: {selected:?}"
     );
+    // Short thinking that fits entirely inline doesn't need the Ctrl+O
+    // affordance; only truncated or explicit-summary thinking shows it.
     assert!(
-        selected.contains("Ctrl+O"),
-        "selection should keep the reasoning detail affordance: {selected:?}"
+        !selected.contains("Ctrl+O"),
+        "short completed thinking should not show the detail affordance: {selected:?}"
     );
     assert!(selected.contains("tool output line"), "{selected:?}");
     assert!(selected.contains("copy assistant"), "{selected:?}");
@@ -1059,7 +1106,7 @@ fn plan_choice_from_option_maps_expected_values() {
 
 #[test]
 fn plan_prompt_view_escape_emits_dismiss_event() {
-    let mut view = PlanPromptView::new();
+    let mut view = PlanPromptView::new(None);
 
     let action = view.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
@@ -1160,6 +1207,33 @@ fn create_test_app() -> App {
     app
 }
 
+#[test]
+fn session_denied_cache_matches_only_approval_key() {
+    let mut app = create_test_app();
+    app.approval_session_denied.insert("edit_file".to_string());
+
+    assert!(
+        !is_session_denied_for_key(&app, "file:edit_file:fresh"),
+        "a legacy tool-name entry must not deny a later fresh call"
+    );
+
+    app.approval_session_denied
+        .insert("file:edit_file:retry".to_string());
+    assert!(is_session_denied_for_key(&app, "file:edit_file:retry"));
+}
+
+#[test]
+fn session_approved_cache_keeps_tool_name_session_grants() {
+    let mut app = create_test_app();
+    app.approval_session_approved
+        .insert("edit_file".to_string());
+
+    assert!(
+        is_session_approved_for_tool(&app, "edit_file", "file:edit_file:fresh"),
+        "approve-for-session should still cover future calls of the same tool"
+    );
+}
+
 fn create_test_options() -> TuiOptions {
     TuiOptions {
         model: "deepseek-v4-pro".to_string(),
@@ -1210,6 +1284,9 @@ fn saved_session_with_messages(messages: Vec<Message>) -> SavedSession {
             workspace: PathBuf::from("/tmp/resume-recovery"),
             mode: Some("yolo".to_string()),
             cost: crate::session_manager::SessionCostSnapshot::default(),
+            parent_session_id: None,
+            forked_from_message_count: None,
+            cumulative_turn_secs: 0,
         },
         messages,
         system_prompt: None,
@@ -1248,6 +1325,24 @@ fn apply_loaded_session_restores_dangling_user_tail_as_retry_draft() {
             .is_some_and(|msg| msg.contains("Recovered interrupted prompt")),
         "status was {:?}",
         app.status_message
+    );
+}
+
+#[test]
+fn apply_loaded_session_does_not_restore_slash_command_tail_as_retry_draft() {
+    let mut app = create_test_app();
+    let session = saved_session_with_messages(vec![text_message("user", "/sessions")]);
+
+    let recovered = apply_loaded_session(&mut app, &Config::default(), &session);
+
+    assert!(!recovered);
+    assert_eq!(app.input, "");
+    assert!(app.queued_draft.is_none());
+    assert_eq!(app.api_messages.len(), 1);
+    assert!(
+        app.history
+            .iter()
+            .any(|cell| matches!(cell, HistoryCell::User { .. }))
     );
 }
 
@@ -1482,7 +1577,7 @@ fn active_tool_status_label_strips_shell_wrappers_from_ci_polling() {
     active.push_tool(
         "exec-1",
         HistoryCell::Tool(ToolCell::Exec(ExecCell {
-            command: "cd /tmp/repo && sleep 15 && gh pr checks 1611 --repo Hmbown/DeepSeek-TUI"
+            command: "cd /tmp/repo && sleep 15 && gh pr checks 1611 --repo Hmbown/CodeWhale"
                 .to_string(),
             status: ToolStatus::Running,
             output: None,
@@ -1642,6 +1737,42 @@ async fn model_change_update_syncs_engine_model_before_compaction() {
         }
         other => panic!("expected SetCompaction, got {other:?}"),
     }
+}
+
+#[test]
+fn saved_default_provider_syncs_back_to_runtime_config() {
+    let _home = SettingsHomeGuard::new();
+    let settings = crate::settings::Settings {
+        default_provider: Some("ollama".to_string()),
+        ..Default::default()
+    };
+    settings.save().expect("save settings");
+
+    let mut config = Config::default();
+    assert_eq!(config.api_provider(), ApiProvider::Deepseek);
+
+    let app = App::new(create_test_options(), &config);
+    assert_eq!(app.api_provider, ApiProvider::Ollama);
+
+    sync_config_provider_from_app(&mut config, &app);
+
+    assert_eq!(config.api_provider(), ApiProvider::Ollama);
+}
+
+#[test]
+fn provider_picker_reselecting_active_provider_preserves_current_model() {
+    let mut app = create_test_app();
+    app.api_provider = ApiProvider::Ollama;
+    app.model = "deepseek-coder-v2:16b".to_string();
+
+    assert_eq!(
+        provider_picker_model_override(&app, ApiProvider::Ollama).as_deref(),
+        Some("deepseek-coder-v2:16b")
+    );
+    assert_eq!(
+        provider_picker_model_override(&app, ApiProvider::Deepseek),
+        None
+    );
 }
 
 #[tokio::test]
@@ -1844,7 +1975,7 @@ fn init_git_repo() -> TempDir {
     let commit = Command::new("git")
         .args([
             "-c",
-            "user.name=DeepSeek TUI Tests",
+            "user.name=codewhale Tests",
             "-c",
             "user.email=tests@example.com",
             "commit",
@@ -2110,6 +2241,34 @@ fn event_poll_timeout_has_nonzero_floor() {
         clamp_event_poll_timeout(Duration::from_millis(24)),
         Duration::from_millis(24)
     );
+}
+
+#[test]
+#[cfg(any(unix, windows))]
+fn external_url_launcher_does_not_wait_for_browser_process() {
+    let command = slow_external_url_command();
+    let start = Instant::now();
+
+    spawn_external_url_command(command).expect("spawn external URL command");
+
+    assert!(
+        start.elapsed() < Duration::from_millis(750),
+        "opening a feedback URL must not wait for the browser command to exit"
+    );
+}
+
+#[cfg(unix)]
+fn slow_external_url_command() -> Command {
+    let mut command = Command::new("sh");
+    command.args(["-c", "sleep 1"]);
+    command
+}
+
+#[cfg(windows)]
+fn slow_external_url_command() -> Command {
+    let mut command = Command::new("cmd");
+    command.args(["/C", "ping -n 2 127.0.0.1 >NUL"]);
+    command
 }
 
 #[test]
@@ -2554,6 +2713,57 @@ fn test_ctrl_c_cancels_streaming_sets_status() {
 }
 
 #[test]
+fn local_cancel_marks_late_stream_events_for_suppression() {
+    let mut app = create_test_app();
+    app.is_loading = true;
+    app.streaming_state.start_text(0, None);
+
+    mark_active_turn_cancelled_locally(&mut app);
+
+    assert!(!app.is_loading);
+    assert!(app.suppress_stream_events_until_turn_complete);
+    assert!(suppress_engine_event_after_local_cancel(
+        &EngineEvent::MessageDelta {
+            index: 0,
+            content: "late text".to_string(),
+        }
+    ));
+    assert!(suppress_engine_event_after_local_cancel(
+        &EngineEvent::ThinkingDelta {
+            index: 0,
+            content: "late thinking".to_string(),
+        }
+    ));
+    assert!(suppress_engine_event_after_local_cancel(
+        &EngineEvent::SessionUpdated {
+            session_id: "session".to_string(),
+            messages: Vec::new(),
+            system_prompt: None,
+            model: "deepseek-v4-flash".to_string(),
+            workspace: PathBuf::from("."),
+        }
+    ));
+    assert!(ignore_stale_stream_event_while_idle(
+        &EngineEvent::MessageDelta {
+            index: 0,
+            content: "late text".to_string(),
+        }
+    ));
+    assert!(!suppress_engine_event_after_local_cancel(
+        &EngineEvent::TurnComplete {
+            usage: Usage::default(),
+            status: crate::core::events::TurnOutcomeStatus::Interrupted,
+            error: None,
+        }
+    ));
+    assert!(!suppress_engine_event_after_local_cancel(
+        &EngineEvent::Status {
+            message: "Request cancelled".to_string(),
+        }
+    ));
+}
+
+#[test]
 fn test_ctrl_c_exits_when_not_loading() {
     let mut app = create_test_app();
     app.is_loading = false;
@@ -2677,7 +2887,7 @@ fn visible_slash_menu_entries_excludes_removed_commands() {
     assert!(entries.iter().any(|entry| entry.name == "/config"));
     assert!(entries.iter().any(|entry| entry.name == "/links"));
     assert!(!entries.iter().any(|entry| entry.name == "/set"));
-    assert!(!entries.iter().any(|entry| entry.name == "/deepseek"));
+    assert!(!entries.iter().any(|entry| entry.name == "/codewhale"));
 }
 
 #[test]
@@ -2761,6 +2971,69 @@ fn apply_slash_menu_selection_uses_skill_command_form() {
 
     assert!(apply_slash_menu_selection(&mut app, &entries, true));
     assert_eq!(app.input, "/skill search-files");
+}
+
+#[test]
+fn inline_skill_slash_popup_lists_cached_skills_in_message() {
+    let mut app = create_test_app();
+    app.cached_skills = vec![
+        ("search-files".to_string(), "Search files".to_string()),
+        ("my-review".to_string(), "Review code".to_string()),
+    ];
+    app.input = "please use /".to_string();
+    app.cursor_position = app.input.chars().count();
+
+    let entries = visible_slash_menu_entries(&app, 128);
+
+    assert!(entries.iter().any(|entry| entry.name == "/search-files"));
+    assert!(entries.iter().any(|entry| entry.name == "/my-review"));
+    assert!(entries.iter().all(|entry| entry.is_skill));
+}
+
+#[test]
+fn inline_skill_slash_popup_filters_partial_without_leaking_to_command_position() {
+    let mut app = create_test_app();
+    app.cached_skills = vec![
+        ("search-files".to_string(), "Search files".to_string()),
+        ("my-review".to_string(), "Review code".to_string()),
+    ];
+    app.input = "please use /my".to_string();
+    app.cursor_position = app.input.chars().count();
+
+    let entries = visible_slash_menu_entries(&app, 128);
+
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].name, "/my-review");
+
+    app.input = "/se".to_string();
+    app.cursor_position = app.input.chars().count();
+    let command_entries = visible_slash_menu_entries(&app, 128);
+    assert!(
+        !command_entries
+            .iter()
+            .any(|entry| entry.name == "/search-files" && entry.is_skill),
+        "command-position slash menu should not include inline skill mentions"
+    );
+}
+
+#[test]
+fn apply_slash_menu_selection_splices_inline_skill_mention() {
+    let mut app = create_test_app();
+    app.input = "please use /se here".to_string();
+    app.cursor_position = "please use /se".chars().count();
+    let entries = vec![crate::tui::widgets::SlashMenuEntry {
+        name: "/search-files".to_string(),
+        description: "Search files".to_string(),
+        is_skill: true,
+        alias_hint: None,
+    }];
+
+    assert!(apply_slash_menu_selection(&mut app, &entries, true));
+    assert_eq!(app.input, "please use /search-files here");
+    assert_eq!(
+        app.cursor_position,
+        "please use /search-files".chars().count()
+    );
 }
 
 #[test]
@@ -2861,6 +3134,52 @@ async fn dismissed_plan_prompt_leaves_non_numeric_input_for_normal_send_path() {
     assert_eq!(
         app.status_message.as_deref(),
         Some("Offline: 1 queued — ↑ to edit, /queue list")
+    );
+}
+
+#[tokio::test]
+async fn dispatch_user_message_records_prompt_for_cancel_restore() {
+    let mut app = create_test_app();
+    let config = Config::default();
+    let mut engine = crate::core::engine::mock_engine_handle();
+    let queued = crate::tui::app::QueuedMessage::new("fix this typo\nthen retry".to_string(), None);
+
+    dispatch_user_message(&mut app, &config, &engine.handle, queued)
+        .await
+        .expect("dispatch user message");
+
+    assert_eq!(
+        app.last_submitted_prompt.as_deref(),
+        Some("fix this typo\nthen retry")
+    );
+    match engine.rx_op.recv().await.expect("send message op") {
+        crate::core::ops::Op::SendMessage { content, .. } => {
+            assert_eq!(content, "fix this typo\nthen retry");
+        }
+        other => panic!("expected SendMessage, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn steer_user_message_records_prompt_for_cancel_restore() {
+    let mut app = create_test_app();
+    let mut engine = crate::core::engine::mock_engine_handle();
+    let queued = crate::tui::app::QueuedMessage::new(
+        "adjust the active turn\nthen continue".to_string(),
+        None,
+    );
+
+    steer_user_message(&mut app, &engine.handle, queued)
+        .await
+        .expect("steer user message");
+
+    assert_eq!(
+        app.last_submitted_prompt.as_deref(),
+        Some("adjust the active turn\nthen continue")
+    );
+    assert_eq!(
+        engine.rx_steer.recv().await.as_deref(),
+        Some("adjust the active turn\nthen continue")
     );
 }
 
@@ -3138,6 +3457,36 @@ fn activity_footer_hint_surfaces_visible_thinking_without_raw_tool_hint() {
 }
 
 #[test]
+fn activity_footer_hint_uses_details_for_subagent_cards() {
+    let mut app = create_test_app();
+    app.history = vec![HistoryCell::SubAgent(
+        crate::tui::history::SubAgentCell::Delegate(
+            crate::tui::widgets::agent_card::DelegateCard::new("agent_123", "general"),
+        ),
+    )];
+    app.resync_history_revisions();
+    let revisions = app.history_revisions.clone();
+    app.viewport.transcript_cache.ensure(
+        &app.history,
+        &revisions,
+        100,
+        app.transcript_render_options(),
+    );
+    app.viewport.last_transcript_top = first_line_for_cell(&app, 0);
+    app.viewport.last_transcript_visible = 4;
+
+    let expected = format!(
+        "{} Activity: sub-agent · {} details",
+        crate::tui::key_shortcuts::activity_shortcut_label(),
+        crate::tui::key_shortcuts::tool_details_shortcut_label()
+    );
+    assert_eq!(
+        selected_detail_footer_label(&app).as_deref(),
+        Some(expected.as_str())
+    );
+}
+
+#[test]
 fn macos_option_v_glyph_is_treated_as_details_shortcut_only_on_macos() {
     let option_v = KeyEvent::new(KeyCode::Char('\u{221A}'), KeyModifiers::NONE);
     assert!(crate::tui::key_shortcuts::is_macos_option_v_legacy_key_for_platform(&option_v, true));
@@ -3321,7 +3670,7 @@ fn active_rlm_task_entries_surface_foreground_rlm_work() {
 
 #[test]
 fn alt_nav_modifiers_require_alt_and_exclude_ctrl_super() {
-    // v0.8.30 — transcript-nav shortcuts (`Alt+G`, `Alt+[`, etc.) require
+    // v0.8.30 — transcript-nav shortcuts (`Alt+[`, `Alt+]`, etc.) require
     // Alt, allow Shift for capital-letter forms, and block Ctrl/Super so
     // they don't collide with clipboard / window shortcuts. Bare and
     // Shift-only modifiers fall through to text insertion now.
@@ -3635,6 +3984,72 @@ fn ok_result(
 }
 
 #[test]
+fn shell_wait_without_command_uses_task_id_until_command_metadata_arrives() {
+    let mut app = create_test_app();
+    handle_tool_call_started(
+        &mut app,
+        "shell-wait",
+        "exec_shell_wait",
+        &serde_json::json!({"task_id": "shell_33a08c3c"}),
+    );
+
+    let exec = app
+        .active_cell
+        .as_ref()
+        .expect("active cell")
+        .entries()
+        .iter()
+        .find_map(|cell| match cell {
+            HistoryCell::Tool(ToolCell::Exec(exec)) => Some(exec),
+            _ => None,
+        })
+        .expect("exec cell");
+    assert_eq!(exec.command, "command shell_33a08c3c");
+    assert!(
+        exec.interaction
+            .as_deref()
+            .is_some_and(|text| text.contains("shell_33a08c3c"))
+    );
+    assert!(
+        !exec.command.contains("<command>")
+            && !exec
+                .interaction
+                .as_deref()
+                .unwrap_or_default()
+                .contains("<command>")
+    );
+
+    let result = Ok(crate::tools::spec::ToolResult::success(
+        "Background task running (no new output).",
+    )
+    .with_metadata(serde_json::json!({
+        "status": "Running",
+        "duration_ms": 178_000_u64,
+        "task_id": "shell_33a08c3c",
+        "command": "cargo test --workspace --all-features",
+    })));
+    handle_tool_call_complete(&mut app, "shell-wait", "exec_shell_wait", &result);
+
+    let exec = app
+        .active_cell
+        .as_ref()
+        .expect("active cell")
+        .entries()
+        .iter()
+        .find_map(|cell| match cell {
+            HistoryCell::Tool(ToolCell::Exec(exec)) => Some(exec),
+            _ => None,
+        })
+        .expect("exec cell");
+    assert_eq!(exec.command, "cargo test --workspace --all-features");
+    assert!(
+        exec.interaction
+            .as_deref()
+            .is_some_and(|text| text.contains("cargo test --workspace"))
+    );
+}
+
+#[test]
 fn tool_child_usage_metadata_updates_live_cost_counter() {
     let mut app = create_test_app();
     let result = Ok(crate::tools::spec::ToolResult::success("ok").with_metadata(
@@ -3705,6 +4120,140 @@ fn first_snapshot_preserves_current_session_id_for_artifact_ownership() {
     let snapshot = build_session_snapshot(&app, &manager);
 
     assert_eq!(snapshot.metadata.id, "session-123");
+}
+
+#[test]
+fn existing_session_snapshot_updates_model_selection() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let manager =
+        crate::session_manager::SessionManager::new(tmp.path().join("sessions")).expect("manager");
+    let mut existing = saved_session_with_messages(vec![text_message("user", "hello")]);
+    existing.metadata.model = "auto".to_string();
+    manager
+        .save_session(&existing)
+        .expect("save existing session");
+
+    let mut app = create_test_app();
+    app.current_session_id = Some(existing.metadata.id.clone());
+    app.api_messages.push(text_message("user", "hello"));
+    app.set_model_selection("deepseek-v4-flash".to_string());
+
+    let snapshot = build_session_snapshot(&app, &manager);
+
+    assert_eq!(snapshot.metadata.id, existing.metadata.id);
+    assert_eq!(snapshot.metadata.model, "deepseek-v4-flash");
+}
+
+#[test]
+fn apply_loaded_session_restores_concrete_model_mode() {
+    let mut app = create_test_app();
+    app.set_model_selection("auto".to_string());
+    let mut session = saved_session_with_messages(vec![
+        text_message("user", "hello"),
+        text_message("assistant", "hi"),
+    ]);
+    session.metadata.model = "deepseek-v4-flash".to_string();
+
+    let recovered = apply_loaded_session(&mut app, &Config::default(), &session);
+
+    assert!(!recovered);
+    assert!(!app.auto_model);
+    assert_eq!(app.model, "deepseek-v4-flash");
+    assert_eq!(app.model_selection_for_persistence(), "deepseek-v4-flash");
+}
+
+#[test]
+fn apply_loaded_session_restores_auto_model_mode() {
+    let mut app = create_test_app();
+    app.set_model_selection("deepseek-v4-pro".to_string());
+    let mut session = saved_session_with_messages(vec![
+        text_message("user", "hello"),
+        text_message("assistant", "hi"),
+    ]);
+    session.metadata.model = "auto".to_string();
+
+    let recovered = apply_loaded_session(&mut app, &Config::default(), &session);
+
+    assert!(!recovered);
+    assert!(app.auto_model);
+    assert_eq!(app.model, "auto");
+    assert_eq!(app.model_selection_for_persistence(), "auto");
+}
+
+#[test]
+fn app_new_restores_saved_model_and_reasoning_effort() {
+    let _guard = ConfigPathEnvGuard::new();
+    let settings = crate::settings::Settings {
+        default_model: Some("deepseek-v4-pro".to_string()),
+        reasoning_effort: Some("high".to_string()),
+        ..Default::default()
+    };
+    settings.save().expect("save settings");
+
+    let options = TuiOptions {
+        model: "auto".to_string(),
+        workspace: PathBuf::from("."),
+        config_path: None,
+        config_profile: None,
+        allow_shell: false,
+        use_alt_screen: true,
+        use_mouse_capture: false,
+        use_bracketed_paste: true,
+        max_subagents: 1,
+        skills_dir: PathBuf::from("."),
+        memory_path: PathBuf::from("memory.md"),
+        notes_path: PathBuf::from("notes.txt"),
+        mcp_config_path: PathBuf::from("mcp.json"),
+        use_memory: false,
+        start_in_agent_mode: true,
+        skip_onboarding: false,
+        yolo: false,
+        resume_session_id: None,
+        initial_input: None,
+    };
+    let config = Config {
+        reasoning_effort: Some("max".to_string()),
+        ..Default::default()
+    };
+
+    let app = App::new(options, &config);
+
+    assert!(!app.auto_model);
+    assert_eq!(app.model, "deepseek-v4-pro");
+    assert_eq!(app.reasoning_effort, ReasoningEffort::High);
+}
+
+#[tokio::test]
+async fn model_picker_persists_model_and_reasoning_effort() {
+    let _guard = ConfigPathEnvGuard::new();
+    let mut app = create_test_app();
+    app.set_model_selection("auto".to_string());
+    app.reasoning_effort = ReasoningEffort::Auto;
+    let engine = mock_engine_handle();
+
+    apply_model_picker_choice(
+        &mut app,
+        &engine.handle,
+        "deepseek-v4-pro".to_string(),
+        ReasoningEffort::High,
+        "auto".to_string(),
+        ReasoningEffort::Auto,
+    )
+    .await;
+
+    let settings = crate::settings::Settings::load().expect("load settings");
+    assert_eq!(settings.default_model.as_deref(), Some("deepseek-v4-pro"));
+    assert_eq!(
+        settings
+            .provider_models
+            .as_ref()
+            .and_then(|models| models.get("deepseek"))
+            .map(String::as_str),
+        Some("deepseek-v4-pro")
+    );
+    assert_eq!(settings.reasoning_effort.as_deref(), Some("high"));
+    assert!(!app.auto_model);
+    assert_eq!(app.reasoning_effort, ReasoningEffort::High);
 }
 
 #[test]
@@ -4725,6 +5274,45 @@ fn recoverable_engine_error_does_not_enter_offline_mode() {
     let _ = ErrorEnvelope::transient("");
 }
 
+#[test]
+fn stream_error_marks_active_turn_failed_without_waiting_for_turn_complete() {
+    use crate::error_taxonomy::ErrorEnvelope;
+
+    let mut app = create_test_app();
+    app.is_loading = true;
+    app.runtime_turn_id = Some("turn_decode_error".to_string());
+    app.runtime_turn_status = Some("in_progress".to_string());
+    handle_tool_call_started(
+        &mut app,
+        "tool-running",
+        "exec_shell",
+        &serde_json::json!({"command": "cargo test --workspace"}),
+    );
+    assert!(app.active_cell.is_some(), "precondition: live tool cell");
+
+    apply_engine_error_to_app(
+        &mut app,
+        ErrorEnvelope::classify("chunk decode error".to_string(), true),
+    );
+
+    assert!(!app.is_loading);
+    assert_eq!(app.runtime_turn_status.as_deref(), Some("failed"));
+    assert!(
+        app.active_cell.is_none(),
+        "stream error should flush live cells so no row stays visually running"
+    );
+    assert!(
+        app.history.iter().any(|cell| {
+            matches!(
+                cell,
+                crate::tui::history::HistoryCell::Error { message, .. }
+                    if message.contains("chunk decode error")
+            )
+        }),
+        "stream decode error should remain visible in transcript"
+    );
+}
+
 /// Hard failures (auth, billing, malformed request) DO need to flip offline
 /// mode so subsequent typed messages get queued instead of silently lost
 /// against a broken upstream.
@@ -4980,18 +5568,17 @@ fn render_footer_from_with_default_items_renders_mode_and_model() {
 }
 
 #[test]
-fn default_footer_includes_prefix_stability_before_cache() {
+fn default_footer_keeps_prefix_stability_opt_in() {
     let items = crate::config::StatusItem::default_footer();
-    let prefix = items
-        .iter()
-        .position(|item| *item == crate::config::StatusItem::PrefixStability)
-        .expect("default footer includes prefix stability");
-    let cache = items
-        .iter()
-        .position(|item| *item == crate::config::StatusItem::Cache)
-        .expect("default footer includes cache");
 
-    assert!(prefix < cache);
+    assert!(
+        !items.contains(&crate::config::StatusItem::PrefixStability),
+        "prefix stability is a diagnostic chip and should not crowd the default footer"
+    );
+    assert!(
+        items.contains(&crate::config::StatusItem::Cache),
+        "default footer should still include provider-reported cache hit rate"
+    );
 }
 
 #[test]
@@ -5002,7 +5589,7 @@ fn render_footer_from_prefix_stability_item_renders_cache_slot_chip() {
 
     let props = render_footer_from(&app, &[crate::config::StatusItem::PrefixStability], None);
 
-    assert_eq!(spans_text(&props.cache), "P 100%");
+    assert_eq!(spans_text(&props.cache), "cache prefix 100%");
 }
 
 #[test]
@@ -5023,7 +5610,7 @@ fn render_footer_from_preserves_prefix_then_cache_order() {
         None,
     );
 
-    assert!(spans_text(&props.cache).starts_with("P 100%  Cache: 90.0% hit"));
+    assert!(spans_text(&props.cache).starts_with("cache prefix 100%  Cache: 90.0% hit"));
 }
 
 #[test]
@@ -5225,6 +5812,9 @@ fn history_arrow_handles_whitespace_input() {
 #[test]
 fn history_arrow_handles_nonempty_input() {
     let mut app = create_test_app();
+    // Explicitly disable arrows-scroll so this test covers the
+    // history-navigation path regardless of the mouse-capture default.
+    app.composer_arrows_scroll = false;
     app.input = "hello".to_string();
     app.cursor_position = app.input.chars().count();
     app.input_history.push("previous prompt".to_string());
@@ -5270,20 +5860,98 @@ fn composer_arrows_scroll_empty_down() {
 }
 
 #[test]
-fn composer_arrows_scroll_nonempty_still_navigates_history() {
+fn composer_arrows_scroll_nonempty_also_scrolls() {
     let mut app = create_test_app();
     app.composer_arrows_scroll = true;
     app.input = "hello".to_string();
     app.cursor_position = app.input.chars().count();
     app.input_history.push("previous prompt".to_string());
 
-    // Even with the option on, non-empty composer still navigates history.
+    // #1677: terminals that convert mouse-wheel to arrow keys should scroll
+    // the transcript without mutating a draft the user is editing.
     assert!(handle_composer_history_arrow(
         &mut app,
         KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
         false,
         false,
     ));
+    assert_eq!(app.viewport.pending_scroll_delta, -3);
+    assert_eq!(app.input, "hello");
+}
+
+#[test]
+fn composer_arrow_up_moves_within_multiline_input() {
+    let mut app = create_test_app();
+    app.composer_arrows_scroll = false;
+    app.input = "line one\nline two".to_string();
+    app.cursor_position = app.input.chars().count();
+    app.input_history.push("previous prompt".to_string());
+
+    assert!(handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+        false,
+        false,
+    ));
+
+    assert_eq!(app.input, "line one\nline two");
+    assert!(app.cursor_position < app.input.chars().count());
+}
+
+#[test]
+fn composer_arrow_down_moves_within_multiline_input() {
+    let mut app = create_test_app();
+    app.composer_arrows_scroll = false;
+    app.input = "line one\nline two".to_string();
+    app.cursor_position = 0;
+    app.input_history.push("next prompt".to_string());
+    app.history_index = Some(app.input_history.len() - 1);
+
+    assert!(handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+        false,
+        false,
+    ));
+
+    assert_eq!(app.input, "line one\nline two");
+    assert!(app.cursor_position >= "line one\n".chars().count());
+}
+
+#[test]
+fn composer_arrows_scroll_multiline_input_navigates_lines() {
+    let mut app = create_test_app();
+    app.composer_arrows_scroll = true;
+    app.input = "line one\nline two".to_string();
+    app.cursor_position = app.input.chars().count();
+
+    assert!(handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+        false,
+        false,
+    ));
+
+    assert_eq!(app.input, "line one\nline two");
+    assert!(app.cursor_position < app.input.chars().count());
+    assert_eq!(app.viewport.pending_scroll_delta, 0);
+}
+
+#[test]
+fn composer_arrow_up_at_first_line_falls_back_to_history_up() {
+    let mut app = create_test_app();
+    app.composer_arrows_scroll = false;
+    app.input = "line one\nline two".to_string();
+    app.cursor_position = 0;
+    app.input_history.push("previous prompt".to_string());
+
+    assert!(handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+        false,
+        false,
+    ));
+
     assert_eq!(app.input, "previous prompt");
 }
 
@@ -5304,15 +5972,16 @@ fn composer_arrows_scroll_defaults_true_without_mouse_capture() {
 }
 
 #[test]
-fn composer_arrows_scroll_defaults_false_with_mouse_capture() {
+fn composer_arrows_scroll_defaults_follow_platform_with_mouse_capture() {
     let options = TuiOptions {
         use_mouse_capture: true,
         ..create_test_options()
     };
     let app = App::new(options, &Config::default());
-    assert!(
-        !app.composer_arrows_scroll,
-        "arrows-scroll must default to false when mouse capture is on"
+    assert_eq!(
+        app.composer_arrows_scroll,
+        cfg!(windows),
+        "arrows-scroll should default to true on Windows and false on other platforms when mouse capture is on"
     );
 }
 
@@ -5335,6 +6004,80 @@ fn composer_arrows_scroll_config_overrides_default() {
         !app.composer_arrows_scroll,
         "explicit config=false must override the mouse-capture-derived default"
     );
+}
+
+#[test]
+fn home_jumps_to_line_start_multiline() {
+    let mut app = create_test_app();
+    app.input = "line one\nline two\nline three".to_string();
+    app.cursor_position = app.input.chars().count();
+    app.move_cursor_line_start();
+    assert_eq!(app.cursor_position, "line one\nline two\n".len());
+}
+
+#[test]
+fn home_from_middle_of_line_jumps_to_line_start() {
+    let mut app = create_test_app();
+    app.input = "line one\nline two".to_string();
+    app.cursor_position = "line one\nli".len();
+    app.move_cursor_line_start();
+    assert_eq!(app.cursor_position, "line one\n".len());
+}
+
+#[test]
+fn home_on_singleline_jumps_to_zero() {
+    let mut app = create_test_app();
+    app.input = "hello world".to_string();
+    app.cursor_position = 6;
+    app.move_cursor_line_start();
+    assert_eq!(app.cursor_position, 0);
+}
+
+#[test]
+fn end_jumps_to_line_end_multiline() {
+    let mut app = create_test_app();
+    app.input = "line one\nline two\nline three".to_string();
+    app.cursor_position = 0;
+    app.move_cursor_line_end();
+    assert_eq!(app.cursor_position, "line one".len());
+}
+
+#[test]
+fn end_from_middle_of_line_jumps_to_line_end() {
+    let mut app = create_test_app();
+    app.input = "line one\nline two".to_string();
+    app.cursor_position = "line one\nli".len();
+    app.move_cursor_line_end();
+    assert_eq!(app.cursor_position, "line one\nline two".len());
+}
+
+#[test]
+fn end_on_singleline_jumps_to_absolute_end() {
+    let mut app = create_test_app();
+    app.input = "hello world".to_string();
+    app.cursor_position = 0;
+    app.move_cursor_line_end();
+    assert_eq!(app.cursor_position, app.input.chars().count());
+}
+
+#[test]
+fn home_at_line_start_stays_put() {
+    let mut app = create_test_app();
+    app.input = "line one\nline two".to_string();
+    app.cursor_position = "line one\n".len();
+    app.move_cursor_line_start();
+    assert_eq!(app.cursor_position, "line one\n".len());
+}
+
+#[test]
+fn end_at_newline_stays_at_line_end() {
+    let mut app = create_test_app();
+    app.input = "line one\nline two\nline three".to_string();
+    // Cursor sitting on the first '\n'.
+    app.cursor_position = "line one".len();
+    app.move_cursor_line_end();
+    // Stays at end of current line.
+    assert_eq!(app.cursor_position, "line one".len());
 }
 
 #[test]
@@ -5448,7 +6191,7 @@ fn completed_turn_notification_falls_back_to_default_when_empty() {
         Duration::from_secs(5),
         None,
     );
-    assert_eq!(msg, "deepseek: turn complete");
+    assert_eq!(msg, "codewhale: turn complete");
 }
 
 #[test]
@@ -5471,13 +6214,13 @@ fn completed_turn_notification_truncates_long_text() {
 fn subagent_completion_notification_uses_summary_line_not_sentinel() {
     let msg = crate::tui::notifications::subagent_completion_message(
         "agent_live",
-        "Finished the docs audit.\n<deepseek:subagent.done>{}</deepseek:subagent.done>",
+        "Finished the docs audit.\n<codewhale:subagent.done>{}</codewhale:subagent.done>",
         false,
         Duration::from_secs(42),
     );
 
     assert_eq!(msg, "sub-agent agent_live: Finished the docs audit.");
-    assert!(!msg.contains("deepseek:subagent.done"));
+    assert!(!msg.contains("codewhale:subagent.done"));
 }
 
 #[test]
@@ -5489,8 +6232,8 @@ fn subagent_completion_notification_can_include_elapsed_summary() {
         Duration::from_secs(65),
     );
 
-    assert!(msg.contains("deepseek: sub-agent agent_live complete"));
-    assert!(msg.contains("deepseek: sub-agent complete (1m 5s)"));
+    assert!(msg.contains("codewhale: sub-agent agent_live complete"));
+    assert!(msg.contains("codewhale: sub-agent complete (1m 5s)"));
 }
 
 #[test]
@@ -5655,4 +6398,168 @@ fn toast_stack_overlay_respects_composer_boundary() {
         max_above <= gap,
         "max_above ({max_above}) must never exceed the composer→footer gap ({gap})"
     );
+}
+
+// === Bug #1913: Work sidebar should hide stale completed tasks ============
+//
+// The Work sidebar reads `~/.deepseek/tasks/` on startup, which holds every
+// durable task the user has ever run. Without filtering, completed tasks
+// from prior sessions persist indefinitely. The projection helper keeps
+// active tasks, keeps tasks that finished during this session, keeps tasks
+// that finished within the last `recent_ttl`, and drops everything older.
+
+mod work_sidebar_projection_tests {
+    use super::*;
+    use crate::task_manager::{TaskStatus, TaskSummary};
+    use chrono::{Duration, TimeZone, Utc};
+
+    fn sample_task(
+        id: &str,
+        status: TaskStatus,
+        ended_at: Option<chrono::DateTime<Utc>>,
+    ) -> TaskSummary {
+        TaskSummary {
+            id: id.to_string(),
+            status,
+            prompt_summary: format!("task {id}"),
+            model: "deepseek-v4-flash".to_string(),
+            mode: "agent".to_string(),
+            created_at: Utc.with_ymd_and_hms(2026, 5, 16, 12, 0, 0).unwrap(),
+            started_at: Some(Utc.with_ymd_and_hms(2026, 5, 16, 12, 1, 0).unwrap()),
+            ended_at,
+            duration_ms: ended_at.map(|_| 1_234),
+            error: None,
+            thread_id: None,
+            turn_id: None,
+        }
+    }
+
+    #[test]
+    fn work_sidebar_hides_stale_completed_tasks_but_keeps_active_and_recent() {
+        // Pretend the TUI session started on 2026-05-23T10:00:00Z. "Now"
+        // is one minute into the session.
+        let session_started_at = Utc.with_ymd_and_hms(2026, 5, 23, 10, 0, 0).unwrap();
+        let now = session_started_at + Duration::minutes(1);
+        let recent_ttl = Duration::hours(2);
+
+        let active_running = sample_task("active_run", TaskStatus::Running, None);
+        let active_queued = sample_task("active_q", TaskStatus::Queued, None);
+
+        // Completed during the current session — must show.
+        let just_finished = sample_task(
+            "just_done",
+            TaskStatus::Completed,
+            Some(session_started_at + Duration::seconds(30)),
+        );
+
+        // Completed shortly before the session started, inside the
+        // recent-TTL window — must show.
+        let recently_finished_before_session = sample_task(
+            "recent_done",
+            TaskStatus::Failed,
+            Some(session_started_at - Duration::minutes(15)),
+        );
+
+        // Stale completed from 6 days ago (the exact scenario in #1913) —
+        // must be hidden.
+        let stale_completed = sample_task(
+            "stale_done",
+            TaskStatus::Completed,
+            Some(session_started_at - Duration::days(6)),
+        );
+        let stale_canceled = sample_task(
+            "stale_cancel",
+            TaskStatus::Canceled,
+            Some(session_started_at - Duration::days(7)),
+        );
+        let stale_failed = sample_task(
+            "stale_fail",
+            TaskStatus::Failed,
+            Some(session_started_at - Duration::days(3)),
+        );
+
+        // A terminal task without `ended_at` shouldn't sneak through.
+        let terminal_no_timestamp = sample_task("ghost", TaskStatus::Completed, None);
+
+        let tasks = vec![
+            active_running.clone(),
+            active_queued.clone(),
+            just_finished.clone(),
+            recently_finished_before_session.clone(),
+            stale_completed.clone(),
+            stale_canceled.clone(),
+            stale_failed.clone(),
+            terminal_no_timestamp.clone(),
+        ];
+
+        let kept = select_work_sidebar_tasks(tasks, session_started_at, now, recent_ttl);
+        let kept_ids: Vec<&str> = kept.iter().map(|t| t.id.as_str()).collect();
+
+        assert!(
+            kept_ids.contains(&"active_run"),
+            "active running task must always show: {kept_ids:?}"
+        );
+        assert!(
+            kept_ids.contains(&"active_q"),
+            "active queued task must always show: {kept_ids:?}"
+        );
+        assert!(
+            kept_ids.contains(&"just_done"),
+            "task completed during the current session must show: {kept_ids:?}"
+        );
+        assert!(
+            kept_ids.contains(&"recent_done"),
+            "task completed within the recent TTL before session start must show: \
+             {kept_ids:?}"
+        );
+
+        assert!(
+            !kept_ids.contains(&"stale_done"),
+            "completed task from 6 days ago must be hidden (bug #1913): {kept_ids:?}"
+        );
+        assert!(
+            !kept_ids.contains(&"stale_cancel"),
+            "canceled task from 7 days ago must be hidden: {kept_ids:?}"
+        );
+        assert!(
+            !kept_ids.contains(&"stale_fail"),
+            "failed task from 3 days ago must be hidden: {kept_ids:?}"
+        );
+        assert!(
+            !kept_ids.contains(&"ghost"),
+            "terminal task missing ended_at must be hidden: {kept_ids:?}"
+        );
+    }
+
+    #[test]
+    fn work_sidebar_keeps_tasks_completed_at_session_boundary() {
+        // Edge case: a task that finished at exactly the same instant the
+        // session started should still be visible (>= comparison).
+        let session_started_at = Utc.with_ymd_and_hms(2026, 5, 23, 10, 0, 0).unwrap();
+        let now = session_started_at + Duration::seconds(1);
+        let recent_ttl = Duration::hours(2);
+
+        let at_boundary = sample_task("boundary", TaskStatus::Completed, Some(session_started_at));
+
+        let kept =
+            select_work_sidebar_tasks(vec![at_boundary], session_started_at, now, recent_ttl);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].id, "boundary");
+    }
+
+    #[test]
+    fn receipt_summary_truncation_does_not_panic_on_multibyte_boundary() {
+        // Build a summary where byte 57 falls mid-character (em dash is 3 bytes).
+        // 56 ASCII chars + em dash ensures byte 57 lands inside the em dash.
+        let prefix = "a".repeat(56); // 56 ASCII bytes
+        let summary = format!("{prefix}— rest of summary"); // byte 56='a', 57-59='—'
+        assert!(summary.len() > 60);
+        // Byte 57 should be inside the em dash (3-byte UTF-8 sequence).
+        assert!(!summary.is_char_boundary(57));
+
+        // The runtime helper should step back to the start of the char
+        // and append the ellipsis without panicking.
+        let truncated = crate::utils::truncate_with_ellipsis(&summary, 60, "…");
+        assert_eq!(truncated, format!("{prefix}…"));
+    }
 }

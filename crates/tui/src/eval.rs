@@ -15,6 +15,69 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EvalShellPlatform {
+    Windows,
+    Unix,
+}
+
+impl EvalShellPlatform {
+    fn current() -> Self {
+        if cfg!(windows) {
+            Self::Windows
+        } else {
+            Self::Unix
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EvalShellInvocation {
+    program: &'static str,
+    args: Vec<String>,
+    raw_payload_on_windows: bool,
+}
+
+fn eval_shell_invocation(command: &str) -> EvalShellInvocation {
+    eval_shell_invocation_for_platform(command, EvalShellPlatform::current())
+}
+
+fn eval_shell_invocation_for_platform(
+    command: &str,
+    platform: EvalShellPlatform,
+) -> EvalShellInvocation {
+    match platform {
+        EvalShellPlatform::Windows => EvalShellInvocation {
+            program: "cmd",
+            args: vec!["/C".to_string(), command.to_string()],
+            raw_payload_on_windows: true,
+        },
+        EvalShellPlatform::Unix => EvalShellInvocation {
+            program: "sh",
+            args: vec!["-c".to_string(), command.to_string()],
+            raw_payload_on_windows: false,
+        },
+    }
+}
+
+fn push_eval_shell_args(cmd: &mut Command, invocation: &EvalShellInvocation) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        if invocation.raw_payload_on_windows
+            && invocation.program.eq_ignore_ascii_case("cmd")
+            && invocation.args.len() == 2
+            && invocation.args[0].eq_ignore_ascii_case("/C")
+        {
+            cmd.raw_arg(&invocation.args[0]);
+            cmd.raw_arg(&invocation.args[1]);
+            return;
+        }
+    }
+
+    cmd.args(&invocation.args);
+}
+
 /// Representative tool steps covered by the evaluation harness.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ScenarioStepKind {
@@ -704,17 +767,10 @@ fn apply_patch(root: &Path, patch: &str) -> Result<()> {
 }
 
 fn exec_shell(root: &Path, command: &str) -> Result<String> {
-    #[cfg(windows)]
-    let output = Command::new("cmd")
-        .args(["/C", command])
-        .current_dir(root)
-        .output()
-        .with_context(|| format!("failed to execute shell command: {command}"))?;
-
-    #[cfg(not(windows))]
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg(command)
+    let invocation = eval_shell_invocation(command);
+    let mut cmd = Command::new(invocation.program);
+    push_eval_shell_args(&mut cmd, &invocation);
+    let output = cmd
         .current_dir(root)
         .output()
         .with_context(|| format!("failed to execute shell command: {command}"))?;
@@ -738,5 +794,25 @@ fn truncate_output(value: &str, max_chars: usize) -> String {
     }
 
     let truncated: String = value.chars().take(max_chars).collect();
-    format!("{}...", truncated)
+    format!("{truncated}...")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn eval_shell_invocation_preserves_quoted_payload_as_single_arg() {
+        let command = r#"git commit -m "feat: complete sub-pages""#;
+
+        let windows = eval_shell_invocation_for_platform(command, EvalShellPlatform::Windows);
+        assert_eq!(windows.program, "cmd");
+        assert_eq!(windows.args, vec!["/C".to_string(), command.to_string()]);
+        assert!(windows.raw_payload_on_windows);
+
+        let unix = eval_shell_invocation_for_platform(command, EvalShellPlatform::Unix);
+        assert_eq!(unix.program, "sh");
+        assert_eq!(unix.args, vec!["-c".to_string(), command.to_string()]);
+        assert!(!unix.raw_payload_on_windows);
+    }
 }

@@ -24,6 +24,33 @@ test("optional mode only changes install-time defaults", () => {
   assert.equal(_internal.defaultStallMs("runtime", { DEEPSEEK_TUI_OPTIONAL_INSTALL: "1" }), 30_000);
 });
 
+test("pnpm optional postinstall skips install-time download", () => {
+  assert.equal(
+    _internal.shouldSkipOptionalPostinstall("install", ["--optional"], {
+      npm_config_user_agent: "pnpm/10.11.0 npm/? node/v22.15.0 win32 x64",
+    }),
+    true,
+  );
+  assert.equal(
+    _internal.shouldSkipOptionalPostinstall("runtime", ["--optional"], {
+      npm_config_user_agent: "pnpm/10.11.0 npm/? node/v22.15.0 win32 x64",
+    }),
+    false,
+  );
+  assert.equal(
+    _internal.shouldSkipOptionalPostinstall("install", [], {
+      npm_config_user_agent: "pnpm/10.11.0 npm/? node/v22.15.0 win32 x64",
+    }),
+    false,
+  );
+  assert.equal(
+    _internal.shouldSkipOptionalPostinstall("install", ["--optional"], {
+      npm_config_user_agent: "npm/11.3.0 node/v22.15.0 win32 x64",
+    }),
+    false,
+  );
+});
+
 test("optional install only swallows retryable download failures", () => {
   const socketHangUp = new Error("socket hang up");
   assert.equal(
@@ -44,7 +71,7 @@ test("optional install only swallows retryable download failures", () => {
     false,
   );
 
-  const badChecksum = new Error("Checksum mismatch for deepseek-linux-x64");
+  const badChecksum = new Error("Checksum mismatch for codewhale-linux-x64");
   badChecksum.nonRetryable = true;
   assert.equal(
     _internal.shouldIgnoreInstallFailure("install", badChecksum, ["--optional"], {}),
@@ -121,7 +148,7 @@ test("withRetry prints install hint on first retryable failure", async () => {
 
     assert.equal(result, "ok");
     assert.equal(attempts, 2);
-    assert.match(stderr, /deepseek-tui install hint:/);
+    assert.match(stderr, /codewhale install hint:/);
     assert.match(stderr, /#npm-binary-download-times-out/);
   } finally {
     process.stderr.write = previousWrite;

@@ -1,8 +1,8 @@
 # Runtime API & Integration Contract
 
-DeepSeek TUI exposes a local runtime API through `deepseek serve --http` and
-machine-readable health via `deepseek doctor --json`. It also exposes
-`deepseek serve --acp` for editor clients that speak the Agent Client Protocol
+codewhale exposes a local runtime API through `codewhale serve --http` and
+machine-readable health via `codewhale doctor --json`. It also exposes
+`codewhale serve --acp` for editor clients that speak the Agent Client Protocol
 over stdio. This document is the stable integration contract for native macOS
 workbench applications (and other local supervisors) that embed the DeepSeek
 engine without screen-scraping terminal output.
@@ -12,19 +12,19 @@ engine without screen-scraping terminal output.
 ```
 macOS workbench (or any local supervisor)
         │
-        ├─ deepseek doctor --json   → machine-readable health & capability
-        ├─ deepseek serve --http    → HTTP/SSE runtime API
-        ├─ deepseek serve --acp     → ACP stdio agent for editors such as Zed
-        ├─ deepseek serve --mcp     → MCP stdio server
-        └─ deepseek [args]          → interactive TUI session
+        ├─ codewhale doctor --json   → machine-readable health & capability
+        ├─ codewhale serve --http    → HTTP/SSE runtime API
+        ├─ codewhale serve --acp     → ACP stdio agent for editors such as Zed
+        ├─ codewhale serve --mcp     → MCP stdio server
+        └─ codewhale [args]          → interactive TUI session
 ```
 
 The engine runs as a local-only process. All APIs bind to `localhost` by
 default. No hosted relay, no provider-token custody, no secret leakage.
 
-## ACP stdio adapter: `deepseek serve --acp`
+## ACP stdio adapter: `codewhale serve --acp`
 
-`deepseek serve --acp` speaks JSON-RPC 2.0 over newline-delimited stdio for
+`codewhale serve --acp` speaks JSON-RPC 2.0 over newline-delimited stdio for
 ACP-compatible editor clients. The initial adapter implements the ACP baseline:
 
 - `initialize`
@@ -38,16 +38,16 @@ followed by a `session/prompt` response with `stopReason: "end_turn"`.
 
 The adapter is intentionally conservative: it does not yet expose shell tools,
 file-write tools, checkpoint replay, or session loading through ACP. Use
-`deepseek serve --http` for the full local runtime API and `deepseek serve --mcp`
+`codewhale serve --http` for the full local runtime API and `codewhale serve --mcp`
 when another client needs DeepSeek's tools as MCP tools.
 
-## Capability endpoint: `deepseek doctor --json`
+## Capability endpoint: `codewhale doctor --json`
 
 Returns a JSON object describing the current installation's readiness state.
 Suitable for health-check polling from a macOS workbench.
 
 ```bash
-deepseek doctor --json
+codewhale doctor --json
 ```
 
 ### Response schema (key fields)
@@ -88,7 +88,7 @@ deepseek doctor --json
   "version": "0.8.9",
   "config_path": "/Users/you/.deepseek/config.toml",
   "config_present": true,
-  "workspace": "/Users/you/projects/deepseek-tui",
+  "workspace": "/Users/you/projects/codewhale-tui",
   "api_key": {
     "source": "env"
   },
@@ -113,10 +113,10 @@ deepseek doctor --json
 }
 ```
 
-## HTTP/SSE runtime API: `deepseek serve --http`
+## HTTP/SSE runtime API: `codewhale serve --http`
 
 ```bash
-deepseek serve --http [--host 127.0.0.1] [--port 7878] [--workers 2] [--auth-token TOKEN]
+codewhale serve --http [--host 127.0.0.1] [--port 7878] [--workers 2] [--auth-token TOKEN]
 ```
 
 Defaults: host `127.0.0.1`, port `7878`, 2 workers (clamped 1–8).
@@ -153,6 +153,13 @@ clients that cannot set custom headers.
 - `PATCH /v1/threads/{id}` (see body shape below)
 - `POST /v1/threads/{id}/resume`
 - `POST /v1/threads/{id}/fork`
+
+Thread forks are sibling runtime threads, not an in-place tree projection.
+`thread.forked` events include `source_thread_id`; internal backtrack-aware
+forks may also include `backtrack_depth_from_tail` and `dropped_turn_id`.
+Thread list and summary responses remain flat in v0.8.40, so clients that need
+a graph should reconstruct it from events instead of assuming list order is a
+complete tree.
 
 `archived_only=true` returns archived threads only (mutually overrides
 `include_archived`). Default behavior is unchanged: `include_archived=false`
@@ -326,7 +333,7 @@ The runtime API ships with a built-in dev-origin allow-list:
 `http://127.0.0.1:1420`, `tauri://localhost`. To add additional origins (e.g.
 when developing a UI on Vite's default `:5173`), use any of:
 
-- CLI flag (repeatable): `deepseek serve --http --cors-origin http://localhost:5173`
+- CLI flag (repeatable): `codewhale serve --http --cors-origin http://localhost:5173`
 - Env var (comma-separated): `DEEPSEEK_CORS_ORIGINS="http://localhost:5173,http://localhost:8080"`
 - Config (`~/.deepseek/config.toml`):
   ```toml
@@ -359,7 +366,7 @@ model is preserved. Added in v0.8.10 (#561).
 Contract snapshots live in `crates/protocol/tests/`. Run:
 
 ```bash
-cargo test -p deepseek-protocol --test parity_protocol --locked
+cargo test -p codewhale-protocol --test parity_protocol --locked
 ```
 
 This validates that the app-server's event schema hasn't drifted from the

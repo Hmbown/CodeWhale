@@ -119,11 +119,11 @@ pub fn resolve_pdftotext() -> Option<String> {
         .clone()
 }
 
-/// Resolve `tesseract` (OCR engine) once per process. Used by
-/// the `image_ocr` tool to decide whether to register itself with
-/// the model. Tesseract is the de-facto open-source OCR engine and
-/// ships as a single binary on every platform we support, so the
-/// candidate list is just `tesseract`.
+/// Resolve `tesseract` (OCR engine) once per process. Used by the
+/// `image_ocr` tool on platforms that do not have a native OCR backend.
+/// Tesseract is the de-facto open-source OCR engine and ships as a single
+/// binary on every platform we support, so the candidate list is just
+/// `tesseract`.
 pub fn resolve_tesseract() -> Option<String> {
     static CACHE: OnceLock<Option<String>> = OnceLock::new();
     CACHE
@@ -137,7 +137,7 @@ pub fn resolve_tesseract() -> Option<String> {
             } else {
                 tracing::warn!(
                     target: "tool_dependencies",
-                    "tesseract binary not found; image_ocr tool will not be registered",
+                    "tesseract binary not found; image_ocr will rely on native OCR if available",
                 );
                 None
             }
@@ -219,7 +219,7 @@ mod tests {
     fn probe_executable_returns_false_for_unknown_binary() {
         // Pick a name we're confident isn't on any developer's PATH.
         // If this ever starts failing locally, rename it.
-        assert!(!probe_executable("deepseek-tui-imaginary-binary-xyz123"));
+        assert!(!probe_executable("codewhale-tui-imaginary-binary-xyz123"));
     }
 
     #[test]

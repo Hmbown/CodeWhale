@@ -86,11 +86,11 @@ pub struct ReviewOutput {
 impl ReviewOutput {
     #[must_use]
     pub fn from_str(raw: &str) -> Self {
-        if let Ok(parsed) = serde_json::from_str::<ReviewOutput>(raw) {
+        if let Some(parsed) = parse_review_output_json(raw) {
             return parsed.normalize();
         }
         if let Some(json_block) = extract_json_block(raw)
-            && let Ok(parsed) = serde_json::from_str::<ReviewOutput>(json_block)
+            && let Some(parsed) = parse_review_output_json(json_block)
         {
             return parsed.normalize();
         }
@@ -127,6 +127,20 @@ impl ReviewOutput {
         }
         self
     }
+}
+
+fn parse_review_output_json(raw: &str) -> Option<ReviewOutput> {
+    if let Ok(parsed) = serde_json::from_str::<ReviewOutput>(raw) {
+        return Some(parsed);
+    }
+
+    let Value::String(inner) = serde_json::from_str::<Value>(raw).ok()? else {
+        return None;
+    };
+    if inner.trim().is_empty() || inner == raw {
+        return None;
+    }
+    parse_review_output_json(&inner)
 }
 
 pub struct ReviewTool {
@@ -546,6 +560,66 @@ mod tests {
         let raw = "prefix {\"summary\":\"ok\"} suffix";
         let block = extract_json_block(raw).expect("block");
         assert!(block.contains("\"summary\""));
+    }
+
+    #[test]
+    fn review_output_parses_structured_json() {
+        let raw = r#"{
+            "summary": " Looks good overall ",
+            "issues": [{
+                "severity": "high",
+                "title": " Missing test ",
+                "description": " Add coverage ",
+                "path": " src/lib.rs ",
+                "line": 42
+            }],
+            "suggestions": [{
+                "path": "",
+                "line": 7,
+                "suggestion": " Keep the helper small "
+            }],
+            "overall_assessment": " Safe after test "
+        }"#;
+
+        let output = ReviewOutput::from_str(raw);
+
+        assert_eq!(output.summary, "Looks good overall");
+        assert_eq!(output.issues.len(), 1);
+        assert_eq!(output.issues[0].severity, "error");
+        assert_eq!(output.issues[0].title, "Missing test");
+        assert_eq!(output.issues[0].path.as_deref(), Some("src/lib.rs"));
+        assert_eq!(output.issues[0].line, Some(42));
+        assert_eq!(output.suggestions.len(), 1);
+        assert_eq!(output.suggestions[0].path, None);
+        assert_eq!(output.suggestions[0].line, Some(7));
+        assert_eq!(output.suggestions[0].suggestion, "Keep the helper small");
+        assert_eq!(output.overall_assessment, "Safe after test");
+    }
+
+    #[test]
+    fn review_output_parses_double_encoded_json_string() {
+        let inner = serde_json::json!({
+            "summary": "structured",
+            "issues": [{
+                "severity": "warning",
+                "title": "Risk",
+                "description": "The parser should not fall back to a raw JSON string.",
+                "path": "src/main.rs",
+                "line": 3
+            }],
+            "suggestions": [],
+            "overall_assessment": "usable"
+        })
+        .to_string();
+        let double_encoded = serde_json::to_string(&inner).expect("encode string");
+
+        let output = ReviewOutput::from_str(&double_encoded);
+
+        assert_eq!(output.summary, "structured");
+        assert_eq!(output.issues.len(), 1);
+        assert_eq!(output.issues[0].severity, "warning");
+        assert_eq!(output.issues[0].path.as_deref(), Some("src/main.rs"));
+        assert_eq!(output.overall_assessment, "usable");
     }
 
     #[test]

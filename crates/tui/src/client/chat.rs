@@ -120,8 +120,8 @@ impl DeepSeekClient {
             Err(_elapsed) => {
                 anyhow::bail!(
                     "SSE stream request did not receive response headers after {}s. \
-                     `deepseek doctor` can still pass when non-streaming requests work; \
-                     on Windows or proxy networks, try `DEEPSEEK_FORCE_HTTP1=1` and rerun `deepseek`.",
+                     `codewhale doctor` can still pass when non-streaming requests work; \
+                     on Windows or proxy networks, try `DEEPSEEK_FORCE_HTTP1=1` and rerun `codewhale`.",
                     open_timeout.as_secs()
                 );
             }
@@ -215,6 +215,7 @@ impl DeepSeekClient {
         }
 
         let model = request.model.clone();
+        let api_provider = self.api_provider;
 
         // Capture transport-shape headers before we consume `response` into
         // `bytes_stream()`. They are surfaced in the decode-error log path so
@@ -251,7 +252,7 @@ impl DeepSeekClient {
             let mut text_started = false;
             let mut thinking_started = false;
             let mut tool_indices: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
-            let is_reasoning_model = requires_reasoning_content(&model);
+            let is_reasoning_model = is_reasoning_model_for_stream(api_provider, &model);
 
             let mut byte_stream = std::pin::pin!(byte_stream);
             let idle = stream_idle_timeout();
@@ -921,6 +922,18 @@ fn turn_meta_budget_json(turn_meta: &TurnMetaBudget) -> Value {
     })
 }
 
+/// Mutating/write tools whose result body is a *confirmation* (it embeds
+/// the unified diff + summary of what was just written), not retrievable
+/// reference data. Two identical large `write_file` calls must each keep
+/// their full confirmation inline: collapsing the later one to a
+/// `<TOOL_RESULT_REF sha="..." />` makes the model lose the write-success
+/// context and behave as if the file is missing (issue #1695). Read-style
+/// tools (`read_file`, `grep_files`, `exec_shell`, …) are unaffected and
+/// still dedup normally.
+fn is_mutation_tool(tool_name: &str) -> bool {
+    matches!(tool_name, "write_file" | "edit_file" | "apply_patch")
+}
+
 fn compact_tool_result_for_wire(
     tool_name: &str,
     input: &Value,
@@ -931,10 +944,26 @@ fn compact_tool_result_for_wire(
     let original_chars = content.chars().count();
     let sha = sha256_hex(content.as_bytes());
 
+    // Two independent size-and-kind predicates, deliberately decoupled:
+    //
+    // * `persist_eligible` — size only. Any large result (including a
+    //   mutation tool's big diff) is written to the SHA-addressed store
+    //   so that, if it gets truncated below, the elided middle stays
+    //   retrievable via `retrieve_tool_result`. Mutation tools must NOT
+    //   be excluded here: a >12k-char `write_file` diff that we truncate
+    //   without persisting would leave the model unable to recover it.
+    // * `dedup_eligible` — size AND non-mutation. Only this predicate
+    //   gates collapsing a later identical result to a
+    //   `<TOOL_RESULT_REF>`. Mutation-tool results are write
+    //   *confirmations*, never dedup-eligible (#1695): two identical
+    //   large `write_file` calls must each keep their full confirmation
+    //   inline.
+    //
     // Below the threshold, repeating the content is safer than asking
-    // the model to chase a reference. Above it, persist a SHA-addressed
-    // copy before any later message can point at that SHA.
-    let dedup_eligible = original_chars >= TOOL_RESULT_DEDUP_MIN_CHARS;
+    // the model to chase a reference, and there's no retrieval burden to
+    // satisfy, so both predicates are false.
+    let persist_eligible = original_chars >= TOOL_RESULT_DEDUP_MIN_CHARS;
+    let dedup_eligible = persist_eligible && !is_mutation_tool(tool_name);
 
     if dedup_eligible && let Some(previous) = seen_tool_results.get(&sha) {
         // Re-check persistence before emitting a ref. If the file is
@@ -965,11 +994,17 @@ fn compact_tool_result_for_wire(
         };
     }
 
-    if dedup_eligible {
-        // Persist before registering the content as dedupable. If the
-        // write fails, later occurrences stay inline instead of pointing
-        // at a file that was never created.
-        if persist_tool_result_for_sha(&sha, content) {
+    if persist_eligible {
+        // Persist any large result so a later truncation below stays
+        // retrievable by SHA — this includes mutation tools, whose big
+        // diffs are NOT dedup-eligible but still must be recoverable
+        // when elided. Only register the SHA as dedup-able (eligible to
+        // be replaced by a back-reference later) when `dedup_eligible`:
+        // if the write fails, skip registration so later occurrences
+        // stay inline instead of pointing at a file that was never
+        // created.
+        let persisted = persist_tool_result_for_sha(&sha, content);
+        if persisted && dedup_eligible {
             seen_tool_results.insert(
                 sha.clone(),
                 SeenToolResult {
@@ -1396,15 +1431,6 @@ pub(super) fn tool_to_chat(tool: &Tool) -> Value {
             "parameters": tool.input_schema,
         }
     });
-    if let Some(allowed_callers) = &tool.allowed_callers {
-        value["allowed_callers"] = json!(allowed_callers);
-    }
-    if let Some(defer_loading) = tool.defer_loading {
-        value["defer_loading"] = json!(defer_loading);
-    }
-    if let Some(input_examples) = &tool.input_examples {
-        value["input_examples"] = json!(input_examples);
-    }
     if let Some(strict) = tool.strict
         && let Some(function) = value.get_mut("function")
     {
@@ -1464,7 +1490,7 @@ fn map_tool_choice_for_chat(choice: &Value) -> Option<Value> {
 /// reasoning can stay omitted once a later user text turn begins.
 ///
 /// Also tallies the size of all replayed `reasoning_content` and logs it, so
-/// users on `RUST_LOG=deepseek_tui=debug` can see how much of their input
+/// users on `RUST_LOG=codewhale_tui=debug` can see how much of their input
 /// budget is being spent re-sending prior thinking traces.
 pub(super) fn sanitize_thinking_mode_messages(
     body: &mut Value,
@@ -1578,8 +1604,7 @@ fn log_thinking_mode_violations(body: &Value) {
         let has_tc = msg.get("tool_calls").is_some();
         if reasoning.trim().is_empty() {
             violations.push(format!(
-                "assistant[{idx}] (reasoning_content missing, tool_calls={})",
-                has_tc
+                "assistant[{idx}] (reasoning_content missing, tool_calls={has_tc})"
             ));
         }
     }
@@ -1635,10 +1660,36 @@ fn should_replay_reasoning_content_for_provider(
     model: &str,
     effort: Option<&str>,
 ) -> bool {
-    if !provider_accepts_reasoning_content(provider) {
+    if !provider_accepts_reasoning_content(provider) && !requires_reasoning_content(model) {
+        // Generic non-DeepSeek model on a provider that rejects the field:
+        // keep stripping it (preserves the #1542 fix). But a known DeepSeek
+        // reasoning model pointed at a DeepSeek-compatible endpoint via the
+        // generic `openai` provider still requires reasoning_content replay,
+        // or the thinking-mode API returns 400 (#1739 / #1694).
         return false;
     }
     should_replay_reasoning_content(model, effort)
+}
+
+/// Should the SSE parser treat incoming `reasoning_content` deltas as thinking
+/// (vs. inlining them as answer text)?
+///
+/// This is the streaming-path twin of `should_replay_reasoning_content_for_provider`:
+/// both must agree on whether a model is a DeepSeek-family reasoning model, or
+/// stream parsing stores reasoning tokens in `content` while the replay path
+/// expects them in `reasoning_content` (DeepSeek thinking-mode API 400s —
+/// #1739 / #1694). Like that predicate's model-aware gate, a known reasoning
+/// model is classified as such on ANY provider (including the generic `openai`
+/// provider used for DeepSeek-compatible endpoints); a genuine non-DeepSeek
+/// model is never reclassified, so #1542 is not regressed.
+///
+/// `provider_accepts_reasoning_content(provider) || requires_reasoning_content(model)`
+/// short-circuits to `requires_reasoning_content(model)` once the model gate
+/// already holds, so the effective rule is purely model-driven — kept explicit
+/// here to mirror the predicate above.
+fn is_reasoning_model_for_stream(provider: ApiProvider, model: &str) -> bool {
+    requires_reasoning_content(model)
+        && (provider_accepts_reasoning_content(provider) || requires_reasoning_content(model))
 }
 
 fn provider_accepts_reasoning_content(provider: ApiProvider) -> bool {
@@ -1646,6 +1697,7 @@ fn provider_accepts_reasoning_content(provider: ApiProvider) -> bool {
         provider,
         ApiProvider::Deepseek
             | ApiProvider::DeepseekCN
+            | ApiProvider::NvidiaNim
             | ApiProvider::Openrouter
             | ApiProvider::Novita
             | ApiProvider::Fireworks
@@ -1908,11 +1960,14 @@ pub(super) fn parse_sse_chunk(
             .map(str::to_string);
 
         if let Some(delta) = delta {
+            let reasoning_text = reasoning_field(delta).filter(|s| !s.is_empty());
+            let content_text = delta
+                .get("content")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty());
+
             // Handle reasoning_content / reasoning thinking deltas.
-            if is_reasoning_model
-                && let Some(reasoning) = reasoning_field(delta)
-                && !reasoning.is_empty()
-            {
+            if is_reasoning_model && let Some(reasoning) = reasoning_text {
                 if !*thinking_started {
                     events.push(StreamEvent::ContentBlockStart {
                         index: *content_index,
@@ -1930,10 +1985,18 @@ pub(super) fn parse_sse_chunk(
                 });
             }
 
+            // Generic OpenAI-compatible proxies sometimes stream answer text
+            // in `reasoning_content`. If this provider is not one whose
+            // reasoning-content semantics we support, render that field as
+            // normal text when no `content` delta is present.
+            let effective_content = match content_text {
+                Some(content) => Some(content),
+                None if !is_reasoning_model => reasoning_text,
+                None => None,
+            };
+
             // Handle regular content
-            if let Some(content) = delta.get("content").and_then(Value::as_str)
-                && !content.is_empty()
-            {
+            if let Some(content) = effective_content {
                 // Close thinking block if transitioning to text
                 if *thinking_started {
                     events.push(StreamEvent::ContentBlockStop {
@@ -2205,6 +2268,10 @@ mod stream_decoder_tests {
     /// Decode a raw SSE-data JSON chunk into our internal events, mirroring
     /// the per-event call shape used by `handle_chat_completion_stream`.
     fn decode_chunk(json_text: &str) -> Vec<StreamEvent> {
+        decode_chunk_with_reasoning(json_text, true)
+    }
+
+    fn decode_chunk_with_reasoning(json_text: &str, is_reasoning_model: bool) -> Vec<StreamEvent> {
         let chunk: Value = serde_json::from_str(json_text).expect("valid SSE JSON");
         let mut content_index = 0u32;
         let mut text_started = false;
@@ -2216,7 +2283,7 @@ mod stream_decoder_tests {
             &mut text_started,
             &mut thinking_started,
             &mut tool_indices,
-            true,
+            is_reasoning_model,
         )
     }
 
@@ -2271,6 +2338,63 @@ mod stream_decoder_tests {
                     ..
                 } if thinking == "plan...")),
             "should yield a ThinkingDelta carrying 'plan...'; got {events:?}"
+        );
+    }
+
+    #[test]
+    fn decoder_accepts_openrouter_reasoning_delta_with_extra_fields() {
+        let events = decode_chunk(
+            r#"{"id":"or-1","choices":[{"delta":{"reasoning":"openrouter thought","reasoning_details":[{"type":"summary","text":"extra"}],"native_finish_reason":null}}],"usage":{"completion_tokens_details":{"reasoning_tokens":3}}}"#,
+        );
+
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                StreamEvent::ContentBlockDelta {
+                    delta: Delta::ThinkingDelta { thinking },
+                    ..
+                } if thinking == "openrouter thought"
+            )),
+            "OpenRouter-style reasoning deltas with extra fields should not crash decoding; got {events:?}"
+        );
+    }
+
+    #[test]
+    fn decoder_treats_reasoning_content_as_text_when_provider_does_not_support_reasoning() {
+        let events = decode_chunk_with_reasoning(
+            r#"{"choices":[{"delta":{"reasoning_content":"hello"}}]}"#,
+            false,
+        );
+
+        assert!(
+            matches!(
+                events.first(),
+                Some(StreamEvent::ContentBlockStart {
+                    content_block: ContentBlockStart::Text { .. },
+                    ..
+                })
+            ),
+            "first event should open a text block; got {events:?}"
+        );
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                StreamEvent::ContentBlockDelta {
+                    delta: Delta::TextDelta { text },
+                    ..
+                } if text == "hello"
+            )),
+            "should yield a TextDelta carrying 'hello'; got {events:?}"
+        );
+        assert!(
+            !events.iter().any(|e| matches!(
+                e,
+                StreamEvent::ContentBlockDelta {
+                    delta: Delta::ThinkingDelta { .. },
+                    ..
+                }
+            )),
+            "should not emit thinking deltas for generic providers; got {events:?}"
         );
     }
 
@@ -2499,6 +2623,24 @@ mod stream_decoder_tests {
             .expect("user message content")
     }
 
+    fn with_tool_result_sha_spillover_root<T>(f: impl FnOnce() -> T) -> T {
+        let _guard = crate::tools::truncate::TEST_SPILLOVER_GUARD
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let prior = crate::tools::truncate::set_test_spillover_root(Some(
+            tmp.path().join(".deepseek").join("tool_outputs"),
+        ));
+        struct Restore(Option<std::path::PathBuf>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                crate::tools::truncate::set_test_spillover_root(self.0.take());
+            }
+        }
+        let _restore = Restore(prior);
+        f()
+    }
+
     #[test]
     fn request_builder_deduplicates_consecutive_identical_turn_meta_for_wire() {
         let turn_meta = "<turn_meta>\nCurrent local date: 2026-05-09\n</turn_meta>";
@@ -2667,31 +2809,170 @@ mod stream_decoder_tests {
 
     #[test]
     fn request_builder_deduplicates_large_identical_tool_results_with_retrieval_hint() {
-        let output = "A".repeat(2_000);
-        let messages = vec![
-            tool_use_message("tool-1", "read_file", json!({"path": "README.md"})),
-            tool_result_message("tool-1", &output),
-            tool_use_message("tool-2", "read_file", json!({"path": "README.md"})),
-            tool_result_message("tool-2", &output),
-        ];
+        with_tool_result_sha_spillover_root(|| {
+            let output = "A".repeat(2_000);
+            let messages = vec![
+                tool_use_message("tool-1", "read_file", json!({"path": "README.md"})),
+                tool_result_message("tool-1", &output),
+                tool_use_message("tool-2", "read_file", json!({"path": "README.md"})),
+                tool_result_message("tool-2", &output),
+            ];
 
+            let built = build_chat_messages(None, &messages, "deepseek-v4-flash");
+            let first = tool_message_content(&built, 0);
+            let second = tool_message_content(&built, 1);
+
+            assert_eq!(first, output);
+            assert!(
+                second.starts_with("<TOOL_RESULT_REF sha=\""),
+                "got: {second}"
+            );
+            assert!(
+                second.contains("original_message=\"Message #1\""),
+                "got: {second}"
+            );
+            assert!(second.contains("chars=\"2000\""), "got: {second}");
+            assert!(
+                second.contains("retrieve: retrieve_tool_result ref=sha:"),
+                "got: {second}"
+            );
+        });
+    }
+
+    #[test]
+    fn request_builder_never_dedups_large_identical_write_file_confirmations() {
+        with_tool_result_sha_spillover_root(|| {
+            // A `write_file` result embeds the unified diff + summary; it is a
+            // confirmation, not retrievable data. Two identical >1024-char
+            // write_file results must BOTH stay inline — collapsing the second
+            // to a SHA ref makes the model lose write-success context and
+            // report the file as missing (#1695).
+            let output = "A".repeat(2_000);
+            let messages = vec![
+                tool_use_message("tool-1", "write_file", json!({"path": "big.txt"})),
+                tool_result_message("tool-1", &output),
+                tool_use_message("tool-2", "write_file", json!({"path": "big.txt"})),
+                tool_result_message("tool-2", &output),
+            ];
+
+            let built = build_chat_messages(None, &messages, "deepseek-v4-flash");
+            let first = tool_message_content(&built, 0);
+            let second = tool_message_content(&built, 1);
+
+            assert_eq!(first, output);
+            assert_eq!(second, output);
+            assert!(!second.contains("<TOOL_RESULT_REF"), "got: {second}");
+
+            // Non-mutation tools still dedup: an identical large read_file
+            // result collapses to a retrievable SHA ref.
+            let read_messages = vec![
+                tool_use_message("read-1", "read_file", json!({"path": "README.md"})),
+                tool_result_message("read-1", &output),
+                tool_use_message("read-2", "read_file", json!({"path": "README.md"})),
+                tool_result_message("read-2", &output),
+            ];
+            let read_built = build_chat_messages(None, &read_messages, "deepseek-v4-flash");
+            let read_first = tool_message_content(&read_built, 0);
+            let read_second = tool_message_content(&read_built, 1);
+            assert_eq!(read_first, output);
+            assert!(
+                read_second.starts_with("<TOOL_RESULT_REF sha=\""),
+                "got: {read_second}"
+            );
+        });
+    }
+
+    #[test]
+    fn large_write_file_result_stays_inline_but_is_persisted_for_retrieval() {
+        // Decoupling regression (#1695 follow-up): a SINGLE very large
+        // `write_file` result must (a) never collapse to a
+        // `<TOOL_RESULT_REF>` (mutation confirmations stay inline) yet
+        // (b) still be persisted to the SHA store so the content elided
+        // by truncation remains retrievable via `retrieve_tool_result`.
+        // Before the fix, folding `!is_mutation_tool` into the single
+        // `dedup_eligible` gate also disabled persistence, so a >12k
+        // mutation diff was truncated AND unrecoverable.
+        let _guard = crate::tools::truncate::TEST_SPILLOVER_GUARD
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let prior = crate::tools::truncate::set_test_spillover_root(Some(
+            tmp.path().join(".deepseek").join("tool_outputs"),
+        ));
+        struct Restore(Option<std::path::PathBuf>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                crate::tools::truncate::set_test_spillover_root(self.0.take());
+            }
+        }
+        let _restore = Restore(prior);
+
+        // > TOOL_RESULT_SENT_CHAR_BUDGET (12_000) so the wire path
+        // truncates and would need a SHA to recover the middle.
+        let big_diff = "D".repeat(20_000);
+        let sha = sha256_hex(big_diff.as_bytes());
+
+        let messages = vec![
+            tool_use_message("w-1", "write_file", json!({"path": "huge.rs"})),
+            tool_result_message("w-1", &big_diff),
+            tool_use_message("w-2", "write_file", json!({"path": "huge.rs"})),
+            tool_result_message("w-2", &big_diff),
+        ];
         let built = build_chat_messages(None, &messages, "deepseek-v4-flash");
         let first = tool_message_content(&built, 0);
         let second = tool_message_content(&built, 1);
 
-        assert_eq!(first, output);
+        // (a) Both confirmations stay inline — truncated, never a ref.
         assert!(
-            second.starts_with("<TOOL_RESULT_REF sha=\""),
-            "got: {second}"
+            first.contains("[TOOL_RESULT_TRUNCATED]"),
+            "first should be truncated, got: {first}"
         );
         assert!(
-            second.contains("original_message=\"Message #1\""),
-            "got: {second}"
+            !first.contains("<TOOL_RESULT_REF"),
+            "first must not be a dedup ref, got: {first}"
         );
-        assert!(second.contains("chars=\"2000\""), "got: {second}");
         assert!(
-            second.contains("retrieve: retrieve_tool_result ref=sha:"),
-            "got: {second}"
+            !second.contains("<TOOL_RESULT_REF"),
+            "second identical write_file must stay inline (#1695), got: {second}"
+        );
+        assert!(
+            second.contains("[TOOL_RESULT_TRUNCATED]"),
+            "second should also be inline-truncated, got: {second}"
+        );
+        assert!(
+            first.contains(&format!("sha256: {sha}")),
+            "truncation block should advertise the recovery SHA, got: {first}"
+        );
+
+        // (b) The full content was persisted to the SHA store and is
+        // retrievable — the seam `persist_tool_result_for_sha` writes
+        // to and `retrieve_tool_result ref=sha:` reads back from.
+        let path = crate::tools::truncate::sha_spillover_path(&sha)
+            .expect("sha spillover path resolvable under test root");
+        assert!(
+            path.exists(),
+            "large write_file output not persisted: {path:?}"
+        );
+        let persisted = std::fs::read_to_string(&path).expect("read persisted spillover");
+        assert_eq!(
+            persisted, big_diff,
+            "persisted content must match the original write_file result verbatim"
+        );
+
+        // Sanity: a large NON-mutation result still dedups (back-ref on
+        // the second sighting) — decoupling didn't regress #1695's
+        // preserved read-path behavior.
+        let read_messages = vec![
+            tool_use_message("r-1", "read_file", json!({"path": "huge.rs"})),
+            tool_result_message("r-1", &big_diff),
+            tool_use_message("r-2", "read_file", json!({"path": "huge.rs"})),
+            tool_result_message("r-2", &big_diff),
+        ];
+        let read_built = build_chat_messages(None, &read_messages, "deepseek-v4-flash");
+        let read_second = tool_message_content(&read_built, 1);
+        assert!(
+            read_second.starts_with("<TOOL_RESULT_REF sha=\""),
+            "large read_file must still dedup to a ref, got: {read_second}"
         );
     }
 
@@ -2719,49 +3000,51 @@ mod stream_decoder_tests {
 
     #[test]
     fn cache_inspect_reports_tool_result_budget_metadata() {
-        let long_output = format!("{}{}", "A".repeat(7_000), "Z".repeat(7_000));
-        let request = MessageRequest {
-            model: "deepseek-v4-flash".to_string(),
-            messages: vec![
-                tool_use_message("tool-1", "shell_command", json!({"command": "cargo test"})),
-                tool_result_message("tool-1", &long_output),
-                tool_use_message("tool-2", "shell_command", json!({"command": "cargo test"})),
-                tool_result_message("tool-2", &long_output),
-            ],
-            max_tokens: 0,
-            system: None,
-            tools: None,
-            tool_choice: None,
-            metadata: None,
-            thinking: None,
-            reasoning_effort: None,
-            stream: None,
-            temperature: None,
-            top_p: None,
-        };
+        with_tool_result_sha_spillover_root(|| {
+            let long_output = format!("{}{}", "A".repeat(7_000), "Z".repeat(7_000));
+            let request = MessageRequest {
+                model: "deepseek-v4-flash".to_string(),
+                messages: vec![
+                    tool_use_message("tool-1", "shell_command", json!({"command": "cargo test"})),
+                    tool_result_message("tool-1", &long_output),
+                    tool_use_message("tool-2", "shell_command", json!({"command": "cargo test"})),
+                    tool_result_message("tool-2", &long_output),
+                ],
+                max_tokens: 0,
+                system: None,
+                tools: None,
+                tool_choice: None,
+                metadata: None,
+                thinking: None,
+                reasoning_effort: None,
+                stream: None,
+                temperature: None,
+                top_p: None,
+            };
 
-        let inspection = inspect_prompt_for_request(&request);
-        let tool_layers: Vec<_> = inspection
-            .layers
-            .iter()
-            .filter_map(|layer| layer.tool_result.as_ref())
-            .collect();
+            let inspection = inspect_prompt_for_request(&request);
+            let tool_layers: Vec<_> = inspection
+                .layers
+                .iter()
+                .filter_map(|layer| layer.tool_result.as_ref())
+                .collect();
 
-        assert_eq!(tool_layers.len(), 2);
-        assert_eq!(tool_layers[0].original_chars, 14_000);
-        assert!(tool_layers[0].sent_chars < tool_layers[0].original_chars);
-        assert!(tool_layers[0].truncated);
-        assert!(!tool_layers[0].deduplicated);
-        assert_eq!(tool_layers[1].original_chars, 14_000);
-        // Keep the reference far smaller than the original 14K output
-        // even with a copyable retrieval hint included.
-        assert!(
-            tool_layers[1].sent_chars < 300,
-            "deduplicated ref grew unexpectedly large: {}",
-            tool_layers[1].sent_chars
-        );
-        assert!(!tool_layers[1].truncated);
-        assert!(tool_layers[1].deduplicated);
+            assert_eq!(tool_layers.len(), 2);
+            assert_eq!(tool_layers[0].original_chars, 14_000);
+            assert!(tool_layers[0].sent_chars < tool_layers[0].original_chars);
+            assert!(tool_layers[0].truncated);
+            assert!(!tool_layers[0].deduplicated);
+            assert_eq!(tool_layers[1].original_chars, 14_000);
+            // Keep the reference far smaller than the original 14K output
+            // even with a copyable retrieval hint included.
+            assert!(
+                tool_layers[1].sent_chars < 300,
+                "deduplicated ref grew unexpectedly large: {}",
+                tool_layers[1].sent_chars
+            );
+            assert!(!tool_layers[1].truncated);
+            assert!(tool_layers[1].deduplicated);
+        });
     }
 }
 
@@ -2778,7 +3061,12 @@ mod alias_thinking_detection_tests {
     //! in the thinking mode must be passed back to the API") on the second
     //! turn. See upstream API docs:
     //! https://api-docs.deepseek.com/guides/thinking_mode
-    use super::{requires_reasoning_content, should_replay_reasoning_content};
+    use super::{
+        is_reasoning_model_for_stream, provider_accepts_reasoning_content,
+        requires_reasoning_content, should_replay_reasoning_content,
+        should_replay_reasoning_content_for_provider,
+    };
+    use crate::config::ApiProvider;
 
     #[test]
     fn aliases_routed_to_v4_require_reasoning_content() {
@@ -2805,7 +3093,7 @@ mod alias_thinking_detection_tests {
         // `reasoning_content` on providers that reject the field.
         assert!(!requires_reasoning_content("deepseek-v3"));
         assert!(!requires_reasoning_content("deepseek-coder"));
-        assert!(!requires_reasoning_content("gpt-4o"));
+        assert!(!requires_reasoning_content("qwen3-coder"));
         assert!(!requires_reasoning_content("claude-sonnet-4-6"));
     }
 
@@ -2837,5 +3125,119 @@ mod alias_thinking_detection_tests {
             "deepseek-reasoner",
             Some("medium")
         ));
+    }
+
+    #[test]
+    fn generic_openai_provider_does_not_accept_reasoning_content_semantics() {
+        assert!(!provider_accepts_reasoning_content(ApiProvider::Openai));
+        assert!(provider_accepts_reasoning_content(ApiProvider::Deepseek));
+        assert!(provider_accepts_reasoning_content(ApiProvider::NvidiaNim));
+    }
+
+    #[test]
+    fn deepseek_model_on_openai_provider_still_replays_reasoning_content() {
+        // #1739 / #1694: a DeepSeek thinking model pointed at a
+        // DeepSeek-compatible endpoint via the generic `openai` provider must
+        // still replay reasoning_content, even though the provider itself does
+        // not accept the field. Otherwise the thinking-mode API returns 400.
+        assert!(should_replay_reasoning_content_for_provider(
+            ApiProvider::Openai,
+            "deepseek-v4-flash",
+            None,
+        ));
+        assert!(should_replay_reasoning_content_for_provider(
+            ApiProvider::Openai,
+            "deepseek-v4-pro",
+            None,
+        ));
+        assert!(should_replay_reasoning_content_for_provider(
+            ApiProvider::Openai,
+            "deepseek-reasoner",
+            Some("medium"),
+        ));
+        // The documented escape hatch still wins over model detection.
+        assert!(!should_replay_reasoning_content_for_provider(
+            ApiProvider::Openai,
+            "deepseek-v4-flash",
+            Some("off"),
+        ));
+    }
+
+    #[test]
+    fn generic_model_on_openai_provider_still_strips_reasoning_content() {
+        // #1542 no-regression guard: a genuine non-DeepSeek model on the
+        // openai provider must continue to have reasoning_content stripped.
+        assert!(!should_replay_reasoning_content_for_provider(
+            ApiProvider::Openai,
+            "qwen3-coder",
+            None,
+        ));
+        assert!(!should_replay_reasoning_content_for_provider(
+            ApiProvider::Openai,
+            "claude-sonnet-4-6",
+            None,
+        ));
+    }
+
+    #[test]
+    fn stream_classifies_deepseek_model_on_openai_provider_as_reasoning() {
+        // #1739: the SSE parser must treat a DeepSeek thinking model on the
+        // generic `openai` provider (DeepSeek-compatible endpoint) as a
+        // reasoning model, or incoming `reasoning_content` tokens are stored
+        // as answer text and the subsequent replay still 400s.
+        assert!(is_reasoning_model_for_stream(
+            ApiProvider::Openai,
+            "deepseek-v4-flash"
+        ));
+        assert!(is_reasoning_model_for_stream(
+            ApiProvider::Openai,
+            "deepseek-v4-pro"
+        ));
+        assert!(is_reasoning_model_for_stream(
+            ApiProvider::Openai,
+            "deepseek-reasoner"
+        ));
+        // Native DeepSeek provider was already correct; stays correct.
+        assert!(is_reasoning_model_for_stream(
+            ApiProvider::Deepseek,
+            "deepseek-v4-pro"
+        ));
+    }
+
+    #[test]
+    fn stream_does_not_classify_generic_model_as_reasoning() {
+        // #1542 no-regression guard: a genuine non-DeepSeek model on the
+        // openai provider must NOT be treated as a reasoning model, so the
+        // parser keeps inlining any `reasoning_content` it emits as text.
+        assert!(!is_reasoning_model_for_stream(
+            ApiProvider::Openai,
+            "qwen3-coder"
+        ));
+        assert!(!is_reasoning_model_for_stream(
+            ApiProvider::Openai,
+            "claude-sonnet-4-6"
+        ));
+        // Non-DeepSeek model on a reasoning-aware provider is also unchanged.
+        assert!(!is_reasoning_model_for_stream(
+            ApiProvider::Deepseek,
+            "qwen3-coder"
+        ));
+    }
+
+    #[test]
+    fn stream_classification_matches_replay_predicate() {
+        // The streaming classifier and the replay predicate must agree on
+        // model identity, or stream parsing and message sanitisation disagree
+        // about where reasoning tokens live. Effort=None isolates the
+        // model/provider dimension shared by both.
+        for model in ["deepseek-v4-pro", "deepseek-reasoner", "qwen3-coder"] {
+            for provider in [ApiProvider::Openai, ApiProvider::Deepseek] {
+                assert_eq!(
+                    is_reasoning_model_for_stream(provider, model),
+                    should_replay_reasoning_content_for_provider(provider, model, None),
+                    "stream vs replay disagree for {model} on {provider:?}"
+                );
+            }
+        }
     }
 }

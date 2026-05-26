@@ -154,8 +154,9 @@ pub struct MailboxReceiver {
 
 impl Mailbox {
     /// Create a new mailbox bound to the given cancellation token. Closing
-    /// the mailbox (or dropping the last sender) cancels this token, which
-    /// propagates to children via `child_token()` per `SubAgentRuntime`.
+    /// the mailbox (or dropping the last sender) cancels this token. Runtimes
+    /// that derive from the same token observe that cancellation; detached
+    /// background `agent_open` sessions use their own runtime token.
     #[must_use]
     pub fn new(cancel_token: CancellationToken) -> (Self, MailboxReceiver) {
         let (tx, rx) = mpsc::unbounded_channel();
@@ -211,10 +212,11 @@ impl Mailbox {
 
     /// Close the mailbox AND cancel the bound cancellation token.
     ///
-    /// "Close-as-cancel": there's no useful state where the consumer is
-    /// gone but children should keep producing. Closing the parent's
-    /// mailbox cascades to every nested child because each child runtime
-    /// derived its `cancel_token` via `child_token()` from the parent's.
+    /// "Close-as-cancel": there's no useful state where the consumer is gone
+    /// but producers bound to this mailbox token should keep publishing.
+    /// Closing cancels the bound token; directly derived `child_runtime()`
+    /// children observe it, while detached `agent_open` sessions rely on their
+    /// own explicit cancellation.
     pub fn close(&self) {
         if !self.inner.closed.swap(true, Ordering::AcqRel) {
             self.inner.cancel_token.cancel();

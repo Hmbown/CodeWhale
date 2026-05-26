@@ -296,6 +296,14 @@ fn message_text(msg: &Message) -> String {
     text
 }
 
+fn is_user_text_query(msg: &Message) -> bool {
+    msg.role == "user"
+        && msg
+            .content
+            .iter()
+            .any(|block| matches!(block, ContentBlock::Text { .. }))
+}
+
 fn extract_paths_from_message(message: &Message, workspace: Option<&Path>) -> Vec<String> {
     let mut paths = Vec::new();
     for block in &message.content {
@@ -436,6 +444,21 @@ pub fn plan_compaction(
 
     // Ensure tool result messages are not kept without their corresponding tool call.
     enforce_tool_call_pairs(messages, &mut pinned_indices);
+
+    // Some OpenAI-compatible chat templates require at least one user text
+    // message. Tool-heavy tails can otherwise compact down to only tool calls
+    // and tool results, which makes those backends reject the next request.
+    if !pinned_indices
+        .iter()
+        .any(|&idx| is_user_text_query(&messages[idx]))
+        && let Some(idx) = messages
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(idx, msg)| is_user_text_query(msg).then_some(idx))
+    {
+        pinned_indices.insert(idx);
+    }
 
     let summarize_indices = (0..len)
         .filter(|idx| !pinned_indices.contains(idx))
@@ -1132,7 +1155,20 @@ async fn create_summary(
         build_formatted_summary_request(model, messages, limits)
     };
 
-    let response = client.create_message(request).await?;
+    let mut telemetry_cache_aligned = used_cache_aligned;
+    let response = match client.create_message(request).await {
+        Ok(response) => response,
+        Err(err) if used_cache_aligned && is_context_window_error(&err) => {
+            logging::warn(format!(
+                "Cache-aligned compaction summary exceeded the model context window ({err}); \
+                 retrying with bounded formatted summary input"
+            ));
+            telemetry_cache_aligned = false;
+            let fallback_request = build_formatted_summary_request(model, messages, limits);
+            client.create_message(fallback_request).await?
+        }
+        Err(err) => return Err(err),
+    };
     // Compaction summary calls are billed by DeepSeek; route the
     // tokens through the side-channel so the dashboard total
     // matches the website (#526).
@@ -1143,9 +1179,9 @@ async fn create_summary(
     // adding UI surface. The event is emitted with
     // `target = "compaction"`, so the filter is
     // `RUST_LOG=compaction=debug` (the module-path form
-    // `deepseek_tui::compaction=debug` does NOT match — `EnvFilter`
+    // `codewhale_tui::compaction=debug` does NOT match — `EnvFilter`
     // matches the explicit target string when one is set).
-    log_summary_cache_telemetry(used_cache_aligned, &response.usage);
+    log_summary_cache_telemetry(telemetry_cache_aligned, &response.usage);
 
     // Extract text from response
     let summary = response
@@ -1159,6 +1195,22 @@ async fn create_summary(
         .join("\n");
 
     Ok(summary)
+}
+
+fn is_context_window_error(e: &anyhow::Error) -> bool {
+    let text = e.to_string();
+    if crate::error_taxonomy::classify_error_message(&text)
+        != crate::error_taxonomy::ErrorCategory::InvalidInput
+    {
+        return false;
+    }
+
+    let lower = text.to_lowercase();
+    lower.contains("context")
+        || lower.contains("token")
+        || lower.contains("prompt is too long")
+        || lower.contains("requested")
+        || lower.contains("maximum")
 }
 
 /// Cache-hit percentage for a compaction summary call.
@@ -1321,7 +1373,7 @@ fn build_formatted_summary_request(
                 }
                 ContentBlock::ToolResult { content, .. } => {
                     let snippet = truncate_chars(content, limits.tool_result_snippet_chars);
-                    let _ = write!(conversation_text, "Tool result: {}\n\n", snippet);
+                    let _ = write!(conversation_text, "Tool result: {snippet}\n\n");
                 }
                 ContentBlock::Thinking { .. } => {
                     // Skip thinking blocks in summary
@@ -1413,9 +1465,9 @@ fn extract_workflow_context(messages: &[Message], workspace: Option<&Path>) -> S
                     .strip_prefix(ws)
                     .unwrap_or(Path::new(file))
                     .display();
-                context.push_str(&format!("- `{}`\n", relative));
+                context.push_str(&format!("- `{relative}`\n"));
             } else {
-                context.push_str(&format!("- `{}`\n", file));
+                context.push_str(&format!("- `{file}`\n"));
             }
         }
         context.push('\n');
@@ -1430,7 +1482,7 @@ fn extract_workflow_context(messages: &[Message], workspace: Option<&Path>) -> S
     if !tasks_identified.is_empty() {
         context.push_str("**Tasks/TODOs Identified:**\n");
         for task in &tasks_identified {
-            context.push_str(&format!("- {}\n", task));
+            context.push_str(&format!("- {task}\n"));
         }
         context.push('\n');
     }
@@ -1781,6 +1833,50 @@ mod tests {
         // divide-by-zero.
         assert!((summary_cache_hit_percent(0, 0) - 0.0).abs() < f64::EPSILON);
         assert!((summary_cache_hit_percent(50, 0) - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn context_window_errors_are_detected_for_summary_fallback() {
+        for msg in [
+            "HTTP 400 Bad Request: maximum context length is 1000000 tokens",
+            "invalid_request_error: prompt is too long for the current model",
+            "You requested 1000001 tokens but the maximum is 1000000",
+            "request exceeds context window",
+        ] {
+            assert!(
+                is_context_window_error(&anyhow::anyhow!(msg)),
+                "expected context-window detection for `{msg}`",
+            );
+        }
+
+        assert!(!is_context_window_error(&anyhow::anyhow!(
+            "Invalid request: missing required field"
+        )));
+        assert!(!is_context_window_error(&anyhow::anyhow!(
+            "503 Service Unavailable"
+        )));
+    }
+
+    #[test]
+    fn formatted_summary_request_bounds_large_input() {
+        let messages = (0..90)
+            .map(|idx| {
+                msg(
+                    "user",
+                    &format!("turn {idx}: {}", "中文上下文 ".repeat(1_000)),
+                )
+            })
+            .collect::<Vec<_>>();
+        let limits = summary_input_limits_for_model("deepseek-v4-pro");
+
+        let request = build_formatted_summary_request("deepseek-v4-pro", &messages, limits);
+
+        assert_eq!(request.messages.len(), 1);
+        let ContentBlock::Text { text, .. } = &request.messages[0].content[0] else {
+            panic!("expected summary text request");
+        };
+        assert!(text.contains("characters omitted before summary"));
+        assert!(text.chars().count() <= limits.input_max_chars + 2_000);
     }
 
     #[test]
@@ -2301,6 +2397,39 @@ mod tests {
 
         // All pairs should remain intact (no orphans)
         assert_eq!(pinned.len(), messages.len());
+    }
+
+    #[test]
+    fn plan_compaction_keeps_at_least_one_user_text_query() {
+        let mut messages = vec![msg(
+            "user",
+            "This is the original query that started the chain.",
+        )];
+
+        for i in 0..10 {
+            messages.push(Message {
+                role: "assistant".to_string(),
+                content: vec![ContentBlock::ToolUse {
+                    id: format!("call-{i}"),
+                    name: "test_tool".to_string(),
+                    input: json!({}),
+                    caller: None,
+                }],
+            });
+            messages.push(Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: format!("call-{i}"),
+                    content: "tool output".to_string(),
+                    is_error: None,
+                    content_blocks: None,
+                }],
+            });
+        }
+
+        let plan = plan_compaction(&messages, None, KEEP_RECENT_MESSAGES, None, None);
+
+        assert!(plan.pinned_indices.contains(&0));
     }
 
     // ========================================================================

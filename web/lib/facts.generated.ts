@@ -18,8 +18,8 @@ export interface RepoFacts {
 }
 
 export const FACTS: RepoFacts = {
-  "generatedAt": "2026-05-13T06:15:45.167Z",
-  "version": "0.8.35",
+  "generatedAt": "2026-05-26T03:03:01.383Z",
+  "version": "0.8.45",
   "crates": [
     "agent",
     "app-server",
@@ -38,8 +38,7 @@ export const FACTS: RepoFacts = {
   ],
   "sandboxBackends": [
     "landlock (Linux)",
-    "seatbelt (macOS)",
-    "AppContainer / restricted tokens (Windows)"
+    "seatbelt (macOS)"
   ],
   "providers": [
     {
@@ -50,12 +49,22 @@ export const FACTS: RepoFacts = {
     {
       "id": "nvidia-nim",
       "label": "NVIDIA NIM",
-      "env": "NVIDIA_API_KEY"
+      "env": "NVIDIA_API_KEY / NVIDIA_NIM_API_KEY"
     },
     {
       "id": "openai",
-      "label": "OpenAI",
+      "label": "OpenAI-compatible",
       "env": "OPENAI_API_KEY"
+    },
+    {
+      "id": "atlascloud",
+      "label": "AtlasCloud",
+      "env": "ATLASCLOUD_API_KEY"
+    },
+    {
+      "id": "wanjie-ark",
+      "label": "Wanjie Ark",
+      "env": "WANJIE_ARK_API_KEY / WANJIE_API_KEY / WANJIE_MAAS_API_KEY"
     },
     {
       "id": "openrouter",
@@ -64,17 +73,22 @@ export const FACTS: RepoFacts = {
     },
     {
       "id": "novita",
-      "label": "Novita",
+      "label": "Novita AI",
       "env": "NOVITA_API_KEY"
     },
     {
       "id": "fireworks",
-      "label": "Fireworks",
+      "label": "Fireworks AI",
       "env": "FIREWORKS_API_KEY"
     },
     {
+      "id": "moonshot",
+      "label": "Moonshot/Kimi",
+      "env": "MOONSHOT_API_KEY / KIMI_API_KEY"
+    },
+    {
       "id": "sglang",
-      "label": "sglang",
+      "label": "SGLang",
       "env": "SGLANG_API_KEY"
     },
     {
@@ -90,7 +104,7 @@ export const FACTS: RepoFacts = {
   ],
   "defaultModel": "deepseek-v4-pro",
   "nodeEngines": ">=18",
-  "toolCount": 68,
+  "toolCount": 70,
   "license": "MIT",
   "latestRelease": null
 };

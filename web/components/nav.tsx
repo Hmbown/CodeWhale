@@ -10,6 +10,7 @@ const EN_LINKS = [
   { href: "/docs", label: "Docs", cn: "文档" },
   { href: "/feed", label: "Activity", cn: "动态" },
   { href: "/roadmap", label: "Roadmap", cn: "路线" },
+  { href: "/faq", label: "FAQ", cn: "问答" },
   { href: "/contribute", label: "Contribute", cn: "参与" },
 ];
 
@@ -18,6 +19,7 @@ const ZH_LINKS = [
   { href: "/zh/docs", label: "文档", cn: "" },
   { href: "/zh/feed", label: "动态", cn: "" },
   { href: "/zh/roadmap", label: "路线图", cn: "" },
+  { href: "/zh/faq", label: "常见问题", cn: "" },
   { href: "/zh/contribute", label: "参与贡献", cn: "" },
 ];
 
@@ -35,7 +37,7 @@ export function Nav({ locale = "en" }: { locale?: Locale }) {
             <span className="hidden sm:inline">· {isZh ? new Date().toLocaleDateString("zh-CN", { weekday: "long", month: "long", day: "numeric" }) : new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}</span>
           </div>
           <div className="flex items-center gap-4">
-            <span className="hidden md:inline">deepseek-tui.com</span>
+            <span className="hidden md:inline">codewhale.net</span>
             <span className="inline-flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 bg-jade rounded-full inline-block animate-pulse" />
               <span>{isZh ? "API · 在线" : "API · 在线"}</span>
@@ -50,11 +52,11 @@ export function Nav({ locale = "en" }: { locale?: Locale }) {
           <Seal char="深" size="md" />
           <div className="leading-tight min-w-0">
             <div className="font-display text-[1.2rem] sm:text-[1.35rem] font-semibold tracking-crisp flex items-center gap-2 truncate">
-              DeepSeek TUI
+              CodeWhale
               <Whale size={20} className="text-indigo hidden sm:inline-block" />
             </div>
             <div className="font-cjk text-[0.65rem] sm:text-[0.7rem] text-ink-mute tracking-widest truncate">
-              {isZh ? "深度求索 · 终端智能体" : "深度求索 · 终端智能体"}
+              {isZh ? "开源模型 · 终端智能体" : "open models · terminal agent"}
             </div>
           </div>
         </Link>
@@ -73,7 +75,7 @@ export function Nav({ locale = "en" }: { locale?: Locale }) {
         <div className="flex items-center gap-2 sm:gap-3">
           <LocaleSwitcher current={locale} />
           <Link
-            href="https://github.com/Hmbown/deepseek-tui"
+            href="https://github.com/Hmbown/CodeWhale"
             className="hidden sm:inline-flex items-center gap-2 px-3 py-1.5 hairline-t hairline-b hairline-l hairline-r font-mono text-[0.7rem] uppercase tracking-wider hover:bg-paper-deep transition-colors"
           >
             <span>★ GitHub</span>

@@ -1,4 +1,4 @@
-use deepseek_protocol::{EventFrame, ThreadListParams, ThreadRequest, ThreadResumeParams};
+use codewhale_protocol::{EventFrame, ThreadListParams, ThreadRequest, ThreadResumeParams};
 
 #[test]
 fn thread_resume_params_round_trip() {

@@ -20,6 +20,69 @@ import {
   stripGroupPrefix
 } from "./lib.mjs";
 
+class ThreadStore {
+  static async open(filePath) {
+    const store = new ThreadStore(filePath);
+    await store.load();
+    return store;
+  }
+
+  constructor(filePath) {
+    this.filePath = filePath;
+    this.data = { chats: {} };
+  }
+
+  async load() {
+    try {
+      const raw = await fs.readFile(this.filePath, "utf8");
+      this.data = JSON.parse(raw);
+      if (!this.data.chats) this.data.chats = {};
+      if (!this.data.messages) this.data.messages = [];
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+  }
+
+  async recordMessage(messageId) {
+    if (!messageId) return false;
+    if (!Array.isArray(this.data.messages)) this.data.messages = [];
+    if (this.data.messages.includes(messageId)) return true;
+    this.data.messages.push(messageId);
+    this.data.messages = this.data.messages.slice(-200);
+    await this.save();
+    return false;
+  }
+
+  async getChat(chatId) {
+    return this.data.chats[chatId] || null;
+  }
+
+  listChats() {
+    return Object.entries(this.data.chats || {});
+  }
+
+  async setChat(chatId, state) {
+    this.data.chats[chatId] = state;
+    await this.save();
+    return state;
+  }
+
+  async patchChat(chatId, patch) {
+    const current = this.data.chats[chatId] || {};
+    this.data.chats[chatId] = { ...current, ...patch };
+    await this.save();
+    return this.data.chats[chatId];
+  }
+
+  async save() {
+    const dir = path.dirname(this.filePath);
+    await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+    const tmp = `${this.filePath}.tmp`;
+    await fs.writeFile(tmp, `${JSON.stringify(this.data, null, 2)}\n`, { mode: 0o600 });
+    await fs.rename(tmp, this.filePath);
+  }
+}
+
 const config = {
   appId: requiredEnv("FEISHU_APP_ID"),
   appSecret: requiredEnv("FEISHU_APP_SECRET"),
@@ -36,7 +99,7 @@ const config = {
   allowUnlisted: parseBool(process.env.DEEPSEEK_ALLOW_UNLISTED, false),
   threadMapPath:
     process.env.FEISHU_THREAD_MAP_PATH ||
-    "/var/lib/deepseek-feishu-bridge/thread-map.json",
+    "/var/lib/codewhale-feishu-bridge/thread-map.json",
   allowGroups: parseBool(process.env.FEISHU_ALLOW_GROUPS, false),
   requirePrefixInGroup: parseBool(process.env.FEISHU_REQUIRE_PREFIX_IN_GROUP, true),
   groupPrefix: process.env.FEISHU_GROUP_PREFIX || "/ds",
@@ -74,6 +137,9 @@ if (!config.allowlist.length && !config.allowUnlisted) {
 }
 
 wsClient.start({ eventDispatcher: dispatcher });
+void reattachActiveTurns().catch((error) => {
+  console.error("failed to reattach active Feishu bridge turns", error);
+});
 
 async function handleIncomingMessage(event) {
   const identity = incomingIdentity(event);
@@ -231,6 +297,43 @@ async function runPrompt(chatId, prompt) {
       activeTurnId: null,
       updatedAt: new Date().toISOString()
     });
+  }
+}
+
+async function reattachActiveTurns() {
+  for (const [chatId, state] of threadStore.listChats()) {
+    if (!state?.threadId || !state.activeTurnId) continue;
+
+    const detail = await runtimeJson(`/v1/threads/${encodeURIComponent(state.threadId)}`);
+    const runningTurn = latestRunningTurn(detail);
+    if (!runningTurn) {
+      await threadStore.patchChat(chatId, {
+        activeTurnId: null,
+        lastSeq: Number(detail.latest_seq || state.lastSeq || 0),
+        updatedAt: new Date().toISOString()
+      });
+      await sendText(chatId, `Bridge restarted. No active turn remains for ${state.threadId}.`);
+      continue;
+    }
+
+    const turnId = runningTurn.id || state.activeTurnId;
+    const sinceSeq = Number(state.lastSeq || 0);
+    await threadStore.patchChat(chatId, {
+      activeTurnId: turnId,
+      updatedAt: new Date().toISOString()
+    });
+    await sendText(
+      chatId,
+      `Bridge restarted. Reattaching to active turn ${turnId} from seq ${sinceSeq}.`
+    );
+    try {
+      await streamTurnEvents(chatId, state.threadId, turnId, sinceSeq);
+    } finally {
+      await threadStore.patchChat(chatId, {
+        activeTurnId: null,
+        updatedAt: new Date().toISOString()
+      });
+    }
   }
 }
 
@@ -508,63 +611,4 @@ function resolveLarkDomain(domain) {
   if (normalized === "lark") return Lark.Domain?.Lark || "https://open.larksuite.com";
   if (normalized === "feishu") return Lark.Domain?.Feishu || "https://open.feishu.cn";
   return domain;
-}
-
-class ThreadStore {
-  static async open(filePath) {
-    const store = new ThreadStore(filePath);
-    await store.load();
-    return store;
-  }
-
-  constructor(filePath) {
-    this.filePath = filePath;
-    this.data = { chats: {} };
-  }
-
-  async load() {
-    try {
-      const raw = await fs.readFile(this.filePath, "utf8");
-      this.data = JSON.parse(raw);
-      if (!this.data.chats) this.data.chats = {};
-      if (!this.data.messages) this.data.messages = [];
-    } catch (error) {
-      if (error.code !== "ENOENT") throw error;
-    }
-  }
-
-  async recordMessage(messageId) {
-    if (!messageId) return false;
-    if (!Array.isArray(this.data.messages)) this.data.messages = [];
-    if (this.data.messages.includes(messageId)) return true;
-    this.data.messages.push(messageId);
-    this.data.messages = this.data.messages.slice(-200);
-    await this.save();
-    return false;
-  }
-
-  async getChat(chatId) {
-    return this.data.chats[chatId] || null;
-  }
-
-  async setChat(chatId, state) {
-    this.data.chats[chatId] = state;
-    await this.save();
-    return state;
-  }
-
-  async patchChat(chatId, patch) {
-    const current = this.data.chats[chatId] || {};
-    this.data.chats[chatId] = { ...current, ...patch };
-    await this.save();
-    return this.data.chats[chatId];
-  }
-
-  async save() {
-    const dir = path.dirname(this.filePath);
-    await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-    const tmp = `${this.filePath}.tmp`;
-    await fs.writeFile(tmp, `${JSON.stringify(this.data, null, 2)}\n`, { mode: 0o600 });
-    await fs.rename(tmp, this.filePath);
-  }
 }

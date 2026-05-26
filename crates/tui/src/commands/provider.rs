@@ -4,7 +4,7 @@
 //! `/provider` with no args opens the picker modal (#52). `/provider <name>`
 //! keeps the v0.6.6 CLI form for muscle-memory + scripted use.
 
-use crate::config::{ApiProvider, normalize_model_name};
+use crate::config::{ApiProvider, normalize_model_name, provider_passes_model_through};
 use crate::tui::app::{App, AppAction};
 
 use super::CommandResult;
@@ -27,13 +27,13 @@ pub fn provider(app: &mut App, args: Option<&str>) -> CommandResult {
 
     let Some(target) = ApiProvider::parse(name) else {
         return CommandResult::error(format!(
-            "Unknown provider '{name}'. Expected: deepseek, nvidia-nim, openai, atlascloud, openrouter, novita, fireworks, sglang, vllm, or ollama."
+            "Unknown provider '{name}'. Expected: deepseek, nvidia-nim, openai, atlascloud, wanjie-ark, openrouter, novita, fireworks, sglang, vllm, or ollama."
         ));
     };
 
     let model = match model_arg {
         None => None,
-        Some(raw) if target == ApiProvider::Ollama => Some(raw.trim().to_string()),
+        Some(raw) if provider_passes_model_through(target) => Some(raw.trim().to_string()),
         Some(raw) => match normalize_model_name(&expand_model_alias(raw)) {
             Some(normalized) => Some(normalized),
             None => {
@@ -137,6 +137,19 @@ mod tests {
             Some(AppAction::SwitchProvider { provider, model }) => {
                 assert_eq!(provider, ApiProvider::Atlascloud);
                 assert_eq!(model, None);
+            }
+            other => panic!("expected SwitchProvider, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn switch_to_wanjie_ark_preserves_model_id() {
+        let mut app = create_test_app();
+        let result = provider(&mut app, Some("ark-wanjie account-model-id"));
+        match result.action {
+            Some(AppAction::SwitchProvider { provider, model }) => {
+                assert_eq!(provider, ApiProvider::WanjieArk);
+                assert_eq!(model.as_deref(), Some("account-model-id"));
             }
             other => panic!("expected SwitchProvider, got {other:?}"),
         }

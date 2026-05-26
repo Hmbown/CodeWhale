@@ -3,9 +3,9 @@ function assertSupportedNode() {
   const major = Number.parseInt(String(version).split(".")[0], 10);
   if (Number.isNaN(major) || major < 18) {
     process.stderr.write(
-      "deepseek-tui: Node.js 18 or newer is required for npm installation. " +
+      "codewhale: Node.js 18 or newer is required for npm installation. " +
       `Current Node.js version is ${version}. ` +
-      "Please upgrade Node.js and rerun `npm install -g deepseek-tui`.\n",
+      "Please upgrade Node.js and rerun `npm install -g codewhale`.\n",
     );
     process.exit(1);
   }
@@ -88,7 +88,7 @@ function resolvePackageVersion() {
 }
 
 function resolveRepo() {
-  return process.env.DEEPSEEK_TUI_GITHUB_REPO || process.env.DEEPSEEK_GITHUB_REPO || "Hmbown/DeepSeek-TUI";
+  return process.env.DEEPSEEK_TUI_GITHUB_REPO || process.env.DEEPSEEK_GITHUB_REPO || "Hmbown/CodeWhale";
 }
 
 function isOptionalInstall(argv = process.argv.slice(2), env = process.env) {
@@ -101,6 +101,18 @@ function isOptionalInstall(argv = process.argv.slice(2), env = process.env) {
 
 function isInstallContext(context) {
   return context === "install";
+}
+
+function isPnpmUserAgent(env = process.env) {
+  return String(env.npm_config_user_agent || "").toLowerCase().includes("pnpm/");
+}
+
+function shouldSkipOptionalPostinstall(
+  context,
+  argv = process.argv.slice(2),
+  env = process.env,
+) {
+  return isInstallContext(context) && isOptionalInstall(argv, env) && isPnpmUserAgent(env);
 }
 
 // Optional install only relaxes npm postinstall behavior. Runtime downloads
@@ -124,16 +136,16 @@ function maxAttempts(context = "runtime", env = process.env) {
 }
 
 function binaryPaths() {
-  const { deepseek, tui } = detectBinaryNames();
+  const { codewhale, tui } = detectBinaryNames();
   const releaseDir = releaseBinaryDirectory();
   return {
-    deepseek: {
-      asset: deepseek,
-      target: path.join(releaseDir, process.platform === "win32" ? "deepseek.exe" : "deepseek"),
+    codewhale: {
+      asset: codewhale,
+      target: path.join(releaseDir, process.platform === "win32" ? "codewhale.exe" : "codewhale"),
     },
     tui: {
       asset: tui,
-      target: path.join(releaseDir, process.platform === "win32" ? "deepseek-tui.exe" : "deepseek-tui"),
+      target: path.join(releaseDir, process.platform === "win32" ? "codewhale-tui.exe" : "codewhale-tui"),
     },
   };
 }
@@ -154,7 +166,7 @@ function logInfo(message) {
   if (isQuietInstall()) {
     return;
   }
-  process.stderr.write(`deepseek-tui: ${message}\n`);
+  process.stderr.write(`codewhale: ${message}\n`);
 }
 
 function installFailureHint(error) {
@@ -182,19 +194,19 @@ function installFailureHint(error) {
 
   if (releaseBase) {
     return [
-      "deepseek-tui install hint:",
+      "codewhale install hint:",
       `  DEEPSEEK_TUI_RELEASE_BASE_URL is set to ${releaseBase}`,
-      "  Verify that this directory contains deepseek-artifacts-sha256.txt",
-      "  plus the deepseek/deepseek-tui binary assets for your platform.",
+      "  Verify that this directory contains codewhale-artifacts-sha256.txt",
+      "  plus the codewhale/codewhale-tui binary assets for your platform.",
     ].join("\n");
   }
 
   return [
-    "deepseek-tui install hint:",
+    "codewhale install hint:",
     "  The npm package downloads prebuilt binaries from GitHub Releases.",
     "  If GitHub is unavailable on this network, mirror the release assets and set:",
     "    DEEPSEEK_TUI_RELEASE_BASE_URL=https://<mirror>/<release-asset-directory>/",
-    "  The directory must contain deepseek-artifacts-sha256.txt and the platform binaries.",
+    "  The directory must contain codewhale-artifacts-sha256.txt and the platform binaries.",
     "  See docs/INSTALL.md#npm-binary-download-times-out.",
   ].join("\n");
 }
@@ -246,14 +258,14 @@ function createProgressReporter(assetName, totalBytes) {
   const render = (final) => {
     if (totalBytes && totalBytes > 0) {
       const pct = Math.min(100, Math.round((received / totalBytes) * 100));
-      const line = `deepseek-tui: downloading ${assetName}: ${formatMb(received)} / ${formatMb(totalBytes)} MB (${pct}%)`;
+      const line = `codewhale: downloading ${assetName}: ${formatMb(received)} / ${formatMb(totalBytes)} MB (${pct}%)`;
       if (interactive) {
         process.stderr.write(`${line}\r`);
       } else {
         process.stderr.write(`${line}\n`);
       }
     } else {
-      const line = `deepseek-tui: downloading ${assetName}: ${formatMb(received)} MB downloaded`;
+      const line = `codewhale: downloading ${assetName}: ${formatMb(received)} MB downloaded`;
       if (interactive) {
         process.stderr.write(`${line}\r`);
       } else {
@@ -283,7 +295,7 @@ function createProgressReporter(assetName, totalBytes) {
         // Move past the carriage-return line and emit a "done" footer.
         process.stderr.write("\n");
       }
-      process.stderr.write(`deepseek-tui: ${assetName} ... done.\n`);
+      process.stderr.write(`codewhale: ${assetName} ... done.\n`);
     },
   };
 }
@@ -394,7 +406,7 @@ function connectThroughProxy(proxy, targetHost, targetPort, timeoutMs) {
       const lines = [
         `CONNECT ${targetHost}:${targetPort} HTTP/1.1`,
         `Host: ${targetHost}:${targetPort}`,
-        "User-Agent: deepseek-tui-installer",
+        "User-Agent: codewhale-installer",
         "Proxy-Connection: keep-alive",
       ];
       if (proxy.auth) {
@@ -543,7 +555,7 @@ function httpRequest(rawUrl, opts = {}) {
         path: `${url.pathname}${url.search || ""}`,
         headers: {
           Host: url.host,
-          "User-Agent": "deepseek-tui-installer",
+          "User-Agent": "codewhale-installer",
           Accept: "*/*",
           Connection: "close",
         },
@@ -565,6 +577,7 @@ function httpRequest(rawUrl, opts = {}) {
       try {
         req = client.request(reqOptions, (response) => {
           res = response;
+          response.pause();
           armStallTimer();
           response.on("data", () => {
             armStallTimer();
@@ -629,7 +642,7 @@ function httpRequest(rawUrl, opts = {}) {
               path: rawUrl,
               headers: {
                 Host: url.host,
-                "User-Agent": "deepseek-tui-installer",
+                "User-Agent": "codewhale-installer",
                 Accept: "*/*",
                 Connection: "close",
                 ...(proxy.auth ? { "Proxy-Authorization": `Basic ${proxy.auth}` } : {}),
@@ -637,6 +650,7 @@ function httpRequest(rawUrl, opts = {}) {
             },
             (response) => {
               res = response;
+              response.pause();
               armStallTimer();
               response.on("data", () => armStallTimer());
               response.on("end", () => cleanup());
@@ -692,7 +706,7 @@ function httpRequest(rawUrl, opts = {}) {
               path: `${url.pathname}${url.search || ""}`,
               headers: {
                 Host: url.host,
-                "User-Agent": "deepseek-tui-installer",
+                "User-Agent": "codewhale-installer",
                 Accept: "*/*",
                 Connection: "close",
               },
@@ -700,6 +714,7 @@ function httpRequest(rawUrl, opts = {}) {
             try {
               req = https.request(reqOptions, (response) => {
                 res = response;
+                response.pause();
                 armStallTimer();
                 response.on("data", () => armStallTimer());
                 response.on("end", () => cleanup());
@@ -932,6 +947,7 @@ async function downloadText(url, options = {}) {
         resolve(chunks.join(""));
       });
       response.on("error", reject);
+      response.resume();
     });
   }, context);
 }
@@ -1089,6 +1105,12 @@ async function run(options = {}) {
   if (process.env.DEEPSEEK_TUI_DISABLE_INSTALL === "1" || process.env.DEEPSEEK_DISABLE_INSTALL === "1") {
     return;
   }
+  if (shouldSkipOptionalPostinstall(context)) {
+    logInfo(
+      "pnpm optional postinstall detected; skipping install-time download. The binary will be checked on first run.",
+    );
+    return;
+  }
   const version = resolvePackageVersion();
   const repo = resolveRepo();
   const paths = binaryPaths();
@@ -1104,7 +1126,7 @@ async function run(options = {}) {
   };
 
   await Promise.all([
-    ensureBinary(paths.deepseek.target, paths.deepseek.asset, version, repo, getChecksums, { context }),
+    ensureBinary(paths.codewhale.target, paths.codewhale.asset, version, repo, getChecksums, { context }),
     ensureBinary(paths.tui.target, paths.tui.asset, version, repo, getChecksums, { context }),
   ]);
 }
@@ -1112,10 +1134,10 @@ async function run(options = {}) {
 async function getBinaryPath(name) {
   await run({ context: "runtime" });
   const paths = binaryPaths();
-  if (name === "deepseek") {
-    return paths.deepseek.target;
+  if (name === "codewhale") {
+    return paths.codewhale.target;
   }
-  if (name === "deepseek-tui") {
+  if (name === "codewhale-tui") {
     return paths.tui.target;
   }
   throw new Error(`Unknown binary: ${name}`);
@@ -1129,6 +1151,7 @@ module.exports = {
     isOptionalInstall,
     adoptExistingBinaryIfValid,
     shouldIgnoreInstallFailure,
+    shouldSkipOptionalPostinstall,
     defaultTimeoutMs,
     defaultStallMs,
     ensureBinary,
@@ -1139,7 +1162,7 @@ module.exports = {
 
 if (require.main === module) {
   run({ context: "install" }).catch((error) => {
-    console.error("deepseek-tui install failed:", error.message);
+    console.error("codewhale install failed:", error.message);
     const hint = installFailureHint(error);
     if (hint) {
       console.error(hint);

@@ -7,8 +7,8 @@ if [[ "${EUID}" -ne 0 ]]; then
 fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-DEEPSEEK_USER="${DEEPSEEK_USER:-deepseek}"
-DEEPSEEK_ROOT="${DEEPSEEK_ROOT:-/opt/deepseek}"
+DEEPSEEK_USER="${DEEPSEEK_USER:-codewhale}"
+DEEPSEEK_ROOT="${DEEPSEEK_ROOT:-/opt/codewhale}"
 
 install -d -o "${DEEPSEEK_USER}" -g "${DEEPSEEK_USER}" "${DEEPSEEK_ROOT}/bridge"
 rsync -a --delete \
@@ -23,11 +23,11 @@ else
   sudo -u "${DEEPSEEK_USER}" npm --prefix "${DEEPSEEK_ROOT}/bridge" install --omit=dev
 fi
 
-install -m 0644 "${REPO_ROOT}/deploy/tencent-lighthouse/systemd/deepseek-runtime.service" /etc/systemd/system/deepseek-runtime.service
-install -m 0644 "${REPO_ROOT}/deploy/tencent-lighthouse/systemd/deepseek-feishu-bridge.service" /etc/systemd/system/deepseek-feishu-bridge.service
+install -m 0644 "${REPO_ROOT}/deploy/tencent-lighthouse/systemd/codewhale-runtime.service" /etc/systemd/system/codewhale-runtime.service
+install -m 0644 "${REPO_ROOT}/deploy/tencent-lighthouse/systemd/codewhale-feishu-bridge.service" /etc/systemd/system/codewhale-feishu-bridge.service
 
 systemctl daemon-reload
-systemctl enable deepseek-runtime deepseek-feishu-bridge
+systemctl enable codewhale-runtime codewhale-feishu-bridge
 
 cat <<'EOF'
 Services installed but not started.
@@ -35,11 +35,11 @@ Services installed but not started.
 Before starting, verify:
   /etc/deepseek/runtime.env
   /etc/deepseek/feishu-bridge.env
-  sudo -u deepseek node /opt/deepseek/bridge/scripts/validate-config.mjs --env /etc/deepseek/feishu-bridge.env --runtime-env /etc/deepseek/runtime.env --workspace-root /opt/whalebro --check-filesystem
+  sudo -u codewhale node /opt/codewhale/bridge/scripts/validate-config.mjs --env /etc/deepseek/feishu-bridge.env --runtime-env /etc/deepseek/runtime.env --workspace-root /opt/whalebro --check-filesystem
 
 Then run:
-  sudo systemctl start deepseek-runtime
-  sudo systemctl start deepseek-feishu-bridge
-  sudo bash /opt/whalebro/deepseek-tui/scripts/tencent-lighthouse/doctor.sh
-  sudo journalctl -u deepseek-feishu-bridge -f
+  sudo systemctl start codewhale-runtime
+  sudo systemctl start codewhale-feishu-bridge
+  sudo bash /opt/whalebro/codewhale/scripts/tencent-lighthouse/doctor.sh
+  sudo journalctl -u codewhale-feishu-bridge -f
 EOF

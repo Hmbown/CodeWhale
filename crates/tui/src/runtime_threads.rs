@@ -865,6 +865,15 @@ impl RuntimeThreadManager {
                 err
             );
         }
+
+        {
+            let mut active = self.active.lock().await;
+            if let Some(state) = active.engines.get_mut(thread_id)
+                && let Some(turn) = state.active_turn.as_mut()
+            {
+                turn.auto_approve = true;
+            }
+        }
     }
 
     #[must_use]
@@ -1964,6 +1973,9 @@ impl RuntimeThreadManager {
                 rlm_sessions: crate::rlm::session::new_shared_rlm_session_store(),
             },
             subagent_model_overrides: self.config.subagent_model_overrides(),
+            subagent_api_timeout: std::time::Duration::from_secs(
+                self.config.subagent_api_timeout_secs(),
+            ),
             memory_enabled: self.config.memory_enabled(),
             memory_path: self.config.memory_path(),
             vision_config: self.config.vision_model_config(),
@@ -1998,6 +2010,7 @@ impl RuntimeThreadManager {
                     session_id: None,
                     messages: session_messages,
                     system_prompt: sys_prompt,
+                    system_prompt_override: thread.system_prompt.is_some(),
                     model: thread.model.clone(),
                     workspace: thread.workspace.clone(),
                 })
@@ -2455,8 +2468,7 @@ impl RuntimeThreadManager {
                     ..
                 } => {
                     let message = format!(
-                        "Capacity intervention: {action} (~{before_prompt_tokens} -> ~{after_prompt_tokens}) replay={:?} replan={replan_performed}",
-                        replay_outcome
+                        "Capacity intervention: {action} (~{before_prompt_tokens} -> ~{after_prompt_tokens}) replay={replay_outcome:?} replan={replan_performed}"
                     );
                     let item = TurnItemRecord {
                         schema_version: CURRENT_RUNTIME_SCHEMA_VERSION,
@@ -4154,6 +4166,7 @@ mod tests {
             .tx_event
             .send(EngineEvent::ApprovalRequired {
                 approval_key: "test_key".to_string(),
+                approval_grouping_key: "test_key".to_string(),
                 id: "tool_stale".to_string(),
                 tool_name: "exec_command".to_string(),
                 description: "stale approval".to_string(),
@@ -4226,6 +4239,7 @@ mod tests {
             .tx_event
             .send(EngineEvent::ApprovalRequired {
                 approval_key: "key1".to_string(),
+                approval_grouping_key: "key1".to_string(),
                 id: "tool_external_allow".to_string(),
                 tool_name: "exec_command".to_string(),
                 description: "external allow".to_string(),
@@ -4302,6 +4316,7 @@ mod tests {
             .tx_event
             .send(EngineEvent::ApprovalRequired {
                 approval_key: "key2".to_string(),
+                approval_grouping_key: "key2".to_string(),
                 id: "tool_external_deny".to_string(),
                 tool_name: "exec_command".to_string(),
                 description: "external deny".to_string(),
@@ -4464,7 +4479,7 @@ mod tests {
         assert!(!manager.store.load_thread(&thread.id)?.auto_approve);
 
         let mut harness = install_mock_engine(&manager, &thread.id).await;
-        let _turn = manager
+        let turn = manager
             .start_turn(
                 &thread.id,
                 StartTurnRequest {
@@ -4487,6 +4502,7 @@ mod tests {
             .tx_event
             .send(EngineEvent::ApprovalRequired {
                 approval_key: "key3".to_string(),
+                approval_grouping_key: "key3".to_string(),
                 id: "tool_remember".to_string(),
                 tool_name: "exec_command".to_string(),
                 description: "remember=true".to_string(),
@@ -4506,6 +4522,11 @@ mod tests {
         assert!(
             manager.store.load_thread(&thread.id)?.auto_approve,
             "remember=true should flip thread auto_approve"
+        );
+        assert_eq!(
+            manager.active_turn_flags(&thread.id, &turn.id).await,
+            Some((true, false)),
+            "remember=true should update the active turn used by subsequent approvals"
         );
 
         harness

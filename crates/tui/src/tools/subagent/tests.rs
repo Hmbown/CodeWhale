@@ -62,6 +62,11 @@ fn test_agent_type_from_str() {
         Some(SubAgentType::Explore)
     );
     assert_eq!(SubAgentType::from_str("awaiter"), Some(SubAgentType::Plan));
+    assert_eq!(
+        SubAgentType::from_str("tool-agent"),
+        Some(SubAgentType::ToolAgent)
+    );
+    assert_eq!(SubAgentType::from_str("fin"), Some(SubAgentType::ToolAgent));
     assert_eq!(SubAgentType::from_str("invalid"), None);
 }
 
@@ -112,6 +117,7 @@ fn test_agent_type_round_trips_via_as_str() {
         SubAgentType::Review,
         SubAgentType::Implementer,
         SubAgentType::Verifier,
+        SubAgentType::ToolAgent,
         SubAgentType::Custom,
     ] {
         let label = t.as_str();
@@ -165,6 +171,7 @@ fn test_agent_type_prompts_include_shared_output_contract_once() {
         (SubAgentType::Review, "code review sub-agent"),
         (SubAgentType::Implementer, "implementation sub-agent"),
         (SubAgentType::Verifier, "verification sub-agent"),
+        (SubAgentType::ToolAgent, "tool execution sub-agent"),
         (SubAgentType::Custom, "custom sub-agent"),
     ] {
         let prompt = agent_type.system_prompt();
@@ -213,7 +220,24 @@ fn new_session_tools_use_open_eval_close_names() {
         "agent_open"
     );
     assert_eq!(AgentEvalTool::new(manager.clone()).name(), "agent_eval");
+    assert_eq!(
+        ToolAgentTool::new(manager.clone(), stub_runtime()).name(),
+        "tool_agent"
+    );
     assert_eq!(AgentCloseTool::new(manager).name(), "agent_close");
+}
+
+#[test]
+fn tool_agent_description_explains_fast_lane() {
+    let tmp = tempdir().expect("tempdir");
+    let manager = new_shared_subagent_manager(tmp.path().to_path_buf(), 1);
+    let tool = ToolAgentTool::new(manager, stub_runtime());
+    let description = tool.description();
+
+    assert!(description.contains("Fin"));
+    assert!(description.contains("Flash"));
+    assert!(description.contains("thinking forced off"));
+    assert!(description.contains("OCR"));
 }
 
 #[test]
@@ -313,6 +337,17 @@ fn test_parse_spawn_request_accepts_session_name_for_agent_open() {
 }
 
 #[test]
+fn test_parse_spawn_request_accepts_tool_agent_aliases() {
+    let input = json!({
+        "prompt": "OCR this screenshot",
+        "agent_type": "tool-agent"
+    });
+    let parsed = parse_spawn_request(&input).expect("spawn request should parse");
+    assert_eq!(parsed.agent_type, SubAgentType::ToolAgent);
+    assert_eq!(parsed.assignment.role.as_deref(), Some("tool_agent"));
+}
+
+#[test]
 fn test_parse_spawn_request_rejects_invalid_session_name() {
     let input = json!({
         "name": "bad name",
@@ -356,6 +391,38 @@ async fn session_projection_exposes_forked_prefix_cache_contract() {
     );
     assert_eq!(projection.transcript_handle.kind, "var_handle");
     assert_eq!(projection.transcript_handle.name, "transcript");
+}
+
+#[tokio::test]
+async fn terminal_session_projection_prefers_full_transcript_handle() {
+    let mut snapshot = make_snapshot(SubAgentStatus::Completed);
+    snapshot.result = Some("done".to_string());
+
+    let ctx = ToolContext::new(".");
+    let full_handle = {
+        let mut store = ctx.runtime.handle_store.lock().await;
+        store.insert_json(
+            "agent:agent_test",
+            "full_transcript",
+            json!({
+                "kind": "subagent_full_transcript",
+                "agent_id": "agent_test",
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": [
+                            { "type": "text", "text": "complete child output" }
+                        ]
+                    }
+                ]
+            }),
+        )
+    };
+
+    let projection = subagent_session_projection(snapshot, false, &ctx).await;
+
+    assert_eq!(projection.transcript_handle, full_handle);
+    assert_eq!(projection.transcript_handle.name, "full_transcript");
 }
 
 #[test]
@@ -405,9 +472,9 @@ fn forked_subagent_messages_preserve_parent_prefix_then_append_task() {
     assert_eq!(messages.first(), Some(&parent_message));
     assert_eq!(messages.len(), 4);
     assert_eq!(messages[1].role, "system");
-    assert!(message_text(&messages[1]).contains("<deepseek:fork_state>"));
+    assert!(message_text(&messages[1]).contains("<codewhale:fork_state>"));
     assert_eq!(messages[2].role, "system");
-    assert!(message_text(&messages[2]).contains("<deepseek:subagent_context>"));
+    assert!(message_text(&messages[2]).contains("<codewhale:subagent_context>"));
     assert_eq!(messages[3].role, "user");
     assert!(message_text(&messages[3]).contains("inspect parser"));
 }
@@ -626,6 +693,24 @@ fn subagent_auto_route_respects_explicit_or_role_model() {
     );
 }
 
+#[tokio::test]
+async fn tool_agent_route_forces_flash_with_thinking_off() {
+    let runtime = stub_runtime()
+        .with_auto_model(false)
+        .with_reasoning_effort(Some("max".to_string()), false);
+
+    let route = resolve_subagent_assignment_route(
+        &runtime,
+        Some("deepseek-v4-pro".to_string()),
+        "run OCR on this screenshot",
+        &SubAgentType::ToolAgent,
+    )
+    .await;
+
+    assert_eq!(route.model, "deepseek-v4-flash");
+    assert_eq!(route.reasoning_effort.as_deref(), Some("off"));
+}
+
 #[test]
 fn subagent_auto_reasoning_resolves_to_distinct_v4_tiers() {
     let runtime = stub_runtime().with_reasoning_effort(Some("high".to_string()), true);
@@ -681,6 +766,7 @@ fn test_subagent_tool_registry_reports_unavailable_tools() {
     runtime.allow_shell = false;
     let registry = SubAgentToolRegistry::new(
         runtime,
+        SubAgentType::Explore,
         Some(vec!["read_file".to_string(), "missing_tool".to_string()]),
         Arc::new(Mutex::new(TodoList::new())),
         Arc::new(Mutex::new(PlanState::default())),
@@ -699,6 +785,7 @@ fn test_review_agent_tools_exclude_agent_spawn() {
     // None = full parent tool inheritance (the default for builtin types).
     let registry = SubAgentToolRegistry::new(
         runtime,
+        SubAgentType::Review,
         None,
         Arc::new(Mutex::new(TodoList::new())),
         Arc::new(Mutex::new(PlanState::default())),
@@ -716,6 +803,7 @@ async fn test_wait_for_result_reports_timeout_when_still_running() {
     let manager = Arc::new(RwLock::new(SubAgentManager::new(PathBuf::from("."), 2)));
     let (input_tx, _input_rx) = mpsc::unbounded_channel();
     let agent = SubAgent::new(
+        "test_agent_1".to_string(),
         SubAgentType::Explore,
         "prompt".to_string(),
         make_assignment(),
@@ -738,11 +826,70 @@ async fn test_wait_for_result_reports_timeout_when_still_running() {
     assert_eq!(snapshot.status, SubAgentStatus::Running);
 }
 
+// Regression for #1738: agent_eval on a terminated session must not
+// hard-fail with "not running" when a follow-up message is supplied. The
+// parent still needs the projection (and its transcript_handle) to recover
+// the child's full output.
+#[tokio::test]
+async fn agent_eval_on_completed_session_returns_full_projection_not_running_error() {
+    let manager = Arc::new(RwLock::new(SubAgentManager::new(PathBuf::from("."), 1)));
+    let (input_tx, _input_rx) = mpsc::unbounded_channel();
+    let mut agent = SubAgent::new(
+        "test_agent_2".to_string(),
+        SubAgentType::Explore,
+        "analyze 14 issues".to_string(),
+        make_assignment(),
+        "deepseek-v4-flash".to_string(),
+        Some("Blue".to_string()),
+        Some(vec!["read_file".to_string()]),
+        input_tx,
+        "boot_test".to_string(),
+    );
+    let full_output = "Per-issue analysis:\n".to_string() + &"detail line\n".repeat(400);
+    agent.status = SubAgentStatus::Completed;
+    agent.result = Some(full_output.clone());
+    let agent_id = agent.id.clone();
+    {
+        let mut guard = manager.write().await;
+        guard.agents.insert(agent_id.clone(), agent);
+    }
+
+    let ctx = ToolContext::new(".");
+    let tool = AgentEvalTool::new(manager.clone());
+    let result = tool
+        .execute(
+            json!({
+                "agent_id": agent_id,
+                "message": "give me the full per-issue breakdown",
+                "block": false
+            }),
+            &ctx,
+        )
+        .await
+        .expect("agent_eval on a completed session must not error");
+
+    let meta = result.metadata.expect("metadata present");
+    assert_eq!(meta["terminal"], json!(true));
+    assert_eq!(meta["message_delivery"]["delivered"], json!(false));
+
+    let projection: SubAgentSessionProjection =
+        serde_json::from_str(&result.content).expect("projection deserializes");
+    assert_eq!(projection.status, "completed");
+    assert_eq!(projection.transcript_handle.kind, "var_handle");
+    // The full, untruncated child output survives in the snapshot the
+    // transcript_handle points at.
+    assert_eq!(
+        projection.snapshot.result.as_deref(),
+        Some(full_output.as_str())
+    );
+}
+
 #[tokio::test]
 async fn test_running_count_counts_only_agents_with_live_task_handles() {
     let mut manager = SubAgentManager::new(PathBuf::from("."), 1);
     let (input_tx, _input_rx) = mpsc::unbounded_channel();
     let mut agent = SubAgent::new(
+        "test_agent_3".to_string(),
         SubAgentType::Explore,
         "prompt".to_string(),
         make_assignment(),
@@ -774,6 +921,7 @@ fn test_running_count_ignores_running_status_without_task_handle() {
     let mut manager = SubAgentManager::new(PathBuf::from("."), 1);
     let (input_tx, _input_rx) = mpsc::unbounded_channel();
     let mut agent = SubAgent::new(
+        "test_agent_4".to_string(),
         SubAgentType::Explore,
         "prompt".to_string(),
         make_assignment(),
@@ -794,6 +942,7 @@ async fn test_running_count_ignores_finished_task_handles() {
     let mut manager = SubAgentManager::new(PathBuf::from("."), 1);
     let (input_tx, _input_rx) = mpsc::unbounded_channel();
     let mut agent = SubAgent::new(
+        "test_agent_5".to_string(),
         SubAgentType::Explore,
         "prompt".to_string(),
         make_assignment(),
@@ -822,6 +971,7 @@ fn test_assign_updates_running_agent_and_sends_message() {
     let mut manager = SubAgentManager::new(PathBuf::from("."), 2);
     let (input_tx, mut input_rx) = mpsc::unbounded_channel();
     let agent = SubAgent::new(
+        "test_agent_6".to_string(),
         SubAgentType::General,
         "work".to_string(),
         make_assignment(),
@@ -859,6 +1009,7 @@ fn test_assign_rejects_message_for_non_running_agent() {
     let mut manager = SubAgentManager::new(PathBuf::from("."), 1);
     let (input_tx, _input_rx) = mpsc::unbounded_channel();
     let mut agent = SubAgent::new(
+        "test_agent_7".to_string(),
         SubAgentType::Explore,
         "prompt".to_string(),
         make_assignment(),
@@ -883,6 +1034,7 @@ fn test_assign_updates_non_running_metadata_without_message() {
     let mut manager = SubAgentManager::new(PathBuf::from("."), 1);
     let (input_tx, _input_rx) = mpsc::unbounded_channel();
     let mut agent = SubAgent::new(
+        "test_agent_8".to_string(),
         SubAgentType::Plan,
         "prompt".to_string(),
         make_assignment(),
@@ -918,6 +1070,7 @@ fn test_persist_and_reload_marks_running_agent_as_interrupted() {
     let mut manager = SubAgentManager::new(workspace.clone(), 2).with_state_path(state_path);
     let (input_tx, _input_rx) = mpsc::unbounded_channel();
     let running = SubAgent::new(
+        "test_agent_9_running".to_string(),
         SubAgentType::General,
         "work".to_string(),
         make_assignment(),
@@ -1065,13 +1218,13 @@ fn build_subagent_system_prompt_skips_role_when_blank() {
 fn subagent_done_sentinel_format_is_well_formed() {
     let res = make_snapshot(SubAgentStatus::Completed);
     let sentinel = subagent_done_sentinel("agent_xyz", &res);
-    assert!(sentinel.starts_with("<deepseek:subagent.done>"));
-    assert!(sentinel.ends_with("</deepseek:subagent.done>"));
+    assert!(sentinel.starts_with("<codewhale:subagent.done>"));
+    assert!(sentinel.ends_with("</codewhale:subagent.done>"));
 
     // The inner JSON parses and carries the expected fields.
     let inner = sentinel
-        .trim_start_matches("<deepseek:subagent.done>")
-        .trim_end_matches("</deepseek:subagent.done>");
+        .trim_start_matches("<codewhale:subagent.done>")
+        .trim_end_matches("</codewhale:subagent.done>");
     let parsed: serde_json::Value = serde_json::from_str(inner).expect("inner JSON parses");
     assert_eq!(parsed["agent_id"], "agent_xyz");
     assert_eq!(parsed["status"], "completed");
@@ -1087,8 +1240,8 @@ fn subagent_done_sentinel_format_is_well_formed() {
 fn subagent_failed_sentinel_format_is_well_formed() {
     let sentinel = subagent_failed_sentinel("agent_zzz", "boom");
     let inner = sentinel
-        .trim_start_matches("<deepseek:subagent.done>")
-        .trim_end_matches("</deepseek:subagent.done>");
+        .trim_start_matches("<codewhale:subagent.done>")
+        .trim_end_matches("</codewhale:subagent.done>");
     let parsed: serde_json::Value = serde_json::from_str(inner).expect("inner JSON parses");
     assert_eq!(parsed["agent_id"], "agent_zzz");
     assert_eq!(parsed["status"], "failed");
@@ -1132,6 +1285,7 @@ fn child_runtime_increments_depth_and_preserves_auto_approve() {
     parent.context.auto_approve = false; // parent in suggest mode
     let child = parent.child_runtime();
     assert_eq!(child.spawn_depth, 2, "child depth = parent + 1");
+    assert_eq!(child.step_api_timeout, DEFAULT_STEP_API_TIMEOUT);
     assert!(
         !child.context.auto_approve,
         "child must inherit parent approval state"
@@ -1146,12 +1300,25 @@ fn child_runtime_increments_depth_and_preserves_auto_approve() {
     );
 }
 
+#[test]
+fn child_and_background_runtimes_preserve_step_api_timeout() {
+    let timeout = Duration::from_secs(7);
+    let parent = stub_runtime().with_step_api_timeout(timeout);
+
+    let child = parent.child_runtime();
+    assert_eq!(child.step_api_timeout, timeout);
+
+    let background = parent.background_runtime();
+    assert_eq!(background.step_api_timeout, timeout);
+}
+
 #[tokio::test]
 async fn subagent_registry_blocks_approval_tools_without_parent_auto_approve() {
     let mut runtime = stub_runtime();
     runtime.context.auto_approve = false;
     let registry = SubAgentToolRegistry::new(
         runtime,
+        SubAgentType::General,
         Some(vec!["exec_shell".to_string()]),
         Arc::new(Mutex::new(TodoList::new())),
         Arc::new(Mutex::new(PlanState::default())),
@@ -1166,6 +1333,173 @@ async fn subagent_registry_blocks_approval_tools_without_parent_auto_approve() {
         err.to_string().contains("requires approval"),
         "unexpected error: {err}"
     );
+}
+
+#[tokio::test]
+async fn implementer_delegation_allows_suggest_write_without_parent_auto_approve() {
+    // Issue #1828: implementer agents could not write files even when their
+    // whole job is to land code changes, because the registry blocked every
+    // approval-gated tool when the parent ran in `suggest` mode. The
+    // hardened gate (#1833) delegates `Suggest`-level tools (write_file,
+    // edit_file, apply_patch) to write-capable roles.
+    let tmp = tempdir().expect("tempdir");
+    let workspace = tmp.path().to_path_buf();
+    let mut runtime = stub_runtime();
+    runtime.context = ToolContext::new(workspace.clone());
+    runtime.context.auto_approve = false;
+    let registry = SubAgentToolRegistry::new(
+        runtime,
+        SubAgentType::Implementer,
+        None,
+        Arc::new(Mutex::new(TodoList::new())),
+        Arc::new(Mutex::new(PlanState::default())),
+    );
+
+    let result = registry
+        .execute(
+            "agent_test",
+            "write_file",
+            json!({"path": "delegated.txt", "content": "hello"}),
+        )
+        .await
+        .expect("delegated write should be allowed for implementer");
+
+    let written = std::fs::read_to_string(workspace.join("delegated.txt"))
+        .expect("file should exist after delegated write");
+    assert_eq!(written, "hello");
+    assert!(
+        !result.contains("requires approval"),
+        "successful write should not look like an approval error: {result}"
+    );
+}
+
+#[tokio::test]
+async fn general_delegation_still_blocks_suggest_write_without_parent_auto_approve() {
+    let tmp = tempdir().expect("tempdir");
+    let workspace = tmp.path().to_path_buf();
+    let mut runtime = stub_runtime();
+    runtime.context = ToolContext::new(workspace.clone());
+    runtime.context.auto_approve = false;
+    let registry = SubAgentToolRegistry::new(
+        runtime,
+        SubAgentType::General,
+        None,
+        Arc::new(Mutex::new(TodoList::new())),
+        Arc::new(Mutex::new(PlanState::default())),
+    );
+
+    let err = registry
+        .execute(
+            "agent_test",
+            "write_file",
+            json!({"path": "general.txt", "content": "ok"}),
+        )
+        .await
+        .expect_err("general agent should not silently gain write permission");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("not delegated to general sub-agents"),
+        "general writes should be rejected with a role-aware message: {msg}"
+    );
+
+    assert!(
+        !workspace.join("general.txt").exists(),
+        "general write must not land without parent auto-approve"
+    );
+}
+
+#[tokio::test]
+async fn explore_role_still_blocks_suggest_writes_without_parent_auto_approve() {
+    // Read-only stances (explore, plan, review, verifier) must not gain
+    // write capabilities via delegation — otherwise a parent that asked
+    // for "just look at the code" could find files mutated behind its back.
+    let tmp = tempdir().expect("tempdir");
+    let mut runtime = stub_runtime();
+    runtime.context = ToolContext::new(tmp.path().to_path_buf());
+    runtime.context.auto_approve = false;
+    let registry = SubAgentToolRegistry::new(
+        runtime,
+        SubAgentType::Explore,
+        None,
+        Arc::new(Mutex::new(TodoList::new())),
+        Arc::new(Mutex::new(PlanState::default())),
+    );
+
+    let err = registry
+        .execute(
+            "agent_test",
+            "write_file",
+            json!({"path": "should_not_appear.txt", "content": "denied"}),
+        )
+        .await
+        .expect_err("explore agents must not write");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("not delegated to explore sub-agents"),
+        "explore writes should be rejected with a role-aware message: {msg}"
+    );
+    assert!(
+        !tmp.path().join("should_not_appear.txt").exists(),
+        "file must not have been written"
+    );
+}
+
+#[tokio::test]
+async fn delegated_write_role_still_blocks_required_tools() {
+    // Required-level tools (exec_shell, etc.) remain gated behind parent
+    // auto-approve regardless of role. Implementer can write files, but it
+    // still can't bypass shell approval just because it's a "write" role.
+    let tmp = tempdir().expect("tempdir");
+    let mut runtime = stub_runtime();
+    runtime.context = ToolContext::new(tmp.path().to_path_buf());
+    runtime.context.auto_approve = false;
+    let registry = SubAgentToolRegistry::new(
+        runtime,
+        SubAgentType::Implementer,
+        Some(vec!["exec_shell".to_string()]),
+        Arc::new(Mutex::new(TodoList::new())),
+        Arc::new(Mutex::new(PlanState::default())),
+    );
+
+    let err = registry
+        .execute("agent_test", "exec_shell", json!({"command": "echo hi"}))
+        .await
+        .expect_err("Required-level shell must still need parent auto-approve");
+    assert!(
+        err.to_string().contains(
+            "cannot run inside this sub-agent unless the parent session is auto-approved"
+        ),
+        "expected Required-level approval message, got: {err}"
+    );
+}
+
+#[tokio::test]
+async fn auto_approved_parent_runs_required_tools_in_subagent() {
+    // Baseline: when the parent runtime IS auto-approved, every approval
+    // class is permitted (same as before the delegation hardening).
+    let tmp = tempdir().expect("tempdir");
+    let mut runtime = stub_runtime();
+    runtime.context = ToolContext::new(tmp.path().to_path_buf());
+    runtime.context.auto_approve = true;
+    let registry = SubAgentToolRegistry::new(
+        runtime,
+        SubAgentType::General,
+        None,
+        Arc::new(Mutex::new(TodoList::new())),
+        Arc::new(Mutex::new(PlanState::default())),
+    );
+
+    // Calling exec_shell with interactive=true is what we block via the
+    // separate terminal-takeover guard; pick the simpler write-file path
+    // to assert that approval gating is off when auto_approve is set.
+    registry
+        .execute(
+            "agent_test",
+            "write_file",
+            json!({"path": "auto.txt", "content": "auto"}),
+        )
+        .await
+        .expect("auto-approved parent should allow writes");
 }
 
 #[test]
@@ -1383,7 +1717,7 @@ fn persisted_non_empty_allowed_tools_loads_as_narrow() {
 fn stub_runtime() -> SubAgentRuntime {
     use tokio_util::sync::CancellationToken;
 
-    let workspace = std::env::temp_dir().join("deepseek-test-stub");
+    let workspace = std::env::temp_dir().join("codewhale-test-stub");
     let context = ToolContext::new(workspace.clone());
     SubAgentRuntime {
         client: stub_client(),
@@ -1402,6 +1736,7 @@ fn stub_runtime() -> SubAgentRuntime {
         mailbox: None,
         parent_completion_tx: None,
         fork_context: None,
+        step_api_timeout: DEFAULT_STEP_API_TIMEOUT,
     }
 }
 
@@ -1434,6 +1769,7 @@ fn insert_prior_session_agent(
 ) {
     let (input_tx, _input_rx) = mpsc::unbounded_channel();
     let mut agent = SubAgent::new(
+        id.to_string(),
         SubAgentType::General,
         "old prompt".to_string(),
         make_assignment(),
@@ -1694,6 +2030,69 @@ fn emit_parent_completion_dropped_receiver_does_not_panic() {
     );
 }
 
+#[tokio::test]
+async fn run_subagent_task_emits_parent_completion_before_terminal_update() {
+    let manager = Arc::new(RwLock::new(SubAgentManager::new(PathBuf::from("."), 2)));
+    let (task_input_tx, task_input_rx) = mpsc::unbounded_channel();
+    let agent_id = "agent_noop".to_string();
+    let mut agent = SubAgent::new(
+        agent_id.clone(),
+        SubAgentType::General,
+        "noop".to_string(),
+        make_assignment(),
+        "deepseek-v4-flash".to_string(),
+        None,
+        None,
+        task_input_tx,
+        "boot_test".to_string(),
+    );
+    agent.status = SubAgentStatus::Running;
+    manager.write().await.agents.insert(agent_id.clone(), agent);
+
+    let (completion_tx, mut completion_rx) = mpsc::unbounded_channel::<SubAgentCompletion>();
+    let mut runtime = runtime_with_depth(1, Some(completion_tx));
+    runtime.manager = Arc::clone(&manager);
+
+    let task = SubAgentTask {
+        manager_handle: manager.clone(),
+        runtime,
+        agent_id: agent_id.clone(),
+        agent_type: SubAgentType::General,
+        prompt: "no-op child run".to_string(),
+        assignment: make_assignment(),
+        allowed_tools: None,
+        fork_context: false,
+        started_at: Instant::now(),
+        max_steps: 0,
+        input_rx: task_input_rx,
+    };
+
+    let manager_lock = manager.write().await;
+    let task_handle = tokio::spawn(run_subagent_task(task));
+
+    // While the manager write lock is held, completion can be emitted only if it
+    // is sent before the terminal-state manager update (the ordering fixed by
+    // issue #1961).
+    let completion = tokio::time::timeout(Duration::from_secs(1), completion_rx.recv())
+        .await
+        .expect("completion should be emitted while manager write lock is still held");
+    let completion = completion.expect("completion channel should remain open");
+    assert_eq!(completion.agent_id, agent_id);
+
+    drop(manager_lock);
+    task_handle
+        .await
+        .expect("run_subagent_task should complete after lock release");
+
+    let snapshot = {
+        let manager = manager.read().await;
+        manager
+            .get_result(&agent_id)
+            .expect("completed agent should be present")
+    };
+    assert_eq!(snapshot.status, SubAgentStatus::Completed);
+}
+
 #[test]
 fn child_runtime_propagates_completion_tx_for_gating() {
     // The channel is cloned through `child_runtime()` so descendants carry
@@ -1712,9 +2111,49 @@ fn child_runtime_propagates_completion_tx_for_gating() {
 }
 
 #[test]
+fn subagent_runtime_default_step_api_timeout_is_legacy_120s() {
+    // The legacy hardcoded constant is now the default field value so existing
+    // call sites and tests that construct a runtime without explicit timeout
+    // wiring keep their old behavior (#1806, #1808).
+    let runtime = stub_runtime();
+    assert_eq!(runtime.step_api_timeout, DEFAULT_STEP_API_TIMEOUT);
+    assert_eq!(
+        DEFAULT_STEP_API_TIMEOUT,
+        std::time::Duration::from_secs(crate::config::DEFAULT_SUBAGENT_API_TIMEOUT_SECS)
+    );
+}
+
+#[test]
+fn with_step_api_timeout_overrides_runtime_field() {
+    let runtime = stub_runtime().with_step_api_timeout(std::time::Duration::from_secs(900));
+    assert_eq!(runtime.step_api_timeout.as_secs(), 900);
+}
+
+#[test]
+fn child_runtime_preserves_step_api_timeout() {
+    // Real sub-agents spawn through `child_runtime()` / `background_runtime()`;
+    // forgetting to clone the timeout would silently drop the user's config
+    // override and resurrect the 120 s default for every child step.
+    let parent = stub_runtime().with_step_api_timeout(std::time::Duration::from_secs(900));
+    let child = parent.child_runtime();
+    let background = parent.background_runtime();
+
+    assert_eq!(
+        child.step_api_timeout.as_secs(),
+        900,
+        "child_runtime must preserve parent's per-step timeout"
+    );
+    assert_eq!(
+        background.step_api_timeout.as_secs(),
+        900,
+        "background_runtime (detached) must also preserve the parent's timeout"
+    );
+}
+
+#[test]
 fn subagent_completion_payload_carries_existing_sentinel_format() {
     // The payload format is the same one already documented in
-    // prompts/base.md: human summary on line 1, `<deepseek:subagent.done>`
+    // prompts/base.md: human summary on line 1, `<codewhale:subagent.done>`
     // sentinel on line 2. This test pins the format so future refactors
     // don't silently break the model's parsing contract.
     let mut snap = make_snapshot(SubAgentStatus::Completed);
@@ -1728,14 +2167,14 @@ fn subagent_completion_payload_carries_existing_sentinel_format() {
     let first = lines.next().expect("first line is summary");
     let second = lines.next().expect("second line is sentinel");
     assert!(
-        !first.starts_with("<deepseek:subagent.done>"),
+        !first.starts_with("<codewhale:subagent.done>"),
         "summary should not be the sentinel itself"
     );
     assert!(
-        second.starts_with("<deepseek:subagent.done>"),
+        second.starts_with("<codewhale:subagent.done>"),
         "second line is the sentinel"
     );
-    assert!(second.ends_with("</deepseek:subagent.done>"));
+    assert!(second.ends_with("</codewhale:subagent.done>"));
     assert!(
         second.contains("\"agent_id\":\"agent_test\""),
         "sentinel JSON includes agent_id"

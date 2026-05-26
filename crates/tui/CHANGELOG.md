@@ -7,6 +7,692 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Kimi Code API-key setup.** `codewhale config set providers.moonshot.*`
+  now writes the Moonshot/Kimi provider table, and Kimi Code API-key
+  endpoints default to `kimi-for-coding` without using the Kimi CLI OAuth path.
+
+## [0.8.45] - 2026-05-25
+
+### Added
+
+- **RLM session objects.** `rlm_open` can now load `session://` refs,
+  exposing the active prompt, history, and session data as symbolic objects
+  inside RLM REPLs (#2047).
+- **Command palette voice input.** The command palette can launch a configured
+  speech-to-text helper and show footer status while transcription runs
+  (#2047).
+- **Moonshot/Kimi provider.** Moonshot/Kimi is now a first-class provider,
+  including API-key auth, model completion, CLI auth, secret-store
+  integration, and optional Kimi CLI credential reuse.
+- **Deterministic whale-species sub-agent names.** Sub-agents now get stable,
+  human-readable whale-species nicknames (e.g. "Beluga", "Orca") while
+  preserving the raw agent ID in the popup (#2035, #2016).
+- **`/balance` command scaffold.** Registered the `/balance` slash command
+  as a placeholder for future provider billing queries (#2035, #2019).
+- **Readable `/restore` snapshot labels.** Snapshot labels now include the
+  originating user prompt so restore listings are easier to identify. Thanks
+  @idling11 (#2111).
+- **Sidebar hover tooltips.** Truncated Work and Tasks sidebar lines now expose
+  their full text on hover. Thanks @idling11 (#2110).
+
+### Changed
+
+- **AGENTS.md is now maintainer-local.** The project instructions file no
+  longer ships as a tracked repo file; it lives in maintainer-local ignored
+  state (#2047).
+
+### Fixed
+
+- **Sub-agent completion handoff compatibility.** Completion handoffs now use a
+  chat-template-safe role and emit before terminal updates, fixing strict
+  OpenAI-compatible/self-hosted backends and preserving transcript ordering.
+  Thanks @h3c-hexin and @cyq1017 (#2057, #2120).
+- **Self-hosted context budgeting.** Sub-500K self-hosted model windows now keep
+  a usable input budget instead of disabling preflight compaction after output
+  reservation underflow. Thanks @h3c-hexin (#2060).
+- **Goal prompts start actionable.** Goal-start prompts now open in an
+  actionable state instead of requiring an extra nudge. Thanks @cyq1017
+  (#2097).
+- **Composer session title display.** The composer chrome shows the current
+  session title again and avoids grayscale luma overflow in debug builds.
+  Thanks @wdw8276 (#2108).
+- **Approval prompts use a one-step confirmation flow.** Enter now commits the
+  selected approval option directly, destructive warnings remain visible, and
+  abort cancels the active turn instead of only denying the current tool call.
+  Thanks @reidliu41 (#2143).
+- **Model picker selection survives Esc.** Dismissing the model picker with Esc
+  no longer loses the highlighted selection. Thanks @reidliu41 (#2056).
+- **Moonshot/Kimi sessions launch from the dispatcher.** The `codewhale`
+  wrapper now includes Moonshot/Kimi in the TUI provider allowlist, so
+  `codewhale --provider moonshot --model kimi-k2.6` reaches the TUI instead of
+  stopping after config resolution.
+- **Slash recovery no longer restores command tails in the composer.**
+  Resuming a session or recovering from a crash no longer leaves stale
+  slash-command text (e.g. `/sessions`) in the composer input (#2047, #2032).
+- **Remembered tool approvals now update the live active turn.**
+  When the "remember" checkbox is set on an approval dialog, the active
+  turn's auto-approve flag flips immediately instead of waiting for the
+  next turn. Thanks @gaord (#2047, #2041).
+- **YAML block scalars in SKILL.md frontmatter.** Multi-line descriptions
+  using `>` or `|` indicators are now parsed correctly — folded block
+  scalars join non-empty lines with spaces, literal scalars preserve
+  newlines, and all three chomping modes (strip/clip/keep) are supported.
+  Thanks @zlh124 (#1908, #1907).
+- **User messages highlighted in the transcript.** User-authored messages
+  now render with a full-row background in the live TUI transcript, making
+  it easier to scan prior turns. Assistant and system messages are
+  unaffected. Thanks @reidliu41 (#1995, #1672).
+- **Cancellable `list_dir` and `file_search`.** Long directory walks and
+  file searches now respond to user cancel/stop requests with a 30-second
+  fallback timeout, preventing the TUI from hanging on deep or slow
+  filesystems (#2035).
+
+## [0.8.44] - 2026-05-24
+
+### Added
+
+- **`codew` convenience alias.** `codew` is a short-form command that silently
+  forwards to `codewhale`. Six fewer keystrokes, same binary. Ships with the
+  Rust `codewhale-cli` crate and the npm `codewhale` package (#2013).
+- **Session picker inline rename.** Press `r` in the session picker (Ctrl+R)
+  to rename the selected session inline. Type the new title, Enter to confirm,
+  Esc to cancel (#1600).
+- **Plan detail display.** The \"Plan Confirmation\" modal now shows the plan
+  explanation and step list from `update_plan` so you can review what was
+  proposed before accepting (#834).
+- **Agent team UX.** Delegate cards in the transcript now show human-readable
+  roles (scout, builder, reviewer, verifier, executor) and the completion
+  summary instead of raw `agent_xxx` IDs (#1981).
+- **`--continue` / `-c` CLI flag.** `codewhale --continue` resumes your most
+  recent interactive session for the current workspace.
+
+### Changed
+
+- **App state migrates to `~/.codewhale/`.** New installs write product-owned
+  state (config, sessions, tasks, skills, logs, etc.) under `~/.codewhale/`.
+  `~/.deepseek/` continues to work as a compatibility fallback — no data loss,
+  no forced migration. `CODEWHALE_HOME` and `CODEWHALE_CONFIG_PATH` env vars
+  are now supported alongside existing `DEEPSEEK_*` vars (#2011).
+- **Project config overlay prefers `.codewhale/config.toml`** before
+  `.deepseek/config.toml`. Both are read; the CodeWhale root takes precedence.
+- **Doctor reports active state root** and whether legacy `~/.deepseek/`
+  state is also present.
+- **README contributor acknowledgements are current for this release.**
+  Thanks @jeoor, @LING71671, and @ousamabenyounes for the fixes and reports
+  now reflected in the public credits.
+- **Harvested-contribution credit audit completed.** The README Thanks list now
+  includes previously missed community helpers whose code, reports, or review
+  notes were already credited in older changelog entries but not in the public
+  contributor surface: @mvanhorn, @krisclarkdev, @tdccccc, @LittleBlacky,
+  @AnaheimEX, @THatch26, @alvin1, @knqiufan, @IIzzaya, @duanchao-lab,
+  @imkingjh999, @eng2007, @chennest, @kunpeng-ai-lab, @asdfg314284230,
+  @maker316, @lalala-233, @muyuliyan, @czf0718, @MeAiRobot, @tiger-dog,
+  @MMMarcinho, @lucaszhu-hue, @sandofree, @zhuangbiaowei, @NorethSea,
+  @Jianfengwu2024, @Fire-dtx, @oooyuy92, @qinxianyuzou, @tyouter,
+  @xulongzhe, @YaYII, @47Cid, and @JafarAkhondali.
+- **Harvest guidance now requires GitHub-visible attribution.** Maintainer
+  harvests should preserve the original commit author where possible or add
+  `Co-authored-by` trailers from the original PR commits, in addition to the
+  existing `Harvested from PR #N by @handle` trailer and changelog credit.
+- **Enter now steers when busy-waiting.** When the model is busy but not
+  actively streaming (waiting on tool results, sub-agents, or shell
+  commands), pressing Enter tries to steer your message into the current
+  turn instead of silently queueing it. During active streaming, Enter
+  still queues to avoid interrupting in-flight reasoning (#2009).
+
+### Fixed
+
+- **`/save` no longer creates repo-local `session_*.json`.** Default saves
+  now go to the managed sessions directory instead of the current workspace.
+  Explicit `/save path/to/file.json` exports still work as before (#2010).
+- **Boot-time session prune** caps managed sessions at 50 on every startup,
+  preventing unbounded growth of `~/.codewhale/sessions/`.
+- **Checkpoint path resolution** no longer hardcodes `~/.deepseek/` — uses
+  the resolved session directory instead.
+- **Plain startup no longer auto-opens the session picker.** `codewhale` and
+  `codew` start in a fresh composer again even when saved sessions exist.
+  Use `/sessions`, Ctrl+R, `--resume`, or `--continue` when you want to resume.
+- **Work sidebar now refreshes immediately** after `checklist_write`,
+  `checklist_update`, and `update_plan` tool calls, matching the existing
+  `todo_write` behavior instead of relying on the 2.5s periodic poll (#1787).
+
+## [0.8.43] - 2026-05-24
+
+### Fixed
+
+- **`grep_files` now respects the cancellation token.** Long-running file
+  searches cancel promptly instead of running to completion after the user
+  aborts (#1839). Thanks @LING71671.
+- **npm installer stream-pause race condition fixed.** The install script now
+  pauses HTTP response streams immediately, preventing early data loss that
+  caused "Invalid checksum manifest line" errors (#1860). Thanks @jeoor.
+- **Ctrl+Z restores the last cleared composer draft.** Pressing Ctrl+Z in an
+  empty composer recovers the text that was last cleared with Ctrl+U or
+  Ctrl+S, matching the muscle memory users expect from other editors (#1911).
+  Thanks @LING71671.
+- **Clipboard works on non-wlroots Wayland compositors.** The Linux clipboard
+  path now tries `wl-copy` before `arboard`, fixing silent copy failures on
+  niri, River, cosmic-comp, and GNOME mutter (#1938). Thanks @ousamabenyounes.
+
+### Added
+
+- **`/goal` remains the persistent objective surface.** Use `/goal <objective>`
+  to set a goal and `/goal done` to mark it complete. Goal status appears in
+  the Work sidebar with elapsed time, but it does not change Plan / Agent /
+  YOLO mode or approval behavior. A tabbed Ralph-style Goal loop is deferred to
+  v0.8.44 (#2007).
+- **Post-turn receipts cite evidence for every completed turn.** When a turn
+  finishes, a receipt line shows in the transcript tail with a summary of
+  tool calls, file changes, and evidence that supports the agent's claims.
+  Tool evidence is collected per-turn and flushed on new dispatch.
+- **Stall reason classification.** When a turn has been running for more than
+  30 seconds, the footer now appends a classified reason: "waiting for model",
+  "tools executing", "sub-agents working", "compacting context", or "waiting —
+  no recent activity".
+- **Decision card widget for structured user input.** When Brother Whale needs
+  a choice, it surfaces a bordered card with numbered options, keyboard
+  navigation (1-9 / j/k / arrows), and Enter/Esc to confirm or cancel.
+- **Tasks sidebar now shows fuller turn IDs and supports copy-to-clipboard.**
+  Turn ID prefixes are widened from 12 to 16 characters for disambiguation,
+  background job status is presented as "X running, Y completed" instead of
+  ambiguous "X active (Y running)", and `y` / `Y` yank affordances copy the
+  current turn ID or full status line to the system clipboard (#1975).
+
+### Changed
+
+- **Contributor count and acknowledgement surfaces refreshed.** The website
+  fallback contributor count now reflects 98 live GitHub contributors (up from
+  the stale 91). All three README translations (English, 中文, 日本語) now
+  include 30+ previously unlisted contributors whose PRs were merged since
+  April 2026.
+- **README and web surface rebrand refinements.** Crate descriptions, npm
+  package text, and website copy now consistently position CodeWhale as
+  open-model-first and provider-spanning, with DeepSeek V4 as the first-class
+  path.
+- **New contributor names added to README acknowledgements.** Thanks to
+  @Apeiron0w0, @aqilaziz, @ChaceLyee2101, @ComeFromTheMars, @CrepuscularIRIS,
+  @dst1213, @eltociear, @fuleinist, @greyfreedom, @h3c-hexin, @heloanc,
+  @hxy91819, @J3y0r, @JiarenWang, @jinpengxuan, @KhalidAlnujaidi, @laoye2020,
+  @lbcheng888, @linzhiqin2003, @Liu-Vince, @lixiasky-back, @pengyou200902,
+  @punkcanyang, @Rene-Kuhm, @SamhandsomeLee, @sockerch, @sternelee,
+  @Wenjunyun123, @whtis, and @wuwuzhijing for the translations, typo fixes,
+  docs polish, and small UX improvements that landed across the 0.8.42 →
+  0.8.43 cycle.
+
+### Security
+
+- **Thinking blocks can be collapsed/expanded via keyboard.** Space on an
+  empty composer toggles the focused thinking cell between collapsed and
+  expanded, complementing the existing mouse right-click context menu (#1972).
+- **Sub-agent completion events no longer delayed to the next turn.** The turn
+  loop now drains late-arriving sub-agent completions at the final checkpoint
+  before breaking, so child-agent sentinels surface immediately instead of
+  appearing in the following turn (#1961).
+- **`codewhale doctor` now referenced correctly in SSE timeout errors.**
+  The error message shown when SSE streams fail to connect now points users to
+  `codewhale doctor` (not the legacy `deepseek doctor`).
+
+## [0.8.42] - 2026-05-24
+
+### Changed
+
+- **CodeWhale now ships with the Brother Whale agent identity prompt.** The
+  built-in system prompt frames the agent as trusted, calm, careful, and
+  responsible, and adds the coordination principle that great intelligence
+  creates spaces where future intelligences can work together.
+- **CodeWhale positioning is clarified as DeepSeek-first and open-model
+  oriented.** README, rebrand notes, crate metadata, and npm package text now
+  describe CodeWhale as an agentic terminal for open source and open-weight
+  coding models while preserving the official DeepSeek provider as first-class.
+- **Model auto-routing is documented separately from TUI modes.** README and
+  modes docs now reserve "mode" for Plan / Agent / YOLO, describe
+  `--model auto` as model/thinking routing, and name the fast
+  `deepseek-v4-flash` thinking-off seam as Fin.
+- **Rebrand shim docs now match the v0.8.x transition window.** The npm and
+  migration notes no longer imply the legacy `deepseek-tui` package/shims
+  expired immediately after v0.8.41.
+
+### Fixed
+
+- **User-authored messages render as literal plain text.** Leading whitespace,
+  whitespace-only lines, repeated spaces, and Markdown-looking `#` / `-` text
+  now survive in transcript history, while assistant messages still render
+  Markdown normally.
+- **English turns stay English after localized context.** The Brother Whale
+  identity and base language rules no longer inject native-script examples into
+  the English prompt path, and the prompt now calls out localized READMEs, issue
+  text, file contents, and tool results as data rather than language signals.
+- **Stream decode failures no longer leave the turn visually stuck.** The UI
+  now marks an active turn failed and flushes live cells as soon as the engine
+  emits a stream error, so the sidebar/footer recover without requiring
+  Ctrl+C (#1960).
+- **RLM contexts now expose `_ctx`.** Persistent RLM REPLs bind `_ctx` as a
+  compatibility alias for the loaded source alongside `_context` and
+  `content`, and the prompt/docs call out the exact names (#1962).
+- **`handle_read` is easier to recover from.** The tool keeps accepting full
+  `var_handle` objects directly, adds `introspect: true` for size/projection
+  hints, and validation failures now include copy-pasteable examples (#1963).
+- **The help picker keeps the selected row visible while scrolling.** `/help`
+  now budgets against the real modal body height, wraps Up/Down navigation,
+  and uses a stronger selected-row highlight (#1964).
+- **Unicode `git_status` paths stay readable.** Chinese and other non-ASCII
+  repository paths now survive status parsing and display cleanly (#1936,
+  #1953).
+- **Project-local and configured skills appear in the slash menu.** Workspace
+  skills and configured skill directories now feed the command picker instead
+  of only the bundled set (#1955, #1956).
+- **Repeated Tab mode switching no longer stacks composer-obscuring toasts.**
+  The mode-switch notification now deduplicates instead of accumulating rows
+  over the composer (#1926, #1957).
+- **Local tool UX surfaces are clearer.** `github_close_pr` now has the same
+  guarded closure workflow as issue close, `handle_read` redirects artifact
+  refs to `retrieve_tool_result`, Plan handoffs use plainer wording, and shell
+  rows/sidebar tasks show the actual running command instead of placeholder
+  labels.
+
+### Thanks
+
+Thanks to **cyq ([@cyq1017](https://github.com/cyq1017))** for the Unicode
+`git_status`, local/configured skill discovery, and mode-switch toast fixes in
+#1953, #1956, and #1957. Thanks to **Reid
+([@reidliu41](https://github.com/reidliu41))** for the help picker scrolling
+and selection fix in #1964.
+
+## [0.8.41] - 2026-05-23
+
+### Changed
+
+- **Project renamed to codewhale.** The canonical CLI dispatcher is now
+  `codewhale` (was `deepseek`) and the TUI runtime is `codewhale-tui`
+  (was `deepseek-tui`). The 14 workspace crates are renamed from
+  `deepseek-*` / `deepseek-tui-*` to `codewhale-*` / `codewhale-tui-*`.
+  The npm wrapper package is now `codewhale` (was `deepseek-tui`). See
+  [docs/REBRAND.md](docs/REBRAND.md) for migration notes.
+- **DeepSeek provider integration is unchanged.** `DEEPSEEK_*` env vars,
+  model IDs (`deepseek-v4-pro`, `deepseek-v4-flash`, the legacy
+  `deepseek-chat` / `deepseek-reasoner` aliases), the
+  `https://api.deepseek.com` host, and the `~/.deepseek/` config
+  directory are all preserved.
+
+### Deprecated
+
+- The `deepseek` and `deepseek-tui` binary names continue to ship as
+  tiny shims that print a one-line warning and forward argv to the
+  renamed binaries. They will be removed in v0.9.0.
+- The `deepseek-tui` npm package continues to publish for one release
+  cycle as a no-`bin` deprecation shim whose postinstall directs users
+  to `npm install -g codewhale`. It will be removed in v0.9.0.
+
+### Fixed
+
+- **Windows CI spillover tests are isolated.** Tool-result deduplication
+  tests now use a temporary spillover root guarded by the existing global
+  spillover mutex, removing the shared-state race that made Windows CI fail
+  unrelated PRs (#1943).
+- **Terminated sub-agents keep `agent_eval` recoverable.** Evaluating a
+  completed child session now returns the available transcript result instead
+  of losing the final output (#1738, #1928).
+- **Bare `@/` completions no longer freeze the TUI.** File-mention
+  completion skips bare separator and dot tokens so Windows/WSL2 workspaces
+  do not trigger an eager 4096-entry filesystem walk on the UI thread
+  (#1921, #1929).
+- **Enter paths avoid synchronous UI-thread waits.** Composer history writes,
+  offline queue persistence, feedback URL launching, and clipboard fallback
+  helpers now run off the hot Enter path where appropriate (#1927, #1931,
+  #1940, #1941, #1944).
+- **tmux and screen sessions stop idling as terminal activity.** Terminal
+  multiplexers now force low-motion behavior and pin the fallback footer label
+  so passive animations do not trip activity monitors (#1925, #1942).
+- **Composer sanitization catches OSC 8 and Kitty fragments.** The input
+  sanitizer now strips common hyperlink and keyboard-protocol fragments that
+  leaked into drafts while preserving ordinary prose (#1915, #1933).
+- **The Work sidebar hides stale completed tasks.** Terminal task records older
+  than the current session and outside the recent-completion window no longer
+  crowd active Work sidebar rows (#1913, #1930).
+- **V4 Pro pricing docs reflect permanent rates.** The English, Simplified
+  Chinese, and Japanese READMEs now describe the V4 Pro pricing change as
+  permanent instead of temporary (#1923, #1932).
+
+### Thanks
+
+Thanks to **OpenWarp ([@zerx-lab](https://github.com/zerx-lab))** for
+prioritizing codewhale support and collaborating on terminal-agent UX.
+Thanks to **[@leo119](https://github.com/leo119)** for the update-command
+documentation lineage now preserved through the rename.
+
+## [0.8.40] - 2026-05-21
+
+### Added
+
+- **Configurable sub-agent per-step API timeout.** A new
+  `[subagents] api_timeout_secs` setting in `~/.deepseek/config.toml`
+  controls how long each sub-agent step will wait on a DeepSeek
+  `create_message` response before falling back. The value is clamped to
+  `1..=1800`; `0` or unset preserves the legacy 120-second default, so
+  existing installs see no behavior change. Long-thinking children (e.g.
+  heavy plan or review work behind `agent_open`) can extend the timeout
+  without recompiling (#1806, #1808).
+- **Delegated file-write permissions for write-capable sub-agent roles.**
+  `implementer` and `custom` sub-agents may now run `Suggest`-level write
+  tools (`write_file`, `edit_file`, `apply_patch`) without the parent
+  runtime being auto-approved. Read-only stances (`explore`, `plan`,
+  `review`, `verifier`) and the default `general` role still bounce
+  approval-gated tools so they can't quietly mutate the workspace, and
+  `Required`-level tools (shell, etc.) still need parent auto-approve
+  regardless of role. Pick `implementer` (or pass an explicit `custom`
+  allowlist) when the delegated task needs to land file changes
+  (#1828, #1833).
+- **Experimental Fin fast-lane tool agents.** `tool_agent` opens a durable
+  child session on DeepSeek V4 Flash with thinking forced off for simple
+  tool-bound work such as OCR, file/search lookups, fetches, and command
+  probes. It uses the existing `agent_eval` / `agent_close` lifecycle and
+  mailbox token-usage stream, so sub-agent cost accounting stays on the same
+  path as normal `agent_open` sessions.
+
+### Fixed
+
+- **WSL2 and headless Linux startup no longer blocks on clipboard init.** The
+  TUI now defers clipboard initialization so machines without an X server can
+  reach the first frame instead of hanging on a blank screen (#1773, #1772).
+- **Windows alt-screen output stays clean when `RUST_LOG` is set.** Runtime
+  tracing is routed away from the interactive buffer so logs no longer leak
+  into the TUI display (#1774, #1776).
+- **OpenAI-compatible custom model names are preserved.** Non-DeepSeek
+  providers now pass explicit model names through instead of rewriting them to
+  a DeepSeek default (#1714, #1740).
+- **Wanjie Ark is a first-class provider.** `--provider wanjie-ark`, the TUI
+  provider picker, `deepseek auth`, doctor, and config files now target
+  Wanjie's OpenAI-compatible MaaS endpoint with pass-through model IDs and
+  Wanjie-specific env vars.
+- **DeepSeek reasoning replay works through OpenAI-compatible endpoints.**
+  DeepSeek models selected under the generic `openai` provider now replay
+  prior `reasoning_content` consistently and classify streamed reasoning the
+  same way the replay path does (#1694, #1739, #1743).
+- **Thinking-only turns no longer disappear.** If a clean turn ends with
+  thinking but no final answer text, the UI now surfaces a clear status instead
+  of silently ending the turn (#1727, #1742).
+- **Windows `cmd /C` preserves quoted shell arguments.** Commands such as
+  `git commit -m "feat: complete sub-pages"` now round-trip through the Windows
+  shell wrapper without losing the quoted message (#1691, #1744).
+- **Home/End are line-local inside multiline composer drafts.** The keys now
+  jump to the current input line boundary before falling back to transcript
+  navigation (#1748, #1749).
+- **Ctrl+C restores the canceled prompt reliably.** Canceling a streaming turn
+  puts the submitted prompt back in the composer and suppresses late stream
+  events from drawing stale output (#1757, #1764).
+- **Compaction recovers from cache-aligned summary context overflow.** When a
+  cache-preserving summary request itself exceeds the provider context window,
+  compaction retries with the bounded formatted summary path instead of failing
+  with a 400 "compression command failed" style error.
+- **Terminal sub-agent sessions expose full transcript handles.** Completed
+  and canceled child agents now store the full child message transcript behind
+  `transcript_handle`, so the parent can inspect details with `handle_read`
+  instead of relying only on a lossy summary (#1738).
+- **Forked saved sessions now keep visible lineage.** `deepseek fork` records
+  the parent session id and fork-time message count in additive metadata, and
+  session listings mark forked paths with their source id. This gives users a
+  bounded branchable-conversation workflow while the larger visual tree browser
+  stays scoped for a future release.
+- **Repeated shell wait rows collapse in the Tasks sidebar.** Multiple live
+  `task_shell_wait` polls for the same background job now render as one row
+  with an explicit collapsed-wait count, reducing the stuck-task appearance
+  tracked for v0.8.40 (#1737).
+- **Leaked mouse scroll reports no longer erase composer draft suffixes.** If
+  a terminal delivers raw SGR mouse bytes into the input stream, the sanitizer
+  now strips only the mouse report and adjacent coordinate fragments instead
+  of deleting legitimate draft text such as `commit -m` or numeric prompts
+  (#1778).
+- **TUI runtime logs are separated per process and pruned on startup.** Each
+  session now writes `~/.deepseek/logs/tui-YYYY-MM-DD-PID.log`, and startup
+  removes stale TUI logs older than seven days by default. Set
+  `DEEPSEEK_LOG_RETENTION_DAYS` to a positive day count to adjust retention
+  (#1782, #1784).
+- **The offline eval harness preserves quoted Windows shell payloads.** Its
+  `exec_shell` step now uses the same single-payload shape as the runtime shell
+  path, with raw `cmd /C` arguments on Windows so quoted commands remain intact
+  (#1779).
+- **The Feishu/Lark bridge recovers better after restarts.** It now reattaches
+  to persisted active turns after the long-connection client starts, and text
+  chunking no longer splits emoji or other multi-code-unit characters.
+- **RLM survives non-UTF-8 stdout.** `rlm_eval` now decodes REPL stdout
+  lossily instead of treating a single invalid byte as a fatal crash, so
+  binary-adjacent diagnostics can still return a bounded result (#1815,
+  #1819).
+- **Small UI/review reliability fixes landed with the stability branch.**
+  `/clear` now resets all displayed cost state, grayscale theme previews avoid
+  luma overflow, `/theme` picker arrow navigation wraps at the list edges, and
+  encoded JSON review output is parsed before display.
+- **New-file writes execute on the first Agent-mode call.** `write_file` now
+  stays preloaded in Agent mode, so creating a file no longer stops at the
+  deferred-tool schema hydration message before the normal approval/execution
+  path (#1825, #1841).
+- **Saved sessions keep the selected model mode.** Changing from `auto` to a
+  concrete model now updates existing session metadata, and resumed sessions
+  recompute the `auto` flag from the saved model instead of falling back to the
+  startup default.
+- **The `/model` picker persists thinking effort across restarts.** Selecting
+  Pro/Flash plus `high`/`max`/`auto` now writes both `default_model` and
+  `reasoning_effort` to `settings.toml`, and startup restores the saved effort
+  before falling back to `config.toml`.
+- **The footer water strip is visible by default again.** `fancy_animations`
+  now defaults to `true`, while `NO_ANIMATIONS`, SSH/Termius, VS Code, Ghostty,
+  and legacy terminal overrides still disable the animated strip where it is
+  known to flicker.
+- **Screenshots are readable without extra setup on macOS.** `image_ocr` now
+  uses the native Vision framework on macOS when Tesseract is absent, and
+  `read_file` routes screenshot/image reads through the same OCR path. Pasted
+  clipboard screenshots saved under `~/.deepseek/clipboard-images` are trusted
+  automatically for read-only tools.
+- **Auto-routing context no longer leaks hidden thinking.** The model/router
+  context summary now excludes `ContentBlock::Thinking`, so prior internal
+  reasoning is not reintroduced as if it were visible user or assistant text.
+
+### Changed
+
+- **Slash-command autocomplete ranks exact alias matches first.** Typing
+  `/q` now surfaces `/exit` (whose alias `q` is an exact match) above
+  `/clear` (which only matches by the longer pinyin alias `qingping`).
+  Within each rank tier the menu still falls back to alphabetical name
+  order for deterministic display (#1811).
+- **CNB mirror preflight covers stability-release branches.** The CNB sync
+  path now recognizes the v0.8.40 stability branch shape before release tags
+  exist, making the Tencent Lighthouse/Lark deployment path easier to verify
+  before publishing.
+
+### Thanks
+
+Thanks to **jayzhu ([@zlh124](https://github.com/zlh124))** for the WSL2
+startup report and clipboard-init fix in #1772/#1773. Thanks to **Paulo Aboim
+Pinto ([@aboimpinto](https://github.com/aboimpinto))** for the Windows
+alt-screen logging report and fix in #1774/#1776, and for the Home/End
+composer work in #1748/#1749, plus the per-process log filename follow-up in
+#1782/#1783. Thanks to **Zhongyue Lin
+([@LeoLin990405](https://github.com/LeoLin990405))** for the provider model
+passthrough, reasoning replay, thinking-only turn, and Windows quoting fixes
+in #1740, #1743, #1742, and #1744. Thanks to **Nightt
+([@nightt5879](https://github.com/nightt5879))** for the Ctrl+C prompt restore
+fix in #1764. Thanks to **Ling ([@LING71671](https://github.com/LING71671);
+commits as `www17 <ivonrust@gmail.com>`)** for the configurable sub-agent API
+timeout in #1808 and the Agent-mode `write_file` preload fix in #1841,
+harvested with `1..=1800` clamping and a fail-fast guard so a stray
+`api_timeout_secs = 0` keeps the legacy 120-second default.
+Thanks to **[@knqiufan](https://github.com/knqiufan)** for the sub-agent
+file-write delegation work in #1833, harvested with structured approval-
+gate semantics (`Implementer` and `Custom` only, never `Required`-level
+tools) so write-capable children can actually land code without bypassing
+the `Required` approval class. Thanks to **[@IIzzaya](https://github.com/IIzzaya)**
+for the exact-alias-first slash-completion ordering idea in #1811, landed
+with a focused regression test. Thanks to **Bevis** and the community reports
+that surfaced the compaction failure mode addressed in this release. Thanks to
+**Reid ([@reidliu41](https://github.com/reidliu41))** for the grayscale theme
+overflow report and `/theme` picker edge-wrapping patch in #1814.
+
+## [0.8.39] - 2026-05-17
+
+### Fixed
+
+- **Feishu/Lark bridge startup order is guarded.** The bridge now keeps
+  `ThreadStore` initialized before startup opens persisted thread state, with a
+  regression test to prevent moving it below its first use.
+- **`/model` picker opens instantly with the curated list again.** Reverted
+  the v0.8.38 live-catalog rework: the picker no longer makes a blocking
+  network call on open and once again shows the curated `auto` /
+  `deepseek-v4-pro` / `deepseek-v4-flash` rows. The `/models` command still
+  lists the live provider catalog.
+- **"Approve for session" groups by command family again.** Session approvals
+  are keyed by a lossy, arity-aware fingerprint once more, so approving
+  `cargo build` also covers `cargo build --release`. Denials keep the exact
+  per-call fingerprint from #1617, so denying one call no longer over-blocks
+  later, different calls to the same tool.
+- **Docker first-run state directories are writable.** The image now
+  pre-creates `/home/deepseek/.deepseek` with `deepseek` ownership so the
+  documented named-volume launch can create runtime thread state on first use
+  (#1684).
+- **Runtime API system prompt overrides survive the first turn.** Threads
+  created with a `system_prompt` override now keep that prompt through
+  mode/context refreshes before the model request is built (#1688).
+- **Compaction keeps a user text query in tool-heavy histories.** Automatic
+  compaction now pins the latest user text message when the retained tail only
+  contains tool calls/results, avoiding OpenAI-compatible Jinja template
+  failures on the next request (#1704).
+- **Pager jumps land at the visible bottom.** Pressing `G` or End in the pager
+  no longer overshoots the render clamp, so `k`/Up scrolls upward immediately
+  afterward, and mouse wheels now scroll pager overlays directly (#1706,
+  #1716).
+- **Mouse-wheel-as-arrow scrolling preserves composer drafts.** When
+  `composer_arrows_scroll` is enabled, Up/Down now scroll the transcript even
+  with text in the composer instead of replacing the draft with input history
+  (#1677).
+- **Multiline composer arrows move between input lines.** Plain Up/Down now
+  move the cursor within multiline drafts before falling back to input history,
+  while single-line mouse-wheel-as-arrow scrolling remains unchanged (#1721).
+- **Third-party `reasoning_content` streams no longer corrupt text output.**
+  Generic OpenAI-compatible providers that stream answer text in
+  `reasoning_content` now render it as normal text unless the selected provider
+  is one whose reasoning-content semantics are supported (#1673).
+- **macOS system theme detection recognizes Light mode.** When `COLORFGBG` is
+  missing or unusable, `theme = "system"` now falls back to macOS appearance
+  detection and treats a missing `AppleInterfaceStyle` key as Light mode
+  (#1670).
+- **`rlm_open` accepts schema-filled blank source fields.** Empty `file_path`,
+  `content`, and `url` strings now count as absent, so calls that provide one
+  real source no longer fail the exactly-one-source validator (#1712).
+- **Resize keeps transcript paging usable immediately.** After a terminal
+  resize, PageUp/PageDown now use the resized viewport height instead of
+  falling back to one-line jumps before the next render (#1724).
+- **ACP responses stringify JSON-RPC ids.** `serve --acp` now returns string
+  ids even when clients send numeric ids, matching Zed's stricter ACP client
+  expectations (#1696).
+
+### Thanks
+
+Thanks to **Matt Van Horn ([@mvanhorn](https://github.com/mvanhorn))** for the
+Docker first-run permission fix in #1699 and the runtime system-prompt
+regression tests harvested from #1702. Thanks to **Kristopher Clark
+([@krisclarkdev](https://github.com/krisclarkdev))** for the compaction
+user-query preservation fix in #1704. Thanks to **Stephen Xu
+([@wlon](https://github.com/wlon))** for the pager jump-bottom fix in #1706.
+Thanks to **tdccccc ([@tdccccc](https://github.com/tdccccc))** for the
+composer scroll fix in #1715 and pager mouse-wheel support in #1716.
+Thanks to **Paulo Aboim Pinto
+([@aboimpinto](https://github.com/aboimpinto))** for the multiline composer
+arrow navigation tests harvested from #1719. Thanks to **LittleBlacky
+([@LittleBlacky](https://github.com/LittleBlacky))** for the provider-gated
+`reasoning_content` stream fix in #1680.
+Thanks to **Eosin Ai ([@Aitensa](https://github.com/Aitensa))** for the macOS
+system appearance fallback in #1674.
+Thanks to **Anaheim ([@AnaheimEX](https://github.com/AnaheimEX))** for the
+`rlm_open` schema validation report in #1712.
+Thanks to **THatch26 ([@THatch26](https://github.com/THatch26))** for the
+terminal resize paging fix in #1724.
+Thanks to **Alvin ([@alvin1](https://github.com/alvin1))** for the Zed ACP id
+compatibility report in #1696.
+
+## [0.8.38] - 2026-05-15
+
+### Changed
+
+- **Update guidance is clearer on the website.** The homepage and install page
+  now surface `deepseek update` while keeping package-manager update paths
+  visible for Homebrew, npm, and Cargo installs.
+- **README setup docs are current again.** The English, Simplified Chinese,
+  and Japanese READMEs now use the current Docker volume/workspace invocation,
+  document update paths, list the current provider/model switching surface, and
+  send release-specific feature notes back to the changelog.
+
+### Fixed
+
+- **OpenAI-compatible providers receive stricter request bodies.** Fireworks
+  requests now use `reasoning_effort` without the DeepSeek/Anthropic-style
+  top-level `thinking` field, and chat tool schemas no longer include
+  Anthropic-only metadata such as `allowed_callers`, `defer_loading`, or
+  `input_examples` (#1592).
+- **pnpm global installs no longer hang in optional postinstall.** pnpm
+  postinstall now skips install-time binary downloads and leaves the existing
+  runtime downloader to verify or fetch binaries on first run (#1637).
+- **Terminal modes are restored on early TUI exits.** A cleanup guard now
+  restores raw mode, alternate screen, focus events, mouse capture, bracketed
+  paste, keyboard flags, and cursor visibility if startup returns early after
+  terminal initialization (#1593, #1582).
+- **Wrapped OSC 8 links keep their full target.** Long clickable URLs now
+  reopen the original full link target on each wrapped visual chunk instead of
+  exposing truncated hyperlink targets (#1577).
+- **Provider-selected models survive startup and picker reselects.** The
+  `/model` picker now uses live provider model catalogs when available, saved
+  default providers sync into the runtime config before the first request, and
+  reselecting the active provider from the picker keeps the current model
+  instead of falling back to the provider default (#1632).
+- **OpenAI-compatible batch tool calls keep all start events.** Streaming
+  responses with multiple `tool_calls` in one assistant message now preserve
+  every tool-use block instead of pairing many tool results with only the last
+  tool start event (#1686).
+- **Diagnostics tool schemas include an empty `required` list.** The built-in
+  `diagnostics` tool now sends `required: []` with its empty object schema so
+  DeepSeek no longer rejects it as a null required array (#1685).
+- **Windows wheel-as-arrow scrolling works with mouse capture enabled.**
+  `composer_arrows_scroll` now defaults on for Windows terminals even when
+  mouse capture is enabled, so wheel events that arrive as arrow keys scroll the
+  transcript instead of cycling composer history (#1578).
+- **Plain Windows PowerShell / ConHost uses calmer rendering.** Unmarked
+  legacy Windows console hosts now automatically enable low-motion rendering,
+  disable fancy animations, and resolve `synchronized_output = "auto"` to off
+  so streaming redraws do not overlap or visibly flicker (#1590).
+- **LoopGuard blocks now count as failed tool calls.** Identical tool-call
+  blocks now return a failed tool result instead of a success, so repeated
+  blocked checklist/tool retries can trip the existing failure warning and halt
+  path instead of spinning indefinitely (#1574).
+- **Denied tool approvals are scoped to the exact call.** Denying one
+  write/shell approval now caches the canonical argument fingerprint instead of
+  a lossy tool/prefix key, so later calls to the same tool with different
+  arguments can still be reviewed and approved (#1617).
+
+### Thanks
+
+Thanks to **DC ([@duanchao-lab](https://github.com/duanchao-lab))** for the
+terminal cleanup-guard idea harvested from #1630, and **imkingjh999
+([@imkingjh999](https://github.com/imkingjh999))** for the provider/model
+switching fixes harvested from #1642. Thanks to **Photo
+([@eng2007](https://github.com/eng2007))** for the provider-aware `/model`
+picker catalog work harvested from #1201. Thanks to **hexin
+([@h3c-hexin](https://github.com/h3c-hexin))** for the OpenAI batch tool-call
+streaming fix in #1686. Thanks to **chennest
+([@chennest](https://github.com/chennest))** for the diagnostics schema report
+in #1685. Thanks to
+**[@kunpeng-ai-lab](https://github.com/kunpeng-ai-lab)** for the Windows
+composer scroll fix harvested from #1578, and **WuMing
+([@asdfg314284230](https://github.com/asdfg314284230))** for the Windows
+PowerShell flicker fix harvested from #1591. Thanks to
+**[@maker316](https://github.com/maker316)** for the LoopGuard/checklist loop
+report in #1574. Thanks to **lalala
+([@lalala-233](https://github.com/lalala-233))** for the approval denial
+regression report in #1617, and **Nightt
+([@nightt5879](https://github.com/nightt5879))** for the exact-call approval
+key work harvested from #1624.
+
+## [0.8.37] - 2026-05-14
+
 ### Added
 
 - **Tencent Lighthouse + Feishu/Lark bridge setup.** Added a `/opt/whalebro`
@@ -17,9 +703,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Feishu/Lark + optional EdgeOne teaching path and added non-active CNB deploy
   templates for a future Lighthouse deploy button. Feishu/Lighthouse branches
   are now mirrored to CNB for Tencent-first bootstrap.
+- **Homebrew tap automation is release-gated.** The release workflow can update
+  `Hmbown/homebrew-deepseek-tui` from the checksum manifest when a tap token is
+  configured, and skips cleanly before downloading release assets when no tap
+  token exists.
+
+### Changed
+
+- **Bing is the default `web_search` backend.** DuckDuckGo remains selectable
+  with `[search] provider = "duckduckgo"` and keeps its Bing fallback path.
 
 ### Fixed
 
+- **First-run onboarding stays usable without an API key.** Missing-key startup
+  no longer aborts the TUI before onboarding can collect provider settings.
+- **Streamable HTTP MCP sessions keep their server-issued session ID.** Custom
+  headers also apply to GET preflight requests, fixing authenticated MCP
+  servers that require both.
+- **DeepSeek model completions use canonical IDs.** Alias completions now
+  resolve to stable DeepSeek model names before being written to config.
+- **Terminal and child-process reliability is tighter.** Signal shutdown now
+  restores the terminal, child tasks preserve proxy environment variables, and
+  Windows Enter / CSI-u input handling avoids the prior event mismatch.
+- **Long terminal text wraps instead of overflowing.** Streaming output, diff
+  rendering, and the pager now hard-wrap overlong no-whitespace and CJK runs.
+- **Release and platform edges are safer.** The TUI no longer trips the Windows
+  Instant-underflow test path, unsupported desktop targets compile the external
+  URL opener, and legacy DeepSeek CN provider aliases deserialize to the
+  canonical DeepSeek provider.
+- **Footer diagnostics are less cryptic.** Prefix-cache stability is no longer
+  shown in the default footer, and the opt-in `/statusline` chip now says
+  `cache prefix 100%` instead of the ambiguous `P 100%`.
 - **Feishu/Lark bridge dependency installs are locked and audited.** The
   bridge now ships a package lock, installs with `npm ci` on Lighthouse when
   available, and overrides the Lark SDK's transitive `axios` dependency to a
@@ -33,10 +747,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   workflow now mirrors Feishu/Lighthouse release branches, so Tencent
   Lighthouse bootstrap can use CNB before the release branch merges.
 
-### Changed
+### Thanks
 
-- **Bing is the default `web_search` backend.** DuckDuckGo remains selectable
-  with `[search] provider = "duckduckgo"` and keeps its Bing fallback path.
+Thanks to **ZzzPL ([@Oliver-ZPLiu](https://github.com/Oliver-ZPLiu))** for
+the MCP Streamable HTTP and Homebrew automation fixes (#1643, #1631),
+**Reid ([@reidliu41](https://github.com/reidliu41))** for CI, streaming wrap,
+and model-completion fixes (#1603, #1628, #1601), **MidoriKurage
+([@mdrkrg](https://github.com/mdrkrg))** for the onboarding crash fix (#1598),
+**Gordon ([@gordonlu](https://github.com/gordonlu))** for the Windows Enter /
+CSI-u fix (#1612), **Aitensa ([@Aitensa](https://github.com/Aitensa))** for
+the CJK diff/pager wrap fix (#1622), **qiyan233
+([@qiyan233](https://github.com/qiyan233))** for legacy DeepSeek CN provider
+aliases (#1645), **jieshu666 ([@jieshu666](https://github.com/jieshu666))**
+for the repaint-flicker reduction (#1563), **Vishnu
+([@Vishnu1837](https://github.com/Vishnu1837))** for terminal restoration on
+signals (#1586), and **axobase001
+([@axobase001](https://github.com/axobase001))** for proxy environment
+preservation in child tasks (#1608).
 
 ## [0.8.36] - 2026-05-14
 
@@ -3262,7 +3989,7 @@ Welcome — and thank you.
   compaction defaults are enabled, transcript history is bounded, persisted
   sessions are capped, and oversized history folds into archived context
   placeholders instead of freezing the TUI.
-- **v0.8.6 feature batch** (#373-#402) — adds Goal mode, cache-hit chips,
+- **v0.8.6 feature batch** (#373-#402) — adds goal tracking, cache-hit chips,
   cycle-boundary visualization, file-tree pane, `/share`, `/model auto`,
   user-defined slash commands, `/profile`, LSP diagnostic wiring,
   crash-recovery, self-update, `/init`, `/diff`, patch-aware `/undo`,
@@ -3665,7 +4392,7 @@ Welcome — and thank you.
 - Multi-turn tool calls on thinking-mode models no longer return HTTP 400. Every assistant message in the conversation now carries `reasoning_content` when thinking is enabled — not just tool-call rounds — matching DeepSeek's actual API validation, which rejects any assistant message missing the field even though the docs describe non-tool-call reasoning as "ignored".
 - Added a final-pass wire-payload sanitizer in the chat-completions client that forces a non-empty `reasoning_content` placeholder onto any assistant message still missing one at request time. This is the last line of defense after engine-side and build-side substitution, so sessions restored from older checkpoints, sub-agents that append messages directly, and cached prefix mismatches all produce a valid request.
 - On a `reasoning_content`-related 400, the client now logs the offending message indices to make future regressions diagnosable.
-- Stripped phantom `web.run` references from prompts and the `web_search` tool surface ([#25](https://github.com/Hmbown/DeepSeek-TUI/issues/25)).
+- Stripped phantom `web.run` references from prompts and the `web_search` tool surface ([#25](https://github.com/Hmbown/CodeWhale/issues/25)).
 
 ### Changed
 - Header/UI widget refactor in the TUI (`crates/tui/src/tui/ui.rs`, `widgets/header.rs`) — internal cleanup, no user-visible behavior change.
@@ -4161,78 +4888,87 @@ Welcome — and thank you.
 - Hooks system and config profiles
 - Example skills and launch assets
 
-[Unreleased]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.36...HEAD
-[0.8.36]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.35...v0.8.36
-[0.8.35]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.34...v0.8.35
-[0.8.34]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.33...v0.8.34
-[0.8.33]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.32...v0.8.33
-[0.8.32]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.31...v0.8.32
-[0.8.31]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.30...v0.8.31
-[0.8.30]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.29...v0.8.30
-[0.8.29]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.28...v0.8.29
-[0.8.28]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.27...v0.8.28
-[0.8.27]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.26...v0.8.27
-[0.8.26]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.25...v0.8.26
-[0.8.25]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.24...v0.8.25
-[0.8.24]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.23...v0.8.24
-[0.8.23]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.22...v0.8.23
-[0.8.22]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.21...v0.8.22
-[0.8.21]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.20...v0.8.21
-[0.8.20]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.19...v0.8.20
-[0.8.19]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.18...v0.8.19
-[0.8.18]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.17...v0.8.18
-[0.8.17]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.16...v0.8.17
-[0.8.16]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.15...v0.8.16
-[0.8.15]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.13...v0.8.15
-[0.8.13]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.12...v0.8.13
-[0.8.12]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.11...v0.8.12
-[0.8.11]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.10...v0.8.11
-[0.8.10]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.8...v0.8.10
-[0.8.8]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.7...v0.8.8
-[0.8.7]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.6...v0.8.7
-[0.8.6]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.5...v0.8.6
-[0.8.5]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.4...v0.8.5
-[0.8.4]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.3...v0.8.4
-[0.8.3]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.2...v0.8.3
-[0.8.2]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.1...v0.8.2
-[0.8.1]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.8.0...v0.8.1
-[0.8.0]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.7.9...v0.8.0
-[0.7.9]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.7.8...v0.7.9
-[0.7.8]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.7.7...v0.7.8
-[0.7.7]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.7.6...v0.7.7
-[0.7.6]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.7.5...v0.7.6
-[0.6.1]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.6.0...v0.6.1
-[0.6.0]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.4.9...v0.6.0
-[0.4.9]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.4.8...v0.4.9
-[0.4.8]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.33...v0.4.8
-[0.3.33]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.32...v0.3.33
-[0.3.32]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.31...v0.3.32
-[0.3.31]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.28...v0.3.31
-[0.3.28]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.27...v0.3.28
-[0.3.23]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.22...v0.3.23
-[0.3.22]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.21...v0.3.22
-[0.3.21]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.17...v0.3.21
-[0.3.17]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.16...v0.3.17
-[0.3.16]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.14...v0.3.16
-[0.3.14]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.13...v0.3.14
-[0.3.13]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.12...v0.3.13
-[0.3.12]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.11...v0.3.12
-[0.3.11]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.10...v0.3.11
-[0.3.10]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.6...v0.3.10
-[0.3.6]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.5...v0.3.6
-[0.3.5]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.4...v0.3.5
-[0.3.4]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.3...v0.3.4
-[0.3.3]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.2...v0.3.3
-[0.3.2]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.1...v0.3.2
-[0.3.1]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.3.0...v0.3.1
-[0.3.0]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.2.2...v0.3.0
-[0.2.2]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.2.0...v0.2.2
-[0.2.0]: https://github.com/Hmbown/DeepSeek-TUI/releases/tag/v0.2.0
-[0.0.2]: https://github.com/Hmbown/DeepSeek-TUI/releases/tag/v0.0.2
-[0.0.1]: https://github.com/Hmbown/DeepSeek-TUI/releases/tag/v0.0.1
-[0.1.9]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.1.8...v0.1.9
-[0.1.8]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.1.7...v0.1.8
-[0.1.7]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.1.6...v0.1.7
-[0.1.6]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.1.5...v0.1.6
-[0.1.5]: https://github.com/Hmbown/DeepSeek-TUI/compare/v0.1.0...v0.1.5
-[0.1.0]: https://github.com/Hmbown/DeepSeek-TUI/releases/tag/v0.1.0
+[Unreleased]: https://github.com/Hmbown/CodeWhale/compare/v0.8.45...HEAD
+[0.8.45]: https://github.com/Hmbown/CodeWhale/compare/v0.8.44...v0.8.45
+[0.8.44]: https://github.com/Hmbown/CodeWhale/compare/v0.8.43...v0.8.44
+[0.8.43]: https://github.com/Hmbown/CodeWhale/compare/v0.8.42...v0.8.43
+[0.8.42]: https://github.com/Hmbown/CodeWhale/compare/v0.8.41...v0.8.42
+[0.8.41]: https://github.com/Hmbown/CodeWhale/compare/v0.8.40...v0.8.41
+[0.8.40]: https://github.com/Hmbown/CodeWhale/compare/v0.8.39...v0.8.40
+[0.8.39]: https://github.com/Hmbown/CodeWhale/compare/v0.8.38...v0.8.39
+[0.8.38]: https://github.com/Hmbown/CodeWhale/compare/v0.8.37...v0.8.38
+[0.8.37]: https://github.com/Hmbown/CodeWhale/compare/v0.8.36...v0.8.37
+[0.8.36]: https://github.com/Hmbown/CodeWhale/compare/v0.8.35...v0.8.36
+[0.8.35]: https://github.com/Hmbown/CodeWhale/compare/v0.8.34...v0.8.35
+[0.8.34]: https://github.com/Hmbown/CodeWhale/compare/v0.8.33...v0.8.34
+[0.8.33]: https://github.com/Hmbown/CodeWhale/compare/v0.8.32...v0.8.33
+[0.8.32]: https://github.com/Hmbown/CodeWhale/compare/v0.8.31...v0.8.32
+[0.8.31]: https://github.com/Hmbown/CodeWhale/compare/v0.8.30...v0.8.31
+[0.8.30]: https://github.com/Hmbown/CodeWhale/compare/v0.8.29...v0.8.30
+[0.8.29]: https://github.com/Hmbown/CodeWhale/compare/v0.8.28...v0.8.29
+[0.8.28]: https://github.com/Hmbown/CodeWhale/compare/v0.8.27...v0.8.28
+[0.8.27]: https://github.com/Hmbown/CodeWhale/compare/v0.8.26...v0.8.27
+[0.8.26]: https://github.com/Hmbown/CodeWhale/compare/v0.8.25...v0.8.26
+[0.8.25]: https://github.com/Hmbown/CodeWhale/compare/v0.8.24...v0.8.25
+[0.8.24]: https://github.com/Hmbown/CodeWhale/compare/v0.8.23...v0.8.24
+[0.8.23]: https://github.com/Hmbown/CodeWhale/compare/v0.8.22...v0.8.23
+[0.8.22]: https://github.com/Hmbown/CodeWhale/compare/v0.8.21...v0.8.22
+[0.8.21]: https://github.com/Hmbown/CodeWhale/compare/v0.8.20...v0.8.21
+[0.8.20]: https://github.com/Hmbown/CodeWhale/compare/v0.8.19...v0.8.20
+[0.8.19]: https://github.com/Hmbown/CodeWhale/compare/v0.8.18...v0.8.19
+[0.8.18]: https://github.com/Hmbown/CodeWhale/compare/v0.8.17...v0.8.18
+[0.8.17]: https://github.com/Hmbown/CodeWhale/compare/v0.8.16...v0.8.17
+[0.8.16]: https://github.com/Hmbown/CodeWhale/compare/v0.8.15...v0.8.16
+[0.8.15]: https://github.com/Hmbown/CodeWhale/compare/v0.8.13...v0.8.15
+[0.8.13]: https://github.com/Hmbown/CodeWhale/compare/v0.8.12...v0.8.13
+[0.8.12]: https://github.com/Hmbown/CodeWhale/compare/v0.8.11...v0.8.12
+[0.8.11]: https://github.com/Hmbown/CodeWhale/compare/v0.8.10...v0.8.11
+[0.8.10]: https://github.com/Hmbown/CodeWhale/compare/v0.8.8...v0.8.10
+[0.8.8]: https://github.com/Hmbown/CodeWhale/compare/v0.8.7...v0.8.8
+[0.8.7]: https://github.com/Hmbown/CodeWhale/compare/v0.8.6...v0.8.7
+[0.8.6]: https://github.com/Hmbown/CodeWhale/compare/v0.8.5...v0.8.6
+[0.8.5]: https://github.com/Hmbown/CodeWhale/compare/v0.8.4...v0.8.5
+[0.8.4]: https://github.com/Hmbown/CodeWhale/compare/v0.8.3...v0.8.4
+[0.8.3]: https://github.com/Hmbown/CodeWhale/compare/v0.8.2...v0.8.3
+[0.8.2]: https://github.com/Hmbown/CodeWhale/compare/v0.8.1...v0.8.2
+[0.8.1]: https://github.com/Hmbown/CodeWhale/compare/v0.8.0...v0.8.1
+[0.8.0]: https://github.com/Hmbown/CodeWhale/compare/v0.7.9...v0.8.0
+[0.7.9]: https://github.com/Hmbown/CodeWhale/compare/v0.7.8...v0.7.9
+[0.7.8]: https://github.com/Hmbown/CodeWhale/compare/v0.7.7...v0.7.8
+[0.7.7]: https://github.com/Hmbown/CodeWhale/compare/v0.7.6...v0.7.7
+[0.7.6]: https://github.com/Hmbown/CodeWhale/compare/v0.7.5...v0.7.6
+[0.6.1]: https://github.com/Hmbown/CodeWhale/compare/v0.6.0...v0.6.1
+[0.6.0]: https://github.com/Hmbown/CodeWhale/compare/v0.4.9...v0.6.0
+[0.4.9]: https://github.com/Hmbown/CodeWhale/compare/v0.4.8...v0.4.9
+[0.4.8]: https://github.com/Hmbown/CodeWhale/compare/v0.3.33...v0.4.8
+[0.3.33]: https://github.com/Hmbown/CodeWhale/compare/v0.3.32...v0.3.33
+[0.3.32]: https://github.com/Hmbown/CodeWhale/compare/v0.3.31...v0.3.32
+[0.3.31]: https://github.com/Hmbown/CodeWhale/compare/v0.3.28...v0.3.31
+[0.3.28]: https://github.com/Hmbown/CodeWhale/compare/v0.3.27...v0.3.28
+[0.3.23]: https://github.com/Hmbown/CodeWhale/compare/v0.3.22...v0.3.23
+[0.3.22]: https://github.com/Hmbown/CodeWhale/compare/v0.3.21...v0.3.22
+[0.3.21]: https://github.com/Hmbown/CodeWhale/compare/v0.3.17...v0.3.21
+[0.3.17]: https://github.com/Hmbown/CodeWhale/compare/v0.3.16...v0.3.17
+[0.3.16]: https://github.com/Hmbown/CodeWhale/compare/v0.3.14...v0.3.16
+[0.3.14]: https://github.com/Hmbown/CodeWhale/compare/v0.3.13...v0.3.14
+[0.3.13]: https://github.com/Hmbown/CodeWhale/compare/v0.3.12...v0.3.13
+[0.3.12]: https://github.com/Hmbown/CodeWhale/compare/v0.3.11...v0.3.12
+[0.3.11]: https://github.com/Hmbown/CodeWhale/compare/v0.3.10...v0.3.11
+[0.3.10]: https://github.com/Hmbown/CodeWhale/compare/v0.3.6...v0.3.10
+[0.3.6]: https://github.com/Hmbown/CodeWhale/compare/v0.3.5...v0.3.6
+[0.3.5]: https://github.com/Hmbown/CodeWhale/compare/v0.3.4...v0.3.5
+[0.3.4]: https://github.com/Hmbown/CodeWhale/compare/v0.3.3...v0.3.4
+[0.3.3]: https://github.com/Hmbown/CodeWhale/compare/v0.3.2...v0.3.3
+[0.3.2]: https://github.com/Hmbown/CodeWhale/compare/v0.3.1...v0.3.2
+[0.3.1]: https://github.com/Hmbown/CodeWhale/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/Hmbown/CodeWhale/compare/v0.2.2...v0.3.0
+[0.2.2]: https://github.com/Hmbown/CodeWhale/compare/v0.2.0...v0.2.2
+[0.2.0]: https://github.com/Hmbown/CodeWhale/releases/tag/v0.2.0
+[0.0.2]: https://github.com/Hmbown/CodeWhale/releases/tag/v0.0.2
+[0.0.1]: https://github.com/Hmbown/CodeWhale/releases/tag/v0.0.1
+[0.1.9]: https://github.com/Hmbown/CodeWhale/compare/v0.1.8...v0.1.9
+[0.1.8]: https://github.com/Hmbown/CodeWhale/compare/v0.1.7...v0.1.8
+[0.1.7]: https://github.com/Hmbown/CodeWhale/compare/v0.1.6...v0.1.7
+[0.1.6]: https://github.com/Hmbown/CodeWhale/compare/v0.1.5...v0.1.6
+[0.1.5]: https://github.com/Hmbown/CodeWhale/compare/v0.1.0...v0.1.5
+[0.1.0]: https://github.com/Hmbown/CodeWhale/releases/tag/v0.1.0

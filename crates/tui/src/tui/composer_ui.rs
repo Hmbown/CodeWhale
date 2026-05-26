@@ -56,26 +56,25 @@ pub(crate) fn handle_composer_history_arrow(
         return false;
     }
 
-    // When `composer_arrows_scroll` is enabled and the composer is empty,
-    // plain Up/Down scroll the transcript.  This helps terminals that map
-    // trackpad gestures to arrow keys.  Otherwise arrows always navigate
-    // input history regardless of composer state (#1117).
-    let scroll_on_empty = app.composer_arrows_scroll && app.input.trim().is_empty();
+    // When `composer_arrows_scroll` is enabled, plain Up/Down scroll the
+    // transcript for single-line drafts. Multiline composers keep editor-like
+    // line navigation, with history fallback at the first/last line.
+    let scroll_transcript = app.composer_arrows_scroll && !app.input.contains('\n');
 
     match key.code {
         KeyCode::Up => {
-            if scroll_on_empty {
+            if scroll_transcript {
                 app.scroll_up(COMPOSER_ARROW_SCROLL_LINES);
             } else {
-                app.history_up();
+                app.vim_move_up();
             }
             true
         }
         KeyCode::Down => {
-            if scroll_on_empty {
+            if scroll_transcript {
                 app.scroll_down(COMPOSER_ARROW_SCROLL_LINES);
             } else {
-                app.history_down();
+                app.vim_move_down();
             }
             true
         }

@@ -1,7 +1,7 @@
 # Tencent Lighthouse Hong Kong Phone Setup
 
 This runbook sets up a Tencent Cloud Lighthouse instance in Hong Kong as an
-always-on DeepSeek TUI host controlled from Feishu/Lark on a phone.
+always-on codewhale host controlled from Feishu/Lark on a phone.
 
 If you are teaching this as the Tencent-native default path, start with
 [docs/TENCENT_CLOUD_REMOTE_FIRST.md](TENCENT_CLOUD_REMOTE_FIRST.md). This file
@@ -11,15 +11,14 @@ is the implementation runbook for the Lighthouse host itself.
 
 ```text
 CNB mirror or GitHub branch
-  -> /opt/whalebro/deepseek-tui
+  -> /opt/whalebro/codewhale
 
 Feishu/Lark mobile app
   -> Feishu/Lark long-connection bot
-  -> deepseek-feishu-bridge systemd service
-  -> http://127.0.0.1:7878 deepseek serve --http
+  -> codewhale-feishu-bridge systemd service
+  -> http://127.0.0.1:7878 codewhale serve --http
   -> /opt/whalebro
-       -> deepseek-tui/
-       -> whalescale/ when product work is needed
+       -> codewhale/
 
 Optional public edge:
 EdgeOne -> Caddy/Nginx public site on Lighthouse
@@ -32,18 +31,16 @@ HTTP service, not the runtime API.
 ## Remote Whalebro Workspace
 
 Use `/opt/whalebro` as the VPS workspace root. The first-class checkout is
-`/opt/whalebro/deepseek-tui`; add `/opt/whalebro/whalescale` if you want the
-desktop product repo available from the phone too.
+`/opt/whalebro/codewhale`.
 
 Create these paths first:
 
-- `/opt/whalebro/deepseek-tui`
-- `/opt/whalebro/whalescale`
+- `/opt/whalebro/codewhale`
 - `/opt/whalebro/worktrees`
 
-Linux is enough for Rust, Node, service work, and most `whalescale-desktop`
-web/Tauri development. Mac-only release work such as iOS simulator runs,
-`.app`/DMG checks, notarization, and Apple signing still belongs on the Mac.
+Linux is enough for Rust, Node, and service work. Mac-only release work such
+as iOS simulator runs, `.app`/DMG checks, notarization, and Apple signing
+still belongs on the Mac.
 
 ## Lighthouse Instance
 
@@ -89,60 +86,50 @@ SSH into the Lighthouse instance and run:
 ```bash
 sudo apt-get update
 sudo apt-get install -y git
-export DEEPSEEK_BRANCH=work/v0.8.37-feishu-lighthouse
-export DEEPSEEK_REPO_URL=https://cnb.cool/deepseek-tui.com/DeepSeek-TUI.git
-git clone --branch "$DEEPSEEK_BRANCH" "$DEEPSEEK_REPO_URL" /tmp/deepseek-tui
-cd /tmp/deepseek-tui
+export DEEPSEEK_BRANCH=main
+export DEEPSEEK_REPO_URL=https://cnb.cool/codewhale.net/codewhale.git
+git clone --branch "$DEEPSEEK_BRANCH" "$DEEPSEEK_REPO_URL" /tmp/codewhale
+cd /tmp/codewhale
 sudo DEEPSEEK_REPO_URL="$DEEPSEEK_REPO_URL" \
   DEEPSEEK_REPO_BRANCH="$DEEPSEEK_BRANCH" \
   bash scripts/tencent-lighthouse/bootstrap-ubuntu.sh
 ```
 
-If you also want `whalescale` cloned during bootstrap, pass it explicitly:
+Use an SSH repo URL instead if you want push access from the VPS. If the CNB
+mirror is unavailable, fall back to:
 
 ```bash
-sudo DEEPSEEK_REPO_URL="$DEEPSEEK_REPO_URL" \
-  DEEPSEEK_REPO_BRANCH="$DEEPSEEK_BRANCH" \
-  WHALEBRO_EXTRA_REPOS='whalescale=https://github.com/Hmbown/whalescale.git' \
-  bash scripts/tencent-lighthouse/bootstrap-ubuntu.sh
-```
-
-Use SSH repo URLs instead if either repo is private or you want push access
-from the VPS. If the CNB mirror is unavailable, fall back to:
-
-```bash
-export DEEPSEEK_REPO_URL=https://github.com/Hmbown/DeepSeek-TUI.git
+export DEEPSEEK_REPO_URL=https://github.com/Hmbown/CodeWhale.git
 ```
 
 For stable release docs, confirm the CNB mirror has the branch or tag before
 using it:
 
 ```bash
-export DEEPSEEK_REPO_URL=https://cnb.cool/deepseek-tui.com/DeepSeek-TUI.git
+export DEEPSEEK_REPO_URL=https://cnb.cool/codewhale.net/codewhale.git
 git ls-remote "$DEEPSEEK_REPO_URL" \
-  refs/heads/work/v0.8.37-feishu-lighthouse \
+  refs/heads/main \
   refs/tags/v0.8.37
 ```
 
-The CNB mirror receives `main`, release tags, and Tencent setup branches that
-match `work/v*-feishu-*` or `work/v*-lighthouse*`. CNB is the default source
-for this Lighthouse path; GitHub is the fallback only when the CNB workflow or
+The CNB mirror receives `main` and release tags. CNB is the default source for
+this Lighthouse path; GitHub is the fallback only when the CNB workflow or
 credentials are unhealthy.
 
 If this deployment setup has not been pushed to Git yet, either push the branch
 first or copy this checkout to the VPS before running these commands. A fresh
 VPS clone cannot see uncommitted local files.
 
-Install Rust 1.88+ for the `deepseek` user, then build both shipped binaries:
+Install Rust 1.88+ for the `codewhale` user, then build both shipped binaries:
 
 ```bash
-sudo -iu deepseek
+sudo -iu codewhale
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup-init.sh
 sed -n '1,120p' /tmp/rustup-init.sh
 sh /tmp/rustup-init.sh -y --profile minimal
 . "$HOME/.cargo/env"
 rustup default stable
-cd /opt/whalebro/deepseek-tui
+cd /opt/whalebro/codewhale
 cargo install --path crates/cli --locked --force
 cargo install --path crates/tui --locked --force
 exit
@@ -151,14 +138,14 @@ exit
 Copy and install the bridge/service files:
 
 ```bash
-cd /opt/whalebro/deepseek-tui
+cd /opt/whalebro/codewhale
 sudo bash scripts/tencent-lighthouse/install-services.sh
 ```
 
 After editing both env files, validate the bridge/runtime pairing:
 
 ```bash
-sudo -u deepseek node /opt/deepseek/bridge/scripts/validate-config.mjs \
+sudo -u codewhale node /opt/codewhale/bridge/scripts/validate-config.mjs \
   --env /etc/deepseek/feishu-bridge.env \
   --runtime-env /etc/deepseek/runtime.env \
   --workspace-root /opt/whalebro \
@@ -198,25 +185,25 @@ For first pairing, either:
 ## Start Services
 
 ```bash
-sudo systemctl start deepseek-runtime
-sudo systemctl status deepseek-runtime --no-pager
+sudo systemctl start codewhale-runtime
+sudo systemctl status codewhale-runtime --no-pager
 curl -s http://127.0.0.1:7878/health
 
-sudo systemctl start deepseek-feishu-bridge
-sudo journalctl -u deepseek-feishu-bridge -f
+sudo systemctl start codewhale-feishu-bridge
+sudo journalctl -u codewhale-feishu-bridge -f
 ```
 
 Run the Lighthouse doctor after both services are configured:
 
 ```bash
-cd /opt/whalebro/deepseek-tui
+cd /opt/whalebro/codewhale
 sudo bash scripts/tencent-lighthouse/doctor.sh
 ```
 
 Enable on boot is done by `install-services.sh`; if needed:
 
 ```bash
-sudo systemctl enable deepseek-runtime deepseek-feishu-bridge
+sudo systemctl enable codewhale-runtime codewhale-feishu-bridge
 ```
 
 ## Phone Commands
@@ -293,15 +280,14 @@ From a phone DM to the bot:
 5. Trigger a tool approval and verify both `/allow <approval_id>` and
    `/deny <approval_id>` paths.
 6. Restart both services and re-run `/status`.
-7. Reboot the instance, then confirm `systemctl status deepseek-runtime` and
-   `systemctl status deepseek-feishu-bridge` return to active.
+7. Reboot the instance, then confirm `systemctl status codewhale-runtime` and
+   `systemctl status codewhale-feishu-bridge` return to active.
 
 ## Operational Notes
 
-- Bind `deepseek serve --http` to `127.0.0.1`.
+- Bind `codewhale serve --http` to `127.0.0.1`.
 - Keep the Lighthouse firewall focused on SSH for this setup.
 - Use SSH key auth.
 - Use `tmux` for emergency terminal work from Blink/Termius.
-- Keep `/opt/whalebro/deepseek-tui` on a personal branch while working from the
+- Keep `/opt/whalebro/codewhale` on a personal branch while working from the
   phone.
-- Keep `/opt/whalebro/whalescale` on its own branch when doing product work.

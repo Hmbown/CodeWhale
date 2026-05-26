@@ -143,7 +143,7 @@ fn build_escape(method: Method, in_tmux: bool, msg: &str) -> Vec<u8> {
         }
         Method::Ghostty => {
             // Ghostty notification: OSC 777 ; notify ; title ; message BEL
-            let seq = format!("\x1b]777;notify;DeepSeek TUI;{msg}\x07");
+            let seq = format!("\x1b]777;notify;codewhale;{msg}\x07");
             wrap_for_multiplexer(&seq, in_tmux).into_bytes()
         }
         // Auto and Off should not reach build_escape.
@@ -332,18 +332,18 @@ pub fn completed_turn_message(
 ) -> String {
     let mut msg = text_summary(current_streaming_text)
         .or_else(|| latest_assistant_text(&app.api_messages))
-        .unwrap_or_else(|| "deepseek: turn complete".to_string());
+        .unwrap_or_else(|| "codewhale: turn complete".to_string());
 
     if include_summary {
         let human = humanize_duration(turn_elapsed);
         let summary = match turn_cost {
             Some(c) => {
                 let cost = crate::pricing::format_cost_estimate(c, app.cost_currency);
-                format!("deepseek: turn complete ({human}, {cost})")
+                format!("codewhale: turn complete ({human}, {cost})")
             }
-            None => format!("deepseek: turn complete ({human})"),
+            None => format!("codewhale: turn complete ({human})"),
         };
-        if msg == "deepseek: turn complete" {
+        if msg == "codewhale: turn complete" {
             msg = summary;
         } else {
             msg.push('\n');
@@ -366,16 +366,16 @@ pub fn subagent_completion_message(
     let result_line = result
         .lines()
         .map(str::trim)
-        .find(|line| !line.is_empty() && !line.starts_with("<deepseek:subagent.done>"));
+        .find(|line| !line.is_empty() && !line.starts_with("<codewhale:subagent.done>"));
     let mut msg = result_line
         .and_then(text_summary)
         .map(|summary| format!("sub-agent {id}: {summary}"))
-        .unwrap_or_else(|| format!("deepseek: sub-agent {id} complete"));
+        .unwrap_or_else(|| format!("codewhale: sub-agent {id} complete"));
 
     if include_summary {
         let human = humanize_duration(elapsed);
         msg.push('\n');
-        msg.push_str(&format!("deepseek: sub-agent complete ({human})"));
+        msg.push_str(&format!("codewhale: sub-agent complete ({human})"));
     }
 
     msg
@@ -471,8 +471,8 @@ mod tests {
 
     #[test]
     fn osc9_body_format() {
-        let out = capture(Method::Osc9, false, "deepseek: done", 0, 1);
-        assert_eq!(out, b"\x1b]9;deepseek: done\x07");
+        let out = capture(Method::Osc9, false, "codewhale: done", 0, 1);
+        assert_eq!(out, b"\x1b]9;codewhale: done\x07");
     }
 
     #[test]
@@ -501,7 +501,7 @@ mod tests {
         let out = capture(Method::Ghostty, false, "done", 0, 1);
         let s = String::from_utf8(out).unwrap();
         assert!(
-            s.contains("777;notify;DeepSeek TUI;done"),
+            s.contains("777;notify;codewhale;done"),
             "should have ghostty seq"
         );
     }

@@ -252,6 +252,7 @@ pub enum MessageId {
     CmdChangeTranslationQueued,
     CmdChangeTranslationUnavailable,
     CmdChangePreviousVersion,
+    CmdBalanceDescription,
     CmdClearDescription,
     CmdCompactDescription,
     CmdConfigDescription,
@@ -292,6 +293,7 @@ pub enum MessageId {
     CmdReviewDescription,
     CmdRlmDescription,
     CmdSaveDescription,
+    CmdForkDescription,
     CmdSessionsDescription,
     CmdSettingsDescription,
     CmdSkillDescription,
@@ -421,6 +423,7 @@ pub enum MessageId {
     HomeYoloModeCaution,
     HomePlanModeTip,
     HomePlanModeChecklistTip,
+    HomeGoalModeTip,
     // Onboarding screens — language picker.
     OnboardLanguageTitle,
     OnboardLanguageBlurb,
@@ -484,6 +487,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::HelpFooterClose,
     MessageId::CmdAnchorDescription,
     MessageId::CmdAttachDescription,
+    MessageId::CmdBalanceDescription,
     MessageId::CmdCacheDescription,
     MessageId::CmdClearDescription,
     MessageId::CmdCompactDescription,
@@ -657,6 +661,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::HomeYoloModeCaution,
     MessageId::HomePlanModeTip,
     MessageId::HomePlanModeChecklistTip,
+    MessageId::HomeGoalModeTip,
     MessageId::OnboardLanguageTitle,
     MessageId::OnboardLanguageBlurb,
     MessageId::OnboardLanguageFooter,
@@ -912,6 +917,7 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CmdChangePreviousVersion => {
             "Previous version: {version} — run `/change {version}` to view it"
         }
+        MessageId::CmdBalanceDescription => "Check the active provider account balance",
         MessageId::CmdClearDescription => "Clear conversation history",
         MessageId::CmdCompactDescription => {
             "Trigger context compaction to free up space (legacy; v0.6.6 prefers cycle restart)"
@@ -936,7 +942,7 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CmdInitDescription => "Generate AGENTS.md for project",
         MessageId::CmdLspDescription => "Toggle LSP diagnostics on or off",
         MessageId::CmdShareDescription => "Export current session as a shareable web URL",
-        MessageId::CmdJobsDescription => "Inspect and control background shell jobs",
+        MessageId::CmdJobsDescription => "Inspect and control background commands",
         MessageId::CmdLinksDescription => "Show DeepSeek dashboard and docs links",
         MessageId::CmdLoadDescription => "Load session from file",
         MessageId::CmdLogoutDescription => "Clear API key and return to setup",
@@ -951,7 +957,7 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CmdNoteDescription => "Add, list, edit, or remove workspace notes",
         MessageId::CmdThemeDescription => "Switch theme or open the theme picker",
         MessageId::CmdProviderDescription => {
-            "Switch or view the active LLM backend (deepseek | nvidia-nim | ollama)"
+            "Switch or view the active LLM backend (codewhale | nvidia-nim | ollama)"
         }
         MessageId::CmdQueueDescription => "View or edit queued messages",
         MessageId::CmdRecallDescription => "Search prior cycle archives (BM25 over message text)",
@@ -964,6 +970,7 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CmdReviewDescription => "Run a structured code review on a file, diff, or PR",
         MessageId::CmdRlmDescription => "Open a persistent RLM context: /rlm [0-3] <file_or_text>",
         MessageId::CmdSaveDescription => "Save session to file",
+        MessageId::CmdForkDescription => "Fork the active conversation into a sibling session",
         MessageId::CmdSessionsDescription => "Open session history picker",
         MessageId::CmdSettingsDescription => "Show persistent settings",
         MessageId::CmdSkillDescription => {
@@ -1129,7 +1136,7 @@ fn english(id: MessageId) -> &'static str {
         MessageId::LinksTip => "Tip: API keys are available in the dashboard console.",
         MessageId::SubagentsFetching => "Fetching sub-agent status...",
         MessageId::HelpUnknownCommand => "Unknown command: {topic}",
-        MessageId::HomeDashboardTitle => "DeepSeek TUI Home Dashboard",
+        MessageId::HomeDashboardTitle => "codewhale Home Dashboard",
         MessageId::HomeModel => "Model:",
         MessageId::HomeMode => "Mode:",
         MessageId::HomeWorkspace => "Workspace:",
@@ -1155,6 +1162,7 @@ fn english(id: MessageId) -> &'static str {
         MessageId::HomeYoloModeCaution => "  Be careful with destructive operations!",
         MessageId::HomePlanModeTip => "Plan mode - Design before implementing",
         MessageId::HomePlanModeChecklistTip => "  Use /mode plan to create structured checklists",
+        MessageId::HomeGoalModeTip => "Goal tracking - Set /goal <objective> to pursue objectives",
         // Onboarding — language picker.
         MessageId::OnboardLanguageTitle => "Choose your language",
         MessageId::OnboardLanguageBlurb => {
@@ -1289,6 +1297,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::CmdChangePreviousVersion => {
             "前のバージョン: {version} — `/change {version}` で表示"
         }
+        MessageId::CmdBalanceDescription => "アクティブなプロバイダーのアカウント残高を確認",
         MessageId::CmdClearDescription => "会話履歴をクリア",
         MessageId::CmdCompactDescription => {
             "コンテキスト圧縮で容量を確保（旧式：v0.6.6 以降はサイクル再起動を推奨）"
@@ -1334,7 +1343,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
             "テーマを切り替え（ダーク/ライト/グレースケール/システム）"
         }
         MessageId::CmdProviderDescription => {
-            "現在の LLM バックエンドを切り替え・確認（deepseek | nvidia-nim | ollama）"
+            "現在の LLM バックエンドを切り替え・確認（codewhale | nvidia-nim | ollama）"
         }
         MessageId::CmdQueueDescription => "キューされたメッセージを確認・編集",
         MessageId::CmdRecallDescription => {
@@ -1349,6 +1358,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::CmdReviewDescription => "ファイル・diff・PR に対して構造化コードレビューを実行",
         MessageId::CmdRlmDescription => "永続 RLM コンテキストを開く: /rlm [0-3] <file_or_text>",
         MessageId::CmdSaveDescription => "セッションをファイルに保存",
+        MessageId::CmdForkDescription => "現在の会話を兄弟セッションに fork",
         MessageId::CmdSessionsDescription => "セッション履歴ピッカーを開く",
         MessageId::CmdSettingsDescription => "永続化された設定を表示",
         MessageId::CmdSkillDescription => {
@@ -1513,7 +1523,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::LinksTip => "ヒント: API キーはダッシュボードコンソールで取得できます。",
         MessageId::SubagentsFetching => "サブエージェントの状態を取得中...",
         MessageId::HelpUnknownCommand => "不明なコマンド: {topic}",
-        MessageId::HomeDashboardTitle => "DeepSeek TUI ホームダッシュボード",
+        MessageId::HomeDashboardTitle => "codewhale ホームダッシュボード",
         MessageId::HomeModel => "モデル：",
         MessageId::HomeMode => "モード：",
         MessageId::HomeWorkspace => "ワークスペース：",
@@ -1541,6 +1551,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::HomePlanModeChecklistTip => {
             "  /mode plan を使って構造化されたチェックリストを作成"
         }
+        MessageId::HomeGoalModeTip => "Goal 追跡 - /goal <目標> で持続的な目標を追跡",
         // Onboarding — language picker.
         MessageId::OnboardLanguageTitle => "言語を選択",
         MessageId::OnboardLanguageBlurb => {
@@ -1641,6 +1652,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CmdChangePreviousVersion => {
             "上一个版本: {version} —— 输入 `/change {version}` 查看"
         }
+        MessageId::CmdBalanceDescription => "查看当前提供商账户余额",
         MessageId::CmdClearDescription => "清除对话历史",
         MessageId::CmdCompactDescription => {
             "触发上下文压缩以释放空间（旧版命令；v0.6.6 起建议改用循环重启）"
@@ -1676,7 +1688,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CmdNoteDescription => "添加、列出、编辑或删除工作区笔记",
         MessageId::CmdThemeDescription => "切换主题：深色、浅色、灰度或系统",
         MessageId::CmdProviderDescription => {
-            "切换或查看当前 LLM 后端（deepseek | nvidia-nim | ollama）"
+            "切换或查看当前 LLM 后端（codewhale | nvidia-nim | ollama）"
         }
         MessageId::CmdQueueDescription => "查看或编辑已排队的消息",
         MessageId::CmdRecallDescription => "搜索此前的循环归档（基于消息文本的 BM25 检索）",
@@ -1689,6 +1701,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CmdReviewDescription => "对文件、diff 或 PR 进行结构化代码审查",
         MessageId::CmdRlmDescription => "打开持久 RLM 上下文：/rlm [0-3] <file_or_text>",
         MessageId::CmdSaveDescription => "将会话保存到文件",
+        MessageId::CmdForkDescription => "将当前对话分叉为兄弟会话",
         MessageId::CmdSessionsDescription => "打开会话历史选择器",
         MessageId::CmdSettingsDescription => "显示持久化设置",
         MessageId::CmdSkillDescription => "激活技能，或安装/更新/卸载/信任社区技能",
@@ -1829,7 +1842,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::LinksTip => "提示：API 密钥可在控制台中获取。",
         MessageId::SubagentsFetching => "正在获取子代理状态...",
         MessageId::HelpUnknownCommand => "未知命令：{topic}",
-        MessageId::HomeDashboardTitle => "DeepSeek TUI 主面板",
+        MessageId::HomeDashboardTitle => "codewhale 主面板",
         MessageId::HomeModel => "模型：",
         MessageId::HomeMode => "模式：",
         MessageId::HomeWorkspace => "工作区：",
@@ -1855,6 +1868,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::HomeYoloModeCaution => "  请小心破坏性操作！",
         MessageId::HomePlanModeTip => "Plan 模式 - 先设计再实现",
         MessageId::HomePlanModeChecklistTip => "  使用 /mode plan 创建结构化检查清单",
+        MessageId::HomeGoalModeTip => "Goal 跟踪 - 设置 /goal <目标> 以跟踪持久目标",
         // Onboarding — language picker.
         MessageId::OnboardLanguageTitle => "选择语言",
         MessageId::OnboardLanguageBlurb => {
@@ -1953,6 +1967,7 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::CmdChangePreviousVersion => {
             "Versão anterior: {version} — execute `/change {version}` para visualizar"
         }
+        MessageId::CmdBalanceDescription => "Verificar o saldo da conta do provedor ativo",
         MessageId::CmdClearDescription => "Limpar o histórico da conversa",
         MessageId::CmdCompactDescription => {
             "Compactar o contexto para liberar espaço (legado; a v0.6.6 prefere o reinício de ciclo)"
@@ -2002,7 +2017,7 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::CmdNoteDescription => "Adicionar, listar, editar ou remover notas do workspace",
         MessageId::CmdThemeDescription => "Alternar tema: escuro, claro, tons de cinza ou sistema",
         MessageId::CmdProviderDescription => {
-            "Trocar ou exibir o backend LLM ativo (deepseek | nvidia-nim | ollama)"
+            "Trocar ou exibir o backend LLM ativo (codewhale | nvidia-nim | ollama)"
         }
         MessageId::CmdQueueDescription => "Ver ou editar mensagens enfileiradas",
         MessageId::CmdRecallDescription => {
@@ -2021,6 +2036,7 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
             "Abrir um contexto RLM persistente: /rlm [0-3] <file_or_text>"
         }
         MessageId::CmdSaveDescription => "Salvar a sessão em arquivo",
+        MessageId::CmdForkDescription => "Bifurcar a conversa ativa para uma sessão irmã",
         MessageId::CmdSessionsDescription => "Abrir seletor de histórico de sessões",
         MessageId::CmdSettingsDescription => "Exibir as configurações persistidas",
         MessageId::CmdSkillDescription => {
@@ -2193,7 +2209,7 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::LinksTip => "Dica: chaves de API estão disponíveis no console do painel.",
         MessageId::SubagentsFetching => "Buscando status dos sub-agentes...",
         MessageId::HelpUnknownCommand => "Comando desconhecido: {topic}",
-        MessageId::HomeDashboardTitle => "Painel Inicial do DeepSeek TUI",
+        MessageId::HomeDashboardTitle => "Painel Inicial do codewhale",
         MessageId::HomeModel => "Modelo:",
         MessageId::HomeMode => "Modo:",
         MessageId::HomeWorkspace => "Workspace:",
@@ -2224,6 +2240,9 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::HomePlanModeTip => "Modo Plan - Planeje antes de implementar",
         MessageId::HomePlanModeChecklistTip => {
             "  Use /mode plan para criar checklists estruturados"
+        }
+        MessageId::HomeGoalModeTip => {
+            "Rastreamento de Goal - Use /goal <objetivo> para rastrear um objetivo persistente"
         }
         // Onboarding — language picker.
         MessageId::OnboardLanguageTitle => "Escolha o idioma",
@@ -2335,6 +2354,7 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::CmdChangePreviousVersion => {
             "Versión anterior: {version} — ejecuta `/change {version}` para verla"
         }
+        MessageId::CmdBalanceDescription => "Consultar el saldo de la cuenta del proveedor activo",
         MessageId::CmdClearDescription => "Limpiar el historial de la conversación",
         MessageId::CmdCompactDescription => {
             "Compactar el contexto para liberar espacio (heredado; v0.6.6 prefiere reinicio de ciclo)"
@@ -2388,7 +2408,7 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::CmdNoteDescription => "Agregar nota al archivo persistente (.deepseek/notes.md)",
         MessageId::CmdThemeDescription => "Alternar entre tema claro y oscuro",
         MessageId::CmdProviderDescription => {
-            "Cambiar o mostrar el backend LLM activo (deepseek | nvidia-nim | ollama)"
+            "Cambiar o mostrar el backend LLM activo (codewhale | nvidia-nim | ollama)"
         }
         MessageId::CmdQueueDescription => "Ver o editar mensajes en cola",
         MessageId::CmdRecallDescription => {
@@ -2407,6 +2427,7 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
             "Turno del Recursive Language Model (RLM) — guarda el prompt en un REPL Python y deja que el modelo escriba el código que lo procesa; usa `llm_query()` / `sub_rlm()` para llamadas a sub-LLMs."
         }
         MessageId::CmdSaveDescription => "Guardar la sesión en archivo",
+        MessageId::CmdForkDescription => "Bifurcar la conversación activa a una sesión hermana",
         MessageId::CmdSessionsDescription => "Abrir el selector de sesiones",
         MessageId::CmdSettingsDescription => "Mostrar las configuraciones persistidas",
         MessageId::CmdSkillDescription => {
@@ -2585,7 +2606,7 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::LinksTip => "Tip: las claves de API están disponibles en la consola del panel.",
         MessageId::SubagentsFetching => "Obteniendo estado de los sub-agentes...",
         MessageId::HelpUnknownCommand => "Comando desconocido: {topic}",
-        MessageId::HomeDashboardTitle => "Panel Inicial de DeepSeek TUI",
+        MessageId::HomeDashboardTitle => "Panel Inicial de codewhale",
         MessageId::HomeModel => "Modelo:",
         MessageId::HomeMode => "Modo:",
         MessageId::HomeWorkspace => "Workspace:",
@@ -2616,6 +2637,9 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::HomePlanModeTip => "Modo Plan - Planear antes de implementar",
         MessageId::HomePlanModeChecklistTip => {
             "  Usa /mode plan para crear checklists estructurados"
+        }
+        MessageId::HomeGoalModeTip => {
+            "Seguimiento de Goal - Usa /goal <objetivo> para seguir un objetivo persistente"
         }
         MessageId::OnboardLanguageTitle => "Elige el idioma",
         MessageId::OnboardLanguageBlurb => {

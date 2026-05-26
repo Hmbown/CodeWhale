@@ -230,6 +230,9 @@ pub struct Settings {
     pub default_provider: Option<String>,
     /// Default model to use
     pub default_model: Option<String>,
+    /// Default reasoning effort selected from the TUI model picker.
+    /// `None` falls back to `config.toml` and then the runtime default.
+    pub reasoning_effort: Option<String>,
     /// Per-provider model overrides. Key is provider name (e.g. "openai"),
     /// value is the model id. Takes precedence over `default_model`.
     pub provider_models: Option<std::collections::HashMap<String, String>>,
@@ -287,7 +290,7 @@ impl Default for Settings {
             auto_compact: false,
             calm_mode: false,
             low_motion: false,
-            fancy_animations: false,
+            fancy_animations: true,
             bracketed_paste: true,
             paste_burst_detection: true,
             show_thinking: true,
@@ -307,6 +310,7 @@ impl Default for Settings {
             max_input_history: 100,
             default_provider: None,
             default_model: None,
+            reasoning_effort: None,
             provider_models: None,
             status_indicator: "whale".to_string(),
             synchronized_output: "auto".to_string(),
@@ -360,6 +364,10 @@ impl Settings {
             s.background_color = normalize_optional_background_color(s.background_color.as_deref());
             s.theme = normalize_settings_theme(&s.theme).to_string();
             s.default_model = s.default_model.as_deref().and_then(normalize_default_model);
+            s.reasoning_effort = s
+                .reasoning_effort
+                .as_deref()
+                .and_then(|value| normalize_reasoning_effort_setting(value).ok().flatten());
             s
         };
         settings.apply_env_overrides();
@@ -409,6 +417,27 @@ impl Settings {
         if term_is_termius || in_ssh_session {
             self.low_motion = true;
             self.fancy_animations = false;
+        }
+
+        // tmux/screen activity monitors treat purely animated redraws as
+        // activity. Keep multiplexer sessions calm by pinning animations.
+        let in_terminal_multiplexer = std::env::var_os("TMUX").is_some_and(|v| !v.is_empty())
+            || std::env::var_os("STY").is_some_and(|v| !v.is_empty());
+        if in_terminal_multiplexer {
+            self.low_motion = true;
+            self.fancy_animations = false;
+        }
+
+        // Plain Windows PowerShell / cmd.exe under legacy ConHost exposes none
+        // of the modern terminal markers below. Keep rendering calmer there:
+        // lower the motion rate, disable animated chrome, and avoid DEC 2026
+        // synchronized-output wrapping unless the user explicitly forced it on.
+        if detected_legacy_windows_console_host() {
+            self.low_motion = true;
+            self.fancy_animations = false;
+            if self.synchronized_output.eq_ignore_ascii_case("auto") {
+                self.synchronized_output = "off".to_string();
+            }
         }
 
         // Ptyxis 50.x (the new default terminal on Ubuntu 26.04) ships with
@@ -636,6 +665,9 @@ impl Settings {
                 };
                 self.default_model = Some(model);
             }
+            "reasoning_effort" | "effort" => {
+                self.reasoning_effort = normalize_reasoning_effort_setting(value)?;
+            }
             _ => {
                 anyhow::bail!("Failed to update setting: unknown setting '{key}'.");
             }
@@ -691,6 +723,12 @@ impl Settings {
         lines.push(format!(
             "  default_model:      {}",
             self.default_model.as_deref().unwrap_or("(default)")
+        ));
+        lines.push(format!(
+            "  reasoning_effort:   {}",
+            self.reasoning_effort
+                .as_deref()
+                .unwrap_or("(config/default)")
         ));
         lines.push(String::new());
         lines.push(format!(
@@ -781,6 +819,10 @@ impl Settings {
                 "default_model",
                 "Default model: auto or any DeepSeek model ID (e.g. deepseek-v4-pro)",
             ),
+            (
+                "reasoning_effort",
+                "Default thinking effort: auto, off, low, medium, high, max, or default",
+            ),
         ]
     }
 
@@ -809,6 +851,33 @@ fn normalize_default_model(value: &str) -> Option<String> {
     } else {
         normalize_model_name(trimmed)
     }
+}
+
+fn normalize_reasoning_effort_setting(value: &str) -> Result<Option<String>> {
+    let trimmed = value.trim();
+    if trimmed.is_empty()
+        || matches!(
+            trimmed.to_ascii_lowercase().as_str(),
+            "default" | "(default)" | "config" | "configured" | "unset"
+        )
+    {
+        return Ok(None);
+    }
+
+    let normalized = match trimmed.to_ascii_lowercase().as_str() {
+        "off" | "disabled" | "none" | "false" => "off",
+        "low" | "minimal" => "low",
+        "medium" | "mid" => "medium",
+        "high" => "high",
+        "auto" | "automatic" => "auto",
+        "max" | "maximum" | "xhigh" => "max",
+        _ => {
+            anyhow::bail!(
+                "Failed to update setting: invalid reasoning_effort '{value}'. Expected: auto, off, low, medium, high, max, or default."
+            );
+        }
+    };
+    Ok(Some(normalized.to_string()))
 }
 
 /// Parse a boolean value from various formats
@@ -907,6 +976,31 @@ pub fn detected_ptyxis_terminal() -> bool {
     matches!(std::env::var("PTYXIS_VERSION"), Ok(v) if !v.trim().is_empty())
 }
 
+/// Returns `true` for the unmarked Windows console-host path used by plain
+/// PowerShell / cmd.exe. Modern Windows terminals set at least one marker that
+/// lets us keep the richer rendering path.
+pub fn detected_legacy_windows_console_host() -> bool {
+    cfg!(windows)
+        && legacy_windows_console_host_env([
+            std::env::var_os("WT_SESSION").as_deref(),
+            std::env::var_os("ConEmuPID").as_deref(),
+            std::env::var_os("TERM_PROGRAM").as_deref(),
+            std::env::var_os("WEZTERM_EXECUTABLE").as_deref(),
+            std::env::var_os("WEZTERM_PANE").as_deref(),
+            std::env::var_os("ALACRITTY_WINDOW_ID").as_deref(),
+            std::env::var_os("ANSICON").as_deref(),
+            std::env::var_os("TERM").as_deref(),
+        ])
+}
+
+fn legacy_windows_console_host_env(markers: [Option<&std::ffi::OsStr>; 8]) -> bool {
+    fn has_value(value: Option<&std::ffi::OsStr>) -> bool {
+        value.is_some_and(|v| !v.is_empty())
+    }
+
+    markers.into_iter().all(|value| !has_value(value))
+}
+
 fn normalize_optional_background_color(value: Option<&str>) -> Option<String> {
     value.and_then(|raw| normalize_background_color_setting(raw).ok().flatten())
 }
@@ -977,6 +1071,25 @@ mod tests {
         assert!(settings.auto_compact);
         settings.set("auto_compact", "off").expect("disable");
         assert!(!settings.auto_compact);
+    }
+
+    #[test]
+    fn default_settings_show_footer_water_strip() {
+        let settings = Settings::default();
+        assert!(settings.fancy_animations);
+    }
+
+    #[test]
+    fn reasoning_effort_setting_normalizes_and_clears() {
+        let mut settings = Settings::default();
+        settings
+            .set("reasoning_effort", "xhigh")
+            .expect("normalize xhigh");
+        assert_eq!(settings.reasoning_effort.as_deref(), Some("max"));
+        settings
+            .set("reasoning_effort", "default")
+            .expect("clear effort");
+        assert!(settings.reasoning_effort.is_none());
     }
 
     #[test]
@@ -1160,7 +1273,7 @@ mod tests {
         }
         let mut settings = Settings::default();
         assert!(!settings.low_motion, "default is animated");
-        assert!(!settings.fancy_animations, "default is animated");
+        assert!(settings.fancy_animations, "default shows the water strip");
         settings.apply_env_overrides();
         assert!(settings.low_motion, "NO_ANIMATIONS=1 forces low_motion");
         assert!(
@@ -1200,6 +1313,23 @@ mod tests {
     #[test]
     fn no_animations_env_recognises_truthy_spellings_only() {
         let _g = no_animations_test_guard();
+        let prev_wt_session = std::env::var_os("WT_SESSION");
+        let prev_tmux = std::env::var_os("TMUX");
+        let prev_sty = std::env::var_os("STY");
+        // The test is about NO_ANIMATIONS only. On Windows CI, an unmarked
+        // console host now independently enables low_motion, so mark the host
+        // as non-legacy while checking falsy spellings.
+        // Clear multiplexer markers for the same reason: they also force
+        // low_motion independently of NO_ANIMATIONS.
+        // SAFETY: serialised by the guard.
+        unsafe {
+            std::env::remove_var("TMUX");
+            std::env::remove_var("STY");
+        }
+        #[cfg(windows)]
+        unsafe {
+            std::env::set_var("WT_SESSION", "test");
+        }
         for truthy in ["1", "true", "True", "YES", "on"] {
             // SAFETY: serialised by the guard.
             unsafe {
@@ -1221,6 +1351,18 @@ mod tests {
         // SAFETY: cleanup under the guard.
         unsafe {
             std::env::remove_var("NO_ANIMATIONS");
+            match prev_wt_session {
+                Some(v) => std::env::set_var("WT_SESSION", v),
+                None => std::env::remove_var("WT_SESSION"),
+            }
+            match prev_tmux {
+                Some(v) => std::env::set_var("TMUX", v),
+                None => std::env::remove_var("TMUX"),
+            }
+            match prev_sty {
+                Some(v) => std::env::set_var("STY", v),
+                None => std::env::remove_var("STY"),
+            }
         }
     }
 
@@ -1298,6 +1440,8 @@ mod tests {
         let prev_ssh_tty = std::env::var_os("SSH_TTY");
         let prev_tilix_id = std::env::var_os("TILIX_ID");
         let prev_terminator_uuid = std::env::var_os("TERMINATOR_UUID");
+        let prev_tmux = std::env::var_os("TMUX");
+        let prev_sty = std::env::var_os("STY");
         // SAFETY: serialised by the guard. Clear SSH_* so a real
         // SSH session running the test suite doesn't make this
         // assertion trivially fail — the SSH path is exercised
@@ -1307,6 +1451,8 @@ mod tests {
             std::env::remove_var("SSH_TTY");
             std::env::remove_var("TILIX_ID");
             std::env::remove_var("TERMINATOR_UUID");
+            std::env::remove_var("TMUX");
+            std::env::remove_var("STY");
         }
         for program in ["iTerm.app", "Apple_Terminal", "WezTerm", "xterm-256color"] {
             // SAFETY: serialised by the guard.
@@ -1337,6 +1483,12 @@ mod tests {
             }
             if let Some(v) = prev_terminator_uuid {
                 std::env::set_var("TERMINATOR_UUID", v);
+            }
+            if let Some(v) = prev_tmux {
+                std::env::set_var("TMUX", v);
+            }
+            if let Some(v) = prev_sty {
+                std::env::set_var("STY", v);
             }
         }
     }
@@ -1418,6 +1570,94 @@ mod tests {
     }
 
     #[test]
+    fn legacy_windows_console_host_detects_unmarked_shell() {
+        assert!(legacy_windows_console_host_env([
+            None, None, None, None, None, None, None, None
+        ]));
+    }
+
+    #[test]
+    fn legacy_windows_console_host_excludes_modern_terminal_markers() {
+        use std::ffi::OsStr;
+
+        let marker = Some(OsStr::new("1"));
+        assert!(!legacy_windows_console_host_env([
+            marker, None, None, None, None, None, None, None
+        ]));
+        assert!(!legacy_windows_console_host_env([
+            None, marker, None, None, None, None, None, None
+        ]));
+        assert!(!legacy_windows_console_host_env([
+            None, None, marker, None, None, None, None, None
+        ]));
+        assert!(!legacy_windows_console_host_env([
+            None, None, None, marker, None, None, None, None
+        ]));
+        assert!(!legacy_windows_console_host_env([
+            None, None, None, None, marker, None, None, None
+        ]));
+        assert!(!legacy_windows_console_host_env([
+            None, None, None, None, None, marker, None, None
+        ]));
+        assert!(!legacy_windows_console_host_env([
+            None, None, None, None, None, None, marker, None
+        ]));
+        assert!(!legacy_windows_console_host_env([
+            None, None, None, None, None, None, None, marker
+        ]));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn unmarked_windows_console_forces_calm_rendering() {
+        let _g = term_program_test_guard();
+        let vars = [
+            "WT_SESSION",
+            "ConEmuPID",
+            "TERM_PROGRAM",
+            "WEZTERM_EXECUTABLE",
+            "WEZTERM_PANE",
+            "ALACRITTY_WINDOW_ID",
+            "ANSICON",
+            "TERM",
+            "SSH_CLIENT",
+            "SSH_TTY",
+            "NO_ANIMATIONS",
+            "PTYXIS_VERSION",
+        ];
+        let prev: Vec<_> = vars
+            .iter()
+            .map(|name| (*name, std::env::var_os(name)))
+            .collect();
+
+        // SAFETY: serialised by the guard.
+        unsafe {
+            for name in vars {
+                std::env::remove_var(name);
+            }
+        }
+
+        let mut settings = Settings::default();
+        assert!(!settings.low_motion, "default is animated");
+        assert!(settings.fancy_animations, "default shows the water strip");
+        assert_eq!(settings.synchronized_output, "auto");
+        settings.apply_env_overrides();
+        assert!(settings.low_motion);
+        assert!(!settings.fancy_animations);
+        assert_eq!(settings.synchronized_output, "off");
+
+        // SAFETY: cleanup under the guard.
+        unsafe {
+            for (name, value) in prev {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+    }
+
+    #[test]
     fn ssh_session_forces_low_motion_on() {
         let _g = term_program_test_guard();
         let prev_client = std::env::var_os("SSH_CLIENT");
@@ -1462,6 +1702,60 @@ mod tests {
             match prev_term_program {
                 Some(v) => std::env::set_var("TERM_PROGRAM", v),
                 None => std::env::remove_var("TERM_PROGRAM"),
+            }
+        }
+    }
+
+    #[test]
+    fn terminal_multiplexer_env_forces_low_motion_on() {
+        let _g = term_program_test_guard();
+        let vars = [
+            "TMUX",
+            "STY",
+            "TERM_PROGRAM",
+            "SSH_CLIENT",
+            "SSH_TTY",
+            "TILIX_ID",
+            "TERMINATOR_UUID",
+            "NO_ANIMATIONS",
+        ];
+        let prev: Vec<_> = vars
+            .iter()
+            .map(|name| (*name, std::env::var_os(name)))
+            .collect();
+
+        for (var, val) in [
+            ("TMUX", "/tmp/tmux-501/default,1234,0"),
+            ("STY", "1234.pts-0.host"),
+        ] {
+            // SAFETY: serialised by the guard.
+            unsafe {
+                for name in vars {
+                    std::env::remove_var(name);
+                }
+                std::env::set_var(var, val);
+            }
+            let mut settings = Settings::default();
+            assert!(!settings.low_motion, "default is animated");
+            assert!(settings.fancy_animations, "default shows the water strip");
+            settings.apply_env_overrides();
+            assert!(
+                settings.low_motion,
+                "{var}={val:?} must enable low_motion under terminal multiplexers (#1925)"
+            );
+            assert!(
+                !settings.fancy_animations,
+                "{var}={val:?} must disable fancy_animations under terminal multiplexers (#1925)"
+            );
+        }
+
+        // SAFETY: cleanup under the guard.
+        unsafe {
+            for (name, value) in prev {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
             }
         }
     }
