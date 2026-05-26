@@ -1041,6 +1041,16 @@ impl Default for SessionState {
     }
 }
 
+impl SessionState {
+    /// Reset the accumulated token breakdown fields to zero.
+    pub fn reset_token_breakdown(&mut self) {
+        self.total_input_tokens = 0;
+        self.total_cache_hit_tokens = 0;
+        self.total_cache_miss_tokens = 0;
+        self.total_output_tokens = 0;
+    }
+}
+
 /// Evidence collected during a turn for the post-turn receipt.
 #[derive(Debug, Clone)]
 pub struct ToolEvidence {

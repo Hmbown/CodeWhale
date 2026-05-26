@@ -605,12 +605,14 @@ pub(crate) fn footer_session_tokens_spans(app: &App) -> Vec<Span<'static>> {
         return Vec::new();
     }
     let in_str = format_token_count_compact(u64::from(session.total_input_tokens));
-    let cache_str = format_token_count_compact(u64::from(session.total_cache_hit_tokens));
     let out_str = format_token_count_compact(u64::from(session.total_output_tokens));
-    vec![Span::styled(
-        format!("{in_str} in · {cache_str} cch · {out_str} out"),
-        Style::default().fg(palette::TEXT_MUTED),
-    )]
+    let text = if session.total_cache_hit_tokens == 0 && session.total_cache_miss_tokens == 0 {
+        format!("{in_str} in · {out_str} out")
+    } else {
+        let cache_str = format_token_count_compact(u64::from(session.total_cache_hit_tokens));
+        format!("{in_str} in · {cache_str} cch · {out_str} out")
+    };
+    vec![Span::styled(text, Style::default().fg(palette::TEXT_MUTED))]
 }
 
 /// Test-only helper retained as a parity reference for `FooterWidget`'s
