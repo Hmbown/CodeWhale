@@ -1920,7 +1920,7 @@ async fn run_event_loop(
                                     "tool_name": tool_name,
                                     "approval_key": approval_key,
                                     "session_id": app.current_session_id,
-                                    "mode": app.mode.label(),
+                                    "mode": app.mode.label(app.ui_locale),
                                 }),
                             );
                             let _ = engine_handle.approve_tool_call(id.clone()).await;
@@ -1930,7 +1930,7 @@ async fn run_event_loop(
                                 serde_json::json!({
                                     "tool_name": tool_name,
                                     "session_id": app.current_session_id,
-                                    "mode": app.mode.label(),
+                                    "mode": app.mode.label(app.ui_locale),
                                 }),
                             );
                             let _ = engine_handle.deny_tool_call(id.clone()).await;
@@ -1962,7 +1962,7 @@ async fn run_event_loop(
                                     "tool_name": tool_name,
                                     "description": description,
                                     "session_id": app.current_session_id,
-                                    "mode": app.mode.label(),
+                                    "mode": app.mode.label(app.ui_locale),
                                 }),
                             );
                             app.view_stack
@@ -4619,7 +4619,7 @@ pub(crate) fn open_context_inspector(app: &mut App) {
         .last_transcript_area
         .map(|area| area.width)
         .unwrap_or(80);
-    let content = build_context_inspector_text(app);
+    let content = build_context_inspector_text(app, app.ui_locale);
     app.view_stack.push(PagerView::from_text(
         "Context inspector",
         &content,
@@ -5768,6 +5768,7 @@ fn render(f: &mut Frame, app: &mut App) {
             workspace_name,
             app.is_loading,
             app.ui_theme.header_bg,
+            app.ui_locale,
         )
         .with_usage(
             app.session.total_conversation_tokens,

@@ -505,10 +505,10 @@ enum ConfigScope {
 }
 
 impl ConfigScope {
-    fn label(self) -> &'static str {
+    fn label(self, locale: Locale) -> &'static str {
         match self {
-            ConfigScope::Session => "SESSION",
-            ConfigScope::Saved => "SAVED",
+            ConfigScope::Session => tr(locale, MessageId::ConfigScopeSession),
+            ConfigScope::Saved => tr(locale, MessageId::ConfigScopeSaved),
         }
     }
 
@@ -846,7 +846,7 @@ impl ConfigView {
         let section = row.section.label(self.locale).to_lowercase();
         let key = row.key.to_lowercase();
         let value = row.value.to_lowercase();
-        let scope = row.scope.label().to_lowercase();
+        let scope = row.scope.label(self.locale).to_lowercase();
 
         filter.split_whitespace().all(|term| {
             section.contains(term)
@@ -979,7 +979,7 @@ impl ConfigView {
         match key.code {
             KeyCode::Esc => {
                 self.editing = None;
-                self.status = Some("Edit cancelled".to_string());
+                self.status = Some(self.tr(MessageId::ConfigEditCancelled).to_string());
                 ViewAction::None
             }
             KeyCode::Enter => {
@@ -1152,7 +1152,7 @@ fn config_hint_for_key(key: &str) -> &'static str {
     }
 }
 
-fn render_config_editor_value_line(edit: &ConfigEdit) -> ratatui::text::Line<'static> {
+fn render_config_editor_value_line(edit: &ConfigEdit, locale: Locale) -> ratatui::text::Line<'static> {
     use ratatui::{
         style::Style,
         text::{Line, Span},
@@ -1160,7 +1160,7 @@ fn render_config_editor_value_line(edit: &ConfigEdit) -> ratatui::text::Line<'st
 
     let mut spans = Vec::new();
     spans.push(Span::styled(
-        "New: ",
+        tr(locale, MessageId::ConfigFieldNew),
         Style::default().fg(palette::TEXT_MUTED),
     ));
 
@@ -1354,20 +1354,20 @@ impl ModalView for ConfigView {
             )]));
             lines.push(Line::from(""));
             lines.push(Line::from(vec![
-                Span::styled("Scope: ", Style::default().fg(palette::TEXT_MUTED)),
-                Span::raw(edit.scope.label()),
+                Span::styled(self.tr(MessageId::ConfigFieldScope), Style::default().fg(palette::TEXT_MUTED)),
+                Span::raw(edit.scope.label(self.locale)),
             ]));
             lines.push(Line::from(vec![
-                Span::styled("Current: ", Style::default().fg(palette::TEXT_MUTED)),
+                Span::styled(self.tr(MessageId::ConfigFieldCurrent), Style::default().fg(palette::TEXT_MUTED)),
                 Span::raw(truncate_view_text(&edit.original_value, 60)),
             ]));
             lines.push(Line::from(""));
-            lines.push(render_config_editor_value_line(edit));
+            lines.push(render_config_editor_value_line(edit, self.locale));
             lines.push(Line::from(""));
             let hint = config_hint_for_key(&edit.key);
             if !hint.is_empty() {
                 lines.push(Line::from(vec![
-                    Span::styled("Hint: ", Style::default().fg(palette::TEXT_MUTED)),
+                    Span::styled(self.tr(MessageId::ConfigFieldHint), Style::default().fg(palette::TEXT_MUTED)),
                     Span::raw(hint),
                 ]));
             }
@@ -1453,7 +1453,7 @@ impl ModalView for ConfigView {
                             "  {:<key_width$} {:<value_width$} {}",
                             row.key,
                             value,
-                            row.scope.label(),
+                            row.scope.label(self.locale),
                             key_width = key_column_width,
                             value_width = CONFIG_VALUE_COLUMN_WIDTH
                         ));

@@ -31,7 +31,7 @@ pub fn init(app: &mut App) -> CommandResult {
                 agents_path.display()
             ))
         }
-        Err(e) => CommandResult::error(format!("Failed to write AGENTS.md: {e}")),
+        Err(e) => CommandResult::error_msg(format!("Failed to write AGENTS.md: {e}")),
     }
 }
 

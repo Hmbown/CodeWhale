@@ -87,6 +87,16 @@ impl CommandResult {
         }
     }
 
+    /// Create a simple error message (English prefix)
+    #[allow(dead_code)]
+    pub fn error_msg(msg: impl Into<String>) -> Self {
+        Self {
+            message: Some(msg.into()),
+            action: None,
+            is_error: true,
+        }
+    }
+
     /// Create an error message result with a localized "Error:" prefix
     pub fn error(msg: impl Into<String>, locale: Locale) -> Self {
         Self {
@@ -743,7 +753,7 @@ pub use config::{
 pub fn rlm(app: &mut App, arg: Option<&str>) -> CommandResult {
     let (max_depth, target) = match parse_depth_prefixed_arg(arg, 1) {
         Ok(parsed) => parsed,
-        Err(message) => return CommandResult::error(message),
+        Err(message) => return CommandResult::error_msg(message),
     };
     let target = match target {
         Some(p) if !p.trim().is_empty() => p.trim().to_string(),
@@ -776,12 +786,12 @@ pub fn rlm(app: &mut App, arg: Option<&str>) -> CommandResult {
 pub fn agent(_app: &mut App, arg: Option<&str>) -> CommandResult {
     let (max_depth, task) = match parse_depth_prefixed_arg(arg, 1) {
         Ok(parsed) => parsed,
-        Err(message) => return CommandResult::error(message),
+        Err(message) => return CommandResult::error_msg(message),
     };
     let task = match task {
         Some(task) if !task.trim().is_empty() => task.trim().to_string(),
         _ => {
-            return CommandResult::error(
+            return CommandResult::error_msg(
                 "Usage: /agent [N] <task>\n\n\
                  Opens a persistent sub-agent session with recursive agent depth N (0-3, default 1).",
             );
@@ -825,7 +835,7 @@ fn build_relay_instruction(app: &App, focus: Option<&str>) -> String {
     let _ = writeln!(out);
     let _ = writeln!(out, "Current session snapshot:");
     let _ = writeln!(out, "- Workspace: {}", app.workspace.display());
-    let _ = writeln!(out, "- Mode: {}", app.mode.label());
+    let _ = writeln!(out, "- Mode: {}", app.mode.label(app.ui_locale));
     let _ = writeln!(out, "- Model: {}", app.model_display_label());
     if let Some(focus) = focus {
         let _ = writeln!(out, "- Requested relay focus: {focus}");

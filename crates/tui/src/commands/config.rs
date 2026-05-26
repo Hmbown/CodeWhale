@@ -28,10 +28,10 @@ use anyhow::Result;
 pub fn show_config(_app: &mut App, arg: Option<&str>) -> CommandResult {
     let mode = match parse_mode(arg) {
         Ok(mode) => mode,
-        Err(err) => return CommandResult::error(err),
+        Err(err) => return CommandResult::error_msg(err),
     };
     if mode == ConfigUiMode::Web && !cfg!(feature = "web") {
-        return CommandResult::error(
+        return CommandResult::error_msg(
             "This build does not include the web config UI. Rebuild with the `web` feature.",
         );
     }
@@ -242,7 +242,7 @@ fn show_single_setting(app: &App, key: &str) -> CommandResult {
     };
     match value {
         Some(v) => CommandResult::message(format!("{key} = {v}")),
-        None => CommandResult::error(format!(
+        None => CommandResult::error_msg(format!(
             "Unknown setting '{key}'. See `/help config` for available settings."
         )),
     }
@@ -252,7 +252,7 @@ fn show_single_setting(app: &App, key: &str) -> CommandResult {
 pub fn show_settings(app: &mut App) -> CommandResult {
     match Settings::load() {
         Ok(settings) => CommandResult::message(settings.display(app.ui_locale)),
-        Err(e) => CommandResult::error(format!("Failed to load settings: {e}")),
+        Err(e) => CommandResult::error_msg(format!("Failed to load settings: {e}")),
     }
 }
 
@@ -270,7 +270,7 @@ pub fn verbose(app: &mut App, arg: Option<&str>) -> CommandResult {
             "off" | "false" | "0" | "no" => false,
             "toggle" => !app.verbose_transcript,
             _ => {
-                return CommandResult::error(
+                return CommandResult::error_msg(
                     "Usage: /verbose [on|off]. Compact thinking remains available when verbose is off.",
                 );
             }
@@ -407,7 +407,7 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
             }
             // Clear auto mode when a specific model is set
             let Some(model) = normalize_model_name_for_provider(app.api_provider, value) else {
-                return CommandResult::error(format!(
+                return CommandResult::error_msg(format!(
                     "Invalid model '{value}'. Expected a DeepSeek model ID. Common models: {}",
                     COMMON_DEEPSEEK_MODELS.join(", ")
                 ));
@@ -428,14 +428,14 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
                     app.approval_mode = m;
                     CommandResult::message(format!("approval_mode = {}", m.label()))
                 }
-                None => CommandResult::error(
+                None => CommandResult::error_msg(
                     "Invalid approval_mode. Use: auto, suggest/on-request/untrusted, never/deny",
                 ),
             };
         }
         "mcp_config_path" | "mcp" => {
             if value.trim().is_empty() {
-                return CommandResult::error("mcp_config_path cannot be empty");
+                return CommandResult::error_msg("mcp_config_path cannot be empty");
             }
             app.mcp_config_path = PathBuf::from(expand_tilde(value));
             app.mcp_restart_required = true;
@@ -447,7 +447,7 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
                         app.mcp_config_path.display(),
                         path.display()
                     ),
-                    Err(err) => return CommandResult::error(format!("Failed to save: {err}")),
+                    Err(err) => return CommandResult::error_msg(format!("Failed to save: {err}")),
                 }
             } else {
                 format!(
@@ -488,11 +488,11 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
             ));
             Settings::default()
         }
-        Err(e) => return CommandResult::error(format!("Failed to load settings: {e}")),
+        Err(e) => return CommandResult::error_msg(format!("Failed to load settings: {e}")),
     };
 
     if let Err(e) = settings.set(&key, value) {
-        return CommandResult::error(format!("{e}"));
+        return CommandResult::error_msg(format!("{e}"));
     }
 
     let mut action = None;
@@ -648,7 +648,7 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
 
     let message = if persist {
         if let Err(e) = settings.save() {
-            return CommandResult::error(format!("Failed to save: {e}"));
+            return CommandResult::error_msg(format!("Failed to save: {e}"));
         }
         format!("{key} = {display_value} (saved)")
     } else {
@@ -683,7 +683,7 @@ pub fn set_config(app: &mut App, args: Option<&str>) -> CommandResult {
 
     let parts: Vec<&str> = args.splitn(2, ' ').collect();
     if parts.len() < 2 {
-        return CommandResult::error("Usage: /set <key> <value>");
+        return CommandResult::error_msg("Usage: /set <key> <value>");
     }
 
     let key = parts[0].to_lowercase();
@@ -703,7 +703,7 @@ pub fn mode(app: &mut App, arg: Option<&str>) -> CommandResult {
     };
     match parse_mode_arg(arg) {
         Some(mode) => CommandResult::message(switch_mode(app, mode)),
-        None => CommandResult::error("Usage: /mode [agent|plan|yolo|1|2|3]"),
+        None => CommandResult::error_msg("Usage: /mode [agent|plan|yolo|1|2|3]"),
     }
 }
 
@@ -772,7 +772,7 @@ pub fn trust(app: &mut App, arg: Option<&str>) -> CommandResult {
         }
         "add" => trust_add(&workspace, rest),
         "remove" | "rm" | "del" | "delete" => trust_remove(&workspace, rest),
-        other => CommandResult::error_locale(
+        other => CommandResult::error(
             t(MessageId::CmdTrustUnknownAction).replace("{action}", other),
             app.ui_locale,
         ),
@@ -810,13 +810,13 @@ fn trust_status(workspace: &Path, app: &App, force_paths: bool) -> CommandResult
 
 fn trust_add(workspace: &Path, raw: &str) -> CommandResult {
     if raw.is_empty() {
-        return CommandResult::error(
+        return CommandResult::error_msg(
             "Usage: /trust add <path>. Supply an absolute path or a path relative to the workspace.",
         );
     }
     let path = PathBuf::from(expand_tilde(raw));
     if !path.exists() {
-        return CommandResult::error(format!(
+        return CommandResult::error_msg(format!(
             "Path not found: {} — supply an existing directory or file.",
             path.display()
         ));
@@ -826,19 +826,19 @@ fn trust_add(workspace: &Path, raw: &str) -> CommandResult {
             "Added to trust list for this workspace: {}",
             stored.display()
         )),
-        Err(err) => CommandResult::error(format!("Failed to update trust list: {err}")),
+        Err(err) => CommandResult::error_msg(format!("Failed to update trust list: {err}")),
     }
 }
 
 fn trust_remove(workspace: &Path, raw: &str) -> CommandResult {
     if raw.is_empty() {
-        return CommandResult::error("Usage: /trust remove <path>");
+        return CommandResult::error_msg("Usage: /trust remove <path>");
     }
     let path = PathBuf::from(expand_tilde(raw));
     match crate::workspace_trust::remove(workspace, &path) {
         Ok(true) => CommandResult::message(format!("Removed from trust list: {}", path.display())),
         Ok(false) => CommandResult::message(format!("Not in trust list: {}", path.display())),
-        Err(err) => CommandResult::error(format!("Failed to update trust list: {err}")),
+        Err(err) => CommandResult::error_msg(format!("Failed to update trust list: {err}")),
     }
 }
 
@@ -1266,7 +1266,7 @@ pub fn lsp_command(app: &mut App, arg: Option<&str>) -> CommandResult {
             app.lsp_enabled = false;
             CommandResult::message(t(MessageId::CmdLspDisabled))
         }
-        other => CommandResult::error_locale(
+        other => CommandResult::error(
             t(MessageId::CmdLspUnknownArg).replace("{arg}", other),
             app.ui_locale,
         ),
@@ -1284,7 +1284,7 @@ pub fn logout(app: &mut App) -> CommandResult {
             app.api_key_cursor = 0;
             CommandResult::message(t(MessageId::CmdLogoutSuccess))
         }
-        Err(e) => CommandResult::error_locale(
+        Err(e) => CommandResult::error(
             t(MessageId::CmdLogoutFailed).replace("{reason}", &e.to_string()),
             app.ui_locale,
         ),
@@ -2049,7 +2049,7 @@ mod tests {
         let mut app = create_test_app();
         let result = trust(&mut app, Some("add"));
         let msg = result.message.expect("error message");
-        assert!(msg.starts_with("Error:"), "got {msg:?}");
+        assert!(msg.starts_with("Usage:"), "got {msg:?}");
     }
 
     #[test]

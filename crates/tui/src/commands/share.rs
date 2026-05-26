@@ -54,7 +54,7 @@ fn do_share(app: &mut App) -> CommandResult {
     // is what we share.
     let history_len = app.history.len();
     let model = &app.model;
-    let mode = app.mode.label();
+    let mode = app.mode.label(app.ui_locale);
 
     // Use an AppAction to signal the engine to perform the async work.
     CommandResult::with_message_and_action(

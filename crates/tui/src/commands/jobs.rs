@@ -21,14 +21,14 @@ pub fn jobs(_app: &mut App, args: Option<&str>) -> CommandResult {
             Some(id) => CommandResult::action(AppAction::ShellJob(ShellJobAction::Show {
                 id: id.to_string(),
             })),
-            None => CommandResult::error("Usage: /jobs show <id>"),
+            None => CommandResult::error_msg("Usage: /jobs show <id>"),
         },
         "poll" | "wait" => match id {
             Some(id) => CommandResult::action(AppAction::ShellJob(ShellJobAction::Poll {
                 id: id.to_string(),
                 wait: action == "wait",
             })),
-            None => CommandResult::error("Usage: /jobs poll <id>"),
+            None => CommandResult::error_msg("Usage: /jobs poll <id>"),
         },
         "stdin" | "send" => match id {
             Some(id) if !rest.is_empty() => {
@@ -38,7 +38,7 @@ pub fn jobs(_app: &mut App, args: Option<&str>) -> CommandResult {
                     close: false,
                 }))
             }
-            _ => CommandResult::error("Usage: /jobs stdin <id> <input>"),
+            _ => CommandResult::error_msg("Usage: /jobs stdin <id> <input>"),
         },
         "close-stdin" | "eof" => match id {
             Some(id) => CommandResult::action(AppAction::ShellJob(ShellJobAction::SendStdin {
@@ -46,18 +46,18 @@ pub fn jobs(_app: &mut App, args: Option<&str>) -> CommandResult {
                 input: String::new(),
                 close: true,
             })),
-            None => CommandResult::error("Usage: /jobs close-stdin <id>"),
+            None => CommandResult::error_msg("Usage: /jobs close-stdin <id>"),
         },
         "cancel" | "kill" | "stop" => match id {
             Some(id) => CommandResult::action(AppAction::ShellJob(ShellJobAction::Cancel {
                 id: id.to_string(),
             })),
-            None => CommandResult::error("Usage: /jobs cancel <id>"),
+            None => CommandResult::error_msg("Usage: /jobs cancel <id>"),
         },
         "cancel-all" | "kill-all" | "stop-all" => {
             CommandResult::action(AppAction::ShellJob(ShellJobAction::CancelAll))
         }
-        _ => CommandResult::error(
+        _ => CommandResult::error_msg(
             "Usage: /jobs [list|show <id>|poll <id>|wait <id>|stdin <id> <input>|close-stdin <id>|cancel <id>|cancel-all]",
         ),
     }

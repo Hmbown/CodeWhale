@@ -36,7 +36,7 @@ pub fn save(app: &mut App, path: Option<&str>) -> CommandResult {
         &app.workspace,
         u64::from(app.session.total_tokens),
         app.system_prompt.as_ref(),
-        Some(app.mode.label()),
+        Some(app.mode.label(app.ui_locale)),
     );
     app.sync_cost_to_metadata(&mut session.metadata);
     session.artifacts = app.session_artifacts.clone();
@@ -80,13 +80,13 @@ pub fn save(app: &mut App, path: Option<&str>) -> CommandResult {
 /// Fork the active conversation into a new saved sibling session and switch to it.
 pub fn fork(app: &mut App) -> CommandResult {
     if app.api_messages.is_empty() {
-        return CommandResult::error("Nothing to fork. Send or load a message first.");
+        return CommandResult::error_msg("Nothing to fork. Send or load a message first.");
     }
 
     let manager = match crate::session_manager::SessionManager::default_location() {
         Ok(manager) => manager,
         Err(err) => {
-            return CommandResult::error(format!("could not open sessions directory: {err}"));
+            return CommandResult::error_msg(format!("could not open sessions directory: {err}"));
         }
     };
 
@@ -101,13 +101,13 @@ pub fn fork(app: &mut App) -> CommandResult {
         &app.workspace,
         u64::from(app.session.total_tokens),
         app.system_prompt.as_ref(),
-        Some(app.mode.label()),
+        Some(app.mode.label(app.ui_locale)),
     );
     app.sync_cost_to_metadata(&mut parent.metadata);
     parent.artifacts = app.session_artifacts.clone();
 
     if let Err(err) = manager.save_session(&parent) {
-        return CommandResult::error(format!("Failed to save parent session: {err}"));
+        return CommandResult::error_msg(format!("Failed to save parent session: {err}"));
     }
 
     let mut forked = create_saved_session_with_mode(
@@ -116,13 +116,13 @@ pub fn fork(app: &mut App) -> CommandResult {
         &app.workspace,
         u64::from(app.session.total_tokens),
         app.system_prompt.as_ref(),
-        Some(app.mode.label()),
+        Some(app.mode.label(app.ui_locale)),
     );
     forked.metadata.copy_cost_from(&parent.metadata);
     forked.metadata.mark_forked_from(&parent.metadata);
 
     if let Err(err) = manager.save_session(&forked) {
-        return CommandResult::error(format!("Failed to save forked session: {err}"));
+        return CommandResult::error_msg(format!("Failed to save forked session: {err}"));
     }
 
     app.current_session_id = Some(forked.metadata.id.clone());

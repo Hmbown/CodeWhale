@@ -13,7 +13,7 @@ use crate::tui::app::App;
 pub fn network(_app: &mut App, arg: Option<&str>) -> CommandResult {
     match network_inner(arg) {
         Ok(message) => CommandResult::message(message),
-        Err(err) => CommandResult::error(err.to_string()),
+        Err(err) => CommandResult::error_msg(err.to_string()),
     }
 }
 

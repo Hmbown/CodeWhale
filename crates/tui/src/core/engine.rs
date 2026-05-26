@@ -54,6 +54,7 @@ use crate::tools::subagent::{
 use crate::tools::todo::{SharedTodoList, new_shared_todo_list};
 use crate::tools::user_input::{UserInputRequest, UserInputResponse};
 use crate::tools::{ToolContext, ToolRegistryBuilder};
+use crate::localization::Locale;
 use crate::tui::app::AppMode;
 use crate::utils::spawn_supervised;
 
@@ -1063,7 +1064,7 @@ impl Engine {
 
         let fork_context_for_runtime = if self.config.features.enabled(Feature::Subagents) {
             let state = StructuredState::capture(
-                mode.label(),
+                mode.label(Locale::En),
                 self.config.workspace.clone(),
                 std::env::current_dir().ok(),
                 &self.session.working_set,
@@ -1716,7 +1717,7 @@ impl Engine {
             let seams = seam_mgr.collect_seam_texts(&self.session.messages).await;
             let state_text = {
                 let s = StructuredState::capture(
-                    mode.label(),
+                    mode.label(Locale::En),
                     self.config.workspace.clone(),
                     std::env::current_dir().ok(),
                     &self.session.working_set,
@@ -1817,7 +1818,7 @@ impl Engine {
 
         // 3. Capture structured state. Locks are held only for the snapshot.
         let state = StructuredState::capture(
-            mode.label(),
+            mode.label(Locale::En),
             self.config.workspace.clone(),
             std::env::current_dir().ok(),
             &self.session.working_set,

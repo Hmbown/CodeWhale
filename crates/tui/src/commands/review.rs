@@ -17,7 +17,7 @@ fn warnings_suffix(registry: &SkillRegistry) -> String {
 pub fn review(app: &mut App, args: Option<&str>) -> CommandResult {
     let target = args.unwrap_or("").trim();
     if target.is_empty() {
-        return CommandResult::error("Usage: /review <target>");
+        return CommandResult::error_msg("Usage: /review <target>");
     }
 
     let skills_dir = app.skills_dir.clone();
@@ -40,7 +40,7 @@ pub fn review(app: &mut App, args: Option<&str>) -> CommandResult {
         Some(skill) => skill,
         None => {
             let global_display = global_dir.display();
-            return CommandResult::error(format!(
+            return CommandResult::error_msg(format!(
                 "Review skill not found in {} or {}. Create ~/.codewhale/skills/review/SKILL.md.{}",
                 skills_dir.display(),
                 global_display,

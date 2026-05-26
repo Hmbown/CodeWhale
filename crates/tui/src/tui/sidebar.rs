@@ -1424,7 +1424,7 @@ fn render_sidebar_subagents(f: &mut Frame, area: Rect, app: &mut App) {
         role_counts,
     };
     let rows = sidebar_agent_rows(app);
-    let lines = subagent_panel_lines(&summary, &rows, content_width, usable_rows.max(1));
+    let lines = subagent_panel_lines(&summary, &rows, content_width, usable_rows.max(1), app.ui_locale);
 
     render_sidebar_section(f, area, "Agents", lines, Vec::new(), app);
 }
@@ -1489,7 +1489,7 @@ fn sidebar_agent_rows(app: &App) -> Vec<SidebarAgentRow> {
                 id: agent.agent_id.clone(),
                 name: agent.nickname.clone().unwrap_or_else(|| agent.name.clone()),
                 role: agent.agent_type.as_str().to_string(),
-                status: subagent_status_text(&agent.status).to_string(),
+                status: subagent_status_text(&agent.status, app.ui_locale).to_string(),
                 progress,
                 steps_taken: agent.steps_taken,
                 duration_ms: Some(agent.duration_ms),
@@ -1522,13 +1522,13 @@ fn sidebar_agent_rows(app: &App) -> Vec<SidebarAgentRow> {
     rows
 }
 
-fn subagent_status_text(status: &SubAgentStatus) -> &'static str {
+fn subagent_status_text(status: &SubAgentStatus, locale: Locale) -> &'static str {
     match status {
-        SubAgentStatus::Running => "running",
-        SubAgentStatus::Completed => "done",
-        SubAgentStatus::Interrupted(_) => "interrupted",
-        SubAgentStatus::Failed(_) => "failed",
-        SubAgentStatus::Cancelled => "canceled",
+        SubAgentStatus::Running => tr(locale, MessageId::AgentLifecycleRunning),
+        SubAgentStatus::Completed => tr(locale, MessageId::AgentLifecycleDone),
+        SubAgentStatus::Interrupted(_) => tr(locale, MessageId::AgentStatusInterrupted),
+        SubAgentStatus::Failed(_) => tr(locale, MessageId::AgentLifecycleFailed),
+        SubAgentStatus::Cancelled => tr(locale, MessageId::AgentLifecycleCancelled),
     }
 }
 
@@ -1539,6 +1539,7 @@ pub fn subagent_panel_lines(
     rows: &[SidebarAgentRow],
     content_width: usize,
     max_rows: usize,
+    locale: Locale,
 ) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::with_capacity(max_rows.max(4));
 
@@ -1549,7 +1550,7 @@ pub fn subagent_panel_lines(
         && !summary.foreground_rlm_running
     {
         lines.push(Line::from(Span::styled(
-            "No agents",
+            tr(locale, MessageId::SidebarNoAgents),
             Style::default().fg(palette::TEXT_MUTED),
         )));
         return lines;
@@ -1889,6 +1890,7 @@ mod tests {
         work_panel_empty_hint, work_panel_lines,
     };
     use crate::config::Config;
+    use crate::localization::Locale;
     use crate::palette::PaletteMode;
     use crate::tools::plan::StepStatus;
     use crate::tools::todo::TodoStatus;
@@ -2561,7 +2563,7 @@ mod tests {
     #[test]
     fn navigator_empty_state_says_no_agents() {
         let summary = SidebarSubagentSummary::default();
-        let lines = subagent_panel_lines(&summary, &[], 32, 8);
+        let lines = subagent_panel_lines(&summary, &[], 32, 8, Locale::En);
         let text = lines_to_text(&lines);
         assert_eq!(text, vec!["No agents".to_string()]);
     }
@@ -2601,7 +2603,7 @@ mod tests {
                 duration_ms: Some(21_000),
             },
         ];
-        let text = lines_to_text(&subagent_panel_lines(&summary, &rows, 64, 12));
+        let text = lines_to_text(&subagent_panel_lines(&summary, &rows, 64, 12, Locale::En));
         assert!(text[0].contains("2 running"), "header: {:?}", text[0]);
         assert!(text[0].contains("/ 3"), "total in header: {:?}", text[0]);
         assert!(
@@ -2632,7 +2634,7 @@ mod tests {
             role_counts: std::collections::BTreeMap::new(),
         };
 
-        let text = lines_to_text(&subagent_panel_lines(&summary, &[], 64, 8));
+        let text = lines_to_text(&subagent_panel_lines(&summary, &[], 64, 8, Locale::En));
 
         assert!(text[0].contains("1 running"), "header: {:?}", text[0]);
         assert!(text[0].contains("/ 6"), "fanout total: {:?}", text[0]);
@@ -2651,7 +2653,7 @@ mod tests {
             foreground_rlm_running: false,
             role_counts,
         };
-        let text = lines_to_text(&subagent_panel_lines(&summary, &[], 32, 8));
+        let text = lines_to_text(&subagent_panel_lines(&summary, &[], 32, 8, Locale::En));
         assert!(text[0].contains("1 done"), "settled header: {:?}", text[0]);
     }
 
@@ -2671,7 +2673,7 @@ mod tests {
             foreground_rlm_running: false,
             role_counts,
         };
-        let lines = subagent_panel_lines(&summary, &[], 16, 8);
+        let lines = subagent_panel_lines(&summary, &[], 16, 8, Locale::En);
         let role_line: &str = lines[1]
             .spans
             .first()
@@ -2689,7 +2691,7 @@ mod tests {
             foreground_rlm_running: true,
             ..SidebarSubagentSummary::default()
         };
-        let text = lines_to_text(&subagent_panel_lines(&summary, &[], 64, 8));
+        let text = lines_to_text(&subagent_panel_lines(&summary, &[], 64, 8, Locale::En));
 
         assert!(!text[0].contains("No agents"), "header: {text:?}");
         assert!(

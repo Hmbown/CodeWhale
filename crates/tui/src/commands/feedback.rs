@@ -15,7 +15,7 @@ pub fn feedback(_app: &mut App, arg: Option<&str>) -> CommandResult {
     let kind = match parse_feedback_kind(raw) {
         Some(parsed) => parsed,
         None => {
-            return CommandResult::error(
+            return CommandResult::error_msg(
                 "Unknown feedback type. Use `/feedback` to list feedback options.",
             );
         }

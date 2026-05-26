@@ -27,7 +27,7 @@ pub fn provider(app: &mut App, args: Option<&str>) -> CommandResult {
     let model_arg = parts.next();
 
     let Some(target) = ApiProvider::parse(name) else {
-        return CommandResult::error(format!(
+        return CommandResult::error_msg(format!(
             "Unknown provider '{name}'. Expected: deepseek, nvidia-nim, openai, atlascloud, wanjie-ark, openrouter, novita, fireworks, sglang, vllm, or ollama."
         ));
     };
@@ -38,7 +38,7 @@ pub fn provider(app: &mut App, args: Option<&str>) -> CommandResult {
         Some(raw) => match normalize_model_name(&expand_model_alias(raw)) {
             Some(normalized) => Some(normalized),
             None => {
-                return CommandResult::error(format!(
+                return CommandResult::error_msg(format!(
                     "Invalid model '{raw}'. Try: flash, pro, deepseek-v4-flash, deepseek-v4-pro."
                 ));
             }

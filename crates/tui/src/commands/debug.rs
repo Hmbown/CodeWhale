@@ -125,7 +125,7 @@ pub fn system_prompt(app: &mut App) -> CommandResult {
 
     CommandResult::message(format!(
         "System Prompt ({} mode):\n─────────────────────────────\n{}",
-        app.mode.label(),
+        app.mode.label(app.ui_locale),
         display
     ))
 }

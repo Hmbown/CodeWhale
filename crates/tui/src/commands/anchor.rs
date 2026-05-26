@@ -21,12 +21,12 @@ pub fn anchor(app: &mut App, content: Option<&str>) -> CommandResult {
     let input = match content {
         Some(c) => c.trim(),
         None => {
-            return CommandResult::error(format!("Usage: {USAGE}"));
+            return CommandResult::error_msg(format!("Usage: {USAGE}"));
         }
     };
 
     if input.is_empty() {
-        return CommandResult::error(format!("Usage: {USAGE}"));
+        return CommandResult::error_msg(format!("Usage: {USAGE}"));
     }
 
     // Parse subcommands.
@@ -89,20 +89,20 @@ fn add_anchor(app: &mut App, text: &str) -> CommandResult {
     if let Some(parent) = path.parent()
         && let Err(e) = fs::create_dir_all(parent)
     {
-        return CommandResult::error(format!("Failed to create anchors directory: {e}"));
+        return CommandResult::error_msg(format!("Failed to create anchors directory: {e}"));
     }
 
     // Append to anchors file.
     let mut file = match fs::OpenOptions::new().create(true).append(true).open(&path) {
         Ok(f) => f,
         Err(e) => {
-            return CommandResult::error(format!("Failed to open anchors file: {e}"));
+            return CommandResult::error_msg(format!("Failed to open anchors file: {e}"));
         }
     };
 
     // Write separator and anchor content.
     if let Err(e) = writeln!(file, "\n---\n{text}") {
-        return CommandResult::error(format!("Failed to write anchor: {e}"));
+        return CommandResult::error_msg(format!("Failed to write anchor: {e}"));
     }
 
     CommandResult::message(format!(
@@ -134,7 +134,7 @@ fn remove_anchor(app: &mut App, index_str: &str) -> CommandResult {
     let index: usize = match index_str.parse() {
         Ok(n) if n >= 1 => n,
         _ => {
-            return CommandResult::error(
+            return CommandResult::error_msg(
                 "Invalid index. Use /anchor list to see anchor numbers, then /anchor remove <n>.",
             );
         }
@@ -143,7 +143,7 @@ fn remove_anchor(app: &mut App, index_str: &str) -> CommandResult {
     let mut anchors = read_anchors(app);
 
     if index > anchors.len() {
-        return CommandResult::error(format!(
+        return CommandResult::error_msg(format!(
             "Anchor #{index} does not exist. You have {} anchor(s). Use /anchor list to see them.",
             anchors.len()
         ));
@@ -151,7 +151,7 @@ fn remove_anchor(app: &mut App, index_str: &str) -> CommandResult {
 
     let removed = anchors.remove(index - 1);
     if let Err(e) = write_anchors(app, &anchors) {
-        return CommandResult::error(e);
+        return CommandResult::error_msg(e);
     }
 
     CommandResult::message(format!("Removed anchor #{index}: {removed}"))

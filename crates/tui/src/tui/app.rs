@@ -751,21 +751,21 @@ impl AppMode {
     }
 
     /// Short label used in the UI footer.
-    pub fn label(self) -> &'static str {
+    pub fn label(self, locale: Locale) -> &'static str {
         match self {
-            AppMode::Agent => "AGENT",
-            AppMode::Yolo => "YOLO",
-            AppMode::Plan => "PLAN",
+            AppMode::Agent => tr(locale, MessageId::AppModeAgent),
+            AppMode::Yolo => tr(locale, MessageId::AppModeYolo),
+            AppMode::Plan => tr(locale, MessageId::AppModePlan),
         }
     }
 
     #[allow(dead_code)]
     /// Description shown in help or onboarding text.
-    pub fn description(self) -> &'static str {
+    pub fn description(self, locale: Locale) -> &'static str {
         match self {
-            AppMode::Agent => "Agent mode - autonomous task execution with tools",
-            AppMode::Yolo => "YOLO mode - full tool access without approvals",
-            AppMode::Plan => "Plan mode - design before implementing",
+            AppMode::Agent => tr(locale, MessageId::AppModeAgentDesc),
+            AppMode::Yolo => tr(locale, MessageId::AppModeYoloDesc),
+            AppMode::Plan => tr(locale, MessageId::AppModePlanDesc),
         }
     }
 }
@@ -845,11 +845,11 @@ pub enum VimMode {
 impl VimMode {
     /// Short status-bar label shown in the composer border.
     #[must_use]
-    pub fn label(self) -> &'static str {
+    pub fn label(self, locale: Locale) -> &'static str {
         match self {
-            Self::Normal => "-- NORMAL --",
-            Self::Insert => "-- INSERT --",
-            Self::Visual => "-- VISUAL --",
+            Self::Normal => tr(locale, MessageId::VimModeNormal),
+            Self::Insert => tr(locale, MessageId::VimModeInsert),
+            Self::Visual => tr(locale, MessageId::VimModeVisual),
         }
     }
 }
@@ -2096,7 +2096,7 @@ impl App {
         let entering_yolo = mode == AppMode::Yolo && previous_mode != AppMode::Yolo;
         let leaving_yolo = previous_mode == AppMode::Yolo && mode != AppMode::Yolo;
         self.mode = mode;
-        self.status_message = Some(format!("Switched to {} mode", mode.label()));
+        self.status_message = Some(format!("Switched to {} mode", mode.label(self.ui_locale)));
 
         if entering_yolo {
             self.yolo_restore = Some(YoloRestoreState {
@@ -2121,8 +2121,8 @@ impl App {
 
         // Execute mode change hooks
         let context = HookContext::new()
-            .with_mode(mode.label())
-            .with_previous_mode(previous_mode.label())
+            .with_mode(mode.label(self.ui_locale))
+            .with_previous_mode(previous_mode.label(self.ui_locale))
             .with_workspace(self.workspace.clone())
             .with_model(&self.model);
         let _ = self.hooks.execute(HookEvent::ModeChange, &context);
@@ -2172,7 +2172,7 @@ impl App {
     /// Create a hook context with common fields pre-populated
     pub fn base_hook_context(&self) -> HookContext {
         HookContext::new()
-            .with_mode(self.mode.label())
+            .with_mode(self.mode.label(self.ui_locale))
             .with_workspace(self.workspace.clone())
             .with_model(&self.model)
             .with_session_id(self.hooks.session_id())
@@ -5643,7 +5643,7 @@ mod tests {
         assert_eq!(app.status_toasts.len(), 1);
         assert_eq!(
             app.status_toasts.back().expect("mode toast").text,
-            format!("Switched to {} mode", first_mode.label())
+            format!("Switched to {} mode", first_mode.label(Locale::En))
         );
 
         app.set_mode(second_mode);
@@ -5651,7 +5651,7 @@ mod tests {
         assert_eq!(app.status_toasts.len(), 1);
         assert_eq!(
             app.status_toasts.back().expect("mode toast").text,
-            format!("Switched to {} mode", second_mode.label())
+            format!("Switched to {} mode", second_mode.label(Locale::En))
         );
 
         app.set_mode(third_mode);
@@ -5659,7 +5659,7 @@ mod tests {
         assert_eq!(app.status_toasts.len(), 1);
         assert_eq!(
             app.status_toasts.back().expect("mode toast").text,
-            format!("Switched to {} mode", third_mode.label())
+            format!("Switched to {} mode", third_mode.label(Locale::En))
         );
     }
 
