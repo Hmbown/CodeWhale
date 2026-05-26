@@ -3128,7 +3128,7 @@ impl App {
         // safety-net at submit time so any other code path that fills
         // self.input above the cap still consolidates rather than
         // silently truncating.
-        self.consolidate_large_input_if_oversized();
+        // self.consolidate_large_input_if_oversized(); // deferred to submit time
     }
 
     pub fn insert_media_attachment(&mut self, kind: &str, path: &Path, description: Option<&str>) {
@@ -4255,7 +4255,7 @@ impl App {
         self.input = format!("@{rel_path}");
         self.cursor_position = char_count(&self.input);
         self.push_status_toast(
-            "Large paste consolidated — sent as @mention",
+            "Large paste consolidated — auto-wrote to file and replaced with @mention. The text is still fully accessible to the model.",
             StatusToastLevel::Info,
             Some(5_000),
         );
