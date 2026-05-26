@@ -1453,12 +1453,13 @@ fn build_tui_command(
             | ProviderKind::Openrouter
             | ProviderKind::Novita
             | ProviderKind::Fireworks
+            | ProviderKind::Moonshot
             | ProviderKind::Sglang
             | ProviderKind::Vllm
             | ProviderKind::Ollama
     ) {
         bail!(
-            "The interactive TUI supports DeepSeek, NVIDIA NIM, OpenAI-compatible, AtlasCloud, Wanjie Ark, OpenRouter, Novita, Fireworks, SGLang, vLLM, and Ollama providers. Remove --provider {} or use `codewhale model ...` for provider registry inspection.",
+            "The interactive TUI supports DeepSeek, NVIDIA NIM, OpenAI-compatible, AtlasCloud, Wanjie Ark, OpenRouter, Novita, Fireworks, Moonshot/Kimi, SGLang, vLLM, and Ollama providers. Remove --provider {} or use `codewhale model ...` for provider registry inspection.",
             resolved_runtime.provider.as_str()
         );
     }
@@ -1480,14 +1481,10 @@ fn build_tui_command(
     }
     if let Some(api_key) = resolved_runtime.api_key.as_ref() {
         cmd.env("DEEPSEEK_API_KEY", api_key);
-        if resolved_runtime.provider == ProviderKind::Openai {
-            cmd.env("OPENAI_API_KEY", api_key);
-        }
-        if resolved_runtime.provider == ProviderKind::Atlascloud {
-            cmd.env("ATLASCLOUD_API_KEY", api_key);
-        }
-        if resolved_runtime.provider == ProviderKind::WanjieArk {
-            cmd.env("WANJIE_ARK_API_KEY", api_key);
+        for var in provider_env_vars(resolved_runtime.provider) {
+            if *var != "DEEPSEEK_API_KEY" {
+                cmd.env(var, api_key);
+            }
         }
         let source = resolved_runtime
             .api_key_source
@@ -2665,6 +2662,73 @@ mod tests {
             args.windows(2)
                 .any(|pair| pair == ["--workspace", "/tmp/codewhale-workspace"]),
             "expected workspace forwarding in args: {args:?}"
+        );
+    }
+
+    #[test]
+    fn build_tui_command_allows_moonshot_and_forwards_kimi_key() {
+        let _lock = env_lock();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let custom = dir
+            .path()
+            .join(format!("custom-tui{}", std::env::consts::EXE_SUFFIX));
+        std::fs::write(&custom, b"").unwrap();
+        let custom_str = custom.to_string_lossy().into_owned();
+        let _bin = ScopedEnvVar::set("DEEPSEEK_TUI_BIN", &custom_str);
+
+        let cli = parse_ok(&[
+            "codewhale",
+            "--provider",
+            "moonshot",
+            "--model",
+            "kimi-k2.6",
+            "--workspace",
+            "/tmp/codewhale-workspace",
+        ]);
+        let resolved = ResolvedRuntimeOptions {
+            provider: ProviderKind::Moonshot,
+            model: "kimi-k2.6".to_string(),
+            api_key: Some("resolved-kimi-key".to_string()),
+            api_key_source: Some(RuntimeApiKeySource::Env),
+            base_url: "https://api.moonshot.ai/v1".to_string(),
+            auth_mode: Some("api_key".to_string()),
+            output_mode: None,
+            log_level: None,
+            telemetry: false,
+            approval_policy: None,
+            sandbox_mode: None,
+            yolo: None,
+            http_headers: std::collections::BTreeMap::new(),
+        };
+
+        let cmd = build_tui_command(&cli, &resolved, Vec::new()).expect("command");
+        assert_eq!(
+            command_env(&cmd, "DEEPSEEK_PROVIDER").as_deref(),
+            Some("moonshot")
+        );
+        assert_eq!(
+            command_env(&cmd, "DEEPSEEK_MODEL").as_deref(),
+            Some("kimi-k2.6")
+        );
+        assert_eq!(
+            command_env(&cmd, "DEEPSEEK_BASE_URL").as_deref(),
+            Some("https://api.moonshot.ai/v1")
+        );
+        assert_eq!(
+            command_env(&cmd, "DEEPSEEK_API_KEY").as_deref(),
+            Some("resolved-kimi-key")
+        );
+        assert_eq!(
+            command_env(&cmd, "MOONSHOT_API_KEY").as_deref(),
+            Some("resolved-kimi-key")
+        );
+        assert_eq!(
+            command_env(&cmd, "KIMI_API_KEY").as_deref(),
+            Some("resolved-kimi-key")
+        );
+        assert_eq!(
+            command_env(&cmd, "DEEPSEEK_API_KEY_SOURCE").as_deref(),
+            Some("env")
         );
     }
 
