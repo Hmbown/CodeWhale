@@ -294,6 +294,21 @@ fn word_cursor_modifier_accepts_control_and_alt() {
     assert!(!is_word_cursor_modifier(KeyModifiers::SHIFT));
 }
 
+fn select_full_transcript(app: &mut App) {
+    app.viewport.transcript_selection.anchor = Some(TranscriptSelectionPoint {
+        line_index: 0,
+        column: 0,
+    });
+    app.viewport.transcript_selection.head = Some(TranscriptSelectionPoint {
+        line_index: app
+            .viewport
+            .transcript_cache
+            .total_lines()
+            .saturating_sub(1),
+        column: 80,
+    });
+}
+
 #[test]
 fn selection_point_from_position_ignores_top_padding() {
     let area = Rect {
@@ -373,6 +388,90 @@ fn selection_to_text_handles_multiline_and_reversed_endpoints() {
     });
 
     assert_eq!(selection_to_text(&app).as_deref(), Some("a beta\ngam"));
+}
+
+#[test]
+fn selection_to_text_removes_visual_wrap_breaks_from_paragraphs() {
+    let mut app = create_test_app();
+    app.history = vec![HistoryCell::Assistant {
+        content: "alpha beta gamma delta epsilon".to_string(),
+        streaming: false,
+    }];
+    app.resync_history_revisions();
+    app.viewport.transcript_cache.ensure(
+        &app.history,
+        &app.history_revisions,
+        14,
+        app.transcript_render_options(),
+    );
+    select_full_transcript(&mut app);
+
+    let selected = selection_to_text(&app).expect("selection text");
+    assert!(
+        !selected.contains('\n'),
+        "soft-wrapped paragraph copied with visual newlines: {selected:?}"
+    );
+    assert!(selected.contains("alpha beta gamma delta epsilon"));
+}
+
+#[test]
+fn selection_to_text_preserves_wrapped_long_words() {
+    let mut app = create_test_app();
+    app.history = vec![HistoryCell::Assistant {
+        content: "abcdefghijklmnop".to_string(),
+        streaming: false,
+    }];
+    app.resync_history_revisions();
+    app.viewport.transcript_cache.ensure(
+        &app.history,
+        &app.history_revisions,
+        10,
+        app.transcript_render_options(),
+    );
+    select_full_transcript(&mut app);
+
+    let selected = selection_to_text(&app).expect("selection text");
+    assert_eq!(selected, "abcdefghijklmnop");
+}
+
+#[test]
+fn selection_to_text_strips_code_block_visual_wrap_prefixes() {
+    let mut app = create_test_app();
+    app.history = vec![HistoryCell::Assistant {
+        content: "```\nlet example = abcdefghijklmnop;\n```".to_string(),
+        streaming: false,
+    }];
+    app.resync_history_revisions();
+    app.viewport.transcript_cache.ensure(
+        &app.history,
+        &app.history_revisions,
+        14,
+        app.transcript_render_options(),
+    );
+    select_full_transcript(&mut app);
+
+    let selected = selection_to_text(&app).expect("selection text");
+    assert_eq!(selected, "let example = abcdefghijklmnop;");
+}
+
+#[test]
+fn selection_to_text_strips_list_continuation_prefixes() {
+    let mut app = create_test_app();
+    app.history = vec![HistoryCell::Assistant {
+        content: "- alpha beta gamma delta epsilon".to_string(),
+        streaming: false,
+    }];
+    app.resync_history_revisions();
+    app.viewport.transcript_cache.ensure(
+        &app.history,
+        &app.history_revisions,
+        14,
+        app.transcript_render_options(),
+    );
+    select_full_transcript(&mut app);
+
+    let selected = selection_to_text(&app).expect("selection text");
+    assert_eq!(selected, "- alpha beta gamma delta epsilon");
 }
 
 #[test]

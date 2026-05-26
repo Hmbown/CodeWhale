@@ -26,6 +26,7 @@ use ratatui::{
 use crate::tui::app::TranscriptSpacing;
 use crate::tui::history::{HistoryCell, TranscriptRenderOptions};
 use crate::tui::scrolling::TranscriptLineMeta;
+use crate::tui::ui_text::CopyLineSeparator;
 
 /// Per-cell cached render output. Reused across `ensure` calls when the
 /// upstream cell's revision counter hasn't changed.
@@ -45,6 +46,12 @@ struct CachedCell {
     /// Rendered lines for this cell (without trailing inter-cell spacers),
     /// shared via `Arc` so cache enumeration is O(N) not O(N*lines).
     lines: Arc<Vec<Line<'static>>>,
+    /// Copy separators aligned with `lines`. These preserve source hard
+    /// newlines while allowing copy to remove visual soft-wrap breaks.
+    copy_separators: Arc<Vec<CopyLineSeparator>>,
+    /// Display-column widths of visual prefixes that should be omitted from
+    /// clipboard text, aligned with `lines`.
+    copy_prefix_widths: Arc<Vec<usize>>,
     /// Whether this cell's rendered output was empty (e.g. Thinking hidden).
     /// Cached so we can skip empty cells without re-rendering.
     is_empty: bool,
@@ -183,11 +190,21 @@ impl TranscriptViewCache {
                 } else {
                     width
                 };
-                let rendered = cell.lines_with_options(render_width, options);
-                let is_empty = rendered.is_empty();
+                let rendered = cell.lines_with_copy_metadata(render_width, options);
+                let mut lines = Vec::with_capacity(rendered.len());
+                let mut copy_separators = Vec::with_capacity(rendered.len());
+                let mut copy_prefix_widths = Vec::with_capacity(rendered.len());
+                for rendered_line in rendered {
+                    lines.push(rendered_line.line);
+                    copy_prefix_widths.push(rendered_line.copy_prefix_width);
+                    copy_separators.push(rendered_line.copy_separator_after);
+                }
+                let is_empty = lines.is_empty();
                 new_per_cell.push(CachedCell {
                     revision: current_rev,
-                    lines: Arc::new(rendered),
+                    lines: Arc::new(lines),
+                    copy_separators: Arc::new(copy_separators),
+                    copy_prefix_widths: Arc::new(copy_prefix_widths),
                     is_empty,
                     is_stream_continuation: cell.is_stream_continuation(),
                     is_conversational: cell.is_conversational(),
@@ -280,6 +297,16 @@ impl TranscriptViewCache {
                 self.line_meta.push(TranscriptLineMeta::CellLine {
                     cell_index,
                     line_in_cell,
+                    copy_prefix_width: cached
+                        .copy_prefix_widths
+                        .get(line_in_cell)
+                        .copied()
+                        .unwrap_or(0),
+                    copy_separator_after: cached
+                        .copy_separators
+                        .get(line_in_cell)
+                        .copied()
+                        .unwrap_or(CopyLineSeparator::Newline),
                 });
             }
 

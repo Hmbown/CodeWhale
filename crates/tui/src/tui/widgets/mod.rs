@@ -1948,7 +1948,8 @@ fn build_empty_state_lines(app: &App, area: Rect) -> Vec<Line<'static>> {
         )),
     ];
 
-    let top_padding = usize::from(area.height.saturating_sub(body.len() as u16) / 3);
+    // Keep the welcome block near the top of the chat pane (header is separate).
+    let top_padding = 2usize;
     let mut lines = Vec::new();
     for _ in 0..top_padding {
         lines.push(Line::from(""));

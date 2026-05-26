@@ -744,9 +744,14 @@ pub(crate) fn selection_to_text(app: &App) -> Option<String> {
     let end_index = end.line_index.min(lines.len().saturating_sub(1));
     let start_index = start.line_index.min(end_index);
 
-    let mut selected_lines = Vec::new();
+    let line_meta = app.viewport.transcript_cache.line_meta();
+    let mut selected = String::new();
+    let mut separator_before = None;
     #[allow(clippy::needless_range_loop)]
     for line_index in start_index..=end_index {
+        if let Some(separator) = separator_before {
+            selected.push_str(separator);
+        }
         // Rail-prefix decorations are stored as cache metadata rather than
         // detected from glyphs, so new decoration types are covered without
         // changes to the copy path (#1163).
@@ -755,30 +760,50 @@ pub(crate) fn selection_to_text(app: &App) -> Option<String> {
         // slice off the rail prefix so subsequent column offsets operate
         // on content-only text.
         let full_text = line_to_plain(&lines[line_index]);
-        let line_text = if rail_width > 0 {
+        let line_after_rail = if rail_width > 0 {
             slice_text(&full_text, rail_width, text_display_width(&full_text))
         } else {
             full_text
         };
+        let line_after_rail_width = text_display_width(&line_after_rail);
+        let copy_prefix_width = line_meta
+            .get(line_index)
+            .map(|meta| meta.copy_prefix_width())
+            .unwrap_or(0)
+            .min(line_after_rail_width);
+        let line_text = if copy_prefix_width > 0 {
+            slice_text(&line_after_rail, copy_prefix_width, line_after_rail_width)
+        } else {
+            line_after_rail
+        };
         let line_width = text_display_width(&line_text);
+        let visual_prefix_width = rail_width.saturating_add(copy_prefix_width);
         // Selection coordinates are recorded in rendered-column space, which
-        // includes the visual rail prefix. Add rail_width back so the column
-        // window maps correctly into the rail-stripped text.
+        // includes visual prefixes. Add them back so the column window maps
+        // correctly into copy-only text.
         let (raw_col_start, raw_col_end) = if start_index == end_index {
             (start.column, end.column)
         } else if line_index == start_index {
-            (start.column, line_width.saturating_add(rail_width))
+            (start.column, line_width.saturating_add(visual_prefix_width))
         } else if line_index == end_index {
             (0, end.column)
         } else {
-            (0, line_width.saturating_add(rail_width))
+            (0, line_width.saturating_add(visual_prefix_width))
         };
 
-        let col_start = raw_col_start.saturating_sub(rail_width).min(line_width);
-        let col_end = raw_col_end.saturating_sub(rail_width).min(line_width);
+        let col_start = raw_col_start
+            .saturating_sub(visual_prefix_width)
+            .min(line_width);
+        let col_end = raw_col_end
+            .saturating_sub(visual_prefix_width)
+            .min(line_width);
 
         let slice = slice_text(&line_text, col_start, col_end);
-        selected_lines.push(slice);
+        selected.push_str(&slice);
+        separator_before = line_meta
+            .get(line_index)
+            .map(|meta| meta.copy_separator_after().as_str())
+            .or(Some("\n"));
     }
-    Some(selected_lines.join("\n"))
+    Some(selected)
 }

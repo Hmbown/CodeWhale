@@ -842,8 +842,12 @@ async fn main() -> Result<()> {
                     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
                 });
                 let resume_session_id = resolve_exec_resume_session_id(&args, &workspace)?;
+                // The `deepseek` launcher forwards `--yolo` to this binary via
+                // the DEEPSEEK_YOLO env var (which the config loader folds into
+                // `config.yolo`), not as a CLI flag. Honour either source.
+                let yolo = cli.yolo || config.yolo.unwrap_or(false);
                 let needs_engine = args.auto
-                    || cli.yolo
+                    || yolo
                     || resume_session_id.is_some()
                     || args.output_format == ExecOutputFormat::StreamJson;
                 if needs_engine {
@@ -851,7 +855,7 @@ async fn main() -> Result<()> {
                         || config.max_subagents(),
                         |value| value.clamp(1, MAX_SUBAGENTS),
                     );
-                    let auto_mode = args.auto || cli.yolo;
+                    let auto_mode = args.auto || yolo;
                     run_exec_agent(
                         &config,
                         &model,
@@ -4872,6 +4876,10 @@ async fn run_interactive(
         let _ = manager.cleanup_old_sessions();
     }
 
+    // The `deepseek` launcher forwards `--yolo` to this binary via the
+    // DEEPSEEK_YOLO env var (config.yolo), not as a CLI flag. Honour either.
+    let yolo = cli.yolo || config.yolo.unwrap_or(false);
+
     tui::run_tui(
         config,
         tui::TuiOptions {
@@ -4879,7 +4887,7 @@ async fn run_interactive(
             workspace,
             config_path: cli.config.clone(),
             config_profile: cli.profile.clone(),
-            allow_shell: cli.yolo || config.allow_shell(),
+            allow_shell: yolo || config.allow_shell(),
             use_alt_screen,
             use_mouse_capture,
             use_bracketed_paste,
@@ -4888,9 +4896,9 @@ async fn run_interactive(
             notes_path: config.notes_path(),
             mcp_config_path: config.mcp_config_path(),
             use_memory: config.memory_enabled(),
-            start_in_agent_mode: cli.yolo,
+            start_in_agent_mode: yolo,
             skip_onboarding: cli.skip_onboarding,
-            yolo: cli.yolo, // YOLO mode auto-approves all tool executions
+            yolo, // YOLO mode auto-approves all tool executions
             resume_session_id,
             initial_input,
             max_subagents,

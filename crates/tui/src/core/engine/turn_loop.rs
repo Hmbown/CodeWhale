@@ -1960,7 +1960,9 @@ impl Engine {
 
             if let Some(message) = loop_guard_halt {
                 crate::logging::warn(message.clone());
-                let _ = self.tx_event.send(Event::status(message)).await;
+                let _ = self.tx_event.send(Event::status(message.clone())).await;
+                // 设置 turn_error 以确保最终返回 TurnOutcomeStatus::Failed 而非 Completed
+                turn_error = Some(message);
                 break;
             }
 

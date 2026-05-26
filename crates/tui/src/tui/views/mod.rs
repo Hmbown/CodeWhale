@@ -3,6 +3,7 @@ use ratatui::{buffer::Buffer, layout::Rect};
 use std::cell::{Cell, RefCell};
 use std::fmt;
 
+use crate::config::Config;
 use crate::localization::{Locale, MessageId, tr};
 use crate::palette;
 use crate::settings::Settings;
@@ -611,6 +612,15 @@ impl ConfigView {
                     .as_deref()
                     .unwrap_or("(config/default)")
                     .to_string(),
+                editable: true,
+                scope: ConfigScope::Saved,
+            },
+            ConfigRow {
+                section: ConfigSection::Model,
+                key: "base_url".to_string(),
+                value: Config::load(app.config_path.clone(), app.config_profile.as_deref())
+                    .map(|config| config.deepseek_base_url())
+                    .unwrap_or_else(|_| "(unavailable)".to_string()),
                 editable: true,
                 scope: ConfigScope::Saved,
             },
@@ -2013,6 +2023,7 @@ mod tests {
         KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
     };
     use ratatui::{buffer::Buffer, layout::Rect};
+    use std::fs;
     use std::path::PathBuf;
 
     fn create_test_app() -> App {
@@ -2175,6 +2186,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(keys.contains(&"model"));
         assert!(keys.contains(&"reasoning_effort"));
+        assert!(keys.contains(&"base_url"));
         assert!(keys.contains(&"approval_mode"));
         assert!(keys.contains(&"theme"));
         assert!(keys.contains(&"locale"));
@@ -2191,6 +2203,32 @@ mod tests {
         assert!(keys.contains(&"prefer_external_pdftotext"));
         assert!(keys.contains(&"mcp_config_path"));
         assert!(view.rows.iter().all(|row| row.editable));
+    }
+
+    #[test]
+    fn config_view_base_url_reflects_app_config_path() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "deepseek-tui-base-url-view-test-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&temp_root).unwrap();
+        let config_path = temp_root.join("config.toml");
+        fs::write(
+            &config_path,
+            "base_url = \"https://ui-config-view.local/v1\"\n",
+        )
+        .unwrap();
+
+        let mut app = create_test_app();
+        app.config_path = Some(config_path.clone());
+        let view = ConfigView::new_for_app(&app);
+
+        let row = view
+            .rows
+            .iter()
+            .find(|row| row.key == "base_url")
+            .expect("base_url row missing");
+        assert_eq!(row.value, "https://ui-config-view.local/v1");
     }
 
     #[test]

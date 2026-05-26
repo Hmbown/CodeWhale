@@ -284,7 +284,7 @@ impl StructuredState {
                 let marker = match item.status {
                     crate::tools::todo::TodoStatus::Pending => "[ ]",
                     crate::tools::todo::TodoStatus::InProgress => "[~]",
-                    crate::tools::todo::TodoStatus::Completed => "[x]",
+                    crate::tools::todo::TodoStatus::Completed => "[✓]",
                 };
                 out.push_str(&format!("- {marker} {}\n", item.content));
             }
@@ -299,7 +299,7 @@ impl StructuredState {
                 let marker = match item.status {
                     crate::tools::plan::StepStatus::Pending => "[ ]",
                     crate::tools::plan::StepStatus::InProgress => "[~]",
-                    crate::tools::plan::StepStatus::Completed => "[x]",
+                    crate::tools::plan::StepStatus::Completed => "[✓]",
                 };
                 out.push_str(&format!("- {marker} {}\n", item.step));
             }
@@ -463,14 +463,17 @@ pub struct CycleArchiveHeader {
     pub message_count: usize,
 }
 
-/// Resolve the on-disk archive directory: `~/.deepseek/sessions/<id>/cycles`.
+/// Resolve the on-disk archive directory: `~/.codewhale/sessions/<id>/cycles`
+/// (or legacy `~/.deepseek/sessions/<id>/cycles`).
 fn archive_dir_for(session_id: &str) -> Result<PathBuf> {
-    let home = dirs::home_dir().context("Could not resolve home directory for cycle archive")?;
-    Ok(home
-        .join(".deepseek")
-        .join("sessions")
-        .join(session_id)
-        .join("cycles"))
+    let sessions = codewhale_config::resolve_state_dir("sessions")
+        .unwrap_or_else(|_| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".deepseek")
+                .join("sessions")
+        });
+    Ok(sessions.join(session_id).join("cycles"))
 }
 
 /// Archive a cycle's messages to JSONL on disk and return the path written.

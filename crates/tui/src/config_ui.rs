@@ -687,7 +687,11 @@ fn apply_reasoning_effort(
     app.last_effective_reasoning_effort = None;
     app.update_model_compaction_budget();
     if persist {
-        commands::persist_root_string_key("reasoning_effort", effort.as_setting())?;
+        commands::persist_root_string_key(
+            app.config_path.as_deref(),
+            "reasoning_effort",
+            effort.as_setting(),
+        )?;
     }
     config.reasoning_effort = Some(effort.as_setting().to_string());
     Ok(())

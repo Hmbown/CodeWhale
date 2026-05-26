@@ -15,6 +15,7 @@ use crate::tools::review::ReviewOutput;
 use crate::tui::app::TranscriptSpacing;
 use crate::tui::diff_render;
 use crate::tui::markdown_render;
+use crate::tui::ui_text::CopyLineSeparator;
 
 // === Constants ===
 
@@ -158,6 +159,12 @@ pub struct TranscriptRenderOptions {
     pub spacing: TranscriptSpacing,
 }
 
+pub(crate) struct RenderedTranscriptLine {
+    pub line: Line<'static>,
+    pub copy_prefix_width: usize,
+    pub copy_separator_after: CopyLineSeparator,
+}
+
 impl Default for TranscriptRenderOptions {
     fn default() -> Self {
         Self {
@@ -293,6 +300,39 @@ impl HistoryCell {
             HistoryCell::ArchivedContext { .. } => {
                 render_archived_context(self, width, options.low_motion)
             }
+        }
+    }
+
+    pub(crate) fn lines_with_copy_metadata(
+        &self,
+        width: u16,
+        options: TranscriptRenderOptions,
+    ) -> Vec<RenderedTranscriptLine> {
+        match self {
+            HistoryCell::User { content } => render_message_with_copy_metadata(
+                USER_GLYPH,
+                user_label_style(),
+                user_body_style(),
+                content,
+                width,
+            ),
+            HistoryCell::Assistant { content, streaming } => render_message_with_copy_metadata(
+                ASSISTANT_GLYPH,
+                assistant_label_style_for(*streaming, options.low_motion),
+                message_body_style(),
+                content,
+                width,
+            ),
+            HistoryCell::System { content } if !is_cycle_boundary(content) => {
+                render_message_with_copy_metadata(
+                    "Note",
+                    system_label_style(),
+                    system_body_style(),
+                    content,
+                    width,
+                )
+            }
+            _ => hard_break_copy_lines(self.lines_with_options(width, options)),
         }
     }
 
@@ -2193,6 +2233,19 @@ fn render_message(
     content: &str,
     width: u16,
 ) -> Vec<Line<'static>> {
+    render_message_with_copy_metadata(prefix, label_style, body_style, content, width)
+        .into_iter()
+        .map(|rendered| rendered.line)
+        .collect()
+}
+
+fn render_message_with_copy_metadata(
+    prefix: &str,
+    label_style: Style,
+    body_style: Style,
+    content: &str,
+    width: u16,
+) -> Vec<RenderedTranscriptLine> {
     let prefix_width = UnicodeWidthStr::width(prefix);
     let prefix_width_u16 = u16::try_from(prefix_width.saturating_add(2)).unwrap_or(u16::MAX);
     let content_width = usize::from(width.saturating_sub(prefix_width_u16).max(1));
@@ -2200,7 +2253,7 @@ fn render_message(
     let rendered =
         markdown_render::render_markdown_tagged(content, content_width as u16, body_style);
     for (idx, rendered_line) in rendered.into_iter().enumerate() {
-        if idx == 0 {
+        let line = if idx == 0 {
             let mut spans = Vec::new();
             if !prefix.is_empty() {
                 spans.push(Span::styled(
@@ -2210,7 +2263,7 @@ fn render_message(
                 spans.push(Span::raw(" "));
             }
             spans.extend(rendered_line.line.spans);
-            lines.push(Line::from(spans));
+            Line::from(spans)
         } else {
             let indent = if prefix.is_empty() {
                 String::new()
@@ -2225,13 +2278,47 @@ fn render_message(
             let rail_style = Style::default().fg(palette::TEXT_DIM);
             let mut spans = vec![Span::styled(indent, rail_style)];
             spans.extend(rendered_line.line.spans);
-            lines.push(Line::from(spans));
-        }
+            Line::from(spans)
+        };
+        lines.push(RenderedTranscriptLine {
+            line,
+            copy_prefix_width: rendered_line.copy_prefix_width
+                + history_copy_prefix_width(prefix, prefix_width, rendered_line.is_code, idx),
+            copy_separator_after: rendered_line.copy_separator_after,
+        });
     }
     if lines.is_empty() {
-        lines.push(Line::from(""));
+        lines.push(RenderedTranscriptLine {
+            line: Line::from(""),
+            copy_prefix_width: 0,
+            copy_separator_after: CopyLineSeparator::Newline,
+        });
     }
     lines
+}
+
+fn history_copy_prefix_width(
+    prefix: &str,
+    prefix_width: usize,
+    is_code: bool,
+    line_index: usize,
+) -> usize {
+    if line_index > 0 && is_code && !prefix.is_empty() {
+        prefix_width + 1
+    } else {
+        0
+    }
+}
+
+fn hard_break_copy_lines(lines: Vec<Line<'static>>) -> Vec<RenderedTranscriptLine> {
+    lines
+        .into_iter()
+        .map(|line| RenderedTranscriptLine {
+            line,
+            copy_prefix_width: 0,
+            copy_separator_after: CopyLineSeparator::Newline,
+        })
+        .collect()
 }
 
 /// Render a plain-text user message: split on newlines, word-wrap each line,
