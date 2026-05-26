@@ -225,12 +225,18 @@ impl PasteBurst {
         Some(out)
     }
 
-    pub fn clear_window_after_non_char(&mut self) {
+    /// Reset burst-accumulation state without clearing the suppression window.
+    ///
+    /// Used when a non-char key (Tab, etc.) arrives during an active burst as
+    /// part of table-data paste. The buffer was flushed upstream; only the
+    /// active state is reset so `burst_window_until` stays alive and a trailing
+    /// Enter is still absorbed as a newline (#2134).
+    pub fn deactivate_keep_window(&mut self) {
         self.consecutive_plain_char_burst = 0;
         self.last_plain_char_time = None;
-        self.burst_window_until = None;
         self.active = false;
         self.pending_first_char = None;
+        // burst_window_until intentionally NOT cleared
     }
 
     pub fn is_active(&self) -> bool {
@@ -331,5 +337,48 @@ mod tests {
 
         let due = t0 + Duration::from_millis(20);
         assert_eq!(burst.next_flush_delay(due), Some(Duration::ZERO));
+    }
+
+    /// Simulate #2134: when a non-char key (Tab) arrives during table-data
+    /// paste, `deactivate_keep_window` resets accumulation state but
+    /// preserves the Enter-suppression window so a trailing newline is still
+    /// absorbed instead of submitting the partial input.
+    #[test]
+    fn deactivate_keep_window_preserves_enter_suppression_window() {
+        let mut burst = PasteBurst::default();
+        let t0 = Instant::now();
+
+        assert!(matches!(
+            burst.on_plain_char('a', t0),
+            CharDecision::RetainFirstChar
+        ));
+        let t1 = t0 + Duration::from_millis(1);
+        assert!(matches!(
+            burst.on_plain_char('b', t1),
+            CharDecision::BeginBufferFromPending
+        ));
+        burst.append_char_to_buffer('b', t1);
+        assert!(burst.is_active());
+        assert!(burst.newline_should_insert_instead_of_submit(t1));
+
+        let flushed = burst.flush_before_modified_input();
+        assert!(flushed.is_some());
+        assert!(!burst.is_active());
+
+        burst.deactivate_keep_window();
+
+        assert!(!burst.is_active());
+
+        let t_tab = t1 + Duration::from_millis(2);
+        assert!(
+            burst.newline_should_insert_instead_of_submit(t_tab),
+            "Enter within suppression window should insert newline, not submit"
+        );
+
+        let t_expired = t_tab + PASTE_ENTER_SUPPRESS_WINDOW + Duration::from_millis(1);
+        assert!(
+            !burst.newline_should_insert_instead_of_submit(t_expired),
+            "Enter after suppression window expires should submit"
+        );
     }
 }

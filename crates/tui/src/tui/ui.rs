@@ -3629,7 +3629,7 @@ async fn run_event_loop(
             }
 
             if !is_plain_char && !is_enter {
-                app.paste_burst.clear_window_after_non_char();
+                app.paste_burst.deactivate_keep_window();
             }
         }
     }
