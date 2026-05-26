@@ -6446,6 +6446,35 @@ model = "qwen2.5-coder:7b"
     }
 
     #[test]
+    fn vllm_env_resolves_reported_lan_http_endpoint_and_model() -> Result<()> {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-tui-vllm-lan-http-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
+
+        // Safety: test-only environment mutation guarded by a global mutex.
+        unsafe {
+            env::set_var("DEEPSEEK_PROVIDER", "vllm");
+            env::set_var("VLLM_BASE_URL", "http://192.168.0.110:8000/v1");
+            env::set_var("DEEPSEEK_MODEL", "deepseek-v4-flash");
+        }
+
+        let config = Config::load(None, None)?;
+        assert_eq!(config.api_provider(), ApiProvider::Vllm);
+        assert_eq!(config.deepseek_base_url(), "http://192.168.0.110:8000/v1");
+        assert_eq!(config.default_model(), "deepseek-v4-flash");
+        Ok(())
+    }
+
+    #[test]
     fn ollama_env_overrides_base_url_and_model() -> Result<()> {
         let _lock = lock_test_env();
         let nanos = SystemTime::now()

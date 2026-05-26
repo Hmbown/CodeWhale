@@ -328,6 +328,8 @@ SGLANG_BASE_URL="http://localhost:30000/v1" codewhale --provider sglang --model 
 
 # Self-hosted vLLM
 VLLM_BASE_URL="http://localhost:8000/v1" codewhale --provider vllm --model deepseek-v4-flash
+# Trusted LAN vLLM over HTTP
+DEEPSEEK_ALLOW_INSECURE_HTTP=1 VLLM_BASE_URL="http://192.168.0.110:8000/v1" codewhale --provider vllm --model deepseek-v4-flash
 
 # Self-hosted Ollama
 ollama pull codewhale-coder:1.3b

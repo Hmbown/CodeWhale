@@ -2862,6 +2862,10 @@ mod tests {
 
     #[test]
     fn base_url_security_rejects_insecure_non_local_http() {
+        let _lock = ALLOW_INSECURE_HTTP_ENV_LOCK.lock().unwrap();
+        let _guard = AllowInsecureHttpEnvGuard::capture();
+        unsafe { std::env::remove_var(ALLOW_INSECURE_HTTP_ENV) };
+
         let err = validate_base_url_security("http://api.deepseek.com")
             .expect_err("non-local insecure HTTP should be rejected");
         assert!(err.to_string().contains("Refusing insecure base URL"));
@@ -2869,8 +2873,44 @@ mod tests {
 
     #[test]
     fn base_url_security_allows_localhost_http() {
+        let _lock = ALLOW_INSECURE_HTTP_ENV_LOCK.lock().unwrap();
+        let _guard = AllowInsecureHttpEnvGuard::capture();
+        unsafe { std::env::remove_var(ALLOW_INSECURE_HTTP_ENV) };
+
         assert!(validate_base_url_security("http://localhost:8080").is_ok());
         assert!(validate_base_url_security("http://127.0.0.1:8080").is_ok());
+    }
+
+    #[test]
+    fn base_url_security_allows_non_local_http_with_explicit_opt_in() {
+        let _lock = ALLOW_INSECURE_HTTP_ENV_LOCK.lock().unwrap();
+        let _guard = AllowInsecureHttpEnvGuard::capture();
+        unsafe { std::env::set_var(ALLOW_INSECURE_HTTP_ENV, "1") };
+
+        assert!(validate_base_url_security("http://192.168.0.110:8000/v1").is_ok());
+    }
+
+    /// Serialize tests that mutate `DEEPSEEK_ALLOW_INSECURE_HTTP`; env vars are
+    /// process-global and would otherwise leak across security checks.
+    static ALLOW_INSECURE_HTTP_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct AllowInsecureHttpEnvGuard {
+        prior: Option<std::ffi::OsString>,
+    }
+    impl AllowInsecureHttpEnvGuard {
+        fn capture() -> Self {
+            Self {
+                prior: std::env::var_os(ALLOW_INSECURE_HTTP_ENV),
+            }
+        }
+    }
+    impl Drop for AllowInsecureHttpEnvGuard {
+        fn drop(&mut self) {
+            match &self.prior {
+                Some(v) => unsafe { std::env::set_var(ALLOW_INSECURE_HTTP_ENV, v) },
+                None => unsafe { std::env::remove_var(ALLOW_INSECURE_HTTP_ENV) },
+            }
+        }
     }
 
     #[test]
