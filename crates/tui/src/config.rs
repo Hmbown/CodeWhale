@@ -6522,6 +6522,47 @@ base_url = "https://api.kimi.com/coding/v1"
         Ok(())
     }
 
+    /// Env-var-only path: `CODEWHALE_BASE_URL=https://api.kimi.com/coding/v1`
+    /// combined with `CODEWHALE_PROVIDER=moonshot` must trigger Kimi Code
+    /// model selection even when the TOML has no `base_url`.
+    #[test]
+    fn moonshot_kimi_code_env_base_url_selects_coding_model() -> Result<()> {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-tui-kimi-code-env-url-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
+
+        let config_path = temp_root.join(".deepseek").join("config.toml");
+        ensure_parent_dir(&config_path)?;
+        fs::write(
+            &config_path,
+            r#"[providers.moonshot]
+api_key = "kimi-code-env-key"
+"#,
+        )?;
+        // Safety: test-only env mutation guarded by lock_test_env().
+        unsafe {
+            env::set_var("CODEWHALE_PROVIDER", "moonshot");
+            env::set_var("CODEWHALE_BASE_URL", "https://api.kimi.com/coding/v1");
+        }
+
+        let config = Config::load(None, None)?;
+        assert_eq!(config.api_provider(), ApiProvider::Moonshot);
+        assert_eq!(config.deepseek_base_url(), DEFAULT_KIMI_CODE_BASE_URL);
+        assert_eq!(config.default_model(), DEFAULT_KIMI_CODE_MODEL);
+        assert_eq!(config.deepseek_api_key()?, "kimi-code-env-key");
+        assert!(has_api_key_for(&config, ApiProvider::Moonshot));
+        Ok(())
+    }
+
     /// Regression for issue #2160: a stale root `default_text_model` carried
     /// over from a DeepSeek setup must not steer the Kimi Code endpoint to
     /// `deepseek-v4-pro`. The user-facing trigger here is the legacy
