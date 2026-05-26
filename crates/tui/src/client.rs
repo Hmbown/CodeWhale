@@ -1125,6 +1125,23 @@ mod tests {
     };
     use serde_json::json;
 
+    fn test_tool(name: &str) -> Tool {
+        Tool {
+            tool_type: None,
+            name: name.to_string(),
+            description: format!("{name} test tool"),
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+            }),
+            allowed_callers: None,
+            defer_loading: Some(false),
+            input_examples: None,
+            strict: Some(true),
+            cache_control: None,
+        }
+    }
+
     #[test]
     fn tool_name_roundtrip_dot() {
         let original = "multi_tool_use.parallel";
@@ -1811,6 +1828,49 @@ mod tests {
     }
 
     #[test]
+    fn prompt_inspect_tracks_tool_catalog_in_static_prefix_hash() {
+        let request = MessageRequest {
+            model: "deepseek-v4-pro".to_string(),
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::Text {
+                    text: "Current task".to_string(),
+                    cache_control: None,
+                }],
+            }],
+            max_tokens: 1024,
+            system: Some(SystemPrompt::Text("Base policy".to_string())),
+            tools: Some(vec![test_tool("read_file")]),
+            tool_choice: None,
+            metadata: None,
+            thinking: None,
+            reasoning_effort: Some("max".to_string()),
+            stream: None,
+            temperature: None,
+            top_p: None,
+        };
+
+        let first = inspect_prompt_for_request(&request);
+        let mut changed_tools = request.clone();
+        changed_tools.tools = Some(vec![test_tool("read_file"), test_tool("grep_files")]);
+        let second = inspect_prompt_for_request(&changed_tools);
+
+        assert!(
+            first.layers.iter().any(|layer| {
+                layer.name == "Tool catalog" && layer.stability.label() == "static"
+            })
+        );
+        assert_ne!(
+            first.base_static_prefix_hash, second.base_static_prefix_hash,
+            "tool schema changes must be visible to cache-inspect base prefix diagnostics"
+        );
+        assert_ne!(
+            first.full_request_prefix_hash, second.full_request_prefix_hash,
+            "tool schema changes must be visible to full reusable-prefix diagnostics"
+        );
+    }
+
+    #[test]
     fn cache_warmup_request_reuses_stable_prefix_and_fixed_user_tail() {
         let request = MessageRequest {
             model: "deepseek-v4-pro".to_string(),
@@ -1835,7 +1895,7 @@ mod tests {
                 "Base policy\n\n<project_instructions source=\"AGENTS.md\">\nStable project rules\n</project_instructions>\n\n## Previous Session Relay\n\nDynamic relay"
                     .to_string(),
             )),
-            tools: None,
+            tools: Some(vec![test_tool("read_file")]),
             tool_choice: None,
             metadata: None,
             thinking: None,
@@ -1850,6 +1910,8 @@ mod tests {
         assert_eq!(warmup.max_tokens, 8);
         assert_eq!(warmup.temperature, Some(0.0));
         assert_eq!(warmup.reasoning_effort.as_deref(), Some("max"));
+        assert_eq!(warmup.tools.as_ref().map(Vec::len), Some(1));
+        assert_eq!(warmup.tool_choice, Some(json!("none")));
         assert_eq!(warmup.messages.len(), 2);
         assert_eq!(warmup.messages[0].role, "assistant");
         assert_eq!(warmup.messages[1].role, "user");

@@ -438,6 +438,7 @@ pub(crate) fn build_cache_warmup_request(request: &MessageRequest) -> MessageReq
 struct PromptBuilder<'a> {
     system: Option<&'a SystemPrompt>,
     messages: &'a [Message],
+    tools: Option<&'a [Tool]>,
     model: &'a str,
     reasoning_effort: Option<&'a str>,
 }
@@ -447,6 +448,7 @@ impl<'a> PromptBuilder<'a> {
         Self {
             system: request.system.as_ref(),
             messages: &request.messages,
+            tools: request.tools.as_deref(),
             model: &request.model,
             reasoning_effort: request.reasoning_effort.as_deref(),
         }
@@ -485,12 +487,17 @@ impl<'a> PromptBuilder<'a> {
             should_replay_reasoning_content(self.model, self.reasoning_effort),
             true,
         );
-        inspect_wire_messages(&messages)
+        inspect_wire_request(self.tools, &messages)
     }
 
     fn build_cache_warmup_request(self) -> MessageRequest {
         let system = stable_system_prompt(self.system);
         let mut messages = stable_history_messages(self.messages);
+        let tools = self
+            .tools
+            .filter(|tools| !tools.is_empty())
+            .map(<[Tool]>::to_vec);
+        let tool_choice = tools.as_ref().map(|_| json!("none"));
         messages.push(Message {
             role: "user".to_string(),
             content: vec![ContentBlock::Text {
@@ -504,8 +511,8 @@ impl<'a> PromptBuilder<'a> {
             messages,
             max_tokens: 8,
             system,
-            tools: None,
-            tool_choice: None,
+            tools,
+            tool_choice,
             metadata: None,
             thinking: None,
             reasoning_effort: self.reasoning_effort.map(str::to_string),
@@ -581,20 +588,19 @@ impl PromptLayerStability {
     }
 }
 
-fn inspect_wire_messages(messages: &[Value]) -> PromptInspection {
+fn inspect_wire_request(tools: Option<&[Tool]>, messages: &[Value]) -> PromptInspection {
     let mut layers = Vec::new();
     let mut base_static_prefix_parts = Vec::new();
     let mut full_request_prefix_parts = Vec::new();
+    let mut start_index = 0;
 
-    for (index, message) in messages.iter().enumerate() {
+    if let Some(message) = messages.first() {
         let role = message
             .get("role")
             .and_then(Value::as_str)
             .unwrap_or("unknown");
         let content = message_content_for_inspect(message);
-        let is_last = index + 1 == messages.len();
-
-        if index == 0 && role == "system" {
+        if role == "system" {
             for (name, stability, body) in split_system_layers(&content) {
                 if stability == PromptLayerStability::Static {
                     base_static_prefix_parts.push(body.to_string());
@@ -604,25 +610,44 @@ fn inspect_wire_messages(messages: &[Value]) -> PromptInspection {
                 }
                 layers.push(prompt_layer(name, stability, body));
             }
-        } else {
-            let stability = if (is_last && role == "user") || role == "tool" {
-                PromptLayerStability::Dynamic
-            } else {
-                PromptLayerStability::History
-            };
-            let name = if is_last && role == "user" {
-                "User task".to_string()
-            } else {
-                format!("Message #{index} {role}")
-            };
-            if stability != PromptLayerStability::Dynamic {
-                full_request_prefix_parts.push(content.clone());
-            }
-            let mut layer = prompt_layer(name, stability, &content);
-            layer.tool_result = tool_result_inspection_for_message(message);
-            layer.turn_meta = turn_meta_inspection_for_message(message);
-            layers.push(layer);
+            start_index = 1;
         }
+    }
+
+    if let Some(tool_catalog) = tool_catalog_for_inspect(tools) {
+        base_static_prefix_parts.push(tool_catalog.clone());
+        full_request_prefix_parts.push(tool_catalog.clone());
+        layers.push(prompt_layer(
+            "Tool catalog".to_string(),
+            PromptLayerStability::Static,
+            &tool_catalog,
+        ));
+    }
+
+    for (index, message) in messages.iter().enumerate().skip(start_index) {
+        let role = message
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let content = message_content_for_inspect(message);
+        let is_last = index + 1 == messages.len();
+        let stability = if (is_last && role == "user") || role == "tool" {
+            PromptLayerStability::Dynamic
+        } else {
+            PromptLayerStability::History
+        };
+        let name = if is_last && role == "user" {
+            "User task".to_string()
+        } else {
+            format!("Message #{index} {role}")
+        };
+        if stability != PromptLayerStability::Dynamic {
+            full_request_prefix_parts.push(content.clone());
+        }
+        let mut layer = prompt_layer(name, stability, &content);
+        layer.tool_result = tool_result_inspection_for_message(message);
+        layer.turn_meta = turn_meta_inspection_for_message(message);
+        layers.push(layer);
     }
 
     let base_static_prefix = base_static_prefix_parts.join("\n");
@@ -633,6 +658,11 @@ fn inspect_wire_messages(messages: &[Value]) -> PromptInspection {
         full_request_prefix_hash: sha256_hex(full_request_prefix.as_bytes()),
         layers,
     }
+}
+
+fn tool_catalog_for_inspect(tools: Option<&[Tool]>) -> Option<String> {
+    let tools = tools.filter(|tools| !tools.is_empty())?;
+    serde_json::to_string(&tools.iter().map(tool_to_chat).collect::<Vec<_>>()).ok()
 }
 
 fn message_content_for_inspect(message: &Value) -> String {
