@@ -2443,9 +2443,9 @@ fn edited_paths_for_write_file_returns_path() {
 }
 
 #[test]
-fn edited_paths_for_apply_patch_with_files_returns_each_path() {
+fn edited_paths_for_apply_patch_with_changes_returns_each_path() {
     let input = json!({
-        "files": [
+        "changes": [
             { "path": "a.rs", "content": "" },
             { "path": "b.rs", "content": "" }
         ]
@@ -2464,6 +2464,15 @@ fn edited_paths_for_apply_patch_with_diff_text_extracts_paths() {
 }
 
 #[test]
+fn edited_paths_for_apply_patch_with_invalid_diff_returns_empty() {
+    let input = json!({
+        "patch": "@@ -1 +1 @@\n-old\n+new\n"
+    });
+    let paths = edited_paths_for_tool("apply_patch", &input);
+    assert!(paths.is_empty());
+}
+
+#[test]
 fn edited_paths_for_unknown_tool_returns_empty() {
     let input = json!({ "path": "irrelevant.rs" });
     let paths = edited_paths_for_tool("read_file", &input);
@@ -2474,8 +2483,8 @@ fn edited_paths_for_unknown_tool_returns_empty() {
 
 #[test]
 fn parse_patch_paths_skips_dev_null() {
-    let patch = "--- a/keep.rs\n+++ b/keep.rs\n--- a/deleted.rs\n+++ /dev/null\n";
-    let paths = parse_patch_paths(patch);
+    let patch = "--- a/keep.rs\n+++ b/keep.rs\n@@ -1 +1 @@\n-old\n+new\n--- a/deleted.rs\n+++ /dev/null\n@@ -1 +0,0 @@\n-delete me\n";
+    let paths = edited_paths_for_tool("apply_patch", &json!({ "patch": patch }));
     assert_eq!(paths, vec![PathBuf::from("keep.rs")]);
 }
 
