@@ -3492,6 +3492,14 @@ async fn run_event_loop(
                     app.delete_char_forward();
                 }
                 KeyCode::Delete => {}
+                KeyCode::Left if key.modifiers.contains(KeyModifiers::SHIFT)
+                    && is_word_cursor_modifier(key.modifiers) =>
+                {
+                    if app.selection_anchor.is_none() {
+                        app.selection_anchor = Some(app.cursor_position);
+                    }
+                    app.move_cursor_word_backward();
+                }
                 KeyCode::Left if key.modifiers.contains(KeyModifiers::SHIFT) => {
                     if app.selection_anchor.is_none() {
                         app.selection_anchor = Some(app.cursor_position);
@@ -3505,6 +3513,14 @@ async fn run_event_loop(
                 KeyCode::Left => {
                     app.clear_selection();
                     app.move_cursor_left();
+                }
+                KeyCode::Right if key.modifiers.contains(KeyModifiers::SHIFT)
+                    && is_word_cursor_modifier(key.modifiers) =>
+                {
+                    if app.selection_anchor.is_none() {
+                        app.selection_anchor = Some(app.cursor_position);
+                    }
+                    app.move_cursor_word_forward();
                 }
                 KeyCode::Right if key.modifiers.contains(KeyModifiers::SHIFT) => {
                     if app.selection_anchor.is_none() {
@@ -3521,6 +3537,7 @@ async fn run_event_loop(
                     app.move_cursor_right();
                 }
                 KeyCode::Home if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    app.clear_selection();
                     if let Some(anchor) =
                         TranscriptScroll::anchor_for(app.viewport.transcript_cache.line_meta(), 0)
                     {
@@ -3528,20 +3545,25 @@ async fn run_event_loop(
                     }
                 }
                 KeyCode::End if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    app.clear_selection();
                     app.scroll_to_bottom();
                 }
                 KeyCode::Home | KeyCode::Char('a')
                     if key.modifiers.contains(KeyModifiers::CONTROL) =>
                 {
+                    app.clear_selection();
                     app.move_cursor_start();
                 }
                 KeyCode::Home => {
+                    app.clear_selection();
                     app.move_cursor_line_start();
                 }
                 KeyCode::End => {
+                    app.clear_selection();
                     app.move_cursor_line_end();
                 }
                 KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    app.clear_selection();
                     app.move_cursor_end();
                 }
                 KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
