@@ -500,9 +500,15 @@ fn update_is_needed(
             if current == latest {
                 return Ok(false);
             }
-            let current_is_beta = version_is_beta(&current);
             let latest_is_beta = version_is_beta(&latest);
-            Ok(!(current_is_beta && latest_is_beta && current > latest))
+            let current_is_stable = current.pre.is_empty();
+            let same_release_line = current.major == latest.major
+                && current.minor == latest.minor
+                && current.patch == latest.patch;
+            if current > latest && !(current_is_stable && same_release_line) {
+                return Ok(false);
+            }
+            Ok(latest_is_beta)
         }
     }
 }
@@ -987,6 +993,8 @@ E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  *codewhale-win
         assert!(!update_is_needed(ReleaseChannel::Beta, "1.0.0-beta.2", "v1.0.0-beta.2").unwrap());
         assert!(!update_is_needed(ReleaseChannel::Beta, "1.0.0-beta.3", "v1.0.0-beta.2").unwrap());
         assert!(update_is_needed(ReleaseChannel::Beta, "1.0.0-beta.2", "v1.0.0-beta.3").unwrap());
+        assert!(!update_is_needed(ReleaseChannel::Beta, "2.0.0", "v1.0.0-beta.3").unwrap());
+        assert!(!update_is_needed(ReleaseChannel::Beta, "1.0.0-rc.1", "v1.0.0-beta.3").unwrap());
     }
 
     #[test]
