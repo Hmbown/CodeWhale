@@ -34,11 +34,19 @@ pub fn run_update(beta: bool) -> Result<()> {
     println!("Current version: v{current_version}");
 
     // Step 1: Fetch latest release metadata
-    let release = fetch_latest_release(channel).with_context(update_network_fallback_hint)?;
+    let fetched = fetch_latest_release(channel).with_context(update_network_fallback_hint)?;
+    let release = &fetched.release;
     let latest_tag = &release.tag_name;
     println!("Latest {} release: {latest_tag}", channel.label());
 
-    if !update_is_needed(current_version, latest_tag)? {
+    if let ReleaseSource::Mirror { base_url } = &fetched.source {
+        if channel == ReleaseChannel::Beta {
+            println!(
+                "Using release mirror {}; --beta does not select GitHub beta releases in mirror mode.",
+                base_url
+            );
+        }
+    } else if !update_is_needed(channel, current_version, latest_tag)? {
         println!("Already up to date; no download needed.");
         return Ok(());
     }
@@ -148,6 +156,18 @@ impl ReleaseChannel {
             Self::Beta => "beta",
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FetchedRelease {
+    release: Release,
+    source: ReleaseSource,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ReleaseSource {
+    GitHub,
+    Mirror { base_url: String },
 }
 
 pub(crate) fn release_arch_for_rust_arch(arch: &str) -> &str {
@@ -303,7 +323,7 @@ fn expected_sha256_from_manifest(text: &str, asset_name: &str) -> Result<String>
 }
 
 /// GitHub release metadata.
-#[derive(serde::Deserialize, Debug)]
+#[derive(serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 struct Release {
     tag_name: String,
     #[serde(default)]
@@ -312,7 +332,7 @@ struct Release {
 }
 
 /// A single release asset.
-#[derive(serde::Deserialize, Debug)]
+#[derive(serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 struct Asset {
     name: String,
     browser_download_url: String,
@@ -326,20 +346,27 @@ fn update_http_client() -> Result<reqwest::blocking::Client> {
 }
 
 /// Fetch the latest release metadata from GitHub.
-fn fetch_latest_release(channel: ReleaseChannel) -> Result<Release> {
+fn fetch_latest_release(channel: ReleaseChannel) -> Result<FetchedRelease> {
     if let Some(base_url) = release_base_url_from_env() {
         let version = update_version_from_env().unwrap_or_else(|| env!("CARGO_PKG_VERSION").into());
-        return Ok(release_from_mirror_base_url(
-            &base_url,
-            &version,
-            std::env::consts::OS,
-            std::env::consts::ARCH,
-        ));
+        return Ok(FetchedRelease {
+            release: release_from_mirror_base_url(
+                &base_url,
+                &version,
+                std::env::consts::OS,
+                std::env::consts::ARCH,
+            ),
+            source: ReleaseSource::Mirror { base_url },
+        });
     }
-    match channel {
+    let release = match channel {
         ReleaseChannel::Stable => fetch_latest_release_from_url(LATEST_RELEASE_URL),
         ReleaseChannel::Beta => fetch_latest_beta_release_from_url(RELEASES_URL),
-    }
+    }?;
+    Ok(FetchedRelease {
+        release,
+        source: ReleaseSource::GitHub,
+    })
 }
 
 fn release_base_url_from_env() -> Option<String> {
@@ -441,6 +468,8 @@ fn fetch_latest_beta_release_from_url(url: &str) -> Result<Release> {
         bail!("GitHub release list request failed with HTTP {status}: {body}");
     }
 
+    // GitHub caps this endpoint at 100 releases per page. CodeWhale uses the
+    // first page as the latest-beta search window, matching GitHub's ordering.
     let releases: Vec<Release> = serde_json::from_str(&body).with_context(|| {
         format!("failed to parse release list JSON from GitHub API. Response: {body}")
     })?;
@@ -452,15 +481,30 @@ fn fetch_latest_beta_release_from_url(url: &str) -> Result<Release> {
 }
 
 fn is_beta_release(release: &Release) -> bool {
-    release.prerelease || release.tag_name.to_ascii_lowercase().contains("beta")
+    release.tag_name.to_ascii_lowercase().contains("beta")
 }
 
-fn update_is_needed(current_version: &str, latest_tag: &str) -> Result<bool> {
+fn update_is_needed(
+    channel: ReleaseChannel,
+    current_version: &str,
+    latest_tag: &str,
+) -> Result<bool> {
     let current = parse_release_version(current_version)
         .with_context(|| format!("failed to parse current version {current_version:?}"))?;
     let latest = parse_release_version(latest_tag)
         .with_context(|| format!("failed to parse latest release tag {latest_tag:?}"))?;
-    Ok(current < latest)
+
+    match channel {
+        ReleaseChannel::Stable => Ok(current < latest),
+        ReleaseChannel::Beta => {
+            if current == latest {
+                return Ok(false);
+            }
+            let current_is_beta = version_is_beta(&current);
+            let latest_is_beta = version_is_beta(&latest);
+            Ok(!(current_is_beta && latest_is_beta && current > latest))
+        }
+    }
 }
 
 fn parse_release_version(value: &str) -> Result<semver::Version> {
@@ -471,6 +515,10 @@ fn parse_release_version(value: &str) -> Result<semver::Version> {
         .next()
         .unwrap_or("");
     semver::Version::parse(version).with_context(|| format!("invalid semver: {value:?}"))
+}
+
+fn version_is_beta(version: &semver::Version) -> bool {
+    version.pre.as_str().to_ascii_lowercase().contains("beta")
 }
 
 /// Download a URL to bytes.
@@ -923,12 +971,22 @@ E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  *codewhale-win
     }
 
     #[test]
-    fn update_is_needed_only_when_latest_is_newer() {
-        assert!(update_is_needed("0.8.45", "v0.8.46").unwrap());
-        assert!(update_is_needed("0.8.45", "v0.9.0-beta.1").unwrap());
-        assert!(!update_is_needed("0.8.45", "v0.8.45").unwrap());
-        assert!(!update_is_needed("0.9.0", "v0.9.0-beta.1").unwrap());
-        assert!(!update_is_needed("0.9.0-beta.2", "v0.9.0-beta.1").unwrap());
+    fn stable_update_is_needed_only_when_latest_is_newer() {
+        assert!(update_is_needed(ReleaseChannel::Stable, "0.8.45", "v0.8.46").unwrap());
+        assert!(update_is_needed(ReleaseChannel::Stable, "0.8.45", "v0.9.0-beta.1").unwrap());
+        assert!(!update_is_needed(ReleaseChannel::Stable, "0.8.45", "v0.8.45").unwrap());
+        assert!(!update_is_needed(ReleaseChannel::Stable, "0.9.0", "v0.9.0-beta.1").unwrap());
+        assert!(
+            !update_is_needed(ReleaseChannel::Stable, "0.9.0-beta.2", "v0.9.0-beta.1").unwrap()
+        );
+    }
+
+    #[test]
+    fn beta_update_allows_switching_from_same_stable_to_beta() {
+        assert!(update_is_needed(ReleaseChannel::Beta, "1.0.0", "v1.0.0-beta.2").unwrap());
+        assert!(!update_is_needed(ReleaseChannel::Beta, "1.0.0-beta.2", "v1.0.0-beta.2").unwrap());
+        assert!(!update_is_needed(ReleaseChannel::Beta, "1.0.0-beta.3", "v1.0.0-beta.2").unwrap());
+        assert!(update_is_needed(ReleaseChannel::Beta, "1.0.0-beta.2", "v1.0.0-beta.3").unwrap());
     }
 
     #[test]
@@ -944,8 +1002,8 @@ E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  *codewhale-win
     }
 
     #[test]
-    fn beta_release_detection_accepts_prerelease_or_beta_tag() {
-        let prerelease = Release {
+    fn beta_release_detection_requires_beta_tag() {
+        let rc_prerelease = Release {
             tag_name: "v0.9.0-rc.1".to_string(),
             prerelease: true,
             assets: vec![],
@@ -961,7 +1019,7 @@ E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  *codewhale-win
             assets: vec![],
         };
 
-        assert!(is_beta_release(&prerelease));
+        assert!(!is_beta_release(&rc_prerelease));
         assert!(is_beta_release(&beta_tag));
         assert!(!is_beta_release(&stable));
     }
@@ -1052,6 +1110,7 @@ E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  *codewhale-win
     fn fetch_latest_beta_release_from_url_selects_first_beta_release() {
         let body = br#"[
           { "tag_name": "v0.9.0", "prerelease": false, "assets": [] },
+          { "tag_name": "v0.9.0-rc.1", "prerelease": true, "assets": [] },
           { "tag_name": "v0.9.0-beta.2", "prerelease": true, "assets": [
             { "name": "codewhale-linux-x64", "browser_download_url": "http://example.invalid/codewhale-linux-x64" }
           ] },
