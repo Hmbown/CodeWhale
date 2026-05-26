@@ -74,18 +74,18 @@ impl Default for ModelRegistry {
                 supports_reasoning: true,
             },
             ModelInfo {
-                id: "gpt-4.1".to_string(),
+                id: "deepseek-v4-pro".to_string(),
                 provider: ProviderKind::Openai,
-                aliases: vec!["gpt4.1".to_string(), "gpt-4o".to_string()],
+                aliases: vec!["openai-compatible-deepseek-v4-pro".to_string()],
                 supports_tools: true,
                 supports_reasoning: true,
             },
             ModelInfo {
-                id: "gpt-4.1-mini".to_string(),
+                id: "deepseek-v4-flash".to_string(),
                 provider: ProviderKind::Openai,
-                aliases: vec!["gpt-4o-mini".to_string()],
+                aliases: vec!["openai-compatible-deepseek-v4-flash".to_string()],
                 supports_tools: true,
-                supports_reasoning: false,
+                supports_reasoning: true,
             },
             ModelInfo {
                 id: "deepseek-reasoner".to_string(),
@@ -147,6 +147,17 @@ impl Default for ModelRegistry {
                 aliases: vec![
                     "deepseek-v4-pro".to_string(),
                     "fireworks-deepseek-v4-pro".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "kimi-k2.6".to_string(),
+                provider: ProviderKind::Moonshot,
+                aliases: vec![
+                    "kimi".to_string(),
+                    "kimi-k2".to_string(),
+                    "moonshot-kimi-k2.6".to_string(),
                 ],
                 supports_tools: true,
                 supports_reasoning: true,

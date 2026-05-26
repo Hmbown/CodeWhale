@@ -55,14 +55,6 @@ pub fn build_entries(
 ) -> Vec<CommandPaletteEntry> {
     let mut entries = Vec::new();
 
-    entries.push(CommandPaletteEntry {
-        section: PaletteSection::Action,
-        label: "Voice input".to_string(),
-        description: "Listen, transcribe, and insert editable text into the composer".to_string(),
-        command: "voice input dictate microphone speech".to_string(),
-        action: CommandPaletteAction::VoiceInput,
-    });
-
     for command in commands::COMMANDS {
         let mut description = command.palette_description_for(locale);
         if command.requires_argument() {
@@ -1015,24 +1007,6 @@ mod tests {
         assert!(!command_labels.contains(&"/voice"));
         assert!(!command_labels.contains(&"/set"));
         assert!(!command_labels.contains(&"/deepseek"));
-    }
-
-    #[test]
-    fn command_palette_includes_voice_input_action() {
-        let entries = build_entries(
-            Locale::En,
-            Path::new("."),
-            Path::new("."),
-            Path::new("mcp.json"),
-            None,
-        );
-        let voice = entries
-            .iter()
-            .find(|entry| entry.section == PaletteSection::Action && entry.label == "Voice input")
-            .expect("voice input action");
-
-        assert!(voice.description.contains("composer"));
-        assert!(matches!(voice.action, CommandPaletteAction::VoiceInput));
     }
 
     #[test]

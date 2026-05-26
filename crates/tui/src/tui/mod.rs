@@ -70,7 +70,6 @@ mod ui_text;
 pub mod user_input;
 pub mod views;
 pub mod vim_mode;
-pub mod voice_input;
 pub mod widgets;
 pub mod workspace_context;
 

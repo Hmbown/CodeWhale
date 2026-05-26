@@ -129,18 +129,6 @@ pub enum AppMode {
     Plan,
 }
 
-#[derive(Debug, Clone)]
-pub struct VoiceInputState {
-    pub started_at: Instant,
-}
-
-impl VoiceInputState {
-    #[must_use]
-    pub fn new(started_at: Instant) -> Self {
-        Self { started_at }
-    }
-}
-
 /// One row in the per-turn cache-telemetry ring (`/cache` debug surface, #263).
 #[derive(Debug, Clone)]
 pub struct TurnCacheRecord {
@@ -1009,6 +997,22 @@ pub struct SessionState {
     pub last_cache_inspection: Option<PromptInspection>,
 }
 
+/// Sidebar hover state for mouse tooltip support.
+#[derive(Debug, Clone, Default)]
+pub struct SidebarHoverState {
+    /// Rendered sections with their areas and full-text lines.
+    pub sections: Vec<SidebarHoverSection>,
+}
+
+/// Per-section metadata for sidebar hover detection.
+#[derive(Debug, Clone)]
+pub struct SidebarHoverSection {
+    /// Content area within the section (inside border + padding).
+    pub content_area: Rect,
+    /// Full original text for each content line rendered.
+    pub lines: Vec<String>,
+}
+
 impl Default for SessionState {
     fn default() -> Self {
         Self {
@@ -1074,8 +1078,6 @@ pub struct App {
     pub sticky_status: Option<StatusToast>,
     /// Last status text already promoted from `status_message` into toast state.
     pub last_status_message_seen: Option<String>,
-    /// Active external speech-to-text helper launched from the command palette.
-    pub voice_input_state: Option<VoiceInputState>,
     pub model: String,
     /// When true, the model is auto-selected based on request complexity
     /// rather than using a fixed model. The `/model auto` command sets this.
@@ -1156,6 +1158,12 @@ pub struct App {
     pub transcript_spacing: TranscriptSpacing,
     pub sidebar_width_percent: u16,
     pub sidebar_focus: SidebarFocus,
+    /// Sidebar hover state for mouse tooltip support.
+    pub sidebar_hover: SidebarHoverState,
+    /// Current hover tooltip text, if any.
+    pub sidebar_hover_tooltip: Option<String>,
+    /// Last known mouse position for tooltip placement.
+    pub last_mouse_pos: Option<(u16, u16)>,
     /// Whether the session-context panel is enabled (#504).
     pub context_panel: bool,
     /// File-tree pane state. `None` when hidden; `Some` when visible.
@@ -1794,7 +1802,6 @@ impl App {
             status_toasts: VecDeque::new(),
             sticky_status: None,
             last_status_message_seen: None,
-            voice_input_state: None,
             model,
             auto_model,
             last_effective_model: None,
@@ -1830,6 +1837,9 @@ impl App {
             transcript_spacing,
             sidebar_width_percent,
             sidebar_focus,
+            sidebar_hover: SidebarHoverState::default(),
+            sidebar_hover_tooltip: None,
+            last_mouse_pos: None,
             context_panel: settings.context_panel,
             file_tree: None,
             file_tree_visible: false,
@@ -2195,6 +2205,9 @@ impl App {
         metadata.cost.subagent_cost_cny = self.session.subagent_cost_cny;
         metadata.cost.displayed_cost_high_water_usd = self.session.displayed_cost_high_water;
         metadata.cost.displayed_cost_high_water_cny = self.session.displayed_cost_high_water_cny;
+        // Persist cumulative turn duration so the footer "worked" chip
+        // survives session save/restore (#2038).
+        metadata.cumulative_turn_secs = self.cumulative_turn_duration.as_secs();
     }
 
     /// Recompute the displayed cost high-water mark. Called any time a cost
@@ -2252,6 +2265,18 @@ impl App {
 
     pub fn format_cost_amount_precise(&self, amount: f64) -> String {
         crate::pricing::format_cost_amount_precise(amount, self.cost_currency)
+    }
+
+    /// Estimated cost saved by the last turn's cache-hit tokens in the
+    /// configured display currency.  Returns `None` when the model's pricing
+    /// is unknown or there were no cache hits.
+    pub fn last_turn_cache_savings(&self) -> Option<f64> {
+        let hit_tokens = self.session.last_prompt_cache_hit_tokens?;
+        let estimate = crate::pricing::calculate_cache_savings(&self.model, hit_tokens)?;
+        Some(match self.cost_currency {
+            crate::pricing::CostCurrency::Usd => estimate.usd,
+            crate::pricing::CostCurrency::Cny => estimate.cny,
+        })
     }
 
     /// Fold the oldest [`Self::HISTORY_FOLD_BATCH`] cells into a single

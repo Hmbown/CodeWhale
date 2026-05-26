@@ -1,6 +1,6 @@
 # CodeWhale
 
-> **DeepSeek 优先、面向开源与开放权重编码模型的终端原生编程智能体：100 万 token 上下文、思考模式流式推理、前缀缓存感知。自包含 Rust 二进制发布——开箱即带 MCP 客户端、沙箱和持久化任务队列。**
+> **DeepSeek V4 的最强智能体运行框架。规则、工具、证据和反馈循环——帮助模型持续工作直到任务完成，并且越用越好。**
 
 [![CI](https://github.com/Hmbown/CodeWhale/actions/workflows/ci.yml/badge.svg)](https://github.com/Hmbown/CodeWhale/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/codewhale)](https://www.npmjs.com/package/codewhale)
@@ -70,37 +70,35 @@ cargo install codewhale-tui     --locked --force
 
 ## 这是什么？
 
-codewhale 是一个完全运行在终端里的编程智能体。它让 DeepSeek 前沿模型直接访问你的工作区：读写文件、运行 shell 命令、搜索浏览网页、管理 git、调度子智能体——全部通过快速、键盘驱动的 TUI 完成。
+模型回答问题。智能体完成任务。区别在于运行框架——包围模型的规则、工具、证据和反馈循环。
 
-它面向 **DeepSeek V4**（`deepseek-v4-pro` / `deepseek-v4-flash`）构建，原生支持 100 万 token 上下文窗口和思考模式流式输出。
+CodeWhale 就是这套框架，围绕 DeepSeek V4 Pro 和 Flash 构建。它最初是一个个人工具，因为维护者受够了模型在任务中途迷失方向、服从过时指令而非用户当前请求、或者命令失败就放弃。结果诞生了一个让模型保持方向的系统：宪政提示层级、结构化信任边界、并行子智能体、前缀缓存感知的上下文管理、以及让模型有足够信号来自我校正的验证节拍。
 
-### 主要功能
+DeepSeek V4 参与了这套框架的部分编写。这很重要——它意味着 CodeWhale 已经是使用 V4 最有效的方式，并且随着 V4 的改进，框架也会随之改进。每一轮都留下更好的提示、更好的规则、更好的交接。下一轮从一个更强的位置开始。
 
-- **模型自动路由** —— `--model auto` / `/model auto` 每轮自动选择模型和推理强度
-- **Fin 快速通道** —— 使用关闭思考的低成本 `deepseek-v4-flash` 承担路由、RLM 子调用、摘要和协调工作
-- **原生 RLM**（`rlm_open`/`rlm_eval`）—— 持久化 REPL 会话用于批量分析；使用带界面的辅助函数（`peek`、`search`、`chunk`、`sub_query_batch`）
-- **思考模式流式输出** —— 实时观察模型在解决问题时的思维链展开
-- **完整工具集** —— 文件操作、shell 执行、git、网页搜索/浏览、apply-patch、子智能体、MCP 服务器
-- **100 万 token 上下文** —— 上下文跟踪、手动或配置驱动的压缩，以及前缀缓存遥测
-- **前缀缓存稳定性跟踪** —— 可选 `/statusline` footer chip 显示最近轮次缓存前缀的稳定程度
-- **三种交互模式** —— Plan（只读探索）、Agent（带审批的默认交互）、YOLO（可信工作区自动批准）
-- **推理强度档位** —— 用 `Shift+Tab` 在 `off → high → max` 之间切换
-- **会话保存和恢复** —— 长任务的断点续作
-- **工作区回滚** —— 通过 side-git 记录每轮前后快照，支持 `/restore` 和 `revert_turn`，不影响项目自己的 `.git`
-- **持久化任务队列** —— 后台任务在重启后仍然存在，支持计划任务和长时间运行的操作
-- **HTTP/SSE 运行时 API** —— `codewhale serve --http` 用于无界面智能体流程
-- **MCP 协议** —— 连接 Model Context Protocol 服务器扩展工具，见 [docs/MCP.md](docs/MCP.md)
-- **LSP 诊断** —— 每次编辑后通过 rust-analyzer、pyright、typescript-language-server、gopls、clangd 提供内联错误/警告
-- **用户记忆** —— 可选的持久化笔记文件注入系统提示，实现跨会话偏好保持
-- **多语言 UI** —— 支持 `en`、`ja`、`zh-Hans`、`pt-BR`，支持自动检测
-- **实时成本跟踪** —— 按轮次和会话统计 token 用量与成本估算，含缓存命中/未命中明细；简体中文 locale 下显示 CNY
-- **技能系统** —— 可通过 GitHub 安装的组合式指令包；首次启动自带 `skill-creator`、`mcp-builder`、`documents`、`presentations`、`spreadsheets`、`pdf`、`feishu` 等 starter skills
-- **终端原生通知** —— OSC 9、OSC 99、OSC 777，以及桌面通知兜底
-- **内置主题选择器** —— Catppuccin、Tokyo Night、Dracula、Gruvbox 和原有亮/暗色主题，可用 `/theme` 实时切换
+### 框架如何工作
+
+**宪政层级。** 系统提示词是一个冲突法引擎。用户意图优先于陈旧记忆。实时证据优先于假设。验证优先于自信。每一轮继承清晰的权威链，模型永远不需要猜测该服从哪条指令。
+
+**结构化信任。** 三种模式，硬边界——Plan（只读）、Agent（审批门控）、YOLO（可信工作区自动批准）。OS 级沙箱支撑边界：macOS 的 Seatbelt、Linux 的 Landlock、Windows 的 Job Objects。危险命令无论在哪种模式下都被分类和门控。
+
+**反馈节拍。** 失败的命令、失败的测试、LSP 诊断——这些不是死胡同。它们是模型可以调谐的信号。非零退出码是信息。类型错误是修正向量。框架让失败变得可读，模型可以在用户不必不断重新掌舵的情况下恢复。
+
+**连续性。** 记忆跨会话持久化。交接在上下文压缩后存活。会话可以保存、恢复和分叉到兄弟路径。下一位智能体——人或机器——从上一位置继续，无需重新发现已经学到的东西。
+
+**分布式工作。** 子智能体并发运行，一次最多 20 个。`agent_open` 立即返回，父进程继续工作。结果以结构化完成事件形式到达，带有有界句柄——无需用完整对话记录淹没父上下文。详见 [docs/SUBAGENTS.md](docs/SUBAGENTS.md)。
+
+**适度智能。** Fin——关闭思考的廉价 Flash——处理模型自动路由、RLM 子调用、摘要和协调。Pro 用于架构、调试和安全审查。`--model auto` 每轮选择模型和思考强度。每个问题匹配恰当的智能量。
+
+**长程注意力经济学。** 100 万 token 上下文窗口，前缀缓存遥测。缓存命中比未命中便宜约 100 倍。`/statusline` 芯片实时显示前缀稳定性，让你能看到某次变更是否即将破坏缓存预算。
+
+**自由与恢复。** 每轮记录 side-git 快照，不影响仓库 `.git`。`/restore` 和 `revert_turn` 即刻回滚工作区。危险操作在 OS 级沙箱化。你可以让模型放手尝试。
+
+其余功能面：**RLM 会话**（持久化 Python REPL，配合 `peek`、`search`、`chunk`、`sub_query_batch` 辅助函数进行批量分析）、**LSP 诊断**（每次编辑后 rust-analyzer、pyright、tsserver、gopls、clangd 的内联错误）、**MCP 协议**、**HTTP/SSE 运行时 API**、重启后仍存活的**持久化任务队列**、Zed 等编辑器的 **ACP 适配器**、**SWE-bench 导出**、**可安装技能**、**主题选择器**、**桌面通知**、以及带缓存命中/未命中明细的**实时成本追踪**。
 
 ---
 
-## 架构说明
+## 运行框架
 
 `codewhale`（调度器 CLI）→ `codewhale-tui`（伴随二进制）→ ratatui 界面 ↔ 异步引擎 ↔ OpenAI 兼容流式客户端。工具调用通过类型化注册表（shell、文件操作、git、web、子智能体、MCP、RLM）路由，结果流式返回对话记录。引擎管理会话状态、轮次追踪、持久化任务队列和 LSP 子系统——它在下一步推理前将编辑后诊断反馈到模型上下文中。
 

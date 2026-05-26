@@ -87,15 +87,15 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
 
             <h1 className="font-display tracking-crisp">
               {isZh
-                ? "面向开源模型的终端编程智能体。"
-                : "The terminal coding agent for open models."}
+                ? "DeepSeek V4 的最强智能体运行框架。"
+                : "The most agentic harness for DeepSeek V4."}
             </h1>
 
             <p className="mt-6 text-lg text-ink-soft leading-relaxed max-w-2xl">
               <span className="font-cjk text-indigo font-semibold">CodeWhale</span>
               {isZh
-                ? " 是面向 DeepSeek V4 及其他开放权重模型的终端原生编程智能体。它读改文件、跑测试、调用 MCP 服务器，全程在你的文件系统沙箱内运行。"
-                : " is a terminal-native coding agent for DeepSeek V4 and other open-weight models. It reads and edits files, runs tests, calls MCP servers — all inside your filesystem sandbox."}
+                ? " 是围绕 DeepSeek V4 Pro 和 Flash 构建的运行框架。规则、工具、证据和反馈循环——帮助模型持续工作，并且不断进步。DeepSeek V4 参与了部分编写。更好的框架让 V4 更有效，更有效的 V4 又让框架变得更好——这是个正向循环。"
+                : " is a harness built around DeepSeek V4 Pro and Flash. Rules, tools, evidence, and feedback loops that help the model keep working — and keep improving. DeepSeek V4 helped write parts of it. A better harness makes V4 more effective, and a more effective V4 makes the harness better — it loops."}
             </p>
 
             <div className="mt-8 flex flex-wrap items-stretch sm:items-center gap-3">
@@ -178,48 +178,48 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
           {isZh ? (
             <>
               <div className="p-6">
-                <div className="eyebrow mb-3">01 · 终端智能体</div>
-                <h3 className="font-display text-xl mb-3">编程智能体，不是聊天框</h3>
+                <div className="eyebrow mb-3">01 · 宪政层级</div>
+                <h3 className="font-display text-xl mb-3">用户意图高于一切</h3>
                 <p className="text-sm text-ink-soft leading-[1.9]">
-                  与 Claude Code、Codex CLI 相同的循环：读、改、跑测试、回报。键盘驱动，住在终端里。
+                  实时证据高于假设。验证高于自信。清晰的权威链让模型无需猜测该服从哪条指令。
                 </p>
               </div>
               <div className="p-6">
-                <div className="eyebrow mb-3">02 · 开源模型优先</div>
-                <h3 className="font-display text-xl mb-3">DeepSeek V4 深度集成</h3>
+                <div className="eyebrow mb-3">02 · 反馈驱动</div>
+                <h3 className="font-display text-xl mb-3">失败是信号，不是终点</h3>
                 <p className="text-sm text-ink-soft leading-[1.9]">
-                  原生 DeepSeek API：推理流、缓存指标、思考力度控制。OpenRouter、NVIDIA NIM、vLLM、sglang 同时可选。
+                  失败的命令、失败的测试、LSP 错误。框架让失败可读。每一次节拍都是模型可以调谐的信息，逐轮迭代。
                 </p>
               </div>
               <div className="p-6">
-                <div className="eyebrow mb-3">03 · 沙箱边界</div>
-                <h3 className="font-display text-xl mb-3">Plan、Agent、YOLO</h3>
+                <div className="eyebrow mb-3">03 · 自我修正</div>
+                <h3 className="font-display text-xl mb-3">恢复内建于环境</h3>
                 <p className="text-sm text-ink-soft leading-[1.9]">
-                  Plan 只读；Agent 风险操作前确认；YOLO 全自动。沙箱：seatbelt（macOS）、landlock（Linux）、受限令牌（Windows）。
+                  子智能体、回滚、会话分叉、交接。模型不需要一次就全对。恢复机制从底层支持试错。
                 </p>
               </div>
             </>
           ) : (
             <>
               <div className="p-6">
-                <div className="eyebrow mb-3">01 · terminal agent</div>
-                <h3 className="font-display text-xl mb-3">A coding agent, not a chat box</h3>
+                <div className="eyebrow mb-3">01 · constitutional</div>
+                <h3 className="font-display text-xl mb-3">User intent above everything</h3>
                 <p className="text-sm text-ink-soft leading-relaxed">
-                  Same loop as Claude Code or Codex CLI: reads, edits, runs tests, reports back. Keyboard-driven, lives in your terminal.
+                  Live evidence above assumptions. Verification above confidence. A clear chain of authority so the model never guesses which instruction to follow.
                 </p>
               </div>
               <div className="p-6">
-                <div className="eyebrow mb-3">02 · open models first</div>
-                <h3 className="font-display text-xl mb-3">DeepSeek V4, deeply integrated</h3>
+                <div className="eyebrow mb-3">02 · feedback-driven</div>
+                <h3 className="font-display text-xl mb-3">Failure is signal, not a dead end</h3>
                 <p className="text-sm text-ink-soft leading-relaxed">
-                  Native DeepSeek API: reasoning streaming, cache metrics, thinking-effort control. OpenRouter, NVIDIA NIM, vLLM, and sglang also supported.
+                  Failed commands, failing tests, LSP errors. The harness makes failure legible. Each beat is information the model can tune against, turn after turn.
                 </p>
               </div>
               <div className="p-6">
-                <div className="eyebrow mb-3">03 · sandboxed</div>
-                <h3 className="font-display text-xl mb-3">Plan, Agent, YOLO</h3>
+                <div className="eyebrow mb-3">03 · self-correcting</div>
+                <h3 className="font-display text-xl mb-3">Recovery built into the environment</h3>
                 <p className="text-sm text-ink-soft leading-relaxed">
-                  Plan reads only. Agent asks before risky ops. YOLO auto-approves. Sandboxed via seatbelt (macOS), landlock (Linux), restricted tokens (Windows).
+                  Sub-agents, rollback, session forks, handoffs. The model doesn't have to get everything right the first time. Recovery is built into the environment.
                 </p>
               </div>
             </>
@@ -259,6 +259,11 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
                 {isZh
                   ? "100:1 不是性能基准，而是贡献形状：一个提示词、许多智能体小时、一个小补丁、一次维护者审查。"
                   : "100-to-1 is not a throughput benchmark. It is a contribution shape: one prompt, many agent-hours, one small patch, one maintainer review."}
+              </p>
+              <p className={`mt-4 text-sm text-ink-soft ${isZh ? "leading-[1.9] tracking-wide" : "leading-relaxed"}`}>
+                {isZh
+                  ? "框架承担了繁重工作：宪政提示、结构化信任、反馈循环和跨会话存活的交接。模型可以专注于任务本身。因为 DeepSeek V4 参与构建了这套框架，每一次改进都让 V4 在其中变得更有效——这让下一次改进变得更容易。"
+                  : "The harness does the heavy lifting: constitutional prompts, structured trust, feedback loops, and handoffs that survive the session. The model is free to focus on the task. And because DeepSeek V4 helped build this harness, each improvement makes V4 more effective within it — which makes the next improvement easier."}
               </p>
               <div className="mt-6 flex flex-wrap gap-3">
                 <Link href={isZh ? "/zh/contribute#recursive-harness" : "/contribute#recursive-harness"} className="px-4 py-2 bg-ink text-paper font-mono text-sm uppercase tracking-wider hover:bg-indigo transition-colors">

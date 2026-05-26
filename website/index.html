@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>DeepSeek TUI — Terminal-native coding agent</title>
+  <title>CodeWhale — The most agentic harness for DeepSeek V4</title>
   <link rel="alternate" hreflang="zh" href="./zh/">
   <style>
     :root {
@@ -441,9 +441,9 @@
 <main class="container">
 
   <div class="hero" id="install">
-    <div class="hero-badge"><span class="dot"></span>v0.8.10 available now</div>
-    <h1>A terminal-native coding agent<br>for <span class="accent">DeepSeek&nbsp;V4</span></h1>
-    <p class="lead">1M-token context. Thinking-mode streaming. Single binary, zero dependencies — ships an MCP client, sandbox, and durable task queue out of the box.</p>
+    <div class="hero-badge"><span class="dot"></span>v0.8.45 available now</div>
+    <h1>The most agentic harness<br>for <span class="accent">DeepSeek&nbsp;V4</span></h1>
+    <p class="lead">Rules, tools, evidence, and feedback loops that help the model keep working until the task is done. 1M-token context, thinking-mode streaming, OS-level sandboxing — single binary, zero dependencies.</p>
 
     <div class="terminal">
       <div class="terminal-header">
@@ -454,7 +454,7 @@
       </div>
       <div class="terminal-body">
         <span class="prompt">$</span>
-        <span>npm i -g deepseek-tui</span>
+        <span>npm i -g codewhale</span>
         <span class="cursor"></span>
         <button class="btn-copy" onclick="copyInstall()" id="copyBtn">Copy</button>
       </div>
@@ -471,31 +471,31 @@
   </div>
 
   <section>
-    <h2><span class="icon">▸</span>What you get</h2>
+    <h2><span class="icon">▸</span>How the harness works</h2>
     <div class="feature-grid">
       <div class="feature-card">
-        <h3>1M context</h3>
-        <p>Built for DeepSeek V4 with intelligent compaction and prefix-cache-aware cost optimization.</p>
+        <h3>Constitutional hierarchy</h3>
+        <p>User intent outranks stale memory. Live evidence outranks assumptions. A clear chain of authority every turn.</p>
       </div>
       <div class="feature-card">
-        <h3>Thinking stream</h3>
-        <p>Watch the model's chain-of-thought unfold in real time before the final answer arrives.</p>
+        <h3>Structured trust</h3>
+        <p>Plan (read-only), Agent (approval-gated), YOLO (auto-approved). OS-level sandboxing backs every boundary.</p>
       </div>
       <div class="feature-card">
-        <h3>Native RLM</h3>
-        <p>Fan out 1–16 cheap children in parallel for batched analysis and parallel reasoning.</p>
+        <h3>Feedback beats</h3>
+        <p>Failed commands and failing tests are not dead ends — they're signals the model can tune against, turn after turn.</p>
       </div>
       <div class="feature-card">
-        <h3>Full tool suite</h3>
-        <p>File ops, shell, git, web search, apply-patch, sub-agents, and MCP servers.</p>
+        <h3>Continuity</h3>
+        <p>Memory persists across sessions. Handoffs survive compaction. Save, resume, and fork conversations.</p>
       </div>
       <div class="feature-card">
-        <h3>Three modes</h3>
-        <p>Plan (read-only), Agent (interactive), and YOLO (auto-approved) for any workflow.</p>
+        <h3>Distributed work</h3>
+        <p>Sub-agents run concurrently, up to 20 at a time. Results arrive as structured completion events.</p>
       </div>
       <div class="feature-card">
-        <h3>Durable sessions</h3>
-        <p>Save, resume, and rollback workspace state without touching your repo's .git.</p>
+        <h3>Right-size intelligence</h3>
+        <p>Fin handles routing and summaries. Pro engages for architecture and debugging. The right amount of intelligence for each problem.</p>
       </div>
     </div>
   </section>
@@ -555,7 +555,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh</code></pre>
 
 <script>
   function copyInstall() {
-    navigator.clipboard.writeText('npm i -g deepseek-tui').then(() => {
+    navigator.clipboard.writeText('npm i -g codewhale').then(() => {
       const btn = document.getElementById('copyBtn');
       btn.textContent = 'Copied';
       btn.classList.add('copied');

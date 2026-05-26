@@ -2030,6 +2030,69 @@ fn emit_parent_completion_dropped_receiver_does_not_panic() {
     );
 }
 
+#[tokio::test]
+async fn run_subagent_task_emits_parent_completion_before_terminal_update() {
+    let manager = Arc::new(RwLock::new(SubAgentManager::new(PathBuf::from("."), 2)));
+    let (task_input_tx, task_input_rx) = mpsc::unbounded_channel();
+    let agent_id = "agent_noop".to_string();
+    let mut agent = SubAgent::new(
+        agent_id.clone(),
+        SubAgentType::General,
+        "noop".to_string(),
+        make_assignment(),
+        "deepseek-v4-flash".to_string(),
+        None,
+        None,
+        task_input_tx,
+        "boot_test".to_string(),
+    );
+    agent.status = SubAgentStatus::Running;
+    manager.write().await.agents.insert(agent_id.clone(), agent);
+
+    let (completion_tx, mut completion_rx) = mpsc::unbounded_channel::<SubAgentCompletion>();
+    let mut runtime = runtime_with_depth(1, Some(completion_tx));
+    runtime.manager = Arc::clone(&manager);
+
+    let task = SubAgentTask {
+        manager_handle: manager.clone(),
+        runtime,
+        agent_id: agent_id.clone(),
+        agent_type: SubAgentType::General,
+        prompt: "no-op child run".to_string(),
+        assignment: make_assignment(),
+        allowed_tools: None,
+        fork_context: false,
+        started_at: Instant::now(),
+        max_steps: 0,
+        input_rx: task_input_rx,
+    };
+
+    let manager_lock = manager.write().await;
+    let task_handle = tokio::spawn(run_subagent_task(task));
+
+    // While the manager write lock is held, completion can be emitted only if it
+    // is sent before the terminal-state manager update (the ordering fixed by
+    // issue #1961).
+    let completion = tokio::time::timeout(Duration::from_secs(1), completion_rx.recv())
+        .await
+        .expect("completion should be emitted while manager write lock is still held");
+    let completion = completion.expect("completion channel should remain open");
+    assert_eq!(completion.agent_id, agent_id);
+
+    drop(manager_lock);
+    task_handle
+        .await
+        .expect("run_subagent_task should complete after lock release");
+
+    let snapshot = {
+        let manager = manager.read().await;
+        manager
+            .get_result(&agent_id)
+            .expect("completed agent should be present")
+    };
+    assert_eq!(snapshot.status, SubAgentStatus::Completed);
+}
+
 #[test]
 fn child_runtime_propagates_completion_tx_for_gating() {
     // The channel is cloned through `child_runtime()` so descendants carry

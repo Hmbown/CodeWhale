@@ -27,9 +27,9 @@ path = "src/bin/deepseek_tui_legacy_shim.rs"
 [dependencies]
 anyhow = "1.0.100"
 arboard = "3.4"
-codewhale-config = { path = "../config", version = "0.8.44" }
-codewhale-secrets = { path = "../secrets", version = "0.8.44" }
-codewhale-tools = { path = "../tools", version = "0.8.44" }
+codewhale-config = { path = "../config", version = "0.8.45" }
+codewhale-secrets = { path = "../secrets", version = "0.8.45" }
+codewhale-tools = { path = "../tools", version = "0.8.45" }
 schemaui = { version = "0.12.0", default-features = false, optional = true }
 async-stream = "0.3.6"
 async-trait = "0.1"
@@ -45,7 +45,7 @@ fd-lock = "4.0.4"
 futures-util = "0.3.31"
 ratatui = "0.30"
 regex = "1.11"
-reqwest = { version = "0.13.1", default-features = false, features = ["blocking", "json", "stream", "multipart", "rustls", "http2", "gzip", "brotli"] }
+reqwest = { version = "0.13.1", default-features = false, features = ["blocking", "json", "stream", "multipart", "form", "rustls", "http2", "gzip", "brotli"] }
 similar = "2"
 rustyline = "15.0.0"
 serde = { version = "1.0.228", features = ["derive"] }

@@ -371,6 +371,7 @@ impl Engine {
             ApiProvider::Openrouter => "OPENROUTER_API_KEY",
             ApiProvider::Novita => "NOVITA_API_KEY",
             ApiProvider::Fireworks => "FIREWORKS_API_KEY",
+            ApiProvider::Moonshot => "MOONSHOT_API_KEY/KIMI_API_KEY",
             ApiProvider::Sglang => "SGLANG_API_KEY",
             ApiProvider::Vllm => "VLLM_API_KEY",
             ApiProvider::Ollama => "OLLAMA_API_KEY",
@@ -933,11 +934,17 @@ impl Engine {
         // work on the blocking pool so the async runtime stays responsive;
         // failure is non-fatal (the helper logs at WARN).
         if self.config.snapshots_enabled {
+            // Clone the user prompt now — `content` is moved into
+            // `user_text_message_with_turn_metadata` below, so we need
+            // a copy for both pre- and post-turn snapshot labels. The
+            // label carries a truncated first line so `/restore`
+            // listings are human-readable.
+            let snapshot_prompt = content.clone();
             let pre_workspace = self.session.workspace.clone();
             let pre_seq = self.turn_counter;
             let pre_cap = self.config.snapshots_max_workspace_bytes;
             let _ = tokio::task::spawn_blocking(move || {
-                pre_turn_snapshot(&pre_workspace, pre_seq, pre_cap)
+                pre_turn_snapshot(&pre_workspace, pre_seq, pre_cap, Some(&snapshot_prompt))
             })
             .await;
         }
@@ -947,6 +954,10 @@ impl Engine {
         // so the footer doesn't display a stale failure row across
         // turns (#499).
         crate::retry_status::clear();
+
+        // Clone user prompt for post-turn snapshot label before `content`
+        // is moved into `user_text_message_with_turn_metadata` below.
+        let snapshot_prompt_post = content.clone();
 
         // Check if we have the appropriate client
         if self.deepseek_client.is_none() {
@@ -1157,11 +1168,18 @@ impl Engine {
         // paste immediately (#234). The git work proceeds on the blocking
         // pool without forcing the engine loop to await it.
         if self.config.snapshots_enabled {
+            // `snapshot_prompt_post` was cloned from `content` above,
+            // before `content` was moved into the session messages.
             let post_workspace = self.session.workspace.clone();
             let post_seq = self.turn_counter;
             let post_cap = self.config.snapshots_max_workspace_bytes;
             crate::utils::spawn_blocking_supervised("post-turn-snapshot", move || {
-                post_turn_snapshot(&post_workspace, post_seq, post_cap);
+                post_turn_snapshot(
+                    &post_workspace,
+                    post_seq,
+                    post_cap,
+                    Some(&snapshot_prompt_post),
+                );
             });
         }
     }
@@ -1286,15 +1304,8 @@ impl Engine {
         removed
     }
 
-    async fn recover_context_overflow(
-        &mut self,
-        client: &DeepSeekClient,
-        reason: &str,
-        requested_output_tokens: u32,
-    ) -> bool {
-        let Some(target_budget) =
-            context_input_budget(&self.session.model, requested_output_tokens)
-        else {
+    async fn recover_context_overflow(&mut self, client: &DeepSeekClient, reason: &str) -> bool {
+        let Some(target_budget) = context_input_budget(&self.session.model) else {
             return false;
         };
 
@@ -1970,9 +1981,9 @@ mod handle;
 pub(crate) use context::compact_tool_result_for_context;
 use context::{
     COMPACTION_SUMMARY_MARKER, MAX_CONTEXT_RECOVERY_ATTEMPTS, MIN_RECENT_MESSAGES_TO_KEEP,
-    TURN_MAX_OUTPUT_TOKENS, context_input_budget, effective_max_output_tokens,
-    estimate_input_tokens_conservative, extract_compaction_summary_prompt,
-    is_context_length_error_message, summarize_text, turn_response_headroom_tokens,
+    context_input_budget, effective_max_output_tokens, estimate_input_tokens_conservative,
+    extract_compaction_summary_prompt, is_context_length_error_message, summarize_text,
+    turn_response_headroom_tokens,
 };
 mod dispatch;
 mod loop_guard;

@@ -196,11 +196,11 @@ default_text_model = "openrouter/deepseek/deepseek-v4-pro"`}
     sources: ["README.md", "#1207"],
   },
   {
-    q: "What is Goal mode? Is it available?",
+    q: "What does /goal do?",
     a: (
       <>
-        Goal mode is a future workflow/tab direction for long-running, multi-step objectives — not the current <code className="inline">/goal</code> command.
-        The current <code className="inline">/goal</code> is a simple goal-setter. The full Goal mode (autonomous multi-turn task execution with checkpoint/resume) is planned but not yet implemented.
+        <code className="inline">/goal</code> is a simple goal-setter for the current session.
+        It does not add another app mode; the mode switcher remains Plan, Agent, and YOLO.
         Track progress in <a href="https://github.com/Hmbown/CodeWhale/issues/891" className="body-link">#891</a>.
       </>
     ),
