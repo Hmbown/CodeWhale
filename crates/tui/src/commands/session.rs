@@ -48,7 +48,9 @@ pub fn save(app: &mut App, path: Option<&str>) -> CommandResult {
 
     match std::fs::create_dir_all(&sessions_dir) {
         Ok(()) => {
-            let json = match serde_json::to_string_pretty(&session) {
+            let mut persisted = session.clone();
+            crate::session_manager::compact_session_tool_outputs(&mut persisted);
+            let json = match serde_json::to_string_pretty(&persisted) {
                 Ok(j) => j,
                 Err(e) => return CommandResult::error(format!("Failed to serialize session: {e}")),
             };
@@ -152,12 +154,13 @@ pub fn load(app: &mut App, path: Option<&str>) -> CommandResult {
         }
     };
 
-    let session: crate::session_manager::SavedSession = match serde_json::from_str(&content) {
+    let mut session: crate::session_manager::SavedSession = match serde_json::from_str(&content) {
         Ok(s) => s,
         Err(e) => {
             return CommandResult::error(format!("Failed to parse session file: {e}"));
         }
     };
+    crate::session_manager::compact_session_tool_outputs(&mut session);
 
     app.api_messages.clone_from(&session.messages);
     app.clear_history();

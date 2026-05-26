@@ -103,6 +103,13 @@ fn format_status(app: &App) -> String {
             app.api_messages.len()
         ),
     );
+    let tool_output_status =
+        crate::tool_output_receipts::tool_output_status(&app.api_messages, &app.session_artifacts);
+    push_row(
+        &mut out,
+        "Tool outputs:",
+        &crate::tool_output_receipts::format_tool_output_status(&tool_output_status),
+    );
     push_row(
         &mut out,
         "Rate limits:",
@@ -257,9 +264,46 @@ mod tests {
         assert!(msg.contains("Session:"));
         assert!(msg.contains("session-123"));
         assert!(msg.contains("Context window:"));
+        assert!(msg.contains("Tool outputs:"));
         assert!(msg.contains("Cache hit/miss:"));
         assert!(msg.contains("70 hit / 30 miss"));
         assert!(msg.contains("Use /statusline to configure footer items."));
+    }
+
+    #[test]
+    fn status_report_surfaces_large_tool_output_pressure() {
+        let tmpdir = TempDir::new().expect("temp dir");
+        let mut app = create_test_app(tmpdir.path().to_path_buf());
+        let raw = "RAW_STATUS_PRESSURE\n".repeat(2_000);
+        app.api_messages.push(Message {
+            role: "user".to_string(),
+            content: vec![ContentBlock::ToolResult {
+                tool_use_id: "call-big".to_string(),
+                content: raw,
+                is_error: None,
+                content_blocks: None,
+            }],
+        });
+        app.session_artifacts
+            .push(crate::artifacts::ArtifactRecord {
+                id: "art_call-big".to_string(),
+                kind: crate::artifacts::ArtifactKind::ToolOutput,
+                session_id: "session-123".to_string(),
+                tool_call_id: "call-big".to_string(),
+                tool_name: "exec_shell".to_string(),
+                created_at: chrono::Utc::now(),
+                byte_size: 24_000,
+                preview: "large output".to_string(),
+                storage_path: PathBuf::from("artifacts/art_call-big.txt"),
+            });
+
+        let result = status(&mut app);
+        let msg = result.message.expect("status message");
+
+        assert!(msg.contains("Tool outputs:"));
+        assert!(msg.contains("raw over cap"));
+        assert!(msg.contains("context pressure"));
+        assert!(msg.contains("artifact"));
     }
 
     #[test]

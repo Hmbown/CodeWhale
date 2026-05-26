@@ -70,6 +70,7 @@ mod task_manager;
 #[cfg(test)]
 mod test_support;
 mod theme_qa_audit;
+mod tool_output_receipts;
 mod tools;
 mod tui;
 mod utils;
