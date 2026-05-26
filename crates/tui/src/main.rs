@@ -2083,6 +2083,7 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
         );
     }
     println!("  workspace: {}", crate::utils::display_path(workspace));
+    println!("  {}", doctor_search_provider_line(config));
 
     // State root (v0.8.44)
     println!();
@@ -3047,6 +3048,7 @@ fn run_doctor_json(
             "message": strict_tool_mode.message,
             "recommended_base_url": strict_tool_mode.recommended_base_url,
         },
+        "search_provider": doctor_search_provider_json(config),
         "memory": memory_summary,
         "mcp": mcp_summary,
         "skills": {
@@ -3153,6 +3155,38 @@ fn provider_capability_report(config: &Config) -> serde_json::Value {
         "cache_telemetry_supported": cap.cache_telemetry_supported,
         "request_payload_mode": serde_json::to_value(cap.request_payload_mode).unwrap_or_default(),
         "alias_deprecation": cap.alias_deprecation,
+    })
+}
+
+fn doctor_search_provider_line(config: &Config) -> String {
+    let search_provider = config.search_provider_resolution();
+    let switch_hint = if matches!(
+        (search_provider.provider, search_provider.source),
+        (
+            crate::config::SearchProvider::Bing,
+            crate::config::SearchProviderSource::Default
+        )
+    ) {
+        "; set [search] provider = \"duckduckgo\" | \"tavily\" | \"bocha\" to switch"
+    } else {
+        ""
+    };
+
+    format!(
+        "search_provider: {} (source: {}{})",
+        search_provider.provider.as_str(),
+        search_provider.source.as_str(),
+        switch_hint
+    )
+}
+
+fn doctor_search_provider_json(config: &Config) -> serde_json::Value {
+    use serde_json::json;
+
+    let search_provider = config.search_provider_resolution();
+    json!({
+        "provider": search_provider.provider.as_str(),
+        "source": search_provider.source.as_str(),
     })
 }
 
@@ -5155,11 +5189,7 @@ async fn run_exec_agent(
         .tag()
         .to_string(),
         workshop: config.workshop.clone(),
-        search_provider: config
-            .search
-            .as_ref()
-            .and_then(|s| s.provider)
-            .unwrap_or_default(),
+        search_provider: config.search_provider(),
         search_api_key: config.search.as_ref().and_then(|s| s.api_key.clone()),
         tools_always_load: config.tools_always_load(),
     };
@@ -5654,6 +5684,86 @@ mod doctor_endpoint_tests {
 
         assert_eq!(report["resolved_model"], "deepseek-v4-flash");
         assert!(report["alias_deprecation"].is_null());
+    }
+
+    #[test]
+    fn doctor_search_provider_line_includes_default_source_and_switch_hint() {
+        let _guard = crate::test_support::lock_test_env();
+        let prev = std::env::var_os("DEEPSEEK_SEARCH_PROVIDER");
+        unsafe { std::env::remove_var("DEEPSEEK_SEARCH_PROVIDER") };
+
+        let line = doctor_search_provider_line(&Config::default());
+
+        match prev {
+            Some(value) => unsafe { std::env::set_var("DEEPSEEK_SEARCH_PROVIDER", value) },
+            None => unsafe { std::env::remove_var("DEEPSEEK_SEARCH_PROVIDER") },
+        }
+        assert!(line.contains("search_provider: bing"));
+        assert!(line.contains("source: default"));
+        assert!(line.contains("[search] provider"));
+    }
+
+    #[test]
+    fn doctor_search_provider_json_reports_config_source() {
+        let _guard = crate::test_support::lock_test_env();
+        let prev = std::env::var_os("DEEPSEEK_SEARCH_PROVIDER");
+        unsafe { std::env::remove_var("DEEPSEEK_SEARCH_PROVIDER") };
+        let config = Config {
+            search: Some(crate::config::SearchConfig {
+                provider: Some(crate::config::SearchProvider::DuckDuckGo),
+                api_key: None,
+            }),
+            ..Default::default()
+        };
+
+        let report = doctor_search_provider_json(&config);
+
+        match prev {
+            Some(value) => unsafe { std::env::set_var("DEEPSEEK_SEARCH_PROVIDER", value) },
+            None => unsafe { std::env::remove_var("DEEPSEEK_SEARCH_PROVIDER") },
+        }
+        assert_eq!(report["provider"], "duckduckgo");
+        assert_eq!(report["source"], "config");
+    }
+
+    #[test]
+    fn doctor_search_provider_json_reports_env_override_source() {
+        let _guard = crate::test_support::lock_test_env();
+        let prev = std::env::var_os("DEEPSEEK_SEARCH_PROVIDER");
+        unsafe { std::env::set_var("DEEPSEEK_SEARCH_PROVIDER", "tavily") };
+
+        let report = doctor_search_provider_json(&Config::default());
+
+        match prev {
+            Some(value) => unsafe { std::env::set_var("DEEPSEEK_SEARCH_PROVIDER", value) },
+            None => unsafe { std::env::remove_var("DEEPSEEK_SEARCH_PROVIDER") },
+        }
+        assert_eq!(report["provider"], "tavily");
+        assert_eq!(report["source"], "env override");
+    }
+
+    #[test]
+    fn doctor_search_provider_line_omits_switch_hint_when_bing_is_configured() {
+        let _guard = crate::test_support::lock_test_env();
+        let prev = std::env::var_os("DEEPSEEK_SEARCH_PROVIDER");
+        unsafe { std::env::remove_var("DEEPSEEK_SEARCH_PROVIDER") };
+        let config = Config {
+            search: Some(crate::config::SearchConfig {
+                provider: Some(crate::config::SearchProvider::Bing),
+                api_key: None,
+            }),
+            ..Default::default()
+        };
+
+        let line = doctor_search_provider_line(&config);
+
+        match prev {
+            Some(value) => unsafe { std::env::set_var("DEEPSEEK_SEARCH_PROVIDER", value) },
+            None => unsafe { std::env::remove_var("DEEPSEEK_SEARCH_PROVIDER") },
+        }
+        assert!(line.contains("search_provider: bing"));
+        assert!(line.contains("source: config"));
+        assert!(!line.contains("[search] provider"));
     }
 
     #[test]
