@@ -1047,6 +1047,9 @@ fn detects_context_length_errors_from_provider_payloads() {
 
 #[test]
 fn context_budget_reserves_output_and_headroom() {
+    // Serialize with other tests that mutate DEEPSEEK_MAX_OUTPUT_TOKENS so
+    // the internal effective_max_output_tokens() call sees a stable env.
+    let _lock = lock_test_env();
     // V4 has a 1M context window — the only family that comfortably hosts
     // a 256K output reservation without saturating the input budget to 0.
     let budget = context_input_budget("deepseek-v4-pro")
@@ -1058,6 +1061,9 @@ fn context_budget_reserves_output_and_headroom() {
 
 #[test]
 fn effective_max_output_tokens_caps_api_request_for_large_window_models() {
+    // Serialize with other tests that mutate DEEPSEEK_MAX_OUTPUT_TOKENS so
+    // v4_cap and flash_cap below see the same env state.
+    let _lock = lock_test_env();
     // V4 models have a 1M context window but the API request cap must stay
     // well below common provider limits (e.g., 131K total on self-hosted
     // vLLM/SGLang). The cap should never exceed 65K.
@@ -1075,8 +1081,84 @@ fn effective_max_output_tokens_caps_api_request_for_large_window_models() {
     assert_eq!(v4_cap, flash_cap);
 }
 
+struct ScopedDeepSeekMaxOutputTokens {
+    previous: Option<OsString>,
+}
+
+impl ScopedDeepSeekMaxOutputTokens {
+    fn set(value: &str) -> Self {
+        let previous = std::env::var_os("DEEPSEEK_MAX_OUTPUT_TOKENS");
+        // Safety: tests using this helper serialize with lock_test_env() and
+        // restore the original value in Drop.
+        unsafe {
+            std::env::set_var("DEEPSEEK_MAX_OUTPUT_TOKENS", value);
+        }
+        Self { previous }
+    }
+
+    fn unset() -> Self {
+        let previous = std::env::var_os("DEEPSEEK_MAX_OUTPUT_TOKENS");
+        // Safety: see set().
+        unsafe {
+            std::env::remove_var("DEEPSEEK_MAX_OUTPUT_TOKENS");
+        }
+        Self { previous }
+    }
+}
+
+impl Drop for ScopedDeepSeekMaxOutputTokens {
+    fn drop(&mut self) {
+        // Safety: tests using this helper serialize with lock_test_env().
+        unsafe {
+            if let Some(previous) = self.previous.take() {
+                std::env::set_var("DEEPSEEK_MAX_OUTPUT_TOKENS", previous);
+            } else {
+                std::env::remove_var("DEEPSEEK_MAX_OUTPUT_TOKENS");
+            }
+        }
+    }
+}
+
+#[test]
+fn effective_max_output_tokens_env_override_returns_positive_value() {
+    let _lock = lock_test_env();
+    let _guard = ScopedDeepSeekMaxOutputTokens::set("16384");
+
+    // Override applies regardless of model — V4 hosted, V4 flash, sub-500K
+    // self-hosted all return the env value verbatim.
+    assert_eq!(effective_max_output_tokens("deepseek-v4-pro"), 16_384);
+    assert_eq!(effective_max_output_tokens("deepseek-v4-flash"), 16_384);
+    assert_eq!(effective_max_output_tokens("qwen3-32b-256k"), 16_384);
+}
+
+#[test]
+fn effective_max_output_tokens_env_override_rejects_zero_and_invalid() {
+    let _lock = lock_test_env();
+    // Establish the heuristic baseline with the env unset.
+    let baseline = {
+        let _guard = ScopedDeepSeekMaxOutputTokens::unset();
+        effective_max_output_tokens("deepseek-v4-pro")
+    };
+    assert!(baseline > 0);
+
+    // 0, non-numeric, and empty values must all fall through to the heuristic
+    // rather than producing a zero/garbage cap that would silently break
+    // request budgeting.
+    for raw in ["0", "abc", "", "  ", "-1"] {
+        let _guard = ScopedDeepSeekMaxOutputTokens::set(raw);
+        assert_eq!(
+            effective_max_output_tokens("deepseek-v4-pro"),
+            baseline,
+            "env={raw:?} should fall through to heuristic"
+        );
+    }
+}
+
 #[test]
 fn internal_context_budget_tiers_reserved_output_by_window() {
+    // Serialize with other tests that mutate DEEPSEEK_MAX_OUTPUT_TOKENS so
+    // both branches below see a stable env.
+    let _lock = lock_test_env();
     // Large-context (>=500K) models reserve the full TURN_MAX_OUTPUT_TOKENS
     // headroom so long V4 sessions don't compact prematurely.
     let internal_budget =
