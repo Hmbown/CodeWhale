@@ -346,6 +346,12 @@ impl ConfigToml {
             "providers.nvidia_nim.http_headers" => {
                 serialize_http_headers(&self.providers.nvidia_nim.http_headers)
             }
+            "providers.moonshot.api_key" => self.providers.moonshot.api_key.clone(),
+            "providers.moonshot.base_url" => self.providers.moonshot.base_url.clone(),
+            "providers.moonshot.model" => self.providers.moonshot.model.clone(),
+            "providers.moonshot.http_headers" => {
+                serialize_http_headers(&self.providers.moonshot.http_headers)
+            }
             "providers.sglang.api_key" => self.providers.sglang.api_key.clone(),
             "providers.sglang.base_url" => self.providers.sglang.base_url.clone(),
             "providers.sglang.model" => self.providers.sglang.model.clone(),
@@ -430,6 +436,18 @@ impl ConfigToml {
             "providers.nvidia_nim.http_headers" => {
                 self.providers.nvidia_nim.http_headers = parse_http_headers(value)?;
             }
+            "providers.moonshot.api_key" => {
+                self.providers.moonshot.api_key = Some(value.to_string());
+            }
+            "providers.moonshot.base_url" => {
+                self.providers.moonshot.base_url = Some(value.to_string());
+            }
+            "providers.moonshot.model" => {
+                self.providers.moonshot.model = Some(value.to_string());
+            }
+            "providers.moonshot.http_headers" => {
+                self.providers.moonshot.http_headers = parse_http_headers(value)?;
+            }
             "providers.sglang.api_key" => {
                 self.providers.sglang.api_key = Some(value.to_string());
             }
@@ -508,6 +526,10 @@ impl ConfigToml {
             "providers.nvidia_nim.base_url" => self.providers.nvidia_nim.base_url = None,
             "providers.nvidia_nim.model" => self.providers.nvidia_nim.model = None,
             "providers.nvidia_nim.http_headers" => self.providers.nvidia_nim.http_headers.clear(),
+            "providers.moonshot.api_key" => self.providers.moonshot.api_key = None,
+            "providers.moonshot.base_url" => self.providers.moonshot.base_url = None,
+            "providers.moonshot.model" => self.providers.moonshot.model = None,
+            "providers.moonshot.http_headers" => self.providers.moonshot.http_headers.clear(),
             "providers.sglang.api_key" => self.providers.sglang.api_key = None,
             "providers.sglang.base_url" => self.providers.sglang.base_url = None,
             "providers.sglang.model" => self.providers.sglang.model = None,
@@ -588,6 +610,18 @@ impl ConfigToml {
         }
         if let Some(v) = serialize_http_headers(&self.providers.nvidia_nim.http_headers) {
             out.insert("providers.nvidia_nim.http_headers".to_string(), v);
+        }
+        if let Some(v) = self.providers.moonshot.api_key.as_ref() {
+            out.insert("providers.moonshot.api_key".to_string(), redact_secret(v));
+        }
+        if let Some(v) = self.providers.moonshot.base_url.as_ref() {
+            out.insert("providers.moonshot.base_url".to_string(), v.clone());
+        }
+        if let Some(v) = self.providers.moonshot.model.as_ref() {
+            out.insert("providers.moonshot.model".to_string(), v.clone());
+        }
+        if let Some(v) = serialize_http_headers(&self.providers.moonshot.http_headers) {
+            out.insert("providers.moonshot.http_headers".to_string(), v);
         }
         if let Some(v) = self.providers.sglang.api_key.as_ref() {
             out.insert("providers.sglang.api_key".to_string(), redact_secret(v));
@@ -1980,7 +2014,7 @@ mod tests {
             api_key: Some("sk-deepseek-secret".to_string()),
             ..ConfigToml::default()
         };
-        config.providers.openrouter.api_key = Some("openrouter-secret-value".to_string());
+        config.providers.moonshot.api_key = Some("moonshot-secret-value".to_string());
         config.model = Some("deepseek-v4-pro".to_string());
 
         assert_eq!(
@@ -1989,9 +2023,9 @@ mod tests {
         );
         assert_eq!(
             config
-                .get_display_value("providers.openrouter.api_key")
+                .get_display_value("providers.moonshot.api_key")
                 .as_deref(),
-            Some("open***alue")
+            Some("moon***alue")
         );
         assert_eq!(
             config.get_display_value("model").as_deref(),
@@ -2008,10 +2042,10 @@ mod tests {
             default_text_model: Some("deepseek-v4-flash".to_string()),
             ..ConfigToml::default()
         };
-        base.providers.openrouter.api_key = Some("user-openrouter-key".to_string());
+        base.providers.moonshot.api_key = Some("user-moonshot-key".to_string());
 
         let mut project = ConfigToml {
-            provider: ProviderKind::Openrouter,
+            provider: ProviderKind::Moonshot,
             api_key: Some("attacker-key".to_string()),
             base_url: Some("https://evil.example/v1".to_string()),
             default_text_model: Some("deepseek-v4-pro".to_string()),
@@ -2019,9 +2053,9 @@ mod tests {
             telemetry: Some(true),
             ..ConfigToml::default()
         };
-        project.providers.openrouter.api_key = Some("attacker-openrouter-key".to_string());
-        project.providers.openrouter.base_url = Some("https://evil.example/openrouter".to_string());
-        project.providers.openrouter.model = Some("deepseek/deepseek-v4-pro".to_string());
+        project.providers.moonshot.api_key = Some("attacker-moonshot-key".to_string());
+        project.providers.moonshot.base_url = Some("https://evil.example/moonshot".to_string());
+        project.providers.moonshot.model = Some("kimi-k2.6".to_string());
 
         base.merge_project_overrides(project);
 
@@ -2031,14 +2065,14 @@ mod tests {
         assert_eq!(base.auth_mode, None);
         assert_eq!(base.telemetry, None);
         assert_eq!(
-            base.providers.openrouter.api_key.as_deref(),
-            Some("user-openrouter-key")
+            base.providers.moonshot.api_key.as_deref(),
+            Some("user-moonshot-key")
         );
-        assert_eq!(base.providers.openrouter.base_url, None);
+        assert_eq!(base.providers.moonshot.base_url, None);
         assert_eq!(base.default_text_model.as_deref(), Some("deepseek-v4-pro"));
         assert_eq!(
-            base.providers.openrouter.model.as_deref(),
-            Some("deepseek/deepseek-v4-pro")
+            base.providers.moonshot.model.as_deref(),
+            Some("kimi-k2.6")
         );
     }
 
@@ -2136,21 +2170,7 @@ mod tests {
     }
 
     #[test]
-    fn provider_kind_parses_openrouter_and_novita_aliases() {
-        assert_eq!(
-            ProviderKind::parse("openrouter"),
-            Some(ProviderKind::Openrouter)
-        );
-        assert_eq!(
-            ProviderKind::parse("OPEN_ROUTER"),
-            Some(ProviderKind::Openrouter)
-        );
-        assert_eq!(ProviderKind::parse("novita"), Some(ProviderKind::Novita));
-        assert_eq!(ProviderKind::parse("Novita"), Some(ProviderKind::Novita));
-        assert_eq!(
-            ProviderKind::parse("fireworks-ai"),
-            Some(ProviderKind::Fireworks)
-        );
+    fn provider_kind_parses_approved_aliases() {
         assert_eq!(ProviderKind::parse("kimi"), Some(ProviderKind::Moonshot));
         assert_eq!(
             ProviderKind::parse("moonshot-ai"),
@@ -2165,17 +2185,16 @@ mod tests {
             Some(ProviderKind::Ollama)
         );
         assert_eq!(
-            ProviderKind::parse("wanjie-ark"),
-            Some(ProviderKind::WanjieArk)
+            ProviderKind::parse("nvidia-nim"),
+            Some(ProviderKind::NvidiaNim)
         );
-        assert_eq!(
-            ProviderKind::parse("ark_wanjie"),
-            Some(ProviderKind::WanjieArk)
-        );
-
-        let parsed: ConfigToml =
-            toml::from_str("provider = \"ark-wanjie\"").expect("wanjie provider alias");
-        assert_eq!(parsed.provider, ProviderKind::WanjieArk);
+        assert_eq!(ProviderKind::parse("nim"), Some(ProviderKind::NvidiaNim));
+        assert_eq!(ProviderKind::parse("openrouter"), None);
+        assert_eq!(ProviderKind::parse("novita"), None);
+        assert_eq!(ProviderKind::parse("fireworks-ai"), None);
+        assert_eq!(ProviderKind::parse("wanjie-ark"), None);
+        assert_eq!(ProviderKind::parse("openai"), None);
+        assert_eq!(ProviderKind::parse("atlascloud"), None);
     }
 
     #[test]
@@ -2192,54 +2211,6 @@ mod tests {
                 toml::from_str(&format!("provider = \"{alias}\"")).expect("legacy provider alias");
             assert_eq!(parsed.provider, ProviderKind::Deepseek);
         }
-    }
-
-    #[test]
-    fn openrouter_provider_defaults_to_canonical_endpoint_and_model() {
-        let _lock = env_lock();
-        let _env = EnvGuard::without_deepseek_runtime_overrides();
-        let config = ConfigToml {
-            provider: ProviderKind::Openrouter,
-            ..ConfigToml::default()
-        };
-
-        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
-
-        assert_eq!(resolved.provider, ProviderKind::Openrouter);
-        assert_eq!(resolved.base_url, DEFAULT_OPENROUTER_BASE_URL);
-        assert_eq!(resolved.model, DEFAULT_OPENROUTER_MODEL);
-    }
-
-    #[test]
-    fn novita_provider_defaults_to_canonical_endpoint_and_model() {
-        let _lock = env_lock();
-        let _env = EnvGuard::without_deepseek_runtime_overrides();
-        let config = ConfigToml {
-            provider: ProviderKind::Novita,
-            ..ConfigToml::default()
-        };
-
-        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
-
-        assert_eq!(resolved.provider, ProviderKind::Novita);
-        assert_eq!(resolved.base_url, DEFAULT_NOVITA_BASE_URL);
-        assert_eq!(resolved.model, DEFAULT_NOVITA_MODEL);
-    }
-
-    #[test]
-    fn fireworks_provider_defaults_to_canonical_endpoint_and_model() {
-        let _lock = env_lock();
-        let _env = EnvGuard::without_deepseek_runtime_overrides();
-        let config = ConfigToml {
-            provider: ProviderKind::Fireworks,
-            ..ConfigToml::default()
-        };
-
-        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
-
-        assert_eq!(resolved.provider, ProviderKind::Fireworks);
-        assert_eq!(resolved.base_url, DEFAULT_FIREWORKS_BASE_URL);
-        assert_eq!(resolved.model, DEFAULT_FIREWORKS_MODEL);
     }
 
     #[test]
@@ -2276,22 +2247,6 @@ mod tests {
         assert_eq!(resolved.model, DEFAULT_KIMI_CODE_MODEL);
         assert_eq!(resolved.api_key, None);
         assert_eq!(resolved.api_key_source, None);
-    }
-
-    #[test]
-    fn wanjie_ark_provider_defaults_to_openai_compatible_endpoint_and_model() {
-        let _lock = env_lock();
-        let _env = EnvGuard::without_deepseek_runtime_overrides();
-        let config = ConfigToml {
-            provider: ProviderKind::WanjieArk,
-            ..ConfigToml::default()
-        };
-
-        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
-
-        assert_eq!(resolved.provider, ProviderKind::WanjieArk);
-        assert_eq!(resolved.base_url, DEFAULT_WANJIE_ARK_BASE_URL);
-        assert_eq!(resolved.model, DEFAULT_WANJIE_ARK_MODEL);
     }
 
     #[test]
@@ -2470,113 +2425,6 @@ mod tests {
     }
 
     #[test]
-    fn openrouter_env_api_key_falls_back_when_config_missing() {
-        let _lock = env_lock();
-        let _env = EnvGuard::without_deepseek_runtime_overrides();
-        // Safety: test-only environment mutation guarded by a module mutex.
-        unsafe {
-            env::set_var("DEEPSEEK_PROVIDER", "openrouter");
-            env::set_var("OPENROUTER_API_KEY", "or-env-key");
-        }
-
-        let resolved =
-            ConfigToml::default().resolve_runtime_options(&CliRuntimeOverrides::default());
-
-        assert_eq!(resolved.provider, ProviderKind::Openrouter);
-        assert_eq!(resolved.api_key.as_deref(), Some("or-env-key"));
-        assert_eq!(resolved.base_url, DEFAULT_OPENROUTER_BASE_URL);
-    }
-
-    #[test]
-    fn novita_env_api_key_falls_back_when_config_missing() {
-        let _lock = env_lock();
-        let _env = EnvGuard::without_deepseek_runtime_overrides();
-        // Safety: test-only environment mutation guarded by a module mutex.
-        unsafe {
-            env::set_var("DEEPSEEK_PROVIDER", "novita");
-            env::set_var("NOVITA_API_KEY", "novita-env-key");
-        }
-
-        let resolved =
-            ConfigToml::default().resolve_runtime_options(&CliRuntimeOverrides::default());
-
-        assert_eq!(resolved.provider, ProviderKind::Novita);
-        assert_eq!(resolved.api_key.as_deref(), Some("novita-env-key"));
-        assert_eq!(resolved.base_url, DEFAULT_NOVITA_BASE_URL);
-    }
-
-    #[test]
-    fn fireworks_env_api_key_falls_back_when_config_missing() {
-        let _lock = env_lock();
-        let _env = EnvGuard::without_deepseek_runtime_overrides();
-        // Safety: test-only environment mutation guarded by a module mutex.
-        unsafe {
-            env::set_var("DEEPSEEK_PROVIDER", "fireworks");
-            env::set_var("FIREWORKS_API_KEY", "fw-env-key");
-        }
-
-        let resolved =
-            ConfigToml::default().resolve_runtime_options(&CliRuntimeOverrides::default());
-
-        assert_eq!(resolved.provider, ProviderKind::Fireworks);
-        assert_eq!(resolved.api_key.as_deref(), Some("fw-env-key"));
-        assert_eq!(resolved.base_url, DEFAULT_FIREWORKS_BASE_URL);
-    }
-
-    #[test]
-    fn wanjie_ark_env_api_key_and_base_url_fall_back_when_config_missing() {
-        let _lock = env_lock();
-        let _env = EnvGuard::without_deepseek_runtime_overrides();
-        // Safety: test-only environment mutation guarded by a module mutex.
-        unsafe {
-            env::set_var("DEEPSEEK_PROVIDER", "wanjie-ark");
-            env::set_var("WANJIE_ARK_API_KEY", "wanjie-env-key");
-            env::set_var("WANJIE_ARK_BASE_URL", "https://wanjie.example/api/v1");
-            env::set_var("WANJIE_ARK_MODEL", "account-model-id");
-        }
-
-        let resolved =
-            ConfigToml::default().resolve_runtime_options(&CliRuntimeOverrides::default());
-
-        assert_eq!(resolved.provider, ProviderKind::WanjieArk);
-        assert_eq!(resolved.api_key.as_deref(), Some("wanjie-env-key"));
-        assert_eq!(resolved.base_url, "https://wanjie.example/api/v1");
-        assert_eq!(resolved.model, "account-model-id");
-    }
-
-    #[test]
-    fn openrouter_provider_normalizes_flash_aliases() {
-        let _lock = env_lock();
-        let _env = EnvGuard::without_deepseek_runtime_overrides();
-        let cli = CliRuntimeOverrides {
-            provider: Some(ProviderKind::Openrouter),
-            model: Some("deepseek-v4-flash".to_string()),
-            ..CliRuntimeOverrides::default()
-        };
-
-        let resolved = ConfigToml::default().resolve_runtime_options(&cli);
-
-        assert_eq!(resolved.provider, ProviderKind::Openrouter);
-        assert_eq!(resolved.model, DEFAULT_OPENROUTER_FLASH_MODEL);
-    }
-
-    #[test]
-    fn novita_provider_normalizes_flash_aliases() {
-        let _lock = env_lock();
-        let _env = EnvGuard::without_deepseek_runtime_overrides();
-        let cli = CliRuntimeOverrides {
-            provider: Some(ProviderKind::Novita),
-            model: Some("deepseek-v4-flash".to_string()),
-            ..CliRuntimeOverrides::default()
-        };
-
-        let resolved = ConfigToml::default().resolve_runtime_options(&cli);
-
-        assert_eq!(resolved.provider, ProviderKind::Novita);
-        assert_eq!(resolved.model, DEFAULT_NOVITA_FLASH_MODEL);
-    }
-
-    #[test]
     fn sglang_provider_normalizes_flash_aliases() {
         let _lock = env_lock();
         let _env = EnvGuard::without_deepseek_runtime_overrides();
@@ -2606,60 +2454,6 @@ mod tests {
 
         assert_eq!(resolved.provider, ProviderKind::Vllm);
         assert_eq!(resolved.model, DEFAULT_VLLM_FLASH_MODEL);
-    }
-
-    #[test]
-    fn openrouter_provider_specific_config_overrides_env() {
-        let _lock = env_lock();
-        let _env = EnvGuard::without_deepseek_runtime_overrides();
-        let mut config = ConfigToml {
-            provider: ProviderKind::Openrouter,
-            ..ConfigToml::default()
-        };
-        config.providers.openrouter.api_key = Some("file-key".to_string());
-        config.providers.openrouter.base_url = Some("https://or-mirror.example/v1".to_string());
-
-        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
-
-        assert_eq!(resolved.api_key.as_deref(), Some("file-key"));
-        assert_eq!(resolved.base_url, "https://or-mirror.example/v1");
-    }
-
-    #[test]
-    fn openrouter_custom_base_url_preserves_provider_model() {
-        let _lock = env_lock();
-        let _env = EnvGuard::without_deepseek_runtime_overrides();
-        let mut config = ConfigToml {
-            provider: ProviderKind::Openrouter,
-            ..ConfigToml::default()
-        };
-        config.providers.openrouter.base_url = Some("https://gateway.example.com/v1".to_string());
-        config.providers.openrouter.model = Some("DeepSeek-V4-Pro".to_string());
-
-        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
-
-        assert_eq!(resolved.provider, ProviderKind::Openrouter);
-        assert_eq!(resolved.base_url, "https://gateway.example.com/v1");
-        assert_eq!(resolved.model, "DeepSeek-V4-Pro");
-    }
-
-    #[test]
-    fn fireworks_custom_base_url_preserves_provider_model() {
-        let _lock = env_lock();
-        let _env = EnvGuard::without_deepseek_runtime_overrides();
-        let mut config = ConfigToml {
-            provider: ProviderKind::Fireworks,
-            ..ConfigToml::default()
-        };
-        config.providers.fireworks.base_url = Some("https://my-gateway.example/v1".to_string());
-        config.providers.fireworks.model = Some("DeepSeek-V4-Pro".to_string());
-
-        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
-
-        assert_eq!(resolved.provider, ProviderKind::Fireworks);
-        assert_eq!(resolved.base_url, "https://my-gateway.example/v1");
-        // Custom base URL skips provider-specific model prefixing.
-        assert_eq!(resolved.model, "DeepSeek-V4-Pro");
     }
 
     #[test]
