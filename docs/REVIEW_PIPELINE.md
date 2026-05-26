@@ -16,7 +16,7 @@ Before a maintainer reviews your PR, it must pass our continuous integration (CI
 
 Please run these locally before pushing your code to avoid CI failures:
 
-\* \*\*Format:\*\* `cargo fmt --check`
+\* \*\*Format:\*\* `cargo fmt --all -- --check`
 
 \* \*\*Linting:\*\* `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`
 
