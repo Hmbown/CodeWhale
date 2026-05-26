@@ -17,10 +17,10 @@
 
 use codewhale_execpolicy::{
     ExecPolicyEngine, PermissionDecision, ToolPermissionCheck, ToolPermissionContext,
-    normalize_path_pattern,
+    normalize_path_pattern, normalize_permission_path,
 };
 use serde_json::{Value, json};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use crate::models::{Tool, ToolCaller};
 use crate::tools::spec::{ToolError, ToolResult};
@@ -656,50 +656,6 @@ fn canonicalize_permission_path(path: &Path) -> Option<PathBuf> {
         canonical.push(part);
     }
     Some(normalize_permission_path(&canonical))
-}
-
-fn normalize_permission_path(path: &Path) -> PathBuf {
-    let mut prefix: Option<std::ffi::OsString> = None;
-    let mut is_root = false;
-    let mut stack: Vec<std::ffi::OsString> = Vec::new();
-
-    for component in path.components() {
-        match component {
-            Component::Prefix(prefix_component) => {
-                prefix = Some(prefix_component.as_os_str().to_owned());
-            }
-            Component::RootDir => {
-                is_root = true;
-            }
-            Component::CurDir => {}
-            Component::ParentDir => {
-                let parent = Component::ParentDir.as_os_str();
-                if let Some(last) = stack.pop() {
-                    if last == parent {
-                        stack.push(last);
-                        stack.push(parent.to_owned());
-                    }
-                } else if !is_root {
-                    stack.push(parent.to_owned());
-                }
-            }
-            Component::Normal(part) => {
-                stack.push(part.to_owned());
-            }
-        }
-    }
-
-    let mut normalized = PathBuf::new();
-    if let Some(prefix) = prefix {
-        normalized.push(prefix);
-    }
-    if is_root {
-        normalized.push(Path::new(std::path::MAIN_SEPARATOR_STR));
-    }
-    for part in stack {
-        normalized.push(part);
-    }
-    normalized
 }
 
 fn permission_path_to_string(path: &Path) -> String {
