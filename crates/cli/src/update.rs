@@ -13,6 +13,7 @@ use std::io::Write;
 
 const CHECKSUM_MANIFEST_ASSET: &str = "codewhale-artifacts-sha256.txt";
 const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/Hmbown/CodeWhale/releases/latest";
+const RELEASES_URL: &str = "https://api.github.com/repos/Hmbown/CodeWhale/releases?per_page=100";
 const CNB_REPO_URL: &str = "https://cnb.cool/codewhale.net/codewhale";
 const RELEASE_BASE_URL_ENV: &str = "DEEPSEEK_TUI_RELEASE_BASE_URL";
 const LEGACY_RELEASE_BASE_URL_ENV: &str = "DEEPSEEK_RELEASE_BASE_URL";
@@ -21,18 +22,26 @@ const LEGACY_UPDATE_VERSION_ENV: &str = "DEEPSEEK_VERSION";
 const UPDATE_USER_AGENT: &str = "codewhale-updater";
 
 /// Run the self-update workflow.
-pub fn run_update() -> Result<()> {
+pub fn run_update(beta: bool) -> Result<()> {
     let current_exe =
         std::env::current_exe().context("failed to determine current executable path")?;
     let targets = update_targets_for_exe(&current_exe);
+    let channel = ReleaseChannel::from_beta_flag(beta);
+    let current_version = env!("CARGO_PKG_VERSION");
 
-    println!("Checking for updates...");
+    println!("Checking for {} updates...", channel.label());
     println!("Current binary: {}", current_exe.display());
+    println!("Current version: v{current_version}");
 
     // Step 1: Fetch latest release metadata
-    let release = fetch_latest_release().with_context(update_network_fallback_hint)?;
+    let release = fetch_latest_release(channel).with_context(update_network_fallback_hint)?;
     let latest_tag = &release.tag_name;
-    println!("Latest release: {latest_tag}");
+    println!("Latest {} release: {latest_tag}", channel.label());
+
+    if !update_is_needed(current_version, latest_tag)? {
+        println!("Already up to date; no download needed.");
+        return Ok(());
+    }
 
     // Step 2: Download the aggregated SHA256 checksum manifest if available
     let checksum_manifest = match select_checksum_manifest_asset(&release) {
@@ -120,6 +129,25 @@ pub fn run_update() -> Result<()> {
     );
 
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReleaseChannel {
+    Stable,
+    Beta,
+}
+
+impl ReleaseChannel {
+    fn from_beta_flag(beta: bool) -> Self {
+        if beta { Self::Beta } else { Self::Stable }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Stable => "stable",
+            Self::Beta => "beta",
+        }
+    }
 }
 
 pub(crate) fn release_arch_for_rust_arch(arch: &str) -> &str {
@@ -278,6 +306,8 @@ fn expected_sha256_from_manifest(text: &str, asset_name: &str) -> Result<String>
 #[derive(serde::Deserialize, Debug)]
 struct Release {
     tag_name: String,
+    #[serde(default)]
+    prerelease: bool,
     assets: Vec<Asset>,
 }
 
@@ -296,7 +326,7 @@ fn update_http_client() -> Result<reqwest::blocking::Client> {
 }
 
 /// Fetch the latest release metadata from GitHub.
-fn fetch_latest_release() -> Result<Release> {
+fn fetch_latest_release(channel: ReleaseChannel) -> Result<Release> {
     if let Some(base_url) = release_base_url_from_env() {
         let version = update_version_from_env().unwrap_or_else(|| env!("CARGO_PKG_VERSION").into());
         return Ok(release_from_mirror_base_url(
@@ -306,7 +336,10 @@ fn fetch_latest_release() -> Result<Release> {
             std::env::consts::ARCH,
         ));
     }
-    fetch_latest_release_from_url(LATEST_RELEASE_URL)
+    match channel {
+        ReleaseChannel::Stable => fetch_latest_release_from_url(LATEST_RELEASE_URL),
+        ReleaseChannel::Beta => fetch_latest_beta_release_from_url(RELEASES_URL),
+    }
 }
 
 fn release_base_url_from_env() -> Option<String> {
@@ -345,7 +378,11 @@ fn release_from_mirror_base_url(
         });
     }
 
-    Release { tag_name, assets }
+    Release {
+        tag_name,
+        prerelease: false,
+        assets,
+    }
 }
 
 fn mirror_asset_url(base_url: &str, asset_name: &str) -> String {
@@ -386,6 +423,54 @@ fn fetch_latest_release_from_url(url: &str) -> Result<Release> {
     })?;
 
     Ok(release)
+}
+
+fn fetch_latest_beta_release_from_url(url: &str) -> Result<Release> {
+    let client = update_http_client()?;
+    let response = client
+        .get(url)
+        .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+        .send()
+        .with_context(|| format!("failed to fetch release list from {url}"))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .with_context(|| format!("failed to read release list response from {url}"))?;
+
+    if !status.is_success() {
+        bail!("GitHub release list request failed with HTTP {status}: {body}");
+    }
+
+    let releases: Vec<Release> = serde_json::from_str(&body).with_context(|| {
+        format!("failed to parse release list JSON from GitHub API. Response: {body}")
+    })?;
+
+    releases
+        .into_iter()
+        .find(is_beta_release)
+        .context("no beta release found in GitHub releases")
+}
+
+fn is_beta_release(release: &Release) -> bool {
+    release.prerelease || release.tag_name.to_ascii_lowercase().contains("beta")
+}
+
+fn update_is_needed(current_version: &str, latest_tag: &str) -> Result<bool> {
+    let current = parse_release_version(current_version)
+        .with_context(|| format!("failed to parse current version {current_version:?}"))?;
+    let latest = parse_release_version(latest_tag)
+        .with_context(|| format!("failed to parse latest release tag {latest_tag:?}"))?;
+    Ok(current < latest)
+}
+
+fn parse_release_version(value: &str) -> Result<semver::Version> {
+    let version = value
+        .trim()
+        .trim_start_matches('v')
+        .split_whitespace()
+        .next()
+        .unwrap_or("");
+    semver::Version::parse(version).with_context(|| format!("invalid semver: {value:?}"))
 }
 
 /// Download a URL to bytes.
@@ -838,6 +923,50 @@ E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  *codewhale-win
     }
 
     #[test]
+    fn update_is_needed_only_when_latest_is_newer() {
+        assert!(update_is_needed("0.8.45", "v0.8.46").unwrap());
+        assert!(update_is_needed("0.8.45", "v0.9.0-beta.1").unwrap());
+        assert!(!update_is_needed("0.8.45", "v0.8.45").unwrap());
+        assert!(!update_is_needed("0.9.0", "v0.9.0-beta.1").unwrap());
+        assert!(!update_is_needed("0.9.0-beta.2", "v0.9.0-beta.1").unwrap());
+    }
+
+    #[test]
+    fn parse_release_version_accepts_tags_and_build_suffixes() {
+        assert_eq!(
+            parse_release_version("v0.9.0-beta.1").unwrap(),
+            semver::Version::parse("0.9.0-beta.1").unwrap()
+        );
+        assert_eq!(
+            parse_release_version("0.8.45 (abcdef123456)").unwrap(),
+            semver::Version::parse("0.8.45").unwrap()
+        );
+    }
+
+    #[test]
+    fn beta_release_detection_accepts_prerelease_or_beta_tag() {
+        let prerelease = Release {
+            tag_name: "v0.9.0-rc.1".to_string(),
+            prerelease: true,
+            assets: vec![],
+        };
+        let beta_tag = Release {
+            tag_name: "v0.9.0-beta.1".to_string(),
+            prerelease: false,
+            assets: vec![],
+        };
+        let stable = Release {
+            tag_name: "v0.9.0".to_string(),
+            prerelease: false,
+            assets: vec![],
+        };
+
+        assert!(is_beta_release(&prerelease));
+        assert!(is_beta_release(&beta_tag));
+        assert!(!is_beta_release(&stable));
+    }
+
+    #[test]
     fn update_fallback_hint_points_china_users_to_cnb_and_asset_mirrors() {
         let hint = update_network_fallback_hint();
 
@@ -914,6 +1043,47 @@ E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  *codewhale-win
 
         assert!(
             err.to_string().contains("HTTP 500"),
+            "unexpected error: {err:#}"
+        );
+        handle.join().expect("test server thread");
+    }
+
+    #[test]
+    fn fetch_latest_beta_release_from_url_selects_first_beta_release() {
+        let body = br#"[
+          { "tag_name": "v0.9.0", "prerelease": false, "assets": [] },
+          { "tag_name": "v0.9.0-beta.2", "prerelease": true, "assets": [
+            { "name": "codewhale-linux-x64", "browser_download_url": "http://example.invalid/codewhale-linux-x64" }
+          ] },
+          { "tag_name": "v0.9.0-beta.1", "prerelease": true, "assets": [] }
+        ]"#;
+        let (url, request_rx, handle) = serve_http_once("200 OK", "application/json", body);
+        let release =
+            fetch_latest_beta_release_from_url(&url).expect("beta release JSON should parse");
+
+        assert_eq!(release.tag_name, "v0.9.0-beta.2");
+        assert!(release.prerelease);
+
+        let request = request_rx.recv().expect("captured request");
+        let request_lower = request.to_ascii_lowercase();
+        assert!(request.starts_with("GET /release "), "got {request:?}");
+        assert!(
+            request_lower.contains("accept: application/vnd.github+json"),
+            "got {request:?}"
+        );
+        handle.join().expect("test server thread");
+    }
+
+    #[test]
+    fn fetch_latest_beta_release_from_url_reports_missing_beta() {
+        let body = br#"[
+          { "tag_name": "v0.9.0", "prerelease": false, "assets": [] }
+        ]"#;
+        let (url, _request_rx, handle) = serve_http_once("200 OK", "application/json", body);
+        let err = fetch_latest_beta_release_from_url(&url).expect_err("missing beta should fail");
+
+        assert!(
+            err.to_string().contains("no beta release found"),
             "unexpected error: {err:#}"
         );
         handle.join().expect("test server thread");

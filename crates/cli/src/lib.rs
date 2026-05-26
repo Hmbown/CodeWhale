@@ -232,7 +232,14 @@ The command prints the completion script to stdout; redirect it to a path your s
     /// Print a usage rollup from the audit log and session store.
     Metrics(MetricsArgs),
     /// Check for and apply updates to the `codewhale` binary.
-    Update,
+    Update(UpdateArgs),
+}
+
+#[derive(Debug, Args)]
+struct UpdateArgs {
+    /// Update to the latest beta release instead of the latest stable release.
+    #[arg(long)]
+    beta: bool,
 }
 
 #[derive(Debug, Args)]
@@ -557,7 +564,7 @@ fn run() -> Result<()> {
             Ok(())
         }
         Some(Commands::Metrics(args)) => run_metrics_command(args),
-        Some(Commands::Update) => update::run_update(),
+        Some(Commands::Update(args)) => update::run_update(args.beta),
         None => {
             let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
             let forwarded = root_tui_passthrough(&cli)?;
@@ -1795,6 +1802,21 @@ mod tests {
             Some(Commands::Config(ConfigArgs {
                 command: ConfigCommand::Path
             }))
+        ));
+    }
+
+    #[test]
+    fn parses_update_beta_flag() {
+        let cli = parse_ok(&["codewhale", "update"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Update(UpdateArgs { beta: false }))
+        ));
+
+        let cli = parse_ok(&["codewhale", "update", "--beta"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Update(UpdateArgs { beta: true }))
         ));
     }
 
