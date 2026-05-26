@@ -83,23 +83,58 @@ DeepSeek V4 helped write parts of this harness. That matters because it means Co
 
 ### How the harness works
 
-**Constitutional hierarchy.** The system prompt is a conflict-of-laws engine. User intent outranks stale memory. Live evidence outranks assumptions. Verification outranks confidence. Every turn inherits a clear chain of authority, so the model never has to guess which instruction to follow.
+Agentic models deal with conflicting information at scale: user intent,
+project rules, system defaults, tool output, and stale memory all compete
+for authority in a single turn. LLM-as-a-judge needs jurisdiction — which
+source wins when they disagree?
 
-**Structured trust.** Three modes with hard boundaries — Plan (read-only), Agent (approval-gated), YOLO (auto-approved in trusted workspaces). OS-level sandboxing backs the boundaries: macOS Seatbelt is the active enforcement path. Linux Landlock support is detected (kernel 5.13+) but not yet enforced; Windows sandboxing is not yet advertised. Dangerous commands are classified and gated regardless of mode.
+CodeWhale answers this with a **Constitution** (`prompts/base.md`). It's a
+formal hierarchy of law — Article VII ranks nine sources from the
+Constitution's own articles down to prior-session handoffs. The user's
+current message outranks stale project instructions. Live tool output
+outranks assumptions. Verification outranks confidence. The model inherits
+a clear chain of authority every turn and never has to guess which
+directive to follow.
 
-**Feedback beats.** Failed commands, failing tests, LSP diagnostics — these are not dead ends. They are signals the model can tune against. A non-zero exit code is information. A type error is a correction vector. The harness makes failure legible so the model can recover without the user constantly re-steering.
+Seven articles sit above the hierarchy, defining the model's identity,
+duties, and agency: a verification mandate (Article V — every action leaves
+evidence, never declare success on faith), a coordination legacy (Article
+VI — leave the workspace legible for the next intelligence), and a
+primacy-of-truth clause (Article II — no lower rule may override it).
 
-**Continuity.** Memory persists across sessions. Handoffs survive context compaction. Sessions can be saved, resumed, and forked into sibling paths. The next intelligence — human or machine — picks up where the last one left off without having to re-discover what was already learned.
+DeepSeek V4's prefix caching makes this practical. The Constitution is long
+and detailed, but once cached it costs roughly 100× less per turn than a
+cold read. The model references it recursively — peeking, scanning, and
+querying through RLM sessions — revisiting information on demand rather
+than relying on a single memorized pass. It performs more like an
+open-book test than a closed one.
 
-**Distributed work.** Sub-agents run concurrently, up to 20 at a time. `agent_open` returns immediately so the parent keeps working. Results arrive inline as completion sentinels with a summary; full transcripts stay behind bounded handles retrievable through `agent_eval`. See [docs/SUBAGENTS.md](docs/SUBAGENTS.md).
+Because the authority structure is explicit, failure isn't hidden. Non-zero
+exit codes, type errors from rust-analyzer arriving between turns, sandbox
+denials — these are fed back as correction vectors. The model uses its own
+drift to self-correct.
 
-**Right-size intelligence.** Fin — cheap Flash with thinking off — handles model auto-routing, RLM child calls, summaries, and coordination. Pro engages for architecture, debugging, and security review. `--model auto` selects both the model and thinking level per turn. The right amount of intelligence for each problem.
+Three modes control the action space. Plan is read-only. Agent gates
+destructive operations behind approval. YOLO auto-approves in trusted
+workspaces. macOS Seatbelt is the active sandbox; Linux Landlock is
+detected but not yet enforced; Windows sandboxing is not yet advertised.
 
-**Long-horizon attention economics.** 1M-token context window with prefix-cache telemetry. Cache hits cost roughly 100× less than misses. A `/statusline` chip shows prefix stability in real time so you can see when a change is about to bust the cache budget.
+Fin — a cheap Flash call with thinking off — handles model auto-routing per
+turn. `--model auto` is the default.
 
-**Freedom with recovery.** Every turn records a side-git snapshot that doesn't touch your repo's `.git`. `/restore` and `revert_turn` roll back the workspace instantly. Dangerous operations are sandboxed at the OS level. You can let the model try things.
+Every turn records a side-git snapshot outside your repo's `.git`.
+`/restore` and `revert_turn` roll back the workspace.
 
-The rest of the surface: **RLM sessions** (persistent Python REPL for batched analysis with `peek`, `search`, `chunk`, and `sub_query_batch` helpers), **LSP diagnostics** (inline errors from rust-analyzer, pyright, tsserver, gopls, clangd after every edit), **MCP protocol**, **HTTP/SSE runtime API**, **persistent task queue** that survives restarts, **ACP adapter** for Zed and other editors, **SWE-bench export**, **installable skills**, **theme picker**, **desktop notifications**, and **live cost tracking** with cache hit/miss breakdowns.
+Sub-agents run concurrently (up to 20). `agent_open` returns immediately;
+results arrive inline as completion sentinels with a summary. Full
+transcripts stay behind bounded handles through `agent_eval`. See
+[docs/SUBAGENTS.md](docs/SUBAGENTS.md).
+
+The rest of the surface: LSP diagnostics after every edit (rust-analyzer,
+pyright, typescript-language-server, gopls, clangd), RLM sessions for
+batched analysis, MCP protocol, HTTP/SSE runtime API, persistent task
+queue, ACP adapter for Zed, SWE-bench export, and live cost tracking with
+cache hit/miss breakdowns.
 
 ---
 
