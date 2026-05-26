@@ -1505,6 +1505,7 @@ pub fn new_shared_shell_manager(workspace: PathBuf) -> SharedShellManager {
 use crate::command_safety::{SafetyLevel, analyze_command, extract_primary_command};
 use crate::execpolicy::{ExecPolicyDecision, load_default_policy};
 use crate::features::Feature;
+use crate::tools::cargo_failure_summary::summarize_cargo_failure;
 use crate::tools::spec::{
     ApprovalRequirement, ToolCapability, ToolContext, ToolError, ToolResult, ToolSpec,
     optional_bool, optional_u64, required_str,
@@ -1522,6 +1523,18 @@ kernel-enforced provenance tag that blocks writes from child processes (includin
 shell sandbox). Workarounds: (1) run the Docker build from a regular terminal outside the \
 TUI, or (2) disable BuildKit with DOCKER_BUILDKIT=0 (only works if your Dockerfiles do not \
 use RUN --mount directives).";
+
+fn attach_cargo_failure_summary(
+    metadata: &mut serde_json::Value,
+    command: &str,
+    result: &ShellResult,
+) {
+    if let Some(summary) =
+        summarize_cargo_failure(command, &result.stdout, &result.stderr, result.exit_code)
+    {
+        metadata["cargo_failure_summary"] = summary.to_metadata_value();
+    }
+}
 
 pub(crate) fn looks_like_macos_provenance_failure(result: &ShellResult) -> bool {
     if matches!(result.status, ShellStatus::Completed) && result.exit_code == Some(0) {
@@ -1965,7 +1978,7 @@ impl ToolSpec for ExecShellTool {
                 format!("{}\n\nSTDERR:\n{}", result.stdout, result.stderr)
             };
 
-            let metadata = json!({
+            let mut metadata = json!({
                 "exit_code": result.exit_code,
                 "status": format!("{:?}", result.status),
                 "duration_ms": result.duration_ms,
@@ -1987,6 +2000,7 @@ impl ToolSpec for ExecShellTool {
                 "canceled": false,
                 "sandbox_backend": "opensandbox",
             });
+            attach_cargo_failure_summary(&mut metadata, command, &result);
 
             return Ok(ToolResult {
                 content: output,
@@ -2165,6 +2179,7 @@ impl ToolSpec for ExecShellTool {
                 if provenance_hint.is_some() {
                     metadata["macos_provenance_restricted"] = json!(true);
                 }
+                attach_cargo_failure_summary(&mut metadata, command, &result);
 
                 Ok(ToolResult {
                     content: output,
@@ -2239,31 +2254,34 @@ fn build_shell_delta_tool_result(delta: ShellDeltaResult, context: &ToolContext)
         output = format!("{hint}\n\n{output}");
     }
 
+    let mut metadata = json!({
+        "exit_code": result.exit_code,
+        "status": format!("{:?}", result.status),
+        "duration_ms": result.duration_ms,
+        "sandboxed": result.sandboxed,
+        "sandbox_type": result.sandbox_type,
+        "sandbox_denied": result.sandbox_denied,
+        "task_id": result.task_id,
+        "stdout_len": result.stdout_len,
+        "stderr_len": result.stderr_len,
+        "stdout_truncated": result.stdout_truncated,
+        "stderr_truncated": result.stderr_truncated,
+        "stdout_omitted": result.stdout_omitted,
+        "stderr_omitted": result.stderr_omitted,
+        "stdout_total_len": delta.stdout_total_len,
+        "stderr_total_len": delta.stderr_total_len,
+        "summary": summary,
+        "stdout_summary": stdout_summary,
+        "stderr_summary": stderr_summary,
+        "command": delta.command,
+        "stream_delta": true,
+    });
+    attach_cargo_failure_summary(&mut metadata, &delta.command, &result);
+
     let mut tool_result = ToolResult {
         content: output,
         success: matches!(result.status, ShellStatus::Completed | ShellStatus::Running),
-        metadata: Some(json!({
-            "exit_code": result.exit_code,
-            "status": format!("{:?}", result.status),
-            "duration_ms": result.duration_ms,
-            "sandboxed": result.sandboxed,
-            "sandbox_type": result.sandbox_type,
-            "sandbox_denied": result.sandbox_denied,
-            "task_id": result.task_id,
-            "stdout_len": result.stdout_len,
-            "stderr_len": result.stderr_len,
-            "stdout_truncated": result.stdout_truncated,
-            "stderr_truncated": result.stderr_truncated,
-            "stdout_omitted": result.stdout_omitted,
-            "stderr_omitted": result.stderr_omitted,
-            "stdout_total_len": delta.stdout_total_len,
-            "stderr_total_len": delta.stderr_total_len,
-            "summary": summary,
-            "stdout_summary": stdout_summary,
-            "stderr_summary": stderr_summary,
-            "command": delta.command,
-            "stream_delta": true,
-        })),
+        metadata: Some(metadata),
     };
     if let Some(hint) = network_restricted_hint
         && let Some(metadata) = tool_result.metadata.as_mut()
