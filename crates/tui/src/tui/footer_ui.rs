@@ -78,10 +78,29 @@ pub(crate) fn render_footer(f: &mut Frame, area: Rect, app: &mut App) {
         let dot_frame = footer_working_label_frame(now_ms, app.fancy_animations);
         // Surface one compact live status row in the footer whenever a turn
         // is live. Tool turns get the current action plus active/done counts;
-        // non-tool work falls back to the existing dot-pulse label.
+        // non-tool work falls back to a descriptive label with elapsed time.
+        let elapsed_secs = app
+            .turn_started_at
+            .map(|t| t.elapsed().as_secs())
+            .unwrap_or(0);
         let mut label = active_subagent_status_label(app)
             .or_else(|| active_tool_status_label(app))
-            .unwrap_or_else(|| crate::tui::widgets::footer_working_label(dot_frame, app.ui_locale));
+            .unwrap_or_else(|| {
+                // Show a more specific label when the model is still loading
+                // or compacting, not just a generic "working…".
+                let base = if app.is_loading {
+                    crate::tui::widgets::footer_working_label(dot_frame, app.ui_locale)
+                } else if app.is_compacting {
+                    "compacting"
+                } else {
+                    crate::tui::widgets::footer_working_label(dot_frame, app.ui_locale)
+                };
+                if elapsed_secs > 0 {
+                    format!("{base} ({elapsed_secs}s)")
+                } else {
+                    base.to_string()
+                }
+            });
         // Append stall reason when the turn has been running > 30 s.
         if let Some(reason) = stall_reason(app) {
             label = format!("{label}  ({reason})");

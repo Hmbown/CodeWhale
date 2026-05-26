@@ -87,8 +87,13 @@ fn resolve_method() -> Method {
         _ => {}
     }
 
+    // Windows: use BEL so `windows_bell()` (MessageBeep) fires on turn
+    // completion.  Previous behavior returned `Off` to avoid the error chime
+    // (#583), but `MessageBeep(MB_OK)` plays the *default system sound* —
+    // distinct from the error sound — so BEL is safe and gives Windows users
+    // audible feedback when a long turn finishes.
     if cfg!(target_os = "windows") {
-        return Method::Off;
+        return Method::Bel;
     }
 
     // Ghostty-based terminals (cmux, etc.) may not set their own

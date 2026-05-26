@@ -1568,6 +1568,10 @@ async fn run_event_loop(
                         }
 
                         // Generate post-turn receipt for completed turns.
+                        // Also push a persistent status toast so users always
+                        // see the outcome in the footer (not just the 8-second
+                        // composer receipt), regardless of notification method
+                        // or platform.
                         if status == crate::core::events::TurnOutcomeStatus::Completed {
                             let tool_count = app.tool_evidence.len();
                             let mut receipt = "✓ turn completed".to_string();
@@ -1583,6 +1587,15 @@ async fn run_event_loop(
                                 }
                             }
                             app.set_receipt_text(receipt);
+                            // Mirror as a persistent status toast (10s TTL).
+                            // The footer bar visibly shows status toasts,
+                            // which is more glanceable than the composer
+                            // border receipt alone.
+                            app.push_status_toast(
+                                receipt,
+                                crate::tui::app::StatusToastLevel::Info,
+                                Some(10_000),
+                            );
                         }
 
                         // Auto-save completed turn and clear crash checkpoint.
