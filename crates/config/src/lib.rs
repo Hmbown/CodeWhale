@@ -2070,10 +2070,7 @@ mod tests {
         );
         assert_eq!(base.providers.moonshot.base_url, None);
         assert_eq!(base.default_text_model.as_deref(), Some("deepseek-v4-pro"));
-        assert_eq!(
-            base.providers.moonshot.model.as_deref(),
-            Some("kimi-k2.6")
-        );
+        assert_eq!(base.providers.moonshot.model.as_deref(), Some("kimi-k2.6"));
     }
 
     #[test]

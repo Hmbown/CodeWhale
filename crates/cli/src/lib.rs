@@ -2405,7 +2405,10 @@ mod tests {
 
         assert_eq!(inner.get("deepseek").unwrap(), Some("sk-deep".to_string()));
         assert_eq!(inner.get("moonshot").unwrap(), Some("kimi-key".to_string()));
-        assert_eq!(inner.get("nvidia-nim").unwrap(), Some("nim-key".to_string()));
+        assert_eq!(
+            inner.get("nvidia-nim").unwrap(),
+            Some("nim-key".to_string())
+        );
 
         // Config file must no longer contain the api keys.
         assert!(store.config.api_key.is_none());
@@ -2495,10 +2498,7 @@ mod tests {
         assert_eq!(cli.telemetry, Some(true));
         assert_eq!(cli.approval_policy.as_deref(), Some("on-request"));
         assert_eq!(cli.sandbox_mode.as_deref(), Some("workspace-write"));
-        assert_eq!(
-            cli.base_url.as_deref(),
-            Some("https://api.moonshot.ai/v1")
-        );
+        assert_eq!(cli.base_url.as_deref(), Some("https://api.moonshot.ai/v1"));
         assert_eq!(cli.api_key.as_deref(), Some("sk-test"));
         assert_eq!(cli.workspace, Some(PathBuf::from("/tmp/workspace")));
         assert!(cli.no_alt_screen);
