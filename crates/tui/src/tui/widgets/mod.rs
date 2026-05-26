@@ -668,7 +668,7 @@ impl Renderable for ComposerWidget<'_> {
             )));
         } else if let Some((sel_start, sel_end)) = self.app.selection_range() {
             let line_ranges = visible_line_char_ranges(
-                &self.app.input,
+                input_text,
                 &visible_lines,
                 content_width,
                 scroll_offset,

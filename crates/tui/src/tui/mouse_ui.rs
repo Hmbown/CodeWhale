@@ -46,12 +46,13 @@ fn mouse_pos_to_char_index(app: &App, col: u16, row: u16, inner: Rect) -> Option
     let rel_col = col.saturating_sub(inner.x) as usize;
     let rel_row = row.saturating_sub(inner.y) as usize;
 
-    if app.input.is_empty() {
+    let input_text = app.composer_display_input();
+    if input_text.is_empty() {
         return Some(0);
     }
 
     let width = inner.width.max(1) as usize;
-    let wrapped = crate::tui::widgets::wrap_input_lines_for_mouse(&app.input, width);
+    let wrapped = crate::tui::widgets::wrap_input_lines_for_mouse(input_text, width);
 
     // Subtract the vertical top-padding (centering of short inputs).
     let text_row = rel_row.saturating_sub(app.viewport.last_composer_top_padding);
@@ -60,7 +61,7 @@ fn mouse_pos_to_char_index(app: &App, col: u16, row: u16, inner: Rect) -> Option
     let absolute_row = text_row + app.viewport.last_composer_scroll_offset;
 
     if absolute_row >= wrapped.len() {
-        return Some(app.input.chars().count());
+        return Some(input_text.chars().count());
     }
 
     let (line_start, line_text) = &wrapped[absolute_row];
