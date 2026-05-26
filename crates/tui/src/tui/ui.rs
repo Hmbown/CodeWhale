@@ -124,7 +124,7 @@ use super::slash_menu::{
 };
 use super::views::{ConfigView, HelpView, ModalKind, ShellControlView, ViewEvent};
 use super::widgets::pending_input_preview::{ContextPreviewItem, PendingInputPreview};
-use super::widgets::{ChatWidget, ComposerWidget, HeaderData, HeaderWidget, Renderable};
+use super::widgets::{ChatWidget, ChatRegion, ComposerWidget, HeaderData, HeaderWidget, Renderable};
 
 // === Constants ===
 
@@ -5605,12 +5605,25 @@ fn render(f: &mut Frame, app: &mut App) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(header_height),   // Header
-            Constraint::Min(1),                  // Chat area
+            Constraint::Min(1),                  // Chat area (split below)
             Constraint::Length(preview_height),  // Pending input preview (0 if empty)
             Constraint::Length(composer_height), // Composer
             Constraint::Length(footer_height),   // Footer
         ])
         .split(size);
+
+    // Split chat area into conversation (upper) and tool output (lower) regions
+    const TOOL_OUTPUT_DEFAULT_HEIGHT: u16 = 10;
+    let chat_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(1),                              // Conversation area (flexible)
+            Constraint::Length(TOOL_OUTPUT_DEFAULT_HEIGHT),  // Tool output area (fixed height)
+        ])
+        .split(chunks[1]);
+
+    let conversation_area = chat_layout[0];
+    let tool_output_area = chat_layout[1];
 
     // Render header
     {
@@ -5708,6 +5721,11 @@ fn render(f: &mut Frame, app: &mut App) {
                 chunks[1]
             };
 
+        // Conversation widget (upper region)
+        let conversation_widget = ChatWidget::new(app, conversation_area, ChatRegion::Conversation);
+        let buf = f.buffer_mut();
+        conversation_widget.render(conversation_area, buf);
+
         if let Some(sidebar_width) = sidebar_width_for_chat_area(app, chat_area.width) {
             let split = Layout::default()
                 .direction(Direction::Horizontal)
@@ -5717,9 +5735,10 @@ fn render(f: &mut Frame, app: &mut App) {
             sidebar_area = Some(split[1]);
         }
 
-        let chat_widget = ChatWidget::new(app, chat_area);
+        // Tool output widget (lower region)
+        let tool_output_widget = ChatWidget::new(app, tool_output_area, ChatRegion::ToolOutput);
         let buf = f.buffer_mut();
-        chat_widget.render(chat_area, buf);
+        tool_output_widget.render(tool_output_area, buf);
 
         if let Some(sidebar_area) = sidebar_area {
             super::sidebar::render_sidebar(f, sidebar_area, app);
