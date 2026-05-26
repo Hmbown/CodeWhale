@@ -78,11 +78,20 @@ function executableName(base, platform) {
 }
 
 function releaseBaseUrl(version, repo = "Hmbown/CodeWhale") {
+  // CODEWHALE_RELEASE_BASE_URL is the canonical override.
+  // DEEPSEEK_TUI_RELEASE_BASE_URL / DEEPSEEK_RELEASE_BASE_URL are legacy aliases.
   const override =
-    process.env.DEEPSEEK_TUI_RELEASE_BASE_URL || process.env.DEEPSEEK_RELEASE_BASE_URL;
+    process.env.CODEWHALE_RELEASE_BASE_URL ||
+    process.env.DEEPSEEK_TUI_RELEASE_BASE_URL ||
+    process.env.DEEPSEEK_RELEASE_BASE_URL;
   if (override) {
     const trimmed = String(override).trim();
     return trimmed.endsWith("/") ? trimmed : `${trimmed}/`;
+  }
+  // When CODEWHALE_USE_CNB_MIRROR is set, use the CNB (China-friendly)
+  // mirror that already builds and publishes binary release assets.
+  if (process.env.CODEWHALE_USE_CNB_MIRROR) {
+    return `https://cnb.cool/Hmbown/CodeWhale/-/releases/v${version}/`;
   }
   return `https://github.com/${repo}/releases/download/v${version}/`;
 }

@@ -15,8 +15,12 @@ const CHECKSUM_MANIFEST_ASSET: &str = "codewhale-artifacts-sha256.txt";
 const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/Hmbown/CodeWhale/releases/latest";
 const RELEASES_URL: &str = "https://api.github.com/repos/Hmbown/CodeWhale/releases?per_page=100";
 const CNB_REPO_URL: &str = "https://cnb.cool/codewhale.net/codewhale";
-const RELEASE_BASE_URL_ENV: &str = "DEEPSEEK_TUI_RELEASE_BASE_URL";
-const LEGACY_RELEASE_BASE_URL_ENV: &str = "DEEPSEEK_RELEASE_BASE_URL";
+const RELEASE_BASE_URL_ENV: &str = "CODEWHALE_RELEASE_BASE_URL";
+const LEGACY_RELEASE_BASE_URL_ENV: &str = "DEEPSEEK_TUI_RELEASE_BASE_URL";
+const DEEPSEEK_RELEASE_BASE_URL_ENV: &str = "DEEPSEEK_RELEASE_BASE_URL";
+const CNB_MIRROR_ENV: &str = "CODEWHALE_USE_CNB_MIRROR";
+/// Base URL for CNB binary release asset downloads (China-friendly mirror).
+const CNB_RELEASE_ASSET_BASE: &str = "https://cnb.cool/Hmbown/CodeWhale/-/releases";
 const UPDATE_VERSION_ENV: &str = "DEEPSEEK_TUI_VERSION";
 const LEGACY_UPDATE_VERSION_ENV: &str = "DEEPSEEK_VERSION";
 const UPDATE_USER_AGENT: &str = "codewhale-updater";
@@ -370,11 +374,24 @@ fn fetch_latest_release(channel: ReleaseChannel) -> Result<FetchedRelease> {
 }
 
 fn release_base_url_from_env() -> Option<String> {
-    std::env::var(RELEASE_BASE_URL_ENV)
-        .ok()
-        .or_else(|| std::env::var(LEGACY_RELEASE_BASE_URL_ENV).ok())
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
+    // Check canonical env first, then legacy envs
+    for env_name in [
+        RELEASE_BASE_URL_ENV,
+        LEGACY_RELEASE_BASE_URL_ENV,
+        DEEPSEEK_RELEASE_BASE_URL_ENV,
+    ] {
+        if let Ok(value) = std::env::var(env_name) {
+            let trimmed = value.trim().to_string();
+            if !trimmed.is_empty() {
+                return Some(trimmed);
+            }
+        }
+    }
+    // Auto-detect CNB mirror when CODEWHALE_USE_CNB_MIRROR is set
+    if std::env::var(CNB_MIRROR_ENV).is_ok() {
+        return Some(CNB_RELEASE_ASSET_BASE.to_string());
+    }
+    None
 }
 
 fn update_version_from_env() -> Option<String> {
