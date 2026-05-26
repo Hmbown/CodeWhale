@@ -25,12 +25,6 @@ use codewhale_state::{StateStore, ThreadListFilters};
 enum ProviderArg {
     Deepseek,
     NvidiaNim,
-    Openai,
-    Atlascloud,
-    WanjieArk,
-    Openrouter,
-    Novita,
-    Fireworks,
     Moonshot,
     Sglang,
     Vllm,
@@ -42,12 +36,6 @@ impl From<ProviderArg> for ProviderKind {
         match value {
             ProviderArg::Deepseek => ProviderKind::Deepseek,
             ProviderArg::NvidiaNim => ProviderKind::NvidiaNim,
-            ProviderArg::Openai => ProviderKind::Openai,
-            ProviderArg::Atlascloud => ProviderKind::Atlascloud,
-            ProviderArg::WanjieArk => ProviderKind::WanjieArk,
-            ProviderArg::Openrouter => ProviderKind::Openrouter,
-            ProviderArg::Novita => ProviderKind::Novita,
-            ProviderArg::Fireworks => ProviderKind::Fireworks,
             ProviderArg::Moonshot => ProviderKind::Moonshot,
             ProviderArg::Sglang => ProviderKind::Sglang,
             ProviderArg::Vllm => ProviderKind::Vllm,
@@ -702,12 +690,6 @@ fn provider_slot(provider: ProviderKind) -> &'static str {
     match provider {
         ProviderKind::Deepseek => "deepseek",
         ProviderKind::NvidiaNim => "nvidia-nim",
-        ProviderKind::Openai => "openai",
-        ProviderKind::Atlascloud => "atlascloud",
-        ProviderKind::WanjieArk => "wanjie-ark",
-        ProviderKind::Openrouter => "openrouter",
-        ProviderKind::Novita => "novita",
-        ProviderKind::Fireworks => "fireworks",
         ProviderKind::Moonshot => "moonshot",
         ProviderKind::Sglang => "sglang",
         ProviderKind::Vllm => "vllm",
@@ -716,15 +698,9 @@ fn provider_slot(provider: ProviderKind) -> &'static str {
 }
 
 /// Provider order used by the `auth list` and `auth status` outputs.
-const PROVIDER_LIST: [ProviderKind; 12] = [
+const PROVIDER_LIST: [ProviderKind; 6] = [
     ProviderKind::Deepseek,
     ProviderKind::NvidiaNim,
-    ProviderKind::Openai,
-    ProviderKind::Atlascloud,
-    ProviderKind::WanjieArk,
-    ProviderKind::Openrouter,
-    ProviderKind::Novita,
-    ProviderKind::Fireworks,
     ProviderKind::Moonshot,
     ProviderKind::Sglang,
     ProviderKind::Vllm,
@@ -776,21 +752,11 @@ fn provider_env_set(provider: ProviderKind) -> bool {
 fn provider_env_vars(provider: ProviderKind) -> &'static [&'static str] {
     match provider {
         ProviderKind::Deepseek => &["DEEPSEEK_API_KEY"],
-        ProviderKind::Openrouter => &["OPENROUTER_API_KEY"],
-        ProviderKind::Novita => &["NOVITA_API_KEY"],
         ProviderKind::NvidiaNim => &["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY", "DEEPSEEK_API_KEY"],
-        ProviderKind::Fireworks => &["FIREWORKS_API_KEY"],
         ProviderKind::Moonshot => &["MOONSHOT_API_KEY", "KIMI_API_KEY"],
         ProviderKind::Sglang => &["SGLANG_API_KEY"],
         ProviderKind::Vllm => &["VLLM_API_KEY"],
         ProviderKind::Ollama => &["OLLAMA_API_KEY"],
-        ProviderKind::Openai => &["OPENAI_API_KEY"],
-        ProviderKind::Atlascloud => &["ATLASCLOUD_API_KEY"],
-        ProviderKind::WanjieArk => &[
-            "WANJIE_ARK_API_KEY",
-            "WANJIE_API_KEY",
-            "WANJIE_MAAS_API_KEY",
-        ],
     }
 }
 
@@ -1447,18 +1413,13 @@ fn build_tui_command(
         resolved_runtime.provider,
         ProviderKind::Deepseek
             | ProviderKind::NvidiaNim
-            | ProviderKind::Openai
-            | ProviderKind::Atlascloud
-            | ProviderKind::WanjieArk
-            | ProviderKind::Openrouter
-            | ProviderKind::Novita
-            | ProviderKind::Fireworks
+            | ProviderKind::Moonshot
             | ProviderKind::Sglang
             | ProviderKind::Vllm
             | ProviderKind::Ollama
     ) {
         bail!(
-            "The interactive TUI supports DeepSeek, NVIDIA NIM, OpenAI-compatible, AtlasCloud, Wanjie Ark, OpenRouter, Novita, Fireworks, SGLang, vLLM, and Ollama providers. Remove --provider {} or use `codewhale model ...` for provider registry inspection.",
+            "The interactive TUI supports DeepSeek, NVIDIA NIM, Moonshot/Kimi, SGLang, vLLM, and Ollama providers. Remove --provider {} or use `codewhale model ...` for provider registry inspection.",
             resolved_runtime.provider.as_str()
         );
     }
@@ -1480,14 +1441,8 @@ fn build_tui_command(
     }
     if let Some(api_key) = resolved_runtime.api_key.as_ref() {
         cmd.env("DEEPSEEK_API_KEY", api_key);
-        if resolved_runtime.provider == ProviderKind::Openai {
-            cmd.env("OPENAI_API_KEY", api_key);
-        }
-        if resolved_runtime.provider == ProviderKind::Atlascloud {
-            cmd.env("ATLASCLOUD_API_KEY", api_key);
-        }
-        if resolved_runtime.provider == ProviderKind::WanjieArk {
-            cmd.env("WANJIE_ARK_API_KEY", api_key);
+        if resolved_runtime.provider == ProviderKind::Moonshot {
+            cmd.env("MOONSHOT_API_KEY", api_key);
         }
         let source = resolved_runtime
             .api_key_source
@@ -1519,14 +1474,8 @@ fn build_tui_command(
     }
     if let Some(api_key) = cli.api_key.as_ref() {
         cmd.env("DEEPSEEK_API_KEY", api_key);
-        if resolved_runtime.provider == ProviderKind::Openai {
-            cmd.env("OPENAI_API_KEY", api_key);
-        }
-        if resolved_runtime.provider == ProviderKind::Atlascloud {
-            cmd.env("ATLASCLOUD_API_KEY", api_key);
-        }
-        if resolved_runtime.provider == ProviderKind::WanjieArk {
-            cmd.env("WANJIE_ARK_API_KEY", api_key);
+        if resolved_runtime.provider == ProviderKind::Moonshot {
+            cmd.env("MOONSHOT_API_KEY", api_key);
         }
         cmd.env("DEEPSEEK_API_KEY_SOURCE", "cli");
     }
@@ -1808,12 +1757,12 @@ mod tests {
             }))
         ));
 
-        let cli = parse_ok(&["deepseek", "model", "list", "--provider", "openai"]);
+        let cli = parse_ok(&["deepseek", "model", "list", "--provider", "moonshot"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Model(ModelArgs {
                 command: ModelCommand::List {
-                    provider: Some(ProviderArg::Openai)
+                    provider: Some(ProviderArg::Moonshot)
                 }
             }))
         ));
@@ -2067,26 +2016,26 @@ mod tests {
             "auth",
             "set",
             "--provider",
-            "openrouter",
+            "moonshot",
             "--api-key-stdin",
         ]);
         assert!(matches!(
             cli.command,
             Some(Commands::Auth(AuthArgs {
                 command: AuthCommand::Set {
-                    provider: ProviderArg::Openrouter,
+                    provider: ProviderArg::Moonshot,
                     api_key: None,
                     api_key_stdin: true,
                 }
             }))
         ));
 
-        let cli = parse_ok(&["deepseek", "auth", "get", "--provider", "novita"]);
+        let cli = parse_ok(&["deepseek", "auth", "get", "--provider", "moonshot"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Auth(AuthArgs {
                 command: AuthCommand::Get {
-                    provider: ProviderArg::Novita
+                    provider: ProviderArg::Moonshot
                 }
             }))
         ));
@@ -2097,42 +2046,6 @@ mod tests {
             Some(Commands::Auth(AuthArgs {
                 command: AuthCommand::Clear {
                     provider: ProviderArg::NvidiaNim
-                }
-            }))
-        ));
-
-        let cli = parse_ok(&["deepseek", "auth", "set", "--provider", "fireworks"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Auth(AuthArgs {
-                command: AuthCommand::Set {
-                    provider: ProviderArg::Fireworks,
-                    api_key: None,
-                    api_key_stdin: false,
-                }
-            }))
-        ));
-
-        let cli = parse_ok(&["deepseek", "auth", "set", "--provider", "moonshot"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Auth(AuthArgs {
-                command: AuthCommand::Set {
-                    provider: ProviderArg::Moonshot,
-                    api_key: None,
-                    api_key_stdin: false,
-                }
-            }))
-        ));
-
-        let cli = parse_ok(&["deepseek", "auth", "set", "--provider", "wanjie-ark"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Auth(AuthArgs {
-                command: AuthCommand::Set {
-                    provider: ProviderArg::WanjieArk,
-                    api_key: None,
-                    api_key_stdin: false,
                 }
             }))
         ));
@@ -2449,7 +2362,7 @@ mod tests {
         let mut store = ConfigStore::load(Some(path.clone())).expect("store should load");
         store.config.api_key = Some("sk-stale".to_string());
         store.config.providers.deepseek.api_key = Some("sk-stale".to_string());
-        store.config.providers.fireworks.api_key = Some("fw-stale".to_string());
+        store.config.providers.moonshot.api_key = Some("kimi-stale".to_string());
         store.save().unwrap();
 
         let secrets = no_keyring_secrets();
@@ -2458,7 +2371,7 @@ mod tests {
 
         assert!(store.config.api_key.is_none());
         assert!(store.config.providers.deepseek.api_key.is_none());
-        assert!(store.config.providers.fireworks.api_key.is_none());
+        assert!(store.config.providers.moonshot.api_key.is_none());
 
         let _ = std::fs::remove_file(path);
     }
@@ -2476,8 +2389,8 @@ mod tests {
         let mut store = ConfigStore::load(Some(path.clone())).expect("store should load");
         store.config.api_key = Some("sk-deep".to_string());
         store.config.providers.deepseek.api_key = Some("sk-deep".to_string());
-        store.config.providers.openrouter.api_key = Some("or-key".to_string());
-        store.config.providers.novita.api_key = Some("nv-key".to_string());
+        store.config.providers.moonshot.api_key = Some("kimi-key".to_string());
+        store.config.providers.nvidia_nim.api_key = Some("nim-key".to_string());
         store.save().unwrap();
 
         let inner = Arc::new(InMemoryKeyringStore::new());
@@ -2491,19 +2404,19 @@ mod tests {
         .expect("migrate should succeed");
 
         assert_eq!(inner.get("deepseek").unwrap(), Some("sk-deep".to_string()));
-        assert_eq!(inner.get("openrouter").unwrap(), Some("or-key".to_string()));
-        assert_eq!(inner.get("novita").unwrap(), Some("nv-key".to_string()));
+        assert_eq!(inner.get("moonshot").unwrap(), Some("kimi-key".to_string()));
+        assert_eq!(inner.get("nvidia-nim").unwrap(), Some("nim-key".to_string()));
 
         // Config file must no longer contain the api keys.
         assert!(store.config.api_key.is_none());
         assert!(store.config.providers.deepseek.api_key.is_none());
-        assert!(store.config.providers.openrouter.api_key.is_none());
-        assert!(store.config.providers.novita.api_key.is_none());
+        assert!(store.config.providers.moonshot.api_key.is_none());
+        assert!(store.config.providers.nvidia_nim.api_key.is_none());
 
         let saved = std::fs::read_to_string(&path).expect("config exists post-migrate");
         assert!(!saved.contains("sk-deep"), "plaintext leaked: {saved}");
-        assert!(!saved.contains("or-key"), "plaintext leaked: {saved}");
-        assert!(!saved.contains("nv-key"), "plaintext leaked: {saved}");
+        assert!(!saved.contains("kimi-key"), "plaintext leaked: {saved}");
+        assert!(!saved.contains("nim-key"), "plaintext leaked: {saved}");
 
         let _ = std::fs::remove_file(path);
     }
@@ -2519,7 +2432,7 @@ mod tests {
             std::process::id()
         ));
         let mut store = ConfigStore::load(Some(path.clone())).expect("store should load");
-        store.config.providers.openrouter.api_key = Some("or-stay".to_string());
+        store.config.providers.moonshot.api_key = Some("kimi-stay".to_string());
         store.save().unwrap();
 
         let inner = Arc::new(InMemoryKeyringStore::new());
@@ -2528,10 +2441,10 @@ mod tests {
         run_auth_command_with_secrets(&mut store, AuthCommand::Migrate { dry_run: true }, &secrets)
             .expect("dry-run should succeed");
 
-        assert_eq!(inner.get("openrouter").unwrap(), None);
+        assert_eq!(inner.get("moonshot").unwrap(), None);
         assert_eq!(
-            store.config.providers.openrouter.api_key.as_deref(),
-            Some("or-stay")
+            store.config.providers.moonshot.api_key.as_deref(),
+            Some("kimi-stay")
         );
 
         let _ = std::fs::remove_file(path);
@@ -2542,7 +2455,7 @@ mod tests {
         let cli = parse_ok(&[
             "deepseek",
             "--provider",
-            "openai",
+            "moonshot",
             "--config",
             "/tmp/deepseek.toml",
             "--profile",
@@ -2560,7 +2473,7 @@ mod tests {
             "--sandbox-mode",
             "workspace-write",
             "--base-url",
-            "https://openai-compatible.example/v1",
+            "https://api.moonshot.ai/v1",
             "--api-key",
             "sk-test",
             "--workspace",
@@ -2573,7 +2486,7 @@ mod tests {
             "deepseek-v4-pro",
         ]);
 
-        assert!(matches!(cli.provider, Some(ProviderArg::Openai)));
+        assert!(matches!(cli.provider, Some(ProviderArg::Moonshot)));
         assert_eq!(cli.config, Some(PathBuf::from("/tmp/deepseek.toml")));
         assert_eq!(cli.profile.as_deref(), Some("work"));
         assert_eq!(cli.model.as_deref(), Some("deepseek-v4-pro"));
@@ -2584,7 +2497,7 @@ mod tests {
         assert_eq!(cli.sandbox_mode.as_deref(), Some("workspace-write"));
         assert_eq!(
             cli.base_url.as_deref(),
-            Some("https://openai-compatible.example/v1")
+            Some("https://api.moonshot.ai/v1")
         );
         assert_eq!(cli.api_key.as_deref(), Some("sk-test"));
         assert_eq!(cli.workspace, Some(PathBuf::from("/tmp/workspace")));
@@ -2595,7 +2508,7 @@ mod tests {
     }
 
     #[test]
-    fn build_tui_command_allows_openai_and_forwards_provider_key() {
+    fn build_tui_command_allows_moonshot_and_forwards_provider_key() {
         let _lock = env_lock();
         let dir = tempfile::TempDir::new().expect("tempdir");
         let custom = dir
@@ -2608,16 +2521,16 @@ mod tests {
         let cli = parse_ok(&[
             "deepseek",
             "--provider",
-            "openai",
+            "moonshot",
             "--workspace",
             "/tmp/codewhale-workspace",
         ]);
         let resolved = ResolvedRuntimeOptions {
-            provider: ProviderKind::Openai,
-            model: "glm-5".to_string(),
-            api_key: Some("resolved-openai-key".to_string()),
+            provider: ProviderKind::Moonshot,
+            model: "kimi-k2.6".to_string(),
+            api_key: Some("resolved-kimi-key".to_string()),
             api_key_source: Some(RuntimeApiKeySource::Keyring),
-            base_url: "https://openai-compatible.example/v4".to_string(),
+            base_url: "https://api.moonshot.ai/v1".to_string(),
             auth_mode: Some("api_key".to_string()),
             output_mode: None,
             log_level: None,
@@ -2631,23 +2544,23 @@ mod tests {
         let cmd = build_tui_command(&cli, &resolved, Vec::new()).expect("command");
         assert_eq!(
             command_env(&cmd, "DEEPSEEK_PROVIDER").as_deref(),
-            Some("openai")
+            Some("moonshot")
         );
         assert_eq!(
             command_env(&cmd, "DEEPSEEK_MODEL").as_deref(),
-            Some("glm-5")
+            Some("kimi-k2.6")
         );
         assert_eq!(
             command_env(&cmd, "DEEPSEEK_BASE_URL").as_deref(),
-            Some("https://openai-compatible.example/v4")
+            Some("https://api.moonshot.ai/v1")
         );
         assert_eq!(
             command_env(&cmd, "DEEPSEEK_API_KEY").as_deref(),
-            Some("resolved-openai-key")
+            Some("resolved-kimi-key")
         );
         assert_eq!(
-            command_env(&cmd, "OPENAI_API_KEY").as_deref(),
-            Some("resolved-openai-key")
+            command_env(&cmd, "MOONSHOT_API_KEY").as_deref(),
+            Some("resolved-kimi-key")
         );
         assert_eq!(
             command_env(&cmd, "DEEPSEEK_API_KEY_SOURCE").as_deref(),
