@@ -74,7 +74,7 @@ pub struct ModelPickerView {
 impl ModelPickerView {
     #[must_use]
     pub fn new(app: &App) -> Self {
-        let hide_deepseek_models = crate::config::provider_passes_model_through(app.api_provider);
+        let hide_deepseek_models = app.accepts_custom_model_ids();
         let initial_model = if app.auto_model {
             "auto".to_string()
         } else {

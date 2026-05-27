@@ -1132,6 +1132,9 @@ pub struct App {
     /// Updated by `/provider` switches so the UI/commands can read the
     /// active backend without re-deriving it from the live config.
     pub api_provider: ApiProvider,
+    /// True when the active provider/base URL accepts arbitrary model IDs
+    /// verbatim rather than DeepSeek-only aliases.
+    pub model_ids_passthrough: bool,
     /// Current reasoning-effort tier for DeepSeek thinking mode.
     /// Cycled via Shift+Tab; initialized from config at startup.
     pub reasoning_effort: ReasoningEffort,
@@ -1665,6 +1668,7 @@ impl App {
         }
         let mut effective_auth_config = config.clone();
         effective_auth_config.provider = Some(provider.as_str().to_string());
+        let model_ids_passthrough = effective_auth_config.model_ids_pass_through();
 
         // Check if the effective provider has an API key. This must happen
         // after settings.default_provider is applied; otherwise a saved
@@ -1850,6 +1854,7 @@ impl App {
             auto_model,
             last_effective_model: None,
             api_provider: provider,
+            model_ids_passthrough,
             reasoning_effort,
             last_effective_reasoning_effort: None,
             workspace,
@@ -4615,6 +4620,10 @@ impl App {
         } else {
             self.model.clone()
         }
+    }
+
+    pub fn accepts_custom_model_ids(&self) -> bool {
+        self.model_ids_passthrough || crate::config::provider_passes_model_through(self.api_provider)
     }
 
     pub fn effective_model_for_budget(&self) -> &str {
