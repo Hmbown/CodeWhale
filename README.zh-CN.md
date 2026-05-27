@@ -316,6 +316,7 @@ codewhale resume --last                         # 恢复最近会话
 codewhale resume <SESSION_ID>                   # 按 UUID 恢复指定会话
 codewhale fork <SESSION_ID>                     # 将已保存会话分叉为兄弟路径
 codewhale serve --http                          # HTTP/SSE API 服务
+codewhale serve --mobile                        # 局域网移动端控制页，默认启用 token 保护
 codewhale serve --acp                           # Zed/自定义智能体的 ACP stdio 适配器
 codewhale run pr <N>                            # 获取 PR 并预填审查提示
 codewhale mcp list                              # 列出已配置 MCP 服务器
@@ -494,7 +495,7 @@ description: 当 DeepSeek 需要遵循我的自定义工作流时使用这个技
 | [CONFIGURATION.md](docs/CONFIGURATION.md) | 完整配置参考 |
 | [MODES.md](docs/MODES.md) | Plan / Agent / YOLO 模式 |
 | [MCP.md](docs/MCP.md) | Model Context Protocol 集成 |
-| [RUNTIME_API.md](docs/RUNTIME_API.md) | HTTP/SSE API 服务 |
+| [RUNTIME_API.md](docs/RUNTIME_API.md) | HTTP/SSE API 服务和移动端控制页 |
 | [INSTALL.md](docs/INSTALL.md) | 各平台安装指南 |
 | [DOCKER.md](docs/DOCKER.md) | GHCR 镜像、volume 和 Docker 用法 |
 | [CNB_MIRROR.md](docs/CNB_MIRROR.md) | CNB 镜像和中国大陆友好安装说明 |

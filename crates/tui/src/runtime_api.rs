@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 use std::convert::Infallible;
 use std::fs;
-use std::net::SocketAddr;
+use std::net::{SocketAddr, UdpSocket};
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
@@ -14,6 +14,7 @@ use async_stream::stream;
 use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderValue, Method, StatusCode, header};
 use axum::middleware::{self, Next};
+use axum::response::Html;
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -60,6 +61,7 @@ pub struct RuntimeApiState {
     auth_required: bool,
     bind_host: String,
     bind_port: u16,
+    mobile_enabled: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -78,6 +80,8 @@ pub struct RuntimeApiOptions {
     pub auth_token: Option<String>,
     /// Allow `/v1/*` routes without auth when no token is configured.
     pub insecure_no_auth: bool,
+    /// Enables the built-in mobile control page at `/mobile`.
+    pub mobile: bool,
 }
 
 impl Default for RuntimeApiOptions {
@@ -89,6 +93,7 @@ impl Default for RuntimeApiOptions {
             cors_origins: Vec::new(),
             auth_token: None,
             insecure_no_auth: false,
+            mobile: false,
         }
     }
 }
@@ -423,6 +428,7 @@ pub async fn run_http_server(
         auth_required: auth_enabled,
         bind_host: options.host.clone(),
         bind_port: options.port,
+        mobile_enabled: options.mobile,
     };
     let app = build_router(state);
 
@@ -444,6 +450,9 @@ pub async fn run_http_server(
         println!("Runtime API auth: bearer token required for /v1/* routes.");
     } else {
         println!("Runtime API auth: disabled by explicit insecure mode.");
+    }
+    if options.mobile {
+        print_mobile_urls(addr, runtime_token.as_deref(), auth_enabled);
     }
     let is_loopback = options.host == "127.0.0.1" || options.host == "::1";
     if is_loopback {
@@ -529,6 +538,8 @@ pub fn build_router(state: RuntimeApiState) -> Router {
 
     Router::new()
         .route("/health", get(health))
+        .route("/mobile", get(mobile_page))
+        .route("/mobile/", get(mobile_page))
         .route("/v1/runtime/info", get(runtime_info))
         .merge(api_routes)
         .layer(cors_layer(&state.cors_origins))
@@ -543,8 +554,17 @@ async fn require_runtime_token(
     let Some(expected) = state.runtime_token.as_deref() else {
         return next.run(req).await;
     };
-    let authorized = req
-        .headers()
+    let authorized = request_has_runtime_token(&req, expected);
+
+    if authorized {
+        next.run(req).await
+    } else {
+        runtime_token_required_response()
+    }
+}
+
+fn request_has_runtime_token(req: &Request, expected: &str) -> bool {
+    req.headers()
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|raw| raw.strip_prefix("Bearer "))
@@ -554,31 +574,125 @@ async fn require_runtime_token(
             .get("x-deepseek-runtime-token")
             .and_then(|value| value.to_str().ok())
             .is_some_and(|token| token == expected)
-        || token_from_query(req.uri().query()).is_some_and(|token| token == expected);
-
-    if authorized {
-        next.run(req).await
-    } else {
-        (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({
-                "error": {
-                    "message": "runtime API bearer token required",
-                    "status": StatusCode::UNAUTHORIZED.as_u16(),
-                }
-            })),
-        )
-            .into_response()
-    }
+        || token_from_query(req.uri().query()).is_some_and(|token| token == expected)
 }
 
-fn token_from_query(query: Option<&str>) -> Option<&str> {
+fn runtime_token_required_response() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(json!({
+            "error": {
+                "message": "runtime API bearer token required",
+                "status": StatusCode::UNAUTHORIZED.as_u16(),
+            }
+        })),
+    )
+        .into_response()
+}
+
+fn token_from_query(query: Option<&str>) -> Option<String> {
     query.and_then(|query| {
         query.split('&').find_map(|pair| {
             let (key, value) = pair.split_once('=')?;
-            (key == "token").then_some(value)
+            (key == "token")
+                .then(|| percent_decode_query_component(value))
+                .flatten()
         })
     })
+}
+
+fn percent_decode_query_component(value: &str) -> Option<String> {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'%' => {
+                let hi = *bytes.get(index + 1)?;
+                let lo = *bytes.get(index + 2)?;
+                let hi = (hi as char).to_digit(16)? as u8;
+                let lo = (lo as char).to_digit(16)? as u8;
+                decoded.push((hi << 4) | lo);
+                index += 3;
+            }
+            b'+' => {
+                decoded.push(b' ');
+                index += 1;
+            }
+            byte => {
+                decoded.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8(decoded).ok()
+}
+
+async fn mobile_page(State(state): State<RuntimeApiState>, req: Request) -> Response {
+    if !state.mobile_enabled {
+        return (
+            StatusCode::NOT_FOUND,
+            "mobile control is disabled; start with `codewhale serve --mobile`",
+        )
+            .into_response();
+    }
+    if let Some(expected) = state.runtime_token.as_deref()
+        && !request_has_runtime_token(&req, expected)
+    {
+        return runtime_token_required_response();
+    }
+    Html(MOBILE_HTML).into_response()
+}
+
+fn print_mobile_urls(addr: SocketAddr, token: Option<&str>, auth_enabled: bool) {
+    println!("Mobile control page enabled.");
+    let token_query = if auth_enabled {
+        token
+            .filter(|token| !token.trim().is_empty())
+            .map(|token| format!("?token={}", url_query_component(token)))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    let port = addr.port();
+    if addr.ip().is_unspecified() {
+        println!("  Local: http://127.0.0.1:{port}/mobile{token_query}");
+        if let Some(ip) = detect_lan_ip() {
+            println!("  LAN:   http://{ip}:{port}/mobile{token_query}");
+        } else {
+            println!(
+                "  LAN:   bind is 0.0.0.0; open http://<this-machine-ip>:{port}/mobile{token_query}"
+            );
+        }
+    } else {
+        println!("  URL:   http://{addr}/mobile{token_query}");
+    }
+    println!("Mobile security: use only on a trusted LAN/VPN; this server does not provide TLS.");
+}
+
+fn url_query_component(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                encoded.push(byte as char);
+            }
+            _ => {
+                use std::fmt::Write as _;
+                let _ = write!(encoded, "%{byte:02X}");
+            }
+        }
+    }
+    encoded
+}
+
+fn detect_lan_ip() -> Option<String> {
+    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
+    // UDP connect only selects the outbound interface locally; no packet is sent.
+    socket.connect("10.255.255.255:1").ok()?;
+    let addr = socket.local_addr().ok()?;
+    Some(addr.ip().to_string())
 }
 
 async fn health() -> Json<HealthResponse> {
@@ -1562,6 +1676,8 @@ fn map_compat_stream_event(event: &crate::runtime_threads::RuntimeEventRecord) -
             }
         }
         "approval.required" => Some(sse_json("approval.required", payload.clone())),
+        "approval.decided" => Some(sse_json("approval.decided", payload.clone())),
+        "approval.timeout" => Some(sse_json("approval.timeout", payload.clone())),
         "sandbox.denied" => Some(sse_json("sandbox.denied", payload.clone())),
         "turn.completed" => {
             let usage = payload
@@ -1741,6 +1857,8 @@ async fn get_usage(
         .map_err(|e| ApiError::internal(e.to_string()))?;
     Ok(Json(json!(aggregation)))
 }
+
+const MOBILE_HTML: &str = include_str!("runtime_mobile.html");
 
 /// Built-in dev origins always allowed by the runtime API (whalescale#255).
 const DEFAULT_CORS_ORIGINS: &[&str] = &[
@@ -1950,6 +2068,23 @@ mod tests {
         assert!(auth.token.is_some());
     }
 
+    #[test]
+    fn url_query_component_percent_encodes_token() {
+        assert_eq!(
+            url_query_component("abc ABC+/?:=&%"),
+            "abc%20ABC%2B%2F%3F%3A%3D%26%25"
+        );
+    }
+
+    #[test]
+    fn token_from_query_decodes_percent_encoded_token() {
+        assert_eq!(
+            token_from_query(Some("since_seq=0&token=abc%20ABC%2B%2F%3F%3A%3D%26%25")),
+            Some("abc ABC+/?:=&%".to_string())
+        );
+        assert_eq!(token_from_query(Some("token=bad%ZZ")), None);
+    }
+
     async fn spawn_test_server_with_root(
         root: PathBuf,
         sessions_dir: PathBuf,
@@ -1967,6 +2102,21 @@ mod tests {
         root: PathBuf,
         sessions_dir: PathBuf,
         runtime_token: Option<String>,
+    ) -> Result<
+        Option<(
+            SocketAddr,
+            SharedRuntimeThreadManager,
+            tokio::task::JoinHandle<()>,
+        )>,
+    > {
+        spawn_test_server_with_root_token_and_mobile(root, sessions_dir, runtime_token, false).await
+    }
+
+    async fn spawn_test_server_with_root_token_and_mobile(
+        root: PathBuf,
+        sessions_dir: PathBuf,
+        runtime_token: Option<String>,
+        mobile_enabled: bool,
     ) -> Result<
         Option<(
             SocketAddr,
@@ -2035,6 +2185,7 @@ mod tests {
             auth_required,
             bind_host: "127.0.0.1".to_string(),
             bind_port: 0,
+            mobile_enabled,
         };
         let app = build_router(state);
         let listener = match TcpListener::bind("127.0.0.1:0").await {
@@ -3595,6 +3746,115 @@ mod tests {
         assert_eq!(info["bind_host"], "127.0.0.1");
         assert_eq!(info["auth_required"], false);
         assert!(info["version"].is_string());
+
+        handle.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn mobile_page_is_available_only_when_enabled() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let root = tmp.path().to_path_buf();
+        let sessions_dir = root.join("sessions");
+        let Some((addr, _runtime_threads, handle)) = spawn_test_server_with_root_token_and_mobile(
+            root.clone(),
+            sessions_dir.clone(),
+            None,
+            false,
+        )
+        .await?
+        else {
+            return Ok(());
+        };
+        let client = reqwest::Client::new();
+        let disabled = client.get(format!("http://{addr}/mobile")).send().await?;
+        assert_eq!(disabled.status(), StatusCode::NOT_FOUND);
+        handle.abort();
+
+        let Some((addr, _runtime_threads, handle)) =
+            spawn_test_server_with_root_token_and_mobile(root, sessions_dir, None, true).await?
+        else {
+            return Ok(());
+        };
+        let enabled = client
+            .get(format!("http://{addr}/mobile"))
+            .send()
+            .await?
+            .error_for_status()?;
+        let html = enabled.text().await?;
+        assert!(html.contains("CodeWhale Mobile"));
+        assert!(html.contains("/v1/approvals/"));
+
+        handle.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn mobile_page_requires_runtime_token_when_auth_enabled() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let root = tmp.path().to_path_buf();
+        let sessions_dir = root.join("sessions");
+        let token = "abc ABC+/?:=&%".to_string();
+        let Some((addr, _runtime_threads, handle)) = spawn_test_server_with_root_token_and_mobile(
+            root,
+            sessions_dir,
+            Some(token.clone()),
+            true,
+        )
+        .await?
+        else {
+            return Ok(());
+        };
+        let client = reqwest::Client::new();
+
+        let unauthorized = client.get(format!("http://{addr}/mobile")).send().await?;
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let encoded = url_query_component(&token);
+        let query = client
+            .get(format!("http://{addr}/mobile?token={encoded}"))
+            .send()
+            .await?
+            .error_for_status()?;
+        assert!(query.text().await?.contains("CodeWhale Mobile"));
+
+        let bearer = client
+            .get(format!("http://{addr}/mobile"))
+            .bearer_auth(&token)
+            .send()
+            .await?
+            .error_for_status()?;
+        assert!(bearer.text().await?.contains("CodeWhale Mobile"));
+
+        handle.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn mobile_insecure_mode_allows_page_and_v1_routes_without_token() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let root = tmp.path().to_path_buf();
+        let sessions_dir = root.join("sessions");
+        let Some((addr, _runtime_threads, handle)) =
+            spawn_test_server_with_root_token_and_mobile(root, sessions_dir, None, true).await?
+        else {
+            return Ok(());
+        };
+        let client = reqwest::Client::new();
+
+        let page = client
+            .get(format!("http://{addr}/mobile"))
+            .send()
+            .await?
+            .error_for_status()?;
+        assert!(page.text().await?.contains("CodeWhale Mobile"));
+
+        let summary = client
+            .get(format!("http://{addr}/v1/threads/summary"))
+            .send()
+            .await?
+            .error_for_status()?;
+        assert_eq!(summary.status(), StatusCode::OK);
 
         handle.abort();
         Ok(())

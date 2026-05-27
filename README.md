@@ -372,6 +372,7 @@ codewhale resume --last                           # resume the most recent sessi
 codewhale resume <SESSION_ID>                     # resume a specific session by UUID
 codewhale fork <SESSION_ID>                       # fork a saved session into a sibling path
 codewhale serve --http                            # HTTP/SSE API server
+codewhale serve --mobile                          # LAN mobile control page; token-gated by default
 codewhale serve --acp                             # ACP stdio adapter for Zed/custom agents
 codewhale run pr <N>                              # fetch PR and pre-seed review prompt
 codewhale mcp list                                # list configured MCP servers
@@ -557,7 +558,7 @@ without recreating skills the user deliberately deleted.
 | [CONFIGURATION.md](docs/CONFIGURATION.md) | Full config reference |
 | [MODES.md](docs/MODES.md) | Plan / Agent / YOLO modes |
 | [MCP.md](docs/MCP.md) | Model Context Protocol integration |
-| [RUNTIME_API.md](docs/RUNTIME_API.md) | HTTP/SSE API server |
+| [RUNTIME_API.md](docs/RUNTIME_API.md) | HTTP/SSE API server and mobile control page |
 | [INSTALL.md](docs/INSTALL.md) | Platform-specific install guide |
 | [DOCKER.md](docs/DOCKER.md) | GHCR image, volumes, and Docker usage |
 | [CNB_MIRROR.md](docs/CNB_MIRROR.md) | CNB mirror and China-friendly install notes |

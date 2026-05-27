@@ -572,12 +572,15 @@ struct ServeArgs {
     /// Start runtime HTTP/SSE API server
     #[arg(long)]
     http: bool,
+    /// Start runtime HTTP/SSE API server with the built-in mobile control page
+    #[arg(long)]
+    mobile: bool,
     /// Start ACP server over stdio for editor clients such as Zed
     #[arg(long)]
     acp: bool,
-    /// Bind host for HTTP server (default localhost)
-    #[arg(long, default_value = "127.0.0.1")]
-    host: String,
+    /// Bind host for HTTP server (default localhost; --mobile defaults to 0.0.0.0)
+    #[arg(long)]
+    host: Option<String>,
     /// Bind port for HTTP server
     #[arg(long, default_value_t = 7878)]
     port: u16,
@@ -597,6 +600,44 @@ struct ServeArgs {
     /// Disable runtime API auth when no token is configured. Only use on a trusted loopback.
     #[arg(long = "insecure")]
     insecure_no_auth: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ServeBindHost {
+    host: String,
+    mobile_rebound_to_lan: bool,
+}
+
+fn resolve_serve_bind_host(mobile: bool, host: Option<String>) -> ServeBindHost {
+    match (mobile, host) {
+        (true, None) => ServeBindHost {
+            host: "0.0.0.0".to_string(),
+            mobile_rebound_to_lan: true,
+        },
+        (_, Some(host)) => ServeBindHost {
+            host,
+            mobile_rebound_to_lan: false,
+        },
+        (false, None) => ServeBindHost {
+            host: "127.0.0.1".to_string(),
+            mobile_rebound_to_lan: false,
+        },
+    }
+}
+
+fn validate_serve_mode_selection(mcp: bool, http: bool, mobile: bool, acp: bool) -> Result<bool> {
+    if http && mobile {
+        bail!("--http and --mobile are mutually exclusive; choose one");
+    }
+    let http_selected = http || mobile;
+    let selected_modes = [mcp, http_selected, acp]
+        .into_iter()
+        .filter(|selected| *selected)
+        .count();
+    if selected_modes != 1 {
+        bail!("Choose exactly one server mode: --mcp, --http/--mobile, or --acp");
+    }
+    Ok(http_selected)
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -926,28 +967,30 @@ async fn main() -> Result<()> {
                 let workspace = cli.workspace.clone().unwrap_or_else(|| {
                     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
                 });
-                let selected_modes = [args.mcp, args.http, args.acp]
-                    .into_iter()
-                    .filter(|selected| *selected)
-                    .count();
-                if selected_modes != 1 {
-                    bail!("Choose exactly one server mode: --mcp, --http, or --acp");
-                }
+                let http_selected =
+                    validate_serve_mode_selection(args.mcp, args.http, args.mobile, args.acp)?;
                 if args.mcp {
                     mcp_server::run_mcp_server(workspace)
-                } else if args.http {
+                } else if http_selected {
                     let config = load_config_from_cli(&cli)?;
                     let cors_origins = resolve_cors_origins(&config, &args.cors_origin);
+                    let bind_host = resolve_serve_bind_host(args.mobile, args.host);
+                    if bind_host.mobile_rebound_to_lan {
+                        println!(
+                            "WARNING: --mobile is binding to 0.0.0.0 so LAN devices can reach the mobile control page. Use --host 127.0.0.1 to keep mobile loopback-only."
+                        );
+                    }
                     runtime_api::run_http_server(
                         config,
                         workspace,
                         runtime_api::RuntimeApiOptions {
-                            host: args.host,
+                            host: bind_host.host,
                             port: args.port,
                             workers: args.workers.clamp(1, 8),
                             cors_origins,
                             auth_token: args.auth_token,
                             insecure_no_auth: args.insecure_no_auth,
+                            mobile: args.mobile,
                         },
                     )
                     .await
@@ -5569,6 +5612,53 @@ async fn run_exec_agent(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod serve_bind_host_tests {
+    use super::*;
+
+    #[test]
+    fn http_defaults_to_loopback() {
+        assert_eq!(
+            resolve_serve_bind_host(false, None),
+            ServeBindHost {
+                host: "127.0.0.1".to_string(),
+                mobile_rebound_to_lan: false,
+            }
+        );
+    }
+
+    #[test]
+    fn mobile_default_rebinds_to_lan_with_warning_flag() {
+        assert_eq!(
+            resolve_serve_bind_host(true, None),
+            ServeBindHost {
+                host: "0.0.0.0".to_string(),
+                mobile_rebound_to_lan: true,
+            }
+        );
+    }
+
+    #[test]
+    fn mobile_respects_explicit_loopback_host() {
+        assert_eq!(
+            resolve_serve_bind_host(true, Some("127.0.0.1".to_string())),
+            ServeBindHost {
+                host: "127.0.0.1".to_string(),
+                mobile_rebound_to_lan: false,
+            }
+        );
+    }
+
+    #[test]
+    fn http_and_mobile_are_mutually_exclusive() {
+        let err = validate_serve_mode_selection(false, true, true, false).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("--http and --mobile are mutually exclusive")
+        );
+    }
 }
 
 #[cfg(test)]
