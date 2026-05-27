@@ -1322,6 +1322,10 @@ pub struct ProviderConfig {
     pub model: Option<String>,
     pub auth_mode: Option<String>,
     pub http_headers: Option<HashMap<String, String>>,
+    /// Override the version path segment between base_url and API routes.
+    /// When `Some("")`, routes go directly on the unversioned base.
+    #[serde(default)]
+    pub path_suffix: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -1804,6 +1808,15 @@ impl Config {
     fn active_provider_preserves_custom_base_url_model(&self) -> bool {
         let provider = self.api_provider();
         provider_preserves_custom_base_url_model(provider, &self.deepseek_base_url())
+    }
+
+    /// Return the configured API path suffix for the active provider.
+    /// When `None`, the default `/v1` versioning logic applies.
+    #[must_use]
+    pub fn path_suffix(&self) -> Option<String> {
+        let provider = self.api_provider();
+        self.provider_config_for(provider)
+            .and_then(|c| c.path_suffix.clone())
     }
 
     /// Read the API key.
@@ -3308,6 +3321,7 @@ fn merge_provider_config(base: ProviderConfig, override_cfg: ProviderConfig) -> 
         model: override_cfg.model.or(base.model),
         auth_mode: override_cfg.auth_mode.or(base.auth_mode),
         http_headers: override_cfg.http_headers.or(base.http_headers),
+        path_suffix: override_cfg.path_suffix.or(base.path_suffix),
     }
 }
 

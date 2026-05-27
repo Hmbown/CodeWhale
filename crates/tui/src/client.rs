@@ -130,6 +130,7 @@ pub struct DeepSeekClient {
     default_model: String,
     connection_health: Arc<AsyncMutex<ConnectionHealth>>,
     rate_limiter: Arc<AsyncMutex<TokenBucket>>,
+    path_suffix: Option<String>,
 }
 
 const CONNECTION_FAILURE_THRESHOLD: u32 = 2;
@@ -296,6 +297,7 @@ impl Clone for DeepSeekClient {
             default_model: self.default_model.clone(),
             connection_health: self.connection_health.clone(),
             rate_limiter: self.rate_limiter.clone(),
+            path_suffix: self.path_suffix.clone(),
         }
     }
 }
@@ -390,10 +392,18 @@ fn is_version_segment(segment: &str) -> bool {
             .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|ch| ch.is_ascii_digit()))
 }
 
-pub(super) fn api_url(base_url: &str, path: &str) -> String {
+pub(super) fn api_url(base_url: &str, path: &str, path_suffix: Option<&str>) -> String {
     let path = path.trim_start_matches('/');
     if path.starts_with("beta/") {
         return format!("{}/{}", unversioned_base_url(base_url), path);
+    }
+    if let Some(suffix) = path_suffix {
+        let base = unversioned_base_url(base_url).trim_end_matches('/').to_string();
+        let suffix = suffix.trim_matches('/');
+        if suffix.is_empty() {
+            return format!("{base}/{path}");
+        }
+        return format!("{base}/{suffix}/{path}");
     }
     let mut versioned = versioned_base_url(base_url);
     // The /beta suffix is not a real API version — it is an
@@ -474,9 +484,13 @@ impl DeepSeekClient {
         let retry = config.retry_policy();
         let default_model = config.default_model();
         let http_headers = config.http_headers();
+        let path_suffix = config.path_suffix();
 
         logging::info(format!("API provider: {}", api_provider.as_str()));
         logging::info(format!("API base URL: {base_url}"));
+        if let Some(ref suffix) = path_suffix {
+            logging::info(format!("API path suffix: {suffix}"));
+        }
         if !http_headers.is_empty() {
             logging::info(format!(
                 "{} custom HTTP header(s) configured",
@@ -499,6 +513,7 @@ impl DeepSeekClient {
             default_model,
             connection_health: Arc::new(AsyncMutex::new(ConnectionHealth::default())),
             rate_limiter: Arc::new(AsyncMutex::new(TokenBucket::from_env())),
+            path_suffix,
         })
     }
 
@@ -580,7 +595,7 @@ impl DeepSeekClient {
         model: &str,
         target_language: &str,
     ) -> Result<String> {
-        let url = api_url(&self.base_url, "chat/completions");
+        let url = api_url(&self.base_url, "chat/completions", self.path_suffix.as_deref());
         let mut body = serde_json::json!({
             "model": model,
             "messages": [
@@ -626,7 +641,7 @@ impl DeepSeekClient {
 
     /// List available models from the provider.
     pub async fn list_models(&self) -> Result<Vec<AvailableModel>> {
-        let url = api_url(&self.base_url, "models");
+        let url = api_url(&self.base_url, "models", self.path_suffix.as_deref());
         let response = self.send_with_retry(|| self.http_client.get(&url)).await?;
 
         let status = response.status();
@@ -673,7 +688,7 @@ impl DeepSeekClient {
         if !should_probe {
             return;
         }
-        let health_url = api_url(&self.base_url, "models");
+        let health_url = api_url(&self.base_url, "models", self.path_suffix.as_deref());
         let probe = self.http_client.get(health_url).send().await;
         match probe {
             Ok(resp) if resp.status().is_success() => {
@@ -784,7 +799,7 @@ impl LlmClient for DeepSeekClient {
     }
 
     async fn health_check(&self) -> Result<bool> {
-        let health_url = api_url(&self.base_url, "models");
+        let health_url = api_url(&self.base_url, "models", self.path_suffix.as_deref());
         self.wait_for_rate_limit().await;
         let response = self.http_client.get(health_url).send().await;
         match response {
@@ -1073,7 +1088,7 @@ impl DeepSeekClient {
         suffix: &str,
         max_tokens: u32,
     ) -> anyhow::Result<String> {
-        let url = api_url(&self.base_url, "beta/completions");
+        let url = api_url(&self.base_url, "beta/completions", self.path_suffix.as_deref());
         let body = json!({
             "model": model,
             "prompt": prompt,
@@ -1190,23 +1205,24 @@ mod tests {
     #[test]
     fn api_url_handles_default_v1_and_beta_base_urls() {
         assert_eq!(
-            api_url("https://api.deepseek.com", "chat/completions"),
+            api_url("https://api.deepseek.com", "chat/completions", None),
             "https://api.deepseek.com/v1/chat/completions"
         );
         assert_eq!(
-            api_url("https://api.deepseek.com/v1", "chat/completions"),
+            api_url("https://api.deepseek.com/v1", "chat/completions", None),
             "https://api.deepseek.com/v1/chat/completions"
         );
         // Non-beta paths from a /beta base URL route to /v1.
         // Only paths with an explicit beta/ prefix use the beta surface.
         assert_eq!(
-            api_url("https://api.deepseek.com/beta", "chat/completions"),
+            api_url("https://api.deepseek.com/beta", "chat/completions", None),
             "https://api.deepseek.com/v1/chat/completions"
         );
         assert_eq!(
             api_url(
                 "https://openai-compatible.example/api/coding/paas/v4",
-                "chat/completions"
+                "chat/completions",
+                None,
             ),
             "https://openai-compatible.example/api/coding/paas/v4/chat/completions"
         );
@@ -1215,15 +1231,15 @@ mod tests {
     #[test]
     fn api_url_routes_beta_paths_from_any_deepseek_base() {
         assert_eq!(
-            api_url("https://api.deepseek.com", "beta/completions"),
+            api_url("https://api.deepseek.com", "beta/completions", None),
             "https://api.deepseek.com/beta/completions"
         );
         assert_eq!(
-            api_url("https://api.deepseek.com/v1", "beta/completions"),
+            api_url("https://api.deepseek.com/v1", "beta/completions", None),
             "https://api.deepseek.com/beta/completions"
         );
         assert_eq!(
-            api_url("https://api.deepseek.com/beta", "beta/completions"),
+            api_url("https://api.deepseek.com/beta", "beta/completions", None),
             "https://api.deepseek.com/beta/completions"
         );
     }
@@ -1234,24 +1250,75 @@ mod tests {
         // /beta/models. Non-beta paths from a /beta base URL must
         // still route to /v1.
         assert_eq!(
-            api_url("https://api.deepseek.com", "models"),
+            api_url("https://api.deepseek.com", "models", None),
             "https://api.deepseek.com/v1/models"
         );
         assert_eq!(
-            api_url("https://api.deepseek.com/v1", "models"),
+            api_url("https://api.deepseek.com/v1", "models", None),
             "https://api.deepseek.com/v1/models"
         );
         assert_eq!(
-            api_url("https://api.deepseek.com/beta", "models"),
+            api_url("https://api.deepseek.com/beta", "models", None),
             "https://api.deepseek.com/v1/models"
         );
         // explicit v<N> versions other than /v1 should be preserved
         assert_eq!(
             api_url(
                 "https://openai-compatible.example/api/coding/paas/v4",
-                "models"
+                "models",
+                None,
             ),
             "https://openai-compatible.example/api/coding/paas/v4/models"
+        );
+    }
+
+    #[test]
+    fn api_url_respects_path_suffix() {
+        // Empty string suffix — no version segment
+        assert_eq!(
+            api_url("https://api.example.com", "chat/completions", Some("")),
+            "https://api.example.com/chat/completions"
+        );
+        // Non-empty suffix — replaces /v1
+        assert_eq!(
+            api_url("https://api.example.com", "chat/completions", Some("v2")),
+            "https://api.example.com/v2/chat/completions"
+        );
+        // Suffix with trailing slash
+        assert_eq!(
+            api_url("https://api.example.com", "chat/completions", Some("/v2/")),
+            "https://api.example.com/v2/chat/completions"
+        );
+        // Suffix on a base_url that already has a version segment
+        assert_eq!(
+            api_url("https://api.example.com/v1", "chat/completions", Some("v2")),
+            "https://api.example.com/v2/chat/completions"
+        );
+        // None suffix — existing default behaviour
+        assert_eq!(
+            api_url("https://api.example.com", "chat/completions", None),
+            "https://api.example.com/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn api_url_path_suffix_with_models_endpoint() {
+        assert_eq!(
+            api_url("https://api.example.com", "models", Some("")),
+            "https://api.example.com/models"
+        );
+        assert_eq!(
+            api_url("https://api.example.com", "models", Some("v2")),
+            "https://api.example.com/v2/models"
+        );
+    }
+
+    #[test]
+    fn api_url_path_suffix_does_not_affect_beta_paths() {
+        // beta/ paths always use the unversioned base regardless of suffix
+        assert_eq!(
+            api_url("https://api.deepseek.com", "beta/completions", Some("v2")),
+            "https://api.deepseek.com/beta/completions"
         );
     }
 
