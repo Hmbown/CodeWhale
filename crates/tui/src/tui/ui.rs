@@ -4701,7 +4701,9 @@ async fn apply_command_result(
                 let _ = engine_handle.send(Op::ListSubAgents).await;
             }
             AppAction::FetchModels => {
-                if crate::config::provider_passes_model_through(config.api_provider()) {
+                if crate::config::provider_passes_model_through(config.api_provider())
+                    && !matches!(config.api_provider(), crate::config::ApiProvider::Xiaomi)
+                {
                     app.add_message(HistoryCell::System {
                         content: format!(
                             "/models is not supported by the {} provider.",
@@ -5754,6 +5756,7 @@ fn render(f: &mut Frame, app: &mut App) {
             crate::config::ApiProvider::Sglang => Some("SGLang"),
             crate::config::ApiProvider::Vllm => Some("vLLM"),
             crate::config::ApiProvider::Ollama => Some("Ollama"),
+            crate::config::ApiProvider::Xiaomi => Some("MiMo"),
         };
         let status_indicator_started_at = if app.low_motion {
             None
@@ -6654,6 +6657,7 @@ async fn apply_provider_picker_api_key(
             ApiProvider::Sglang => &mut providers.sglang,
             ApiProvider::Vllm => &mut providers.vllm,
             ApiProvider::Ollama => &mut providers.ollama,
+            ApiProvider::Xiaomi => &mut providers.xiaomi,
         };
         entry.api_key = Some(api_key);
     }
@@ -6706,6 +6710,7 @@ fn set_provider_auth_mode_in_memory(config: &mut Config, provider: ApiProvider, 
         ApiProvider::Sglang => &mut providers.sglang,
         ApiProvider::Vllm => &mut providers.vllm,
         ApiProvider::Ollama => &mut providers.ollama,
+        ApiProvider::Xiaomi => &mut providers.xiaomi,
     };
     entry.auth_mode = Some(auth_mode);
 }

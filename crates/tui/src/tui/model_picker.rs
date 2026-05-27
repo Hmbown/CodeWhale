@@ -39,6 +39,13 @@ const PICKER_MODELS: &[(&str, &str)] = &[
     ("deepseek-v4-flash", "fast / cheap"),
 ];
 
+/// Models for Xiaomi MiMo provider.
+const PICKER_MODELS_XIAOMI: &[(&str, &str)] = &[
+    ("auto", "select per turn"),
+    ("mimo-v2.5-pro", "reasoning flagship"),
+    ("mimo-v2.5", "omni model"),
+];
+
 /// Thinking-effort rows shown in the picker, in the order DeepSeek
 /// behaviorally distinguishes them.
 const PICKER_EFFORTS: &[ReasoningEffort] = &[
@@ -47,6 +54,9 @@ const PICKER_EFFORTS: &[ReasoningEffort] = &[
     ReasoningEffort::High,
     ReasoningEffort::Max,
 ];
+
+/// Thinking-effort rows for MiMo — only supports enabled/disabled.
+const PICKER_EFFORTS_MIMO: &[ReasoningEffort] = &[ReasoningEffort::Off, ReasoningEffort::High];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Pane {
@@ -66,26 +76,32 @@ pub struct ModelPickerView {
     /// True when the active model is one we don't list — we still show it
     /// so the picker doesn't quietly forget the user's chosen IDs.
     show_custom_model_row: bool,
-    /// When true, hide DeepSeek-specific model rows (pass-through providers
-    /// like openai don't support them).
-    hide_deepseek_models: bool,
+    /// Provider-specific model list to show in the picker.
+    provider_models: &'static [(&'static str, &'static str)],
+    /// Provider-specific thinking effort list.
+    provider_efforts: &'static [ReasoningEffort],
 }
 
 impl ModelPickerView {
     #[must_use]
     pub fn new(app: &App) -> Self {
-        let hide_deepseek_models = crate::config::provider_passes_model_through(app.api_provider);
+        let is_xiaomi = matches!(app.api_provider, crate::config::ApiProvider::Xiaomi);
+        let provider_models: &'static [(&'static str, &'static str)] = match app.api_provider {
+            crate::config::ApiProvider::Xiaomi => PICKER_MODELS_XIAOMI,
+            p if crate::config::provider_passes_model_through(p) => &[("auto", "select per turn")],
+            _ => PICKER_MODELS,
+        };
+        let provider_efforts: &'static [ReasoningEffort] = if is_xiaomi {
+            PICKER_EFFORTS_MIMO
+        } else {
+            PICKER_EFFORTS
+        };
         let initial_model = if app.auto_model {
             "auto".to_string()
         } else {
             app.model.clone()
         };
-        // On pass-through providers, only show "auto" and the custom row.
-        let visible_models: Vec<&str> = if hide_deepseek_models {
-            vec!["auto"]
-        } else {
-            PICKER_MODELS.iter().map(|(id, _)| *id).collect()
-        };
+        let visible_models: Vec<&str> = provider_models.iter().map(|(id, _)| *id).collect();
         let mut selected_model_idx = visible_models.iter().position(|id| *id == initial_model);
         let show_custom_model_row = selected_model_idx.is_none();
         if show_custom_model_row {
@@ -99,10 +115,16 @@ impl ModelPickerView {
             ReasoningEffort::Low | ReasoningEffort::Medium => ReasoningEffort::High,
             other => other,
         };
-        let selected_effort_idx = PICKER_EFFORTS
+        let selected_effort_idx = provider_efforts
             .iter()
-            .position(|e| *e == normalized)
-            .unwrap_or(2); // default to High if somehow unknown
+            .position(|e| {
+                if is_xiaomi && normalized == ReasoningEffort::Max {
+                    *e == ReasoningEffort::High
+                } else {
+                    *e == normalized
+                }
+            })
+            .unwrap_or(0); // default to first effort if unknown
 
         Self {
             initial_model,
@@ -112,16 +134,13 @@ impl ModelPickerView {
             focus: Pane::Model,
             selection_touched: false,
             show_custom_model_row,
-            hide_deepseek_models,
+            provider_models,
+            provider_efforts,
         }
     }
 
     fn visible_model_ids(&self) -> Vec<&'static str> {
-        if self.hide_deepseek_models {
-            vec!["auto"]
-        } else {
-            PICKER_MODELS.iter().map(|(id, _)| *id).collect()
-        }
+        self.provider_models.iter().map(|(id, _)| *id).collect()
     }
 
     fn model_row_count(&self) -> usize {
@@ -146,7 +165,7 @@ impl ModelPickerView {
         if self.resolved_model().trim().eq_ignore_ascii_case("auto") {
             return ReasoningEffort::Auto;
         }
-        PICKER_EFFORTS[self.selected_effort_idx]
+        self.provider_efforts[self.selected_effort_idx]
     }
 
     fn move_up(&mut self) -> bool {
@@ -177,7 +196,7 @@ impl ModelPickerView {
                 }
             }
             Pane::Effort => {
-                let max = PICKER_EFFORTS.len().saturating_sub(1);
+                let max = self.provider_efforts.len().saturating_sub(1);
                 if self.selected_effort_idx < max {
                     self.selected_effort_idx += 1;
                     return true;
@@ -333,14 +352,11 @@ impl ModalView for ModelPickerView {
             .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
             .split(inner);
 
-        let mut model_rows: Vec<(String, String)> = if self.hide_deepseek_models {
-            vec![("auto".to_string(), "select per turn".to_string())]
-        } else {
-            PICKER_MODELS
-                .iter()
-                .map(|(id, hint)| ((*id).to_string(), (*hint).to_string()))
-                .collect()
-        };
+        let mut model_rows: Vec<(String, String)> = self
+            .provider_models
+            .iter()
+            .map(|(id, hint)| ((*id).to_string(), (*hint).to_string()))
+            .collect();
         if self.show_custom_model_row {
             model_rows.push((self.initial_model.clone(), "current (custom)".to_string()));
         }
@@ -353,7 +369,8 @@ impl ModalView for ModelPickerView {
             self.focus == Pane::Model,
         );
 
-        let effort_rows: Vec<(String, String)> = PICKER_EFFORTS
+        let effort_rows: Vec<(String, String)> = self
+            .provider_efforts
             .iter()
             .map(|effort| {
                 let label = effort.short_label().to_string();

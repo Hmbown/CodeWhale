@@ -901,6 +901,10 @@ pub(super) fn apply_reasoning_effort(
                     "enable_thinking": false,
                 });
             }
+            // MiMo uses thinking: { type: "disabled" } to turn off reasoning
+            ApiProvider::Xiaomi => {
+                body["thinking"] = json!({ "type": "disabled" });
+            }
             ApiProvider::Openai
             | ApiProvider::Atlascloud
             | ApiProvider::WanjieArk
@@ -916,6 +920,11 @@ pub(super) fn apply_reasoning_effort(
             // DeepSeek compatibility: low/medium both map to high
             ApiProvider::Deepseek | ApiProvider::DeepseekCN | ApiProvider::Sglang => {
                 body["reasoning_effort"] = json!("high");
+                body["thinking"] = json!({ "type": "enabled" });
+            }
+            // MiMo uses the thinking object like DeepSeek but does NOT
+            // also send reasoning_effort (DeepSeek sends both).
+            ApiProvider::Xiaomi => {
                 body["thinking"] = json!({ "type": "enabled" });
             }
             // OpenRouter/Novita: pass through the actual user-chosen value.
@@ -961,6 +970,10 @@ pub(super) fn apply_reasoning_effort(
         "xhigh" | "max" | "highest" => match provider {
             ApiProvider::Deepseek | ApiProvider::DeepseekCN | ApiProvider::Sglang => {
                 body["reasoning_effort"] = json!("max");
+                body["thinking"] = json!({ "type": "enabled" });
+            }
+            // MiMo doesn't have max/low distinction — just enable thinking
+            ApiProvider::Xiaomi => {
                 body["thinking"] = json!({ "type": "enabled" });
             }
             ApiProvider::Openrouter | ApiProvider::Novita => {
@@ -3073,5 +3086,45 @@ mod tests {
                 "{value:?} should NOT be parsed as truthy",
             );
         }
+    }
+
+    #[test]
+    fn apply_reasoning_effort_xiaomi_disabled() {
+        let mut body = json!({});
+        apply_reasoning_effort(&mut body, Some("disabled"), ApiProvider::Xiaomi);
+        assert_eq!(body["thinking"], json!({ "type": "disabled" }));
+        assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn apply_reasoning_effort_xiaomi_enabled_high() {
+        let mut body = json!({});
+        apply_reasoning_effort(&mut body, Some("high"), ApiProvider::Xiaomi);
+        assert_eq!(body["thinking"], json!({ "type": "enabled" }));
+        assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn apply_reasoning_effort_xiaomi_enabled_low() {
+        let mut body = json!({});
+        apply_reasoning_effort(&mut body, Some("low"), ApiProvider::Xiaomi);
+        assert_eq!(body["thinking"], json!({ "type": "enabled" }));
+        assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn apply_reasoning_effort_xiaomi_no_effort_is_noop() {
+        let mut body = json!({});
+        apply_reasoning_effort(&mut body, None, ApiProvider::Xiaomi);
+        assert!(body.get("thinking").is_none());
+        assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn apply_reasoning_effort_deepseek_sets_both_fields() {
+        let mut body = json!({});
+        apply_reasoning_effort(&mut body, Some("high"), ApiProvider::Deepseek);
+        assert_eq!(body["thinking"], json!({ "type": "enabled" }));
+        assert_eq!(body["reasoning_effort"], json!("high"));
     }
 }
