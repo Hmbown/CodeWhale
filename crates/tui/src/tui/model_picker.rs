@@ -44,6 +44,7 @@ const PICKER_MODELS_XIAOMI: &[(&str, &str)] = &[
     ("auto", "select per turn"),
     ("mimo-v2.5-pro", "reasoning flagship"),
     ("mimo-v2.5", "omni model"),
+    ("mimo-v2-flash", "fast / cheap"),
 ];
 
 /// Thinking-effort rows shown in the picker, in the order DeepSeek
@@ -56,10 +57,7 @@ const PICKER_EFFORTS: &[ReasoningEffort] = &[
 ];
 
 /// Thinking-effort rows for MiMo — only supports enabled/disabled.
-const PICKER_EFFORTS_MIMO: &[ReasoningEffort] = &[
-    ReasoningEffort::Off,
-    ReasoningEffort::High,
-];
+const PICKER_EFFORTS_MIMO: &[ReasoningEffort] = &[ReasoningEffort::Off, ReasoningEffort::High];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Pane {
@@ -91,7 +89,7 @@ impl ModelPickerView {
         let is_xiaomi = matches!(app.api_provider, crate::config::ApiProvider::Xiaomi);
         let provider_models: &'static [(&'static str, &'static str)] = match app.api_provider {
             crate::config::ApiProvider::Xiaomi => PICKER_MODELS_XIAOMI,
-            p if crate::config::provider_passes_model_through(p) => &[],
+            p if crate::config::provider_passes_model_through(p) => &[("auto", "select per turn")],
             _ => PICKER_MODELS,
         };
         let provider_efforts: &'static [ReasoningEffort] = if is_xiaomi {
@@ -120,7 +118,13 @@ impl ModelPickerView {
         };
         let selected_effort_idx = provider_efforts
             .iter()
-            .position(|e| *e == normalized)
+            .position(|e| {
+                if is_xiaomi && normalized == ReasoningEffort::Max {
+                    *e == ReasoningEffort::High
+                } else {
+                    *e == normalized
+                }
+            })
             .unwrap_or(0); // default to first effort if unknown
 
         Self {

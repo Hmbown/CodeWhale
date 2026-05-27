@@ -447,8 +447,9 @@ fn canonical_official_deepseek_model_id(model: &str) -> Option<&'static str> {
 #[must_use]
 pub fn normalize_model_name_for_provider(provider: ApiProvider, model: &str) -> Option<String> {
     let trimmed = model.trim();
-    // Xiaomi MiMo models bypass DeepSeek-only normalization
-    if matches!(provider, ApiProvider::Xiaomi) && trimmed.to_ascii_lowercase().starts_with("mimo") {
+    // Xiaomi MiMo models bypass DeepSeek-only normalization — accept any
+    // valid model name including "auto" and custom/fine-tuned models.
+    if matches!(provider, ApiProvider::Xiaomi) {
         if trimmed
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':'))
@@ -492,7 +493,11 @@ pub fn model_completion_names_for_provider(provider: ApiProvider) -> Vec<&'stati
         ApiProvider::Openai | ApiProvider::Atlascloud | ApiProvider::Ollama => {
             OFFICIAL_DEEPSEEK_MODELS.to_vec()
         }
-        ApiProvider::Xiaomi => vec![DEFAULT_XIAOMI_MODEL, DEFAULT_XIAOMI_FLASH_MODEL],
+        ApiProvider::Xiaomi => vec![
+            DEFAULT_XIAOMI_MODEL,
+            "mimo-v2.5",
+            DEFAULT_XIAOMI_FLASH_MODEL,
+        ],
     }
 }
 
