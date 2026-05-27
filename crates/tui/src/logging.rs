@@ -112,4 +112,21 @@ mod tests {
 
         set_verbose(false);
     }
+
+    #[test]
+    fn restore_keeps_cli_verbose_state_even_when_env_is_not_verbose() {
+        let _guard = TEST_GUARD.lock().unwrap_or_else(|err| err.into_inner());
+
+        set_verbose(true);
+        snapshot_verbose_state();
+
+        // Simulate the Windows alt-screen suppression path. The restore must
+        // bring back the pre-suppression CLI state without depending on the
+        // environment.
+        set_verbose(false);
+        restore_verbose_state();
+
+        assert!(is_verbose());
+        set_verbose(false);
+    }
 }
