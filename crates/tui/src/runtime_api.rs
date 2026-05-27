@@ -707,7 +707,30 @@ fn session_to_detail(session: SavedSession) -> SessionDetailResponse {
                     crate::models::ContentBlock::Thinking { thinking, .. } => {
                         json!({ "type": "thinking", "text": thinking })
                     }
-                    _ => json!({ "type": "other" }),
+                    crate::models::ContentBlock::ToolUse { id, name, input, .. } => {
+                        json!({ "type": "tool_use", "id": id, "name": name, "input": input })
+                    }
+                    crate::models::ContentBlock::ToolResult { tool_use_id, content, is_error, content_blocks, .. } => {
+                        let mut obj = json!({ "type": "tool_result", "tool_use_id": tool_use_id });
+                        if let Some(cbs) = content_blocks {
+                            obj["content_blocks"] = json!(cbs);
+                        } else {
+                            obj["content"] = json!(content);
+                        }
+                        if let Some(e) = is_error {
+                            obj["is_error"] = json!(e);
+                        }
+                        obj
+                    }
+                    crate::models::ContentBlock::ServerToolUse { id, name, input } => {
+                        json!({ "type": "tool_use", "id": id, "name": name, "input": input })
+                    }
+                    crate::models::ContentBlock::ToolSearchToolResult { tool_use_id, content } => {
+                        json!({ "type": "tool_result", "tool_use_id": tool_use_id, "content": content })
+                    }
+                    crate::models::ContentBlock::CodeExecutionToolResult { tool_use_id, content } => {
+                        json!({ "type": "tool_result", "tool_use_id": tool_use_id, "content": content })
+                    }
                 })
                 .collect();
             json!({
