@@ -880,7 +880,7 @@ pub const CLAUDE_UI_THEME: UiTheme = UiTheme {
     header_bg: Color::Rgb(0x18, 0x17, 0x15),
     footer_bg: Color::Rgb(0x18, 0x17, 0x15),
     // Cream-tinted text hierarchy on dark
-    text_dim: Color::Rgb(0x61, 0x5e, 0x58),
+    text_dim: Color::Rgb(0x72, 0x70, 0x6a),
     text_hint: Color::Rgb(0x7d, 0x7a, 0x73),
     text_muted: Color::Rgb(0xa0, 0x9d, 0x96), // on-dark-soft
     text_body: Color::Rgb(0xfa, 0xf9, 0xf5),  // on-dark (cream white)
@@ -889,12 +889,12 @@ pub const CLAUDE_UI_THEME: UiTheme = UiTheme {
     // Coral primary (signature Anthropic accent), teal secondary
     accent_primary: Color::Rgb(0xcc, 0x78, 0x5c), // coral
     accent_secondary: Color::Rgb(0x5d, 0xb8, 0xa6), // accent-teal
-    accent_action: Color::Rgb(0xcc, 0x78, 0x5c),  // coral
+    accent_action: Color::Rgb(0xe8, 0xa5, 0x5a),  // amber
     // Error / destructive — warm red
-    error_fg: Color::Rgb(0xc6, 0x45, 0x45),
+    error_fg: Color::Rgb(0xe0, 0x60, 0x60),
     error_hover: Color::Rgb(0xd9, 0x66, 0x66),
     error_surface: Color::Rgb(0x2a, 0x1c, 0x1c),
-    error_border: Color::Rgb(0xc6, 0x45, 0x45),
+    error_border: Color::Rgb(0xe0, 0x60, 0x60),
     error_text: Color::Rgb(0xe8, 0xb8, 0xb8),
     // Status
     warning: Color::Rgb(0xd4, 0xa0, 0x17), // amber
