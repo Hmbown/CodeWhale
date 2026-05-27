@@ -6,7 +6,7 @@ use std::time::Duration;
 use super::CommandResult;
 use crate::client::DeepSeekClient;
 use crate::config::{
-    COMMON_DEEPSEEK_MODELS, Config, clear_api_key, expand_path, normalize_model_name_for_provider,
+    COMMON_DEEPSEEK_MODELS, Config, clear_api_key, normalize_model_name_for_provider,
 };
 use crate::config_ui::{ConfigUiMode, parse_mode};
 use crate::llm_client::LlmClient;
@@ -611,9 +611,10 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
                     Err(err) => return CommandResult::error(format!("Failed to save: {err}")),
                 }
             }
-            return CommandResult::error(format!(
+            return CommandResult::error(
                 "base_url must be saved with --save; client base URL is loaded from config on startup. Restart and re-open your session after saving."
-            ));
+                    .to_string(),
+            );
         }
         _ => {}
     }
