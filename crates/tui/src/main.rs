@@ -69,6 +69,7 @@ mod session_failure_classifier;
 mod session_manager;
 mod settings;
 mod shell_dispatcher;
+mod shell_invocation;
 mod skill_state;
 mod skills;
 mod slop_ledger;
