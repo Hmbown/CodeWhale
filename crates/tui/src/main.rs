@@ -65,6 +65,7 @@ mod seam_manager;
 mod session_failure_classifier;
 mod session_manager;
 mod settings;
+mod shell_dispatcher;
 mod skill_state;
 mod skills;
 mod snapshot;
