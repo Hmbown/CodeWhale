@@ -4171,6 +4171,7 @@ mod tests {
                 approval_grouping_key: "test_key".to_string(),
                 id: "tool_stale".to_string(),
                 tool_name: "exec_command".to_string(),
+                input: json!({"command": "stale approval"}),
                 description: "stale approval".to_string(),
             })
             .await?;
@@ -4244,6 +4245,7 @@ mod tests {
                 approval_grouping_key: "key1".to_string(),
                 id: "tool_external_allow".to_string(),
                 tool_name: "exec_command".to_string(),
+                input: json!({"command": "external allow"}),
                 description: "external allow".to_string(),
             })
             .await?;
@@ -4321,6 +4323,7 @@ mod tests {
                 approval_grouping_key: "key2".to_string(),
                 id: "tool_external_deny".to_string(),
                 tool_name: "exec_command".to_string(),
+                input: json!({"command": "external deny"}),
                 description: "external deny".to_string(),
             })
             .await?;
@@ -4507,6 +4510,7 @@ mod tests {
                 approval_grouping_key: "key3".to_string(),
                 id: "tool_remember".to_string(),
                 tool_name: "exec_command".to_string(),
+                input: json!({"command": "remember=true"}),
                 description: "remember=true".to_string(),
             })
             .await?;

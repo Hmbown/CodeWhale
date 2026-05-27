@@ -39,15 +39,15 @@ pub fn render_diff(diff: &str, width: u16) -> Vec<Line<'static>> {
 
         if raw.starts_with("@@") {
             if let Some((old_start, new_start)) = parse_hunk_header(raw) {
-                old_line = Some(old_start);
-                new_line = Some(new_start);
+                old_line = old_start;
+                new_line = new_start;
             }
             lines.extend(render_hunk_header(raw, width));
             continue;
         }
 
         if raw.starts_with('+') && !raw.starts_with("+++") {
-            let content = raw.trim_start_matches('+');
+            let content = raw.strip_prefix('+').unwrap_or(raw);
             lines.extend(render_diff_line(
                 content,
                 width,
@@ -65,7 +65,7 @@ pub fn render_diff(diff: &str, width: u16) -> Vec<Line<'static>> {
         }
 
         if raw.starts_with('-') && !raw.starts_with("---") {
-            let content = raw.trim_start_matches('-');
+            let content = raw.strip_prefix('-').unwrap_or(raw);
             lines.extend(render_diff_line(
                 content,
                 width,
@@ -83,7 +83,7 @@ pub fn render_diff(diff: &str, width: u16) -> Vec<Line<'static>> {
         }
 
         if raw.starts_with(' ') {
-            let content = raw.trim_start_matches(' ');
+            let content = raw.strip_prefix(' ').unwrap_or(raw);
             lines.extend(render_diff_line(
                 content,
                 width,
@@ -102,6 +102,95 @@ pub fn render_diff(diff: &str, width: u16) -> Vec<Line<'static>> {
         }
 
         lines.extend(render_header_line(raw, width));
+    }
+
+    lines
+}
+
+/// Render a unified diff in the **compact** layout used by the approval
+/// popup: keeps `@@` hunk headers, line numbers, and `+/-` colouring, but
+/// drops the multi-line summary block and the `--- a/... +++ b/...` /
+/// `diff --git` headers. That trim is what frees up the ~6 rows the old
+/// renderer was burning on metadata inside a 10-line preview window.
+///
+/// The full renderer (`render_diff`) is still what the detail pager uses,
+/// so nothing here changes what the user sees behind `v`.
+pub fn render_diff_compact(diff: &str, width: u16) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let mut old_line: Option<usize> = None;
+    let mut new_line: Option<usize> = None;
+
+    for raw in diff.lines() {
+        if raw.starts_with("diff --git")
+            || raw.starts_with("index ")
+            || raw.starts_with("--- ")
+            || raw.starts_with("+++ ")
+        {
+            continue;
+        }
+
+        if raw.starts_with("@@") {
+            if let Some((old_start, new_start)) = parse_hunk_header(raw) {
+                old_line = old_start;
+                new_line = new_start;
+            }
+            lines.extend(render_hunk_header(raw, width));
+            continue;
+        }
+
+        if raw.starts_with('+') {
+            let content = raw.strip_prefix('+').unwrap_or(raw);
+            lines.extend(render_diff_line(
+                content,
+                width,
+                old_line,
+                new_line,
+                '+',
+                Style::default()
+                    .fg(palette::DIFF_ADDED)
+                    .bg(palette::DIFF_ADDED_BG),
+            ));
+            if let Some(line) = new_line.as_mut() {
+                *line = line.saturating_add(1);
+            }
+            continue;
+        }
+
+        if raw.starts_with('-') {
+            let content = raw.strip_prefix('-').unwrap_or(raw);
+            lines.extend(render_diff_line(
+                content,
+                width,
+                old_line,
+                new_line,
+                '-',
+                Style::default()
+                    .fg(palette::STATUS_ERROR)
+                    .bg(palette::DIFF_DELETED_BG),
+            ));
+            if let Some(line) = old_line.as_mut() {
+                *line = line.saturating_add(1);
+            }
+            continue;
+        }
+
+        if raw.starts_with(' ') {
+            let content = raw.strip_prefix(' ').unwrap_or(raw);
+            lines.extend(render_diff_line(
+                content,
+                width,
+                old_line,
+                new_line,
+                ' ',
+                Style::default().fg(palette::TEXT_PRIMARY),
+            ));
+            if let Some(line) = old_line.as_mut() {
+                *line = line.saturating_add(1);
+            }
+            if let Some(line) = new_line.as_mut() {
+                *line = line.saturating_add(1);
+            }
+        }
     }
 
     lines
@@ -254,15 +343,26 @@ fn render_diff_summary(summaries: &[DiffFileSummary], width: u16) -> Vec<Line<'s
     lines
 }
 
-fn parse_hunk_header(line: &str) -> Option<(usize, usize)> {
+fn parse_hunk_header(line: &str) -> Option<(Option<usize>, Option<usize>)> {
     let parts: Vec<&str> = line.split_whitespace().collect();
     if parts.len() < 3 {
         return None;
     }
     let old = parts[1].trim_start_matches('-');
     let new = parts[2].trim_start_matches('+');
-    let old_start = old.split(',').next()?.parse::<usize>().ok()?;
-    let new_start = new.split(',').next()?.parse::<usize>().ok()?;
+    // 0 means "no lines" (e.g. new file) → None so the gutter stays blank.
+    let old_start = old
+        .split(',')
+        .next()?
+        .parse::<usize>()
+        .ok()
+        .filter(|&v| v > 0);
+    let new_start = new
+        .split(',')
+        .next()?
+        .parse::<usize>()
+        .ok()
+        .filter(|&v| v > 0);
     Some((old_start, new_start))
 }
 
@@ -345,33 +445,14 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
     let mut current = String::new();
     let mut current_width = 0;
 
-    for word in text.split_whitespace() {
-        let word_width = word.width();
-        if word_width > width {
-            if !current.is_empty() {
-                lines.push(std::mem::take(&mut current));
-                current_width = 0;
-            }
-            push_word_breaking_chars(word, width, &mut current, &mut current_width, &mut lines);
-            continue;
+    for ch in text.chars() {
+        let char_width = ch.width().unwrap_or(1);
+        if current_width + char_width > width && current_width > 0 {
+            lines.push(std::mem::take(&mut current));
+            current_width = 0;
         }
-        let additional = if current.is_empty() {
-            word_width
-        } else {
-            word_width + 1
-        };
-        if current_width + additional > width && !current.is_empty() {
-            lines.push(current);
-            current = word.to_string();
-            current_width = word_width;
-        } else {
-            if !current.is_empty() {
-                current.push(' ');
-                current_width += 1;
-            }
-            current.push_str(word);
-            current_width += word_width;
-        }
+        current.push(ch);
+        current_width += char_width;
     }
 
     if current.is_empty() {
@@ -381,24 +462,6 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
     }
 
     lines
-}
-
-fn push_word_breaking_chars(
-    word: &str,
-    width: usize,
-    current: &mut String,
-    current_width: &mut usize,
-    lines: &mut Vec<String>,
-) {
-    for ch in word.chars() {
-        let char_width = ch.width().unwrap_or(1);
-        if *current_width + char_width > width && *current_width > 0 {
-            lines.push(std::mem::take(current));
-            *current_width = 0;
-        }
-        current.push(ch);
-        *current_width += char_width;
-    }
 }
 
 #[cfg(test)]
@@ -456,7 +519,8 @@ diff --git a/src/a.rs b/src/a.rs
         let rendered = render_diff(diff, 80);
         let text = rendered.iter().map(line_text).collect::<Vec<_>>();
         assert!(text[0].contains("summary: 1 file, +1 -1, 1 hunk"));
-        assert!(text.iter().any(|line| line.contains("src/a.rs +1 -1")));
+        assert!(text.iter().any(|line| line.contains("src/a.rs")));
+        assert!(text.iter().any(|line| line.contains("+1 -1")));
         assert!(
             text.iter().any(|line| line.contains(" + new")),
             "added line should carry + gutter: {text:?}"
@@ -477,5 +541,69 @@ diff --git a/src/a.rs b/src/a.rs
         }
 
         assert_eq!(lines.join(""), text);
+    }
+
+    #[test]
+    fn render_diff_compact_skips_summary_and_file_headers() {
+        // The compact renderer is what the approval popup uses, so summary
+        // / `diff --git` / `--- +++` rows must be dropped to free vertical
+        // room for actual code. Hunk header + line-numbered code rows stay.
+        let diff = "\
+diff --git a/src/a.rs b/src/a.rs
+--- a/src/a.rs
++++ b/src/a.rs
+@@ -1,2 +1,3 @@
+ line
++new
+-old
+";
+
+        let rendered = render_diff_compact(diff, 80);
+        let text: Vec<String> = rendered.iter().map(line_text).collect();
+        let joined = text.join("\n");
+        assert!(
+            !joined.contains("summary:"),
+            "compact must skip summary: {joined}"
+        );
+        assert!(
+            !joined.contains("diff --git"),
+            "compact must skip file headers: {joined}",
+        );
+        assert!(
+            !joined.contains("--- a/src/a.rs"),
+            "compact must skip --- header: {joined}",
+        );
+        assert!(
+            text.iter().any(|line| line.contains("@@ -1,2 +1,3 @@")),
+            "hunk header should remain: {text:?}",
+        );
+        assert!(
+            text.iter().any(|line| line.contains(" + new")),
+            "added line should carry + gutter: {text:?}",
+        );
+        assert!(
+            text.iter().any(|line| line.contains(" - old")),
+            "deleted line should carry - gutter: {text:?}",
+        );
+    }
+
+    #[test]
+    fn render_diff_preserves_indented_context_lines() {
+        let diff = "\
+diff --git a/src/a.rs b/src/a.rs
+--- a/src/a.rs
++++ b/src/a.rs
+@@ -1,2 +1,2 @@
+ fn main() {
+     println!(\"hello\");
+";
+        let rendered = render_diff_compact(diff, 80);
+        let text = rendered
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains(" fn main() {"), "{text}");
+        assert!(text.contains("     println!"), "{text}");
     }
 }

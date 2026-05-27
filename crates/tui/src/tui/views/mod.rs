@@ -1,5 +1,5 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-use ratatui::{buffer::Buffer, layout::Rect};
+use ratatui::{buffer::Buffer, layout::Rect, text::Line};
 use std::cell::{Cell, RefCell};
 use std::fmt;
 
@@ -87,6 +87,10 @@ pub enum ViewEvent {
     OpenTextPager {
         title: String,
         content: String,
+    },
+    OpenStyledPager {
+        title: String,
+        lines: Vec<Line<'static>>,
     },
     ApprovalDecision {
         tool_id: String,

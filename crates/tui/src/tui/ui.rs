@@ -1892,6 +1892,7 @@ async fn run_event_loop(
                     EngineEvent::ApprovalRequired {
                         id,
                         tool_name,
+                        input,
                         description,
                         approval_key,
                         approval_grouping_key,
@@ -1937,25 +1938,43 @@ async fn run_event_loop(
                             app.status_message =
                                 Some(format!("Blocked tool '{tool_name}' (approval_mode=never)"));
                         } else {
-                            let tool_input = app
-                                .pending_tool_uses
-                                .iter()
-                                .find(|(tool_id, _, _)| tool_id == &id)
-                                .map(|(_, _, input)| input.clone())
-                                .unwrap_or_else(|| serde_json::json!({}));
-
                             if tool_name == "apply_patch" {
-                                maybe_add_patch_preview(app, &tool_input);
+                                maybe_add_patch_preview(app, &input);
                             }
 
-                            // Create approval request and show overlay
-                            let request = ApprovalRequest::new(
-                                &id,
-                                &tool_name,
-                                &description,
-                                &tool_input,
-                                &approval_key,
-                            );
+                            // Create approval request and show overlay.
+                            // Build the diff preview off the async executor
+                            // thread so synchronous filesystem I/O doesn't
+                            // block the TUI event loop.
+                            let workspace_str = app.workspace.display().to_string();
+                            let id_owned = id.clone();
+                            let tool_owned = tool_name.clone();
+                            let desc_owned = description.clone();
+                            let input_owned = input.clone();
+                            let key_owned = approval_key.clone();
+                            let mut request = tokio::task::spawn_blocking(move || {
+                                let mut r = ApprovalRequest::new_with_workspace(
+                                    &id_owned,
+                                    &tool_owned,
+                                    &desc_owned,
+                                    &input_owned,
+                                    &key_owned,
+                                    Some(workspace_str),
+                                );
+                                r.build_and_set_diff_preview();
+                                r
+                            })
+                            .await
+                            .unwrap_or_else(|_| {
+                                ApprovalRequest::new_with_workspace(
+                                    &id,
+                                    &tool_name,
+                                    &description,
+                                    &input,
+                                    &approval_key,
+                                    Some(app.workspace.display().to_string()),
+                                )
+                            });
                             log_sensitive_event(
                                 "tool.approval.prompted",
                                 serde_json::json!({
@@ -4612,6 +4631,10 @@ fn open_text_pager(app: &mut App, title: String, content: String) {
     ));
 }
 
+fn open_styled_pager(app: &mut App, title: String, lines: Vec<ratatui::text::Line<'static>>) {
+    app.view_stack.push(PagerView::new(title, lines));
+}
+
 pub(crate) fn open_context_inspector(app: &mut App) {
     let width = app
         .viewport
@@ -6100,6 +6123,9 @@ async fn handle_view_events(
             },
             ViewEvent::OpenTextPager { title, content } => {
                 open_text_pager(app, title, content);
+            }
+            ViewEvent::OpenStyledPager { title, lines } => {
+                open_styled_pager(app, title, lines);
             }
             ViewEvent::CopyToClipboard { text, label } => {
                 if text.is_empty() {
@@ -7873,12 +7899,20 @@ fn spillover_pager_section(app: &App, cell_index: usize) -> Option<String> {
 }
 
 pub(crate) fn open_details_pager_for_cell(app: &mut App, cell_index: usize) -> bool {
+    use ratatui::style::Modifier;
+    use ratatui::text::{Line, Span};
     if let Some(detail) = app.tool_detail_record_for_cell(cell_index) {
         let input = serde_json::to_string_pretty(&detail.input)
             .unwrap_or_else(|_| detail.input.to_string());
         let output = detail.output.as_deref().map_or(
             "(not available)".to_string(),
             std::string::ToString::to_string,
+        );
+        let workspace_str = app.workspace.to_string_lossy().to_string();
+        let preview = crate::tui::approval::build_diff_preview(
+            &detail.tool_name,
+            &detail.input,
+            Some(workspace_str.as_str()),
         );
 
         // #500: when the tool result was spilled to disk, fold the full
@@ -7888,28 +7922,87 @@ pub(crate) fn open_details_pager_for_cell(app: &mut App, cell_index: usize) -> b
         // model received against the full payload.
         let spillover_section = spillover_pager_section(app, cell_index);
 
-        let content = if let Some(section) = spillover_section {
-            format!(
-                "Tool ID: {}\nTool: {}\n\nInput:\n{}\n\nOutput:\n{}\n\n{}",
-                detail.tool_id, detail.tool_name, input, output, section
-            )
-        } else {
-            format!(
-                "Tool ID: {}\nTool: {}\n\nInput:\n{}\n\nOutput:\n{}",
-                detail.tool_id, detail.tool_name, input, output
-            )
-        };
-
         let width = app
             .viewport
             .last_transcript_area
             .map(|area| area.width)
             .unwrap_or(80);
-        app.view_stack.push(PagerView::from_text(
-            format!("Tool: {}", detail.tool_name),
-            &content,
-            width.saturating_sub(2),
-        ));
+        // Subtract pager border + padding so wrapping in `render_diff`
+        // matches what the user actually sees inside the popup.
+        let diff_width = width.saturating_sub(4).max(20);
+
+        let label_style = Style::default()
+            .fg(palette::DEEPSEEK_SKY)
+            .add_modifier(Modifier::BOLD);
+        let muted_style = Style::default().fg(palette::TEXT_MUTED);
+        let push_plain = |lines: &mut Vec<Line<'static>>, text: &str| {
+            for raw in text.split('\n') {
+                lines.push(Line::from(Span::raw(raw.to_string())));
+            }
+        };
+
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(Line::from(vec![
+            Span::styled("Tool ID: ", muted_style),
+            Span::raw(detail.tool_id.clone()),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("Tool: ", muted_style),
+            Span::raw(detail.tool_name.clone()),
+        ]));
+        lines.push(Line::from(""));
+
+        if let Some(preview) = preview.as_ref() {
+            lines.push(Line::from(Span::styled("Changes:", label_style)));
+            match preview {
+                crate::tui::approval::ApprovalDiffPreview::Diff { text, .. }
+                | crate::tui::approval::ApprovalDiffPreview::MissingMatch { text, .. } => {
+                    if text.is_empty() {
+                        lines.push(Line::from(Span::styled(
+                            "  (no textual changes — content matches current file)".to_string(),
+                            muted_style,
+                        )));
+                    } else {
+                        lines.extend(crate::tui::diff_render::render_diff(text, diff_width));
+                    }
+                }
+                crate::tui::approval::ApprovalDiffPreview::NewFile { path, content } => {
+                    let diff = crate::tools::diff_format::make_unified_diff(path, "", content);
+                    lines.extend(crate::tui::diff_render::render_diff(&diff, diff_width));
+                }
+                crate::tui::approval::ApprovalDiffPreview::SkippedLargeFile {
+                    size, limit, ..
+                } => {
+                    lines.push(Line::from(Span::styled(
+                        format!(
+                            "  (diff preview skipped - file is {size} bytes, limit is {limit} bytes)"
+                        ),
+                        muted_style,
+                    )));
+                }
+                crate::tui::approval::ApprovalDiffPreview::NoChange { .. } => {
+                    lines.push(Line::from(Span::styled(
+                        "  (no textual changes — content matches current file)".to_string(),
+                        muted_style,
+                    )));
+                }
+            }
+            lines.push(Line::from(""));
+        }
+
+        lines.push(Line::from(Span::styled("Input:", label_style)));
+        push_plain(&mut lines, &input);
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled("Output:", label_style)));
+        push_plain(&mut lines, &output);
+
+        if let Some(section) = spillover_section {
+            lines.push(Line::from(""));
+            push_plain(&mut lines, &section);
+        }
+
+        app.view_stack
+            .push(PagerView::new(format!("Tool: {}", detail.tool_name), lines));
         return true;
     }
 

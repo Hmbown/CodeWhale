@@ -28,7 +28,8 @@ use crate::localization::Locale;
 use crate::palette;
 use crate::tui::app::{App, AppMode, ComposerDensity, VimMode};
 use crate::tui::approval::{
-    ApprovalRequest, ApprovalView, ElevationOption, ElevationRequest, RiskLevel, ToolCategory,
+    ApprovalDiffPreview, ApprovalRequest, ApprovalView, ElevationOption, ElevationRequest,
+    RenderedDiffPanel, RiskLevel, ToolCategory,
 };
 use crate::tui::history::HistoryCell;
 use crate::tui::scrolling::TranscriptLineMeta;
@@ -1056,9 +1057,9 @@ impl<'a> ApprovalWidget<'a> {
 /// terminal can hold.
 const APPROVAL_CARD_HORIZONTAL_PAD: u16 = 6;
 const APPROVAL_CARD_VERTICAL_PAD: u16 = 2;
-/// Minimum card height — anything tighter and the approval controls
-/// overlap the option list.
-const APPROVAL_CARD_MIN_HEIGHT: u16 = 18;
+/// Minimum card height — anything tighter and the destructive variant's
+/// confirmation banner overlaps the option list.
+const APPROVAL_CARD_MIN_HEIGHT: u16 = 16;
 /// Minimum card width — anything tighter makes approval copy wrap too
 /// aggressively on small terminals.
 const APPROVAL_CARD_MIN_WIDTH: u16 = 40;
@@ -1107,9 +1108,10 @@ impl Renderable for ApprovalWidget<'_> {
         let palette_colors = approval_palette(risk);
         let mut lines: Vec<Line<'static>> = Vec::with_capacity(20);
 
-        // Header: stakes badge + tool identifier. The badge is the
-        // first thing the eye lands on.
+        // Header: stakes badge + plain category. Keep the tool id out of
+        // the first read path so the command/path remains the focus.
         lines.push(Line::from(""));
+        let (cat_label, cat_color) = category_label_for(self.request.category, locale);
         lines.push(Line::from(vec![
             Span::raw("  "),
             Span::styled(
@@ -1121,110 +1123,224 @@ impl Renderable for ApprovalWidget<'_> {
             ),
             Span::raw("  "),
             Span::styled(
-                self.request.tool_name.clone(),
-                Style::default()
-                    .fg(palette::DEEPSEEK_SKY)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]));
-
-        // Category line — English remains the baseline while localized
-        // sessions get the same risk category in their UI language.
-        let (cat_label, cat_color) = category_label_for(self.request.category, locale);
-        lines.push(Line::from(vec![
-            Span::raw("  "),
-            Span::styled(label_type(locale), Style::default().fg(palette::TEXT_HINT)),
-            Span::styled(
                 cat_label,
                 Style::default().fg(cat_color).add_modifier(Modifier::BOLD),
             ),
         ]));
 
         lines.push(Line::from(""));
-        // About + impacts. Impact lines are the load-bearing content;
-        // they tell the user what will happen.
-        lines.push(Line::from(vec![
-            Span::raw("  "),
-            Span::styled(label_about(locale), Style::default().fg(palette::TEXT_HINT)),
-            Span::styled(
-                self.request.description_for_locale(locale),
-                Style::default().fg(palette::TEXT_BODY),
-            ),
-        ]));
-        for impact in self.request.impacts_for_locale(locale).into_iter().take(4) {
+        // Prominent key details (command, path, target) are the default
+        // body. Full JSON stays behind `v`.
+        let details = self.request.prominent_detail_items(locale);
+        if details.is_empty() {
             lines.push(Line::from(vec![
                 Span::raw("  "),
+                Span::styled(label_tool(locale), Style::default().fg(palette::TEXT_HINT)),
                 Span::styled(
-                    label_impact(locale),
-                    Style::default().fg(palette::TEXT_HINT),
+                    self.request.tool_name.clone(),
+                    Style::default()
+                        .fg(palette::TEXT_BODY)
+                        .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(impact, Style::default().fg(palette::TEXT_BODY)),
             ]));
+        } else {
+            for detail in &details {
+                if self.request.category == ToolCategory::Shell
+                    && matches!(detail.label.as_str(), "Command" | "命令")
+                    && let Some(shell_lines) = detail.shell_lines.as_deref()
+                {
+                    push_shell_command_lines(&mut lines, &detail.label, shell_lines);
+                } else {
+                    push_detail_line(&mut lines, &detail.label, &detail.value);
+                }
+            }
+        }
+
+        let options = approval_options_for(self.request, risk, locale);
+        let pending = self.view.pending_confirm();
+
+        if let Some(preview) = self.request.diff_preview() {
+            let diff_width = card_area.width.saturating_sub(4).max(20);
+            let RenderedDiffPanel {
+                header,
+                lines: body_lines,
+            } = self
+                .view
+                .cached_diff_panel(diff_width, locale)
+                .unwrap_or_else(|| {
+                    let (header, lines) = build_diff_panel(preview, diff_width, locale);
+                    let panel = RenderedDiffPanel { header, lines };
+                    self.view
+                        .set_cached_diff_panel(diff_width, locale, panel.clone());
+                    panel
+                });
+            let body_height = card_area.height.saturating_sub(4) as usize;
+            let footer_rows = match (risk, pending) {
+                (RiskLevel::Destructive, Some(_)) if !details.is_empty() => 2,
+                _ => 1,
+            };
+            // Keep the action rows and confirmation copy visible while the
+            // diff itself scrolls inside the approval card.
+            let reserved_after_diff = 1 + 4 + 1 + footer_rows;
+            let available = body_height
+                .saturating_sub(lines.len())
+                .saturating_sub(reserved_after_diff)
+                .saturating_sub(2);
+            let visible = available.min(body_lines.len());
+            let scroll = self.view.set_diff_metrics(body_lines.len(), visible);
+
+            lines.push(Line::from(""));
+            if visible > 0 {
+                let end = scroll.saturating_add(visible).min(body_lines.len());
+                let more_above = scroll > 0;
+                let more_below = end < body_lines.len();
+                lines.push(Line::from(Span::styled(
+                    diff_header_with_scroll(&header, more_above, more_below, locale),
+                    Style::default().fg(palette::TEXT_HINT),
+                )));
+                for line in body_lines.into_iter().skip(scroll).take(visible) {
+                    lines.push(line);
+                }
+            } else {
+                lines.push(Line::from(Span::styled(
+                    format!("  {header}  ·  {}", diff_hidden_hint(locale)),
+                    Style::default().fg(palette::TEXT_HINT),
+                )));
+            }
+        } else {
+            self.view.set_diff_metrics(0, 0);
         }
 
         lines.push(Line::from(""));
-        let params_str = self.request.params_display();
-        let params_width = card_area.width.saturating_sub(14) as usize;
-        let params_truncated =
-            crate::utils::truncate_with_ellipsis(&params_str, params_width.max(20), "...");
-        lines.push(Line::from(vec![
-            Span::raw("  "),
-            Span::styled(
-                label_params(locale),
-                Style::default().fg(palette::TEXT_HINT),
-            ),
-            Span::styled(
-                params_truncated,
-                Style::default().fg(palette::TEXT_SECONDARY),
-            ),
-        ]));
-
-        lines.push(Line::from(""));
-
-        let options = approval_options_for(risk, locale);
 
         for (i, opt) in options.iter().enumerate() {
             let is_selected = i == self.view.selected();
+            let staged = pending.is_some_and(|p| p == opt.option);
             let label_color = if opt.dangerous {
                 palette_colors.accent
             } else {
                 palette::TEXT_BODY
             };
 
-            let option_style = approval_option_style(is_selected, label_color);
-            let shortcut_style = approval_option_style(is_selected, palette_colors.shortcut);
+            let row_style = if is_selected {
+                Style::default()
+                    .fg(palette::SELECTION_TEXT)
+                    .bg(palette::SELECTION_BG)
+            } else {
+                Style::default()
+            };
 
-            let spans = vec![
+            let mut spans = vec![
                 Span::raw("  "),
                 Span::styled(
                     format!("[{}] ", opt.key_hint),
-                    shortcut_style.add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(palette_colors.shortcut)
+                        .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(opt.label.to_string(), option_style),
+                Span::styled(opt.label.clone(), row_style.fg(label_color)),
             ];
+            if staged {
+                spans.push(Span::raw("  "));
+                spans.push(Span::styled(
+                    staged_marker(locale),
+                    Style::default()
+                        .fg(palette_colors.accent)
+                        .add_modifier(Modifier::BOLD),
+                ));
+            }
             lines.push(Line::from(spans));
         }
 
         // Footer: Enter commits the highlighted row; y/a/d remain direct
         // shortcuts for users who do not want to move the selection.
         lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::raw("  "),
-            Span::styled(
-                selection_hint_prefix(locale),
-                Style::default().fg(palette::TEXT_HINT),
-            ),
-            Span::styled(
-                selection_hint_value(locale),
-                Style::default()
-                    .fg(palette_colors.accent)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                footer_controls(locale),
-                Style::default().fg(palette::TEXT_HINT),
-            ),
-        ]));
+        match (risk, pending) {
+            (RiskLevel::Benign, _) => {
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        single_key_prefix(locale),
+                        Style::default().fg(palette::TEXT_HINT),
+                    ),
+                    Span::styled(
+                        single_key_value(locale),
+                        Style::default()
+                            .fg(palette_colors.accent)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        footer_controls(locale),
+                        Style::default().fg(palette::TEXT_HINT),
+                    ),
+                ]));
+            }
+            (RiskLevel::Destructive, Some(opt)) => {
+                let again_key = match opt {
+                    crate::tui::approval::ApprovalOption::ApproveOnce => confirm_key_once(locale),
+                    crate::tui::approval::ApprovalOption::ApproveAlways => {
+                        confirm_key_always(locale)
+                    }
+                    _ => "Enter",
+                };
+                // Show what is being confirmed so the user never loses
+                // context between the selection and the commit step.
+                if let Some(detail) = details.first() {
+                    lines.push(Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled(
+                            confirm_label(locale, &detail.label),
+                            Style::default().fg(palette::TEXT_BODY),
+                        ),
+                        Span::styled(
+                            detail.value.clone(),
+                            Style::default()
+                                .fg(palette::TEXT_BODY)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                    ]));
+                }
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        destructive_confirm_prefix(locale),
+                        Style::default()
+                            .fg(palette_colors.accent)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        again_key.to_string(),
+                        Style::default()
+                            .fg(palette::DEEPSEEK_INK)
+                            .bg(palette_colors.accent)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        destructive_confirm_suffix(locale),
+                        Style::default().fg(palette::TEXT_HINT),
+                    ),
+                ]));
+            }
+            (RiskLevel::Destructive, None) => {
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        two_key_prefix(locale),
+                        Style::default().fg(palette::TEXT_HINT),
+                    ),
+                    Span::styled(
+                        two_key_value(locale),
+                        Style::default()
+                            .fg(palette_colors.accent)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        footer_controls(locale),
+                        Style::default().fg(palette::TEXT_HINT),
+                    ),
+                ]));
+            }
+        }
 
         let title = format!(
             " {} {} — {} ",
@@ -1322,21 +1438,6 @@ fn approval_palette(risk: RiskLevel) -> ApprovalColors {
     }
 }
 
-fn approval_selected_style() -> Style {
-    Style::default()
-        .fg(palette::SELECTION_TEXT)
-        .bg(palette::DEEPSEEK_BLUE)
-        .add_modifier(Modifier::BOLD)
-}
-
-fn approval_option_style(is_selected: bool, color: Color) -> Style {
-    if is_selected {
-        approval_selected_style()
-    } else {
-        Style::default().fg(color)
-    }
-}
-
 fn risk_badge_text(risk: RiskLevel, locale: Locale) -> &'static str {
     match (locale, risk) {
         (Locale::ZhHans, RiskLevel::Benign) => "审查",
@@ -1372,81 +1473,375 @@ fn approval_word(locale: Locale) -> &'static str {
     }
 }
 
-fn label_type(locale: Locale) -> &'static str {
+fn label_tool(locale: Locale) -> &'static str {
     match locale {
-        Locale::ZhHans => "类型：",
-        _ => "Type: ",
+        Locale::ZhHans => "工具    ",
+        _ => "Tool    ",
     }
 }
 
-fn label_about(locale: Locale) -> &'static str {
+fn confirm_label(locale: Locale, detail_label: &str) -> String {
     match locale {
-        Locale::ZhHans => "说明：",
-        _ => "About:  ",
-    }
-}
-
-fn label_impact(locale: Locale) -> &'static str {
-    match locale {
-        Locale::ZhHans => "影响：",
-        _ => "Impact: ",
-    }
-}
-
-fn label_params(locale: Locale) -> &'static str {
-    match locale {
-        Locale::ZhHans => "参数：",
-        _ => "Params: ",
+        Locale::ZhHans => match detail_label {
+            "Command" | "命令" => "确认命令：".to_string(),
+            "File" | "文件" => "确认文件：".to_string(),
+            "Dir" | "目录" => "确认目录：".to_string(),
+            "Target" | "目标" => "确认目标：".to_string(),
+            "Path" | "路径" => "确认路径：".to_string(),
+            "Input" | "输入" => "确认输入：".to_string(),
+            _ => format!("确认{detail_label}："),
+        },
+        _ => format!("Confirm {}: ", detail_label.to_ascii_lowercase()),
     }
 }
 
 fn footer_controls(locale: Locale) -> &'static str {
     match locale {
-        Locale::ZhHans => "  ·  v：完整参数  ·  Esc：终止",
-        _ => "  ·  v: full params  ·  Esc: abort",
+        Locale::ZhHans => "  ·  v：完整 diff  ·  Esc：终止",
+        _ => "  ·  v: full details  ·  Esc: abort",
     }
 }
 
-fn selection_hint_prefix(locale: Locale) -> &'static str {
-    match locale {
-        Locale::ZhHans => "选择：",
-        _ => "Choose: ",
+/// Build the rendered body + header for the approval popup diff area.
+///
+/// The popup uses the compact renderer (no summary / `--- +++` lines) so a
+/// 10-row preview window shows a few real lines of code instead of just
+/// metadata. The header summarises the variant — `+N -M` for normal diffs,
+/// a "new file" or "no change" hint for the degenerate cases — so the user
+/// always knows what's behind the preview window even when it's empty.
+///
+/// Body lines are indented by two spaces to line up with the rest of the
+/// popup body (the popup margin) so the hunk header and code rows visually
+/// align with the `File` / option rows above and below.
+fn build_diff_panel(
+    preview: &ApprovalDiffPreview,
+    width: u16,
+    locale: Locale,
+) -> (String, Vec<Line<'static>>) {
+    use crate::tui::diff_render::render_diff_compact;
+    // Reserve 2 columns for the indent we prepend below so the renderer's
+    // wrapping decisions agree with the visible width.
+    let body_width = width.saturating_sub(2).max(20);
+    let indent = || Span::raw("  ");
+    let indent_lines = |mut lines: Vec<Line<'static>>| -> Vec<Line<'static>> {
+        for line in &mut lines {
+            line.spans.insert(0, indent());
+        }
+        lines
+    };
+    match preview {
+        ApprovalDiffPreview::Diff {
+            text,
+            added,
+            deleted,
+        } => {
+            let lines = indent_lines(render_diff_compact(text, body_width));
+            let header = format!("{} +{} -{}", diff_preview_word(locale), added, deleted);
+            (header, lines)
+        }
+        ApprovalDiffPreview::NewFile { path: _, content } => {
+            // Render the proposed content directly as added lines so the
+            // user sees the body with the standard `+` gutter + new-side
+            // line numbers. No synthetic hunk header — the panel header
+            // already says "New file +N", and the hunk row would just
+            // duplicate metadata while costing one of the few rows we have.
+            let body = content
+                .lines()
+                .enumerate()
+                .map(|(idx, line)| {
+                    // Reuse the diff renderer by feeding a synthetic line
+                    // wearing the `+` marker, but the renderer doesn't see
+                    // a hunk header so we build the styled line by hand
+                    // to keep colour + line numbers consistent.
+                    let prefix = format!("{:>4} {:>4} + ", "", idx + 1);
+                    Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled(prefix, Style::default().fg(palette::TEXT_MUTED)),
+                        Span::styled(
+                            line.to_string(),
+                            Style::default()
+                                .fg(palette::DIFF_ADDED)
+                                .bg(palette::DIFF_ADDED_BG),
+                        ),
+                    ])
+                })
+                .collect::<Vec<_>>();
+            let header = format!("{} +{}", new_file_word(locale), content.lines().count());
+            (header, body)
+        }
+        ApprovalDiffPreview::NoChange { path: _ } => {
+            let msg = no_change_text(locale);
+            let line = Line::from(Span::styled(
+                msg.to_string(),
+                Style::default().fg(palette::TEXT_MUTED),
+            ));
+            (no_change_word(locale).to_string(), vec![line])
+        }
+        ApprovalDiffPreview::SkippedLargeFile { size, limit, .. } => {
+            let line = Line::from(Span::styled(
+                skipped_large_file_text(*size, *limit, locale),
+                Style::default().fg(palette::TEXT_MUTED),
+            ));
+            (preview_skipped_word(locale).to_string(), vec![line])
+        }
+        ApprovalDiffPreview::MissingMatch {
+            path: _,
+            text,
+            match_count: _,
+        } => {
+            let mut lines = vec![Line::from(Span::styled(
+                missing_match_warning(locale).to_string(),
+                Style::default()
+                    .fg(palette::STATUS_WARNING)
+                    .add_modifier(Modifier::BOLD),
+            ))];
+            lines.extend(indent_lines(render_diff_compact(text, body_width)));
+            (missing_match_header(locale).to_string(), lines)
+        }
     }
 }
 
-fn selection_hint_value(locale: Locale) -> &'static str {
+fn diff_header_with_scroll(
+    header: &str,
+    more_above: bool,
+    more_below: bool,
+    locale: Locale,
+) -> String {
+    let mut parts: Vec<String> = vec![format!("  {header}")];
+    if more_above {
+        parts.push(more_above_hint(locale).to_string());
+    }
+    if more_below {
+        parts.push(more_below_hint(locale).to_string());
+    }
+    parts.push(full_details_hint(locale).to_string());
+    parts.join("  ·  ")
+}
+
+fn diff_preview_word(locale: Locale) -> &'static str {
     match locale {
-        Locale::ZhHans => "Enter 执行选中项，或直接按 y/a/d",
-        _ => "Enter selected option, or press y/a/d directly",
+        Locale::ZhHans => "差异预览",
+        _ => "Diff preview",
+    }
+}
+
+fn new_file_word(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "新文件",
+        _ => "New file",
+    }
+}
+
+fn no_change_word(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "无变化",
+        _ => "No change",
+    }
+}
+
+fn preview_skipped_word(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "预览已跳过",
+        _ => "Preview skipped",
+    }
+}
+
+fn skipped_large_file_text(size: u64, limit: u64, locale: Locale) -> String {
+    match locale {
+        Locale::ZhHans => format!("文件过大，已跳过差异预览（{size} bytes，限制 {limit} bytes）"),
+        _ => format!(
+            "file is too large for an inline diff preview ({size} bytes, limit {limit} bytes)"
+        ),
+    }
+}
+
+fn no_change_text(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "  内容与当前文件一致，无需写入。",
+        _ => "  Content matches the current file — nothing to write.",
+    }
+}
+
+fn missing_match_warning(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "  ⚠ 文件中未匹配到 search，下面是 search→replace 兜底视图。",
+        _ => "  ⚠ Search string not found in file — fallback search→replace below.",
+    }
+}
+
+fn missing_match_header(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "未匹配（兜底视图）",
+        _ => "No match (fallback)",
+    }
+}
+
+fn more_above_hint(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "↑ 上方还有",
+        _ => "↑ more above",
+    }
+}
+
+fn more_below_hint(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "↓ 下方还有",
+        _ => "↓ more below",
+    }
+}
+
+fn full_details_hint(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "v 详情",
+        _ => "v details",
+    }
+}
+
+fn push_detail_line(lines: &mut Vec<Line<'static>>, label: &str, value: &str) {
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            format!("{label:<7} "),
+            Style::default()
+                .fg(palette::DEEPSEEK_SKY)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            value.to_string(),
+            Style::default()
+                .fg(palette::TEXT_BODY)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+}
+
+fn push_shell_command_lines(lines: &mut Vec<Line<'static>>, label: &str, command_lines: &[String]) {
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            format!("{label:<7} "),
+            Style::default()
+                .fg(palette::DEEPSEEK_SKY)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+
+    for line in command_lines {
+        lines.push(Line::from(vec![
+            Span::raw("    "),
+            Span::styled(
+                line.clone(),
+                Style::default()
+                    .fg(palette::TEXT_BODY)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+    }
+}
+
+fn diff_hidden_hint(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "终端高度不足，按 v 查看",
+        _ => "preview hidden — press v",
+    }
+}
+
+fn staged_marker(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "(待确认)",
+        _ => "(staged)",
+    }
+}
+
+fn single_key_prefix(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "单键批准：",
+        _ => "Single key approves: ",
+    }
+}
+
+fn single_key_value(_locale: Locale) -> &'static str {
+    "Enter / 1 / y"
+}
+
+fn destructive_confirm_prefix(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "确认破坏性操作：再次按 ",
+        _ => "Confirm destructive action — press ",
+    }
+}
+
+fn destructive_confirm_suffix(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => " 执行；按其他键取消。",
+        _ => " again to commit, anything else cancels.",
+    }
+}
+
+fn confirm_key_once(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "Enter 或 y",
+        _ => "Enter or y",
+    }
+}
+
+fn confirm_key_always(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "Enter 或 a",
+        _ => "Enter or a",
+    }
+}
+
+fn two_key_prefix(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "两次按键确认：",
+        _ => "Two keys to approve: ",
+    }
+}
+
+fn two_key_value(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhHans => "先按 y/a，再按一次 y/a",
+        _ => "y/a then y/a again",
     }
 }
 
 struct ApprovalOptionRow {
-    label: &'static str,
+    option: crate::tui::approval::ApprovalOption,
+    label: String,
     key_hint: &'static str,
     dangerous: bool,
 }
 
-fn approval_options_for(risk: RiskLevel, locale: Locale) -> [ApprovalOptionRow; 4] {
+fn approval_options_for(
+    request: &ApprovalRequest,
+    risk: RiskLevel,
+    locale: Locale,
+) -> [ApprovalOptionRow; 4] {
+    use crate::tui::approval::ApprovalOption as O;
     let dangerous = matches!(risk, RiskLevel::Destructive);
     [
         ApprovalOptionRow {
-            label: option_approve_once(locale),
+            option: O::ApproveOnce,
+            label: option_approve_once(locale).to_string(),
             key_hint: "1 / y",
             dangerous,
         },
         ApprovalOptionRow {
-            label: option_approve_always(locale),
+            option: O::ApproveAlways,
+            label: option_approve_always(request.category, locale),
             key_hint: "2 / a",
             dangerous,
         },
         ApprovalOptionRow {
-            label: option_deny(locale),
+            option: O::Deny,
+            label: option_deny(locale).to_string(),
             key_hint: "3 / d / n",
             dangerous: false,
         },
         ApprovalOptionRow {
-            label: option_abort(locale),
+            option: O::Abort,
+            label: option_abort(locale).to_string(),
             key_hint: "Esc",
             dangerous: false,
         },
@@ -1460,10 +1855,14 @@ fn option_approve_once(locale: Locale) -> &'static str {
     }
 }
 
-fn option_approve_always(locale: Locale) -> &'static str {
-    match locale {
-        Locale::ZhHans => "本会话同类自动批准",
-        _ => "Approve always for this kind",
+fn option_approve_always(category: ToolCategory, locale: Locale) -> String {
+    match (locale, category) {
+        (Locale::ZhHans, ToolCategory::Shell) => "本会话自动批准 Shell 命令".to_string(),
+        (Locale::ZhHans, ToolCategory::FileWrite) => "本会话自动批准文件写入".to_string(),
+        (Locale::ZhHans, _) => "本会话同类自动批准".to_string(),
+        (_, ToolCategory::Shell) => "Approve shell commands this session".to_string(),
+        (_, ToolCategory::FileWrite) => "Approve file writes this session".to_string(),
+        _ => "Approve this kind this session".to_string(),
     }
 }
 
@@ -3620,22 +4019,110 @@ mod tests {
         let selected_row = (area.y..area.y.saturating_add(area.height))
             .find(|&y| {
                 (area.x..area.x.saturating_add(area.width))
-                    .any(|x| buf[(x, y)].bg == palette::DEEPSEEK_BLUE)
+                    .any(|x| buf[(x, y)].bg == palette::SELECTION_BG)
             })
-            .expect("selected approval row should use blue background");
+            .expect("selected approval row should use selection background");
         let highlighted_cells = (area.x..area.x.saturating_add(area.width))
             .filter(|&x| {
                 let cell = &buf[(x, selected_row)];
-                !cell.symbol().trim().is_empty()
-                    && cell.bg == palette::DEEPSEEK_BLUE
-                    && cell.fg == palette::SELECTION_TEXT
+                !cell.symbol().trim().is_empty() && cell.bg == palette::SELECTION_BG
             })
             .count();
 
         assert!(
             highlighted_cells >= 4,
-            "selected destructive option should render visible blue/white text"
+            "selected destructive option should render visible highlighted cells"
         );
+    }
+
+    #[test]
+    fn approval_shell_command_splits_long_command_into_multiple_lines() {
+        let request = crate::tui::approval::ApprovalRequest::new(
+            "approval-1",
+            "exec_shell",
+            "Run shell command",
+            &serde_json::json!({
+                "command": "printf 'a b c' && cat /tmp/x | sed -n '1,5p' > out.txt",
+            }),
+            "exec_shell:printf",
+        );
+        let view = crate::tui::approval::ApprovalView::new(request.clone());
+        let widget = ApprovalWidget::new(&request, &view);
+        let area = Rect::new(0, 0, 120, 24);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+
+        let mut body = String::new();
+        for y in 0..area.height {
+            for x in 0..area.width {
+                body.push_str(buf[(x, y)].symbol());
+            }
+            body.push('\n');
+        }
+        assert!(body.contains("Command"));
+        assert!(body.contains("printf 'a b c'"));
+        assert!(body.contains("cat /tmp/x"));
+        assert!(body.contains("sed -n '1,5p'"));
+    }
+
+    #[test]
+    fn approval_shell_command_detects_printf_write_file_preview() {
+        let request = crate::tui::approval::ApprovalRequest::new(
+            "approval-1",
+            "exec_shell",
+            "Run shell command",
+            &serde_json::json!({
+                "command": "printf '%s\\n' \"line one\" \"line two\" > /tmp/out.txt",
+            }),
+            "exec_shell:printf",
+        );
+        let view = crate::tui::approval::ApprovalView::new(request.clone());
+        let widget = ApprovalWidget::new(&request, &view);
+        let area = Rect::new(0, 0, 120, 24);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+
+        let mut body = String::new();
+        for y in 0..area.height {
+            for x in 0..area.width {
+                body.push_str(buf[(x, y)].symbol());
+            }
+            body.push('\n');
+        }
+        assert!(body.contains("Write file via printf"), "{body}");
+        assert!(body.contains("Target: /tmp/out.txt"), "{body}");
+        assert!(body.contains("Lines: 2"), "{body}");
+        assert!(body.contains("1  line one"), "{body}");
+        assert!(body.contains("2  line two"), "{body}");
+    }
+
+    #[test]
+    fn approval_shell_command_keeps_compound_printf_command_visible() {
+        let request = crate::tui::approval::ApprovalRequest::new(
+            "approval-1",
+            "exec_shell",
+            "Run shell command",
+            &serde_json::json!({
+                "command": "printf '%s\\n' \"line one\" > /tmp/out.txt && rm /tmp/other.txt",
+            }),
+            "exec_shell:printf",
+        );
+        let view = crate::tui::approval::ApprovalView::new(request.clone());
+        let widget = ApprovalWidget::new(&request, &view);
+        let area = Rect::new(0, 0, 120, 24);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+
+        let mut body = String::new();
+        for y in 0..area.height {
+            for x in 0..area.width {
+                body.push_str(buf[(x, y)].symbol());
+            }
+            body.push('\n');
+        }
+        assert!(!body.contains("Write file via printf"), "{body}");
+        assert!(body.contains("printf '%s"), "{body}");
+        assert!(body.contains("rm /tmp/other.txt"), "{body}");
     }
 
     /// Regression for issue #65: after `App::handle_resize`, the chat widget

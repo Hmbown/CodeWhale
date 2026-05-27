@@ -23,7 +23,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Padding, Paragraph, Widget, Wrap},
 };
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthChar;
 
 use crate::palette;
 use crate::tui::views::{ModalKind, ModalView, ViewAction, ViewEvent};
@@ -70,7 +70,7 @@ impl PagerView {
     pub fn from_text(title: impl Into<String>, text: &str, width: u16) -> Self {
         let mut lines = Vec::new();
         for raw in text.lines() {
-            for wrapped in wrap_text(raw, width.max(1) as usize) {
+            for wrapped in wrap_text_preserving_spaces(raw, width.max(1) as usize) {
                 lines.push(Line::from(Span::raw(wrapped)));
             }
             if raw.is_empty() {
@@ -497,41 +497,57 @@ fn line_to_string(line: &Line<'static>) -> String {
         .collect::<String>()
 }
 
-fn wrap_text(text: &str, width: usize) -> Vec<String> {
+fn wrap_text_preserving_spaces(text: &str, width: usize) -> Vec<String> {
     if width == 0 {
         return vec![text.to_string()];
     }
+    if text.is_empty() {
+        return vec![String::new()];
+    }
+
+    let leading_indent = text
+        .chars()
+        .take_while(|ch| ch.is_whitespace())
+        .collect::<String>();
+    let indent_width = display_width(&leading_indent);
+    let continuation_indent = if indent_width < width {
+        leading_indent
+    } else {
+        String::new()
+    };
+
     let mut lines = Vec::new();
     let mut current = String::new();
     let mut current_width = 0usize;
 
-    for word in text.split_whitespace() {
-        let word_width = word.width();
-        if word_width > width {
-            if !current.is_empty() {
+    for ch in text.chars() {
+        let char_width = ch.width().unwrap_or(1);
+        if current_width + char_width > width && current_width > 0 {
+            if let Some((break_idx, break_len)) = last_word_break(&current) {
+                let line = current[..break_idx].trim_end().to_string();
+                let mut rest = current[break_idx + break_len..].trim_start().to_string();
+                lines.push(line);
+                current.clear();
+                current_width = 0;
+
+                let rest_width = display_width(&rest);
+                if !rest.is_empty()
+                    && !continuation_indent.is_empty()
+                    && display_width(&continuation_indent) + rest_width <= width
+                {
+                    current.push_str(&continuation_indent);
+                    current_width += display_width(&continuation_indent);
+                }
+                current.push_str(&rest);
+                current_width += rest_width;
+                rest.clear();
+            } else {
                 lines.push(std::mem::take(&mut current));
                 current_width = 0;
             }
-            push_word_breaking_chars(word, width, &mut current, &mut current_width, &mut lines);
-            continue;
         }
-        let additional = if current.is_empty() {
-            word_width
-        } else {
-            word_width + 1
-        };
-        if current_width + additional > width && !current.is_empty() {
-            lines.push(current);
-            current = word.to_string();
-            current_width = word_width;
-        } else {
-            if !current.is_empty() {
-                current.push(' ');
-                current_width += 1;
-            }
-            current.push_str(word);
-            current_width += word_width;
-        }
+        current.push(ch);
+        current_width += char_width;
     }
 
     if current.is_empty() {
@@ -543,22 +559,23 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
-fn push_word_breaking_chars(
-    word: &str,
-    width: usize,
-    current: &mut String,
-    current_width: &mut usize,
-    lines: &mut Vec<String>,
-) {
-    for ch in word.chars() {
-        let char_width = ch.width().unwrap_or(1);
-        if *current_width + char_width > width && *current_width > 0 {
-            lines.push(std::mem::take(current));
-            *current_width = 0;
+fn last_word_break(text: &str) -> Option<(usize, usize)> {
+    let mut seen_non_ws = false;
+    let mut last = None;
+    for (idx, ch) in text.char_indices() {
+        if ch.is_whitespace() {
+            if seen_non_ws {
+                last = Some((idx, ch.len_utf8()));
+            }
+        } else {
+            seen_non_ws = true;
         }
-        current.push(ch);
-        *current_width += char_width;
     }
+    last
+}
+
+fn display_width(text: &str) -> usize {
+    text.chars().map(|ch| ch.width().unwrap_or(1)).sum()
 }
 
 #[cfg(test)]
@@ -825,6 +842,13 @@ mod tests {
     }
 
     #[test]
+    fn from_text_preserves_leading_indent() {
+        let p = PagerView::from_text("T", "  indented\n    more", 40);
+        assert!(p.body_text().contains("  indented"));
+        assert!(p.body_text().contains("    more"));
+    }
+
+    #[test]
     fn footer_hint_is_rendered_in_buffer() {
         let p = make_pager(5);
         let area = Rect::new(0, 0, 100, 10);
@@ -1014,12 +1038,30 @@ mod tests {
     }
 
     #[test]
+    fn wrap_text_prefers_word_boundaries_for_english() {
+        let lines = wrap_text_preserving_spaces("alpha beta gamma delta", 12);
+
+        assert_eq!(lines, vec!["alpha beta", "gamma delta"]);
+    }
+
+    #[test]
+    fn wrap_text_keeps_continuation_indent() {
+        let lines = wrap_text_preserving_spaces("    alpha beta gamma", 14);
+
+        assert_eq!(lines, vec!["    alpha", "    beta gamma"]);
+    }
+
+    #[test]
     fn wrap_text_breaks_overlong_cjk_runs() {
         let text = "这是一个非常长的中文字符串".repeat(10);
-        let lines = wrap_text(&text, 16);
+        let lines = wrap_text_preserving_spaces(&text, 16);
 
         for line in &lines {
-            assert!(line.width() <= 16, "line {line:?} exceeds width 16");
+            let width = line
+                .chars()
+                .map(|ch| ch.width().unwrap_or(1))
+                .sum::<usize>();
+            assert!(width <= 16, "line {line:?} exceeds width 16");
         }
 
         assert_eq!(lines.join(""), text);
