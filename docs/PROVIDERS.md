@@ -141,7 +141,7 @@ Run this before changing provider IDs, provider TOML tables, static model
 registry rows, or provider default strings:
 
 ```bash
-python scripts/check-provider-registry.py
+python3 scripts/check-provider-registry.py
 ```
 
 The check fails when:
