@@ -5703,19 +5703,6 @@ fn render(f: &mut Frame, app: &mut App) {
         ])
         .split(size);
 
-    // Split chat area into conversation (upper) and tool output (lower) regions
-    const TOOL_OUTPUT_DEFAULT_HEIGHT: u16 = 10;
-    let chat_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(1),                              // Conversation area (flexible)
-            Constraint::Length(TOOL_OUTPUT_DEFAULT_HEIGHT),  // Tool output area (fixed height)
-        ])
-        .split(chunks[1]);
-
-    let conversation_area = chat_layout[0];
-    let tool_output_area = chat_layout[1];
-
     // Render header
     {
         let sanitized_context_window = context_usage
@@ -5786,8 +5773,6 @@ fn render(f: &mut Frame, app: &mut App) {
             .style(Style::default().bg(app.ui_theme.surface_bg))
             .render(chunks[1], f.buffer_mut());
 
-        let mut sidebar_area = None;
-
         // When the file-tree pane is visible and the terminal is wide
         // enough, reserve the left ~25% for the file tree.
         let mut chat_area =
@@ -5811,11 +5796,8 @@ fn render(f: &mut Frame, app: &mut App) {
                 chunks[1]
             };
 
-        // Conversation widget (upper region)
-        let conversation_widget = ChatWidget::new(app, conversation_area, ChatRegion::Conversation);
-        let buf = f.buffer_mut();
-        conversation_widget.render(conversation_area, buf);
-
+        // First calculate sidebar width, then split chat_area for sidebar
+        let mut sidebar_area = None;
         if let Some(sidebar_width) = sidebar_width_for_chat_area(app, chat_area.width) {
             let split = Layout::default()
                 .direction(Direction::Horizontal)
@@ -5825,9 +5807,26 @@ fn render(f: &mut Frame, app: &mut App) {
             sidebar_area = Some(split[1]);
         }
 
+        // Now split chat_area (after sidebar) into conversation and tool output regions
+        const TOOL_OUTPUT_DEFAULT_HEIGHT: u16 = 10;
+        let chat_layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(1),                              // Conversation area (flexible)
+                Constraint::Length(TOOL_OUTPUT_DEFAULT_HEIGHT),  // Tool output area (fixed height)
+            ])
+            .split(chat_area);
+
+        let conversation_area = chat_layout[0];
+        let tool_output_area = chat_layout[1];
+
+        // Conversation widget (upper region)
+        let conversation_widget = ChatWidget::new(app, conversation_area, ChatRegion::Conversation);
+        let buf = f.buffer_mut();
+        conversation_widget.render(conversation_area, buf);
+
         // Tool output widget (lower region)
         let tool_output_widget = ChatWidget::new(app, tool_output_area, ChatRegion::ToolOutput);
-        let buf = f.buffer_mut();
         tool_output_widget.render(tool_output_area, buf);
 
         if let Some(sidebar_area) = sidebar_area {
