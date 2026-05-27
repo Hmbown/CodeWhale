@@ -5,7 +5,7 @@ use std::io::{self, Stdout, Write};
 use std::path::PathBuf;
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 use std::process::{Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -858,6 +858,44 @@ fn active_rlm_task_entries(app: &App) -> Vec<TaskPanelEntry> {
         .collect()
 }
 
+/// Minimum interval between balance API fetches to avoid flooding.
+const BALANCE_FETCH_COOLDOWN: Duration = Duration::from_secs(60);
+
+/// Shared `reqwest::Client` for balance fetches so connection pools are
+/// reused across successive background polls.
+static BALANCE_CLIENT: LazyLock<::reqwest::Client> = LazyLock::new(|| {
+    ::reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .unwrap_or_default()
+});
+
+/// Fetch the DeepSeek account balance from the balance API.
+///
+/// Returns `None` on any error (network, auth, parse) — callers should treat
+/// a `None` return as "balance unknown" and keep the previous value.
+async fn fetch_deepseek_balance(api_key: &str, base_url: &str) -> Option<crate::pricing::BalanceInfo> {
+    let url = format!("{}/user/balance", base_url.trim_end_matches('/'));
+    let client = &*BALANCE_CLIENT;
+    let response = client
+        .get(url)
+        .header("Authorization", format!("Bearer {api_key}"))
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        tracing::debug!(
+            "balance API returned {}: {}",
+            response.status().as_u16(),
+            response.text().await.unwrap_or_default()
+        );
+        return None;
+    }
+    let body: crate::pricing::BalanceResponse = response.json().await.ok()?;
+    // Return the first balance entry (typically the user's primary currency).
+    body.balance_infos.into_iter().next()
+}
+
 #[allow(clippy::too_many_lines)]
 async fn run_event_loop(
     terminal: &mut AppTerminal,
@@ -938,6 +976,29 @@ async fn run_event_loop(
             }
         })
     });
+
+    // Fire a one-shot initial balance fetch for DeepSeek providers
+    // so the footer chip shows balance on the first frame without
+    // waiting for a turn to complete.
+    if !app.balance_initiated
+        && (app.api_provider == ApiProvider::Deepseek
+            || app.api_provider == ApiProvider::DeepseekCN)
+    {
+        let cell = app.balance_cell.clone();
+        let api_key = config.deepseek_api_key().unwrap_or_default();
+        let base_url = config.deepseek_base_url();
+        if !api_key.is_empty() {
+            app.last_balance_fetch = Some(Instant::now());
+            tokio::spawn(async move {
+                if let Some(info) = fetch_deepseek_balance(&api_key, &base_url).await
+                    && let Ok(mut guard) = cell.lock()
+                {
+                    *guard = Some(info);
+                }
+            });
+        }
+        app.balance_initiated = true;
+    }
 
     loop {
         // Drain the version-check handle once; re-assign None so we
@@ -1609,6 +1670,31 @@ async fn run_event_loop(
                             persistence_actor::persist(PersistRequest::SessionSnapshot(session));
                         }
                         persistence_actor::persist(PersistRequest::ClearCheckpoint);
+
+                        // Refresh DeepSeek account balance after each completed
+                        // turn so the footer balance chip stays current without
+                        // adding latency to any request path.
+                        let balance_cooldown_expired = app
+                            .last_balance_fetch
+                            .map_or(true, |t| t.elapsed() >= BALANCE_FETCH_COOLDOWN);
+                        if balance_cooldown_expired
+                            && (app.api_provider == ApiProvider::Deepseek
+                                || app.api_provider == ApiProvider::DeepseekCN)
+                        {
+                            let cell = app.balance_cell.clone();
+                            let api_key = config.deepseek_api_key().unwrap_or_default();
+                            let base_url = config.deepseek_base_url();
+                            if !api_key.is_empty() {
+                                app.last_balance_fetch = Some(Instant::now());
+                                tokio::spawn(async move {
+                                    if let Some(info) = fetch_deepseek_balance(&api_key, &base_url).await
+                                        && let Ok(mut guard) = cell.lock()
+                                    {
+                                        *guard = Some(info);
+                                    }
+                                });
+                            }
+                        }
 
                         if app.mode == AppMode::Plan
                             && app.plan_tool_used_in_turn
@@ -4762,6 +4848,33 @@ async fn apply_command_result(
             }
             AppAction::SwitchProvider { provider, model } => {
                 switch_provider(app, engine_handle, config, provider, model).await;
+                // Refresh balance after provider switch.
+                let balance_cooldown_expired = app
+                    .last_balance_fetch
+                    .map_or(true, |t| t.elapsed() >= BALANCE_FETCH_COOLDOWN);
+                if balance_cooldown_expired
+                    && (app.api_provider == ApiProvider::Deepseek
+                        || app.api_provider == ApiProvider::DeepseekCN)
+                {
+                    let cell = app.balance_cell.clone();
+                    let api_key = config.deepseek_api_key().unwrap_or_default();
+                    let base_url = config.deepseek_base_url();
+                    if !api_key.is_empty() {
+                        app.last_balance_fetch = Some(Instant::now());
+                        tokio::spawn(async move {
+                            if let Some(info) = fetch_deepseek_balance(&api_key, &base_url).await
+                                && let Ok(mut guard) = cell.lock()
+                            {
+                                *guard = Some(info);
+                            }
+                        });
+                    }
+                } else {
+                    // Clear balance when switching to a non-DeepSeek provider.
+                    if let Ok(mut guard) = app.balance_cell.lock() {
+                        *guard = None;
+                    }
+                }
             }
             AppAction::UpdateCompaction(compaction) => {
                 apply_model_and_compaction_update(engine_handle, compaction).await;
@@ -4864,6 +4977,7 @@ async fn apply_command_result(
                     app.view_stack
                         .push(crate::tui::views::status_picker::StatusPickerView::new(
                             &app.status_items,
+                            app.api_provider,
                         ));
                 }
             }

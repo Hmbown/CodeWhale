@@ -467,6 +467,28 @@ pub struct RetryConfig {
     pub exponential_base: Option<f64>,
 }
 
+/// Deserialize `status_items` tolerantly: skip keys unknown to this build
+/// instead of erroring with "unknown variant".  This lets a dev build write
+/// `"balance"` (or any future item) while the stable build still parses the
+/// config file successfully.
+fn deser_status_items<'de, D>(deserializer: D) -> Result<Option<Vec<StatusItem>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw: Option<Vec<String>> = Option::deserialize(deserializer)?;
+    Ok(raw.map(|strings| {
+        strings
+            .into_iter()
+            .filter_map(|s| {
+                StatusItem::from_key(&s).or_else(|| {
+                    tracing::warn!("ignoring unknown status item {s:?} in config");
+                    None
+                })
+            })
+            .collect()
+    }))
+}
+
 /// UI configuration loaded from config files.
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct TuiConfig {
@@ -481,6 +503,7 @@ pub struct TuiConfig {
     ///
     /// Edited interactively via `/statusline`; persisted to `tui.status_items`
     /// in `~/.deepseek/config.toml`.
+    #[serde(deserialize_with = "deser_status_items")]
     pub status_items: Option<Vec<StatusItem>>,
     /// Emit OSC 8 hyperlink escape sequences around URLs in the transcript so
     /// supporting terminals (iTerm2, Terminal.app 13+, Ghostty, Kitty,
@@ -779,6 +802,8 @@ pub enum StatusItem {
     RateLimit,
     /// Session token usage: input / cache-hit / output.
     Tokens,
+    /// DeepSeek account balance, refreshed once per turn completion.
+    Balance,
 }
 
 impl StatusItem {
@@ -819,6 +844,32 @@ impl StatusItem {
             StatusItem::LastToolElapsed => "last_tool_elapsed",
             StatusItem::RateLimit => "rate_limit",
             StatusItem::Tokens => "tokens",
+            StatusItem::Balance => "balance",
+        }
+    }
+
+    /// Reverse of [`key`](Self::key): parse a config string back to a variant.
+    /// Returns `None` for unknown keys so the config parser can silently skip
+    /// items added by newer versions rather than crashing with "unknown variant".
+    #[must_use]
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key {
+            "mode" => Some(Self::Mode),
+            "model" => Some(Self::Model),
+            "cost" => Some(Self::Cost),
+            "status" => Some(Self::Status),
+            "coherence" => Some(Self::Coherence),
+            "agents" => Some(Self::Agents),
+            "reasoning_replay" => Some(Self::ReasoningReplay),
+            "prefix_stability" => Some(Self::PrefixStability),
+            "cache" => Some(Self::Cache),
+            "context_percent" => Some(Self::ContextPercent),
+            "git_branch" => Some(Self::GitBranch),
+            "last_tool_elapsed" => Some(Self::LastToolElapsed),
+            "rate_limit" => Some(Self::RateLimit),
+            "tokens" => Some(Self::Tokens),
+            "balance" => Some(Self::Balance),
+            _ => None,
         }
     }
 
@@ -840,6 +891,7 @@ impl StatusItem {
             StatusItem::LastToolElapsed => "Last tool elapsed",
             StatusItem::RateLimit => "Rate-limit remaining",
             StatusItem::Tokens => "Session tokens",
+            StatusItem::Balance => "Account balance",
         }
     }
 
@@ -862,6 +914,7 @@ impl StatusItem {
             StatusItem::LastToolElapsed => "ms of the most recent tool call (placeholder)",
             StatusItem::RateLimit => "remaining requests in the budget (placeholder)",
             StatusItem::Tokens => "input / cache-hit / output token totals",
+            StatusItem::Balance => "topped-up + granted balance from DeepSeek",
         }
     }
 
@@ -872,6 +925,7 @@ impl StatusItem {
             StatusItem::Mode,
             StatusItem::Model,
             StatusItem::Cost,
+            StatusItem::Balance,
             StatusItem::Status,
             StatusItem::Coherence,
             StatusItem::Agents,
@@ -891,8 +945,25 @@ impl StatusItem {
     pub fn is_left_cluster(self) -> bool {
         matches!(
             self,
-            StatusItem::Mode | StatusItem::Model | StatusItem::Cost | StatusItem::Status
+            StatusItem::Mode
+                | StatusItem::Model
+                | StatusItem::Cost
+                | StatusItem::Status
+                | StatusItem::Balance
         )
+    }
+
+    /// Whether this item is relevant for `provider`.  Provider-specific
+    /// items return `false` for unsupported providers so the picker doesn't
+    /// offer toggles that can never show useful data.
+    #[must_use]
+    pub fn is_available_for(self, provider: ApiProvider) -> bool {
+        match self {
+            StatusItem::Balance => {
+                matches!(provider, ApiProvider::Deepseek | ApiProvider::DeepseekCN)
+            }
+            _ => true,
+        }
     }
 }
 
@@ -7534,5 +7605,42 @@ model = "deepseek-ai/deepseek-v4-pro"
         let json = serde_json::to_value(&cap).unwrap();
         let deserialized: ProviderCapability = serde_json::from_value(json).unwrap();
         assert_eq!(cap, deserialized);
+    }
+
+    #[test]
+    fn status_item_balance_available_only_for_deepseek_providers() {
+        // Balance item should only be offered for DeepSeek / DeepSeekCN.
+        assert!(StatusItem::Balance.is_available_for(ApiProvider::Deepseek));
+        assert!(StatusItem::Balance.is_available_for(ApiProvider::DeepseekCN));
+        // Sanity: all other known providers should hide the Balance toggle.
+        assert!(!StatusItem::Balance.is_available_for(ApiProvider::Openrouter));
+        assert!(!StatusItem::Balance.is_available_for(ApiProvider::Novita));
+        assert!(!StatusItem::Balance.is_available_for(ApiProvider::NvidiaNim));
+        assert!(!StatusItem::Balance.is_available_for(ApiProvider::Fireworks));
+        assert!(!StatusItem::Balance.is_available_for(ApiProvider::Sglang));
+        assert!(!StatusItem::Balance.is_available_for(ApiProvider::Vllm));
+        assert!(!StatusItem::Balance.is_available_for(ApiProvider::Ollama));
+        assert!(!StatusItem::Balance.is_available_for(ApiProvider::Openai));
+        assert!(!StatusItem::Balance.is_available_for(ApiProvider::Atlascloud));
+        // Other StatusItem variants should be available everywhere.
+        assert!(StatusItem::Mode.is_available_for(ApiProvider::Ollama));
+    }
+
+    #[test]
+    fn status_items_deser_ignores_unknown_variants() {
+        // Simulate a stable build reading config written by a dev build that
+        // knows about items the stable build doesn't (e.g. "balance" or a
+        // future "cost_saving" chip).
+        let toml_str = r#"
+            alternate_screen = "auto"
+            status_items = ["mode", "model", "unknown_future_item", "cost", "another_unknown", "status"]
+        "#;
+        let tui: TuiConfig = toml::from_str(toml_str).expect("should parse without error");
+        let items = tui.status_items.expect("status_items should be Some");
+        assert_eq!(items.len(), 4, "unknown items should be silently dropped");
+        assert_eq!(items[0], StatusItem::Mode);
+        assert_eq!(items[1], StatusItem::Model);
+        assert_eq!(items[2], StatusItem::Cost);
+        assert_eq!(items[3], StatusItem::Status);
     }
 }
