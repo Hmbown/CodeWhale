@@ -396,6 +396,7 @@ pub fn persist_permission_rules(
 
     let body = doc.to_string();
     write_config_toml(&path, &body)?;
+    enforce_owner_only_permissions(&path)?;
     Ok(path)
 }
 
@@ -404,6 +405,19 @@ fn write_config_toml(path: &Path, body: &str) -> anyhow::Result<()> {
 
     crate::utils::write_atomic(path, body.as_bytes())
         .with_context(|| format!("failed to write config at {}", path.display()))
+}
+
+fn enforce_owner_only_permissions(path: &Path) -> anyhow::Result<()> {
+    #[cfg(unix)]
+    {
+        use anyhow::Context;
+        use std::os::unix::fs::PermissionsExt;
+
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).with_context(
+            || format!("failed to set owner-only permissions at {}", path.display()),
+        )?;
+    }
+    Ok(())
 }
 
 fn append_permission_rules(
@@ -2388,6 +2402,11 @@ mod tests {
         .unwrap();
         let permissions_path = temp_root.join(".deepseek").join("permissions.toml");
         fs::write(&permissions_path, "# user permission notes\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&permissions_path, fs::Permissions::from_mode(0o644)).unwrap();
+        }
 
         let cargo_rule = codewhale_execpolicy::ToolPermissionRule::exec_shell(
             codewhale_execpolicy::PermissionDecision::Allow,
@@ -2431,6 +2450,15 @@ mod tests {
             body.contains("[[rules]]"),
             "expected top-level rules in {body}"
         );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&written).unwrap().permissions().mode() & 0o777,
+                0o600,
+                "permissions.toml should be owner-only"
+            );
+        }
 
         let config = Config::load(Some(path), None).expect("config and permissions should load");
         assert_eq!(config.permissions.rules, vec![cargo_rule, docs_rule]);

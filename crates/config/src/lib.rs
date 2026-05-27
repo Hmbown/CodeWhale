@@ -447,6 +447,8 @@ impl ConfigToml {
         if project.tools.is_some() {
             self.tools = project.tools;
         }
+        // Repo-local config may only tighten permissions. `auto_allow` is
+        // intentionally ignored because it grants shell execution trust.
         if !project.auto_deny.is_empty() {
             self.auto_deny.extend(project.auto_deny);
         }
@@ -3118,6 +3120,42 @@ path = "secrets/**"
         });
         assert_eq!(unset.approval_policy, None);
         assert_eq!(unset.sandbox_mode, None);
+    }
+
+    #[test]
+    fn project_merge_ignores_auto_allow_but_keeps_tightening_rules() {
+        let mut base = ConfigToml {
+            auto_allow: vec!["git status".to_string()],
+            auto_deny: vec!["rm -rf".to_string()],
+            ..ConfigToml::default()
+        };
+
+        base.merge_project_overrides(ConfigToml {
+            auto_allow: vec!["cargo test".to_string()],
+            auto_deny: vec!["curl https://secrets.example".to_string()],
+            permissions: PermissionsToml {
+                rules: vec![
+                    ToolPermissionRule::exec_shell(PermissionDecision::Allow, "cargo test"),
+                    ToolPermissionRule::file_path(
+                        "read_file",
+                        PermissionDecision::Ask,
+                        "secrets/**",
+                    ),
+                    ToolPermissionRule::file_path("write_file", PermissionDecision::Deny, "src/**"),
+                ],
+            },
+            ..ConfigToml::default()
+        });
+
+        assert_eq!(base.auto_allow, ["git status"]);
+        assert_eq!(base.auto_deny, ["rm -rf", "curl https://secrets.example"]);
+        assert_eq!(
+            base.permissions.rules,
+            vec![
+                ToolPermissionRule::file_path("read_file", PermissionDecision::Ask, "secrets/**"),
+                ToolPermissionRule::file_path("write_file", PermissionDecision::Deny, "src/**"),
+            ]
+        );
     }
 
     #[test]
