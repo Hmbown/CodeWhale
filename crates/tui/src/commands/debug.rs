@@ -1592,15 +1592,17 @@ pub fn patch_undo(app: &mut App) -> CommandResult {
 
     // Show diff stat so the user knows what changed.
     let diff_stat = Git::command()
-        .expect("git not found")
-        .args(["diff", "--stat"])
-        .current_dir(&workspace)
-        .output()
-        .ok()
-        .and_then(|o| {
-            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            if s.is_empty() { None } else { Some(s) }
-        });
+        .map(|mut git| {
+            git.args(["diff", "--stat"])
+                .current_dir(&workspace)
+                .output()
+                .ok()
+                .and_then(|o| {
+                    let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                    if s.is_empty() { None } else { Some(s) }
+                })
+        })
+        .unwrap_or(None);
 
     let short = &target.id.as_str()[..target.id.as_str().len().min(8)];
     let summary = match diff_stat {
@@ -1671,13 +1673,17 @@ pub fn edit(app: &mut App) -> CommandResult {
 pub fn diff(app: &mut App) -> CommandResult {
     let workspace = app.workspace.clone();
 
-    let name_only_output = Git::command()
-        .expect("git not found")
+    let Some(mut name_only_cmd) = Git::command() else {
+        return CommandResult::error("git not found on PATH");
+    };
+    let Some(mut stat_cmd) = Git::command() else {
+        return CommandResult::error("git not found on PATH");
+    };
+    let name_only_output = name_only_cmd
         .args(["diff", "--name-only"])
         .current_dir(&workspace)
         .output();
-    let stat_output = Git::command()
-        .expect("git not found")
+    let stat_output = stat_cmd
         .args(["diff", "--stat"])
         .current_dir(&workspace)
         .output();
