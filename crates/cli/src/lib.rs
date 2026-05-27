@@ -29,6 +29,7 @@ enum ProviderArg {
     Atlascloud,
     WanjieArk,
     Openrouter,
+    XiaomiMimo,
     Novita,
     Fireworks,
     Moonshot,
@@ -46,6 +47,7 @@ impl From<ProviderArg> for ProviderKind {
             ProviderArg::Atlascloud => ProviderKind::Atlascloud,
             ProviderArg::WanjieArk => ProviderKind::WanjieArk,
             ProviderArg::Openrouter => ProviderKind::Openrouter,
+            ProviderArg::XiaomiMimo => ProviderKind::XiaomiMimo,
             ProviderArg::Novita => ProviderKind::Novita,
             ProviderArg::Fireworks => ProviderKind::Fireworks,
             ProviderArg::Moonshot => ProviderKind::Moonshot,
@@ -718,6 +720,7 @@ fn provider_slot(provider: ProviderKind) -> &'static str {
         ProviderKind::Atlascloud => "atlascloud",
         ProviderKind::WanjieArk => "wanjie-ark",
         ProviderKind::Openrouter => "openrouter",
+        ProviderKind::XiaomiMimo => "xiaomi-mimo",
         ProviderKind::Novita => "novita",
         ProviderKind::Fireworks => "fireworks",
         ProviderKind::Moonshot => "moonshot",
@@ -728,13 +731,14 @@ fn provider_slot(provider: ProviderKind) -> &'static str {
 }
 
 /// Provider order used by the `auth list` and `auth status` outputs.
-const PROVIDER_LIST: [ProviderKind; 12] = [
+const PROVIDER_LIST: [ProviderKind; 13] = [
     ProviderKind::Deepseek,
     ProviderKind::NvidiaNim,
     ProviderKind::Openai,
     ProviderKind::Atlascloud,
     ProviderKind::WanjieArk,
     ProviderKind::Openrouter,
+    ProviderKind::XiaomiMimo,
     ProviderKind::Novita,
     ProviderKind::Fireworks,
     ProviderKind::Moonshot,
@@ -789,6 +793,7 @@ fn provider_env_vars(provider: ProviderKind) -> &'static [&'static str] {
     match provider {
         ProviderKind::Deepseek => &["DEEPSEEK_API_KEY"],
         ProviderKind::Openrouter => &["OPENROUTER_API_KEY"],
+        ProviderKind::XiaomiMimo => &["XIAOMI_MIMO_API_KEY", "MIMO_API_KEY"],
         ProviderKind::Novita => &["NOVITA_API_KEY"],
         ProviderKind::NvidiaNim => &["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY", "DEEPSEEK_API_KEY"],
         ProviderKind::Fireworks => &["FIREWORKS_API_KEY"],
@@ -1473,6 +1478,7 @@ fn build_tui_command(
             | ProviderKind::Atlascloud
             | ProviderKind::WanjieArk
             | ProviderKind::Openrouter
+            | ProviderKind::XiaomiMimo
             | ProviderKind::Novita
             | ProviderKind::Fireworks
             | ProviderKind::Moonshot
@@ -1481,7 +1487,7 @@ fn build_tui_command(
             | ProviderKind::Ollama
     ) {
         bail!(
-            "The interactive TUI supports DeepSeek, NVIDIA NIM, OpenAI-compatible, AtlasCloud, Wanjie Ark, OpenRouter, Novita, Fireworks, Moonshot/Kimi, SGLang, vLLM, and Ollama providers. Remove --provider {} or use `codewhale model ...` for provider registry inspection.",
+            "The interactive TUI supports DeepSeek, NVIDIA NIM, OpenAI-compatible, AtlasCloud, Wanjie Ark, OpenRouter, Xiaomi MiMo, Novita, Fireworks, Moonshot/Kimi, SGLang, vLLM, and Ollama providers. Remove --provider {} or use `codewhale model ...` for provider registry inspection.",
             resolved_runtime.provider.as_str()
         );
     }
@@ -2878,6 +2884,11 @@ mod tests {
                 ProviderKind::Openrouter,
                 "openrouter",
                 &["OPENROUTER_API_KEY"],
+            ),
+            (
+                ProviderKind::XiaomiMimo,
+                "xiaomi-mimo",
+                &["XIAOMI_MIMO_API_KEY", "MIMO_API_KEY"],
             ),
             (ProviderKind::Novita, "novita", &["NOVITA_API_KEY"]),
             (

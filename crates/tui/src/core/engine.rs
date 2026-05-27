@@ -387,6 +387,7 @@ impl Engine {
             ApiProvider::Atlascloud => "ATLASCLOUD_API_KEY",
             ApiProvider::WanjieArk => "WANJIE_ARK_API_KEY/WANJIE_API_KEY/WANJIE_MAAS_API_KEY",
             ApiProvider::Openrouter => "OPENROUTER_API_KEY",
+            ApiProvider::XiaomiMimo => "XIAOMI_MIMO_API_KEY/MIMO_API_KEY",
             ApiProvider::Novita => "NOVITA_API_KEY",
             ApiProvider::Fireworks => "FIREWORKS_API_KEY",
             ApiProvider::Moonshot => "MOONSHOT_API_KEY/KIMI_API_KEY",

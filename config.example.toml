@@ -13,11 +13,12 @@
 # `[providers.*]` sections near the bottom of
 # this file — keeping both stored at once means `/provider deepseek` and
 # `/provider nvidia-nim` (or `--provider openai`, `--provider wanjie-ark`,
-# `--provider fireworks`, `/provider sglang`, `/provider vllm`, `/provider ollama`)
-# toggle without having to re-enter keys. Top-level `api_key` / `base_url` are
+# `--provider xiaomi-mimo`, `--provider fireworks`, `/provider sglang`,
+# `/provider vllm`, `/provider ollama`) toggle without having to re-enter keys.
+# Top-level `api_key` / `base_url` are
 # still read as DeepSeek defaults when `[providers.deepseek]` is absent
 # (backward compatibility).
-provider = "deepseek" # deepseek | deepseek-cn | nvidia-nim | openai | atlascloud | wanjie-ark | openrouter | novita | fireworks | sglang | vllm | ollama
+provider = "deepseek" # deepseek | deepseek-cn | nvidia-nim | openai | atlascloud | wanjie-ark | openrouter | xiaomi-mimo | novita | fireworks | sglang | vllm | ollama
 api_key = "YOUR_DEEPSEEK_API_KEY" # must be non-empty
 base_url = "https://api.deepseek.com/beta"
 # provider = "deepseek-cn"                       # legacy alias (official host is still https://api.deepseek.com)
@@ -37,6 +38,7 @@ base_url = "https://api.deepseek.com/beta"
 #   gpt-4.1                         — default generic OpenAI-compatible model ID
 #   deepseek-ai/deepseek-v4-flash   — default AtlasCloud model ID
 #   deepseek-reasoner               — default Wanjie Ark model ID
+#   mimo-v2.5-pro                   — default Xiaomi MiMo model ID
 #   accounts/fireworks/models/deepseek-v4-pro — Fireworks AI Pro model ID
 #   deepseek-ai/DeepSeek-V4-Pro    — SGLang self-hosted Pro model ID
 #   deepseek-ai/DeepSeek-V4-Flash  — SGLang self-hosted Flash model ID
@@ -186,6 +188,7 @@ max_subagents = 10 # optional (1-20)
 #   OpenAI-compatible: OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL
 #   Wanjie Ark: WANJIE_ARK_API_KEY (or WANJIE_API_KEY), WANJIE_ARK_BASE_URL, WANJIE_ARK_MODEL
 #   OpenRouter: OPENROUTER_API_KEY, OPENROUTER_BASE_URL, OPENROUTER_MODEL
+#   Xiaomi MiMo: XIAOMI_MIMO_API_KEY (or MIMO_API_KEY), XIAOMI_MIMO_BASE_URL, XIAOMI_MIMO_MODEL
 #   Novita:     NOVITA_API_KEY, NOVITA_BASE_URL, NOVITA_MODEL
 #   Fireworks:  FIREWORKS_API_KEY, FIREWORKS_BASE_URL
 #   SGLang:    SGLANG_BASE_URL, SGLANG_MODEL, optional SGLANG_API_KEY
@@ -231,6 +234,12 @@ max_subagents = 10 # optional (1-20)
 # api_key = "YOUR_OPENROUTER_API_KEY"
 # base_url = "https://openrouter.ai/api/v1"
 # model = "deepseek/deepseek-v4-pro"         # or deepseek/deepseek-v4-flash
+
+# Xiaomi MiMo OpenAI-compatible endpoint (https://platform.xiaomimimo.com)
+[providers.xiaomi_mimo]
+# api_key = "YOUR_XIAOMI_MIMO_API_KEY"
+# base_url = "https://api.xiaomimimo.com/v1"
+# model = "mimo-v2.5-pro"
 
 # Novita AI-hosted inference (https://novita.ai)
 [providers.novita]
@@ -368,6 +377,11 @@ exec_policy = true
 # model = "gemini-3.1-flash-lite-preview"  # Required: vision-capable model ID
 # api_key = "YOUR_API_KEY"                 # Optional: defaults to main api_key
 # base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"  # Optional
+#
+# Xiaomi MiMo image understanding can be configured through the same tool:
+# model = "mimo-v2.5"
+# api_key = "YOUR_XIAOMI_MIMO_API_KEY"
+# base_url = "https://api.xiaomimimo.com/v1"
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Retry Configuration

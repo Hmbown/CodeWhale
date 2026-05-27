@@ -1866,6 +1866,10 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
                     "OPENROUTER_API_KEY",
                     "codewhale auth set --provider openrouter --api-key \"...\"",
                 ),
+                crate::config::ApiProvider::XiaomiMimo => (
+                    "XIAOMI_MIMO_API_KEY/MIMO_API_KEY",
+                    "codewhale auth set --provider xiaomi-mimo --api-key \"...\"",
+                ),
                 crate::config::ApiProvider::Novita => (
                     "NOVITA_API_KEY",
                     "codewhale auth set --provider novita --api-key \"...\"",
@@ -1902,6 +1906,7 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
                     crate::config::ApiProvider::Atlascloud => "atlascloud",
                     crate::config::ApiProvider::WanjieArk => "wanjie_ark",
                     crate::config::ApiProvider::Openrouter => "openrouter",
+                    crate::config::ApiProvider::XiaomiMimo => "xiaomi_mimo",
                     crate::config::ApiProvider::Novita => "novita",
                     crate::config::ApiProvider::Fireworks => "fireworks",
                     crate::config::ApiProvider::Moonshot => "moonshot",
@@ -2162,6 +2167,11 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
             crate::config::ApiProvider::Openrouter,
             "openrouter",
             &["OPENROUTER_API_KEY"][..],
+        ),
+        (
+            crate::config::ApiProvider::XiaomiMimo,
+            "xiaomi-mimo",
+            &["XIAOMI_MIMO_API_KEY", "MIMO_API_KEY"][..],
         ),
         (
             crate::config::ApiProvider::Novita,

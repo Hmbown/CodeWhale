@@ -120,6 +120,20 @@ impl Default for ModelRegistry {
                 supports_reasoning: true,
             },
             ModelInfo {
+                id: "mimo-v2.5-pro".to_string(),
+                provider: ProviderKind::XiaomiMimo,
+                aliases: vec!["mimo".to_string()],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "mimo-v2.5".to_string(),
+                provider: ProviderKind::XiaomiMimo,
+                aliases: vec!["xiaomi-mimo-v2.5".to_string()],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
                 id: "deepseek/deepseek-v4-pro".to_string(),
                 provider: ProviderKind::Novita,
                 aliases: vec![
@@ -380,6 +394,16 @@ mod tests {
 
         assert_eq!(resolved.resolved.provider, ProviderKind::Openrouter);
         assert_eq!(resolved.resolved.id, "deepseek/deepseek-v4-pro");
+    }
+
+    #[test]
+    fn xiaomi_mimo_default_uses_canonical_model_id() {
+        let registry = ModelRegistry::default();
+        let resolved = registry.resolve(None, Some(ProviderKind::XiaomiMimo));
+
+        assert_eq!(resolved.resolved.provider, ProviderKind::XiaomiMimo);
+        assert_eq!(resolved.resolved.id, "mimo-v2.5-pro");
+        assert!(resolved.resolved.supports_reasoning);
     }
 
     #[test]
