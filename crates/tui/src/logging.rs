@@ -6,10 +6,48 @@ use colored::Colorize;
 
 use crate::palette;
 static VERBOSE: AtomicBool = AtomicBool::new(false);
+static REQUESTED_VERBOSE: AtomicBool = AtomicBool::new(false);
+static IN_ALT_SCREEN: AtomicBool = AtomicBool::new(false);
+
+fn alt_screen_verbose_state(
+    requested_verbose: bool,
+    in_alt_screen: bool,
+    is_windows: bool,
+) -> bool {
+    if is_windows && in_alt_screen {
+        false
+    } else {
+        requested_verbose
+    }
+}
 
 /// Enable or disable verbose logging output.
 pub fn set_verbose(enabled: bool) {
-    VERBOSE.store(enabled, Ordering::SeqCst);
+    REQUESTED_VERBOSE.store(enabled, Ordering::SeqCst);
+    VERBOSE.store(
+        alt_screen_verbose_state(enabled, IN_ALT_SCREEN.load(Ordering::SeqCst), cfg!(windows)),
+        Ordering::SeqCst,
+    );
+}
+
+/// Suppress verbose CLI logging while the TUI owns the alt-screen.
+pub fn suppress_for_tui_alt_screen() {
+    let requested = REQUESTED_VERBOSE.load(Ordering::SeqCst);
+    IN_ALT_SCREEN.store(true, Ordering::SeqCst);
+    VERBOSE.store(
+        alt_screen_verbose_state(requested, true, cfg!(windows)),
+        Ordering::SeqCst,
+    );
+}
+
+/// Restore the user's requested verbosity after leaving the alt-screen.
+pub fn restore_after_tui_alt_screen() {
+    let requested = REQUESTED_VERBOSE.load(Ordering::SeqCst);
+    IN_ALT_SCREEN.store(false, Ordering::SeqCst);
+    VERBOSE.store(
+        alt_screen_verbose_state(requested, false, cfg!(windows)),
+        Ordering::SeqCst,
+    );
 }
 
 /// Return true when `DEEPSEEK_LOG_LEVEL` requests verbose output.
@@ -63,6 +101,24 @@ pub fn warn(message: impl AsRef<str>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    fn logging_state_test_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn lock_logging_state_test() -> MutexGuard<'static, ()> {
+        logging_state_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn reset_logging_state() {
+        IN_ALT_SCREEN.store(false, Ordering::SeqCst);
+        VERBOSE.store(false, Ordering::SeqCst);
+        REQUESTED_VERBOSE.store(false, Ordering::SeqCst);
+    }
 
     #[test]
     fn log_value_parser_accepts_common_rust_log_directives() {
@@ -73,5 +129,49 @@ mod tests {
         ));
         assert!(!log_value_enables_verbose("warn"));
         assert!(!log_value_enables_verbose("codewhale_tui=off"));
+    }
+
+    #[test]
+    fn alt_screen_verbose_state_suppresses_verbose_on_windows() {
+        assert!(!alt_screen_verbose_state(true, true, true));
+        assert!(!alt_screen_verbose_state(false, true, true));
+    }
+
+    #[test]
+    fn alt_screen_verbose_state_restores_requested_state_off_alt_screen() {
+        assert!(alt_screen_verbose_state(true, false, true));
+        assert!(!alt_screen_verbose_state(false, false, true));
+    }
+
+    #[test]
+    fn alt_screen_verbose_state_is_noop_off_windows() {
+        assert!(alt_screen_verbose_state(true, true, false));
+        assert!(!alt_screen_verbose_state(false, true, false));
+    }
+
+    #[test]
+    fn set_verbose_respects_alt_screen_suppression() {
+        let _guard = lock_logging_state_test();
+        reset_logging_state();
+        IN_ALT_SCREEN.store(true, Ordering::SeqCst);
+        set_verbose(true);
+        assert!(REQUESTED_VERBOSE.load(Ordering::SeqCst));
+        if cfg!(windows) {
+            assert!(!is_verbose());
+        } else {
+            assert!(is_verbose());
+        }
+        reset_logging_state();
+    }
+
+    #[test]
+    fn set_verbose_restores_requested_state_outside_alt_screen() {
+        let _guard = lock_logging_state_test();
+        reset_logging_state();
+        set_verbose(true);
+        assert!(is_verbose());
+        set_verbose(false);
+        assert!(!is_verbose());
+        reset_logging_state();
     }
 }
