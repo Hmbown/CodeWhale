@@ -1806,6 +1806,15 @@ impl Config {
         provider_preserves_custom_base_url_model(provider, &self.deepseek_base_url())
     }
 
+    /// Return the configured API path suffix for the active provider.
+    /// When `None`, the default `/v1` versioning logic applies.
+    #[must_use]
+    pub fn path_suffix(&self) -> Option<String> {
+        let provider = self.api_provider();
+        self.provider_config_for(provider)
+            .and_then(|c| c.path_suffix.clone())
+    }
+
     /// Read the API key.
     ///
     /// Precedence: **explicit in-memory override → provider/root config

@@ -213,6 +213,11 @@ max_subagents = 10 # optional (1-20)
 # api_key = "YOUR_OPENAI_COMPATIBLE_API_KEY"
 # base_url = "https://api.openai.com/v1"
 # model = "gpt-4.1"
+# # path_suffix = ""      # Override the version path segment. Use "" to drop
+#                         # the /v1 prefix (e.g. third-party endpoints that
+#                         # reject /v1/chat/completions). Custom values like
+#                         # "v2" produce /v2/chat/completions. Default is None
+#                         # (current /v1-adding behavior).
 
 # AtlasCloud OpenAI-compatible endpoint (https://www.atlascloud.ai/docs/models/llm)
 [providers.atlascloud]
