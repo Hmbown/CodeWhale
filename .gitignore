@@ -118,3 +118,7 @@ pack_claude*.ps1
 .github/workflows.bak/
 _test_exe.js
 check_scripts.js
+_read_cli.js
+verify_deploy.js
+pack_ds_full.js
+InstallationLog.txt

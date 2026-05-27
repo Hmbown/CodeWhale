@@ -62,6 +62,7 @@ pub(crate) fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEv
             };
             *pending_delta = pending_delta.saturating_add(update.delta_lines);
             if update.delta_lines != 0 {
+                app.user_scrolled_during_stream = true;
                 app.needs_redraw = true;
             }
         }
@@ -74,6 +75,7 @@ pub(crate) fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEv
             };
             *pending_delta = pending_delta.saturating_add(update.delta_lines);
             if update.delta_lines != 0 {
+                app.user_scrolled_during_stream = true;
                 app.needs_redraw = true;
             }
         }

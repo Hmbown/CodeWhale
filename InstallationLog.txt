@@ -1,6 +1,0 @@
-************************************* Invoked: Wed May 20 07:24:00 2026
-[0] Arguments: C:/Users/ljm37/AppData/Local/Temp/msys2.exe
-[2] Operations sanity check succeeded.
-[3] Warning: Cannot create lock file "C:\Users\ljm37\AppData\Local\Temp\msys21234865.lock": 另一个程序正在使用此文件，进程无法访问。
- (0x00000020)
-[21] UnableToStart : Unable to start installer : Another msys2 instance is already running. Wait until it finishes, close it, or restart your system.
