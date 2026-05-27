@@ -684,20 +684,18 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
             }
             let suggestions = suggest_command_names(command, 3);
             if suggestions.is_empty() {
-                CommandResult::error_msg(
-                    format!("Unknown command: /{command}. Type /help for available commands."),
-                )
+                CommandResult::error_msg(format!(
+                    "Unknown command: /{command}. Type /help for available commands."
+                ))
             } else {
                 let list = suggestions
                     .into_iter()
                     .map(|name| format!("/{name}"))
                     .collect::<Vec<_>>()
                     .join(", ");
-                CommandResult::error_msg(
-                    format!(
-                        "Unknown command: /{command}. Did you mean: {list}? Type /help for available commands."
-                    ),
-                )
+                CommandResult::error_msg(format!(
+                    "Unknown command: /{command}. Did you mean: {list}? Type /help for available commands."
+                ))
             }
         }
     }

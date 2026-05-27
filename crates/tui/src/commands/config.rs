@@ -772,9 +772,9 @@ pub fn trust(app: &mut App, arg: Option<&str>) -> CommandResult {
         }
         "add" => trust_add(&workspace, rest),
         "remove" | "rm" | "del" | "delete" => trust_remove(&workspace, rest),
-        other => CommandResult::error_msg(
-            t(MessageId::CmdTrustUnknownAction).replace("{action}", other),
-        ),
+        other => {
+            CommandResult::error_msg(t(MessageId::CmdTrustUnknownAction).replace("{action}", other))
+        }
     }
 }
 
@@ -1265,9 +1265,7 @@ pub fn lsp_command(app: &mut App, arg: Option<&str>) -> CommandResult {
             app.lsp_enabled = false;
             CommandResult::message(t(MessageId::CmdLspDisabled))
         }
-        other => CommandResult::error_msg(
-            t(MessageId::CmdLspUnknownArg).replace("{arg}", other),
-        ),
+        other => CommandResult::error_msg(t(MessageId::CmdLspUnknownArg).replace("{arg}", other)),
     }
 }
 

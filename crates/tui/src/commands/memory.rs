@@ -81,12 +81,10 @@ pub fn memory(app: &mut App, arg: Option<&str>) -> CommandResult {
             path.display()
         )),
         "help" => CommandResult::message(memory_help(&path)),
-        _ => CommandResult::error_msg(
-            format!(
-                "unknown subcommand `{sub}`. Try `/memory help`.\n\n{}",
-                memory_help(&path)
-            ),
-        ),
+        _ => CommandResult::error_msg(format!(
+            "unknown subcommand `{sub}`. Try `/memory help`.\n\n{}",
+            memory_help(&path)
+        )),
     }
 }
 

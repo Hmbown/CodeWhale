@@ -308,9 +308,9 @@ pub fn sessions(app: &mut App, arg: Option<&str>) -> CommandResult {
             app.view_stack.push(SessionPickerView::new(&app.workspace));
             CommandResult::ok()
         }
-        _ => CommandResult::error_msg(
-            format!("unknown subcommand `{action}`. usage: /sessions [show|prune <days>]"),
-        ),
+        _ => CommandResult::error_msg(format!(
+            "unknown subcommand `{action}`. usage: /sessions [show|prune <days>]"
+        )),
     }
 }
 

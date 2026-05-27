@@ -1776,7 +1776,9 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CtxInspectorTitle => "Session Context",
         MessageId::CtxInspectorModel => "Model: {model}",
         MessageId::CtxInspectorSession => "Session: {session}",
-        MessageId::CtxInspectorTranscript => "Transcript: {cells} cells, {api_messages} API messages",
+        MessageId::CtxInspectorTranscript => {
+            "Transcript: {cells} cells, {api_messages} API messages"
+        }
         MessageId::CtxInspectorWorkspaceStatus => "Workspace status: {status}",
         MessageId::CtxInspectorNotSampled => "not sampled yet",
         MessageId::CtxInspectorEmpty => "(empty)",
@@ -1789,8 +1791,12 @@ fn english(id: MessageId) -> &'static str {
         }
         MessageId::CtxInspectorNone => "none",
         MessageId::CtxInspectorTotal => "  Total: {count} block(s), ~{tokens} tokens",
-        MessageId::CtxInspectorTextPromptLayers => "  Text prompt layers: {count} layer(s), ~{tokens} tokens",
-        MessageId::CtxInspectorSingleBlob => "  Single text blob (~{tokens} tokens) [stable prefix only]",
+        MessageId::CtxInspectorTextPromptLayers => {
+            "  Text prompt layers: {count} layer(s), ~{tokens} tokens"
+        }
+        MessageId::CtxInspectorSingleBlob => {
+            "  Single text blob (~{tokens} tokens) [stable prefix only]"
+        }
         MessageId::CtxInspectorNoSystemPrompt => "  No system prompt set.",
         MessageId::CtxInspectorTip => {
             "  Tip: Stable prefix blocks are DeepSeek V4 prefix-cache eligible. Keep the system prompt append-only to maximize reuse."
