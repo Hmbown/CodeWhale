@@ -4,7 +4,7 @@ use std::fmt::Write;
 use std::path::PathBuf;
 
 use crate::config::{ApiProvider, COMMON_DEEPSEEK_MODELS, normalize_model_name_for_provider};
-use crate::localization::{Locale, MessageId, tr};
+use crate::localization::{MessageId, tr};
 use crate::tui::app::{App, AppAction, AppMode, ReasoningEffort};
 use crate::tui::views::{HelpView, ModalKind, SubAgentsView, subagent_view_agents};
 

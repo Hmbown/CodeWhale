@@ -4,8 +4,7 @@
 //! `/provider` with no args opens the picker modal (#52). `/provider <name>`
 //! keeps the v0.6.6 CLI form for muscle-memory + scripted use.
 
-use crate::config::{ApiProvider, Config, normalize_model_name, provider_passes_model_through};
-use crate::localization::Locale;
+use crate::config::{ApiProvider, normalize_model_name, provider_passes_model_through};
 use crate::tui::app::{App, AppAction};
 
 use super::CommandResult;
