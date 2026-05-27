@@ -573,6 +573,17 @@ impl Renderable for FooterWidget {
             return;
         }
 
+        // Clear the whole footer row first so stale transcript glyphs from
+        // the previous frame cannot survive in cells this frame's spans do not
+        // touch (#2244).
+        for y in area.top()..area.bottom() {
+            for x in area.left()..area.right() {
+                buf[(x, y)]
+                    .set_symbol(" ")
+                    .set_style(Style::default().bg(self.props.footer_bg));
+            }
+        }
+
         let preview_left_spans = self.left_spans(available_width);
         let preview_left_width = span_width(&preview_left_spans);
         let right_budget = available_width
@@ -652,6 +663,8 @@ mod tests {
     use crate::palette;
     use crate::tui::app::{App, AppMode, TuiOptions};
     use ratatui::{
+        buffer::Buffer,
+        layout::Rect,
         style::{Color, Style},
         text::Span,
     };
@@ -1376,5 +1389,37 @@ mod tests {
         assert!(rendered.contains("session saved"));
         assert!(!rendered.contains("agent"));
         assert!(!rendered.contains("deepseek-v4-flash"));
+    }
+
+    #[test]
+    fn render_clears_stale_cells_across_entire_footer_row() {
+        let app = make_app();
+        let widget = FooterWidget::new(idle_props_for(&app));
+        let area = Rect::new(0, 0, 48, 1);
+        let mut buf = Buffer::empty(area);
+
+        for x in area.x..area.x.saturating_add(area.width) {
+            buf[(x, area.y)]
+                .set_symbol("X")
+                .set_style(Style::default().fg(Color::Red).bg(Color::Blue));
+        }
+
+        widget.render(area, &mut buf);
+
+        let rendered: String = (area.x..area.x.saturating_add(area.width))
+            .map(|x| buf[(x, area.y)].symbol())
+            .collect();
+
+        assert!(
+            !rendered.contains('X'),
+            "footer render must clear stale row content before painting: {rendered:?}"
+        );
+        for x in area.x..area.x.saturating_add(area.width) {
+            assert_eq!(
+                buf[(x, area.y)].bg,
+                app.ui_theme.footer_bg,
+                "footer background should cover the full row"
+            );
+        }
     }
 }
