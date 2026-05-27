@@ -6,10 +6,22 @@ use colored::Colorize;
 
 use crate::palette;
 static VERBOSE: AtomicBool = AtomicBool::new(false);
+static VERBOSE_SNAPSHOT: AtomicBool = AtomicBool::new(false);
 
 /// Enable or disable verbose logging output.
 pub fn set_verbose(enabled: bool) {
     VERBOSE.store(enabled, Ordering::SeqCst);
+}
+
+/// Capture the current verbose state so the TUI can restore it after
+/// temporarily suppressing Windows alt-screen output.
+pub fn snapshot_verbose_state() {
+    VERBOSE_SNAPSHOT.store(is_verbose(), Ordering::SeqCst);
+}
+
+/// Restore the last captured verbose state.
+pub fn restore_verbose_state() {
+    set_verbose(VERBOSE_SNAPSHOT.load(Ordering::SeqCst));
 }
 
 /// Return true when `DEEPSEEK_LOG_LEVEL` requests verbose output.
@@ -63,6 +75,9 @@ pub fn warn(message: impl AsRef<str>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static TEST_GUARD: Mutex<()> = Mutex::new(());
 
     #[test]
     fn log_value_parser_accepts_common_rust_log_directives() {
@@ -73,5 +88,24 @@ mod tests {
         ));
         assert!(!log_value_enables_verbose("warn"));
         assert!(!log_value_enables_verbose("codewhale_tui=off"));
+    }
+
+    #[test]
+    fn snapshot_and_restore_verbose_state_round_trip() {
+        let _guard = TEST_GUARD.lock().unwrap_or_else(|err| err.into_inner());
+
+        set_verbose(false);
+        snapshot_verbose_state();
+        set_verbose(true);
+        restore_verbose_state();
+        assert!(!is_verbose());
+
+        set_verbose(true);
+        snapshot_verbose_state();
+        set_verbose(false);
+        restore_verbose_state();
+        assert!(is_verbose());
+
+        set_verbose(false);
     }
 }

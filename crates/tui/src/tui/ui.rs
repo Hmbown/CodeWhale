@@ -287,6 +287,8 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
         // Suppress verbose CLI logging once the alt-screen is active so
         // eprintln! calls from crate::logging don't leak into the TUI buffer.
         #[cfg(windows)]
+        crate::logging::snapshot_verbose_state();
+        #[cfg(windows)]
         crate::logging::set_verbose(false);
     }
     // Initialize the file-backed TUI log and (on Unix) redirect raw stderr
@@ -560,7 +562,7 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
     if use_alt_screen {
         execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
         #[cfg(windows)]
-        crate::logging::set_verbose(crate::logging::env_requests_verbose_logging());
+        crate::logging::restore_verbose_state();
     }
     if use_mouse_capture {
         execute!(terminal.backend_mut(), DisableMouseCapture)?;
@@ -6915,7 +6917,7 @@ fn pause_terminal(
     if use_alt_screen {
         execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
         #[cfg(windows)]
-        crate::logging::set_verbose(crate::logging::env_requests_verbose_logging());
+        crate::logging::restore_verbose_state();
     }
     if use_mouse_capture {
         execute!(terminal.backend_mut(), DisableMouseCapture)?;
