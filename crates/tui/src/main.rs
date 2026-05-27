@@ -78,6 +78,7 @@ mod tui;
 mod utils;
 mod vision;
 mod working_set;
+mod workspace_discovery;
 mod workspace_trust;
 
 use crate::config::{Config, DEFAULT_TEXT_MODEL, MAX_SUBAGENTS, effective_home_dir};
