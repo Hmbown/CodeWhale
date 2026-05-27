@@ -31,7 +31,7 @@ mod skills;
 mod stash;
 mod status;
 mod task;
-mod user_commands;
+pub mod user_commands;
 
 use std::fmt::Write as _;
 
@@ -966,6 +966,7 @@ pub fn get_command_info(name: &str) -> Option<&'static CommandInfo> {
 ///
 /// `workspace` is used to also scan workspace-local command directories;
 /// pass `None` when no workspace context is available.
+#[allow(dead_code)]
 pub fn all_command_names_matching(
     prefix: &str,
     workspace: Option<&std::path::Path>,

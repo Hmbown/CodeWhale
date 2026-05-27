@@ -158,6 +158,9 @@ pub struct EngineConfig {
     pub memory_path: PathBuf,
     pub vision_config: Option<crate::config::VisionModelConfig>,
     pub goal_objective: Option<String>,
+    /// Tool restriction from custom slash command frontmatter.
+    /// `None` means the current turn may use the normal tool set.
+    pub allowed_tools: Option<Vec<String>>,
     /// Resolved BCP-47 locale tag (e.g. `"en"`, `"zh-Hans"`, `"ja"`)
     /// for the `## Environment` block in the system prompt. The
     /// caller resolves this from `Settings` once at engine
@@ -223,6 +226,7 @@ impl Default for EngineConfig {
             vision_config: None,
             strict_tool_mode: false,
             goal_objective: None,
+            allowed_tools: None,
             locale_tag: "en".to_string(),
             workshop: None,
             search_provider: crate::config::SearchProvider::default(),
@@ -626,6 +630,7 @@ impl Engine {
                     approval_mode,
                     translation_enabled,
                     show_thinking,
+                    allowed_tools,
                 } => {
                     self.handle_send_message(
                         content,
@@ -641,6 +646,7 @@ impl Engine {
                         approval_mode,
                         translation_enabled,
                         show_thinking,
+                        allowed_tools,
                     )
                     .await;
                 }
@@ -848,6 +854,7 @@ impl Engine {
                         self.session.approval_mode,
                         self.config.translation_enabled,
                         self.config.show_thinking,
+                        self.config.allowed_tools.clone(),
                     )
                     .await;
                 }
@@ -937,6 +944,7 @@ impl Engine {
         approval_mode: crate::tui::approval::ApprovalMode,
         translation_enabled: bool,
         show_thinking: bool,
+        allowed_tools: Option<Vec<String>>,
     ) {
         // Reset cancel token for fresh turn (in case previous was cancelled)
         self.reset_cancel_token();
@@ -1034,6 +1042,7 @@ impl Engine {
                 false,
             );
         }
+        self.config.allowed_tools = allowed_tools;
         self.session.reasoning_effort = reasoning_effort;
         self.session.reasoning_effort_auto = reasoning_effort_auto;
         self.session.auto_model = auto_model;

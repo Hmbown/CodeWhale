@@ -1629,6 +1629,7 @@ impl RuntimeThreadManager {
                 auto_approve,
                 translation_enabled: false,
                 show_thinking,
+                allowed_tools: None,
                 approval_mode: if auto_approve {
                     crate::tui::approval::ApprovalMode::Auto
                 } else {
@@ -1989,6 +1990,7 @@ impl RuntimeThreadManager {
             vision_config: self.config.vision_model_config(),
             strict_tool_mode: self.config.strict_tool_mode.unwrap_or(false),
             goal_objective: None,
+            allowed_tools: None,
             locale_tag: crate::localization::resolve_locale(&settings.locale)
                 .tag()
                 .to_string(),

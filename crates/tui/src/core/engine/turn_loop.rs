@@ -1188,6 +1188,13 @@ impl Engine {
                     "Planning tool '{tool_name}' with input: {tool_input:?}"
                 ));
 
+                let requested_tool_name = tool_name.clone();
+                let tool_def =
+                    resolve_tool_definition(&mut tool_name, &tool_catalog, tool_registry);
+                if requested_tool_name != tool_name {
+                    tool.name = tool_name.clone();
+                }
+
                 let interactive = (tool_name == "exec_shell"
                     && tool_input
                         .get("interactive")
@@ -1219,25 +1226,10 @@ impl Engine {
                     )));
                 }
 
-                let requested_tool_name = tool_name.clone();
-                let mut tool_def = tool_catalog.iter().find(|def| def.name == tool_name);
-
-                // Resolve hallucinated tool names when the model emits a
-                // non-canonical variant (Read_file, readFile, read-file, etc.).
-                if tool_def.is_none()
-                    && let Some(registry) = tool_registry
-                    && let Some(canonical) = registry.resolve(&tool_name)
-                {
-                    crate::logging::info(format!(
-                        "Resolved hallucinated tool name '{tool_name}' -> '{canonical}'"
-                    ));
-                    tool_def = tool_catalog.iter().find(|d| d.name == canonical);
-                    if tool_def.is_some() {
-                        tool_name = canonical.to_string();
-                        // Update the tool_uses entry so the result is
-                        // attributed to the canonical name.
-                        tool.name = tool_name.clone();
-                    }
+                if !command_allows_tool(self.config.allowed_tools.as_deref(), &tool_name) {
+                    blocked_error = Some(ToolError::permission_denied(format!(
+                        "Tool '{tool_name}' is not in the allowed-tools list for the current command"
+                    )));
                 }
 
                 if !caller_allowed_for_tool(tool_caller.as_ref(), tool_def) {
@@ -2112,6 +2104,40 @@ fn should_hold_turn_for_subagents(queued_completions: usize, running_children: u
     queued_completions > 0 || running_children > 0
 }
 
+fn command_allows_tool(allowed_tools: Option<&[String]>, tool_name: &str) -> bool {
+    let Some(allowed_tools) = allowed_tools else {
+        return true;
+    };
+    allowed_tools.contains(&tool_name.to_ascii_lowercase())
+}
+
+fn resolve_tool_definition<'a>(
+    tool_name: &mut String,
+    tool_catalog: &'a [Tool],
+    tool_registry: Option<&crate::tools::ToolRegistry>,
+) -> Option<&'a Tool> {
+    let mut tool_def = tool_catalog
+        .iter()
+        .find(|def| def.name.as_str() == tool_name.as_str());
+
+    // Resolve hallucinated tool names before policy gates run, so aliases like
+    // ReadFile are checked against the canonical registered tool name.
+    if tool_def.is_none()
+        && let Some(registry) = tool_registry
+        && let Some(canonical) = registry.resolve(tool_name.as_str())
+    {
+        crate::logging::info(format!(
+            "Resolved hallucinated tool name '{tool_name}' -> '{canonical}'"
+        ));
+        tool_def = tool_catalog.iter().find(|d| d.name == canonical);
+        if tool_def.is_some() {
+            *tool_name = canonical.to_string();
+        }
+    }
+
+    tool_def
+}
+
 /// Issue #1727: decide whether to surface a "thinking-only, no output" status.
 ///
 /// Reached when the assistant turn had no sendable content (no Text, no
@@ -2382,5 +2408,46 @@ mod tests {
             Some("high".to_string()),
             "auto thinking should classify the user request, not stored metadata"
         );
+    }
+
+    #[test]
+    fn allowed_tools_gate_blocks_unlisted_tool() {
+        let allowed = vec!["bash".to_string(), "grep".to_string()];
+        assert!(!command_allows_tool(Some(&allowed), "read"));
+    }
+
+    #[test]
+    fn allowed_tools_gate_allows_listed_tool_case_insensitively() {
+        let allowed = vec!["bash".to_string(), "read".to_string()];
+        assert!(command_allows_tool(Some(&allowed), "Read"));
+    }
+
+    #[test]
+    fn allowed_tools_gate_allows_all_tools_when_not_set() {
+        assert!(command_allows_tool(None, "write"));
+    }
+
+    #[test]
+    fn review_regression_allowed_tools_gate_blocks_all_tools_when_empty() {
+        let allowed = Vec::new();
+        assert!(!command_allows_tool(Some(&allowed), "bash"));
+    }
+
+    #[test]
+    fn review_regression_allowed_tools_gate_checks_canonical_tool_name() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let context = crate::tools::spec::ToolContext::new(tmp.path().to_path_buf());
+        let registry = crate::tools::ToolRegistryBuilder::new()
+            .with_file_tools()
+            .build(context);
+        let catalog = registry.to_api_tools();
+        let mut tool_name = "ReadFile".to_string();
+
+        let tool_def = resolve_tool_definition(&mut tool_name, &catalog, Some(&registry));
+
+        assert!(tool_def.is_some());
+        assert_eq!(tool_name, "read_file");
+        let allowed = vec!["read_file".to_string()];
+        assert!(command_allows_tool(Some(&allowed), &tool_name));
     }
 }
