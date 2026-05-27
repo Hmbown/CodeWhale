@@ -920,6 +920,14 @@ async fn run_event_loop(
                 .await
                 .ok()?;
             let json: serde_json::Value = resp.json().await.ok()?;
+            // Only notify for fully-published releases — skip drafts and
+            // pre-releases so a pushed tag doesn't trigger a premature
+            // "new version" banner before assets are uploaded (#2254).
+            if json["draft"].as_bool().unwrap_or(true)
+                || json["prerelease"].as_bool().unwrap_or(false)
+            {
+                return None;
+            }
             let tag = json["tag_name"].as_str()?;
             let latest = tag.trim_start_matches('v');
             // Compare semver so dev builds (e.g. "0.8.46-pre") don't
