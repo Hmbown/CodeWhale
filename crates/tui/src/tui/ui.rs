@@ -48,6 +48,7 @@ use crate::core::events::Event as EngineEvent;
 use crate::core::ops::Op;
 use crate::hooks::{HookEvent, HookExecutor};
 use crate::llm_client::LlmClient;
+use crate::localization::Locale;
 use crate::models::{
     ContentBlock, Message, MessageRequest, SystemPrompt, Usage, context_window_for_model,
 };
@@ -1920,7 +1921,7 @@ async fn run_event_loop(
                                     "tool_name": tool_name,
                                     "approval_key": approval_key,
                                     "session_id": app.current_session_id,
-                                    "mode": app.mode.label(app.ui_locale),
+                                    "mode": app.mode.label(Locale::En),
                                 }),
                             );
                             let _ = engine_handle.approve_tool_call(id.clone()).await;
@@ -1930,7 +1931,7 @@ async fn run_event_loop(
                                 serde_json::json!({
                                     "tool_name": tool_name,
                                     "session_id": app.current_session_id,
-                                    "mode": app.mode.label(app.ui_locale),
+                                    "mode": app.mode.label(Locale::En),
                                 }),
                             );
                             let _ = engine_handle.deny_tool_call(id.clone()).await;
@@ -1962,7 +1963,7 @@ async fn run_event_loop(
                                     "tool_name": tool_name,
                                     "description": description,
                                     "session_id": app.current_session_id,
-                                    "mode": app.mode.label(app.ui_locale),
+                                    "mode": app.mode.label(Locale::En),
                                 }),
                             );
                             app.view_stack

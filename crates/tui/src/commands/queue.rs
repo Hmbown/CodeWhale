@@ -34,7 +34,10 @@ fn list_queue(app: &mut App) -> CommandResult {
     let queued = app.queued_message_count();
 
     if let Some(draft) = app.queued_draft.as_ref() {
-        lines.push(format!("{}:", t(MessageId::CmdEditingQueuedDraft)));
+        lines.push(format!(
+            "{}:",
+            t(MessageId::CmdEditingQueuedDraft).replace("{n}", "")
+        ));
         lines.push(format!("- {}", truncate_preview(&draft.display)));
     }
 

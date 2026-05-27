@@ -2121,8 +2121,8 @@ impl App {
 
         // Execute mode change hooks
         let context = HookContext::new()
-            .with_mode(mode.label(self.ui_locale))
-            .with_previous_mode(previous_mode.label(self.ui_locale))
+            .with_mode(mode.label(Locale::En))
+            .with_previous_mode(previous_mode.label(Locale::En))
             .with_workspace(self.workspace.clone())
             .with_model(&self.model);
         let _ = self.hooks.execute(HookEvent::ModeChange, &context);
@@ -2172,7 +2172,7 @@ impl App {
     /// Create a hook context with common fields pre-populated
     pub fn base_hook_context(&self) -> HookContext {
         HookContext::new()
-            .with_mode(self.mode.label(self.ui_locale))
+            .with_mode(self.mode.label(Locale::En))
             .with_workspace(self.workspace.clone())
             .with_model(&self.model)
             .with_session_id(self.hooks.session_id())
