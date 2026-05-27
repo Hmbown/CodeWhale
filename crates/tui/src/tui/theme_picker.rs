@@ -325,7 +325,8 @@ mod tests {
         let mut v = ThemePickerView::new("system".to_string());
 
         let action = v.handle_key(key(KeyCode::Up));
-        assert_eq!(selected_name(&action), Some(ThemeId::GruvboxDark.name()));
+        let last_theme = SELECTABLE_THEMES.last().expect("theme picker has rows");
+        assert_eq!(selected_name(&action), Some(last_theme.name()));
 
         let action = v.handle_key(key(KeyCode::Down));
         assert_eq!(selected_name(&action), Some(ThemeId::System.name()));

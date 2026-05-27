@@ -156,7 +156,7 @@ impl TuiPrefs {
         let theme = self.theme.trim().to_ascii_lowercase();
         let Some(theme) = normalize_theme_name(&theme) else {
             anyhow::bail!(
-                "Invalid tui.toml theme '{}': expected system, dark, light, grayscale, catppuccin-mocha, tokyo-night, dracula, or gruvbox-dark.",
+                "Invalid tui.toml theme '{}': expected system, dark, light, grayscale, catppuccin-mocha, tokyo-night, dracula, gruvbox-dark, or solarized-light.",
                 self.theme
             );
         };
@@ -520,7 +520,7 @@ impl Settings {
             "theme" => {
                 let Some(id) = crate::palette::ThemeId::from_name(value) else {
                     anyhow::bail!(
-                        "Failed to update setting: invalid theme '{value}'. Expected: system, dark, light, grayscale, catppuccin-mocha, tokyo-night, dracula, gruvbox-dark."
+                        "Failed to update setting: invalid theme '{value}'. Expected: system, dark, light, grayscale, catppuccin-mocha, tokyo-night, dracula, gruvbox-dark, solarized-light."
                     );
                 };
                 self.theme = id.name().to_string();
@@ -528,7 +528,7 @@ impl Settings {
             "ui_theme" => {
                 let Some(id) = crate::palette::ThemeId::from_name(value) else {
                     anyhow::bail!(
-                        "Failed to update setting: invalid theme '{value}'. Expected: system, dark, light, grayscale, catppuccin-mocha, tokyo-night, dracula, gruvbox-dark."
+                        "Failed to update setting: invalid theme '{value}'. Expected: system, dark, light, grayscale, catppuccin-mocha, tokyo-night, dracula, gruvbox-dark, solarized-light."
                     );
                 };
                 self.theme = id.name().to_string();
@@ -780,7 +780,7 @@ impl Settings {
             ),
             (
                 "theme",
-                "UI theme: system, dark, light, grayscale, catppuccin-mocha, tokyo-night, dracula, gruvbox-dark",
+                "UI theme: system, dark, light, grayscale, catppuccin-mocha, tokyo-night, dracula, gruvbox-dark, solarized-light",
             ),
             (
                 "background_color",
@@ -1153,8 +1153,13 @@ mod tests {
             .expect("set community theme alias");
         assert_eq!(settings.theme, "tokyo-night");
 
-        let err = settings
+        settings
             .set("theme", "solarized")
+            .expect("set solarized alias");
+        assert_eq!(settings.theme, "solarized-light");
+
+        let err = settings
+            .set("theme", "nord")
             .expect_err("unknown theme should fail");
         assert!(err.to_string().contains("invalid theme"));
     }
@@ -2052,6 +2057,7 @@ mod tests {
             "tokyo-night",
             "dracula",
             "gruvbox-dark",
+            "solarized-light",
         ] {
             let mut prefs = TuiPrefs {
                 theme: theme.to_string(),
@@ -2079,17 +2085,16 @@ mod tests {
     #[test]
     fn tui_prefs_validate_rejects_unknown_theme() {
         let mut prefs = TuiPrefs {
-            theme: "solarized".to_string(),
+            theme: "nord".to_string(),
             ..TuiPrefs::default()
         };
-        let err = prefs
-            .validate()
-            .expect_err("solarized is not a valid theme");
+        let err = prefs.validate().expect_err("nord is not a valid theme");
         assert!(err.to_string().contains("Invalid tui.toml theme"));
         assert!(
             err.to_string()
                 .contains("expected system, dark, light, grayscale")
         );
+        assert!(err.to_string().contains("solarized-light"));
     }
 
     #[test]
