@@ -21,6 +21,8 @@ Sources to keep in sync:
   `codewhale model list` and `codewhale model resolve`.
 - `config.example.toml` and `docs/CONFIGURATION.md` - user-facing config
   examples and environment variable reference.
+- `scripts/check-provider-registry.py` - drift check for canonical provider
+  IDs, TOML table names, static registry rows, and documented defaults.
 
 ## Provider Selection
 
@@ -133,6 +135,24 @@ DeepSeek compatibility aliases `deepseek-chat` and `deepseek-reasoner` map to
 `deepseek-v4-flash` capability metadata and are scheduled to retire on
 2026-07-24 at 2026-07-24T15:59:00Z.
 
+## Drift Check
+
+Run this before changing provider IDs, provider TOML tables, static model
+registry rows, or provider default strings:
+
+```bash
+python scripts/check-provider-registry.py
+```
+
+The check fails when:
+
+- `docs/PROVIDERS.md` omits a canonical `ProviderKind::as_str()` ID.
+- The shipped-provider table omits or adds a `[providers.*]` TOML table.
+- The static model registry table drifts from providers used by
+  `crates/agent/src/lib.rs`.
+- A provider default model or base URL constant in `crates/tui/src/config.rs`
+  is no longer mentioned here.
+
 ## Planned, Not Shipped Yet
 
 These items belong to the v0.8.47 provider-abstraction milestone or related
@@ -149,9 +169,6 @@ provider docs work, but they are not native shipped behavior in this checkout:
 - Hugging Face model passport metadata in the picker, including license, base
   model, context length, chat template, tool-call support, reasoning support,
   and gated/private status.
-- A generated drift-check script that fails when this file diverges from the
-  provider registry. Until that exists, update this file with a source read of
-  the files listed at the top.
 
 Until native Hugging Face support lands, users can only reach an explicitly
 configured Hugging Face-compatible OpenAI route through the generic `openai`
