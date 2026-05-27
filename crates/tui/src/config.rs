@@ -446,6 +446,17 @@ fn canonical_official_deepseek_model_id(model: &str) -> Option<&'static str> {
 /// aliases like `deepseek-v4pro` → `deepseek-v4-pro`.
 #[must_use]
 pub fn normalize_model_name_for_provider(provider: ApiProvider, model: &str) -> Option<String> {
+    let trimmed = model.trim();
+    // Xiaomi MiMo models bypass DeepSeek-only normalization
+    if matches!(provider, ApiProvider::Xiaomi) && trimmed.to_ascii_lowercase().starts_with("mimo") {
+        if trimmed
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':'))
+        {
+            return Some(trimmed.to_string());
+        }
+        return None;
+    }
     let normalized = normalize_model_name(model)?;
     if matches!(provider, ApiProvider::Deepseek | ApiProvider::DeepseekCN)
         && let Some(canonical) = canonical_official_deepseek_model_id(&normalized)

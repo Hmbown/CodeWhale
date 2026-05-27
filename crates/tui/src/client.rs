@@ -901,12 +901,15 @@ pub(super) fn apply_reasoning_effort(
                     "enable_thinking": false,
                 });
             }
+            // MiMo uses thinking: { type: "disabled" } to turn off reasoning
+            ApiProvider::Xiaomi => {
+                body["thinking"] = json!({ "type": "disabled" });
+            }
             ApiProvider::Openai
             | ApiProvider::Atlascloud
             | ApiProvider::WanjieArk
             | ApiProvider::Moonshot
-            | ApiProvider::Ollama
-            | ApiProvider::Xiaomi => {}
+            | ApiProvider::Ollama => {}
             ApiProvider::NvidiaNim => {
                 body["chat_template_kwargs"] = json!({
                     "thinking": false,

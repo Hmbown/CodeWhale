@@ -4701,7 +4701,9 @@ async fn apply_command_result(
                 let _ = engine_handle.send(Op::ListSubAgents).await;
             }
             AppAction::FetchModels => {
-                if crate::config::provider_passes_model_through(config.api_provider()) {
+                if crate::config::provider_passes_model_through(config.api_provider())
+                    && !matches!(config.api_provider(), crate::config::ApiProvider::Xiaomi)
+                {
                     app.add_message(HistoryCell::System {
                         content: format!(
                             "/models is not supported by the {} provider.",
