@@ -31,7 +31,15 @@ pub(super) fn is_tool_search_tool(name: &str) -> bool {
     matches!(name, TOOL_SEARCH_REGEX_NAME | TOOL_SEARCH_BM25_NAME)
 }
 
-pub(super) fn should_default_defer_tool(name: &str, mode: AppMode) -> bool {
+pub(super) fn should_default_defer_tool(
+    name: &str,
+    mode: AppMode,
+    always_load: &HashSet<String>,
+) -> bool {
+    if always_load.contains(name) {
+        return false;
+    }
+
     if mode == AppMode::Yolo {
         return false;
     }
@@ -83,9 +91,13 @@ pub(super) fn should_default_defer_tool(name: &str, mode: AppMode) -> bool {
     )
 }
 
-pub(super) fn apply_native_tool_deferral(catalog: &mut [Tool], mode: AppMode) {
+pub(super) fn apply_native_tool_deferral(
+    catalog: &mut [Tool],
+    mode: AppMode,
+    always_load: &HashSet<String>,
+) {
     for tool in catalog {
-        tool.defer_loading = Some(should_default_defer_tool(&tool.name, mode));
+        tool.defer_loading = Some(should_default_defer_tool(&tool.name, mode, always_load));
     }
 }
 
@@ -111,8 +123,9 @@ pub(super) fn build_model_tool_catalog(
     mut native_tools: Vec<Tool>,
     mut mcp_tools: Vec<Tool>,
     mode: AppMode,
+    always_load: &HashSet<String>,
 ) -> Vec<Tool> {
-    apply_native_tool_deferral(&mut native_tools, mode);
+    apply_native_tool_deferral(&mut native_tools, mode, always_load);
     apply_mcp_tool_deferral(&mut mcp_tools, mode);
     // Sort each partition by name for prefix-cache stability (#263). The
     // upstream `to_api_tools()` already sorts the registry's HashMap output;
@@ -126,7 +139,11 @@ pub(super) fn build_model_tool_catalog(
     native_tools
 }
 
-pub(super) fn ensure_advanced_tooling(catalog: &mut Vec<Tool>, mode: AppMode) {
+pub(super) fn ensure_advanced_tooling(
+    catalog: &mut Vec<Tool>,
+    mode: AppMode,
+    always_load: &HashSet<String>,
+) {
     // code_execution depends on a locally-installed Python interpreter
     // (python3 / python / py -3). Before v0.8.31, the tool was always
     // advertised and would fail at execution time on Windows where
@@ -150,7 +167,11 @@ pub(super) fn ensure_advanced_tooling(catalog: &mut Vec<Tool>, mode: AppMode) {
                 "required": ["code"]
             }),
             allowed_callers: Some(vec!["direct".to_string()]),
-            defer_loading: Some(false),
+            defer_loading: Some(should_default_defer_tool(
+                CODE_EXECUTION_TOOL_NAME,
+                mode,
+                always_load,
+            )),
             input_examples: None,
             strict: None,
             cache_control: None,
@@ -166,7 +187,9 @@ pub(super) fn ensure_advanced_tooling(catalog: &mut Vec<Tool>, mode: AppMode) {
         && !catalog.iter().any(|t| t.name == JS_EXECUTION_TOOL_NAME)
         && crate::dependencies::resolve_node().is_some()
     {
-        catalog.push(crate::tools::js_execution::js_execution_tool_definition());
+        let mut tool = crate::tools::js_execution::js_execution_tool_definition();
+        tool.defer_loading = Some(should_default_defer_tool(&tool.name, mode, always_load));
+        catalog.push(tool);
     }
 
     if !catalog.iter().any(|t| t.name == TOOL_SEARCH_REGEX_NAME) {

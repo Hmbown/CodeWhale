@@ -55,19 +55,48 @@ pub enum ClipboardContent {
 /// Clipboard reader/writer helper.
 pub struct ClipboardHandler {
     clipboard: Option<Clipboard>,
+    clipboard_init_attempted: bool,
     #[cfg(test)]
     written_text: Vec<String>,
 }
 
 impl ClipboardHandler {
-    /// Create a new clipboard handler, falling back to a no-op when unavailable.
+    /// Create a new clipboard handler without connecting.
+    ///
+    /// The actual clipboard connection is deferred to first use
+    /// (`ensure_clipboard`) so that startup on hosts without an X11/Wayland
+    /// server (headless, WSL2) never blocks the TUI event loop.
     pub fn new() -> Self {
-        let clipboard = Clipboard::new().ok();
         Self {
-            clipboard,
+            clipboard: None,
+            clipboard_init_attempted: false,
             #[cfg(test)]
             written_text: Vec::new(),
         }
+    }
+
+    /// Try to connect to the system clipboard, bounded by a short timeout.
+    ///
+    /// On Linux, `arboard::Clipboard::new()` opens a blocking X11 connection.
+    /// When no X server is running (headless, WSL2 without WSLg), the connect
+    /// call can hang indefinitely. We spawn the connection attempt on a
+    /// temporary thread and give it 500 ms; if it doesn't return in time the
+    /// handler stays in fallback/no-op mode and `read`/`write_text` fall
+    /// through to their OSC 52 and pbcopy/powershell fallbacks.
+    fn ensure_clipboard(&mut self) {
+        if self.clipboard_init_attempted {
+            return;
+        }
+        self.clipboard_init_attempted = true;
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(Clipboard::new().ok());
+        });
+        self.clipboard = rx
+            .recv_timeout(std::time::Duration::from_millis(500))
+            .ok()
+            .flatten();
     }
 
     /// Read the clipboard and return the parsed content.
@@ -75,6 +104,7 @@ impl ClipboardHandler {
     /// `workspace` is used as a fallback location when `~/.deepseek/` cannot
     /// be resolved (e.g. running with a stripped HOME in CI sandboxes).
     pub fn read(&mut self, workspace: &Path) -> Option<ClipboardContent> {
+        self.ensure_clipboard();
         let clipboard = self.clipboard.as_mut()?;
         if let Ok(text) = clipboard.get_text() {
             return Some(ClipboardContent::Text(text));
@@ -99,6 +129,12 @@ impl ClipboardHandler {
 
         #[cfg(not(test))]
         {
+            #[cfg(target_os = "linux")]
+            if write_text_with_wlcopy(text).is_ok() {
+                return Ok(());
+            }
+
+            self.ensure_clipboard();
             if let Some(clipboard) = self.clipboard.as_mut()
                 && clipboard.set_text(text.to_string()).is_ok()
             {
@@ -128,48 +164,75 @@ impl ClipboardHandler {
 
 #[cfg(all(target_os = "macos", not(test)))]
 fn write_text_with_pbcopy(text: &str) -> Result<()> {
-    let mut child = Command::new("pbcopy")
-        .stdin(Stdio::piped())
-        .spawn()
-        .map_err(|e| anyhow::anyhow!("Failed to run pbcopy: {e}"))?;
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(text.as_bytes())
-            .map_err(|e| anyhow::anyhow!("Failed to write to pbcopy: {e}"))?;
-    }
-    let status = child
-        .wait()
-        .map_err(|e| anyhow::anyhow!("Failed to wait for pbcopy: {e}"))?;
-    if status.success() {
-        return Ok(());
-    }
-    Err(anyhow::anyhow!("pbcopy failed"))
+    write_text_with_stdin_command("pbcopy", &[], text, "pbcopy")
 }
 
 #[cfg(all(target_os = "windows", not(test)))]
 fn write_text_with_set_clipboard(text: &str) -> Result<()> {
-    use crate::shell_dispatcher::ShellKind;
-    let mut child = Command::new(ShellKind::WindowsPowerShell.binary())
-        .args([
-            ShellKind::WindowsPowerShell.command_flag(),
-            "-Command",
-            "Set-Clipboard -Value $input",
-        ])
+    write_text_with_stdin_command(
+        "powershell.exe",
+        &["-NoProfile", "-Command", "Set-Clipboard -Value $input"],
+        text,
+        "Set-Clipboard",
+    )
+}
+
+#[cfg(any(
+    all(test, unix),
+    all(any(target_os = "macos", target_os = "windows"), not(test))
+))]
+fn write_text_with_stdin_command(
+    program: &str,
+    args: &[&str],
+    text: &str,
+    label: &str,
+) -> Result<()> {
+    let mut child = Command::new(program)
+        .args(args)
         .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()
-        .map_err(|e| anyhow::anyhow!("Failed to run Set-Clipboard: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("Failed to run {label}: {e}"))?;
     if let Some(mut stdin) = child.stdin.take() {
         stdin
             .write_all(text.as_bytes())
-            .map_err(|e| anyhow::anyhow!("Failed to write to Set-Clipboard: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("Failed to write to {label}: {e}"))?;
     }
+    let _ = std::thread::Builder::new()
+        .name("clipboard-wait".to_string())
+        .spawn(move || {
+            let _ = child.wait();
+        });
+    Ok(())
+}
+
+#[cfg(all(target_os = "linux", not(test)))]
+fn write_text_with_wlcopy(text: &str) -> Result<()> {
+    write_text_with_wlcopy_using_argv("wl-copy", text)
+}
+
+#[cfg(target_os = "linux")]
+fn write_text_with_wlcopy_using_argv(program: &str, text: &str) -> Result<()> {
+    let mut child = Command::new(program)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("Failed to run {program}: {e}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(text.as_bytes())
+            .map_err(|e| anyhow::anyhow!("Failed to write to {program}: {e}"))?;
+    }
+    // stdin is dropped here, closing the pipe so wl-copy flushes.
     let status = child
         .wait()
-        .map_err(|e| anyhow::anyhow!("Failed to wait for Set-Clipboard: {e}"))?;
-    if status.success() {
-        return Ok(());
+        .map_err(|e| anyhow::anyhow!("Failed to wait on {program}: {e}"))?;
+    if !status.success() {
+        bail!("{program} exited with {status}");
     }
-    Err(anyhow::anyhow!("Set-Clipboard failed"))
+    Ok(())
 }
 
 #[cfg(not(test))]

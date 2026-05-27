@@ -229,11 +229,12 @@ pub fn open_url(url: &str) -> Result<()> {
     let _command = {
         let mut cmd = Command::new("cmd");
         cmd.args(["/C", "start", "", url]);
-        return match cmd.status() {
-            Ok(status) if status.success() => Ok(()),
-            Ok(status) => Err(anyhow::anyhow!(
-                "browser command exited with status {status}"
-            )),
+        return match cmd
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(_) => Ok(()),
             Err(e) => Err(anyhow::anyhow!("failed to launch browser command: {e}")),
         };
     };
@@ -242,17 +243,12 @@ pub fn open_url(url: &str) -> Result<()> {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
         command.arg(url);
-        let status = command
+        command
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
-            .status()
-            .map_err(|e| anyhow::anyhow!("failed to launch browser command: {e}"))?;
-        if !status.success() {
-            return Err(anyhow::anyhow!(
-                "browser command exited with status {status}"
-            ));
-        }
-        Ok(())
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| anyhow::anyhow!("failed to launch browser command: {e}"))
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
