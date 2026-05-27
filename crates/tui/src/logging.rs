@@ -6,6 +6,7 @@ use colored::Colorize;
 
 use crate::palette;
 static VERBOSE: AtomicBool = AtomicBool::new(false);
+#[cfg(windows)]
 static VERBOSE_SNAPSHOT: AtomicBool = AtomicBool::new(false);
 
 /// Enable or disable verbose logging output.
@@ -15,11 +16,13 @@ pub fn set_verbose(enabled: bool) {
 
 /// Capture the current verbose state so the TUI can restore it after
 /// temporarily suppressing Windows alt-screen output.
+#[cfg(windows)]
 pub fn snapshot_verbose_state() {
     VERBOSE_SNAPSHOT.store(is_verbose(), Ordering::SeqCst);
 }
 
 /// Restore the last captured verbose state.
+#[cfg(windows)]
 pub fn restore_verbose_state() {
     set_verbose(VERBOSE_SNAPSHOT.load(Ordering::SeqCst));
 }
@@ -73,6 +76,7 @@ pub fn warn(message: impl AsRef<str>) {
 }
 
 #[cfg(test)]
+#[cfg(windows)]
 mod tests {
     use super::*;
     use std::sync::Mutex;
