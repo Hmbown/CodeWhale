@@ -225,25 +225,7 @@ pub trait ExternalTool {
 
     /// Resolve the best candidate once per process (cached). Returns
     /// the spec string (e.g. `"python3"` or `"py -3"`).
-    fn resolve() -> Option<String> {
-        static CACHE: OnceLock<Option<String>> = OnceLock::new();
-        CACHE
-            .get_or_init(|| {
-                for candidate in Self::candidates() {
-                    if probe_executable(candidate) {
-                        tracing::info!(
-                            target: "tool_dependencies",
-                            candidate = candidate,
-                            tool = std::any::type_name::<Self>(),
-                            "Resolved external tool",
-                        );
-                        return Some((*candidate).to_string());
-                    }
-                }
-                None
-            })
-            .clone()
-    }
+    fn resolve() -> Option<String>;
 
     /// Quick availability check — true when the tool was found on PATH.
     fn available() -> bool {
@@ -318,6 +300,21 @@ impl ExternalTool for Git {
     fn candidates() -> &'static [&'static str] {
         &["git"]
     }
+
+    fn resolve() -> Option<String> {
+        static CACHE: OnceLock<Option<String>> = OnceLock::new();
+        CACHE
+            .get_or_init(|| {
+                for candidate in Self::candidates() {
+                    if probe_executable(candidate) {
+                        tracing::info!(target: "tool_dependencies", "Resolved git binary");
+                        return Some((*candidate).to_string());
+                    }
+                }
+                None
+            })
+            .clone()
+    }
 }
 
 /// GitHub CLI.
@@ -326,6 +323,21 @@ pub struct Gh;
 impl ExternalTool for Gh {
     fn candidates() -> &'static [&'static str] {
         &["gh"]
+    }
+
+    fn resolve() -> Option<String> {
+        static CACHE: OnceLock<Option<String>> = OnceLock::new();
+        CACHE
+            .get_or_init(|| {
+                for candidate in Self::candidates() {
+                    if probe_executable(candidate) {
+                        tracing::info!(target: "tool_dependencies", "Resolved gh binary");
+                        return Some((*candidate).to_string());
+                    }
+                }
+                None
+            })
+            .clone()
     }
 }
 
@@ -336,6 +348,21 @@ impl ExternalTool for RustC {
     fn candidates() -> &'static [&'static str] {
         &["rustc"]
     }
+
+    fn resolve() -> Option<String> {
+        static CACHE: OnceLock<Option<String>> = OnceLock::new();
+        CACHE
+            .get_or_init(|| {
+                for candidate in Self::candidates() {
+                    if probe_executable(candidate) {
+                        tracing::info!(target: "tool_dependencies", "Resolved rustc binary");
+                        return Some((*candidate).to_string());
+                    }
+                }
+                None
+            })
+            .clone()
+    }
 }
 
 /// Rust build tool — used by the `run_tests` tool.
@@ -344,6 +371,21 @@ pub struct Cargo;
 impl ExternalTool for Cargo {
     fn candidates() -> &'static [&'static str] {
         &["cargo"]
+    }
+
+    fn resolve() -> Option<String> {
+        static CACHE: OnceLock<Option<String>> = OnceLock::new();
+        CACHE
+            .get_or_init(|| {
+                for candidate in Self::candidates() {
+                    if probe_executable(candidate) {
+                        tracing::info!(target: "tool_dependencies", "Resolved cargo binary");
+                        return Some((*candidate).to_string());
+                    }
+                }
+                None
+            })
+            .clone()
     }
 }
 
@@ -371,6 +413,10 @@ pub struct Node;
 impl ExternalTool for Node {
     fn candidates() -> &'static [&'static str] {
         &["node"]
+    }
+
+    fn resolve() -> Option<String> {
+        resolve_node()
     }
 }
 

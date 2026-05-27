@@ -288,10 +288,9 @@ impl ToolSpec for TaskGateRunTool {
         }
 
         let started = Instant::now();
-        let (program, args) =
-            crate::shell_dispatcher::global_dispatcher().build_command_parts(&command);
-        let mut cmd = Command::new(&program);
-        cmd.args(&args)
+        let mut cmd = Command::new("/bin/sh");
+        cmd.arg("-lc")
+            .arg(&command)
             .current_dir(&cwd)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
