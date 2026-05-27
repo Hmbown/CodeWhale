@@ -28,7 +28,7 @@ pub fn goal(app: &mut App, arg: Option<&str>) -> CommandResult {
             let (objective, budget) = parse_goal_budget(text);
             let objective = objective.trim().to_string();
             if objective.is_empty() || objective.chars().all(|c| c == '|') {
-                return CommandResult::error("Usage: /goal <objective> [budget: N]");
+                return CommandResult::error_msg("Usage: /goal <objective> [budget: N]");
             }
             app.goal.goal_objective = Some(objective.clone());
             app.goal.goal_token_budget = budget;

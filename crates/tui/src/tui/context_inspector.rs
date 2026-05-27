@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::fmt::Write;
 
 use crate::compaction::estimate_input_tokens_conservative;
+use crate::localization::{Locale, MessageId, tr};
 use crate::models::{
     LEGACY_DEEPSEEK_CONTEXT_WINDOW_TOKENS, SystemPrompt, context_window_for_model,
 };
@@ -71,10 +72,10 @@ enum PromptLayerKind {
 }
 
 impl PromptLayerKind {
-    fn label(self) -> &'static str {
+    fn label(self, locale: Locale) -> &'static str {
         match self {
-            Self::Static => "cache-friendly",
-            Self::Dynamic => "changes by session/turn",
+            Self::Static => tr(locale, MessageId::CtxInspectorPromptLayerCacheFriendly),
+            Self::Dynamic => tr(locale, MessageId::CtxInspectorPromptLayerChangesBySession),
         }
     }
 }
@@ -87,47 +88,59 @@ struct PromptTextLayer<'a> {
 }
 
 #[must_use]
-pub fn build_context_inspector_text(app: &App) -> String {
+pub fn build_context_inspector_text(app: &App, locale: Locale) -> String {
     let mut out = String::new();
     let usage = context_usage(app);
-    let status = context_status(usage.2);
+    let status = context_status(usage.2, locale);
 
-    let _ = writeln!(out, "Session Context");
+    let _ = writeln!(out, "{}", tr(locale, MessageId::CtxInspectorTitle));
     let _ = writeln!(out, "---------------");
-    let _ = writeln!(out, "Model: {}", app.model);
+    let _ = writeln!(
+        out,
+        "{}",
+        tr(locale, MessageId::CtxInspectorModel).replace("{model}", &app.model)
+    );
     let _ = writeln!(
         out,
         "Workspace: {}",
         crate::utils::display_path(&app.workspace)
     );
     if let Some(session_id) = app.current_session_id.as_deref() {
-        let _ = writeln!(out, "Session: {session_id}");
+        let _ = writeln!(
+            out,
+            "{}",
+            tr(locale, MessageId::CtxInspectorSession).replace("{session}", session_id)
+        );
     }
     let (used, max, percent) = usage;
     let _ = writeln!(
         out,
         "Context: {status} - ~{used}/{max} tokens ({percent:.1}%)"
     );
+    let tmpl_transcript = tr(locale, MessageId::CtxInspectorTranscript);
     let _ = writeln!(
         out,
-        "Transcript: {} cells, {} API messages",
-        app.history.len(),
-        app.api_messages.len()
+        "{}",
+        tmpl_transcript
+            .replace("{cells}", &app.history.len().to_string())
+            .replace("{api_messages}", &app.api_messages.len().to_string())
     );
+    let workspace_status = app
+        .workspace_context
+        .as_deref()
+        .unwrap_or(tr(locale, MessageId::CtxInspectorNotSampled));
     let _ = writeln!(
         out,
-        "Workspace status: {}",
-        app.workspace_context
-            .as_deref()
-            .unwrap_or("not sampled yet")
+        "{}",
+        tr(locale, MessageId::CtxInspectorWorkspaceStatus).replace("{status}", workspace_status)
     );
 
     let _ = writeln!(out);
-    push_system_prompt_structure(&mut out, app);
+    push_system_prompt_structure(&mut out, app, locale);
     let _ = writeln!(out);
-    push_references(&mut out, &app.session_context_references);
+    push_references(&mut out, &app.session_context_references, locale);
     let _ = writeln!(out);
-    push_tools(&mut out, app);
+    push_tools(&mut out, app, locale);
 
     out
 }
@@ -142,25 +155,22 @@ fn context_usage(app: &App) -> (usize, u32, f64) {
     (used, max, percent)
 }
 
-fn context_status(percent: f64) -> &'static str {
+fn context_status(percent: f64, locale: Locale) -> &'static str {
     if percent >= CONTEXT_CRITICAL_THRESHOLD_PERCENT {
-        "critical"
+        tr(locale, MessageId::CtxInspectorStatusCritical)
     } else if percent >= CONTEXT_WARNING_THRESHOLD_PERCENT {
-        "high"
+        tr(locale, MessageId::CtxInspectorStatusHigh)
     } else {
-        "ok"
+        tr(locale, MessageId::CtxInspectorStatusOk)
     }
 }
 
 /// Inspect the system prompt structure, split into cache-friendly stable
 /// prefix blocks and the volatile working-set tail block.
-fn push_system_prompt_structure(out: &mut String, app: &App) {
-    let _ = writeln!(out, "System Prompt Structure");
+fn push_system_prompt_structure(out: &mut String, app: &App, locale: Locale) {
+    let _ = writeln!(out, "{}", tr(locale, MessageId::CtxInspectorSystemPrompt));
     let _ = writeln!(out, "-----------------------");
 
-    // Conservative token estimate: ~3 chars per token (consistent with
-    // compaction.rs internal helpers — replicated here to avoid depending
-    // on a private function).
     let text_tokens = |text: &str| text.chars().count().div_ceil(3);
 
     let total_est = match &app.system_prompt {
@@ -186,27 +196,44 @@ fn push_system_prompt_structure(out: &mut String, app: &App) {
                 .sum();
             let working_tokens = working_block.map(|b| text_tokens(&b.text)).unwrap_or(0);
 
+            let tmpl_stable = tr(locale, MessageId::CtxInspectorStablePrefix);
             let _ = writeln!(
                 out,
-                "  Stable prefix: {stable_count} block(s), ~{stable_tokens} tokens  [cache-friendly]"
+                "{}",
+                tmpl_stable
+                    .replace("{count}", &stable_count.to_string())
+                    .replace("{tokens}", &stable_tokens.to_string())
             );
             if let Some(block) = working_block {
+                let tmpl_volatile = tr(locale, MessageId::CtxInspectorVolatileWorkingSet);
                 let _ = writeln!(
                     out,
-                    "  Volatile working set: 1 block, ~{working_tokens} tokens  [changes every turn]"
+                    "{}",
+                    tmpl_volatile.replace("{tokens}", &working_tokens.to_string())
                 );
                 let _ = writeln!(
                     out,
                     "    First line: {}",
-                    block.text.lines().next().unwrap_or("(empty)")
+                    block
+                        .text
+                        .lines()
+                        .next()
+                        .unwrap_or(tr(locale, MessageId::CtxInspectorEmpty))
                 );
             } else {
-                let _ = writeln!(out, "  Volatile working set: none");
+                let _ = writeln!(
+                    out,
+                    "  Volatile working set: {}",
+                    tr(locale, MessageId::CtxInspectorNone)
+                );
             }
+            let tmpl_total = tr(locale, MessageId::CtxInspectorTotal);
             let _ = writeln!(
                 out,
-                "  Total: {} block(s), ~{total_est} tokens",
-                blocks.len()
+                "{}",
+                tmpl_total
+                    .replace("{count}", &blocks.len().to_string())
+                    .replace("{tokens}", &total_est.to_string())
             );
         }
         Some(SystemPrompt::Text(text)) => {
@@ -216,10 +243,13 @@ fn push_system_prompt_structure(out: &mut String, app: &App) {
                     .first()
                     .is_some_and(|layer| layer.name != "System prompt")
             {
+                let tmpl_layers = tr(locale, MessageId::CtxInspectorTextPromptLayers);
                 let _ = writeln!(
                     out,
-                    "  Text prompt layers: {} layer(s), ~{total_est} tokens",
-                    layers.len()
+                    "{}",
+                    tmpl_layers
+                        .replace("{count}", &layers.len().to_string())
+                        .replace("{tokens}", &total_est.to_string())
                 );
                 for layer in layers {
                     let tokens = text_tokens(layer.body);
@@ -228,27 +258,24 @@ fn push_system_prompt_structure(out: &mut String, app: &App) {
                         "  - {}: ~{} tokens [{}]",
                         layer.name,
                         tokens,
-                        layer.kind.label()
+                        layer.kind.label(locale)
                     );
                 }
             } else {
                 let _ = writeln!(
                     out,
-                    "  Single text blob (~{total_est} tokens) [stable prefix only]"
+                    "{}",
+                    tr(locale, MessageId::CtxInspectorSingleBlob)
+                        .replace("{tokens}", &total_est.to_string())
                 );
             }
         }
         None => {
-            let _ = writeln!(out, "  No system prompt set.");
+            let _ = writeln!(out, "{}", tr(locale, MessageId::CtxInspectorNoSystemPrompt));
         }
     }
 
-    // Cache-economics hint
-    let _ = writeln!(
-        out,
-        "  Tip: Stable prefix blocks are DeepSeek V4 prefix-cache eligible. \
-        Volatile working-set changes break the cache only for the tail."
-    );
+    let _ = writeln!(out, "{}", tr(locale, MessageId::CtxInspectorTip));
 }
 
 fn split_text_prompt_layers(text: &str) -> Vec<PromptTextLayer<'_>> {
@@ -287,8 +314,8 @@ fn split_text_prompt_layers(text: &str) -> Vec<PromptTextLayer<'_>> {
     layers
 }
 
-fn push_references(out: &mut String, references: &[SessionContextReference]) {
-    let _ = writeln!(out, "References");
+fn push_references(out: &mut String, references: &[SessionContextReference], locale: Locale) {
+    let _ = writeln!(out, "{}", tr(locale, MessageId::CtxInspectorReferences));
     let _ = writeln!(out, "----------");
 
     let mut seen = HashSet::new();
@@ -305,7 +332,12 @@ fn push_references(out: &mut String, references: &[SessionContextReference]) {
         if rendered >= MAX_REFERENCE_ROWS {
             let remaining = references.len().saturating_sub(rendered);
             if remaining > 0 {
-                let _ = writeln!(out, "- ... {remaining} more reference(s)");
+                let _ = writeln!(
+                    out,
+                    "{}",
+                    tr(locale, MessageId::CtxInspectorMoreReferences)
+                        .replace("{count}", &remaining.to_string())
+                );
             }
             break;
         }
@@ -316,12 +348,12 @@ fn push_references(out: &mut String, references: &[SessionContextReference]) {
         };
         let state = if reference.included {
             if reference.expanded {
-                "included"
+                tr(locale, MessageId::CtxInspectorIncluded)
             } else {
-                "attached"
+                tr(locale, MessageId::CtxInspectorAttached)
             }
         } else {
-            "not included"
+            tr(locale, MessageId::CtxInspectorNotIncluded)
         };
         let detail = reference
             .detail
@@ -338,15 +370,12 @@ fn push_references(out: &mut String, references: &[SessionContextReference]) {
     }
 
     if rendered == 0 {
-        let _ = writeln!(
-            out,
-            "- No file, directory, or media references recorded yet."
-        );
+        let _ = writeln!(out, "{}", tr(locale, MessageId::CtxInspectorNoReferences));
     }
 }
 
-fn push_tools(out: &mut String, app: &App) {
-    let _ = writeln!(out, "Recent Tools");
+fn push_tools(out: &mut String, app: &App, locale: Locale) {
+    let _ = writeln!(out, "{}", tr(locale, MessageId::CtxInspectorRecentTools));
     let _ = writeln!(out, "------------");
 
     let mut rows: Vec<(usize, &ToolDetailRecord)> = app
@@ -358,7 +387,12 @@ fn push_tools(out: &mut String, app: &App) {
 
     let mut rendered = 0usize;
     for detail in app.active_tool_details.values() {
-        push_tool_row(out, "active", detail);
+        push_tool_row(
+            out,
+            tr(locale, MessageId::CtxInspectorActive),
+            detail,
+            locale,
+        );
         rendered += 1;
         if rendered >= MAX_TOOL_ROWS {
             return;
@@ -369,12 +403,12 @@ fn push_tools(out: &mut String, app: &App) {
         .take(MAX_TOOL_ROWS.saturating_sub(rendered))
     {
         let location = format!("cell {cell_idx}");
-        push_tool_row(out, &location, detail);
+        push_tool_row(out, &location, detail, locale);
         rendered += 1;
     }
 
     if rendered == 0 {
-        let _ = writeln!(out, "- No tool activity recorded yet.");
+        let _ = writeln!(out, "{}", tr(locale, MessageId::CtxInspectorNoToolActivity));
     } else {
         let _ = writeln!(
             out,
@@ -383,11 +417,11 @@ fn push_tools(out: &mut String, app: &App) {
     }
 }
 
-fn push_tool_row(out: &mut String, location: &str, detail: &ToolDetailRecord) {
+fn push_tool_row(out: &mut String, location: &str, detail: &ToolDetailRecord, locale: Locale) {
     let output_state = if detail.output.as_deref().is_some_and(|out| !out.is_empty()) {
-        "output captured"
+        tr(locale, MessageId::CtxInspectorOutputCaptured)
     } else {
-        "no output yet"
+        tr(locale, MessageId::CtxInspectorNoOutputYet)
     };
     let _ = writeln!(
         out,
@@ -449,7 +483,7 @@ mod tests {
     #[test]
     fn inspector_formats_empty_state() {
         let app = test_app();
-        let text = build_context_inspector_text(&app);
+        let text = build_context_inspector_text(&app, Locale::En);
         assert!(text.contains("Session Context"));
         assert!(text.contains("No file, directory, or media references recorded yet."));
         assert!(text.contains("No tool activity recorded yet."));
@@ -476,7 +510,7 @@ mod tests {
                 },
             });
 
-        let text = build_context_inspector_text(&app);
+        let text = build_context_inspector_text(&app, Locale::En);
         assert!(text.contains("[file] @src/main.rs -> /tmp/project/src/main.rs"));
     }
 
@@ -491,14 +525,14 @@ mod tests {
             }],
         });
 
-        let text = build_context_inspector_text(&app);
+        let text = build_context_inspector_text(&app, Locale::En);
         assert!(text.contains("Context: critical"), "{text}");
     }
 
     #[test]
     fn inspector_no_system_prompt_shows_section() {
         let app = test_app();
-        let text = build_context_inspector_text(&app);
+        let text = build_context_inspector_text(&app, Locale::En);
         assert!(text.contains("System Prompt Structure"));
         assert!(text.contains("No system prompt set."));
     }
@@ -520,7 +554,7 @@ mod tests {
             },
         ]));
 
-        let text = build_context_inspector_text(&app);
+        let text = build_context_inspector_text(&app, Locale::En);
         assert!(text.contains("System Prompt Structure"));
         assert!(
             text.contains("Stable prefix: 1 block"),
@@ -561,7 +595,7 @@ mod tests {
             },
         ]));
 
-        let text = build_context_inspector_text(&app);
+        let text = build_context_inspector_text(&app, Locale::En);
         assert!(text.contains("Stable prefix: 2 block(s)"));
         assert!(text.contains("Volatile working set: none"));
     }
@@ -573,7 +607,7 @@ mod tests {
             "You are CodeWhale.\n\n<project_instructions source=\"AGENTS.md\">\nRules\n</project_instructions>\n\n## Project Context Pack\n{}\n\n## Environment\n- lang: en\n\n## Skills\n- rust\n\n## Context Management\nKeep compact\n\n## Compact\nTemplate\n\n## Repo Working Set\nsrc/".to_string(),
         ));
 
-        let text = build_context_inspector_text(&app);
+        let text = build_context_inspector_text(&app, Locale::En);
         assert!(text.contains("System Prompt Structure"));
         assert!(text.contains("Text prompt layers"));
         assert!(text.contains("Global system prefix"));
@@ -592,7 +626,7 @@ mod tests {
         let mut app = test_app();
         app.system_prompt = Some(SystemPrompt::Text("You are CodeWhale.".to_string()));
 
-        let text = build_context_inspector_text(&app);
+        let text = build_context_inspector_text(&app, Locale::En);
         assert!(text.contains("Single text blob"));
         assert!(text.contains("stable prefix only"));
     }

@@ -26,7 +26,7 @@
 //! happen *before* the view is constructed (see `tui/ui.rs`); this
 //! module always assumes the user is being asked.
 
-use crate::localization::Locale;
+use crate::localization::{Locale, MessageId, tr};
 use crate::sandbox::SandboxPolicy;
 use crate::tui::views::{ModalKind, ModalView, ViewAction, ViewEvent};
 use crate::tui::widgets::{ApprovalWidget, ElevationWidget, Renderable};
@@ -691,28 +691,22 @@ pub enum ElevationOption {
 
 impl ElevationOption {
     /// Get the display label for this option.
-    pub fn label(&self) -> &'static str {
+    pub fn label(&self, locale: Locale) -> &'static str {
         match self {
-            ElevationOption::WithNetwork => "Allow outbound network",
-            ElevationOption::WithWriteAccess(_) => "Allow extra write access",
-            ElevationOption::FullAccess => "Full access (filesystem + network)",
-            ElevationOption::Abort => "Abort",
+            ElevationOption::WithNetwork => tr(locale, MessageId::ElevationOptionNetwork),
+            ElevationOption::WithWriteAccess(_) => tr(locale, MessageId::ElevationOptionWrite),
+            ElevationOption::FullAccess => tr(locale, MessageId::ElevationOptionFullAccess),
+            ElevationOption::Abort => tr(locale, MessageId::ElevationOptionAbort),
         }
     }
 
     /// Get a short description.
-    pub fn description(&self) -> &'static str {
+    pub fn description(&self, locale: Locale) -> &'static str {
         match self {
-            ElevationOption::WithNetwork => {
-                "Retry this tool call with outbound network access for downloads and HTTP requests"
-            }
-            ElevationOption::WithWriteAccess(_) => {
-                "Retry this tool call with additional writable filesystem scope"
-            }
-            ElevationOption::FullAccess => {
-                "Retry without sandbox limits; grants unrestricted filesystem and network access"
-            }
-            ElevationOption::Abort => "Cancel this tool execution",
+            ElevationOption::WithNetwork => tr(locale, MessageId::ElevationOptionNetworkDesc),
+            ElevationOption::WithWriteAccess(_) => tr(locale, MessageId::ElevationOptionWriteDesc),
+            ElevationOption::FullAccess => tr(locale, MessageId::ElevationOptionFullAccessDesc),
+            ElevationOption::Abort => tr(locale, MessageId::ElevationOptionAbortDesc),
         }
     }
 
@@ -797,13 +791,15 @@ impl ElevationRequest {
 pub struct ElevationView {
     request: ElevationRequest,
     selected: usize,
+    locale: Locale,
 }
 
 impl ElevationView {
-    pub fn new(request: ElevationRequest) -> Self {
+    pub fn new(request: ElevationRequest, locale: Locale) -> Self {
         Self {
             request,
             selected: 0,
+            locale,
         }
     }
 
@@ -838,6 +834,11 @@ impl ElevationView {
     #[allow(dead_code)]
     pub fn selected(&self) -> usize {
         self.selected
+    }
+
+    /// Get the locale used for display.
+    pub fn locale(&self) -> Locale {
+        self.locale
     }
 }
 
@@ -878,7 +879,7 @@ impl ModalView for ElevationView {
     }
 
     fn render(&self, area: ratatui::layout::Rect, buf: &mut ratatui::buffer::Buffer) {
-        let elevation_widget = ElevationWidget::new(&self.request, self.selected);
+        let elevation_widget = ElevationWidget::new(&self.request, self.selected, self.locale());
         elevation_widget.render(area, buf);
     }
 }
@@ -1560,7 +1561,7 @@ mod tests {
     fn test_elevation_view_initial_state() {
         let request =
             ElevationRequest::for_shell("test-id", "cargo build", "network blocked", true, false);
-        let view = ElevationView::new(request);
+        let view = ElevationView::new(request, Locale::En);
         assert_eq!(view.selected, 0);
     }
 
@@ -1568,7 +1569,7 @@ mod tests {
     fn test_elevation_view_keybindings() {
         let request =
             ElevationRequest::for_shell("test-id", "cargo test", "write blocked", false, true);
-        let mut view = ElevationView::new(request);
+        let mut view = ElevationView::new(request, Locale::En);
 
         let action = view.handle_key(create_key_event(KeyCode::Char('n')));
         assert!(matches!(
@@ -1581,7 +1582,7 @@ mod tests {
 
         let request =
             ElevationRequest::for_shell("test-id", "cargo build", "write blocked", false, true);
-        let mut view = ElevationView::new(request);
+        let mut view = ElevationView::new(request, Locale::En);
         let action = view.handle_key(create_key_event(KeyCode::Char('w')));
         assert!(matches!(
             action,
@@ -1593,7 +1594,7 @@ mod tests {
 
         let request =
             ElevationRequest::for_shell("test-id", "cargo build", "blocked", false, false);
-        let mut view = ElevationView::new(request);
+        let mut view = ElevationView::new(request, Locale::En);
         let action = view.handle_key(create_key_event(KeyCode::Char('f')));
         assert!(matches!(
             action,
@@ -1605,7 +1606,7 @@ mod tests {
 
         let request =
             ElevationRequest::for_shell("test-id", "cargo build", "blocked", false, false);
-        let mut view = ElevationView::new(request);
+        let mut view = ElevationView::new(request, Locale::En);
         let action = view.handle_key(create_key_event(KeyCode::Esc));
         assert!(matches!(
             action,
@@ -1617,7 +1618,7 @@ mod tests {
 
         let request =
             ElevationRequest::for_shell("test-id", "cargo build", "blocked", false, false);
-        let mut view = ElevationView::new(request);
+        let mut view = ElevationView::new(request, Locale::En);
         let action = view.handle_key(create_key_event(KeyCode::Char('a')));
         assert!(matches!(
             action,
@@ -1631,7 +1632,7 @@ mod tests {
     #[test]
     fn test_elevation_view_navigation() {
         let request = ElevationRequest::for_shell("test-id", "cargo build", "blocked", true, false);
-        let mut view = ElevationView::new(request);
+        let mut view = ElevationView::new(request, Locale::En);
 
         assert_eq!(view.selected, 0);
 
@@ -1651,7 +1652,7 @@ mod tests {
     #[test]
     fn test_elevation_view_enter_uses_selected_option() {
         let request = ElevationRequest::for_shell("test-id", "cargo build", "blocked", true, false);
-        let mut view = ElevationView::new(request);
+        let mut view = ElevationView::new(request, Locale::En);
 
         view.handle_key(create_key_event(KeyCode::Down));
         assert_eq!(view.selected, 1);
@@ -1673,34 +1674,38 @@ mod tests {
     #[test]
     fn test_elevation_option_labels() {
         assert_eq!(
-            ElevationOption::WithNetwork.label(),
+            ElevationOption::WithNetwork.label(Locale::En),
             "Allow outbound network"
         );
         assert_eq!(
-            ElevationOption::FullAccess.label(),
+            ElevationOption::FullAccess.label(Locale::En),
             "Full access (filesystem + network)"
         );
         assert!(
             ElevationOption::WithWriteAccess(vec![])
-                .label()
+                .label(Locale::En)
                 .contains("write")
         );
-        assert_eq!(ElevationOption::Abort.label(), "Abort");
+        assert_eq!(ElevationOption::Abort.label(Locale::En), "Abort");
     }
 
     #[test]
     fn test_elevation_option_descriptions() {
         assert!(
             ElevationOption::WithNetwork
-                .description()
+                .description(Locale::En)
                 .contains("network")
         );
         assert!(
             ElevationOption::FullAccess
-                .description()
+                .description(Locale::En)
                 .contains("filesystem and network access")
         );
-        assert!(ElevationOption::Abort.description().contains("Cancel"));
+        assert!(
+            ElevationOption::Abort
+                .description(Locale::En)
+                .contains("Cancel")
+        );
     }
 
     #[test]

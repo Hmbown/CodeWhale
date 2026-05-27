@@ -14,12 +14,12 @@ pub fn note(app: &mut App, content: Option<&str>) -> CommandResult {
     let input = match content {
         Some(c) => c.trim(),
         None => {
-            return CommandResult::error(format!("Usage: {USAGE}"));
+            return CommandResult::error_msg(format!("Usage: {USAGE}"));
         }
     };
 
     if input.is_empty() {
-        return CommandResult::error("Note content cannot be empty");
+        return CommandResult::error_msg("Note content cannot be empty");
     }
 
     let notes_path = notes_path(app);
@@ -55,19 +55,19 @@ fn split_command(input: &str) -> (&str, Option<&str>) {
 
 fn append_note_command(notes_path: &Path, content: Option<&str>) -> CommandResult {
     let Some(note_content) = content.map(str::trim).filter(|content| !content.is_empty()) else {
-        return CommandResult::error("Usage: /note add <text>");
+        return CommandResult::error_msg("Usage: /note add <text>");
     };
 
     match append_note(notes_path, note_content) {
         Ok(()) => CommandResult::message(format!("Note appended to {}", notes_path.display())),
-        Err(e) => CommandResult::error(e),
+        Err(e) => CommandResult::error_msg(e),
     }
 }
 
 fn list_notes_command(notes_path: &Path) -> CommandResult {
     let notes = match read_notes(notes_path) {
         Ok(notes) => notes,
-        Err(e) => return CommandResult::error(e),
+        Err(e) => return CommandResult::error_msg(e),
     };
 
     if notes.is_empty() {
@@ -84,11 +84,11 @@ fn list_notes_command(notes_path: &Path) -> CommandResult {
 fn show_note_command(notes_path: &Path, rest: Option<&str>) -> CommandResult {
     let notes = match read_notes(notes_path) {
         Ok(notes) => notes,
-        Err(e) => return CommandResult::error(e),
+        Err(e) => return CommandResult::error_msg(e),
     };
     let index = match parse_note_index(rest, notes.len(), "/note show <n>") {
         Ok(index) => index,
-        Err(e) => return CommandResult::error(e),
+        Err(e) => return CommandResult::error_msg(e),
     };
 
     CommandResult::message(format!("Note {}:\n\n{}", index + 1, notes[index]))
@@ -96,22 +96,22 @@ fn show_note_command(notes_path: &Path, rest: Option<&str>) -> CommandResult {
 
 fn edit_note_command(notes_path: &Path, rest: Option<&str>) -> CommandResult {
     let Some(rest) = rest else {
-        return CommandResult::error("Usage: /note edit <n> <text>");
+        return CommandResult::error_msg("Usage: /note edit <n> <text>");
     };
     let (index_text, new_content) = match split_command(rest) {
         (index_text, Some(new_content)) if !new_content.trim().is_empty() => {
             (index_text, new_content.trim())
         }
-        _ => return CommandResult::error("Usage: /note edit <n> <text>"),
+        _ => return CommandResult::error_msg("Usage: /note edit <n> <text>"),
     };
 
     let mut notes = match read_notes(notes_path) {
         Ok(notes) => notes,
-        Err(e) => return CommandResult::error(e),
+        Err(e) => return CommandResult::error_msg(e),
     };
     let index = match parse_note_index(Some(index_text), notes.len(), "/note edit <n> <text>") {
         Ok(index) => index,
-        Err(e) => return CommandResult::error(e),
+        Err(e) => return CommandResult::error_msg(e),
     };
 
     notes[index] = new_content.to_string();
@@ -121,18 +121,18 @@ fn edit_note_command(notes_path: &Path, rest: Option<&str>) -> CommandResult {
             index + 1,
             notes_path.display()
         )),
-        Err(e) => CommandResult::error(e),
+        Err(e) => CommandResult::error_msg(e),
     }
 }
 
 fn remove_note_command(notes_path: &Path, rest: Option<&str>) -> CommandResult {
     let mut notes = match read_notes(notes_path) {
         Ok(notes) => notes,
-        Err(e) => return CommandResult::error(e),
+        Err(e) => return CommandResult::error_msg(e),
     };
     let index = match parse_note_index(rest, notes.len(), "/note remove <n>") {
         Ok(index) => index,
-        Err(e) => return CommandResult::error(e),
+        Err(e) => return CommandResult::error_msg(e),
     };
 
     notes.remove(index);
@@ -142,14 +142,14 @@ fn remove_note_command(notes_path: &Path, rest: Option<&str>) -> CommandResult {
             index + 1,
             notes_path.display()
         )),
-        Err(e) => CommandResult::error(e),
+        Err(e) => CommandResult::error_msg(e),
     }
 }
 
 fn clear_notes_command(notes_path: &Path) -> CommandResult {
     match write_notes(notes_path, &[]) {
         Ok(()) => CommandResult::message(format!("Notes cleared in {}", notes_path.display())),
-        Err(e) => CommandResult::error(e),
+        Err(e) => CommandResult::error_msg(e),
     }
 }
 

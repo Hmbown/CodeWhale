@@ -454,6 +454,201 @@ pub enum MessageId {
     OnboardTipsLine4,
     OnboardTipsFooterEnter,
     OnboardTipsFooterAction,
+    ComposerTitle,
+    ComposerDraftTitle,
+    ComposerQueueForNextTurn,
+    ComposerQueueCount,
+    ComposerSteerHint,
+    ComposerQueuedHint,
+    ComposerOfflineQueueHint,
+    PendingInputsHeader,
+    PendingInputsContextHeader,
+    PendingInputsEditHint,
+    StatusPickerTitle,
+    StatusPickerToggle,
+    StatusPickerAll,
+    StatusPickerNone,
+    StatusPickerSave,
+    StatusPickerCancel,
+    StatusPickerInstruction,
+    ConfigSectionModel,
+    ConfigSectionPermissions,
+    ConfigSectionDisplay,
+    ConfigSectionComposer,
+    ConfigSectionSidebar,
+    ConfigSectionHistory,
+    ConfigSectionMcp,
+    // Phase 2: Approval & Sandbox Elevation
+    ApprovalRiskReview,
+    ApprovalRiskDestructive,
+    ApprovalCategorySafe,
+    ApprovalCategoryFileWrite,
+    ApprovalCategoryShell,
+    ApprovalCategoryNetwork,
+    ApprovalCategoryMcpRead,
+    ApprovalCategoryMcpAction,
+    ApprovalCategoryUnknown,
+    ApprovalFieldType,
+    ApprovalFieldAbout,
+    ApprovalFieldImpact,
+    ApprovalFieldParams,
+    ApprovalOptionApproveOnce,
+    ApprovalOptionApproveAlways,
+    ApprovalOptionDeny,
+    ApprovalOptionAbortTurn,
+    ApprovalStaged,
+    ApprovalBlockTitle,
+    ApprovalFooterBenignPrefix,
+    ApprovalFooterBenignSuffix,
+    ApprovalFooterDestructiveConfirmPrefix,
+    ApprovalFooterDestructiveConfirmSuffix,
+    ApprovalFooterDestructivePrefix,
+    ApprovalFooterDestructiveSuffix,
+    ElevationTitleSandboxDenied,
+    ElevationTitleRequired,
+    ElevationFieldTool,
+    ElevationFieldCmd,
+    ElevationFieldReason,
+    ElevationImpactHeader,
+    ElevationImpactNetwork,
+    ElevationImpactWrite,
+    ElevationImpactFullAccess,
+    ElevationPromptProceed,
+    ElevationOptionNetwork,
+    ElevationOptionWrite,
+    ElevationOptionFullAccess,
+    ElevationOptionAbort,
+    ElevationOptionNetworkDesc,
+    ElevationOptionWriteDesc,
+    ElevationOptionFullAccessDesc,
+    ElevationOptionAbortDesc,
+    // Phase 3: Common command output
+    CmdErrorPrefix,
+    CmdQueueUsage,
+    CmdQueueNoMessages,
+    CmdQueueListHeader,
+    CmdQueueListTip,
+    CmdQueueAlreadyEditing,
+    CmdQueueMissingIndex,
+    CmdQueueIndexPositive,
+    CmdQueueIndexMin,
+    CmdQueueNotFound,
+    CmdQueueDropped,
+    CmdQueueAlreadyEmpty,
+    CmdQueueCleared,
+    CmdTaskUsageAdd,
+    CmdTaskUsageShow,
+    CmdTaskUsageCancel,
+    CmdTaskUsageGeneral,
+    CmdTrustEnabled,
+    CmdTrustDisabled,
+    CmdTrustUnknownAction,
+    CmdLspStatus,
+    CmdLspEnabled,
+    CmdLspDisabled,
+    CmdLspUnknownArg,
+    CmdLogoutSuccess,
+    CmdLogoutFailed,
+    CmdEditingQueuedDraft,
+
+    // ── Tool family labels (card headers) ────────────────
+    ToolFamilyRead,
+    ToolFamilyPatch,
+    ToolFamilyRun,
+    ToolFamilyFind,
+    ToolFamilyDelegate,
+    ToolFamilyFanout,
+    ToolFamilyRlm,
+    ToolFamilyThink,
+    ToolFamilyGeneric,
+
+    // ── Agent lifecycle labels (status badges) ──────────
+    AgentLifecyclePending,
+    AgentLifecycleRunning,
+    AgentLifecycleDone,
+    AgentLifecycleFailed,
+    AgentLifecycleCancelled,
+
+    // ── Fanout summary counts ────────────────────────────
+    FanoutCounts,
+
+    // ── Sub-agents modal ─────────────────────────────────
+    SubAgentsTitle,
+    SubAgentsNoAgents,
+    SubAgentsRunning,
+    SubAgentsCompleted,
+    SubAgentsInterrupted,
+    SubAgentsFailed,
+    SubAgentsCancelled,
+    AgentStatusRunning,
+    AgentStatusCompleted,
+    AgentStatusInterrupted,
+    AgentStatusCancelled,
+    AgentStatusFailed,
+
+    // ── Sidebar ──────────────────────────────────────────
+    SidebarNoAgents,
+
+    // ── Config Scope ──────────────────────────────────────
+    ConfigScopeSession,
+    ConfigScopeSaved,
+    ConfigFieldScope,
+    ConfigFieldCurrent,
+    ConfigFieldNew,
+    ConfigFieldHint,
+    ConfigEditCancelled,
+
+    // ── App Mode ──────────────────────────────────────────
+    AppModeAgent,
+    AppModeYolo,
+    AppModePlan,
+    AppModeAgentDesc,
+    AppModeYoloDesc,
+    AppModePlanDesc,
+    VimModeNormal,
+    VimModeInsert,
+    VimModeVisual,
+
+    // ── Onboarding Welcome ────────────────────────────────
+    OnboardWelcomeTitle,
+    OnboardWelcomeSubtitle,
+    OnboardWelcomeDesc,
+    OnboardWelcomePressEnter,
+    OnboardWelcomeCtrlCExit,
+
+    // ── Context Inspector ─────────────────────────────────
+    CtxInspectorTitle,
+    CtxInspectorModel,
+    CtxInspectorSession,
+    CtxInspectorTranscript,
+    CtxInspectorWorkspaceStatus,
+    CtxInspectorNotSampled,
+    CtxInspectorEmpty,
+    CtxInspectorSystemPrompt,
+    CtxInspectorStablePrefix,
+    CtxInspectorVolatileWorkingSet,
+    CtxInspectorNone,
+    CtxInspectorTotal,
+    CtxInspectorTextPromptLayers,
+    CtxInspectorSingleBlob,
+    CtxInspectorNoSystemPrompt,
+    CtxInspectorTip,
+    CtxInspectorReferences,
+    CtxInspectorMoreReferences,
+    CtxInspectorNoReferences,
+    CtxInspectorIncluded,
+    CtxInspectorAttached,
+    CtxInspectorNotIncluded,
+    CtxInspectorRecentTools,
+    CtxInspectorActive,
+    CtxInspectorNoToolActivity,
+    CtxInspectorOutputCaptured,
+    CtxInspectorNoOutputYet,
+    CtxInspectorPromptLayerCacheFriendly,
+    CtxInspectorPromptLayerChangesBySession,
+    CtxInspectorStatusCritical,
+    CtxInspectorStatusHigh,
+    CtxInspectorStatusOk,
 }
 
 #[allow(dead_code)]
@@ -688,6 +883,181 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::OnboardTipsLine4,
     MessageId::OnboardTipsFooterEnter,
     MessageId::OnboardTipsFooterAction,
+    MessageId::ComposerTitle,
+    MessageId::ComposerDraftTitle,
+    MessageId::ComposerQueueForNextTurn,
+    MessageId::ComposerQueueCount,
+    MessageId::ComposerSteerHint,
+    MessageId::ComposerQueuedHint,
+    MessageId::ComposerOfflineQueueHint,
+    MessageId::PendingInputsHeader,
+    MessageId::PendingInputsContextHeader,
+    MessageId::PendingInputsEditHint,
+    MessageId::StatusPickerTitle,
+    MessageId::StatusPickerToggle,
+    MessageId::StatusPickerAll,
+    MessageId::StatusPickerNone,
+    MessageId::StatusPickerSave,
+    MessageId::StatusPickerCancel,
+    MessageId::StatusPickerInstruction,
+    MessageId::ConfigSectionModel,
+    MessageId::ConfigSectionPermissions,
+    MessageId::ConfigSectionDisplay,
+    MessageId::ConfigSectionComposer,
+    MessageId::ConfigSectionSidebar,
+    MessageId::ConfigSectionHistory,
+    MessageId::ConfigSectionMcp,
+    MessageId::ApprovalRiskReview,
+    MessageId::ApprovalRiskDestructive,
+    MessageId::ApprovalCategorySafe,
+    MessageId::ApprovalCategoryFileWrite,
+    MessageId::ApprovalCategoryShell,
+    MessageId::ApprovalCategoryNetwork,
+    MessageId::ApprovalCategoryMcpRead,
+    MessageId::ApprovalCategoryMcpAction,
+    MessageId::ApprovalCategoryUnknown,
+    MessageId::ApprovalFieldType,
+    MessageId::ApprovalFieldAbout,
+    MessageId::ApprovalFieldImpact,
+    MessageId::ApprovalFieldParams,
+    MessageId::ApprovalOptionApproveOnce,
+    MessageId::ApprovalOptionApproveAlways,
+    MessageId::ApprovalOptionDeny,
+    MessageId::ApprovalOptionAbortTurn,
+    MessageId::ApprovalStaged,
+    MessageId::ApprovalBlockTitle,
+    MessageId::ApprovalFooterBenignPrefix,
+    MessageId::ApprovalFooterBenignSuffix,
+    MessageId::ApprovalFooterDestructiveConfirmPrefix,
+    MessageId::ApprovalFooterDestructiveConfirmSuffix,
+    MessageId::ApprovalFooterDestructivePrefix,
+    MessageId::ApprovalFooterDestructiveSuffix,
+    MessageId::ElevationTitleSandboxDenied,
+    MessageId::ElevationTitleRequired,
+    MessageId::ElevationFieldTool,
+    MessageId::ElevationFieldCmd,
+    MessageId::ElevationFieldReason,
+    MessageId::ElevationImpactHeader,
+    MessageId::ElevationImpactNetwork,
+    MessageId::ElevationImpactWrite,
+    MessageId::ElevationImpactFullAccess,
+    MessageId::ElevationPromptProceed,
+    MessageId::ElevationOptionNetwork,
+    MessageId::ElevationOptionWrite,
+    MessageId::ElevationOptionFullAccess,
+    MessageId::ElevationOptionAbort,
+    MessageId::ElevationOptionNetworkDesc,
+    MessageId::ElevationOptionWriteDesc,
+    MessageId::ElevationOptionFullAccessDesc,
+    MessageId::ElevationOptionAbortDesc,
+    MessageId::CmdErrorPrefix,
+    MessageId::CmdQueueUsage,
+    MessageId::CmdQueueNoMessages,
+    MessageId::CmdQueueListHeader,
+    MessageId::CmdQueueListTip,
+    MessageId::CmdQueueAlreadyEditing,
+    MessageId::CmdQueueMissingIndex,
+    MessageId::CmdQueueIndexPositive,
+    MessageId::CmdQueueIndexMin,
+    MessageId::CmdQueueNotFound,
+    MessageId::CmdQueueDropped,
+    MessageId::CmdQueueAlreadyEmpty,
+    MessageId::CmdQueueCleared,
+    MessageId::CmdTaskUsageAdd,
+    MessageId::CmdTaskUsageShow,
+    MessageId::CmdTaskUsageCancel,
+    MessageId::CmdTaskUsageGeneral,
+    MessageId::CmdTrustEnabled,
+    MessageId::CmdTrustDisabled,
+    MessageId::CmdTrustUnknownAction,
+    MessageId::CmdLspStatus,
+    MessageId::CmdLspEnabled,
+    MessageId::CmdLspDisabled,
+    MessageId::CmdLspUnknownArg,
+    MessageId::CmdLogoutSuccess,
+    MessageId::CmdLogoutFailed,
+    MessageId::CmdEditingQueuedDraft,
+    MessageId::ToolFamilyRead,
+    MessageId::ToolFamilyPatch,
+    MessageId::ToolFamilyRun,
+    MessageId::ToolFamilyFind,
+    MessageId::ToolFamilyDelegate,
+    MessageId::ToolFamilyFanout,
+    MessageId::ToolFamilyRlm,
+    MessageId::ToolFamilyThink,
+    MessageId::ToolFamilyGeneric,
+    MessageId::AgentLifecyclePending,
+    MessageId::AgentLifecycleRunning,
+    MessageId::AgentLifecycleDone,
+    MessageId::AgentLifecycleFailed,
+    MessageId::AgentLifecycleCancelled,
+    MessageId::FanoutCounts,
+    MessageId::SubAgentsTitle,
+    MessageId::SubAgentsNoAgents,
+    MessageId::SubAgentsRunning,
+    MessageId::SubAgentsCompleted,
+    MessageId::SubAgentsInterrupted,
+    MessageId::SubAgentsFailed,
+    MessageId::SubAgentsCancelled,
+    MessageId::AgentStatusRunning,
+    MessageId::AgentStatusCompleted,
+    MessageId::AgentStatusInterrupted,
+    MessageId::AgentStatusCancelled,
+    MessageId::AgentStatusFailed,
+    MessageId::SidebarNoAgents,
+    MessageId::ConfigScopeSession,
+    MessageId::ConfigScopeSaved,
+    MessageId::ConfigFieldScope,
+    MessageId::ConfigFieldCurrent,
+    MessageId::ConfigFieldNew,
+    MessageId::ConfigFieldHint,
+    MessageId::ConfigEditCancelled,
+    MessageId::AppModeAgent,
+    MessageId::AppModeYolo,
+    MessageId::AppModePlan,
+    MessageId::AppModeAgentDesc,
+    MessageId::AppModeYoloDesc,
+    MessageId::AppModePlanDesc,
+    MessageId::VimModeNormal,
+    MessageId::VimModeInsert,
+    MessageId::VimModeVisual,
+    MessageId::OnboardWelcomeTitle,
+    MessageId::OnboardWelcomeSubtitle,
+    MessageId::OnboardWelcomeDesc,
+    MessageId::OnboardWelcomePressEnter,
+    MessageId::OnboardWelcomeCtrlCExit,
+    MessageId::CtxInspectorTitle,
+    MessageId::CtxInspectorModel,
+    MessageId::CtxInspectorSession,
+    MessageId::CtxInspectorTranscript,
+    MessageId::CtxInspectorWorkspaceStatus,
+    MessageId::CtxInspectorNotSampled,
+    MessageId::CtxInspectorEmpty,
+    MessageId::CtxInspectorSystemPrompt,
+    MessageId::CtxInspectorStablePrefix,
+    MessageId::CtxInspectorVolatileWorkingSet,
+    MessageId::CtxInspectorNone,
+    MessageId::CtxInspectorTotal,
+    MessageId::CtxInspectorTextPromptLayers,
+    MessageId::CtxInspectorSingleBlob,
+    MessageId::CtxInspectorNoSystemPrompt,
+    MessageId::CtxInspectorTip,
+    MessageId::CtxInspectorReferences,
+    MessageId::CtxInspectorMoreReferences,
+    MessageId::CtxInspectorNoReferences,
+    MessageId::CtxInspectorIncluded,
+    MessageId::CtxInspectorAttached,
+    MessageId::CtxInspectorNotIncluded,
+    MessageId::CtxInspectorRecentTools,
+    MessageId::CtxInspectorActive,
+    MessageId::CtxInspectorNoToolActivity,
+    MessageId::CtxInspectorOutputCaptured,
+    MessageId::CtxInspectorNoOutputYet,
+    MessageId::CtxInspectorPromptLayerCacheFriendly,
+    MessageId::CtxInspectorPromptLayerChangesBySession,
+    MessageId::CtxInspectorStatusCritical,
+    MessageId::CtxInspectorStatusHigh,
+    MessageId::CtxInspectorStatusOk,
 ];
 
 pub fn tr(locale: Locale, id: MessageId) -> &'static str {
@@ -1136,6 +1506,30 @@ fn english(id: MessageId) -> &'static str {
         MessageId::LinksTip => "Tip: API keys are available in the dashboard console.",
         MessageId::SubagentsFetching => "Fetching sub-agent status...",
         MessageId::HelpUnknownCommand => "Unknown command: {topic}",
+        MessageId::ComposerTitle => "Composer",
+        MessageId::ComposerDraftTitle => "Draft",
+        MessageId::ComposerQueueForNextTurn => "↵ queue for next turn",
+        MessageId::ComposerQueueCount => "↵ queue ({count} waiting)",
+        MessageId::ComposerSteerHint => "↵ steering (Ctrl+Enter)",
+        MessageId::ComposerQueuedHint => "↵ queued (Ctrl+Enter to steer)",
+        MessageId::ComposerOfflineQueueHint => "↵ offline queue",
+        MessageId::PendingInputsHeader => "Pending inputs",
+        MessageId::PendingInputsContextHeader => "Context for next send",
+        MessageId::PendingInputsEditHint => "{key} edit last queued message",
+        MessageId::StatusPickerTitle => " Status line ",
+        MessageId::StatusPickerToggle => "toggle",
+        MessageId::StatusPickerAll => "all",
+        MessageId::StatusPickerNone => "none",
+        MessageId::StatusPickerSave => "save",
+        MessageId::StatusPickerCancel => "cancel",
+        MessageId::StatusPickerInstruction => "Pick the chips you want in the footer:",
+        MessageId::ConfigSectionModel => "Model",
+        MessageId::ConfigSectionPermissions => "Permissions",
+        MessageId::ConfigSectionDisplay => "Display",
+        MessageId::ConfigSectionComposer => "Composer",
+        MessageId::ConfigSectionSidebar => "Sidebar",
+        MessageId::ConfigSectionHistory => "History",
+        MessageId::ConfigSectionMcp => "MCP",
         MessageId::HomeDashboardTitle => "codewhale Home Dashboard",
         MessageId::HomeModel => "Model:",
         MessageId::HomeMode => "Mode:",
@@ -1215,6 +1609,216 @@ fn english(id: MessageId) -> &'static str {
         }
         MessageId::OnboardTipsFooterEnter => "Press Enter",
         MessageId::OnboardTipsFooterAction => " to open the workspace",
+        // Phase 2: Approval & Sandbox Elevation
+        MessageId::ApprovalRiskReview => "REVIEW",
+        MessageId::ApprovalRiskDestructive => "DESTRUCTIVE",
+        MessageId::ApprovalCategorySafe => "Safe",
+        MessageId::ApprovalCategoryFileWrite => "File Write",
+        MessageId::ApprovalCategoryShell => "Shell Command",
+        MessageId::ApprovalCategoryNetwork => "Network",
+        MessageId::ApprovalCategoryMcpRead => "MCP Read",
+        MessageId::ApprovalCategoryMcpAction => "MCP Action",
+        MessageId::ApprovalCategoryUnknown => "Unknown",
+        MessageId::ApprovalFieldType => "Type:",
+        MessageId::ApprovalFieldAbout => "About:",
+        MessageId::ApprovalFieldImpact => "Impact:",
+        MessageId::ApprovalFieldParams => "Params:",
+        MessageId::ApprovalOptionApproveOnce => "Approve once",
+        MessageId::ApprovalOptionApproveAlways => "Approve always for this kind",
+        MessageId::ApprovalOptionDeny => "Deny this call",
+        MessageId::ApprovalOptionAbortTurn => "Abort the turn",
+        MessageId::ApprovalStaged => "(staged)",
+        MessageId::ApprovalBlockTitle => "approval",
+        MessageId::ApprovalFooterBenignPrefix => "Single key approves: ",
+        MessageId::ApprovalFooterBenignSuffix => "  ·  v: full params  ·  Esc: abort",
+        MessageId::ApprovalFooterDestructiveConfirmPrefix => "Confirm destructive action — press ",
+        MessageId::ApprovalFooterDestructiveConfirmSuffix => {
+            " again to commit, anything else cancels."
+        }
+        MessageId::ApprovalFooterDestructivePrefix => "Two keys to approve: ",
+        MessageId::ApprovalFooterDestructiveSuffix => "  ·  v: full params  ·  Esc: abort",
+        MessageId::ElevationTitleSandboxDenied => "  ⚠ Sandbox Denied ",
+        MessageId::ElevationTitleRequired => " Sandbox Elevation Required ",
+        MessageId::ElevationFieldTool => "Tool:",
+        MessageId::ElevationFieldCmd => "Cmd:",
+        MessageId::ElevationFieldReason => "Reason:",
+        MessageId::ElevationImpactHeader => "Impact if approved:",
+        MessageId::ElevationImpactNetwork => {
+            "network retry enables outbound downloads and HTTP requests"
+        }
+        MessageId::ElevationImpactWrite => {
+            "write retry expands writable filesystem scope for this tool call"
+        }
+        MessageId::ElevationImpactFullAccess => {
+            "full access removes sandbox restrictions entirely for this retry"
+        }
+        MessageId::ElevationPromptProceed => "Choose how to proceed:",
+        MessageId::ElevationOptionNetwork => "Allow outbound network",
+        MessageId::ElevationOptionWrite => "Allow extra write access",
+        MessageId::ElevationOptionFullAccess => "Full access (filesystem + network)",
+        MessageId::ElevationOptionAbort => "Abort",
+        MessageId::ElevationOptionNetworkDesc => {
+            "Retry this tool call with outbound network access for downloads and HTTP requests"
+        }
+        MessageId::ElevationOptionWriteDesc => {
+            "Retry this tool call with additional writable filesystem scope"
+        }
+        MessageId::ElevationOptionFullAccessDesc => {
+            "Retry without sandbox limits; grants unrestricted filesystem and network access"
+        }
+        MessageId::ElevationOptionAbortDesc => "Cancel this tool execution",
+        // ── Phase 3: common command output ──
+        MessageId::CmdErrorPrefix => "Error:",
+        MessageId::CmdQueueUsage => "Usage: /queue [list|edit <n>|drop <n>|clear]",
+        MessageId::CmdQueueNoMessages => "No queued messages",
+        MessageId::CmdQueueListHeader => "Queued messages ({queued}):",
+        MessageId::CmdQueueListTip => "Tip: /queue edit <n> to edit, /queue drop <n> to remove",
+        MessageId::CmdQueueAlreadyEditing => {
+            "Already editing a queued message. Send it or /queue clear to discard."
+        }
+        MessageId::CmdQueueMissingIndex => {
+            "Missing index. Usage: /queue edit <n> or /queue drop <n>"
+        }
+        MessageId::CmdQueueIndexPositive => "Index must be a positive number",
+        MessageId::CmdQueueIndexMin => "Index must be >= {min}",
+        MessageId::CmdQueueNotFound => "Queued message not found",
+        MessageId::CmdQueueDropped => "Dropped queued message {n}",
+        MessageId::CmdQueueAlreadyEmpty => "Queue already empty",
+        MessageId::CmdQueueCleared => "Queue cleared",
+        MessageId::CmdTaskUsageAdd => "Usage: /task add <prompt>",
+        MessageId::CmdTaskUsageShow => "Usage: /task show <id>",
+        MessageId::CmdTaskUsageCancel => "Usage: /task cancel <id>",
+        MessageId::CmdTaskUsageGeneral => "Usage: /task [add <prompt>|list|show <id>|cancel <id>]",
+        MessageId::CmdTrustEnabled => {
+            "Workspace trust mode enabled — agent file tools can now read/write \
+             any path. Use `/trust off` to revert; prefer `/trust add <path>` \
+             for a narrower opt-in."
+        }
+        MessageId::CmdTrustDisabled => "Workspace trust mode disabled.",
+        MessageId::CmdTrustUnknownAction => {
+            "Unknown /trust action `{action}`. Use `/trust`, `/trust on|off`, \
+             `/trust add <path>`, or `/trust remove <path>`."
+        }
+        MessageId::CmdLspStatus => {
+            "LSP diagnostics are currently **{status}**.\n\n\
+             Use `/lsp on` to enable or `/lsp off` to disable inline \
+             diagnostics after file edits."
+        }
+        MessageId::CmdLspEnabled => {
+            "LSP diagnostics enabled — file edit results will include compiler \
+             errors and warnings when available."
+        }
+        MessageId::CmdLspDisabled => "LSP diagnostics disabled.",
+        MessageId::CmdLspUnknownArg => {
+            "Unknown /lsp argument `{arg}`. Use `/lsp on`, `/lsp off`, or \
+             `/lsp status`."
+        }
+        MessageId::CmdLogoutSuccess => "Logged out. Enter a new API key to continue.",
+        MessageId::CmdLogoutFailed => "Failed to clear API key: {reason}",
+        MessageId::CmdEditingQueuedDraft => {
+            "Editing queued message {n} (press Enter to re-queue/send)"
+        }
+        MessageId::ToolFamilyRead => "read",
+        MessageId::ToolFamilyPatch => "patch",
+        MessageId::ToolFamilyRun => "run",
+        MessageId::ToolFamilyFind => "find",
+        MessageId::ToolFamilyDelegate => "delegate",
+        MessageId::ToolFamilyFanout => "fanout",
+        MessageId::ToolFamilyRlm => "rlm",
+        MessageId::ToolFamilyThink => "think",
+        MessageId::ToolFamilyGeneric => "tool",
+        MessageId::AgentLifecyclePending => "pending",
+        MessageId::AgentLifecycleRunning => "running",
+        MessageId::AgentLifecycleDone => "done",
+        MessageId::AgentLifecycleFailed => "failed",
+        MessageId::AgentLifecycleCancelled => "cancelled",
+        MessageId::FanoutCounts => {
+            "{done} done · {running} running · {failed} failed · {pending} pending"
+        }
+        MessageId::SubAgentsTitle => "Sub-agents",
+        MessageId::SubAgentsNoAgents => "No agents running.",
+        MessageId::SubAgentsRunning => "Running",
+        MessageId::SubAgentsCompleted => "Completed",
+        MessageId::SubAgentsInterrupted => "Interrupted",
+        MessageId::SubAgentsFailed => "Failed",
+        MessageId::SubAgentsCancelled => "Cancelled",
+        MessageId::AgentStatusRunning => "running",
+        MessageId::AgentStatusCompleted => "completed",
+        MessageId::AgentStatusInterrupted => "interrupted",
+        MessageId::AgentStatusCancelled => "cancelled",
+        MessageId::AgentStatusFailed => "failed",
+        MessageId::SidebarNoAgents => "No agents",
+        MessageId::ConfigScopeSession => "SESSION",
+        MessageId::ConfigScopeSaved => "SAVED",
+        MessageId::ConfigFieldScope => "Scope: ",
+        MessageId::ConfigFieldCurrent => "Current: ",
+        MessageId::ConfigFieldNew => "New: ",
+        MessageId::ConfigFieldHint => "Hint: ",
+        MessageId::ConfigEditCancelled => "Edit cancelled",
+        MessageId::AppModeAgent => "AGENT",
+        MessageId::AppModeYolo => "YOLO",
+        MessageId::AppModePlan => "PLAN",
+        MessageId::AppModeAgentDesc => "Agent mode - autonomous task execution with tools",
+        MessageId::AppModeYoloDesc => "YOLO mode - full tool access without approvals",
+        MessageId::AppModePlanDesc => "Plan mode - design before implementing",
+        MessageId::VimModeNormal => "-- NORMAL --",
+        MessageId::VimModeInsert => "-- INSERT --",
+        MessageId::VimModeVisual => "-- VISUAL --",
+        MessageId::OnboardWelcomeTitle => "codewhale",
+        MessageId::OnboardWelcomeSubtitle => {
+            "A focused terminal workspace for longer model sessions."
+        }
+        MessageId::OnboardWelcomeDesc => {
+            "You'll add an API key, review trust for this directory, and then land in the chat."
+        }
+        MessageId::OnboardWelcomePressEnter => "Press Enter to continue.",
+        MessageId::OnboardWelcomeCtrlCExit => "Ctrl+C exits at any point.",
+        MessageId::CtxInspectorTitle => "Session Context",
+        MessageId::CtxInspectorModel => "Model: {model}",
+        MessageId::CtxInspectorSession => "Session: {session}",
+        MessageId::CtxInspectorTranscript => {
+            "Transcript: {cells} cells, {api_messages} API messages"
+        }
+        MessageId::CtxInspectorWorkspaceStatus => "Workspace status: {status}",
+        MessageId::CtxInspectorNotSampled => "not sampled yet",
+        MessageId::CtxInspectorEmpty => "(empty)",
+        MessageId::CtxInspectorSystemPrompt => "System Prompt Structure",
+        MessageId::CtxInspectorStablePrefix => {
+            "  Stable prefix: {count} block(s), ~{tokens} tokens  [cache-friendly]"
+        }
+        MessageId::CtxInspectorVolatileWorkingSet => {
+            "  Volatile working set: 1 block, ~{tokens} tokens  [changes every turn]"
+        }
+        MessageId::CtxInspectorNone => "none",
+        MessageId::CtxInspectorTotal => "  Total: {count} block(s), ~{tokens} tokens",
+        MessageId::CtxInspectorTextPromptLayers => {
+            "  Text prompt layers: {count} layer(s), ~{tokens} tokens"
+        }
+        MessageId::CtxInspectorSingleBlob => {
+            "  Single text blob (~{tokens} tokens) [stable prefix only]"
+        }
+        MessageId::CtxInspectorNoSystemPrompt => "  No system prompt set.",
+        MessageId::CtxInspectorTip => {
+            "  Tip: Stable prefix blocks are DeepSeek V4 prefix-cache eligible. Keep the system prompt append-only to maximize reuse."
+        }
+        MessageId::CtxInspectorReferences => "References",
+        MessageId::CtxInspectorMoreReferences => "- ... {count} more reference(s)",
+        MessageId::CtxInspectorNoReferences => {
+            "- No file, directory, or media references recorded yet."
+        }
+        MessageId::CtxInspectorIncluded => "included",
+        MessageId::CtxInspectorAttached => "attached",
+        MessageId::CtxInspectorNotIncluded => "not included",
+        MessageId::CtxInspectorRecentTools => "Recent Tools",
+        MessageId::CtxInspectorActive => "active",
+        MessageId::CtxInspectorNoToolActivity => "- No tool activity recorded yet.",
+        MessageId::CtxInspectorOutputCaptured => "output captured",
+        MessageId::CtxInspectorNoOutputYet => "no output yet",
+        MessageId::CtxInspectorPromptLayerCacheFriendly => "cache-friendly",
+        MessageId::CtxInspectorPromptLayerChangesBySession => "changes by session/turn",
+        MessageId::CtxInspectorStatusCritical => "critical",
+        MessageId::CtxInspectorStatusHigh => "high",
+        MessageId::CtxInspectorStatusOk => "ok",
     }
 }
 
@@ -1523,6 +2127,30 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::LinksTip => "ヒント: API キーはダッシュボードコンソールで取得できます。",
         MessageId::SubagentsFetching => "サブエージェントの状態を取得中...",
         MessageId::HelpUnknownCommand => "不明なコマンド: {topic}",
+        MessageId::ComposerTitle => "コンポーザー",
+        MessageId::ComposerDraftTitle => "下書き",
+        MessageId::ComposerQueueForNextTurn => "↵ 次のターンにキュー",
+        MessageId::ComposerQueueCount => "↵ キュー（{count} 待機中）",
+        MessageId::ComposerSteerHint => "↵ ステアリング（Ctrl+Enter）",
+        MessageId::ComposerQueuedHint => "↵ キュー済み（Ctrl+Enterでステアリング）",
+        MessageId::ComposerOfflineQueueHint => "↵ オフラインキュー",
+        MessageId::PendingInputsHeader => "保留中の入力",
+        MessageId::PendingInputsContextHeader => "次回送信のコンテキスト",
+        MessageId::PendingInputsEditHint => "{key} 最後のキュー済みメッセージを編集",
+        MessageId::StatusPickerTitle => " ステータスライン ",
+        MessageId::StatusPickerToggle => "切替",
+        MessageId::StatusPickerAll => "すべて",
+        MessageId::StatusPickerNone => "なし",
+        MessageId::StatusPickerSave => "保存",
+        MessageId::StatusPickerCancel => "キャンセル",
+        MessageId::StatusPickerInstruction => "フッターに表示するチップを選択してください：",
+        MessageId::ConfigSectionModel => "モデル",
+        MessageId::ConfigSectionPermissions => "権限",
+        MessageId::ConfigSectionDisplay => "表示",
+        MessageId::ConfigSectionComposer => "コンポーザー",
+        MessageId::ConfigSectionSidebar => "サイドバー",
+        MessageId::ConfigSectionHistory => "履歴",
+        MessageId::ConfigSectionMcp => "MCP",
         MessageId::HomeDashboardTitle => "codewhale ホームダッシュボード",
         MessageId::HomeModel => "モデル：",
         MessageId::HomeMode => "モード：",
@@ -1602,6 +2230,142 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         }
         MessageId::OnboardTipsFooterEnter => "Enter を押す",
         MessageId::OnboardTipsFooterAction => " とワークスペースが開きます",
+        // Phase 2: Approval & Sandbox Elevation
+        MessageId::ApprovalRiskReview => "確認",
+        MessageId::ApprovalRiskDestructive => "破壊的操作",
+        MessageId::ApprovalCategorySafe => "安全",
+        MessageId::ApprovalCategoryFileWrite => "ファイル書き込み",
+        MessageId::ApprovalCategoryShell => "シェルコマンド",
+        MessageId::ApprovalCategoryNetwork => "ネットワーク",
+        MessageId::ApprovalCategoryMcpRead => "MCP読み取り",
+        MessageId::ApprovalCategoryMcpAction => "MCPアクション",
+        MessageId::ApprovalCategoryUnknown => "未分類",
+        MessageId::ApprovalFieldType => "種類：",
+        MessageId::ApprovalFieldAbout => "詳細：",
+        MessageId::ApprovalFieldImpact => "影響：",
+        MessageId::ApprovalFieldParams => "パラメータ：",
+        MessageId::ApprovalOptionApproveOnce => "1回だけ承認",
+        MessageId::ApprovalOptionApproveAlways => "常に承認（この種類）",
+        MessageId::ApprovalOptionDeny => "拒否",
+        MessageId::ApprovalOptionAbortTurn => "中断",
+        MessageId::ApprovalStaged => "(ステージング中)",
+        MessageId::ApprovalBlockTitle => "承認",
+        MessageId::ApprovalFooterBenignPrefix => "ワンキー承認：",
+        MessageId::ApprovalFooterBenignSuffix => "  ·  v: パラメータ表示  ·  Esc: 中止",
+        MessageId::ApprovalFooterDestructiveConfirmPrefix => "破壊的操作の確認 — ",
+        MessageId::ApprovalFooterDestructiveConfirmSuffix => {
+            " をもう一度押して確定、他のキーでキャンセル"
+        }
+        MessageId::ApprovalFooterDestructivePrefix => "2キー承認が必要：",
+        MessageId::ApprovalFooterDestructiveSuffix => "  ·  v: パラメータ表示  ·  Esc: 中止",
+        MessageId::ElevationTitleSandboxDenied => "  ⚠ サンドボックス拒否 ",
+        MessageId::ElevationTitleRequired => " サンドボックス昇格 ",
+        MessageId::ElevationFieldTool => "ツール：",
+        MessageId::ElevationFieldCmd => "コマンド：",
+        MessageId::ElevationFieldReason => "理由：",
+        MessageId::ElevationImpactHeader => "承認された場合の影響：",
+        MessageId::ElevationImpactNetwork => {
+            "ネットワーク再試行で外部ダウンロード・HTTPリクエストが可能"
+        }
+        MessageId::ElevationImpactWrite => "書き込み再試行でファイルシステムの書き込み範囲が拡大",
+        MessageId::ElevationImpactFullAccess => "フルアクセスでサンドボックス制限を完全に解除",
+        MessageId::ElevationPromptProceed => "方法を選択：",
+        MessageId::ElevationOptionNetwork => "外部ネットワークを許可",
+        MessageId::ElevationOptionWrite => "追加の書き込みアクセスを許可",
+        MessageId::ElevationOptionFullAccess => "フルアクセス（ファイルシステム + ネットワーク）",
+        MessageId::ElevationOptionAbort => "中止",
+        MessageId::ElevationOptionNetworkDesc => {
+            "ダウンロードとHTTPリクエストのため外部ネットワークアクセスを許可して再試行"
+        }
+        MessageId::ElevationOptionWriteDesc => "追加の書き込み可能ファイルシステム範囲で再試行",
+        MessageId::ElevationOptionFullAccessDesc => {
+            "サンドボックス制限なしで再試行：制限なしのファイルシステム・ネットワークアクセス"
+        }
+        MessageId::ElevationOptionAbortDesc => "このツール実行をキャンセル",
+        // ── Phase 3: common command output ──
+        MessageId::CmdErrorPrefix => "エラー:",
+        MessageId::CmdQueueUsage => "使用法: /queue [list|edit <n>|drop <n>|clear]",
+        MessageId::CmdQueueNoMessages => "キューされたメッセージはありません",
+        MessageId::CmdQueueListHeader => "キューされたメッセージ ({queued}):",
+        MessageId::CmdQueueListTip => "ヒント: /queue edit <n> で編集、/queue drop <n> で削除",
+        MessageId::CmdQueueAlreadyEditing => {
+            "既にキューされたメッセージを編集中です。送信するか /queue clear で破棄してください。"
+        }
+        MessageId::CmdQueueMissingIndex => {
+            "インデックスがありません。使用法: /queue edit <n> または /queue drop <n>"
+        }
+        MessageId::CmdQueueIndexPositive => "インデックスは正の数である必要があります",
+        MessageId::CmdQueueIndexMin => "インデックスは {min} 以上である必要があります",
+        MessageId::CmdQueueNotFound => "キューされたメッセージが見つかりません",
+        MessageId::CmdQueueDropped => "キューされたメッセージ {n} を削除しました",
+        MessageId::CmdQueueAlreadyEmpty => "キューは既に空です",
+        MessageId::CmdQueueCleared => "キューをクリアしました",
+        MessageId::CmdTaskUsageAdd => "使用法: /task add <prompt>",
+        MessageId::CmdTaskUsageShow => "使用法: /task show <id>",
+        MessageId::CmdTaskUsageCancel => "使用法: /task cancel <id>",
+        MessageId::CmdTaskUsageGeneral => "使用法: /task [add <prompt>|list|show <id>|cancel <id>]",
+        MessageId::CmdTrustEnabled => {
+            "ワークスペース信頼モードが有効になりました — エージェントのファイルツールは \
+             任意のパスを読み書きできます。`/trust off` で戻すか、`/trust add <path>` で \
+             より狭い範囲の許可を推奨します。"
+        }
+        MessageId::CmdTrustDisabled => "ワークスペース信頼モードが無効になりました。",
+        MessageId::CmdTrustUnknownAction => {
+            "不明な /trust アクション `{action}` です。`/trust`、`/trust on|off`、\
+             `/trust add <path>`、または `/trust remove <path>` を使用してください。"
+        }
+        MessageId::CmdLspStatus => {
+            "LSP 診断は現在 **{status}** です。\n\n\
+             `/lsp on` で有効、`/lsp off` で無効にできます。ファイル編集後に \
+             インライン診断を表示します。"
+        }
+        MessageId::CmdLspEnabled => {
+            "LSP 診断が有効になりました — ファイル編集結果にコンパイラのエラーや \
+             警告が含まれるようになります。"
+        }
+        MessageId::CmdLspDisabled => "LSP 診断が無効になりました。",
+        MessageId::CmdLspUnknownArg => {
+            "不明な /lsp 引数 `{arg}` です。`/lsp on`、`/lsp off`、または `/lsp status` \
+             を使用してください。"
+        }
+        MessageId::CmdLogoutSuccess => {
+            "ログアウトしました。新しい API キーを入力して続行してください。"
+        }
+        MessageId::CmdLogoutFailed => "API キーの消去に失敗しました: {reason}",
+        MessageId::CmdEditingQueuedDraft => {
+            "キューされたメッセージ {n} を編集中 (Enter で再キュー/送信)"
+        }
+        MessageId::ToolFamilyRead => "読み取り",
+        MessageId::ToolFamilyPatch => "パッチ",
+        MessageId::ToolFamilyRun => "実行",
+        MessageId::ToolFamilyFind => "検索",
+        MessageId::ToolFamilyDelegate => "委任",
+        MessageId::ToolFamilyFanout => "ファンアウト",
+        MessageId::ToolFamilyRlm => "rlm",
+        MessageId::ToolFamilyThink => "思考",
+        MessageId::ToolFamilyGeneric => "ツール",
+        MessageId::AgentLifecyclePending => "待機中",
+        MessageId::AgentLifecycleRunning => "実行中",
+        MessageId::AgentLifecycleDone => "完了",
+        MessageId::AgentLifecycleFailed => "失敗",
+        MessageId::AgentLifecycleCancelled => "キャンセル済み",
+        MessageId::FanoutCounts => {
+            "{done} 完了 · {running} 実行中 · {failed} 失敗 · {pending} 待機"
+        }
+        MessageId::SubAgentsTitle => "サブエージェント",
+        MessageId::SubAgentsNoAgents => "実行中のエージェントはありません。",
+        MessageId::SubAgentsRunning => "実行中",
+        MessageId::SubAgentsCompleted => "完了",
+        MessageId::SubAgentsInterrupted => "中断",
+        MessageId::SubAgentsFailed => "失敗",
+        MessageId::SubAgentsCancelled => "キャンセル済み",
+        MessageId::AgentStatusRunning => "実行中",
+        MessageId::AgentStatusCompleted => "完了",
+        MessageId::AgentStatusInterrupted => "中断",
+        MessageId::AgentStatusCancelled => "キャンセル済み",
+        MessageId::AgentStatusFailed => "失敗",
+        MessageId::SidebarNoAgents => "エージェントなし",
+        _ => english(id),
     })
 }
 
@@ -1842,6 +2606,30 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::LinksTip => "提示：API 密钥可在控制台中获取。",
         MessageId::SubagentsFetching => "正在获取子代理状态...",
         MessageId::HelpUnknownCommand => "未知命令：{topic}",
+        MessageId::ComposerTitle => "编辑器",
+        MessageId::ComposerDraftTitle => "草稿",
+        MessageId::ComposerQueueForNextTurn => "↵ 排队等待下一轮",
+        MessageId::ComposerQueueCount => "↵ 排队（{count} 等待中）",
+        MessageId::ComposerSteerHint => "↵ 引导回复（Ctrl+Enter）",
+        MessageId::ComposerQueuedHint => "↵ 已排队（Ctrl+Enter 转向）",
+        MessageId::ComposerOfflineQueueHint => "↵ 离线排队",
+        MessageId::PendingInputsHeader => "待处理输入",
+        MessageId::PendingInputsContextHeader => "下次发送的上下文",
+        MessageId::PendingInputsEditHint => "{key} 编辑最后一条已排队消息",
+        MessageId::StatusPickerTitle => " 状态栏 ",
+        MessageId::StatusPickerToggle => "切换",
+        MessageId::StatusPickerAll => "全选",
+        MessageId::StatusPickerNone => "全无",
+        MessageId::StatusPickerSave => "保存",
+        MessageId::StatusPickerCancel => "取消",
+        MessageId::StatusPickerInstruction => "选择要在底栏中显示的模块：",
+        MessageId::ConfigSectionModel => "模型",
+        MessageId::ConfigSectionPermissions => "权限",
+        MessageId::ConfigSectionDisplay => "显示",
+        MessageId::ConfigSectionComposer => "编辑器",
+        MessageId::ConfigSectionSidebar => "侧栏",
+        MessageId::ConfigSectionHistory => "历史",
+        MessageId::ConfigSectionMcp => "MCP",
         MessageId::HomeDashboardTitle => "codewhale 主面板",
         MessageId::HomeModel => "模型：",
         MessageId::HomeMode => "模式：",
@@ -1909,6 +2697,126 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::OnboardTipsLine4 => "Ctrl+R 恢复历史会话，Esc 退出当前输入或弹层。",
         MessageId::OnboardTipsFooterEnter => "按 Enter",
         MessageId::OnboardTipsFooterAction => " 进入工作区",
+        // Phase 2: 审批与沙箱弹窗
+        MessageId::ApprovalRiskReview => "审核",
+        MessageId::ApprovalRiskDestructive => "危险操作",
+        MessageId::ApprovalCategorySafe => "安全操作",
+        MessageId::ApprovalCategoryFileWrite => "文件写入",
+        MessageId::ApprovalCategoryShell => "Shell 命令",
+        MessageId::ApprovalCategoryNetwork => "网络",
+        MessageId::ApprovalCategoryMcpRead => "MCP 读取",
+        MessageId::ApprovalCategoryMcpAction => "MCP 操作",
+        MessageId::ApprovalCategoryUnknown => "未分类",
+        MessageId::ApprovalFieldType => "类型：",
+        MessageId::ApprovalFieldAbout => "说明：",
+        MessageId::ApprovalFieldImpact => "影响：",
+        MessageId::ApprovalFieldParams => "参数：",
+        MessageId::ApprovalOptionApproveOnce => "仅批准一次",
+        MessageId::ApprovalOptionApproveAlways => "同类操作始终批准",
+        MessageId::ApprovalOptionDeny => "拒绝此次调用",
+        MessageId::ApprovalOptionAbortTurn => "中断本轮",
+        MessageId::ApprovalStaged => "（待确认）",
+        MessageId::ApprovalBlockTitle => "审批",
+        MessageId::ApprovalFooterBenignPrefix => "一键批准：",
+        MessageId::ApprovalFooterBenignSuffix => "  ·  v: 查看参数  ·  Esc: 中止",
+        MessageId::ApprovalFooterDestructiveConfirmPrefix => "确认危险操作 — 再次按下 ",
+        MessageId::ApprovalFooterDestructiveConfirmSuffix => " 以提交，其他按键取消",
+        MessageId::ApprovalFooterDestructivePrefix => "需要二次确认：",
+        MessageId::ApprovalFooterDestructiveSuffix => "  ·  v: 查看参数  ·  Esc: 中止",
+        MessageId::ElevationTitleSandboxDenied => "  ⚠ 沙箱拒绝 ",
+        MessageId::ElevationTitleRequired => " 沙箱提权 ",
+        MessageId::ElevationFieldTool => "工具：",
+        MessageId::ElevationFieldCmd => "命令：",
+        MessageId::ElevationFieldReason => "原因：",
+        MessageId::ElevationImpactHeader => "批准后的影响：",
+        MessageId::ElevationImpactNetwork => "网络重试 - 允许外部下载和 HTTP 请求",
+        MessageId::ElevationImpactWrite => "写入重试 - 扩大此工具调用的文件系统写入范围",
+        MessageId::ElevationImpactFullAccess => "完全访问 - 解除沙箱限制",
+        MessageId::ElevationPromptProceed => "请选择处理方式：",
+        MessageId::ElevationOptionNetwork => "允许外部网络访问",
+        MessageId::ElevationOptionWrite => "允许额外写入权限",
+        MessageId::ElevationOptionFullAccess => "完全访问（文件系统 + 网络）",
+        MessageId::ElevationOptionAbort => "中止",
+        MessageId::ElevationOptionNetworkDesc => {
+            "重试此工具调用，允许外部网络访问进行下载和 HTTP 请求"
+        }
+        MessageId::ElevationOptionWriteDesc => "重试此工具调用，扩大可写入的文件系统范围",
+        MessageId::ElevationOptionFullAccessDesc => {
+            "无沙箱限制重试，授予不受限的文件系统和网络访问权限"
+        }
+        MessageId::ElevationOptionAbortDesc => "取消此工具调用",
+        // ── Phase 3: common command output ──
+        MessageId::CmdErrorPrefix => "错误：",
+        MessageId::CmdQueueUsage => "用法：/queue [list|edit <n>|drop <n>|clear]",
+        MessageId::CmdQueueNoMessages => "没有已排队的消息",
+        MessageId::CmdQueueListHeader => "已排队的消息 ({queued})：",
+        MessageId::CmdQueueListTip => "提示：用 /queue edit <n> 编辑，用 /queue drop <n> 删除",
+        MessageId::CmdQueueAlreadyEditing => {
+            "已在编辑一条已排队的消息。请发送或用 /queue clear 放弃。"
+        }
+        MessageId::CmdQueueMissingIndex => "缺少索引。用法：/queue edit <n> 或 /queue drop <n>",
+        MessageId::CmdQueueIndexPositive => "索引必须为正数",
+        MessageId::CmdQueueIndexMin => "索引必须 ≥ {min}",
+        MessageId::CmdQueueNotFound => "未找到已排队的消息",
+        MessageId::CmdQueueDropped => "已从队列中删除消息 {n}",
+        MessageId::CmdQueueAlreadyEmpty => "队列已为空",
+        MessageId::CmdQueueCleared => "队列已清空",
+        MessageId::CmdTaskUsageAdd => "用法：/task add <prompt>",
+        MessageId::CmdTaskUsageShow => "用法：/task show <id>",
+        MessageId::CmdTaskUsageCancel => "用法：/task cancel <id>",
+        MessageId::CmdTaskUsageGeneral => "用法：/task [add <prompt>|list|show <id>|cancel <id>]",
+        MessageId::CmdTrustEnabled => {
+            "工作区信任模式已启用 — 代理文件工具现在可以读写任何路径。\n\
+             使用 `/trust off` 恢复；建议用 `/trust add <path>` 进行更精确的授权。"
+        }
+        MessageId::CmdTrustDisabled => "工作区信任模式已禁用。",
+        MessageId::CmdTrustUnknownAction => {
+            "未知的 /trust 操作 `{action}`。请使用 `/trust`、`/trust on|off`、\
+             `/trust add <path>` 或 `/trust remove <path>`。"
+        }
+        MessageId::CmdLspStatus => {
+            "LSP 诊断当前为 **{status}**。\n\n\
+             使用 `/lsp on` 启用或 `/lsp off` 禁用文件编辑后的内联诊断。"
+        }
+        MessageId::CmdLspEnabled => "LSP 诊断已启用 — 文件编辑结果将包含编译器错误和警告（如有）。",
+        MessageId::CmdLspDisabled => "LSP 诊断已禁用。",
+        MessageId::CmdLspUnknownArg => {
+            "未知的 /lsp 参数 `{arg}`。请使用 `/lsp on`、`/lsp off` 或 `/lsp status`。"
+        }
+        MessageId::CmdLogoutSuccess => "已登出。请输入新的 API 密钥以继续。",
+        MessageId::CmdLogoutFailed => "清除 API 密钥失败：{reason}",
+        MessageId::CmdEditingQueuedDraft => "正在编辑已排队的消息 {n}（按 Enter 重新排队/发送）",
+        MessageId::ToolFamilyRead => "读取",
+        MessageId::ToolFamilyPatch => "补丁",
+        MessageId::ToolFamilyRun => "运行",
+        MessageId::ToolFamilyFind => "查找",
+        MessageId::ToolFamilyDelegate => "委托",
+        MessageId::ToolFamilyFanout => "扇出",
+        MessageId::ToolFamilyRlm => "rlm",
+        MessageId::ToolFamilyThink => "思考",
+        MessageId::ToolFamilyGeneric => "工具",
+        MessageId::AgentLifecyclePending => "等待中",
+        MessageId::AgentLifecycleRunning => "运行中",
+        MessageId::AgentLifecycleDone => "完成",
+        MessageId::AgentLifecycleFailed => "失败",
+        MessageId::AgentLifecycleCancelled => "已取消",
+        MessageId::FanoutCounts => {
+            "{done} 完成 · {running} 运行中 · {failed} 失败 · {pending} 等待中"
+        }
+        MessageId::SubAgentsTitle => "子 Agent",
+        MessageId::SubAgentsNoAgents => "没有运行中的 Agent。",
+        MessageId::SubAgentsRunning => "运行中",
+        MessageId::SubAgentsCompleted => "已完成",
+        MessageId::SubAgentsInterrupted => "已中断",
+        MessageId::SubAgentsFailed => "失败",
+        MessageId::SubAgentsCancelled => "已取消",
+        MessageId::AgentStatusRunning => "运行中",
+        MessageId::AgentStatusCompleted => "已完成",
+        MessageId::AgentStatusInterrupted => "已中断",
+        MessageId::AgentStatusCancelled => "已取消",
+        MessageId::AgentStatusFailed => "失败",
+        MessageId::SidebarNoAgents => "无 Agent",
+        _ => english(id),
     })
 }
 
@@ -2209,6 +3117,30 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::LinksTip => "Dica: chaves de API estão disponíveis no console do painel.",
         MessageId::SubagentsFetching => "Buscando status dos sub-agentes...",
         MessageId::HelpUnknownCommand => "Comando desconhecido: {topic}",
+        MessageId::ComposerTitle => "Compositor",
+        MessageId::ComposerDraftTitle => "Rascunho",
+        MessageId::ComposerQueueForNextTurn => "↵ fila para próximo turno",
+        MessageId::ComposerQueueCount => "↵ fila ({count} aguardando)",
+        MessageId::ComposerSteerHint => "↵ direcionar (Ctrl+Enter)",
+        MessageId::ComposerQueuedHint => "↵ na fila (Ctrl+Enter para direcionar)",
+        MessageId::ComposerOfflineQueueHint => "↵ fila offline",
+        MessageId::PendingInputsHeader => "Entradas pendentes",
+        MessageId::PendingInputsContextHeader => "Contexto para próximo envio",
+        MessageId::PendingInputsEditHint => "{key} editar última mensagem na fila",
+        MessageId::StatusPickerTitle => " Linha de status ",
+        MessageId::StatusPickerToggle => "alternar",
+        MessageId::StatusPickerAll => "todos",
+        MessageId::StatusPickerNone => "nenhum",
+        MessageId::StatusPickerSave => "salvar",
+        MessageId::StatusPickerCancel => "cancelar",
+        MessageId::StatusPickerInstruction => "Escolha os itens para exibir no rodapé:",
+        MessageId::ConfigSectionModel => "Modelo",
+        MessageId::ConfigSectionPermissions => "Permissões",
+        MessageId::ConfigSectionDisplay => "Exibição",
+        MessageId::ConfigSectionComposer => "Compositor",
+        MessageId::ConfigSectionSidebar => "Barra lateral",
+        MessageId::ConfigSectionHistory => "Histórico",
+        MessageId::ConfigSectionMcp => "MCP",
         MessageId::HomeDashboardTitle => "Painel Inicial do codewhale",
         MessageId::HomeModel => "Modelo:",
         MessageId::HomeMode => "Modo:",
@@ -2296,6 +3228,150 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         }
         MessageId::OnboardTipsFooterEnter => "Pressione Enter",
         MessageId::OnboardTipsFooterAction => " para abrir o workspace",
+        // Phase 2: Approval & Sandbox Elevation
+        MessageId::ApprovalRiskReview => "REVISÃO",
+        MessageId::ApprovalRiskDestructive => "DESTRUTIVO",
+        MessageId::ApprovalCategorySafe => "Seguro",
+        MessageId::ApprovalCategoryFileWrite => "Escrita de Arquivo",
+        MessageId::ApprovalCategoryShell => "Comando Shell",
+        MessageId::ApprovalCategoryNetwork => "Rede",
+        MessageId::ApprovalCategoryMcpRead => "Leitura MCP",
+        MessageId::ApprovalCategoryMcpAction => "Ação MCP",
+        MessageId::ApprovalCategoryUnknown => "Desconhecido",
+        MessageId::ApprovalFieldType => "Tipo:",
+        MessageId::ApprovalFieldAbout => "Sobre:",
+        MessageId::ApprovalFieldImpact => "Impacto:",
+        MessageId::ApprovalFieldParams => "Parâmetros:",
+        MessageId::ApprovalOptionApproveOnce => "Aprovar uma vez",
+        MessageId::ApprovalOptionApproveAlways => "Aprovar sempre para este tipo",
+        MessageId::ApprovalOptionDeny => "Negar esta chamada",
+        MessageId::ApprovalOptionAbortTurn => "Abortar turno",
+        MessageId::ApprovalStaged => "(em espera)",
+        MessageId::ApprovalBlockTitle => "aprovação",
+        MessageId::ApprovalFooterBenignPrefix => "Tecla única aprova: ",
+        MessageId::ApprovalFooterBenignSuffix => "  ·  v: parâmetros  ·  Esc: abortar",
+        MessageId::ApprovalFooterDestructiveConfirmPrefix => {
+            "Confirme ação destrutiva — pressione "
+        }
+        MessageId::ApprovalFooterDestructiveConfirmSuffix => {
+            " novamente para confirmar, qualquer outra tecla cancela."
+        }
+        MessageId::ApprovalFooterDestructivePrefix => "Duas teclas para aprovar: ",
+        MessageId::ApprovalFooterDestructiveSuffix => "  ·  v: parâmetros  ·  Esc: abortar",
+        MessageId::ElevationTitleSandboxDenied => "  ⚠ Sandbox Negado ",
+        MessageId::ElevationTitleRequired => " Elevação de Sandbox Necessária ",
+        MessageId::ElevationFieldTool => "Ferramenta:",
+        MessageId::ElevationFieldCmd => "Comando:",
+        MessageId::ElevationFieldReason => "Motivo:",
+        MessageId::ElevationImpactHeader => "Impacto se aprovado:",
+        MessageId::ElevationImpactNetwork => {
+            "retentativa de rede permite downloads externos e requisições HTTP"
+        }
+        MessageId::ElevationImpactWrite => {
+            "retentativa de escrita expande escopo gravável do sistema de arquivos"
+        }
+        MessageId::ElevationImpactFullAccess => {
+            "acesso total remove restrições de sandbox completamente"
+        }
+        MessageId::ElevationPromptProceed => "Escolha como prosseguir:",
+        MessageId::ElevationOptionNetwork => "Permitir rede externa",
+        MessageId::ElevationOptionWrite => "Permitir acesso extra de escrita",
+        MessageId::ElevationOptionFullAccess => "Acesso total (sistema de arquivos + rede)",
+        MessageId::ElevationOptionAbort => "Abortar",
+        MessageId::ElevationOptionNetworkDesc => {
+            "Tentar novamente com acesso de rede externa para downloads e requisições HTTP"
+        }
+        MessageId::ElevationOptionWriteDesc => {
+            "Tentar novamente com escopo adicional gravável no sistema de arquivos"
+        }
+        MessageId::ElevationOptionFullAccessDesc => {
+            "Tentar sem limites de sandbox; concede acesso irrestrito ao sistema de arquivos e rede"
+        }
+        MessageId::ElevationOptionAbortDesc => "Cancelar esta execução de ferramenta",
+        // ── Phase 3: common command output ──
+        MessageId::CmdErrorPrefix => "Erro:",
+        MessageId::CmdQueueUsage => "Uso: /queue [list|edit <n>|drop <n>|clear]",
+        MessageId::CmdQueueNoMessages => "Nenhuma mensagem enfileirada",
+        MessageId::CmdQueueListHeader => "Mensagens enfileiradas ({queued}):",
+        MessageId::CmdQueueListTip => {
+            "Dica: use /queue edit <n> para editar, /queue drop <n> para remover"
+        }
+        MessageId::CmdQueueAlreadyEditing => {
+            "Já está editando uma mensagem enfileirada. Envie-a ou use /queue clear para descartá-la."
+        }
+        MessageId::CmdQueueMissingIndex => {
+            "Índice ausente. Uso: /queue edit <n> ou /queue drop <n>"
+        }
+        MessageId::CmdQueueIndexPositive => "O índice deve ser um número positivo",
+        MessageId::CmdQueueIndexMin => "O índice deve ser >= {min}",
+        MessageId::CmdQueueNotFound => "Mensagem enfileirada não encontrada",
+        MessageId::CmdQueueDropped => "Mensagem enfileirada {n} removida",
+        MessageId::CmdQueueAlreadyEmpty => "A fila já está vazia",
+        MessageId::CmdQueueCleared => "Fila limpa",
+        MessageId::CmdTaskUsageAdd => "Uso: /task add <prompt>",
+        MessageId::CmdTaskUsageShow => "Uso: /task show <id>",
+        MessageId::CmdTaskUsageCancel => "Uso: /task cancel <id>",
+        MessageId::CmdTaskUsageGeneral => "Uso: /task [add <prompt>|list|show <id>|cancel <id>]",
+        MessageId::CmdTrustEnabled => {
+            "Modo de confiança do workspace ativado — as ferramentas de arquivo do \
+             agente podem agora ler/escrever qualquer caminho. Use `/trust off` para \
+             reverter; prefira `/trust add <path>` para uma permissão mais restrita."
+        }
+        MessageId::CmdTrustDisabled => "Modo de confiança do workspace desativado.",
+        MessageId::CmdTrustUnknownAction => {
+            "Ação /trust desconhecida `{action}`. Use `/trust`, `/trust on|off`, \
+             `/trust add <path>`, ou `/trust remove <path>`."
+        }
+        MessageId::CmdLspStatus => {
+            "O diagnóstico LSP está atualmente **{status}**.\n\n\
+             Use `/lsp on` para ativar ou `/lsp off` para desativar o diagnóstico \
+             inline após edições de arquivo."
+        }
+        MessageId::CmdLspEnabled => {
+            "Diagnóstico LSP ativado — os resultados de edição de arquivo incluirão \
+             erros e avisos do compilador quando disponíveis."
+        }
+        MessageId::CmdLspDisabled => "Diagnóstico LSP desativado.",
+        MessageId::CmdLspUnknownArg => {
+            "Argumento /lsp desconhecido `{arg}`. Use `/lsp on`, `/lsp off`, ou \
+             `/lsp status`."
+        }
+        MessageId::CmdLogoutSuccess => "Desconectado. Insira uma nova chave de API para continuar.",
+        MessageId::CmdLogoutFailed => "Falha ao limpar a chave de API: {reason}",
+        MessageId::CmdEditingQueuedDraft => {
+            "Editando mensagem enfileirada {n} (pressione Enter para re-enfileirar/enviar)"
+        }
+        MessageId::ToolFamilyRead => "ler",
+        MessageId::ToolFamilyPatch => "patch",
+        MessageId::ToolFamilyRun => "executar",
+        MessageId::ToolFamilyFind => "buscar",
+        MessageId::ToolFamilyDelegate => "delegar",
+        MessageId::ToolFamilyFanout => "fanout",
+        MessageId::ToolFamilyRlm => "rlm",
+        MessageId::ToolFamilyThink => "pensar",
+        MessageId::ToolFamilyGeneric => "ferramenta",
+        MessageId::AgentLifecyclePending => "pendente",
+        MessageId::AgentLifecycleRunning => "executando",
+        MessageId::AgentLifecycleDone => "concluído",
+        MessageId::AgentLifecycleFailed => "falhou",
+        MessageId::AgentLifecycleCancelled => "cancelado",
+        MessageId::FanoutCounts => {
+            "{done} concluído · {running} executando · {failed} falhou · {pending} pendente"
+        }
+        MessageId::SubAgentsTitle => "Sub-agentes",
+        MessageId::SubAgentsNoAgents => "Nenhum agente em execução.",
+        MessageId::SubAgentsRunning => "Executando",
+        MessageId::SubAgentsCompleted => "Concluído",
+        MessageId::SubAgentsInterrupted => "Interrompido",
+        MessageId::SubAgentsFailed => "Falhou",
+        MessageId::SubAgentsCancelled => "Cancelado",
+        MessageId::AgentStatusRunning => "executando",
+        MessageId::AgentStatusCompleted => "concluído",
+        MessageId::AgentStatusInterrupted => "interrompido",
+        MessageId::AgentStatusCancelled => "cancelado",
+        MessageId::AgentStatusFailed => "falhou",
+        MessageId::SidebarNoAgents => "Sem agentes",
+        _ => english(id),
     })
 }
 
@@ -2689,6 +3765,7 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         }
         MessageId::OnboardTipsFooterEnter => "Presiona Enter",
         MessageId::OnboardTipsFooterAction => " para abrir el workspace",
+        _ => english(id),
     })
 }
 

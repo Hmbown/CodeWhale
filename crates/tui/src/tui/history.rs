@@ -9,6 +9,7 @@ use serde_json::Value;
 use unicode_width::UnicodeWidthStr;
 
 use crate::deepseek_theme::active_theme;
+use crate::localization::Locale;
 use crate::models::{ContentBlock, Message};
 use crate::palette;
 use crate::tools::review::ReviewOutput;
@@ -142,9 +143,15 @@ pub enum SubAgentCell {
 
 impl SubAgentCell {
     pub fn lines(&self, width: u16) -> Vec<Line<'static>> {
+        // No-locale overload — falls back to English. Used by `lines()`
+        // and `transcript_lines()` on `HistoryCell` (test paths).
+        self.lines_with_locale(width, Locale::En)
+    }
+
+    pub fn lines_with_locale(&self, width: u16, locale: Locale) -> Vec<Line<'static>> {
         match self {
-            SubAgentCell::Delegate(card) => card.render_lines(width),
-            SubAgentCell::Fanout(card) => card.render_lines(width),
+            SubAgentCell::Delegate(card) => card.render_lines(width, locale),
+            SubAgentCell::Fanout(card) => card.render_lines(width, locale),
         }
     }
 }
@@ -157,6 +164,7 @@ pub struct TranscriptRenderOptions {
     pub calm_mode: bool,
     pub low_motion: bool,
     pub spacing: TranscriptSpacing,
+    pub locale: Locale,
 }
 
 pub(crate) struct RenderedTranscriptLine {
@@ -174,6 +182,7 @@ impl Default for TranscriptRenderOptions {
             calm_mode: false,
             low_motion: false,
             spacing: TranscriptSpacing::Comfortable,
+            locale: Locale::En,
         }
     }
 }
@@ -265,7 +274,7 @@ impl HistoryCell {
                 options.low_motion,
             ),
             HistoryCell::Tool(cell) if !options.show_tool_details => {
-                let mut lines = cell.lines_with_motion(width, options.low_motion);
+                let mut lines = cell.lines_with_locale(width, options.locale);
                 if lines.len() > 2 {
                     lines.truncate(2);
                     lines.push(details_affordance_line(
@@ -276,7 +285,8 @@ impl HistoryCell {
                 lines
             }
             HistoryCell::Tool(cell) if options.calm_mode => {
-                let mut lines = cell.lines_with_motion(width, options.low_motion);
+                let mut lines =
+                    cell.render(width, options.low_motion, RenderMode::Live, options.locale);
                 if lines.len() > TOOL_CARD_SUMMARY_LINES {
                     lines.truncate(TOOL_CARD_SUMMARY_LINES);
                     lines.push(details_affordance_line(
@@ -286,7 +296,9 @@ impl HistoryCell {
                 }
                 lines
             }
-            HistoryCell::Tool(cell) => cell.lines_with_motion(width, options.low_motion),
+            HistoryCell::Tool(cell) => {
+                cell.render(width, options.low_motion, RenderMode::Live, options.locale)
+            }
             HistoryCell::User { content } => render_user_message(content, width),
             HistoryCell::Assistant { content, streaming } => render_message(
                 ASSISTANT_GLYPH,
@@ -296,7 +308,7 @@ impl HistoryCell {
                 width,
             ),
             HistoryCell::System { .. } | HistoryCell::Error { .. } => self.lines(width),
-            HistoryCell::SubAgent(cell) => cell.lines(width),
+            HistoryCell::SubAgent(cell) => cell.lines_with_locale(width, options.locale),
             HistoryCell::ArchivedContext { .. } => {
                 render_archived_context(self, width, options.low_motion)
             }
@@ -651,28 +663,43 @@ impl ToolCell {
     }
 
     pub fn lines_with_motion(&self, width: u16, low_motion: bool) -> Vec<Line<'static>> {
-        self.render(width, low_motion, RenderMode::Live)
+        self.render(width, low_motion, RenderMode::Live, Locale::En)
     }
 
     /// Full-content rendering for the pager / clipboard. Tool output that
     /// would be capped + suffixed with "Alt+V for details" in the live view
     /// is emitted in full here.
     pub fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
-        self.render(width, /*low_motion*/ false, RenderMode::Transcript)
+        self.render(
+            width,
+            /*low_motion*/ false,
+            RenderMode::Transcript,
+            Locale::En,
+        )
     }
 
-    fn render(&self, width: u16, low_motion: bool, mode: RenderMode) -> Vec<Line<'static>> {
+    pub fn lines_with_locale(&self, width: u16, locale: Locale) -> Vec<Line<'static>> {
+        self.render(width, false, RenderMode::Live, locale)
+    }
+
+    fn render(
+        &self,
+        width: u16,
+        low_motion: bool,
+        mode: RenderMode,
+        locale: Locale,
+    ) -> Vec<Line<'static>> {
         match self {
-            ToolCell::Exec(cell) => cell.render(width, low_motion, mode),
-            ToolCell::Exploring(cell) => cell.lines_with_motion(width, low_motion),
-            ToolCell::PlanUpdate(cell) => cell.lines_with_motion(width, low_motion),
-            ToolCell::PatchSummary(cell) => cell.render(width, low_motion, mode),
-            ToolCell::Review(cell) => cell.render(width, low_motion, mode),
-            ToolCell::DiffPreview(cell) => cell.lines_with_motion(width, low_motion),
-            ToolCell::Mcp(cell) => cell.render(width, low_motion, mode),
-            ToolCell::ViewImage(cell) => cell.lines_with_motion(width, low_motion),
-            ToolCell::WebSearch(cell) => cell.lines_with_motion(width, low_motion),
-            ToolCell::Generic(cell) => cell.lines_with_mode(width, low_motion, mode),
+            ToolCell::Exec(cell) => cell.render(width, low_motion, mode, locale),
+            ToolCell::Exploring(cell) => cell.lines_with_motion(width, low_motion, locale),
+            ToolCell::PlanUpdate(cell) => cell.lines_with_motion(width, low_motion, locale),
+            ToolCell::PatchSummary(cell) => cell.render(width, low_motion, mode, locale),
+            ToolCell::Review(cell) => cell.render(width, low_motion, mode, locale),
+            ToolCell::DiffPreview(cell) => cell.lines_with_motion(width, low_motion, locale),
+            ToolCell::Mcp(cell) => cell.render(width, low_motion, mode, locale),
+            ToolCell::ViewImage(cell) => cell.lines_with_motion(width, low_motion, locale),
+            ToolCell::WebSearch(cell) => cell.lines_with_motion(width, low_motion, locale),
+            ToolCell::Generic(cell) => cell.lines_with_mode(width, low_motion, mode, locale),
         }
     }
 }
@@ -703,7 +730,7 @@ impl ExecCell {
     /// Render the execution cell into lines (live view, capped output).
     #[cfg(test)]
     pub fn lines_with_motion(&self, width: u16, low_motion: bool) -> Vec<Line<'static>> {
-        self.render(width, low_motion, RenderMode::Live)
+        self.render(width, low_motion, RenderMode::Live, Locale::En)
     }
 
     pub(super) fn render(
@@ -711,6 +738,7 @@ impl ExecCell {
         width: u16,
         low_motion: bool,
         mode: RenderMode,
+        locale: Locale,
     ) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
         let command_summary = command_header_summary(&self.command);
@@ -725,6 +753,7 @@ impl ExecCell {
             self.status,
             self.started_at,
             low_motion,
+            locale,
         ));
 
         if self.status == ToolStatus::Success && self.source == ExecSource::User {
@@ -797,7 +826,12 @@ pub struct ExploringCell {
 
 impl ExploringCell {
     /// Render the exploring cell into lines.
-    pub fn lines_with_motion(&self, width: u16, low_motion: bool) -> Vec<Line<'static>> {
+    pub fn lines_with_motion(
+        &self,
+        width: u16,
+        low_motion: bool,
+        locale: Locale,
+    ) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
         let all_done = self
             .entries
@@ -816,6 +850,7 @@ impl ExploringCell {
             status,
             None,
             low_motion,
+            locale,
         ));
 
         for entry in &self.entries {
@@ -859,7 +894,12 @@ pub struct PlanUpdateCell {
 
 impl PlanUpdateCell {
     /// Render the plan update cell into lines.
-    pub fn lines_with_motion(&self, width: u16, low_motion: bool) -> Vec<Line<'static>> {
+    pub fn lines_with_motion(
+        &self,
+        width: u16,
+        low_motion: bool,
+        locale: Locale,
+    ) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
         lines.push(render_tool_header(
             "Plan",
@@ -867,6 +907,7 @@ impl PlanUpdateCell {
             self.status,
             None,
             low_motion,
+            locale,
         ));
 
         if let Some(explanation) = self.explanation.as_ref() {
@@ -919,6 +960,7 @@ impl PatchSummaryCell {
         width: u16,
         low_motion: bool,
         mode: RenderMode,
+        locale: Locale,
     ) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
         lines.push(render_tool_header_with_summary(
@@ -928,6 +970,7 @@ impl PatchSummaryCell {
             self.status,
             None,
             low_motion,
+            locale,
         ));
         lines.extend(render_compact_kv(
             "file",
@@ -968,6 +1011,7 @@ impl ReviewCell {
         width: u16,
         low_motion: bool,
         mode: RenderMode,
+        locale: Locale,
     ) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
         lines.push(render_tool_header(
@@ -976,6 +1020,7 @@ impl ReviewCell {
             self.status,
             None,
             low_motion,
+            locale,
         ));
 
         if !self.target.trim().is_empty() {
@@ -1097,7 +1142,12 @@ pub struct DiffPreviewCell {
 }
 
 impl DiffPreviewCell {
-    pub fn lines_with_motion(&self, width: u16, low_motion: bool) -> Vec<Line<'static>> {
+    pub fn lines_with_motion(
+        &self,
+        width: u16,
+        low_motion: bool,
+        locale: Locale,
+    ) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
         let diff_summary = diff_render::diff_summary_label(&self.diff);
         lines.push(render_tool_header_with_summary(
@@ -1107,6 +1157,7 @@ impl DiffPreviewCell {
             ToolStatus::Success,
             None,
             low_motion,
+            locale,
         ));
         lines.extend(render_compact_kv(
             "title",
@@ -1134,6 +1185,7 @@ impl McpToolCell {
         width: u16,
         low_motion: bool,
         mode: RenderMode,
+        locale: Locale,
     ) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
         lines.push(render_tool_header_with_summary(
@@ -1143,6 +1195,7 @@ impl McpToolCell {
             self.status,
             None,
             low_motion,
+            locale,
         ));
         lines.extend(render_compact_kv(
             "name",
@@ -1180,7 +1233,12 @@ pub struct ViewImageCell {
 
 impl ViewImageCell {
     /// Render the image view cell into lines.
-    pub fn lines_with_motion(&self, width: u16, low_motion: bool) -> Vec<Line<'static>> {
+    pub fn lines_with_motion(
+        &self,
+        width: u16,
+        low_motion: bool,
+        locale: Locale,
+    ) -> Vec<Line<'static>> {
         let path = self.path.display().to_string();
         let mut lines = vec![render_tool_header_with_summary(
             "Image",
@@ -1189,6 +1247,7 @@ impl ViewImageCell {
             ToolStatus::Success,
             None,
             low_motion,
+            locale,
         )];
         lines.extend(render_compact_kv("path", &path, tool_value_style(), width));
         lines
@@ -1205,7 +1264,12 @@ pub struct WebSearchCell {
 
 impl WebSearchCell {
     /// Render the web search cell into lines.
-    pub fn lines_with_motion(&self, width: u16, low_motion: bool) -> Vec<Line<'static>> {
+    pub fn lines_with_motion(
+        &self,
+        width: u16,
+        low_motion: bool,
+        locale: Locale,
+    ) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
         lines.push(render_tool_header_with_summary(
             "Search",
@@ -1214,6 +1278,7 @@ impl WebSearchCell {
             self.status,
             None,
             low_motion,
+            locale,
         ));
         lines.extend(render_compact_kv(
             "query",
@@ -1269,11 +1334,12 @@ impl GenericToolCell {
         width: u16,
         low_motion: bool,
         mode: RenderMode,
+        locale: Locale,
     ) -> Vec<Line<'static>> {
         // Issue #241: when the underlying tool is a checklist/todo update and
         // the output is parseable, render a purpose-built progress card
         // instead of dumping the JSON into the generic tool block.
-        if let Some(lines) = self.try_render_as_checklist(width, low_motion, mode) {
+        if let Some(lines) = self.try_render_as_checklist(width, low_motion, mode, locale) {
             return lines;
         }
 
@@ -1287,7 +1353,7 @@ impl GenericToolCell {
         if matches!(mode, RenderMode::Live)
             && matches!(self.name.as_str(), "agent_open" | "agent_spawn")
         {
-            return self.render_agent_spawn_compact(low_motion);
+            return self.render_agent_spawn_compact(low_motion, locale);
         }
 
         let mut lines = Vec::new();
@@ -1307,6 +1373,7 @@ impl GenericToolCell {
             self.status,
             None,
             low_motion,
+            locale,
         ));
         lines.extend(render_compact_kv(
             "name",
@@ -1355,6 +1422,7 @@ impl GenericToolCell {
                     self.status,
                     None,
                     low_motion,
+                    locale,
                 ));
                 lines.extend(diff_render::render_diff(output, width));
             } else {
@@ -1384,7 +1452,7 @@ impl GenericToolCell {
     ///   `◐ delegate · agent_open  agent-abc12  [running]`
     /// Falls back to a placeholder when the spawn is still pending and
     /// no agent id has been assigned yet.
-    fn render_agent_spawn_compact(&self, low_motion: bool) -> Vec<Line<'static>> {
+    fn render_agent_spawn_compact(&self, low_motion: bool, locale: Locale) -> Vec<Line<'static>> {
         let family = crate::tui::widgets::tool_card::ToolFamily::Delegate;
         let agent_id = self
             .output
@@ -1398,6 +1466,7 @@ impl GenericToolCell {
             self.status,
             None,
             low_motion,
+            locale,
         )]
     }
 
@@ -1409,6 +1478,7 @@ impl GenericToolCell {
         width: u16,
         low_motion: bool,
         mode: RenderMode,
+        locale: Locale,
     ) -> Option<Vec<Line<'static>>> {
         if !is_checklist_tool_name(&self.name) {
             return None;
@@ -1433,6 +1503,7 @@ impl GenericToolCell {
                 &change,
                 width,
                 low_motion,
+                locale,
             ));
         }
 
@@ -1443,6 +1514,7 @@ impl GenericToolCell {
             width,
             low_motion,
             mode,
+            locale,
         ))
     }
 }
@@ -1630,6 +1702,7 @@ fn render_checklist_change_card(
     change: &ChecklistChange,
     width: u16,
     low_motion: bool,
+    locale: Locale,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let header_summary = format!(
@@ -1644,6 +1717,7 @@ fn render_checklist_change_card(
         status,
         None,
         low_motion,
+        locale,
     ));
 
     // Look up the title from the snapshot. `id` in tool input is
@@ -1719,6 +1793,7 @@ fn render_checklist_card(
     width: u16,
     low_motion: bool,
     mode: RenderMode,
+    locale: Locale,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let header_summary = format!(
@@ -1733,6 +1808,7 @@ fn render_checklist_card(
         status,
         None,
         low_motion,
+        locale,
     ));
     lines.extend(render_compact_kv(
         "checklist",
@@ -2964,9 +3040,10 @@ fn render_tool_header(
     status: ToolStatus,
     started_at: Option<Instant>,
     low_motion: bool,
+    locale: Locale,
 ) -> Line<'static> {
     let family = crate::tui::widgets::tool_card::tool_family_for_title(title);
-    render_tool_header_with_family(family, state, status, started_at, low_motion)
+    render_tool_header_with_family(family, state, status, started_at, low_motion, locale)
 }
 
 fn render_tool_header_with_summary(
@@ -2976,10 +3053,11 @@ fn render_tool_header_with_summary(
     status: ToolStatus,
     started_at: Option<Instant>,
     low_motion: bool,
+    locale: Locale,
 ) -> Line<'static> {
     let family = crate::tui::widgets::tool_card::tool_family_for_title(title);
     render_tool_header_with_family_and_summary(
-        family, summary, state, status, started_at, low_motion,
+        family, summary, state, status, started_at, low_motion, locale,
     )
 }
 
@@ -2992,8 +3070,11 @@ fn render_tool_header_with_family(
     status: ToolStatus,
     started_at: Option<Instant>,
     low_motion: bool,
+    locale: Locale,
 ) -> Line<'static> {
-    render_tool_header_with_family_and_summary(family, None, state, status, started_at, low_motion)
+    render_tool_header_with_family_and_summary(
+        family, None, state, status, started_at, low_motion, locale,
+    )
 }
 
 fn render_tool_header_with_family_and_summary(
@@ -3003,6 +3084,7 @@ fn render_tool_header_with_family_and_summary(
     status: ToolStatus,
     started_at: Option<Instant>,
     low_motion: bool,
+    locale: Locale,
 ) -> Line<'static> {
     // For long-running tools, append elapsed seconds so the user can see the
     // call isn't stuck. Threshold matches the eye's "did this hang?" reflex
@@ -3017,7 +3099,7 @@ fn render_tool_header_with_family_and_summary(
     };
 
     let glyph = crate::tui::widgets::tool_card::family_glyph(family);
-    let verb = crate::tui::widgets::tool_card::family_label(family);
+    let verb = crate::tui::widgets::tool_card::family_label_locale(family, locale);
 
     let mut spans = vec![
         Span::styled(
@@ -3329,10 +3411,14 @@ mod tests {
         running_status_label_with_elapsed,
     };
     use crate::deepseek_theme::Theme;
+    use crate::localization::Locale;
     use crate::models::{ContentBlock, Message};
     use crate::palette;
     use ratatui::style::Modifier;
     use std::time::{Duration, Instant};
+
+    /// A string longer than the truncation threshold to exercise spillover paths.
+    const LONG_OUTPUT: &str = "a very long output that should be truncated in live mode because it exceeds the TOOL_TEXT_LIMIT of 180 characters which means this needs to be at least 181 characters to trigger the truncation logic and show the ellipsis truncation affordance to the user indicating there is more content available that was hidden.";
 
     // ---- elapsed-seconds badge for long-running tools ----
     //
@@ -3362,37 +3448,34 @@ mod tests {
             output_summary: None,
             is_diff: false,
         };
-        let lines = cell.lines_with_mode(120, true, super::RenderMode::Live);
-        let joined: String = lines
-            .iter()
-            .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
-            .collect();
+        let lines = cell.lines_with_mode(120, true, super::RenderMode::Live, Locale::En);
         assert!(
-            joined.contains("full output:"),
-            "expected annotation prefix: {joined:?}"
+            lines
+                .iter()
+                .any(|l| l.spans.iter().any(|s| s.content.contains("full output:"))),
+            "spillover annotation should include 'full output:' prefix"
         );
         assert!(
-            joined.contains("/Users/dev/.deepseek/tool_outputs/call-abc12.txt"),
-            "expected the spillover path: {joined:?}"
+            lines
+                .iter()
+                .any(|l| l.spans.iter().any(|s| s.content.contains("call-abc12.txt"))),
+            "spillover annotation should include the path"
         );
     }
 
     #[test]
-    fn render_spillover_annotation_omitted_in_transcript_mode() {
-        use std::path::PathBuf;
-        // Transcript mode is for replay; the full output is already
-        // inline so the annotation would just be redundant.
+    fn generic_tool_cell_transcript_renders_full_output_without_truncation() {
         let cell = GenericToolCell {
-            name: "exec_shell".to_string(),
+            name: "read_file".to_string(),
             status: ToolStatus::Success,
             input_summary: None,
-            output: Some("output".to_string()),
+            output: Some(LONG_OUTPUT.into()),
             prompts: None,
-            spillover_path: Some(PathBuf::from("/tmp/spill.txt")),
+            spillover_path: None,
             output_summary: None,
             is_diff: false,
         };
-        let lines = cell.lines_with_mode(120, true, super::RenderMode::Transcript);
+        let lines = cell.lines_with_mode(120, true, super::RenderMode::Transcript, Locale::En);
         let joined: String = lines
             .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
@@ -3416,7 +3499,7 @@ mod tests {
             output_summary: None,
             is_diff: false,
         };
-        let lines = cell.lines_with_mode(80, true, super::RenderMode::Live);
+        let lines = cell.lines_with_mode(80, true, super::RenderMode::Live, Locale::En);
         let joined: String = lines
             .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
@@ -3438,7 +3521,7 @@ mod tests {
             output_summary: None,
             is_diff: false,
         };
-        let lines = cell.lines_with_mode(40, true, super::RenderMode::Live);
+        let lines = cell.lines_with_mode(40, true, super::RenderMode::Live, Locale::En);
         let annotation_line = lines
             .iter()
             .find(|l| {
@@ -3515,7 +3598,7 @@ mod tests {
                 output_summary: None,
                 is_diff: false,
         };
-        let lines = cell.lines_with_mode(80, true, super::RenderMode::Live);
+        let lines = cell.lines_with_mode(80, true, super::RenderMode::Live, Locale::En);
         // One header line, no details/args/output expansion.
         assert_eq!(lines.len(), 1, "expected exactly 1 line, got {lines:?}");
         let rendered: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
@@ -3550,7 +3633,7 @@ mod tests {
             output_summary: None,
             is_diff: false,
         };
-        let lines = cell.lines_with_mode(80, true, super::RenderMode::Live);
+        let lines = cell.lines_with_mode(80, true, super::RenderMode::Live, Locale::En);
         assert_eq!(lines.len(), 1);
         let rendered: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(rendered.contains('\u{2026}'), "{rendered:?}"); // …
@@ -3572,7 +3655,7 @@ mod tests {
             output_summary: None,
             is_diff: false,
         };
-        let lines = cell.lines_with_mode(80, true, super::RenderMode::Transcript);
+        let lines = cell.lines_with_mode(80, true, super::RenderMode::Transcript, Locale::En);
         // Transcript mode emits header + name kv + (no args, output present)
         // + output rows. At minimum more than the live one-liner.
         assert!(lines.len() > 1, "expected verbose transcript render");
@@ -3592,7 +3675,7 @@ mod tests {
             output_summary: None,
             is_diff: false,
         };
-        let lines = cell.lines_with_mode(80, true, super::RenderMode::Live);
+        let lines = cell.lines_with_mode(80, true, super::RenderMode::Live, Locale::En);
         assert!(
             lines.len() > 1,
             "non-spawn tools should keep their full block"
@@ -3680,7 +3763,8 @@ mod tests {
             &snapshot,
             &change,
             80,
-            true,
+            false,
+            Locale::En,
         );
         // Header + change line + summary affordance = 3 lines.
         assert!(lines.len() >= 3, "expected ≥3 lines, got {}", lines.len());
@@ -3742,7 +3826,8 @@ mod tests {
             &snapshot,
             &change,
             80,
-            true,
+            false,
+            Locale::En,
         );
         let change_line: String = lines[1].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(change_line.contains("#99"));
@@ -4268,7 +4353,7 @@ mod tests {
             output_summary: None,
             is_diff: false,
         };
-        let lines = cell.lines_with_mode(80, true, super::RenderMode::Live);
+        let lines = cell.lines_with_mode(80, true, super::RenderMode::Live, Locale::En);
         let header_visible: String = lines[0]
             .spans
             .iter()
@@ -4297,7 +4382,7 @@ mod tests {
             output_summary: None,
             is_diff: false,
         };
-        let lines = cell.lines_with_mode(80, true, super::RenderMode::Live);
+        let lines = cell.lines_with_mode(80, true, super::RenderMode::Live, Locale::En);
         let header_visible: String = lines[0]
             .spans
             .iter()
@@ -4426,7 +4511,7 @@ mod tests {
             status: ToolStatus::Running,
         };
 
-        let lines = cell.lines_with_motion(80, true);
+        let lines = cell.lines_with_motion(80, true, Locale::En);
 
         // Header: "<spinner> <family-glyph> <verb> <state>" (v0.6.6 layout).
         // PlanUpdate has no canonical family yet, so it falls into the

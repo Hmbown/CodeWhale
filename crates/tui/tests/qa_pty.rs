@@ -82,7 +82,10 @@ fn assert_viewport_starts_at_top(frame: &qa_harness::Frame) {
         "viewport content drifted below row 0:\n{dump}"
     );
     assert!(
-        frame.row(0).contains("Plan")
+        frame.row(0).contains("PLAN")
+            || frame.row(0).contains("AGENT")
+            || frame.row(0).contains("YOLO")
+            || frame.row(0).contains("Plan")
             || frame.row(0).contains("Agent")
             || frame.row(0).contains("Yolo")
             || frame.row(0).contains("DeepSeek"),

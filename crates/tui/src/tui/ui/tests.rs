@@ -5855,7 +5855,12 @@ fn checklist_write_renders_dedicated_card() {
             output_summary: None,
             is_diff: false,
     };
-    let lines = cell.lines_with_mode(80, true, crate::tui::history::RenderMode::Live);
+    let lines = cell.lines_with_mode(
+        80,
+        true,
+        crate::tui::history::RenderMode::Live,
+        crate::localization::Locale::En,
+    );
     let text: Vec<String> = lines
         .iter()
         .map(|line| {

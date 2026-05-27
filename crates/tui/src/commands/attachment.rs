@@ -7,20 +7,27 @@ use crate::tui::app::App;
 
 pub fn attach(app: &mut App, arg: Option<&str>) -> CommandResult {
     let Some(raw_path) = arg.map(str::trim).filter(|value| !value.is_empty()) else {
-        return CommandResult::error("Usage: /attach <image-or-video-path>");
+        return CommandResult::error("Usage: /attach <image-or-video-path>", app.ui_locale);
     };
 
     let path = resolve_attachment_path(raw_path, &app.workspace);
     let Ok(path) = path.canonicalize() else {
-        return CommandResult::error(format!("Attachment not found: {}", path.display()));
+        return CommandResult::error(
+            format!("Attachment not found: {}", path.display()),
+            app.ui_locale,
+        );
     };
     if !path.is_file() {
-        return CommandResult::error(format!("Attachment is not a file: {}", path.display()));
+        return CommandResult::error(
+            format!("Attachment is not a file: {}", path.display()),
+            app.ui_locale,
+        );
     }
 
     let Some(kind) = media_kind(&path) else {
         return CommandResult::error(
             "Unsupported attachment type. /attach is for image/video paths; use @path for text files or directories.",
+            app.ui_locale,
         );
     };
 

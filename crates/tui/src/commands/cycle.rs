@@ -45,17 +45,18 @@ pub fn list_cycles(app: &App) -> CommandResult {
 /// `/cycle <n>` — print the full briefing for cycle `n`.
 pub fn show_cycle(app: &App, arg: Option<&str>) -> CommandResult {
     let Some(raw) = arg.map(str::trim) else {
-        return CommandResult::error(
+        return CommandResult::error_msg(
             "Usage: /cycle <n>  — n is the cycle number from /cycles".to_string(),
         );
     };
     if raw.is_empty() {
-        return CommandResult::error("Usage: /cycle <n>".to_string());
+        return CommandResult::error_msg("Usage: /cycle <n>".to_string());
     }
     let Ok(n) = raw.parse::<u32>() else {
-        return CommandResult::error(format!(
-            "Cycle number must be a positive integer (got '{raw}')."
-        ));
+        return CommandResult::error(
+            format!("Cycle number must be a positive integer (got '{raw}')."),
+            app.ui_locale,
+        );
     };
 
     let Some(brief) = app.cycle_briefings.iter().find(|b| b.cycle == n) else {
@@ -69,9 +70,10 @@ pub fn show_cycle(app: &App, arg: Option<&str>) -> CommandResult {
         } else {
             known.join(", ")
         };
-        return CommandResult::error(format!(
-            "Cycle {n} not found in this session. Known cycles: {known_str}."
-        ));
+        return CommandResult::error(
+            format!("Cycle {n} not found in this session. Known cycles: {known_str}."),
+            app.ui_locale,
+        );
     };
 
     let mut out = String::new();
@@ -99,10 +101,10 @@ pub fn recall_archive(app: &App, arg: Option<&str>) -> CommandResult {
     use crate::tools::spec::{ToolContext, ToolSpec};
 
     let Some(raw) = arg.map(str::trim) else {
-        return CommandResult::error("Usage: /recall <query>".to_string());
+        return CommandResult::error_msg("Usage: /recall <query>".to_string());
     };
     if raw.is_empty() {
-        return CommandResult::error("Usage: /recall <query>".to_string());
+        return CommandResult::error_msg("Usage: /recall <query>".to_string());
     }
 
     let session_id = app
@@ -120,7 +122,7 @@ pub fn recall_archive(app: &App, arg: Option<&str>) -> CommandResult {
 
     match result {
         Ok(res) => CommandResult::message(res.content),
-        Err(err) => CommandResult::error(format!("recall_archive failed: {err}")),
+        Err(err) => CommandResult::error(format!("recall_archive failed: {err}"), app.ui_locale),
     }
 }
 

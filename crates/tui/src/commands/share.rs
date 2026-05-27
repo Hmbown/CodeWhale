@@ -31,7 +31,7 @@ pub fn share(app: &mut App, arg: Option<&str>) -> CommandResult {
              so you can paste it into Slack, GitHub, Twitter, etc."
                 .to_string(),
         ),
-        _ => CommandResult::error(format!(
+        _ => CommandResult::error_msg(format!(
             "Unknown /share argument `{raw}`. Use `/share` with no arguments or `/share help`."
         )),
     }
@@ -41,14 +41,14 @@ pub fn share(app: &mut App, arg: Option<&str>) -> CommandResult {
 fn do_share(app: &mut App) -> CommandResult {
     // Check if there's any session content to share
     if app.history.is_empty() {
-        return CommandResult::error("Nothing to share. The current session is empty.");
+        return CommandResult::error_msg("Nothing to share. The current session is empty.");
     }
 
     // Sanity-check: the extra info block is optional; the session itself
     // is what we share.
     let history_len = app.history.len();
     let model = &app.model;
-    let mode = app.mode.label();
+    let mode = app.mode.label(app.ui_locale);
 
     // Use an AppAction to signal the engine to perform the async work.
     CommandResult::with_message_and_action(

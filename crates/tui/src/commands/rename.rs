@@ -16,17 +16,19 @@ const MAX_TITLE_LEN: usize = 100;
 pub fn rename(app: &mut App, arg: Option<&str>) -> CommandResult {
     let new_title = match arg.map(str::trim).filter(|s| !s.is_empty()) {
         Some(t) => t,
-        None => return CommandResult::error("Usage: /rename <new title>"),
+        None => return CommandResult::error_msg("Usage: /rename <new title>"),
     };
 
     if new_title.chars().count() > MAX_TITLE_LEN {
-        return CommandResult::error(format!("Title too long (max {MAX_TITLE_LEN} characters)"));
+        return CommandResult::error_msg(format!(
+            "Title too long (max {MAX_TITLE_LEN} characters)"
+        ));
     }
 
     let session_id = match &app.current_session_id {
         Some(id) => id.clone(),
         None => {
-            return CommandResult::error(
+            return CommandResult::error_msg(
                 "No active session. Send a message first to start a session.",
             );
         }
@@ -34,7 +36,9 @@ pub fn rename(app: &mut App, arg: Option<&str>) -> CommandResult {
 
     let manager = match SessionManager::default_location() {
         Ok(m) => m,
-        Err(e) => return CommandResult::error(format!("Could not open sessions directory: {e}")),
+        Err(e) => {
+            return CommandResult::error_msg(format!("Could not open sessions directory: {e}"));
+        }
     };
 
     rename_with_manager(new_title, &session_id, &manager, app)
@@ -48,7 +52,7 @@ fn rename_with_manager(
 ) -> CommandResult {
     let mut session = match manager.load_session(session_id) {
         Ok(s) => s,
-        Err(e) => return CommandResult::error(format!("Could not load session: {e}")),
+        Err(e) => return CommandResult::error_msg(format!("Could not load session: {e}")),
     };
 
     // Sync with current App state to avoid overwriting unsaved messages.
@@ -63,7 +67,7 @@ fn rename_with_manager(
 
     match manager.save_session(&session) {
         Ok(_) => CommandResult::message(format!("Session renamed to \"{new_title}\"")),
-        Err(e) => CommandResult::error(format!("Could not save session: {e}")),
+        Err(e) => CommandResult::error_msg(format!("Could not save session: {e}")),
     }
 }
 

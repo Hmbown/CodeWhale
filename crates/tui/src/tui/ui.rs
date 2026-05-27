@@ -48,6 +48,7 @@ use crate::core::events::Event as EngineEvent;
 use crate::core::ops::Op;
 use crate::hooks::{HookEvent, HookExecutor};
 use crate::llm_client::LlmClient;
+use crate::localization::Locale;
 use crate::models::{
     ContentBlock, Message, MessageRequest, SystemPrompt, Usage, context_window_for_model,
 };
@@ -1920,7 +1921,7 @@ async fn run_event_loop(
                                     "tool_name": tool_name,
                                     "approval_key": approval_key,
                                     "session_id": app.current_session_id,
-                                    "mode": app.mode.label(),
+                                    "mode": app.mode.label(Locale::En),
                                 }),
                             );
                             let _ = engine_handle.approve_tool_call(id.clone()).await;
@@ -1930,7 +1931,7 @@ async fn run_event_loop(
                                 serde_json::json!({
                                     "tool_name": tool_name,
                                     "session_id": app.current_session_id,
-                                    "mode": app.mode.label(),
+                                    "mode": app.mode.label(Locale::En),
                                 }),
                             );
                             let _ = engine_handle.deny_tool_call(id.clone()).await;
@@ -1962,7 +1963,7 @@ async fn run_event_loop(
                                     "tool_name": tool_name,
                                     "description": description,
                                     "session_id": app.current_session_id,
-                                    "mode": app.mode.label(),
+                                    "mode": app.mode.label(Locale::En),
                                 }),
                             );
                             app.view_stack
@@ -2028,7 +2029,8 @@ async fn run_event_loop(
                                 blocked_network,
                                 blocked_write,
                             );
-                            app.view_stack.push(ElevationView::new(request));
+                            app.view_stack
+                                .push(ElevationView::new(request, app.ui_locale));
                             app.status_message =
                                 Some(format!("Sandbox blocked {tool_name}: {denial_reason}"));
                         }
@@ -4618,7 +4620,7 @@ pub(crate) fn open_context_inspector(app: &mut App) {
         .last_transcript_area
         .map(|area| area.width)
         .unwrap_or(80);
-    let content = build_context_inspector_text(app);
+    let content = build_context_inspector_text(app, app.ui_locale);
     app.view_stack.push(PagerView::from_text(
         "Context inspector",
         &content,
@@ -4864,6 +4866,7 @@ async fn apply_command_result(
                     app.view_stack
                         .push(crate::tui::views::status_picker::StatusPickerView::new(
                             &app.status_items,
+                            app.ui_locale,
                         ));
                 }
             }
@@ -5628,7 +5631,7 @@ async fn handle_plan_choice(
 /// - `queued_messages` — Enter while busy (offline-mode FIFO); drained at
 ///   end-of-turn.
 fn build_pending_input_preview(app: &App) -> PendingInputPreview {
-    let mut preview = PendingInputPreview::new();
+    let mut preview = PendingInputPreview::with_locale(app.ui_locale);
     let selected_attachment = app.selected_composer_attachment_index();
     let mut attachment_index = 0usize;
     preview.context_items = crate::tui::file_mention::pending_context_previews(
@@ -5766,6 +5769,7 @@ fn render(f: &mut Frame, app: &mut App) {
             workspace_name,
             app.is_loading,
             app.ui_theme.header_bg,
+            app.ui_locale,
         )
         .with_usage(
             app.session.total_conversation_tokens,

@@ -33,6 +33,7 @@ use crate::cycle_manager::{
 use crate::error_taxonomy::{ErrorCategory, ErrorEnvelope, StreamError};
 use crate::features::{Feature, Features};
 use crate::llm_client::LlmClient;
+use crate::localization::Locale;
 use crate::mcp::McpPool;
 #[cfg(test)]
 use crate::models::ToolCaller;
@@ -1063,7 +1064,7 @@ impl Engine {
 
         let fork_context_for_runtime = if self.config.features.enabled(Feature::Subagents) {
             let state = StructuredState::capture(
-                mode.label(),
+                mode.label(Locale::En),
                 self.config.workspace.clone(),
                 std::env::current_dir().ok(),
                 &self.session.working_set,
@@ -1716,7 +1717,7 @@ impl Engine {
             let seams = seam_mgr.collect_seam_texts(&self.session.messages).await;
             let state_text = {
                 let s = StructuredState::capture(
-                    mode.label(),
+                    mode.label(Locale::En),
                     self.config.workspace.clone(),
                     std::env::current_dir().ok(),
                     &self.session.working_set,
@@ -1817,7 +1818,7 @@ impl Engine {
 
         // 3. Capture structured state. Locks are held only for the snapshot.
         let state = StructuredState::capture(
-            mode.label(),
+            mode.label(Locale::En),
             self.config.workspace.clone(),
             std::env::current_dir().ok(),
             &self.session.working_set,

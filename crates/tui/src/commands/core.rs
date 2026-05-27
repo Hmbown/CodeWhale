@@ -32,7 +32,7 @@ pub fn help(app: &mut App, topic: Option<&str>) -> CommandResult {
             }
             return CommandResult::message(help);
         }
-        return CommandResult::error(
+        return CommandResult::error_msg(
             tr(app.ui_locale, MessageId::HelpUnknownCommand).replace("{topic}", topic),
         );
     }
@@ -130,7 +130,7 @@ pub fn model(app: &mut App, model_name: Option<&str>) -> CommandResult {
             );
         }
         let Some(model_id) = normalize_model_name_for_provider(app.api_provider, name) else {
-            return CommandResult::error(format!(
+            return CommandResult::error_msg(format!(
                 "Invalid model '{name}'. Expected auto or a DeepSeek model ID. Common models: {}",
                 COMMON_DEEPSEEK_MODELS.join(", ")
             ));
@@ -167,7 +167,8 @@ pub fn models(_app: &mut App) -> CommandResult {
 pub fn subagents(app: &mut App) -> CommandResult {
     if app.view_stack.top_kind() != Some(ModalKind::SubAgents) {
         let agents = subagent_view_agents(app, &app.subagent_cache);
-        app.view_stack.push(SubAgentsView::new(agents));
+        app.view_stack
+            .push(SubAgentsView::new(agents, app.ui_locale));
     }
     app.status_message = Some(tr(app.ui_locale, MessageId::SubagentsFetching).to_string());
     CommandResult::action(AppAction::ListSubAgents)
@@ -178,7 +179,7 @@ pub fn profile_switch(_app: &mut App, arg: Option<&str>) -> CommandResult {
     let profile_name = match arg {
         Some(name) if !name.trim().is_empty() => name.trim().to_string(),
         _ => {
-            return CommandResult::error(
+            return CommandResult::error_msg(
                 "Usage: /profile <name>\n\nSwitch to a named config profile. Profiles are defined in ~/.deepseek/config.toml under [profiles] sections.",
             );
         }
@@ -198,7 +199,7 @@ pub fn workspace_switch(app: &mut App, arg: Option<&str>) -> CommandResult {
 
     let expanded = match expand_workspace_path(raw_path) {
         Ok(path) => path,
-        Err(message) => return CommandResult::error(message),
+        Err(message) => return CommandResult::error_msg(message),
     };
     let candidate = if expanded.is_absolute() {
         expanded
@@ -207,10 +208,13 @@ pub fn workspace_switch(app: &mut App, arg: Option<&str>) -> CommandResult {
     };
 
     if !candidate.exists() {
-        return CommandResult::error(format!("Workspace does not exist: {}", candidate.display()));
+        return CommandResult::error_msg(format!(
+            "Workspace does not exist: {}",
+            candidate.display()
+        ));
     }
     if !candidate.is_dir() {
-        return CommandResult::error(format!(
+        return CommandResult::error_msg(format!(
             "Workspace is not a directory: {}",
             candidate.display()
         ));
@@ -271,7 +275,7 @@ pub fn home_dashboard(app: &mut App) -> CommandResult {
         stats,
         "{}       {}",
         tr(locale, MessageId::HomeMode),
-        app.mode.label()
+        app.mode.label(locale)
     );
     let _ = writeln!(
         stats,
@@ -379,7 +383,8 @@ pub fn translate(app: &mut App) -> CommandResult {
 mod tests {
     use super::*;
     use crate::client::PromptInspection;
-    use crate::config::Config;
+    use crate::config::{ApiProvider, Config};
+    use crate::localization::Locale;
     use crate::models::Message;
     use crate::tui::app::{App, AppMode, TuiOptions, TurnCacheRecord};
     use crate::tui::history::HistoryCell;
@@ -410,8 +415,8 @@ mod tests {
             initial_input: None,
         };
         let mut app = App::new(options, &Config::default());
-        app.ui_locale = crate::localization::Locale::En;
-        app.api_provider = crate::config::ApiProvider::Deepseek;
+        app.ui_locale = Locale::En;
+        app.api_provider = ApiProvider::Deepseek;
         app
     }
 

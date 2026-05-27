@@ -26,7 +26,7 @@ pub fn provider(app: &mut App, args: Option<&str>) -> CommandResult {
     let model_arg = parts.next();
 
     let Some(target) = ApiProvider::parse(name) else {
-        return CommandResult::error(format!(
+        return CommandResult::error_msg(format!(
             "Unknown provider '{name}'. Expected: deepseek, nvidia-nim, openai, atlascloud, wanjie-ark, openrouter, novita, fireworks, sglang, vllm, or ollama."
         ));
     };
@@ -37,7 +37,7 @@ pub fn provider(app: &mut App, args: Option<&str>) -> CommandResult {
         Some(raw) => match normalize_model_name(&expand_model_alias(raw)) {
             Some(normalized) => Some(normalized),
             None => {
-                return CommandResult::error(format!(
+                return CommandResult::error_msg(format!(
                     "Invalid model '{raw}'. Try: flash, pro, deepseek-v4-flash, deepseek-v4-pro."
                 ));
             }
@@ -66,6 +66,7 @@ fn expand_model_alias(name: &str) -> String {
 mod tests {
     use super::*;
     use crate::config::Config;
+    use crate::localization::Locale;
     use crate::tui::app::TuiOptions;
     use std::path::PathBuf;
 
@@ -91,9 +92,12 @@ mod tests {
             resume_session_id: None,
             initial_input: None,
         };
-        let mut app = App::new(options, &Config::default());
-        app.ui_locale = crate::localization::Locale::En;
-        app.api_provider = crate::config::ApiProvider::Deepseek;
+        let cfg = Config {
+            provider: Some("deepseek".to_string()),
+            ..Default::default()
+        };
+        let mut app = App::new(options, &cfg);
+        app.ui_locale = Locale::En;
         app
     }
 

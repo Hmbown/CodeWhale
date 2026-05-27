@@ -17,9 +17,10 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use crate::localization::{Locale, MessageId, tr};
 use crate::palette;
 use crate::tools::subagent::MailboxMessage;
-use crate::tui::widgets::tool_card::{ToolFamily, family_glyph, family_label};
+use crate::tui::widgets::tool_card::{ToolFamily, family_glyph, family_label_locale};
 
 /// Maximum number of recent actions kept on a `DelegateCard`. Older entries
 /// are dropped from the head; an ellipsis row signals truncation.
@@ -40,13 +41,13 @@ impl AgentLifecycle {
         matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
     }
 
-    fn label(self) -> &'static str {
+    fn label(self, locale: Locale) -> &'static str {
         match self {
-            Self::Pending => "pending",
-            Self::Running => "running",
-            Self::Completed => "done",
-            Self::Failed => "failed",
-            Self::Cancelled => "cancelled",
+            Self::Pending => tr(locale, MessageId::AgentLifecyclePending),
+            Self::Running => tr(locale, MessageId::AgentLifecycleRunning),
+            Self::Completed => tr(locale, MessageId::AgentLifecycleDone),
+            Self::Failed => tr(locale, MessageId::AgentLifecycleFailed),
+            Self::Cancelled => tr(locale, MessageId::AgentLifecycleCancelled),
         }
     }
 
@@ -99,7 +100,7 @@ impl DelegateCard {
     }
 
     #[must_use]
-    pub fn render_lines(&self, _width: u16) -> Vec<Line<'static>> {
+    pub fn render_lines(&self, _width: u16, locale: Locale) -> Vec<Line<'static>> {
         let mut lines = Vec::with_capacity(self.actions.len() + 3);
         let role = readable_agent_role(&self.agent_type);
         let short_id = crate::session_manager::truncate_id(&self.agent_id).to_string();
@@ -113,6 +114,7 @@ impl DelegateCard {
             self.status,
             &role,
             &detail,
+            locale,
         ));
         if self.truncated {
             lines.push(Line::from(Span::styled(
@@ -286,7 +288,7 @@ impl FanoutCard {
     }
 
     #[must_use]
-    pub fn render_lines(&self, _width: u16) -> Vec<Line<'static>> {
+    pub fn render_lines(&self, _width: u16, locale: Locale) -> Vec<Line<'static>> {
         let mut lines = Vec::with_capacity(3);
         let header_status = self.aggregate_status();
         let title = format!("{} ({} workers)", self.kind, self.workers.len());
@@ -295,7 +297,13 @@ impl FanoutCard {
         } else {
             ToolFamily::Fanout
         };
-        lines.push(card_header(family, header_status, &self.kind, &title));
+        lines.push(card_header(
+            family,
+            header_status,
+            &self.kind,
+            &title,
+            locale,
+        ));
         lines.push(Line::from(vec![
             Span::styled("  ", Style::default()),
             Span::styled(
@@ -343,9 +351,10 @@ fn card_header(
     status: AgentLifecycle,
     role: &str,
     detail: &str,
+    locale: Locale,
 ) -> Line<'static> {
     let glyph = family_glyph(family);
-    let verb = family_label(family);
+    let verb = family_label_locale(family, locale);
     let header_color = status.color();
     Line::from(vec![
         Span::styled(
@@ -355,7 +364,7 @@ fn card_header(
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            verb.to_string(),
+            verb,
             Style::default()
                 .fg(header_color)
                 .add_modifier(Modifier::BOLD),
@@ -364,7 +373,7 @@ fn card_header(
         Span::styled(role.to_string(), Style::default().fg(palette::TEXT_PRIMARY)),
         Span::raw(" "),
         Span::styled(
-            format!("[{}]", status.label()),
+            format!("[{}]", status.label(locale)),
             Style::default().fg(header_color),
         ),
         Span::raw(" "),
@@ -495,6 +504,8 @@ pub fn apply_to_fanout(card: &mut FanoutCard, msg: &MailboxMessage) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use crate::localization::Locale;
+
     use super::*;
 
     fn render_to_strings(lines: &[Line<'static>]) -> Vec<String> {
@@ -528,7 +539,7 @@ mod tests {
             "stable steady-state size"
         );
 
-        let rendered = render_to_strings(&card.render_lines(80));
+        let rendered = render_to_strings(&card.render_lines(80, Locale::En));
         assert!(
             rendered.iter().any(|line| line.contains('\u{2026}')),
             "ellipsis indicator must render: got {rendered:?}"
@@ -562,7 +573,7 @@ mod tests {
         };
         assert!(apply_to_delegate(&mut card, &msg));
         assert_eq!(card.status, AgentLifecycle::Completed);
-        let rendered = render_to_strings(&card.render_lines(80));
+        let rendered = render_to_strings(&card.render_lines(80, Locale::En));
         assert!(
             rendered
                 .iter()
@@ -584,7 +595,7 @@ mod tests {
             "scheduler progress should not become a stale transcript row"
         );
 
-        let rendered = render_to_strings(&card.render_lines(80)).join("\n");
+        let rendered = render_to_strings(&card.render_lines(80, Locale::En)).join("\n");
         assert!(!rendered.contains("step 1/100"), "{rendered}");
         assert!(
             !rendered.contains("requesting model response"),
@@ -614,7 +625,7 @@ mod tests {
             }
         ));
 
-        let rendered = render_to_strings(&card.render_lines(80)).join("\n");
+        let rendered = render_to_strings(&card.render_lines(80, Locale::En)).join("\n");
         assert!(rendered.contains("read_file"), "{rendered}");
         assert!(
             !rendered.contains("[7]"),
@@ -654,7 +665,7 @@ mod tests {
         card.upsert_worker("w_2", AgentLifecycle::Completed);
         card.upsert_worker("w_3", AgentLifecycle::Completed);
         card.upsert_worker("w_4", AgentLifecycle::Failed);
-        let rendered = render_to_strings(&card.render_lines(80));
+        let rendered = render_to_strings(&card.render_lines(80, Locale::En));
         // The stats row is the one carrying "running" too; the header may
         // mention "done" alone via the lifecycle status badge.
         let stats = rendered

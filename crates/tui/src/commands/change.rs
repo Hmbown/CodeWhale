@@ -56,7 +56,7 @@ pub fn change(app: &mut App, version: Option<&str>) -> CommandResult {
                  Expected a line starting with `## [`."
                     .to_string()
             };
-            return CommandResult::error(msg);
+            return CommandResult::error_msg(msg);
         }
     };
 

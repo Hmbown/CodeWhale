@@ -11,6 +11,7 @@ use ratatui::{
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+use crate::localization::Locale;
 use crate::palette;
 use crate::tui::app::AppMode;
 
@@ -71,6 +72,7 @@ pub struct HeaderData<'a> {
     pub model: &'a str,
     pub workspace_name: &'a str,
     pub mode: AppMode,
+    pub locale: Locale,
     pub is_streaming: bool,
     pub background: ratatui::style::Color,
     /// Total tokens used in this session (cumulative, for display).
@@ -107,11 +109,13 @@ impl<'a> HeaderData<'a> {
         workspace_name: &'a str,
         is_streaming: bool,
         background: ratatui::style::Color,
+        locale: Locale,
     ) -> Self {
         Self {
             model,
             workspace_name,
             mode,
+            locale,
             is_streaming,
             background,
             total_tokens: 0,
@@ -184,12 +188,8 @@ impl<'a> HeaderWidget<'a> {
         }
     }
 
-    fn mode_name(mode: AppMode) -> &'static str {
-        match mode {
-            AppMode::Agent => "Agent",
-            AppMode::Yolo => "Yolo",
-            AppMode::Plan => "Plan",
-        }
+    fn mode_name(mode: AppMode, locale: Locale) -> &'static str {
+        mode.label(locale)
     }
 
     fn span_width(spans: &[Span<'_>]) -> usize {
@@ -529,7 +529,7 @@ impl<'a> HeaderWidget<'a> {
             return Vec::new();
         }
 
-        let mode_label = Self::mode_name(self.data.mode);
+        let mode_label = Self::mode_name(self.data.mode, self.data.locale);
         let mode_style = Style::default()
             .fg(Self::mode_color(self.data.mode))
             .add_modifier(Modifier::BOLD);
@@ -538,7 +538,7 @@ impl<'a> HeaderWidget<'a> {
             let fallback = self
                 .data
                 .mode
-                .label()
+                .label(self.data.locale)
                 .chars()
                 .next()
                 .unwrap_or('?')
@@ -600,6 +600,7 @@ impl Renderable for HeaderWidget<'_> {
 #[cfg(test)]
 mod tests {
     use super::{HeaderData, HeaderWidget, Renderable};
+    use crate::localization::Locale;
     use crate::palette;
     use crate::tui::app::AppMode;
     use ratatui::{buffer::Buffer, layout::Rect};
@@ -622,15 +623,16 @@ mod tests {
                 "codewhale-tui",
                 false,
                 palette::DEEPSEEK_INK,
+                Locale::En,
             ),
             72,
         );
 
-        assert!(rendered.contains("Agent"));
+        assert!(rendered.contains("AGENT"));
         assert!(rendered.contains("codewhale-tui"));
         assert!(rendered.contains("deepseek-v4-pro"));
-        assert!(!rendered.contains("Plan"));
-        assert!(!rendered.contains("Yolo"));
+        assert!(!rendered.contains("PLAN"));
+        assert!(!rendered.contains("YOLO"));
     }
 
     #[test]
@@ -645,6 +647,7 @@ mod tests {
                 "codewhale-tui",
                 false,
                 palette::DEEPSEEK_INK,
+                Locale::En,
             ),
             120,
         );
@@ -666,6 +669,7 @@ mod tests {
                 "codewhale-tui",
                 true,
                 palette::DEEPSEEK_INK,
+                Locale::En,
             )
             .with_usage(1_000, Some(128_000), 0.0, Some(2_000)),
             12,
@@ -676,7 +680,7 @@ mod tests {
             "version chip should drop under width pressure: {rendered:?}",
         );
         assert!(
-            rendered.contains("Yolo") || rendered.contains('Y'),
+            rendered.contains("YOLO") || rendered.contains('Y'),
             "mode label must survive: {rendered:?}",
         );
     }
@@ -690,6 +694,7 @@ mod tests {
                 "workspace",
                 true,
                 palette::DEEPSEEK_INK,
+                Locale::En,
             )
             .with_usage(42_000, Some(128_000), 0.0, Some(48_000)),
             72,
@@ -703,12 +708,15 @@ mod tests {
     #[test]
     fn narrow_header_keeps_context_percent_visible() {
         let rendered = render_header(
-            HeaderData::new(AppMode::Agent, "", "", true, palette::DEEPSEEK_INK).with_usage(
-                0,
-                Some(128_000),
-                0.0,
-                Some(48_000),
-            ),
+            HeaderData::new(
+                AppMode::Agent,
+                "",
+                "",
+                true,
+                palette::DEEPSEEK_INK,
+                Locale::En,
+            )
+            .with_usage(0, Some(128_000), 0.0, Some(48_000)),
             14,
         );
 
@@ -724,14 +732,15 @@ mod tests {
                 "repo",
                 true,
                 palette::DEEPSEEK_INK,
+                Locale::En,
             )
             .with_usage(1_000, Some(10_000), 0.0, Some(4_000)),
             8,
         );
 
         assert!(rendered.trim_start().starts_with('Y'));
-        assert!(!rendered.contains("Plan"));
-        assert!(!rendered.contains("Agent"));
+        assert!(!rendered.contains("PLAN"));
+        assert!(!rendered.contains("AGENT"));
     }
 
     #[test]
@@ -743,6 +752,7 @@ mod tests {
                 "repo",
                 false,
                 palette::DEEPSEEK_INK,
+                Locale::En,
             ),
             48,
         );
@@ -760,6 +770,7 @@ mod tests {
                 "repo",
                 false,
                 palette::DEEPSEEK_INK,
+                Locale::En,
             )
             .with_usage(1_000, Some(128_000), 0.0, Some(320_000)),
             48,
@@ -778,6 +789,7 @@ mod tests {
                 "codewhale-tui",
                 false,
                 palette::DEEPSEEK_INK,
+                Locale::En,
             )
             .with_provider(Some("NIM")),
             72,
@@ -797,6 +809,7 @@ mod tests {
                 "codewhale-tui",
                 false,
                 palette::DEEPSEEK_INK,
+                Locale::En,
             ),
             72,
         );
@@ -862,6 +875,7 @@ mod tests {
                 "codewhale-tui",
                 false,
                 palette::DEEPSEEK_INK,
+                Locale::En,
             )
             .with_reasoning_effort(Some("max"))
             .with_status_indicator(Some("🐳")),
@@ -893,6 +907,7 @@ mod tests {
                 "codewhale-tui",
                 false,
                 palette::DEEPSEEK_INK,
+                Locale::En,
             )
             .with_reasoning_effort(Some("max"))
             .with_status_indicator(None),

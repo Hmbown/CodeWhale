@@ -10,7 +10,7 @@ use crate::config::{
 };
 use crate::config_ui::{ConfigUiMode, parse_mode};
 use crate::llm_client::LlmClient;
-use crate::localization::resolve_locale;
+use crate::localization::{self, MessageId, resolve_locale};
 use crate::models::{ContentBlock, Message, MessageRequest, MessageResponse, SystemPrompt};
 use crate::settings::Settings;
 use crate::tui::app::{
@@ -28,10 +28,10 @@ use anyhow::Result;
 pub fn show_config(_app: &mut App, arg: Option<&str>) -> CommandResult {
     let mode = match parse_mode(arg) {
         Ok(mode) => mode,
-        Err(err) => return CommandResult::error(err),
+        Err(err) => return CommandResult::error_msg(err),
     };
     if mode == ConfigUiMode::Web && !cfg!(feature = "web") {
-        return CommandResult::error(
+        return CommandResult::error_msg(
             "This build does not include the web config UI. Rebuild with the `web` feature.",
         );
     }
@@ -129,7 +129,7 @@ fn show_single_setting(app: &App, key: &str) -> CommandResult {
             {
                 Ok(config) => config,
                 Err(err) => {
-                    return CommandResult::error(format!("Failed to load config: {err}"));
+                    return CommandResult::error_msg(format!("Failed to load config: {err}"));
                 }
             };
             Some(config.deepseek_base_url())
@@ -242,7 +242,7 @@ fn show_single_setting(app: &App, key: &str) -> CommandResult {
     };
     match value {
         Some(v) => CommandResult::message(format!("{key} = {v}")),
-        None => CommandResult::error(format!(
+        None => CommandResult::error_msg(format!(
             "Unknown setting '{key}'. See `/help config` for available settings."
         )),
     }
@@ -252,7 +252,7 @@ fn show_single_setting(app: &App, key: &str) -> CommandResult {
 pub fn show_settings(app: &mut App) -> CommandResult {
     match Settings::load() {
         Ok(settings) => CommandResult::message(settings.display(app.ui_locale)),
-        Err(e) => CommandResult::error(format!("Failed to load settings: {e}")),
+        Err(e) => CommandResult::error_msg(format!("Failed to load settings: {e}")),
     }
 }
 
@@ -270,7 +270,7 @@ pub fn verbose(app: &mut App, arg: Option<&str>) -> CommandResult {
             "off" | "false" | "0" | "no" => false,
             "toggle" => !app.verbose_transcript,
             _ => {
-                return CommandResult::error(
+                return CommandResult::error_msg(
                     "Usage: /verbose [on|off]. Compact thinking remains available when verbose is off.",
                 );
             }
@@ -407,7 +407,7 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
             }
             // Clear auto mode when a specific model is set
             let Some(model) = normalize_model_name_for_provider(app.api_provider, value) else {
-                return CommandResult::error(format!(
+                return CommandResult::error_msg(format!(
                     "Invalid model '{value}'. Expected a DeepSeek model ID. Common models: {}",
                     COMMON_DEEPSEEK_MODELS.join(", ")
                 ));
@@ -428,14 +428,14 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
                     app.approval_mode = m;
                     CommandResult::message(format!("approval_mode = {}", m.label()))
                 }
-                None => CommandResult::error(
+                None => CommandResult::error_msg(
                     "Invalid approval_mode. Use: auto, suggest/on-request/untrusted, never/deny",
                 ),
             };
         }
         "mcp_config_path" | "mcp" => {
             if value.trim().is_empty() {
-                return CommandResult::error("mcp_config_path cannot be empty");
+                return CommandResult::error_msg("mcp_config_path cannot be empty");
             }
             app.mcp_config_path = PathBuf::from(expand_tilde(value));
             app.mcp_restart_required = true;
@@ -447,7 +447,7 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
                         app.mcp_config_path.display(),
                         path.display()
                     ),
-                    Err(err) => return CommandResult::error(format!("Failed to save: {err}")),
+                    Err(err) => return CommandResult::error_msg(format!("Failed to save: {err}")),
                 }
             } else {
                 format!(
@@ -460,7 +460,7 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
         "base_url" => {
             let value = value.trim();
             if value.is_empty() {
-                return CommandResult::error("base_url cannot be empty");
+                return CommandResult::error_msg("base_url cannot be empty");
             }
             if persist {
                 match persist_root_string_key(app.config_path.as_deref(), "base_url", value) {
@@ -470,10 +470,10 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
                             path.display()
                         ));
                     }
-                    Err(err) => return CommandResult::error(format!("Failed to save: {err}")),
+                    Err(err) => return CommandResult::error_msg(format!("Failed to save: {err}")),
                 }
             }
-            return CommandResult::error(format!(
+            return CommandResult::error_msg(format!(
                 "base_url must be saved with --save; client base URL is loaded from config on startup. Restart and re-open your session after saving."
             ));
         }
@@ -488,11 +488,11 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
             ));
             Settings::default()
         }
-        Err(e) => return CommandResult::error(format!("Failed to load settings: {e}")),
+        Err(e) => return CommandResult::error_msg(format!("Failed to load settings: {e}")),
     };
 
     if let Err(e) = settings.set(&key, value) {
-        return CommandResult::error(format!("{e}"));
+        return CommandResult::error_msg(format!("{e}"));
     }
 
     let mut action = None;
@@ -648,7 +648,7 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
 
     let message = if persist {
         if let Err(e) = settings.save() {
-            return CommandResult::error(format!("Failed to save: {e}"));
+            return CommandResult::error_msg(format!("Failed to save: {e}"));
         }
         format!("{key} = {display_value} (saved)")
     } else {
@@ -683,7 +683,7 @@ pub fn set_config(app: &mut App, args: Option<&str>) -> CommandResult {
 
     let parts: Vec<&str> = args.splitn(2, ' ').collect();
     if parts.len() < 2 {
-        return CommandResult::error("Usage: /set <key> <value>");
+        return CommandResult::error_msg("Usage: /set <key> <value>");
     }
 
     let key = parts[0].to_lowercase();
@@ -703,7 +703,7 @@ pub fn mode(app: &mut App, arg: Option<&str>) -> CommandResult {
     };
     match parse_mode_arg(arg) {
         Some(mode) => CommandResult::message(switch_mode(app, mode)),
-        None => CommandResult::error("Usage: /mode [agent|plan|yolo|1|2|3]"),
+        None => CommandResult::error_msg("Usage: /mode [agent|plan|yolo|1|2|3]"),
     }
 }
 
@@ -759,24 +759,22 @@ pub fn trust(app: &mut App, arg: Option<&str>) -> CommandResult {
     let rest = parts.next().map(str::trim).unwrap_or("");
     let workspace = app.workspace.clone();
 
+    let t = |id| localization::tr(app.ui_locale, id);
     match sub.as_str() {
         "" | "status" | "list" => trust_status(&workspace, app, sub == "list"),
         "on" | "enable" | "yes" | "y" => {
             app.trust_mode = true;
-            CommandResult::message(
-                "Workspace trust mode enabled — agent file tools can now read/write any path. \
-                 Use `/trust off` to revert; prefer `/trust add <path>` for a narrower opt-in.",
-            )
+            CommandResult::message(t(MessageId::CmdTrustEnabled))
         }
         "off" | "disable" | "no" | "n" => {
             app.trust_mode = false;
-            CommandResult::message("Workspace trust mode disabled.")
+            CommandResult::message(t(MessageId::CmdTrustDisabled))
         }
         "add" => trust_add(&workspace, rest),
         "remove" | "rm" | "del" | "delete" => trust_remove(&workspace, rest),
-        other => CommandResult::error(format!(
-            "Unknown /trust action `{other}`. Use `/trust`, `/trust on|off`, `/trust add <path>`, or `/trust remove <path>`."
-        )),
+        other => {
+            CommandResult::error_msg(t(MessageId::CmdTrustUnknownAction).replace("{action}", other))
+        }
     }
 }
 
@@ -811,13 +809,13 @@ fn trust_status(workspace: &Path, app: &App, force_paths: bool) -> CommandResult
 
 fn trust_add(workspace: &Path, raw: &str) -> CommandResult {
     if raw.is_empty() {
-        return CommandResult::error(
+        return CommandResult::error_msg(
             "Usage: /trust add <path>. Supply an absolute path or a path relative to the workspace.",
         );
     }
     let path = PathBuf::from(expand_tilde(raw));
     if !path.exists() {
-        return CommandResult::error(format!(
+        return CommandResult::error_msg(format!(
             "Path not found: {} — supply an existing directory or file.",
             path.display()
         ));
@@ -827,19 +825,19 @@ fn trust_add(workspace: &Path, raw: &str) -> CommandResult {
             "Added to trust list for this workspace: {}",
             stored.display()
         )),
-        Err(err) => CommandResult::error(format!("Failed to update trust list: {err}")),
+        Err(err) => CommandResult::error_msg(format!("Failed to update trust list: {err}")),
     }
 }
 
 fn trust_remove(workspace: &Path, raw: &str) -> CommandResult {
     if raw.is_empty() {
-        return CommandResult::error("Usage: /trust remove <path>");
+        return CommandResult::error_msg("Usage: /trust remove <path>");
     }
     let path = PathBuf::from(expand_tilde(raw));
     match crate::workspace_trust::remove(workspace, &path) {
         Ok(true) => CommandResult::message(format!("Removed from trust list: {}", path.display())),
         Ok(false) => CommandResult::message(format!("Not in trust list: {}", path.display())),
-        Err(err) => CommandResult::error(format!("Failed to update trust list: {err}")),
+        Err(err) => CommandResult::error_msg(format!("Failed to update trust list: {err}")),
     }
 }
 
@@ -1249,6 +1247,7 @@ fn truncate_for_auto_router(text: &str, max_chars: usize) -> String {
 /// - `/lsp off` — disable inline LSP diagnostics
 /// - `/lsp status` — show whether diagnostics are currently enabled
 pub fn lsp_command(app: &mut App, arg: Option<&str>) -> CommandResult {
+    let t = |id| localization::tr(app.ui_locale, id);
     let raw = arg.map(str::trim).unwrap_or("");
     // Access lsp_manager config through the App's engine handle
     let current_enabled = app.lsp_enabled;
@@ -1256,38 +1255,35 @@ pub fn lsp_command(app: &mut App, arg: Option<&str>) -> CommandResult {
     match raw {
         "" | "status" => {
             let status = if current_enabled { "on" } else { "off" };
-            CommandResult::message(format!(
-                "LSP diagnostics are currently **{status}**.\n\n\
-                 Use `/lsp on` to enable or `/lsp off` to disable inline diagnostics after file edits."
-            ))
+            CommandResult::message(t(MessageId::CmdLspStatus).replace("{status}", status))
         }
         "on" | "enable" | "1" | "true" => {
             app.lsp_enabled = true;
-            CommandResult::message(
-                "LSP diagnostics enabled — file edit results will include compiler errors and warnings when available.",
-            )
+            CommandResult::message(t(MessageId::CmdLspEnabled))
         }
         "off" | "disable" | "0" | "false" => {
             app.lsp_enabled = false;
-            CommandResult::message("LSP diagnostics disabled.")
+            CommandResult::message(t(MessageId::CmdLspDisabled))
         }
-        other => CommandResult::error(format!(
-            "Unknown /lsp argument `{other}`. Use `/lsp on`, `/lsp off`, or `/lsp status`."
-        )),
+        other => CommandResult::error_msg(t(MessageId::CmdLspUnknownArg).replace("{arg}", other)),
     }
 }
 
 /// Logout - clear API key and return to onboarding
 pub fn logout(app: &mut App) -> CommandResult {
+    let t = |id| localization::tr(app.ui_locale, id);
     match clear_api_key() {
         Ok(()) => {
             app.onboarding = OnboardingState::ApiKey;
             app.onboarding_needs_api_key = true;
             app.api_key_input.clear();
             app.api_key_cursor = 0;
-            CommandResult::message("Logged out. Enter a new API key to continue.")
+            CommandResult::message(t(MessageId::CmdLogoutSuccess))
         }
-        Err(e) => CommandResult::error(format!("Failed to clear API key: {e}")),
+        Err(e) => CommandResult::error(
+            t(MessageId::CmdLogoutFailed).replace("{reason}", &e.to_string()),
+            app.ui_locale,
+        ),
     }
 }
 
@@ -1295,6 +1291,7 @@ pub fn logout(app: &mut App) -> CommandResult {
 mod tests {
     use super::*;
     use crate::config::Config;
+    use crate::localization::Locale;
     use crate::test_support::lock_test_env;
     use crate::tui::app::{App, TuiOptions};
     use crate::tui::approval::ApprovalMode;
@@ -1400,7 +1397,9 @@ mod tests {
             resume_session_id: None,
             initial_input: None,
         };
-        App::new(options, &Config::default())
+        let mut app = App::new(options, &Config::default());
+        app.ui_locale = Locale::En;
+        app
     }
 
     #[test]
@@ -2046,7 +2045,7 @@ mod tests {
         let mut app = create_test_app();
         let result = trust(&mut app, Some("add"));
         let msg = result.message.expect("error message");
-        assert!(msg.starts_with("Error:"), "got {msg:?}");
+        assert!(msg.starts_with("Usage:"), "got {msg:?}");
     }
 
     #[test]

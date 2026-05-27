@@ -594,23 +594,38 @@ impl Renderable for ComposerWidget<'_> {
                     }
                     SubmitDisposition::Queue => {
                         if self.app.offline_mode {
-                            (Some("↵ offline queue".to_string()), palette::STATUS_WARNING)
+                            (Some(self.app.tr(crate::localization::MessageId::ComposerOfflineQueueHint).to_string()), palette::STATUS_WARNING)
                         } else {
                             let label = if queue_count > 0 {
-                                format!("↵ queue ({} waiting)", queue_count.saturating_add(1))
+                                self.app
+                                    .tr(crate::localization::MessageId::ComposerQueueCount)
+                                    .replace(
+                                        "{count}",
+                                        &(queue_count.saturating_add(1).to_string()),
+                                    )
                             } else {
-                                "↵ queue for next turn".to_string()
+                                self.app
+                                    .tr(crate::localization::MessageId::ComposerQueueForNextTurn)
+                                    .to_string()
                             };
                             (Some(label), palette::TEXT_MUTED)
                         }
                     }
                     // Steer and QueueFollowUp are now only reached via Ctrl+Enter override.
                     SubmitDisposition::Steer => (
-                        Some("↵ steering (Ctrl+Enter)".to_string()),
+                        Some(
+                            self.app
+                                .tr(crate::localization::MessageId::ComposerSteerHint)
+                                .to_string(),
+                        ),
                         palette::DEEPSEEK_SKY,
                     ),
                     SubmitDisposition::QueueFollowUp => (
-                        Some("↵ queued (Ctrl+Enter to steer)".to_string()),
+                        Some(
+                            self.app
+                                .tr(crate::localization::MessageId::ComposerQueuedHint)
+                                .to_string(),
+                        ),
                         palette::TEXT_MUTED,
                     ),
                 };
@@ -630,9 +645,10 @@ impl Renderable for ComposerWidget<'_> {
                         self.app
                             .tr(crate::localization::MessageId::HistorySearchTitle)
                     } else if is_draft_mode {
-                        "Draft"
+                        self.app
+                            .tr(crate::localization::MessageId::ComposerDraftTitle)
                     } else {
-                        "Composer"
+                        self.app.tr(crate::localization::MessageId::ComposerTitle)
                     },
                     Style::default().fg(palette::TEXT_MUTED),
                 )))
@@ -1484,11 +1500,16 @@ fn option_abort(locale: Locale) -> &'static str {
 pub struct ElevationWidget<'a> {
     request: &'a ElevationRequest,
     selected: usize,
+    locale: Locale,
 }
 
 impl<'a> ElevationWidget<'a> {
-    pub fn new(request: &'a ElevationRequest, selected: usize) -> Self {
-        Self { request, selected }
+    pub fn new(request: &'a ElevationRequest, selected: usize, locale: Locale) -> Self {
+        Self {
+            request,
+            selected,
+            locale,
+        }
     }
 }
 
@@ -1611,12 +1632,12 @@ impl Renderable for ElevationWidget<'_> {
                     format!("[{key}] "),
                     Style::default().fg(palette::STATUS_SUCCESS),
                 ),
-                Span::styled(option.label(), style.fg(label_color)),
+                Span::styled(option.label(self.locale), style.fg(label_color)),
             ]));
             lines.push(Line::from(vec![
                 Span::raw("      "),
                 Span::styled(
-                    option.description(),
+                    option.description(self.locale),
                     Style::default().fg(palette::TEXT_MUTED),
                 ),
             ]));
@@ -1866,7 +1887,7 @@ fn composer_top_right_chrome(app: &App, area_width: u16) -> Option<Line<'static>
     if let Some(receipt) = receipt {
         let receipt_text = receipt.trim();
         if app.composer.vim_enabled {
-            let vim_label = app.composer.vim_mode.label();
+            let vim_label = app.composer.vim_mode.label(app.ui_locale);
             let vim_width = UnicodeWidthStr::width(vim_label);
             let sep_width = UnicodeWidthStr::width(" · ");
             if vim_width + sep_width + 4 <= max_width {
@@ -1891,7 +1912,7 @@ fn composer_top_right_chrome(app: &App, area_width: u16) -> Option<Line<'static>
     let mut spans: Vec<Span> = Vec::new();
     if app.composer.vim_enabled {
         spans.push(Span::styled(
-            truncate_display_width(app.composer.vim_mode.label(), max_width),
+            truncate_display_width(app.composer.vim_mode.label(app.ui_locale), max_width),
             vim_mode_style(app.composer.vim_mode),
         ));
     }
@@ -3008,6 +3029,7 @@ mod tests {
     #[test]
     fn composer_border_renders_session_title() {
         let mut app = create_test_app();
+        app.ui_locale = crate::localization::Locale::En;
         app.composer_density = ComposerDensity::Comfortable;
         app.session_title = Some("my-session".to_string());
         let slash_menu_entries = Vec::<SlashMenuEntry>::new();
@@ -3031,6 +3053,7 @@ mod tests {
     #[test]
     fn composer_border_renders_active_turn_receipt() {
         let mut app = create_test_app();
+        app.ui_locale = crate::localization::Locale::En;
         app.composer_density = ComposerDensity::Comfortable;
         app.set_receipt_text("✓ turn completed · 2 tool(s) used");
         let slash_menu_entries = Vec::<SlashMenuEntry>::new();
