@@ -98,6 +98,7 @@ impl ProviderPickerView {
             ApiProvider::Sglang => "SGLANG_API_KEY",
             ApiProvider::Vllm => "VLLM_API_KEY",
             ApiProvider::Ollama => "OLLAMA_API_KEY",
+            ApiProvider::Xiaomi => "MIMO_API_KEY",
         }
     }
 
@@ -347,7 +348,7 @@ impl ModalView for ProviderPickerView {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         let popup_width = 64.min(area.width.saturating_sub(4)).max(40);
         let popup_height = match self.stage {
-            Stage::List => 12,
+            Stage::List => (self.providers.len() as u16 + 4).min(area.height.saturating_sub(4)),
             Stage::KeyEntry => 10,
         }
         .min(area.height.saturating_sub(4))
@@ -411,7 +412,8 @@ mod tests {
                 "Moonshot/Kimi",
                 "SGLang",
                 "vLLM",
-                "Ollama"
+                "Ollama",
+                "Xiaomi MiMo"
             ]
         );
     }

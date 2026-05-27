@@ -1672,6 +1672,9 @@ fn requires_reasoning_content(model: &str) -> bool {
         || lower.contains("-reasoning")
         || lower.contains("-thinking")
         || has_deepseek_r_series_marker(&lower)
+        // MiMo models require reasoning_content replay in multi-turn tool calls
+        // per the official Xiaomi MiMo API documentation.
+        || lower.starts_with("mimo")
 }
 
 fn should_replay_reasoning_content(model: &str, effort: Option<&str>) -> bool {
@@ -1737,6 +1740,7 @@ fn provider_accepts_reasoning_content(provider: ApiProvider) -> bool {
             | ApiProvider::Novita
             | ApiProvider::Fireworks
             | ApiProvider::Sglang
+            | ApiProvider::Xiaomi
     )
 }
 

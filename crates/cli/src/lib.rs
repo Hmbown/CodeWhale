@@ -35,6 +35,7 @@ enum ProviderArg {
     Sglang,
     Vllm,
     Ollama,
+    Xiaomi,
 }
 
 impl From<ProviderArg> for ProviderKind {
@@ -52,6 +53,7 @@ impl From<ProviderArg> for ProviderKind {
             ProviderArg::Sglang => ProviderKind::Sglang,
             ProviderArg::Vllm => ProviderKind::Vllm,
             ProviderArg::Ollama => ProviderKind::Ollama,
+            ProviderArg::Xiaomi => ProviderKind::Xiaomi,
         }
     }
 }
@@ -724,11 +726,12 @@ fn provider_slot(provider: ProviderKind) -> &'static str {
         ProviderKind::Sglang => "sglang",
         ProviderKind::Vllm => "vllm",
         ProviderKind::Ollama => "ollama",
+        ProviderKind::Xiaomi => "xiaomi",
     }
 }
 
 /// Provider order used by the `auth list` and `auth status` outputs.
-const PROVIDER_LIST: [ProviderKind; 12] = [
+const PROVIDER_LIST: [ProviderKind; 13] = [
     ProviderKind::Deepseek,
     ProviderKind::NvidiaNim,
     ProviderKind::Openai,
@@ -741,6 +744,7 @@ const PROVIDER_LIST: [ProviderKind; 12] = [
     ProviderKind::Sglang,
     ProviderKind::Vllm,
     ProviderKind::Ollama,
+    ProviderKind::Xiaomi,
 ];
 
 #[cfg(test)]
@@ -796,6 +800,7 @@ fn provider_env_vars(provider: ProviderKind) -> &'static [&'static str] {
         ProviderKind::Sglang => &["SGLANG_API_KEY"],
         ProviderKind::Vllm => &["VLLM_API_KEY"],
         ProviderKind::Ollama => &["OLLAMA_API_KEY"],
+        ProviderKind::Xiaomi => &["MIMO_API_KEY"],
         ProviderKind::Openai => &["OPENAI_API_KEY"],
         ProviderKind::Atlascloud => &["ATLASCLOUD_API_KEY"],
         ProviderKind::WanjieArk => &[
@@ -1479,9 +1484,10 @@ fn build_tui_command(
             | ProviderKind::Sglang
             | ProviderKind::Vllm
             | ProviderKind::Ollama
+            | ProviderKind::Xiaomi
     ) {
         bail!(
-            "The interactive TUI supports DeepSeek, NVIDIA NIM, OpenAI-compatible, AtlasCloud, Wanjie Ark, OpenRouter, Novita, Fireworks, Moonshot/Kimi, SGLang, vLLM, and Ollama providers. Remove --provider {} or use `codewhale model ...` for provider registry inspection.",
+            "The interactive TUI supports DeepSeek, NVIDIA NIM, OpenAI-compatible, AtlasCloud, Wanjie Ark, OpenRouter, Novita, Fireworks, Moonshot/Kimi, SGLang, vLLM, Ollama, and Xiaomi MiMo providers. Remove --provider {} or use `codewhale model ...` for provider registry inspection.",
             resolved_runtime.provider.as_str()
         );
     }

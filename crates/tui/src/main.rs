@@ -1889,6 +1889,9 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
                 crate::config::ApiProvider::Ollama => {
                     ("OLLAMA_API_KEY", "codewhale auth set --provider ollama")
                 }
+                crate::config::ApiProvider::Xiaomi => {
+                    ("MIMO_API_KEY", "codewhale auth set --provider xiaomi")
+                }
                 crate::config::ApiProvider::Deepseek | crate::config::ApiProvider::DeepseekCN => {
                     ("DEEPSEEK_API_KEY", "codewhale auth set --provider deepseek")
                 }
@@ -1908,6 +1911,7 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
                     crate::config::ApiProvider::Sglang => "sglang",
                     crate::config::ApiProvider::Vllm => "vllm",
                     crate::config::ApiProvider::Ollama => "ollama",
+                    crate::config::ApiProvider::Xiaomi => "xiaomi",
                     crate::config::ApiProvider::Deepseek
                     | crate::config::ApiProvider::DeepseekCN => "deepseek",
                 }
@@ -2192,6 +2196,11 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
             crate::config::ApiProvider::Ollama,
             "ollama",
             &["OLLAMA_API_KEY"][..],
+        ),
+        (
+            crate::config::ApiProvider::Xiaomi,
+            "xiaomi",
+            &["MIMO_API_KEY"][..],
         ),
     ] {
         let in_env = env_names.iter().any(|n| {

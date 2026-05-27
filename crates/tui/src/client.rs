@@ -901,6 +901,10 @@ pub(super) fn apply_reasoning_effort(
                     "enable_thinking": false,
                 });
             }
+            // MiMo uses thinking: { type: "disabled" } to turn off reasoning
+            ApiProvider::Xiaomi => {
+                body["thinking"] = json!({ "type": "disabled" });
+            }
             ApiProvider::Openai
             | ApiProvider::Atlascloud
             | ApiProvider::WanjieArk
@@ -916,6 +920,10 @@ pub(super) fn apply_reasoning_effort(
             // DeepSeek compatibility: low/medium both map to high
             ApiProvider::Deepseek | ApiProvider::DeepseekCN | ApiProvider::Sglang => {
                 body["reasoning_effort"] = json!("high");
+                body["thinking"] = json!({ "type": "enabled" });
+            }
+            // MiMo uses the same thinking format as DeepSeek
+            ApiProvider::Xiaomi => {
                 body["thinking"] = json!({ "type": "enabled" });
             }
             // OpenRouter/Novita: pass through the actual user-chosen value.
@@ -961,6 +969,10 @@ pub(super) fn apply_reasoning_effort(
         "xhigh" | "max" | "highest" => match provider {
             ApiProvider::Deepseek | ApiProvider::DeepseekCN | ApiProvider::Sglang => {
                 body["reasoning_effort"] = json!("max");
+                body["thinking"] = json!({ "type": "enabled" });
+            }
+            // MiMo doesn't have max/low distinction — just enable thinking
+            ApiProvider::Xiaomi => {
                 body["thinking"] = json!({ "type": "enabled" });
             }
             ApiProvider::Openrouter | ApiProvider::Novita => {
