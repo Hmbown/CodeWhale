@@ -1746,15 +1746,7 @@ impl Config {
             && (provider_passes_model_through(provider)
                 || self.active_provider_preserves_custom_base_url_model())
         {
-            // Guard: don't inherit a provider-specific model name (e.g.
-            // "deepseek-v4-pro") when the user switches to a provider with
-            // its own model namespace (e.g. Xiaomi MiMo).  Fall through to
-            // the provider's own default instead.
-            let dominated = dominated_model_prefix(provider);
-            if dominated.is_none_or(|prefix| model.trim().to_ascii_lowercase().starts_with(prefix))
-            {
-                return model.trim().to_string();
-            }
+            return model.trim().to_string();
         }
         if let Some(model) = self.default_text_model.as_deref()
             && model.trim().eq_ignore_ascii_case("auto")
@@ -3127,19 +3119,6 @@ pub(crate) fn provider_passes_model_through(provider: ApiProvider) -> bool {
             | ApiProvider::Ollama
             | ApiProvider::Xiaomi
     )
-}
-
-/// Returns the model-name prefix that uniquely identifies a provider's own
-/// model family, if the provider has a distinct namespace.
-///
-/// Used to prevent cross-provider model leakage: when the user switches from
-/// DeepSeek to Xiaomi, `default_text_model = "deepseek-v4-pro"` must NOT
-/// carry over — the provider's own default should be used instead.
-fn dominated_model_prefix(provider: ApiProvider) -> Option<&'static str> {
-    match provider {
-        ApiProvider::Xiaomi => Some("mimo"),
-        _ => None,
-    }
 }
 
 fn provider_entry_uses_custom_base_url(provider: ApiProvider, entry: &ProviderConfig) -> bool {
