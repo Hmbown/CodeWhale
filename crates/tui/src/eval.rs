@@ -15,52 +15,24 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum EvalShellPlatform {
-    Windows,
-    Unix,
+use crate::shell_invocation::{ShellInvocation, shell_invocation};
+#[cfg(test)]
+use crate::shell_invocation::{ShellPlatform, ShellProbe, shell_invocation_for_platform};
+
+fn eval_shell_invocation(command: &str) -> ShellInvocation {
+    shell_invocation(command)
 }
 
-impl EvalShellPlatform {
-    fn current() -> Self {
-        if cfg!(windows) {
-            Self::Windows
-        } else {
-            Self::Unix
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct EvalShellInvocation {
-    program: &'static str,
-    args: Vec<String>,
-    raw_payload_on_windows: bool,
-}
-
-fn eval_shell_invocation(command: &str) -> EvalShellInvocation {
-    eval_shell_invocation_for_platform(command, EvalShellPlatform::current())
-}
-
+#[cfg(test)]
 fn eval_shell_invocation_for_platform(
     command: &str,
-    platform: EvalShellPlatform,
-) -> EvalShellInvocation {
-    match platform {
-        EvalShellPlatform::Windows => EvalShellInvocation {
-            program: "cmd",
-            args: vec!["/C".to_string(), command.to_string()],
-            raw_payload_on_windows: true,
-        },
-        EvalShellPlatform::Unix => EvalShellInvocation {
-            program: "sh",
-            args: vec!["-c".to_string(), command.to_string()],
-            raw_payload_on_windows: false,
-        },
-    }
+    platform: ShellPlatform,
+    probe: &ShellProbe,
+) -> ShellInvocation {
+    shell_invocation_for_platform(command, platform, probe)
 }
 
-fn push_eval_shell_args(cmd: &mut Command, invocation: &EvalShellInvocation) {
+fn push_eval_shell_args(cmd: &mut Command, invocation: &ShellInvocation) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -768,7 +740,7 @@ fn apply_patch(root: &Path, patch: &str) -> Result<()> {
 
 fn exec_shell(root: &Path, command: &str) -> Result<String> {
     let invocation = eval_shell_invocation(command);
-    let mut cmd = Command::new(invocation.program);
+    let mut cmd = Command::new(&invocation.program);
     push_eval_shell_args(&mut cmd, &invocation);
     let output = cmd
         .current_dir(root)
@@ -805,12 +777,45 @@ mod tests {
     fn eval_shell_invocation_preserves_quoted_payload_as_single_arg() {
         let command = r#"git commit -m "feat: complete sub-pages""#;
 
-        let windows = eval_shell_invocation_for_platform(command, EvalShellPlatform::Windows);
-        assert_eq!(windows.program, "cmd");
-        assert_eq!(windows.args, vec!["/C".to_string(), command.to_string()]);
+        let windows = eval_shell_invocation_for_platform(
+            command,
+            ShellPlatform::Windows,
+            &ShellProbe {
+                comspec: Some("cmd.exe".to_string()),
+                ..ShellProbe::default()
+            },
+        );
+        assert_eq!(windows.program, "cmd.exe");
+        assert_eq!(
+            windows.args,
+            vec!["/C".to_string(), format!("chcp 65001 >NUL & {command}")]
+        );
         assert!(windows.raw_payload_on_windows);
 
-        let unix = eval_shell_invocation_for_platform(command, EvalShellPlatform::Unix);
+        let powershell = eval_shell_invocation_for_platform(
+            command,
+            ShellPlatform::Windows,
+            &ShellProbe {
+                pwsh_on_path: true,
+                ..ShellProbe::default()
+            },
+        );
+        assert_eq!(powershell.program, "pwsh.exe");
+        assert_eq!(
+            powershell.args,
+            vec![
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                command.to_string()
+            ]
+        );
+        assert!(!powershell.raw_payload_on_windows);
+
+        let unix = eval_shell_invocation_for_platform(
+            command,
+            ShellPlatform::Unix,
+            &ShellProbe::default(),
+        );
         assert_eq!(unix.program, "sh");
         assert_eq!(unix.args, vec!["-c".to_string(), command.to_string()]);
         assert!(!unix.raw_payload_on_windows);

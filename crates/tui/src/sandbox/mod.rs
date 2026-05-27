@@ -51,6 +51,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::shell_invocation::{ShellInvocation, shell_invocation};
+
 pub use policy::SandboxPolicy;
 
 /// Specification for a command to be executed, potentially within a sandbox.
@@ -86,24 +88,11 @@ pub struct CommandSpec {
 impl CommandSpec {
     /// Create a `CommandSpec` for running a shell command via the platform shell.
     pub fn shell(command: &str, cwd: PathBuf, timeout: Duration) -> Self {
-        #[cfg(windows)]
-        let (program, args) = {
-            // Force UTF-8 output on Windows by running `chcp 65001` before the
-            // actual command. Without this, subprocesses output in the system's
-            // ANSI code page (e.g. GBK for Chinese locales), causing garbled
-            // text in the shell output panel. See issue #982.
-            let cmd = format!("chcp 65001 >NUL & {command}");
-            ("cmd".to_string(), vec!["/C".to_string(), cmd])
-        };
-        #[cfg(not(windows))]
-        let (program, args) = (
-            "sh".to_string(),
-            vec!["-c".to_string(), command.to_string()],
-        );
+        let invocation = shell_invocation(command);
 
         Self {
-            program,
-            args,
+            program: invocation.program,
+            args: invocation.args,
             cwd,
             env: HashMap::new(),
             timeout,
@@ -151,19 +140,13 @@ impl CommandSpec {
 
     /// Get the original command as a single string (for display).
     pub fn display_command(&self) -> String {
-        if self.program == "sh" && self.args.len() == 2 && self.args[0] == "-c" {
-            // For shell commands, show the actual command
-            self.args[1].clone()
-        } else if self.program.eq_ignore_ascii_case("cmd")
-            && self.args.len() == 2
-            && self.args[0].eq_ignore_ascii_case("/C")
-        {
-            // Strip the `chcp 65001 >NUL & ` prefix we add on Windows for
-            // UTF-8 output (issue #982).
-            let raw = &self.args[1];
-            raw.strip_prefix("chcp 65001 >NUL & ")
-                .unwrap_or(raw)
-                .to_string()
+        let invocation = ShellInvocation {
+            program: self.program.clone(),
+            args: self.args.clone(),
+            raw_payload_on_windows: false,
+        };
+        if let Some(command) = invocation.display_command() {
+            command
         } else {
             // For other commands, join program and args
             let mut parts = vec![self.program.clone()];
@@ -584,19 +567,10 @@ impl SandboxManager {
 mod tests {
     use super::*;
 
-    fn expected_shell_command(command: &str) -> Vec<String> {
-        #[cfg(windows)]
-        {
-            vec![
-                "cmd".to_string(),
-                "/C".to_string(),
-                format!("chcp 65001 >NUL & {command}"),
-            ]
-        }
-        #[cfg(not(windows))]
-        {
-            vec!["sh".to_string(), "-c".to_string(), command.to_string()]
-        }
+    fn expected_shell_command(spec: &CommandSpec) -> Vec<String> {
+        let mut command = vec![spec.program.clone()];
+        command.extend(spec.args.clone());
+        command
     }
 
     #[test]
@@ -605,8 +579,7 @@ mod tests {
 
         #[cfg(windows)]
         {
-            assert_eq!(spec.program, "cmd");
-            assert_eq!(spec.args, vec!["/C", "chcp 65001 >NUL & echo hello"]);
+            assert_windows_shell_spec_displays_command(&spec, "echo hello");
         }
         #[cfg(not(windows))]
         {
@@ -628,11 +601,7 @@ mod tests {
 
         #[cfg(windows)]
         {
-            assert_eq!(spec.program, "cmd");
-            assert_eq!(
-                spec.args,
-                vec!["/C".to_string(), format!("chcp 65001 >NUL & {cmd}")]
-            );
+            assert_windows_shell_spec_displays_command(&spec, cmd);
         }
         #[cfg(not(windows))]
         {
@@ -702,8 +671,29 @@ mod tests {
         let env = manager.prepare(&spec);
 
         assert_eq!(env.sandbox_type, SandboxType::None);
-        assert_eq!(env.command, expected_shell_command("echo test"));
+        assert_eq!(env.command, expected_shell_command(&spec));
         assert!(!env.is_sandboxed());
+    }
+
+    #[cfg(windows)]
+    fn assert_windows_shell_spec_displays_command(spec: &CommandSpec, command: &str) {
+        assert_eq!(spec.display_command(), command);
+
+        let program = spec.program.replace('\\', "/").to_ascii_lowercase();
+        if program.ends_with("/cmd.exe") || program == "cmd" || program == "cmd.exe" {
+            assert_eq!(spec.args[0], "/C");
+            assert!(spec.args[1].ends_with(command));
+        } else if program.ends_with("/pwsh.exe")
+            || program == "pwsh"
+            || program == "pwsh.exe"
+            || program.ends_with("/powershell.exe")
+            || program == "powershell"
+            || program == "powershell.exe"
+        {
+            assert_eq!(spec.args, ["-NoProfile", "-Command", command]);
+        } else {
+            assert_eq!(spec.args, ["-c", command]);
+        }
     }
 
     #[test]

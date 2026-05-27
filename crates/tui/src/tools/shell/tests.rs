@@ -931,14 +931,33 @@ fn issue_1691_quoted_commit_message_round_trips() {
 
     #[cfg(windows)]
     {
-        // `cmd /C <payload>`: payload carries the quotes verbatim. The fix
-        // routes /C + payload through `raw_arg` so `cmd.exe` (not MSVCRT)
-        // parses it, matching what a terminal does.
-        assert_eq!(spec.program, "cmd");
-        assert_eq!(
-            spec.args,
-            ["/C".to_string(), format!("chcp 65001 >NUL & {cmd}")]
-        );
+        let program = spec.program.replace('\\', "/").to_ascii_lowercase();
+        if program.ends_with("/cmd.exe") || program == "cmd" || program == "cmd.exe" {
+            // `cmd /C <payload>`: payload carries the quotes verbatim. The fix
+            // routes /C + payload through `raw_arg` so `cmd.exe` (not MSVCRT)
+            // parses it, matching what a terminal does.
+            assert_eq!(
+                spec.args,
+                ["/C".to_string(), format!("chcp 65001 >NUL & {cmd}")]
+            );
+        } else if program.ends_with("/pwsh.exe")
+            || program == "pwsh"
+            || program == "pwsh.exe"
+            || program.ends_with("/powershell.exe")
+            || program == "powershell"
+            || program == "powershell.exe"
+        {
+            assert_eq!(
+                spec.args,
+                [
+                    "-NoProfile".to_string(),
+                    "-Command".to_string(),
+                    cmd.to_string()
+                ]
+            );
+        } else {
+            assert_eq!(spec.args, ["-c".to_string(), cmd.to_string()]);
+        }
         let mut built = Command::new(&spec.program);
         push_shell_args(&mut built, &spec.program, &spec.args);
         let got: Vec<String> = built
@@ -947,4 +966,19 @@ fn issue_1691_quoted_commit_message_round_trips() {
             .collect();
         assert_eq!(got, spec.args);
     }
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_cmd_fallback_still_uses_raw_args() {
+    let cmd = r#"git commit -m "feat: complete sub-pages""#;
+    let args = vec!["/C".to_string(), format!("chcp 65001 >NUL & {cmd}")];
+
+    let mut built = Command::new("cmd");
+    push_shell_args(&mut built, "cmd", &args);
+    let got: Vec<String> = built
+        .get_args()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(got, args);
 }
