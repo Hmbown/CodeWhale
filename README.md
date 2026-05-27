@@ -323,6 +323,11 @@ codewhale --provider fireworks --model deepseek-v4-pro
 codewhale auth set --provider openai --api-key "YOUR_OPENAI_COMPATIBLE_API_KEY"
 OPENAI_BASE_URL="https://openai-compatible.example/v4" codewhale --provider openai --model glm-5
 
+# Custom DeepSeek-compatible endpoint
+DEEPSEEK_BASE_URL="https://your-provider.example/v1" \
+  DEEPSEEK_MODEL="deepseek-ai/DeepSeek-V4-Pro" \
+  codewhale --provider deepseek
+
 # Self-hosted SGLang
 SGLANG_BASE_URL="http://localhost:30000/v1" codewhale --provider sglang --model deepseek-v4-flash
 
@@ -467,6 +472,12 @@ Full shortcut catalog: [docs/KEYBINDINGS.md](docs/KEYBINDINGS.md).
 ## Configuration
 
 User config: `~/.codewhale/config.toml` (legacy `~/.deepseek/config.toml` fallback). Project overlay: `<workspace>/.codewhale/config.toml` (legacy `<workspace>/.deepseek/config.toml`) (denied: `api_key`, `base_url`, `provider`, `mcp_config_path`). [config.example.toml](config.example.toml) has every option.
+
+Custom DeepSeek-compatible endpoints usually do not need a new provider. Keep
+`provider = "deepseek"` and set `[providers.deepseek].base_url` / `model`, or
+use `provider = "openai"` for generic OpenAI-compatible gateways. Keep
+`provider`, `api_key`, and `base_url` in user config or environment variables;
+project overlays cannot set them.
 
 Key environment variables:
 

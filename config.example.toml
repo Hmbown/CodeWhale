@@ -191,12 +191,21 @@ max_subagents = 10 # optional (1-20)
 #   SGLang:    SGLANG_BASE_URL, SGLANG_MODEL, optional SGLANG_API_KEY
 #   vLLM:      VLLM_BASE_URL, VLLM_MODEL, optional VLLM_API_KEY
 #   Ollama:    OLLAMA_BASE_URL, OLLAMA_MODEL, optional OLLAMA_API_KEY
+#
+# Custom DeepSeek-compatible APIs usually do not need a new provider table:
+# set `provider = "deepseek"` and override [providers.deepseek].base_url/model.
+# For generic OpenAI-compatible gateways, use `provider = "openai"` and the
+# [providers.openai] table below. Keep provider/api_key/base_url in user config
+# or environment variables; project overlays are not allowed to set them.
 
 # DeepSeek Platform (https://platform.deepseek.com)
 [providers.deepseek]
 # api_key = "YOUR_DEEPSEEK_API_KEY"
 # base_url = "https://api.deepseek.com/beta"
 # model = "deepseek-v4-pro"
+# Custom DeepSeek-compatible example:
+# base_url = "https://your-provider.example/v1"
+# model = "deepseek-ai/DeepSeek-V4-Pro"
 # http_headers = { "X-Model-Provider-Id" = "your-model-provider" } # optional custom request headers
 
 # NVIDIA NIM-hosted DeepSeek V4 (https://build.nvidia.com)
@@ -213,6 +222,9 @@ max_subagents = 10 # optional (1-20)
 # api_key = "YOUR_OPENAI_COMPATIBLE_API_KEY"
 # base_url = "https://api.openai.com/v1"
 # model = "gpt-4.1"
+# Gateway example:
+# base_url = "https://gateway.example/v1"
+# model = "your-deepseek-compatible-model"
 
 # AtlasCloud OpenAI-compatible endpoint (https://www.atlascloud.ai/docs/models/llm)
 [providers.atlascloud]
