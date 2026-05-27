@@ -9,6 +9,7 @@
 
 use crate::models::SystemPrompt;
 use crate::project_context::{ProjectContext, load_project_context_with_parents};
+use crate::shell_invocation::{shell_invocation, shell_program_stem};
 use crate::tui::app::AppMode;
 use crate::tui::approval::ApprovalMode;
 use std::path::{Path, PathBuf};
@@ -150,7 +151,8 @@ fn render_environment_block(workspace: &Path, locale_tag: &str) -> String {
     let deepseek_version = env!("CARGO_PKG_VERSION");
     let platform = std::env::consts::OS;
     let shell = if cfg!(windows) {
-        crate::shell_invocation::shell_invocation("").program
+        let resolved = shell_invocation("").program;
+        shell_program_stem(&resolved).unwrap_or(resolved)
     } else {
         std::env::var("SHELL").unwrap_or_else(|_| "unknown".to_string())
     };
@@ -1536,6 +1538,18 @@ mod tests {
         assert!(block.contains(&format!("- pwd: {}", tmp.path().display())));
         assert!(block.contains("- platform:"));
         assert!(block.contains("- shell:"));
+
+        #[cfg(windows)]
+        {
+            let shell_line = block
+                .lines()
+                .find(|line| line.starts_with("- shell: "))
+                .expect("shell line present");
+            assert!(
+                !shell_line.contains('\\') && !shell_line.contains('/'),
+                "Windows prompt shell should use the stem, not a full path"
+            );
+        }
     }
 
     #[test]
