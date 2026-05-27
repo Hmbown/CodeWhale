@@ -60,7 +60,7 @@ use crate::session_manager::{
 use crate::task_manager::{
     NewTaskRequest, SharedTaskManager, TaskManager, TaskManagerConfig, TaskStatus, TaskSummary,
 };
-use crate::tools::spec::RuntimeToolServices;
+use crate::tools::spec::{RuntimeToolServices, ToolResult};
 use crate::tools::subagent::SubAgentStatus;
 use crate::tui::auto_router;
 use crate::tui::color_compat::ColorCompatBackend;
@@ -1328,9 +1328,7 @@ async fn run_event_loop(
                         }
                         let tool_content = match &result {
                             Ok(output) => sanitize_stream_chunk(
-                                &crate::core::engine::compact_tool_result_for_context(
-                                    &app.model, &name, output,
-                                ),
+                                &tool_result_content_for_api_message(app, &id, &name, output),
                             ),
                             Err(err) => sanitize_stream_chunk(&format!("Error: {err}")),
                         };
@@ -4077,6 +4075,43 @@ fn push_assistant_message(
             content: blocks,
         });
     }
+}
+
+fn tool_result_content_for_api_message(
+    app: &App,
+    id: &str,
+    name: &str,
+    output: &ToolResult,
+) -> String {
+    let raw = output.content.trim();
+    if raw.is_empty() {
+        return String::new();
+    }
+
+    if raw.chars().count() > crate::tool_output_receipts::RAW_TOOL_OUTPUT_RECEIPT_THRESHOLD_CHARS {
+        let mut messages = app.api_messages.clone();
+        messages.push(Message {
+            role: "user".to_string(),
+            content: vec![ContentBlock::ToolResult {
+                tool_use_id: id.to_string(),
+                content: raw.to_string(),
+                is_error: Some(!output.success),
+                content_blocks: None,
+            }],
+        });
+        let (compacted, stats) = crate::tool_output_receipts::compact_messages_for_persistence(
+            &messages,
+            &app.session_artifacts,
+        );
+        if stats.compacted_count > 0
+            && let Some(Message { content, .. }) = compacted.last()
+            && let Some(ContentBlock::ToolResult { content, .. }) = content.first()
+        {
+            return content.clone();
+        }
+    }
+
+    crate::core::engine::compact_tool_result_for_context(&app.model, name, output)
 }
 
 fn replace_matching_assistant_text(
