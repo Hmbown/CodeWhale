@@ -87,6 +87,7 @@ impl ShellKind {
         matches!(self, ShellKind::Pwsh | ShellKind::WindowsPowerShell)
     }
 
+    #[cfg(test)]
     /// Returns true when this is a PowerShell-family shell.
     pub fn is_powershell(&self) -> bool {
         matches!(self, ShellKind::Pwsh | ShellKind::WindowsPowerShell)
@@ -210,6 +211,7 @@ impl ShellDispatcher {
     /// Build a `Command` from separate program + args (bypasses the shell).
     /// Used when the caller already has a resolved executable and argument
     /// vector — e.g. `ExecEnv` from the sandbox.
+    #[cfg(test)]
     pub fn build_direct(&self, program: &str, args: &[String]) -> Command {
         let mut cmd = Command::new(program);
         cmd.args(args);
@@ -270,24 +272,6 @@ impl ShellDispatcher {
     // -- Detection --------------------------------------------------------
 
     fn detect_shell() -> ShellKind {
-        // 1. $SHELL environment variable (WSL, Git Bash, MSYS2, or Unix)
-        if let Ok(shell) = std::env::var("SHELL") {
-            let lower = shell.to_lowercase();
-            if lower.contains("bash") {
-                return ShellKind::Bash;
-            }
-            if lower.contains("pwsh") {
-                return ShellKind::Pwsh;
-            }
-            if lower.contains("powershell") {
-                return ShellKind::WindowsPowerShell;
-            }
-            return ShellKind::Custom {
-                binary: shell,
-                flag: "-c".to_string(),
-            };
-        }
-
         #[cfg(windows)]
         {
             if Self::find_exe("pwsh.exe") {
@@ -301,11 +285,30 @@ impl ShellDispatcher {
 
         #[cfg(not(windows))]
         {
+            // 1. $SHELL environment variable (Unix)
+            if let Ok(shell) = std::env::var("SHELL") {
+                let lower = shell.to_lowercase();
+                if lower.contains("bash") {
+                    return ShellKind::Bash;
+                }
+                if lower.contains("pwsh") {
+                    return ShellKind::Pwsh;
+                }
+                if lower.contains("powershell") {
+                    return ShellKind::WindowsPowerShell;
+                }
+                return ShellKind::Custom {
+                    binary: shell,
+                    flag: "-c".to_string(),
+                };
+            }
+
             ShellKind::Sh
         }
     }
 
     /// Check PATH first, then fall back to well-known install directories.
+    #[cfg(windows)]
     fn find_exe(name: &str) -> bool {
         if Self::binary_on_path(name) {
             return true;
@@ -320,6 +323,7 @@ impl ShellDispatcher {
             .any(|dir| std::path::Path::new(dir).join(name).is_file())
     }
 
+    #[cfg(windows)]
     fn binary_on_path(name: &str) -> bool {
         std::env::var_os("PATH")
             .map(|path| {
@@ -417,6 +421,7 @@ mod tests {
         assert!(args.contains(&"echo hello"));
     }
 
+    #[cfg(test)]
     #[test]
     fn build_direct_preserves_args() {
         let dispatcher = ShellDispatcher {
@@ -428,6 +433,7 @@ mod tests {
         assert_eq!(cmd_args, vec!["-m", "commit message"]);
     }
 
+    #[cfg(test)]
     #[test]
     fn powershell_flags_are_correct() {
         assert!(ShellKind::Pwsh.needs_command_flag());
@@ -437,6 +443,7 @@ mod tests {
         assert!(!ShellKind::Bash.needs_command_flag());
     }
 
+    #[cfg(test)]
     #[test]
     fn is_powershell_detects_both_variants() {
         assert!(ShellKind::Pwsh.is_powershell());
@@ -446,6 +453,7 @@ mod tests {
         assert!(!ShellKind::Bash.is_powershell());
     }
 
+    #[cfg(test)]
     #[test]
     fn build_command_quotes_spaces_for_cmd() {
         let dispatcher = ShellDispatcher {
@@ -459,6 +467,7 @@ mod tests {
         assert!(args[1].starts_with("git "));
     }
 
+    #[cfg(test)]
     #[test]
     fn build_command_quotes_spaces_for_pwsh() {
         let dispatcher = ShellDispatcher {
@@ -472,6 +481,7 @@ mod tests {
         assert!(args[2].contains("msg with spaces"));
     }
 
+    #[cfg(test)]
     #[test]
     fn build_direct_handles_empty_args() {
         let dispatcher = ShellDispatcher {
@@ -482,17 +492,20 @@ mod tests {
         assert!(args.is_empty());
     }
 
+    #[cfg(windows)]
     #[test]
     fn find_exe_finds_cmd_on_path() {
         // cmd.exe is always on PATH on Windows.
         assert!(ShellDispatcher::find_exe("cmd.exe"));
     }
 
+    #[cfg(windows)]
     #[test]
     fn find_exe_rejects_nonexistent_binary() {
         assert!(!ShellDispatcher::find_exe("nonexistent_xyz_12345.exe"));
     }
 
+    #[cfg(windows)]
     #[test]
     fn find_exe_falls_back_to_known_dirs() {
         // Verify the known-dirs fallback path actually exists on this system.
