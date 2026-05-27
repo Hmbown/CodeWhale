@@ -1114,10 +1114,6 @@ pub struct App {
     pub status_toasts: VecDeque<StatusToast>,
     /// Sticky status toast used for important warnings/errors.
     pub sticky_status: Option<StatusToast>,
-    /// Version-update hint shown in the footer when a newer release
-    /// is available. Set by a background GitHub API check after app
-    /// startup; `None` until the check completes or if up-to-date.
-    pub version_hint: Option<String>,
     /// Last status text already promoted from `status_message` into toast state.
     pub last_status_message_seen: Option<String>,
     pub model: String,
@@ -1844,7 +1840,6 @@ impl App {
             status_message: None,
             status_toasts: VecDeque::new(),
             sticky_status: None,
-            version_hint: None,
             last_status_message_seen: None,
             model,
             auto_model,

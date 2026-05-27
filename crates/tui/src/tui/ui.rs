@@ -156,6 +156,27 @@ const DEFAULT_TERMINAL_PROBE_TIMEOUT_MS: u64 = 500;
 const PERIODIC_FULL_REPAINT_EVERY_N: u64 = 50;
 const TURN_META_PREFIX: &str = "<turn_meta>";
 const SESSION_TITLE_MAX_CHARS: usize = 32;
+const VERSION_HINT_TOAST_TTL_MS: u64 = 12_000;
+
+const REQUIRED_RELEASE_ASSETS: &[&str] = &[
+    "codewhale-artifacts-sha256.txt",
+    "codewhale-linux-arm64",
+    "codewhale-linux-arm64.tar.gz",
+    "codewhale-linux-x64",
+    "codewhale-linux-x64.tar.gz",
+    "codewhale-macos-arm64",
+    "codewhale-macos-arm64.tar.gz",
+    "codewhale-macos-x64",
+    "codewhale-macos-x64.tar.gz",
+    "codewhale-tui-linux-arm64",
+    "codewhale-tui-linux-x64",
+    "codewhale-tui-macos-arm64",
+    "codewhale-tui-macos-x64",
+    "codewhale-tui-windows-x64.exe",
+    "codewhale-windows-x64.exe",
+    "codewhale-windows-x64-portable.zip",
+    "codewhale-windows-x64.zip",
+];
 
 fn is_session_approved_for_tool(app: &App, tool_name: &str, grouping_key: &str) -> bool {
     app.approval_session_approved.contains(grouping_key)
@@ -902,8 +923,8 @@ async fn run_event_loop(
         .unwrap_or_else(Instant::now);
 
     // Fire-and-forget version check — runs once per session in the
-    // background. On success, `app.version_hint` is set and the footer
-    // renders the update recommendation on the next frame.
+    // background. On success, a short status toast advertises the update
+    // without replacing the user's configured footer/status-line chips.
     let mut version_check: Option<tokio::task::JoinHandle<Option<String>>> = Some({
         let current = env!("CARGO_PKG_VERSION").to_string();
         tokio::spawn(async move {
@@ -922,22 +943,7 @@ async fn run_event_loop(
                 .await
                 .ok()?;
             let json: serde_json::Value = resp.json().await.ok()?;
-            let tag = json["tag_name"].as_str()?;
-            let latest = tag.trim_start_matches('v');
-            // Compare semver so dev builds (e.g. "0.8.46-pre") don't
-            // trigger false hints. Falls back to string compare on
-            // unparseable versions.
-            let newer = match (parse_semver(latest), parse_semver(&current)) {
-                (Some(l), Some(c)) => l > c,
-                _ => latest != current,
-            };
-            if newer {
-                Some(format!(
-                    "v{latest} available — run `codewhale update` and restart"
-                ))
-            } else {
-                None
-            }
+            version_hint_from_release_json(&json, &current)
         })
     });
 
@@ -949,7 +955,11 @@ async fn run_event_loop(
             done = handle.is_finished();
         }
         if done && let Ok(Some(hint)) = version_check.take().unwrap().await {
-            app.version_hint = Some(hint);
+            app.push_status_toast(
+                hint,
+                StatusToastLevel::Info,
+                Some(VERSION_HINT_TOAST_TTL_MS),
+            );
         }
 
         if !drain_web_config_events(&mut web_config_session, app, config, &engine_handle).await {
@@ -8117,6 +8127,62 @@ fn extract_reasoning_header(text: &str) -> Option<String> {
         None
     } else {
         Some(header.to_string())
+    }
+}
+
+fn version_hint_from_release_json(json: &serde_json::Value, current: &str) -> Option<String> {
+    if !release_has_required_assets(json) {
+        return None;
+    }
+
+    let tag = json["tag_name"].as_str()?;
+    let latest = tag.trim_start_matches('v');
+    if !is_newer_version(latest, current) {
+        return None;
+    }
+
+    Some(format!(
+        "v{latest} available - run `codewhale update` and restart"
+    ))
+}
+
+fn release_has_required_assets(json: &serde_json::Value) -> bool {
+    if json
+        .get("draft")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    if json
+        .get("prerelease")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+    {
+        return false;
+    }
+
+    REQUIRED_RELEASE_ASSETS
+        .iter()
+        .all(|required| release_has_uploaded_asset(json, required))
+}
+
+fn release_has_uploaded_asset(json: &serde_json::Value, required: &str) -> bool {
+    let Some(assets) = json.get("assets").and_then(serde_json::Value::as_array) else {
+        return false;
+    };
+    assets.iter().any(|asset| {
+        asset.get("name").and_then(serde_json::Value::as_str) == Some(required)
+            && asset.get("state").and_then(serde_json::Value::as_str) == Some("uploaded")
+    })
+}
+
+fn is_newer_version(latest: &str, current: &str) -> bool {
+    // Compare semver so dev builds (e.g. "0.8.46-pre") don't trigger false
+    // hints. Falls back to string compare on unparseable versions.
+    match (parse_semver(latest), parse_semver(current)) {
+        (Some(l), Some(c)) => l > c,
+        _ => latest != current,
     }
 }
 
