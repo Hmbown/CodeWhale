@@ -167,6 +167,7 @@ fn powershell_invocation(program: &str, command: &str) -> ShellInvocation {
         program: program.to_string(),
         args: vec![
             "-NoProfile".to_string(),
+            "-NonInteractive".to_string(),
             "-Command".to_string(),
             command.to_string(),
         ],
@@ -257,6 +258,7 @@ mod tests {
             invocation.args,
             [
                 "-NoProfile",
+                "-NonInteractive",
                 "-Command",
                 r#"Remove-Item -Path "target file.txt" -Force"#
             ]
@@ -281,7 +283,10 @@ mod tests {
         );
 
         assert_eq!(invocation.program, "pwsh.exe");
-        assert_eq!(invocation.args, ["-NoProfile", "-Command", "Get-ChildItem"]);
+        assert_eq!(
+            invocation.args,
+            ["-NoProfile", "-NonInteractive", "-Command", "Get-ChildItem"]
+        );
         assert!(!invocation.raw_payload_on_windows);
     }
 

@@ -806,6 +806,7 @@ mod tests {
             powershell.args,
             vec![
                 "-NoProfile".to_string(),
+                "-NonInteractive".to_string(),
                 "-Command".to_string(),
                 command.to_string()
             ]
