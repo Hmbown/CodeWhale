@@ -26,9 +26,8 @@ pub fn hooks(app: &App, arg: Option<&str>) -> CommandResult {
     match sub.as_str() {
         "" | "list" | "ls" | "show" => list(app),
         "events" | "event" | "list-events" => events(),
-        other => CommandResult::error(
+        other => CommandResult::error_msg(
             format!("unknown subcommand `{other}`. Try `/hooks list` or `/hooks events`."),
-            app.ui_locale,
         ),
     }
 }

@@ -87,8 +87,7 @@ impl CommandResult {
         }
     }
 
-    /// Create a simple error message (English prefix)
-    #[allow(dead_code)]
+    /// Create a simple error message without any prefix
     pub fn error_msg(msg: impl Into<String>) -> Self {
         Self {
             message: Some(msg.into()),
@@ -670,13 +669,11 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "rlm" | "recursive" | "digui" => rlm(app, arg),
 
         // Legacy command migrations (kept out of registry/autocomplete intentionally).
-        "set" => CommandResult::error(
+        "set" => CommandResult::error_msg(
             "The /set command was retired. Use /config to edit settings and /settings to inspect current values.",
-            app.ui_locale,
         ),
-        "deepseek" => CommandResult::error(
+        "deepseek" => CommandResult::error_msg(
             "The /deepseek command was renamed. Use /links (aliases: /dashboard, /api).",
-            app.ui_locale,
         ),
 
         _ => {
@@ -687,9 +684,8 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
             }
             let suggestions = suggest_command_names(command, 3);
             if suggestions.is_empty() {
-                CommandResult::error(
+                CommandResult::error_msg(
                     format!("Unknown command: /{command}. Type /help for available commands."),
-                    app.ui_locale,
                 )
             } else {
                 let list = suggestions
@@ -697,11 +693,10 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
                     .map(|name| format!("/{name}"))
                     .collect::<Vec<_>>()
                     .join(", ");
-                CommandResult::error(
+                CommandResult::error_msg(
                     format!(
                         "Unknown command: /{command}. Did you mean: {list}? Type /help for available commands."
                     ),
-                    app.ui_locale,
                 )
             }
         }
@@ -758,11 +753,10 @@ pub fn rlm(app: &mut App, arg: Option<&str>) -> CommandResult {
     let target = match target {
         Some(p) if !p.trim().is_empty() => p.trim().to_string(),
         _ => {
-            return CommandResult::error(
+            return CommandResult::error_msg(
                 "Usage: /rlm [N] <file_or_text>\n\n\
                  Opens a persistent RLM context with sub_rlm depth N (0-3, default 1)."
                     .to_string(),
-                app.ui_locale,
             );
         }
     };

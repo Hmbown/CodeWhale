@@ -25,11 +25,10 @@ pub fn stash(app: &mut App, arg: Option<&str>) -> CommandResult {
         "" | "list" | "ls" | "show" => list(),
         "pop" | "restore" => pop(app),
         "clear" | "wipe" | "drop" => clear(app.ui_locale),
-        other => CommandResult::error(
+        other => CommandResult::error_msg(
             format!(
                 "unknown subcommand `{other}`. Try `/stash list`, `/stash pop`, or `/stash clear`."
             ),
-            app.ui_locale,
         ),
     }
 }

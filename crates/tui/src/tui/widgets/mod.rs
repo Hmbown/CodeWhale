@@ -599,7 +599,7 @@ impl Renderable for ComposerWidget<'_> {
                             let label = if queue_count > 0 {
                                 self.app
                                     .tr(crate::localization::MessageId::ComposerQueueCount)
-                                    .replace("{}", &(queue_count.saturating_add(1).to_string()))
+                                    .replace("{count}", &(queue_count.saturating_add(1).to_string()))
                             } else {
                                 self.app
                                     .tr(crate::localization::MessageId::ComposerQueueForNextTurn)

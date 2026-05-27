@@ -148,7 +148,7 @@ impl PendingInputPreview {
                 let hint =
                     localization::tr(self.locale, localization::MessageId::PendingInputsEditHint);
                 lines.push(Line::from(vec![Span::styled(
-                    hint.replace("{}", self.edit_binding.label),
+                    hint.replace("{key}", self.edit_binding.label),
                     dim,
                 )]));
             }

@@ -45,9 +45,8 @@ fn memory_help(path: &Path) -> String {
 
 pub fn memory(app: &mut App, arg: Option<&str>) -> CommandResult {
     if !app.use_memory {
-        return CommandResult::error(
+        return CommandResult::error_msg(
             "user memory is disabled. Enable with `[memory] enabled = true` in `~/.deepseek/config.toml` or `DEEPSEEK_MEMORY=on` in your environment, then restart the TUI.",
-            app.ui_locale,
         );
     }
 
@@ -82,12 +81,11 @@ pub fn memory(app: &mut App, arg: Option<&str>) -> CommandResult {
             path.display()
         )),
         "help" => CommandResult::message(memory_help(&path)),
-        _ => CommandResult::error(
+        _ => CommandResult::error_msg(
             format!(
                 "unknown subcommand `{sub}`. Try `/memory help`.\n\n{}",
                 memory_help(&path)
             ),
-            app.ui_locale,
         ),
     }
 }

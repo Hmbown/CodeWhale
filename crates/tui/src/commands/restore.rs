@@ -46,9 +46,8 @@ pub fn restore(app: &mut App, arg: Option<&str>) -> CommandResult {
     let n: usize = match arg.parse() {
         Ok(n) if n >= 1 => n,
         _ => {
-            return CommandResult::error(
+            return CommandResult::error_msg(
                 format!("Usage: /restore <N>  (N is 1-based; got '{arg}')",),
-                app.ui_locale,
             );
         }
     };

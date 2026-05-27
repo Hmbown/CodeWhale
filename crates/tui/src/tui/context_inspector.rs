@@ -98,7 +98,7 @@ pub fn build_context_inspector_text(app: &App, locale: Locale) -> String {
     let _ = writeln!(
         out,
         "{}",
-        tr(locale, MessageId::CtxInspectorModel).replace("{}", &app.model)
+        tr(locale, MessageId::CtxInspectorModel).replace("{model}", &app.model)
     );
     let _ = writeln!(
         out,
@@ -109,7 +109,7 @@ pub fn build_context_inspector_text(app: &App, locale: Locale) -> String {
         let _ = writeln!(
             out,
             "{}",
-            tr(locale, MessageId::CtxInspectorSession).replace("{}", session_id)
+            tr(locale, MessageId::CtxInspectorSession).replace("{session}", session_id)
         );
     }
     let (used, max, percent) = usage;
@@ -122,8 +122,8 @@ pub fn build_context_inspector_text(app: &App, locale: Locale) -> String {
         out,
         "{}",
         tmpl_transcript
-            .replacen("{}", &app.history.len().to_string(), 1)
-            .replace("{}", &app.api_messages.len().to_string())
+            .replace("{cells}", &app.history.len().to_string())
+            .replace("{api_messages}", &app.api_messages.len().to_string())
     );
     let workspace_status = app
         .workspace_context
@@ -132,7 +132,7 @@ pub fn build_context_inspector_text(app: &App, locale: Locale) -> String {
     let _ = writeln!(
         out,
         "{}",
-        tr(locale, MessageId::CtxInspectorWorkspaceStatus).replace("{}", workspace_status)
+        tr(locale, MessageId::CtxInspectorWorkspaceStatus).replace("{status}", workspace_status)
     );
 
     let _ = writeln!(out);
@@ -201,15 +201,15 @@ fn push_system_prompt_structure(out: &mut String, app: &App, locale: Locale) {
                 out,
                 "{}",
                 tmpl_stable
-                    .replacen("{}", &stable_count.to_string(), 1)
-                    .replace("{}", &stable_tokens.to_string())
+                    .replace("{count}", &stable_count.to_string())
+                    .replace("{tokens}", &stable_tokens.to_string())
             );
             if let Some(block) = working_block {
                 let tmpl_volatile = tr(locale, MessageId::CtxInspectorVolatileWorkingSet);
                 let _ = writeln!(
                     out,
                     "{}",
-                    tmpl_volatile.replace("{}", &working_tokens.to_string())
+                    tmpl_volatile.replace("{tokens}", &working_tokens.to_string())
                 );
                 let _ = writeln!(
                     out,
@@ -232,8 +232,8 @@ fn push_system_prompt_structure(out: &mut String, app: &App, locale: Locale) {
                 out,
                 "{}",
                 tmpl_total
-                    .replacen("{}", &blocks.len().to_string(), 1)
-                    .replace("{}", &total_est.to_string())
+                    .replace("{count}", &blocks.len().to_string())
+                    .replace("{tokens}", &total_est.to_string())
             );
         }
         Some(SystemPrompt::Text(text)) => {
@@ -248,8 +248,8 @@ fn push_system_prompt_structure(out: &mut String, app: &App, locale: Locale) {
                     out,
                     "{}",
                     tmpl_layers
-                        .replacen("{}", &layers.len().to_string(), 1)
-                        .replace("{}", &total_est.to_string())
+                        .replace("{count}", &layers.len().to_string())
+                        .replace("{tokens}", &total_est.to_string())
                 );
                 for layer in layers {
                     let tokens = text_tokens(layer.body);
@@ -266,7 +266,7 @@ fn push_system_prompt_structure(out: &mut String, app: &App, locale: Locale) {
                     out,
                     "{}",
                     tr(locale, MessageId::CtxInspectorSingleBlob)
-                        .replace("{}", &total_est.to_string())
+                        .replace("{tokens}", &total_est.to_string())
                 );
             }
         }
@@ -336,7 +336,7 @@ fn push_references(out: &mut String, references: &[SessionContextReference], loc
                     out,
                     "{}",
                     tr(locale, MessageId::CtxInspectorMoreReferences)
-                        .replace("{}", &remaining.to_string())
+                        .replace("{count}", &remaining.to_string())
                 );
             }
             break;

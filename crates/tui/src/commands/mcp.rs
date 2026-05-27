@@ -32,9 +32,8 @@ pub fn mcp(app: &mut App, args: Option<&str>) -> CommandResult {
         },
         "validate" => CommandResult::action(AppAction::Mcp(McpUiAction::Validate)),
         "reload" | "reconnect" => CommandResult::action(AppAction::Mcp(McpUiAction::Reload)),
-        _ => CommandResult::error(
+        _ => CommandResult::error_msg(
             "Usage: /mcp [init|add stdio <name> <command> [args...]|add http <name> <url>|enable <name>|disable <name>|remove <name>|validate|reload]",
-            app.ui_locale,
         ),
     }
 }

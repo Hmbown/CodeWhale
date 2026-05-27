@@ -151,7 +151,7 @@ pub fn load(app: &mut App, path: Option<&str>) -> CommandResult {
             app.workspace.join(p)
         }
     } else {
-        return CommandResult::error("Usage: /load <path>", app.ui_locale);
+        return CommandResult::error_msg("Usage: /load <path>");
     };
 
     let content = match std::fs::read_to_string(&load_path) {
@@ -308,9 +308,8 @@ pub fn sessions(app: &mut App, arg: Option<&str>) -> CommandResult {
             app.view_stack.push(SessionPickerView::new(&app.workspace));
             CommandResult::ok()
         }
-        _ => CommandResult::error(
+        _ => CommandResult::error_msg(
             format!("unknown subcommand `{action}`. usage: /sessions [show|prune <days>]"),
-            app.ui_locale,
         ),
     }
 }
@@ -324,9 +323,8 @@ fn prune(app: &mut App, days_arg: Option<&str>) -> CommandResult {
     let days_str = match days_arg {
         Some(s) => s,
         None => {
-            return CommandResult::error(
+            return CommandResult::error_msg(
                 "usage: /sessions prune <days>   (e.g. `/sessions prune 30` to drop sessions older than 30 days)",
-                app.ui_locale,
             );
         }
     };
