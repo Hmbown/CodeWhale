@@ -44,6 +44,8 @@ pub enum Feature {
     Mcp,
     /// Enable execpolicy integration/tooling.
     ExecPolicy,
+    /// Enable file access policy checks for file tools.
+    FilePolicy,
     /// Enable vision model for image analysis.
     VisionModel,
 }
@@ -206,6 +208,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ExecPolicy,
         key: "exec_policy",
+        stage: Stage::Experimental,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::FilePolicy,
+        key: "file_policy",
         stage: Stage::Experimental,
         default_enabled: true,
     },

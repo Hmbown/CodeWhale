@@ -528,6 +528,7 @@ impl Engine {
             tool_registry,
             mcp_pool.clone(),
             None,
+            None,
         )
         .await;
 

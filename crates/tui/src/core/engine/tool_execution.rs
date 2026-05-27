@@ -211,6 +211,7 @@ impl Engine {
             let lock = tool_exec_lock.clone();
             let tx_event = self.tx_event.clone();
             let mcp_pool = mcp_pool.clone();
+            let file_policy = self.file_policy.clone();
             tasks.push(async move {
                 let result = Engine::execute_tool_with_lock(
                     lock,
@@ -222,6 +223,7 @@ impl Engine {
                     Some(registry_ref),
                     mcp_pool,
                     None,
+                    file_policy,
                 )
                 .await;
                 (tool_name, result)
@@ -270,6 +272,7 @@ impl Engine {
         registry: Option<&crate::tools::ToolRegistry>,
         mcp_pool: Option<Arc<AsyncMutex<McpPool>>>,
         context_override: Option<crate::tools::ToolContext>,
+        file_policy: Option<Arc<crate::execpolicy::ExecPolicyConfig>>,
     ) -> Result<ToolResult, ToolError> {
         let started_at = std::time::Instant::now();
         let dispatch = if McpPool::is_mcp_tool(&tool_name) {
@@ -297,6 +300,18 @@ impl Engine {
         } else {
             ToolExecGuard::Write(lock.write().await)
         };
+
+        if let Some(policy) = file_policy.as_ref()
+            && let Some(err) = Engine::evaluate_file_policy(policy, &tool_name, &tool_input)
+        {
+            emit_tool_audit(json!({
+                "event": "tool.file_policy_denied",
+                "tool_name": tool_name.clone(),
+                "error": err.to_string(),
+                "enforcement": "execute_tool_with_lock",
+            }));
+            return Err(err);
+        }
 
         // RAII pause/resume: ensures `Event::ResumeEvents` always fires on
         // drop, even if the tool future is cancelled mid-await. See

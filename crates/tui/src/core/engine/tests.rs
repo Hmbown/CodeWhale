@@ -2750,3 +2750,260 @@ async fn post_edit_hook_skips_unknown_tool_names() {
     assert!(engine.pending_lsp_blocks.is_empty());
     assert_eq!(fake.call_count(), 0);
 }
+
+// === File policy engine tests ==============================================
+
+fn make_file_policy(deny: Vec<&str>, allow: Vec<&str>) -> crate::execpolicy::ExecPolicyConfig {
+    use crate::execpolicy::rules::FileRuleSet;
+    use std::collections::BTreeMap;
+
+    let file_rules = BTreeMap::from([(
+        "write_file".to_string(),
+        FileRuleSet {
+            allow: allow.into_iter().map(String::from).collect(),
+            deny: deny.into_iter().map(String::from).collect(),
+        },
+    )]);
+
+    crate::execpolicy::ExecPolicyConfig {
+        rules: BTreeMap::new(),
+        file_rules,
+    }
+}
+
+#[test]
+fn file_policy_blocks_denied_write_file() {
+    let (mut engine, _handle) = Engine::new(EngineConfig::default(), &Config::default());
+    engine.file_policy = Some(Arc::new(make_file_policy(
+        vec!["src/secrets.rs", ".env"],
+        vec!["src/**/*.rs"],
+    )));
+
+    let input = json!({ "path": "src/secrets.rs" });
+    let err = engine.check_file_policy("write_file", &input);
+    assert!(err.is_some(), "denied path must return an error");
+    let msg = err.unwrap().to_string();
+    assert!(
+        msg.contains("File policy blocked"),
+        "error must mention policy block: {msg}"
+    );
+    assert!(
+        msg.contains("src/secrets.rs"),
+        "error must contain the denied path: {msg}"
+    );
+}
+
+#[test]
+fn file_policy_allows_permitted_write_file() {
+    let (mut engine, _handle) = Engine::new(EngineConfig::default(), &Config::default());
+    engine.file_policy = Some(Arc::new(make_file_policy(
+        vec!["src/secrets.rs"],
+        vec!["src/**/*.rs", "*.md"],
+    )));
+
+    let input = json!({ "path": "src/main.rs" });
+    assert!(
+        engine.check_file_policy("write_file", &input).is_none(),
+        "allowed path must not be blocked"
+    );
+}
+
+#[test]
+fn file_policy_allows_when_no_file_rules_configured() {
+    let (mut engine, _handle) = Engine::new(EngineConfig::default(), &Config::default());
+    engine.file_policy = None;
+
+    let input = json!({ "path": "anything.txt" });
+    assert!(
+        engine.check_file_policy("write_file", &input).is_none(),
+        "missing policy must not block"
+    );
+}
+
+#[test]
+fn file_policy_skips_non_file_tools() {
+    let (mut engine, _handle) = Engine::new(EngineConfig::default(), &Config::default());
+    engine.file_policy = Some(Arc::new(make_file_policy(vec!["*"], vec![])));
+
+    let input = json!({ "command": "rm -rf /" });
+    assert!(
+        engine.check_file_policy("exec_shell", &input).is_none(),
+        "exec_shell must never be checked by file policy"
+    );
+}
+
+#[test]
+fn file_policy_skips_when_path_field_is_missing() {
+    let (mut engine, _handle) = Engine::new(EngineConfig::default(), &Config::default());
+    engine.file_policy = Some(Arc::new(make_file_policy(
+        vec!["src/secrets.rs"],
+        vec!["src/**/*.rs"],
+    )));
+
+    let input = json!({ "content": "hello" });
+    assert!(
+        engine.check_file_policy("write_file", &input).is_none(),
+        "missing path must not trigger policy block"
+    );
+}
+
+#[test]
+fn file_policy_blocks_read_file_when_category_has_deny_rule() {
+    use crate::execpolicy::rules::FileRuleSet;
+    use std::collections::BTreeMap;
+
+    let (mut engine, _handle) = Engine::new(EngineConfig::default(), &Config::default());
+    let file_rules = BTreeMap::from([(
+        "read_file".to_string(),
+        FileRuleSet {
+            allow: vec!["*.md".to_string()],
+            deny: vec![".env".to_string()],
+        },
+    )]);
+    engine.file_policy = Some(Arc::new(crate::execpolicy::ExecPolicyConfig {
+        rules: BTreeMap::new(),
+        file_rules,
+    }));
+
+    let input = json!({ "path": ".env" });
+    let err = engine.check_file_policy("read_file", &input);
+    assert!(err.is_some(), "read_file to denied path must be blocked");
+}
+
+#[test]
+fn file_policy_falls_back_to_default_category() {
+    use crate::execpolicy::rules::FileRuleSet;
+    use std::collections::BTreeMap;
+
+    let (mut engine, _handle) = Engine::new(EngineConfig::default(), &Config::default());
+    let file_rules = BTreeMap::from([(
+        "default".to_string(),
+        FileRuleSet {
+            allow: vec!["*".to_string()],
+            deny: vec![".env".to_string()],
+        },
+    )]);
+    engine.file_policy = Some(Arc::new(crate::execpolicy::ExecPolicyConfig {
+        rules: BTreeMap::new(),
+        file_rules,
+    }));
+
+    let input = json!({ "path": ".env" });
+    let err = engine.check_file_policy("edit_file", &input);
+    assert!(
+        err.is_some(),
+        "edit_file to .env must be blocked via default category"
+    );
+
+    let input = json!({ "path": "README.md" });
+    assert!(
+        engine.check_file_policy("edit_file", &input).is_none(),
+        "edit_file to allowed path must pass via default category"
+    );
+}
+
+#[test]
+fn file_policy_feature_enabled_by_default() {
+    let features = Features::with_defaults();
+    assert!(
+        features.enabled(Feature::FilePolicy),
+        "FilePolicy must be enabled by default"
+    );
+}
+
+#[test]
+fn file_policy_not_loaded_when_feature_disabled() {
+    let mut features = Features::with_defaults();
+    features.disable(Feature::FilePolicy);
+
+    let config = EngineConfig {
+        features,
+        ..Default::default()
+    };
+    let (engine, _handle) = Engine::new(config, &Config::default());
+    assert!(
+        engine.file_policy.is_none(),
+        "file_policy must be None when FilePolicy feature is disabled"
+    );
+}
+
+#[test]
+fn evaluate_file_policy_static_method_blocks_denied_paths() {
+    let policy = crate::execpolicy::ExecPolicyConfig {
+        rules: std::collections::BTreeMap::new(),
+        file_rules: std::collections::BTreeMap::from([(
+            "write_file".to_string(),
+            crate::execpolicy::rules::FileRuleSet {
+                allow: vec!["src/**/*.rs".to_string()],
+                deny: vec![".env".to_string()],
+            },
+        )]),
+    };
+
+    let allowed = json!({ "path": "src/main.rs" });
+    assert!(
+        Engine::evaluate_file_policy(&policy, "write_file", &allowed).is_none(),
+        "allowed path must not be blocked by static evaluator"
+    );
+
+    let denied = json!({ "path": ".env" });
+    let err = Engine::evaluate_file_policy(&policy, "write_file", &denied);
+    assert!(
+        err.is_some(),
+        "denied path must be blocked by static evaluator"
+    );
+    let msg = err.unwrap().to_string();
+    assert!(
+        msg.contains("File policy blocked"),
+        "error must mention policy block: {msg}"
+    );
+}
+
+#[test]
+fn evaluate_file_policy_blocks_denied_apply_patch_paths() {
+    let policy = crate::execpolicy::ExecPolicyConfig {
+        rules: std::collections::BTreeMap::new(),
+        file_rules: std::collections::BTreeMap::from([(
+            "apply_patch".to_string(),
+            crate::execpolicy::rules::FileRuleSet {
+                allow: vec!["src/**/*.rs".to_string()],
+                deny: vec![".env".to_string()],
+            },
+        )]),
+    };
+    let input = json!({
+        "patch": "diff --git a/.env b/.env\n--- a/.env\n+++ b/.env\n@@ -1 +1 @@\n-old\n+new\n"
+    });
+
+    let err = Engine::evaluate_file_policy(&policy, "apply_patch", &input);
+    assert!(
+        err.is_some(),
+        "denied path inside apply_patch must be blocked"
+    );
+    let msg = err.unwrap().to_string();
+    assert!(
+        msg.contains(".env"),
+        "error must contain denied path: {msg}"
+    );
+}
+
+#[test]
+fn file_policy_feature_switch_controls_engine_loading() {
+    let enabled_config = EngineConfig {
+        features: Features::with_defaults(),
+        ..Default::default()
+    };
+    let (_engine_enabled, _handle) = Engine::new(enabled_config, &Config::default());
+
+    let mut disabled_features = Features::with_defaults();
+    disabled_features.disable(Feature::FilePolicy);
+    let disabled_config = EngineConfig {
+        features: disabled_features,
+        ..Default::default()
+    };
+    let (engine_disabled, _handle) = Engine::new(disabled_config, &Config::default());
+    assert!(
+        engine_disabled.file_policy.is_none(),
+        "disabling FilePolicy feature must prevent policy loading"
+    );
+}
