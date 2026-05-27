@@ -5820,6 +5820,10 @@ fn render(f: &mut Frame, app: &mut App) {
         let conversation_area = chat_layout[0];
         let tool_output_area = chat_layout[1];
 
+        // Update viewport areas for mouse routing
+        app.viewport.conversation_area = Some(conversation_area);
+        app.viewport.tool_output_area = Some(tool_output_area);
+
         // Conversation widget (upper region)
         let conversation_widget = ChatWidget::new(app, conversation_area, ChatRegion::Conversation);
         let buf = f.buffer_mut();

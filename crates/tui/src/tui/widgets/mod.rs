@@ -141,36 +141,92 @@ impl ChatWidget {
         let history_len = app.history.len();
         let has_collapsed = !app.collapsed_cells.is_empty();
 
-        // Fast path: no collapsed cells — use original slices directly.
-        if !has_collapsed {
-            let mut cell_revisions: Vec<u64> =
-                Vec::with_capacity(app.history.len() + active_entries.len());
-            cell_revisions.extend_from_slice(&app.history_revisions);
-            if !active_entries.is_empty() {
-                let active_rev = app.active_cell_revision;
-                for i in 0..active_entries.len() {
-                    let salt = (i as u64).wrapping_add(1);
-                    cell_revisions.push(
-                        active_rev
-                            .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-                            .wrapping_add(salt),
-                    );
-                }
+        // Helper closure to check if a cell belongs in this region
+        let cell_belongs_to_region = |cell: &HistoryCell| -> bool {
+            match region {
+                ChatRegion::Conversation => cell.is_conversation_cell(),
+                ChatRegion::ToolOutput => cell.is_tool_output_cell(),
             }
-            // Build identity mapping: filtered index == original index.
-            app.collapsed_cell_map = (0..app.history.len() + active_entries.len()).collect();
+        };
 
-            let shards: [&[HistoryCell]; 2] = [&app.history, active_entries];
-            app.viewport.transcript_cache.ensure_split(
-                &shards,
-                &cell_revisions,
-                content_area.width.max(1),
-                render_options,
-            );
+        // Fast path: no collapsed cells — but still need region filtering
+        if !has_collapsed {
+            // Check if we need region filtering
+            let needs_filter = app.history.iter().any(|c| !cell_belongs_to_region(c))
+                || active_entries.iter().any(|c| !cell_belongs_to_region(c));
+
+            if !needs_filter {
+                // No filtering needed, use original slices
+                let mut cell_revisions: Vec<u64> =
+                    Vec::with_capacity(app.history.len() + active_entries.len());
+                cell_revisions.extend_from_slice(&app.history_revisions);
+                if !active_entries.is_empty() {
+                    let active_rev = app.active_cell_revision;
+                    for i in 0..active_entries.len() {
+                        let salt = (i as u64).wrapping_add(1);
+                        cell_revisions.push(
+                            active_rev
+                                .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                                .wrapping_add(salt),
+                        );
+                    }
+                }
+                // Build identity mapping: filtered index == original index.
+                app.collapsed_cell_map = (0..app.history.len() + active_entries.len()).collect();
+
+                let shards: [&[HistoryCell]; 2] = [&app.history, active_entries];
+                app.viewport.transcript_cache.ensure_split(
+                    &shards,
+                    &cell_revisions,
+                    content_area.width.max(1),
+                    render_options,
+                );
+            } else {
+                // Region filtering needed
+                let mut filtered_cells: Vec<HistoryCell> =
+                    Vec::with_capacity(history_len + active_entries.len());
+                let mut filtered_revs: Vec<u64> =
+                    Vec::with_capacity(history_len + active_entries.len());
+                let mut filtered_to_original: Vec<usize> =
+                    Vec::with_capacity(history_len + active_entries.len());
+
+                for (idx, cell) in app.history.iter().enumerate() {
+                    if cell_belongs_to_region(cell) {
+                        filtered_cells.push(cell.clone());
+                        filtered_revs.push(app.history_revisions[idx]);
+                        filtered_to_original.push(idx);
+                    }
+                }
+
+                if !active_entries.is_empty() {
+                    let active_rev = app.active_cell_revision;
+                    for (i, cell) in active_entries.iter().enumerate() {
+                        if cell_belongs_to_region(cell) {
+                            let original_idx = history_len + i;
+                            filtered_cells.push(cell.clone());
+                            let salt = (i as u64).wrapping_add(1);
+                            filtered_revs.push(
+                                active_rev
+                                    .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                                    .wrapping_add(salt),
+                            );
+                            filtered_to_original.push(original_idx);
+                        }
+                    }
+                }
+
+                app.collapsed_cell_map = filtered_to_original;
+
+                let shards: [&[HistoryCell]; 1] = [&filtered_cells];
+                app.viewport.transcript_cache.ensure_split(
+                    &shards,
+                    &filtered_revs,
+                    content_area.width.max(1),
+                    render_options,
+                );
+            }
         } else {
-            // Slow path: clone non-collapsed cells into filtered vecs so
-            // collapsed cells are excluded from rendering. Build the
-            // filtered→original index mapping.
+            // Slow path: collapsed cells + region filtering
             let mut filtered_cells: Vec<HistoryCell> =
                 Vec::with_capacity(history_len + active_entries.len());
             let mut filtered_revs: Vec<u64> =
@@ -182,9 +238,11 @@ impl ChatWidget {
                 if app.collapsed_cells.contains(&idx) {
                     continue;
                 }
-                filtered_cells.push(cell.clone());
-                filtered_revs.push(app.history_revisions[idx]);
-                filtered_to_original.push(idx);
+                if cell_belongs_to_region(cell) {
+                    filtered_cells.push(cell.clone());
+                    filtered_revs.push(app.history_revisions[idx]);
+                    filtered_to_original.push(idx);
+                }
             }
 
             if !active_entries.is_empty() {
@@ -194,14 +252,16 @@ impl ChatWidget {
                     if app.collapsed_cells.contains(&original_idx) {
                         continue;
                     }
-                    filtered_cells.push(cell.clone());
-                    let salt = (i as u64).wrapping_add(1);
-                    filtered_revs.push(
-                        active_rev
-                            .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-                            .wrapping_add(salt),
-                    );
-                    filtered_to_original.push(original_idx);
+                    if cell_belongs_to_region(cell) {
+                        filtered_cells.push(cell.clone());
+                        let salt = (i as u64).wrapping_add(1);
+                        filtered_revs.push(
+                            active_rev
+                                .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                                .wrapping_add(salt),
+                        );
+                        filtered_to_original.push(original_idx);
+                    }
                 }
             }
 
