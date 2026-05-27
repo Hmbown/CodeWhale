@@ -1,7 +1,7 @@
 //! TUI runtime logging. Initializes a `tracing-subscriber` that writes to a
 //! per-process file under `~/.deepseek/logs/tui-YYYY-MM-DD-PID.log`, and (on
-//! Unix) redirects the process's `stderr` fd to that same file for the lifetime
-//! of the alt-screen TUI.
+//! Unix and Windows) redirects the process's `stderr` handle/fd to that same
+//! file for the lifetime of the alt-screen TUI.
 //!
 //! Why this exists:
 //!
@@ -26,12 +26,12 @@
 //!      `tracing::error!` calls go somewhere observable instead of
 //!      disappearing into the void (the TUI previously had no global
 //!      subscriber, so contributors reached for `eprintln!`).
-//!   2. On Unix the process's stderr fd is redirected (via `dup2`) to the
-//!      same log file for the lifetime of `TuiLogGuard`. Any raw stderr
+//!   2. On Unix and Windows the process's stderr handle/fd is redirected to
+//!      the same log file for the lifetime of `TuiLogGuard`. Any raw stderr
 //!      write — ours, a dependency's, a panic message — lands in the log
 //!      file instead of the alt-screen. The guard restores the original
-//!      stderr fd on drop so post-TUI shutdown messages still reach the
-//!      user's terminal.
+//!      stderr handle/fd on drop so post-TUI shutdown messages still reach
+//!      the user's terminal.
 //!   3. Crate-level `#![deny(clippy::print_stderr, clippy::print_stdout)]`
 //!      on the TUI runtime modules forbids new `eprintln!` / `println!`
 //!      calls at compile time. CLI-output paths (`main.rs` eval, init,
@@ -50,9 +50,9 @@ const DEFAULT_LOG_RETENTION_DAYS: u64 = 7;
 const LOG_RETENTION_ENV: &str = "DEEPSEEK_LOG_RETENTION_DAYS";
 const SECONDS_PER_DAY: u64 = 24 * 60 * 60;
 
-/// Owns the active tracing subscriber and (on Unix) a saved copy of the
-/// original `stderr` fd so it can be restored on drop. Dropped when the TUI
-/// exits the alt-screen.
+/// Owns the active tracing subscriber and (on Unix/Windows) a saved copy of
+/// the original `stderr` handle/fd so it can be restored on drop. Dropped when
+/// the TUI exits the alt-screen.
 pub struct TuiLogGuard {
     #[cfg(unix)]
     saved_stderr_fd: Option<libc::c_int>,
