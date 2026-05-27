@@ -33,6 +33,15 @@ use std::time::Duration;
 pub const MAX_HISTORY_ENTRIES: usize = 1000;
 
 const HISTORY_FILE_NAME: &str = "composer_history.txt";
+// Prevent a steady stream of test/UI writes from delaying persistence
+// indefinitely while waiting for a 2ms idle window.
+const WRITER_BATCH_LIMIT: usize = 128;
+
+enum HistoryWrite {
+    Append(PathBuf, String),
+    #[cfg(test)]
+    Flush(Sender<()>),
+}
 
 fn default_history_path() -> Option<PathBuf> {
     dirs::home_dir().map(|home| home.join(".deepseek").join(HISTORY_FILE_NAME))
@@ -80,7 +89,7 @@ pub fn append_history(entry: &str) {
 fn append_history_dispatched(path: &Path, entry: &str) {
     let entry = entry.to_string();
     if writer_sender()
-        .send((path.to_path_buf(), entry.clone()))
+        .send(HistoryWrite::Append(path.to_path_buf(), entry.clone()))
         .is_err()
     {
         append_history_to(path, &entry);
@@ -90,10 +99,10 @@ fn append_history_dispatched(path: &Path, entry: &str) {
 /// Lazy singleton sender for the dedicated composer-history writer
 /// thread. Initialised on first use; the thread runs for the lifetime
 /// of the process and drains queued writes in arrival order.
-fn writer_sender() -> &'static Sender<(PathBuf, String)> {
-    static SENDER: OnceLock<Sender<(PathBuf, String)>> = OnceLock::new();
+fn writer_sender() -> &'static Sender<HistoryWrite> {
+    static SENDER: OnceLock<Sender<HistoryWrite>> = OnceLock::new();
     SENDER.get_or_init(|| {
-        let (tx, rx) = channel::<(PathBuf, String)>();
+        let (tx, rx) = channel::<HistoryWrite>();
         let spawn_result = std::thread::Builder::new()
             .name("composer-history-writer".to_string())
             .spawn(move || {
@@ -101,7 +110,15 @@ fn writer_sender() -> &'static Sender<(PathBuf, String)> {
                 // only happens at process shutdown because the singleton
                 // sender lives in a static for the lifetime of the process.
                 while let Ok(first) = rx.recv() {
-                    append_history_batch(&rx, first);
+                    match first {
+                        HistoryWrite::Append(path, entry) => {
+                            append_history_batch(&rx, (path, entry));
+                        }
+                        #[cfg(test)]
+                        HistoryWrite::Flush(done) => {
+                            let _ = done.send(());
+                        }
+                    }
                 }
             });
         if let Err(err) = spawn_result {
@@ -111,17 +128,27 @@ fn writer_sender() -> &'static Sender<(PathBuf, String)> {
     })
 }
 
-fn append_history_batch(rx: &Receiver<(PathBuf, String)>, first: (PathBuf, String)) {
+fn append_history_batch(rx: &Receiver<HistoryWrite>, first: (PathBuf, String)) {
     let mut pending = vec![first];
 
-    loop {
+    while pending.len() < WRITER_BATCH_LIMIT {
         match rx.recv_timeout(Duration::from_millis(2)) {
-            Ok(next) => pending.push(next),
+            Ok(HistoryWrite::Append(path, entry)) => pending.push((path, entry)),
+            #[cfg(test)]
+            Ok(HistoryWrite::Flush(done)) => {
+                persist_history_batch(pending);
+                let _ = done.send(());
+                return;
+            }
             Err(RecvTimeoutError::Timeout) => break,
             Err(RecvTimeoutError::Disconnected) => break,
         }
     }
 
+    persist_history_batch(pending);
+}
+
+fn persist_history_batch(pending: Vec<(PathBuf, String)>) {
     for (path, entries) in group_history_writes_by_path(pending) {
         append_history_entries_to(&path, entries.iter().map(String::as_str));
     }
@@ -146,6 +173,12 @@ fn group_history_writes_by_path(writes: Vec<(PathBuf, String)>) -> Vec<(PathBuf,
 
 fn append_history_to(path: &Path, entry: &str) {
     append_history_entries_to(path, std::iter::once(entry));
+}
+
+#[cfg(test)]
+fn flush_history_writer_for_test(timeout: Duration) -> bool {
+    let (tx, rx) = channel();
+    writer_sender().send(HistoryWrite::Flush(tx)).is_ok() && rx.recv_timeout(timeout).is_ok()
 }
 
 fn append_history_entries_to<'a>(
@@ -311,26 +344,23 @@ mod tests {
              (likely re-introduced #1927: caller blocked on disk write)"
         );
 
-        // Give the writer thread time to drain the queue, then verify the
-        // new entries landed.
-        // Use 10s on Windows (slow CI I/O) vs 5s on other platforms.
-        let deadline = Instant::now() + Duration::from_secs(if cfg!(windows) { 10 } else { 5 });
-        loop {
-            let loaded = load_history_from(&path);
-            if loaded.iter().any(|line| line == "new entry 49") {
-                // Last dispatched entry observed; queue is drained.
-                assert!(loaded.iter().any(|line| line == "new entry 0"));
-                break;
-            }
-            if Instant::now() >= deadline {
-                panic!(
-                    "writer thread did not persist the dispatched entries; \
-                     loaded {} entries, last = {:?}",
-                    loaded.len(),
-                    loaded.last()
-                );
-            }
-            std::thread::sleep(Duration::from_millis(25));
-        }
+        // Wait for a FIFO flush marker instead of polling wall-clock time.
+        // Other tests may also enqueue history writes through the process-wide
+        // singleton, so a sleep-based assertion can observe only the seed file
+        // even though this test's writes are merely queued behind earlier work.
+        assert!(
+            flush_history_writer_for_test(Duration::from_secs(if cfg!(windows) { 30 } else { 15 })),
+            "writer thread did not acknowledge the dispatched entries"
+        );
+
+        let loaded = load_history_from(&path);
+        assert!(
+            loaded.iter().any(|line| line == "new entry 49"),
+            "writer thread did not persist the dispatched entries; \
+             loaded {} entries, last = {:?}",
+            loaded.len(),
+            loaded.last()
+        );
+        assert!(loaded.iter().any(|line| line == "new entry 0"));
     }
 }

@@ -6,7 +6,7 @@ use std::time::Duration;
 use super::CommandResult;
 use crate::client::DeepSeekClient;
 use crate::config::{
-    COMMON_DEEPSEEK_MODELS, Config, clear_api_key, expand_path, normalize_model_name_for_provider,
+    COMMON_DEEPSEEK_MODELS, Config, clear_api_key, normalize_model_name_for_provider,
 };
 use crate::config_ui::{ConfigUiMode, parse_mode};
 use crate::llm_client::LlmClient;
@@ -327,8 +327,7 @@ pub fn persist_status_items(items: &[crate::config::StatusItem]) -> anyhow::Resu
     tui_table.insert("status_items".to_string(), toml::Value::Array(array));
 
     let body = toml::to_string_pretty(&doc).context("failed to serialize config.toml")?;
-    fs::write(&path, body)
-        .with_context(|| format!("failed to write config at {}", path.display()))?;
+    write_config_toml(&path, &body)?;
     Ok(path)
 }
 
@@ -359,31 +358,189 @@ pub fn persist_root_string_key(
         .context("config.toml root must be a table")?;
     table.insert(key.to_string(), toml::Value::String(value.to_string()));
     let body = toml::to_string_pretty(&doc).context("failed to serialize config.toml")?;
-    fs::write(&path, body)
-        .with_context(|| format!("failed to write config at {}", path.display()))?;
+    write_config_toml(&path, &body)?;
     Ok(path)
 }
 
-/// Resolve the path to `~/.deepseek/config.toml` (or
-/// `$DEEPSEEK_CONFIG_PATH`). Mirrors what `Config::load` accepts so we
-/// never write to a different file than the one we read.
-pub(super) fn config_toml_path(config_path: Option<&Path>) -> anyhow::Result<PathBuf> {
+pub fn persist_permission_rules(
+    rules: &[codewhale_execpolicy::ToolPermissionRule],
+) -> anyhow::Result<PathBuf> {
     use anyhow::Context;
-    if let Some(path) = config_path {
-        return Ok(expand_path(path.to_string_lossy().as_ref()));
+    use std::fs;
+    use toml_edit::{ArrayOfTables, DocumentMut, Item};
+
+    let path = permissions_toml_path()?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "failed to create permissions directory {}",
+                parent.display()
+            )
+        })?;
     }
-    if let Ok(env) = std::env::var("DEEPSEEK_CONFIG_PATH") {
-        let trimmed = env.trim();
-        if !trimmed.is_empty() {
-            return Ok(PathBuf::from(trimmed));
+
+    let mut doc: DocumentMut = if path.exists() {
+        let raw = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read permissions at {}", path.display()))?;
+        raw.parse()
+            .with_context(|| format!("failed to parse permissions at {}", path.display()))?
+    } else {
+        DocumentMut::new()
+    };
+    let rules_entry = doc
+        .entry("rules")
+        .or_insert_with(|| Item::ArrayOfTables(ArrayOfTables::new()));
+
+    append_permission_rules(rules_entry, rules)?;
+
+    let body = doc.to_string();
+    write_config_toml(&path, &body)?;
+    enforce_owner_only_permissions(&path)?;
+    Ok(path)
+}
+
+fn write_config_toml(path: &Path, body: &str) -> anyhow::Result<()> {
+    use anyhow::Context;
+
+    crate::utils::write_atomic(path, body.as_bytes())
+        .with_context(|| format!("failed to write config at {}", path.display()))
+}
+
+fn enforce_owner_only_permissions(_path: &Path) -> anyhow::Result<()> {
+    #[cfg(unix)]
+    {
+        use anyhow::Context;
+        use std::os::unix::fs::PermissionsExt;
+
+        std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o600)).with_context(
+            || {
+                format!(
+                    "failed to set owner-only permissions at {}",
+                    _path.display()
+                )
+            },
+        )?;
+    }
+    Ok(())
+}
+
+fn append_permission_rules(
+    rules_item: &mut toml_edit::Item,
+    rules: &[codewhale_execpolicy::ToolPermissionRule],
+) -> anyhow::Result<()> {
+    match rules_item {
+        toml_edit::Item::ArrayOfTables(array) => {
+            for rule in rules {
+                if !array
+                    .iter()
+                    .any(|existing| permission_toml_table_matches_rule(existing, rule))
+                {
+                    array.push(permission_rule_to_toml_table(rule));
+                }
+            }
         }
+        toml_edit::Item::Value(value) => {
+            let Some(array) = value.as_array_mut() else {
+                anyhow::bail!("`rules` in permissions.toml must be an array");
+            };
+            for rule in rules {
+                if !array
+                    .iter()
+                    .any(|existing| permission_toml_value_matches_rule(existing, rule))
+                {
+                    array.push(permission_rule_to_toml_inline_table(rule));
+                }
+            }
+        }
+        _ => anyhow::bail!("`rules` in permissions.toml must be an array"),
     }
-    let home = dirs::home_dir().context("failed to resolve home directory for config.toml path")?;
-    let primary = home.join(".codewhale").join("config.toml");
-    if primary.exists() {
-        return Ok(primary);
+    Ok(())
+}
+
+fn permission_rule_to_toml_table(
+    rule: &codewhale_execpolicy::ToolPermissionRule,
+) -> toml_edit::Table {
+    let mut table = toml_edit::Table::new();
+    table["tool"] = toml_edit::value(rule.tool.clone());
+    table["decision"] = toml_edit::value(permission_decision_label(rule.decision));
+    if let Some(command) = rule.command.as_deref() {
+        table["command"] = toml_edit::value(command);
     }
-    Ok(home.join(".deepseek").join("config.toml"))
+    if let Some(path) = rule.path.as_deref() {
+        table["path"] = toml_edit::value(path);
+    }
+    table
+}
+
+fn permission_rule_to_toml_inline_table(
+    rule: &codewhale_execpolicy::ToolPermissionRule,
+) -> toml_edit::Value {
+    let mut table = toml_edit::InlineTable::new();
+    table.insert("tool", toml_edit::Value::from(rule.tool.clone()));
+    table.insert(
+        "decision",
+        toml_edit::Value::from(permission_decision_label(rule.decision)),
+    );
+    if let Some(command) = rule.command.as_deref() {
+        table.insert("command", toml_edit::Value::from(command));
+    }
+    if let Some(path) = rule.path.as_deref() {
+        table.insert("path", toml_edit::Value::from(path));
+    }
+    toml_edit::Value::InlineTable(table)
+}
+
+fn permission_toml_table_matches_rule(
+    table: &toml_edit::Table,
+    rule: &codewhale_execpolicy::ToolPermissionRule,
+) -> bool {
+    table.get("tool").and_then(toml_edit::Item::as_str) == Some(rule.tool.as_str())
+        && table.get("decision").and_then(toml_edit::Item::as_str)
+            == Some(permission_decision_label(rule.decision))
+        && optional_toml_item_str_matches(table.get("command"), rule.command.as_deref())
+        && optional_toml_item_str_matches(table.get("path"), rule.path.as_deref())
+}
+
+fn permission_toml_value_matches_rule(
+    value: &toml_edit::Value,
+    rule: &codewhale_execpolicy::ToolPermissionRule,
+) -> bool {
+    let Some(table) = value.as_inline_table() else {
+        return false;
+    };
+    table.get("tool").and_then(toml_edit::Value::as_str) == Some(rule.tool.as_str())
+        && table.get("decision").and_then(toml_edit::Value::as_str)
+            == Some(permission_decision_label(rule.decision))
+        && optional_toml_value_str_matches(table.get("command"), rule.command.as_deref())
+        && optional_toml_value_str_matches(table.get("path"), rule.path.as_deref())
+}
+
+fn optional_toml_item_str_matches(item: Option<&toml_edit::Item>, expected: Option<&str>) -> bool {
+    item.and_then(toml_edit::Item::as_str) == expected
+}
+
+fn optional_toml_value_str_matches(
+    value: Option<&toml_edit::Value>,
+    expected: Option<&str>,
+) -> bool {
+    value.and_then(toml_edit::Value::as_str) == expected
+}
+
+fn permission_decision_label(decision: codewhale_execpolicy::PermissionDecision) -> &'static str {
+    match decision {
+        codewhale_execpolicy::PermissionDecision::Allow => "allow",
+        codewhale_execpolicy::PermissionDecision::Deny => "deny",
+        codewhale_execpolicy::PermissionDecision::Ask => "ask",
+    }
+}
+
+/// Resolve the user config path using the same precedence as config loading.
+pub(super) fn config_toml_path(config_path: Option<&Path>) -> anyhow::Result<PathBuf> {
+    codewhale_config::resolve_config_path(config_path.map(Path::to_path_buf))
+}
+
+pub(super) fn permissions_toml_path() -> anyhow::Result<PathBuf> {
+    codewhale_config::resolve_permissions_path(None)
 }
 
 /// Modify a setting at runtime
@@ -473,9 +630,10 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
                     Err(err) => return CommandResult::error(format!("Failed to save: {err}")),
                 }
             }
-            return CommandResult::error(format!(
+            return CommandResult::error(
                 "base_url must be saved with --save; client base URL is loaded from config on startup. Restart and re-open your session after saving."
-            ));
+                    .to_string(),
+            );
         }
         _ => {}
     }
@@ -1308,6 +1466,7 @@ mod tests {
     struct EnvGuard {
         home: Option<OsString>,
         userprofile: Option<OsString>,
+        codewhale_config_path: Option<OsString>,
         deepseek_config_path: Option<OsString>,
         _lock: std::sync::MutexGuard<'static, ()>,
     }
@@ -1320,18 +1479,21 @@ mod tests {
             let config_str = OsString::from(config_path.as_os_str());
             let home_prev = env::var_os("HOME");
             let userprofile_prev = env::var_os("USERPROFILE");
+            let codewhale_config_prev = env::var_os("CODEWHALE_CONFIG_PATH");
             let deepseek_config_prev = env::var_os("DEEPSEEK_CONFIG_PATH");
 
             // Safety: test-only environment mutation guarded by process-wide mutex.
             unsafe {
                 env::set_var("HOME", &home_str);
                 env::set_var("USERPROFILE", &home_str);
+                env::remove_var("CODEWHALE_CONFIG_PATH");
                 env::set_var("DEEPSEEK_CONFIG_PATH", &config_str);
             }
 
             Self {
                 home: home_prev,
                 userprofile: userprofile_prev,
+                codewhale_config_path: codewhale_config_prev,
                 deepseek_config_path: deepseek_config_prev,
                 _lock: lock,
             }
@@ -1361,6 +1523,18 @@ mod tests {
                 // Safety: test-only environment mutation guarded by a global mutex.
                 unsafe {
                     env::remove_var("USERPROFILE");
+                }
+            }
+
+            if let Some(value) = self.codewhale_config_path.take() {
+                // Safety: test-only environment mutation guarded by a global mutex.
+                unsafe {
+                    env::set_var("CODEWHALE_CONFIG_PATH", value);
+                }
+            } else {
+                // Safety: test-only environment mutation guarded by a global mutex.
+                unsafe {
+                    env::remove_var("CODEWHALE_CONFIG_PATH");
                 }
             }
 
@@ -2166,6 +2340,129 @@ mod tests {
         assert!(
             body.contains("status_items"),
             "expected status_items in {body}"
+        );
+    }
+
+    #[test]
+    fn persist_permission_rules_writes_deduped_rules_to_permissions_toml() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "deepseek-permission-rules-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root).unwrap();
+        let _guard = EnvGuard::new(&temp_root);
+
+        let path = temp_root.join(".deepseek").join("config.toml");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            "# user config header\napi_key = \"sentinel-key\" # keep inline\nmodel = \"deepseek-v4-pro\"\n",
+        )
+        .unwrap();
+        let permissions_path = temp_root.join(".deepseek").join("permissions.toml");
+        fs::write(&permissions_path, "# user permission notes\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&permissions_path, fs::Permissions::from_mode(0o644)).unwrap();
+        }
+
+        let cargo_rule = codewhale_execpolicy::ToolPermissionRule::exec_shell(
+            codewhale_execpolicy::PermissionDecision::Allow,
+            "cargo test",
+        );
+        let docs_rule = codewhale_execpolicy::ToolPermissionRule::file_path(
+            "read_file",
+            codewhale_execpolicy::PermissionDecision::Allow,
+            "docs/README.md",
+        );
+        let written =
+            persist_permission_rules(&[cargo_rule.clone(), cargo_rule.clone(), docs_rule.clone()])
+                .expect("persist should succeed");
+
+        assert_eq!(written, permissions_path);
+
+        let config_body = fs::read_to_string(&path).expect("config file should be readable");
+        assert!(
+            config_body.contains("# user config header"),
+            "permission persistence should not rewrite config.toml: {config_body}"
+        );
+        assert!(
+            config_body.contains("# keep inline"),
+            "permission persistence should not rewrite config.toml: {config_body}"
+        );
+        assert!(
+            config_body.contains("api_key = \"sentinel-key\""),
+            "config.toml lost api_key: {config_body}"
+        );
+        assert!(
+            config_body.contains("model = \"deepseek-v4-pro\""),
+            "config.toml lost model: {config_body}"
+        );
+
+        let body = fs::read_to_string(&written).expect("written file should be readable");
+        assert!(
+            body.contains("# user permission notes"),
+            "round-trip lost permissions comment: {body}"
+        );
+        assert!(
+            body.contains("[[rules]]"),
+            "expected top-level rules in {body}"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&written).unwrap().permissions().mode() & 0o777,
+                0o600,
+                "permissions.toml should be owner-only"
+            );
+        }
+
+        let config = Config::load(Some(path), None).expect("config and permissions should load");
+        assert_eq!(config.permissions.rules, vec![cargo_rule, docs_rule]);
+    }
+
+    #[test]
+    fn persist_permission_rules_prefers_codewhale_config_path() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-permission-rules-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root).unwrap();
+        let _guard = EnvGuard::new(&temp_root);
+
+        let codewhale_path = temp_root.join(".codewhale").join("config.toml");
+        let codewhale_config_str = OsString::from(codewhale_path.as_os_str());
+        unsafe {
+            env::set_var("CODEWHALE_CONFIG_PATH", &codewhale_config_str);
+        }
+
+        let rule = codewhale_execpolicy::ToolPermissionRule::file_path(
+            "write_file",
+            codewhale_execpolicy::PermissionDecision::Allow,
+            "src/testfile2",
+        );
+        let written = persist_permission_rules(&[rule]).expect("persist should succeed");
+
+        assert_eq!(
+            written,
+            temp_root.join(".codewhale").join("permissions.toml")
+        );
+        assert!(written.exists());
+        assert!(
+            !temp_root.join(".deepseek").join("config.toml").exists(),
+            "persist should not fall back to legacy config when CODEWHALE_CONFIG_PATH is set"
         );
     }
 }

@@ -1884,8 +1884,8 @@ mod tests {
         ACTIVE_TOOL_COMPLETED_ROW_TTL, ACTIVE_TOOL_STALE_RUNNING_ROW_TTL, AutoSidebarPanel,
         AutoSidebarState, SidebarAgentRow, SidebarHoverSection, SidebarHoverState,
         SidebarSubagentSummary, SidebarWorkChecklistItem, SidebarWorkStrategyStep,
-        SidebarWorkSummary, auto_sidebar_panels, subagent_panel_lines, task_panel_lines,
-        work_panel_empty_hint, work_panel_lines,
+        SidebarWorkSummary, auto_sidebar_panels, duration_ms, subagent_panel_lines,
+        task_panel_lines, work_panel_empty_hint, work_panel_lines,
     };
     use crate::config::Config;
     use crate::palette::PaletteMode;
@@ -2228,6 +2228,8 @@ mod tests {
     fn tasks_panel_collapses_stale_running_tool_rows() {
         let mut app = create_test_app();
         let mut active = ActiveCell::new();
+        let stale_duration_ms =
+            duration_ms(ACTIVE_TOOL_STALE_RUNNING_ROW_TTL).saturating_add(1_000);
         for (idx, command) in ["long one", "long two"].into_iter().enumerate() {
             active.push_tool(
                 format!("shell-{idx}"),
@@ -2236,7 +2238,7 @@ mod tests {
                     status: ToolStatus::Running,
                     output: None,
                     started_at: None,
-                    duration_ms: Some(ACTIVE_TOOL_STALE_RUNNING_ROW_TTL.as_millis() as u64 + 1),
+                    duration_ms: Some(stale_duration_ms),
                     source: ExecSource::Assistant,
                     interaction: None,
                     output_summary: None,

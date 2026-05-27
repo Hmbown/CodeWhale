@@ -6,6 +6,8 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
 
 use anyhow::{Context, Result, bail};
+use codewhale_execpolicy::{ExecPolicyEngine, Ruleset};
+pub use codewhale_execpolicy::{PermissionDecision, ToolPermissionRule};
 use codewhale_secrets::SecretSource;
 pub use codewhale_secrets::Secrets;
 use serde::{Deserialize, Serialize};
@@ -14,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 pub const CONFIG_FILE_NAME: &str = "config.toml";
+pub const PERMISSIONS_FILE_NAME: &str = "permissions.toml";
 const DEFAULT_DEEPSEEK_MODEL: &str = "deepseek-v4-pro";
 const DEFAULT_NVIDIA_NIM_MODEL: &str = "deepseek-ai/deepseek-v4-pro";
 const DEFAULT_NVIDIA_NIM_FLASH_MODEL: &str = "deepseek-ai/deepseek-v4-flash";
@@ -195,6 +198,19 @@ impl ProvidersToml {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct PermissionsToml {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rules: Vec<ToolPermissionRule>,
+}
+
+impl PermissionsToml {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.rules.is_empty()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ConfigToml {
     /// TUI-compatible DeepSeek API key. Kept at the root so both `deepseek`
@@ -219,6 +235,16 @@ pub struct ConfigToml {
     /// Native tool catalog controls shared with `codewhale-tui`.
     #[serde(default)]
     pub tools: Option<ToolsToml>,
+    /// Legacy command allow-list. Entries become `exec_shell` allow rules.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub auto_allow: Vec<String>,
+    /// Legacy command deny-list. Entries become `exec_shell` deny rules.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub auto_deny: Vec<String>,
+    /// Typed tool permission rules. First version supports tool name, command
+    /// prefix, and workspace-relative path glob matching.
+    #[serde(default, skip_serializing_if = "PermissionsToml::is_empty")]
+    pub permissions: PermissionsToml,
     #[serde(default)]
     pub providers: ProvidersToml,
     /// Per-domain network policy (#135). When absent, network tools fall back
@@ -387,6 +413,17 @@ impl ConfigToml {
         if project.tools.is_some() {
             self.tools = project.tools;
         }
+        // Repo-local config may only tighten permissions. `auto_allow` is
+        // intentionally ignored because it grants shell execution trust.
+        if !project.auto_deny.is_empty() {
+            self.auto_deny.extend(project.auto_deny);
+        }
+        let project_rules = project
+            .permissions
+            .rules
+            .into_iter()
+            .filter(|rule| rule.decision != PermissionDecision::Allow);
+        self.permissions.rules.extend(project_rules);
         merge_project_provider_config(&mut self.providers.deepseek, &project.providers.deepseek);
         merge_project_provider_config(
             &mut self.providers.nvidia_nim,
@@ -413,6 +450,21 @@ impl ConfigToml {
     }
 
     #[must_use]
+    pub fn permission_ruleset(&self) -> Ruleset {
+        Ruleset::user(self.auto_allow.clone(), self.auto_deny.clone())
+            .with_rules(self.permissions.rules.clone())
+    }
+
+    pub fn append_permissions(&mut self, permissions: PermissionsToml) {
+        self.permissions.rules.extend(permissions.rules);
+    }
+
+    #[must_use]
+    pub fn exec_policy_engine(&self) -> ExecPolicyEngine {
+        ExecPolicyEngine::with_rulesets(vec![self.permission_ruleset()])
+    }
+
+    #[must_use]
     pub fn get_value(&self, key: &str) -> Option<String> {
         match key {
             "provider" => Some(self.provider.as_str().to_string()),
@@ -428,6 +480,8 @@ impl ConfigToml {
             "approval_policy" => self.approval_policy.clone(),
             "sandbox_mode" => self.sandbox_mode.clone(),
             "tools.always_load" => self.tools.as_ref().map(|tools| tools.always_load.join(",")),
+            "auto_allow" => serialize_string_list(&self.auto_allow),
+            "auto_deny" => serialize_string_list(&self.auto_deny),
             "providers.deepseek.api_key" => self.providers.deepseek.api_key.clone(),
             "providers.deepseek.base_url" => self.providers.deepseek.base_url.clone(),
             "providers.deepseek.model" => self.providers.deepseek.model.clone(),
@@ -1467,26 +1521,26 @@ pub struct ResolvedRuntimeOptions {
 pub struct ConfigStore {
     path: PathBuf,
     pub config: ConfigToml,
+    permissions: PermissionsToml,
 }
 
 impl ConfigStore {
     pub fn load(path: Option<PathBuf>) -> Result<Self> {
         let path = resolve_config_path(path)?;
-        if !path.exists() {
-            return Ok(Self {
-                path,
-                config: ConfigToml::default(),
-            });
-        }
-
-        let raw = fs::read_to_string(&path)
-            .with_context(|| format!("failed to read config at {}", path.display()))?;
-        let parsed: ConfigToml = toml::from_str(&raw)
-            .with_context(|| format!("failed to parse config at {}", path.display()))?;
+        let parsed = if path.exists() {
+            let raw = fs::read_to_string(&path)
+                .with_context(|| format!("failed to read config at {}", path.display()))?;
+            toml::from_str(&raw)
+                .with_context(|| format!("failed to parse config at {}", path.display()))?
+        } else {
+            ConfigToml::default()
+        };
+        let permissions = load_sibling_permissions(&path)?;
 
         Ok(Self {
             path,
             config: parsed,
+            permissions,
         })
     }
 
@@ -1527,6 +1581,13 @@ impl ConfigStore {
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    #[must_use]
+    pub fn effective_config(&self) -> ConfigToml {
+        let mut config = self.config.clone();
+        config.append_permissions(self.permissions.clone());
+        config
     }
 }
 
@@ -1665,6 +1726,37 @@ pub fn resolve_config_path(explicit: Option<PathBuf>) -> Result<PathBuf> {
     normalize_config_file_path(path)
 }
 
+pub fn permissions_path_for_config_path(config_path: &Path) -> PathBuf {
+    config_path.with_file_name(PERMISSIONS_FILE_NAME)
+}
+
+pub fn resolve_permissions_path(config_path: Option<PathBuf>) -> Result<PathBuf> {
+    Ok(permissions_path_for_config_path(&resolve_config_path(
+        config_path,
+    )?))
+}
+
+fn load_sibling_permissions(config_path: &Path) -> Result<PermissionsToml> {
+    let permissions_path = permissions_path_for_config_path(config_path);
+    if !permissions_path.exists() {
+        return Ok(PermissionsToml::default());
+    }
+
+    let raw = fs::read_to_string(&permissions_path).with_context(|| {
+        format!(
+            "failed to read permissions at {}",
+            permissions_path.display()
+        )
+    })?;
+    let permissions: PermissionsToml = toml::from_str(&raw).with_context(|| {
+        format!(
+            "failed to parse permissions at {}",
+            permissions_path.display()
+        )
+    })?;
+    Ok(permissions)
+}
+
 pub fn default_config_path() -> Result<PathBuf> {
     // Prefer ~/.codewhale/config.toml when it exists (fresh install or
     // migrated), otherwise fall back to ~/.deepseek/config.toml.
@@ -1749,6 +1841,13 @@ fn serialize_http_headers(headers: &BTreeMap<String, String>) -> Option<String> 
             .collect::<Vec<_>>()
             .join(","),
     )
+}
+
+fn serialize_string_list(values: &[String]) -> Option<String> {
+    if values.is_empty() {
+        return None;
+    }
+    Some(values.join(","))
 }
 
 fn redact_secret(secret: &str) -> String {
@@ -1958,6 +2057,123 @@ mod tests {
         assert_eq!(policy.default, "allow");
         assert_eq!(policy.proxy, ["github.com", ".githubusercontent.com"]);
         assert!(policy.audit);
+    }
+
+    #[test]
+    fn permissions_toml_deserializes_typed_rules_and_legacy_lists() {
+        let config: ConfigToml = toml::from_str(
+            r#"
+            auto_allow = ["git status"]
+            auto_deny = ["rm -rf"]
+
+            [[permissions.rules]]
+            tool = "exec_shell"
+            decision = "allow"
+            command = "cargo test"
+
+            [[permissions.rules]]
+            tool = "edit_file"
+            decision = "ask"
+            path = "src/**"
+            "#,
+        )
+        .expect("permissions toml");
+
+        assert_eq!(config.auto_allow, ["git status"]);
+        assert_eq!(config.auto_deny, ["rm -rf"]);
+        assert_eq!(config.permissions.rules.len(), 2);
+        assert_eq!(
+            config.permissions.rules[0],
+            ToolPermissionRule::exec_shell(PermissionDecision::Allow, "cargo test")
+        );
+        assert_eq!(
+            config.permissions.rules[1],
+            ToolPermissionRule::file_path("edit_file", PermissionDecision::Ask, "src/**")
+        );
+    }
+
+    #[test]
+    fn config_builds_exec_policy_engine_with_legacy_and_typed_rules() {
+        let config: ConfigToml = toml::from_str(
+            r#"
+            auto_allow = ["git status"]
+
+            [[permissions.rules]]
+            tool = "exec_shell"
+            decision = "deny"
+            command = "git status --dangerous"
+            "#,
+        )
+        .expect("permissions toml");
+        let engine = config.exec_policy_engine();
+
+        let allowed = engine
+            .check(codewhale_execpolicy::ExecPolicyContext {
+                command: "git status --porcelain",
+                cwd: ".",
+                ask_for_approval: codewhale_execpolicy::AskForApproval::UnlessTrusted,
+                sandbox_mode: Some("workspace-write"),
+            })
+            .expect("policy decision");
+        assert!(allowed.allow);
+        assert!(!allowed.requires_approval);
+
+        let denied = engine
+            .check(codewhale_execpolicy::ExecPolicyContext {
+                command: "git status --dangerous",
+                cwd: ".",
+                ask_for_approval: codewhale_execpolicy::AskForApproval::UnlessTrusted,
+                sandbox_mode: Some("workspace-write"),
+            })
+            .expect("policy decision");
+        assert!(!denied.allow);
+        assert_eq!(denied.requirement.phase(), "forbidden");
+    }
+
+    #[test]
+    fn config_store_loads_sibling_permissions_toml() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "codewhale-permissions-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).expect("mkdir");
+        let config_path = dir.join(CONFIG_FILE_NAME);
+        fs::write(&config_path, "auto_allow = [\"git status\"]\n").expect("write config");
+        fs::write(
+            dir.join(PERMISSIONS_FILE_NAME),
+            r#"
+[[rules]]
+tool = "read_file"
+decision = "ask"
+path = "secrets/**"
+"#,
+        )
+        .expect("write permissions");
+
+        let store = ConfigStore::load(Some(config_path)).expect("load config store");
+
+        assert_eq!(store.config.auto_allow, ["git status"]);
+        assert!(
+            store.config.permissions.rules.is_empty(),
+            "sibling permissions must not be written back into config.toml"
+        );
+        let effective = store.effective_config();
+        assert_eq!(
+            effective.permissions.rules,
+            vec![ToolPermissionRule::file_path(
+                "read_file",
+                PermissionDecision::Ask,
+                "secrets/**"
+            )]
+        );
+
+        let _ = fs::remove_dir_all(dir);
     }
 
     struct EnvGuard {
@@ -2648,6 +2864,42 @@ mod tests {
     }
 
     #[test]
+    fn project_merge_ignores_auto_allow_but_keeps_tightening_rules() {
+        let mut base = ConfigToml {
+            auto_allow: vec!["git status".to_string()],
+            auto_deny: vec!["rm -rf".to_string()],
+            ..ConfigToml::default()
+        };
+
+        base.merge_project_overrides(ConfigToml {
+            auto_allow: vec!["cargo test".to_string()],
+            auto_deny: vec!["curl https://secrets.example".to_string()],
+            permissions: PermissionsToml {
+                rules: vec![
+                    ToolPermissionRule::exec_shell(PermissionDecision::Allow, "cargo test"),
+                    ToolPermissionRule::file_path(
+                        "read_file",
+                        PermissionDecision::Ask,
+                        "secrets/**",
+                    ),
+                    ToolPermissionRule::file_path("write_file", PermissionDecision::Deny, "src/**"),
+                ],
+            },
+            ..ConfigToml::default()
+        });
+
+        assert_eq!(base.auto_allow, ["git status"]);
+        assert_eq!(base.auto_deny, ["rm -rf", "curl https://secrets.example"]);
+        assert_eq!(
+            base.permissions.rules,
+            vec![
+                ToolPermissionRule::file_path("read_file", PermissionDecision::Ask, "secrets/**"),
+                ToolPermissionRule::file_path("write_file", PermissionDecision::Deny, "src/**"),
+            ]
+        );
+    }
+
+    #[test]
     fn list_values_redacts_unicode_api_key_without_byte_slicing() {
         let config = ConfigToml {
             api_key: Some("密钥密钥密钥密钥123456789".to_string()),
@@ -2693,6 +2945,7 @@ mod tests {
                 api_key: Some("new-secret".to_string()),
                 ..ConfigToml::default()
             },
+            permissions: PermissionsToml::default(),
         };
         store.save().expect("save");
 

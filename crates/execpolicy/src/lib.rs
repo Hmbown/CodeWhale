@@ -1,14 +1,19 @@
 pub mod bash_arity;
 
-use std::collections::HashSet;
+use std::{
+    collections::HashSet,
+    path::{Component, Path, PathBuf},
+};
 
 use anyhow::Result;
 use bash_arity::BashArityDict;
 use codewhale_protocol::{NetworkPolicyAmendment, NetworkPolicyRuleAction};
+use globset::GlobBuilder;
 use serde::{Deserialize, Serialize};
 
 /// Priority layer for a permission ruleset. Higher ordinal = higher priority.
-/// On conflict, the highest-priority layer's longest matching prefix wins.
+/// Deny rules still win across layers. For non-deny matches, higher-priority
+/// layers win first, then narrower patterns, then ask/allow precedence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RulesetLayer {
@@ -17,12 +22,100 @@ pub enum RulesetLayer {
     User = 2,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionDecision {
+    Allow,
+    Deny,
+    Ask,
+}
+
+impl PermissionDecision {
+    fn precedence(self) -> u8 {
+        match self {
+            Self::Deny => 3,
+            Self::Ask => 2,
+            Self::Allow => 1,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Allow => "allow",
+            Self::Deny => "deny",
+            Self::Ask => "ask",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolPermissionRule {
+    pub tool: String,
+    pub decision: PermissionDecision,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+impl ToolPermissionRule {
+    #[must_use]
+    pub fn new(tool: impl Into<String>, decision: PermissionDecision) -> Self {
+        Self {
+            tool: tool.into(),
+            decision,
+            command: None,
+            path: None,
+        }
+    }
+
+    #[must_use]
+    pub fn exec_shell(decision: PermissionDecision, command: impl Into<String>) -> Self {
+        Self {
+            tool: "exec_shell".to_string(),
+            decision,
+            command: Some(command.into()),
+            path: None,
+        }
+    }
+
+    #[must_use]
+    pub fn file_path(
+        tool: impl Into<String>,
+        decision: PermissionDecision,
+        path: impl Into<String>,
+    ) -> Self {
+        Self {
+            tool: tool.into(),
+            decision,
+            command: None,
+            path: Some(path.into()),
+        }
+    }
+
+    #[must_use]
+    pub fn pattern_label(&self) -> String {
+        let mut parts = vec![format!("tool '{}'", self.tool)];
+        if let Some(command) = self.command.as_deref() {
+            parts.push(format!("command '{command}'"));
+        }
+        if let Some(path) = self.path.as_deref() {
+            parts.push(format!("path '{path}'"));
+        }
+        parts.join(", ")
+    }
+}
+
 /// A named set of allow/deny prefix rules at a given priority layer.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Ruleset {
     pub layer: RulesetLayer,
+    #[serde(default)]
     pub trusted_prefixes: Vec<String>,
+    #[serde(default)]
     pub denied_prefixes: Vec<String>,
+    #[serde(default)]
+    pub rules: Vec<ToolPermissionRule>,
 }
 
 impl Ruleset {
@@ -31,6 +124,7 @@ impl Ruleset {
             layer: RulesetLayer::BuiltinDefault,
             trusted_prefixes: vec![],
             denied_prefixes: vec![],
+            rules: vec![],
         }
     }
 
@@ -39,6 +133,7 @@ impl Ruleset {
             layer: RulesetLayer::Agent,
             trusted_prefixes: trusted,
             denied_prefixes: denied,
+            rules: vec![],
         }
     }
 
@@ -47,7 +142,14 @@ impl Ruleset {
             layer: RulesetLayer::User,
             trusted_prefixes: trusted,
             denied_prefixes: denied,
+            rules: vec![],
         }
+    }
+
+    #[must_use]
+    pub fn with_rules(mut self, rules: Vec<ToolPermissionRule>) -> Self {
+        self.rules = rules;
+        self
     }
 }
 
@@ -126,11 +228,62 @@ pub struct ExecPolicyContext<'a> {
     pub sandbox_mode: Option<&'a str>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ToolPermissionContext<'a> {
+    pub tool: &'a str,
+    pub command: Option<&'a str>,
+    pub path: Option<&'a str>,
+    /// Workspace root used to normalize absolute tool paths before matching
+    /// workspace-relative path rules.
+    pub workspace_root: Option<&'a str>,
+}
+
+impl<'a> ToolPermissionContext<'a> {
+    #[must_use]
+    pub fn exec_shell(command: &'a str) -> Self {
+        Self {
+            tool: "exec_shell",
+            command: Some(command),
+            path: None,
+            workspace_root: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MatchedToolPermissionRule {
+    pub layer: RulesetLayer,
+    pub rule: ToolPermissionRule,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolPermissionCheck {
+    pub decision: Option<PermissionDecision>,
+    pub matched_rule: Option<MatchedToolPermissionRule>,
+}
+
+impl ToolPermissionCheck {
+    #[must_use]
+    pub fn unmatched() -> Self {
+        Self {
+            decision: None,
+            matched_rule: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct LayeredToolPermissionRule {
+    layer: RulesetLayer,
+    rule: ToolPermissionRule,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ExecPolicyEngine {
     /// Layered rulesets (builtin → agent → user). When non-empty, takes precedence
     /// over the legacy flat lists below.
     rulesets: Vec<Ruleset>,
+    layered_rules: Vec<LayeredToolPermissionRule>,
     /// Legacy flat lists kept for backward compatibility with `new()`.
     trusted_prefixes: Vec<String>,
     denied_prefixes: Vec<String>,
@@ -142,8 +295,11 @@ pub struct ExecPolicyEngine {
 impl ExecPolicyEngine {
     /// Legacy constructor: wraps the two vecs into a User-layer ruleset.
     pub fn new(trusted_prefixes: Vec<String>, denied_prefixes: Vec<String>) -> Self {
+        let layered_rules =
+            build_layered_permission_rules(&[], &trusted_prefixes, &denied_prefixes);
         Self {
             rulesets: vec![],
+            layered_rules,
             trusted_prefixes,
             denied_prefixes,
             approved_for_session: HashSet::new(),
@@ -155,8 +311,10 @@ impl ExecPolicyEngine {
     /// Rulesets are sorted by layer priority on construction.
     pub fn with_rulesets(mut rulesets: Vec<Ruleset>) -> Self {
         rulesets.sort_by_key(|r| r.layer);
+        let layered_rules = build_layered_permission_rules(&rulesets, &[], &[]);
         Self {
             rulesets,
+            layered_rules,
             trusted_prefixes: vec![],
             denied_prefixes: vec![],
             approved_for_session: HashSet::new(),
@@ -168,30 +326,15 @@ impl ExecPolicyEngine {
     pub fn add_ruleset(&mut self, ruleset: Ruleset) {
         self.rulesets.push(ruleset);
         self.rulesets.sort_by_key(|r| r.layer);
+        self.layered_rules = build_layered_permission_rules(
+            &self.rulesets,
+            &self.trusted_prefixes,
+            &self.denied_prefixes,
+        );
     }
 
-    /// Resolve the effective trusted/denied prefix sets by merging all rulesets.
-    ///
-    /// Collects all prefixes from every layer (builtin → agent → user) into flat
-    /// trusted/denied lists. The `check()` method then applies deny-always-wins
-    /// semantics: any matching deny prefix blocks the command regardless of layer.
-    /// Trusted rules are only consulted after deny checks pass.
-    fn resolve_prefixes(&self) -> (Vec<String>, Vec<String>) {
-        if self.rulesets.is_empty() {
-            return (self.trusted_prefixes.clone(), self.denied_prefixes.clone());
-        }
-        // Collect all trusted/denied across all layers, highest-priority last so they
-        // shadow lower-priority entries with the same prefix.
-        let mut trusted: Vec<String> = vec![];
-        let mut denied: Vec<String> = vec![];
-        for rs in &self.rulesets {
-            trusted.extend(rs.trusted_prefixes.iter().cloned());
-            denied.extend(rs.denied_prefixes.iter().cloned());
-        }
-        // Also merge legacy flat lists as user-layer.
-        trusted.extend(self.trusted_prefixes.iter().cloned());
-        denied.extend(self.denied_prefixes.iter().cloned());
-        (trusted, denied)
+    fn layered_permission_rules(&self) -> &[LayeredToolPermissionRule] {
+        &self.layered_rules
     }
 
     pub fn remember_session_approval(&mut self, approval_key: String) {
@@ -202,62 +345,113 @@ impl ExecPolicyEngine {
         self.approved_for_session.contains(approval_key)
     }
 
+    #[must_use]
+    pub fn check_tool_permission(&self, ctx: ToolPermissionContext<'_>) -> ToolPermissionCheck {
+        let mut best: Option<(&LayeredToolPermissionRule, usize)> = None;
+
+        for candidate in self.layered_permission_rules() {
+            if !tool_rule_matches(&candidate.rule, &ctx, &self.arity_dict) {
+                continue;
+            }
+            let specificity = rule_specificity(&candidate.rule);
+            let should_replace = best.as_ref().is_none_or(|(current, current_specificity)| {
+                compare_rule_priority(candidate, specificity, current, *current_specificity)
+            });
+            if should_replace {
+                best = Some((candidate, specificity));
+            }
+        }
+
+        match best {
+            Some((matched, _)) => ToolPermissionCheck {
+                decision: Some(matched.rule.decision),
+                matched_rule: Some(MatchedToolPermissionRule {
+                    layer: matched.layer,
+                    rule: matched.rule.clone(),
+                }),
+            },
+            None => ToolPermissionCheck::unmatched(),
+        }
+    }
+
     pub fn check(&self, ctx: ExecPolicyContext<'_>) -> Result<ExecPolicyDecision> {
-        let normalized = normalize_command(ctx.command);
-        let (trusted_prefixes, denied_prefixes) = self.resolve_prefixes();
-        // Deny rules use simple prefix matching (no arity semantics needed).
-        if let Some(rule) = denied_prefixes
-            .iter()
-            .find(|rule| normalized.starts_with(&normalize_command(rule)))
+        let tool_rule = self.check_tool_permission(ToolPermissionContext::exec_shell(ctx.command));
+        if let Some(matched) = tool_rule
+            .matched_rule
+            .as_ref()
+            .filter(|matched| matched.rule.decision == PermissionDecision::Deny)
         {
             return Ok(ExecPolicyDecision {
                 allow: false,
                 requires_approval: false,
-                matched_rule: Some(rule.clone()),
+                matched_rule: Some(matched.rule.pattern_label()),
                 requirement: ExecApprovalRequirement::Forbidden {
-                    reason: format!("Command blocked by denied prefix rule '{rule}'"),
+                    reason: format!(
+                        "Command blocked by {} rule ({})",
+                        matched.rule.decision.as_str(),
+                        matched.rule.pattern_label()
+                    ),
                 },
             });
         }
-
-        // Allow (trusted) rules use arity-aware prefix matching so that
-        // `auto_allow = ["git status"]` matches `git status -s` but NOT
-        // `git push origin main`.
-        let trusted_rule = trusted_prefixes
-            .iter()
-            .find(|rule| self.arity_dict.allow_rule_matches(rule, ctx.command))
-            .cloned();
-        let is_trusted = trusted_rule.is_some();
 
         let requirement = match ctx.ask_for_approval {
             AskForApproval::Never => ExecApprovalRequirement::Skip {
                 bypass_sandbox: false,
                 proposed_execpolicy_amendment: None,
             },
-            AskForApproval::UnlessTrusted if is_trusted => ExecApprovalRequirement::Skip {
-                bypass_sandbox: false,
-                proposed_execpolicy_amendment: None,
+            AskForApproval::Reject { rules, .. } if rules => ExecApprovalRequirement::Forbidden {
+                reason: "Policy is configured to reject rule-exceptions.".to_string(),
             },
+            _ if matches!(tool_rule.decision, Some(PermissionDecision::Ask)) => {
+                ExecApprovalRequirement::NeedsApproval {
+                    reason: tool_rule
+                        .matched_rule
+                        .as_ref()
+                        .map(|matched| {
+                            format!(
+                                "Approval required by ask rule ({})",
+                                matched.rule.pattern_label()
+                            )
+                        })
+                        .unwrap_or_else(|| "Approval required by ask rule.".to_string()),
+                    proposed_execpolicy_amendment: None,
+                    proposed_network_policy_amendments: vec![],
+                }
+            }
+            AskForApproval::OnRequest
+                if matches!(tool_rule.decision, Some(PermissionDecision::Allow)) =>
+            {
+                ExecApprovalRequirement::NeedsApproval {
+                    reason: "Approval requested by policy mode.".to_string(),
+                    proposed_execpolicy_amendment: None,
+                    proposed_network_policy_amendments: vec![],
+                }
+            }
+            AskForApproval::Reject { rules: false, .. }
+                if matches!(tool_rule.decision, Some(PermissionDecision::Allow)) =>
+            {
+                ExecApprovalRequirement::NeedsApproval {
+                    reason: "Approval requested by policy mode.".to_string(),
+                    proposed_execpolicy_amendment: None,
+                    proposed_network_policy_amendments: vec![],
+                }
+            }
+            _ if matches!(tool_rule.decision, Some(PermissionDecision::Allow)) => {
+                ExecApprovalRequirement::Skip {
+                    bypass_sandbox: false,
+                    proposed_execpolicy_amendment: None,
+                }
+            }
             AskForApproval::OnFailure => ExecApprovalRequirement::Skip {
                 bypass_sandbox: false,
                 proposed_execpolicy_amendment: None,
             },
-            AskForApproval::Reject { rules, .. } if rules => ExecApprovalRequirement::Forbidden {
-                reason: "Policy is configured to reject rule-exceptions.".to_string(),
-            },
             _ => ExecApprovalRequirement::NeedsApproval {
-                reason: if is_trusted {
-                    "Approval requested by policy mode.".to_string()
-                } else {
-                    "Unmatched command prefix requires approval.".to_string()
-                },
-                proposed_execpolicy_amendment: if is_trusted {
-                    None
-                } else {
-                    Some(ExecPolicyAmendment {
-                        prefixes: vec![first_token(ctx.command)],
-                    })
-                },
+                reason: "Unmatched command prefix requires approval.".to_string(),
+                proposed_execpolicy_amendment: Some(ExecPolicyAmendment {
+                    prefixes: vec![first_token(ctx.command)],
+                }),
                 proposed_network_policy_amendments: vec![NetworkPolicyAmendment {
                     host: ctx.cwd.to_string(),
                     action: NetworkPolicyRuleAction::Allow,
@@ -274,14 +468,292 @@ impl ExecPolicyEngine {
         Ok(ExecPolicyDecision {
             allow,
             requires_approval,
-            matched_rule: trusted_rule,
+            matched_rule: tool_rule
+                .matched_rule
+                .as_ref()
+                .map(|matched| matched.rule.pattern_label()),
             requirement,
         })
     }
 }
 
+fn legacy_command_rules(
+    layer: RulesetLayer,
+    trusted_prefixes: &[String],
+    denied_prefixes: &[String],
+) -> Vec<LayeredToolPermissionRule> {
+    trusted_prefixes
+        .iter()
+        .map(|command| LayeredToolPermissionRule {
+            layer,
+            rule: ToolPermissionRule::exec_shell(PermissionDecision::Allow, command.clone()),
+        })
+        .chain(
+            denied_prefixes
+                .iter()
+                .map(|command| LayeredToolPermissionRule {
+                    layer,
+                    rule: ToolPermissionRule::exec_shell(PermissionDecision::Deny, command.clone()),
+                }),
+        )
+        .collect()
+}
+
+fn build_layered_permission_rules(
+    rulesets: &[Ruleset],
+    trusted_prefixes: &[String],
+    denied_prefixes: &[String],
+) -> Vec<LayeredToolPermissionRule> {
+    let mut rules = Vec::new();
+    if rulesets.is_empty() {
+        rules.extend(legacy_command_rules(
+            RulesetLayer::User,
+            trusted_prefixes,
+            denied_prefixes,
+        ));
+        return rules;
+    }
+
+    for ruleset in rulesets {
+        rules.extend(
+            ruleset
+                .rules
+                .iter()
+                .cloned()
+                .map(|rule| LayeredToolPermissionRule {
+                    layer: ruleset.layer,
+                    rule,
+                }),
+        );
+        rules.extend(legacy_command_rules(
+            ruleset.layer,
+            &ruleset.trusted_prefixes,
+            &ruleset.denied_prefixes,
+        ));
+    }
+    rules.extend(legacy_command_rules(
+        RulesetLayer::User,
+        trusted_prefixes,
+        denied_prefixes,
+    ));
+    rules
+}
+
+fn compare_rule_priority(
+    candidate: &LayeredToolPermissionRule,
+    candidate_specificity: usize,
+    current: &LayeredToolPermissionRule,
+    current_specificity: usize,
+) -> bool {
+    match (candidate.rule.decision, current.rule.decision) {
+        (PermissionDecision::Deny, PermissionDecision::Deny) => {
+            return (candidate.layer, candidate_specificity) > (current.layer, current_specificity);
+        }
+        (PermissionDecision::Deny, _) => return true,
+        (_, PermissionDecision::Deny) => return false,
+        _ => {}
+    }
+
+    (
+        candidate.layer,
+        candidate_specificity,
+        candidate.rule.decision.precedence(),
+    ) > (
+        current.layer,
+        current_specificity,
+        current.rule.decision.precedence(),
+    )
+}
+
+fn tool_rule_matches(
+    rule: &ToolPermissionRule,
+    ctx: &ToolPermissionContext<'_>,
+    arity_dict: &BashArityDict,
+) -> bool {
+    if !rule.tool.eq_ignore_ascii_case(ctx.tool) {
+        return false;
+    }
+    if let Some(command_rule) = rule.command.as_deref() {
+        let Some(command) = ctx.command else {
+            return false;
+        };
+        if !command_rule_matches(rule.decision, command_rule, command, arity_dict) {
+            return false;
+        }
+    }
+    if let Some(path_rule) = rule.path.as_deref() {
+        let Some(path) = ctx.path else {
+            return false;
+        };
+        if !path_pattern_matches(path_rule, path, ctx.workspace_root) {
+            return false;
+        }
+    }
+    true
+}
+
+fn command_rule_matches(
+    decision: PermissionDecision,
+    pattern: &str,
+    command: &str,
+    arity_dict: &BashArityDict,
+) -> bool {
+    match decision {
+        PermissionDecision::Deny => command_prefix_matches(pattern, command),
+        PermissionDecision::Allow | PermissionDecision::Ask => {
+            arity_dict.allow_rule_matches(pattern, command)
+        }
+    }
+}
+
+fn path_pattern_matches(pattern: &str, path: &str, workspace_root: Option<&str>) -> bool {
+    let pattern = normalize_path_pattern(pattern);
+    let path = normalize_path_for_matching(path, workspace_root);
+    if let Some(prefix) = pattern.strip_suffix("/**")
+        && path.starts_with(&format!("{prefix}/"))
+    {
+        return true;
+    }
+    if !pattern.contains('*') && !pattern.contains('?') {
+        return pattern == path;
+    }
+    GlobBuilder::new(&pattern)
+        .literal_separator(true)
+        .build()
+        .map(|glob| glob.compile_matcher().is_match(path))
+        .unwrap_or(false)
+}
+
+fn rule_specificity(rule: &ToolPermissionRule) -> usize {
+    let mut score = rule.tool.len();
+    if let Some(command) = rule.command.as_deref() {
+        score += 1_000 + non_wildcard_len(command);
+    }
+    if let Some(path) = rule.path.as_deref() {
+        score += 1_000 + non_wildcard_len(path);
+    }
+    score
+}
+
+fn non_wildcard_len(value: &str) -> usize {
+    value.chars().filter(|ch| *ch != '*' && *ch != '?').count()
+}
+
 fn normalize_command(value: &str) -> String {
-    value.trim().to_ascii_lowercase()
+    value
+        .trim()
+        .to_ascii_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn command_prefix_matches(pattern: &str, command: &str) -> bool {
+    let pattern = normalize_command(pattern);
+    if pattern.is_empty() {
+        return false;
+    }
+    let command = normalize_command(command);
+    command
+        .strip_prefix(&pattern)
+        .is_some_and(|suffix| suffix.is_empty() || suffix.starts_with(' '))
+}
+
+/// Normalize permission path patterns to slash-separated paths with `.` and
+/// safe `..` segments collapsed.
+pub fn normalize_path_pattern(value: &str) -> String {
+    let raw = value.trim().replace('\\', "/");
+    let absolute = raw.starts_with('/');
+    let mut segments = Vec::new();
+
+    for segment in raw.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                if absolute {
+                    segments.pop();
+                } else if segments.is_empty() || segments.last() == Some(&"..") {
+                    segments.push(segment);
+                } else {
+                    segments.pop();
+                }
+            }
+            _ => segments.push(segment),
+        }
+    }
+
+    let normalized = segments.join("/");
+    if absolute && normalized.is_empty() {
+        "/".to_string()
+    } else if absolute {
+        format!("/{normalized}")
+    } else {
+        normalized
+    }
+}
+
+/// Normalize a filesystem path for permission matching and rule generation.
+#[must_use]
+pub fn normalize_permission_path(path: &Path) -> PathBuf {
+    let mut prefix: Option<std::ffi::OsString> = None;
+    let mut is_root = false;
+    let mut stack: Vec<std::ffi::OsString> = Vec::new();
+
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix_component) => {
+                prefix = Some(prefix_component.as_os_str().to_owned());
+            }
+            Component::RootDir => {
+                is_root = true;
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                let parent = Component::ParentDir.as_os_str();
+                if let Some(last) = stack.pop() {
+                    if last == parent {
+                        stack.push(last);
+                        stack.push(parent.to_owned());
+                    }
+                } else if !is_root {
+                    stack.push(parent.to_owned());
+                }
+            }
+            Component::Normal(part) => {
+                stack.push(part.to_owned());
+            }
+        }
+    }
+
+    let mut normalized = PathBuf::new();
+    if let Some(prefix) = prefix {
+        normalized.push(prefix);
+    }
+    if is_root {
+        normalized.push(Path::new(std::path::MAIN_SEPARATOR_STR));
+    }
+    for part in stack {
+        normalized.push(part);
+    }
+    normalized
+}
+
+fn normalize_path_for_matching(path: &str, workspace_root: Option<&str>) -> String {
+    let path = normalize_path_pattern(path);
+    let Some(workspace_root) = workspace_root else {
+        return path;
+    };
+    let workspace_root = normalize_path_pattern(workspace_root);
+    if workspace_root.is_empty() {
+        return path;
+    }
+    if path == workspace_root {
+        return String::new();
+    }
+    let workspace_prefix = format!("{workspace_root}/");
+    path.strip_prefix(&workspace_prefix)
+        .unwrap_or(&path)
+        .to_string()
 }
 
 fn first_token(command: &str) -> String {
@@ -305,6 +777,10 @@ mod tests {
         }
     }
 
+    fn exec_ctx(command: &str) -> ExecPolicyContext<'_> {
+        ctx(command, AskForApproval::UnlessTrusted)
+    }
+
     #[test]
     fn trusted_prefix_skips_approval_when_policy_is_unless_trusted() {
         let engine = ExecPolicyEngine::new(vec!["git status".to_string()], vec![]);
@@ -315,7 +791,10 @@ mod tests {
 
         assert!(decision.allow);
         assert!(!decision.requires_approval);
-        assert_eq!(decision.matched_rule.as_deref(), Some("git status"));
+        assert_eq!(
+            decision.matched_rule.as_deref(),
+            Some("tool 'exec_shell', command 'git status'")
+        );
         assert!(matches!(
             decision.requirement,
             ExecApprovalRequirement::Skip {
@@ -338,14 +817,45 @@ mod tests {
 
         assert!(!decision.allow);
         assert!(!decision.requires_approval);
-        assert_eq!(decision.matched_rule.as_deref(), Some("git status"));
+        assert_eq!(
+            decision.matched_rule.as_deref(),
+            Some("tool 'exec_shell', command 'git status'")
+        );
         assert!(matches!(
             decision.requirement,
             ExecApprovalRequirement::Forbidden { .. }
         ));
         assert_eq!(
             decision.reason(),
-            "Command blocked by denied prefix rule 'git status'"
+            "Command blocked by deny rule (tool 'exec_shell', command 'git status')"
+        );
+    }
+
+    #[test]
+    fn denied_prefix_respects_command_word_boundaries() {
+        let engine = ExecPolicyEngine::new(vec![], vec!["ls".to_string()]);
+
+        let blocked = engine.check(exec_ctx("ls -la")).unwrap();
+        assert!(!blocked.allow);
+        assert_eq!(blocked.requirement.phase(), "forbidden");
+
+        let separate_binary = engine.check(exec_ctx("ls-remote origin")).unwrap();
+        assert!(separate_binary.allow);
+        assert!(separate_binary.requires_approval);
+        assert_eq!(separate_binary.matched_rule, None);
+    }
+
+    #[test]
+    fn legacy_auto_allow_prefixes_become_exec_shell_rules() {
+        let engine = ExecPolicyEngine::new(vec!["git status".to_string()], vec![]);
+
+        let decision = engine.check(exec_ctx("git status --porcelain")).unwrap();
+
+        assert!(decision.allow);
+        assert!(!decision.requires_approval);
+        assert_eq!(
+            decision.matched_rule.as_deref(),
+            Some("tool 'exec_shell', command 'git status'")
         );
     }
 
@@ -389,7 +899,10 @@ mod tests {
 
         assert!(decision.allow);
         assert!(decision.requires_approval);
-        assert_eq!(decision.matched_rule.as_deref(), Some("cargo test"));
+        assert_eq!(
+            decision.matched_rule.as_deref(),
+            Some("tool 'exec_shell', command 'cargo test'")
+        );
         match decision.requirement {
             ExecApprovalRequirement::NeedsApproval {
                 proposed_execpolicy_amendment,
@@ -422,5 +935,249 @@ mod tests {
             decision.reason(),
             "Policy is configured to reject rule-exceptions."
         );
+    }
+
+    #[test]
+    fn reject_without_rules_still_requires_approval_for_allow_rule() {
+        let engine =
+            ExecPolicyEngine::with_rulesets(vec![Ruleset::user(vec![], vec![]).with_rules(vec![
+                ToolPermissionRule::exec_shell(PermissionDecision::Allow, "cargo test"),
+            ])]);
+
+        let decision = engine
+            .check(ctx(
+                "cargo test --workspace",
+                AskForApproval::Reject {
+                    sandbox_approval: false,
+                    rules: false,
+                    mcp_elicitations: false,
+                },
+            ))
+            .unwrap();
+
+        assert!(decision.allow);
+        assert!(decision.requires_approval);
+        assert_eq!(decision.requirement.phase(), "needs_approval");
+        assert_eq!(
+            decision.matched_rule.as_deref(),
+            Some("tool 'exec_shell', command 'cargo test'")
+        );
+    }
+
+    #[test]
+    fn legacy_auto_allow_uses_bash_arity() {
+        let engine = ExecPolicyEngine::new(vec!["git status".to_string()], vec![]);
+
+        let decision = engine.check(exec_ctx("git push origin main")).unwrap();
+
+        assert!(decision.requires_approval);
+        assert_eq!(decision.matched_rule, None);
+    }
+
+    #[test]
+    fn deny_rule_wins_over_user_allow_rule() {
+        let engine = ExecPolicyEngine::with_rulesets(vec![
+            Ruleset::builtin_default().with_rules(vec![ToolPermissionRule::exec_shell(
+                PermissionDecision::Deny,
+                "cargo",
+            )]),
+            Ruleset::user(vec![], vec![]).with_rules(vec![ToolPermissionRule::exec_shell(
+                PermissionDecision::Allow,
+                "cargo test",
+            )]),
+        ]);
+
+        let decision = engine.check(exec_ctx("cargo test --workspace")).unwrap();
+
+        assert!(!decision.allow);
+        assert_eq!(decision.requirement.phase(), "forbidden");
+        assert_eq!(
+            decision.matched_rule.as_deref(),
+            Some("tool 'exec_shell', command 'cargo'")
+        );
+    }
+
+    #[test]
+    fn ask_rule_wins_over_allow_rule() {
+        let engine =
+            ExecPolicyEngine::with_rulesets(vec![Ruleset::user(vec![], vec![]).with_rules(vec![
+                ToolPermissionRule::exec_shell(PermissionDecision::Allow, "cargo"),
+                ToolPermissionRule::exec_shell(PermissionDecision::Ask, "cargo test"),
+            ])]);
+
+        let decision = engine.check(exec_ctx("cargo test --workspace")).unwrap();
+
+        assert!(decision.allow);
+        assert!(decision.requires_approval);
+        assert_eq!(decision.requirement.phase(), "needs_approval");
+        assert_eq!(
+            decision.matched_rule.as_deref(),
+            Some("tool 'exec_shell', command 'cargo test'")
+        );
+    }
+
+    #[test]
+    fn more_specific_allow_rule_wins_over_broad_ask_rule() {
+        let engine =
+            ExecPolicyEngine::with_rulesets(vec![Ruleset::user(vec![], vec![]).with_rules(vec![
+                ToolPermissionRule::exec_shell(PermissionDecision::Ask, "cargo test"),
+                ToolPermissionRule::exec_shell(PermissionDecision::Allow, "cargo test --workspace"),
+            ])]);
+
+        let decision = engine.check(exec_ctx("cargo test --workspace")).unwrap();
+
+        assert!(decision.allow);
+        assert!(!decision.requires_approval);
+        assert_eq!(decision.requirement.phase(), "allowed");
+        assert_eq!(
+            decision.matched_rule.as_deref(),
+            Some("tool 'exec_shell', command 'cargo test --workspace'")
+        );
+    }
+
+    #[test]
+    fn ask_rule_overrides_on_failure_policy() {
+        let engine =
+            ExecPolicyEngine::with_rulesets(vec![Ruleset::user(vec![], vec![]).with_rules(vec![
+                ToolPermissionRule::exec_shell(PermissionDecision::Ask, "cargo test"),
+            ])]);
+
+        let decision = engine
+            .check(ExecPolicyContext {
+                command: "cargo test --workspace",
+                cwd: ".",
+                ask_for_approval: AskForApproval::OnFailure,
+                sandbox_mode: Some("workspace-write"),
+            })
+            .unwrap();
+
+        assert!(decision.allow);
+        assert!(decision.requires_approval);
+        assert_eq!(decision.requirement.phase(), "needs_approval");
+    }
+
+    #[test]
+    fn path_rules_match_workspace_relative_globs() {
+        let engine =
+            ExecPolicyEngine::with_rulesets(vec![Ruleset::user(vec![], vec![]).with_rules(vec![
+                ToolPermissionRule::file_path("file_edit", PermissionDecision::Allow, "docs/**"),
+            ])]);
+
+        let decision = engine.check_tool_permission(ToolPermissionContext {
+            tool: "file_edit",
+            command: None,
+            path: Some("./docs/guide/setup.md"),
+            workspace_root: None,
+        });
+
+        assert_eq!(decision.decision, Some(PermissionDecision::Allow));
+    }
+
+    #[test]
+    fn exact_path_allow_rule_wins_over_broad_path_ask_rule() {
+        let engine =
+            ExecPolicyEngine::with_rulesets(vec![Ruleset::user(vec![], vec![]).with_rules(vec![
+                ToolPermissionRule::file_path("file_edit", PermissionDecision::Ask, "src/**"),
+                ToolPermissionRule::file_path(
+                    "file_edit",
+                    PermissionDecision::Allow,
+                    "src/main.rs",
+                ),
+            ])]);
+
+        let decision = engine.check_tool_permission(ToolPermissionContext {
+            tool: "file_edit",
+            command: None,
+            path: Some("src/main.rs"),
+            workspace_root: None,
+        });
+
+        assert_eq!(decision.decision, Some(PermissionDecision::Allow));
+        let label = decision
+            .matched_rule
+            .as_ref()
+            .map(|matched| matched.rule.pattern_label());
+        assert_eq!(
+            label.as_deref(),
+            Some("tool 'file_edit', path 'src/main.rs'")
+        );
+    }
+
+    #[test]
+    fn path_star_does_not_cross_directory_separator() {
+        assert!(path_pattern_matches("docs/*.md", "docs/readme.md", None));
+        assert!(!path_pattern_matches(
+            "docs/*.md",
+            "docs/guides/readme.md",
+            None
+        ));
+    }
+
+    #[test]
+    fn path_double_star_requires_child_path() {
+        assert!(path_pattern_matches("docs/**", "docs/readme.md", None));
+        assert!(!path_pattern_matches("docs/**", "docs", None));
+    }
+
+    #[test]
+    fn path_rules_normalize_dot_segments() {
+        assert!(path_pattern_matches("src/**", "src/./lib.rs", None));
+        assert!(!path_pattern_matches("src/**", "src/../secret.txt", None));
+        assert!(!path_pattern_matches("src/**", "../src/lib.rs", None));
+        assert!(path_pattern_matches("/foo", "/../foo", None));
+        assert!(!path_pattern_matches("/src/**", "/src/../secret.txt", None));
+    }
+
+    #[test]
+    fn normalize_permission_path_collapses_dot_segments() {
+        assert_eq!(
+            normalize_permission_path(Path::new("/../foo")),
+            PathBuf::from("/foo")
+        );
+        assert_eq!(
+            normalize_permission_path(Path::new("src/../docs/./guide.md")),
+            PathBuf::from("docs/guide.md")
+        );
+    }
+
+    #[test]
+    fn path_rules_match_absolute_paths_inside_workspace_root() {
+        let engine =
+            ExecPolicyEngine::with_rulesets(vec![Ruleset::user(vec![], vec![]).with_rules(vec![
+                ToolPermissionRule::file_path("file_edit", PermissionDecision::Deny, "secret.toml"),
+            ])]);
+
+        let denied = engine.check_tool_permission(ToolPermissionContext {
+            tool: "file_edit",
+            command: None,
+            path: Some("/workspace/project/secret.toml"),
+            workspace_root: Some("/workspace/project"),
+        });
+        assert_eq!(denied.decision, Some(PermissionDecision::Deny));
+
+        let outside_workspace = engine.check_tool_permission(ToolPermissionContext {
+            tool: "file_edit",
+            command: None,
+            path: Some("/workspace/other/secret.toml"),
+            workspace_root: Some("/workspace/project"),
+        });
+        assert_eq!(outside_workspace.decision, None);
+    }
+
+    #[test]
+    fn tool_name_only_rule_matches_unknown_tool() {
+        let engine =
+            ExecPolicyEngine::with_rulesets(vec![Ruleset::user(vec![], vec![]).with_rules(vec![
+                ToolPermissionRule::new("agent_spawn", PermissionDecision::Ask),
+            ])]);
+
+        let decision = engine.check_tool_permission(ToolPermissionContext {
+            tool: "agent_spawn",
+            command: None,
+            path: None,
+            workspace_root: None,
+        });
+
+        assert_eq!(decision.decision, Some(PermissionDecision::Ask));
     }
 }

@@ -12,7 +12,6 @@ use axum::{Json, Router};
 use codewhale_agent::ModelRegistry;
 use codewhale_config::{CliRuntimeOverrides, ConfigStore};
 use codewhale_core::Runtime;
-use codewhale_execpolicy::ExecPolicyEngine;
 use codewhale_hooks::{HookDispatcher, JsonlHookSink, StdoutHookSink};
 use codewhale_mcp::McpManager;
 use codewhale_protocol::{
@@ -298,7 +297,7 @@ async fn app_handler(
 
 fn build_state(config_path: Option<PathBuf>, auth_token: Option<String>) -> Result<AppState> {
     let store = ConfigStore::load(config_path.clone())?;
-    let config = store.config.clone();
+    let config = store.effective_config();
     let registry = ModelRegistry::default();
 
     let state_db_path = config_path
@@ -320,7 +319,7 @@ fn build_state(config_path: Option<PathBuf>, auth_token: Option<String>) -> Resu
         state_store,
         Arc::new(ToolRegistry::default()),
         Arc::new(McpManager::default()),
-        ExecPolicyEngine::new(Vec::new(), Vec::new()),
+        config.exec_policy_engine(),
         hooks,
     );
 

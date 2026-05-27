@@ -63,6 +63,23 @@ controls for live jobs. Jobs are process-local; after restart, live process
 state is not reattached, and any remembered detached entries must be marked
 stale rather than presented as live processes.
 
+### Tool permission precedence
+
+Typed permission rules can match by tool name, shell command prefix, or
+workspace-relative path pattern. Rules may return `allow`, `deny`, or `ask`.
+The precedence contract is:
+
+- Any matching `deny` rule wins across all layers.
+- Otherwise, higher layers win over lower layers (`user` over `agent` over
+  built-in defaults).
+- Within the same layer, more specific rules win before less specific rules.
+- If specificity is tied, `ask` wins over `allow`.
+
+Legacy `auto_allow` and `auto_deny` entries are converted into `exec_shell`
+permission rules for compatibility. Project-local config may only tighten the
+posture: `auto_deny` and typed `ask`/`deny` rules are honored, while
+project-local `auto_allow` and typed `allow` rules are ignored.
+
 ### MCP manager and palette discovery
 
 MCP server configuration is surfaced in the TUI through `/mcp` and the

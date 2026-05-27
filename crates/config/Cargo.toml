@@ -8,6 +8,7 @@ description = "Config schema and precedence model for DeepSeek workspace archite
 
 [dependencies]
 anyhow.workspace = true
+codewhale-execpolicy = { path = "../execpolicy", version = "0.8.46" }
 codewhale-secrets = { path = "../secrets", version = "0.8.46" }
 dirs.workspace = true
 serde.workspace = true

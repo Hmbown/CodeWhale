@@ -733,6 +733,7 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         search_provider: config.search_provider(),
         search_api_key: config.search.as_ref().and_then(|s| s.api_key.clone()),
         tools_always_load: config.tools_always_load(),
+        exec_policy_engine: config.exec_policy_engine(),
     }
 }
 
@@ -1893,6 +1894,7 @@ async fn run_event_loop(
                         id,
                         tool_name,
                         description,
+                        input,
                         approval_key,
                         approval_grouping_key,
                     } => {
@@ -1937,24 +1939,18 @@ async fn run_event_loop(
                             app.status_message =
                                 Some(format!("Blocked tool '{tool_name}' (approval_mode=never)"));
                         } else {
-                            let tool_input = app
-                                .pending_tool_uses
-                                .iter()
-                                .find(|(tool_id, _, _)| tool_id == &id)
-                                .map(|(_, _, input)| input.clone())
-                                .unwrap_or_else(|| serde_json::json!({}));
-
                             if tool_name == "apply_patch" {
-                                maybe_add_patch_preview(app, &tool_input);
+                                maybe_add_patch_preview(app, &input);
                             }
 
                             // Create approval request and show overlay
-                            let request = ApprovalRequest::new(
+                            let request = ApprovalRequest::new_with_workspace(
                                 &id,
                                 &tool_name,
                                 &description,
-                                &tool_input,
+                                &input,
                                 &approval_key,
+                                &app.workspace,
                             );
                             log_sensitive_event(
                                 "tool.approval.prompted",
@@ -6117,6 +6113,7 @@ async fn handle_view_events(
                 timed_out,
                 approval_key,
                 approval_grouping_key,
+                persistent_rules,
             } => {
                 apply_approval_decision(
                     app,
@@ -6128,6 +6125,7 @@ async fn handle_view_events(
                         timed_out,
                         approval_key,
                         approval_grouping_key,
+                        persistent_rules,
                     },
                 )
                 .await;
@@ -6410,6 +6408,7 @@ struct ApprovalDecisionEvent {
     timed_out: bool,
     approval_key: String,
     approval_grouping_key: String,
+    persistent_rules: Vec<codewhale_execpolicy::ToolPermissionRule>,
 }
 
 async fn apply_approval_decision(
@@ -6427,9 +6426,45 @@ async fn apply_approval_decision(
             .insert(event.approval_grouping_key.clone());
     }
 
+    let mut live_persistent_rules = Vec::new();
+    if matches!(
+        event.decision,
+        ReviewDecision::Approved | ReviewDecision::ApprovedForSession
+    ) && !event.persistent_rules.is_empty()
+    {
+        match commands::persist_permission_rules(&event.persistent_rules) {
+            Ok(path) => {
+                live_persistent_rules = event.persistent_rules;
+                let noun = if live_persistent_rules.len() == 1 {
+                    "rule"
+                } else {
+                    "rules"
+                };
+                app.push_status_toast(
+                    format!("Saved permission {noun} to {}", path.display()),
+                    StatusToastLevel::Success,
+                    Some(5_000),
+                );
+            }
+            Err(err) => {
+                app.push_status_toast(
+                    format!("Failed to save permission rule: {err}"),
+                    StatusToastLevel::Error,
+                    Some(10_000),
+                );
+            }
+        }
+    }
+
     match event.decision {
         ReviewDecision::Approved | ReviewDecision::ApprovedForSession => {
-            let _ = engine_handle.approve_tool_call(event.tool_id).await;
+            if live_persistent_rules.is_empty() {
+                let _ = engine_handle.approve_tool_call(event.tool_id).await;
+            } else {
+                let _ = engine_handle
+                    .approve_tool_call_with_rules(event.tool_id, live_persistent_rules)
+                    .await;
+            }
         }
         ReviewDecision::Denied => {
             // Cache the denial so the model retry-loop doesn't re-prompt for
