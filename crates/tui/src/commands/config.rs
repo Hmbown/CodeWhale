@@ -407,14 +407,19 @@ fn write_config_toml(path: &Path, body: &str) -> anyhow::Result<()> {
         .with_context(|| format!("failed to write config at {}", path.display()))
 }
 
-fn enforce_owner_only_permissions(path: &Path) -> anyhow::Result<()> {
+fn enforce_owner_only_permissions(_path: &Path) -> anyhow::Result<()> {
     #[cfg(unix)]
     {
         use anyhow::Context;
         use std::os::unix::fs::PermissionsExt;
 
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).with_context(
-            || format!("failed to set owner-only permissions at {}", path.display()),
+        std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o600)).with_context(
+            || {
+                format!(
+                    "failed to set owner-only permissions at {}",
+                    _path.display()
+                )
+            },
         )?;
     }
     Ok(())
