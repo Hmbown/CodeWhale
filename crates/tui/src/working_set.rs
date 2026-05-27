@@ -7,6 +7,9 @@
 //! - pinned message indices that compaction should preserve
 
 use crate::models::{ContentBlock, Message};
+use crate::workspace_discovery::{
+    DISCOVERY_ALWAYS_DIRS, path_is_excluded_from_discovery, should_skip_unignored_discovery_entry,
+};
 use ignore::WalkBuilder;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -269,32 +272,6 @@ const COMPLETIONS_WALK_DEPTH: usize = 6;
 /// above the actual entry count and the cap is a no-op.
 const FILE_INDEX_MAX_ENTRIES: usize = 50_000;
 
-/// Directories that must remain discoverable for `@`-mention completion and
-/// fuzzy file resolution even when excluded by `.gitignore`. AI-tool
-/// convention directories (`.deepseek/`, `.cursor/`, `.claude/`, `.agents/`)
-/// are routinely gitignored, but users need to `@`-mention files inside them.
-const DISCOVERY_ALWAYS_DIRS: &[&str] = &[".deepseek", ".cursor", ".claude", ".agents"];
-
-/// Subdirectories under `DISCOVERY_ALWAYS_DIRS` that must NOT be indexed
-/// even when the parent dir is walked with gitignore disabled. These are
-/// large, machine-generated, or sensitive paths that would blow up the
-/// walker (e.g. `.deepseek/snapshots/` — the snapshot side repo that
-/// #1112 caps at 500 MB; indexing it would trigger the same OOM/hang
-/// the cap was built to prevent).
-const DISCOVERY_EXCLUDED_SUBDIRS: &[&str] = &[".deepseek/snapshots"];
-
-/// Check whether a path resolved against `walk_root` falls inside any
-/// `DISCOVERY_EXCLUDED_SUBDIRS` entry. Used to keep the snapshot side
-/// repo (`.deepseek/snapshots/`) out of the completion/index walk.
-fn path_is_excluded_from_discovery(walk_root: &Path, path: &Path) -> bool {
-    for excluded in DISCOVERY_EXCLUDED_SUBDIRS {
-        if path.starts_with(walk_root.join(excluded)) {
-            return true;
-        }
-    }
-    false
-}
-
 /// Configure a `WalkBuilder` for workspace discovery: hidden files, no
 /// symlink following, depth-limited, custom `.deepseekignore` honored,
 /// and gitignore overrides for AI-tool dot-directories so `@`-completion
@@ -494,7 +471,10 @@ fn local_reference_paths(root: &Path, limit: usize) -> Vec<PathBuf> {
         .git_global(false)
         .git_exclude(false);
     let _ = builder.add_custom_ignore_filename(".deepseekignore");
-    builder.filter_entry(|entry| !should_skip_local_reference_dir(entry.path()));
+    let root_for_filter = root.to_path_buf();
+    builder.filter_entry(move |entry| {
+        !should_skip_unignored_discovery_entry(&root_for_filter, entry.path())
+    });
 
     for entry in builder.build().flatten() {
         if out.len() >= limit {
@@ -512,25 +492,6 @@ fn local_reference_paths(root: &Path, limit: usize) -> Vec<PathBuf> {
         }
     }
     out
-}
-
-fn should_skip_local_reference_dir(path: &Path) -> bool {
-    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-        return false;
-    };
-    matches!(
-        name,
-        ".git"
-            | "target"
-            | "node_modules"
-            | ".venv"
-            | "venv"
-            | "env"
-            | "dist"
-            | "build"
-            | "__pycache__"
-            | ".ruff_cache"
-    )
 }
 
 impl Clone for Workspace {
@@ -1521,6 +1482,82 @@ mod tests {
                 .any(|e| e == ".generated/specs/secrets.env"),
             ".deepseekignore entries must not be reintroduced by local fallback: {generated_entries:?}",
         );
+    }
+
+    #[test]
+    fn workspace_completions_skip_hidden_worktrees_and_build_bulk() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        std::fs::write(root.join(".gitignore"), ".worktrees/\n.generated/\n").unwrap();
+
+        std::fs::create_dir_all(root.join(".worktrees/release/src")).unwrap();
+        std::fs::write(
+            root.join(".worktrees/release/src/worktree-only.rs"),
+            "fn main() {}",
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join(".worktrees/release/target/debug")).unwrap();
+        std::fs::write(
+            root.join(".worktrees/release/target/debug/generated.o"),
+            "object",
+        )
+        .unwrap();
+
+        std::fs::create_dir_all(root.join(".claude/worktrees/agent/src")).unwrap();
+        std::fs::write(
+            root.join(".claude/worktrees/agent/src/agent-only.md"),
+            "agent note",
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join(".claude/commands")).unwrap();
+        std::fs::write(root.join(".claude/commands/keep.md"), "command").unwrap();
+
+        std::fs::create_dir_all(root.join(".generated/specs")).unwrap();
+        std::fs::write(root.join(".generated/specs/device-layout.md"), "layout").unwrap();
+
+        let ws = Workspace::with_cwd(root.to_path_buf(), Some(root.to_path_buf()));
+
+        let worktree_entries = ws.completions(".worktrees", 32);
+        assert!(
+            worktree_entries
+                .iter()
+                .all(|entry| !entry.starts_with(".worktrees/")),
+            "hidden release worktrees must stay out of completions: {worktree_entries:?}",
+        );
+
+        let claude_worktree_entries = ws.completions(".claude/worktrees", 32);
+        assert!(
+            claude_worktree_entries
+                .iter()
+                .all(|entry| !entry.starts_with(".claude/worktrees/")),
+            ".claude/worktrees must stay out of completions: {claude_worktree_entries:?}",
+        );
+
+        let generated_entries = ws.completions(".generated/specs", 32);
+        assert!(
+            generated_entries
+                .iter()
+                .any(|entry| entry == ".generated/specs/device-layout.md"),
+            "explicit user-generated hidden folders should still complete: {generated_entries:?}",
+        );
+
+        let command_entries = ws.completions(".claude/commands", 32);
+        assert!(
+            command_entries
+                .iter()
+                .any(|entry| entry == ".claude/commands/keep.md"),
+            "normal .claude command files should still complete: {command_entries:?}",
+        );
+
+        assert!(
+            ws.resolve("worktree-only.rs").is_err(),
+            "fuzzy resolution must not index files from hidden release worktrees"
+        );
+        assert!(
+            ws.resolve("agent-only.md").is_err(),
+            "fuzzy resolution must not index files from .claude/worktrees"
+        );
+        assert!(ws.resolve("keep.md").is_ok());
     }
 
     #[test]
