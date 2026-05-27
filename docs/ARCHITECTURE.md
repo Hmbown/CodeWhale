@@ -213,6 +213,7 @@ drives turns through Chat Completions.
 5. Tool executed (possibly sandboxed on macOS)
 6. Post-execution hooks run
 7. Result metadata is retained on runtime item records
+7.5. **Verification gate** (v0.8.47): if the tool claims side effects, the engine runs a deterministic re-check via `verify::run_verification()`. A `[VERIFY FAIL]` annotation replaces the raw `success` claim if the re-check contradicts it. Results are recorded in the session verification ledger (bounded at 200 entries).
 8. **LSP post-edit hook** (v0.8.6): if the tool was `edit_file`/`apply_patch`/`write_file` and LSP is enabled, the engine runs `run_post_edit_lsp_hook()` to collect diagnostics
 9. **Diagnostics flush** (v0.8.6): before the next API request, `flush_pending_lsp_diagnostics()` injects any collected errors as a synthetic user message
 10. Result returned to agent loop

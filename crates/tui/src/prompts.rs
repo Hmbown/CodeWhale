@@ -778,6 +778,15 @@ pub fn system_prompt_for_mode_with_context_skills_session_and_approval(
              - **Read once, refer back.** Re-reading the same file produces a different tool-result envelope than the prior read; it's cheaper to scroll back than to re-fetch.\n\
              - **Footer chip:** the `cache hit %` chip turns red below 40% and yellow below 80%. If it's been red for several turns, that's a signal to consolidate."
         );
+
+        full_prompt.push_str(
+            "\n\n### Verification Gate (Tier 2 Statute)\n\n\
+             The engine runs a verification gate after every side-effect tool call. \
+             Results annotated with `[VERIFY FAIL]` indicate the tool's claim was \
+             contradicted by a follow-up check. Treat these as errors and correct \
+             them before proceeding. Results without annotation are unverified or \
+             read-only — apply normal judgment.",
+        );
     }
 
     // 5. Compaction relay template — so the model knows the format to use

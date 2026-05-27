@@ -578,20 +578,10 @@ pub(crate) fn footer_cost_spans(app: &App) -> Vec<Span<'static>> {
     if !should_show_footer_cost(displayed_cost) {
         return Vec::new();
     }
-    let mut spans = vec![Span::styled(
+    let spans = vec![Span::styled(
         app.format_cost_amount(displayed_cost),
         Style::default().fg(palette::TEXT_MUTED),
     )];
-    // Append cache-savings hint when the last turn had cache hits that
-    // saved money (#2038).
-    if let Some(saved) = app.last_turn_cache_savings()
-        && saved > 0.0
-    {
-        spans.push(Span::styled(
-            format!(" · saved {}", app.format_cost_amount(saved)),
-            Style::default().fg(palette::STATUS_SUCCESS),
-        ));
-    }
     spans
 }
 

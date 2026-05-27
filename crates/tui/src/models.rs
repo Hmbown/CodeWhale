@@ -44,6 +44,11 @@ pub struct MessageRequest {
     pub temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub top_p: Option<f32>,
+    /// DeepSeek JSON Output mode. When set to `{"type": "json_object"}`,
+    /// the model is constrained to output valid JSON. Per DeepSeek docs,
+    /// the word "json" must also appear in the system or user prompt.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_format: Option<serde_json::Value>,
 }
 
 /// System prompt representation (plain text or structured blocks).

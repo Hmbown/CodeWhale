@@ -901,6 +901,10 @@ pub(super) fn apply_reasoning_effort(
                     "enable_thinking": false,
                 });
             }
+            // MiMo uses thinking: { type: "disabled" } to turn off reasoning
+            ApiProvider::Xiaomi => {
+                body["thinking"] = json!({ "type": "disabled" });
+            }
             ApiProvider::Openai
             | ApiProvider::Atlascloud
             | ApiProvider::WanjieArk
@@ -916,6 +920,10 @@ pub(super) fn apply_reasoning_effort(
             // DeepSeek compatibility: low/medium both map to high
             ApiProvider::Deepseek | ApiProvider::DeepseekCN | ApiProvider::Sglang => {
                 body["reasoning_effort"] = json!("high");
+                body["thinking"] = json!({ "type": "enabled" });
+            }
+            // MiMo uses the same thinking format as DeepSeek
+            ApiProvider::Xiaomi => {
                 body["thinking"] = json!({ "type": "enabled" });
             }
             // OpenRouter/Novita: pass through the actual user-chosen value.
@@ -961,6 +969,10 @@ pub(super) fn apply_reasoning_effort(
         "xhigh" | "max" | "highest" => match provider {
             ApiProvider::Deepseek | ApiProvider::DeepseekCN | ApiProvider::Sglang => {
                 body["reasoning_effort"] = json!("max");
+                body["thinking"] = json!({ "type": "enabled" });
+            }
+            // MiMo doesn't have max/low distinction — just enable thinking
+            ApiProvider::Xiaomi => {
                 body["thinking"] = json!({ "type": "enabled" });
             }
             ApiProvider::Openrouter | ApiProvider::Novita => {
@@ -1338,6 +1350,7 @@ mod tests {
             stream: None,
             temperature: None,
             top_p: None,
+            response_format: None,
         };
 
         let openai = build_chat_messages_for_request_and_provider(&request, ApiProvider::Openai);
@@ -1616,6 +1629,7 @@ mod tests {
             stream: None,
             temperature: None,
             top_p: None,
+            response_format: None,
         };
 
         let out = build_chat_messages_for_request(&request);
@@ -1672,6 +1686,7 @@ mod tests {
             stream: None,
             temperature: None,
             top_p: None,
+            response_format: None,
         };
 
         let out = build_chat_messages_for_request(&request);
@@ -1724,6 +1739,7 @@ mod tests {
             stream: None,
             temperature: None,
             top_p: None,
+                response_format: None,
         };
 
         let inspection = inspect_prompt_for_request(&request);
@@ -1786,6 +1802,7 @@ mod tests {
                 stream: None,
                 temperature: None,
                 top_p: None,
+                response_format: None,
             }
         }
 
@@ -1848,6 +1865,7 @@ mod tests {
             stream: None,
             temperature: None,
             top_p: None,
+            response_format: None,
         };
 
         let first = inspect_prompt_for_request(&request);
@@ -1903,6 +1921,7 @@ mod tests {
             stream: Some(true),
             temperature: Some(0.7),
             top_p: None,
+                response_format: None,
         };
 
         let warmup = build_cache_warmup_request(&request);

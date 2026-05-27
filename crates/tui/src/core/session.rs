@@ -91,6 +91,11 @@ pub struct Session {
     /// Tracks the immutable prefix fingerprint and detects drift across turns.
     /// Set during engine construction; None until the first system prompt assembly.
     pub prefix_stability: Option<PrefixStabilityManager>,
+
+    /// Verification records for every side-effect tool call in this session.
+    /// Bounded: max 200 entries; older entries are pruned on push.
+    /// Survives compaction as durable evidence.
+    pub verification_ledger: Vec<crate::core::engine::verify::VerifyRecord>,
 }
 
 /// Cumulative usage statistics for a session.
@@ -166,6 +171,7 @@ impl Session {
             current_cycle_started: Utc::now(),
             cycle_briefings: Vec::new(),
             prefix_stability: None,
+            verification_ledger: Vec::new(),
         }
     }
 

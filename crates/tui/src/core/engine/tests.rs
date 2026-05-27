@@ -424,7 +424,9 @@ fn core_native_tools_stay_loaded_in_yolo_mode() {
         AppMode::Yolo,
         &always_load
     ));
-    assert!(should_default_defer_tool(
+    // All native tools are loaded upfront; previously-deferred tools
+    // like git_show are now also non-deferred.
+    assert!(!should_default_defer_tool(
         "git_show",
         AppMode::Yolo,
         &always_load
@@ -464,7 +466,9 @@ fn non_yolo_mode_retains_default_defer_policy() {
         AppMode::Agent,
         &always_load
     ));
-    assert!(should_default_defer_tool(
+    // With the v0.8.47 "all native tools loaded" policy, every tool
+    // (including previously-deferred ones like git_show) is non-deferred.
+    assert!(!should_default_defer_tool(
         "git_show",
         AppMode::Agent,
         &always_load
@@ -472,7 +476,7 @@ fn non_yolo_mode_retains_default_defer_policy() {
 }
 
 #[test]
-fn model_tool_catalog_applies_native_and_mcp_deferral() {
+fn model_tool_catalog_keeps_all_native_tools_loaded() {
     let always_load = HashSet::new();
     let catalog = build_model_tool_catalog(
         vec![
@@ -498,7 +502,7 @@ fn model_tool_catalog_applies_native_and_mcp_deferral() {
     assert_eq!(defer_loading("write_file"), Some(false));
     assert_eq!(defer_loading("exec_shell"), Some(false));
     assert_eq!(defer_loading("edit_file"), Some(false));
-    assert_eq!(defer_loading("project_map"), Some(true));
+    assert_eq!(defer_loading("project_map"), Some(false));
     assert_eq!(defer_loading("list_mcp_resources"), Some(false));
     assert_eq!(defer_loading("mcp_server_write"), Some(true));
 }
@@ -717,7 +721,7 @@ fn deferred_edit_file_first_use_hydrates_schema_without_execution() {
 }
 
 #[test]
-fn model_tool_catalog_defers_non_core_native_tools_in_yolo_mode() {
+fn model_tool_catalog_keeps_all_native_tools_loaded_in_yolo_mode() {
     let always_load = HashSet::new();
     let catalog = build_model_tool_catalog(
         vec![api_tool("read_file"), api_tool("project_map")],
@@ -734,7 +738,7 @@ fn model_tool_catalog_defers_non_core_native_tools_in_yolo_mode() {
     };
 
     assert_eq!(defer_loading("read_file"), Some(false));
-    assert_eq!(defer_loading("project_map"), Some(true));
+    assert_eq!(defer_loading("project_map"), Some(false));
     assert_eq!(defer_loading("mcp_server_write"), Some(false));
 }
 
@@ -860,12 +864,17 @@ fn deferred_tool_preflight_guides_checklist_update_list_replacement() {
         )
         .build(engine.build_tool_context(AppMode::Agent, false));
     let always_load = HashSet::new();
-    let catalog = build_model_tool_catalog(
+    let mut catalog = build_model_tool_catalog(
         registry.to_api_tools_with_cache(true),
         vec![],
         AppMode::Agent,
         &always_load,
     );
+    // Manually defer checklist_update to test the preflight/hydration
+    // mechanism — the default policy now keeps all native tools loaded.
+    if let Some(tool) = catalog.iter_mut().find(|t| t.name == "checklist_update") {
+        tool.defer_loading = Some(true);
+    }
     let mut active = initial_active_tools(&catalog);
     assert!(!active.contains("checklist_update"));
 

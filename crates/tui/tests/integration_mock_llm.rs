@@ -126,6 +126,7 @@ fn make_request(messages: Vec<Message>) -> MessageRequest {
         stream: Some(true),
         temperature: None,
         top_p: None,
+        response_format: None,
     }
 }
 

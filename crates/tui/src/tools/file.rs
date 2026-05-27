@@ -84,10 +84,22 @@ impl ToolSpec for ReadFileTool {
         let pages = optional_str(&input, "pages");
 
         if is_pdf(&file_path)? {
-            return read_pdf(&file_path, pages);
+            let path = file_path.clone();
+            let pages_owned = pages.map(|s| s.to_string());
+            return tokio::task::spawn_blocking(move || read_pdf(&path, pages_owned.as_deref()))
+                .await
+                .map_err(|e| {
+                    ToolError::execution_failed(format!("pdf read task panicked: {e}"))
+                })?;
         }
         if is_image_for_ocr(&file_path) {
-            return read_image_via_ocr(&file_path, path_str);
+            let path = file_path.clone();
+            let path_str_owned = path_str.to_string();
+            return tokio::task::spawn_blocking(move || read_image_via_ocr(&path, &path_str_owned))
+                .await
+                .map_err(|e| {
+                    ToolError::execution_failed(format!("ocr read task panicked: {e}"))
+                })?;
         }
 
         let contents = fs::read_to_string(&file_path).map_err(|e| {

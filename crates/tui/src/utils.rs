@@ -27,6 +27,7 @@ pub fn is_key_file(path: &Path) -> bool {
             | "pom.xml"
             | "readme.md"
             | "agents.md"
+            | "deepseek.md"
             | "claude.md"
             | "makefile"
             | "dockerfile"

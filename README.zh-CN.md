@@ -537,7 +537,7 @@ description: 当 DeepSeek 需要遵循我的自定义工作流时使用这个技
 - **[zichen0116](https://github.com/zichen0116)** — CODE_OF_CONDUCT.md (#686)
 - **[dfwqdyl-ui](https://github.com/dfwqdyl-ui)** — 模型 ID 大小写兼容性报告 (#729)
 - **[Oliver-ZPLiu](https://github.com/Oliver-ZPLiu)** — `working...` 卡死状态 Bug 报告和 Windows 剪贴板兜底修复 (#738, #850)
-- **[reidliu41](https://github.com/reidliu41)** — 退出后的恢复提示、工作区信任持久化、Ollama provider 支持，以及思考块流式终结修复 (#863, #870, #921, #1078)
+- **[reidliu41](https://github.com/reidliu41)** — 退出后的恢复提示、工作区信任持久化、Ollama provider 支持、思考块流式终结修复、审批流程简化、模型选择器 Esc 修复、用户消息高亮、provider 选择器滚动、`/new` 会话命令 (#863, #870, #921, #1078, #2143, #2056, #1995, #2241, #2235)
 - **[xieshutao](https://github.com/xieshutao)** — 纯 Markdown skill 兜底解析 (#869)
 - **[GK012](https://github.com/GK012)** — npm wrapper 的 `--version` 兜底 (#885)
 - **[y0sif](https://github.com/y0sif)** — 直接子智能体完成后唤醒父级 turn loop (#901)
@@ -573,6 +573,19 @@ description: 当 DeepSeek 需要遵循我的自定义工作流时使用这个技
 - **[mrluanma](https://github.com/mrluanma)** — Metaso 搜索提供商 (#2059)
 - **[Lellansin](https://github.com/Lellansin)** — 主目录下跳过配置合并 (#2055)
 - **[zhuangbiaowei](https://github.com/zhuangbiaowei)** — 更新发布渠道 (#2145)
+- **[Fire-dtx](https://github.com/Fire-dtx)** — 并发子代理死锁修复 (#1856)
+- **[imkingjh999](https://github.com/imkingjh999)** — 输入框文本选择与复制/剪切 (#2228)
+- **[harvey2011888](https://github.com/harvey2011888)** — 循环守卫停止状态修复 (#1859)
+- **[victorcheng2333](https://github.com/victorcheng2333)** — DEEPSEEK_YOLO 环境变量合并修复 (#1870)
+- **[IIzzaya](https://github.com/IIzzaya)** — [✓] 完成标记 (#1935)
+- **[PurplePulse](https://github.com/PurplePulse)** — macOS 引导布局优化 (#1837)
+- **[cyq1017](https://github.com/cyq1017)** — /config 视图显示 base URL (#1967)
+- **[knqiufan](https://github.com/knqiufan)** — 复制文本去除自动换行符 (#1906)
+- **[Colorful-glassblock](https://github.com/Colorful-glassblock)** — DeepSeek V4 Pro 定价永久化 (#1937)
+- **[hongqitai](https://github.com/hongqitai)** — Clippy 警告修复 (#2237)
+- **[EmiyaKiritsugu3](https://github.com/EmiyaKiritsugu3)** — DEEPSEEK.md 项目上下文 (#1852)
+- **[HUQIANTAO](https://github.com/HUQIANTAO)** — 小米 MiMo 提供商支持 (#2240)
+- **[mvanhorn](https://github.com/mvanhorn)** — 全局 AGENTS.md 厂商中立回退 (#2156)
 
 ---
 

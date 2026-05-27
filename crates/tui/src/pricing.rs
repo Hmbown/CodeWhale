@@ -2,7 +2,7 @@
 //!
 //! Pricing based on DeepSeek's published rates (per million tokens).
 
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, Utc};
 
 use crate::models::Usage;
 
@@ -70,18 +70,12 @@ struct ModelPricing {
     cny: CurrencyPricing,
 }
 
-fn v4_pro_discount_ends_at() -> DateTime<Utc> {
-    Utc.with_ymd_and_hms(2026, 5, 31, 15, 59, 0)
-        .single()
-        .expect("valid DeepSeek V4 Pro discount end timestamp")
-}
-
 /// Look up pricing for a model name.
 fn pricing_for_model(model: &str) -> Option<ModelPricing> {
     pricing_for_model_at(model, Utc::now())
 }
 
-fn pricing_for_model_at(model: &str, now: DateTime<Utc>) -> Option<ModelPricing> {
+fn pricing_for_model_at(model: &str, _now: DateTime<Utc>) -> Option<ModelPricing> {
     let lower = model.to_lowercase();
     if lower.starts_with("deepseek-ai/") {
         // NVIDIA NIM-hosted DeepSeek uses NVIDIA's catalog/account terms, not
@@ -92,32 +86,17 @@ fn pricing_for_model_at(model: &str, now: DateTime<Utc>) -> Option<ModelPricing>
         return None;
     }
     if lower.contains("v4-pro") || lower.contains("v4pro") {
-        if now <= v4_pro_discount_ends_at() {
-            // DeepSeek lists these as a limited-time 75% discount through
-            // 2026-05-31 15:59 UTC.
-            return Some(ModelPricing {
-                usd: CurrencyPricing {
-                    input_cache_hit_per_million: 0.003625,
-                    input_cache_miss_per_million: 0.435,
-                    output_per_million: 0.87,
-                },
-                cny: CurrencyPricing {
-                    input_cache_hit_per_million: 0.025,
-                    input_cache_miss_per_million: 3.0,
-                    output_per_million: 6.0,
-                },
-            });
-        }
+        // DeepSeek lists these as a permanent 75% discount.
         Some(ModelPricing {
             usd: CurrencyPricing {
-                input_cache_hit_per_million: 0.0145,
-                input_cache_miss_per_million: 1.74,
-                output_per_million: 3.48,
+                input_cache_hit_per_million: 0.003625,
+                input_cache_miss_per_million: 0.435,
+                output_per_million: 0.87,
             },
             cny: CurrencyPricing {
-                input_cache_hit_per_million: 0.1,
-                input_cache_miss_per_million: 12.0,
-                output_per_million: 24.0,
+                input_cache_hit_per_million: 0.025,
+                input_cache_miss_per_million: 3.0,
+                output_per_million: 6.0,
             },
         })
     } else {
@@ -201,25 +180,6 @@ fn calculate_turn_cost_from_usage_with_pricing(pricing: CurrencyPricing, usage: 
     hit_cost + miss_cost + output_cost
 }
 
-/// Estimate how much money was saved by serving `cache_hit_tokens` from the
-/// prefix cache instead of billing them at the cache-miss rate.  Returns `None`
-/// when the model's pricing is unknown or the number of cache-hit tokens is
-/// zero (nothing to save).
-#[must_use]
-pub fn calculate_cache_savings(model: &str, cache_hit_tokens: u32) -> Option<CostEstimate> {
-    if cache_hit_tokens == 0 {
-        return None;
-    }
-    let pricing = pricing_for_model(model)?;
-    let tokens = cache_hit_tokens as f64 / 1_000_000.0;
-    Some(CostEstimate {
-        usd: tokens
-            * (pricing.usd.input_cache_miss_per_million - pricing.usd.input_cache_hit_per_million),
-        cny: tokens
-            * (pricing.cny.input_cache_miss_per_million - pricing.cny.input_cache_hit_per_million),
-    })
-}
-
 /// Format a USD cost for compact display.
 #[must_use]
 #[allow(dead_code)]
@@ -260,6 +220,7 @@ pub fn format_cost_estimate(estimate: CostEstimate, currency: CostCurrency) -> S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
 
     #[test]
     fn nvidia_nim_deepseek_model_does_not_use_deepseek_platform_pricing() {
@@ -267,12 +228,10 @@ mod tests {
     }
 
     #[test]
-    fn v4_pro_uses_limited_time_discount_before_expiry() {
-        let before_expiry = Utc
-            .with_ymd_and_hms(2026, 5, 31, 15, 58, 59)
-            .single()
-            .unwrap();
-        let pricing = pricing_for_model_at("deepseek-v4-pro", before_expiry).unwrap();
+    fn v4_pro_always_uses_permanent_discount() {
+        // Discount is now permanent, should apply at any time.
+        let now = Utc::now();
+        let pricing = pricing_for_model_at("deepseek-v4-pro", now).unwrap();
 
         assert_eq!(pricing.usd.input_cache_hit_per_million, 0.003625);
         assert_eq!(pricing.usd.input_cache_miss_per_million, 0.435);
@@ -283,30 +242,33 @@ mod tests {
     }
 
     #[test]
-    fn v4_pro_returns_to_base_rates_after_discount_expiry() {
-        let after_expiry = Utc
-            .with_ymd_and_hms(2026, 5, 31, 16, 0, 0)
-            .single()
-            .unwrap();
-        let pricing = pricing_for_model_at("deepseek-v4-pro", after_expiry).unwrap();
-
-        assert_eq!(pricing.usd.input_cache_hit_per_million, 0.0145);
-        assert_eq!(pricing.usd.input_cache_miss_per_million, 1.74);
-        assert_eq!(pricing.usd.output_per_million, 3.48);
-        assert_eq!(pricing.cny.input_cache_hit_per_million, 0.1);
-        assert_eq!(pricing.cny.input_cache_miss_per_million, 12.0);
-        assert_eq!(pricing.cny.output_per_million, 24.0);
-    }
-
-    #[test]
-    fn v4_pro_discount_still_applies_just_before_old_may5_expiry() {
-        // Regression for #267: extension to 2026-05-31 15:59 UTC.
-        let after_old_expiry = Utc.with_ymd_and_hms(2026, 5, 6, 0, 0, 0).single().unwrap();
-        let pricing = pricing_for_model_at("deepseek-v4-pro", after_old_expiry).unwrap();
+    fn v4_pro_discount_does_not_revert_to_base_rates_in_future() {
+        // Permanent discount should still apply far in the future.
+        let far_future = Utc.with_ymd_and_hms(2030, 1, 1, 0, 0, 0).single().unwrap();
+        let pricing = pricing_for_model_at("deepseek-v4-pro", far_future).unwrap();
 
         assert_eq!(pricing.usd.input_cache_hit_per_million, 0.003625);
         assert_eq!(pricing.usd.input_cache_miss_per_million, 0.435);
         assert_eq!(pricing.usd.output_per_million, 0.87);
+        assert_eq!(pricing.cny.input_cache_hit_per_million, 0.025);
+        assert_eq!(pricing.cny.input_cache_miss_per_million, 3.0);
+        assert_eq!(pricing.cny.output_per_million, 6.0);
+    }
+
+    #[test]
+    fn v4_pro_permanent_discount_applies_consistently() {
+        // Permanent discount applies at various points in time.
+        let dates = [
+            Utc.with_ymd_and_hms(2026, 5, 6, 0, 0, 0).single().unwrap(),
+            Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).single().unwrap(),
+            Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).single().unwrap(),
+        ];
+        for date in dates {
+            let pricing = pricing_for_model_at("deepseek-v4-pro", date).unwrap();
+            assert_eq!(pricing.cny.input_cache_hit_per_million, 0.025);
+            assert_eq!(pricing.cny.input_cache_miss_per_million, 3.0);
+            assert_eq!(pricing.cny.output_per_million, 6.0);
+        }
     }
 
     #[test]

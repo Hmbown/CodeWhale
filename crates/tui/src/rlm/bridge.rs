@@ -113,6 +113,7 @@ impl RlmBridge {
             stream: Some(false),
             temperature: Some(0.4_f32),
             top_p: Some(0.9_f32),
+            response_format: None,
         };
 
         let fut = self.client.create_message_boxed(request);

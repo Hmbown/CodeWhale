@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use chrono::Utc;
 use futures_util::StreamExt;
 use futures_util::stream::FuturesUnordered;
 use serde_json::json;
@@ -173,6 +174,15 @@ pub struct EngineConfig {
     /// API key for Tavily, Bocha, or Metaso. `None` for Bing or DuckDuckGo.
     /// Metaso also falls back to `METASO_API_KEY` env var, then a built-in key.
     pub search_api_key: Option<String>,
+    /// Enable the closed-loop verification gate. When true, the engine
+    /// re-checks side-effect tool claims (write_file, edit_file, apply_patch,
+    /// exec_shell) before accepting them as fact.
+    /// Default: true in YOLO mode, false otherwise.
+    pub verification_enabled: bool,
+    /// Max auto-retry attempts when the verification gate fails.
+    /// File-mutating tools (write_file, edit_file, apply_patch) are
+    /// re-executed on [VERIFY FAIL] up to this many times. Default: 2.
+    pub verification_max_retries: u32,
     /// Per-step DeepSeek API timeout for sub-agent `create_message` requests.
     /// Resolved from `[subagents] api_timeout_secs` (clamped to 1..=1800)
     /// once at engine construction, then threaded onto every
@@ -232,6 +242,8 @@ impl Default for EngineConfig {
             ),
             tools_always_load: HashSet::new(),
             prefer_bwrap: false,
+            verification_enabled: true,
+            verification_max_retries: 2,
         }
     }
 }
@@ -337,6 +349,10 @@ pub struct Engine {
     /// — when LSP is disabled in config, this is an inert manager that
     /// always returns `None` from `diagnostics_for`.
     lsp_manager: Arc<crate::lsp::LspManager>,
+    /// Closed-loop verification gate. Re-checks tool claims before
+    /// the result enters the session message stream.
+    #[allow(dead_code)]
+    verify_config: verify::VerifyConfig,
     /// Session-scoped workshop variable store (#548). Shared across all tool
     /// calls so `last_tool_result` persists within the session and can be
     /// promoted to the parent context via `promote_to_context`.
@@ -393,6 +409,7 @@ impl Engine {
             ApiProvider::Sglang => "SGLANG_API_KEY",
             ApiProvider::Vllm => "VLLM_API_KEY",
             ApiProvider::Ollama => "OLLAMA_API_KEY",
+            ApiProvider::Xiaomi => "MIMO_API_KEY",
         };
 
         Some(format!(
@@ -588,6 +605,7 @@ impl Engine {
             coherence_state: CoherenceState::default(),
             turn_counter: 0,
             lsp_manager,
+            verify_config: verify::VerifyConfig::default(),
             pending_lsp_blocks: Vec::new(),
             workshop_vars,
             sandbox_backend,
@@ -2084,6 +2102,7 @@ mod tool_catalog;
 mod tool_execution;
 mod tool_setup;
 mod turn_loop;
+pub(crate) mod verify;
 
 use self::approval::{ApprovalDecision, ApprovalResult, UserInputDecision};
 #[cfg(test)]

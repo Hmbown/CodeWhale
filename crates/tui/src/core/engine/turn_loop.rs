@@ -302,6 +302,7 @@ impl Engine {
                 stream: Some(true),
                 temperature: None,
                 top_p: None,
+                response_format: None,
             };
 
             // Stream the response. Keep the request around (cloned into the
@@ -1865,7 +1866,7 @@ impl Engine {
                             "tool_name": outcome.name.clone(),
                             "success": output.success,
                         }));
-                        let output_for_context = compact_tool_result_for_context(
+                        let mut output_for_context = compact_tool_result_for_context(
                             &self.session.model,
                             &outcome.name,
                             &output,
@@ -1877,6 +1878,7 @@ impl Engine {
                             .and_then(serde_json::Value::as_bool)
                             .unwrap_or(true);
                         let output_content = output.content;
+                        let output_success = output.success;
 
                         tool_call.set_result(output_content.clone(), duration);
                         self.session.working_set.observe_tool_call(
@@ -1890,23 +1892,325 @@ impl Engine {
                         // this on success — failed edits leave the file
                         // untouched, so polling for diagnostics would just
                         // surface stale state.
-                        if output.success && tool_was_executed {
+                        if output_success && tool_was_executed {
                             self.run_post_edit_lsp_hook(&outcome.name, &tool_input)
                                 .await;
                         }
+
+                        // CLOSED-LOOP: verification gate with auto-retry.
+                        // Re-checks side-effect claims before the result enters
+                        // the session stream. File-mutating tools are retried
+                        // automatically on failure (up to max_retries).
+                        let mut verify_verdict = verify::VerifyVerdict::Skipped;
+                        let mut verify_annotation = String::new();
+                        let mut verification_elapsed_ms = 0;
+                        let mut retry_count: u32 = 0;
+
+                        if self.config.verification_enabled && output_success && tool_was_executed {
+                            let verify_started = std::time::Instant::now();
+                            let max_retries = self.config.verification_max_retries;
+                            let is_retryable = verify::is_auto_retryable(&outcome.name);
+
+                            loop {
+                                let (verdict, annotation) = verify::run_verification(
+                                    &outcome.name,
+                                    &tool_input,
+                                    &self.session.workspace,
+                                );
+
+                                // If passed, skipped, or unverifiable — done.
+                                let should_retry =
+                                    matches!(verdict, verify::VerifyVerdict::Fail { .. })
+                                        && is_retryable
+                                        && retry_count < max_retries;
+
+                                if !should_retry {
+                                    verify_verdict = verdict;
+                                    verify_annotation = annotation;
+                                    break;
+                                }
+
+                                // Auto-retry: re-execute the tool.
+                                retry_count += 1;
+                                match Engine::retry_file_tool(
+                                    tool_exec_lock.clone(),
+                                    &outcome.name,
+                                    tool_input.clone(),
+                                    self.tx_event.clone(),
+                                    tool_registry,
+                                    mcp_pool.clone(),
+                                )
+                                .await
+                                {
+                                    Ok((retry_result, _retry_ok)) => {
+                                        // Update the output for context with retry result.
+                                        output_for_context = compact_tool_result_for_context(
+                                            &self.session.model,
+                                            &outcome.name,
+                                            &retry_result,
+                                        );
+                                    }
+                                    Err(_e) => {
+                                        // Retry execution itself failed — stop retrying.
+                                        verify_verdict = verify::VerifyVerdict::Fail {
+                                            expected: "retry execution succeeded".to_string(),
+                                            observed: format!(
+                                                "retry attempt {retry_count} failed to execute"
+                                            ),
+                                        };
+                                        break;
+                                    }
+                                }
+                            }
+
+                            // Annotate successful retries.
+                            if retry_count > 0
+                                && matches!(verify_verdict, verify::VerifyVerdict::Pass)
+                            {
+                                verify_annotation = verify::retry_annotation(retry_count);
+                            }
+                            let elapsed_ms = verify_started.elapsed().as_millis();
+                            verification_elapsed_ms = elapsed_ms.min(u128::from(u64::MAX)) as u64;
+                        }
+
+                        // Record the verdict for session-level audit.
+                        self.session.verification_ledger.push(verify::VerifyRecord {
+                            tool_id: outcome.id.clone(),
+                            tool_name: outcome.name.clone(),
+                            verdict: verify_verdict.clone(),
+                            elapsed_ms: verification_elapsed_ms,
+                            ts: Utc::now().timestamp(),
+                        });
+                        // Bounded ledger: keep at most 200 entries.
+                        const MAX_VERIFICATION_RECORDS: usize = 200;
+                        if self.session.verification_ledger.len() > MAX_VERIFICATION_RECORDS {
+                            let excess =
+                                self.session.verification_ledger.len() - MAX_VERIFICATION_RECORDS;
+                            self.session.verification_ledger.drain(0..excess);
+                        }
+
+                        // Annotate the tool result with the verification outcome.
+                        let annotated_content = if verify_annotation.is_empty() {
+                            output_for_context
+                        } else {
+                            format!("{output_for_context}{verify_annotation}")
+                        };
+
+                        let is_error =
+                            if matches!(verify_verdict, verify::VerifyVerdict::Fail { .. }) {
+                                Some(true)
+                            } else {
+                                None
+                            };
 
                         self.add_session_message(Message {
                             role: "user".to_string(),
                             content: vec![ContentBlock::ToolResult {
                                 tool_use_id: outcome.id,
-                                content: output_for_context,
-                                is_error: None,
+                                content: annotated_content,
+                                is_error,
                                 content_blocks: None,
                             }],
                         })
                         .await;
                     }
                     Err(e) => {
+                        // Auto-correction: if edit_file failed with a
+                        // "search string not found" error, try fuzzy matching
+                        // to find the closest real text and retry once.
+                        let error_str = e.to_string();
+                        if outcome.name == "edit_file" {
+                            let maybe_corrected_input = verify::correct_edit_file_input(
+                                &tool_input,
+                                &error_str,
+                                &self.session.workspace,
+                            );
+
+                            if let Some(corrected_input) = maybe_corrected_input {
+                                // Retry with the corrected search string.
+                                match Engine::retry_file_tool(
+                                    tool_exec_lock.clone(),
+                                    &outcome.name,
+                                    corrected_input.clone(),
+                                    self.tx_event.clone(),
+                                    tool_registry,
+                                    mcp_pool.clone(),
+                                )
+                                .await
+                                {
+                                    Ok((retry_result, retry_ok)) if retry_ok => {
+                                        // Retry succeeded — treat as success.
+                                        emit_tool_audit(json!({
+                                            "event": "tool.result",
+                                            "tool_id": outcome.id.clone(),
+                                            "tool_name": outcome.name.clone(),
+                                            "success": true,
+                                            "corrected": true,
+                                            "fuzzy_correction": corrected_input
+                                                .get("fuzzy_correction")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or(""),
+                                        }));
+                                        let mut corrected_output = compact_tool_result_for_context(
+                                            &self.session.model,
+                                            &outcome.name,
+                                            &retry_result,
+                                        );
+                                        // Verification for corrected result.
+                                        let (v_verdict, _v_annotation) = verify::run_verification(
+                                            &outcome.name,
+                                            &corrected_input,
+                                            &self.session.workspace,
+                                        );
+                                        if matches!(v_verdict, verify::VerifyVerdict::Pass) {
+                                            corrected_output = format!(
+                                                "{corrected_output}{}",
+                                                verify::retry_annotation(1)
+                                            );
+                                        }
+                                        tool_call.set_result(corrected_output.clone(), duration);
+                                        self.session.working_set.observe_tool_call(
+                                            &tool_name_for_ws,
+                                            &corrected_input,
+                                            Some(&corrected_output),
+                                            &self.session.workspace,
+                                        );
+                                        self.add_session_message(Message {
+                                            role: "user".to_string(),
+                                            content: vec![ContentBlock::ToolResult {
+                                                tool_use_id: outcome.id,
+                                                content: corrected_output,
+                                                is_error: None,
+                                                content_blocks: None,
+                                            }],
+                                        })
+                                        .await;
+                                        // Skip the normal error path.
+                                        continue;
+                                    }
+                                    _ => {
+                                        // Option B: Fin Flash inner-loop.
+                                        // If the fuzzy retry still failed,
+                                        // ask Flash (thinking off) to locate
+                                        // the closest text in the file.
+                                        if let Some(client) = self.deepseek_client.as_ref()
+                                            && let Some(path_str) =
+                                                tool_input.get("path").and_then(|v| v.as_str())
+                                        {
+                                            let resolved =
+                                                if std::path::Path::new(path_str).is_absolute() {
+                                                    std::path::Path::new(path_str).to_path_buf()
+                                                } else {
+                                                    self.session.workspace.join(path_str)
+                                                };
+                                            #[allow(clippy::collapsible_if)]
+                                            if let Ok(file_content) =
+                                                std::fs::read_to_string(&resolved)
+                                            {
+                                                if let Some(search_str) = tool_input
+                                                    .get("search")
+                                                    .and_then(|v| v.as_str())
+                                                {
+                                                    if let Some(flash_match) =
+                                                        verify::flash_correct_search(
+                                                            client,
+                                                            &file_content,
+                                                            search_str,
+                                                        )
+                                                        .await
+                                                    {
+                                                        let mut flash_input =
+                                                            corrected_input.clone();
+                                                        if let Some(obj) =
+                                                            flash_input.as_object_mut()
+                                                        {
+                                                            obj.insert(
+                                                                "search".to_string(),
+                                                                serde_json::Value::String(
+                                                                    flash_match.clone(),
+                                                                ),
+                                                            );
+                                                            obj.insert(
+                                                                "flash_correction".to_string(),
+                                                                serde_json::Value::String(format!(
+                                                                    "search string corrected \
+                                                                     by Fin Flash: \"{search_str}\" \
+                                                                     → \"{flash_match}\""
+                                                                )),
+                                                            );
+                                                        }
+                                                        // Retry with Flash-corrected input.
+                                                        match Engine::retry_file_tool(
+                                                            tool_exec_lock.clone(),
+                                                            &outcome.name,
+                                                            flash_input.clone(),
+                                                            self.tx_event.clone(),
+                                                            tool_registry,
+                                                            mcp_pool.clone(),
+                                                        )
+                                                        .await
+                                                        {
+                                                            Ok((flash_result, true)) => {
+                                                                let flash_output =
+                                                                    compact_tool_result_for_context(
+                                                                        &self.session.model,
+                                                                        &outcome.name,
+                                                                        &flash_result,
+                                                                    );
+                                                                emit_tool_audit(json!({
+                                                                    "event": "tool.result",
+                                                                    "tool_id": outcome.id.clone(),
+                                                                    "tool_name": outcome.name.clone(),
+                                                                    "success": true,
+                                                                    "corrected": true,
+                                                                    "flash_correction": flash_match,
+                                                                }));
+                                                                let flash_annotation =
+                                                                    verify::retry_annotation(2);
+                                                                let final_output = format!(
+                                                                    "{flash_output}{flash_annotation}"
+                                                                );
+                                                                tool_call.set_result(
+                                                                    final_output.clone(),
+                                                                    duration,
+                                                                );
+                                                                self.session
+                                                                    .working_set
+                                                                    .observe_tool_call(
+                                                                        &tool_name_for_ws,
+                                                                        &flash_input,
+                                                                        Some(&final_output),
+                                                                        &self.session.workspace,
+                                                                    );
+                                                                self.add_session_message(Message {
+                                                                    role: "user".to_string(),
+                                                                    content: vec![
+                                                                        ContentBlock::ToolResult {
+                                                                            tool_use_id: outcome.id,
+                                                                            content: final_output,
+                                                                            is_error: None,
+                                                                            content_blocks: None,
+                                                                        },
+                                                                    ],
+                                                                })
+                                                                .await;
+                                                                continue;
+                                                            }
+                                                            _ => {
+                                                                // Flash correction also
+                                                                // failed — fall through
+                                                                // to normal error handling.
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         match loop_guard.record_outcome(&outcome.name, false) {
                             OutcomeDecision::Continue => {}
                             OutcomeDecision::Warn(message) => {

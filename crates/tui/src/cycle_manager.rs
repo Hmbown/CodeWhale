@@ -382,6 +382,7 @@ pub async fn produce_briefing(
         // capture, not stylistic variation.
         temperature: Some(0.2),
         top_p: None,
+        response_format: None,
     };
 
     let response = client

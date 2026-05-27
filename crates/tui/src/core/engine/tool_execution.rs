@@ -359,6 +359,35 @@ impl Engine {
         }
         outcome
     }
+
+    /// Auto-retry a tool that failed verification. For file-mutating tools
+    /// (write_file, edit_file, apply_patch), re-executes with the same input.
+    /// Called from the turn loop when the verification gate detects a [VERIFY FAIL].
+    pub(super) async fn retry_file_tool(
+        lock: Arc<RwLock<()>>,
+        tool_name: &str,
+        tool_input: serde_json::Value,
+        tx_event: mpsc::Sender<Event>,
+        registry: Option<&crate::tools::ToolRegistry>,
+        mcp_pool: Option<Arc<AsyncMutex<McpPool>>>,
+    ) -> Result<(ToolResult, bool), ToolError> {
+        let result = Self::execute_tool_with_lock(
+            lock,
+            false, // retries run sequentially, not parallel
+            false, // file tools are not interactive
+            tx_event,
+            tool_name.to_string(),
+            tool_input,
+            registry,
+            mcp_pool,
+            None,
+        )
+        .await?;
+
+        // Check if the retry succeeded: non-empty file on disk
+        let success = result.success;
+        Ok((result, success))
+    }
 }
 
 #[cfg(test)]

@@ -2311,18 +2311,6 @@ impl App {
         crate::pricing::format_cost_amount_precise(amount, self.cost_currency)
     }
 
-    /// Estimated cost saved by the last turn's cache-hit tokens in the
-    /// configured display currency.  Returns `None` when the model's pricing
-    /// is unknown or there were no cache hits.
-    pub fn last_turn_cache_savings(&self) -> Option<f64> {
-        let hit_tokens = self.session.last_prompt_cache_hit_tokens?;
-        let estimate = crate::pricing::calculate_cache_savings(&self.model, hit_tokens)?;
-        Some(match self.cost_currency {
-            crate::pricing::CostCurrency::Usd => estimate.usd,
-            crate::pricing::CostCurrency::Cny => estimate.cny,
-        })
-    }
-
     /// Fold the oldest [`Self::HISTORY_FOLD_BATCH`] cells into a single
     /// `ArchivedContext` placeholder when history exceeds the soft cap.
     /// Called from [`Self::add_message`]; the caller is responsible for

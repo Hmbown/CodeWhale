@@ -180,6 +180,7 @@ fn format_cache_inspect(app: &mut App) -> String {
         stream: Some(true),
         temperature: None,
         top_p: None,
+        response_format: None,
     };
     let inspection = inspect_prompt_for_request(&request);
     let previous = app.session.last_cache_inspection.as_ref();

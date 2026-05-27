@@ -29,6 +29,9 @@ pub(super) fn is_tool_search_tool(name: &str) -> bool {
     matches!(name, TOOL_SEARCH_REGEX_NAME | TOOL_SEARCH_BM25_NAME)
 }
 
+// Kept as documentation of the original core tool set. No longer drives
+// deferral policy since all native tools are loaded upfront (v0.8.47).
+#[allow(dead_code)]
 pub(super) const DEFAULT_ACTIVE_NATIVE_TOOLS: &[&str] = &[
     "agent_open",
     "apply_patch",
@@ -52,21 +55,16 @@ pub(super) const DEFAULT_ACTIVE_NATIVE_TOOLS: &[&str] = &[
 ];
 
 pub(super) fn should_default_defer_tool(
-    name: &str,
+    _name: &str,
     _mode: AppMode,
-    always_load: &HashSet<String>,
+    _always_load: &HashSet<String>,
 ) -> bool {
-    if always_load.contains(name) {
-        return false;
-    }
-
-    if is_tool_search_tool(name) {
-        return false;
-    }
-
-    !DEFAULT_ACTIVE_NATIVE_TOOLS
-        .iter()
-        .any(|core_tool| core_tool == &name)
+    // All native tools are loaded upfront — no deferred loading.
+    // The tool_search discovery tools remain registered so the model
+    // can still search the catalog (useful for MCP tools and tool
+    // discovery in general), but native tools no longer require a
+    // search step to become available.
+    false
 }
 
 pub(super) fn apply_native_tool_deferral(

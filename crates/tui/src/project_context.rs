@@ -35,8 +35,10 @@ const PROJECT_CONTEXT_FILES: &[&str] = &[
 
 /// User-level project instructions loaded as a fallback when the workspace and
 /// its parents do not define project context. `.codewhale/` takes priority
-/// over `.deepseek/` for both WHALE.md and AGENTS.md.
+/// over vendor-neutral `.agents/` (AGENTS.md only), which takes priority over
+/// legacy `.deepseek/`.
 const GLOBAL_AGENTS_RELATIVE_PATH: &[&str] = &[".codewhale", "AGENTS.md"];
+const GLOBAL_AGENTS_VENDOR_NEUTRAL_PATH: &[&str] = &[".agents", "AGENTS.md"];
 const GLOBAL_AGENTS_LEGACY_PATH: &[&str] = &[".deepseek", "AGENTS.md"];
 const GLOBAL_WHALE_RELATIVE_PATH: &[&str] = &[".codewhale", "WHALE.md"];
 const GLOBAL_WHALE_LEGACY_PATH: &[&str] = &[".deepseek", "WHALE.md"];
@@ -436,7 +438,7 @@ fn load_project_context_with_parents_and_home(
         }
     }
 
-    // Always check `~/.deepseek/AGENTS.md` so user-wide preferences
+    // Always check global instruction files so user-wide preferences
     // travel into every session (#1157). When both global and project
     // instructions exist, the global block prepends the project's so
     // workspace overrides win the last word; when only global exists,
@@ -486,12 +488,11 @@ fn load_project_context_with_parents_and_home(
     ctx
 }
 
-/// Combine `~/.deepseek/AGENTS.md` (global, user-wide preferences) with a
-/// project-local AGENTS.md/CLAUDE.md/instructions.md. Global comes first
-/// so workspace-specific rules can override it — the model reads in
-/// declared order. Each block is wrapped in a labelled fence so the
-/// model can tell which level any rule comes from when the two sets
-/// disagree (#1157).
+/// Combine global user-wide preferences with a project-local
+/// AGENTS.md/CLAUDE.md/instructions.md. Global comes first so
+/// workspace-specific rules can override it — the model reads in declared
+/// order. Each block is wrapped in a labelled fence so the model can tell
+/// which level any rule comes from when the two sets disagree (#1157).
 fn merge_global_and_project_instructions(
     global: &str,
     global_source: Option<&Path>,
@@ -513,11 +514,13 @@ fn load_global_agents_context(workspace: &Path, home_dir: Option<&Path>) -> Opti
     // Priority order:
     // 1. ~/.codewhale/WHALE.md      (CodeWhale-native)
     // 2. ~/.codewhale/AGENTS.md     (new config directory)
-    // 3. ~/.deepseek/WHALE.md       (legacy fallback)
-    // 4. ~/.deepseek/AGENTS.md      (legacy fallback)
+    // 3. ~/.agents/AGENTS.md        (vendor-neutral, AGENTS.md only)
+    // 4. ~/.deepseek/WHALE.md       (legacy fallback)
+    // 5. ~/.deepseek/AGENTS.md      (legacy fallback)
     let candidates: &[&[&str]] = &[
         GLOBAL_WHALE_RELATIVE_PATH,
         GLOBAL_AGENTS_RELATIVE_PATH,
+        GLOBAL_AGENTS_VENDOR_NEUTRAL_PATH,
         GLOBAL_WHALE_LEGACY_PATH,
         GLOBAL_AGENTS_LEGACY_PATH,
     ];
@@ -1041,6 +1044,58 @@ mod tests {
                 .contains("Global instructions")
         );
         assert_eq!(ctx.source_path, Some(global_agents));
+    }
+
+    #[test]
+    fn test_load_global_agents_falls_back_to_vendor_neutral_path() {
+        let workspace = tempdir().expect("workspace tempdir");
+        let home = tempdir().expect("home tempdir");
+        let global_dir = home.path().join(".agents");
+        fs::create_dir(&global_dir).expect("mkdir .agents");
+        let global_agents = global_dir.join("AGENTS.md");
+        fs::write(&global_agents, "Vendor-neutral instructions").expect("write global agents");
+
+        let ctx = load_project_context_with_parents_and_home(workspace.path(), Some(home.path()));
+
+        assert!(ctx.has_instructions());
+        assert!(
+            ctx.instructions
+                .as_ref()
+                .unwrap()
+                .contains("Vendor-neutral instructions")
+        );
+        assert_eq!(ctx.source_path, Some(global_agents));
+    }
+
+    #[test]
+    fn test_codewhale_specific_path_wins_over_agents_path() {
+        let workspace = tempdir().expect("workspace tempdir");
+        let home = tempdir().expect("home tempdir");
+
+        let codewhale_dir = home.path().join(".codewhale");
+        fs::create_dir(&codewhale_dir).expect("mkdir .codewhale");
+        let codewhale_agents = codewhale_dir.join("AGENTS.md");
+        fs::write(&codewhale_agents, "CodeWhale-specific instructions")
+            .expect("write codewhale agents");
+
+        let agents_dir = home.path().join(".agents");
+        fs::create_dir(&agents_dir).expect("mkdir .agents");
+        fs::write(agents_dir.join("AGENTS.md"), "Vendor-neutral instructions")
+            .expect("write vendor-neutral agents");
+
+        let ctx = load_project_context_with_parents_and_home(workspace.path(), Some(home.path()));
+
+        assert!(ctx.has_instructions());
+        let instructions = ctx.instructions.as_ref().unwrap();
+        assert!(
+            instructions.contains("CodeWhale-specific instructions"),
+            "CodeWhale-specific global file should win:\n{instructions}"
+        );
+        assert!(
+            !instructions.contains("Vendor-neutral instructions"),
+            "lower-priority .agents file should be skipped:\n{instructions}"
+        );
+        assert_eq!(ctx.source_path, Some(codewhale_agents));
     }
 
     #[test]

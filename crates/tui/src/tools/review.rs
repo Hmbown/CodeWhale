@@ -245,6 +245,7 @@ impl ToolSpec for ReviewTool {
             stream: Some(false),
             temperature: Some(0.2),
             top_p: Some(0.9),
+            response_format: None,
         };
 
         let response = client

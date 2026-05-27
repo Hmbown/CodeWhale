@@ -5,10 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.8.47] - 2026-05-26
 
 ### Added
 
+- **Closed-loop verification gate.** After every side-effect tool call
+  (write, edit, apply_patch, exec_shell), the engine re-checks the claim.
+  Results annotated with `[VERIFY PASS]` or `[VERIFY FAIL]` enter the
+  session verification ledger. Enabled by default; configurable via
+  `[verification]` in `config.toml`.
+- **All native tools loaded upfront.** Removed deferred loading policy.
+  Every tool is visible from turn one instead of requiring `tool_search`
+  discovery. 80+ tools in catalog with ~1% context overhead.
+- **`response_format` field on MessageRequest.** Supports DeepSeek JSON
+  Output mode for structured responses when needed.
+- **Runtime goal tools.** `create_goal`, `get_goal`, and `update_goal`
+  provide bounded continuation gates with objective tracking, token
+  budgets, and LLM-as-judge completion verification (#2199).
+- **Session failure classifier.** A redacted synthetic classifier
+  diagnoses session failures for faster triage (#2022).
+- **DuckDuckGo as default web search backend.** Switched from Bing to
+  DuckDuckGo as the default search provider (#2132).
 - **Composer text selection with copy/cut.** Mouse drag and Shift+Arrow
   selection in the composer input box, with Ctrl+C copy and Ctrl+X cut
   support. Home, End, Ctrl+A, and Ctrl+E now clear the selection (#2228).
@@ -22,9 +39,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   both npm install scripts and Rust self-updater (#2222).
 - **[✓] completion markers.** Checklist, plan, and tool completion
   markers now render as `[✓]` instead of `[x]` (#1935).
+- **Xiaomi MiMo provider support.** MiMo is now a first-class provider
+  with API-key auth and secret-store integration (#2240).
+- **Global AGENTS.md fallback.** CodeWhale now reads `~/.agents/AGENTS.md`
+  as a vendor-neutral project instructions fallback (#2156).
+- **DeepSeek V4 Pro pricing permanent.** The 75% discount is now
+  permanent, reflected in the pricing model (#1937).
+- **`/new` session command.** `/new [--force]` starts a fresh saved session
+  from inside the TUI, distinct from `/clear`. Respects active work
+  blockers; `--force` discards unsaved input (#2235).
+- **Docker toolbox contract docs.** Added custom-image contract,
+  examples, and toolbox documentation (#2217).
 
 ### Changed
 
+- **Constitution: 'begin with an A' clarified.** Article I now frames
+  this as a grade metaphor — the A+ is awarded in advance, and the duty
+  is to be worthy of a grade already given.
+- **Article V updated with structural verification note.** The
+  verification gate is now a structural part of the Constitution.
 - **Project context loading now logs the source file.** (#2227)
 - **macOS onboarding and empty-state layout pinned to top** instead
   of vertically centered (#1837).
@@ -32,11 +65,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prefer `~/.codewhale` with `~/.deepseek` fallback (#2231).
 - **READMEs updated for the CodeWhale rename.** All three READMEs now
   reference canonical `~/.codewhale` paths.
+- **Reasoning content stays English regardless of locale.** Hidden
+  `reasoning_content` blocks now respect the English-only policy
+  regardless of the UI locale setting (#1842/#1843).
 
 ### Fixed
 
 - **Deadlock when spawning multiple concurrent sub-agents.** Replaced
   `RwLock`-based serialisation with a `Semaphore(1)` (#1856).
+- **Provider picker scroll visibility.** The `/provider` modal now
+  sizes dynamically, scrolls to keep the selected row visible, and
+  wraps Up/Down navigation between first and last providers (#2241).
+- **Auto model state restored on session load.** The auto model
+  selection survives session save/restore cycles (#1797).
+- **Cache-inspect prefix hashing includes tool catalog.** Fixes
+  prefix-cache misses when tools change between turns (#1818).
+- **Insecure HTTP guard for LAN providers.** Added
+  `DEEPSEEK_ALLOW_INSECURE_HTTP` env var for local vLLM endpoints
+  on `http://` (#1656).
+- **Large tool outputs compacted to artifact receipts on persist.**
+  Prevents session bloat from large stdout/stderr payloads (#2021).
 - **Steered/queued messages now render in correct transcript order.**
   `steer_user_message` now flushes the active cell before inserting (#2225).
 - **Session save test updated for managed sessions directory.** (#2223).
@@ -44,6 +92,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Failed` instead of `Completed` when the loop guard trips (#1859).
 - **DEEPSEEK_YOLO env honoured on startup.** The `--yolo` flag is now
   correctly merged with the `DEEPSEEK_YOLO` environment variable (#1870).
+- **Clippy warnings resolved.** (#2237).
+- **Windows alt-screen logging suppressed.** Verbose CLI logging no
+  longer leaks into the TUI on Windows alt-screen (#1910).
+- **PDF and OCR reads no longer block the async runtime.** `read_file`
+  on PDF and image files now runs extraction inside `spawn_blocking`,
+  preventing the tokio worker pool from stalling on large documents.
+- **Sidebar hover tooltip contrast fixed.** Tooltip foreground changed
+  from pale gray (`TEXT_MUTED`) to deep navy (`DEEPSEEK_INK`) for
+  readable contrast against the amber warning background.
 
 ### Community
 
@@ -55,7 +112,15 @@ Thanks to contributors whose PRs landed in this release:
 **@IIzzaya** (#1935),
 **@PurplePulse** (#1837),
 **@cyq1017** (#1967),
-**@knqiufan** (#1906).
+**@knqiufan** (#1906),
+**@Colorful-glassblock** (#1937),
+**@hongqitai** (#2237),
+**@EmiyaKiritsugu3** (#1852),
+**@aboimpinto** (#1910),
+**@HUQIANTAO** (#2240),
+**@mvanhorn** (#2156),
+**@LING71671** (#1797),
+and **@reidliu41** (#2241, #2235).
 
 ## [0.8.46] - 2026-05-26
 
@@ -5018,7 +5083,8 @@ Welcome — and thank you.
 - Hooks system and config profiles
 - Example skills and launch assets
 
-[Unreleased]: https://github.com/Hmbown/CodeWhale/compare/v0.8.46...HEAD
+[Unreleased]: https://github.com/Hmbown/CodeWhale/compare/v0.8.47...HEAD
+[0.8.47]: https://github.com/Hmbown/CodeWhale/compare/v0.8.46...v0.8.47
 [0.8.46]: https://github.com/Hmbown/CodeWhale/compare/v0.8.45...v0.8.46
 [0.8.45]: https://github.com/Hmbown/CodeWhale/compare/v0.8.44...v0.8.45
 [0.8.44]: https://github.com/Hmbown/CodeWhale/compare/v0.8.43...v0.8.44

@@ -455,6 +455,7 @@ mod tests {
             stream: Some(true),
             temperature: None,
             top_p: None,
+            response_format: None,
         }
     }
 

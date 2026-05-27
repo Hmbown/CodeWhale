@@ -3808,6 +3808,7 @@ async fn run_subagent(
             stream: Some(false),
             temperature: None,
             top_p: None,
+            response_format: None,
         };
 
         // Race the API call against the cancellation token so a parent
@@ -4550,6 +4551,7 @@ async fn subagent_flash_router(
         stream: Some(false),
         temperature: Some(0.0),
         top_p: None,
+        response_format: None,
     };
 
     let response = tokio::time::timeout(

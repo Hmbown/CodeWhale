@@ -111,6 +111,11 @@ evidence, never declare success on faith), a coordination legacy (Article
 VI — leave the workspace legible for the next intelligence), and a
 primacy-of-truth clause (Article II — no lower rule may override it).
 
+Article V is now structural. A closed-loop verification gate runs after every
+side-effect tool call — write, edit, patch, shell — and re-checks the claim
+before the result enters the session stream. Results carry `[VERIFY PASS]` or
+`[VERIFY FAIL]` annotations. No more taking the model's word for it.
+
 DeepSeek V4's prefix caching makes this practical. The Constitution is long
 and detailed, but once cached it costs roughly 100× less per turn than a
 cold read. The model references it recursively — peeking, scanning, and
@@ -331,6 +336,10 @@ VLLM_BASE_URL="http://localhost:8000/v1" codewhale --provider vllm --model deeps
 # Trusted LAN vLLM over HTTP
 DEEPSEEK_ALLOW_INSECURE_HTTP=1 VLLM_BASE_URL="http://192.168.0.110:8000/v1" codewhale --provider vllm --model deepseek-v4-flash
 
+# Xiaomi MiMo
+codewhale auth set --provider xiaomi --api-key "YOUR_MIMO_API_KEY"
+codewhale --provider xiaomi --model deepseek-v4-pro
+
 # Self-hosted Ollama
 ollama pull codewhale-coder:1.3b
 codewhale --provider ollama --model codewhale-coder:1.3b
@@ -477,7 +486,7 @@ Key environment variables:
 | `DEEPSEEK_HTTP_HEADERS` | Optional custom model request headers, e.g. `X-Model-Provider-Id=your-model-provider` |
 | `DEEPSEEK_MODEL` | Default model |
 | `DEEPSEEK_STREAM_IDLE_TIMEOUT_SECS` | Stream idle timeout in seconds, default `300`, clamped to `1..=3600` |
-| `CODEWHALE_PROVIDER` / `DEEPSEEK_PROVIDER` | `deepseek` (default), `nvidia-nim`, `openai`, `atlascloud`, `wanjie-ark`, `openrouter`, `novita`, `fireworks`, `moonshot`, `sglang`, `vllm`, `ollama` |
+| `CODEWHALE_PROVIDER` / `DEEPSEEK_PROVIDER` | `deepseek` (default), `nvidia-nim`, `openai`, `atlascloud`, `wanjie-ark`, `openrouter`, `novita`, `fireworks`, `moonshot`, `xiaomi`, `sglang`, `vllm`, `ollama` |
 | `DEEPSEEK_PROFILE` | Config profile name |
 | `DEEPSEEK_MEMORY` | Set to `on` to enable user memory |
 | `DEEPSEEK_ALLOW_INSECURE_HTTP=1` | Allow non-local `http://` API base URLs on trusted networks |
@@ -600,7 +609,7 @@ This project ships with help from a growing community of contributors:
 - **[zichen0116](https://github.com/zichen0116)** — CODE_OF_CONDUCT.md (#686)
 - **[dfwqdyl-ui](https://github.com/dfwqdyl-ui)** — model ID case-sensitivity compatibility report (#729)
 - **[Oliver-ZPLiu](https://github.com/Oliver-ZPLiu)** — stale `working...` state bug report, Windows clipboard fallback, MCP Streamable HTTP session fixes, and Homebrew tap automation (#738, #850, #1643, #1631)
-- **[reidliu41](https://github.com/reidliu41)** — resume hint, workspace trust persistence, Ollama provider support, thinking-block stream finalization, CI cache hardening, streaming wrap, and DeepSeek model completions (#863, #870, #921, #1078, #1603, #1628, #1601)
+- **[reidliu41](https://github.com/reidliu41)** — resume hint, workspace trust persistence, Ollama provider support, thinking-block stream finalization, CI cache hardening, streaming wrap, DeepSeek model completions, approval flow simplification, model picker Esc fix, user message highlighting, provider picker scroll, and `/new` session command (#863, #870, #921, #1078, #1603, #1628, #1601, #2143, #2056, #1995, #2241, #2235)
 - **[xieshutao](https://github.com/xieshutao)** — plain Markdown skill fallback (#869)
 - **[GK012](https://github.com/GK012)** — npm wrapper `--version` fallback (#885)
 - **[y0sif](https://github.com/y0sif)** — parent turn-loop wakeup after direct child sub-agent completion (#901)
@@ -633,7 +642,7 @@ This project ships with help from a growing community of contributors:
 - **[Aitensa](https://github.com/Aitensa)** — CJK wrapping propagation for diff and pager output (#1622)
 - **[qiyan233](https://github.com/qiyan233)** — legacy DeepSeek CN provider alias compatibility (#1645)
 - **[zlh124](https://github.com/zlh124)** — WSL2/headless startup report and clipboard-init fix (#1772, #1773)
-- **[aboimpinto](https://github.com/aboimpinto)** — Windows alt-screen logging, Home/End composer, and runtime log follow-ups (#1774, #1776, #1748, #1749, #1782, #1783)
+- **[aboimpinto](https://github.com/aboimpinto)** — Windows alt-screen logging, Home/End composer, runtime log follow-ups, taskbar progress, animated title spinner, and configurable completion sound (#1774, #1776, #1748, #1749, #1782, #1783, #1871, #1910)
 - **[LeoLin990405](https://github.com/LeoLin990405)** — provider model passthrough, reasoning replay, thinking-only turn, and Windows quoting fixes (#1740, #1743, #1742, #1744)
 - **[nightt5879](https://github.com/nightt5879)** — Ctrl+C prompt restore fix (#1764)
 - **[donglovejava](https://github.com/donglovejava)** — paste @file consolidation, CJK panic fix, user feedback, RLM routing, edit_file retry (#2154–#2168)
@@ -646,6 +655,19 @@ This project ships with help from a growing community of contributors:
 - **[mrluanma](https://github.com/mrluanma)** — Metaso search provider (#2059)
 - **[Lellansin](https://github.com/Lellansin)** — skip config merge at home dir (#2055)
 - **[zhuangbiaowei](https://github.com/zhuangbiaowei)** — update release channels (#2145)
+- **[Fire-dtx](https://github.com/Fire-dtx)** — deadlock fix for concurrent sub-agents (#1856)
+- **[imkingjh999](https://github.com/imkingjh999)** — composer text selection with copy/cut (#2228)
+- **[harvey2011888](https://github.com/harvey2011888)** — loop guard halt outcome fix (#1859)
+- **[victorcheng2333](https://github.com/victorcheng2333)** — DEEPSEEK_YOLO env merge fix (#1870)
+- **[IIzzaya](https://github.com/IIzzaya)** — [✓] completion markers (#1935)
+- **[PurplePulse](https://github.com/PurplePulse)** — macOS onboarding layout pinning (#1837)
+- **[cyq1017](https://github.com/cyq1017)** — configurable base URL in /config view (#1967)
+- **[knqiufan](https://github.com/knqiufan)** — copy transcript without visual-wrap newlines (#1906)
+- **[Colorful-glassblock](https://github.com/Colorful-glassblock)** — DeepSeek V4 Pro pricing permanent (#1937)
+- **[hongqitai](https://github.com/hongqitai)** — clippy warnings fix (#2237)
+- **[EmiyaKiritsugu3](https://github.com/EmiyaKiritsugu3)** — DEEPSEEK.md project context (#1852)
+- **[HUQIANTAO](https://github.com/HUQIANTAO)** — Xiaomi MiMo provider support (#2240)
+- **[mvanhorn](https://github.com/mvanhorn)** — global AGENTS.md vendor-neutral fallback (#2156)
 
 ---
 

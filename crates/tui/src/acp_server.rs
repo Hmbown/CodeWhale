@@ -207,6 +207,7 @@ impl AcpServer {
             stream: Some(false),
             temperature: Some(0.2),
             top_p: Some(0.9),
+                response_format: None,
         };
 
         let response = client.create_message(request).await?;

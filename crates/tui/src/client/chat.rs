@@ -182,6 +182,10 @@ impl DeepSeekClient {
             self.api_provider,
         );
 
+        if let Some(ref response_format) = request.response_format {
+            body["response_format"] = response_format.clone();
+        }
+
         // Bulletproof final sanitizer: walk the wire payload and force
         // `reasoning_content` onto any assistant message that has tool_calls
         // but no reasoning_content. DeepSeek's thinking-mode API rejects
@@ -519,6 +523,7 @@ impl<'a> PromptBuilder<'a> {
             stream: None,
             temperature: Some(0.0),
             top_p: None,
+            response_format: None,
         }
     }
 }
@@ -1667,6 +1672,9 @@ fn requires_reasoning_content(model: &str) -> bool {
         || lower.contains("-reasoning")
         || lower.contains("-thinking")
         || has_deepseek_r_series_marker(&lower)
+        // MiMo models require reasoning_content replay in multi-turn tool calls
+        // per the official Xiaomi MiMo API documentation.
+        || lower.starts_with("mimo")
 }
 
 fn should_replay_reasoning_content(model: &str, effort: Option<&str>) -> bool {
@@ -1732,6 +1740,7 @@ fn provider_accepts_reasoning_content(provider: ApiProvider) -> bool {
             | ApiProvider::Novita
             | ApiProvider::Fireworks
             | ApiProvider::Sglang
+            | ApiProvider::Xiaomi
     )
 }
 
@@ -2763,6 +2772,7 @@ mod stream_decoder_tests {
             stream: None,
             temperature: None,
             top_p: None,
+            response_format: None,
         };
 
         let inspection = inspect_prompt_for_request(&request);
@@ -3050,6 +3060,7 @@ mod stream_decoder_tests {
                 stream: None,
                 temperature: None,
                 top_p: None,
+                response_format: None,
             };
 
             let inspection = inspect_prompt_for_request(&request);

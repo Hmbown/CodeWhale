@@ -733,6 +733,8 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         search_provider: config.search_provider(),
         search_api_key: config.search.as_ref().and_then(|s| s.api_key.clone()),
         tools_always_load: config.tools_always_load(),
+        verification_enabled: true,
+        verification_max_retries: 2,
     }
 }
 
@@ -3796,6 +3798,7 @@ async fn run_cache_warmup(app: &App, config: &Config) -> Result<Usage> {
         stream: None,
         temperature: None,
         top_p: None,
+        response_format: None,
     };
     let warmup = build_cache_warmup_request(&request);
     let response =
@@ -4523,6 +4526,10 @@ async fn switch_provider(
     }
     if let Some(ref model) = model_override {
         config.default_text_model = Some(model.clone());
+    } else if target != previous_provider {
+        // Switching to a different provider without an explicit model choice:
+        // clear the old model so the new provider's default is used.
+        config.default_text_model = None;
     }
 
     if let Err(err) = DeepSeekClient::new(config) {
@@ -4701,7 +4708,9 @@ async fn apply_command_result(
                 let _ = engine_handle.send(Op::ListSubAgents).await;
             }
             AppAction::FetchModels => {
-                if crate::config::provider_passes_model_through(config.api_provider()) {
+                if crate::config::provider_passes_model_through(config.api_provider())
+                    && !matches!(config.api_provider(), crate::config::ApiProvider::Xiaomi)
+                {
                     app.add_message(HistoryCell::System {
                         content: format!(
                             "/models is not supported by the {} provider.",
@@ -5754,6 +5763,7 @@ fn render(f: &mut Frame, app: &mut App) {
             crate::config::ApiProvider::Sglang => Some("SGLang"),
             crate::config::ApiProvider::Vllm => Some("vLLM"),
             crate::config::ApiProvider::Ollama => Some("Ollama"),
+            crate::config::ApiProvider::Xiaomi => Some("MiMo"),
         };
         let status_indicator_started_at = if app.low_motion {
             None
@@ -5857,7 +5867,7 @@ fn render(f: &mut Frame, app: &mut App) {
                     let tooltip = ratatui::widgets::Paragraph::new(tooltip_text.as_str()).style(
                         Style::default()
                             .bg(palette::STATUS_WARNING)
-                            .fg(palette::TEXT_MUTED),
+                            .fg(palette::DEEPSEEK_INK),
                     );
                     f.render_widget(tooltip, tooltip_area);
                 }
@@ -6654,6 +6664,7 @@ async fn apply_provider_picker_api_key(
             ApiProvider::Sglang => &mut providers.sglang,
             ApiProvider::Vllm => &mut providers.vllm,
             ApiProvider::Ollama => &mut providers.ollama,
+            ApiProvider::Xiaomi => &mut providers.xiaomi,
         };
         entry.api_key = Some(api_key);
     }
@@ -6706,6 +6717,7 @@ fn set_provider_auth_mode_in_memory(config: &mut Config, provider: ApiProvider, 
         ApiProvider::Sglang => &mut providers.sglang,
         ApiProvider::Vllm => &mut providers.vllm,
         ApiProvider::Ollama => &mut providers.ollama,
+        ApiProvider::Xiaomi => &mut providers.xiaomi,
     };
     entry.auth_mode = Some(auth_mode);
 }

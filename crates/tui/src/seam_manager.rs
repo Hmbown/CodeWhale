@@ -325,6 +325,7 @@ impl SeamManager {
             stream: Some(false),
             temperature: Some(0.1),
             top_p: None,
+            response_format: None,
         };
 
         let response = self.flash_client.create_message(request).await?;
@@ -424,6 +425,7 @@ impl SeamManager {
             stream: Some(false),
             temperature: Some(0.2),
             top_p: None,
+            response_format: None,
         };
 
         let response = self.flash_client.create_message(request).await?;
@@ -521,6 +523,7 @@ impl SeamManager {
             stream: Some(false),
             temperature: Some(0.1),
             top_p: None,
+            response_format: None,
         };
 
         let response = self.flash_client.create_message(request).await?;
