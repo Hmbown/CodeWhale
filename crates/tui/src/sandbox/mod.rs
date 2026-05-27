@@ -99,8 +99,10 @@ impl CommandSpec {
                     | crate::shell_dispatcher::ShellKind::WindowsPowerShell
             ) {
                 format!("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; {command}")
-            } else {
+            } else if matches!(kind, crate::shell_dispatcher::ShellKind::Cmd) {
                 format!("chcp 65001 >NUL & {command}")
+            } else {
+                command.to_string()
             };
             dispatcher.build_command_parts(&cmd)
         };
@@ -667,17 +669,15 @@ mod tests {
                 ]
             );
         } else {
-            assert_eq!(
-                spec.args,
-                if cfg!(windows) {
-                    vec!["/C".to_string(), format!("chcp 65001 >NUL & {cmd}")]
-                } else {
-                    vec![
-                        dispatcher.kind().command_flag().to_string(),
-                        cmd.to_string(),
-                    ]
-                }
-            );
+            let expected = if matches!(dispatcher.kind(), crate::shell_dispatcher::ShellKind::Cmd) {
+                vec!["/C".to_string(), format!("chcp 65001 >NUL & {cmd}")]
+            } else {
+                vec![
+                    dispatcher.kind().command_flag().to_string(),
+                    cmd.to_string(),
+                ]
+            };
+            assert_eq!(spec.args, expected);
             // The quoted message is intact in a single argv slot — shell `-c`
             // performs POSIX tokenization, yielding the correct argv:
             // ["git","commit","-m","feat: complete sub-pages"].
@@ -754,7 +754,7 @@ mod tests {
                         .to_string(),
                 ]
             );
-        } else if cfg!(windows) {
+        } else if matches!(dispatcher.kind(), crate::shell_dispatcher::ShellKind::Cmd) {
             assert_eq!(
                 env.command,
                 vec![
