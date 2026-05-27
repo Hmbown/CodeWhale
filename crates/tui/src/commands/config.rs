@@ -6,7 +6,7 @@ use std::time::Duration;
 use super::CommandResult;
 use crate::client::DeepSeekClient;
 use crate::config::{
-    COMMON_DEEPSEEK_MODELS, Config, clear_api_key, expand_path, normalize_model_name_for_provider,
+    COMMON_DEEPSEEK_MODELS, Config, clear_api_key, normalize_model_name_for_provider,
 };
 use crate::config_ui::{ConfigUiMode, parse_mode};
 use crate::llm_client::LlmClient;
