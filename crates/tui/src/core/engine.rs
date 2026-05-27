@@ -2085,6 +2085,10 @@ mod tool_execution;
 mod tool_setup;
 mod turn_loop;
 
+pub(crate) fn default_active_native_tool_names() -> &'static [&'static str] {
+    tool_catalog::DEFAULT_ACTIVE_NATIVE_TOOLS
+}
+
 use self::approval::{ApprovalDecision, ApprovalResult, UserInputDecision};
 #[cfg(test)]
 use self::dispatch::should_parallelize_tool_batch;

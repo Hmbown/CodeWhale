@@ -2,7 +2,7 @@
 //! System prompts for different modes.
 //!
 //! Prompts are assembled from composable layers loaded at compile time:
-//!   base.md → personality overlay → mode delta → approval policy
+//!   tool taxonomy → base.md → personality overlay → mode delta → approval policy
 //!
 //! This keeps each concern in its own file and makes prompt tuning
 //! a single-file operation.
@@ -490,10 +490,11 @@ fn approval_prompt_for_mode(mode: AppMode, approval_mode: ApprovalMode) -> &'sta
 }
 
 /// Compose the full system prompt in deterministic order:
-///   1. base.md        — core identity, toolbox, execution contract
-///   2. personality    — voice and tone overlay
-///   3. mode delta     — mode-specific permissions and workflow
-///   4. approval policy — tool-approval behavior
+///   1. tool taxonomy  — compact hints generated from the eager core tools
+///   2. base.md        — core identity, toolbox, execution contract
+///   3. personality    — voice and tone overlay
+///   4. mode delta     — mode-specific permissions and workflow
+///   5. approval policy — tool-approval behavior
 ///
 /// Each layer is separated by a blank line for readability in the
 /// rendered prompt (the model sees them as contiguous sections).
@@ -504,6 +505,51 @@ fn approval_prompt_for_mode(mode: AppMode, approval_mode: ApprovalMode) -> &'sta
 /// of a static placeholder.
 fn apply_model_template(prompt: &str, model_id: &str) -> String {
     prompt.replace("{model_id}", model_id)
+}
+
+const TOOL_TAXONOMY_DISCOVERY: &[&str] = &["grep_files", "file_search"];
+const TOOL_TAXONOMY_GIT: &[&str] = &["git_status", "git_diff"];
+const TOOL_TAXONOMY_VERIFICATION: &[&str] = &["run_tests"];
+
+fn render_core_tool_taxonomy_block(mode: AppMode) -> String {
+    let core_tools = core_taxonomy_tools_for_mode(mode);
+    let mut sentences = Vec::new();
+
+    if let Some(discovery) = render_core_tool_group(TOOL_TAXONOMY_DISCOVERY, &core_tools) {
+        sentences.push(format!("Use {discovery} for discovery."));
+    }
+    if let Some(git) = render_core_tool_group(TOOL_TAXONOMY_GIT, &core_tools) {
+        sentences.push(format!("Use {git} for git inspection."));
+    }
+    if let Some(verification) = render_core_tool_group(TOOL_TAXONOMY_VERIFICATION, &core_tools) {
+        sentences.push(format!("Use {verification} for verification."));
+    }
+
+    debug_assert!(
+        !sentences.is_empty(),
+        "core tool taxonomy has no active tool groups"
+    );
+    format!("## Core Tool Taxonomy\n\n{}", sentences.join(" "))
+}
+
+fn core_taxonomy_tools_for_mode(mode: AppMode) -> Vec<&'static str> {
+    let core_tools = crate::core::engine::default_active_native_tool_names();
+    core_tools
+        .iter()
+        .copied()
+        .filter(|tool| mode != AppMode::Plan || *tool != "run_tests")
+        .collect()
+}
+
+fn render_core_tool_group(group: &[&str], core_tools: &[&str]) -> Option<String> {
+    let rendered = group
+        .iter()
+        .copied()
+        .filter(|tool| core_tools.contains(tool))
+        .map(|tool| format!("`{tool}`"))
+        .collect::<Vec<_>>()
+        .join("/");
+    (!rendered.is_empty()).then_some(rendered)
 }
 
 /// Authority recap block — appended at the end of the system prompt,
@@ -541,8 +587,11 @@ pub fn compose_prompt_with_approval_and_model(
     approval_mode: ApprovalMode,
     model_id: &str,
 ) -> String {
-    let parts: [&str; 4] = [
-        &apply_model_template(BASE_PROMPT.trim(), model_id),
+    let tool_taxonomy = render_core_tool_taxonomy_block(mode);
+    let base_prompt = apply_model_template(BASE_PROMPT.trim(), model_id);
+    let parts: [&str; 5] = [
+        tool_taxonomy.as_str(),
+        base_prompt.as_str(),
         personality.prompt().trim(),
         mode_prompt(mode).trim(),
         approval_prompt_for_mode(mode, approval_mode).trim(),
@@ -994,6 +1043,64 @@ mod tests {
     }
 
     #[test]
+    fn composed_prompt_starts_with_core_tool_taxonomy() {
+        let prompt = compose_prompt_with_approval_and_model(
+            AppMode::Agent,
+            Personality::Calm,
+            ApprovalMode::Suggest,
+            "deepseek-v4-pro",
+        );
+        let expected_taxonomy = render_core_tool_taxonomy_block(AppMode::Agent);
+
+        assert!(
+            prompt.starts_with(&expected_taxonomy),
+            "composed prompt should start with the compact generated tool taxonomy"
+        );
+    }
+
+    #[test]
+    fn plan_prompt_taxonomy_omits_run_tests() {
+        let prompt = compose_prompt_with_approval_and_model(
+            AppMode::Plan,
+            Personality::Calm,
+            ApprovalMode::Never,
+            "deepseek-v4-pro",
+        );
+        let expected_taxonomy = render_core_tool_taxonomy_block(AppMode::Plan);
+
+        assert!(
+            prompt.starts_with(&expected_taxonomy),
+            "Plan prompt should start with its mode-specific tool taxonomy"
+        );
+        assert!(
+            expected_taxonomy.contains("for discovery")
+                && expected_taxonomy.contains("for git inspection"),
+            "Plan taxonomy should keep read-only discovery and git guidance"
+        );
+        assert!(
+            !expected_taxonomy.contains("run_tests")
+                && !expected_taxonomy.contains("for verification")
+                && !expected_taxonomy.contains("Use  "),
+            "Plan taxonomy must not advertise unavailable verification tools: {expected_taxonomy:?}"
+        );
+    }
+
+    #[test]
+    fn core_tool_taxonomy_only_references_default_active_tools() {
+        let core_tools = crate::core::engine::default_active_native_tool_names();
+        for tool in TOOL_TAXONOMY_DISCOVERY
+            .iter()
+            .chain(TOOL_TAXONOMY_GIT)
+            .chain(TOOL_TAXONOMY_VERIFICATION)
+        {
+            assert!(
+                core_tools.contains(tool),
+                "tool taxonomy references {tool}, but it is not in the eager native-tool list"
+            );
+        }
+    }
+
+    #[test]
     fn authority_recap_appears_in_full_prompt() {
         let tmp = tempdir().expect("tempdir");
         let text = match system_prompt_for_mode_with_context_skills_session_and_approval(
@@ -1338,9 +1445,20 @@ mod tests {
             "English locale must not get a pt-BR closer: {text:?}"
         );
         assert!(
-            !contains_cjk(&text),
-            "English system prompt should avoid native-script priming tokens: {text:?}"
+            !contains_cjk(BASE_PROMPT),
+            "base prompt must not contain static CJK priming tokens"
         );
+        for mode in [AppMode::Agent, AppMode::Plan, AppMode::Yolo] {
+            let taxonomy = render_core_tool_taxonomy_block(mode);
+            assert!(
+                !contains_cjk(&taxonomy),
+                "tool taxonomy must not contain static CJK priming tokens: {taxonomy:?}"
+            );
+        }
+        // Do not assert on arbitrary CJK in the full system prompt: project
+        // context may legitimately contain localized file names, README text,
+        // or user-authored instructions. The locale bookend markers above are
+        // the priming tokens this test is meant to guard.
     }
 
     #[test]
