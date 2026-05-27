@@ -754,6 +754,7 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         ),
         max_spawn_depth: crate::tools::subagent::DEFAULT_MAX_SPAWN_DEPTH,
         allowed_tools: app.active_allowed_tools.clone(),
+        hook_executor: Some(std::sync::Arc::new(app.hooks.clone())),
         network_policy: config.network.clone().map(|toml_cfg| {
             crate::network_policy::NetworkPolicyDecider::with_default_audit(toml_cfg.into_runtime())
         }),
@@ -4706,6 +4707,7 @@ async fn dispatch_user_message(
             translation_enabled: app.translation_enabled,
             show_thinking: app.show_thinking,
             allowed_tools: app.active_allowed_tools.clone(),
+            hook_executor: Some(std::sync::Arc::new(app.hooks.clone())),
         })
         .await
     {

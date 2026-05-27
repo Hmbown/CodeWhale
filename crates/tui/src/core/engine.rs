@@ -166,6 +166,9 @@ pub struct EngineConfig {
     /// Tool restriction from custom slash command frontmatter.
     /// `None` means the current turn may use the normal tool set.
     pub allowed_tools: Option<Vec<String>>,
+    /// Hook executor for control-plane hooks.
+    /// `ToolCallBefore` hooks may deny a tool call with exit code 2.
+    pub hook_executor: Option<std::sync::Arc<crate::hooks::HookExecutor>>,
     /// Resolved BCP-47 locale tag (e.g. `"en"`, `"zh-Hans"`, `"ja"`)
     /// for the `## Environment` block in the system prompt. The
     /// caller resolves this from `Settings` once at engine
@@ -237,6 +240,7 @@ impl Default for EngineConfig {
             strict_tool_mode: false,
             goal_objective: None,
             allowed_tools: None,
+            hook_executor: None,
             locale_tag: "en".to_string(),
             workshop: None,
             search_provider: crate::config::SearchProvider::default(),
@@ -650,6 +654,7 @@ impl Engine {
                     translation_enabled,
                     show_thinking,
                     allowed_tools,
+                    hook_executor,
                 } => {
                     self.handle_send_message(
                         content,
@@ -666,6 +671,7 @@ impl Engine {
                         translation_enabled,
                         show_thinking,
                         allowed_tools,
+                        hook_executor,
                     )
                     .await;
                 }
@@ -884,6 +890,7 @@ impl Engine {
                         self.config.translation_enabled,
                         self.config.show_thinking,
                         self.config.allowed_tools.clone(),
+                        self.config.hook_executor.clone(),
                     )
                     .await;
                 }
@@ -1008,6 +1015,7 @@ impl Engine {
         translation_enabled: bool,
         show_thinking: bool,
         allowed_tools: Option<Vec<String>>,
+        hook_executor: Option<std::sync::Arc<crate::hooks::HookExecutor>>,
     ) {
         // Reset cancel token for fresh turn (in case previous was cancelled)
         self.reset_cancel_token();
@@ -1114,6 +1122,7 @@ impl Engine {
             );
         }
         self.config.allowed_tools = allowed_tools;
+        self.config.hook_executor = hook_executor;
         self.session.reasoning_effort = reasoning_effort;
         self.session.reasoning_effort_auto = reasoning_effort_auto;
         self.session.auto_model = auto_model;

@@ -35,6 +35,9 @@ pub enum Op {
         /// Tool restriction from custom slash command frontmatter.
         /// `None` means the current turn may use the normal tool set.
         allowed_tools: Option<Vec<String>>,
+        /// Hook executor for control-plane hooks.
+        /// `ToolCallBefore` hooks may deny a tool call with exit code 2.
+        hook_executor: Option<std::sync::Arc<crate::hooks::HookExecutor>>,
     },
 
     /// Cancel the current request
