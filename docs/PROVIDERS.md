@@ -61,6 +61,48 @@ Non-local `http://` base URLs are rejected unless
 `DEEPSEEK_ALLOW_INSECURE_HTTP=1` is set. Loopback HTTP URLs are allowed for
 self-hosted runtimes.
 
+## Custom DeepSeek-Compatible Endpoints
+
+Most custom DeepSeek-compatible deployments can use an existing provider ID.
+Do not create `[providers.deepseek_custom]`; the provider table names are fixed.
+Instead, choose the closest shipped route and override its endpoint/model:
+
+- DeepSeek-compatible hosted API: keep `provider = "deepseek"` and set
+  `[providers.deepseek].base_url` plus `[providers.deepseek].model`, or launch
+  with `DEEPSEEK_BASE_URL` and `DEEPSEEK_MODEL`.
+- Generic OpenAI-compatible gateway: use `provider = "openai"` with
+  `[providers.openai].base_url` plus `[providers.openai].model`, or launch with
+  `OPENAI_BASE_URL` and `OPENAI_MODEL`.
+- Local OpenAI-compatible runtimes: use `provider = "vllm"`, `"sglang"`, or
+  `"ollama"` with the matching provider-specific base URL/model values.
+
+Example user config for a DeepSeek-compatible host:
+
+```toml
+provider = "deepseek"
+
+[providers.deepseek]
+api_key = "YOUR_API_KEY"
+base_url = "https://your-provider.example/v1"
+model = "deepseek-ai/DeepSeek-V4-Pro"
+```
+
+Example user config for a generic gateway:
+
+```toml
+provider = "openai"
+
+[providers.openai]
+api_key = "YOUR_GATEWAY_API_KEY"
+base_url = "https://gateway.example/v1"
+model = "your-deepseek-compatible-model"
+```
+
+Keep `provider`, `api_key`, and `base_url` in user config or process
+environment. Project-local config overlays intentionally cannot set those keys,
+so a repository cannot silently redirect prompts or credentials to another
+endpoint.
+
 ## Shipped Providers
 
 | Provider ID | TOML table | Auth env | Base URL env and default | Default or static models | Notes |
