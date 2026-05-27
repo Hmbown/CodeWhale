@@ -12,7 +12,9 @@
 mod tests {
     use crate::palette::{
         CATPPUCCIN_MOCHA_UI_THEME, DRACULA_UI_THEME, GRAYSCALE_UI_THEME, GRUVBOX_DARK_UI_THEME,
-        LIGHT_UI_THEME, TOKYO_NIGHT_UI_THEME, UI_THEME, UiTheme,
+        LIGHT_UI_THEME, TOKYO_NIGHT_UI_THEME, UI_THEME, UiTheme, WHALE_ACCENT_ACTION_RGB,
+        WHALE_ACCENT_PRIMARY_RGB, WHALE_ACCENT_SECONDARY_RGB, WHALE_BG_RGB, WHALE_TEXT_BODY_RGB,
+        WHALE_TEXT_MUTED_RGB,
     };
     use ratatui::style::Color;
 
@@ -288,30 +290,30 @@ mod tests {
     fn whale_dark_uses_proposed_palette() {
         // Issue #2012: verify the default Whale dark uses proposed tokens.
         let t = UI_THEME;
-        assert_eq!(rgb(t.surface_bg), Some((13, 21, 37)), "Deep Navy #0D1525");
+        assert_eq!(rgb(t.surface_bg), Some(WHALE_BG_RGB), "Deep Navy #0A1120");
         assert_eq!(
             rgb(t.text_body),
-            Some((246, 242, 232)),
+            Some(WHALE_TEXT_BODY_RGB),
             "Whale Ivory #F6F2E8"
         );
         assert_eq!(
             rgb(t.text_muted),
-            Some((169, 180, 199)),
+            Some(WHALE_TEXT_MUTED_RGB),
             "Mist Gray #A9B4C7"
         );
         assert_eq!(
             rgb(t.accent_primary),
-            Some((246, 196, 83)),
+            Some(WHALE_ACCENT_PRIMARY_RGB),
             "Signal Gold #F6C453"
         );
         assert_eq!(
             rgb(t.accent_secondary),
-            Some((79, 209, 197)),
+            Some(WHALE_ACCENT_SECONDARY_RGB),
             "Seafoam #4FD1C5"
         );
         assert_eq!(
             rgb(t.accent_action),
-            Some((255, 122, 89)),
+            Some(WHALE_ACCENT_ACTION_RGB),
             "Coral Spark #FF7A59"
         );
         assert_eq!(rgb(t.error_fg), Some((255, 92, 122)), "Rose Red #FF5C7A");

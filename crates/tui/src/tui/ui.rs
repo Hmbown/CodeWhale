@@ -106,6 +106,8 @@ use crate::tui::views::subagent_view_agents;
 use crate::tui::vim_mode;
 use crate::tui::workspace_context;
 
+use super::key_actions;
+
 use super::app::{
     App, AppAction, AppMode, OnboardingState, QueuedMessage, ReasoningEffort, SidebarFocus,
     StatusToastLevel, SubmitDisposition, TaskPanelEntry, TuiOptions,
@@ -682,6 +684,7 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         instructions: config.instructions_paths(),
         project_context_pack_enabled: config.project_context_pack_enabled(),
         translation_enabled: app.translation_enabled,
+        show_thinking: app.show_thinking,
         // Effectively unlimited. V4 has a 1M context window and the user
         // wants the model running until it's actually done. The previous cap
         // of 100 hit the ceiling on long multi-step plans (wide refactors,
@@ -698,6 +701,11 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         capacity: crate::core::capacity::CapacityControllerConfig::from_app_config(config),
         todos: app.todos.clone(),
         plan_state: app.plan_state.clone(),
+        goal_state: crate::tools::goal::new_shared_goal_state_from_host(
+            app.goal.goal_objective.clone(),
+            app.goal.goal_token_budget,
+            app.goal.goal_completed,
+        ),
         max_spawn_depth: crate::tools::subagent::DEFAULT_MAX_SPAWN_DEPTH,
         network_policy: config.network.clone().map(|toml_cfg| {
             crate::network_policy::NetworkPolicyDecider::with_default_audit(toml_cfg.into_runtime())
@@ -714,6 +722,7 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         runtime_services: app.runtime_services.clone(),
         subagent_model_overrides: config.subagent_model_overrides(),
         subagent_api_timeout: Duration::from_secs(config.subagent_api_timeout_secs()),
+        prefer_bwrap: config.prefer_bwrap.unwrap_or(false),
         memory_enabled: config.memory_enabled(),
         memory_path: config.memory_path(),
         vision_config: config.vision_model_config(),
@@ -721,12 +730,9 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         goal_objective: app.goal.goal_objective.clone(),
         locale_tag: app.ui_locale.tag().to_string(),
         workshop: config.workshop.clone(),
-        search_provider: config
-            .search
-            .as_ref()
-            .and_then(|s| s.provider)
-            .unwrap_or_default(),
+        search_provider: config.search_provider(),
         search_api_key: config.search.as_ref().and_then(|s| s.api_key.clone()),
+        tools_always_load: config.tools_always_load(),
     }
 }
 
@@ -893,7 +899,57 @@ async fn run_event_loop(
         .checked_sub(Duration::from_secs(60))
         .unwrap_or_else(Instant::now);
 
+    // Fire-and-forget version check — runs once per session in the
+    // background. On success, `app.version_hint` is set and the footer
+    // renders the update recommendation on the next frame.
+    let mut version_check: Option<tokio::task::JoinHandle<Option<String>>> = Some({
+        let current = env!("CARGO_PKG_VERSION").to_string();
+        tokio::spawn(async move {
+            let client = match reqwest::Client::builder()
+                .user_agent("codewhale-version-check")
+                .timeout(std::time::Duration::from_secs(5))
+                .build()
+            {
+                Ok(c) => c,
+                Err(_) => return None,
+            };
+            let resp = client
+                .get("https://api.github.com/repos/Hmbown/CodeWhale/releases/latest")
+                .header("Accept", "application/vnd.github+json")
+                .send()
+                .await
+                .ok()?;
+            let json: serde_json::Value = resp.json().await.ok()?;
+            let tag = json["tag_name"].as_str()?;
+            let latest = tag.trim_start_matches('v');
+            // Compare semver so dev builds (e.g. "0.8.46-pre") don't
+            // trigger false hints. Falls back to string compare on
+            // unparseable versions.
+            let newer = match (parse_semver(latest), parse_semver(&current)) {
+                (Some(l), Some(c)) => l > c,
+                _ => latest != current,
+            };
+            if newer {
+                Some(format!(
+                    "v{latest} available — run `codewhale update` and restart"
+                ))
+            } else {
+                None
+            }
+        })
+    });
+
     loop {
+        // Drain the version-check handle once; re-assign None so we
+        // don't poll it again.
+        let mut done = false;
+        if let Some(ref handle) = version_check {
+            done = handle.is_finished();
+        }
+        if done && let Ok(Some(hint)) = version_check.take().unwrap().await {
+            app.version_hint = Some(hint);
+        }
+
         if !drain_web_config_events(&mut web_config_session, app, config, &engine_handle).await {
             web_config_session = None;
         }
@@ -1429,6 +1485,28 @@ async fn run_event_loop(
                             .session
                             .total_conversation_tokens
                             .saturating_add(turn_tokens);
+                        app.session.total_input_tokens = app
+                            .session
+                            .total_input_tokens
+                            .saturating_add(usage.input_tokens);
+                        app.session.total_output_tokens = app
+                            .session
+                            .total_output_tokens
+                            .saturating_add(usage.output_tokens);
+                        // Only accumulate cache telemetry when reported.
+                        if let Some(hit_tokens) = usage.prompt_cache_hit_tokens {
+                            app.session.total_cache_hit_tokens = app
+                                .session
+                                .total_cache_hit_tokens
+                                .saturating_add(hit_tokens);
+                            let cache_miss = usage
+                                .prompt_cache_miss_tokens
+                                .unwrap_or_else(|| usage.input_tokens.saturating_sub(hit_tokens));
+                            app.session.total_cache_miss_tokens = app
+                                .session
+                                .total_cache_miss_tokens
+                                .saturating_add(cache_miss);
+                        }
                         app.session.last_prompt_tokens = Some(usage.input_tokens);
                         app.session.last_completion_tokens = Some(usage.output_tokens);
                         app.session.last_prompt_cache_hit_tokens = usage.prompt_cache_hit_tokens;
@@ -1487,9 +1565,15 @@ async fn run_event_loop(
                                 threshold,
                                 turn_elapsed,
                             );
+                            crate::tui::notifications::clear_taskbar_progress();
+                            crate::tui::notifications::stop_title_animation();
                         }
 
                         // Generate post-turn receipt for completed turns.
+                        // Also push a persistent status toast so users always
+                        // see the outcome in the footer (not just the 8-second
+                        // composer receipt), regardless of notification method
+                        // or platform.
                         if status == crate::core::events::TurnOutcomeStatus::Completed {
                             let tool_count = app.tool_evidence.len();
                             let mut receipt = "✓ turn completed".to_string();
@@ -1504,7 +1588,16 @@ async fn run_event_loop(
                                     let _ = write!(receipt, " · {}: {summary}", evidence.tool_name);
                                 }
                             }
-                            app.set_receipt_text(receipt);
+                            app.set_receipt_text(receipt.clone());
+                            // Mirror as a persistent status toast (10s TTL).
+                            // The footer bar visibly shows status toasts,
+                            // which is more glanceable than the composer
+                            // border receipt alone.
+                            app.push_status_toast(
+                                receipt,
+                                crate::tui::app::StatusToastLevel::Info,
+                                Some(10_000),
+                            );
                         }
 
                         // Auto-save completed turn and clear crash checkpoint.
@@ -2279,6 +2372,8 @@ async fn run_event_loop(
             if app.use_mouse_capture
                 && let Event::Mouse(mouse) = evt
             {
+                // Mouse interaction clears the ✅ completion marker.
+                crate::tui::notifications::reset_title_on_interaction();
                 if should_drop_loading_mouse_motion(app, mouse) {
                     continue;
                 }
@@ -2298,6 +2393,9 @@ async fn run_event_loop(
                 }
                 continue;
             }
+
+            // User interaction — clear the ✅ completion marker from the title.
+            crate::tui::notifications::reset_title_on_interaction();
 
             let Event::Key(key) = evt else {
                 continue;
@@ -2680,47 +2778,9 @@ async fn run_event_loop(
                 continue;
             }
 
-            // File-tree navigation: intercept keys when the file-tree pane is
-            // visible so Up/Down/Enter/Esc operate on the tree rather than
-            // falling through to composer or modal handlers.
-            if app.file_tree_visible {
-                match key.code {
-                    KeyCode::Up => {
-                        if let Some(state) = app.file_tree.as_mut() {
-                            state.cursor_up();
-                        }
-                        app.needs_redraw = true;
-                        continue;
-                    }
-                    KeyCode::Down => {
-                        if let Some(state) = app.file_tree.as_mut() {
-                            state.cursor_down();
-                        }
-                        app.needs_redraw = true;
-                        continue;
-                    }
-                    KeyCode::Enter => {
-                        if let Some(state) = app.file_tree.as_mut() {
-                            if let Some(rel_path) = state.activate() {
-                                // Insert @path into the composer.
-                                let path_str = rel_path.to_string_lossy().to_string();
-                                app.status_message = Some(format!("Attached @{path_str}"));
-                                app.insert_str(&format!("@{path_str} "));
-                            } else {
-                                // Directory was expanded/collapsed; rebuild.
-                                app.needs_redraw = true;
-                            }
-                        }
-                        continue;
-                    }
-                    KeyCode::Esc => {
-                        app.file_tree = None;
-                        app.status_message = Some("File tree closed".to_string());
-                        app.needs_redraw = true;
-                        continue;
-                    }
-                    _ => {}
-                }
+            // File-tree navigation: delegated to key_actions module.
+            if key_actions::handle_file_tree_key(app, &key) {
+                continue;
             }
 
             if app.is_history_search_active() {
@@ -2915,7 +2975,21 @@ async fn run_event_loop(
                 KeyCode::Char('c') | KeyCode::Char('C')
                     if key_shortcuts::is_copy_shortcut(&key) =>
                 {
-                    copy_active_selection(app);
+                    let sel = app.selected_text();
+                    if !sel.is_empty() {
+                        if app.clipboard.write_text(&sel).is_ok() {
+                            app.push_status_toast(
+                                "Copied to clipboard",
+                                StatusToastLevel::Info,
+                                None,
+                            );
+                            app.clear_selection();
+                        } else {
+                            app.push_status_toast("Copy failed", StatusToastLevel::Error, None);
+                        }
+                    } else {
+                        copy_active_selection(app);
+                    }
                 }
                 KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     // Four behaviors layered on Ctrl+C in priority order — see
@@ -3428,16 +3502,32 @@ async fn run_event_loop(
                     app.delete_char_forward();
                 }
                 KeyCode::Delete => {}
+                KeyCode::Left if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                    if app.selection_anchor.is_none() {
+                        app.selection_anchor = Some(app.cursor_position);
+                    }
+                    app.move_cursor_left();
+                }
                 KeyCode::Left if is_word_cursor_modifier(key.modifiers) => {
+                    app.clear_selection();
                     app.move_cursor_word_backward();
                 }
                 KeyCode::Left => {
+                    app.clear_selection();
                     app.move_cursor_left();
                 }
+                KeyCode::Right if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                    if app.selection_anchor.is_none() {
+                        app.selection_anchor = Some(app.cursor_position);
+                    }
+                    app.move_cursor_right();
+                }
                 KeyCode::Right if is_word_cursor_modifier(key.modifiers) => {
+                    app.clear_selection();
                     app.move_cursor_word_forward();
                 }
                 KeyCode::Right => {
+                    app.clear_selection();
                     app.move_cursor_right();
                 }
                 KeyCode::Home if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -3453,15 +3543,19 @@ async fn run_event_loop(
                 KeyCode::Home | KeyCode::Char('a')
                     if key.modifiers.contains(KeyModifiers::CONTROL) =>
                 {
+                    app.clear_selection();
                     app.move_cursor_start();
                 }
                 KeyCode::Home => {
+                    app.clear_selection();
                     app.move_cursor_line_start();
                 }
                 KeyCode::End => {
+                    app.clear_selection();
                     app.move_cursor_line_end();
                 }
                 KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    app.clear_selection();
                     app.move_cursor_end();
                 }
                 KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -3564,12 +3658,22 @@ async fn run_event_loop(
                     }
                 }
                 KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    let new_mode = match app.mode {
-                        AppMode::Plan => AppMode::Agent,
-                        AppMode::Agent => AppMode::Yolo,
-                        AppMode::Yolo => AppMode::Plan,
-                    };
-                    app.set_mode(new_mode);
+                    let sel = app.selected_text();
+                    if !sel.is_empty() {
+                        if app.clipboard.write_text(&sel).is_ok() {
+                            app.push_status_toast("Cut to clipboard", StatusToastLevel::Info, None);
+                            app.delete_selection();
+                        } else {
+                            app.push_status_toast("Cut failed", StatusToastLevel::Error, None);
+                        }
+                    } else {
+                        let new_mode = match app.mode {
+                            AppMode::Plan => AppMode::Agent,
+                            AppMode::Agent => AppMode::Yolo,
+                            AppMode::Yolo => AppMode::Plan,
+                        };
+                        app.set_mode(new_mode);
+                    }
                 }
                 _ if key_shortcuts::is_paste_shortcut(&key) => {
                     app.paste_from_clipboard();
@@ -3633,7 +3737,7 @@ async fn run_event_loop(
             }
 
             if !is_plain_char && !is_enter {
-                app.paste_burst.clear_window_after_non_char();
+                app.paste_burst.deactivate_keep_window();
             }
         }
     }
@@ -4093,6 +4197,7 @@ async fn dispatch_user_message(
                 locale_tag: app.ui_locale.tag(),
                 translation_enabled: app.translation_enabled,
                 model_id: &app.model,
+                show_thinking: app.show_thinking,
             },
         ),
     );
@@ -4189,6 +4294,7 @@ async fn dispatch_user_message(
             auto_approve: app.mode == AppMode::Yolo,
             approval_mode: app.approval_mode,
             translation_enabled: app.translation_enabled,
+            show_thinking: app.show_thinking,
         })
         .await
     {
@@ -5290,6 +5396,11 @@ async fn steer_user_message(
     engine_handle.steer(content.clone()).await?;
     app.last_submitted_prompt = Some(message.display.clone());
 
+    // Flush any streaming thinking/tool content into history before
+    // inserting the steer message, so the steer appears after (below)
+    // the content that chronologically preceded it.
+    app.flush_active_cell();
+
     // Mirror steer input in local transcript/session state.
     app.add_message(HistoryCell::User {
         content: format!("+ {}", message.display),
@@ -5772,6 +5883,47 @@ fn render(f: &mut Frame, app: &mut App) {
         composer_widget.render(chunks[3], buf);
         composer_widget.cursor_pos(chunks[3])
     };
+    app.viewport.last_composer_area = Some(chunks[3]);
+    {
+        let area = chunks[3];
+        let has_panel = app.composer_border && area.height >= 3 && area.width >= 12;
+        let inner = if has_panel {
+            ratatui::widgets::Block::default()
+                .borders(ratatui::widgets::Borders::ALL)
+                .inner(area)
+        } else {
+            area
+        };
+        app.viewport.last_composer_content = Some(inner);
+
+        // Compute scroll offset and top padding for mouse coordinate mapping.
+        let input_text = app.composer_display_input();
+        let input_cursor = app.composer_display_cursor();
+        let content_width = usize::from(inner.width.max(1));
+        let menu_lines = ComposerWidget::new(
+            app,
+            composer_max_height,
+            &slash_menu_entries,
+            &mention_menu_entries,
+        )
+        .active_menu_reserved_rows();
+        let budget = crate::tui::widgets::composer_input_rows_budget(inner.height, menu_lines);
+        let (_, _, _, scroll_offset) = crate::tui::widgets::layout_input_with_scroll(
+            input_text,
+            input_cursor,
+            content_width,
+            budget,
+        );
+        let visible_lines = if input_text.is_empty() {
+            1
+        } else {
+            // Count wrapped lines (approximation matching the render path).
+            crate::tui::widgets::wrap_input_lines_for_mouse(input_text, content_width).len()
+        };
+        let top_padding = budget.saturating_sub(visible_lines.clamp(1, budget));
+        app.viewport.last_composer_scroll_offset = scroll_offset;
+        app.viewport.last_composer_top_padding = top_padding;
+    }
     if let Some(cursor_pos) = cursor_pos {
         f.set_cursor_position(cursor_pos);
     }
@@ -6635,6 +6787,8 @@ fn apply_loaded_session(app: &mut App, config: &Config, session: &SavedSession) 
     app.session.last_prompt_cache_hit_tokens = None;
     app.session.last_prompt_cache_miss_tokens = None;
     app.session.last_reasoning_replay_tokens = None;
+    // Accumulated token breakdown is per-runtime-session; reset on load.
+    app.session.reset_token_breakdown();
     app.session.turn_cache_history.clear();
     // Restore cumulative turn duration so the footer "worked" chip
     // persists across session restarts (#2038).
@@ -7937,6 +8091,16 @@ fn extract_reasoning_header(text: &str) -> Option<String> {
     } else {
         Some(header.to_string())
     }
+}
+
+/// Parse a `major.minor.patch` version string into a comparable tuple.
+/// Returns `None` on any parse failure (non-semver, dev suffixes, etc.).
+fn parse_semver(v: &str) -> Option<(u32, u32, u32)> {
+    let mut parts = v.splitn(3, '.');
+    let major = parts.next()?.parse::<u32>().ok()?;
+    let minor = parts.next()?.parse::<u32>().ok()?;
+    let patch = parts.next().unwrap_or("0").parse::<u32>().ok()?;
+    Some((major, minor, patch))
 }
 
 #[cfg(test)]

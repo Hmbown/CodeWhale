@@ -48,7 +48,9 @@ pub fn save(app: &mut App, path: Option<&str>) -> CommandResult {
 
     match std::fs::create_dir_all(&sessions_dir) {
         Ok(()) => {
-            let json = match serde_json::to_string_pretty(&session) {
+            let mut persisted = session.clone();
+            crate::session_manager::compact_session_tool_outputs(&mut persisted);
+            let json = match serde_json::to_string_pretty(&persisted) {
                 Ok(j) => j,
                 Err(e) => return CommandResult::error(format!("Failed to serialize session: {e}")),
             };
@@ -152,12 +154,13 @@ pub fn load(app: &mut App, path: Option<&str>) -> CommandResult {
         }
     };
 
-    let session: crate::session_manager::SavedSession = match serde_json::from_str(&content) {
+    let mut session: crate::session_manager::SavedSession = match serde_json::from_str(&content) {
         Ok(s) => s,
         Err(e) => {
             return CommandResult::error(format!("Failed to parse session file: {e}"));
         }
     };
+    crate::session_manager::compact_session_tool_outputs(&mut session);
 
     app.api_messages.clone_from(&session.messages);
     app.clear_history();
@@ -169,11 +172,13 @@ pub fn load(app: &mut App, path: Option<&str>) -> CommandResult {
     app.extend_history(cells_to_add);
     app.mark_history_updated();
     app.viewport.transcript_selection.clear();
-    app.model.clone_from(&session.metadata.model);
+    app.set_model_selection(session.metadata.model.clone());
     app.update_model_compaction_budget();
     app.workspace.clone_from(&session.metadata.workspace);
     app.session.total_tokens = u32::try_from(session.metadata.total_tokens).unwrap_or(u32::MAX);
     app.session.total_conversation_tokens = app.session.total_tokens;
+    // Accumulated token breakdown is per-runtime-session; zero on load.
+    app.session.reset_token_breakdown();
     app.session.session_cost = 0.0;
     app.session.session_cost_cny = 0.0;
     app.session.subagent_cost = 0.0;
@@ -363,8 +368,8 @@ fn line_to_string(line: ratatui::text::Line<'static>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
-    use crate::tui::app::{App, TuiOptions, TurnCacheRecord};
+    use crate::config::{Config, DEFAULT_TEXT_MODEL};
+    use crate::tui::app::{App, ReasoningEffort, TuiOptions, TurnCacheRecord};
     use std::time::Instant;
     use tempfile::TempDir;
 
@@ -485,22 +490,36 @@ mod tests {
     }
 
     #[test]
-    fn test_save_with_default_path_uses_workspace() {
+    fn test_save_with_default_path_uses_managed_sessions_dir() {
         let tmpdir = TempDir::new().unwrap();
+        // Set CODEWHALE_HOME so the managed sessions directory lands inside the
+        // temp dir rather than the real user home. Pre-create the directory so
+        // resolve_state_dir picks it up instead of falling back to legacy.
+        let home = tmpdir.path().join("home");
+        let sessions_dir = home.join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        // SAFETY: test-only, single-threaded via cargo test
+        unsafe { std::env::set_var("CODEWHALE_HOME", home.to_str().unwrap()) };
         let mut app = create_test_app_with_tmpdir(&tmpdir);
         let result = save(&mut app, None);
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
-        // Should create file in workspace with timestamp name
         // Give it a moment to ensure file is written
         std::thread::sleep(std::time::Duration::from_millis(10));
-        let entries: Vec<_> = std::fs::read_dir(tmpdir.path())
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_name().to_string_lossy().starts_with("session_"))
-            .collect();
-        // Test passes if file was created or if save returned success message
-        assert!(!entries.is_empty() || msg.contains("Session saved"));
+        let entries: Vec<_> = if sessions_dir.exists() {
+            std::fs::read_dir(&sessions_dir)
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_name().to_string_lossy().starts_with("session_"))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        // Session should be saved to the managed dir, not the workspace root.
+        assert!(
+            !entries.is_empty(),
+            "expected session file in {sessions_dir:?}, got none; msg: {msg}"
+        );
     }
 
     #[test]
@@ -571,6 +590,31 @@ mod tests {
         assert_eq!(app2.session.total_tokens, 500);
         assert!(app2.current_session_id.is_some());
         assert!(matches!(result.action, Some(AppAction::SyncSession { .. })));
+    }
+
+    #[test]
+    fn load_auto_model_session_restores_auto_mode() {
+        let tmpdir = TempDir::new().unwrap();
+        let mut saved_app = create_test_app_with_tmpdir(&tmpdir);
+        saved_app.set_model_selection("auto".to_string());
+        saved_app.last_effective_model = Some("deepseek-v4-flash".to_string());
+        saved_app.last_effective_reasoning_effort = Some(ReasoningEffort::Low);
+        let save_path = tmpdir.path().join("auto_model.json");
+        save(&mut saved_app, Some(save_path.to_str().unwrap()));
+
+        let mut app = create_test_app_with_tmpdir(&tmpdir);
+        app.set_model_selection("deepseek-v4-flash".to_string());
+        app.reasoning_effort = ReasoningEffort::High;
+        let result = load(&mut app, Some(save_path.to_str().unwrap()));
+
+        assert!(!result.is_error);
+        assert!(app.auto_model);
+        assert_eq!(app.model, "auto");
+        assert_eq!(app.model_selection_for_persistence(), "auto");
+        assert_eq!(app.last_effective_model, None);
+        assert_eq!(app.last_effective_reasoning_effort, None);
+        assert_eq!(app.reasoning_effort, ReasoningEffort::Auto);
+        assert_eq!(app.effective_model_for_budget(), DEFAULT_TEXT_MODEL);
     }
 
     #[test]

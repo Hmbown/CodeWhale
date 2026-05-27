@@ -31,6 +31,7 @@ pub enum Op {
         auto_approve: bool,
         approval_mode: ApprovalMode,
         translation_enabled: bool,
+        show_thinking: bool,
     },
 
     /// Cancel the current request

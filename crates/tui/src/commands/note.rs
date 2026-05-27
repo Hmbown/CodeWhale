@@ -39,6 +39,10 @@ pub fn note(app: &mut App, content: Option<&str>) -> CommandResult {
 }
 
 fn notes_path(app: &App) -> PathBuf {
+    let primary = app.workspace.join(".codewhale").join("notes.md");
+    if primary.exists() {
+        return primary;
+    }
     app.workspace.join(".deepseek").join("notes.md")
 }
 

@@ -3,8 +3,8 @@
 //!
 //! Two side-by-side panes — Models on the left, Thinking effort on the
 //! right. Tab swaps focus, ↑/↓ moves within the focused pane, Enter applies
-//! both and closes the modal. Esc closes immediately when nothing moved; after
-//! a selection move it keeps the highlighted choice.
+//! both and closes the modal. Esc applies the last-highlighted choice and
+//! closes.
 //!
 //! The effort pane intentionally only exposes `Off / High / Max`. Per
 //! DeepSeek's [Thinking Mode docs](https://api-docs.deepseek.com/guides/reasoning_model),
@@ -274,8 +274,7 @@ impl ModalView for ModelPickerView {
 
     fn handle_key(&mut self, key: KeyEvent) -> ViewAction {
         match key.code {
-            KeyCode::Esc if self.selection_touched => ViewAction::EmitAndClose(self.build_event()),
-            KeyCode::Esc => ViewAction::Close,
+            KeyCode::Esc => ViewAction::EmitAndClose(self.build_event()),
             KeyCode::Enter => ViewAction::EmitAndClose(self.build_event()),
             KeyCode::Up => {
                 self.selection_touched |= self.move_up();
@@ -321,7 +320,7 @@ impl ModalView for ModelPickerView {
                 Span::styled(" Enter ", Style::default().fg(palette::TEXT_MUTED)),
                 Span::raw("apply "),
                 Span::styled(" Esc ", Style::default().fg(palette::TEXT_MUTED)),
-                Span::raw("cancel "),
+                Span::raw("apply "),
             ]))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(palette::BORDER_COLOR))
@@ -577,14 +576,19 @@ mod tests {
     }
 
     #[test]
-    fn immediate_esc_closes_without_emitting() {
+    fn immediate_esc_applies_current_selection() {
         let (app, _lock) = create_test_app();
         let mut view = ModelPickerView::new(&app);
         let action = view.handle_key(KeyEvent::new(
             KeyCode::Esc,
             crossterm::event::KeyModifiers::NONE,
         ));
-        assert!(matches!(action, ViewAction::Close));
+        match action {
+            ViewAction::EmitAndClose(ViewEvent::ModelPickerApplied { model, .. }) => {
+                assert_eq!(model, "deepseek-v4-pro");
+            }
+            other => panic!("expected Esc to apply current selection, got {other:?}"),
+        }
     }
 
     #[test]

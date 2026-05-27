@@ -1032,7 +1032,13 @@ fn read_workspace_anchors(workspace: Option<&Path>) -> Vec<String> {
         return Vec::new();
     };
 
-    let anchors_path = ws.join(".deepseek").join("anchors.md");
+    // Prefer .codewhale, fall back to .deepseek
+    let primary = ws.join(".codewhale").join("anchors.md");
+    let anchors_path = if primary.exists() {
+        primary
+    } else {
+        ws.join(".deepseek").join("anchors.md")
+    };
     let Ok(content) = std::fs::read_to_string(anchors_path) else {
         return Vec::new();
     };

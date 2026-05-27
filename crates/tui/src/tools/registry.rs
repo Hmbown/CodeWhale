@@ -844,6 +844,15 @@ impl ToolRegistryBuilder {
         self.with_tool(Arc::new(UpdatePlanTool::new(plan_state)))
     }
 
+    /// Include runtime goal tools (`create_goal`, `get_goal`, `update_goal`).
+    #[must_use]
+    pub fn with_goal_tools(self, goal_state: super::goal::SharedGoalState) -> Self {
+        use super::goal::{CreateGoalTool, GetGoalTool, UpdateGoalTool};
+        self.with_tool(Arc::new(CreateGoalTool::new(goal_state.clone())))
+            .with_tool(Arc::new(GetGoalTool::new(goal_state.clone())))
+            .with_tool(Arc::new(UpdateGoalTool::new(goal_state)))
+    }
+
     /// Include sub-agent management tools.
     #[must_use]
     pub fn with_subagent_tools(

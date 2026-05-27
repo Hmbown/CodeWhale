@@ -442,7 +442,7 @@ fn push_work_checklist_lines(
         let (prefix, color) = match item.status {
             TodoStatus::Pending => ("[ ]", palette::TEXT_MUTED),
             TodoStatus::InProgress => ("[~]", palette::STATUS_WARNING),
-            TodoStatus::Completed => ("[x]", palette::STATUS_SUCCESS),
+            TodoStatus::Completed => ("[✓]", palette::STATUS_SUCCESS),
         };
         let text = format!("{prefix} #{} {}", item.id, item.content);
         lines.push(Line::from(Span::styled(
@@ -533,7 +533,7 @@ fn push_work_strategy_lines(
         let (prefix, color) = match step.status {
             StepStatus::Pending => ("[ ]", theme.plan_pending_color),
             StepStatus::InProgress => ("[~]", theme.plan_in_progress_color),
-            StepStatus::Completed => ("[x]", theme.plan_completed_color),
+            StepStatus::Completed => ("[✓]", theme.plan_completed_color),
         };
         let mut text = format!("{prefix} {}", step.text);
         if !step.elapsed.is_empty() {
@@ -1361,7 +1361,7 @@ fn first_nonempty_line(text: &str) -> &str {
 fn tool_status_marker(status: ToolStatus) -> (&'static str, ratatui::style::Color) {
     match status {
         ToolStatus::Running => ("[~]", palette::STATUS_WARNING),
-        ToolStatus::Success => ("[x]", palette::STATUS_SUCCESS),
+        ToolStatus::Success => ("[✓]", palette::STATUS_SUCCESS),
         ToolStatus::Failed => ("[!]", palette::STATUS_ERROR),
     }
 }
@@ -1606,6 +1606,12 @@ pub fn subagent_panel_lines(
             Style::default().fg(color),
         )));
 
+        // Auto-collapse finished sub-agents: hide detail lines for completed
+        // agents so the sidebar stays compact when work is done.
+        if row.status == "done" {
+            continue;
+        }
+
         if lines.len() >= max_rows {
             break;
         }
@@ -1650,7 +1656,7 @@ pub fn subagent_panel_lines(
 fn agent_status_marker(status: &str) -> (&'static str, ratatui::style::Color) {
     match status {
         "running" => ("[~]", palette::STATUS_WARNING),
-        "done" => ("[x]", palette::STATUS_SUCCESS),
+        "done" => ("[✓]", palette::STATUS_SUCCESS),
         "failed" => ("[!]", palette::STATUS_ERROR),
         "canceled" | "interrupted" => ("[-]", palette::TEXT_MUTED),
         _ => ("[ ]", palette::TEXT_MUTED),
@@ -2146,7 +2152,7 @@ mod tests {
             "recent section missing: {text:?}"
         );
         assert!(
-            text.iter().any(|line| line.contains("[x] read_file")),
+            text.iter().any(|line| line.contains("[✓] read_file")),
             "recent read_file row missing: {text:?}"
         );
     }
@@ -2175,7 +2181,7 @@ mod tests {
         let text = lines_to_text(&task_panel_lines(&app, 64, 8));
 
         assert!(
-            !text.iter().any(|line| line.contains("[x] read_file")),
+            !text.iter().any(|line| line.contains("[✓] read_file")),
             "expired completed active row should leave the sidebar: {text:?}"
         );
     }
@@ -2213,7 +2219,7 @@ mod tests {
         let text = lines_to_text(&task_panel_lines(&app, 64, 8));
 
         assert!(
-            text.iter().any(|line| line.contains("[x] read_file")),
+            text.iter().any(|line| line.contains("[✓] read_file")),
             "fresh completed active row should linger briefly: {text:?}"
         );
     }
@@ -2366,7 +2372,7 @@ mod tests {
             .expect("failed grep row should stay visible");
         let read_group_index = text
             .iter()
-            .position(|line| line.contains("[x] read_file x3"))
+            .position(|line| line.contains("[✓] read_file x3"))
             .expect("repeated read_file rows should collapse");
 
         assert!(
@@ -2375,7 +2381,7 @@ mod tests {
         );
         assert_eq!(
             text.iter()
-                .filter(|line| line.contains("[x] read_file"))
+                .filter(|line| line.contains("[✓] read_file"))
                 .count(),
             1,
             "read_file should render once after grouping: {text:?}"
@@ -2475,7 +2481,7 @@ mod tests {
 
         assert!(
             text.iter()
-                .any(|line| line.contains("[x] cargo check 1.2s")),
+                .any(|line| line.contains("[✓] cargo check 1.2s")),
             "status marker and duration should stay in the row label: {text:?}"
         );
         assert!(

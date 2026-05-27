@@ -261,7 +261,10 @@ impl SessionManager {
     pub fn save_session(&self, session: &SavedSession) -> std::io::Result<PathBuf> {
         let path = self.validated_session_path(&session.metadata.id)?;
 
-        let content = serde_json::to_string_pretty(session)
+        let mut persisted = session.clone();
+        compact_session_tool_outputs(&mut persisted);
+
+        let content = serde_json::to_string_pretty(&persisted)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
         // Atomic write via write_atomic (NamedTempFile + fsync + persist)
@@ -278,7 +281,9 @@ impl SessionManager {
         let checkpoints = self.sessions_dir.join("checkpoints");
         fs::create_dir_all(&checkpoints)?;
         let path = checkpoints.join("latest.json");
-        let content = serde_json::to_string_pretty(session)
+        let mut persisted = session.clone();
+        compact_session_tool_outputs(&mut persisted);
+        let content = serde_json::to_string_pretty(&persisted)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         write_atomic(&path, content.as_bytes())?;
         Ok(path)
@@ -291,7 +296,7 @@ impl SessionManager {
             return Ok(None);
         }
         let content = fs::read_to_string(&path)?;
-        let session: SavedSession = serde_json::from_str(&content)
+        let mut session: SavedSession = serde_json::from_str(&content)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         if session.schema_version > CURRENT_SESSION_SCHEMA_VERSION {
             return Err(std::io::Error::new(
@@ -302,6 +307,7 @@ impl SessionManager {
                 ),
             ));
         }
+        compact_session_tool_outputs(&mut session);
         Ok(Some(session))
     }
 
@@ -372,7 +378,7 @@ impl SessionManager {
         let path = self.validated_session_path(id)?;
 
         let content = fs::read_to_string(&path)?;
-        let session: SavedSession = serde_json::from_str(&content)
+        let mut session: SavedSession = serde_json::from_str(&content)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         if session.schema_version > CURRENT_SESSION_SCHEMA_VERSION {
             return Err(std::io::Error::new(
@@ -384,6 +390,7 @@ impl SessionManager {
             ));
         }
 
+        compact_session_tool_outputs(&mut session);
         Ok(session)
     }
 
@@ -760,6 +767,17 @@ pub fn update_session(
     session
 }
 
+pub(crate) fn compact_session_tool_outputs(
+    session: &mut SavedSession,
+) -> crate::tool_output_receipts::ToolOutputReceiptStats {
+    let (messages, stats) = crate::tool_output_receipts::compact_messages_for_persistence(
+        &session.messages,
+        &session.artifacts,
+    );
+    session.messages = messages;
+    stats
+}
+
 /// Cap messages to [`MAX_PERSISTED_MESSAGES`], keeping the most recent.
 /// Returns the capped slice and an optional truncation note.
 fn cap_messages(messages: &[Message]) -> (Vec<Message>, Option<String>) {
@@ -1117,6 +1135,119 @@ mod tests {
         let loaded = manager.load_session(&session_id).expect("load");
         assert_eq!(loaded.metadata.id, session_id);
         assert_eq!(loaded.messages.len(), 2);
+    }
+
+    #[test]
+    fn save_session_compacts_large_tool_outputs_to_artifact_receipts() {
+        let tmp = tempdir().expect("tempdir");
+        let manager = SessionManager::new(tmp.path().join("sessions")).expect("new");
+        let raw = "RAW_SESSION_SENTINEL\n".repeat(2_000);
+        let messages = vec![
+            Message {
+                role: "assistant".to_string(),
+                content: vec![ContentBlock::ToolUse {
+                    id: "call-big".to_string(),
+                    name: "exec_shell".to_string(),
+                    input: serde_json::json!({"command": "cargo test -p codewhale-tui"}),
+                    caller: None,
+                }],
+            },
+            Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: "call-big".to_string(),
+                    content: raw.clone(),
+                    is_error: None,
+                    content_blocks: None,
+                }],
+            },
+        ];
+        let mut session = create_saved_session(&messages, "test-model", tmp.path(), 100, None);
+        session.artifacts.push(crate::artifacts::ArtifactRecord {
+            id: "art_call-big".to_string(),
+            kind: crate::artifacts::ArtifactKind::ToolOutput,
+            session_id: session.metadata.id.clone(),
+            tool_call_id: "call-big".to_string(),
+            tool_name: "exec_shell".to_string(),
+            created_at: Utc::now(),
+            byte_size: raw.len() as u64,
+            preview: "checking crate ... error[E0425]".to_string(),
+            storage_path: PathBuf::from("artifacts/art_call-big.txt"),
+        });
+
+        let path = manager.save_session(&session).expect("save");
+        let persisted_json = fs::read_to_string(path).expect("read persisted session");
+        assert!(!persisted_json.contains("RAW_SESSION_SENTINEL"));
+
+        let loaded = manager.load_session(&session.metadata.id).expect("load");
+        let ContentBlock::ToolResult { content, .. } = &loaded.messages[1].content[0] else {
+            panic!("expected loaded tool result");
+        };
+        assert!(!content.contains("RAW_SESSION_SENTINEL"));
+        assert!(content.contains("[TOOL_OUTPUT_RECEIPT]"));
+        assert!(content.contains("detail_handle: art_call-big"));
+        assert!(content.contains("retrieve: retrieve_tool_result ref=art_call-big"));
+    }
+
+    #[test]
+    fn load_session_compacts_legacy_large_tool_outputs_before_resume() {
+        let tmp = tempdir().expect("tempdir");
+        let manager = SessionManager::new(tmp.path().join("sessions")).expect("new");
+        let raw = "RAW_LEGACY_RESUME_SENTINEL\n".repeat(2_000);
+        let messages = vec![
+            Message {
+                role: "assistant".to_string(),
+                content: vec![ContentBlock::ToolUse {
+                    id: "call-legacy".to_string(),
+                    name: "exec_shell".to_string(),
+                    input: serde_json::json!({"command": "cargo check"}),
+                    caller: None,
+                }],
+            },
+            Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: "call-legacy".to_string(),
+                    content: raw.clone(),
+                    is_error: None,
+                    content_blocks: None,
+                }],
+            },
+        ];
+        let mut session = create_saved_session(&messages, "test-model", tmp.path(), 100, None);
+        session.artifacts.push(crate::artifacts::ArtifactRecord {
+            id: "art_call-legacy".to_string(),
+            kind: crate::artifacts::ArtifactKind::ToolOutput,
+            session_id: session.metadata.id.clone(),
+            tool_call_id: "call-legacy".to_string(),
+            tool_name: "exec_shell".to_string(),
+            created_at: Utc::now(),
+            byte_size: raw.len() as u64,
+            preview: "cargo check output".to_string(),
+            storage_path: PathBuf::from("artifacts/art_call-legacy.txt"),
+        });
+        let path = manager
+            .validated_session_path(&session.metadata.id)
+            .expect("path");
+        fs::write(
+            &path,
+            serde_json::to_string_pretty(&session).expect("serialize legacy session"),
+        )
+        .expect("write legacy raw session");
+        assert!(
+            fs::read_to_string(&path)
+                .expect("read legacy raw")
+                .contains("RAW_LEGACY_RESUME_SENTINEL")
+        );
+
+        let loaded = manager.load_session(&session.metadata.id).expect("load");
+        let ContentBlock::ToolResult { content, .. } = &loaded.messages[1].content[0] else {
+            panic!("expected loaded tool result");
+        };
+        assert!(!content.contains("RAW_LEGACY_RESUME_SENTINEL"));
+        assert!(content.contains("[TOOL_OUTPUT_RECEIPT]"));
+        assert!(content.contains("detail_handle: art_call-legacy"));
+        assert!(content.contains("retrieve: retrieve_tool_result ref=art_call-legacy"));
     }
 
     #[test]

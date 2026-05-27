@@ -15,7 +15,7 @@ const FALLBACK_STATS: RepoStats = {
   forks: 0,
   openIssues: 0,
   openPulls: 0,
-  contributors: 99,
+  contributors: 98,
   fetchedAt: new Date().toISOString(),
 };
 
@@ -87,18 +87,33 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
 
             <h1 className="font-display tracking-crisp">
               {isZh
-                ? "面向开源模型的终端编程智能体。"
-                : "The terminal coding agent for open models."}
+                ? "DeepSeek V4 的最强智能体运行框架。"
+                : "The most agentic harness for DeepSeek V4."}
             </h1>
 
             <p className="mt-6 text-lg text-ink-soft leading-relaxed max-w-2xl">
               <span className="font-cjk text-indigo font-semibold">CodeWhale</span>
               {isZh
-                ? " 是面向 DeepSeek V4 及其他开放权重模型的终端原生编程智能体。它读改文件、跑测试、调用 MCP 服务器，并通过审批、工作区边界和平台沙箱控制风险。"
-                : " is a terminal-native coding agent for DeepSeek V4 and other open-weight models. It reads and edits files, runs tests, calls MCP servers, and controls risk through approvals, workspace boundaries, and platform sandboxes."}
+                ? " 就是那个框架——围绕 DeepSeek V4 Pro 和 Flash 构建，用规则、工具、证据和反馈循环让模型持续工作并不断进步。DeepSeek V4 参与了编写。V4 越强，框架越强——每一轮对话留下更好的提示词和更清晰的交接，下一轮从更高起点出发。这个递归循环正是项目的核心使命：借助国际开源社区，构建一个让 V4 自主管理环境的自改进框架。"
+                : " is that harness — built around DeepSeek V4 Pro and Flash, with rules, tools, evidence, and feedback loops that help the model keep working and keep improving. DeepSeek V4 helped write it. As V4 improves, the harness improves with it. Each turn leaves behind better prompts and better handoffs — so the next turn starts stronger. That's the recursive loop at the heart of this project: an international open source community building a harness that lets V4 manage its own environment, turn after turn."}
             </p>
 
-            <div className="mt-8 flex flex-wrap items-stretch sm:items-center gap-3">
+            {/* MISSION CALLOUT */}
+            <div className="mt-6 px-4 py-3 bg-indigo-pale border-l-4 border-indigo text-sm leading-relaxed max-w-2xl">
+              {isZh ? (
+                <>
+                  <span className="font-display text-indigo font-semibold mr-1">使命</span>
+                  构建一个递归自改进的 DeepSeek V4 运行框架——通过国际开源社区的力量，让 V4 在每一轮对话中学会更好地管理自己的环境。
+                </>
+              ) : (
+                <>
+                  <span className="font-display text-indigo font-semibold mr-1">Mission</span>
+                  Build a recursive, self-improving harness for DeepSeek V4 — by leveraging the international open source community and V4's own ability to manage its environment, turn after turn.
+                </>
+              )}
+            </div>
+
+            <div className="mt-6 flex flex-wrap items-stretch sm:items-center gap-3">
               <Link
                 href={isZh ? "/zh/install" : "/install"}
                 className="flex-1 sm:flex-none text-center px-5 py-3 bg-ink text-paper font-mono text-sm uppercase tracking-wider hover:bg-indigo transition-colors"
@@ -155,7 +170,7 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
                 )}
               </pre>
               <div className="mt-3 flex items-center justify-between text-[0.7rem] font-mono text-ink-mute">
-                <span>{isZh ? "Linux / macOS / Windows x64" : "Linux / macOS / Windows x64"}</span>
+                <span>{isZh ? "需要 Node 或 Rust 1.88+" : "needs Node or Rust 1.88+"}</span>
                 <Link href={isZh ? "/zh/install" : "/install"} className="text-indigo hover:underline">{isZh ? "其他方式 →" : "other ways →"}</Link>
               </div>
             </div>
@@ -165,61 +180,66 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
 
       <StatGrid stats={stats} />
 
-      {/* WHAT IT IS */}
+      {/* WHAT IT IS — the core ideas behind the harness */}
       <section className="mx-auto max-w-[1400px] px-6 py-16">
-        <div className="flex items-baseline gap-4 mb-8 hairline-b pb-4">
+        <div className="flex items-baseline gap-4 mb-2 hairline-b pb-4">
           <Seal char="是" />
           <h2 className="font-display">
-            {isZh ? "它到底是什么" : "What it actually is"}
+            {isZh ? "核心思想" : "The ideas that make it what it is"}
           </h2>
         </div>
+        <p className={`mb-8 text-ink-soft max-w-2xl ${isZh ? "leading-[1.9] tracking-wide" : "text-sm leading-relaxed"}`}>
+          {isZh
+            ? "一个模型回答问题，一个智能体完成任务。区别在于框架——围绕模型构建的规则、工具、证据和反馈循环的运行环境。CodeWhale 围绕三条原则运作。"
+            : "A model answers a question. An agent finishes a task. The difference is the harness — the operating environment that surrounds the model with rules, tools, evidence, and feedback loops. CodeWhale operates on three principles."}
+        </p>
 
         <div className="grid md:grid-cols-3 gap-0 col-rule hairline-t hairline-b">
           {isZh ? (
             <>
               <div className="p-6">
-                <div className="eyebrow mb-3">01 · 终端智能体</div>
-                <h3 className="font-display text-xl mb-3">编程智能体，不是聊天框</h3>
+                <div className="eyebrow mb-3">01 · 宪政层级</div>
+                <h3 className="font-display text-xl mb-3">七层权威链，从不模糊</h3>
                 <p className="text-sm text-ink-soft leading-[1.9]">
-                  与 Claude Code、Codex CLI 相同的循环：读、改、跑测试、回报。键盘驱动，住在终端里。
+                  《宪法》第七条定义了九层权威层级——用户当前消息覆盖过时项目规则，实时工具输出覆盖假设，验证覆盖自信。模型不需要猜测该服从哪条指令。
                 </p>
               </div>
               <div className="p-6">
-                <div className="eyebrow mb-3">02 · 开源模型优先</div>
-                <h3 className="font-display text-xl mb-3">DeepSeek V4 深度集成</h3>
+                <div className="eyebrow mb-3">02 · 自己写的框架</div>
+                <h3 className="font-display text-xl mb-3">DeepSeek V4 参与构建</h3>
                 <p className="text-sm text-ink-soft leading-[1.9]">
-                  原生 DeepSeek API：推理流、缓存指标、思考力度控制。Moonshot/Kimi、OpenRouter、NVIDIA NIM、vLLM、SGLang 等同时可选。
+                  V4 编写了框架的部分代码。每一轮对话的缓存前缀让《宪法》的实际成本接近免费。V4 越强，框架越强；框架越强，V4 在其中越高效——递归循环。
                 </p>
               </div>
               <div className="p-6">
-                <div className="eyebrow mb-3">03 · 沙箱边界</div>
-                <h3 className="font-display text-xl mb-3">Plan、Agent、YOLO</h3>
+                <div className="eyebrow mb-3">03 · 开源协作</div>
+                <h3 className="font-display text-xl mb-3">国际社区，小补丁驱动</h3>
                 <p className="text-sm text-ink-soft leading-[1.9]">
-                  Plan 只读；Agent 风险操作前确认；YOLO 全自动。macOS 使用 seatbelt，Linux 使用 landlock；Windows 保留同样的审批与终端保护。
+                  100:1 贡献模型——一个提示词、大量智能体小时、一个小补丁、一次维护者审查。无 CLA，无赞助商优先通道。每一条内容都被阅读。
                 </p>
               </div>
             </>
           ) : (
             <>
               <div className="p-6">
-                <div className="eyebrow mb-3">01 · terminal agent</div>
-                <h3 className="font-display text-xl mb-3">A coding agent, not a chat box</h3>
+                <div className="eyebrow mb-3">01 · constitutional hierarchy</div>
+                <h3 className="font-display text-xl mb-3">Seven tiers of authority, never ambiguous</h3>
                 <p className="text-sm text-ink-soft leading-relaxed">
-                  Same loop as Claude Code or Codex CLI: reads, edits, runs tests, reports back. Keyboard-driven, lives in your terminal.
+                  Article VII of the Constitution ranks nine sources from the Articles themselves to prior-session handoffs. The user's current message outranks stale project rules. Live tool output outranks assumptions. Verification outranks confidence. The model never guesses which instruction to follow.
                 </p>
               </div>
               <div className="p-6">
-                <div className="eyebrow mb-3">02 · open models first</div>
-                <h3 className="font-display text-xl mb-3">DeepSeek V4, deeply integrated</h3>
+                <div className="eyebrow mb-3">02 · self-written harness</div>
+                <h3 className="font-display text-xl mb-3">DeepSeek V4 helped build it</h3>
                 <p className="text-sm text-ink-soft leading-relaxed">
-                  Native DeepSeek API: reasoning streaming, cache metrics, thinking-effort control. Moonshot/Kimi, OpenRouter, NVIDIA NIM, vLLM, and SGLang are also supported.
+                  V4 wrote parts of this harness. DeepSeek's prefix caching makes the Constitution nearly free to reference every turn. As V4 improves, the harness improves with it. A more effective V4 makes the harness better — the recursive loop that defines this project.
                 </p>
               </div>
               <div className="p-6">
-                <div className="eyebrow mb-3">03 · controlled</div>
-                <h3 className="font-display text-xl mb-3">Plan, Agent, YOLO</h3>
+                <div className="eyebrow mb-3">03 · open by design</div>
+                <h3 className="font-display text-xl mb-3">International community, small patches</h3>
                 <p className="text-sm text-ink-soft leading-relaxed">
-                  Plan reads only. Agent asks before risky ops. YOLO auto-approves. macOS uses seatbelt, Linux uses landlock; Windows keeps the same approval and terminal protections.
+                  The 100-to-1 contribution model: one prompt, many agent-hours, one small patch, one maintainer review. No CLA. No sponsor lockouts. The maintainer reads everything personally, issues are triaged in the open, releases cut from main.
                 </p>
               </div>
             </>
@@ -259,6 +279,11 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
                 {isZh
                   ? "100:1 不是性能基准，而是贡献形状：一个提示词、许多智能体小时、一个小补丁、一次维护者审查。"
                   : "100-to-1 is not a throughput benchmark. It is a contribution shape: one prompt, many agent-hours, one small patch, one maintainer review."}
+              </p>
+              <p className={`mt-4 text-sm text-ink-soft ${isZh ? "leading-[1.9] tracking-wide" : "leading-relaxed"}`}>
+                {isZh
+                  ? "框架承担了繁重工作：宪政提示、结构化信任、反馈循环和跨会话存活的交接。模型可以专注于任务本身。因为 DeepSeek V4 参与构建了这套框架，每一次改进都让 V4 在其中变得更有效——这让下一次改进变得更容易。"
+                  : "The harness does the heavy lifting: constitutional prompts, structured trust, feedback loops, and handoffs that survive the session. The model is free to focus on the task. And because DeepSeek V4 helped build this harness, each improvement makes V4 more effective within it — which makes the next improvement easier."}
               </p>
               <div className="mt-6 flex flex-wrap gap-3">
                 <Link href={isZh ? "/zh/contribute#recursive-harness" : "/contribute#recursive-harness"} className="px-4 py-2 bg-ink text-paper font-mono text-sm uppercase tracking-wider hover:bg-indigo transition-colors">
@@ -325,7 +350,7 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
     B -->|tool call| T["read_file · edit_file · grep<br/>apply_patch · exec_shell<br/>mcp_&lt;server&gt;_&lt;tool&gt;"]
     T -->|approval Y/N| P["审批对话框<br/>approval dialog"]
     P --> B
-    T -->|exec| S["平台控制<br/>seatbelt · landlock · approvals"]
+    T -->|exec| S["沙箱<br/>seatbelt · landlock · win32"]
     classDef accent fill:#e9eefe,stroke:#0e0e10,stroke-width:1px;
     classDef api fill:#0e0e10,stroke:#0e0e10,color:#ffffff;
     class C api;
@@ -337,7 +362,7 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
     B -->|tool call| T["read_file · edit_file · grep<br/>apply_patch · exec_shell<br/>mcp_&lt;server&gt;_&lt;tool&gt;"]
     T -->|approval Y/N| P["Approval<br/>dialog"]
     P --> B
-    T -->|exec| S["Platform controls<br/>seatbelt · landlock · approvals"]
+    T -->|exec| S["Sandbox<br/>seatbelt · landlock · win32"]
     classDef accent fill:#e9eefe,stroke:#0e0e10,stroke-width:1px;
     classDef api fill:#0e0e10,stroke:#0e0e10,color:#ffffff;
     class C api;

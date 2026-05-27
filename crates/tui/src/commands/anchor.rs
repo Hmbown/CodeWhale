@@ -47,6 +47,10 @@ pub fn anchor(app: &mut App, content: Option<&str>) -> CommandResult {
 }
 
 fn anchors_path(app: &App) -> std::path::PathBuf {
+    let primary = app.workspace.join(".codewhale").join("anchors.md");
+    if primary.exists() {
+        return primary;
+    }
     app.workspace.join(".deepseek").join("anchors.md")
 }
 

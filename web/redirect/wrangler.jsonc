@@ -1,0 +1,11 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "deepseek-tui-web",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-04-01",
+  "observability": { "enabled": true },
+  "routes": [
+    { "pattern": "deepseek-tui.com", "custom_domain": true },
+    { "pattern": "www.deepseek-tui.com", "custom_domain": true }
+  ]
+}

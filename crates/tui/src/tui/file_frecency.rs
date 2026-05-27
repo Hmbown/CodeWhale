@@ -55,7 +55,7 @@ fn store() -> &'static Mutex<Store> {
 }
 
 fn default_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join(".deepseek").join("file-frecency.jsonl"))
+    dirs::home_dir().map(|h| h.join(".codewhale").join("file-frecency.jsonl"))
 }
 
 fn now_secs() -> u64 {

@@ -17,6 +17,8 @@
 
 use std::time::{Duration, Instant};
 
+use crate::tui::ui_text::CopyLineSeparator;
+
 const TRACKPAD_EVENT_WINDOW: Duration = Duration::from_millis(35);
 const WHEEL_LINES_PER_TICK: i32 = 3;
 const TRACKPAD_BASE_LINES_PER_TICK: i32 = 1;
@@ -36,6 +38,8 @@ pub enum TranscriptLineMeta {
     CellLine {
         cell_index: usize,
         line_in_cell: usize,
+        copy_prefix_width: usize,
+        copy_separator_after: CopyLineSeparator,
     },
     Spacer,
 }
@@ -48,8 +52,30 @@ impl TranscriptLineMeta {
             TranscriptLineMeta::CellLine {
                 cell_index,
                 line_in_cell,
+                ..
             } => Some((cell_index, line_in_cell)),
             TranscriptLineMeta::Spacer => None,
+        }
+    }
+
+    #[must_use]
+    pub fn copy_separator_after(&self) -> CopyLineSeparator {
+        match *self {
+            TranscriptLineMeta::CellLine {
+                copy_separator_after,
+                ..
+            } => copy_separator_after,
+            TranscriptLineMeta::Spacer => CopyLineSeparator::Newline,
+        }
+    }
+
+    #[must_use]
+    pub fn copy_prefix_width(&self) -> usize {
+        match *self {
+            TranscriptLineMeta::CellLine {
+                copy_prefix_width, ..
+            } => copy_prefix_width,
+            TranscriptLineMeta::Spacer => 0,
         }
     }
 }
@@ -271,6 +297,8 @@ mod tests {
         TranscriptLineMeta::CellLine {
             cell_index,
             line_in_cell,
+            copy_prefix_width: 0,
+            copy_separator_after: CopyLineSeparator::Newline,
         }
     }
 

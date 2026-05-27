@@ -441,7 +441,7 @@ fn sync_skills(app: &mut App) -> CommandResult {
                     }
                     SkillSyncOutcome::Denied { name, host } => {
                         failed += 1;
-                        let _ = writeln!(out, "  [x] {name} — network denied ({host})");
+                        let _ = writeln!(out, "  [!] {name} — network denied ({host})");
                     }
                     SkillSyncOutcome::NeedsApproval { name, host } => {
                         failed += 1;

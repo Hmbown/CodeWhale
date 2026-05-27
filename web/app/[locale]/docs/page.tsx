@@ -121,7 +121,7 @@ export default async function DocsPage({ params }: { params: Promise<{ locale: s
                     { group: "Git / 诊断 / 测试", tools: "git_status · git_diff · diagnostics · run_tests" },
                     { group: "子 Agent", tools: "agent_open · agent_eval · agent_close —— 持久会话，并行执行，通过 var_handle 读取大结果" },
                     { group: "递归 LM (RLM)", tools: "rlm_open · rlm_eval · rlm_configure · rlm_close —— 沙箱 Python REPL，内置 peek/search/chunk/sub_query_batch 等辅助函数" },
-                    { group: "MCP", tools: "mcp_<server>_<tool>——从 ~/.deepseek/mcp.json 自动注册" },
+                    { group: "MCP", tools: "mcp_<server>_<tool>——从 ~/.codewhale/mcp.json 自动注册" },
                   ].map((row) => (
                     <div key={row.group} className="grid md:grid-cols-12 gap-0 hairline-t py-3 px-4 hover:bg-paper-deep transition-colors min-w-0">
                       <div className="md:col-span-3 font-display text-sm font-semibold">{row.group}</div>
@@ -152,8 +152,8 @@ export default async function DocsPage({ params }: { params: Promise<{ locale: s
                   ))}
                 </div>
                 <p className="mt-5 text-ink-soft leading-[1.9] tracking-wide">
-                  沙箱：{facts.sandboxBackends.join("、")}。Windows 当前不宣称 OS 级文件系统沙箱，但保留同样的审批、工作区边界和终端运行时保护。
-                  <code className="inline">/trust</code> 可解除工作区边界限制。
+                  沙箱：{facts.sandboxBackends.join("、")}。工作区边界默认为 <code className="inline">--workspace</code>。
+                  <code className="inline">/trust</code> 可解除边界限制。
                 </p>
               </section>
 
@@ -163,7 +163,7 @@ export default async function DocsPage({ params }: { params: Promise<{ locale: s
                   配置 <span className="font-cjk text-indigo text-2xl ml-2">Configuration</span>
                 </h2>
                 <pre className="code-block mt-5">
-{`# ~/.deepseek/config.toml
+{`# ~/.codewhale/config.toml
 api_key = "sk-..."
 base_url = "https://api.deepseek.com"
 default_text_model = "${facts.defaultModel ?? "deepseek-v4-pro"}"  # 默认模型；deepseek-v4-flash 用于快速 / 子智能体
@@ -179,7 +179,7 @@ default_timeout_secs = 30
 
 [[hooks.hooks]]
 event = "session_start"                     # 也支持: tool_call_before / tool_call_after
-command = "~/.deepseek/hooks/pre.sh"         # / message_submit / mode_change / on_error / shell_env`}
+command = "~/.codewhale/hooks/pre.sh"        # / message_submit / mode_change / on_error / shell_env`}
                 </pre>
                 <p className="mt-4 text-sm text-ink-soft">
                   完整参考：<Link className="body-link" href="https://github.com/Hmbown/CodeWhale/blob/main/config.example.toml">config.example.toml</Link>。
@@ -193,7 +193,7 @@ command = "~/.deepseek/hooks/pre.sh"         # / message_submit / mode_change / 
                 </h2>
                 <p className="text-ink-soft mt-3 leading-[1.9] tracking-wide">
                   <code className="inline">codewhale</code> 双向支持模型上下文协议（Model Context Protocol）：作为客户端从
-                  <code className="inline">~/.deepseek/mcp.json</code> 加载服务器，同时也可作为服务器暴露工具
+                  <code className="inline">~/.codewhale/mcp.json</code> 加载服务器，同时也可作为服务器暴露工具
                   （<code className="inline">codewhale mcp</code>）。工具以 <code className="inline">mcp_&lt;server&gt;_&lt;tool&gt;</code> 形式呈现。
                 </p>
                 <pre className="code-block mt-5">
@@ -218,7 +218,7 @@ command = "~/.deepseek/hooks/pre.sh"         # / message_submit / mode_change / 
                   技能 <span className="font-cjk text-indigo text-2xl ml-2">Skills</span>
                 </h2>
                 <p className="text-ink-soft mt-3 leading-[1.9] tracking-wide">
-                  技能是 <code className="inline">~/.deepseek/skills/&lt;name&gt;/</code> 下的一个文件夹，
+                  技能是 <code className="inline">~/.codewhale/skills/&lt;name&gt;/</code> 下的一个文件夹，
                   根目录包含 <code className="inline">SKILL.md</code>。Agent 启动时加载技能名称和描述，
                   在需要时通过 Skill 工具拉取完整内容。
                 </p>
@@ -253,7 +253,7 @@ command = "~/.deepseek/hooks/pre.sh"         # / message_submit / mode_change / 
                 <p className="text-ink-soft mt-3 leading-[1.9] tracking-wide">
                   使用 <code className="inline">codewhale auth set --provider &lt;id&gt;</code> 切换。下表为
                   <code className="inline">crates/tui/src/config.rs</code> 中 <code className="inline">ApiProvider</code> 枚举的实时投影
-                  ，v0.8.45 当前共 {facts.providers.length} 个。
+                  ，目前共 {facts.providers.length} 个。
                 </p>
                 <div className="hairline-t hairline-b mt-5">
                   {facts.providers.map((p) => (
@@ -265,13 +265,9 @@ command = "~/.deepseek/hooks/pre.sh"         # / message_submit / mode_change / 
                   ))}
                 </div>
                 <p className="mt-5 text-ink-soft leading-[1.9] tracking-wide">
-                  开放模型平台方向：CodeWhale 保持 DeepSeek 优先，同时内置 Moonshot/Kimi、OpenRouter、NVIDIA NIM、
-                  AtlasCloud、Wanjie Ark、Novita、Fireworks 和自托管 SGLang/vLLM/Ollama 路径。
-                  Kimi Code 会员 API Key 使用 <code className="inline">providers.moonshot.base_url</code>
-                  指向 <code className="inline">https://api.kimi.com/coding/v1</code>，模型为
-                  <code className="inline">kimi-for-coding</code>；Kimi/Moonshot 平台 API Key 继续使用
-                  <code className="inline">https://api.moonshot.ai/v1</code> 和
-                  <code className="inline">kimi-k2.6</code>。
+                  开放模型平台方向：CodeWhale 正在扩展对
+                  <strong> OpenRouter</strong>、<strong> Hugging Face</strong> 和<strong> 自托管</strong> 模型的支持，
+                  为您提供完全自主的模型选择——从云端 API 到本地部署均可覆盖。
                 </p>
               </section>
 
@@ -377,7 +373,7 @@ command = "~/.deepseek/hooks/pre.sh"         # / message_submit / mode_change / 
                     { group: "Git / diag / test", tools: "git_status · git_diff · diagnostics · run_tests" },
                     { group: "Sub-agents", tools: "agent_open · agent_eval · agent_close — persistent sessions, parallel execution, bounded result retrieval via var_handle" },
                     { group: "Recursive LM (RLM)", tools: "rlm_open · rlm_eval · rlm_configure · rlm_close — sandboxed Python REPL with peek/search/chunk/sub_query_batch helpers" },
-                    { group: "MCP", tools: "mcp_<server>_<tool> — auto-registered from ~/.deepseek/mcp.json" },
+                    { group: "MCP", tools: "mcp_<server>_<tool> — auto-registered from ~/.codewhale/mcp.json" },
                   ].map((row) => (
                     <div key={row.group} className="grid md:grid-cols-12 gap-0 hairline-t py-3 px-4 hover:bg-paper-deep transition-colors min-w-0">
                       <div className="md:col-span-3 font-display text-sm font-semibold">{row.group}</div>
@@ -407,9 +403,8 @@ command = "~/.deepseek/hooks/pre.sh"         # / message_submit / mode_change / 
                   ))}
                 </div>
                 <p className="mt-5 text-ink-soft leading-relaxed">
-                  Sandbox: {facts.sandboxBackends.join(", ")}. On Windows, CodeWhale does not advertise
-                  OS-level filesystem isolation yet, but keeps the same approvals, workspace boundary,
-                  and terminal runtime protections. <code className="inline">/trust</code> lifts the workspace boundary.
+                  Sandbox: {facts.sandboxBackends.join(", ")}. Workspace boundary defaults to{" "}
+                  <code className="inline">--workspace</code>. <code className="inline">/trust</code> lifts the boundary.
                 </p>
               </section>
 
@@ -418,7 +413,7 @@ command = "~/.deepseek/hooks/pre.sh"         # / message_submit / mode_change / 
                   Configuration <span className="font-cjk text-indigo text-2xl ml-2">配置</span>
                 </h2>
                 <pre className="code-block mt-5">
-{`# ~/.deepseek/config.toml
+{`# ~/.codewhale/config.toml
 api_key = "sk-..."
 base_url = "https://api.deepseek.com"
 default_text_model = "${facts.defaultModel ?? "deepseek-v4-pro"}"  # default; deepseek-v4-flash is the fast / sub-agent option
@@ -434,7 +429,7 @@ default_timeout_secs = 30
 
 [[hooks.hooks]]
 event = "session_start"                     # or: tool_call_before / tool_call_after
-command = "~/.deepseek/hooks/pre.sh"         # / message_submit / mode_change / on_error / shell_env`}
+command = "~/.codewhale/hooks/pre.sh"        # / message_submit / mode_change / on_error / shell_env`}
                 </pre>
                 <p className="mt-4 text-sm text-ink-soft">
                   Full reference: <Link className="body-link" href="https://github.com/Hmbown/CodeWhale/blob/main/config.example.toml">config.example.toml</Link>.
@@ -447,7 +442,7 @@ command = "~/.deepseek/hooks/pre.sh"         # / message_submit / mode_change / 
                 </h2>
                 <p className="text-ink-soft mt-3 leading-relaxed">
                   <code className="inline">codewhale</code> speaks the Model Context Protocol both ways: as a client (loads
-                  servers from <code className="inline">~/.deepseek/mcp.json</code>) and as a server
+                  servers from <code className="inline">~/.codewhale/mcp.json</code>) and as a server
                   (<code className="inline">codewhale mcp</code>). Tools surface as <code className="inline">mcp_&lt;server&gt;_&lt;tool&gt;</code>.
                 </p>
                 <pre className="code-block mt-5">
@@ -471,7 +466,7 @@ command = "~/.deepseek/hooks/pre.sh"         # / message_submit / mode_change / 
                   Skills <span className="font-cjk text-indigo text-2xl ml-2">技能</span>
                 </h2>
                 <p className="text-ink-soft mt-3 leading-relaxed">
-                  A skill is a folder under <code className="inline">~/.deepseek/skills/&lt;name&gt;/</code>
+                  A skill is a folder under <code className="inline">~/.codewhale/skills/&lt;name&gt;/</code>
                   with a <code className="inline">SKILL.md</code> at the root. The agent loads skill names + descriptions on
                   startup and can pull in the full body via the Skill tool when relevant.
                 </p>
@@ -505,7 +500,7 @@ command = "~/.deepseek/hooks/pre.sh"         # / message_submit / mode_change / 
                 <p className="text-ink-soft mt-3 leading-relaxed">
                   Switch with <code className="inline">codewhale auth set --provider &lt;id&gt;</code>. The
                   table below is a live projection of the <code className="inline">ApiProvider</code> enum
-                  in <code className="inline">crates/tui/src/config.rs</code> — v0.8.45 currently has {facts.providers.length} providers.
+                  in <code className="inline">crates/tui/src/config.rs</code> — currently {facts.providers.length} providers.
                 </p>
                 <div className="hairline-t hairline-b mt-5">
                   {facts.providers.map((p) => (
@@ -517,14 +512,9 @@ command = "~/.deepseek/hooks/pre.sh"         # / message_submit / mode_change / 
                   ))}
                 </div>
                 <p className="mt-5 text-ink-soft leading-relaxed">
-                  Open-model platform direction: CodeWhale stays DeepSeek-first while shipping Moonshot/Kimi,
-                  OpenRouter, NVIDIA NIM, AtlasCloud, Wanjie Ark, Novita, Fireworks, and self-hosted
-                  SGLang/vLLM/Ollama paths.
-                  Kimi Code membership API keys use <code className="inline">providers.moonshot.base_url</code>
-                  set to <code className="inline">https://api.kimi.com/coding/v1</code> with
-                  <code className="inline">kimi-for-coding</code>; Kimi/Moonshot Platform API keys use
-                  <code className="inline">https://api.moonshot.ai/v1</code> with
-                  <code className="inline">kimi-k2.6</code>.
+                  Open-model platform direction: CodeWhale is expanding support for
+                  <strong> OpenRouter</strong>, <strong> Hugging Face</strong>, and <strong> self-hosted</strong> models,
+                  giving you full sovereignty over model choice — from cloud APIs to local deployments.
                 </p>
               </section>
 

@@ -67,7 +67,13 @@ export function incomingIdentity(event) {
     messageType: message.message_type || "",
     openId: sender.open_id || "",
     unionId: sender.union_id || "",
-    userId: sender.user_id || ""
+    userId: sender.user_id || "",
+    // Thread/topic group context: these fields let the bridge reply
+    // inside the same topic instead of spawning a new standalone topic.
+    // / 话题群上下文：用于在同一话题内回复，而非新建独立话题。
+    parentId: message.parent_id || "",
+    rootId: message.root_id || "",
+    threadId: message.thread_id || ""
   };
 }
 
