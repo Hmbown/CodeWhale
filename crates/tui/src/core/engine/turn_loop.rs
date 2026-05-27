@@ -249,6 +249,8 @@ impl Engine {
                 let tools_ref: Option<&[crate::models::Tool]> = active_tools.as_deref();
                 match pm.check_and_update(&system_text, tools_ref) {
                     Err(change) => {
+                        let previous_stable_prefix_hash = Some(change.old.combined_sha256.clone());
+                        let current_stable_prefix_hash = Some(change.new.combined_sha256.clone());
                         tracing::debug!(
                             target: "prefix_cache",
                             "{}",
@@ -258,6 +260,8 @@ impl Engine {
                             .tx_event
                             .send(Event::PrefixCacheChange {
                                 description: change.description(),
+                                previous_stable_prefix_hash,
+                                current_stable_prefix_hash,
                                 system_prompt_changed: change.system_changed,
                                 tools_changed: change.tools_changed,
                                 stability_pct: (pm.stability_ratio() * 100.0).round() as u32,
@@ -266,11 +270,16 @@ impl Engine {
                             .await;
                     }
                     Ok(_) => {
+                        let current_stable_prefix_hash = pm
+                            .current_fingerprint()
+                            .map(|fp| fp.combined_sha256.clone());
                         // Stable check — keep the TUI counter in sync.
                         let _ = self
                             .tx_event
                             .send(Event::PrefixCacheChange {
                                 description: String::new(),
+                                previous_stable_prefix_hash: None,
+                                current_stable_prefix_hash,
                                 system_prompt_changed: false,
                                 tools_changed: false,
                                 stability_pct: (pm.stability_ratio() * 100.0).round() as u32,

@@ -1464,6 +1464,10 @@ pub struct App {
     pub prefix_checks_total: u64,
     /// Current prefix stability percentage, if known.
     pub prefix_stability_pct: Option<u32>,
+    /// Previous stable prefix hash from the last detected drift.
+    pub previous_stable_prefix_hash: Option<String>,
+    /// Current stable prefix hash from the most recent prefix check.
+    pub current_stable_prefix_hash: Option<String>,
     /// Description of the last prefix change, if any.
     pub last_prefix_change_desc: Option<String>,
 
@@ -2002,6 +2006,8 @@ impl App {
             prefix_change_count: 0,
             prefix_checks_total: 0,
             prefix_stability_pct: None,
+            previous_stable_prefix_hash: None,
+            current_stable_prefix_hash: None,
             last_prefix_change_desc: None,
             cycle: CycleConfig::default(),
             collapsed_cells: HashSet::new(),

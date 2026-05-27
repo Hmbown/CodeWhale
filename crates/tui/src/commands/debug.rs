@@ -19,6 +19,10 @@ fn token_count(value: Option<u32>, locale: Locale) -> String {
     )
 }
 
+fn short_hash(hash: &str) -> &str {
+    hash.get(..12).unwrap_or(hash)
+}
+
 fn active_context_summary(app: &App, locale: Locale) -> String {
     let estimated =
         estimate_input_tokens_conservative(&app.api_messages, app.system_prompt.as_ref());
@@ -142,6 +146,9 @@ pub fn cache(app: &mut App, arg: Option<&str>) -> CommandResult {
     if matches!(arg, Some("inspect")) {
         return CommandResult::message(format_cache_inspect(app));
     }
+    if matches!(arg, Some("stats")) {
+        return CommandResult::message(format_cache_stats(app));
+    }
     if matches!(arg, Some("warmup")) {
         return CommandResult::action(AppAction::CacheWarmup);
     }
@@ -230,6 +237,88 @@ fn format_cache_inspect(app: &mut App) -> String {
         out.push_str(&line);
     }
     app.session.last_cache_inspection = Some(inspection);
+    out
+}
+
+fn format_cache_stats(app: &App) -> String {
+    let checks = app.prefix_checks_total;
+    let changes = app.prefix_change_count;
+    let stable = checks.saturating_sub(changes);
+    let pct = app
+        .prefix_stability_pct
+        .map(|pct| format!("{pct}%"))
+        .unwrap_or_else(|| "unavailable".to_string());
+    let current_hash = app
+        .current_stable_prefix_hash
+        .as_deref()
+        .map(short_hash)
+        .unwrap_or("unavailable");
+
+    let mut out = String::new();
+    out.push_str("Cache Stats\n");
+    out.push_str(&format!("Model: {}\n", app.model));
+    out.push_str(&format!("Stable prefix hash: {current_hash}\n"));
+
+    if checks == 0 {
+        out.push_str("Stable prefix drift: no checks yet\n");
+    } else if changes == 0 {
+        out.push_str(&format!(
+            "Stable prefix drift: OK ({stable}/{checks} checks stable)\n"
+        ));
+    } else {
+        out.push_str(&format!(
+            "Stable prefix drift: WARNING ({changes} change{} across {checks} checks)\n",
+            if changes == 1 { "" } else { "s" }
+        ));
+        if let (Some(previous), Some(current)) = (
+            app.previous_stable_prefix_hash.as_deref(),
+            app.current_stable_prefix_hash.as_deref(),
+        ) {
+            out.push_str(&format!(
+                "Last hash change: {} -> {}\n",
+                short_hash(previous),
+                short_hash(current)
+            ));
+        }
+        if let Some(desc) = app.last_prefix_change_desc.as_deref() {
+            out.push_str(&format!("Last change: {desc}\n"));
+        }
+    }
+
+    out.push_str(&format!(
+        "Prefix checks: {checks} total, {stable} stable, {changes} changed, stability {pct}\n"
+    ));
+
+    let mut turns = 0usize;
+    let mut total_input = 0u64;
+    let mut total_hit = 0u64;
+    let mut total_miss = 0u64;
+    for rec in &app.session.turn_cache_history {
+        turns += 1;
+        total_input += u64::from(rec.input_tokens);
+        if let Some(hit) = rec.cache_hit_tokens {
+            let miss = rec
+                .cache_miss_tokens
+                .unwrap_or_else(|| rec.input_tokens.saturating_sub(hit));
+            total_hit += u64::from(hit);
+            total_miss += u64::from(miss);
+        }
+    }
+
+    if turns == 0 {
+        out.push_str("Recent cache telemetry: no turns recorded yet\n");
+    } else {
+        let accounted = total_hit + total_miss;
+        let avg = if accounted == 0 {
+            "unavailable".to_string()
+        } else {
+            format!("{:.1}%", 100.0 * total_hit as f64 / accounted as f64)
+        };
+        out.push_str(&format!(
+            "Recent cache telemetry: {turns} turns, {total_input} input, {total_hit} hit, {total_miss} miss, avg hit {avg}\n"
+        ));
+    }
+
     out
 }
 
@@ -816,6 +905,59 @@ mod tests {
         let msg = result.message.expect("cache produces a message");
         // Asked for 100 turns, only 3 exist — should report "last 3 of 3".
         assert!(msg.contains("last 3 of 3 turn(s)"), "got: {msg}");
+    }
+
+    #[test]
+    fn cache_stats_reports_stable_prefix_hash_without_turn_history() {
+        let mut app = create_test_app();
+        app.prefix_checks_total = 2;
+        app.prefix_stability_pct = Some(100);
+        app.current_stable_prefix_hash = Some("abcdef1234567890".to_string());
+
+        let result = cache(&mut app, Some("stats"));
+        let msg = result.message.expect("cache stats output");
+
+        assert!(msg.contains("Cache Stats"), "got: {msg}");
+        assert!(
+            msg.contains("Stable prefix hash: abcdef123456"),
+            "got: {msg}"
+        );
+        assert!(
+            msg.contains("Stable prefix drift: OK (2/2 checks stable)"),
+            "got: {msg}"
+        );
+        assert!(
+            msg.contains("Recent cache telemetry: no turns recorded yet"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn cache_stats_warns_when_stable_prefix_hash_drifted() {
+        let mut app = create_test_app();
+        app.prefix_checks_total = 3;
+        app.prefix_change_count = 1;
+        app.prefix_stability_pct = Some(67);
+        app.previous_stable_prefix_hash = Some("111111111111aaaa".to_string());
+        app.current_stable_prefix_hash = Some("222222222222bbbb".to_string());
+        app.last_prefix_change_desc =
+            Some("prefix cache invalidated: tool set changed".to_string());
+
+        let result = cache(&mut app, Some("stats"));
+        let msg = result.message.expect("cache stats output");
+
+        assert!(
+            msg.contains("Stable prefix drift: WARNING (1 change across 3 checks)"),
+            "got: {msg}"
+        );
+        assert!(
+            msg.contains("Last hash change: 111111111111 -> 222222222222"),
+            "got: {msg}"
+        );
+        assert!(
+            msg.contains("Last change: prefix cache invalidated: tool set changed"),
+            "got: {msg}"
+        );
     }
 
     #[test]

@@ -1734,17 +1734,42 @@ async fn run_event_loop(
                     }
                     EngineEvent::PrefixCacheChange {
                         description,
+                        previous_stable_prefix_hash,
+                        current_stable_prefix_hash,
                         stability_pct,
                         changed,
                         ..
                     } => {
                         app.prefix_checks_total = app.prefix_checks_total.saturating_add(1);
                         app.prefix_stability_pct = Some(stability_pct);
+                        if let Some(hash) = previous_stable_prefix_hash {
+                            app.previous_stable_prefix_hash = Some(hash);
+                        }
+                        if let Some(hash) = current_stable_prefix_hash {
+                            app.current_stable_prefix_hash = Some(hash);
+                        }
                         if changed {
                             app.prefix_change_count = app.prefix_change_count.saturating_add(1);
                             if !description.is_empty() {
-                                app.last_prefix_change_desc = Some(description);
+                                app.last_prefix_change_desc = Some(description.clone());
                             }
+                            let old_hash = app
+                                .previous_stable_prefix_hash
+                                .as_deref()
+                                .map(|hash| hash.get(..12).unwrap_or(hash))
+                                .unwrap_or("unknown");
+                            let new_hash = app
+                                .current_stable_prefix_hash
+                                .as_deref()
+                                .map(|hash| hash.get(..12).unwrap_or(hash))
+                                .unwrap_or("unknown");
+                            let reason = if description.is_empty() {
+                                "stable prefix hash changed"
+                            } else {
+                                description.as_str()
+                            };
+                            app.status_message =
+                                Some(format!("Warning: {reason} ({old_hash} -> {new_hash})"));
                         }
                     }
                     EngineEvent::CapacityDecision { .. } => {

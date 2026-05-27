@@ -272,6 +272,10 @@ pub enum Event {
     PrefixCacheChange {
         /// Human-readable description of what changed.
         description: String,
+        /// Previous stable prefix hash, when a drift was detected.
+        previous_stable_prefix_hash: Option<String>,
+        /// Current stable prefix hash after the check.
+        current_stable_prefix_hash: Option<String>,
         /// Whether the system prompt component changed.
         system_prompt_changed: bool,
         /// Whether the tool set component changed.
