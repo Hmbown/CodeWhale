@@ -10,7 +10,13 @@
 #[cfg(not(test))]
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
-#[cfg(all(any(target_os = "macos", target_os = "windows"), not(test)))]
+#[cfg(any(
+    all(test, unix),
+    all(
+        any(target_os = "macos", target_os = "windows", target_os = "linux"),
+        not(test)
+    )
+))]
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
