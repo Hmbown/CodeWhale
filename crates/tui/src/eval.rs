@@ -15,7 +15,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
-use crate::shell_invocation::{ShellInvocation, shell_invocation};
+use crate::shell_invocation::{ShellInvocation, shell_invocation, shell_program_stem};
 #[cfg(test)]
 use crate::shell_invocation::{ShellPlatform, ShellProbe, shell_invocation_for_platform};
 
@@ -36,8 +36,9 @@ fn push_eval_shell_args(cmd: &mut Command, invocation: &ShellInvocation) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
+        let is_cmd = shell_program_stem(&invocation.program).is_some_and(|stem| stem == "cmd");
         if invocation.raw_payload_on_windows
-            && invocation.program.eq_ignore_ascii_case("cmd")
+            && is_cmd
             && invocation.args.len() == 2
             && invocation.args[0].eq_ignore_ascii_case("/C")
         {
@@ -817,5 +818,27 @@ mod tests {
         assert_eq!(unix.program, "sh");
         assert_eq!(unix.args, vec!["-c".to_string(), command.to_string()]);
         assert!(!unix.raw_payload_on_windows);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn push_eval_shell_args_uses_raw_arg_for_full_path_cmd() {
+        let invocation = ShellInvocation {
+            program: r"C:\Windows\System32\cmd.exe".to_string(),
+            args: vec![
+                "/C".to_string(),
+                r#"chcp 65001 >NUL & git commit -m "quoted""#.to_string(),
+            ],
+            raw_payload_on_windows: true,
+        };
+
+        let mut cmd = Command::new("cmd");
+        push_eval_shell_args(&mut cmd, &invocation);
+        let got: Vec<String> = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+
+        assert_eq!(got, invocation.args);
     }
 }
