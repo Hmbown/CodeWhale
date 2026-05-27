@@ -2378,6 +2378,23 @@ fn version_hint_requires_complete_release_assets() {
         version_hint_from_release_json(&missing_manifest, "0.8.46").is_none(),
         "do not advertise a release before checksums are uploaded"
     );
+
+    let mut pending_asset = complete_release_json("v0.8.47");
+    pending_asset["assets"].as_array_mut().expect("assets")[0]["state"] = serde_json::json!("open");
+    assert!(
+        version_hint_from_release_json(&pending_asset, "0.8.46").is_none(),
+        "do not advertise a release before every asset is uploaded"
+    );
+
+    let mut missing_state = complete_release_json("v0.8.47");
+    missing_state["assets"].as_array_mut().expect("assets")[0]
+        .as_object_mut()
+        .expect("asset object")
+        .remove("state");
+    assert!(
+        version_hint_from_release_json(&missing_state, "0.8.46").is_none(),
+        "do not accept malformed asset state as uploaded"
+    );
 }
 
 #[test]

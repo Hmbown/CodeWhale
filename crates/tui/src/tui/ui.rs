@@ -8146,10 +8146,7 @@ fn release_has_uploaded_asset(json: &serde_json::Value, required: &str) -> bool 
     };
     assets.iter().any(|asset| {
         asset.get("name").and_then(serde_json::Value::as_str) == Some(required)
-            && matches!(
-                asset.get("state").and_then(serde_json::Value::as_str),
-                None | Some("uploaded")
-            )
+            && asset.get("state").and_then(serde_json::Value::as_str) == Some("uploaded")
     })
 }
 
