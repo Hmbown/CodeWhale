@@ -15,7 +15,7 @@ use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderValue, Method, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
-use axum::response::{IntoResponse, Response};
+use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::Utc;
@@ -473,6 +473,11 @@ pub async fn run_http_server(
     serve_result
 }
 
+/// Serve the embedded web-chat UI at `/`.
+async fn serve_web_ui() -> Html<&'static str> {
+    Html(include_str!("../../../web-chat/index.html"))
+}
+
 pub fn build_router(state: RuntimeApiState) -> Router {
     let api_routes = Router::new()
         .route("/v1/sessions", get(list_sessions))
@@ -528,6 +533,7 @@ pub fn build_router(state: RuntimeApiState) -> Router {
         ));
 
     Router::new()
+        .route("/", get(serve_web_ui))
         .route("/health", get(health))
         .route("/v1/runtime/info", get(runtime_info))
         .merge(api_routes)
