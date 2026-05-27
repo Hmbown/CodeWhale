@@ -14,12 +14,14 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EvalShellPlatform {
     Windows,
     Unix,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EvalShellInvocation {
     program: &'static str,
@@ -27,6 +29,7 @@ struct EvalShellInvocation {
     raw_payload_on_windows: bool,
 }
 
+#[cfg(test)]
 fn eval_shell_invocation_for_platform(
     command: &str,
     platform: EvalShellPlatform,

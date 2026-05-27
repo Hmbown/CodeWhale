@@ -28,6 +28,7 @@ static LOG_MUTEX: Mutex<()> = Mutex::new(());
 // ---------------------------------------------------------------------------
 
 /// The concrete shell that the dispatcher will use.
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShellKind {
     /// PowerShell 7+ (`pwsh.exe`).
@@ -104,6 +105,7 @@ pub struct ShellDispatcher {
     kind: ShellKind,
 }
 
+#[allow(dead_code)]
 impl ShellDispatcher {
     /// Detect the user's shell from the environment.
     ///
@@ -159,12 +161,9 @@ impl ShellDispatcher {
         // `detect()` which calls `log_startup()` which also acquires the mutex.
         let kind = global_dispatcher().kind();
         let _lock = LOG_MUTEX.lock();
-        let line = format!(
-            "[{}] exec via {kind:?}: {command}\n", now_iso()
-        );
+        let line = format!("[{}] exec via {kind:?}: {command}\n", now_iso());
         Self::append_log(path, &line)
     }
-
 
     /// The detected shell kind.
     pub fn kind(&self) -> &ShellKind {
@@ -233,9 +232,7 @@ impl ShellDispatcher {
             let _lock = LOG_MUTEX.lock();
             if let Ok(path) = std::env::var("SHELL_DISPATCHER_LOG") {
                 let kind = self.kind();
-                let line = format!(
-                    "[{}] exec via {kind:?}: {shell_command}\n", now_iso()
-                );
+                let line = format!("[{}] exec via {kind:?}: {shell_command}\n", now_iso());
                 let _ = Self::append_log(&path, &line);
             }
         }
@@ -318,7 +315,9 @@ impl ShellDispatcher {
             r"C:\Program Files\PowerShell\7",
             r"C:\Windows\System32\WindowsPowerShell\v1.0",
         ];
-        known_dirs.iter().any(|dir| std::path::Path::new(dir).join(name).is_file())
+        known_dirs
+            .iter()
+            .any(|dir| std::path::Path::new(dir).join(name).is_file())
     }
 
     fn binary_on_path(name: &str) -> bool {
@@ -336,7 +335,9 @@ impl ShellDispatcher {
 // -- Helpers ---------------------------------------------------------------
 
 fn now_iso() -> String {
-    chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3f").to_string()
+    chrono::Utc::now()
+        .format("%Y-%m-%dT%H:%M:%S%.3f")
+        .to_string()
 }
 
 /// Global dispatcher instance, detected once at startup.
@@ -384,7 +385,9 @@ mod tests {
 
     #[test]
     fn powershell_build_command_includes_no_profile_and_command_flags() {
-        let dispatcher = ShellDispatcher { kind: ShellKind::Pwsh };
+        let dispatcher = ShellDispatcher {
+            kind: ShellKind::Pwsh,
+        };
         let cmd = dispatcher.build_command("echo hello");
         let args: Vec<&str> = cmd.get_args().map(|a| a.to_str().unwrap()).collect();
         assert!(args.contains(&"-NoProfile"));
@@ -394,7 +397,9 @@ mod tests {
 
     #[test]
     fn cmd_build_command_uses_c_flag() {
-        let dispatcher = ShellDispatcher { kind: ShellKind::Cmd };
+        let dispatcher = ShellDispatcher {
+            kind: ShellKind::Cmd,
+        };
         let cmd = dispatcher.build_command("echo hello");
         let args: Vec<&str> = cmd.get_args().map(|a| a.to_str().unwrap()).collect();
         assert!(args.contains(&"/C"));
@@ -403,7 +408,9 @@ mod tests {
 
     #[test]
     fn sh_build_command_uses_dash_c() {
-        let dispatcher = ShellDispatcher { kind: ShellKind::Sh };
+        let dispatcher = ShellDispatcher {
+            kind: ShellKind::Sh,
+        };
         let cmd = dispatcher.build_command("echo hello");
         let args: Vec<&str> = cmd.get_args().map(|a| a.to_str().unwrap()).collect();
         assert!(args.contains(&"-c"));
@@ -412,7 +419,9 @@ mod tests {
 
     #[test]
     fn build_direct_preserves_args() {
-        let dispatcher = ShellDispatcher { kind: ShellKind::Cmd };
+        let dispatcher = ShellDispatcher {
+            kind: ShellKind::Cmd,
+        };
         let args = vec!["-m".to_string(), "commit message".to_string()];
         let cmd = dispatcher.build_direct("git", &args);
         let cmd_args: Vec<&str> = cmd.get_args().map(|a| a.to_str().unwrap()).collect();
@@ -439,7 +448,9 @@ mod tests {
 
     #[test]
     fn build_command_quotes_spaces_for_cmd() {
-        let dispatcher = ShellDispatcher { kind: ShellKind::Cmd };
+        let dispatcher = ShellDispatcher {
+            kind: ShellKind::Cmd,
+        };
         let cmd = dispatcher.build_command("git commit -m \"msg with spaces\"");
         let args: Vec<&str> = cmd.get_args().map(|a| a.to_str().unwrap()).collect();
         assert_eq!(args.len(), 2);
@@ -450,7 +461,9 @@ mod tests {
 
     #[test]
     fn build_command_quotes_spaces_for_pwsh() {
-        let dispatcher = ShellDispatcher { kind: ShellKind::Pwsh };
+        let dispatcher = ShellDispatcher {
+            kind: ShellKind::Pwsh,
+        };
         let cmd = dispatcher.build_command("git commit -m \"msg with spaces\"");
         let args: Vec<&str> = cmd.get_args().map(|a| a.to_str().unwrap()).collect();
         assert_eq!(args.len(), 3);
@@ -461,7 +474,9 @@ mod tests {
 
     #[test]
     fn build_direct_handles_empty_args() {
-        let dispatcher = ShellDispatcher { kind: ShellKind::Sh };
+        let dispatcher = ShellDispatcher {
+            kind: ShellKind::Sh,
+        };
         let cmd = dispatcher.build_direct("echo", &[]);
         let args: Vec<&str> = cmd.get_args().map(|a| a.to_str().unwrap()).collect();
         assert!(args.is_empty());
