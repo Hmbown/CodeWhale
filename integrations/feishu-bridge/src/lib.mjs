@@ -147,6 +147,11 @@ export function commandAction(command) {
       return { kind: "interrupt" };
     case "compact":
       return { kind: "compact" };
+    case "model":
+      // /model <model_name> — switch per-chat default model.
+      // Stored in thread store and used for future threads/turns.
+      // Pass "default" to reset to the bridge-level default.
+      return { kind: "set_model", modelName: command.args };
     case "allow":
       return { kind: "approval", decision: "allow", ...parseApprovalDecisionArgs(command.args) };
     case "deny":
