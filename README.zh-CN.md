@@ -59,6 +59,8 @@ brew update && brew upgrade deepseek-tui
 cargo install codewhale-cli --locked --force
 cargo install codewhale-tui     --locked --force
 ```
+> codewhale update 现在可添加 --proxy ,通过代理下载更新
+> eg: codewhale update --proxy https://localhost:7897
 
 [![CI](https://github.com/Hmbown/CodeWhale/actions/workflows/ci.yml/badge.svg)](https://github.com/Hmbown/CodeWhale/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/codewhale)](https://www.npmjs.com/package/codewhale)

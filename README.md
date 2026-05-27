@@ -64,6 +64,9 @@ cargo install codewhale-cli --locked --force
 cargo install codewhale-tui     --locked --force
 ```
 
+> codewhale update now supports --proxy, update through a proxy
+> eg: codewhale update --proxy https://localhost:7897
+
 [![CI](https://github.com/Hmbown/CodeWhale/actions/workflows/ci.yml/badge.svg)](https://github.com/Hmbown/CodeWhale/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/codewhale)](https://www.npmjs.com/package/codewhale)
 [![crates.io](https://img.shields.io/crates/v/codewhale-cli?label=crates.io)](https://crates.io/crates/codewhale-cli)

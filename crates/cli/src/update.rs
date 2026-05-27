@@ -4,11 +4,11 @@
 //! `github.com/Hmbown/CodeWhale/releases/latest`, downloads the
 //! platform-correct binary, verifies its SHA256 checksum, and atomically
 //! replaces the currently running binary.
-
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use reqwest::Proxy;
 use std::io::Write;
 
 const CHECKSUM_MANIFEST_ASSET: &str = "codewhale-artifacts-sha256.txt";
@@ -26,19 +26,26 @@ const LEGACY_UPDATE_VERSION_ENV: &str = "DEEPSEEK_VERSION";
 const UPDATE_USER_AGENT: &str = "codewhale-updater";
 
 /// Run the self-update workflow.
-pub fn run_update(beta: bool) -> Result<()> {
+pub fn run_update(beta: bool, proxy_arg: Option<String>) -> Result<()> {
     let current_exe =
         std::env::current_exe().context("failed to determine current executable path")?;
     let targets = update_targets_for_exe(&current_exe);
     let channel = ReleaseChannel::from_beta_flag(beta);
     let current_version = env!("CARGO_PKG_VERSION");
 
+    let proxy = if let Some(proxy_str) = &proxy_arg {
+        Some(validate_and_build_proxy(proxy_str)?)
+    } else {
+        None
+    };
+
     println!("Checking for {} updates...", channel.label());
     println!("Current binary: {}", current_exe.display());
     println!("Current version: v{current_version}");
 
     // Step 1: Fetch latest release metadata
-    let fetched = fetch_latest_release(channel).with_context(update_network_fallback_hint)?;
+    let fetched =
+        fetch_latest_release(channel, &proxy).with_context(update_network_fallback_hint)?;
     let release = &fetched.release;
     let latest_tag = &release.tag_name;
     println!("Latest {} release: {latest_tag}", channel.label());
@@ -59,8 +66,8 @@ pub fn run_update(beta: bool) -> Result<()> {
     let checksum_manifest = match select_checksum_manifest_asset(release) {
         Some(checksum_asset) => {
             println!("Downloading {}...", checksum_asset.name);
-            let checksum_bytes =
-                download_url(&checksum_asset.browser_download_url).with_context(|| {
+            let checksum_bytes = download_url(&checksum_asset.browser_download_url, &proxy)
+                .with_context(|| {
                     format!(
                         "failed to download {}\n{}",
                         checksum_asset.name,
@@ -95,7 +102,7 @@ pub fn run_update(beta: bool) -> Result<()> {
         })?;
 
         println!("Downloading {}...", asset.name);
-        let bytes = download_url(&asset.browser_download_url).with_context(|| {
+        let bytes = download_url(&asset.browser_download_url, &proxy).with_context(|| {
             format!(
                 "failed to download {}\n{}",
                 asset.name,
@@ -172,6 +179,19 @@ struct FetchedRelease {
 enum ReleaseSource {
     GitHub,
     Mirror { base_url: String },
+}
+
+/// Validate the proxy URL and optionally test connectivity before proceeding.
+pub(crate) fn validate_and_build_proxy(proxy_str: &str) -> Result<Proxy> {
+    let valid_url = reqwest::Url::parse(proxy_str).with_context(|| {
+        format!(
+            "invalid proxy URL: {proxy_str}\n\
+             Expected format: http://host:port, https://host:port, or socks5://host:port"
+        )
+    })?;
+
+    let proxy = reqwest::Proxy::all(valid_url)?;
+    Ok(proxy)
 }
 
 pub(crate) fn release_arch_for_rust_arch(arch: &str) -> &str {
@@ -342,15 +362,21 @@ struct Asset {
     browser_download_url: String,
 }
 
-fn update_http_client() -> Result<reqwest::blocking::Client> {
-    reqwest::blocking::Client::builder()
+fn update_http_client(proxy: &Option<Proxy>) -> Result<reqwest::blocking::Client> {
+    let mut builder = reqwest::blocking::Client::builder();
+
+    if let Some(p) = proxy {
+        builder = builder.proxy(p.clone());
+    }
+
+    builder
         .user_agent(UPDATE_USER_AGENT)
         .build()
         .context("failed to build update HTTP client")
 }
 
 /// Fetch the latest release metadata from GitHub.
-fn fetch_latest_release(channel: ReleaseChannel) -> Result<FetchedRelease> {
+fn fetch_latest_release(channel: ReleaseChannel, proxy: &Option<Proxy>) -> Result<FetchedRelease> {
     let version = update_version_from_env().unwrap_or_else(|| env!("CARGO_PKG_VERSION").into());
     if let Some(base_url) = release_base_url_from_env(&version) {
         return Ok(FetchedRelease {
@@ -364,8 +390,8 @@ fn fetch_latest_release(channel: ReleaseChannel) -> Result<FetchedRelease> {
         });
     }
     let release = match channel {
-        ReleaseChannel::Stable => fetch_latest_release_from_url(LATEST_RELEASE_URL),
-        ReleaseChannel::Beta => fetch_latest_beta_release_from_url(RELEASES_URL),
+        ReleaseChannel::Stable => fetch_latest_release_from_url(LATEST_RELEASE_URL, proxy),
+        ReleaseChannel::Beta => fetch_latest_beta_release_from_url(RELEASES_URL, proxy),
     }?;
     Ok(FetchedRelease {
         release,
@@ -454,8 +480,8 @@ fn update_network_fallback_hint() -> String {
     )
 }
 
-fn fetch_latest_release_from_url(url: &str) -> Result<Release> {
-    let client = update_http_client()?;
+fn fetch_latest_release_from_url(url: &str, proxy: &Option<Proxy>) -> Result<Release> {
+    let client = update_http_client(proxy)?;
     let response = client
         .get(url)
         .header(reqwest::header::ACCEPT, "application/vnd.github+json")
@@ -477,8 +503,8 @@ fn fetch_latest_release_from_url(url: &str) -> Result<Release> {
     Ok(release)
 }
 
-fn fetch_latest_beta_release_from_url(url: &str) -> Result<Release> {
-    let client = update_http_client()?;
+fn fetch_latest_beta_release_from_url(url: &str, proxy: &Option<Proxy>) -> Result<Release> {
+    let client = update_http_client(proxy)?;
     let response = client
         .get(url)
         .header(reqwest::header::ACCEPT, "application/vnd.github+json")
@@ -553,8 +579,8 @@ fn version_is_beta(version: &semver::Version) -> bool {
 }
 
 /// Download a URL to bytes.
-fn download_url(url: &str) -> Result<Vec<u8>> {
-    let client = update_http_client()?;
+fn download_url(url: &str, proxy: &Option<Proxy>) -> Result<Vec<u8>> {
+    let client = update_http_client(proxy)?;
     let response = client
         .get(url)
         .send()
@@ -1119,7 +1145,8 @@ E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  *codewhale-win
           ]
         }"#;
         let (url, request_rx, handle) = serve_http_once("200 OK", "application/json", body);
-        let release = fetch_latest_release_from_url(&url).expect("release JSON should parse");
+        let release =
+            fetch_latest_release_from_url(&url, &None).expect("release JSON should parse");
 
         assert_eq!(release.tag_name, "v9.9.9");
         assert_eq!(release.assets.len(), 2);
@@ -1142,7 +1169,7 @@ E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  *codewhale-win
     fn fetch_latest_release_from_url_reports_http_errors() {
         let (url, _request_rx, handle) =
             serve_http_once("500 Internal Server Error", "text/plain", b"server broke");
-        let err = fetch_latest_release_from_url(&url).expect_err("HTTP 500 should fail");
+        let err = fetch_latest_release_from_url(&url, &None).expect_err("HTTP 500 should fail");
 
         assert!(
             err.to_string().contains("HTTP 500"),
@@ -1162,8 +1189,8 @@ E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  *codewhale-win
           { "tag_name": "v0.9.0-beta.1", "prerelease": true, "assets": [] }
         ]"#;
         let (url, request_rx, handle) = serve_http_once("200 OK", "application/json", body);
-        let release =
-            fetch_latest_beta_release_from_url(&url).expect("beta release JSON should parse");
+        let release = fetch_latest_beta_release_from_url(&url, &None)
+            .expect("beta release JSON should parse");
 
         assert_eq!(release.tag_name, "v0.9.0-beta.2");
         assert!(release.prerelease);
@@ -1184,7 +1211,8 @@ E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  *codewhale-win
           { "tag_name": "v0.9.0", "prerelease": false, "assets": [] }
         ]"#;
         let (url, _request_rx, handle) = serve_http_once("200 OK", "application/json", body);
-        let err = fetch_latest_beta_release_from_url(&url).expect_err("missing beta should fail");
+        let err =
+            fetch_latest_beta_release_from_url(&url, &None).expect_err("missing beta should fail");
 
         assert!(
             err.to_string().contains("no beta release found"),
@@ -1197,7 +1225,7 @@ E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  *codewhale-win
     fn download_url_reads_binary_body_with_updater_user_agent() {
         let (url, request_rx, handle) =
             serve_http_once("200 OK", "application/octet-stream", b"\0binary bytes");
-        let bytes = download_url(&url).expect("binary download should succeed");
+        let bytes = download_url(&url, &None).expect("binary download should succeed");
 
         assert_eq!(bytes, b"\0binary bytes");
 
