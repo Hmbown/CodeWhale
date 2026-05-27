@@ -464,6 +464,16 @@ fn non_yolo_mode_retains_default_defer_policy() {
         AppMode::Agent,
         &always_load
     ));
+    assert!(!should_default_defer_tool(
+        "task_shell_start",
+        AppMode::Agent,
+        &always_load
+    ));
+    assert!(!should_default_defer_tool(
+        "task_shell_wait",
+        AppMode::Agent,
+        &always_load
+    ));
     assert!(should_default_defer_tool(
         "git_show",
         AppMode::Agent,

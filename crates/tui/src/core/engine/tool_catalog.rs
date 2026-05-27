@@ -46,6 +46,8 @@ pub(super) const DEFAULT_ACTIVE_NATIVE_TOOLS: &[&str] = &[
     "task_create",
     "task_list",
     "task_read",
+    "task_shell_start",
+    "task_shell_wait",
     "update_plan",
     "web_search",
     "write_file",
