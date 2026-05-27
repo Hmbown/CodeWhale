@@ -847,6 +847,7 @@ dependencies = [
  "codewhale-config",
  "codewhale-execpolicy",
  "codewhale-mcp",
+ "codewhale-release",
  "codewhale-secrets",
  "codewhale-state",
  "dirs",
@@ -932,6 +933,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "codewhale-release"
+version = "0.8.46"
+dependencies = [
+ "anyhow",
+ "reqwest",
+ "semver",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "codewhale-secrets"
 version = "0.8.46"
 dependencies = [
@@ -983,6 +995,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "codewhale-config",
+ "codewhale-release",
  "codewhale-secrets",
  "codewhale-tools",
  "colored",

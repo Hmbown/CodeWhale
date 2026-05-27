@@ -2065,6 +2065,51 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
     println!("  rust: {}", rustc_version());
     println!();
 
+    println!("{}", "Updates:".bold());
+    let current_version = env!("CARGO_PKG_VERSION");
+    println!("  · current: v{current_version}");
+    match codewhale_release::latest_release_tag_async(codewhale_release::ReleaseChannel::Stable)
+        .await
+    {
+        Ok(latest_tag) => {
+            match codewhale_release::compare_release_versions(current_version, &latest_tag) {
+                Ok(std::cmp::Ordering::Less) => {
+                    println!(
+                        "  {} latest: {latest_tag}",
+                        "!".truecolor(sky_r, sky_g, sky_b)
+                    );
+                    println!("    Update available. Run `codewhale update` to install.");
+                }
+                Ok(std::cmp::Ordering::Equal) => {
+                    println!(
+                        "  {} latest: {latest_tag}",
+                        "✓".truecolor(aqua_r, aqua_g, aqua_b)
+                    );
+                    println!("    Already up to date.");
+                }
+                Ok(std::cmp::Ordering::Greater) => {
+                    println!("  {} latest: {latest_tag}", "·".dimmed());
+                    println!("    Current build is newer than the latest published release.");
+                }
+                Err(err) => {
+                    println!(
+                        "  {} latest: {latest_tag}",
+                        "!".truecolor(sky_r, sky_g, sky_b)
+                    );
+                    println!("    Version comparison failed: {err}");
+                }
+            }
+        }
+        Err(err) => {
+            println!(
+                "  {} latest release check failed: {err}",
+                "!".truecolor(sky_r, sky_g, sky_b)
+            );
+            println!("    Run `codewhale update --check` to retry.");
+        }
+    }
+    println!();
+
     // Configuration summary
     println!("{}", "Configuration:".bold());
     let config_path = config_path_override

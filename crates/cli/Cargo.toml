@@ -30,6 +30,7 @@ codewhale-app-server = { path = "../app-server", version = "0.8.46" }
 codewhale-config = { path = "../config", version = "0.8.46" }
 codewhale-execpolicy = { path = "../execpolicy", version = "0.8.46" }
 codewhale-mcp = { path = "../mcp", version = "0.8.46" }
+codewhale-release = { path = "../release", version = "0.8.46" }
 codewhale-secrets = { path = "../secrets", version = "0.8.46" }
 codewhale-state = { path = "../state", version = "0.8.46" }
 chrono.workspace = true
