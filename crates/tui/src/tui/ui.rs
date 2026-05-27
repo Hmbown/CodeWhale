@@ -146,6 +146,11 @@ const UI_IDLE_POLL_MS: u64 = 48;
 const UI_ACTIVE_POLL_MS: u64 = 24;
 const WEB_CONFIG_POLL_MS: u64 = 16;
 const DISPATCH_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(30);
+/// Maximum wall-clock time a turn may stay in `"in_progress"` before the UI
+/// assumes the engine stalled (e.g. sub-agent hang, lost completion event,
+/// engine panic).  Matched to [`DEFAULT_STREAM_IDLE_TIMEOUT`] so legitimate
+/// long-running tool chains are not interrupted prematurely.
+const TURN_STALL_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(300);
 // Forced repaint cadence while a turn is live (model loading, compacting,
 // sub-agents running). Drives the footer water-spout animation as well as
 // the per-tool spinner pulse — keep this fast enough that the spout reads as
@@ -3896,6 +3901,40 @@ fn reconcile_turn_liveness(app: &mut App, now: Instant, has_running_agents: bool
         app.push_status_toast(
             "Recovered from an inconsistent busy state.",
             StatusToastLevel::Warning,
+            None,
+        );
+        return true;
+    }
+
+    // Branch 3: turn started but never completed — engine may have
+    // panicked, sub-agent may be stuck, or the completion event was lost.
+    if app.is_loading
+        && matches!(app.runtime_turn_status.as_deref(), Some("in_progress"))
+        && !has_running_agents
+        && !app.is_compacting
+        && app.turn_started_at.is_some_and(|started| {
+            now.saturating_duration_since(started) > TURN_STALL_WATCHDOG_TIMEOUT
+        })
+    {
+        // Finalize in-flight thinking / assistant / tool cells so the
+        // transcript doesn't show permanent spinners after recovery.
+        streaming_thinking::finalize_current(app);
+        app.finalize_streaming_assistant_as_interrupted();
+        app.finalize_active_cell_as_interrupted();
+        app.streaming_state.reset();
+        app.streaming_message_index = None;
+        app.streaming_thinking_active_entry = None;
+
+        app.is_loading = false;
+        app.turn_started_at = None;
+        app.runtime_turn_status = None;
+        app.runtime_turn_id = None;
+        app.dispatch_started_at = None;
+        // Per-turn scroll lock — clear so the next turn auto-scrolls.
+        app.user_scrolled_during_stream = false;
+        app.push_status_toast(
+            "Turn stalled — no completion signal received. Please try again.",
+            StatusToastLevel::Error,
             None,
         );
         return true;
