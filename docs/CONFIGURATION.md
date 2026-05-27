@@ -62,16 +62,18 @@ label without printing the key itself. The command only probes the active
 provider's keyring entry.
 
 For hosted, generic OpenAI-compatible, or self-hosted providers, set
-`provider = "nvidia-nim"`, `"openai"`, `"atlascloud"`, `"wanjie-ark"`, `"fireworks"`,
-`"moonshot"`, `"sglang"`, `"vllm"`, or `"ollama"` or pass `codewhale --provider <name>`.
+`provider = "nvidia-nim"`, `"openai"`, `"atlascloud"`, `"wanjie-ark"`,
+`"openrouter"`, `"novita"`, `"fireworks"`, `"moonshot"`, `"sglang"`,
+`"vllm"`, or `"ollama"` or pass `codewhale --provider <name>`.
+For the provider-by-provider registry, including auth variables, default base
+URLs, model IDs, and capability metadata, see [PROVIDERS.md](PROVIDERS.md).
 The facade saves provider credentials to the shared user config and forwards
 the resolved key, base URL, provider, and model to the TUI process. Use
 `codewhale auth set --provider nvidia-nim --api-key "YOUR_NVIDIA_API_KEY"` or
 `codewhale auth set --provider openai --api-key "YOUR_OPENAI_COMPATIBLE_API_KEY"` or
 `codewhale auth set --provider atlascloud --api-key "YOUR_ATLASCLOUD_API_KEY"` or
 `codewhale auth set --provider wanjie-ark --api-key "YOUR_WANJIE_API_KEY"` or
-`codewhale auth set --provider fireworks --api-key "YOUR_FIREWORKS_API_KEY"` or
-`codewhale auth set --provider moonshot --api-key "YOUR_MOONSHOT_OR_KIMI_API_KEY"`
+`codewhale auth set --provider fireworks --api-key "YOUR_FIREWORKS_API_KEY"`
 to save provider keys through the facade. The generic `openai` provider defaults
 to `https://api.openai.com/v1`, accepts `OPENAI_BASE_URL`, and defaults to
 `deepseek-v4-pro` for OpenAI-compatible gateways. `atlascloud` defaults to
@@ -80,9 +82,7 @@ to `https://api.openai.com/v1`, accepts `OPENAI_BASE_URL`, and defaults to
 Wanjie Ark's OpenAI-compatible endpoint at
 `https://maas-openapi.wanjiedata.com/api/v1`, defaults to `deepseek-reasoner`,
 and passes model IDs through unchanged because Wanjie model access is
-account-scoped. `moonshot` targets Moonshot/Kimi, defaults to `kimi-k2.6`,
-and can use `KIMI_API_KEY` or `auth_mode = "kimi_oauth"` with local Kimi CLI
-credentials. SGLang, vLLM, and Ollama are
+account-scoped. SGLang, vLLM, and Ollama are
 self-hosted and can run without an API key by default. Ollama defaults to
 `http://localhost:11434/v1` and sends model tags such as `codewhale-coder:1.3b`
 or `qwen2.5-coder:7b` unchanged. Self-hosted providers and loopback custom
@@ -200,13 +200,22 @@ If a profile is selected but missing, codewhale exits with an error listing avai
 ## Environment Variables
 
 Most runtime environment variables override config values. API-key variables are
-fallbacks after saved config and keyring credentials:
+fallbacks after saved config and keyring credentials.
+
+The three user-facing slots — provider, model, base URL — expose `CODEWHALE_*`
+aliases. When both forms are set the `CODEWHALE_*` value wins; the
+`DEEPSEEK_*` form is kept for older shells:
+
+- `CODEWHALE_PROVIDER` (preferred) / `DEEPSEEK_PROVIDER` (legacy alias) —
+  `deepseek|nvidia-nim|openai|atlascloud|wanjie-ark|openrouter|novita|fireworks|moonshot|sglang|vllm|ollama`
+- `CODEWHALE_MODEL` (preferred) / `DEEPSEEK_MODEL` (legacy alias) — default model for the active provider
+- `CODEWHALE_BASE_URL` (preferred) / `DEEPSEEK_BASE_URL` (legacy alias) — base URL for the active provider
+
+Remaining variables:
 
 - `DEEPSEEK_API_KEY`
-- `DEEPSEEK_BASE_URL`
 - `DEEPSEEK_HTTP_HEADERS` (custom model request headers, comma-separated `name=value` pairs)
-- `DEEPSEEK_PROVIDER` (`codewhale|nvidia-nim|openai|atlascloud|wanjie-ark|openrouter|novita|fireworks|moonshot|sglang|vllm|ollama`)
-- `DEEPSEEK_MODEL` or `DEEPSEEK_DEFAULT_TEXT_MODEL`
+- `DEEPSEEK_DEFAULT_TEXT_MODEL` (extra legacy alias of `DEEPSEEK_MODEL`)
 - `DEEPSEEK_STREAM_IDLE_TIMEOUT_SECS` (stream idle timeout in seconds; default `300`, clamped to `1..=3600`)
 - `DEEPSEEK_STREAM_OPEN_TIMEOUT_SECS` (connection setup + response-header wait in seconds; default `45`, clamped to `5..=300`; distinct from the per-chunk idle timeout)
 - `NVIDIA_API_KEY` or `NVIDIA_NIM_API_KEY` (preferred when provider is `nvidia-nim`; falls back to `DEEPSEEK_API_KEY`)
@@ -227,6 +236,9 @@ fallbacks after saved config and keyring credentials:
 - `NOVITA_BASE_URL`
 - `FIREWORKS_API_KEY`
 - `FIREWORKS_BASE_URL`
+- `MOONSHOT_API_KEY` or `KIMI_API_KEY`
+- `MOONSHOT_BASE_URL` or `KIMI_BASE_URL`
+- `MOONSHOT_MODEL`, `KIMI_MODEL_NAME`, or `KIMI_MODEL`
 - `SGLANG_BASE_URL`
 - `SGLANG_MODEL`
 - `SGLANG_API_KEY` (optional; many localhost SGLang servers do not require auth)
@@ -429,10 +441,10 @@ If you are upgrading from older releases:
 
 ### Core keys (used by the TUI/engine)
 
-- `provider` (string, optional): `codewhale` (default), `nvidia-nim`, `openai`, `atlascloud`, `wanjie-ark`, `openrouter`, `novita`, `fireworks`, `moonshot`, `sglang`, `vllm`, or `ollama`. Legacy `deepseek-cn` configs are still accepted as an alias for `codewhale`; DeepSeek uses the same official host [`https://api.deepseek.com`](https://api-docs.deepseek.com/) worldwide. `nvidia-nim` targets NVIDIA's NIM-hosted DeepSeek endpoints through `https://integrate.api.nvidia.com/v1`; `openai` targets a generic OpenAI-compatible endpoint, defaulting to `https://api.openai.com/v1`; `atlascloud` targets AtlasCloud's OpenAI-compatible endpoint at `https://api.atlascloud.ai/v1`; `wanjie-ark` targets Wanjie Ark's OpenAI-compatible endpoint at `https://maas-openapi.wanjiedata.com/api/v1`; `fireworks` targets `https://api.fireworks.ai/inference/v1`; `moonshot` targets `https://api.moonshot.ai/v1` by default, with Kimi CLI OAuth mode using `https://api.kimi.com/coding/v1`; `sglang` targets a self-hosted OpenAI-compatible endpoint, defaulting to `http://localhost:30000/v1`; `vllm` targets a self-hosted vLLM OpenAI-compatible endpoint, defaulting to `http://localhost:8000/v1`; `ollama` targets Ollama's OpenAI-compatible endpoint, defaulting to `http://localhost:11434/v1`.
+- `provider` (string, optional): `deepseek` (default), `nvidia-nim`, `openai`, `atlascloud`, `wanjie-ark`, `openrouter`, `novita`, `fireworks`, `moonshot`, `sglang`, `vllm`, or `ollama`. Legacy `deepseek-cn` configs are still accepted as an alias for `deepseek`; DeepSeek uses the same official host [`https://api.deepseek.com`](https://api-docs.deepseek.com/) worldwide. `nvidia-nim` targets NVIDIA's NIM-hosted DeepSeek endpoints through `https://integrate.api.nvidia.com/v1`; `openai` targets a generic OpenAI-compatible endpoint, defaulting to `https://api.openai.com/v1`; `atlascloud` targets AtlasCloud's OpenAI-compatible endpoint at `https://api.atlascloud.ai/v1`; `wanjie-ark` targets Wanjie Ark's OpenAI-compatible endpoint at `https://maas-openapi.wanjiedata.com/api/v1`; `openrouter` targets `https://openrouter.ai/api/v1`; `novita` targets `https://api.novita.ai/v1`; `fireworks` targets `https://api.fireworks.ai/inference/v1`; `moonshot` targets Moonshot/Kimi, defaulting to `https://api.moonshot.ai/v1`; `sglang` targets a self-hosted OpenAI-compatible endpoint, defaulting to `http://localhost:30000/v1`; `vllm` targets a self-hosted vLLM OpenAI-compatible endpoint, defaulting to `http://localhost:8000/v1`; `ollama` targets Ollama's OpenAI-compatible endpoint, defaulting to `http://localhost:11434/v1`.
 - `api_key` (string, required for hosted providers): must be non-empty for DeepSeek/hosted providers (or set the provider API key env var). Self-hosted SGLang, vLLM, and Ollama can omit it.
-- `base_url` (string, optional): defaults to `https://api.deepseek.com/beta` for DeepSeek's OpenAI-compatible Chat Completions API, including legacy `provider = "deepseek-cn"` configs, `https://api.openai.com/v1` for `provider = "openai"`, `https://api.atlascloud.ai/v1` for `provider = "atlascloud"`, `https://maas-openapi.wanjiedata.com/api/v1` for `provider = "wanjie-ark"`, `https://api.moonshot.ai/v1` for `provider = "moonshot"` API-key mode, or the provider-specific endpoint for hosted/self-hosted providers. Set `https://api.deepseek.com` or `https://api.deepseek.com/v1` explicitly to opt out of DeepSeek beta features.
-- `default_text_model` (string, optional): defaults to `deepseek-v4-pro` for DeepSeek and generic OpenAI-compatible endpoints, `deepseek-ai/deepseek-v4-pro` for NVIDIA NIM, `deepseek-ai/deepseek-v4-flash` for AtlasCloud, `deepseek-reasoner` for Wanjie Ark, `accounts/fireworks/models/deepseek-v4-pro` for Fireworks, `kimi-k2.6` for Moonshot/Kimi API-key mode, `deepseek-ai/DeepSeek-V4-Pro` for SGLang/vLLM, and `codewhale-coder:1.3b` for Ollama. Current public DeepSeek IDs are `deepseek-v4-pro` and `deepseek-v4-flash`, both with 1M context windows, 384K max output, and thinking mode enabled by default. Legacy `deepseek-chat` and `deepseek-reasoner` remain compatibility aliases for `deepseek-v4-flash` until July 24, 2026. Provider-specific mappings translate `deepseek-v4-pro` / `deepseek-v4-flash` to each provider's model ID where supported. Generic `openai`, `atlascloud`, `wanjie-ark`, and Ollama model IDs are passed through unchanged. OpenRouter provider configs with a custom `base_url` also preserve explicit model values, which lets OpenAI-compatible gateways accept bare model IDs. Use `/models` or `codewhale models` to discover live IDs from your configured endpoint. `DEEPSEEK_MODEL` overrides this for a single process.
+- `base_url` (string, optional): defaults to `https://api.deepseek.com/beta` for DeepSeek's OpenAI-compatible Chat Completions API, including legacy `provider = "deepseek-cn"` configs. Other defaults are `https://integrate.api.nvidia.com/v1` for `nvidia-nim`, `https://api.openai.com/v1` for `openai`, `https://api.atlascloud.ai/v1` for `atlascloud`, `https://maas-openapi.wanjiedata.com/api/v1` for `wanjie-ark`, `https://openrouter.ai/api/v1` for `openrouter`, `https://api.novita.ai/v1` for `novita`, `https://api.fireworks.ai/inference/v1` for `fireworks`, `https://api.moonshot.ai/v1` for `moonshot`, `http://localhost:30000/v1` for `sglang`, `http://localhost:8000/v1` for `vllm`, and `http://localhost:11434/v1` for `ollama`. Set `https://api.deepseek.com` or `https://api.deepseek.com/v1` explicitly to opt out of DeepSeek beta features.
+- `default_text_model` (string, optional): defaults to `deepseek-v4-pro` for DeepSeek and generic OpenAI-compatible endpoints, `deepseek-ai/deepseek-v4-pro` for NVIDIA NIM, `deepseek-ai/deepseek-v4-flash` for AtlasCloud, `deepseek-reasoner` for Wanjie Ark, `deepseek/deepseek-v4-pro` for OpenRouter and Novita, `accounts/fireworks/models/deepseek-v4-pro` for Fireworks, `kimi-k2.6` for Moonshot, `deepseek-ai/DeepSeek-V4-Pro` for SGLang/vLLM, and `deepseek-coder:1.3b` for Ollama. Current public DeepSeek IDs are `deepseek-v4-pro` and `deepseek-v4-flash`, both with 1M context windows, 384K max output, and thinking mode enabled by default. Legacy `deepseek-chat` and `deepseek-reasoner` remain compatibility aliases for `deepseek-v4-flash` until July 24, 2026. Provider-specific mappings translate `deepseek-v4-pro` / `deepseek-v4-flash` to each provider's model ID where supported. Generic `openai`, `atlascloud`, `wanjie-ark`, and Ollama model IDs are passed through unchanged. OpenRouter provider configs with a custom `base_url` also preserve explicit model values, which lets OpenAI-compatible gateways accept bare model IDs. Use `/models` or `codewhale models` to discover live IDs from your configured endpoint. `CODEWHALE_MODEL` overrides this for a single process; `DEEPSEEK_MODEL` is the legacy alias.
 - `reasoning_effort` (string, optional): `off`, `low`, `medium`, `high`, or `max`; defaults to the configured UI tier. DeepSeek Platform receives top-level `thinking` / `reasoning_effort` fields. NVIDIA NIM receives equivalent settings through `chat_template_kwargs`.
 - `allow_shell` (bool, optional): defaults to `true` (sandboxed).
 - `approval_policy` (string, optional): `on-request`, `untrusted`, or `never`. Runtime `approval_mode` editing in `/config` also accepts `on-request` and `untrusted` aliases.
@@ -534,7 +546,7 @@ If you are upgrading from older releases:
   `false`. When `true`, the notification body includes the elapsed
   duration and the turn's cost in the configured display currency.
 - `tui.alternate_screen` (string, optional): `auto`, `always`, or `never`. This is retained for config compatibility, but interactive sessions now always use the TUI-owned alternate screen so host terminal scrollback cannot hijack the viewport.
-- `tui.mouse_capture` (bool, optional, default `true` on non-Windows terminals and on Windows Terminal/ConEmu/Cmder when the alternate screen is active; `false` on legacy Windows console and inside JetBrains JediTerm — PyCharm/IDEA/CLion/etc. — where mouse-event escapes leak into the input stream as garbled text, see #878 / #898): enable internal mouse scrolling, transcript selection, right-click context actions, and transcript scrollbar dragging. TUI-owned drag selection copies only transcript text and keeps selection scoped to the transcript pane. Set this to `false` or run with `--no-mouse-capture` for raw terminal selection; set it to `true` or run with `--mouse-capture` to opt in anywhere it's defaulted off. On raw terminal selection, especially on legacy Windows console or when mouse capture is disabled, selection may cross the right sidebar because the terminal, not the TUI, owns the selection.
+- `tui.mouse_capture` (bool, optional, default `true` on non-Windows terminals and on Windows Terminal/ConEmu/Cmder when the alternate screen is active; `false` on legacy Windows console and inside JetBrains JediTerm — PyCharm/IDEA/CLion/etc. — where mouse-event escapes leak into the input stream as garbled text, see #878 / #898): enable internal mouse scrolling, transcript selection, right-click context actions, and transcript scrollbar dragging. TUI-owned drag selection copies only transcript text, removes visual wrap-column line breaks from paragraphs, and keeps selection scoped to the transcript pane. Set this to `false` or run with `--no-mouse-capture` for raw terminal selection; set it to `true` or run with `--mouse-capture` to opt in anywhere it's defaulted off. On raw terminal selection, especially on legacy Windows console or when mouse capture is disabled, selection may cross the right sidebar and include visual wraps because the terminal, not the TUI, owns the selection.
 - `tui.terminal_probe_timeout_ms` (int, optional, default `500`): startup terminal-mode probe timeout in milliseconds. Values are clamped to `100..=5000`; timeout emits a warning and aborts startup instead of hanging indefinitely.
 - `tui.osc8_links` (bool, optional, default `true`): emit OSC 8 escape sequences around URLs in transcript output so terminals that support them (iTerm2, Terminal.app 13+, Ghostty, Kitty, WezTerm, Alacritty, recent gnome-terminal/konsole) render them as Cmd+click hyperlinks. Terminals without OSC 8 support render the plain URL and ignore the escape. Set `false` for terminals that misrender the sequence; selection/clipboard output always strips the escapes.
 - `hooks` (optional): lifecycle hooks configuration (see `config.example.toml`).
@@ -612,6 +624,17 @@ These keys are accepted by the config loader but not currently used by the inter
 
 - `tools_file`
 
+## Tool Catalog
+
+CodeWhale loads a small core native tool catalog by default and leaves less
+common native tools discoverable through ToolSearch. To keep specific native
+tools loaded on every request, add them to `[tools].always_load`:
+
+```toml
+[tools]
+always_load = ["git_show", "notify"]
+```
+
 ## Feature Flags
 
 Feature flags live under the `[features]` table and are merged across profiles.
@@ -637,14 +660,17 @@ Use `codewhale-tui features list` to inspect known flags and their effective sta
 
 ## Web Search Provider
 
-`web_search` uses Bing by default and does not require an API key. DuckDuckGo
-remains selectable for users who explicitly want it, and Tavily or Bocha can be
-selected when an API-backed provider is preferred.
+`web_search` uses DuckDuckGo by default and does not require an API key. The
+DuckDuckGo path keeps a Bing fallback when DDG returns a bot challenge or no
+parseable results. Bing remains selectable for users who explicitly want it,
+and Tavily or Bocha can be selected when an API-backed provider is preferred.
+**Metaso** ([metaso.cn](https://metaso.cn))
+100 searches/day free quota — set `METASO_API_KEY` or `[search] api_key` for a higher quota.
 
 ```toml
 [search]
-provider = "bing" # bing | duckduckgo | tavily | bocha
-# api_key = "tvly-YOUR_KEY" # required for tavily and bocha
+provider = "duckduckgo"    # duckduckgo | bing | tavily | bocha | metaso
+# api_key = "YOUR_KEY" # required for tavily and bocha; optional for metaso (100 searches/day free quota)
 ```
 
 ## Local Media Attachments

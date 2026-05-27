@@ -10,6 +10,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use super::cargo_failure_summary::summarize_cargo_failure;
 use super::spec::{
     ApprovalRequirement, ToolCapability, ToolContext, ToolError, ToolResult, ToolSpec,
     optional_bool, optional_str,
@@ -100,7 +101,20 @@ impl ToolSpec for RunTestsTool {
             command: command_str,
         };
 
-        ToolResult::json(&result).map_err(|e| ToolError::execution_failed(e.to_string()))
+        let mut tool_result =
+            ToolResult::json(&result).map_err(|e| ToolError::execution_failed(e.to_string()))?;
+        if let Some(summary) = summarize_cargo_failure(
+            &result.command,
+            &result.stdout,
+            &result.stderr,
+            Some(result.exit_code),
+        ) {
+            tool_result = tool_result.with_metadata(json!({
+                "summary": summary.summary,
+                "cargo_failure_summary": summary.to_metadata_value(),
+            }));
+        }
+        Ok(tool_result)
     }
 }
 
@@ -255,6 +269,17 @@ mod tests {
             serde_json::from_str(&result.content).expect("tool result should be json");
         assert!(!parsed.success);
         assert_ne!(parsed.exit_code, 0);
+        let metadata = result.metadata.expect("metadata");
+        assert_eq!(
+            metadata["cargo_failure_summary"]["kind"],
+            json!("test_failure")
+        );
+        assert!(
+            metadata["cargo_failure_summary"]["summary"]
+                .as_str()
+                .unwrap()
+                .contains("Failing tests:")
+        );
     }
 
     #[test]

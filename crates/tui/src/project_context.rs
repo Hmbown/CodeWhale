@@ -384,6 +384,11 @@ pub fn load_project_context(workspace: &Path) -> ProjectContext {
         if file_path.exists() && file_path.is_file() {
             match load_context_file(&file_path) {
                 Ok(content) => {
+                    tracing::info!(
+                        "Loaded project context from {} ({} bytes)",
+                        file_path.display(),
+                        content.len()
+                    );
                     ctx.instructions = Some(content);
                     ctx.source_path = Some(file_path);
                     break;

@@ -27,9 +27,9 @@ path = "src/bin/deepseek_tui_legacy_shim.rs"
 [dependencies]
 anyhow = "1.0.100"
 arboard = "3.4"
-codewhale-config = { path = "../config", version = "0.8.45" }
-codewhale-secrets = { path = "../secrets", version = "0.8.45" }
-codewhale-tools = { path = "../tools", version = "0.8.45" }
+codewhale-config = { path = "../config", version = "0.8.46" }
+codewhale-secrets = { path = "../secrets", version = "0.8.46" }
+codewhale-tools = { path = "../tools", version = "0.8.46" }
 schemaui = { version = "0.12.0", default-features = false, optional = true }
 async-stream = "0.3.6"
 async-trait = "0.1"
@@ -70,7 +70,7 @@ multimap = "0.10.0"
 shlex = "1.3.0"
 starlark = "0.13.0"
 tiny_http = "0.12"
-portable-pty = "0.8"
+portable-pty = "0.9"
 zeroize = "1.8.2"
 ignore = "0.4"
 image = { version = "0.25", default-features = false, features = ["png"] }

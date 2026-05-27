@@ -157,17 +157,24 @@ pub fn init() -> Result<TuiLogGuard> {
 }
 
 fn log_directory() -> Option<PathBuf> {
+    let resolve = |base: PathBuf| -> Option<PathBuf> {
+        let primary = base.join(".codewhale").join("logs");
+        if primary.exists() {
+            return Some(primary);
+        }
+        Some(base.join(".deepseek").join("logs"))
+    };
     if let Some(home) = std::env::var_os("HOME").map(PathBuf::from)
         && !home.as_os_str().is_empty()
     {
-        return Some(home.join(".deepseek").join("logs"));
+        return resolve(home);
     }
     if let Some(userprofile) = std::env::var_os("USERPROFILE").map(PathBuf::from)
         && !userprofile.as_os_str().is_empty()
     {
-        return Some(userprofile.join(".deepseek").join("logs"));
+        return resolve(userprofile);
     }
-    dirs::home_dir().map(|h| h.join(".deepseek").join("logs"))
+    dirs::home_dir().and_then(|h| resolve(h))
 }
 
 fn log_file_name(date: &str, pid: u32) -> String {

@@ -41,5 +41,5 @@ fn append_event(event: &str, details: Value) -> anyhow::Result<()> {
 
 fn default_audit_path() -> anyhow::Result<PathBuf> {
     let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("home directory not found"))?;
-    Ok(home.join(".deepseek").join("audit.log"))
+    Ok(home.join(".codewhale").join("audit.log"))
 }

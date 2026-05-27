@@ -81,6 +81,13 @@ pub fn spillover_root() -> Option<PathBuf> {
         return Some(root);
     }
 
+    // Prefer .codewhale, fall back to .deepseek
+    let primary = dirs::home_dir()?
+        .join(".codewhale")
+        .join(SPILLOVER_DIR_NAME);
+    if primary.exists() {
+        return Some(primary);
+    }
     Some(dirs::home_dir()?.join(".deepseek").join(SPILLOVER_DIR_NAME))
 }
 

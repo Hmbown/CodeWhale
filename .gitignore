@@ -100,6 +100,8 @@ apps/
 # Maintainer-local SWE-bench scratch (instance workspaces, venvs, predictions,
 # Docker harness logs). Never published.
 .swebench/
+deep-swe/
+all_preds.jsonl
 
 # Agent handoffs and version-specific setup plans are working-state notes, not
 # public docs. Keep durable setup guidance in docs/runbooks instead.
@@ -111,3 +113,4 @@ docs/*_PLAN.md
 # direnv
 .envrc
 .direnv
+scripts/run_deep_swe.py

@@ -28,7 +28,21 @@ const API_MAX_OUTPUT_TOKENS: u32 = 65_536;
 /// model. Uses `API_MAX_OUTPUT_TOKENS` (64K) which fits within common provider
 /// limits (128K+ total). For non-V4 models with smaller context windows, caps
 /// at half the context window.
+///
+/// Override: when the env var `DEEPSEEK_MAX_OUTPUT_TOKENS` is set to a positive
+/// integer, this function returns that value directly. Use this for self-hosted
+/// providers (vLLM/SGLang) whose `max-model-len` is tight and where the
+/// model-table heuristic above would over-allocate. Example: vLLM serving
+/// Qwen3.6 with `--max-model-len 65536` should set
+/// `DEEPSEEK_MAX_OUTPUT_TOKENS=16384` so input + output stays well under the
+/// provider's hard limit.
 pub(super) fn effective_max_output_tokens(model: &str) -> u32 {
+    if let Ok(raw) = std::env::var("DEEPSEEK_MAX_OUTPUT_TOKENS")
+        && let Ok(n) = raw.trim().parse::<u32>()
+        && n > 0
+    {
+        return n;
+    }
     let window = context_window_for_model(model).unwrap_or(128_000);
     if window >= 500_000 {
         // V4-class models on large-context providers: use 64K which is safe

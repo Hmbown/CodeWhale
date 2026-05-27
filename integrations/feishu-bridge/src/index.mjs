@@ -145,6 +145,29 @@ async function handleIncomingMessage(event) {
   const identity = incomingIdentity(event);
   if (!identity.chatId) return;
 
+  // Store the incoming message ID so sendText() can reply inside the same
+  // Feishu thread/topic — without this, every bot message creates a new
+  // standalone topic in thread-enabled groups.
+  // / 缓存入站消息 ID，让 sendText 能通过 reply API 在同一话题内回复。
+  // / 否则每条 bot 消息都会在话题群中创建独立的新话题（见 #1710）。
+  if (identity.messageId) {
+    const existing = await threadStore.getChat(identity.chatId);
+    if (existing) {
+      await threadStore.patchChat(identity.chatId, {
+        replyToMessageId: identity.messageId,
+        updatedAt: new Date().toISOString()
+      });
+    } else {
+      await threadStore.setChat(identity.chatId, {
+        replyToMessageId: identity.messageId,
+        threadId: null,
+        lastSeq: 0,
+        activeTurnId: null,
+        updatedAt: new Date().toISOString()
+      });
+    }
+  }
+
   if (identity.messageType && identity.messageType !== "text") {
     await sendText(identity.chatId, "Only text messages are supported in this first bridge.");
     return;
@@ -531,21 +554,40 @@ async function decideApproval(chatId, action) {
 }
 
 async function sendText(chatId, text) {
+  // Try reply API first — keeps bot responses inside the same Feishu
+  // thread/topic instead of spawning new standalone topics.
+  // / 优先使用 reply API，确保 bot 回复留在话题群的同一条话题内。
+  const state = await threadStore.getChat(chatId);
+  const replyToMessageId = state?.replyToMessageId || null;
+
+  const replyMessage =
+    replyToMessageId
+      ? client.im?.v1?.message?.reply?.bind(client.im.v1.message) ||
+        client.im?.message?.reply?.bind(client.im.message)
+      : null;
   const createMessage =
     client.im?.v1?.message?.create?.bind(client.im.v1.message) ||
     client.im?.message?.create?.bind(client.im.message);
   if (!createMessage) {
     throw new Error("Lark SDK client does not expose im message create API");
   }
+
   for (const chunk of splitMessage(text, config.maxReplyChars)) {
-    await createMessage({
-      params: { receive_id_type: "chat_id" },
-      data: {
-        receive_id: chatId,
-        msg_type: "text",
-        content: JSON.stringify({ text: chunk })
-      }
-    });
+    const body = {
+      msg_type: "text",
+      content: JSON.stringify({ text: chunk })
+    };
+    if (replyMessage) {
+      await replyMessage({
+        path: { message_id: replyToMessageId },
+        data: body
+      });
+    } else {
+      await createMessage({
+        params: { receive_id_type: "chat_id" },
+        data: { ...body, receive_id: chatId }
+      });
+    }
   }
 }
 

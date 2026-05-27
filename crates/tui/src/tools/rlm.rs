@@ -27,6 +27,11 @@ const DEFAULT_CHILD_MODEL: &str = "deepseek-v4-flash";
 const MAX_INLINE_CONTENT_CHARS: usize = 200_000;
 const FULL_STDOUT_HEAD_CHARS: usize = 4_096;
 const FULL_STDOUT_TAIL_CHARS: usize = 1_024;
+
+/// When `rlm_eval` stdout exceeds this many characters the full body is
+/// stored as a `var_handle` instead of inlined into the parent transcript.
+/// The model retrieves the body via `handle_read` using the returned handle.
+const STDOUT_HANDLE_THRESHOLD_CHARS: usize = 1_000;
 const HARD_SUB_RLM_DEPTH_CAP: u32 = 3;
 
 pub struct RlmSessionObjectsTool;
@@ -217,8 +222,11 @@ impl ToolSpec for RlmEvalTool {
          bounded projection of stdout/stderr plus metadata. If the code calls \
          FINAL/finalize, the final value is stored as a var_handle retrievable \
          with handle_read instead of copied unbounded into the parent context. \
-         Batch child helpers require dependency_mode='independent'; use \
-         sub_query_sequence or a sequential loop for dependent work."
+         Large stdout/stderr payloads (>1k chars) are also stored as \
+         var_handles (returned in stdout_handle / stderr_handle) to keep the \
+         parent transcript lean. Batch child helpers require \
+         dependency_mode='independent'; use sub_query_sequence or a \
+         sequential loop for dependent work."
     }
 
     fn input_schema(&self) -> Value {
@@ -299,14 +307,48 @@ impl ToolSpec for RlmEvalTool {
         let had_error = round.has_error;
         let rpc_count = round.rpc_count;
         let duration_ms = round.elapsed.as_millis() as u64;
-        let stdout_preview = match config.output_feedback {
-            OutputFeedback::Full => Some(preview_output(&round.full_stdout)),
-            OutputFeedback::Metadata => None,
-        };
-        let stderr_preview = match config.output_feedback {
-            OutputFeedback::Full if !round.stderr.is_empty() => Some(preview_output(&round.stderr)),
-            _ => None,
-        };
+        // Route large stdout/stderr into a var_handle to avoid bloat in
+        // the parent transcript. The model calls handle_read for bounded
+        // projections; a short inline note describes availability.
+        fn route_output(
+            text: &str,
+            feedback: &OutputFeedback,
+            store: &mut crate::tools::handle::HandleStore,
+            session_id: &str,
+            tag: &str,
+        ) -> (Option<String>, Option<crate::tools::handle::VarHandle>) {
+            let threshold = STDOUT_HANDLE_THRESHOLD_CHARS;
+            match (feedback, text.len()) {
+                (OutputFeedback::Full, len) if len <= threshold => {
+                    (Some(preview_output(text)), None)
+                }
+                (OutputFeedback::Full, _) if !text.trim().is_empty() => {
+                    // Store full body as a handle for out-of-band retrieval
+                    let name = format!("{tag}_{}", 0); // single counter is fine
+                    let handle = store.insert_text(session_id, name, text);
+                    (
+                        Some(format!("{} chars; retrieve via handle_read", text.len())),
+                        Some(handle),
+                    )
+                }
+                _ => (None, None),
+            }
+        }
+
+        let (stdout_preview, stdout_handle) = route_output(
+            &round.full_stdout,
+            &config.output_feedback,
+            &mut *context.runtime.handle_store.lock().await,
+            &session.id,
+            "stdout",
+        );
+        let (stderr_preview, stderr_handle) = route_output(
+            &round.stderr,
+            &config.output_feedback,
+            &mut *context.runtime.handle_store.lock().await,
+            &session.id,
+            "stderr",
+        );
 
         let mut output = json!({
             "name": session.name,
@@ -317,11 +359,17 @@ impl ToolSpec for RlmEvalTool {
             "new_vars": [],
             "final": final_handle,
         });
-        if let Some(stdout_preview) = stdout_preview {
+        if let Some(ref stdout_preview) = stdout_preview {
             output["stdout_preview"] = json!(stdout_preview);
         }
-        if let Some(stderr_preview) = stderr_preview {
+        if let Some(ref stderr_preview) = stderr_preview {
             output["stderr_preview"] = json!(stderr_preview);
+        }
+        if let (Some(h), Some(_)) = (stdout_handle, &stdout_preview) {
+            output["stdout_handle"] = json!(h);
+        }
+        if let (Some(h), Some(_)) = (stderr_handle, &stderr_preview) {
+            output["stderr_handle"] = json!(h);
         }
         if let Some(confidence) = round.final_confidence.clone() {
             output["confidence"] = confidence;

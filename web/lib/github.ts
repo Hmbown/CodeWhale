@@ -2,7 +2,7 @@ import type { FeedItem, RepoStats } from "./types";
 
 const REPO = process.env.GITHUB_REPO ?? "Hmbown/CodeWhale";
 const GH = "https://api.github.com";
-const MIN_KNOWN_CONTRIBUTORS = 98;
+const MIN_KNOWN_CONTRIBUTORS = 99;
 
 function headers(token?: string): HeadersInit {
   const h: Record<string, string> = {

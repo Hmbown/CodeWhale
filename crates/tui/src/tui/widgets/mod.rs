@@ -16,7 +16,8 @@ mod renderable;
 pub mod tool_card;
 
 pub use footer::{
-    FooterProps, FooterToast, FooterWidget, footer_agents_chip, footer_working_label,
+    FooterProps, FooterToast, FooterWidget, footer_agents_chip, footer_shell_chip,
+    footer_working_label,
 };
 pub use header::{HeaderData, HeaderWidget, header_status_indicator_frame};
 pub use renderable::Renderable;
@@ -473,7 +474,7 @@ impl<'a> ComposerWidget<'a> {
     /// backend's per-cell write cost makes the layout jitter visible
     /// even though the work is tiny on Unix terminals. See user
     /// feedback in v0.8.8 polish thread.
-    fn active_menu_reserved_rows(&self) -> usize {
+    pub fn active_menu_reserved_rows(&self) -> usize {
         let actual = self.active_menu_row_count();
         if actual == 0 {
             return 0;
@@ -534,8 +535,8 @@ impl Renderable for ComposerWidget<'_> {
         let input_rows_budget =
             composer_input_rows_budget(inner_area.height, menu_lines_for_budget);
         let content_width = usize::from(inner_area.width.max(1));
-        let (visible_lines, _cursor_row, _cursor_col) =
-            layout_input(input_text, input_cursor, content_width, input_rows_budget);
+        let (visible_lines, _cursor_row, _cursor_col, scroll_offset) =
+            layout_input_with_scroll(input_text, input_cursor, content_width, input_rows_budget);
         let is_draft_mode = input_text.contains('\n') || visible_lines.len() > 1;
         if has_panel {
             let border_color = if input_text.trim().is_empty() {
@@ -665,6 +666,26 @@ impl Renderable for ComposerWidget<'_> {
                 placeholder,
                 Style::default().fg(palette::TEXT_MUTED).italic(),
             )));
+        } else if let Some((sel_start, sel_end)) = self.app.selection_range() {
+            let line_ranges: Vec<(usize, usize)> =
+                wrap_input_lines_for_mouse(&self.app.input, content_width)
+                    .into_iter()
+                    .skip(scroll_offset)
+                    .take(visible_lines.len())
+                    .map(|(start, text)| (start, start + text.chars().count()))
+                    .collect();
+            for (line_text, (line_start, line_end)) in visible_lines.iter().zip(line_ranges.iter())
+            {
+                let spans = line_spans_with_selection(
+                    line_text,
+                    *line_start,
+                    *line_end,
+                    sel_start,
+                    sel_end,
+                    self.app.ui_theme.selection_bg,
+                );
+                input_lines.push(Line::from(spans));
+            }
         } else {
             for line in &visible_lines {
                 input_lines.push(Line::from(Span::styled(
@@ -1928,7 +1949,8 @@ fn build_empty_state_lines(app: &App, area: Rect) -> Vec<Line<'static>> {
         )),
     ];
 
-    let top_padding = usize::from(area.height.saturating_sub(body.len() as u16) / 3);
+    // Keep the welcome block near the top of the chat pane (header is separate).
+    let top_padding = 2usize;
     let mut lines = Vec::new();
     for _ in 0..top_padding {
         lines.push(Line::from(""));
@@ -1937,7 +1959,7 @@ fn build_empty_state_lines(app: &App, area: Rect) -> Vec<Line<'static>> {
     lines
 }
 
-fn composer_input_rows_budget(inner_height: u16, extra_lines: usize) -> usize {
+pub fn composer_input_rows_budget(inner_height: u16, extra_lines: usize) -> usize {
     usize::from(inner_height).saturating_sub(extra_lines).max(1)
 }
 
@@ -2018,6 +2040,26 @@ pub(crate) struct SlashMenuEntry {
     pub alias_hint: Option<String>,
 }
 
+/// Check if all characters in `needle` appear in `haystack` in order
+/// (subsequence matching — fuzzy filtering).
+fn fuzzy_chars_in_order(needle: &str, haystack: &str) -> bool {
+    let mut chars = needle.chars();
+    let mut current = match chars.next() {
+        Some(c) => c,
+        None => return true,
+    };
+    for ch in haystack.chars() {
+        if ch == current {
+            if let Some(next) = chars.next() {
+                current = next;
+            } else {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 pub(crate) fn slash_completion_hints(
     input: &str,
     limit: usize,
@@ -2036,61 +2078,95 @@ pub(crate) fn slash_completion_hints(
         return Vec::new();
     }
     let mut entries: Vec<SlashMenuEntry> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let prefix_lower = prefix.to_ascii_lowercase();
 
-    // Built-in commands + user-defined commands
-    // `all_command_names_matching` returns both; we resolve descriptions for
-    // built-in ones from the static registry and use a generic label for
-    // user-defined commands.
+    // ── Phase 1: prefix (starts_with) matches ─────────────────────────
+    // Highest priority — preserves existing exact-prefix completion.
     if completing_skill_arg.is_none() {
-        let prefix_lower = prefix.to_ascii_lowercase();
         for name in commands::all_command_names_matching(prefix, workspace) {
+            seen.insert(name.clone());
             let command_key = name.trim_start_matches('/');
-            let (description, alias_hint) =
-                if let Some(info) = commands::get_command_info(command_key) {
-                    // Detect matching alias: if the user typed via pinyin rather
-                    // than the canonical name, record which alias matched.
-                    let hint = if !command_key.to_ascii_lowercase().starts_with(&prefix_lower) {
-                        info.aliases
-                            .iter()
-                            .find(|a| a.to_ascii_lowercase().starts_with(&prefix_lower))
-                            .map(|a| a.to_string())
-                    } else {
-                        None
-                    };
-                    let desc = if info.aliases.is_empty() {
-                        info.description_for(locale).to_string()
-                    } else {
-                        format!(
-                            "{}  (aliases: {})",
-                            info.description_for(locale),
-                            info.aliases
-                                .iter()
-                                .map(|a| format!("/{a}"))
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        )
-                    };
-                    (desc, hint)
-                } else {
-                    (String::from("User-defined command"), None)
-                };
-            entries.push(SlashMenuEntry {
-                name,
-                description,
-                is_skill: false,
-                alias_hint,
-            });
+            push_command_entry(&mut entries, &name, command_key, &prefix_lower, locale);
         }
     }
 
-    // Cached skills are arguments to `/skill`, not top-level commands. Keep
-    // the top-level slash menu focused on commands and expand skills only
-    // after the user has selected the skill command.
-    let prefix_lower = completing_skill_arg.unwrap_or(prefix).to_ascii_lowercase();
+    // ── Phase 2: contains (substring) matches ─────────────────────────
+    // Medium priority — broader catching.
+    if completing_skill_arg.is_none() {
+        for cmd in commands::COMMANDS {
+            let name = format!("/{}", cmd.name);
+            if seen.contains(&name) {
+                continue;
+            }
+            let cmd_lower = cmd.name.to_ascii_lowercase();
+            let alias_match = cmd
+                .aliases
+                .iter()
+                .any(|a| a.to_ascii_lowercase().contains(&prefix_lower));
+            if cmd_lower.contains(&prefix_lower) || alias_match {
+                seen.insert(name.clone());
+                push_command_entry(&mut entries, &name, cmd.name, &prefix_lower, locale);
+            }
+        }
+    }
+
+    // ── Phase 3: fuzzy subsequence matches ────────────────────────────
+    // Lowest priority — characters in order, not necessarily consecutive.
+    if completing_skill_arg.is_none() {
+        for cmd in commands::COMMANDS {
+            let name = format!("/{}", cmd.name);
+            if seen.contains(&name) {
+                continue;
+            }
+            let cmd_lower = cmd.name.to_ascii_lowercase();
+            let alias_match = cmd
+                .aliases
+                .iter()
+                .any(|a| fuzzy_chars_in_order(&prefix_lower, &a.to_ascii_lowercase()));
+            if fuzzy_chars_in_order(&prefix_lower, &cmd_lower) || alias_match {
+                seen.insert(name.clone());
+                push_command_entry(&mut entries, &name, cmd.name, &prefix_lower, locale);
+            }
+        }
+    }
+
+    // ── Skills (only after user has typed `/skill `) ──────────────────
+    let skill_prefix = completing_skill_arg.unwrap_or(prefix).to_ascii_lowercase();
     if completing_skill_arg.is_some() {
         for (skill_name, skill_desc) in cached_skills {
             let skill_name_lower = skill_name.to_ascii_lowercase();
-            if skill_name_lower.starts_with(&prefix_lower) {
+            if skill_name_lower.starts_with(&skill_prefix) {
+                entries.push(SlashMenuEntry {
+                    name: format!("/skill {skill_name}"),
+                    description: skill_desc.clone(),
+                    is_skill: true,
+                    alias_hint: None,
+                });
+            }
+        }
+        // Skills: contains fuzzy fallback
+        for (skill_name, skill_desc) in cached_skills {
+            let skill_name_lower = skill_name.to_ascii_lowercase();
+            if skill_name_lower.contains(&skill_prefix)
+                && !entries
+                    .iter()
+                    .any(|e| e.name == format!("/skill {skill_name}"))
+            {
+                entries.push(SlashMenuEntry {
+                    name: format!("/skill {skill_name}"),
+                    description: skill_desc.clone(),
+                    is_skill: true,
+                    alias_hint: None,
+                });
+            }
+        }
+        for (skill_name, skill_desc) in cached_skills {
+            let skill_name_lower = skill_name.to_ascii_lowercase();
+            if !skill_name_lower.starts_with(&skill_prefix)
+                && !skill_name_lower.contains(&skill_prefix)
+                && fuzzy_chars_in_order(&skill_prefix, &skill_name_lower)
+            {
                 entries.push(SlashMenuEntry {
                     name: format!("/skill {skill_name}"),
                     description: skill_desc.clone(),
@@ -2143,12 +2219,70 @@ pub(crate) fn slash_completion_hints(
     entries.into_iter().take(limit).collect()
 }
 
+/// Push a built-in command entry to the slash menu, resolving description
+/// and alias hints.
+fn push_command_entry(
+    entries: &mut Vec<SlashMenuEntry>,
+    name: &str,
+    command_key: &str,
+    prefix_lower: &str,
+    locale: crate::localization::Locale,
+) {
+    let (description, alias_hint) = if let Some(info) = commands::get_command_info(command_key) {
+        let hint = if !command_key.to_ascii_lowercase().starts_with(prefix_lower) {
+            info.aliases
+                .iter()
+                .find(|a| {
+                    a.to_ascii_lowercase().starts_with(prefix_lower)
+                        || a.to_ascii_lowercase().contains(prefix_lower)
+                        || fuzzy_chars_in_order(prefix_lower, &a.to_ascii_lowercase())
+                })
+                .map(|a| a.to_string())
+        } else {
+            None
+        };
+        let desc = if info.aliases.is_empty() {
+            info.description_for(locale).to_string()
+        } else {
+            format!(
+                "{}  (aliases: {})",
+                info.description_for(locale),
+                info.aliases
+                    .iter()
+                    .map(|a| format!("/{a}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        (desc, hint)
+    } else {
+        (String::from("User-defined command"), None)
+    };
+    entries.push(SlashMenuEntry {
+        name: name.to_string(),
+        description,
+        is_skill: false,
+        alias_hint,
+    });
+}
+
 fn layout_input(
     input: &str,
     cursor: usize,
     width: usize,
     max_height: usize,
 ) -> (Vec<String>, usize, usize) {
+    let (visible, visible_cursor_row, visible_cursor_col, _) =
+        layout_input_with_scroll(input, cursor, width, max_height);
+    (visible, visible_cursor_row, visible_cursor_col)
+}
+
+pub fn layout_input_with_scroll(
+    input: &str,
+    cursor: usize,
+    width: usize,
+    max_height: usize,
+) -> (Vec<String>, usize, usize, usize) {
     let mut lines = wrap_input_lines(input, width);
     if lines.is_empty() {
         lines.push(String::new());
@@ -2174,6 +2308,7 @@ fn layout_input(
         visible,
         visible_cursor_row,
         cursor_col.min(width.saturating_sub(1)),
+        start,
     )
 }
 
@@ -2240,6 +2375,34 @@ fn wrap_input_lines(input: &str, width: usize) -> Vec<String> {
     lines
 }
 
+/// For mouse coordinate mapping: returns (char_start_of_line, line_text) pairs
+/// matching the wrapping produced by `wrap_input_lines`.
+pub fn wrap_input_lines_for_mouse(input: &str, width: usize) -> Vec<(usize, String)> {
+    if input.is_empty() || width == 0 {
+        return vec![(0, String::new())];
+    }
+
+    let mut result = Vec::new();
+    let mut char_idx = 0usize;
+
+    for raw_line in input.split('\n') {
+        if raw_line.is_empty() {
+            result.push((char_idx, String::new()));
+            char_idx += 1; // the '\n'
+            continue;
+        }
+        let wrapped = wrap_text(raw_line, width);
+        for wrapped_line in &wrapped {
+            let line_char_len: usize = wrapped_line.chars().count();
+            result.push((char_idx, wrapped_line.clone()));
+            char_idx += line_char_len;
+        }
+        char_idx += 1; // the '\n'
+    }
+
+    result
+}
+
 fn wrap_text(text: &str, width: usize) -> Vec<String> {
     if width == 0 {
         return vec![text.to_string()];
@@ -2279,6 +2442,56 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
 
     lines.push(current);
     lines
+}
+
+fn line_spans_with_selection<'a>(
+    line: &'a str,
+    line_start: usize,
+    line_end: usize,
+    sel_start: usize,
+    sel_end: usize,
+    highlight_bg: Color,
+) -> Vec<Span<'a>> {
+    let normal_style = Style::default().fg(palette::TEXT_PRIMARY);
+    let sel_style = Style::default().fg(palette::TEXT_PRIMARY).bg(highlight_bg);
+
+    // No overlap between this line and the selection
+    if line_end <= sel_start || line_start >= sel_end {
+        return vec![Span::styled(line, normal_style)];
+    }
+
+    let local_sel_start = sel_start.saturating_sub(line_start);
+    let local_sel_end = sel_end.min(line_end).saturating_sub(line_start);
+
+    // Build a Vec of byte offsets for each char boundary, plus one past the end.
+    let mut byte_offsets: Vec<usize> = line.char_indices().map(|(i, _)| i).collect();
+    byte_offsets.push(line.len());
+
+    let b0 = byte_offsets
+        .get(local_sel_start)
+        .copied()
+        .unwrap_or(line.len());
+    let b1 = byte_offsets
+        .get(local_sel_end)
+        .copied()
+        .unwrap_or(line.len());
+
+    let mut spans = Vec::with_capacity(3);
+
+    // Text before selection
+    if b0 > 0 {
+        spans.push(Span::styled(&line[..b0], normal_style));
+    }
+    // Selected text
+    if b1 > b0 {
+        spans.push(Span::styled(&line[b0..b1], sel_style));
+    }
+    // Text after selection
+    if b1 < line.len() {
+        spans.push(Span::styled(&line[b1..], normal_style));
+    }
+
+    spans
 }
 
 #[cfg(test)]

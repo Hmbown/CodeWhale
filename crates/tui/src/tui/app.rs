@@ -368,7 +368,7 @@ pub(crate) struct InputHistoryDraft {
     cursor: usize,
 }
 
-fn char_count(text: &str) -> usize {
+pub(crate) fn char_count(text: &str) -> usize {
     text.chars().count()
 }
 
@@ -902,6 +902,10 @@ pub struct ComposerState {
     /// user presses `d` in Normal mode; cleared on the next key (either `d`
     /// to complete `dd`, or any other key to cancel).
     pub vim_pending_d: bool,
+    /// When set, the cursor is the active end of a text selection and
+    /// `selection_anchor` is the fixed end.  Both are char-indexed.
+    /// `None` means no selection is active.
+    pub selection_anchor: Option<usize>,
 }
 
 impl Default for ComposerState {
@@ -926,6 +930,7 @@ impl Default for ComposerState {
             vim_enabled: false,
             vim_mode: VimMode::Normal,
             vim_pending_d: false,
+            selection_anchor: None,
         }
     }
 }
@@ -940,11 +945,21 @@ pub struct ViewportState {
     pub selection_autoscroll: Option<SelectionAutoscroll>,
     pub transcript_scrollbar_dragging: bool,
     pub last_transcript_area: Option<Rect>,
+    pub last_composer_area: Option<Rect>,
     pub last_transcript_top: usize,
     pub last_transcript_visible: usize,
     pub last_transcript_total: usize,
     pub last_transcript_padding_top: usize,
     pub jump_to_latest_button_area: Option<Rect>,
+    /// Inner content rect of the composer (excluding border/padding),
+    /// stored at render time for mouse coordinate mapping.
+    pub last_composer_content: Option<Rect>,
+    /// Number of rendered text lines scrolled off the top of the composer,
+    /// stored at render time for mouse coordinate mapping.
+    pub last_composer_scroll_offset: usize,
+    /// Vertical padding above the first text line in the composer,
+    /// stored at render time for mouse coordinate mapping.
+    pub last_composer_top_padding: usize,
 }
 
 impl Default for ViewportState {
@@ -958,11 +973,15 @@ impl Default for ViewportState {
             selection_autoscroll: None,
             transcript_scrollbar_dragging: false,
             last_transcript_area: None,
+            last_composer_area: None,
             last_transcript_top: 0,
             last_transcript_visible: 0,
             last_transcript_total: 0,
             last_transcript_padding_top: 0,
             jump_to_latest_button_area: None,
+            last_composer_content: None,
+            last_composer_scroll_offset: 0,
+            last_composer_top_padding: 0,
         }
     }
 }
@@ -993,6 +1012,11 @@ pub struct SessionState {
     pub last_reasoning_replay_tokens: Option<u32>,
     pub total_tokens: u32,
     pub total_conversation_tokens: u32,
+    /// Accumulated token breakdown for the session.
+    pub total_input_tokens: u32,
+    pub total_cache_hit_tokens: u32,
+    pub total_cache_miss_tokens: u32,
+    pub total_output_tokens: u32,
     pub turn_cache_history: VecDeque<TurnCacheRecord>,
     pub last_cache_inspection: Option<PromptInspection>,
 }
@@ -1030,9 +1054,23 @@ impl Default for SessionState {
             last_reasoning_replay_tokens: None,
             total_tokens: 0,
             total_conversation_tokens: 0,
+            total_input_tokens: 0,
+            total_cache_hit_tokens: 0,
+            total_cache_miss_tokens: 0,
+            total_output_tokens: 0,
             turn_cache_history: VecDeque::new(),
             last_cache_inspection: None,
         }
+    }
+}
+
+impl SessionState {
+    /// Reset the accumulated token breakdown fields to zero.
+    pub fn reset_token_breakdown(&mut self) {
+        self.total_input_tokens = 0;
+        self.total_cache_hit_tokens = 0;
+        self.total_cache_miss_tokens = 0;
+        self.total_output_tokens = 0;
     }
 }
 
@@ -1076,6 +1114,10 @@ pub struct App {
     pub status_toasts: VecDeque<StatusToast>,
     /// Sticky status toast used for important warnings/errors.
     pub sticky_status: Option<StatusToast>,
+    /// Version-update hint shown in the footer when a newer release
+    /// is available. Set by a background GitHub API check after app
+    /// startup; `None` until the check completes or if up-to-date.
+    pub version_hint: Option<String>,
     /// Last status text already promoted from `status_message` into toast state.
     pub last_status_message_seen: Option<String>,
     pub model: String,
@@ -1557,8 +1599,8 @@ fn default_composer_arrows_scroll(use_mouse_capture: bool) -> bool {
     default_composer_arrows_scroll_for_platform(use_mouse_capture, cfg!(windows))
 }
 
-fn default_composer_arrows_scroll_for_platform(use_mouse_capture: bool, is_windows: bool) -> bool {
-    is_windows || !use_mouse_capture
+fn default_composer_arrows_scroll_for_platform(use_mouse_capture: bool, _is_windows: bool) -> bool {
+    !use_mouse_capture
 }
 
 impl App {
@@ -1786,6 +1828,7 @@ impl App {
                 vim_enabled: composer_vim_enabled,
                 vim_mode: VimMode::Normal,
                 vim_pending_d: false,
+                selection_anchor: None,
             },
             viewport: ViewportState::default(),
             goal: GoalState::default(),
@@ -1801,6 +1844,7 @@ impl App {
             status_message: None,
             status_toasts: VecDeque::new(),
             sticky_status: None,
+            version_hint: None,
             last_status_message_seen: None,
             model,
             auto_model,
@@ -3100,6 +3144,7 @@ impl App {
         if text.is_empty() {
             return;
         }
+        self.delete_selection();
         self.selected_attachment_index = None;
         let cursor = self.cursor_position.min(char_count(&self.input));
         let byte_index = byte_index_at_char(&self.input, cursor);
@@ -3121,14 +3166,11 @@ impl App {
             self.insert_str(&normalized);
         }
         self.paste_burst.clear_after_explicit_paste();
-        // Visible-before-submit consolidation: when the post-paste input
-        // is over the cap, swap it for an @paste-…md mention immediately
-        // (instead of waiting until the user presses Enter and getting
-        // surprised by an auto-sent @mention). The same logic runs as a
-        // safety-net at submit time so any other code path that fills
-        // self.input above the cap still consolidates rather than
-        // silently truncating.
-        self.consolidate_large_input_if_oversized();
+        // Large pasted input stays editable and visible until submit. The
+        // submit-time safety net consolidates oversized composer content into
+        // an @paste-...md mention before dispatch, so no path silently
+        // truncates user input.
+        // self.consolidate_large_input_if_oversized(); // deferred to submit time
     }
 
     pub fn insert_media_attachment(&mut self, kind: &str, path: &Path, description: Option<&str>) {
@@ -3362,6 +3404,7 @@ impl App {
 
     pub fn insert_char(&mut self, c: char) {
         self.clear_input_history_navigation();
+        self.delete_selection();
         self.selected_attachment_index = None;
         let cursor = self.cursor_position.min(char_count(&self.input));
         let byte_index = byte_index_at_char(&self.input, cursor);
@@ -3388,6 +3431,9 @@ impl App {
 
     pub fn delete_char(&mut self) {
         self.clear_input_history_navigation();
+        if self.delete_selection() {
+            return;
+        }
         self.selected_attachment_index = None;
         if self.cursor_position == 0 {
             return;
@@ -3405,6 +3451,9 @@ impl App {
 
     pub fn delete_char_forward(&mut self) {
         self.clear_input_history_navigation();
+        if self.delete_selection() {
+            return;
+        }
         self.selected_attachment_index = None;
         if self.input.is_empty() {
             return;
@@ -3423,6 +3472,9 @@ impl App {
     /// Delete the word before the cursor.
     pub fn delete_word_backward(&mut self) {
         self.clear_input_history_navigation();
+        if self.delete_selection() {
+            return;
+        }
         self.selected_attachment_index = None;
         if self.cursor_position == 0 {
             return;
@@ -3464,6 +3516,9 @@ impl App {
     /// Delete from the cursor to the start of the line.
     pub fn delete_to_start_of_line(&mut self) {
         self.clear_input_history_navigation();
+        if self.delete_selection() {
+            return;
+        }
         self.selected_attachment_index = None;
         if self.cursor_position == 0 {
             return;
@@ -3489,6 +3544,9 @@ impl App {
     /// Delete the word after the cursor.
     pub fn delete_word_forward(&mut self) {
         self.clear_input_history_navigation();
+        if self.delete_selection() {
+            return;
+        }
         self.selected_attachment_index = None;
         let cursor_byte = byte_index_at_char(&self.input, self.cursor_position);
         if cursor_byte >= self.input.len() {
@@ -3533,6 +3591,13 @@ impl App {
     /// Returns `true` when bytes were moved into the kill buffer.
     pub fn kill_to_end_of_line(&mut self) -> bool {
         self.clear_input_history_navigation();
+        if let Some((start, end)) = self.selection_range() {
+            let sb = byte_index_at_char(&self.input, start);
+            let eb = byte_index_at_char(&self.input, end);
+            self.kill_buffer = self.input[sb..eb].to_string();
+            self.delete_selection();
+            return true;
+        }
         let total_chars = char_count(&self.input);
         let cursor = self.cursor_position.min(total_chars);
         let start_byte = byte_index_at_char(&self.input, cursor);
@@ -3578,6 +3643,7 @@ impl App {
         if self.kill_buffer.is_empty() {
             return false;
         }
+        self.delete_selection();
         self.clear_input_history_navigation();
         let text = self.kill_buffer.clone();
         let cursor = self.cursor_position.min(char_count(&self.input));
@@ -3701,6 +3767,59 @@ impl App {
         }
         self.cursor_position = pos;
         self.needs_redraw = true;
+    }
+
+    // === Selection helpers ===
+
+    /// Return the (start, end) of the active selection, or `None`.
+    /// `start` is inclusive, `end` is exclusive; both are char indices.
+    pub fn selection_range(&self) -> Option<(usize, usize)> {
+        let total = char_count(&self.input);
+        let anchor = self.selection_anchor?.min(total);
+        let cursor = self.cursor_position.min(total);
+        if anchor == cursor {
+            return None;
+        }
+        Some(if anchor < cursor {
+            (anchor, cursor)
+        } else {
+            (cursor, anchor)
+        })
+    }
+
+    /// Return the selected text, or empty string if no selection.
+    pub fn selected_text(&self) -> String {
+        self.selection_range()
+            .map(|(s, e)| {
+                let sb = byte_index_at_char(&self.input, s);
+                let eb = byte_index_at_char(&self.input, e);
+                self.input[sb..eb].to_string()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Delete the selected text, place cursor at the start of the deleted range.
+    /// Returns true if a selection was deleted.
+    pub fn delete_selection(&mut self) -> bool {
+        let Some((start, end)) = self.selection_range() else {
+            return false;
+        };
+        let sb = byte_index_at_char(&self.input, start);
+        let eb = byte_index_at_char(&self.input, end);
+        self.input.replace_range(sb..eb, "");
+        self.cursor_position = start;
+        self.selection_anchor = None;
+        self.clear_input_history_navigation();
+        self.slash_menu_hidden = false;
+        self.mention_menu_hidden = false;
+        self.mention_menu_selected = 0;
+        self.needs_redraw = true;
+        true
+    }
+
+    /// Clear the selection without moving the cursor.
+    pub fn clear_selection(&mut self) {
+        self.selection_anchor = None;
     }
 
     // === Vim composer mode helpers ===
@@ -3885,6 +4004,7 @@ impl App {
         self.clear_input_history_navigation();
         self.input.clear();
         self.cursor_position = 0;
+        self.selection_anchor = None;
         self.selected_attachment_index = None;
         self.slash_menu_selected = 0;
         self.slash_menu_hidden = false;
@@ -4255,7 +4375,7 @@ impl App {
         self.input = format!("@{rel_path}");
         self.cursor_position = char_count(&self.input);
         self.push_status_toast(
-            "Large paste consolidated — sent as @mention",
+            "Large paste consolidated — auto-wrote to file and replaced with @mention. The text is still fully accessible to the model.",
             StatusToastLevel::Info,
             Some(5_000),
         );
@@ -4391,6 +4511,7 @@ impl App {
         self.history_index = Some(new_index);
         self.input = self.input_history[new_index].clone();
         self.cursor_position = char_count(&self.input);
+        self.selection_anchor = None;
         self.selected_attachment_index = None;
         self.slash_menu_hidden = false;
         self.paste_burst.clear_after_explicit_paste();
@@ -4407,6 +4528,7 @@ impl App {
                     self.history_index = Some(i + 1);
                     self.input = self.input_history[i + 1].clone();
                     self.cursor_position = char_count(&self.input);
+                    self.selection_anchor = None;
                     self.selected_attachment_index = None;
                     self.slash_menu_hidden = false;
                     self.paste_burst.clear_after_explicit_paste();
@@ -4415,6 +4537,7 @@ impl App {
                     if let Some(draft) = self.history_navigation_draft.take() {
                         self.input = draft.input;
                         self.cursor_position = draft.cursor.min(char_count(&self.input));
+                        self.selection_anchor = None;
                         self.selected_attachment_index = None;
                         self.slash_menu_hidden = false;
                         self.paste_burst.clear_after_explicit_paste();
@@ -4480,6 +4603,10 @@ impl App {
         };
         self.auto_model = auto_model;
         self.last_effective_model = None;
+        self.last_effective_reasoning_effort = None;
+        if auto_model {
+            self.reasoning_effort = ReasoningEffort::Auto;
+        }
     }
 
     pub fn model_selection_for_persistence(&self) -> String {
@@ -4730,8 +4857,13 @@ mod tests {
     }
 
     #[test]
-    fn composer_arrows_scroll_default_is_true_on_windows_even_with_mouse_capture() {
-        assert!(default_composer_arrows_scroll_for_platform(true, true));
+    fn composer_arrows_scroll_default_is_false_with_mouse_capture_on_windows() {
+        assert!(!default_composer_arrows_scroll_for_platform(true, true));
+    }
+
+    #[test]
+    fn composer_arrows_scroll_default_is_true_without_mouse_capture_on_windows() {
+        assert!(default_composer_arrows_scroll_for_platform(false, true));
     }
 
     #[test]
@@ -5295,12 +5427,10 @@ mod tests {
     }
 
     #[test]
-    fn paste_consolidates_oversized_text_into_paste_file_visibly() {
-        // Visible-before-submit consolidation (paste UX): when a single
-        // bracketed paste exceeds the safety cap, the @mention must
-        // replace the input *immediately*, so the user sees what's
-        // about to be sent before pressing Enter — not as a side effect
-        // of submit.
+    fn paste_defers_oversized_text_consolidation_until_submit() {
+        // #2168: a large paste stays inline so the user can still edit it.
+        // Submit-time consolidation then writes the paste file and sends the
+        // @mention instead of the raw oversized content.
         let tmp = tempfile::TempDir::new().expect("tempdir");
         let mut opts = test_options(false);
         opts.workspace = tmp.path().to_path_buf();
@@ -5309,26 +5439,35 @@ mod tests {
 
         app.insert_paste_text(&full_content);
 
-        // Composer should now contain the @mention, not the full text.
-        assert!(
-            app.input.starts_with("@.deepseek/pastes/paste-") && app.input.ends_with(".md"),
-            "expected @mention in composer after large paste, got: {}",
-            app.input
-        );
-        // The cursor moves to the end of the @mention.
+        assert_eq!(app.input, full_content);
         assert_eq!(app.cursor_position, app.input.chars().count());
-        // The paste file must exist with the full content.
-        let rel_path = &app.input[1..];
+        let pastes_dir = tmp.path().join(".deepseek/pastes");
+        assert!(
+            !pastes_dir.exists() || std::fs::read_dir(&pastes_dir).unwrap().next().is_none(),
+            "paste file should not be written before submit"
+        );
+        assert!(
+            app.status_toasts
+                .iter()
+                .all(|toast| !toast.text.contains("consolidated")),
+            "consolidation toast should not appear before submit"
+        );
+
+        let submitted = app.submit_input().expect("expected submitted input");
+        assert!(
+            submitted.starts_with("@.deepseek/pastes/paste-") && submitted.ends_with(".md"),
+            "expected @mention after submit, got: {submitted}"
+        );
+        let rel_path = &submitted[1..];
         let abs = tmp.path().join(rel_path);
         assert!(abs.is_file(), "paste file must exist at {abs:?}");
         let written = std::fs::read_to_string(&abs).expect("read");
         assert_eq!(written, full_content);
-        // A toast confirms what happened so the user isn't surprised.
         assert!(
             app.status_toasts
                 .iter()
-                .any(|t| t.text.contains("consolidated")),
-            "expected consolidation toast"
+                .any(|toast| toast.text.contains("consolidated")),
+            "expected consolidation toast after submit"
         );
     }
 
@@ -5781,6 +5920,22 @@ mod tests {
         assert_eq!(app.input, "careful current draft");
         assert_eq!(app.cursor_position, "careful".chars().count());
         assert!(app.history_index.is_none());
+    }
+
+    #[test]
+    fn input_history_navigation_clears_stale_selection() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input_history.push("previous input".to_string());
+        app.input = "hello world".to_string();
+        app.cursor_position = "hello ".chars().count();
+        app.selection_anchor = Some(app.input.chars().count());
+
+        app.history_up();
+        assert_eq!(app.input, "previous input");
+        assert!(app.selection_anchor.is_none());
+
+        app.insert_char('x');
+        assert_eq!(app.input, "previous inputx");
     }
 
     #[test]
@@ -6628,5 +6783,108 @@ mod tests {
         assert!(app.yank());
         assert_eq!(app.input, "café 你好");
         assert_eq!(app.cursor_position, 7);
+    }
+
+    #[test]
+    fn selection_range_returns_none_when_no_anchor() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "hello world".to_string();
+        app.cursor_position = 5;
+        app.selection_anchor = None;
+        assert!(app.selection_range().is_none());
+    }
+
+    #[test]
+    fn selection_range_returns_ordered_range() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "hello world".to_string();
+        app.cursor_position = 5;
+        app.selection_anchor = Some(2);
+        assert_eq!(app.selection_range(), Some((2, 5)));
+    }
+
+    #[test]
+    fn selection_range_normalizes_order() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "hello world".to_string();
+        app.cursor_position = 2;
+        app.selection_anchor = Some(5);
+        assert_eq!(app.selection_range(), Some((2, 5)));
+    }
+
+    #[test]
+    fn selection_range_returns_none_when_anchor_equals_cursor() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "hello".to_string();
+        app.cursor_position = 3;
+        app.selection_anchor = Some(3);
+        assert!(app.selection_range().is_none());
+    }
+
+    #[test]
+    fn delete_selection_removes_selected_text() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "hello world".to_string();
+        app.cursor_position = 5;
+        app.selection_anchor = Some(2);
+        assert!(app.delete_selection());
+        assert_eq!(app.input, "he world");
+        assert_eq!(app.cursor_position, 2);
+        assert!(app.selection_anchor.is_none());
+    }
+
+    #[test]
+    fn insert_char_replaces_selection() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "hello world".to_string();
+        app.cursor_position = 5;
+        app.selection_anchor = Some(2);
+        app.insert_char('X');
+        assert_eq!(app.input, "heX world");
+        assert_eq!(app.cursor_position, 3);
+        assert!(app.selection_anchor.is_none());
+    }
+
+    #[test]
+    fn delete_char_removes_selection_instead_of_single_char() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "hello world".to_string();
+        app.cursor_position = 5;
+        app.selection_anchor = Some(2);
+        app.delete_char();
+        assert_eq!(app.input, "he world");
+        assert_eq!(app.cursor_position, 2);
+    }
+
+    #[test]
+    fn selected_text_returns_correct_substring() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "hello world".to_string();
+        app.cursor_position = 5;
+        app.selection_anchor = Some(2);
+        assert_eq!(app.selected_text(), "llo");
+    }
+
+    #[test]
+    fn insert_str_replaces_selection() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "hello world".to_string();
+        app.cursor_position = 5;
+        app.selection_anchor = Some(2);
+        app.insert_str("yo");
+        assert_eq!(app.input, "heyo world");
+        assert_eq!(app.cursor_position, 4);
+        assert!(app.selection_anchor.is_none());
+    }
+
+    #[test]
+    fn delete_selection_noop_when_no_selection() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "hello".to_string();
+        app.cursor_position = 3;
+        app.selection_anchor = None;
+        assert!(!app.delete_selection());
+        assert_eq!(app.input, "hello");
+        assert_eq!(app.cursor_position, 3);
     }
 }

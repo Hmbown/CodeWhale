@@ -1,5 +1,5 @@
 use super::*;
-use crate::config::{ApiProvider, Config};
+use crate::config::{ApiProvider, Config, DEFAULT_TEXT_MODEL};
 use crate::config_ui::{self, WebConfigSession, WebConfigSessionEvent};
 use crate::core::engine::mock_engine_handle;
 use crate::tui::active_cell::ActiveCell;
@@ -294,6 +294,21 @@ fn word_cursor_modifier_accepts_control_and_alt() {
     assert!(!is_word_cursor_modifier(KeyModifiers::SHIFT));
 }
 
+fn select_full_transcript(app: &mut App) {
+    app.viewport.transcript_selection.anchor = Some(TranscriptSelectionPoint {
+        line_index: 0,
+        column: 0,
+    });
+    app.viewport.transcript_selection.head = Some(TranscriptSelectionPoint {
+        line_index: app
+            .viewport
+            .transcript_cache
+            .total_lines()
+            .saturating_sub(1),
+        column: 80,
+    });
+}
+
 #[test]
 fn selection_point_from_position_ignores_top_padding() {
     let area = Rect {
@@ -373,6 +388,90 @@ fn selection_to_text_handles_multiline_and_reversed_endpoints() {
     });
 
     assert_eq!(selection_to_text(&app).as_deref(), Some("a beta\ngam"));
+}
+
+#[test]
+fn selection_to_text_removes_visual_wrap_breaks_from_paragraphs() {
+    let mut app = create_test_app();
+    app.history = vec![HistoryCell::Assistant {
+        content: "alpha beta gamma delta epsilon".to_string(),
+        streaming: false,
+    }];
+    app.resync_history_revisions();
+    app.viewport.transcript_cache.ensure(
+        &app.history,
+        &app.history_revisions,
+        14,
+        app.transcript_render_options(),
+    );
+    select_full_transcript(&mut app);
+
+    let selected = selection_to_text(&app).expect("selection text");
+    assert!(
+        !selected.contains('\n'),
+        "soft-wrapped paragraph copied with visual newlines: {selected:?}"
+    );
+    assert!(selected.contains("alpha beta gamma delta epsilon"));
+}
+
+#[test]
+fn selection_to_text_preserves_wrapped_long_words() {
+    let mut app = create_test_app();
+    app.history = vec![HistoryCell::Assistant {
+        content: "abcdefghijklmnop".to_string(),
+        streaming: false,
+    }];
+    app.resync_history_revisions();
+    app.viewport.transcript_cache.ensure(
+        &app.history,
+        &app.history_revisions,
+        10,
+        app.transcript_render_options(),
+    );
+    select_full_transcript(&mut app);
+
+    let selected = selection_to_text(&app).expect("selection text");
+    assert_eq!(selected, "abcdefghijklmnop");
+}
+
+#[test]
+fn selection_to_text_strips_code_block_visual_wrap_prefixes() {
+    let mut app = create_test_app();
+    app.history = vec![HistoryCell::Assistant {
+        content: "```\nlet example = abcdefghijklmnop;\n```".to_string(),
+        streaming: false,
+    }];
+    app.resync_history_revisions();
+    app.viewport.transcript_cache.ensure(
+        &app.history,
+        &app.history_revisions,
+        14,
+        app.transcript_render_options(),
+    );
+    select_full_transcript(&mut app);
+
+    let selected = selection_to_text(&app).expect("selection text");
+    assert_eq!(selected, "let example = abcdefghijklmnop;");
+}
+
+#[test]
+fn selection_to_text_strips_list_continuation_prefixes() {
+    let mut app = create_test_app();
+    app.history = vec![HistoryCell::Assistant {
+        content: "- alpha beta gamma delta epsilon".to_string(),
+        streaming: false,
+    }];
+    app.resync_history_revisions();
+    app.viewport.transcript_cache.ensure(
+        &app.history,
+        &app.history_revisions,
+        14,
+        app.transcript_render_options(),
+    );
+    select_full_transcript(&mut app);
+
+    let selected = selection_to_text(&app).expect("selection text");
+    assert_eq!(selected, "- alpha beta gamma delta epsilon");
 }
 
 #[test]
@@ -3140,6 +3239,7 @@ async fn dismissed_plan_prompt_leaves_non_numeric_input_for_normal_send_path() {
 #[tokio::test]
 async fn dispatch_user_message_records_prompt_for_cancel_restore() {
     let mut app = create_test_app();
+    app.show_thinking = false;
     let config = Config::default();
     let mut engine = crate::core::engine::mock_engine_handle();
     let queued = crate::tui::app::QueuedMessage::new("fix this typo\nthen retry".to_string(), None);
@@ -3153,8 +3253,16 @@ async fn dispatch_user_message_records_prompt_for_cancel_restore() {
         Some("fix this typo\nthen retry")
     );
     match engine.rx_op.recv().await.expect("send message op") {
-        crate::core::ops::Op::SendMessage { content, .. } => {
+        crate::core::ops::Op::SendMessage {
+            content,
+            show_thinking,
+            ..
+        } => {
             assert_eq!(content, "fix this typo\nthen retry");
+            assert!(
+                !show_thinking,
+                "dispatch must carry the user's hidden-thinking setting into the engine"
+            );
         }
         other => panic!("expected SendMessage, got {other:?}"),
     }
@@ -4166,6 +4274,9 @@ fn apply_loaded_session_restores_concrete_model_mode() {
 fn apply_loaded_session_restores_auto_model_mode() {
     let mut app = create_test_app();
     app.set_model_selection("deepseek-v4-pro".to_string());
+    app.reasoning_effort = ReasoningEffort::High;
+    app.last_effective_model = Some("deepseek-v4-flash".to_string());
+    app.last_effective_reasoning_effort = Some(ReasoningEffort::Low);
     let mut session = saved_session_with_messages(vec![
         text_message("user", "hello"),
         text_message("assistant", "hi"),
@@ -4178,6 +4289,10 @@ fn apply_loaded_session_restores_auto_model_mode() {
     assert!(app.auto_model);
     assert_eq!(app.model, "auto");
     assert_eq!(app.model_selection_for_persistence(), "auto");
+    assert_eq!(app.last_effective_model, None);
+    assert_eq!(app.last_effective_reasoning_effort, None);
+    assert_eq!(app.reasoning_effort, ReasoningEffort::Auto);
+    assert_eq!(app.effective_model_for_budget(), DEFAULT_TEXT_MODEL);
 }
 
 #[test]
@@ -5972,16 +6087,15 @@ fn composer_arrows_scroll_defaults_true_without_mouse_capture() {
 }
 
 #[test]
-fn composer_arrows_scroll_defaults_follow_platform_with_mouse_capture() {
+fn composer_arrows_scroll_defaults_false_with_mouse_capture() {
     let options = TuiOptions {
         use_mouse_capture: true,
         ..create_test_options()
     };
     let app = App::new(options, &Config::default());
-    assert_eq!(
-        app.composer_arrows_scroll,
-        cfg!(windows),
-        "arrows-scroll should default to true on Windows and false on other platforms when mouse capture is on"
+    assert!(
+        !app.composer_arrows_scroll,
+        "arrows-scroll must default to false when mouse capture is on"
     );
 }
 
@@ -6090,6 +6204,7 @@ fn notification_settings_tui_always_keeps_configured_method_no_threshold() {
         notifications: Some(crate::config::NotificationsConfig {
             method: crate::config::NotificationMethod::Bel,
             threshold_secs: 120,
+            completion_sound: crate::config::CompletionSound::Beep,
             include_summary: true,
         }),
         ..Config::default()
@@ -6121,6 +6236,7 @@ fn notification_settings_no_tui_override_uses_notifications_block() {
         notifications: Some(crate::config::NotificationsConfig {
             method: crate::config::NotificationMethod::Osc9,
             threshold_secs: 45,
+            completion_sound: crate::config::CompletionSound::Beep,
             include_summary: false,
         }),
         ..Config::default()

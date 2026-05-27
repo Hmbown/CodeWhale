@@ -33,13 +33,13 @@ const cjk = Noto_Serif_SC({
 });
 
 export const metadata: Metadata = {
-  title: "CodeWhale · 深度求索 终端",
+  title: "CodeWhale · DeepSeek V4 智能体运行框架",
   description:
-    "Terminal-native coding agent for open-source and open-weight models across providers. DeepSeek V4 is first-class. Community site for installation, docs, roadmap, and live activity.",
+    "The most agentic harness for DeepSeek V4. Constitutional hierarchy, structured trust, verification, and recovery — rules, tools, and feedback loops that help the model keep working.",
   metadataBase: new URL("https://codewhale.net"),
   openGraph: {
     title: "CodeWhale",
-    description: "Terminal-native coding agent for open-source and open-weight models across providers.",
+    description: "The most agentic harness for DeepSeek V4. Constitutional hierarchy, structured trust, verification, and recovery.",
     url: "https://codewhale.net",
     siteName: "CodeWhale",
     type: "website",

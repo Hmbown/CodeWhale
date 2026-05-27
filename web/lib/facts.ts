@@ -11,6 +11,10 @@ interface KVNamespace {
 }
 
 async function getKv(): Promise<KVNamespace | undefined> {
+  if (process.env.NEXT_PHASE === "phase-production-build") {
+    return undefined;
+  }
+
   try {
     const mod = await import("@opennextjs/cloudflare");
     const ctx = await mod.getCloudflareContext({ async: true });

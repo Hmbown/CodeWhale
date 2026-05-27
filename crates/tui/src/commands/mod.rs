@@ -299,6 +299,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         description_id: MessageId::CmdForkDescription,
     },
     CommandInfo {
+        name: "new",
+        aliases: &[],
+        usage: "/new [--force]",
+        description_id: MessageId::CmdNewDescription,
+    },
+    CommandInfo {
         name: "sessions",
         aliases: &["resume"],
         usage: "/sessions [show|prune <days>]",
@@ -585,6 +591,7 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "rename" | "gaiming" | "chongmingming" => rename::rename(app, arg),
         "save" => session::save(app, arg),
         "fork" | "branch" => session::fork(app),
+        "new" => session::new_session(app, arg),
         "sessions" | "resume" => session::sessions(app, arg),
         "relay" | "batonpass" | "接力" => relay(app, arg),
         "load" | "jiazai" => session::load(app, arg),
@@ -702,8 +709,12 @@ pub fn persist_status_items(
 }
 
 /// Persist a root-level string key in `config.toml`.
-pub fn persist_root_string_key(key: &str, value: &str) -> anyhow::Result<std::path::PathBuf> {
-    config::persist_root_string_key(key, value)
+pub fn persist_root_string_key(
+    config_path: Option<&std::path::Path>,
+    key: &str,
+    value: &str,
+) -> anyhow::Result<std::path::PathBuf> {
+    config::persist_root_string_key(config_path, key, value)
 }
 
 pub fn switch_mode(app: &mut App, mode: crate::tui::app::AppMode) -> String {

@@ -77,12 +77,15 @@ function deriveProvidersFromConfig(cfg: string): ProviderFact[] {
   // so the binary rejects it — keep it out of the docs. Issue #1104.
   const labelMap: Record<string, ProviderFact> = {
     Deepseek: { id: "deepseek", label: "DeepSeek", env: "DEEPSEEK_API_KEY" },
-    NvidiaNim: { id: "nvidia-nim", label: "NVIDIA NIM", env: "NVIDIA_API_KEY" },
-    Openai: { id: "openai", label: "OpenAI", env: "OPENAI_API_KEY" },
+    NvidiaNim: { id: "nvidia-nim", label: "NVIDIA NIM", env: "NVIDIA_API_KEY / NVIDIA_NIM_API_KEY" },
+    Openai: { id: "openai", label: "OpenAI-compatible", env: "OPENAI_API_KEY" },
+    Atlascloud: { id: "atlascloud", label: "AtlasCloud", env: "ATLASCLOUD_API_KEY" },
+    WanjieArk: { id: "wanjie-ark", label: "Wanjie Ark", env: "WANJIE_ARK_API_KEY / WANJIE_API_KEY / WANJIE_MAAS_API_KEY" },
     Openrouter: { id: "openrouter", label: "OpenRouter", env: "OPENROUTER_API_KEY" },
-    Novita: { id: "novita", label: "Novita", env: "NOVITA_API_KEY" },
-    Fireworks: { id: "fireworks", label: "Fireworks", env: "FIREWORKS_API_KEY" },
-    Sglang: { id: "sglang", label: "sglang", env: "SGLANG_API_KEY" },
+    Novita: { id: "novita", label: "Novita AI", env: "NOVITA_API_KEY" },
+    Fireworks: { id: "fireworks", label: "Fireworks AI", env: "FIREWORKS_API_KEY" },
+    Moonshot: { id: "moonshot", label: "Moonshot/Kimi", env: "MOONSHOT_API_KEY / KIMI_API_KEY" },
+    Sglang: { id: "sglang", label: "SGLang", env: "SGLANG_API_KEY" },
     Vllm: { id: "vllm", label: "vLLM", env: "VLLM_API_KEY" },
     Ollama: { id: "ollama", label: "Ollama", env: "OLLAMA_API_KEY" },
   };
@@ -98,7 +101,6 @@ function deriveSandboxBackends(files: string[]): string[] {
   const map: Record<string, string> = {
     seatbelt: "seatbelt (macOS)",
     landlock: "landlock (Linux)",
-    windows: "AppContainer / restricted tokens (Windows)",
   };
   return files
     .map((f) => f.replace(/\.rs$/, ""))

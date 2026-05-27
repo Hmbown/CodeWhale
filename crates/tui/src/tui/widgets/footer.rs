@@ -152,6 +152,19 @@ pub fn footer_working_label(frame: u64, locale: Locale) -> String {
     out
 }
 
+/// Build a "⏳ shell running" chip span when a foreground shell command is
+/// active. Empty when no shell is running, which hides the chip entirely.
+#[must_use]
+pub fn footer_shell_chip(active: bool) -> Vec<Span<'static>> {
+    if !active {
+        return Vec::new();
+    }
+    vec![Span::styled(
+        "\u{23F3} shell running".to_string(),
+        Style::default().fg(palette::STATUS_WARNING),
+    )]
+}
+
 /// Build a "N agents" chip span list when there are sub-agents in flight.
 /// Empty list when N == 0 hides the chip entirely. Singular for N == 1
 /// reads naturally; plural otherwise. The pluralization template lives in

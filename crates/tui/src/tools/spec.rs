@@ -162,10 +162,11 @@ pub struct ToolContext {
     /// routing (e.g. in sub-agents and test contexts to avoid recursion).
     pub large_output_router: Option<crate::tools::large_output_router::LargeOutputRouter>,
 
-    /// Which search backend `web_search` should use. Default: Bing. Set via
+    /// Which search backend `web_search` should use. Default: DuckDuckGo. Set via
     /// `[search] provider` in config.toml.
     pub search_provider: crate::config::SearchProvider,
-    /// API key for Tavily or Bocha. `None` for Bing or DuckDuckGo.
+    /// API key for Tavily, Bocha, or Metaso. `None` for Bing or DuckDuckGo.
+    /// Metaso also falls back to `METASO_API_KEY` env var, then a built-in key.
     pub search_api_key: Option<String>,
 
     /// Per-session workshop variable store (#548). Holds the raw content of
@@ -182,8 +183,9 @@ impl ToolContext {
     pub fn new(workspace: impl Into<PathBuf>) -> Self {
         let workspace = workspace.into();
         let shell_manager = new_shared_shell_manager(workspace.clone());
-        let notes_path = workspace.join(".deepseek").join("notes.md");
-        let mcp_config_path = workspace.join(".deepseek").join("mcp.json");
+        // Prefer .codewhale, fall back to .deepseek for project-local state
+        let notes_path = codewhale_config::resolve_project_state_dir(&workspace, "notes.md").1;
+        let mcp_config_path = codewhale_config::resolve_project_state_dir(&workspace, "mcp.json").1;
         Self {
             workspace,
             shell_manager,

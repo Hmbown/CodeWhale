@@ -204,7 +204,7 @@ impl ModalView for StatusPickerView {
         for (idx, item) in self.rows.iter().enumerate() {
             let checked = *self.selected.get(idx).unwrap_or(&false);
             let is_cursor = idx == self.cursor;
-            let mark = if checked { "[x]" } else { "[ ]" };
+            let mark = if checked { "[✓]" } else { "[ ]" };
 
             let row_style = if is_cursor {
                 Style::default()

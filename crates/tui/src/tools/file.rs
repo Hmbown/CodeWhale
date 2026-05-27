@@ -496,7 +496,7 @@ impl ToolSpec for EditFileTool {
     }
 
     fn description(&self) -> &'static str {
-        "Replace text in a single file via exact search/replace. Use this instead of `sed -i` in `exec_shell` for one unambiguous in-place edit. `search` matches exactly by default, including whitespace and indentation; set `fuzz: true` to tolerate leading-indentation differences. Returns a compact unified diff, not the full file. For structural, multi-block, or cross-file changes, use `apply_patch` or `write_file` instead."
+        "Replace text in a single file via exact search/replace. Use this instead of `sed -i` in `exec_shell` for one unambiguous in-place edit. `search` matches exactly by default; when no exact match is found the tool retries with leading-whitespace-tolerant fuzzy matching automatically. The optional `fuzz` parameter is accepted for backward compatibility and is no longer needed. Returns a compact unified diff, not the full file. For structural, multi-block, or cross-file changes, use `apply_patch` or `write_file` instead."
     }
 
     fn input_schema(&self) -> Value {
@@ -517,7 +517,7 @@ impl ToolSpec for EditFileTool {
                 },
                 "fuzz": {
                     "type": "boolean",
-                    "description": "When true, tolerate leading whitespace differences on each searched line (default false)"
+                    "description": "Deprecated: fuzzy fallback is now automatic. Accepted for backward compatibility but ignored."
                 }
             },
             "required": ["path", "search", "replace"]
@@ -540,7 +540,7 @@ impl ToolSpec for EditFileTool {
         let path_str = required_str(&input, "path")?;
         let search = required_str(&input, "search")?;
         let replace = required_str(&input, "replace")?;
-        let fuzz = optional_bool(&input, "fuzz", false);
+        let _fuzz = optional_bool(&input, "fuzz", false);
 
         if search == replace {
             return Err(ToolError::invalid_input(
@@ -555,7 +555,7 @@ impl ToolSpec for EditFileTool {
         })?;
 
         let count = contents.matches(search).count();
-        let (updated, count, fuzz_kind) = if count == 0 && fuzz {
+        let (updated, count, fuzz_kind) = if count == 0 {
             // First fallback: tolerate indentation differences.
             let indent_matches = leading_whitespace_fuzzy_matches(&contents, search);
             match indent_matches.as_slice() {
@@ -600,11 +600,6 @@ impl ToolSpec for EditFileTool {
                     )));
                 }
             }
-        } else if count == 0 {
-            return Err(ToolError::execution_failed(format!(
-                "Search string not found in {}",
-                file_path.display()
-            )));
         } else {
             (contents.replace(search, replace), count, None)
         };
@@ -1481,6 +1476,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_edit_file_accepts_omitted_and_explicit_fuzz() {
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+        let tool = EditFileTool;
+
+        for (file_name, fuzz) in [
+            ("fuzz_omitted.txt", None),
+            ("fuzz_false.txt", Some(false)),
+            ("fuzz_true.txt", Some(true)),
+        ] {
+            let test_file = tmp.path().join(file_name);
+            fs::write(&test_file, "hello world").expect("write");
+
+            let mut input = serde_json::Map::from_iter([
+                ("path".to_string(), json!(file_name)),
+                ("search".to_string(), json!("hello")),
+                ("replace".to_string(), json!("hi")),
+            ]);
+            if let Some(fuzz) = fuzz {
+                input.insert("fuzz".to_string(), json!(fuzz));
+            }
+
+            let result = tool
+                .execute(Value::Object(input), &ctx)
+                .await
+                .expect("execute");
+
+            assert!(result.success, "{file_name}: {}", result.content);
+            assert!(result.content.contains("Replaced 1 occurrence"));
+            let edited = fs::read_to_string(&test_file).expect("read");
+            assert_eq!(edited, "hi world");
+        }
+    }
+
+    #[tokio::test]
     async fn test_edit_file_single_match_has_no_multi_match_warning() {
         let tmp = tempdir().expect("tempdir");
         let ctx = ToolContext::new(tmp.path().to_path_buf());
@@ -1832,7 +1862,13 @@ mod tests {
             .get("required")
             .and_then(|value| value.as_array())
             .expect("edit schema should include required array");
-        assert_eq!(required.len(), 3);
+        let required_fields: Vec<_> = required.iter().filter_map(|value| value.as_str()).collect();
+        assert_eq!(required_fields, vec!["path", "search", "replace"]);
+        assert!(!required_fields.contains(&"fuzz"));
+        assert_eq!(
+            edit_schema["properties"]["fuzz"]["type"].as_str(),
+            Some("boolean")
+        );
         let search_desc = edit_schema["properties"]["search"]["description"]
             .as_str()
             .expect("search description");

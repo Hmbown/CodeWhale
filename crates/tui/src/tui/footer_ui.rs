@@ -43,12 +43,21 @@ pub(crate) fn render_footer(f: &mut Frame, area: Rect, app: &mut App) {
     } else {
         None
     };
-    let toast = quit_prompt.or_else(|| {
-        app.active_status_toast().map(|toast| FooterToast {
-            text: toast.text,
-            color: status_color(toast.level),
+    let toast = quit_prompt
+        .or_else(|| {
+            // Version-update hint takes precedence over ephemeral status toasts
+            // so the user sees it even when status traffic would hide it.
+            app.version_hint.as_ref().map(|hint| FooterToast {
+                text: hint.clone(),
+                color: palette::STATUS_INFO,
+            })
         })
-    });
+        .or_else(|| {
+            app.active_status_toast().map(|toast| FooterToast {
+                text: toast.text,
+                color: status_color(toast.level),
+            })
+        });
 
     // Drive every cluster from the user's configured `status_items`. Mode
     // and Model are always rendered by `FooterProps` itself (their position
@@ -71,10 +80,29 @@ pub(crate) fn render_footer(f: &mut Frame, area: Rect, app: &mut App) {
         let dot_frame = footer_working_label_frame(now_ms, app.fancy_animations);
         // Surface one compact live status row in the footer whenever a turn
         // is live. Tool turns get the current action plus active/done counts;
-        // non-tool work falls back to the existing dot-pulse label.
+        // non-tool work falls back to a descriptive label with elapsed time.
+        let elapsed_secs = app
+            .turn_started_at
+            .map(|t| t.elapsed().as_secs())
+            .unwrap_or(0);
         let mut label = active_subagent_status_label(app)
             .or_else(|| active_tool_status_label(app))
-            .unwrap_or_else(|| crate::tui::widgets::footer_working_label(dot_frame, app.ui_locale));
+            .unwrap_or_else(|| {
+                // Show a more specific label when the model is still loading
+                // or compacting, not just a generic "working…".
+                let base = if app.is_loading {
+                    crate::tui::widgets::footer_working_label(dot_frame, app.ui_locale)
+                } else if app.is_compacting {
+                    "compacting".to_string()
+                } else {
+                    crate::tui::widgets::footer_working_label(dot_frame, app.ui_locale)
+                };
+                if elapsed_secs > 0 {
+                    format!("{base} ({elapsed_secs}s)")
+                } else {
+                    base.to_string()
+                }
+            });
         // Append stall reason when the turn has been running > 30 s.
         if let Some(reason) = stall_reason(app) {
             label = format!("{label}  ({reason})");
@@ -467,9 +495,16 @@ pub(crate) fn render_footer_from(
         props.model.clear();
     }
 
+    // Shell-running chip: visible whenever a foreground shell command is
+    // active, regardless of user-configured status items.
+    let shell_chip = crate::tui::widgets::footer_shell_chip(active_foreground_shell_running(app));
+
     // Right-cluster extension chips: append in `items` order so user
     // ordering is preserved across the new variants.
     let mut extra: Vec<Span<'static>> = Vec::new();
+    if !shell_chip.is_empty() {
+        extra.extend(shell_chip);
+    }
     for item in items {
         let chip = match *item {
             S::PrefixStability => prefix_stability.clone(),
@@ -477,6 +512,7 @@ pub(crate) fn render_footer_from(
             S::ContextPercent => footer_context_percent_spans(app),
             S::GitBranch => footer_git_branch_spans(app),
             S::LastToolElapsed | S::RateLimit => Vec::new(),
+            S::Tokens => footer_session_tokens_spans(app),
             _ => continue,
         };
         if chip.is_empty() {
@@ -563,6 +599,27 @@ pub(crate) fn should_show_footer_cost(displayed_cost: f64) -> bool {
     displayed_cost.is_finite() && displayed_cost > 0.0
 }
 
+/// Session token-usage chip for the footer right cluster.
+///
+/// Renders the accumulated input / cache-hit / output token breakdown
+/// since the current runtime session started (not persisted across
+/// restarts). Returns empty when no tokens have been recorded yet.
+pub(crate) fn footer_session_tokens_spans(app: &App) -> Vec<Span<'static>> {
+    let session = &app.session;
+    if session.total_input_tokens == 0 && session.total_output_tokens == 0 {
+        return Vec::new();
+    }
+    let in_str = format_token_count_compact(u64::from(session.total_input_tokens));
+    let out_str = format_token_count_compact(u64::from(session.total_output_tokens));
+    let text = if session.total_cache_hit_tokens == 0 && session.total_cache_miss_tokens == 0 {
+        format!("{in_str} in · {out_str} out")
+    } else {
+        let cache_str = format_token_count_compact(u64::from(session.total_cache_hit_tokens));
+        format!("{in_str} in · {cache_str} cch · {out_str} out")
+    };
+    vec![Span::styled(text, Style::default().fg(palette::TEXT_MUTED))]
+}
+
 /// Test-only helper retained as a parity reference for `FooterWidget`'s
 /// auxiliary-span composition. Production rendering is performed by the
 /// widget itself; the existing footer parity tests still exercise this
@@ -590,6 +647,8 @@ pub(crate) fn footer_auxiliary_spans(app: &App, max_width: usize) -> Vec<Span<'s
         })
         .unwrap_or_default();
 
+    let shell_spans = crate::tui::widgets::footer_shell_chip(active_foreground_shell_running(app));
+
     let parts: Vec<&Vec<Span<'static>>> = [
         &coherence_spans,
         &agents_spans,
@@ -597,6 +656,7 @@ pub(crate) fn footer_auxiliary_spans(app: &App, max_width: usize) -> Vec<Span<'s
         &prefix_spans,
         &cache_spans,
         &cost_spans,
+        &shell_spans,
     ]
     .iter()
     .filter(|spans| !spans.is_empty())

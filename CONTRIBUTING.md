@@ -184,6 +184,9 @@ these crates, including the bottom-up build order.
 
 ## Pull Request Guidelines
 
+- Use the [pull request template](.github/PULL_REQUEST_TEMPLATE.md) when opening
+  a PR — it includes the Summary, Testing, and Checklist sections reviewers
+  expect
 - Keep PRs focused on a single change
 - Update documentation if needed
 - Add tests for new functionality
@@ -217,7 +220,14 @@ cargo check
 
 ## Reporting Issues
 
-When reporting issues, please include:
+When reporting issues, please use one of the issue templates:
+
+- [Bug report](.github/ISSUE_TEMPLATE/bug_report.md) — for reproducible problems
+  or regressions
+- [Feature request](.github/ISSUE_TEMPLATE/feature_request.md) — for ideas and
+  improvements
+
+Issue reports should include:
 
 - Operating system and version
 - Rust version (`rustc --version`)
@@ -226,9 +236,17 @@ When reporting issues, please include:
 - Expected vs actual behavior
 - Relevant error messages or logs
 
+## Security
+
+If you discover a security vulnerability, please do **not** open a public issue.
+See [SECURITY.md](SECURITY.md) for the responsible disclosure process and
+contact information.
+
 ## Code of Conduct
 
-Be respectful and inclusive. We welcome contributors of all backgrounds and experience levels.
+Be respectful and inclusive. We welcome contributors of all backgrounds and
+experience levels. See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for the full
+code of conduct.
 
 ## License
 

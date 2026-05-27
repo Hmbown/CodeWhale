@@ -55,6 +55,20 @@ async function gh<T>(url: string, ghToken?: string): Promise<T | null> {
 interface GhRelease { tag_name: string; name: string | null; body: string | null; html_url: string; prerelease: boolean; draft: boolean }
 interface GhIssue { number: number; title: string; html_url: string; body: string | null; state: string; pull_request?: unknown }
 
+const FALLBACK_SHIPPED: RoadmapItem[] = [
+  {
+    title: "v0.8.45",
+    note: "Moonshot/Kimi provider support, API-key setup guidance, provider-surface sync, and current Windows install/runtime guidance",
+    href: "https://github.com/Hmbown/CodeWhale/releases/tag/v0.8.45",
+  },
+];
+
+function withPinnedShipped(items: RoadmapItem[]): RoadmapItem[] {
+  const seen = new Set(items.map((item) => item.title));
+  const pinned = FALLBACK_SHIPPED.filter((item) => !seen.has(item.title));
+  return [...pinned, ...items];
+}
+
 function summarizeReleaseBody(body: string | null): string {
   if (!body) return "";
   // First non-empty line, stripped of markdown headers / bullets / links
@@ -100,17 +114,19 @@ export async function fetchRoadmap(ghToken?: string): Promise<RoadmapFeed> {
     fetchByLabel("roadmap:ruled-out", ghToken, "all"),
   ]);
 
-  const shipped: RoadmapItem[] = (releases ?? [])
+  const shipped: RoadmapItem[] = releases
+    ? releases
     .filter((r) => !r.draft)
     .map((r) => ({
       title: r.name?.trim() || r.tag_name,
       note: summarizeReleaseBody(r.body) || r.tag_name,
       href: r.html_url,
-    }));
+    }))
+    : FALLBACK_SHIPPED;
 
   return {
     generatedAt: new Date().toISOString(),
-    shipped,
+    shipped: withPinnedShipped(shipped),
     underway,
     considered,
     ruledOut,
@@ -121,7 +137,10 @@ export async function getCachedRoadmap(kv: KVNamespace | undefined, ghToken: str
   try {
     if (kv) {
       const cached = await kv.get(KV_KEY);
-      if (cached) return JSON.parse(cached) as RoadmapFeed;
+      if (cached) {
+        const parsed = JSON.parse(cached) as RoadmapFeed;
+        return { ...parsed, shipped: withPinnedShipped(parsed.shipped ?? []) };
+      }
     }
     const fresh = await fetchRoadmap(ghToken);
     if (kv) {

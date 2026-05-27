@@ -163,7 +163,7 @@ mod tests {
         assert!(matches!(
             result.action,
             Some(AppAction::SendMessage(content))
-                if content == "Implement login flow".to_string()
+                if content == *"Implement login flow"
         ));
     }
 

@@ -279,6 +279,7 @@ pub enum StatusItemValue {
     GitBranch,
     LastToolElapsed,
     RateLimit,
+    Tokens,
 }
 
 pub fn parse_mode(arg: Option<&str>) -> Result<ConfigUiMode, String> {
@@ -687,7 +688,11 @@ fn apply_reasoning_effort(
     app.last_effective_reasoning_effort = None;
     app.update_model_compaction_budget();
     if persist {
-        commands::persist_root_string_key("reasoning_effort", effort.as_setting())?;
+        commands::persist_root_string_key(
+            app.config_path.as_deref(),
+            "reasoning_effort",
+            effort.as_setting(),
+        )?;
     }
     config.reasoning_effort = Some(effort.as_setting().to_string());
     Ok(())
@@ -999,6 +1004,7 @@ impl From<StatusItem> for StatusItemValue {
             StatusItem::GitBranch => Self::GitBranch,
             StatusItem::LastToolElapsed => Self::LastToolElapsed,
             StatusItem::RateLimit => Self::RateLimit,
+            StatusItem::Tokens => Self::Tokens,
         }
     }
 }
@@ -1019,6 +1025,7 @@ impl From<StatusItemValue> for StatusItem {
             StatusItemValue::GitBranch => Self::GitBranch,
             StatusItemValue::LastToolElapsed => Self::LastToolElapsed,
             StatusItemValue::RateLimit => Self::RateLimit,
+            StatusItemValue::Tokens => Self::Tokens,
         }
     }
 }

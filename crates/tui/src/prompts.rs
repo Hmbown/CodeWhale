@@ -34,6 +34,10 @@ pub struct PromptSessionContext<'a> {
     /// preserving backward compatibility with existing call sites
     /// that predate dynamic model injection.
     pub model_id: &'a str,
+    /// Whether the user-visible transcript renders thinking blocks.
+    /// When false, the prompt should not spend localization pressure on
+    /// `reasoning_content` the user will never see.
+    pub show_thinking: bool,
 }
 
 impl Default for PromptSessionContext<'_> {
@@ -45,6 +49,7 @@ impl Default for PromptSessionContext<'_> {
             locale_tag: "en",
             translation_enabled: false,
             model_id: "codewhale",
+            show_thinking: true,
         }
     }
 }
@@ -53,7 +58,9 @@ impl Default for PromptSessionContext<'_> {
 /// A previous session writes it on exit / `/compact`; the next session reads
 /// it back on startup and prepends it to the system prompt so a fresh agent
 /// doesn't have to re-discover open blockers from scratch.
-pub const HANDOFF_RELATIVE_PATH: &str = ".deepseek/handoff.md";
+pub const HANDOFF_RELATIVE_PATH: &str = ".codewhale/handoff.md";
+/// Legacy handoff path for reading from existing installs.
+const LEGACY_HANDOFF_RELATIVE_PATH: &str = ".deepseek/handoff.md";
 
 /// Per-file size cap for `instructions = [...]` entries (#454). Mirrors
 /// the existing project-context cap in `project_context::load_context_file`
@@ -102,6 +109,25 @@ fn translation_target_language_for_tag(locale_tag: &str) -> &'static str {
     } else {
         "English"
     }
+}
+
+fn hidden_thinking_language_instruction(locale_tag: &str) -> String {
+    let fallback_language = translation_target_language_for_tag(locale_tag);
+    format!(
+        "\
+## Hidden Thinking Language\n\
+\n\
+The user has disabled thinking display (`show_thinking = false`). If you emit \
+`reasoning_content`, keep that hidden internal thinking in English regardless \
+of the latest user-message language or `## Environment.lang`; the user will \
+not see it, so localizing hidden thinking only adds language switching.\n\
+\n\
+The final reply is still user-visible. Follow the normal `## Language` rule \
+for the final reply: mirror the latest user message, and use \
+{fallback_language} only when the user message is ambiguous. If the user \
+explicitly asks for a different thinking language, follow that explicit request \
+for the current turn."
+    )
 }
 
 /// Render a `## Environment` block listing the resolved locale tag,
@@ -180,7 +206,12 @@ fn render_instructions_block(paths: &[PathBuf]) -> Option<String> {
 /// system-prompt block. Returns `None` when the file is absent or empty so
 /// callers can keep the default-uncluttered prompt for fresh workspaces.
 fn load_handoff_block(workspace: &Path) -> Option<String> {
-    let path = workspace.join(HANDOFF_RELATIVE_PATH);
+    let primary = workspace.join(HANDOFF_RELATIVE_PATH);
+    let path = if primary.exists() {
+        primary
+    } else {
+        workspace.join(LEGACY_HANDOFF_RELATIVE_PATH)
+    };
     let raw = std::fs::read_to_string(&path).ok()?;
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -373,8 +404,12 @@ pub const SUGGEST_APPROVAL: &str = include_str!("prompts/approvals/suggest.md");
 pub const NEVER_APPROVAL: &str = include_str!("prompts/approvals/never.md");
 
 /// Compaction relay template — written into the system prompt so the
-/// model knows the format to use when writing `.deepseek/handoff.md`.
+/// model knows the format to use when writing `.codewhale/handoff.md`.
 pub const COMPACT_TEMPLATE: &str = include_str!("prompts/compact.md");
+
+/// Goal continuation audit template — injected by the engine when a runtime
+/// goal is active and the assistant tries to end a turn without closing it.
+pub const GOAL_CONTINUATION_PROMPT: &str = include_str!("prompts/continuation.md");
 
 /// Memory hygiene guidance — appended to the system prompt only when the
 /// session has a non-empty user-memory block. Steers the model toward
@@ -611,6 +646,7 @@ pub fn system_prompt_for_mode_with_context_and_skills(
             locale_tag: "en",
             translation_enabled: false,
             model_id: "codewhale",
+            show_thinking: true,
         },
     )
 }
@@ -657,7 +693,11 @@ pub fn system_prompt_for_mode_with_context_skills_session_and_approval(
     // in English even though `lang: zh-Hans` is set" failure mode that
     // PR #1398 partially addressed. English (and unknown) locales get
     // `None` and keep the previous behavior unchanged.
-    let preamble = locale_reinforcement_preamble(session_context.locale_tag);
+    let preamble = if session_context.show_thinking {
+        locale_reinforcement_preamble(session_context.locale_tag)
+    } else {
+        None
+    };
 
     // 1–2. Mode prompt + project context.
     // `load_project_context_with_parents` auto-generates .codewhale/instructions.md
@@ -741,7 +781,7 @@ pub fn system_prompt_for_mode_with_context_skills_session_and_approval(
     }
 
     // 5. Compaction relay template — so the model knows the format to use
-    //    when writing `.deepseek/handoff.md` on exit / `/compact`.
+    //    when writing `.codewhale/handoff.md` on exit / `/compact`.
     full_prompt.push_str("\n\n");
     full_prompt.push_str(COMPACT_TEMPLATE);
 
@@ -806,8 +846,17 @@ pub fn system_prompt_for_mode_with_context_skills_session_and_approval(
     // rule immediately before it generates `reasoning_content` for the
     // turn. English (and unknown) locales return `None` and the prompt
     // stays byte-identical to the pre-bookend behavior.
-    if let Some(closer) = locale_reinforcement_closer(session_context.locale_tag) {
+    if let Some(closer) = session_context
+        .show_thinking
+        .then(|| locale_reinforcement_closer(session_context.locale_tag))
+        .flatten()
+    {
         full_prompt = format!("{full_prompt}\n\n{closer}");
+    } else if !session_context.show_thinking {
+        full_prompt = format!(
+            "{full_prompt}\n\n{}",
+            hidden_thinking_language_instruction(session_context.locale_tag)
+        );
     }
 
     SystemPrompt::Text(full_prompt)
@@ -832,7 +881,7 @@ mod tests {
 
     /// Discriminator unique to the injected relay block (not present in the
     /// agent prompt's own discussion of the convention).
-    const HANDOFF_BLOCK_MARKER: &str = "left a relay artifact at `.deepseek/handoff.md`";
+    const HANDOFF_BLOCK_MARKER: &str = "left a relay artifact at `.codewhale/handoff.md`";
 
     fn contains_cjk(text: &str) -> bool {
         text.chars().any(|ch| {
@@ -1087,6 +1136,7 @@ mod tests {
                 locale_tag: "zh-Hans",
                 translation_enabled: false,
                 model_id: "codewhale",
+                show_thinking: true,
             },
             ApprovalMode::Suggest,
         ) {
@@ -1157,6 +1207,7 @@ mod tests {
                 locale_tag: "zh-Hans",
                 translation_enabled: false,
                 model_id: "codewhale",
+                show_thinking: true,
             },
             ApprovalMode::Suggest,
         ) {
@@ -1185,6 +1236,58 @@ mod tests {
     }
 
     #[test]
+    fn hidden_thinking_uses_english_reasoning_without_locale_bookends() {
+        let tmp = tempdir().expect("tempdir");
+        let text = match system_prompt_for_mode_with_context_skills_session_and_approval(
+            AppMode::Agent,
+            tmp.path(),
+            None,
+            None,
+            None,
+            PromptSessionContext {
+                user_memory_block: None,
+                goal_objective: None,
+                project_context_pack_enabled: false,
+                locale_tag: "zh-Hans",
+                translation_enabled: false,
+                model_id: "codewhale",
+                show_thinking: false,
+            },
+            ApprovalMode::Suggest,
+        ) {
+            SystemPrompt::Text(text) => text,
+            SystemPrompt::Blocks(_) => panic!("expected text system prompt"),
+        };
+
+        assert!(
+            text.contains("## Hidden Thinking Language"),
+            "hidden thinking prompt must include the request-side language override"
+        );
+        assert!(
+            text.contains("reasoning_content") && text.contains("English"),
+            "hidden thinking override must steer reasoning_content to English"
+        );
+        assert!(
+            text.contains("final reply") && text.contains("Simplified Chinese"),
+            "hidden thinking override must preserve the visible reply language"
+        );
+        assert!(
+            !text.contains("## 语言要求") && !text.contains("## 语言再次提醒"),
+            "hidden thinking prompt must not also ask for localized reasoning"
+        );
+
+        let hidden_pos = text
+            .find("## Hidden Thinking Language")
+            .expect("hidden thinking block present");
+        let hidden_header_end = hidden_pos + "## Hidden Thinking Language".len();
+        let after_hidden_body = &text[hidden_header_end..];
+        assert!(
+            !after_hidden_body.contains("\n## "),
+            "hidden thinking override must be the final top-level block; got: {after_hidden_body:?}",
+        );
+    }
+
+    #[test]
     fn system_prompt_skips_locale_preamble_for_english() {
         // English locale → no preamble injected. Asserts the
         // "preamble is opt-in for non-English" invariant.
@@ -1202,6 +1305,7 @@ mod tests {
                 locale_tag: "en",
                 translation_enabled: false,
                 model_id: "codewhale",
+                show_thinking: true,
             },
             ApprovalMode::Suggest,
         ) {
@@ -1295,6 +1399,7 @@ mod tests {
                 locale_tag: "ja",
                 translation_enabled: false,
                 model_id: "codewhale",
+                show_thinking: true,
             },
         ) {
             SystemPrompt::Text(text) => text,
@@ -1331,6 +1436,7 @@ mod tests {
                 locale_tag: "en",
                 translation_enabled: false,
                 model_id: "codewhale",
+                show_thinking: true,
             },
         ) {
             SystemPrompt::Text(text) => text,
@@ -1359,6 +1465,7 @@ mod tests {
                 locale_tag: "en",
                 translation_enabled: false,
                 model_id: "codewhale",
+                show_thinking: true,
             },
         ) {
             SystemPrompt::Text(text) => text,
@@ -1416,6 +1523,7 @@ mod tests {
                 locale_tag: "en",
                 translation_enabled: false,
                 model_id: "codewhale",
+                show_thinking: true,
             },
         ) {
             SystemPrompt::Text(text) => text,
@@ -1444,6 +1552,7 @@ mod tests {
                 locale_tag: "en",
                 translation_enabled: false,
                 model_id: "codewhale",
+                show_thinking: true,
             },
         ) {
             SystemPrompt::Text(text) => text,
@@ -1639,6 +1748,7 @@ mod tests {
                 locale_tag: "en",
                 translation_enabled: false,
                 model_id: "codewhale",
+                show_thinking: true,
             },
         ) {
             SystemPrompt::Text(text) => text,
@@ -1673,6 +1783,7 @@ mod tests {
                 locale_tag: "en",
                 translation_enabled: false,
                 model_id: "codewhale",
+                show_thinking: true,
             },
         ) {
             SystemPrompt::Text(text) => text,

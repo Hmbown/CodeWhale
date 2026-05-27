@@ -223,6 +223,104 @@ jobs:
         with:
           name: ${{ matrix.artifact_name }}
           path: ${{ matrix.artifact_name }}
+
+  bundle:
+    needs: [build, resolve]
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.source_ref }}
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: 'codewhale*'
+      - name: Create platform archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p bundles/checksums
+          MANIFEST="bundles/checksums/codewhale-bundles-sha256.txt"
+          : > "$MANIFEST"
+
+          bundle() {
+            local platform="$1"   # linux-x64, linux-arm64, macos-x64, macos-arm64, windows-x64
+            local cli_src="$2"    # artifact name for codewhale binary
+            local tui_src="$3"    # artifact name for codewhale-tui binary
+            local ext="$4"        # tar.gz or zip
+            local variant="$5"    # '' (standard) or 'portable' (Windows only, no install script)
+            shift 5
+
+            local dir="bundles/codewhale-${platform}${variant:+-}${variant}"
+            mkdir -p "$dir"
+
+            # Copy binaries, stripping platform suffixes
+            local cli_dst="codewhale"
+            local tui_dst="codewhale-tui"
+            if [[ "$platform" == windows-* ]]; then
+              cli_dst="codewhale.exe"
+              tui_dst="codewhale-tui.exe"
+            fi
+            cp "artifacts/${cli_src}/${cli_src}" "$dir/${cli_dst}"
+            cp "artifacts/${tui_src}/${tui_src}" "$dir/${tui_dst}"
+
+            # Add install script (standard variant only)
+            if [[ "$variant" != "portable" ]]; then
+              if [[ "$platform" == windows-* ]]; then
+                cp scripts/release/install.bat "$dir/"
+                # Convert line endings to CRLF for Windows
+                sed -i 's/$/\r/' "$dir/install.bat" 2>/dev/null || true
+              else
+                cp scripts/release/install.sh "$dir/"
+                chmod +x "$dir/install.sh"
+              fi
+            fi
+
+            if [[ "$ext" == "zip" ]]; then
+              (cd bundles && zip -r "codewhale-${platform}${variant:+-}${variant}.zip" "codewhale-${platform}${variant:+-}${variant}/")
+            else
+              tar -czf "bundles/codewhale-${platform}${variant:+-}${variant}.tar.gz" -C bundles "codewhale-${platform}${variant:+-}${variant}/"
+            fi
+
+            local archive="codewhale-${platform}${variant:+-}${variant}.${ext}"
+            sha256sum "bundles/${archive}" | awk '{printf "%s  %s\n", $1, $2}' >> "$MANIFEST"
+            echo "  Created bundles/${archive}"
+          }
+
+          # Platform: linux-x64
+          bundle linux-x64 \
+            codewhale-linux-x64 codewhale-tui-linux-x64 tar.gz ""
+
+          # Platform: linux-arm64
+          bundle linux-arm64 \
+            codewhale-linux-arm64 codewhale-tui-linux-arm64 tar.gz ""
+
+          # Platform: macos-x64
+          bundle macos-x64 \
+            codewhale-macos-x64 codewhale-tui-macos-x64 tar.gz ""
+
+          # Platform: macos-arm64
+          bundle macos-arm64 \
+            codewhale-macos-arm64 codewhale-tui-macos-arm64 tar.gz ""
+
+          # Platform: windows-x64 (standard + portable)
+          bundle windows-x64 \
+            codewhale-windows-x64.exe codewhale-tui-windows-x64.exe zip ""
+          bundle windows-x64 \
+            codewhale-windows-x64.exe codewhale-tui-windows-x64.exe zip "portable"
+
+          echo ""
+          echo "=== Archive checksums ==="
+          cat "$MANIFEST"
+
+      - name: Upload bundle artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: codewhale-bundles
+          path: bundles/*
+          if-no-files-found: error
+
   docker:
     needs: [build, resolve]
     if: ${{ !cancelled() && needs.build.result == 'success' }}
@@ -292,8 +390,8 @@ jobs:
           cache-to: type=gha,mode=max
 
   release:
-    needs: [build, docker, resolve]
-    if: ${{ !cancelled() && needs.build.result == 'success' && needs.docker.result == 'success' }}
+    needs: [build, bundle, docker, resolve]
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.bundle.result == 'success' && needs.docker.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -365,35 +463,52 @@ jobs:
 
             Both crates are required — `codewhale-cli` produces the `codewhale` dispatcher and `codewhale-tui` produces the interactive runtime that the dispatcher delegates to. Installing only one binary will fail at runtime with a `MISSING_COMPANION_BINARY` error.
 
-            ### Manual download
+            ### Manual download — platform archives (recommended)
 
-            **Both** binaries below must be downloaded for your platform and dropped into the same directory (e.g. `~/.local/bin/`):
+            Each archive below contains **both** the `codewhale` dispatcher and `codewhale-tui` runtime, plus an install script:
 
-            | Platform | Dispatcher | TUI runtime |
+            | Platform | Archive | Install script |
             |---|---|---|
-            | Linux x64 | `codewhale-linux-x64` | `codewhale-tui-linux-x64` |
-            | Linux ARM64 | `codewhale-linux-arm64` | `codewhale-tui-linux-arm64` |
-            | macOS x64 | `codewhale-macos-x64` | `codewhale-tui-macos-x64` |
-            | macOS ARM | `codewhale-macos-arm64` | `codewhale-tui-macos-arm64` |
-            | Windows x64 | `codewhale-windows-x64.exe` | `codewhale-tui-windows-x64.exe` |
+            | Linux x64 | `codewhale-linux-x64.tar.gz` | `install.sh` |
+            | Linux ARM64 | `codewhale-linux-arm64.tar.gz` | `install.sh` |
+            | macOS x64 | `codewhale-macos-x64.tar.gz` | `install.sh` |
+            | macOS ARM | `codewhale-macos-arm64.tar.gz` | `install.sh` |
+            | Windows x64 | `codewhale-windows-x64.zip` | `install.bat` |
+            | Windows x64 (portable) | `codewhale-windows-x64-portable.zip` | — |
 
-            Then `chmod +x` both (Unix) and run `./codewhale`.
+            **Unix (Linux / macOS):**
+            ```bash
+            tar xzf codewhale-<platform>.tar.gz
+            cd codewhale-<platform>
+            ./install.sh
+            ```
 
-            Legacy `deepseek-*` and `deepseek-tui-*` assets are also attached for one release cycle so that existing `deepseek update` invocations on v0.8.40 keep working; they install the deprecation shims, which forward to the canonical binaries.
+            **Windows:**
+            - Extract `codewhale-windows-x64.zip`
+            - Run `install.bat` (copies to `%USERPROFILE%\bin`)
+            - Add `%USERPROFILE%\bin` to your PATH
+
+            The **portable** Windows archive skips the install script — extract and run from any directory.
+
+            Individual binaries are also attached below for scripting and the npm wrapper. Legacy `deepseek-*` and `deepseek-tui-*` assets ship for one release cycle so that existing `deepseek update` invocations on v0.8.40 keep working; they install the deprecation shims, which forward to the canonical binaries.
 
             ### Verify (recommended)
 
-            Download `codewhale-artifacts-sha256.txt` from this Release and verify:
+            Download the checksum manifests from this Release and verify:
 
             ```bash
-            # Linux
+            # Linux — archive bundles
+            sha256sum -c codewhale-bundles-sha256.txt
+
+            # Linux — individual binaries
             sha256sum -c codewhale-artifacts-sha256.txt
 
             # macOS
+            shasum -a 256 -c codewhale-bundles-sha256.txt
             shasum -a 256 -c codewhale-artifacts-sha256.txt
             ```
 
-            The legacy `deepseek-artifacts-sha256.txt` is also attached for backward compatibility and contains the same hashes.
+            The legacy `deepseek-artifacts-sha256.txt` is also attached for backward compatibility and contains the same hashes as the canonical manifest.
 
             ## Changelog
 
