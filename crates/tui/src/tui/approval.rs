@@ -206,6 +206,8 @@ pub struct ApprovalRequest {
     diff_preview: Option<ApprovalDiffPreview>,
     /// Precomputed popup details, including parsed shell command lines.
     prominent_details: Vec<ApprovalDetail>,
+    /// Workspace path used to resolve relative paths for diff previews.
+    workspace: Option<String>,
 }
 
 impl ApprovalRequest {
@@ -217,7 +219,10 @@ impl ApprovalRequest {
         params: &Value,
         approval_key: &str,
     ) -> Self {
-        Self::new_with_workspace(id, tool_name, description, params, approval_key, None)
+        let mut req =
+            Self::new_with_workspace(id, tool_name, description, params, approval_key, None);
+        req.build_and_set_diff_preview();
+        req
     }
 
     pub fn new_with_workspace(
@@ -232,10 +237,10 @@ impl ApprovalRequest {
         let risk = classify_risk(tool_name, category, params);
         let approval_grouping_key =
             crate::tools::approval_cache::build_approval_grouping_key(tool_name, params).0;
-        // Build snapshots once. Renderers read these caches instead of doing
-        // path canonicalization, shell parsing, or filesystem reads per frame.
         let prominent_details = build_prominent_details(category, params, workspace.as_deref());
-        let diff_preview = build_diff_preview(tool_name, params, workspace.as_deref());
+        // diff_preview is NOT built here — callers should call
+        // `build_and_set_diff_preview` separately so the I/O can be
+        // offloaded to a blocking thread in async contexts.
 
         Self {
             id: id.to_string(),
@@ -245,9 +250,18 @@ impl ApprovalRequest {
             params: params.clone(),
             approval_key: approval_key.to_string(),
             approval_grouping_key,
-            diff_preview,
+            diff_preview: None,
             prominent_details,
+            workspace,
         }
+    }
+
+    /// Build the diff preview from disk and store it.  This performs
+    /// synchronous filesystem I/O — call it from `spawn_blocking` or
+    /// at construction time when not inside an async executor.
+    pub fn build_and_set_diff_preview(&mut self) {
+        self.diff_preview =
+            build_diff_preview(&self.tool_name, &self.params, self.workspace.as_deref());
     }
 
     /// Extract the most important param values for the approval widget.
@@ -2028,7 +2042,7 @@ mod tests {
         std::fs::write(&abs, "before\n").unwrap();
 
         let params = json!({"path": file_rel, "content": "after\n"});
-        let request = ApprovalRequest::new_with_workspace(
+        let mut request = ApprovalRequest::new_with_workspace(
             "test-id",
             "write_file",
             "Write file",
@@ -2036,6 +2050,7 @@ mod tests {
             "test_key",
             Some(workspace.display().to_string()),
         );
+        request.build_and_set_diff_preview();
         let preview = request.diff_preview().expect("preview built");
         match preview {
             ApprovalDiffPreview::Diff { text, .. } => {
@@ -2076,7 +2091,7 @@ mod tests {
                 {"path": "b.txt", "content": "added\n"},
             ]
         });
-        let request = ApprovalRequest::new_with_workspace(
+        let mut request = ApprovalRequest::new_with_workspace(
             "test-id",
             "apply_patch",
             "Apply patch",
@@ -2084,6 +2099,7 @@ mod tests {
             "test_key",
             Some(workspace.display().to_string()),
         );
+        request.build_and_set_diff_preview();
         let preview = request
             .diff_preview()
             .expect("changes array should produce a preview");
@@ -2116,7 +2132,7 @@ mod tests {
                 {"path": "b.txt", "content": "added\n"},
             ]
         });
-        let request = ApprovalRequest::new_with_workspace(
+        let mut request = ApprovalRequest::new_with_workspace(
             "test-id",
             "apply_patch",
             "Apply patch",
@@ -2124,6 +2140,7 @@ mod tests {
             "test_key",
             Some(workspace.display().to_string()),
         );
+        request.build_and_set_diff_preview();
         let preview = request
             .diff_preview()
             .expect("changes array should keep a partial preview");
