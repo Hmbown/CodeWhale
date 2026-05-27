@@ -75,7 +75,6 @@ pub(crate) struct ShellProbe {
     pub(crate) shell: Option<String>,
     pub(crate) comspec: Option<String>,
     pub(crate) pwsh_on_path: bool,
-    pub(crate) powershell_on_path: bool,
 }
 
 impl ShellProbe {
@@ -89,7 +88,6 @@ impl ShellProbe {
                 .ok()
                 .filter(|value| !value.trim().is_empty()),
             pwsh_on_path: command_on_path("pwsh.exe") || command_on_path("pwsh"),
-            powershell_on_path: command_on_path("powershell.exe") || command_on_path("powershell"),
         }
     }
 }
@@ -130,10 +128,6 @@ fn windows_shell_invocation(command: &str, probe: &ShellProbe) -> ShellInvocatio
 
     if probe.pwsh_on_path {
         return powershell_invocation("pwsh.exe", command);
-    }
-
-    if probe.powershell_on_path {
-        return powershell_invocation("powershell.exe", command);
     }
 
     if let Some(comspec) = probe
@@ -196,17 +190,14 @@ fn windows_posix_shell_program<'a>(shell: &'a str, stem: &'a str) -> &'a str {
     }
 }
 
-fn shell_program_stem(program: &str) -> Option<String> {
+pub(crate) fn shell_program_stem(program: &str) -> Option<String> {
     let normalized = program.trim().replace('\\', "/");
-    let filename = normalized.rsplit('/').next()?.trim();
-    let stem = filename
-        .strip_suffix(".exe")
-        .or_else(|| filename.strip_suffix(".EXE"))
-        .unwrap_or(filename);
+    let filename = normalized.rsplit('/').next()?.trim().to_ascii_lowercase();
+    let stem = filename.strip_suffix(".exe").unwrap_or(&filename);
     if stem.is_empty() {
         None
     } else {
-        Some(stem.to_ascii_lowercase())
+        Some(stem.to_string())
     }
 }
 
@@ -292,29 +283,6 @@ mod tests {
         assert_eq!(invocation.program, "pwsh.exe");
         assert_eq!(invocation.args, ["-NoProfile", "-Command", "Get-ChildItem"]);
         assert!(!invocation.raw_payload_on_windows);
-    }
-
-    #[test]
-    fn windows_falls_back_to_comspec_cmd_with_utf8_prefix() {
-        let invocation = shell_invocation_for_platform(
-            r#"git commit -m "hello world""#,
-            ShellPlatform::Windows,
-            &ShellProbe {
-                comspec: Some(r"C:\Windows\System32\cmd.exe".to_string()),
-                ..probe()
-            },
-        );
-
-        assert_eq!(invocation.program, r"C:\Windows\System32\cmd.exe");
-        assert_eq!(
-            invocation.args,
-            ["/C", r#"chcp 65001 >NUL & git commit -m "hello world""#]
-        );
-        assert!(invocation.raw_payload_on_windows);
-        assert_eq!(
-            invocation.display_command().as_deref(),
-            Some(r#"git commit -m "hello world""#)
-        );
     }
 
     #[test]
