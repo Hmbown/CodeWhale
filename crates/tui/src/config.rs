@@ -64,7 +64,6 @@ pub const DEFAULT_VLLM_BASE_URL: &str = "http://localhost:8000/v1";
 pub const DEFAULT_OLLAMA_MODEL: &str = "deepseek-coder:1.3b";
 pub const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434/v1";
 pub const DEFAULT_XIAOMI_MODEL: &str = "mimo-v2.5-pro";
-pub const DEFAULT_XIAOMI_FLASH_MODEL: &str = "mimo-v2-flash";
 pub const DEFAULT_XIAOMI_BASE_URL: &str = "https://token-plan-cn.xiaomimimo.com/v1";
 /// Legacy `deepseek-cn` provider alias.
 ///
@@ -493,11 +492,7 @@ pub fn model_completion_names_for_provider(provider: ApiProvider) -> Vec<&'stati
         ApiProvider::Openai | ApiProvider::Atlascloud | ApiProvider::Ollama => {
             OFFICIAL_DEEPSEEK_MODELS.to_vec()
         }
-        ApiProvider::Xiaomi => vec![
-            DEFAULT_XIAOMI_MODEL,
-            "mimo-v2.5",
-            DEFAULT_XIAOMI_FLASH_MODEL,
-        ],
+        ApiProvider::Xiaomi => vec![DEFAULT_XIAOMI_MODEL, "mimo-v2.5"],
     }
 }
 

@@ -267,7 +267,7 @@ max_subagents = 10 # optional (1-20)
 [providers.xiaomi]
 # api_key = "tp-YOUR_MIMO_API_KEY"           # Token Plan key (tp-xxxxx)
 # base_url = "https://token-plan-cn.xiaomimimo.com/v1"  # cn / sgp / ams cluster
-# model = "mimo-v2.5-pro"                    # mimo-v2.5-pro | mimo-v2.5 | mimo-v2-flash
+# model = "mimo-v2.5-pro"                    # mimo-v2.5-pro | mimo-v2.5
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Web Search Provider

@@ -44,7 +44,6 @@ const PICKER_MODELS_XIAOMI: &[(&str, &str)] = &[
     ("auto", "select per turn"),
     ("mimo-v2.5-pro", "reasoning flagship"),
     ("mimo-v2.5", "omni model"),
-    ("mimo-v2-flash", "fast / cheap"),
 ];
 
 /// Thinking-effort rows shown in the picker, in the order DeepSeek
