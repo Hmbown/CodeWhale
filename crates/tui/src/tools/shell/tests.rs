@@ -21,6 +21,10 @@ fn echo_command(message: &str) -> String {
 }
 
 fn sleep_command(seconds: u64) -> String {
+    let dispatcher = crate::shell_dispatcher::global_dispatcher();
+    if dispatcher.kind().is_powershell() {
+        return format!("Start-Sleep -Seconds {seconds}");
+    }
     #[cfg(windows)]
     {
         let ping_count = seconds.saturating_add(1);
@@ -33,6 +37,10 @@ fn sleep_command(seconds: u64) -> String {
 }
 
 fn sleep_then_echo_command(seconds: u64, message: &str) -> String {
+    let dispatcher = crate::shell_dispatcher::global_dispatcher();
+    if dispatcher.kind().is_powershell() {
+        return format!("Start-Sleep -Seconds {seconds}; echo {message}");
+    }
     #[cfg(windows)]
     {
         let ping_count = seconds.saturating_add(1);
@@ -45,6 +53,10 @@ fn sleep_then_echo_command(seconds: u64, message: &str) -> String {
 }
 
 fn echo_stdin_command() -> String {
+    let dispatcher = crate::shell_dispatcher::global_dispatcher();
+    if dispatcher.kind().is_powershell() {
+        return "[Console]::In.ReadToEnd()".to_string();
+    }
     #[cfg(windows)]
     {
         "more".to_string()
