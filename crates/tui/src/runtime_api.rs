@@ -40,7 +40,6 @@ use crate::runtime_threads::{
 };
 use crate::session_manager::{SavedSession, SessionManager, SessionMetadata, default_sessions_dir};
 use crate::skill_state::SkillStateStore;
-use crate::skills::SkillRegistry;
 use crate::task_manager::{
     NewTaskRequest, SharedTaskManager, TaskManager, TaskManagerConfig, TaskRecord, TaskSummary,
 };
@@ -261,11 +260,13 @@ struct SkillEntry {
     description: String,
     path: PathBuf,
     enabled: bool,
+    is_bundled: bool,
 }
 
 #[derive(Debug, Serialize)]
 struct SkillsResponse {
     directory: PathBuf,
+    directories: Vec<PathBuf>,
     warnings: Vec<String>,
     skills: Vec<SkillEntry>,
 }
@@ -906,20 +907,24 @@ async fn list_skills(
     State(state): State<RuntimeApiState>,
 ) -> Result<Json<SkillsResponse>, ApiError> {
     let skills_dir = resolve_skills_dir(&state.config, &state.workspace);
-    let registry = SkillRegistry::discover(&skills_dir);
+    let registry =
+        crate::skills::discover_for_workspace_and_dir(&state.workspace, &skills_dir);
     let skill_state = state.skill_state.lock().await;
+    let directories = crate::skills::skills_directories(&state.workspace);
     let skills = registry
         .list()
         .iter()
         .map(|skill| SkillEntry {
             name: skill.name.clone(),
             description: skill.description.clone(),
-            path: skills_dir.join(&skill.name).join("SKILL.md"),
+            path: skill.path.clone(),
             enabled: skill_state.is_enabled(&skill.name),
+            is_bundled: crate::skills::is_bundled_skill_name(&skill.name),
         })
         .collect();
     Ok(Json(SkillsResponse {
         directory: skills_dir,
+        directories,
         warnings: registry.warnings().to_vec(),
         skills,
     }))
@@ -931,12 +936,12 @@ async fn set_skill_enabled(
     Json(req): Json<SetSkillEnabledRequest>,
 ) -> Result<Json<SetSkillEnabledResponse>, ApiError> {
     let skills_dir = resolve_skills_dir(&state.config, &state.workspace);
-    let registry = SkillRegistry::discover(&skills_dir);
+    let registry =
+        crate::skills::discover_for_workspace_and_dir(&state.workspace, &skills_dir);
     let exists = registry.list().iter().any(|skill| skill.name == name);
     if !exists {
         return Err(ApiError::not_found(format!(
-            "skill '{name}' not found under {}",
-            skills_dir.display()
+            "skill '{name}' not found"
         )));
     }
 
