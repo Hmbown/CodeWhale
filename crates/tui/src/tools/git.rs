@@ -64,6 +64,8 @@ impl ToolSpec for GitStatusTool {
         let git_ctx = resolve_git_context(context, optional_str(&input, "path"))?;
 
         let mut args = vec![
+            "-c".to_string(),
+            "core.quotepath=false".to_string(),
             "status".to_string(),
             "--porcelain=v1".to_string(),
             "-b".to_string(),
@@ -363,6 +365,38 @@ mod tests {
         assert!(result.success);
         assert!(result.content.contains("##"));
         assert!(result.content.contains("file.txt"));
+    }
+
+    #[tokio::test]
+    async fn git_status_reports_unquoted_unicode_paths() {
+        if !git_available() {
+            return;
+        }
+
+        let tmp = tempdir().expect("tempdir");
+        init_git_repo(tmp.path());
+
+        let file = tmp.path().join("中文-данные.txt");
+        fs::write(&file, "hello\n").expect("write");
+        commit_all(tmp.path(), "init");
+
+        fs::write(&file, "hello\nworld\n").expect("modify");
+
+        let ctx = ToolContext::new(tmp.path());
+        let tool = GitStatusTool;
+        let result = tool.execute(json!({}), &ctx).await.expect("execute");
+        assert!(result.success);
+        assert!(
+            result
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("command"))
+                .and_then(Value::as_str)
+                .is_some_and(|command| command.contains("-c core.quotepath=false"))
+        );
+        assert!(result.content.contains("中文-данные.txt"));
+        assert!(!result.content.contains("\\344"));
+        assert!(!result.content.contains("\\320"));
     }
 
     #[tokio::test]

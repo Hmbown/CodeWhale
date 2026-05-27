@@ -25,6 +25,23 @@ const MAX_SUMMARY_CHARS: usize = 900;
 const DEFAULT_GATE_TIMEOUT_MS: u64 = 120_000;
 const MAX_GATE_TIMEOUT_MS: u64 = 600_000;
 
+fn build_gate_command_parts(command: &str) -> (String, Vec<String>) {
+    (
+        "/bin/sh".to_string(),
+        vec!["-lc".to_string(), command.to_string()],
+    )
+}
+
+fn build_gate_command(command: &str, cwd: &Path) -> Command {
+    let (program, args) = build_gate_command_parts(command);
+    let mut cmd = Command::new(program);
+    cmd.args(args)
+        .current_dir(cwd)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    cmd
+}
+
 pub struct TaskCreateTool;
 pub struct TaskListTool;
 pub struct TaskReadTool;
@@ -288,12 +305,7 @@ impl ToolSpec for TaskGateRunTool {
         }
 
         let started = Instant::now();
-        let mut cmd = Command::new("/bin/sh");
-        cmd.arg("-lc")
-            .arg(&command)
-            .current_dir(&cwd)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        let mut cmd = build_gate_command(&command, &cwd);
         let output =
             tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), cmd.output()).await;
 
@@ -1013,5 +1025,12 @@ mod tests {
         let wait_schema = TaskShellWaitTool.input_schema();
         assert_eq!(wait_schema["required"][0], "task_id");
         assert!(wait_schema["properties"]["gate"].is_object());
+    }
+
+    #[test]
+    fn gate_command_uses_login_shell_invocation() {
+        let (program, args) = build_gate_command_parts("echo hello");
+        assert_eq!(program, "/bin/sh");
+        assert_eq!(args, vec!["-lc".to_string(), "echo hello".to_string()]);
     }
 }

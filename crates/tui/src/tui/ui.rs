@@ -5038,9 +5038,23 @@ async fn apply_command_result(
     Ok(false)
 }
 
+#[cfg(test)]
+use std::process::{Command, Stdio};
+
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 fn open_external_url(url: &str) -> Result<()> {
     crate::utils::open_url(url)
+}
+
+#[cfg(test)]
+fn spawn_external_url_command(mut command: Command) -> Result<()> {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|err| anyhow::anyhow!("failed to launch browser command: {err}"))
 }
 
 fn apply_workspace_runtime_state(app: &mut App, config: &Config, workspace: PathBuf) {

@@ -550,6 +550,28 @@ mod tests {
     }
 
     #[test]
+    fn concrete_resolvers_do_not_cross_contaminate_when_available() {
+        let values = [
+            Git::resolve().map(|v| ("git", v)),
+            Gh::resolve().map(|v| ("gh", v)),
+            RustC::resolve().map(|v| ("rustc", v)),
+            Cargo::resolve().map(|v| ("cargo", v)),
+            Node::resolve().map(|v| ("node", v)),
+        ];
+        let resolved: Vec<(&str, String)> = values.into_iter().flatten().collect();
+
+        for i in 0..resolved.len() {
+            for j in (i + 1)..resolved.len() {
+                assert_ne!(
+                    resolved[i].1, resolved[j].1,
+                    "{} and {} unexpectedly resolved to the same binary",
+                    resolved[i].0, resolved[j].0
+                );
+            }
+        }
+    }
+
+    #[test]
     fn git_resolve_is_cached() {
         let first = Git::resolve();
         let second = Git::resolve();
