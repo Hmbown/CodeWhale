@@ -129,7 +129,7 @@ fn show_single_setting(app: &App, key: &str) -> CommandResult {
             {
                 Ok(config) => config,
                 Err(err) => {
-                    return CommandResult::error(format!("Failed to load config: {err}"));
+                    return CommandResult::error_msg(format!("Failed to load config: {err}"));
                 }
             };
             Some(config.deepseek_base_url())
@@ -460,7 +460,7 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
         "base_url" => {
             let value = value.trim();
             if value.is_empty() {
-                return CommandResult::error("base_url cannot be empty");
+                return CommandResult::error_msg("base_url cannot be empty");
             }
             if persist {
                 match persist_root_string_key(app.config_path.as_deref(), "base_url", value) {
@@ -470,10 +470,10 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
                             path.display()
                         ));
                     }
-                    Err(err) => return CommandResult::error(format!("Failed to save: {err}")),
+                    Err(err) => return CommandResult::error_msg(format!("Failed to save: {err}")),
                 }
             }
-            return CommandResult::error(format!(
+            return CommandResult::error_msg(format!(
                 "base_url must be saved with --save; client base URL is loaded from config on startup. Restart and re-open your session after saving."
             ));
         }
