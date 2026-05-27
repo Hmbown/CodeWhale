@@ -65,13 +65,23 @@ impl ProviderPickerView {
     }
 
     fn move_up(&mut self) {
-        if self.selected_idx > 0 {
+        if self.providers.is_empty() {
+            return;
+        }
+        if self.selected_idx == 0 {
+            self.selected_idx = self.providers.len() - 1;
+        } else {
             self.selected_idx -= 1;
         }
     }
 
     fn move_down(&mut self) {
-        if self.selected_idx + 1 < self.providers.len() {
+        if self.providers.is_empty() {
+            return;
+        }
+        if self.selected_idx + 1 == self.providers.len() {
+            self.selected_idx = 0;
+        } else {
             self.selected_idx += 1;
         }
     }
@@ -498,6 +508,18 @@ mod tests {
     }
 
     #[test]
+    fn list_navigation_wraps_between_first_and_last_provider() {
+        let config = Config::default();
+        let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
+
+        picker.handle_key(key(KeyCode::Up));
+        assert_eq!(picker.selected_provider(), ApiProvider::Ollama);
+
+        picker.handle_key(key(KeyCode::Down));
+        assert_eq!(picker.selected_provider(), ApiProvider::Deepseek);
+    }
+
+    #[test]
     fn enter_with_no_key_transitions_to_key_entry_stage() {
         let config = Config::default();
         let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
@@ -516,8 +538,7 @@ mod tests {
             ..Config::default()
         };
         let mut picker = ProviderPickerView::new(ApiProvider::NvidiaNim, &config);
-        // Move up twice to DeepSeek (index 0), which has a key from the config.
-        picker.handle_key(key(KeyCode::Up));
+        // Move up once to DeepSeek (index 0), which has a key from the config.
         picker.handle_key(key(KeyCode::Up));
         let action = picker.handle_key(key(KeyCode::Enter));
         match action {
