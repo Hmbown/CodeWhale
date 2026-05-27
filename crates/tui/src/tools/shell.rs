@@ -846,16 +846,25 @@ impl ShellManager {
 
         child_env::apply_to_command(&mut cmd, child_env::string_map_env(&exec_env.env));
 
-        // Disable raw mode before spawn; restore on drop regardless of
-        // success/failure/timeout (issue #1690).
-        let _ = crossterm::terminal::disable_raw_mode();
-        struct SyncRawModeGuard;
+        // Disable raw mode before spawn; restore only if raw mode was active
+        // on entry (issue #1690).
+        let raw_mode_was_enabled = crossterm::terminal::is_raw_mode_enabled().unwrap_or(false);
+        if raw_mode_was_enabled {
+            let _ = crossterm::terminal::disable_raw_mode();
+        }
+        struct SyncRawModeGuard {
+            restore: bool,
+        }
         impl Drop for SyncRawModeGuard {
             fn drop(&mut self) {
-                let _ = crossterm::terminal::enable_raw_mode();
+                if self.restore {
+                    let _ = crossterm::terminal::enable_raw_mode();
+                }
             }
         }
-        let _guard = SyncRawModeGuard;
+        let _guard = SyncRawModeGuard {
+            restore: raw_mode_was_enabled,
+        };
 
         let mut child = cmd
             .spawn()
@@ -991,15 +1000,25 @@ impl ShellManager {
         }
         install_parent_death_signal(&mut cmd);
 
-        // Disable raw mode before spawn; restore on drop (issue #1690).
-        let _ = crossterm::terminal::disable_raw_mode();
-        struct InteractiveRawModeGuard;
+        // Disable raw mode before spawn; restore only if raw mode was active
+        // on entry (issue #1690).
+        let raw_mode_was_enabled = crossterm::terminal::is_raw_mode_enabled().unwrap_or(false);
+        if raw_mode_was_enabled {
+            let _ = crossterm::terminal::disable_raw_mode();
+        }
+        struct InteractiveRawModeGuard {
+            restore: bool,
+        }
         impl Drop for InteractiveRawModeGuard {
             fn drop(&mut self) {
-                let _ = crossterm::terminal::enable_raw_mode();
+                if self.restore {
+                    let _ = crossterm::terminal::enable_raw_mode();
+                }
             }
         }
-        let _guard = InteractiveRawModeGuard;
+        let _guard = InteractiveRawModeGuard {
+            restore: raw_mode_was_enabled,
+        };
 
         child_env::apply_to_command(&mut cmd, child_env::string_map_env(&exec_env.env));
 
