@@ -111,3 +111,10 @@ docs/*_PLAN.md
 # direnv
 .envrc
 .direnv
+config.toml
+deepseek.ps1
+pack_claude*.js
+pack_claude*.ps1
+.github/workflows.bak/
+_test_exe.js
+check_scripts.js
