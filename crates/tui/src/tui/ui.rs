@@ -5684,7 +5684,6 @@ fn render(f: &mut Frame, app: &mut App) {
 
     let header_height = 1;
     let footer_height = 1;
-    let body_height = size.height.saturating_sub(header_height + footer_height);
     let slash_menu_entries = visible_slash_menu_entries(app, SLASH_MENU_LIMIT);
     let mention_menu_entries =
         crate::tui::file_mention::visible_mention_menu_entries(app, MENTION_MENU_LIMIT);
@@ -5692,8 +5691,24 @@ fn render(f: &mut Frame, app: &mut App) {
         app.mention_menu_selected = mention_menu_entries.len().saturating_sub(1);
     }
     let context_usage = context_usage_snapshot(app);
+
+    // Defensive two-pass layout: pin the header to the absolute top row,
+    // then split the remaining body area for chat / preview / composer /
+    // footer. This guarantees the header is never vertically centered
+    // regardless of ratatui Flex defaults or terminal size.
+    // Fixes #1834 — macOS terminal title centering.
+    let (header_area, body_area) = {
+        let split = Layout::default()
+            .direction(Direction::Vertical)
+            .flex(ratatui::layout::Flex::Start)
+            .constraints([Constraint::Length(header_height), Constraint::Min(1)])
+            .split(size);
+        (split[0], split[1])
+    };
+
+    let body_height = body_area.height;
     let composer_max_height = body_height
-        .saturating_sub(MIN_CHAT_HEIGHT)
+        .saturating_sub(MIN_CHAT_HEIGHT + footer_height)
         .max(MIN_COMPOSER_HEIGHT);
     let composer_height = {
         let composer_widget = ComposerWidget::new(
@@ -5712,16 +5727,16 @@ fn render(f: &mut Frame, app: &mut App) {
     let pending_preview = build_pending_input_preview(app);
     let preview_height = pending_preview.desired_height(size.width);
 
-    let chunks = Layout::default()
+    let body_chunks = Layout::default()
         .direction(Direction::Vertical)
+        .flex(ratatui::layout::Flex::Start)
         .constraints([
-            Constraint::Length(header_height),   // Header
             Constraint::Min(1),                  // Chat area
             Constraint::Length(preview_height),  // Pending input preview (0 if empty)
             Constraint::Length(composer_height), // Composer
             Constraint::Length(footer_height),   // Footer
         ])
-        .split(size);
+        .split(body_area);
 
     // Render header
     {
@@ -5781,7 +5796,7 @@ fn render(f: &mut Frame, app: &mut App) {
         ));
         let header_widget = HeaderWidget::new(header_data);
         let buf = f.buffer_mut();
-        header_widget.render(chunks[0], buf);
+        header_widget.render(header_area, buf);
     }
 
     // Render chat + sidebar + optional file-tree pane
@@ -5792,19 +5807,19 @@ fn render(f: &mut Frame, app: &mut App) {
         // resize) don't retain stale content from a previous frame.
         Block::default()
             .style(Style::default().bg(app.ui_theme.surface_bg))
-            .render(chunks[1], f.buffer_mut());
+            .render(body_chunks[0], f.buffer_mut());
 
         let mut sidebar_area = None;
 
         // When the file-tree pane is visible and the terminal is wide
         // enough, reserve the left ~25% for the file tree.
         let mut chat_area =
-            if app.file_tree.is_some() && chunks[1].width >= SIDEBAR_VISIBLE_MIN_WIDTH {
+            if app.file_tree.is_some() && body_chunks[0].width >= SIDEBAR_VISIBLE_MIN_WIDTH {
                 app.file_tree_visible = true;
                 let split = Layout::default()
                     .direction(Direction::Horizontal)
                     .constraints([Constraint::Percentage(25), Constraint::Percentage(75)])
-                    .split(chunks[1]);
+                    .split(body_chunks[0]);
                 let tree_area = split[0];
                 let remaining = split[1];
 
@@ -5816,7 +5831,7 @@ fn render(f: &mut Frame, app: &mut App) {
                 remaining
             } else {
                 app.file_tree_visible = false;
-                chunks[1]
+                body_chunks[0]
             };
 
         if let Some(sidebar_width) = sidebar_width_for_chat_area(app, chat_area.width) {
@@ -5868,7 +5883,7 @@ fn render(f: &mut Frame, app: &mut App) {
     // Render pending-input preview (queued/steered messages, if any).
     if preview_height > 0 {
         let buf = f.buffer_mut();
-        pending_preview.render(chunks[2], buf);
+        pending_preview.render(body_chunks[1], buf);
     }
 
     // Render composer
@@ -5880,12 +5895,12 @@ fn render(f: &mut Frame, app: &mut App) {
             &mention_menu_entries,
         );
         let buf = f.buffer_mut();
-        composer_widget.render(chunks[3], buf);
-        composer_widget.cursor_pos(chunks[3])
+        composer_widget.render(body_chunks[2], buf);
+        composer_widget.cursor_pos(body_chunks[2])
     };
-    app.viewport.last_composer_area = Some(chunks[3]);
+    app.viewport.last_composer_area = Some(body_chunks[2]);
     {
-        let area = chunks[3];
+        let area = body_chunks[2];
         let has_panel = app.composer_border && area.height >= 3 && area.width >= 12;
         let inner = if has_panel {
             ratatui::widgets::Block::default()
@@ -5929,11 +5944,11 @@ fn render(f: &mut Frame, app: &mut App) {
     }
 
     // Render footer
-    render_footer(f, chunks[4], app);
+    render_footer(f, body_chunks[3], app);
     // Toast stack overlay (#439): when multiple status toasts are queued,
     // surface the older ones as a 1-2 line strip above the footer so a
     // burst of events isn't collapsed to a single visible message.
-    render_toast_stack_overlay(f, size, chunks[3], chunks[4], app);
+    render_toast_stack_overlay(f, size, body_chunks[2], body_chunks[3], app);
 
     // Decision card overlay (v0.8.43 truth-surface). When a decision card is
     // active, render it centered on top of the transcript.
