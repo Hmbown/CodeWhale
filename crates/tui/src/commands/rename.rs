@@ -20,7 +20,9 @@ pub fn rename(app: &mut App, arg: Option<&str>) -> CommandResult {
     };
 
     if new_title.chars().count() > MAX_TITLE_LEN {
-        return CommandResult::error_msg(format!("Title too long (max {MAX_TITLE_LEN} characters)"));
+        return CommandResult::error_msg(format!(
+            "Title too long (max {MAX_TITLE_LEN} characters)"
+        ));
     }
 
     let session_id = match &app.current_session_id {
@@ -34,7 +36,9 @@ pub fn rename(app: &mut App, arg: Option<&str>) -> CommandResult {
 
     let manager = match SessionManager::default_location() {
         Ok(m) => m,
-        Err(e) => return CommandResult::error_msg(format!("Could not open sessions directory: {e}")),
+        Err(e) => {
+            return CommandResult::error_msg(format!("Could not open sessions directory: {e}"));
+        }
     };
 
     rename_with_manager(new_title, &session_id, &manager, app)

@@ -152,23 +152,6 @@ pub fn family_glyph(family: ToolFamily) -> &'static str {
 }
 
 /// The short verb label for a family — appears in card headers next to the
-/// glyph. Lowercased on purpose; the verb-glyph + label is the new card
-/// title vocabulary.
-#[must_use]
-pub fn family_label(family: ToolFamily) -> &'static str {
-    match family {
-        ToolFamily::Read => "read",
-        ToolFamily::Patch => "patch",
-        ToolFamily::Run => "run",
-        ToolFamily::Find => "find",
-        ToolFamily::Delegate => "delegate",
-        ToolFamily::Fanout => "fanout",
-        ToolFamily::Rlm => "rlm",
-        ToolFamily::Think => "think",
-        ToolFamily::Generic => "tool",
-    }
-}
-
 /// Locale-aware version of [`family_label`]. Returns an owned string so the
 /// caller can use it directly in a `Span` without extra `.to_string()`.
 #[must_use]
@@ -218,9 +201,10 @@ pub fn rail_glyph(rail: CardRail) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{
-        CardRail, ToolFamily, family_glyph, family_label, rail_glyph, tool_family_for_name,
+        CardRail, ToolFamily, family_glyph, family_label_locale, rail_glyph, tool_family_for_name,
         tool_family_for_title, tool_header_summary_for_name,
     };
+    use crate::localization::Locale;
 
     #[test]
     fn legacy_titles_route_to_expected_families() {
@@ -289,7 +273,7 @@ mod tests {
                 "family {family:?} has empty glyph",
             );
             assert!(
-                !family_label(family).is_empty(),
+                !family_label_locale(family, Locale::En).is_empty(),
                 "family {family:?} has empty label",
             );
         }

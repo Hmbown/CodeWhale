@@ -1152,7 +1152,10 @@ fn config_hint_for_key(key: &str) -> &'static str {
     }
 }
 
-fn render_config_editor_value_line(edit: &ConfigEdit, locale: Locale) -> ratatui::text::Line<'static> {
+fn render_config_editor_value_line(
+    edit: &ConfigEdit,
+    locale: Locale,
+) -> ratatui::text::Line<'static> {
     use ratatui::{
         style::Style,
         text::{Line, Span},
@@ -1354,11 +1357,17 @@ impl ModalView for ConfigView {
             )]));
             lines.push(Line::from(""));
             lines.push(Line::from(vec![
-                Span::styled(self.tr(MessageId::ConfigFieldScope), Style::default().fg(palette::TEXT_MUTED)),
+                Span::styled(
+                    self.tr(MessageId::ConfigFieldScope),
+                    Style::default().fg(palette::TEXT_MUTED),
+                ),
                 Span::raw(edit.scope.label(self.locale)),
             ]));
             lines.push(Line::from(vec![
-                Span::styled(self.tr(MessageId::ConfigFieldCurrent), Style::default().fg(palette::TEXT_MUTED)),
+                Span::styled(
+                    self.tr(MessageId::ConfigFieldCurrent),
+                    Style::default().fg(palette::TEXT_MUTED),
+                ),
                 Span::raw(truncate_view_text(&edit.original_value, 60)),
             ]));
             lines.push(Line::from(""));
@@ -1367,7 +1376,10 @@ impl ModalView for ConfigView {
             let hint = config_hint_for_key(&edit.key);
             if !hint.is_empty() {
                 lines.push(Line::from(vec![
-                    Span::styled(self.tr(MessageId::ConfigFieldHint), Style::default().fg(palette::TEXT_MUTED)),
+                    Span::styled(
+                        self.tr(MessageId::ConfigFieldHint),
+                        Style::default().fg(palette::TEXT_MUTED),
+                    ),
                     Span::raw(hint),
                 ]));
             }

@@ -132,8 +132,7 @@ pub fn build_context_inspector_text(app: &App, locale: Locale) -> String {
     let _ = writeln!(
         out,
         "{}",
-        tr(locale, MessageId::CtxInspectorWorkspaceStatus)
-            .replace("{}", workspace_status)
+        tr(locale, MessageId::CtxInspectorWorkspaceStatus).replace("{}", workspace_status)
     );
 
     let _ = writeln!(out);
@@ -215,7 +214,11 @@ fn push_system_prompt_structure(out: &mut String, app: &App, locale: Locale) {
                 let _ = writeln!(
                     out,
                     "    First line: {}",
-                    block.text.lines().next().unwrap_or(tr(locale, MessageId::CtxInspectorEmpty))
+                    block
+                        .text
+                        .lines()
+                        .next()
+                        .unwrap_or(tr(locale, MessageId::CtxInspectorEmpty))
                 );
             } else {
                 let _ = writeln!(
@@ -384,7 +387,12 @@ fn push_tools(out: &mut String, app: &App, locale: Locale) {
 
     let mut rendered = 0usize;
     for detail in app.active_tool_details.values() {
-        push_tool_row(out, tr(locale, MessageId::CtxInspectorActive), detail, locale);
+        push_tool_row(
+            out,
+            tr(locale, MessageId::CtxInspectorActive),
+            detail,
+            locale,
+        );
         rendered += 1;
         if rendered >= MAX_TOOL_ROWS {
             return;

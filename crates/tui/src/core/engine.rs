@@ -33,6 +33,7 @@ use crate::cycle_manager::{
 use crate::error_taxonomy::{ErrorCategory, ErrorEnvelope, StreamError};
 use crate::features::{Feature, Features};
 use crate::llm_client::LlmClient;
+use crate::localization::Locale;
 use crate::mcp::McpPool;
 #[cfg(test)]
 use crate::models::ToolCaller;
@@ -54,7 +55,6 @@ use crate::tools::subagent::{
 use crate::tools::todo::{SharedTodoList, new_shared_todo_list};
 use crate::tools::user_input::{UserInputRequest, UserInputResponse};
 use crate::tools::{ToolContext, ToolRegistryBuilder};
-use crate::localization::Locale;
 use crate::tui::app::AppMode;
 use crate::utils::spawn_supervised;
 

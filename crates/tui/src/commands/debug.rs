@@ -7,10 +7,8 @@ use std::time::Instant;
 use super::CommandResult;
 use crate::client::{PromptInspection, inspect_prompt_for_request};
 use crate::compaction::estimate_input_tokens_conservative;
-use crate::config::ApiProvider;
 use crate::localization::{Locale, MessageId, tr};
 use crate::models::{ContentBlock, MessageRequest, SystemPrompt, context_window_for_model};
-use crate::pricing::CostCurrency;
 use crate::tui::app::{App, AppAction, TurnCacheRecord};
 use crate::tui::history::HistoryCell;
 
@@ -423,8 +421,9 @@ fn humanize_age(d: std::time::Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
+    use crate::config::{ApiProvider, Config};
     use crate::models::{ContentBlock, Message, SystemBlock};
+    use crate::pricing::CostCurrency;
     use crate::tui::app::{App, TuiOptions};
     use crate::tui::history::{GenericToolCell, ToolCell, ToolStatus};
     use std::path::PathBuf;

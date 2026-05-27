@@ -3,7 +3,7 @@
 use std::fmt::Write;
 use std::path::PathBuf;
 
-use crate::config::{ApiProvider, COMMON_DEEPSEEK_MODELS, normalize_model_name_for_provider};
+use crate::config::{COMMON_DEEPSEEK_MODELS, normalize_model_name_for_provider};
 use crate::localization::{MessageId, tr};
 use crate::tui::app::{App, AppAction, AppMode, ReasoningEffort};
 use crate::tui::views::{HelpView, ModalKind, SubAgentsView, subagent_view_agents};
@@ -167,7 +167,8 @@ pub fn models(_app: &mut App) -> CommandResult {
 pub fn subagents(app: &mut App) -> CommandResult {
     if app.view_stack.top_kind() != Some(ModalKind::SubAgents) {
         let agents = subagent_view_agents(app, &app.subagent_cache);
-        app.view_stack.push(SubAgentsView::new(agents, app.ui_locale));
+        app.view_stack
+            .push(SubAgentsView::new(agents, app.ui_locale));
     }
     app.status_message = Some(tr(app.ui_locale, MessageId::SubagentsFetching).to_string());
     CommandResult::action(AppAction::ListSubAgents)
@@ -207,7 +208,10 @@ pub fn workspace_switch(app: &mut App, arg: Option<&str>) -> CommandResult {
     };
 
     if !candidate.exists() {
-        return CommandResult::error_msg(format!("Workspace does not exist: {}", candidate.display()));
+        return CommandResult::error_msg(format!(
+            "Workspace does not exist: {}",
+            candidate.display()
+        ));
     }
     if !candidate.is_dir() {
         return CommandResult::error_msg(format!(
@@ -379,7 +383,7 @@ pub fn translate(app: &mut App) -> CommandResult {
 mod tests {
     use super::*;
     use crate::client::PromptInspection;
-    use crate::config::Config;
+    use crate::config::{ApiProvider, Config};
     use crate::localization::Locale;
     use crate::models::Message;
     use crate::tui::app::{App, AppMode, TuiOptions, TurnCacheRecord};

@@ -394,7 +394,9 @@ pub fn list_remote_skills(app: &mut App) -> CommandResult {
         Ok(RegistryFetchResult::Denied(host)) => {
             CommandResult::error_msg(network_denied_message(&host))
         }
-        Err(err) => CommandResult::error_msg(format_registry_error("Failed to fetch registry", &err)),
+        Err(err) => {
+            CommandResult::error_msg(format_registry_error("Failed to fetch registry", &err))
+        }
     }
 }
 
@@ -414,7 +416,9 @@ fn sync_skills(app: &mut App) -> CommandResult {
     });
 
     match result {
-        Ok(SyncResult::RegistryDenied(host)) => CommandResult::error_msg(network_denied_message(&host)),
+        Ok(SyncResult::RegistryDenied(host)) => {
+            CommandResult::error_msg(network_denied_message(&host))
+        }
         Ok(SyncResult::RegistryNeedsApproval(host)) => {
             CommandResult::error_msg(needs_approval_message(&host))
         }

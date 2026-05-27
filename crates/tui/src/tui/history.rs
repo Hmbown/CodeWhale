@@ -285,7 +285,8 @@ impl HistoryCell {
                 lines
             }
             HistoryCell::Tool(cell) if options.calm_mode => {
-                let mut lines = cell.render(width, options.low_motion, RenderMode::Live, options.locale);
+                let mut lines =
+                    cell.render(width, options.low_motion, RenderMode::Live, options.locale);
                 if lines.len() > TOOL_CARD_SUMMARY_LINES {
                     lines.truncate(TOOL_CARD_SUMMARY_LINES);
                     lines.push(details_affordance_line(
@@ -295,7 +296,9 @@ impl HistoryCell {
                 }
                 lines
             }
-            HistoryCell::Tool(cell) => cell.render(width, options.low_motion, RenderMode::Live, options.locale),
+            HistoryCell::Tool(cell) => {
+                cell.render(width, options.low_motion, RenderMode::Live, options.locale)
+            }
             HistoryCell::User { content } => render_user_message(content, width),
             HistoryCell::Assistant { content, streaming } => render_message(
                 ASSISTANT_GLYPH,
@@ -667,14 +670,25 @@ impl ToolCell {
     /// would be capped + suffixed with "Alt+V for details" in the live view
     /// is emitted in full here.
     pub fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
-        self.render(width, /*low_motion*/ false, RenderMode::Transcript, Locale::En)
+        self.render(
+            width,
+            /*low_motion*/ false,
+            RenderMode::Transcript,
+            Locale::En,
+        )
     }
 
     pub fn lines_with_locale(&self, width: u16, locale: Locale) -> Vec<Line<'static>> {
         self.render(width, false, RenderMode::Live, locale)
     }
 
-    fn render(&self, width: u16, low_motion: bool, mode: RenderMode, locale: Locale) -> Vec<Line<'static>> {
+    fn render(
+        &self,
+        width: u16,
+        low_motion: bool,
+        mode: RenderMode,
+        locale: Locale,
+    ) -> Vec<Line<'static>> {
         match self {
             ToolCell::Exec(cell) => cell.render(width, low_motion, mode, locale),
             ToolCell::Exploring(cell) => cell.lines_with_motion(width, low_motion, locale),
@@ -812,7 +826,12 @@ pub struct ExploringCell {
 
 impl ExploringCell {
     /// Render the exploring cell into lines.
-    pub fn lines_with_motion(&self, width: u16, low_motion: bool, locale: Locale) -> Vec<Line<'static>> {
+    pub fn lines_with_motion(
+        &self,
+        width: u16,
+        low_motion: bool,
+        locale: Locale,
+    ) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
         let all_done = self
             .entries
@@ -875,7 +894,12 @@ pub struct PlanUpdateCell {
 
 impl PlanUpdateCell {
     /// Render the plan update cell into lines.
-    pub fn lines_with_motion(&self, width: u16, low_motion: bool, locale: Locale) -> Vec<Line<'static>> {
+    pub fn lines_with_motion(
+        &self,
+        width: u16,
+        low_motion: bool,
+        locale: Locale,
+    ) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
         lines.push(render_tool_header(
             "Plan",
@@ -1118,7 +1142,12 @@ pub struct DiffPreviewCell {
 }
 
 impl DiffPreviewCell {
-    pub fn lines_with_motion(&self, width: u16, low_motion: bool, locale: Locale) -> Vec<Line<'static>> {
+    pub fn lines_with_motion(
+        &self,
+        width: u16,
+        low_motion: bool,
+        locale: Locale,
+    ) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
         let diff_summary = diff_render::diff_summary_label(&self.diff);
         lines.push(render_tool_header_with_summary(
@@ -1204,7 +1233,12 @@ pub struct ViewImageCell {
 
 impl ViewImageCell {
     /// Render the image view cell into lines.
-    pub fn lines_with_motion(&self, width: u16, low_motion: bool, locale: Locale) -> Vec<Line<'static>> {
+    pub fn lines_with_motion(
+        &self,
+        width: u16,
+        low_motion: bool,
+        locale: Locale,
+    ) -> Vec<Line<'static>> {
         let path = self.path.display().to_string();
         let mut lines = vec![render_tool_header_with_summary(
             "Image",
@@ -1230,7 +1264,12 @@ pub struct WebSearchCell {
 
 impl WebSearchCell {
     /// Render the web search cell into lines.
-    pub fn lines_with_motion(&self, width: u16, low_motion: bool, locale: Locale) -> Vec<Line<'static>> {
+    pub fn lines_with_motion(
+        &self,
+        width: u16,
+        low_motion: bool,
+        locale: Locale,
+    ) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
         lines.push(render_tool_header_with_summary(
             "Search",
@@ -3033,7 +3072,9 @@ fn render_tool_header_with_family(
     low_motion: bool,
     locale: Locale,
 ) -> Line<'static> {
-    render_tool_header_with_family_and_summary(family, None, state, status, started_at, low_motion, locale)
+    render_tool_header_with_family_and_summary(
+        family, None, state, status, started_at, low_motion, locale,
+    )
 }
 
 fn render_tool_header_with_family_and_summary(

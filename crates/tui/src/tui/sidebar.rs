@@ -1424,7 +1424,13 @@ fn render_sidebar_subagents(f: &mut Frame, area: Rect, app: &mut App) {
         role_counts,
     };
     let rows = sidebar_agent_rows(app);
-    let lines = subagent_panel_lines(&summary, &rows, content_width, usable_rows.max(1), app.ui_locale);
+    let lines = subagent_panel_lines(
+        &summary,
+        &rows,
+        content_width,
+        usable_rows.max(1),
+        app.ui_locale,
+    );
 
     render_sidebar_section(f, area, "Agents", lines, Vec::new(), app);
 }

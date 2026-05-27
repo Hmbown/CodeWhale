@@ -1701,7 +1701,11 @@ mod tests {
                 .description(Locale::En)
                 .contains("filesystem and network access")
         );
-        assert!(ElevationOption::Abort.description(Locale::En).contains("Cancel"));
+        assert!(
+            ElevationOption::Abort
+                .description(Locale::En)
+                .contains("Cancel")
+        );
     }
 
     #[test]

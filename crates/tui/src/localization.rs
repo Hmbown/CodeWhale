@@ -1765,8 +1765,12 @@ fn english(id: MessageId) -> &'static str {
         MessageId::VimModeInsert => "-- INSERT --",
         MessageId::VimModeVisual => "-- VISUAL --",
         MessageId::OnboardWelcomeTitle => "codewhale",
-        MessageId::OnboardWelcomeSubtitle => "A focused terminal workspace for longer model sessions.",
-        MessageId::OnboardWelcomeDesc => "You'll add an API key, review trust for this directory, and then land in the chat.",
+        MessageId::OnboardWelcomeSubtitle => {
+            "A focused terminal workspace for longer model sessions."
+        }
+        MessageId::OnboardWelcomeDesc => {
+            "You'll add an API key, review trust for this directory, and then land in the chat."
+        }
         MessageId::OnboardWelcomePressEnter => "Press Enter to continue.",
         MessageId::OnboardWelcomeCtrlCExit => "Ctrl+C exits at any point.",
         MessageId::CtxInspectorTitle => "Session Context",
@@ -1777,17 +1781,25 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CtxInspectorNotSampled => "not sampled yet",
         MessageId::CtxInspectorEmpty => "(empty)",
         MessageId::CtxInspectorSystemPrompt => "System Prompt Structure",
-        MessageId::CtxInspectorStablePrefix => "  Stable prefix: {} block(s), ~{} tokens  [cache-friendly]",
-        MessageId::CtxInspectorVolatileWorkingSet => "  Volatile working set: 1 block, ~{} tokens  [changes every turn]",
+        MessageId::CtxInspectorStablePrefix => {
+            "  Stable prefix: {} block(s), ~{} tokens  [cache-friendly]"
+        }
+        MessageId::CtxInspectorVolatileWorkingSet => {
+            "  Volatile working set: 1 block, ~{} tokens  [changes every turn]"
+        }
         MessageId::CtxInspectorNone => "none",
         MessageId::CtxInspectorTotal => "  Total: {} block(s), ~{} tokens",
         MessageId::CtxInspectorTextPromptLayers => "  Text prompt layers: {} layer(s), ~{} tokens",
         MessageId::CtxInspectorSingleBlob => "  Single text blob (~{} tokens) [stable prefix only]",
         MessageId::CtxInspectorNoSystemPrompt => "  No system prompt set.",
-        MessageId::CtxInspectorTip => "  Tip: Stable prefix blocks are DeepSeek V4 prefix-cache eligible. Keep the system prompt append-only to maximize reuse.",
+        MessageId::CtxInspectorTip => {
+            "  Tip: Stable prefix blocks are DeepSeek V4 prefix-cache eligible. Keep the system prompt append-only to maximize reuse."
+        }
         MessageId::CtxInspectorReferences => "References",
         MessageId::CtxInspectorMoreReferences => "- ... {} more reference(s)",
-        MessageId::CtxInspectorNoReferences => "- No file, directory, or media references recorded yet.",
+        MessageId::CtxInspectorNoReferences => {
+            "- No file, directory, or media references recorded yet."
+        }
         MessageId::CtxInspectorIncluded => "included",
         MessageId::CtxInspectorAttached => "attached",
         MessageId::CtxInspectorNotIncluded => "not included",

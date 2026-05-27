@@ -708,12 +708,15 @@ mod tests {
     #[test]
     fn narrow_header_keeps_context_percent_visible() {
         let rendered = render_header(
-            HeaderData::new(AppMode::Agent, "", "", true, palette::DEEPSEEK_INK, Locale::En).with_usage(
-                0,
-                Some(128_000),
-                0.0,
-                Some(48_000),
-            ),
+            HeaderData::new(
+                AppMode::Agent,
+                "",
+                "",
+                true,
+                palette::DEEPSEEK_INK,
+                Locale::En,
+            )
+            .with_usage(0, Some(128_000), 0.0, Some(48_000)),
             14,
         );
 

@@ -1502,7 +1502,11 @@ pub struct ElevationWidget<'a> {
 
 impl<'a> ElevationWidget<'a> {
     pub fn new(request: &'a ElevationRequest, selected: usize, locale: Locale) -> Self {
-        Self { request, selected, locale }
+        Self {
+            request,
+            selected,
+            locale,
+        }
     }
 }
 

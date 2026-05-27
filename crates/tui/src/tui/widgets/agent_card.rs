@@ -297,7 +297,13 @@ impl FanoutCard {
         } else {
             ToolFamily::Fanout
         };
-        lines.push(card_header(family, header_status, &self.kind, &title, locale));
+        lines.push(card_header(
+            family,
+            header_status,
+            &self.kind,
+            &title,
+            locale,
+        ));
         lines.push(Line::from(vec![
             Span::styled("  ", Style::default()),
             Span::styled(
