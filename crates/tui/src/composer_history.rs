@@ -190,12 +190,46 @@ fn append_history_entries_to<'a>(
     }
 
     let payload = entries.join("\n") + "\n";
-    if let Err(err) = crate::utils::write_atomic(path, payload.as_bytes()) {
+    if let Err(err) = write_history_atomic(path, payload.as_bytes()) {
         tracing::warn!(
             "Failed to persist composer history at {}: {err}",
             path.display()
         );
     }
+}
+
+fn write_history_atomic(path: &Path, payload: &[u8]) -> std::io::Result<()> {
+    const RETRY_DELAYS: &[Duration] = &[
+        Duration::from_millis(5),
+        Duration::from_millis(10),
+        Duration::from_millis(25),
+        Duration::from_millis(50),
+        Duration::from_millis(100),
+        Duration::from_millis(200),
+        Duration::from_millis(400),
+    ];
+
+    for (attempt, delay) in RETRY_DELAYS
+        .iter()
+        .map(Some)
+        .chain(std::iter::once(None))
+        .enumerate()
+    {
+        match crate::utils::write_atomic(path, payload) {
+            Ok(()) => return Ok(()),
+            Err(err) if delay.is_some() => {
+                tracing::debug!(
+                    "Retrying composer history write to {} after attempt {} failed: {err}",
+                    path.display(),
+                    attempt + 1
+                );
+                std::thread::sleep(*delay.expect("delay checked"));
+            }
+            Err(err) => return Err(err),
+        }
+    }
+
+    unreachable!("retry iterator always ends with a final write attempt")
 }
 
 #[cfg(test)]
