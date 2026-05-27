@@ -336,6 +336,7 @@ mod tests {
             source: ExecSource::Assistant,
             interaction: None,
             output_summary: None,
+            live_output: None,
         }))
     }
 

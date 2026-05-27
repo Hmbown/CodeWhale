@@ -1643,6 +1643,7 @@ fn active_tool_status_label_summarizes_live_tool_group() {
             source: ExecSource::Assistant,
             interaction: None,
             output_summary: None,
+            live_output: None,
         })),
     );
     active.push_tool(
@@ -1685,6 +1686,7 @@ fn active_tool_status_label_strips_shell_wrappers_from_ci_polling() {
             source: ExecSource::Assistant,
             interaction: None,
             output_summary: None,
+            live_output: None,
         })),
     );
     app.active_cell = Some(active);
@@ -3722,6 +3724,7 @@ fn terminal_pause_has_live_owner_only_for_running_exec_cells() {
             source: ExecSource::Assistant,
             interaction: Some("interactive".to_string()),
             output_summary: None,
+            live_output: None,
         })),
     );
     app.active_cell = Some(active);

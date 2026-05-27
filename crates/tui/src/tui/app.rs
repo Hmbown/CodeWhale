@@ -2598,6 +2598,75 @@ impl App {
         self.needs_redraw = true;
     }
 
+/// Poll shell manager for live output of running exec cells and update
+    /// their `live_output` field so the TUI shows incremental progress.
+    /// Called from the idle frame handler in `run_event_loop`.
+    pub fn poll_shell_progress(&mut self) {
+        use crate::tui::history::{ExecCell, ToolCell};
+
+        let Some(ref shell_mgr) = self.runtime_services.shell_manager else {
+            return;
+        };
+        let Some(ref active) = self.active_cell else {
+            return;
+        };
+
+        // Collect (index, command) of running exec cells
+        let mut running_execs: Vec<(usize, String)> = Vec::new();
+        for (i, entry) in active.entries().iter().enumerate() {
+            if let HistoryCell::Tool(ToolCell::Exec(ExecCell {
+                command,
+                status: crate::tui::history::ToolStatus::Running,
+                ..
+            })) = entry
+            {
+                running_execs.push((i, command.clone()));
+            }
+        }
+        if running_execs.is_empty() {
+            return;
+        }
+
+        // Get live output from shell manager
+        let jobs = match shell_mgr.lock() {
+            Ok(mut mgr) => mgr.list_jobs(),
+            Err(_) => return,
+        };
+
+        let active_ref = self.active_cell.as_mut().expect("active_cell just checked");
+        let mut updated = false;
+        for (idx, cmd) in &running_execs {
+            let cmd_prefix: String = cmd.chars().take(100).collect();
+            for job in &jobs {
+                if job.status == crate::tools::shell::ShellStatus::Running {
+                    let job_prefix: String = job.command.chars().take(100).collect();
+                    if cmd_prefix == job_prefix {
+                        let tail = if !job.stderr_tail.trim().is_empty() {
+                            job.stderr_tail.trim()
+                        } else {
+                            job.stdout_tail.trim()
+                        };
+                        if !tail.is_empty() {
+                            if let Some(HistoryCell::Tool(ToolCell::Exec(ref mut ec))) =
+                                active_ref.entry_mut(*idx)
+                            {
+                                let new_output = tail.to_string();
+                                if ec.live_output.as_deref() != Some(&new_output) {
+                                    ec.live_output = Some(new_output);
+                                    updated = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if updated {
+            self.bump_active_cell_revision();
+        }
+    }
+
+
     /// Total number of cells in the *virtual* transcript: `history.len()`
     /// plus active cell entries (if any).
     #[must_use]

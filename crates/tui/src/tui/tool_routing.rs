@@ -112,6 +112,7 @@ pub(super) fn handle_tool_call_started(
                     source,
                     interaction: Some(summary.clone()),
                     output_summary: None,
+                    live_output: None,
                 })),
             );
             return;
@@ -144,6 +145,7 @@ pub(super) fn handle_tool_call_started(
                 source,
                 interaction: None,
                 output_summary: None,
+                live_output: None,
             })),
         );
         return;
