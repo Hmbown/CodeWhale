@@ -325,7 +325,7 @@ mod tests {
         let mut v = ThemePickerView::new("system".to_string());
 
         let action = v.handle_key(key(KeyCode::Up));
-        assert_eq!(selected_name(&action), Some(ThemeId::GruvboxDark.name()));
+        assert_eq!(selected_name(&action), Some(ThemeId::Claude.name()));
 
         let action = v.handle_key(key(KeyCode::Down));
         assert_eq!(selected_name(&action), Some(ThemeId::System.name()));
