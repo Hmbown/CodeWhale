@@ -56,6 +56,8 @@ const SECONDS_PER_DAY: u64 = 24 * 60 * 60;
 pub struct TuiLogGuard {
     #[cfg(unix)]
     saved_stderr_fd: Option<libc::c_int>,
+    #[cfg(windows)]
+    saved_stderr_handle: Option<windows::Win32::Foundation::HANDLE>,
     _file: File,
     // Exposed via `log_path()` for diagnostics (e.g. `/doctor`,
     // `--print-log-path`). Currently no caller — keep the accessor
@@ -90,7 +92,21 @@ impl Drop for TuiLogGuard {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+impl Drop for TuiLogGuard {
+    fn drop(&mut self) {
+        if let Some(handle) = self.saved_stderr_handle.take() {
+            unsafe {
+                let _ = windows::Win32::System::Console::SetStdHandle(
+                    windows::Win32::System::Console::STD_ERROR_HANDLE,
+                    handle,
+                );
+            }
+        }
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
 impl Drop for TuiLogGuard {
     fn drop(&mut self) {}
 }
@@ -147,10 +163,14 @@ pub fn init() -> Result<TuiLogGuard> {
 
     #[cfg(unix)]
     let saved_stderr_fd = redirect_stderr_to(&file).ok();
+    #[cfg(windows)]
+    let saved_stderr_handle = redirect_stderr_to(&file).ok();
 
     Ok(TuiLogGuard {
         #[cfg(unix)]
         saved_stderr_fd,
+        #[cfg(windows)]
+        saved_stderr_handle,
         _file: file,
         log_path,
     })
@@ -244,6 +264,27 @@ fn redirect_stderr_to(file: &File) -> Result<libc::c_int> {
         }
         Ok(saved)
     }
+}
+
+#[cfg(windows)]
+fn redirect_stderr_to(file: &File) -> Result<windows::Win32::Foundation::HANDLE> {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::System::Console::{
+        GetStdHandle, SetStdHandle, STD_ERROR_HANDLE,
+    };
+    // SAFETY: GetStdHandle is always available; returns INVALID_HANDLE_VALUE
+    // on failure or null-like handles for console-less processes.
+    let saved = unsafe { GetStdHandle(STD_ERROR_HANDLE) };
+    if saved.is_invalid() {
+        return Err(anyhow::anyhow!("GetStdHandle(STD_ERROR_HANDLE) failed"));
+    }
+    let target = file.as_raw_handle();
+    // SAFETY: SetStdHandle redirects stderr. We save the original handle
+    // so the guard can restore it on drop.
+    unsafe {
+        let _ = SetStdHandle(STD_ERROR_HANDLE, windows::Win32::Foundation::HANDLE(target as isize));
+    }
+    Ok(saved)
 }
 
 #[cfg(test)]
