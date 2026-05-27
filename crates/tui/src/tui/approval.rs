@@ -35,7 +35,7 @@ use codewhale_execpolicy::{
 };
 use crossterm::event::{KeyCode, KeyEvent};
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
 /// Determines when tool executions require user approval
@@ -432,6 +432,12 @@ fn normalize_persistent_permission_path(raw: &str, workspace: Option<&Path>) -> 
     } else {
         normalize_permission_path(raw_path)
     };
+    if normalized
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return None;
+    }
 
     let mut path = normalize_path_pattern(&permission_path_to_string(&normalized));
     if path.is_empty() {
@@ -1826,6 +1832,30 @@ mod tests {
             "apply_patch",
             &json!({
                 "patch": "--- a/docs/a.md\n+++ b/docs/a.md\n@@ -1,2 +1,2 @@\n--- secrets/token.txt\n+++ secrets/token.txt\n"
+            }),
+        );
+
+        assert_eq!(
+            rules,
+            vec![ToolPermissionRule::file_path(
+                "apply_patch",
+                PermissionDecision::Allow,
+                "docs/a.md"
+            )]
+        );
+    }
+
+    #[test]
+    fn persistent_permission_rules_reject_path_traversal_segments() {
+        assert!(
+            build_persistent_permission_rules("read_file", &json!({"path": "../secrets/token"}))
+                .is_empty()
+        );
+
+        let rules = build_persistent_permission_rules(
+            "apply_patch",
+            &json!({
+                "patch": "--- a/docs/a.md\n+++ b/docs/a.md\n@@ -1 +1 @@\n-old\n+new\n--- a/../secrets/token\n+++ b/../secrets/token\n@@ -1 +1 @@\n-old\n+new\n"
             }),
         );
 
