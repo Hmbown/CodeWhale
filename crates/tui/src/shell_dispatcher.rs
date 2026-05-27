@@ -17,6 +17,8 @@
 
 use std::fs::OpenOptions;
 use std::io::Write;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::path::Path;
 use std::process::Command;
 use std::sync::Mutex;
@@ -181,6 +183,16 @@ impl ShellDispatcher {
             cmd.arg(self.kind.command_flag());
             cmd.arg("-Command");
             cmd.arg(shell_command);
+        } else if matches!(self.kind, ShellKind::Cmd) {
+            cmd.arg(self.kind.command_flag());
+            #[cfg(windows)]
+            {
+                cmd.raw_arg(shell_command);
+            }
+            #[cfg(not(windows))]
+            {
+                cmd.arg(shell_command);
+            }
         } else {
             cmd.arg(self.kind.command_flag());
             cmd.arg(shell_command);
