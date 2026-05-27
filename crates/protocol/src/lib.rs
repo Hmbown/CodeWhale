@@ -1,7 +1,37 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+pub mod runtime {
+    use super::*;
+
+    pub const RUNTIME_EVENT_ENVELOPE_SCHEMA_VERSION: u32 = 1;
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct RuntimeEventEnvelope {
+        #[serde(default = "default_runtime_event_envelope_schema_version")]
+        pub schema_version: u32,
+        pub seq: u64,
+        pub event: String,
+        pub kind: String,
+        pub thread_id: String,
+        pub turn_id: Option<String>,
+        pub item_id: Option<String>,
+        pub timestamp: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub created_at: Option<String>,
+        pub payload: Value,
+        #[serde(default)]
+        #[serde(flatten)]
+        pub extra: BTreeMap<String, Value>,
+    }
+
+    fn default_runtime_event_envelope_schema_version() -> u32 {
+        RUNTIME_EVENT_ENVELOPE_SCHEMA_VERSION
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Envelope<T> {

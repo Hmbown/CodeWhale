@@ -983,6 +983,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "codewhale-config",
+ "codewhale-protocol",
  "codewhale-secrets",
  "codewhale-tools",
  "colored",
