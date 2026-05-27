@@ -283,6 +283,20 @@ impl ShellDispatcher {
     fn detect_shell() -> ShellKind {
         #[cfg(windows)]
         {
+            // 1. $env:SHELL — WSL interop or Git Bash often set this.
+            if let Ok(shell) = std::env::var("SHELL") {
+                let lower = shell.to_lowercase();
+                if lower.contains("bash") {
+                    return ShellKind::Bash;
+                }
+                if lower.contains("pwsh") {
+                    return ShellKind::Pwsh;
+                }
+                if lower.contains("powershell") {
+                    return ShellKind::WindowsPowerShell;
+                }
+            }
+
             if Self::find_exe("pwsh.exe") {
                 return ShellKind::Pwsh;
             }

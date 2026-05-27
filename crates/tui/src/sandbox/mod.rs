@@ -157,11 +157,23 @@ impl CommandSpec {
 
     /// Get the original command as a single string (for display).
     pub fn display_command(&self) -> String {
-        if (self.program == "sh" || self.program == "bash")
-            && self.args.len() == 2
+        if self.args.len() == 2
             && self.args[0] == "-c"
+            && matches!(
+                self.program.as_str(),
+                "sh" | "bash" | "/bin/sh" | "/bin/bash" | "/usr/bin/sh" | "/usr/bin/bash"
+            )
         {
             // For shell commands, show the actual command
+            self.args[1].clone()
+        } else if self.args.len() == 2
+            && self.args[0] == "-c"
+            && !self.program.eq_ignore_ascii_case("cmd")
+            && !self.program.eq_ignore_ascii_case("pwsh")
+            && !self.program.eq_ignore_ascii_case("pwsh.exe")
+            && !self.program.eq_ignore_ascii_case("powershell")
+            && !self.program.eq_ignore_ascii_case("powershell.exe")
+        {
             self.args[1].clone()
         } else if self.program.eq_ignore_ascii_case("cmd")
             && self.args.len() == 2
@@ -615,6 +627,21 @@ mod tests {
         // Program and args depend on the detected shell.
         assert!(!spec.program.is_empty(), "program must not be empty");
         assert!(!spec.args.is_empty(), "args must not be empty");
+        assert_eq!(spec.display_command(), "echo hello");
+    }
+
+    #[test]
+    fn test_command_spec_shell_custom_posix_path_display() {
+        let spec = CommandSpec {
+            program: "/bin/zsh".to_string(),
+            args: vec!["-c".to_string(), "echo hello".to_string()],
+            cwd: PathBuf::from("/tmp"),
+            env: HashMap::new(),
+            timeout: Duration::from_secs(30),
+            sandbox_policy: SandboxPolicy::default(),
+            justification: None,
+        };
+
         assert_eq!(spec.display_command(), "echo hello");
     }
 
