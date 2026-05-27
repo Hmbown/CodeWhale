@@ -2342,6 +2342,75 @@ fn event_poll_timeout_has_nonzero_floor() {
     );
 }
 
+fn complete_release_json(tag: &str) -> serde_json::Value {
+    let assets = REQUIRED_RELEASE_ASSETS
+        .iter()
+        .map(|name| serde_json::json!({ "name": name, "state": "uploaded" }))
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "tag_name": tag,
+        "draft": false,
+        "prerelease": false,
+        "assets": assets,
+    })
+}
+
+#[test]
+fn version_hint_requires_complete_release_assets() {
+    let complete = complete_release_json("v0.8.47");
+    let hint = version_hint_from_release_json(&complete, "0.8.46").expect("newer complete release");
+    assert!(hint.contains("v0.8.47 available"));
+
+    let mut missing_manifest = complete_release_json("v0.8.47");
+    missing_manifest["assets"] = serde_json::Value::Array(
+        missing_manifest["assets"]
+            .as_array()
+            .expect("assets")
+            .iter()
+            .filter(|asset| {
+                asset.get("name").and_then(serde_json::Value::as_str)
+                    != Some("codewhale-artifacts-sha256.txt")
+            })
+            .cloned()
+            .collect(),
+    );
+    assert!(
+        version_hint_from_release_json(&missing_manifest, "0.8.46").is_none(),
+        "do not advertise a release before checksums are uploaded"
+    );
+
+    let mut pending_asset = complete_release_json("v0.8.47");
+    pending_asset["assets"].as_array_mut().expect("assets")[0]["state"] = serde_json::json!("open");
+    assert!(
+        version_hint_from_release_json(&pending_asset, "0.8.46").is_none(),
+        "do not advertise a release before every asset is uploaded"
+    );
+
+    let mut missing_state = complete_release_json("v0.8.47");
+    missing_state["assets"].as_array_mut().expect("assets")[0]
+        .as_object_mut()
+        .expect("asset object")
+        .remove("state");
+    assert!(
+        version_hint_from_release_json(&missing_state, "0.8.46").is_none(),
+        "do not accept malformed asset state as uploaded"
+    );
+}
+
+#[test]
+fn version_hint_ignores_draft_prerelease_and_current_versions() {
+    let mut draft = complete_release_json("v0.8.47");
+    draft["draft"] = serde_json::Value::Bool(true);
+    assert!(version_hint_from_release_json(&draft, "0.8.46").is_none());
+
+    let mut prerelease = complete_release_json("v0.8.47");
+    prerelease["prerelease"] = serde_json::Value::Bool(true);
+    assert!(version_hint_from_release_json(&prerelease, "0.8.46").is_none());
+
+    let current = complete_release_json("v0.8.46");
+    assert!(version_hint_from_release_json(&current, "0.8.46").is_none());
+}
+
 #[test]
 #[cfg(any(unix, windows))]
 fn external_url_launcher_does_not_wait_for_browser_process() {
