@@ -13,7 +13,7 @@ const ASSET_MATRIX = {
     arm64: ["codewhale-macos-arm64", "codewhale-tui-macos-arm64"],
   },
   win32: {
-    x64: ["codewhale-windows-x64.exe", "codewhale-tui-windows-x64.exe"],
+    x64: ["codewhale-windows-x64.exe", "codewhale-tui-windows-x64.exe", "codewhale.bat"],
   },
 };
 
