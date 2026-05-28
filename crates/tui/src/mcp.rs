@@ -248,6 +248,16 @@ pub struct McpServerConfig {
     #[serde(default)]
     pub env: HashMap<String, String>,
     pub url: Option<String>,
+    /// Optional explicit HTTP transport override.
+    ///
+    /// By default URL-based MCP servers use Streamable HTTP first and fall
+    /// back to legacy SSE only when the server rejects Streamable HTTP with
+    /// a known incompatible status. Set this to `"sse"` for legacy SSE
+    /// endpoints that must start with a long-lived GET endpoint discovery
+    /// stream and cannot accept an initial POST to the configured URL.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transport: Option<String>,
     #[serde(default)]
     pub connect_timeout: Option<u64>,
     #[serde(default)]
@@ -1091,10 +1101,22 @@ fn sse_field_value<'a>(line: &'a str, field: &str) -> Option<&'a str> {
     Some(value.strip_prefix(' ').unwrap_or(value))
 }
 
-fn is_legacy_sse_endpoint_url(url: &str) -> bool {
-    reqwest::Url::parse(url)
-        .map(|url| url.path().trim_end_matches('/').ends_with("/sse"))
+fn is_legacy_sse_transport(config: &McpServerConfig) -> bool {
+    config
+        .transport
+        .as_deref()
+        .map(|transport| transport.trim().eq_ignore_ascii_case("sse"))
         .unwrap_or(false)
+}
+
+fn validate_mcp_transport(transport: Option<&str>) -> Result<()> {
+    let Some(transport) = transport else {
+        return Ok(());
+    };
+    if transport.trim().eq_ignore_ascii_case("sse") {
+        return Ok(());
+    }
+    anyhow::bail!("Unsupported MCP transport '{transport}'. Supported values: sse");
 }
 
 fn response_id_matches(id: Option<&serde_json::Value>, expected_id: &str) -> bool {
@@ -1237,7 +1259,7 @@ impl McpConnection {
                 }
             }
             let client = client_builder.build()?;
-            if is_legacy_sse_endpoint_url(url) {
+            if is_legacy_sse_transport(&config) {
                 Box::new(
                     SseTransport::connect(
                         client,
@@ -2494,6 +2516,7 @@ fn mcp_template_json() -> Result<String> {
             args: vec!["./path/to/your-mcp-server.js".to_string()],
             env: HashMap::new(),
             url: None,
+            transport: None,
             connect_timeout: None,
             execute_timeout: None,
             read_timeout: None,
@@ -2534,10 +2557,12 @@ pub fn add_server_config(
     command: Option<String>,
     url: Option<String>,
     args: Vec<String>,
+    transport: Option<String>,
 ) -> Result<()> {
     if command.is_none() && url.is_none() {
         anyhow::bail!("Provide either a command or URL for MCP server '{name}'.");
     }
+    validate_mcp_transport(transport.as_deref())?;
     let mut cfg = load_config(path)?;
     cfg.servers.insert(
         name,
@@ -2546,6 +2571,7 @@ pub fn add_server_config(
             args,
             env: HashMap::new(),
             url,
+            transport,
             connect_timeout: None,
             execute_timeout: None,
             read_timeout: None,
@@ -2630,7 +2656,11 @@ fn snapshot_from_config(
         .iter()
         .map(|(name, server)| {
             let transport = if server.url.is_some() {
-                "http/sse"
+                if is_legacy_sse_transport(server) {
+                    "sse"
+                } else {
+                    "http/sse"
+                }
             } else {
                 "stdio"
             };
@@ -2841,6 +2871,7 @@ mod tests {
             args: vec!["server.js".into()],
             env: HashMap::new(),
             url: None,
+            transport: None,
             connect_timeout: None,
             execute_timeout: None,
             read_timeout: None,
@@ -3001,6 +3032,7 @@ mod tests {
             Some("node".to_string()),
             None,
             vec!["server.js".to_string()],
+            None,
         )
         .unwrap();
         set_server_enabled(&path, "local", false).unwrap();
@@ -3019,6 +3051,54 @@ mod tests {
     }
 
     #[test]
+    fn test_mcp_config_adds_explicit_sse_transport() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp.json");
+
+        add_server_config(
+            &path,
+            "legacy".to_string(),
+            None,
+            Some("https://example.com/v1/mcp/sse".to_string()),
+            Vec::new(),
+            Some("sse".to_string()),
+        )
+        .unwrap();
+
+        let cfg = load_config(&path).unwrap();
+        assert_eq!(
+            cfg.servers
+                .get("legacy")
+                .and_then(|server| server.transport.as_deref()),
+            Some("sse")
+        );
+
+        let snapshot = manager_snapshot_from_config(&path, false).unwrap();
+        assert_eq!(snapshot.servers[0].transport, "sse");
+    }
+
+    #[test]
+    fn test_mcp_config_rejects_unknown_transport() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp.json");
+
+        let err = add_server_config(
+            &path,
+            "bad".to_string(),
+            None,
+            Some("https://example.com/mcp".to_string()),
+            Vec::new(),
+            Some("streamable".to_string()),
+        )
+        .expect_err("unknown transport should fail");
+
+        assert!(
+            format!("{err:#}").contains("Unsupported MCP transport"),
+            "got: {err:#}"
+        );
+    }
+
+    #[test]
     fn test_server_effective_timeouts() {
         let global = McpTimeouts::default();
 
@@ -3027,6 +3107,7 @@ mod tests {
             args: vec![],
             env: HashMap::new(),
             url: None,
+            transport: None,
             connect_timeout: Some(20),
             execute_timeout: None,
             read_timeout: Some(180),
@@ -3137,6 +3218,7 @@ mod tests {
             args: Vec::new(),
             env: HashMap::new(),
             url: None,
+            transport: None,
             connect_timeout: None,
             execute_timeout: None,
             read_timeout: None,
@@ -3306,6 +3388,7 @@ mod tests {
                 args: vec!["hi".into()],
                 env: Default::default(),
                 url: None,
+                transport: None,
                 connect_timeout: None,
                 execute_timeout: None,
                 read_timeout: None,
@@ -3426,15 +3509,23 @@ mod tests {
     }
 
     #[test]
-    fn legacy_sse_endpoint_url_detects_sse_paths_only() {
-        assert!(is_legacy_sse_endpoint_url(
-            "https://example.com/mcp/abc/sse"
-        ));
-        assert!(is_legacy_sse_endpoint_url(
-            "https://example.com/mcp/abc/sse/"
-        ));
-        assert!(!is_legacy_sse_endpoint_url("https://example.com/mcp"));
-        assert!(!is_legacy_sse_endpoint_url("not a url"));
+    fn legacy_sse_transport_requires_explicit_config() {
+        let mut server = test_server_config();
+        server.url = Some("https://example.com/mcp/abc/sse".to_string());
+
+        assert!(
+            !is_legacy_sse_transport(&server),
+            "/sse paths must not force legacy SSE without an explicit transport override"
+        );
+
+        server.transport = Some("sse".to_string());
+        assert!(is_legacy_sse_transport(&server));
+
+        server.transport = Some("SSE".to_string());
+        assert!(is_legacy_sse_transport(&server));
+
+        server.transport = Some("http".to_string());
+        assert!(!is_legacy_sse_transport(&server));
     }
 
     #[test]
@@ -3562,6 +3653,7 @@ mod tests {
             args: vec![],
             env: HashMap::new(),
             url: Some(format!("http://{addr}/mcp")),
+            transport: None,
             connect_timeout: Some(2),
             execute_timeout: None,
             read_timeout: None,

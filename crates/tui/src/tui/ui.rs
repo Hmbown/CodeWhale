@@ -5193,12 +5193,16 @@ async fn handle_mcp_ui_action(
             args,
         } => {
             changed = true;
-            mcp::add_server_config(&path, name.clone(), Some(command), None, args)
+            mcp::add_server_config(&path, name.clone(), Some(command), None, args, None)
                 .map(|()| message = Some(format!("Added MCP stdio server '{name}'")))
         }
-        crate::tui::app::McpUiAction::AddHttp { name, url } => {
+        crate::tui::app::McpUiAction::AddHttp {
+            name,
+            url,
+            transport,
+        } => {
             changed = true;
-            mcp::add_server_config(&path, name.clone(), None, Some(url), Vec::new())
+            mcp::add_server_config(&path, name.clone(), None, Some(url), Vec::new(), transport)
                 .map(|()| message = Some(format!("Added MCP HTTP/SSE server '{name}'")))
         }
         crate::tui::app::McpUiAction::Enable { name } => {

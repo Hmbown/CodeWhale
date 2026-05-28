@@ -631,6 +631,9 @@ enum McpCommand {
         /// URL for streamable HTTP/SSE server
         #[arg(long, conflicts_with = "command")]
         url: Option<String>,
+        /// Explicit URL transport override. Use "sse" for legacy SSE endpoints.
+        #[arg(long, requires = "url")]
+        transport: Option<String>,
         /// Arguments for command-based servers
         #[arg(long = "arg")]
         args: Vec<String>,
@@ -1417,6 +1420,7 @@ fn mcp_template_json() -> Result<String> {
             args: vec!["./path/to/your-mcp-server.js".to_string()],
             env: std::collections::HashMap::new(),
             url: None,
+            transport: None,
             connect_timeout: None,
             execute_timeout: None,
             read_timeout: None,
@@ -4131,10 +4135,16 @@ async fn run_mcp_command(config: &Config, command: McpCommand) -> Result<()> {
             name,
             command,
             url,
+            transport,
             args,
         } => {
             if command.is_none() && url.is_none() {
                 bail!("Provide either --command or --url for `mcp add`.");
+            }
+            if let Some(transport) = transport.as_deref() {
+                if !transport.trim().eq_ignore_ascii_case("sse") {
+                    bail!("Unsupported MCP transport '{transport}'. Supported values: sse");
+                }
             }
             let mut cfg = load_mcp_config(&config_path)?;
             cfg.servers.insert(
@@ -4144,6 +4154,7 @@ async fn run_mcp_command(config: &Config, command: McpCommand) -> Result<()> {
                     args,
                     env: std::collections::HashMap::new(),
                     url,
+                    transport,
                     connect_timeout: None,
                     execute_timeout: None,
                     read_timeout: None,
@@ -4230,6 +4241,7 @@ async fn run_mcp_command(config: &Config, command: McpCommand) -> Result<()> {
                     args,
                     env: std::collections::HashMap::new(),
                     url: None,
+                    transport: None,
                     connect_timeout: None,
                     execute_timeout: None,
                     read_timeout: None,
@@ -6718,6 +6730,7 @@ mod doctor_mcp_tests {
             args: args.iter().map(|s| s.to_string()).collect(),
             env: std::collections::HashMap::new(),
             url: url.map(String::from),
+            transport: None,
             connect_timeout: None,
             execute_timeout: None,
             read_timeout: None,
