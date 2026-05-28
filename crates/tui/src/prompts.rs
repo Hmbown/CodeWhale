@@ -722,17 +722,6 @@ pub fn system_prompt_for_mode_with_context_skills_session_and_approval(
         full_prompt = format!("{full_prompt}\n\n{pack}");
     }
 
-    // 2.25. Environment block — locale, platform, shell, pwd. All
-    // four inputs are session-stable (workspace path is fixed for
-    // the run; locale is loaded once by the caller; platform/shell
-    // come from process env). Inserted above skills so it remains in
-    // the workspace-static cache layer alongside the mode prompt and
-    // project context.
-    full_prompt = format!(
-        "{full_prompt}\n\n{}",
-        render_environment_block(workspace, session_context.locale_tag),
-    );
-
     // 2.3a. Translation output instruction — when enabled, instruct
     // the model to respond in the resolved session locale. Stays
     // above the volatile-content boundary because it's a per-session
@@ -791,6 +780,24 @@ pub fn system_prompt_for_mode_with_context_skills_session_and_approval(
     // skills, context management, compact template) live above this line
     // so DeepSeek's KV prefix cache can hit on the entire system prompt
     // regardless of per-session edits to memory, goals, or instructions.
+
+    // 6. Environment block — platform, shell, pwd, locale.
+    //
+    // Placed below the volatile-content boundary. The original comment claimed
+    // "workspace path is fixed for the run" → static-cacheable, which is true
+    // for the terminal use case (one process owns one workspace for its
+    // lifetime). It is **not** true for embedders that swap workspaces between
+    // sessions (the Op::SyncSession path, multi-engine pools, IDE
+    // integrations binding the engine to a per-tab workspace, etc.):
+    // `pwd` drifts session-to-session and drags the entire static prefix
+    // out of cache reuse. Moving the block below the volatile boundary keeps
+    // mode / project / skills / context-mgmt / compact-template byte-stable
+    // across sessions while preserving the pwd info the model needs for
+    // `exec_shell` and structured search tools.
+    full_prompt = format!(
+        "{full_prompt}\n\n{}",
+        render_environment_block(workspace, session_context.locale_tag),
+    );
 
     // 6a. Configured `instructions = [...]` files (#454). Loaded
     // and concatenated in declared order. Placed below the volatile boundary
