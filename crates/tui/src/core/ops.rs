@@ -32,6 +32,9 @@ pub enum Op {
         approval_mode: ApprovalMode,
         translation_enabled: bool,
         show_thinking: bool,
+        /// Tool restriction from custom slash command frontmatter.
+        /// `None` means the current turn may use the normal tool set.
+        allowed_tools: Option<Vec<String>>,
     },
 
     /// Cancel the current request

@@ -5211,6 +5211,7 @@ async fn run_exec_agent(
         vision_config: config.vision_model_config(),
         strict_tool_mode: config.strict_tool_mode.unwrap_or(false),
         goal_objective: None,
+        allowed_tools: None,
         locale_tag: crate::localization::resolve_locale(&settings.locale)
             .tag()
             .to_string(),
@@ -5265,6 +5266,7 @@ async fn run_exec_agent(
             mode,
             model: effective_model.clone(),
             goal_objective: None,
+            allowed_tools: None,
             reasoning_effort: effective_reasoning_effort,
             reasoning_effort_auto: auto_model,
             auto_model,
