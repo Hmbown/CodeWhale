@@ -168,6 +168,7 @@ impl StateStore {
         if user_version == 0 {
             conn.execute_batch(
                 r#"
+                BEGIN;
                 CREATE TABLE IF NOT EXISTS threads (
                     id TEXT PRIMARY KEY,
                     rollout_path TEXT,
@@ -244,7 +245,7 @@ impl StateStore {
                         SELECT m2.id
                         FROM messages m2
                         WHERE m2.created_at < messages.created_at AND m2.thread_id = messages.thread_id
-                        ORDER BY m2.created_at DESC
+                        ORDER BY m2.id DESC
                         LIMIT 1
                     );
                 CREATE INDEX idx_messages_parent_entry_id ON messages(parent_entry_id);
@@ -256,11 +257,12 @@ impl StateStore {
                         SELECT m.id
                         FROM messages m
                         WHERE m.thread_id = threads.id
-                        ORDER BY m.created_at DESC
+                        ORDER BY m.id DESC
                         LIMIT 1
                     );
 
                 PRAGMA user_version = 1;
+                COMMIT;
                 "#,
             )
             .context("failed to initialize thread schema")?;
@@ -589,7 +591,7 @@ impl StateStore {
         tx.commit()
             .context("failed to commit append message transaction")?;
 
-        Ok(conn.last_insert_rowid())
+        Ok(next_leaf_id)
     }
 
     pub fn list_messages(
@@ -619,7 +621,7 @@ impl StateStore {
                         WHERE a.depth < ?2
                     )
                     SELECT id, thread_id, role, content, item_json, created_at, parent_entry_id FROM ancestors
-                    ORDER BY depth ASC
+                    ORDER BY depth DESC
                 "#
             )
             .context("failed to prepare message listing query")?;
@@ -668,7 +670,7 @@ impl StateStore {
             .transaction()
             .context("failed to begin fork message transaction")?;
 
-        let thread_id: Option<String> = tx
+        let thread_id: String = tx
             .query_row(
                 "SELECT thread_id FROM messages WHERE id = ?1",
                 params![message_id],

@@ -148,9 +148,9 @@ fn init_schema_migration() {
     assert_eq!(messages.len(), 3);
     for (i, message) in messages.iter().enumerate() {
         assert_eq!(message.thread_id, "thread-test-1");
-        assert_eq!(message.role, format!("foo{}", 2 - i));
-        assert_eq!(message.content, format!("bar{}", 2 - i));
-        assert_eq!(message.created_at, 2 - i as i64);
+        assert_eq!(message.role, format!("foo{}", i));
+        assert_eq!(message.content, format!("bar{}", i));
+        assert_eq!(message.created_at, i as i64);
     }
 
     // Test idempotent
@@ -213,8 +213,8 @@ fn test_fork() {
         .enumerate()
         .map(|(i, message)| {
             assert_eq!(message.thread_id, "thread-test-1");
-            assert_eq!(message.role, format!("foo{}", 4 - i));
-            assert_eq!(message.content, format!("bar{}", 4 - i));
+            assert_eq!(message.role, format!("foo{}", i));
+            assert_eq!(message.content, format!("bar{}", i));
             message.id.to_string()
         })
         .collect::<Vec<_>>();
@@ -226,7 +226,7 @@ fn test_fork() {
         .list_messages("thread-test-1", None)
         .expect("list messages");
     assert_eq!(messages.len(), 4);
-    const LIST_1: [i64; 4] = [5, 2, 1, 0];
+    const LIST_1: [i64; 4] = [0, 1, 2, 5];
     messages
         .iter()
         .zip(LIST_1.iter())
@@ -241,7 +241,7 @@ fn test_fork() {
     assert_eq!(leaves.len(), 2);
 
     store
-        .set_current_leaf_id("thread-test-1", &ids[0])
+        .set_current_leaf_id("thread-test-1", &ids[4])
         .expect("set current leaf id");
     store
         .append_message("thread-test-1", "foo6", "bar6", None)
@@ -250,7 +250,7 @@ fn test_fork() {
         .list_messages("thread-test-1", None)
         .expect("list messages");
     assert_eq!(messages.len(), 6);
-    const LIST_2: [i64; 6] = [6, 4, 3, 2, 1, 0];
+    const LIST_2: [i64; 6] = [0, 1, 2, 3, 4, 6];
     messages
         .iter()
         .zip(LIST_2.iter())
