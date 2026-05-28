@@ -1898,6 +1898,24 @@ mod tests {
         );
     }
 
+    /// Tier 5 Local Law must explicitly cover `EngineConfig.instructions`
+    /// files. Without this clause, embedders that inject instructions via the
+    /// config field (rather than via the four hard-coded path conventions)
+    /// get their files classified by path — and since those embedder-supplied
+    /// paths aren't `AGENTS.md` / `CLAUDE.md` / `.codewhale/instructions.md` /
+    /// `.deepseek/instructions.md`, the model defaults to treating their
+    /// imperatives as Tier 7 Memory (the lowest tier per Article VII),
+    /// overridable by a single user sentence.
+    #[test]
+    fn local_law_tier_covers_engine_config_instructions() {
+        let prompt = compose_prompt(AppMode::Agent, Personality::Calm);
+        assert!(
+            prompt.contains("any file configured via `EngineConfig.instructions`"),
+            "Tier 5 must explicitly cover EngineConfig.instructions so \
+             embedder-injected instructions are not default-classified as Tier 7 Memory."
+        );
+    }
+
     #[test]
     fn workspace_orientation_guidance_present() {
         let prompt = compose_prompt(AppMode::Agent, Personality::Calm);
