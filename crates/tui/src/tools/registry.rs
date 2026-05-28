@@ -720,6 +720,30 @@ impl ToolRegistryBuilder {
         self.with_tool(Arc::new(RememberTool))
     }
 
+    /// Include the slop ledger tools (#2127) — durable tracking of
+    /// unresolved architectural residue: append, query, update, export.
+    /// Registered unconditionally; the ledger JSON file is auto-created
+    /// on first append.
+    #[must_use]
+    pub fn with_slop_ledger_tools(self) -> Self {
+        use crate::slop_ledger::{
+            SlopLedgerAppendTool, SlopLedgerExportTool, SlopLedgerQueryTool, SlopLedgerUpdateTool,
+        };
+        self.with_tool(Arc::new(SlopLedgerAppendTool))
+            .with_tool(Arc::new(SlopLedgerQueryTool))
+            .with_tool(Arc::new(SlopLedgerUpdateTool))
+            .with_tool(Arc::new(SlopLedgerExportTool))
+    }
+
+    /// Read-only subset of slop ledger tools (#2127) for plan mode:
+    /// only query and export — no append or update.
+    #[must_use]
+    pub fn with_slop_ledger_read_only_tools(self) -> Self {
+        use crate::slop_ledger::{SlopLedgerExportTool, SlopLedgerQueryTool};
+        self.with_tool(Arc::new(SlopLedgerQueryTool))
+            .with_tool(Arc::new(SlopLedgerExportTool))
+    }
+
     /// Include the `notify` tool — model-callable desktop notification
     /// (#1322). Routes through the existing `tui::notifications` OSC 9 /
     /// BEL pipeline so the user's `[notifications].method` config is

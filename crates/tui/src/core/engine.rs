@@ -349,6 +349,11 @@ pub struct Engine {
     /// Diagnostics collected during the current step's tool calls. Drained
     /// and forwarded as a synthetic user message before the next API call.
     pending_lsp_blocks: Vec<crate::lsp::DiagnosticBlock>,
+    /// Cached SlopLedger gate block so `refresh_system_prompt` doesn't hit
+    /// the filesystem on every turn (#2127). `None` = not yet loaded;
+    /// `Some(None)` = loaded, no open entries; `Some(Some(...))` = loaded,
+    /// gate block ready.
+    slop_ledger_gate_cache: Option<Option<String>>,
 }
 
 // === Internal tool helpers ===
@@ -589,6 +594,7 @@ impl Engine {
             turn_counter: 0,
             lsp_manager,
             pending_lsp_blocks: Vec::new(),
+            slop_ledger_gate_cache: None,
             workshop_vars,
             sandbox_backend,
         };
@@ -1892,8 +1898,37 @@ impl Engine {
             },
             self.session.approval_mode,
         );
-        let stable_prompt =
+        let mut stable_prompt =
             merge_system_prompts(Some(&base), self.session.compaction_summary_prompt.clone());
+
+        // SlopLedger completion-gate: inject unresolved slop entries into the
+        // system prompt so the agent can autonomously review them before
+        // claiming the task is done (#2127). Cached to avoid filesystem I/O on
+        // every turn — only re-loaded when the cache is empty (first call or
+        // after invalidation).
+        let gate_block = match &self.slop_ledger_gate_cache {
+            Some(cached) => cached.clone(),
+            None => {
+                let loaded = crate::slop_ledger::SlopLedger::load()
+                    .ok()
+                    .and_then(|ledger| {
+                        if ledger.has_open_entries() {
+                            ledger.completion_gate_summary()
+                        } else {
+                            None
+                        }
+                    });
+                self.slop_ledger_gate_cache = Some(loaded.clone());
+                loaded
+            }
+        };
+        if let Some(ref block) = gate_block {
+            if let Some(SystemPrompt::Text(prompt_text)) = &mut stable_prompt {
+                prompt_text.push_str("\n\n");
+                prompt_text.push_str(block);
+            }
+        }
+
         let stable_hash = system_prompt_hash(stable_prompt.as_ref());
         if self.session.system_prompt_override {
             self.session.last_system_prompt_hash = Some(stable_hash);
