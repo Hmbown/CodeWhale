@@ -1893,6 +1893,7 @@ async fn run_event_loop(
                         id,
                         tool_name,
                         description,
+                        input,
                         approval_key,
                         approval_grouping_key,
                     } => {
@@ -1937,12 +1938,7 @@ async fn run_event_loop(
                             app.status_message =
                                 Some(format!("Blocked tool '{tool_name}' (approval_mode=never)"));
                         } else {
-                            let tool_input = app
-                                .pending_tool_uses
-                                .iter()
-                                .find(|(tool_id, _, _)| tool_id == &id)
-                                .map(|(_, _, input)| input.clone())
-                                .unwrap_or_else(|| serde_json::json!({}));
+                            let tool_input = input;
 
                             if tool_name == "apply_patch" {
                                 maybe_add_patch_preview(app, &tool_input);
