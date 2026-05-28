@@ -1944,7 +1944,12 @@ impl RuntimeThreadManager {
             notes_path: self.config.notes_path(),
             mcp_config_path: self.config.mcp_config_path(),
             skills_dir: self.config.skills_dir(),
-            instructions: self.config.instructions_paths(),
+            instructions: self
+                .config
+                .instructions_paths()
+                .into_iter()
+                .map(Into::into)
+                .collect(),
             project_context_pack_enabled: self.config.project_context_pack_enabled(),
             translation_enabled: false,
             show_thinking: settings.show_thinking,
