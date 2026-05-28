@@ -5208,6 +5208,11 @@ fn activity_detail_fallback_uses_recent_meaningful_activity_without_full_tool_du
         body.contains("Alt+V for details"),
         "activity detail should stay bounded and point to Alt+V for raw detail: {body}"
     );
+    assert!(body.contains("Detail handle: Alt+V details"), "{body}");
+    assert!(
+        !body.contains("Detail handle: Alt+V raw details"),
+        "fallback tool details should not be labeled raw: {body}"
+    );
     assert!(
         !body.contains("line 10"),
         "middle of large raw output should not be dumped into Activity Detail: {body}"

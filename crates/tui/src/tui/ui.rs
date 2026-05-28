@@ -7591,15 +7591,20 @@ fn activity_detail_text(app: &App, cell_index: usize, width: u16) -> Option<Stri
         sections.push(status);
     }
 
-    if let Some((position, total)) = activity_position(app, cell_index) {
-        sections.push(format!("Activity chunk: {position} of {total}"));
+    let activity_indices = activity_indices(app);
+    if let Some(position) = activity_indices.iter().position(|&idx| idx == cell_index) {
+        sections.push(format!(
+            "Activity chunk: {} of {}",
+            position + 1,
+            activity_indices.len()
+        ));
+        sections.extend(activity_navigation_lines(app, position, &activity_indices));
     }
 
     if let Some(handle) = activity_detail_handle_line(app, cell_index, cell) {
         sections.push(handle);
     }
 
-    sections.extend(activity_navigation_lines(app, cell_index));
     sections.push(String::new());
     sections.push(activity_cell_to_text(cell, width));
     Some(sections.join("\n"))
@@ -7826,34 +7831,20 @@ fn format_activity_duration_ms(ms: u64) -> String {
     }
 }
 
-fn activity_position(app: &App, cell_index: usize) -> Option<(usize, usize)> {
-    let mut total = 0usize;
-    let mut position = None;
-    for idx in 0..app.virtual_cell_count() {
-        let Some(cell) = app.cell_at_virtual_index(idx) else {
-            continue;
-        };
-        if !is_meaningful_activity_cell(cell) {
-            continue;
-        }
-        total += 1;
-        if idx == cell_index {
-            position = Some(total);
-        }
-    }
-    position.map(|pos| (pos, total))
-}
-
-fn activity_navigation_lines(app: &App, cell_index: usize) -> Vec<String> {
-    let activity_indices: Vec<usize> = (0..app.virtual_cell_count())
+fn activity_indices(app: &App) -> Vec<usize> {
+    (0..app.virtual_cell_count())
         .filter(|&idx| {
             app.cell_at_virtual_index(idx)
                 .is_some_and(is_meaningful_activity_cell)
         })
-        .collect();
-    let Some(position) = activity_indices.iter().position(|&idx| idx == cell_index) else {
-        return Vec::new();
-    };
+        .collect()
+}
+
+fn activity_navigation_lines(
+    app: &App,
+    position: usize,
+    activity_indices: &[usize],
+) -> Vec<String> {
     let total = activity_indices.len();
     let mut lines = Vec::new();
     if position > 0 {
@@ -7900,9 +7891,7 @@ fn activity_detail_handle_line(app: &App, cell_index: usize, cell: &HistoryCell)
     }
 
     match cell {
-        HistoryCell::Tool(_) if app.cell_has_detail_target(cell_index) => {
-            Some("Detail handle: Alt+V raw details".to_string())
-        }
+        HistoryCell::Tool(_) => Some("Detail handle: Alt+V details".to_string()),
         HistoryCell::SubAgent(_) => Some("Detail handle: Alt+V details".to_string()),
         _ => None,
     }
