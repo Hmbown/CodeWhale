@@ -126,6 +126,9 @@ fn windows_shell_invocation(command: &str, probe: &ShellProbe) -> ShellInvocatio
         return shell;
     }
 
+    // Default Windows resolution is intentionally pwsh.exe -> cmd.exe. Windows
+    // PowerShell 5.x can still be selected explicitly through SHELL, but it is
+    // not used as an implicit fallback.
     if probe.pwsh_on_path {
         return powershell_invocation("pwsh.exe", command);
     }
@@ -288,6 +291,30 @@ mod tests {
             ["-NoProfile", "-NonInteractive", "-Command", "Get-ChildItem"]
         );
         assert!(!invocation.raw_payload_on_windows);
+    }
+
+    #[test]
+    fn windows_falls_back_to_comspec_cmd_with_utf8_prefix() {
+        let invocation = shell_invocation_for_platform(
+            "git status --short",
+            ShellPlatform::Windows,
+            &ShellProbe {
+                comspec: Some(r"C:\Windows\System32\cmd.exe".to_string()),
+                pwsh_on_path: false,
+                ..probe()
+            },
+        );
+
+        assert_eq!(invocation.program, r"C:\Windows\System32\cmd.exe");
+        assert_eq!(
+            invocation.args,
+            ["/C", "chcp 65001 >NUL & git status --short"]
+        );
+        assert!(invocation.raw_payload_on_windows);
+        assert_eq!(
+            invocation.display_command().as_deref(),
+            Some("git status --short")
+        );
     }
 
     #[test]
