@@ -19,8 +19,12 @@ use ratatui::{
 };
 
 use crate::config::StatusItem;
+use crate::localization::truncate_to_width;
 use crate::palette;
 use crate::tui::views::{ModalKind, ModalView, ViewAction, ViewEvent};
+use unicode_width::UnicodeWidthStr;
+
+const STATUS_PICKER_SELECTION_BG: ratatui::style::Color = ratatui::style::Color::Rgb(54, 72, 104);
 
 /// Picker state. We hold both the user's working selection AND the original
 /// snapshot so Esc can perfectly revert the live preview.
@@ -62,16 +66,21 @@ impl StatusPickerView {
     }
 
     fn move_up(&mut self) {
-        if self.cursor > 0 {
+        if self.rows.is_empty() {
+            return;
+        }
+        if self.cursor == 0 {
+            self.cursor = self.rows.len() - 1;
+        } else {
             self.cursor -= 1;
         }
     }
 
     fn move_down(&mut self) {
-        let max = self.rows.len().saturating_sub(1);
-        if self.cursor < max {
-            self.cursor += 1;
+        if self.rows.is_empty() {
+            return;
         }
+        self.cursor = (self.cursor + 1) % self.rows.len();
     }
 
     fn toggle_current(&mut self) {
@@ -201,7 +210,16 @@ impl ModalView for StatusPickerView {
         )));
         lines.push(Line::from(""));
 
-        for (idx, item) in self.rows.iter().enumerate() {
+        let visible_rows = inner.height.saturating_sub(2) as usize;
+        let row_start = visible_row_start(self.rows.len(), self.cursor, visible_rows);
+
+        for (idx, item) in self
+            .rows
+            .iter()
+            .enumerate()
+            .skip(row_start)
+            .take(visible_rows)
+        {
             let checked = *self.selected.get(idx).unwrap_or(&false);
             let is_cursor = idx == self.cursor;
             let mark = if checked { "[✓]" } else { "[ ]" };
@@ -225,18 +243,48 @@ impl ModalView for StatusPickerView {
             };
             let pointer = if is_cursor { "▸" } else { " " };
 
-            lines.push(Line::from(vec![
-                Span::styled(format!(" {pointer} "), row_style),
-                Span::styled(mark.to_string(), row_style),
-                Span::raw(" "),
-                Span::styled(item.label().to_string(), row_style),
-                Span::raw("  "),
-                Span::styled(format!("({})", item.hint()), hint_style),
-            ]));
+            if is_cursor {
+                let selected_style = Style::default()
+                    .fg(palette::SELECTION_TEXT)
+                    .bg(STATUS_PICKER_SELECTION_BG)
+                    .add_modifier(Modifier::BOLD);
+                let line = status_row_text(pointer, mark, item, inner.width as usize);
+                lines.push(Line::from(Span::styled(line, selected_style)));
+            } else {
+                lines.push(Line::from(vec![
+                    Span::styled(format!(" {pointer} "), row_style),
+                    Span::styled(mark.to_string(), row_style),
+                    Span::styled(" ", row_style),
+                    Span::styled(item.label().to_string(), row_style),
+                    Span::styled("  ", row_style),
+                    Span::styled(format!("({})", item.hint()), hint_style),
+                ]));
+            }
         }
 
         Paragraph::new(lines).render(inner, buf);
     }
+}
+
+fn visible_row_start(total_rows: usize, cursor: usize, visible_rows: usize) -> usize {
+    if total_rows == 0 || visible_rows == 0 || total_rows <= visible_rows {
+        return 0;
+    }
+    let max_start = total_rows - visible_rows;
+    cursor
+        .saturating_add(1)
+        .saturating_sub(visible_rows)
+        .min(max_start)
+}
+
+fn status_row_text(pointer: &str, mark: &str, item: &StatusItem, width: usize) -> String {
+    let text = format!(" {pointer} {mark} {}  ({})", item.label(), item.hint());
+    let mut text = truncate_to_width(&text, width);
+    let current_width = text.width();
+    if current_width < width {
+        text.push_str(&" ".repeat(width - current_width));
+    }
+    text
 }
 
 #[cfg(test)]
@@ -317,18 +365,32 @@ mod tests {
     }
 
     #[test]
-    fn arrow_keys_move_cursor_within_bounds() {
+    fn arrow_keys_wrap_cursor_at_edges() {
         let active = StatusItem::default_footer();
         let mut view = StatusPickerView::new(&active);
+        assert_eq!(view.cursor, 0);
+        view.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(view.cursor, StatusItem::all().len() - 1);
+        view.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         assert_eq!(view.cursor, 0);
         view.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         assert_eq!(view.cursor, 1);
         view.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
         assert_eq!(view.cursor, 0);
-        // Move past the bottom shouldn't wrap.
-        for _ in 0..StatusItem::all().len() + 5 {
-            view.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        }
-        assert_eq!(view.cursor, StatusItem::all().len() - 1);
+    }
+
+    #[test]
+    fn visible_row_start_keeps_cursor_in_view() {
+        assert_eq!(visible_row_start(14, 0, 8), 0);
+        assert_eq!(visible_row_start(14, 7, 8), 0);
+        assert_eq!(visible_row_start(14, 8, 8), 1);
+        assert_eq!(visible_row_start(14, 13, 8), 6);
+    }
+
+    #[test]
+    fn selected_row_text_fills_available_width() {
+        let text = status_row_text("▸", "[ ]", &StatusItem::LastToolElapsed, 40);
+        assert_eq!(text.width(), 40);
+        assert!(text.starts_with(" ▸ [ ] Last tool elapsed"));
     }
 }
