@@ -1087,6 +1087,24 @@ fn sse_field_value<'a>(line: &'a str, field: &str) -> Option<&'a str> {
     Some(value.strip_prefix(' ').unwrap_or(value))
 }
 
+fn is_legacy_sse_endpoint_url(url: &str) -> bool {
+    reqwest::Url::parse(url)
+        .map(|url| url.path().trim_end_matches('/').ends_with("/sse"))
+        .unwrap_or(false)
+}
+
+fn response_id_matches(id: Option<&serde_json::Value>, expected_id: &str) -> bool {
+    let Some(id) = id else {
+        return false;
+    };
+    if id.as_str() == Some(expected_id) {
+        return true;
+    }
+    id.as_u64()
+        .map(|id| id.to_string() == expected_id)
+        .unwrap_or(false)
+}
+
 #[async_trait::async_trait]
 impl McpTransport for SseTransport {
     async fn send(&mut self, msg: Vec<u8>) -> Result<()> {
@@ -1212,27 +1230,39 @@ impl McpConnection {
                 }
             }
             let client = client_builder.build()?;
-            let mut http = HttpTransport::new(
-                client,
-                url.clone(),
-                config.headers.clone(),
-                cancel_token.clone(),
-                Duration::from_secs(connect_timeout_secs),
-            );
-            // Best-effort session preflight for servers that require
-            // a session ID on every POST including `initialize`
-            // (e.g. Hindsight, #1629). Failures are non-fatal — the
-            // `initialize` POST will proceed and may capture a session
-            // ID from the response instead.
-            if let Err(e) = http.try_establish_session().await {
-                tracing::debug!(
-                    target: "mcp",
-                    server = %name,
-                    error = %e,
-                    "session-establishment GET skipped; proceeding with POST initialize"
+            if is_legacy_sse_endpoint_url(url) {
+                Box::new(
+                    SseTransport::connect(
+                        client,
+                        url.clone(),
+                        cancel_token.clone(),
+                        Duration::from_secs(connect_timeout_secs),
+                    )
+                    .await?,
+                )
+            } else {
+                let mut http = HttpTransport::new(
+                    client,
+                    url.clone(),
+                    config.headers.clone(),
+                    cancel_token.clone(),
+                    Duration::from_secs(connect_timeout_secs),
                 );
+                // Best-effort session preflight for servers that require
+                // a session ID on every POST including `initialize`
+                // (e.g. Hindsight, #1629). Failures are non-fatal — the
+                // `initialize` POST will proceed and may capture a session
+                // ID from the response instead.
+                if let Err(e) = http.try_establish_session().await {
+                    tracing::debug!(
+                        target: "mcp",
+                        server = %name,
+                        error = %e,
+                        "session-establishment GET skipped; proceeding with POST initialize"
+                    );
+                }
+                Box::new(http)
             }
-            Box::new(http)
         } else if let Some(command) = &config.command {
             let mut cmd = tokio::process::Command::new(command);
             cmd.args(&config.args)
@@ -1320,7 +1350,7 @@ impl McpConnection {
         let init_id = self.next_id();
         self.send(serde_json::json!({
             "jsonrpc": "2.0",
-            "id": init_id,
+            "id": init_id.clone(),
             "method": "initialize",
             "params": {
                 "protocolVersion": "2024-11-05",
@@ -1371,7 +1401,7 @@ impl McpConnection {
             };
             self.send(serde_json::json!({
                 "jsonrpc": "2.0",
-                "id": list_id,
+                "id": list_id.clone(),
                 "method": "tools/list",
                 "params": params
             }))
@@ -1423,7 +1453,7 @@ impl McpConnection {
             };
             self.send(serde_json::json!({
                 "jsonrpc": "2.0",
-                "id": list_id,
+                "id": list_id.clone(),
                 "method": "resources/list",
                 "params": params
             }))
@@ -1467,7 +1497,7 @@ impl McpConnection {
             };
             self.send(serde_json::json!({
                 "jsonrpc": "2.0",
-                "id": list_id,
+                "id": list_id.clone(),
                 "method": "resources/templates/list",
                 "params": params
             }))
@@ -1515,7 +1545,7 @@ impl McpConnection {
             };
             self.send(serde_json::json!({
                 "jsonrpc": "2.0",
-                "id": list_id,
+                "id": list_id.clone(),
                 "method": "prompts/list",
                 "params": params
             }))
@@ -1618,7 +1648,7 @@ impl McpConnection {
         let call_id = self.next_id();
         self.send(serde_json::json!({
             "jsonrpc": "2.0",
-            "id": call_id,
+            "id": call_id.clone(),
             "method": method,
             "params": params
         }))
@@ -1689,8 +1719,8 @@ impl McpConnection {
         self.state
     }
 
-    fn next_id(&self) -> u64 {
-        self.request_id.fetch_add(1, Ordering::SeqCst)
+    fn next_id(&self) -> String {
+        self.request_id.fetch_add(1, Ordering::SeqCst).to_string()
     }
 
     async fn send(&mut self, msg: serde_json::Value) -> Result<()> {
@@ -1698,7 +1728,7 @@ impl McpConnection {
         self.transport.send(bytes).await
     }
 
-    async fn recv(&mut self, expected_id: u64) -> Result<serde_json::Value> {
+    async fn recv(&mut self, expected_id: String) -> Result<serde_json::Value> {
         loop {
             let bytes = self.transport.recv().await.inspect_err(|_e| {
                 self.state = ConnectionState::Disconnected;
@@ -1707,8 +1737,11 @@ impl McpConnection {
                 format!("Invalid MCP JSON-RPC message from server '{}'", self.name)
             })?;
 
-            // Check if this is a response with the expected id
-            if value.get("id").and_then(serde_json::Value::as_u64) == Some(expected_id) {
+            // Check if this is a response with the expected id. We emit
+            // string IDs because some MCP gateways reject numeric JSON-RPC
+            // IDs, but accept numeric echoes for compatibility with older
+            // servers and tests.
+            if response_id_matches(value.get("id"), &expected_id) {
                 return Ok(value);
             }
             // Skip notifications (no id) and responses with different ids
@@ -3161,7 +3194,7 @@ mod tests {
         let sent = sent.lock().unwrap();
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0]["jsonrpc"], "2.0");
-        assert_eq!(sent[0]["id"], 1);
+        assert_eq!(sent[0]["id"], "1");
         assert_eq!(sent[0]["method"], "tools/call");
     }
 
@@ -3375,6 +3408,25 @@ mod tests {
         let value: serde_json::Value = serde_json::from_slice(&messages[0]).unwrap();
         assert_eq!(value["id"], 1);
         assert!(value.get("result").is_some());
+    }
+
+    #[test]
+    fn response_id_matches_string_and_numeric_echoes() {
+        assert!(response_id_matches(Some(&serde_json::json!("1")), "1"));
+        assert!(response_id_matches(Some(&serde_json::json!(1)), "1"));
+        assert!(!response_id_matches(Some(&serde_json::json!("2")), "1"));
+    }
+
+    #[test]
+    fn legacy_sse_endpoint_url_detects_sse_paths_only() {
+        assert!(is_legacy_sse_endpoint_url(
+            "https://example.com/mcp/abc/sse"
+        ));
+        assert!(is_legacy_sse_endpoint_url(
+            "https://example.com/mcp/abc/sse/"
+        ));
+        assert!(!is_legacy_sse_endpoint_url("https://example.com/mcp"));
+        assert!(!is_legacy_sse_endpoint_url("not a url"));
     }
 
     #[test]
