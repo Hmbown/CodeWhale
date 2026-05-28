@@ -643,6 +643,7 @@ impl ThreadManager {
             git_branch: None,
             git_origin_url: None,
             memory_mode: None,
+            current_leaf_id: None,
         })
     }
 }
