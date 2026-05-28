@@ -463,9 +463,9 @@ pub const COMMANDS: &[CommandInfo] = &[
         description_id: MessageId::CmdShareDescription,
     },
     CommandInfo {
-        name: "goal",
-        aliases: &["mubiao"],
-        usage: "/goal [objective] [budget: N]",
+        name: "hunt",
+        aliases: &["goal", "mubiao", "狩猎"],
+        usage: "/hunt [quarry] [budget: N]",
         description_id: MessageId::CmdGoalDescription,
     },
     CommandInfo {
@@ -648,7 +648,7 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "init" => init::init(app),
         "lsp" => config::lsp_command(app, arg),
         "share" => share::share(app, arg),
-        "goal" | "mubiao" => goal::goal(app, arg),
+        "goal" | "hunt" | "mubiao" | "狩猎" => goal::hunt(app, arg),
 
         // Skills commands
         "skills" | "jinengliebiao" => skills::list_skills(app, arg),
@@ -826,10 +826,10 @@ fn build_relay_instruction(app: &App, focus: Option<&str>) -> String {
     if let Some(focus) = focus {
         let _ = writeln!(out, "- Requested relay focus: {focus}");
     }
-    if let Some(goal) = app.goal.goal_objective.as_deref() {
+    if let Some(goal) = app.hunt.quarry.as_deref() {
         let _ = writeln!(out, "- Goal: {goal}");
     }
-    if let Some(budget) = app.goal.goal_token_budget {
+    if let Some(budget) = app.hunt.token_budget {
         let _ = writeln!(out, "- Goal token budget: {budget}");
     }
     if app.cycle_count > 0 {
@@ -1164,8 +1164,8 @@ mod tests {
     #[test]
     fn relay_slash_command_routes_to_session_relay_instruction() {
         let mut app = create_test_app();
-        app.goal.goal_objective = Some("Unify the work surface".to_string());
-        app.goal.goal_token_budget = Some(12_000);
+        app.hunt.quarry = Some("Unify the work surface".to_string());
+        app.hunt.token_budget = Some(12_000);
         app.cycle_count = 2;
         {
             let mut todos = app.todos.try_lock().expect("todo lock");

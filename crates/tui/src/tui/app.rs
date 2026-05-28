@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use ratatui::layout::Rect;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
@@ -986,13 +987,29 @@ impl Default for ViewportState {
     }
 }
 
-/// Goal tracking state (#397).
+/// Verdict for a hunt (#2092).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HuntVerdict {
+    Hunting,
+    Hunted,
+    Wounded,
+    Escaped,
+}
+
+impl Default for HuntVerdict {
+    fn default() -> Self {
+        Self::Hunting
+    }
+}
+
+/// Hunt tracking state (#2092 — was GoalState).
 #[derive(Debug, Clone, Default)]
-pub struct GoalState {
-    pub goal_objective: Option<String>,
-    pub goal_token_budget: Option<u32>,
-    pub goal_started_at: Option<Instant>,
-    pub goal_completed: bool,
+pub struct HuntState {
+    pub quarry: Option<String>,
+    pub token_budget: Option<u32>,
+    pub started_at: Option<Instant>,
+    pub verdict: HuntVerdict,
 }
 
 /// Session cost and token telemetry state.
@@ -1090,7 +1107,7 @@ pub struct App {
     /// Viewport sub-state (scroll, cache, selection).
     pub viewport: ViewportState,
     /// Goal sub-state.
-    pub goal: GoalState,
+    pub hunt: HuntState,
     /// Session sub-state (cost, tokens, telemetry).
     pub session: SessionState,
     pub history: Vec<HistoryCell>,
@@ -1831,7 +1848,7 @@ impl App {
                 selection_anchor: None,
             },
             viewport: ViewportState::default(),
-            goal: GoalState::default(),
+            hunt: HuntState::default(),
             session: SessionState::default(),
             history: Vec::new(),
             history_version: 0,

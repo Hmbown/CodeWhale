@@ -820,7 +820,7 @@ pub fn system_prompt_for_mode_with_context_skills_session_and_approval(
         && !goal_objective.trim().is_empty()
     {
         full_prompt = format!(
-            "{full_prompt}\n\n## Current Session Goal\n\n<session_goal>\n{}\n</session_goal>",
+            "{full_prompt}\n\n## Current Hunt\n\n<session_goal>\n{}\n</session_goal>",
             goal_objective.trim()
         );
     }
@@ -1791,7 +1791,7 @@ mod tests {
         };
 
         assert!(!prompt.contains("<session_goal>"));
-        assert!(!prompt.contains("## Current Session Goal"));
+        assert!(!prompt.contains("## Current Hunt"));
     }
 
     #[test]

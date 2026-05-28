@@ -62,6 +62,7 @@ use crate::task_manager::{
 };
 use crate::tools::spec::RuntimeToolServices;
 use crate::tools::subagent::SubAgentStatus;
+use crate::tui::app::HuntVerdict;
 use crate::tui::auto_router;
 use crate::tui::color_compat::ColorCompatBackend;
 use crate::tui::command_palette::{
@@ -702,9 +703,9 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         todos: app.todos.clone(),
         plan_state: app.plan_state.clone(),
         goal_state: crate::tools::goal::new_shared_goal_state_from_host(
-            app.goal.goal_objective.clone(),
-            app.goal.goal_token_budget,
-            app.goal.goal_completed,
+            app.hunt.quarry.clone(),
+            app.hunt.token_budget,
+            app.hunt.verdict == HuntVerdict::Hunted,
         ),
         max_spawn_depth: crate::tools::subagent::DEFAULT_MAX_SPAWN_DEPTH,
         network_policy: config.network.clone().map(|toml_cfg| {
@@ -727,7 +728,7 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         memory_path: config.memory_path(),
         vision_config: config.vision_model_config(),
         strict_tool_mode: config.strict_tool_mode.unwrap_or(false),
-        goal_objective: app.goal.goal_objective.clone(),
+        goal_objective: app.hunt.quarry.clone(),
         locale_tag: app.ui_locale.tag().to_string(),
         workshop: config.workshop.clone(),
         search_provider: config.search_provider(),
@@ -4192,7 +4193,7 @@ async fn dispatch_user_message(
             None,
             prompts::PromptSessionContext {
                 user_memory_block: None,
-                goal_objective: app.goal.goal_objective.as_deref(),
+                goal_objective: app.hunt.quarry.as_deref(),
                 project_context_pack_enabled: config.project_context_pack_enabled(),
                 locale_tag: app.ui_locale.tag(),
                 translation_enabled: app.translation_enabled,
@@ -4285,7 +4286,7 @@ async fn dispatch_user_message(
             content,
             mode: app.mode,
             model: effective_model,
-            goal_objective: app.goal.goal_objective.clone(),
+            goal_objective: app.hunt.quarry.clone(),
             reasoning_effort: effective_reasoning_effort,
             reasoning_effort_auto: auto_controls_reasoning,
             auto_model: app.auto_model,
