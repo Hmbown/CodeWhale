@@ -315,7 +315,7 @@ pub fn stop_title_animation() {
     // terminal-level visual indicator (flash/icon).
     let mode = COMPLETION_SOUND_MODE.load(Ordering::SeqCst);
     if mode == 1 {
-        set_terminal_title("✅ DeepSeek TUI");
+        set_terminal_title("✅ CodeWhale");
     }
     play_completion_sound();
 }
@@ -326,7 +326,7 @@ pub fn stop_title_animation() {
 /// marker doesn't persist once the user is back at the terminal.
 pub fn reset_title_on_interaction() {
     if COMPLETION_MARKER_SHOWN.swap(false, Ordering::SeqCst) {
-        set_terminal_title("DeepSeek TUI");
+        set_terminal_title("CodeWhale");
     }
 }
 
