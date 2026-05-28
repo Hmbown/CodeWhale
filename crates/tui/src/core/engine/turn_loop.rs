@@ -23,7 +23,7 @@ impl Engine {
         // Signal to the terminal / taskbar that a turn is in progress
         // (OSC 9 ; 4 indeterminate progress + title spinner).
         crate::tui::notifications::set_taskbar_progress_busy();
-        crate::tui::notifications::start_title_animation("DeepSeek TUI");
+        crate::tui::notifications::start_title_animation("CodeWhale");
 
         let client = self
             .deepseek_client
