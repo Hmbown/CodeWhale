@@ -94,7 +94,7 @@ impl PasteBurst {
         None
     }
 
-    fn note_plain_char(&mut self, now: Instant) {
+    pub(crate) fn note_plain_char(&mut self, now: Instant) {
         match self.last_plain_char_time {
             Some(prev) if now.duration_since(prev) <= PASTE_BURST_CHAR_INTERVAL => {
                 self.consecutive_plain_char_burst =
