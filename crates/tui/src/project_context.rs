@@ -50,6 +50,7 @@ const PACK_MAX_CONFIG_FILES: usize = 60;
 const PACK_MAX_DEPTH: usize = 4;
 const PACK_IGNORED_DIRS: &[&str] = &[
     ".git",
+    ".worktrees",
     "node_modules",
     ".venv",
     "venv",

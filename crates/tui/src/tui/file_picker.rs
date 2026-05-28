@@ -24,6 +24,7 @@ use ratatui::{
 
 use crate::palette;
 use crate::tui::views::{ModalKind, ModalView, ViewAction, ViewEvent};
+use crate::workspace_discovery::{DISCOVERY_ALWAYS_DIRS, path_is_excluded_from_discovery};
 
 /// Maximum number of candidates collected from the initial walk. Keeps memory
 /// bounded for very large monorepos; matches the limits codex-rs uses for the
@@ -437,7 +438,7 @@ fn collect_candidates(root: &Path) -> Vec<String> {
 
     // Whitelist AI-tool dot-directories so they're discoverable even when
     // gitignored. Walk each one separately with gitignore disabled.
-    for dir in [".deepseek", ".cursor", ".claude", ".agents"] {
+    for dir in DISCOVERY_ALWAYS_DIRS {
         let dot_dir = root.join(dir);
         if !dot_dir.is_dir() {
             continue;
@@ -451,7 +452,7 @@ fn collect_candidates(root: &Path) -> Vec<String> {
             .max_depth(Some(WALK_DEPTH.saturating_sub(1)));
         for entry in dot_builder.build().flatten() {
             // Exclude machine-generated bulk (e.g. .deepseek/snapshots/).
-            if entry.path().starts_with(root.join(".deepseek/snapshots")) {
+            if path_is_excluded_from_discovery(root, entry.path()) {
                 continue;
             }
             if !entry.file_type().is_some_and(|ft| ft.is_file()) {
@@ -731,6 +732,60 @@ mod tests {
         assert!(
             !visible.iter().any(|p| p.ends_with("skipme.txt")),
             "skipme.txt should be filtered by .ignore: {visible:?}"
+        );
+    }
+
+    #[test]
+    fn picker_skips_generated_worktree_bulk_inside_unignored_dot_dirs() {
+        let dir = TempDir::new().expect("tempdir");
+        let root = dir.path();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/main.rs"), "fn main() {}").unwrap();
+
+        fs::create_dir_all(root.join(".deepseek/commands")).unwrap();
+        fs::write(root.join(".deepseek/commands/build.md"), "build").unwrap();
+        fs::create_dir_all(root.join(".deepseek/snapshots/deadbeef/.git/objects")).unwrap();
+        fs::write(
+            root.join(".deepseek/snapshots/deadbeef/.git/objects/snapshot.pack"),
+            "pack",
+        )
+        .unwrap();
+
+        fs::create_dir_all(root.join(".claude/commands")).unwrap();
+        fs::write(root.join(".claude/commands/test.md"), "test").unwrap();
+        fs::create_dir_all(root.join(".claude/worktrees/agent/src")).unwrap();
+        fs::write(
+            root.join(".claude/worktrees/agent/src/agent-only.md"),
+            "agent",
+        )
+        .unwrap();
+
+        let candidates = collect_candidates(root);
+
+        assert!(candidates.iter().any(|path| path == "src/main.rs"));
+        assert!(
+            candidates
+                .iter()
+                .any(|path| path == ".deepseek/commands/build.md"),
+            "normal .deepseek command files should stay discoverable: {candidates:?}",
+        );
+        assert!(
+            candidates
+                .iter()
+                .any(|path| path == ".claude/commands/test.md"),
+            "normal .claude command files should stay discoverable: {candidates:?}",
+        );
+        assert!(
+            candidates
+                .iter()
+                .all(|path| !path.starts_with(".deepseek/snapshots/")),
+            "snapshot side repo files must not enter picker candidates: {candidates:?}",
+        );
+        assert!(
+            candidates
+                .iter()
+                .all(|path| !path.starts_with(".claude/worktrees/")),
+            ".claude worktree files must not enter picker candidates: {candidates:?}",
         );
     }
 }
