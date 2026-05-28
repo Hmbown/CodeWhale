@@ -749,13 +749,20 @@ pub fn system_prompt_for_mode_with_context_skills_session_and_approval(
     // skills directory (`.agents/skills`, `skills`,
     // `.opencode/skills`, `.claude/skills`, `.cursor/skills`) plus global
     // `~/.agents/skills` / `~/.deepseek/skills` so skills installed for any
-    // AI-tool convention show up in the catalogue. The legacy
-    // single-`skills_dir` path is
-    // honoured as a fallback for callers that don't supply a
-    // workspace-aware view; it falls through to the same merged
-    // registry when available.
-    let skills_block = crate::skills::render_available_skills_context_for_workspace(workspace)
-        .or_else(|| skills_dir.and_then(crate::skills::render_available_skills_context));
+    // AI-tool convention show up in the catalogue.
+    //
+    // When the embedder supplies `EngineConfig.skills_dir`, **union** it into
+    // the discovery set instead of using it only as a fallback. The previous
+    // `for_workspace(...).or_else(skills_dir...)` short-circuits whenever the
+    // workspace search hits any home-rooted skill (very common when workspace
+    // is `$HOME` or similar), making bundle-distributed skills invisible to
+    // the model — the union behaviour is what most embedders actually want.
+    let skills_block = match skills_dir {
+        Some(dir) => {
+            crate::skills::render_available_skills_context_for_workspace_and_dir(workspace, dir)
+        }
+        None => crate::skills::render_available_skills_context_for_workspace(workspace),
+    };
     if let Some(block) = skills_block {
         full_prompt = format!("{full_prompt}\n\n{block}");
     }

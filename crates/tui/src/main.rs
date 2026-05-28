@@ -3167,14 +3167,17 @@ fn provider_capability_report(config: &Config) -> serde_json::Value {
 
 fn doctor_search_provider_line(config: &Config) -> String {
     let search_provider = config.search_provider_resolution();
+    // pinvou3 fork patch #42: 默认是 Bing scrape (上游 PR #2132 想用 DDG,
+    // 但 DDG HTML 在我们的网络环境恒返 bot challenge)。Bing scrape 也会被反爬
+    // 退化(中文查询易返兜底页),所以在 default 状态下提示用户可切到 API 后端。
     let switch_hint = if matches!(
         (search_provider.provider, search_provider.source),
         (
-            crate::config::SearchProvider::DuckDuckGo,
+            crate::config::SearchProvider::Bing,
             crate::config::SearchProviderSource::Default
         )
     ) {
-        "; set [search] provider = \"bing\" | \"tavily\" | \"bocha\" to switch"
+        "; set [search] provider = \"tavily\" | \"bocha\" | \"metaso\" for API-backed alternatives"
     } else {
         ""
     };
@@ -5714,7 +5717,7 @@ mod doctor_endpoint_tests {
     }
 
     #[test]
-    fn doctor_search_provider_line_includes_duckduckgo_default_source_and_switch_hint() {
+    fn doctor_search_provider_line_includes_bing_default_source_and_api_switch_hint() {
         let _guard = crate::test_support::lock_test_env();
         let prev = std::env::var_os("DEEPSEEK_SEARCH_PROVIDER");
         unsafe { std::env::remove_var("DEEPSEEK_SEARCH_PROVIDER") };
@@ -5725,10 +5728,11 @@ mod doctor_endpoint_tests {
             Some(value) => unsafe { std::env::set_var("DEEPSEEK_SEARCH_PROVIDER", value) },
             None => unsafe { std::env::remove_var("DEEPSEEK_SEARCH_PROVIDER") },
         }
-        assert!(line.contains("search_provider: duckduckgo"));
+        // pinvou3 fork patch #42: 默认是 Bing(回退上游 PR #2132),提示指向 API 后端。
+        assert!(line.contains("search_provider: bing"));
         assert!(line.contains("source: default"));
         assert!(line.contains("[search] provider"));
-        assert!(line.contains("provider = \"bing\""));
+        assert!(line.contains("provider = \"tavily\""));
     }
 
     #[test]
@@ -5771,13 +5775,16 @@ mod doctor_endpoint_tests {
     }
 
     #[test]
-    fn doctor_search_provider_line_omits_switch_hint_when_bing_is_configured() {
+    fn doctor_search_provider_line_omits_switch_hint_when_duckduckgo_is_configured() {
+        // 显式选择的 provider(任意值)都不再触发 switch hint —— hint 只对
+        // "default + Bing" 的兜底场景说话。pinvou3 fork patch #42 调整后,
+        // 这里用 DuckDuckGo 显式配置覆盖 source=Config 路径。
         let _guard = crate::test_support::lock_test_env();
         let prev = std::env::var_os("DEEPSEEK_SEARCH_PROVIDER");
         unsafe { std::env::remove_var("DEEPSEEK_SEARCH_PROVIDER") };
         let config = Config {
             search: Some(crate::config::SearchConfig {
-                provider: Some(crate::config::SearchProvider::Bing),
+                provider: Some(crate::config::SearchProvider::DuckDuckGo),
                 api_key: None,
             }),
             ..Default::default()
@@ -5789,7 +5796,7 @@ mod doctor_endpoint_tests {
             Some(value) => unsafe { std::env::set_var("DEEPSEEK_SEARCH_PROVIDER", value) },
             None => unsafe { std::env::remove_var("DEEPSEEK_SEARCH_PROVIDER") },
         }
-        assert!(line.contains("search_provider: bing"));
+        assert!(line.contains("search_provider: duckduckgo"));
         assert!(line.contains("source: config"));
         assert!(!line.contains("[search] provider"));
     }

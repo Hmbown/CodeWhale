@@ -648,9 +648,12 @@ impl SnapshotsConfig {
 #[serde(rename_all = "snake_case")]
 pub enum SearchProvider {
     /// Bing HTML scraping. No API key needed.
+    /// pinvou3 fork (#42): 是默认后端 — 上游 PR #2132 把默认改成 DuckDuckGo,
+    /// 但 DDG `html.duckduckgo.com` 对非浏览器请求恒返 anomaly-modal,在我们的
+    /// CN 部署里相当于永远走 fallback。改回 Bing(配合 #10 实体解码 fix)直接生效。
+    #[default]
     Bing,
     /// DuckDuckGo HTML scraping with Bing fallback. No API key needed.
-    #[default]
     #[serde(alias = "duckduckgo")]
     DuckDuckGo,
     /// Tavily AI Search API (<https://tavily.com>). Requires api_key.
@@ -4244,8 +4247,11 @@ mod tests {
     }
 
     #[test]
-    fn search_provider_defaults_to_duckduckgo() {
-        assert_eq!(SearchProvider::default(), SearchProvider::DuckDuckGo);
+    fn forkguard_search_provider_defaults_to_bing() {
+        // pinvou3 fork patch #42: 上游 PR #2132 把默认改成 DuckDuckGo,但 DDG
+        // HTML 端点在 CN 网络下恒返 anomaly-modal → 永远走 Bing fallback,凭空多
+        // 一发废请求。改回 Bing 是 fork distinct 行为,锁死防 sync 静默丢失。
+        assert_eq!(SearchProvider::default(), SearchProvider::Bing);
     }
 
     #[test]
@@ -4290,7 +4296,7 @@ mod tests {
         let resolution = Config::default().search_provider_resolution();
 
         unsafe { EnvGuard::restore_var("DEEPSEEK_SEARCH_PROVIDER", prev) };
-        assert_eq!(resolution.provider, SearchProvider::DuckDuckGo);
+        assert_eq!(resolution.provider, SearchProvider::Bing);
         assert_eq!(resolution.source, SearchProviderSource::Default);
     }
 

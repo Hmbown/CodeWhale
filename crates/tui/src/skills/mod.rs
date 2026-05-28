@@ -615,13 +615,43 @@ pub fn render_available_skills_context_for_workspace(workspace: &Path) -> Option
     render_skills_block(&registry)
 }
 
+/// Union of [`render_available_skills_context_for_workspace`] and
+/// [`render_available_skills_context`]: scan every workspace candidate
+/// directory **plus** the caller-supplied `skills_dir`, then render one
+/// merged Skills block. Lets callers configure an extra skill
+/// installation root (e.g. a vendored bundle directory) without it being
+/// short-circuited by home-rooted candidates the workspace search already
+/// hits. Mirrors [`discover_for_workspace_and_dir`].
+///
+/// Useful for embedders that ship their own skill directory: passing it
+/// to `render_available_skills_context_for_workspace` alone would miss it
+/// (workspace-only scan), and using `render_available_skills_context` on
+/// just that directory would miss the workspace-rooted skills. The union
+/// covers both.
+#[must_use]
+pub fn render_available_skills_context_for_workspace_and_dir(
+    workspace: &Path,
+    skills_dir: &Path,
+) -> Option<String> {
+    let registry = discover_for_workspace_and_dir(workspace, skills_dir);
+    render_skills_block(&registry)
+}
+
 /// Codex's progressive-disclosure contract: the model sees skill names,
 /// descriptions, and paths up front, then opens the specific `SKILL.md` only
 /// when a skill is relevant.
 ///
 /// Single-directory variant — use
 /// [`render_available_skills_context_for_workspace`] when scanning
-/// a workspace for cross-tool skill folders (#432).
+/// a workspace for cross-tool skill folders (#432), or
+/// [`render_available_skills_context_for_workspace_and_dir`] to union both.
+///
+/// `#[allow(dead_code)]`: the in-tree prompt builder no longer calls this
+/// after the skills_block union refactor (it goes through
+/// `render_available_skills_context_for_workspace_and_dir` when
+/// `EngineConfig.skills_dir` is set), but the function is kept as a public
+/// API for embedders that just want to render a single directory.
+#[allow(dead_code)]
 #[must_use]
 pub fn render_available_skills_context(skills_dir: &Path) -> Option<String> {
     let registry = SkillRegistry::discover(skills_dir);
@@ -1639,6 +1669,57 @@ mod tests {
             skill.description,
             "Usage:\n  $ deepseek --model auto\n  $ deepseek doctor"
         );
+    }
+
+    /// When an embedder supplies an extra `skills_dir`, it must be **unioned**
+    /// into the discovery set alongside workspace candidates — not used as a
+    /// fallback that home-rooted skills can short-circuit. Regression catch:
+    /// if `prompts.rs` reverts to `for_workspace(...).or_else(skills_dir...)`,
+    /// home-rooted skills consume the result first and bundle skills disappear.
+    #[test]
+    fn skills_dir_unions_with_home_rooted_workspace_skills() {
+        let tmpdir = TempDir::new().unwrap();
+        let workspace = tmpdir.path().join("ws");
+        let bundle = tmpdir.path().join("bundle");
+        let fake_home = tmpdir.path().join("fake-home");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::create_dir_all(&bundle).unwrap();
+        std::fs::create_dir_all(&fake_home).unwrap();
+
+        // home-rooted skill (covered by the workspace search via the home
+        // candidate directories).
+        std::fs::create_dir_all(fake_home.join(".agents/skills/from-home")).unwrap();
+        std::fs::write(
+            fake_home.join(".agents/skills/from-home/SKILL.md"),
+            "---\nname: from-home\ndescription: home-rooted skill\n---\nbody",
+        )
+        .unwrap();
+
+        // bundle skill (the embedder-supplied directory).
+        std::fs::create_dir_all(bundle.join("from-bundle")).unwrap();
+        std::fs::write(
+            bundle.join("from-bundle/SKILL.md"),
+            "---\nname: from-bundle\ndescription: bundle skill\n---\nbody",
+        )
+        .unwrap();
+
+        let registry =
+            super::discover_for_workspace_and_dir_with_home(&workspace, &bundle, Some(&fake_home));
+        let names: Vec<&str> = registry.list().iter().map(|s| s.name.as_str()).collect();
+        assert!(
+            names.contains(&"from-home"),
+            "home-rooted skill must remain visible. Got: {names:?}"
+        );
+        assert!(
+            names.contains(&"from-bundle"),
+            "skills_dir-supplied skill must be unioned in, not short-circuited. Got: {names:?}"
+        );
+
+        // And the public render path the prompt builder uses must surface it too.
+        let rendered =
+            super::render_available_skills_context_for_workspace_and_dir(&workspace, &bundle)
+                .expect("rendered block should be non-empty");
+        assert!(rendered.contains("from-bundle"));
     }
 
     /// Folded (`>`) block scalars also preserve relative indentation

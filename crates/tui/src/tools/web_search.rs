@@ -129,7 +129,7 @@ impl ToolSpec for WebSearchTool {
     }
 
     fn description(&self) -> &'static str {
-        "Search the web and return ranked results with URLs and snippets. Default backend is DuckDuckGo with Bing fallback; set `[search] provider = \"bing\" | \"tavily\" | \"bocha\"` in config.toml to switch backends. Use this instead of scraping search engines with `curl` in `exec_shell`. For a known canonical URL, prefer `fetch_url` directly."
+        "Search the web and return ranked results with URLs and snippets. Default backend is Bing with DuckDuckGo fallback; set `[search] provider = \"duckduckgo\" | \"tavily\" | \"bocha\"` in config.toml to switch backends. Use this instead of scraping search engines with `curl` in `exec_shell`. For a known canonical URL, prefer `fetch_url` directly."
     }
 
     fn input_schema(&self) -> Value {
