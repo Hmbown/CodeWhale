@@ -274,6 +274,35 @@ mod tests {
     }
 
     #[test]
+    fn windows_shell_env_can_select_windows_powershell() {
+        let invocation = shell_invocation_for_platform(
+            "Get-ChildItem",
+            ShellPlatform::Windows,
+            &ShellProbe {
+                shell: Some(
+                    r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe".to_string(),
+                ),
+                comspec: Some(r"C:\Windows\System32\cmd.exe".to_string()),
+                pwsh_on_path: false,
+            },
+        );
+
+        assert_eq!(
+            invocation.program,
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+        );
+        assert_eq!(
+            invocation.args,
+            ["-NoProfile", "-NonInteractive", "-Command", "Get-ChildItem"]
+        );
+        assert!(!invocation.raw_payload_on_windows);
+        assert_eq!(
+            invocation.display_command().as_deref(),
+            Some("Get-ChildItem")
+        );
+    }
+
+    #[test]
     fn windows_uses_pwsh_before_cmd_when_available() {
         let invocation = shell_invocation_for_platform(
             "Get-ChildItem",
@@ -291,6 +320,32 @@ mod tests {
             ["-NoProfile", "-NonInteractive", "-Command", "Get-ChildItem"]
         );
         assert!(!invocation.raw_payload_on_windows);
+    }
+
+    #[test]
+    fn windows_without_pwsh_falls_straight_to_cmd_not_windows_powershell() {
+        let invocation = shell_invocation_for_platform(
+            "git status --short",
+            ShellPlatform::Windows,
+            &ShellProbe {
+                comspec: Some(
+                    r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe".to_string(),
+                ),
+                pwsh_on_path: false,
+                ..probe()
+            },
+        );
+
+        assert_eq!(invocation.program, "cmd");
+        assert_eq!(
+            invocation.args,
+            ["/C", "chcp 65001 >NUL & git status --short"]
+        );
+        assert!(invocation.raw_payload_on_windows);
+        assert_eq!(
+            invocation.display_command().as_deref(),
+            Some("git status --short")
+        );
     }
 
     #[test]
