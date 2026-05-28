@@ -62,6 +62,27 @@ async function main() {
     manifestLines.push(`${await sha256(outputPath)}  ${asset.target}`);
   }
 
+  // Windows: generate .bat launcher that prefers Windows Terminal
+  if (isWindows) {
+    const batContent = [
+      "@echo off",
+      "where wt >nul 2>nul",
+      'if "%ERRORLEVEL%"=="0" (',
+      '    wt --title CodeWhale cmd /k "%~dp0codewhale-windows-x64.exe"',
+      "    set NO_ANIMATIONS=1",
+      ") else (",
+      '    "%~dp0codewhale-windows-x64.exe"',
+      "    set NO_ANIMATIONS=1",
+      ")",
+      "",
+    ].join("\r\n");
+    const batPath = path.join(outputDir, "codewhale.bat");
+    await fs.writeFile(batPath, batContent, "utf8");
+    const batHash = await sha256(batPath);
+    manifestLines.push(`${batHash}  codewhale.bat`);
+    console.log(`Generated ${batPath}`);
+  }
+
   manifestLines.sort();
   const manifestPath = path.join(outputDir, CHECKSUM_MANIFEST);
   await fs.writeFile(manifestPath, `${manifestLines.join("\n")}\n`, "utf8");
