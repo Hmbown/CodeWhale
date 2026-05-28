@@ -20,17 +20,17 @@ services:
         CODEWHALE_IMAGE: ${CODEWHALE_IMAGE:-ghcr.io/hmbown/codewhale:latest}
         TOOLBOX_PACKAGES: ${TOOLBOX_PACKAGES:-git openssh-client curl build-essential pkg-config python3 python3-pip nodejs npm}
     environment:
-      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?set DEEPSEEK_API_KEY}
-      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-}
-      DEEPSEEK_NO_COLOR: ${DEEPSEEK_NO_COLOR:-}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:?set DEEPSEEK_API_KEY}
+      - DEEPSEEK_BASE_URL
+      - DEEPSEEK_NO_COLOR
     volumes:
       - codewhale-home:/home/codewhale/.deepseek
-      - ${CODEWHALE_WORKSPACE:-../..}:/workspace
+      - ${CODEWHALE_WORKSPACE:?set CODEWHALE_WORKSPACE to the project directory}:/workspace
       # Mount SSH material only for projects that need it, and prefer read-only.
       # - ${HOME}/.ssh:/home/codewhale/.ssh:ro
       # Mount local CA certificates only when starting through a command that
       # runs `sudo update-ca-certificates` inside this toolbox image.
-      # - ${CODEWHALE_CERTS_DIR:-./docker/certs}:/usr/local/share/ca-certificates/local:ro
+      # - ${CODEWHALE_CERTS_DIR:-../../docker/certs}:/usr/local/share/ca-certificates/local:ro
     working_dir: /workspace
     stdin_open: true
     tty: true
