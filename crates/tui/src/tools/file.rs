@@ -256,6 +256,49 @@ fn parse_pages_arg(spec: &str) -> Option<(u32, u32)> {
     }
 }
 
+/// Clean PDF-extracted text for TUI display: collapse consecutive blank
+/// lines (more than 1 becomes 1), replace NUL bytes with U+FFFD, replace
+/// non-breaking spaces with regular spaces, and trim trailing whitespace
+/// on each line. Produces output that won't clutter the transcript with
+/// vertical gaps or invisible control characters.
+fn clean_pdf_text(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut blank_run = 0usize;
+    let mut any_content = false;
+    for line in raw.lines() {
+        let trimmed = line.trim_end();
+        if trimmed.is_empty() {
+            blank_run = blank_run.saturating_add(1);
+            if blank_run <= 1 {
+                out.push('\n');
+            }
+        } else {
+            blank_run = 0;
+            any_content = true;
+            // Push cleaned characters directly — avoids a per-line
+            // temporary String allocation.
+            for c in trimmed.chars() {
+                match c {
+                    '\0' => out.push('\u{FFFD}'),
+                    '\u{A0}' => out.push(' '),
+                    other => out.push(other),
+                }
+            }
+            out.push('\n');
+        }
+    }
+    // Trim leading blank lines only — don't use str::trim() which
+    // would also strip intentional indentation (e.g. centred titles).
+    if any_content {
+        let start = out.find(|c: char| c != '\n').unwrap_or(0);
+        // Walk back from end to find the last non-newline character.
+        let end = out.rfind(|c: char| c != '\n').map_or(out.len(), |i| i + 1);
+        out[start..end].to_string()
+    } else {
+        String::new()
+    }
+}
+
 fn read_pdf(path: &Path, pages: Option<&str>) -> Result<ToolResult, ToolError> {
     // Validate the `pages` spec once, up front, so both extractor paths
     // surface the same error shape on bad input.
@@ -325,7 +368,7 @@ fn read_pdf_via_pdf_extract(
             ))
         })?
     };
-    Ok(ToolResult::success(text))
+    Ok(ToolResult::success(clean_pdf_text(&text)))
 }
 
 fn read_pdf_via_pdftotext(
@@ -382,7 +425,7 @@ fn read_pdf_via_pdftotext(
     }
 
     let text = String::from_utf8_lossy(&output.stdout).to_string();
-    Ok(ToolResult::success(text))
+    Ok(ToolResult::success(clean_pdf_text(&text)))
 }
 
 // === WriteFileTool ===
@@ -1224,6 +1267,43 @@ mod tests {
 
     fn sample_pdf_present() -> bool {
         std::path::Path::new(SAMPLE_PDF_PATH).exists()
+    }
+
+    #[test]
+    fn clean_pdf_text_collapses_consecutive_blank_lines() {
+        let raw = "line1\n\n\n\n\nline2\n\n\nline3";
+        let cleaned = super::clean_pdf_text(raw);
+        assert_eq!(cleaned, "line1\n\nline2\n\nline3");
+    }
+
+    #[test]
+    fn clean_pdf_text_replaces_nul_bytes_with_replacement_char() {
+        let raw = "hello\0world";
+        let cleaned = super::clean_pdf_text(raw);
+        assert!(!cleaned.contains('\0'));
+        assert!(cleaned.contains('\u{FFFD}'));
+    }
+
+    #[test]
+    fn clean_pdf_text_replaces_non_breaking_spaces() {
+        let raw = "hello\u{A0}world";
+        let cleaned = super::clean_pdf_text(raw);
+        assert!(!cleaned.contains('\u{A0}'));
+        assert_eq!(cleaned, "hello world");
+    }
+
+    #[test]
+    fn clean_pdf_text_trims_trailing_whitespace() {
+        let raw = "hello   ";
+        let cleaned = super::clean_pdf_text(raw);
+        assert_eq!(cleaned, "hello");
+    }
+
+    #[test]
+    fn clean_pdf_text_preserves_leading_indentation() {
+        let raw = "   indented line\nregular line";
+        let cleaned = super::clean_pdf_text(raw);
+        assert_eq!(cleaned, "   indented line\nregular line");
     }
 
     #[test]
