@@ -85,6 +85,24 @@ fn is_safe_custom_header(key: &str, value: &str) -> bool {
     !value.contains('\r') && !value.contains('\n')
 }
 
+fn apply_safe_custom_headers(
+    mut request: reqwest::RequestBuilder,
+    headers: &HashMap<String, String>,
+) -> reqwest::RequestBuilder {
+    for (key, value) in headers {
+        if !is_safe_custom_header(key, value) {
+            tracing::warn!(
+                target: "mcp",
+                "skipping unsafe MCP header {:?} (empty/control-char/reserved)",
+                key
+            );
+            continue;
+        }
+        request = request.header(key.as_str(), value.as_str());
+    }
+    request
+}
+
 /// Mask a URL so any embedded credentials in the userinfo portion (e.g.
 /// `https://user:secret@host`) are replaced with `***`. Failures fall back to
 /// the original string so we don't lose context — we never want masking to
@@ -537,6 +555,7 @@ impl Drop for StdioTransport {
 pub struct SseTransport {
     client: reqwest::Client,
     base_url: String,
+    headers: HashMap<String, String>,
     endpoint_url: Option<String>,
     receiver: tokio::sync::mpsc::UnboundedReceiver<SseInbound>,
     pending_messages: VecDeque<Vec<u8>>,
@@ -551,6 +570,7 @@ struct HttpTransport {
     mode: HttpTransportMode,
     client: reqwest::Client,
     base_url: String,
+    headers: HashMap<String, String>,
     cancel_token: tokio_util::sync::CancellationToken,
     endpoint_timeout: Duration,
 }
@@ -587,12 +607,14 @@ impl SseTransport {
     pub async fn connect(
         client: reqwest::Client,
         url: String,
+        headers: HashMap<String, String>,
         cancel_token: tokio_util::sync::CancellationToken,
         endpoint_timeout: Duration,
     ) -> Result<Self> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let client_clone = client.clone();
         let url_clone = url.clone();
+        let headers_clone = headers.clone();
         let wait_cancel_token = cancel_token.clone();
 
         tokio::spawn(async move {
@@ -603,6 +625,7 @@ impl SseTransport {
             let result = std::panic::AssertUnwindSafe(Self::run_sse_loop(
                 client_clone,
                 url_clone,
+                headers_clone,
                 tx,
                 cancel_token,
             ))
@@ -629,6 +652,7 @@ impl SseTransport {
         let mut transport = Self {
             client,
             base_url: url,
+            headers,
             endpoint_url: None,
             receiver: rx,
             pending_messages: VecDeque::new(),
@@ -642,18 +666,22 @@ impl SseTransport {
     async fn run_sse_loop(
         client: reqwest::Client,
         url: String,
+        headers: HashMap<String, String>,
         tx: tokio::sync::mpsc::UnboundedSender<SseInbound>,
         cancel_token: tokio_util::sync::CancellationToken,
     ) -> Result<()> {
-        let response = with_default_mcp_http_headers(client.get(&url), false)
-            .send()
-            .await
-            .with_context(|| {
-                format!(
-                    "MCP SSE connect failed (transport=http url={})",
-                    mask_url_secrets(&url),
-                )
-            })?;
+        let response = apply_safe_custom_headers(
+            with_default_mcp_http_headers(client.get(&url), false),
+            &headers,
+        )
+        .send()
+        .await
+        .with_context(|| {
+            format!(
+                "MCP SSE connect failed (transport=http url={})",
+                mask_url_secrets(&url),
+            )
+        })?;
         let status = response.status();
         if !status.is_success() {
             let body_excerpt = bounded_body_excerpt(response, ERROR_BODY_PREVIEW_BYTES).await;
@@ -783,10 +811,11 @@ impl HttpTransport {
             mode: HttpTransportMode::Streamable(StreamableHttpTransport::new(
                 client.clone(),
                 url.clone(),
-                headers,
+                headers.clone(),
             )),
             client,
             base_url: url,
+            headers,
             cancel_token,
             endpoint_timeout,
         }
@@ -796,6 +825,7 @@ impl HttpTransport {
         let mut sse = SseTransport::connect(
             self.client.clone(),
             self.base_url.clone(),
+            self.headers.clone(),
             self.cancel_token.clone(),
             self.endpoint_timeout,
         )
@@ -836,19 +866,10 @@ impl HttpTransport {
             HttpTransportMode::Sse(_) => return Ok(()),
         };
 
-        let mut request = transport.client.get(&transport.url);
-        request = with_default_mcp_http_headers(request, false);
-        for (key, value) in &transport.headers {
-            if !is_safe_custom_header(key, value) {
-                tracing::warn!(
-                    target: "mcp",
-                    "skipping unsafe MCP header {:?} (empty/control-char/reserved)",
-                    key
-                );
-                continue;
-            }
-            request = request.header(key.as_str(), value.as_str());
-        }
+        let request = apply_safe_custom_headers(
+            with_default_mcp_http_headers(transport.client.get(&transport.url), false),
+            &transport.headers,
+        );
         let response = tokio::time::timeout(Duration::from_secs(5), request.send())
             .await
             .map_err(|_| anyhow::anyhow!("GET timeout"))?
@@ -923,29 +944,12 @@ impl StreamableHttpTransport {
     }
 
     async fn send(&mut self, msg: Vec<u8>) -> std::result::Result<(), StreamableSendError> {
-        let mut request = with_default_mcp_http_headers(self.client.post(&self.url), true);
-        // Apply user-configured custom headers. Skip:
-        //   * empty / whitespace-only keys (would produce reqwest builder
-        //     errors mid-request and abort the whole connection);
-        //   * keys that duplicate the framing we already set (`Accept`,
-        //     `Content-Type`) so a stray entry can't break protocol
-        //     negotiation;
-        //   * values containing CR/LF, which would enable response-
-        //     splitting style requests on a misbehaving proxy.
-        // reqwest itself rejects malformed header names/values; the
-        // duplicates and control-char filter is purely defense in
-        // depth.
-        for (key, value) in &self.headers {
-            if !is_safe_custom_header(key, value) {
-                tracing::warn!(
-                    target: "mcp",
-                    "skipping unsafe MCP header {:?} (empty/control-char/reserved)",
-                    key
-                );
-                continue;
-            }
-            request = request.header(key.as_str(), value.as_str());
-        }
+        // Apply user-configured custom headers after protocol framing so
+        // reserved Accept / Content-Type overrides can be filtered out.
+        let mut request = apply_safe_custom_headers(
+            with_default_mcp_http_headers(self.client.post(&self.url), true),
+            &self.headers,
+        );
         // Attach any previously captured session ID per the Streamable
         // HTTP spec so the server can correlate this request to the
         // existing session.
@@ -1112,10 +1116,13 @@ impl McpTransport for SseTransport {
             .endpoint_url
             .as_ref()
             .context("SSE endpoint not yet discovered")?;
-        let response = with_default_mcp_http_headers(self.client.post(endpoint), true)
-            .body(msg)
-            .send()
-            .await?;
+        let response = apply_safe_custom_headers(
+            with_default_mcp_http_headers(self.client.post(endpoint), true),
+            &self.headers,
+        )
+        .body(msg)
+        .send()
+        .await?;
         if !response.status().is_success() {
             anyhow::bail!("Failed to send message via SSE POST: {}", response.status());
         }
@@ -1235,6 +1242,7 @@ impl McpConnection {
                     SseTransport::connect(
                         client,
                         url.clone(),
+                        config.headers.clone(),
                         cancel_token.clone(),
                         Duration::from_secs(connect_timeout_secs),
                     )
@@ -1350,7 +1358,7 @@ impl McpConnection {
         let init_id = self.next_id();
         self.send(serde_json::json!({
             "jsonrpc": "2.0",
-            "id": init_id.clone(),
+            "id": &init_id,
             "method": "initialize",
             "params": {
                 "protocolVersion": "2024-11-05",
@@ -1401,7 +1409,7 @@ impl McpConnection {
             };
             self.send(serde_json::json!({
                 "jsonrpc": "2.0",
-                "id": list_id.clone(),
+                "id": &list_id,
                 "method": "tools/list",
                 "params": params
             }))
@@ -1453,7 +1461,7 @@ impl McpConnection {
             };
             self.send(serde_json::json!({
                 "jsonrpc": "2.0",
-                "id": list_id.clone(),
+                "id": &list_id,
                 "method": "resources/list",
                 "params": params
             }))
@@ -1497,7 +1505,7 @@ impl McpConnection {
             };
             self.send(serde_json::json!({
                 "jsonrpc": "2.0",
-                "id": list_id.clone(),
+                "id": &list_id,
                 "method": "resources/templates/list",
                 "params": params
             }))
@@ -1545,7 +1553,7 @@ impl McpConnection {
             };
             self.send(serde_json::json!({
                 "jsonrpc": "2.0",
-                "id": list_id.clone(),
+                "id": &list_id,
                 "method": "prompts/list",
                 "params": params
             }))
@@ -1648,7 +1656,7 @@ impl McpConnection {
         let call_id = self.next_id();
         self.send(serde_json::json!({
             "jsonrpc": "2.0",
-            "id": call_id.clone(),
+            "id": &call_id,
             "method": method,
             "params": params
         }))
@@ -3820,10 +3828,15 @@ mod tests {
 
         let client = reqwest::Client::new();
         let url = format!("http://{addr}/sse");
-        let mut transport =
-            SseTransport::connect(client, url, cancel_token.clone(), Duration::from_secs(2))
-                .await
-                .unwrap();
+        let mut transport = SseTransport::connect(
+            client,
+            url,
+            HashMap::new(),
+            cancel_token.clone(),
+            Duration::from_secs(2),
+        )
+        .await
+        .unwrap();
 
         transport
             .send(json_frame(serde_json::json!({
@@ -3905,10 +3918,15 @@ mod tests {
 
         let client = reqwest::Client::new();
         let url = format!("http://{addr}/sse");
-        let mut transport =
-            SseTransport::connect(client, url, cancel_token.clone(), Duration::from_secs(2))
-                .await
-                .unwrap();
+        let mut transport = SseTransport::connect(
+            client,
+            url,
+            HashMap::new(),
+            cancel_token.clone(),
+            Duration::from_secs(2),
+        )
+        .await
+        .unwrap();
 
         transport
             .send(json_frame(serde_json::json!({
@@ -3922,6 +3940,111 @@ mod tests {
         assert!(
             post_seen.load(AtomicOrdering::SeqCst),
             "first SSE send should POST to the CRLF-discovered endpoint"
+        );
+
+        cancel_token.cancel();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn sse_transport_applies_custom_headers_to_get_and_post() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering as AtomicOrdering},
+        };
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let get_header_seen = Arc::new(AtomicBool::new(false));
+        let post_header_seen = Arc::new(AtomicBool::new(false));
+        let server_get_header_seen = Arc::clone(&get_header_seen);
+        let server_post_header_seen = Arc::clone(&post_header_seen);
+        let cancel_token = tokio_util::sync::CancellationToken::new();
+        let server_cancel = cancel_token.clone();
+
+        let server = tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let get_header_seen = Arc::clone(&server_get_header_seen);
+                let post_header_seen = Arc::clone(&server_post_header_seen);
+                let server_cancel = server_cancel.clone();
+                tokio::spawn(async move {
+                    let mut request = Vec::new();
+                    let mut buf = [0; 1024];
+                    loop {
+                        let n = socket.read(&mut buf).await.unwrap();
+                        if n == 0 {
+                            return;
+                        }
+                        request.extend_from_slice(&buf[..n]);
+                        if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                            break;
+                        }
+                    }
+                    let request = String::from_utf8_lossy(&request);
+                    let request_lower = request.to_lowercase();
+                    if request.starts_with("GET /sse ") {
+                        if request_lower.contains("x-custom-auth: my-test-token") {
+                            get_header_seen.store(true, AtomicOrdering::SeqCst);
+                        }
+                        socket
+                            .write_all(
+                                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n",
+                            )
+                            .await
+                            .unwrap();
+                        socket
+                            .write_all(b"event: endpoint\ndata: /messages\n\n")
+                            .await
+                            .unwrap();
+                        server_cancel.cancelled().await;
+                    } else if request.starts_with("POST /messages ") {
+                        if request_lower.contains("x-custom-auth: my-test-token") {
+                            post_header_seen.store(true, AtomicOrdering::SeqCst);
+                        }
+                        socket
+                            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                            .await
+                            .unwrap();
+                    }
+                });
+            }
+        });
+
+        let client = reqwest::Client::new();
+        let url = format!("http://{addr}/sse");
+        let mut headers = HashMap::new();
+        headers.insert("X-Custom-Auth".to_string(), "my-test-token".to_string());
+        let mut transport = SseTransport::connect(
+            client,
+            url,
+            headers,
+            cancel_token.clone(),
+            Duration::from_secs(2),
+        )
+        .await
+        .unwrap();
+
+        transport
+            .send(json_frame(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize"
+            })))
+            .await
+            .unwrap();
+
+        assert!(
+            get_header_seen.load(AtomicOrdering::SeqCst),
+            "legacy SSE GET must include user-configured custom headers"
+        );
+        assert!(
+            post_header_seen.load(AtomicOrdering::SeqCst),
+            "legacy SSE POST must include user-configured custom headers"
         );
 
         cancel_token.cancel();
