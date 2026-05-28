@@ -281,20 +281,16 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
     }
 
     let mut stdout = io::stdout();
-    if use_alt_screen {
-        execute!(stdout, EnterAlternateScreen)?;
-    }
-    // Initialize the file-backed TUI log and (on Unix) redirect raw stderr
-    // away from the alt-screen for the lifetime of this guard. Any
-    // `eprintln!`, panic message, or third-party stderr write that would
-    // otherwise leak into the alt-screen buffer and shift ratatui's
-    // diff-renderer view (the "scroll demon" reported in #1085) now lands
-    // in `~/.deepseek/logs/tui-YYYY-MM-DD.log` instead. The guard is held
-    // until the function returns; dropping it (after `LeaveAlternateScreen`
-    // below) restores the original stderr fd so shutdown messages reach
-    // the user's terminal. We accept the init failing (e.g., read-only
-    // `$HOME`) and continue without the redirect rather than refusing to
-    // start the TUI.
+    // Initialize the file-backed TUI log and redirect raw stderr away from
+    // the alt-screen for the lifetime of this guard. MUST run BEFORE
+    // EnterAlternateScreen — otherwise verbose logging between alt-screen
+    // entry and redirect init leaks raw bytes into the TUI buffer, causing
+    // the "scroll demon" on Windows (#1909) and garbled output on all
+    // platforms (#1085). The guard is held until the function returns;
+    // dropping it (after LeaveAlternateScreen below) restores the original
+    // stderr fd so shutdown messages reach the user's terminal. We accept
+    // the init failing (e.g., read-only $HOME) and continue without the
+    // redirect rather than refusing to start the TUI.
     let _tui_log_guard = match crate::runtime_log::init() {
         Ok(guard) => Some(guard),
         Err(err) => {
@@ -302,6 +298,9 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
             None
         }
     };
+    if use_alt_screen {
+        execute!(stdout, EnterAlternateScreen)?;
+    }
     // Mouse capture, bracketed paste, focus events, and the Kitty
     // keyboard-protocol escape-disambiguation flag (#442). Single source
     // of truth shared with the FocusGained recovery path and
