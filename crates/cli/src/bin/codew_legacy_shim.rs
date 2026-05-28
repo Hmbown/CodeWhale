@@ -37,12 +37,12 @@ fn spawn_codewhale(args: &[String]) -> std::io::Result<std::process::ExitStatus>
     // same directory as this shim but not on PATH (#2006).
     #[cfg(windows)]
     {
-        if let Ok(exe_path) = env::current_exe() {
-            if let Some(dir) = exe_path.parent() {
-                let sibling = dir.join("codewhale.exe");
-                if sibling.is_file() {
-                    return Command::new(sibling).args(args).status();
-                }
+        if let Ok(exe_path) = env::current_exe()
+            && let Some(dir) = exe_path.parent()
+        {
+            let sibling = dir.join("codewhale.exe");
+            if sibling.is_file() {
+                return Command::new(sibling).args(args).status();
             }
         }
     }
