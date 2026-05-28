@@ -75,7 +75,6 @@ pub(crate) struct ShellProbe {
     pub(crate) shell: Option<String>,
     pub(crate) comspec: Option<String>,
     pub(crate) pwsh_on_path: bool,
-    pub(crate) powershell_on_path: bool,
 }
 
 impl ShellProbe {
@@ -89,7 +88,6 @@ impl ShellProbe {
                 .ok()
                 .filter(|value| !value.trim().is_empty()),
             pwsh_on_path: command_on_path("pwsh.exe") || command_on_path("pwsh"),
-            powershell_on_path: command_on_path("powershell.exe") || command_on_path("powershell"),
         }
     }
 }
@@ -128,12 +126,11 @@ fn windows_shell_invocation(command: &str, probe: &ShellProbe) -> ShellInvocatio
         return shell;
     }
 
+    // Default Windows resolution is intentionally pwsh.exe -> cmd.exe. Windows
+    // PowerShell 5.x can still be selected explicitly through SHELL, but it is
+    // not used as an implicit fallback.
     if probe.pwsh_on_path {
         return powershell_invocation("pwsh.exe", command);
-    }
-
-    if probe.powershell_on_path {
-        return powershell_invocation("powershell.exe", command);
     }
 
     if let Some(comspec) = probe
@@ -173,6 +170,7 @@ fn powershell_invocation(program: &str, command: &str) -> ShellInvocation {
         program: program.to_string(),
         args: vec![
             "-NoProfile".to_string(),
+            "-NonInteractive".to_string(),
             "-Command".to_string(),
             command.to_string(),
         ],
@@ -196,17 +194,14 @@ fn windows_posix_shell_program<'a>(shell: &'a str, stem: &'a str) -> &'a str {
     }
 }
 
-fn shell_program_stem(program: &str) -> Option<String> {
+pub(crate) fn shell_program_stem(program: &str) -> Option<String> {
     let normalized = program.trim().replace('\\', "/");
-    let filename = normalized.rsplit('/').next()?.trim();
-    let stem = filename
-        .strip_suffix(".exe")
-        .or_else(|| filename.strip_suffix(".EXE"))
-        .unwrap_or(filename);
+    let filename = normalized.rsplit('/').next()?.trim().to_ascii_lowercase();
+    let stem = filename.strip_suffix(".exe").unwrap_or(&filename);
     if stem.is_empty() {
         None
     } else {
-        Some(stem.to_ascii_lowercase())
+        Some(stem.to_string())
     }
 }
 
@@ -266,6 +261,7 @@ mod tests {
             invocation.args,
             [
                 "-NoProfile",
+                "-NonInteractive",
                 "-Command",
                 r#"Remove-Item -Path "target file.txt" -Force"#
             ]
@@ -274,6 +270,35 @@ mod tests {
         assert_eq!(
             invocation.display_command().as_deref(),
             Some(r#"Remove-Item -Path "target file.txt" -Force"#)
+        );
+    }
+
+    #[test]
+    fn windows_shell_env_can_select_windows_powershell() {
+        let invocation = shell_invocation_for_platform(
+            "Get-ChildItem",
+            ShellPlatform::Windows,
+            &ShellProbe {
+                shell: Some(
+                    r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe".to_string(),
+                ),
+                comspec: Some(r"C:\Windows\System32\cmd.exe".to_string()),
+                pwsh_on_path: false,
+            },
+        );
+
+        assert_eq!(
+            invocation.program,
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+        );
+        assert_eq!(
+            invocation.args,
+            ["-NoProfile", "-NonInteractive", "-Command", "Get-ChildItem"]
+        );
+        assert!(!invocation.raw_payload_on_windows);
+        assert_eq!(
+            invocation.display_command().as_deref(),
+            Some("Get-ChildItem")
         );
     }
 
@@ -290,17 +315,47 @@ mod tests {
         );
 
         assert_eq!(invocation.program, "pwsh.exe");
-        assert_eq!(invocation.args, ["-NoProfile", "-Command", "Get-ChildItem"]);
+        assert_eq!(
+            invocation.args,
+            ["-NoProfile", "-NonInteractive", "-Command", "Get-ChildItem"]
+        );
         assert!(!invocation.raw_payload_on_windows);
+    }
+
+    #[test]
+    fn windows_without_pwsh_falls_straight_to_cmd_not_windows_powershell() {
+        let invocation = shell_invocation_for_platform(
+            "git status --short",
+            ShellPlatform::Windows,
+            &ShellProbe {
+                comspec: Some(
+                    r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe".to_string(),
+                ),
+                pwsh_on_path: false,
+                ..probe()
+            },
+        );
+
+        assert_eq!(invocation.program, "cmd");
+        assert_eq!(
+            invocation.args,
+            ["/C", "chcp 65001 >NUL & git status --short"]
+        );
+        assert!(invocation.raw_payload_on_windows);
+        assert_eq!(
+            invocation.display_command().as_deref(),
+            Some("git status --short")
+        );
     }
 
     #[test]
     fn windows_falls_back_to_comspec_cmd_with_utf8_prefix() {
         let invocation = shell_invocation_for_platform(
-            r#"git commit -m "hello world""#,
+            "git status --short",
             ShellPlatform::Windows,
             &ShellProbe {
                 comspec: Some(r"C:\Windows\System32\cmd.exe".to_string()),
+                pwsh_on_path: false,
                 ..probe()
             },
         );
@@ -308,12 +363,12 @@ mod tests {
         assert_eq!(invocation.program, r"C:\Windows\System32\cmd.exe");
         assert_eq!(
             invocation.args,
-            ["/C", r#"chcp 65001 >NUL & git commit -m "hello world""#]
+            ["/C", "chcp 65001 >NUL & git status --short"]
         );
         assert!(invocation.raw_payload_on_windows);
         assert_eq!(
             invocation.display_command().as_deref(),
-            Some(r#"git commit -m "hello world""#)
+            Some("git status --short")
         );
     }
 
