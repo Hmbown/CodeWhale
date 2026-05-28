@@ -28,16 +28,18 @@ pub struct ContextMenuView {
     column: u16,
     row: u16,
     last_rect: Cell<Option<Rect>>,
+    title: String,
 }
 
 impl ContextMenuView {
-    pub fn new(entries: Vec<ContextMenuEntry>, column: u16, row: u16) -> Self {
+    pub fn new(entries: Vec<ContextMenuEntry>, column: u16, row: u16, title: String) -> Self {
         Self {
             entries,
             selected: 0,
             column,
             row,
             last_rect: Cell::new(None),
+            title,
         }
     }
 
@@ -199,7 +201,7 @@ impl ModalView for ContextMenuView {
             .collect::<Vec<_>>();
 
         let block = Block::default()
-            .title(" Right click ")
+            .title(self.title.as_str())
             .borders(Borders::ALL)
             .border_style(Style::default().fg(palette::DEEPSEEK_SKY))
             .style(Style::default().bg(palette::SURFACE_ELEVATED))
@@ -256,6 +258,7 @@ mod tests {
             ],
             5,
             5,
+            " Right click ".to_string(),
         );
 
         view.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
@@ -271,7 +274,12 @@ mod tests {
 
     #[test]
     fn menu_clamps_to_render_area() {
-        let view = ContextMenuView::new(vec![entry("Paste", ContextMenuAction::Paste)], 200, 80);
+        let view = ContextMenuView::new(
+            vec![entry("Paste", ContextMenuAction::Paste)],
+            200,
+            80,
+            " Right click ".to_string(),
+        );
 
         let rect = view.menu_rect(Rect {
             x: 0,
@@ -293,6 +301,7 @@ mod tests {
             ],
             2,
             2,
+            " Right click ".to_string(),
         );
         let area = Rect {
             x: 0,
