@@ -228,6 +228,53 @@ fn load_handoff_block(workspace: &Path) -> Option<String> {
 /// "When NOT to use" guidance, sub-agent sentinel protocol.
 pub const BASE_PROMPT: &str = include_str!("prompts/base.md");
 
+// ── Embedder prompt overrides ──
+// Let an embedder replace these compile-time prompt constants at startup,
+// so brand / slimming customizations live in the embedder crate instead of
+// editing these files in-tree. Unset → the bundled constant (fully
+// backward compatible). Intended to be set once at process start, before
+// any engine spawns; later sets are ignored (OnceLock semantics).
+static BASE_PROMPT_OVERRIDE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+static LOCALE_PREAMBLE_ZH_HANS_OVERRIDE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+static AUTHORITY_RECAP_OVERRIDE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Replace `BASE_PROMPT` for all subsequent prompt composition. First call
+/// wins; later calls are no-ops. Set before spawning any engine.
+pub fn set_base_prompt_override(s: String) {
+    let _ = BASE_PROMPT_OVERRIDE.set(s);
+}
+
+/// Replace the Simplified-Chinese locale preamble (`## 语言要求`).
+pub fn set_locale_preamble_zh_hans_override(s: String) {
+    let _ = LOCALE_PREAMBLE_ZH_HANS_OVERRIDE.set(s);
+}
+
+/// Replace the trailing `## Authority Recap` block.
+pub fn set_authority_recap_override(s: String) {
+    let _ = AUTHORITY_RECAP_OVERRIDE.set(s);
+}
+
+fn effective_base_prompt() -> &'static str {
+    BASE_PROMPT_OVERRIDE
+        .get()
+        .map(String::as_str)
+        .unwrap_or(BASE_PROMPT)
+}
+
+fn effective_locale_preamble_zh_hans() -> &'static str {
+    LOCALE_PREAMBLE_ZH_HANS_OVERRIDE
+        .get()
+        .map(String::as_str)
+        .unwrap_or(LOCALE_PREAMBLE_ZH_HANS)
+}
+
+fn effective_authority_recap() -> &'static str {
+    AUTHORITY_RECAP_OVERRIDE
+        .get()
+        .map(String::as_str)
+        .unwrap_or(AUTHORITY_RECAP)
+}
+
 /// Optional locale-native reinforcement preamble prepended to the system
 /// prompt when the user's UI locale is non-English.
 ///
@@ -293,7 +340,7 @@ pub const BASE_PROMPT: &str = include_str!("prompts/base.md");
 /// and the closer position would all carry over unchanged.
 pub(crate) fn locale_reinforcement_preamble(locale_tag: &str) -> Option<&'static str> {
     match locale_tag {
-        "zh-Hans" | "zh-CN" | "zh" => Some(LOCALE_PREAMBLE_ZH_HANS),
+        "zh-Hans" | "zh-CN" | "zh" => Some(effective_locale_preamble_zh_hans()),
         "ja" | "ja-JP" => Some(LOCALE_PREAMBLE_JA),
         "pt-BR" | "pt" => Some(LOCALE_PREAMBLE_PT_BR),
         _ => None,
@@ -542,7 +589,7 @@ pub fn compose_prompt_with_approval_and_model(
     model_id: &str,
 ) -> String {
     let parts: [&str; 4] = [
-        &apply_model_template(BASE_PROMPT.trim(), model_id),
+        &apply_model_template(effective_base_prompt().trim(), model_id),
         personality.prompt().trim(),
         mode_prompt(mode).trim(),
         approval_prompt_for_mode(mode, approval_mode).trim(),
@@ -833,7 +880,8 @@ pub fn system_prompt_for_mode_with_context_skills_session_and_approval(
     // 7a. Authority recap — the final tier reminder before user messages.
     // Uses recency bias constructively: this is the last content the model
     // sees before the user's turn, reinforcing the Constitutional hierarchy.
-    full_prompt = format!("{full_prompt}\n\n{AUTHORITY_RECAP}");
+    let authority_recap = effective_authority_recap();
+    full_prompt = format!("{full_prompt}\n\n{authority_recap}");
 
     // 8. Locale-native closing reinforcement (#1118 follow-up #2). The
     // opening preamble alone wasn't enough — community feedback (the
