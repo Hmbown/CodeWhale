@@ -294,6 +294,18 @@ Both binaries are required. Cross-compilation and platform-specific notes: [docs
 For the full shipped provider registry, including model IDs, auth variables,
 base URLs, and capability boundaries, see [docs/PROVIDERS.md](docs/PROVIDERS.md).
 
+![Atlas Cloud](assets/atlascloud-logo.png)
+
+> [Atlas Cloud](https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=CodeWhale)
+> is a full-modal AI inference platform that gives developers a single AI API
+> to access video generation, image generation, and LLM APIs. Instead of
+> managing multiple vendor integrations, you connect once and get unified
+> access to 300+ curated models across all modalities.
+>
+> Check out Atlas Cloud's new coding plan promotion for more budget-friendly
+> API access:
+> [https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=CodeWhale](https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=CodeWhale)
+
 ```bash
 # NVIDIA NIM
 codewhale auth set --provider nvidia-nim --api-key "YOUR_NVIDIA_API_KEY"
@@ -301,7 +313,7 @@ codewhale --provider nvidia-nim
 
 # AtlasCloud
 codewhale auth set --provider atlascloud --api-key "YOUR_ATLASCLOUD_API_KEY"
-codewhale --provider atlascloud
+codewhale --provider atlascloud --model deepseek-ai/deepseek-v4-flash
 
 # Wanjie Ark
 codewhale auth set --provider wanjie-ark --api-key "YOUR_WANJIE_API_KEY"
