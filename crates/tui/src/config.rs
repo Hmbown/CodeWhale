@@ -2989,11 +2989,7 @@ fn apply_env_overrides(config: &mut Config) {
 }
 
 fn parse_bool_env(raw: &str) -> Option<bool> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "1" | "true" | "yes" | "on" | "enabled" => Some(true),
-        "0" | "false" | "no" | "off" | "disabled" => Some(false),
-        _ => None,
-    }
+    codewhale_config::parse_bool(raw).ok()
 }
 
 fn normalize_model_config(config: &mut Config) {
