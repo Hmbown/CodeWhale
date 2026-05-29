@@ -288,7 +288,11 @@ fn format_cache_stats(app: &App) -> String {
                 out.push_str(&format!(
                     "               ({change} change{plural} detected)\n",
                     change = app.prefix_change_count,
-                    plural = if app.prefix_change_count == 1 { "" } else { "s" }
+                    plural = if app.prefix_change_count == 1 {
+                        ""
+                    } else {
+                        "s"
+                    }
                 ));
             } else {
                 out.push_str("  Drift:       none (hash stable)\n");
@@ -1534,7 +1538,10 @@ mod tests {
         let result = cache(&mut app, Some("stats"));
         let msg = result.message.expect("cache stats produces a message");
         assert!(msg.contains("Cache Stats"), "got: {msg}");
-        assert!(msg.contains("unknown (no checks recorded yet)"), "got: {msg}");
+        assert!(
+            msg.contains("unknown (no checks recorded yet)"),
+            "got: {msg}"
+        );
         assert!(msg.contains("Pinned hash: unavailable"), "got: {msg}");
         assert!(msg.contains("No turn telemetry recorded yet"), "got: {msg}");
     }
@@ -1554,7 +1561,10 @@ mod tests {
         assert!(msg.contains("Stability: 100%"), "got: {msg}");
         assert!(msg.contains("stable (no prefix changes"), "got: {msg}");
         assert!(msg.contains("Pinned hash: a1b2c3d4e5f6"), "got: {msg}");
-        assert!(msg.contains("Drift:       none (hash stable)"), "got: {msg}");
+        assert!(
+            msg.contains("Drift:       none (hash stable)"),
+            "got: {msg}"
+        );
     }
 
     #[test]
@@ -1563,9 +1573,11 @@ mod tests {
         app.prefix_stability_pct = Some(67);
         app.prefix_checks_total = 3;
         app.prefix_change_count = 1;
-        app.last_prefix_change_desc = Some("prefix cache invalidated: system prompt changed".to_string());
-        app.last_pinned_prefix_hash =
-            Some("deadbeef0000deadbeef0000deadbeef0000deadbeef0000deadbeef0000deadbeef".to_string());
+        app.last_prefix_change_desc =
+            Some("prefix cache invalidated: system prompt changed".to_string());
+        app.last_pinned_prefix_hash = Some(
+            "deadbeef0000deadbeef0000deadbeef0000deadbeef0000deadbeef0000deadbeef".to_string(),
+        );
 
         let result = cache(&mut app, Some("stats"));
         let msg = result.message.expect("cache stats produces a message");
@@ -1582,7 +1594,8 @@ mod tests {
         let mut app = create_test_app();
         app.prefix_stability_pct = Some(100);
         app.prefix_checks_total = 1;
-        app.last_pinned_prefix_hash = Some("abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234".to_string());
+        app.last_pinned_prefix_hash =
+            Some("abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234".to_string());
 
         app.push_turn_cache_record(TurnCacheRecord {
             input_tokens: 10_000,
@@ -1614,7 +1627,8 @@ mod tests {
         let mut app = create_test_app();
         app.prefix_stability_pct = Some(100);
         app.prefix_checks_total = 1;
-        app.last_pinned_prefix_hash = Some("abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234".to_string());
+        app.last_pinned_prefix_hash =
+            Some("abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234".to_string());
 
         app.push_turn_cache_record(TurnCacheRecord {
             input_tokens: 10_000,
