@@ -6,6 +6,7 @@
 //! as stray green/cyan backgrounds. This backend adapts every cell to the
 //! detected color depth before handing it to crossterm.
 
+use std::fmt::Write as _;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 
@@ -222,15 +223,30 @@ fn render_debug_line(
     diff_cells: usize,
     sample: &[(u16, u16)],
 ) -> String {
-    let size = viewport
-        .map(|size| format!("{}x{}", size.width, size.height))
-        .unwrap_or_else(|| "unknown".to_string());
-    let sample = sample
-        .iter()
-        .map(|(x, y)| format!("{x}:{y}"))
-        .collect::<Vec<_>>()
-        .join(",");
-    format!("frame={frame} size={size} diff_cells={diff_cells} sample={sample}\n")
+    let mut line = String::new();
+    match viewport {
+        Some(size) => {
+            let _ = write!(
+                &mut line,
+                "frame={frame} size={}x{} diff_cells={diff_cells} sample=",
+                size.width, size.height
+            );
+        }
+        None => {
+            let _ = write!(
+                &mut line,
+                "frame={frame} size=unknown diff_cells={diff_cells} sample="
+            );
+        }
+    }
+    for (index, (x, y)) in sample.iter().enumerate() {
+        if index > 0 {
+            line.push(',');
+        }
+        let _ = write!(&mut line, "{x}:{y}");
+    }
+    line.push('\n');
+    line
 }
 
 fn adapt_cell_colors(
@@ -258,7 +274,7 @@ fn adapt_cell_colors(
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, env, fs, io::Write, rc::Rc};
+    use std::{cell::RefCell, env, ffi::OsString, fs, io::Write, rc::Rc};
 
     use ratatui::backend::Backend;
     use ratatui::{buffer::Cell, style::Color};
@@ -277,6 +293,32 @@ mod tests {
 
         fn flush(&mut self) -> io::Result<()> {
             Ok(())
+        }
+    }
+
+    struct EnvRestore {
+        key: &'static str,
+        value: Option<OsString>,
+    }
+
+    impl EnvRestore {
+        fn capture(key: &'static str) -> Self {
+            Self {
+                key,
+                value: env::var_os(key),
+            }
+        }
+    }
+
+    impl Drop for EnvRestore {
+        fn drop(&mut self) {
+            // SAFETY: environment mutation is serialized by lock_test_env.
+            unsafe {
+                match &self.value {
+                    Some(value) => env::set_var(self.key, value),
+                    None => env::remove_var(self.key),
+                }
+            }
         }
     }
 
@@ -427,9 +469,9 @@ mod tests {
     fn backend_writes_render_debug_log_when_enabled() {
         let _lock = lock_test_env();
         let tmp = tempfile::tempdir().expect("tempdir");
-        let previous_home = env::var_os("HOME");
-        let previous_userprofile = env::var_os("USERPROFILE");
-        let previous_debug = env::var_os(RENDER_DEBUG_ENV);
+        let _home = EnvRestore::capture("HOME");
+        let _userprofile = EnvRestore::capture("USERPROFILE");
+        let _debug = EnvRestore::capture(RENDER_DEBUG_ENV);
 
         // SAFETY: environment mutation is serialized by lock_test_env.
         unsafe {
@@ -446,28 +488,12 @@ mod tests {
 
         let log_path = tmp
             .path()
-            .join(".deepseek")
+            .join(".codewhale")
             .join("logs")
             .join("tui-render.log");
         let body = fs::read_to_string(log_path).expect("render debug log");
         assert!(body.contains("frame=1"), "{body}");
         assert!(body.contains("diff_cells=1"), "{body}");
         assert!(body.contains("sample=3:4"), "{body}");
-
-        // SAFETY: environment mutation is serialized by lock_test_env.
-        unsafe {
-            match previous_home {
-                Some(value) => env::set_var("HOME", value),
-                None => env::remove_var("HOME"),
-            }
-            match previous_userprofile {
-                Some(value) => env::set_var("USERPROFILE", value),
-                None => env::remove_var("USERPROFILE"),
-            }
-            match previous_debug {
-                Some(value) => env::set_var(RENDER_DEBUG_ENV, value),
-                None => env::remove_var(RENDER_DEBUG_ENV),
-            }
-        }
     }
 }

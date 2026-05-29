@@ -1,5 +1,5 @@
 //! TUI runtime logging. Initializes a `tracing-subscriber` that writes to a
-//! per-process file under `~/.deepseek/logs/tui-YYYY-MM-DD-PID.log`, and (on
+//! per-process file under `~/.codewhale/logs/tui-YYYY-MM-DD-PID.log`, and (on
 //! Unix) redirects the process's `stderr` fd to that same file for the lifetime
 //! of the alt-screen TUI.
 //!
@@ -22,7 +22,7 @@
 //!
 //! Defence-in-depth:
 //!   1. A `tracing-subscriber` writes formatted logs to
-//!      `~/.deepseek/logs/tui-YYYY-MM-DD-PID.log` so `tracing::warn!` /
+//!      `~/.codewhale/logs/tui-YYYY-MM-DD-PID.log` so `tracing::warn!` /
 //!      `tracing::error!` calls go somewhere observable instead of
 //!      disappearing into the void (the TUI previously had no global
 //!      subscriber, so contributors reached for `eprintln!`).
@@ -162,7 +162,11 @@ pub(crate) fn log_directory() -> Option<PathBuf> {
         if primary.exists() {
             return Some(primary);
         }
-        Some(base.join(".deepseek").join("logs"))
+        let legacy = base.join(".deepseek").join("logs");
+        if legacy.exists() {
+            return Some(legacy);
+        }
+        Some(primary)
     };
     if let Some(home) = std::env::var_os("HOME").map(PathBuf::from)
         && !home.as_os_str().is_empty()
@@ -270,7 +274,37 @@ mod tests {
         }
 
         let resolved = log_directory().expect("log_directory should resolve");
-        assert_eq!(resolved, tmp.path().join(".deepseek").join("logs"));
+        assert_eq!(resolved, tmp.path().join(".codewhale").join("logs"));
+
+        // SAFETY: cleanup under the same lock.
+        unsafe {
+            match prev_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+            match prev_userprofile {
+                Some(v) => std::env::set_var("USERPROFILE", v),
+                None => std::env::remove_var("USERPROFILE"),
+            }
+        }
+    }
+
+    #[test]
+    fn log_directory_uses_existing_legacy_deepseek_logs() {
+        let _lock = crate::test_support::lock_test_env();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let legacy = tmp.path().join(".deepseek").join("logs");
+        fs::create_dir_all(&legacy).unwrap();
+        let prev_home = std::env::var_os("HOME");
+        let prev_userprofile = std::env::var_os("USERPROFILE");
+        // SAFETY: serialised by lock_test_env.
+        unsafe {
+            std::env::set_var("HOME", tmp.path());
+            std::env::set_var("USERPROFILE", "");
+        }
+
+        let resolved = log_directory().expect("log_directory should resolve");
+        assert_eq!(resolved, legacy);
 
         // SAFETY: cleanup under the same lock.
         unsafe {
