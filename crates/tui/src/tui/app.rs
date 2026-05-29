@@ -86,6 +86,9 @@ pub(crate) fn looks_like_slash_command_input(input: &str) -> bool {
     let Some(rest) = input.trim_start().strip_prefix('/') else {
         return false;
     };
+    if rest.starts_with(char::is_whitespace) {
+        return false;
+    }
     let Some(command) = rest.split_whitespace().next() else {
         return rest.is_empty();
     };
@@ -5010,6 +5013,8 @@ mod tests {
         assert!(looks_like_slash_command_input("/"));
         assert!(looks_like_slash_command_input("/help"));
         assert!(looks_like_slash_command_input("/model deepseek-v4-pro"));
+        assert!(!looks_like_slash_command_input("/ hello"));
+        assert!(!looks_like_slash_command_input("  / hello"));
         assert!(!looks_like_slash_command_input(
             "/usr/lib/x86_64-linux-gnu/ 是标准路径吗？"
         ));
