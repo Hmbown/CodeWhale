@@ -22,7 +22,8 @@ Sources to keep in sync:
 - `config.example.toml` and `docs/CONFIGURATION.md` - user-facing config
   examples and environment variable reference.
 - `scripts/check-provider-registry.py` - drift check for canonical provider
-  IDs, TOML table names, static registry rows, and documented defaults.
+  IDs, live TUI provider IDs, TOML table names, static registry rows, and
+  documented defaults.
 
 ## Provider Selection
 
@@ -147,6 +148,8 @@ python3 scripts/check-provider-registry.py
 The check fails when:
 
 - `docs/PROVIDERS.md` omits a canonical `ProviderKind::as_str()` ID.
+- `crates/tui/src/config.rs` `ApiProvider::as_str()` diverges from
+  `ProviderKind::as_str()` except for the explicit `deepseek-cn` legacy alias.
 - The shipped-provider table omits or adds a `[providers.*]` TOML table.
 - The static model registry table drifts from providers used by
   `crates/agent/src/lib.rs`.
