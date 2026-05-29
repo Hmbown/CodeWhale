@@ -185,6 +185,10 @@ pub struct EngineConfig {
     /// through bubblewrap instead of relying solely on Landlock (#2184).
     #[allow(dead_code)] // Wired through ShellManager in follow-up PR
     pub prefer_bwrap: bool,
+    /// Skip TLS certificate verification for all outbound HTTPS requests.
+    /// Defaults to `false` (verify certificates). Mirrors the resolved
+    /// value from `Config::insecure_skip_tls_verify`.
+    pub insecure_skip_tls_verify: bool,
 }
 
 impl Default for EngineConfig {
@@ -232,6 +236,7 @@ impl Default for EngineConfig {
             ),
             tools_always_load: HashSet::new(),
             prefer_bwrap: false,
+            insecure_skip_tls_verify: false,
         }
     }
 }
@@ -1517,7 +1522,7 @@ impl Engine {
         // Wire search provider config.
         ctx.search_provider = self.config.search_provider;
         ctx.search_api_key = self.config.search_api_key.clone();
-        ctx.insecure_skip_tls_verify = self.config.insecure_skip_tls_verify.unwrap_or(false);
+        ctx.insecure_skip_tls_verify = self.config.insecure_skip_tls_verify;
 
         let policy = sandbox_policy_for_mode(mode, &self.session.workspace);
         let mut ctx = ctx.with_elevated_sandbox_policy(policy);
@@ -1535,7 +1540,7 @@ impl Engine {
         }
         let mut pool = McpPool::from_config_path(&self.session.mcp_config_path)
             .map_err(|e| ToolError::execution_failed(format!("Failed to load MCP config: {e}")))?
-            .with_skip_tls_verify(self.config.insecure_skip_tls_verify.unwrap_or(false));
+            .with_skip_tls_verify(self.config.insecure_skip_tls_verify);
         if let Some(decider) = self.config.network_policy.as_ref() {
             pool = pool.with_network_policy(decider.clone());
         }

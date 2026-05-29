@@ -28,8 +28,9 @@ use ratatui::{
     Frame, Terminal,
     layout::{Constraint, Direction, Layout, Rect, Size},
     prelude::Widget,
-    style::Style,
-    widgets::Block,
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Paragraph},
 };
 use tracing;
 
@@ -733,6 +734,7 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         search_provider: config.search_provider(),
         search_api_key: config.search.as_ref().and_then(|s| s.api_key.clone()),
         tools_always_load: config.tools_always_load(),
+        insecure_skip_tls_verify: config.insecure_skip_tls_verify.unwrap_or(false),
     }
 }
 
@@ -5682,9 +5684,12 @@ fn render(f: &mut Frame, app: &mut App) {
         return;
     }
 
-    let header_height = 1;
-    let footer_height = 1;
-    let body_height = size.height.saturating_sub(header_height + footer_height);
+    let header_height: u16 = 1;
+    let footer_height: u16 = 1;
+    let banner_height: u16 = if app.insecure_tls_active { 1 } else { 0 };
+    let body_height = size
+        .height
+        .saturating_sub(header_height + banner_height + footer_height);
     let slash_menu_entries = visible_slash_menu_entries(app, SLASH_MENU_LIMIT);
     let mention_menu_entries =
         crate::tui::file_mention::visible_mention_menu_entries(app, MENTION_MENU_LIMIT);
@@ -5716,6 +5721,7 @@ fn render(f: &mut Frame, app: &mut App) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(header_height),   // Header
+            Constraint::Length(banner_height),   // TLS warning banner (0 if inactive)
             Constraint::Min(1),                  // Chat area
             Constraint::Length(preview_height),  // Pending input preview (0 if empty)
             Constraint::Length(composer_height), // Composer
@@ -5784,6 +5790,35 @@ fn render(f: &mut Frame, app: &mut App) {
         header_widget.render(chunks[0], buf);
     }
 
+    // Render TLS warning banner (when insecure mode is active)
+    if banner_height > 0 {
+        let banner = Paragraph::new(Line::from(vec![
+            Span::styled(
+                " ⚠ ",
+                Style::default()
+                    .fg(palette::STATUS_WARNING)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "TLS certificate verification is DISABLED",
+                Style::default()
+                    .fg(palette::STATUS_WARNING)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                " — only use this setting for trusted internal servers",
+                Style::default().fg(palette::STATUS_WARNING),
+            ),
+        ]))
+        .style(
+            Style::default()
+                .bg(palette::SURFACE_ERROR)
+                .fg(palette::STATUS_WARNING),
+        );
+        let buf = f.buffer_mut();
+        banner.render(chunks[1], buf);
+    }
+
     // Render chat + sidebar + optional file-tree pane
     {
         // Defensive backstop (#400): fill the entire body area with ink
@@ -5792,19 +5827,19 @@ fn render(f: &mut Frame, app: &mut App) {
         // resize) don't retain stale content from a previous frame.
         Block::default()
             .style(Style::default().bg(app.ui_theme.surface_bg))
-            .render(chunks[1], f.buffer_mut());
+            .render(chunks[2], f.buffer_mut());
 
         let mut sidebar_area = None;
 
         // When the file-tree pane is visible and the terminal is wide
         // enough, reserve the left ~25% for the file tree.
         let mut chat_area =
-            if app.file_tree.is_some() && chunks[1].width >= SIDEBAR_VISIBLE_MIN_WIDTH {
+            if app.file_tree.is_some() && chunks[2].width >= SIDEBAR_VISIBLE_MIN_WIDTH {
                 app.file_tree_visible = true;
                 let split = Layout::default()
                     .direction(Direction::Horizontal)
                     .constraints([Constraint::Percentage(25), Constraint::Percentage(75)])
-                    .split(chunks[1]);
+                    .split(chunks[2]);
                 let tree_area = split[0];
                 let remaining = split[1];
 
@@ -5816,7 +5851,7 @@ fn render(f: &mut Frame, app: &mut App) {
                 remaining
             } else {
                 app.file_tree_visible = false;
-                chunks[1]
+                chunks[2]
             };
 
         if let Some(sidebar_width) = sidebar_width_for_chat_area(app, chat_area.width) {
@@ -5868,7 +5903,7 @@ fn render(f: &mut Frame, app: &mut App) {
     // Render pending-input preview (queued/steered messages, if any).
     if preview_height > 0 {
         let buf = f.buffer_mut();
-        pending_preview.render(chunks[2], buf);
+        pending_preview.render(chunks[3], buf);
     }
 
     // Render composer
@@ -5880,8 +5915,8 @@ fn render(f: &mut Frame, app: &mut App) {
             &mention_menu_entries,
         );
         let buf = f.buffer_mut();
-        composer_widget.render(chunks[3], buf);
-        composer_widget.cursor_pos(chunks[3])
+        composer_widget.render(chunks[4], buf);
+        composer_widget.cursor_pos(chunks[4])
     };
     app.viewport.last_composer_area = Some(chunks[3]);
     {
@@ -5929,11 +5964,11 @@ fn render(f: &mut Frame, app: &mut App) {
     }
 
     // Render footer
-    render_footer(f, chunks[4], app);
+    render_footer(f, chunks[5], app);
     // Toast stack overlay (#439): when multiple status toasts are queued,
     // surface the older ones as a 1-2 line strip above the footer so a
     // burst of events isn't collapsed to a single visible message.
-    render_toast_stack_overlay(f, size, chunks[3], chunks[4], app);
+    render_toast_stack_overlay(f, size, chunks[4], chunks[5], app);
 
     // Decision card overlay (v0.8.43 truth-surface). When a decision card is
     // active, render it centered on top of the transcript.

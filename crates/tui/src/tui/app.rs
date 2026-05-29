@@ -1309,6 +1309,9 @@ pub struct App {
     pub mcp_configured_count: usize,
     /// Set after in-TUI MCP config edits because the engine caches its MCP pool.
     pub mcp_restart_required: bool,
+    /// True when the loaded config has `insecure_skip_tls_verify` enabled.
+    /// Used by the renderer to show a persistent TUI banner warning.
+    pub insecure_tls_active: bool,
     /// Tool execution log
     pub tool_log: Vec<String>,
     /// Active skill to apply to next user message
@@ -1950,6 +1953,7 @@ impl App {
                 .map(|cfg| cfg.servers.len())
                 .unwrap_or(0),
             mcp_restart_required: false,
+            insecure_tls_active: config.insecure_skip_tls_verify == Some(true),
             tool_log: Vec::new(),
             active_skill: None,
             cached_skills,

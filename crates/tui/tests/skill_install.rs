@@ -149,6 +149,7 @@ async fn install_happy_path_writes_skill_and_marker() {
         install::DEFAULT_MAX_SIZE_BYTES,
         &policy,
         false,
+        false,
     )
     .await
     .expect("install ok");
@@ -215,6 +216,7 @@ async fn install_rejects_path_traversal() {
         install::DEFAULT_MAX_SIZE_BYTES,
         &policy,
         false,
+        false,
     )
     .await
     .expect_err("path traversal must be rejected");
@@ -254,6 +256,7 @@ async fn install_rejects_oversized_tarball() {
         small_cap,
         &policy,
         false,
+        false,
     )
     .await
     .expect_err("oversized must be rejected");
@@ -278,6 +281,7 @@ async fn install_rejects_missing_skill_md() {
         tmp.path(),
         install::DEFAULT_MAX_SIZE_BYTES,
         &policy,
+        false,
         false,
     )
     .await
@@ -309,6 +313,7 @@ async fn install_accepts_claude_compatible_skill_directory_archive() {
         tmp.path(),
         install::DEFAULT_MAX_SIZE_BYTES,
         &policy,
+        false,
         false,
     )
     .await
@@ -348,6 +353,7 @@ async fn install_accepts_nested_workflow_pack_skill_directory() {
         install::DEFAULT_MAX_SIZE_BYTES,
         &policy,
         false,
+        false,
     )
     .await
     .expect("nested workflow-pack skill dir should install");
@@ -383,6 +389,7 @@ async fn install_accepts_single_skill_subdirectory_archive() {
         install::DEFAULT_MAX_SIZE_BYTES,
         &policy,
         false,
+        false,
     )
     .await
     .expect("single nested skill dir should install");
@@ -412,6 +419,7 @@ async fn install_rejects_missing_required_frontmatter() {
         install::DEFAULT_MAX_SIZE_BYTES,
         &policy,
         false,
+        false,
     )
     .await
     .expect_err("missing description must be rejected");
@@ -435,6 +443,7 @@ async fn install_idempotent_then_uninstall_then_reinstall() {
         install::DEFAULT_MAX_SIZE_BYTES,
         &policy,
         false,
+        false,
     )
     .await
     .expect("first install ok");
@@ -445,6 +454,7 @@ async fn install_idempotent_then_uninstall_then_reinstall() {
         tmp.path(),
         install::DEFAULT_MAX_SIZE_BYTES,
         &policy,
+        false,
         false,
     )
     .await
@@ -464,6 +474,7 @@ async fn install_idempotent_then_uninstall_then_reinstall() {
         tmp.path(),
         install::DEFAULT_MAX_SIZE_BYTES,
         &policy,
+        false,
         false,
     )
     .await
@@ -486,6 +497,7 @@ async fn update_no_change_returns_nochange_without_overwriting() {
         tmp.path(),
         install::DEFAULT_MAX_SIZE_BYTES,
         &policy,
+        false,
         false,
     )
     .await
@@ -513,6 +525,7 @@ async fn update_no_change_returns_nochange_without_overwriting() {
         tmp.path(),
         install::DEFAULT_MAX_SIZE_BYTES,
         &policy,
+        false,
     )
     .await
     .expect("update ok");
@@ -535,6 +548,7 @@ async fn install_with_deny_policy_returns_network_denied() {
         tmp.path(),
         install::DEFAULT_MAX_SIZE_BYTES,
         &policy,
+        false,
         false,
     )
     .await
@@ -562,6 +576,7 @@ async fn install_with_prompt_policy_returns_needs_approval() {
         tmp.path(),
         install::DEFAULT_MAX_SIZE_BYTES,
         &policy,
+        false,
         false,
     )
     .await
@@ -612,6 +627,7 @@ async fn install_rejects_symlink_entry() {
         tmp.path(),
         install::DEFAULT_MAX_SIZE_BYTES,
         &policy,
+        false,
         false,
     )
     .await
@@ -673,6 +689,7 @@ async fn install_ignores_symlink_outside_selected_skill_root() {
         tmp.path(),
         install::DEFAULT_MAX_SIZE_BYTES,
         &policy,
+        false,
         false,
     )
     .await
