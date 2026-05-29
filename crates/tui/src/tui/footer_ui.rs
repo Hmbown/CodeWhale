@@ -88,15 +88,8 @@ pub(crate) fn render_footer(f: &mut Frame, area: Rect, app: &mut App) {
         let mut label = active_subagent_status_label(app)
             .or_else(|| active_tool_status_label(app))
             .unwrap_or_else(|| {
-                // Show a more specific label when the model is still loading
-                // or compacting, not just a generic "working…".
-                let base = if app.is_loading {
-                    crate::tui::widgets::footer_working_label(dot_frame, app.ui_locale)
-                } else if app.is_compacting {
-                    "compacting".to_string()
-                } else {
-                    crate::tui::widgets::footer_working_label(dot_frame, app.ui_locale)
-                };
+                // Show the working label during active turns (loading, compacting, etc.).
+                let base = crate::tui::widgets::footer_working_label(dot_frame, app.ui_locale);
                 if elapsed_secs > 0 {
                     format!("{base} ({elapsed_secs}s)")
                 } else {
