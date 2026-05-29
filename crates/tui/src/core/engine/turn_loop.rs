@@ -249,6 +249,10 @@ impl Engine {
                 let tools_ref: Option<&[crate::models::Tool]> = active_tools.as_deref();
                 match pm.check_and_update(&system_text, tools_ref) {
                     Err(change) => {
+                        let pinned_hash = pm
+                            .pinned_fingerprint()
+                            .map(|fp| fp.combined_sha256.clone())
+                            .unwrap_or_default();
                         tracing::debug!(
                             target: "prefix_cache",
                             "{}",
@@ -262,10 +266,15 @@ impl Engine {
                                 tools_changed: change.tools_changed,
                                 stability_pct: (pm.stability_ratio() * 100.0).round() as u32,
                                 changed: true,
+                                pinned_combined_hash: pinned_hash,
                             })
                             .await;
                     }
                     Ok(_) => {
+                        let pinned_hash = pm
+                            .pinned_fingerprint()
+                            .map(|fp| fp.combined_sha256.clone())
+                            .unwrap_or_default();
                         // Stable check — keep the TUI counter in sync.
                         let _ = self
                             .tx_event
@@ -275,6 +284,7 @@ impl Engine {
                                 tools_changed: false,
                                 stability_pct: (pm.stability_ratio() * 100.0).round() as u32,
                                 changed: false,
+                                pinned_combined_hash: pinned_hash,
                             })
                             .await;
                     }

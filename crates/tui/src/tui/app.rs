@@ -1466,6 +1466,10 @@ pub struct App {
     pub prefix_stability_pct: Option<u32>,
     /// Description of the last prefix change, if any.
     pub last_prefix_change_desc: Option<String>,
+    /// Current pinned prefix combined hash (SHA-256, 64 hex chars).
+    /// Updated per-turn via PrefixCacheChange events; surfaced by
+    /// `/cache stats` for cache-hit debugging.
+    pub last_pinned_prefix_hash: Option<String>,
 
     /// Active cycle configuration (token threshold, briefing cap, per-model
     /// overrides). Loaded from config and forwarded to the engine.
@@ -1624,6 +1628,7 @@ impl App {
         self.session.last_prompt_cache_miss_tokens = None;
         self.session.last_reasoning_replay_tokens = None;
         self.session.turn_cache_history.clear();
+        self.last_pinned_prefix_hash = None;
     }
 
     pub fn tr(&self, id: MessageId) -> &'static str {
@@ -2003,6 +2008,7 @@ impl App {
             prefix_checks_total: 0,
             prefix_stability_pct: None,
             last_prefix_change_desc: None,
+            last_pinned_prefix_hash: None,
             cycle: CycleConfig::default(),
             collapsed_cells: HashSet::new(),
             collapsed_cell_map: Vec::new(),
