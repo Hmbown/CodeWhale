@@ -156,7 +156,7 @@ pub fn init() -> Result<TuiLogGuard> {
     })
 }
 
-fn log_directory() -> Option<PathBuf> {
+pub(crate) fn log_directory() -> Option<PathBuf> {
     let resolve = |base: PathBuf| -> Option<PathBuf> {
         let primary = base.join(".codewhale").join("logs");
         if primary.exists() {
