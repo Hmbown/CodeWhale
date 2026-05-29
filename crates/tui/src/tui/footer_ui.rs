@@ -538,11 +538,15 @@ pub(crate) fn render_footer_from(
 }
 
 pub(crate) fn footer_git_branch_spans(app: &App) -> Vec<Span<'static>> {
-    let Some(branch) = workspace_context::branch(&app.workspace) else {
+    let Some(branch) = app
+        .workspace_context
+        .as_deref()
+        .and_then(workspace_context::branch_from_context)
+    else {
         return Vec::new();
     };
     vec![Span::styled(
-        branch,
+        branch.to_string(),
         Style::default().fg(app.ui_theme.text_muted),
     )]
 }

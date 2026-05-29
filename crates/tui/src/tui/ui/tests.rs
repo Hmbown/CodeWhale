@@ -5783,6 +5783,7 @@ fn render_footer_from_git_branch_item_renders_workspace_branch() {
 
     let mut app = create_test_app();
     app.workspace = repo.path().to_path_buf();
+    crate::tui::workspace_context::refresh_if_needed(&mut app, Instant::now(), true);
 
     let props = render_footer_from(&app, &[crate::config::StatusItem::GitBranch], None);
     assert_eq!(spans_text(&props.cache), "feature/statusline");
@@ -5804,6 +5805,7 @@ fn default_footer_renders_workspace_branch_when_available() {
 
     let mut app = create_test_app();
     app.workspace = repo.path().to_path_buf();
+    crate::tui::workspace_context::refresh_if_needed(&mut app, Instant::now(), true);
 
     let props = render_footer_from(&app, &crate::config::StatusItem::default_footer(), None);
     assert!(
