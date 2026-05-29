@@ -24,7 +24,6 @@ use crossterm::{
 use crossterm::event::{
     KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
-#[cfg(target_os = "windows")]
 use ratatui::{
     Frame, Terminal,
     layout::{Constraint, Direction, Layout, Rect, Size},
