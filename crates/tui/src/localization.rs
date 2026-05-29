@@ -1559,7 +1559,7 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
         }
         MessageId::OnboardApiKeyStep2 => "Bước 2. Dán khóa vào bên dưới và nhấn Enter.",
         MessageId::OnboardApiKeySavedHint => {
-            "Được lưu vào ~/.deepseek/config.toml để có thể hoạt động từ mọi thư mục."
+            "Được lưu vào ~/.codewhale/config.toml để có thể hoạt động từ mọi thư mục."
         }
         MessageId::OnboardApiKeyFormatHint => {
             "Dán chính xác toàn bộ khóa (không chứa khoảng trắng hoặc xuống dòng)."
