@@ -797,6 +797,7 @@ impl StatusItem {
             StatusItem::Agents,
             StatusItem::ReasoningReplay,
             StatusItem::Cache,
+            StatusItem::GitBranch,
             StatusItem::Tokens,
         ]
     }
