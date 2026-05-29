@@ -959,7 +959,7 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CmdNoteDescription => "Add, list, edit, or remove workspace notes",
         MessageId::CmdThemeDescription => "Switch theme or open the theme picker",
         MessageId::CmdProviderDescription => {
-            "Switch or view the active LLM backend (codewhale | nvidia-nim | ollama)"
+            "Switch or view the active LLM backend (deepseek | nvidia-nim | ollama)"
         }
         MessageId::CmdQueueDescription => "View or edit queued messages",
         MessageId::CmdRecallDescription => "Search prior cycle archives (BM25 over message text)",
@@ -1346,7 +1346,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
             "テーマを切り替え（ダーク/ライト/グレースケール/システム）"
         }
         MessageId::CmdProviderDescription => {
-            "現在の LLM バックエンドを切り替え・確認（codewhale | nvidia-nim | ollama）"
+            "現在の LLM バックエンドを切り替え・確認（deepseek | nvidia-nim | ollama）"
         }
         MessageId::CmdQueueDescription => "キューされたメッセージを確認・編集",
         MessageId::CmdRecallDescription => {
@@ -1692,7 +1692,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CmdNoteDescription => "添加、列出、编辑或删除工作区笔记",
         MessageId::CmdThemeDescription => "切换主题：深色、浅色、灰度或系统",
         MessageId::CmdProviderDescription => {
-            "切换或查看当前 LLM 后端（codewhale | nvidia-nim | ollama）"
+            "切换或查看当前 LLM 后端（deepseek | nvidia-nim | ollama）"
         }
         MessageId::CmdQueueDescription => "查看或编辑已排队的消息",
         MessageId::CmdRecallDescription => "搜索此前的循环归档（基于消息文本的 BM25 检索）",
@@ -2022,7 +2022,7 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::CmdNoteDescription => "Adicionar, listar, editar ou remover notas do workspace",
         MessageId::CmdThemeDescription => "Alternar tema: escuro, claro, tons de cinza ou sistema",
         MessageId::CmdProviderDescription => {
-            "Trocar ou exibir o backend LLM ativo (codewhale | nvidia-nim | ollama)"
+            "Trocar ou exibir o backend LLM ativo (deepseek | nvidia-nim | ollama)"
         }
         MessageId::CmdQueueDescription => "Ver ou editar mensagens enfileiradas",
         MessageId::CmdRecallDescription => {
@@ -2414,7 +2414,7 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::CmdNoteDescription => "Agregar nota al archivo persistente (.deepseek/notes.md)",
         MessageId::CmdThemeDescription => "Alternar entre tema claro y oscuro",
         MessageId::CmdProviderDescription => {
-            "Cambiar o mostrar el backend LLM activo (codewhale | nvidia-nim | ollama)"
+            "Cambiar o mostrar el backend LLM activo (deepseek | nvidia-nim | ollama)"
         }
         MessageId::CmdQueueDescription => "Ver o editar mensajes en cola",
         MessageId::CmdRecallDescription => {
@@ -2768,6 +2768,23 @@ mod tests {
             fallback_translation(None, MessageId::ComposerPlaceholder),
             english(MessageId::ComposerPlaceholder)
         );
+    }
+
+    #[test]
+    fn provider_description_names_deepseek_backend() {
+        for locale in Locale::shipped() {
+            let description = tr(*locale, MessageId::CmdProviderDescription);
+            assert!(
+                description.contains("deepseek"),
+                "{} provider description should mention deepseek: {description}",
+                locale.tag()
+            );
+            assert!(
+                !description.contains("codewhale |"),
+                "{} provider description should not name codewhale as a backend: {description}",
+                locale.tag()
+            );
+        }
     }
 
     #[test]
