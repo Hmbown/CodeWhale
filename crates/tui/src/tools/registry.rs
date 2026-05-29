@@ -605,23 +605,23 @@ impl ToolRegistryBuilder {
 
     /// Include web search tools.
     #[must_use]
-    pub fn with_web_tools(self) -> Self {
+    pub fn with_web_tools(self, skip_verify: bool) -> Self {
         use super::fetch_url::FetchUrlTool;
         use super::finance::FinanceTool;
         use super::web_run::WebRunTool;
         use super::web_search::WebSearchTool;
         self.with_tool(Arc::new(WebSearchTool))
             .with_tool(Arc::new(FetchUrlTool))
-            .with_tool(Arc::new(FinanceTool::new(false)))
+            .with_tool(Arc::new(FinanceTool::new(skip_verify)))
             .with_tool(Arc::new(WebRunTool))
     }
 
     /// Register the `image_analyze` vision tool.
     /// Only registered when `[vision_model]` is configured in config.toml.
     #[must_use]
-    pub fn with_vision_tools(self, config: crate::config::VisionModelConfig) -> Self {
+    pub fn with_vision_tools(self, config: crate::config::VisionModelConfig, skip_verify: bool) -> Self {
         use crate::vision::tools::ImageAnalyzeTool;
-        self.with_tool(Arc::new(ImageAnalyzeTool::new(config, false)))
+        self.with_tool(Arc::new(ImageAnalyzeTool::new(config, skip_verify)))
     }
 
     /// Previously registered the OpenAI-style `multi_tool_use.parallel`
@@ -762,12 +762,12 @@ impl ToolRegistryBuilder {
 
     /// Include all agent tools (file tools + shell + note + search + patch).
     #[must_use]
-    pub fn with_agent_tools(self, allow_shell: bool) -> Self {
+    pub fn with_agent_tools(self, allow_shell: bool, skip_verify: bool) -> Self {
         let builder = self
             .with_file_tools()
             .with_note_tool()
             .with_search_tools()
-            .with_web_tools()
+            .with_web_tools(skip_verify)
             .with_user_input_tool()
             .with_parallel_tool()
             .with_patch_tools()
@@ -811,10 +811,11 @@ impl ToolRegistryBuilder {
         manager: super::subagent::SharedSubAgentManager,
         runtime: super::subagent::SubAgentRuntime,
         allow_shell: bool,
+        skip_verify: bool,
         todo_list: super::todo::SharedTodoList,
         plan_state: super::plan::SharedPlanState,
     ) -> Self {
-        self.with_agent_tools(allow_shell)
+        self.with_agent_tools(allow_shell, skip_verify)
             .with_todo_tool(todo_list)
             .with_plan_tool(plan_state)
             .with_review_tool(client.clone(), model.clone())
@@ -1363,7 +1364,7 @@ mod tests {
         let tmp = tempdir().expect("tempdir");
         let ctx = ToolContext::new(tmp.path().to_path_buf());
 
-        let registry = ToolRegistryBuilder::new().with_web_tools().build(ctx);
+        let registry = ToolRegistryBuilder::new().with_web_tools(false).build(ctx);
 
         assert!(registry.contains("finance"));
     }
@@ -1374,7 +1375,7 @@ mod tests {
         let ctx = ToolContext::new(tmp.path().to_path_buf());
 
         let registry = ToolRegistryBuilder::new()
-            .with_agent_tools(false)
+            .with_agent_tools(false, false)
             .build(ctx);
 
         assert!(registry.contains("finance"));

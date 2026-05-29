@@ -598,7 +598,7 @@ fn print_agent_tool_catalog_metrics() {
         manager.clone(),
     );
     let registry = crate::tools::ToolRegistryBuilder::new()
-        .with_agent_tools(true)
+        .with_agent_tools(true, false)
         .with_todo_tool(new_shared_todo_list())
         .with_plan_tool(new_shared_plan_state())
         .with_review_tool(None, DEFAULT_TEXT_MODEL.to_string())

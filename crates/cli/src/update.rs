@@ -366,7 +366,7 @@ fn fetch_latest_release(channel: ReleaseChannel, skip_verify: bool) -> Result<Fe
     }
     let release = match channel {
         ReleaseChannel::Stable => fetch_latest_release_from_url(LATEST_RELEASE_URL, skip_verify),
-        ReleaseChannel::Beta => fetch_latest_beta_release_from_url(RELEASES_URL),
+        ReleaseChannel::Beta => fetch_latest_beta_release_from_url(RELEASES_URL, skip_verify),
     }?;
     Ok(FetchedRelease {
         release,
@@ -478,8 +478,8 @@ fn fetch_latest_release_from_url(url: &str, skip_verify: bool) -> Result<Release
     Ok(release)
 }
 
-fn fetch_latest_beta_release_from_url(url: &str) -> Result<Release> {
-    let client = update_http_client()?;
+fn fetch_latest_beta_release_from_url(url: &str, skip_verify: bool) -> Result<Release> {
+    let client = update_http_client(skip_verify)?;
     let response = client
         .get(url)
         .header(reqwest::header::ACCEPT, "application/vnd.github+json")
@@ -1164,7 +1164,7 @@ E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  *codewhale-win
         ]"#;
         let (url, request_rx, handle) = serve_http_once("200 OK", "application/json", body);
         let release =
-            fetch_latest_beta_release_from_url(&url).expect("beta release JSON should parse");
+            fetch_latest_beta_release_from_url(&url, false).expect("beta release JSON should parse");
 
         assert_eq!(release.tag_name, "v0.9.0-beta.2");
         assert!(release.prerelease);
@@ -1185,7 +1185,7 @@ E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  *codewhale-win
           { "tag_name": "v0.9.0", "prerelease": false, "assets": [] }
         ]"#;
         let (url, _request_rx, handle) = serve_http_once("200 OK", "application/json", body);
-        let err = fetch_latest_beta_release_from_url(&url).expect_err("missing beta should fail");
+        let err = fetch_latest_beta_release_from_url(&url, false).expect_err("missing beta should fail");
 
         assert!(
             err.to_string().contains("no beta release found"),
