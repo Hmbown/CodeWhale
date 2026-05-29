@@ -2077,6 +2077,8 @@ fn init_git_repo() -> TempDir {
             "user.name=codewhale Tests",
             "-c",
             "user.email=tests@example.com",
+            "-c",
+            "commit.gpgsign=false",
             "commit",
             "--allow-empty",
             "-m",
@@ -5694,6 +5696,10 @@ fn default_footer_keeps_prefix_stability_opt_in() {
         items.contains(&crate::config::StatusItem::Cache),
         "default footer should still include provider-reported cache hit rate"
     );
+    assert!(
+        items.contains(&crate::config::StatusItem::GitBranch),
+        "default footer should surface the current workspace branch"
+    );
 }
 
 #[test]
@@ -5777,9 +5783,35 @@ fn render_footer_from_git_branch_item_renders_workspace_branch() {
 
     let mut app = create_test_app();
     app.workspace = repo.path().to_path_buf();
+    crate::tui::workspace_context::refresh_if_needed(&mut app, Instant::now(), true);
 
     let props = render_footer_from(&app, &[crate::config::StatusItem::GitBranch], None);
     assert_eq!(spans_text(&props.cache), "feature/statusline");
+}
+
+#[test]
+fn default_footer_renders_workspace_branch_when_available() {
+    let repo = init_git_repo();
+    let checkout = Command::new("git")
+        .args(["checkout", "-b", "feature/default-branch-chip"])
+        .current_dir(repo.path())
+        .output()
+        .expect("git checkout should run");
+    assert!(
+        checkout.status.success(),
+        "git checkout failed: {}",
+        String::from_utf8_lossy(&checkout.stderr)
+    );
+
+    let mut app = create_test_app();
+    app.workspace = repo.path().to_path_buf();
+    crate::tui::workspace_context::refresh_if_needed(&mut app, Instant::now(), true);
+
+    let props = render_footer_from(&app, &crate::config::StatusItem::default_footer(), None);
+    assert!(
+        spans_text(&props.cache).contains("feature/default-branch-chip"),
+        "default footer should include the current git branch"
+    );
 }
 
 /// Regression for issue #244: visible session spend must not decrease.
