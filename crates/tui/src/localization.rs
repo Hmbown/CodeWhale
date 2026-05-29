@@ -1344,7 +1344,7 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
         }
         MessageId::CmdQueueDescription => "Xem hoặc chỉnh sửa các tin nhắn đang chờ xử lý",
         MessageId::CmdRecallDescription => "Tìm kiếm kho lưu trữ chu kỳ trước (BM25 trên văn bản tin nhắn)",
-        MessageId::CmdRelayDescription => "Tạo một phiên tiếp sức (接力) cho một luồng mới",
+        MessageId::CmdRelayDescription => "Tạo một phiên tiếp sức cho một luồng mới",
         MessageId::CmdRenameDescription => "Đổi tên phiên làm việc hiện tại",
         MessageId::CmdRestoreDescription => {
             "Khôi phục không gian làm việc về bản chụp trước/sau lượt. Nếu không có đối số, hiển thị các bản chụp gần đây."
