@@ -238,8 +238,34 @@ pub struct ConfigToml {
     /// applies the defaults documented in [`LspConfigToml`].
     #[serde(default)]
     pub lsp: Option<LspConfigToml>,
+    /// Hook sink configuration. When absent, the runtime defaults to
+    /// stdout + JSONL sinks only (current behaviour).
+    #[serde(default)]
+    pub hooks: Option<HooksToml>,
     #[serde(flatten)]
     pub extras: BTreeMap<String, toml::Value>,
+}
+
+
+/// On-disk schema for the `[hooks]` table. Controls which sinks receive
+/// lifecycle events from the engine. See `config.example.toml` for examples.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HooksToml {
+    /// Sink type: "stdout", "jsonl", "webhook", or "unix-socket".
+    /// When unset, no additional sink is created beyond the runtime defaults.
+    #[serde(default)]
+    pub sink: Option<String>,
+    /// Unix domain socket path used when `sink = "unix-socket"`.
+    /// Defaults to `/tmp/codewhale-island.sock`.
+    #[serde(default)]
+    pub socket_path: Option<String>,
+    /// JSONL file path used when `sink = "jsonl"`.
+    /// Defaults to `events.jsonl` in the config directory.
+    #[serde(default)]
+    pub jsonl_path: Option<String>,
+    /// Webhook URL used when `sink = "webhook"`.
+    #[serde(default)]
+    pub webhook_url: Option<String>,
 }
 
 /// On-disk schema for the `[skills]` table (#140). See `config.example.toml`

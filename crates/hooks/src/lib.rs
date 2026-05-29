@@ -152,6 +152,55 @@ impl HookSink for WebhookHookSink {
     }
 }
 
+/// A [`HookSink`] that sends events over a Unix domain socket.
+///
+/// Each event is serialized as a single JSON line (`{"at": "...", "event": {...}}\n`)
+/// and written to the socket. If the socket is not available (listener not running),
+/// the event is silently dropped — hook sinks are best-effort observability, not
+/// control flow.
+///
+/// On non-Unix platforms this struct exists but its [`HookSink::emit`] is a no-op.
+#[derive(Debug, Clone)]
+pub struct UnixSocketHookSink {
+    path: PathBuf,
+}
+
+impl UnixSocketHookSink {
+    /// Create a sink that connects to the Unix domain socket at `path`.
+    pub fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+}
+
+#[async_trait]
+impl HookSink for UnixSocketHookSink {
+    #[cfg(unix)]
+    async fn emit(&self, event: &HookEvent) -> Result<()> {
+        let mut stream = match tokio::net::UnixStream::connect(&self.path).await {
+            Ok(s) => s,
+            Err(_) => return Ok(()), // listener not running, skip silently
+        };
+        let payload = json!({
+            "at": Utc::now().to_rfc3339(),
+            "event": event
+        });
+        let mut line =
+            serde_json::to_string(&payload).context("failed to encode hook event")?;
+        line.push('\n');
+        stream
+            .write_all(line.as_bytes())
+            .await
+            .context("failed to write to unix socket")?;
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    async fn emit(&self, _event: &HookEvent) -> Result<()> {
+        // Unix sockets not available on this platform — no-op.
+        Ok(())
+    }
+}
+
 #[derive(Default, Clone)]
 pub struct HookDispatcher {
     sinks: Vec<Arc<dyn HookSink>>,
@@ -253,6 +302,56 @@ mod tests {
             })]
         );
         assert_eq!(second.events(), first.events());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unix_socket_sink_skips_when_listener_absent() {
+        let sink = UnixSocketHookSink::new(
+            std::env::temp_dir().join("codewhale-test-nonexistent.sock"),
+        );
+        let result = sink
+            .emit(&HookEvent::ResponseStart {
+                response_id: "resp-1".to_string(),
+            })
+            .await;
+        // Should not error — listener absent is a silent skip.
+        assert!(result.is_ok());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unix_socket_sink_sends_event_to_listener() {
+        use tokio::io::AsyncBufReadExt;
+        use tokio::net::UnixListener;
+
+        let socket_path = unique_temp_dir("unix_sink").join("test.sock");
+        let _ = std::fs::remove_file(&socket_path);
+
+        let listener = UnixListener::bind(&socket_path).expect("bind");
+        let sink = UnixSocketHookSink::new(socket_path.clone());
+
+        let handle = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept");
+            let mut reader = tokio::io::BufReader::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).await.expect("read_line");
+            line
+        });
+
+        sink.emit(&HookEvent::ResponseStart {
+            response_id: "resp-42".to_string(),
+        })
+        .await
+        .expect("emit");
+
+        let received = handle.await.expect("join");
+        let parsed: Value = serde_json::from_str(&received).expect("parse");
+        assert_eq!(parsed["event"]["type"], "response_start");
+        assert_eq!(parsed["event"]["response_id"], "resp-42");
+        assert!(parsed["at"].as_str().is_some());
+
+        let _ = std::fs::remove_file(&socket_path);
     }
 
     #[derive(Default)]

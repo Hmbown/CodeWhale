@@ -13,7 +13,7 @@ use codewhale_agent::ModelRegistry;
 use codewhale_config::{CliRuntimeOverrides, ConfigStore};
 use codewhale_core::Runtime;
 use codewhale_execpolicy::ExecPolicyEngine;
-use codewhale_hooks::{HookDispatcher, JsonlHookSink, StdoutHookSink};
+use codewhale_hooks::{HookDispatcher, JsonlHookSink, StdoutHookSink, UnixSocketHookSink};
 use codewhale_mcp::McpManager;
 use codewhale_protocol::{
     AppRequest, AppResponse, PromptRequest, PromptResponse, ThreadRequest, ThreadResponse,
@@ -313,6 +313,16 @@ fn build_state(config_path: Option<PathBuf>, auth_token: Option<String>) -> Resu
         .and_then(|p| p.parent().map(|parent| parent.join("events.jsonl")))
         .unwrap_or_else(|| PathBuf::from(".deepseek/events.jsonl"));
     hooks.add_sink(Arc::new(JsonlHookSink::new(hook_log_path)));
+
+    // Unix socket sink for external monitoring (e.g. custom dashboards).
+    // Configure via [hooks] in config.toml: sink = "unix-socket"
+    if let Some(ref hooks_cfg) = config.hooks {
+        if hooks_cfg.sink.as_deref() == Some("unix-socket") {
+            let socket_path = hooks_cfg.socket_path.clone()
+                .unwrap_or_else(|| "/tmp/codewhale-island.sock".to_string());
+            hooks.add_sink(Arc::new(UnixSocketHookSink::new(socket_path.into())));
+        }
+    }
 
     let runtime = Runtime::new(
         config.clone(),
