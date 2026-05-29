@@ -1550,7 +1550,7 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
             "Chọn ngôn ngữ hiển thị. Bạn có thể thay đổi bất kỳ lúc nào bằng lệnh `/settings set locale <tag>`."
         }
         MessageId::OnboardLanguageFooter => {
-            "Nhấn phím từ 1-6 để chọn, hoặc Enter để giữ cài đặt hiện tại"
+            "Nhấn phím từ 1-7 để chọn, hoặc Enter để giữ cài đặt hiện tại"
         }
         // Onboarding — API key entry.
         MessageId::OnboardApiKeyTitle => "Kết nối khóa API DeepSeek của bạn",
