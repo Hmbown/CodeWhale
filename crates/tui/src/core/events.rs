@@ -281,6 +281,10 @@ pub enum Event {
         /// True when the prefix actually changed (cache invalidated).
         /// False for routine stable-check heartbeats.
         changed: bool,
+        /// Current pinned prefix combined hash (SHA-256, 64 hex chars).
+        /// Carried so `/cache stats` can surface it without reaching
+        /// into the engine's PrefixStabilityManager.
+        pinned_combined_hash: String,
     },
 }
 
