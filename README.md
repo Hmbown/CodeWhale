@@ -555,6 +555,7 @@ without recreating skills the user deliberately deleted.
 |---|---|
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Codebase internals |
 | [CONFIGURATION.md](docs/CONFIGURATION.md) | Full config reference |
+| [PROVIDERS.md](docs/PROVIDERS.md) | Provider IDs, auth, model defaults, and capability metadata |
 | [MODES.md](docs/MODES.md) | Plan / Agent / YOLO modes |
 | [MCP.md](docs/MCP.md) | Model Context Protocol integration |
 | [RUNTIME_API.md](docs/RUNTIME_API.md) | HTTP/SSE API server |
