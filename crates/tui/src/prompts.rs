@@ -106,6 +106,8 @@ fn translation_target_language_for_tag(locale_tag: &str) -> &'static str {
         "Simplified Chinese (简体中文)"
     } else if normalized.starts_with("pt") {
         "Brazilian Portuguese (Português do Brasil)"
+    } else if normalized.starts_with("vi") {
+        "Vietnamese (Tiếng Việt)"
     } else {
         "English"
     }
@@ -296,6 +298,7 @@ pub(crate) fn locale_reinforcement_preamble(locale_tag: &str) -> Option<&'static
         "zh-Hans" | "zh-CN" | "zh" => Some(LOCALE_PREAMBLE_ZH_HANS),
         "ja" | "ja-JP" => Some(LOCALE_PREAMBLE_JA),
         "pt-BR" | "pt" => Some(LOCALE_PREAMBLE_PT_BR),
+        "vi" | "vi-VN" => Some(LOCALE_PREAMBLE_VI),
         _ => None,
     }
 }
@@ -321,6 +324,7 @@ pub(crate) fn locale_reinforcement_closer(locale_tag: &str) -> Option<&'static s
         "zh-Hans" | "zh-CN" | "zh" => Some(LOCALE_CLOSER_ZH_HANS),
         "ja" | "ja-JP" => Some(LOCALE_CLOSER_JA),
         "pt-BR" | "pt" => Some(LOCALE_CLOSER_PT_BR),
+        "vi" | "vi-VN" => Some(LOCALE_CLOSER_VI),
         _ => None,
     }
 }
@@ -387,6 +391,24 @@ requisito rígido em nível de sessão — o idioma do usuário define seu \
 idioma. A menos que o usuário peça explicitamente a troca (por exemplo, \
 \"think in English\"), continue pensando e respondendo em português do \
 Brasil.";
+
+const LOCALE_PREAMBLE_VI: &str = "## Yêu cầu ngôn ngữ\n\n\
+Bạn đang chạy trong codewhale. Cho dù ngữ cảnh tác vụ (mã nguồn, nhật ký lỗi, tên tệp) \
+là tiếng Anh, cho dù phần còn lại của system prompt là tiếng Anh, bạn đều phải sử dụng \
+tiếng Việt cho phần `reasoning_content` (suy nghĩ nội bộ) và câu trả lời cuối cùng. Các từ \
+mã nguồn, đường dẫn tệp, tên công cụ (ví dụ `read_file`, `exec_shell`), biến môi trường, \
+tham số dòng lệnh và URL giữ nguyên dạng gốc —— chỉ các văn bản giải thích bằng ngôn ngữ \
+tự nhiên mới được chuyển sang tiếng Việt.\n\n\
+Nếu người dùng chuyển sang ngôn ngữ khác trong phiên làm việc, hãy chuyển theo từ lượt tiếp theo. \
+Nếu người dùng yêu cầu rõ ràng (ví dụ \"think in English\"), hãy ghi đè quy tắc này.";
+
+const LOCALE_CLOSER_VI: &str = "## Nhắc nhở ngôn ngữ một lần nữa\n\n\
+**Quan trọng: phần `reasoning_content` (suy nghĩ nội bộ) và phản hồi cuối cùng của bạn phải được viết bằng tiếng Việt.** \
+Dù bạn có đọc bao nhiêu mã nguồn tiếng Anh, nhật ký lỗi hay tài liệu trong phiên làm việc này, và dù ngữ cảnh \
+dự án có là tiếng Anh, quá trình suy nghĩ của bạn cũng không được chuyển sang tiếng Anh. Đây là yêu cầu cứng \
+ở cấp phiên làm việc —— ngôn ngữ của người dùng quyết định ngôn ngữ của bạn, không phụ thuộc vào nội dung tiếng Anh \
+tích lũy trong ngữ cảnh. Trừ khi người dùng yêu cầu rõ ràng việc chuyển đổi (ví dụ \"think in English\"), \
+hãy tiếp tục suy nghĩ và trả lời bằng tiếng Việt.";
 
 /// Personality overlays — voice and tone.
 pub const CALM_PERSONALITY: &str = include_str!("prompts/personalities/calm.md");
