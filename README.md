@@ -4,6 +4,8 @@
 
 [简体中文 README](README.zh-CN.md)
 [日本語 README](README.ja-JP.md)
+[Tiếng Việt README](README.vi.md)
+
 
 ## Install
 

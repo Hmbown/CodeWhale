@@ -93,6 +93,7 @@ fn show_single_setting(app: &App, key: &str) -> CommandResult {
             crate::localization::Locale::Ja => "ja",
             crate::localization::Locale::PtBr => "pt-BR",
             crate::localization::Locale::Es419 => "es-419",
+            crate::localization::Locale::Vi => "vi",
         }
     }
     fn density_display(d: crate::tui::app::ComposerDensity) -> &'static str {
