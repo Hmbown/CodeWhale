@@ -1996,6 +1996,7 @@ impl RuntimeThreadManager {
             search_provider: self.config.search_provider(),
             search_api_key: self.config.search.as_ref().and_then(|s| s.api_key.clone()),
             tools_always_load: self.config.tools_always_load(),
+            insecure_skip_tls_verify: self.config.insecure_skip_tls_verify.unwrap_or(false),
         };
 
         let engine = spawn_engine(engine_cfg, &self.config);

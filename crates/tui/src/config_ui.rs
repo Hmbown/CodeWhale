@@ -386,11 +386,15 @@ pub async fn start_web_editor(app: &App, config: &Config) -> Result<WebConfigSes
     let url = format!("http://{addr}");
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     let app_snapshot = build_document(app, config)?;
+    let skip_verify = config.insecure_skip_tls_verify.unwrap_or(false);
     let task = tokio::spawn(async move {
         let poll_tx = tx.clone();
         let poll_url = format!("{url}/api/session");
         let poll_task = tokio::spawn(async move {
-            let client = reqwest::Client::new();
+            let client = reqwest::Client::builder()
+                .danger_accept_invalid_certs(skip_verify)
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new());
             let mut last: Option<ConfigUiDocument> = Some(app_snapshot);
             loop {
                 tokio::time::sleep(Duration::from_millis(750)).await;

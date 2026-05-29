@@ -1150,6 +1150,11 @@ pub struct Config {
     /// Vision model configuration for the `image_analyze` tool.
     #[serde(default)]
     pub vision_model: Option<VisionModelConfig>,
+
+    /// Skip TLS certificate verification for all outbound HTTPS requests.
+    /// Defaults to `false` (verify certificates).
+    #[serde(default)]
+    pub insecure_skip_tls_verify: Option<bool>,
 }
 
 /// Vision model configuration for the `image_analyze` tool.
@@ -1460,6 +1465,7 @@ impl Config {
         normalize_model_config(&mut config);
         config.validate()?;
         config.warn_on_misplaced_root_base_url();
+        config.warn_if_insecure_tls();
         Ok(config)
     }
 
@@ -1514,6 +1520,16 @@ impl Config {
              Move it under `[{table}]` (e.g. `[{table}]\\nbase_url = \"...\"`) \
              or set the corresponding `*_BASE_URL` env var. (#1308)"
         );
+    }
+
+    /// Emit a one-line warning when TLS certificate verification is disabled.
+    fn warn_if_insecure_tls(&self) {
+        if self.insecure_skip_tls_verify == Some(true) {
+            tracing::warn!(
+                "TLS certificate verification is disabled (insecure_skip_tls_verify = true). \
+                 This is insecure and should only be used for development or trusted internal servers."
+            );
+        }
     }
 
     /// Validate that critical config fields are present.
@@ -2967,6 +2983,13 @@ fn apply_env_overrides(config: &mut Config) {
     }) {
         config.capacity = None;
     }
+    if let Ok(value) = std::env::var("DEEPSEEK_INSECURE_SKIP_TLS_VERIFY") {
+        config.insecure_skip_tls_verify = parse_bool_env(&value);
+    }
+}
+
+fn parse_bool_env(raw: &str) -> Option<bool> {
+    codewhale_config::parse_bool(raw).ok()
 }
 
 fn normalize_model_config(config: &mut Config) {
@@ -3298,6 +3321,9 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
         strict_tool_mode: override_cfg.strict_tool_mode.or(base.strict_tool_mode),
         runtime_api: override_cfg.runtime_api.or(base.runtime_api),
         workshop: override_cfg.workshop.or(base.workshop),
+        insecure_skip_tls_verify: override_cfg
+            .insecure_skip_tls_verify
+            .or(base.insecure_skip_tls_verify),
     }
 }
 
@@ -7534,5 +7560,79 @@ model = "deepseek-ai/deepseek-v4-pro"
         let json = serde_json::to_value(&cap).unwrap();
         let deserialized: ProviderCapability = serde_json::from_value(json).unwrap();
         assert_eq!(cap, deserialized);
+    }
+
+    #[test]
+    fn insecure_skip_tls_verify_toml_deserializes() {
+        let config: Config = toml::from_str(
+            r#"
+            insecure_skip_tls_verify = true
+            "#,
+        )
+        .expect("config toml");
+        assert_eq!(config.insecure_skip_tls_verify, Some(true));
+    }
+
+    #[test]
+    fn insecure_skip_tls_verify_env_override_applied() {
+        let _lock = lock_test_env();
+        // Safety: test-only environment mutation guarded by a global mutex.
+        unsafe {
+            env::set_var("DEEPSEEK_INSECURE_SKIP_TLS_VERIFY", "true");
+        }
+
+        let mut config = Config::default();
+        apply_env_overrides(&mut config);
+        assert_eq!(config.insecure_skip_tls_verify, Some(true));
+
+        // Safety: env mutation guarded by lock_test_env().
+        unsafe { env::remove_var("DEEPSEEK_INSECURE_SKIP_TLS_VERIFY") };
+    }
+
+    #[test]
+    fn insecure_skip_tls_verify_warning_emitted_when_true() {
+        // Set up a subscriber so the tracing::warn! reaches the test output.
+        let subscriber = tracing_subscriber::fmt()
+            .with_test_writer()
+            .with_max_level(tracing::Level::WARN)
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let config = Config {
+            insecure_skip_tls_verify: Some(true),
+            ..Config::default()
+        };
+        config.warn_if_insecure_tls();
+        // If we reach here without panic, the warning-path branch was exercised.
+        // The warning text appears in `cargo test --nocapture` output for
+        // manual verification: "TLS certificate verification is disabled ..."
+    }
+
+    #[test]
+    fn insecure_skip_tls_verify_no_warning_when_false() {
+        let subscriber = tracing_subscriber::fmt()
+            .with_test_writer()
+            .with_max_level(tracing::Level::WARN)
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let config = Config {
+            insecure_skip_tls_verify: Some(false),
+            ..Config::default()
+        };
+        // Should not panic — the method must handle both values gracefully.
+        config.warn_if_insecure_tls();
+    }
+
+    #[test]
+    fn insecure_skip_tls_verify_no_warning_when_none() {
+        let subscriber = tracing_subscriber::fmt()
+            .with_test_writer()
+            .with_max_level(tracing::Level::WARN)
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let config = Config::default();
+        config.warn_if_insecure_tls();
     }
 }

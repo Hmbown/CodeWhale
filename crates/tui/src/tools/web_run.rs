@@ -476,7 +476,7 @@ impl ToolSpec for WebRunTool {
                     .unwrap_or_default();
 
                 let (entries, source, warning) =
-                    run_search(&query, max_results, timeout_ms, &domains).await?;
+                    run_search(&query, max_results, timeout_ms, &domains, context.insecure_skip_tls_verify).await?;
                 let mut warnings = Vec::new();
                 if recency > 0 {
                     warnings.push(format!(
@@ -538,7 +538,7 @@ impl ToolSpec for WebRunTool {
                     .unwrap_or_default();
 
                 let (entries, warning) =
-                    run_image_search(&query, max_results, timeout_ms, &domains).await?;
+                    run_image_search(&query, max_results, timeout_ms, &domains, context.insecure_skip_tls_verify).await?;
 
                 let mut warnings = Vec::new();
                 if recency > 0 {
@@ -699,7 +699,7 @@ async fn resolve_or_fetch_page(
     }
     if looks_like_url(ref_id) {
         check_network_policy(ref_id, context)?;
-        return fetch_page(ref_id, timeout_ms).await;
+        return fetch_page(ref_id, timeout_ms, context.insecure_skip_tls_verify).await;
     }
     Err(ToolError::invalid_input(format!(
         "Unknown ref_id '{ref_id}'"
@@ -715,8 +715,10 @@ async fn run_search(
     max_results: usize,
     timeout_ms: u64,
     domains: &[String],
+    skip_verify: bool,
 ) -> Result<(Vec<SearchEntry>, String, Option<String>), ToolError> {
     let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(skip_verify)
         .timeout(Duration::from_millis(timeout_ms))
         .user_agent(USER_AGENT)
         .build()
@@ -911,8 +913,10 @@ async fn run_image_search(
     max_results: usize,
     timeout_ms: u64,
     domains: &[String],
+    skip_verify: bool,
 ) -> Result<(Vec<ImageResultEntry>, Option<String>), ToolError> {
     let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(skip_verify)
         .timeout(Duration::from_millis(timeout_ms))
         .user_agent(USER_AGENT)
         .build()
@@ -1064,8 +1068,9 @@ fn check_network_policy(url: &str, context: &ToolContext) -> Result<(), ToolErro
     }
 }
 
-async fn fetch_page(url: &str, timeout_ms: u64) -> Result<WebPage, ToolError> {
+async fn fetch_page(url: &str, timeout_ms: u64, skip_verify: bool) -> Result<WebPage, ToolError> {
     let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(skip_verify)
         .timeout(Duration::from_millis(timeout_ms))
         .user_agent(USER_AGENT)
         .build()

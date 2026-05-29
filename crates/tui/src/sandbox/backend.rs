@@ -88,7 +88,7 @@ pub fn create_backend(config: &Config) -> Result<Option<Box<dyn SandboxBackend>>
                 .clone()
                 .unwrap_or_else(|| "http://localhost:8080".to_string());
             let api_key = config.sandbox_api_key.clone();
-            let backend = super::opensandbox::OpenSandboxBackend::new(base_url, api_key, 30)?;
+            let backend = super::opensandbox::OpenSandboxBackend::new(base_url, api_key, 30, config.insecure_skip_tls_verify.unwrap_or(false))?;
             Ok(Some(Box::new(backend)))
         }
     }

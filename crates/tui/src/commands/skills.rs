@@ -269,7 +269,7 @@ fn install_skill(app: &mut App, spec: &str) -> CommandResult {
         Err(err) => return CommandResult::error(format!("Invalid install source: {err}")),
     };
     let skills_dir = app.skills_dir.clone();
-    let (network, max_size, registry_url) = installer_settings(app);
+    let (network, max_size, registry_url, skip_verify) = installer_settings(app);
 
     let outcome = run_async(async move {
         install::install_with_registry(
@@ -279,6 +279,7 @@ fn install_skill(app: &mut App, spec: &str) -> CommandResult {
             &network,
             false,
             &registry_url,
+            skip_verify,
         )
         .await
     });
@@ -309,10 +310,10 @@ fn update_skill(app: &mut App, name: &str) -> CommandResult {
         return CommandResult::error("Usage: /skill update <name>");
     }
     let skills_dir = app.skills_dir.clone();
-    let (network, max_size, registry_url) = installer_settings(app);
+    let (network, max_size, registry_url, skip_verify) = installer_settings(app);
     let owned_name = name.to_string();
     let outcome = run_async(async move {
-        install::update_with_registry(&owned_name, &skills_dir, max_size, &network, &registry_url)
+        install::update_with_registry(&owned_name, &skills_dir, max_size, &network, &registry_url, skip_verify)
             .await
     });
 
@@ -368,8 +369,8 @@ fn trust_skill(app: &mut App, name: &str) -> CommandResult {
 
 /// List skills available in the configured curated registry.
 pub fn list_remote_skills(app: &mut App) -> CommandResult {
-    let (network, _max_size, registry_url) = installer_settings(app);
-    let registry = run_async(async move { install::fetch_registry(&network, &registry_url).await });
+    let (network, _max_size, registry_url, skip_verify) = installer_settings(app);
+    let registry = run_async(async move { install::fetch_registry(&network, &registry_url, skip_verify).await });
     match registry {
         Ok(RegistryFetchResult::Loaded(doc)) => {
             if doc.skills.is_empty() {
@@ -406,11 +407,11 @@ pub fn list_remote_skills(app: &mut App) -> CommandResult {
 /// For each skill the sync checks the cached ETag / SHA-256 before
 /// downloading so unchanged skills are skipped in O(1) network round-trips.
 fn sync_skills(app: &mut App) -> CommandResult {
-    let (network, max_size, registry_url) = installer_settings(app);
+    let (network, max_size, registry_url, skip_verify) = installer_settings(app);
     let cache_dir = install::default_cache_skills_dir();
 
     let result = run_async(async move {
-        install::sync_registry(&network, &registry_url, &cache_dir, max_size).await
+        install::sync_registry(&network, &registry_url, &cache_dir, max_size, skip_verify).await
     });
 
     match result {
@@ -473,7 +474,7 @@ fn sync_skills(app: &mut App) -> CommandResult {
 /// round-trip the install/update operation will incur next. If the config
 /// fails to parse, we fall back to defaults so the user still gets a
 /// network-gated install rather than a silent crash.
-fn installer_settings(_app: &App) -> (NetworkPolicy, u64, String) {
+fn installer_settings(_app: &App) -> (NetworkPolicy, u64, String, bool) {
     let cfg = crate::config::Config::load(None, None).unwrap_or_default();
     let network = cfg
         .network
@@ -487,7 +488,8 @@ fn installer_settings(_app: &App) -> (NetworkPolicy, u64, String) {
     let registry_url = skills_cfg
         .and_then(|s| s.registry_url.clone())
         .unwrap_or_else(|| DEFAULT_REGISTRY_URL.to_string());
-    (network, max_size, registry_url)
+    let skip_verify = cfg.insecure_skip_tls_verify.unwrap_or(false);
+    (network, max_size, registry_url, skip_verify)
 }
 
 fn run_async<F, T>(future: F) -> T

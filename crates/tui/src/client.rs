@@ -488,7 +488,8 @@ impl DeepSeekClient {
             retry.enabled, retry.max_retries, retry.initial_delay, retry.max_delay
         ));
 
-        let http_client = Self::build_http_client(&api_key, &http_headers)?;
+        let skip_verify = config.insecure_skip_tls_verify.unwrap_or(false);
+        let http_client = Self::build_http_client(&api_key, &http_headers, skip_verify)?;
 
         Ok(Self {
             http_client,
@@ -505,9 +506,11 @@ impl DeepSeekClient {
     fn build_http_client(
         api_key: &str,
         extra_headers: &HashMap<String, String>,
+        skip_verify: bool,
     ) -> Result<reqwest::Client> {
         let headers = build_default_headers(api_key, extra_headers)?;
         let mut builder = reqwest::Client::builder()
+            .danger_accept_invalid_certs(skip_verify)
             .default_headers(headers)
             .user_agent(concat!(
                 "Mozilla/5.0 (compatible; codewhale/",
@@ -3073,5 +3076,25 @@ mod tests {
                 "{value:?} should NOT be parsed as truthy",
             );
         }
+    }
+
+    #[test]
+    fn build_http_client_succeeds_with_skip_verify_true() {
+        let client = DeepSeekClient::build_http_client(
+            "test-key",
+            &HashMap::new(),
+            true,
+        );
+        assert!(client.is_ok());
+    }
+
+    #[test]
+    fn build_http_client_succeeds_with_skip_verify_false() {
+        let client = DeepSeekClient::build_http_client(
+            "test-key",
+            &HashMap::new(),
+            false,
+        );
+        assert!(client.is_ok());
     }
 }

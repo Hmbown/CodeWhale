@@ -164,6 +164,7 @@ impl ToolSpec for FetchUrlTool {
         let resp = loop {
             let dns_pinning = validate_fetch_target(&current_url, context).await?;
             let mut client_builder = reqwest::Client::builder()
+                .danger_accept_invalid_certs(context.insecure_skip_tls_verify)
                 .timeout(Duration::from_millis(timeout_ms))
                 .user_agent(USER_AGENT)
                 .redirect(reqwest::redirect::Policy::none());

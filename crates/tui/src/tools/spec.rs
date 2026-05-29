@@ -169,6 +169,10 @@ pub struct ToolContext {
     /// Metaso also falls back to `METASO_API_KEY` env var, then a built-in key.
     pub search_api_key: Option<String>,
 
+    /// Skip TLS certificate verification for outbound HTTPS requests made by
+    /// network tools. Defaults to `false`.
+    pub insecure_skip_tls_verify: bool,
+
     /// Per-session workshop variable store (#548). Holds the raw content of
     /// the most recent large-tool routing event so the parent can call
     /// `promote_to_context` later. `None` when the router is disabled.
@@ -209,6 +213,7 @@ impl ToolContext {
             large_output_router: None,
             search_provider: crate::config::SearchProvider::default(),
             search_api_key: None,
+            insecure_skip_tls_verify: false,
             workshop_vars: None,
         }
     }
@@ -246,6 +251,7 @@ impl ToolContext {
             large_output_router: None,
             search_provider: crate::config::SearchProvider::default(),
             search_api_key: None,
+            insecure_skip_tls_verify: false,
             workshop_vars: None,
         }
     }
@@ -283,8 +289,16 @@ impl ToolContext {
             large_output_router: None,
             search_provider: crate::config::SearchProvider::default(),
             search_api_key: None,
+            insecure_skip_tls_verify: false,
             workshop_vars: None,
         }
+    }
+
+    /// Skip TLS certificate verification for outbound HTTPS requests.
+    #[must_use]
+    pub fn with_insecure_skip_tls_verify(mut self, skip: bool) -> Self {
+        self.insecure_skip_tls_verify = skip;
+        self
     }
 
     /// Attach a per-domain network policy to this context (#135).

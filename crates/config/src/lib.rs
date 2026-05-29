@@ -238,6 +238,11 @@ pub struct ConfigToml {
     /// applies the defaults documented in [`LspConfigToml`].
     #[serde(default)]
     pub lsp: Option<LspConfigToml>,
+    /// Skip TLS certificate verification for all outbound HTTPS requests.
+    /// Defaults to `false` (verify certificates). Set to `true` only when
+    /// connecting to servers with self-signed or untrusted certificates.
+    #[serde(default)]
+    pub insecure_skip_tls_verify: Option<bool>,
     #[serde(flatten)]
     pub extras: BTreeMap<String, toml::Value>,
 }
@@ -966,6 +971,17 @@ impl ConfigToml {
             out.insert(k.clone(), v.to_string());
         }
         out
+    }
+
+    /// Resolve `insecure_skip_tls_verify` considering the environment variable
+    /// override first, then the config file value, defaulting to `false`.
+    #[must_use]
+    pub fn resolve_insecure_skip_tls_verify(&self) -> bool {
+        std::env::var("DEEPSEEK_INSECURE_SKIP_TLS_VERIFY")
+            .ok()
+            .and_then(|v| parse_bool(&v).ok())
+            .or(self.insecure_skip_tls_verify)
+            .unwrap_or(false)
     }
 
     /// Resolve runtime options without touching platform credential stores.
@@ -1707,7 +1723,8 @@ pub fn migrate_config_if_needed() -> Result<()> {
     Ok(())
 }
 
-fn parse_bool(raw: &str) -> Result<bool> {
+/// Parse common boolean string representations.
+pub fn parse_bool(raw: &str) -> Result<bool> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "1" | "true" | "yes" | "on" | "enabled" => Ok(true),
         "0" | "false" | "no" | "off" | "disabled" => Ok(false),
@@ -1820,6 +1837,7 @@ struct EnvRuntimeOverrides {
     sglang_base_url: Option<String>,
     vllm_base_url: Option<String>,
     ollama_base_url: Option<String>,
+    insecure_skip_tls_verify: Option<bool>,
 }
 
 impl EnvRuntimeOverrides {
@@ -1901,6 +1919,9 @@ impl EnvRuntimeOverrides {
             ollama_base_url: std::env::var("OLLAMA_BASE_URL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
+            insecure_skip_tls_verify: std::env::var("DEEPSEEK_INSECURE_SKIP_TLS_VERIFY")
+                .ok()
+                .and_then(|v| parse_bool(&v).ok()),
         }
     }
 
@@ -2002,6 +2023,7 @@ mod tests {
         codewhale_provider: Option<OsString>,
         codewhale_model: Option<OsString>,
         codewhale_base_url: Option<OsString>,
+        deepseek_insecure_skip_tls_verify: Option<OsString>,
     }
 
     impl EnvGuard {
@@ -2048,6 +2070,7 @@ mod tests {
                 vllm_base_url: env::var_os("VLLM_BASE_URL"),
                 ollama_api_key: env::var_os("OLLAMA_API_KEY"),
                 ollama_base_url: env::var_os("OLLAMA_BASE_URL"),
+                deepseek_insecure_skip_tls_verify: env::var_os("DEEPSEEK_INSECURE_SKIP_TLS_VERIFY"),
             };
             // Safety: test-only environment mutation guarded by a module mutex.
             unsafe {
@@ -2092,6 +2115,7 @@ mod tests {
                 env::remove_var("VLLM_BASE_URL");
                 env::remove_var("OLLAMA_API_KEY");
                 env::remove_var("OLLAMA_BASE_URL");
+                env::remove_var("DEEPSEEK_INSECURE_SKIP_TLS_VERIFY");
             }
             guard
         }
@@ -2153,6 +2177,7 @@ mod tests {
                 Self::restore_var("VLLM_BASE_URL", self.vllm_base_url.take());
                 Self::restore_var("OLLAMA_API_KEY", self.ollama_api_key.take());
                 Self::restore_var("OLLAMA_BASE_URL", self.ollama_base_url.take());
+                Self::restore_var("DEEPSEEK_INSECURE_SKIP_TLS_VERIFY", self.deepseek_insecure_skip_tls_verify.take());
             }
         }
     }
@@ -3462,5 +3487,16 @@ mod tests {
         let resolved = ConfigToml::default().resolve_runtime_options_with_secrets(&cli, &secrets);
         assert_eq!(resolved.api_key.as_deref(), Some("cli-key"));
         assert_eq!(resolved.api_key_source, Some(RuntimeApiKeySource::Cli));
+    }
+
+    #[test]
+    fn insecure_skip_tls_verify_toml_deserializes() {
+        let config: ConfigToml = toml::from_str(
+            r#"
+            insecure_skip_tls_verify = true
+            "#,
+        )
+        .expect("config toml");
+        assert_eq!(config.insecure_skip_tls_verify, Some(true));
     }
 }

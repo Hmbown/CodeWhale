@@ -569,7 +569,9 @@ fn run() -> Result<()> {
             Ok(())
         }
         Some(Commands::Metrics(args)) => run_metrics_command(args),
-        Some(Commands::Update(args)) => update::run_update(args.beta),
+        Some(Commands::Update(args)) => {
+            update::run_update(args.beta, store.config.resolve_insecure_skip_tls_verify())
+        }
         None => {
             let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
             let forwarded = root_tui_passthrough(&cli)?;

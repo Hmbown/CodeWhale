@@ -97,7 +97,7 @@ pub fn build_entries(
         .with_file_tools()
         .with_search_tools()
         .with_shell_tools()
-        .with_web_tools()
+        .with_web_tools(false)
         .with_git_tools()
         .with_user_input_tool()
         .with_parallel_tool()

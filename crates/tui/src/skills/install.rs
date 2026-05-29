@@ -261,6 +261,7 @@ pub async fn install(
     max_size: u64,
     network: &NetworkPolicy,
     update: bool,
+    skip_verify: bool,
 ) -> Result<InstallOutcome> {
     install_with_registry(
         source,
@@ -269,6 +270,7 @@ pub async fn install(
         network,
         update,
         DEFAULT_REGISTRY_URL,
+        skip_verify,
     )
     .await
 }
@@ -282,8 +284,9 @@ pub async fn install_with_registry(
     network: &NetworkPolicy,
     update: bool,
     registry_url: &str,
+    skip_verify: bool,
 ) -> Result<InstallOutcome> {
-    let urls = candidate_urls(&source, network, registry_url).await?;
+    let urls = candidate_urls(&source, network, registry_url, skip_verify).await?;
     let urls = match urls {
         UrlResolution::Resolved(urls) => urls,
         UrlResolution::NeedsApproval(host) => return Ok(InstallOutcome::NeedsApproval(host)),
@@ -379,8 +382,9 @@ pub async fn update(
     skills_dir: &Path,
     max_size: u64,
     network: &NetworkPolicy,
+    skip_verify: bool,
 ) -> Result<UpdateResult> {
-    update_with_registry(name, skills_dir, max_size, network, DEFAULT_REGISTRY_URL).await
+    update_with_registry(name, skills_dir, max_size, network, DEFAULT_REGISTRY_URL, skip_verify).await
 }
 
 /// Same as [`update`] but lets the caller override the registry URL.
@@ -390,6 +394,7 @@ pub async fn update_with_registry(
     max_size: u64,
     network: &NetworkPolicy,
     registry_url: &str,
+    skip_verify: bool,
 ) -> Result<UpdateResult> {
     let target = skill_target_path(name, skills_dir)?;
     if target.exists() {
@@ -408,7 +413,7 @@ pub async fn update_with_registry(
     // we still hit the network so the user gets a useful "no upstream change"
     // signal, but we skip the unpack step if the bytes match.
     let source = InstallSource::parse(&marker.spec)?;
-    let urls = match candidate_urls(&source, network, registry_url).await? {
+    let urls = match candidate_urls(&source, network, registry_url, skip_verify).await? {
         UrlResolution::Resolved(urls) => urls,
         UrlResolution::NeedsApproval(host) => return Ok(UpdateResult::NeedsApproval(host)),
         UrlResolution::Denied(host) => return Ok(UpdateResult::NetworkDenied(host)),
@@ -429,7 +434,7 @@ pub async fn update_with_registry(
     // Bytes changed — fall back to the regular install path with `update = true`
     // so we get the same atomic-replace semantics.
     let outcome =
-        install_with_registry(source, skills_dir, max_size, network, true, registry_url).await?;
+        install_with_registry(source, skills_dir, max_size, network, true, registry_url, skip_verify).await?;
     match outcome {
         InstallOutcome::Installed(installed) => Ok(UpdateResult::Updated(installed)),
         InstallOutcome::NeedsApproval(host) => Ok(UpdateResult::NeedsApproval(host)),
@@ -487,6 +492,7 @@ pub fn trust(name: &str, skills_dir: &Path) -> Result<()> {
 pub async fn fetch_registry(
     network: &NetworkPolicy,
     registry_url: &str,
+    skip_verify: bool,
 ) -> Result<RegistryFetchResult> {
     let host = match host_from_url(registry_url) {
         Some(host) => host,
@@ -497,7 +503,13 @@ pub async fn fetch_registry(
         Decision::Deny => return Ok(RegistryFetchResult::Denied(host)),
         Decision::Prompt => return Ok(RegistryFetchResult::NeedsApproval(host)),
     }
-    let body = reqwest::get(registry_url)
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(skip_verify)
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+    let body = client
+        .get(registry_url)
+        .send()
         .await
         .with_context(|| format!("failed to fetch registry {registry_url}"))?
         .error_for_status()
@@ -571,8 +583,9 @@ pub async fn sync_registry(
     registry_url: &str,
     cache_dir: &Path,
     max_size: u64,
+    skip_verify: bool,
 ) -> Result<SyncResult> {
-    let doc = match fetch_registry(network, registry_url).await? {
+    let doc = match fetch_registry(network, registry_url, skip_verify).await? {
         RegistryFetchResult::Loaded(doc) => doc,
         RegistryFetchResult::Denied(host) => return Ok(SyncResult::RegistryDenied(host)),
         RegistryFetchResult::NeedsApproval(host) => {
@@ -583,7 +596,7 @@ pub async fn sync_registry(
     let mut outcomes = Vec::new();
 
     for (name, entry) in &doc.skills {
-        let outcome = sync_one_skill(name, entry, network, cache_dir, max_size).await;
+        let outcome = sync_one_skill(name, entry, network, cache_dir, max_size, skip_verify).await;
         outcomes.push(outcome);
     }
 
@@ -597,6 +610,7 @@ async fn sync_one_skill(
     network: &NetworkPolicy,
     cache_dir: &Path,
     max_size: u64,
+    skip_verify: bool,
 ) -> SkillSyncOutcome {
     // Resolve the source to a concrete URL list.
     let source = match InstallSource::parse(&entry.source) {
@@ -665,7 +679,10 @@ async fn sync_one_skill(
             .flatten();
 
         // Build the request — add If-None-Match if we have a cached ETag.
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder()
+            .danger_accept_invalid_certs(skip_verify)
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
         let mut req = client.get(url);
         if let Some(ref meta) = existing_meta
             && let Some(ref etag) = meta.etag
@@ -875,6 +892,7 @@ async fn candidate_urls(
     source: &InstallSource,
     network: &NetworkPolicy,
     registry_url: &str,
+    skip_verify: bool,
 ) -> Result<UrlResolution> {
     match source {
         InstallSource::GitHubRepo(repo) => {
@@ -889,7 +907,7 @@ async fn candidate_urls(
         }
         InstallSource::DirectUrl(url) => Ok(UrlResolution::Resolved(vec![url.clone()])),
         InstallSource::Registry(name) => {
-            match fetch_registry(network, registry_url).await? {
+            match fetch_registry(network, registry_url, skip_verify).await? {
                 RegistryFetchResult::Loaded(doc) => {
                     let entry = doc
                         .skills
@@ -909,7 +927,7 @@ async fn candidate_urls(
                     }
                     // Reuse this function for the inner source so GitHub fallback
                     // still applies.
-                    Box::pin(candidate_urls(&inner, network, registry_url)).await
+                    Box::pin(candidate_urls(&inner, network, registry_url, skip_verify)).await
                 }
                 RegistryFetchResult::NeedsApproval(host) => Ok(UrlResolution::NeedsApproval(host)),
                 RegistryFetchResult::Denied(host) => Ok(UrlResolution::Denied(host)),

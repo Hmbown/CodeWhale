@@ -997,7 +997,8 @@ async fn list_mcp_servers(
     State(state): State<RuntimeApiState>,
 ) -> Result<Json<McpServersResponse>, ApiError> {
     let config = load_mcp_config_or_default(&state.mcp_config_path)?;
-    let mut pool = McpPool::new(config.clone());
+    let mut pool = McpPool::new(config.clone())
+        .with_skip_tls_verify(state.config.insecure_skip_tls_verify.unwrap_or(false));
     let _errors = pool.connect_all().await;
     let connected: HashSet<String> = pool
         .connected_servers()
@@ -1028,7 +1029,8 @@ async fn list_mcp_tools(
     Query(query): Query<McpToolsQuery>,
 ) -> Result<Json<McpToolsResponse>, ApiError> {
     let mut pool = McpPool::from_config_path(&state.mcp_config_path)
-        .map_err(|e| ApiError::internal(format!("Failed to load MCP config: {e}")))?;
+        .map_err(|e| ApiError::internal(format!("Failed to load MCP config: {e}")))?
+        .with_skip_tls_verify(state.config.insecure_skip_tls_verify.unwrap_or(false));
     let _errors = pool.connect_all().await;
 
     let mut tools = Vec::new();

@@ -4073,7 +4073,8 @@ async fn run_mcp_command(config: &Config, command: McpCommand) -> Result<()> {
             Ok(())
         }
         McpCommand::Connect { server } => {
-            let mut pool = McpPool::from_config_path(&config_path)?;
+            let mut pool = McpPool::from_config_path(&config_path)?
+                .with_skip_tls_verify(config.insecure_skip_tls_verify.unwrap_or(false));
             if let Some(name) = server {
                 pool.get_or_connect(&name).await?;
                 println!("Connected to MCP server: {name}");
@@ -4090,7 +4091,8 @@ async fn run_mcp_command(config: &Config, command: McpCommand) -> Result<()> {
             Ok(())
         }
         McpCommand::Tools { server } => {
-            let mut pool = McpPool::from_config_path(&config_path)?;
+            let mut pool = McpPool::from_config_path(&config_path)?
+                .with_skip_tls_verify(config.insecure_skip_tls_verify.unwrap_or(false));
             if let Some(name) = server {
                 let conn = pool.get_or_connect(&name).await?;
                 if conn.tools().is_empty() {
@@ -4193,7 +4195,8 @@ async fn run_mcp_command(config: &Config, command: McpCommand) -> Result<()> {
             Ok(())
         }
         McpCommand::Validate => {
-            let mut pool = McpPool::from_config_path(&config_path)?;
+            let mut pool = McpPool::from_config_path(&config_path)?
+                .with_skip_tls_verify(config.insecure_skip_tls_verify.unwrap_or(false));
             let errors = pool.connect_all().await;
             if errors.is_empty() {
                 println!("MCP config is valid. All enabled servers connected.");
@@ -5218,6 +5221,7 @@ async fn run_exec_agent(
         search_provider: config.search_provider(),
         search_api_key: config.search.as_ref().and_then(|s| s.api_key.clone()),
         tools_always_load: config.tools_always_load(),
+        insecure_skip_tls_verify: config.insecure_skip_tls_verify.unwrap_or(false),
     };
 
     let engine_handle = spawn_engine(engine_config, config);
