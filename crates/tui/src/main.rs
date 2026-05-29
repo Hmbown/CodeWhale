@@ -934,7 +934,7 @@ async fn main() -> Result<()> {
                     bail!("Choose exactly one server mode: --mcp, --http, or --acp");
                 }
                 if args.mcp {
-                    mcp_server::run_mcp_server(workspace)
+                    tokio::task::block_in_place(|| mcp_server::run_mcp_server(workspace))
                 } else if args.http {
                     let config = load_config_from_cli(&cli)?;
                     let cors_origins = resolve_cors_origins(&config, &args.cors_origin);
