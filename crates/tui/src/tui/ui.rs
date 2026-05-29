@@ -4160,12 +4160,15 @@ async fn dispatch_user_message(
         .has_hooks_for_event(crate::hooks::HookEvent::MessageSubmit)
     {
         let context = app.base_hook_context().with_message(&message.display);
-        match app
+        let outcome = app
             .hooks
-            .execute_message_submit_transform(&context, &message.display)
-        {
-            crate::hooks::MessageSubmitOutcome::Unchanged => {}
-            crate::hooks::MessageSubmitOutcome::Replaced(text) => {
+            .execute_message_submit_transform(&context, &message.display);
+        if let Some(warning) = outcome.warning() {
+            app.status_message = Some(warning.to_string());
+        }
+        match outcome {
+            crate::hooks::MessageSubmitOutcome::Unchanged { .. } => {}
+            crate::hooks::MessageSubmitOutcome::Replaced { text, .. } => {
                 message.display = text;
             }
             crate::hooks::MessageSubmitOutcome::Blocked { reason } => {

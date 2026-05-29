@@ -1987,18 +1987,81 @@ fn write_message_submit_hook(dir: &TempDir, name: &str, body: &str) -> String {
 
 #[cfg(not(windows))]
 fn configure_single_message_submit_hook(app: &mut App, dir: &TempDir, command: String) {
+    configure_message_submit_hooks(app, dir, vec![command]);
+}
+
+#[cfg(not(windows))]
+fn configure_message_submit_hooks(app: &mut App, dir: &TempDir, commands: Vec<String>) {
     app.hooks = crate::hooks::HookExecutor::new(
         crate::hooks::HooksConfig {
             enabled: true,
-            hooks: vec![crate::hooks::Hook::new(
-                crate::hooks::HookEvent::MessageSubmit,
-                &command,
-            )],
+            hooks: commands
+                .iter()
+                .map(|command| {
+                    crate::hooks::Hook::new(crate::hooks::HookEvent::MessageSubmit, command)
+                })
+                .collect(),
             working_dir: Some(dir.path().to_path_buf()),
             ..crate::hooks::HooksConfig::default()
         },
         dir.path().to_path_buf(),
     );
+}
+
+#[cfg(not(windows))]
+#[tokio::test]
+async fn dispatch_user_message_surfaces_continued_message_submit_timeout() {
+    let dir = TempDir::new().expect("tempdir");
+    let slow = write_message_submit_hook(
+        &dir,
+        "slow.sh",
+        r#"#!/bin/sh
+sleep 2
+"#,
+    );
+    let replacing = write_message_submit_hook(
+        &dir,
+        "replace.sh",
+        r#"#!/bin/sh
+printf '%s\n' '{"text":"after timeout"}'
+"#,
+    );
+    let mut app = create_test_app();
+    app.hooks = crate::hooks::HookExecutor::new(
+        crate::hooks::HooksConfig {
+            enabled: true,
+            hooks: vec![
+                crate::hooks::Hook::new(crate::hooks::HookEvent::MessageSubmit, &slow)
+                    .with_timeout(1),
+                crate::hooks::Hook::new(crate::hooks::HookEvent::MessageSubmit, &replacing),
+            ],
+            working_dir: Some(dir.path().to_path_buf()),
+            ..crate::hooks::HooksConfig::default()
+        },
+        dir.path().to_path_buf(),
+    );
+    let mut engine = crate::core::engine::mock_engine_handle();
+    let config = Config::default();
+
+    dispatch_user_message(
+        &mut app,
+        &config,
+        &engine.handle,
+        QueuedMessage::new("hello".to_string(), None),
+    )
+    .await
+    .expect("dispatch user message");
+
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some("Hook timed out after 1s")
+    );
+    match engine.rx_op.recv().await.expect("send message op") {
+        crate::core::ops::Op::SendMessage { content, .. } => {
+            assert_eq!(content, "after timeout");
+        }
+        other => panic!("expected SendMessage, got {other:?}"),
+    }
 }
 
 #[cfg(not(windows))]

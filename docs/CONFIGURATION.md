@@ -355,7 +355,7 @@ The hook receives JSON on stdin:
 }
 ```
 
-If the hook exits `0` and prints JSON with a string `text` field,
+If the hook exits `0` and prints JSON with a non-empty string `text` field,
 that value replaces the submitted text:
 
 ```json
@@ -363,10 +363,13 @@ that value replaces the submitted text:
 ```
 
 Exit `0` with empty stdout, or stdout JSON without `text`, leaves
-the current text unchanged. Exit `2` blocks the submission before
-the turn starts; a `reason` field, stderr, or stdout can provide the
-status message shown in the TUI. Other non-zero exits follow the
-hook's `continue_on_error` setting.
+the current text unchanged. A JSON `text` field must not be empty;
+`{"text":""}` is treated as invalid stdout and ignored. Exit `2`
+blocks the submission before the turn starts; a `reason` field,
+stderr, or stdout can provide the status message shown in the TUI.
+Other non-zero exits follow the hook's `continue_on_error` setting.
+Timeouts and spawn failures are also surfaced as transient TUI status
+messages when `continue_on_error = true` lets submission continue.
 
 Multiple `message_submit` hooks run in config order, and each hook
 receives the text produced by the previous hook. Hooks marked
