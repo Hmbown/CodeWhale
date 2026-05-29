@@ -46,6 +46,7 @@
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -265,6 +266,27 @@ fn host_matches(entry: &str, normalized_host: &str) -> bool {
     }
 }
 
+/// Parse an IPv4 CIDR string such as `"198.18.0.0/15"` into `(base, prefix)`.
+/// Returns `None` for malformed input or a prefix length above 32.
+fn parse_ipv4_cidr(cidr: &str) -> Option<(Ipv4Addr, u8)> {
+    let (addr, prefix) = cidr.split_once('/')?;
+    let base: Ipv4Addr = addr.trim().parse().ok()?;
+    let prefix: u8 = prefix.trim().parse().ok()?;
+    if prefix > 32 {
+        return None;
+    }
+    Some((base, prefix))
+}
+
+/// Whether `ip` is contained in the `base/prefix` IPv4 CIDR block.
+fn ipv4_in_cidr(ip: Ipv4Addr, base: Ipv4Addr, prefix: u8) -> bool {
+    if prefix == 0 {
+        return true;
+    }
+    let mask: u32 = u32::MAX << (32 - prefix);
+    (u32::from(ip) & mask) == (u32::from(base) & mask)
+}
+
 /// Best-effort writer for the network audit log.
 #[derive(Debug, Clone)]
 pub struct NetworkAuditor {
@@ -415,6 +437,12 @@ pub struct NetworkPolicyDecider {
     policy: NetworkPolicy,
     cache: NetworkSessionCache,
     auditor: Option<NetworkAuditor>,
+    /// IPv4 CIDR ranges that are treated as benign fake-IP placeholders (e.g.
+    /// a transparent-proxy / TUN setup running in `fake-ip` mode, where DNS
+    /// resolves every hostname into a reserved range like `198.18.0.0/15`).
+    /// A resolved IP inside one of these ranges bypasses the restricted-IP SSRF
+    /// block; real private/loopback/link-local/metadata IPs are unaffected.
+    trusted_fakeip_cidrs: Vec<(Ipv4Addr, u8)>,
 }
 
 impl NetworkPolicyDecider {
@@ -425,6 +453,38 @@ impl NetworkPolicyDecider {
             policy,
             cache: NetworkSessionCache::new(),
             auditor,
+            trusted_fakeip_cidrs: Vec::new(),
+        }
+    }
+
+    /// Register IPv4 CIDR ranges to treat as benign fake-IP placeholders.
+    /// Invalid CIDR strings are skipped. See [`Self::is_trusted_fakeip_addr`].
+    #[must_use]
+    pub fn with_trusted_fakeip_cidrs(mut self, cidrs: &[&str]) -> Self {
+        for cidr in cidrs {
+            if let Some(parsed) = parse_ipv4_cidr(cidr) {
+                self.trusted_fakeip_cidrs.push(parsed);
+            }
+        }
+        self
+    }
+
+    /// Whether `ip` falls inside a configured fake-IP placeholder range.
+    ///
+    /// In `fake-ip` proxy/TUN setups the local resolver maps every hostname to
+    /// a reserved range (commonly `198.18.0.0/15`), so the DNS-resolution SSRF
+    /// check would otherwise reject every request. This narrowly trusts only
+    /// those placeholder addresses — real private/loopback/link-local/cloud-
+    /// metadata IPs are *not* matched and stay blocked.
+    #[must_use]
+    pub fn is_trusted_fakeip_addr(&self, ip: &IpAddr) -> bool {
+        match ip {
+            IpAddr::V4(v4) => self
+                .trusted_fakeip_cidrs
+                .iter()
+                .any(|(base, prefix)| ipv4_in_cidr(*v4, *base, *prefix)),
+            // fake-ip placeholders are IPv4-only in practice.
+            IpAddr::V6(_) => false,
         }
     }
 
@@ -641,6 +701,30 @@ mod tests {
 
         assert!(!p.trusts_proxy_fakeip_host("raw.githubusercontent.com"));
         assert!(p.trusts_proxy_fakeip_host("avatars.githubusercontent.com"));
+    }
+
+    #[test]
+    fn trusted_fakeip_cidr_allows_placeholder_but_not_real_private() {
+        let decider = NetworkPolicyDecider::new(NetworkPolicy::default(), None)
+            .with_trusted_fakeip_cidrs(&["198.18.0.0/15"]);
+
+        // fake-ip placeholder range (clash default / IETF benchmark) is trusted
+        assert!(decider.is_trusted_fakeip_addr(&"198.18.0.5".parse::<std::net::IpAddr>().unwrap()));
+        assert!(
+            decider.is_trusted_fakeip_addr(&"198.19.255.255".parse::<std::net::IpAddr>().unwrap())
+        );
+
+        // real private / loopback / link-local / cloud-metadata are NOT trusted
+        for ip in ["192.168.1.1", "10.0.0.1", "127.0.0.1", "169.254.169.254"] {
+            assert!(
+                !decider.is_trusted_fakeip_addr(&ip.parse::<std::net::IpAddr>().unwrap()),
+                "{ip} must not be treated as a fake-ip placeholder"
+            );
+        }
+
+        // no ranges configured → nothing trusted
+        let bare = NetworkPolicyDecider::new(NetworkPolicy::default(), None);
+        assert!(!bare.is_trusted_fakeip_addr(&"198.18.0.5".parse::<std::net::IpAddr>().unwrap()));
     }
 
     #[test]
