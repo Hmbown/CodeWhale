@@ -2115,7 +2115,7 @@ use self::tool_catalog::{
 };
 #[cfg(test)]
 use self::tool_catalog::{
-    TOOL_SEARCH_BM25_NAME, maybe_activate_requested_deferred_tool,
+    TOOL_SEARCH_BM25_NAME, TOOL_SEARCH_REGEX_NAME, maybe_activate_requested_deferred_tool,
     preflight_requested_deferred_tool, should_default_defer_tool,
 };
 use self::tool_execution::emit_tool_audit;
