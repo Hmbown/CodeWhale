@@ -310,14 +310,24 @@ fn format_cache_stats(app: &App) -> String {
     if history.is_empty() {
         out.push_str("  No turn telemetry recorded yet.\n");
     } else {
+        // Aggregate only cache-aware turns; skip turns where the provider
+        // did not report cache telemetry (cache_hit_tokens is None).
+        // When cache_miss_tokens is None, infer it as
+        //   input_tokens − cache_hit_tokens  (matches /cache table logic).
+        let mut turns = 0u64;
         let (hit, miss, input) = app.session.turn_cache_history.iter().fold(
             (0u64, 0u64, 0u64),
             |(hit, miss, input), rec| {
-                (
-                    hit + u64::from(rec.cache_hit_tokens.unwrap_or(0)),
-                    miss + u64::from(rec.cache_miss_tokens.unwrap_or(0)),
-                    input + u64::from(rec.input_tokens),
-                )
+                let Some(hit_tokens) = rec.cache_hit_tokens else {
+                    return (hit, miss, input);
+                };
+                let h = u64::from(hit_tokens);
+                let m = u64::from(
+                    rec.cache_miss_tokens
+                        .unwrap_or(rec.input_tokens.saturating_sub(hit_tokens)),
+                );
+                turns += 1;
+                (hit + h, miss + m, input + u64::from(rec.input_tokens))
             },
         );
         let total_cache = hit + miss;
@@ -326,7 +336,7 @@ fn format_cache_stats(app: &App) -> String {
         } else {
             0.0
         };
-        out.push_str(&format!("  Turns recorded: {}\n", history.len()));
+        out.push_str(&format!("  Turns recorded: {turns}\n"));
         out.push_str(&format!(
             "  Cache hit tokens:  {hit} ({avg_pct:.1}% of {total_cache} cache-aware tokens)\n",
             hit = format_tokens(hit),
