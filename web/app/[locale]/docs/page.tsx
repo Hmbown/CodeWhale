@@ -184,6 +184,11 @@ command = "~/.codewhale/hooks/pre.sh"        # / message_submit / mode_change / 
                 <p className="mt-4 text-sm text-ink-soft">
                   完整参考：<Link className="body-link" href="https://github.com/Hmbown/CodeWhale/blob/main/config.example.toml">config.example.toml</Link>。
                 </p>
+                <p className="mt-3 text-sm text-ink-soft leading-[1.9]">
+                  <code className="inline">message_submit</code> hooks run before a user message is sent to the model. A non-background hook can print
+                  <code className="inline">{'{"text":"replacement"}'}</code> on stdout to replace the message; <code className="inline">text</code> must be non-empty. Exit with code <code className="inline">2</code> to block the submission.
+                  <code className="inline">shell_env</code> keeps its existing <code className="inline">KEY=VALUE</code> stdout contract.
+                </p>
               </section>
 
               {/* MCP */}
@@ -433,6 +438,11 @@ command = "~/.codewhale/hooks/pre.sh"        # / message_submit / mode_change / 
                 </pre>
                 <p className="mt-4 text-sm text-ink-soft">
                   Full reference: <Link className="body-link" href="https://github.com/Hmbown/CodeWhale/blob/main/config.example.toml">config.example.toml</Link>.
+                </p>
+                <p className="mt-3 text-sm text-ink-soft leading-relaxed">
+                  <code className="inline">message_submit</code> hooks run before a user message is sent to the model. A non-background hook can print
+                  <code className="inline">{'{"text":"replacement"}'}</code> on stdout to replace the message; <code className="inline">text</code> must be non-empty. Exit with code <code className="inline">2</code> to block the submission.
+                  <code className="inline">shell_env</code> keeps its existing <code className="inline">KEY=VALUE</code> stdout contract.
                 </p>
               </section>
 

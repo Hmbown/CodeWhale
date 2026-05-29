@@ -1978,6 +1978,177 @@ async fn dispatch_user_message_failed_send_clears_loading_state() {
     assert!(app.dispatch_started_at.is_none());
 }
 
+#[cfg(not(windows))]
+fn write_message_submit_hook(dir: &TempDir, name: &str, body: &str) -> String {
+    let path = dir.path().join(name);
+    std::fs::write(&path, body).expect("write message_submit hook");
+    format!("sh {}", path.display())
+}
+
+#[cfg(not(windows))]
+fn configure_single_message_submit_hook(app: &mut App, dir: &TempDir, command: String) {
+    configure_message_submit_hooks(app, dir, vec![command]);
+}
+
+#[cfg(not(windows))]
+fn configure_message_submit_hooks(app: &mut App, dir: &TempDir, commands: Vec<String>) {
+    app.hooks = crate::hooks::HookExecutor::new(
+        crate::hooks::HooksConfig {
+            enabled: true,
+            hooks: commands
+                .iter()
+                .map(|command| {
+                    crate::hooks::Hook::new(crate::hooks::HookEvent::MessageSubmit, command)
+                })
+                .collect(),
+            working_dir: Some(dir.path().to_path_buf()),
+            ..crate::hooks::HooksConfig::default()
+        },
+        dir.path().to_path_buf(),
+    );
+}
+
+#[cfg(not(windows))]
+#[tokio::test]
+async fn dispatch_user_message_surfaces_continued_message_submit_timeout() {
+    let dir = TempDir::new().expect("tempdir");
+    let slow = write_message_submit_hook(
+        &dir,
+        "slow.sh",
+        r#"#!/bin/sh
+sleep 2
+"#,
+    );
+    let replacing = write_message_submit_hook(
+        &dir,
+        "replace.sh",
+        r#"#!/bin/sh
+printf '%s\n' '{"text":"after timeout"}'
+"#,
+    );
+    let mut app = create_test_app();
+    app.hooks = crate::hooks::HookExecutor::new(
+        crate::hooks::HooksConfig {
+            enabled: true,
+            hooks: vec![
+                crate::hooks::Hook::new(crate::hooks::HookEvent::MessageSubmit, &slow)
+                    .with_timeout(1),
+                crate::hooks::Hook::new(crate::hooks::HookEvent::MessageSubmit, &replacing),
+            ],
+            working_dir: Some(dir.path().to_path_buf()),
+            ..crate::hooks::HooksConfig::default()
+        },
+        dir.path().to_path_buf(),
+    );
+    let mut engine = crate::core::engine::mock_engine_handle();
+    let config = Config::default();
+
+    dispatch_user_message(
+        &mut app,
+        &config,
+        &engine.handle,
+        QueuedMessage::new("hello".to_string(), None),
+    )
+    .await
+    .expect("dispatch user message");
+
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some("Hook timed out after 1s")
+    );
+    match engine.rx_op.recv().await.expect("send message op") {
+        crate::core::ops::Op::SendMessage { content, .. } => {
+            assert_eq!(content, "after timeout");
+        }
+        other => panic!("expected SendMessage, got {other:?}"),
+    }
+}
+
+#[cfg(not(windows))]
+#[tokio::test]
+async fn dispatch_user_message_uses_transformed_message_submit_text() {
+    let dir = TempDir::new().expect("tempdir");
+    let command = write_message_submit_hook(
+        &dir,
+        "replace.sh",
+        r#"#!/bin/sh
+printf '%s\n' '{"text":"[hooked] hello"}'
+"#,
+    );
+    let mut app = create_test_app();
+    configure_single_message_submit_hook(&mut app, &dir, command);
+    let mut engine = crate::core::engine::mock_engine_handle();
+    let config = Config::default();
+
+    dispatch_user_message(
+        &mut app,
+        &config,
+        &engine.handle,
+        QueuedMessage::new("hello".to_string(), None),
+    )
+    .await
+    .expect("dispatch user message");
+
+    assert_eq!(app.last_submitted_prompt.as_deref(), Some("[hooked] hello"));
+    assert!(app.history.iter().any(|cell| matches!(
+        cell,
+        HistoryCell::User { content } if content == "[hooked] hello"
+    )));
+    assert_eq!(app.api_messages.len(), 1);
+    assert!(matches!(
+        &app.api_messages[0].content[0],
+        ContentBlock::Text { text, .. } if text == "[hooked] hello"
+    ));
+    match engine.rx_op.recv().await.expect("send message op") {
+        crate::core::ops::Op::SendMessage { content, .. } => {
+            assert_eq!(content, "[hooked] hello");
+        }
+        other => panic!("expected SendMessage, got {other:?}"),
+    }
+}
+
+#[cfg(not(windows))]
+#[tokio::test]
+async fn dispatch_user_message_blocked_by_message_submit_hook_does_not_start_turn() {
+    let dir = TempDir::new().expect("tempdir");
+    let command = write_message_submit_hook(
+        &dir,
+        "block.sh",
+        r#"#!/bin/sh
+printf '%s\n' '{"reason":"blocked by test hook"}'
+exit 2
+"#,
+    );
+    let mut app = create_test_app();
+    configure_single_message_submit_hook(&mut app, &dir, command);
+    let mut engine = crate::core::engine::mock_engine_handle();
+    let config = Config::default();
+
+    dispatch_user_message(
+        &mut app,
+        &config,
+        &engine.handle,
+        QueuedMessage::new("hello".to_string(), None),
+    )
+    .await
+    .expect("blocked submit is handled locally");
+
+    assert_eq!(app.status_message.as_deref(), Some("blocked by test hook"));
+    assert!(app.api_messages.is_empty());
+    assert!(
+        app.history
+            .iter()
+            .all(|cell| !matches!(cell, HistoryCell::User { .. }))
+    );
+    assert!(!app.is_loading);
+    assert!(app.dispatch_started_at.is_none());
+    assert!(app.runtime_turn_status.is_none());
+    assert!(
+        engine.rx_op.try_recv().is_err(),
+        "blocked submit must not send any engine operation"
+    );
+}
+
 #[test]
 fn turn_liveness_watchdog_clears_stale_dispatch() {
     let mut app = create_test_app();
