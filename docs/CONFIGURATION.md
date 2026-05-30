@@ -663,14 +663,21 @@ Use `codewhale-tui features list` to inspect known flags and their effective sta
 `web_search` uses DuckDuckGo by default and does not require an API key. The
 DuckDuckGo path keeps a Bing fallback when DDG returns a bot challenge or no
 parseable results. Bing remains selectable for users who explicitly want it,
-and Tavily or Bocha can be selected when an API-backed provider is preferred.
-**Metaso** ([metaso.cn](https://metaso.cn))
-100 searches/day free quota — set `METASO_API_KEY` or `[search] api_key` for a higher quota.
+and Tavily, Bocha, Metaso, or Baidu can be selected when an API-backed provider
+is preferred.
+
+**Metaso** ([metaso.cn](https://metaso.cn)) has a 100 searches/day free quota;
+set `METASO_API_KEY` or `[search] api_key` for a higher quota.
+
+**Baidu** uses Baidu AI Search at
+`https://qianfan.baidubce.com/v2/ai_search/web_search`. Set
+`BAIDU_SEARCH_API_KEY` or `[search] api_key`. This is a search-tool backend
+only; it does not add a Baidu model provider.
 
 ```toml
 [search]
-provider = "duckduckgo"    # duckduckgo | bing | tavily | bocha | metaso
-# api_key = "YOUR_KEY" # required for tavily and bocha; optional for metaso (100 searches/day free quota)
+provider = "baidu" # duckduckgo | bing | tavily | bocha | metaso | baidu
+# api_key = "YOUR_KEY" # required for tavily, bocha, and baidu; optional for metaso
 ```
 
 ## Local Media Attachments

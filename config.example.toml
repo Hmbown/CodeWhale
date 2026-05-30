@@ -265,25 +265,29 @@ max_subagents = 10 # optional (1-20)
 # ─────────────────────────────────────────────────────────────────────────────────
 # Web Search Provider
 # ─────────────────────────────────────────────────────────────────────────────────
-# Choose which backend `web_search` uses. Default is Bing HTML scraping — no
-# API key needed. DuckDuckGo remains selectable and still falls back to Bing
-# when its HTML endpoint returns a bot challenge or no parseable results.
-# Switch to Tavily or Bocha for reliable search in mainland China.
+# Choose which backend `web_search` uses. Default is DuckDuckGo HTML scraping
+# with Bing fallback — no API key needed. Bing remains selectable for users who
+# explicitly prefer it. Switch to Tavily, Bocha, Metaso, or Baidu for
+# API-backed search.
 #
 # [search]
-# provider = "bing"         # bing | duckduckgo | tavily | bocha | metaso
+# provider = "duckduckgo"  # duckduckgo | bing | tavily | bocha | metaso | baidu
 #                            # duckduckgo: HTML scrape with Bing fallback
-#                            # tavily: https://tavily.com — AI search, needs api_key
-#                            # bocha:  https://bochaai.com — 博查AI搜索，国内友好，需api_key
-#                            # metaso: https://metaso.cn — 秘塔AI搜索，每天 100 次免费
-#                            #         设置 METASO_API_KEY 或 [search] api_key 可提升额度
-# api_key = "tvly-YOUR_KEY"  # required for tavily, bocha, and metaso (optional for metaso)
-#                            # WARNING: treat config.toml like a secret file when
-#                            # storing API keys. Use env vars or `auth set` instead.
+#                            # bing:       HTML scrape, no API key
+#                            # tavily:     https://tavily.com — AI search, needs api_key
+#                            # bocha:      https://bochaai.com — 博查AI搜索，国内友好，需api_key
+#                            # metaso:     https://metaso.cn — 秘塔AI搜索，每天 100 次免费
+#                            #             设置 METASO_API_KEY 或 [search] api_key 可提升额度
+#                            # baidu:      百度 AI Search via qianfan.baidubce.com，需 api_key
+# api_key = "YOUR_SEARCH_KEY" # required for tavily, bocha, and baidu; optional for metaso
+#                             # WARNING: treat config.toml like a secret file when
+#                             # storing API keys. Prefer env vars for local smoke tests.
 #
 # Env-var overrides:
 #   DEEPSEEK_SEARCH_PROVIDER → search.provider
 #   DEEPSEEK_SEARCH_API_KEY  → search.api_key
+#   METASO_API_KEY           → metaso key fallback
+#   BAIDU_SEARCH_API_KEY     → baidu key fallback
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Network Policy (#135)
