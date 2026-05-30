@@ -137,7 +137,6 @@ use super::widgets::{ChatWidget, ComposerWidget, HeaderData, HeaderWidget, Rende
 /// Bumped from 6 to 128 to fix #64 (selection couldn't reach commands beyond
 /// the visible window because the source list itself was capped).
 const SLASH_MENU_LIMIT: usize = 128;
-const MENTION_MENU_LIMIT: usize = 6;
 const MIN_CHAT_HEIGHT: u16 = 3;
 const MIN_COMPOSER_HEIGHT: u16 = 2;
 const CONTEXT_WARNING_THRESHOLD_PERCENT: f64 = 85.0;
@@ -2831,7 +2830,7 @@ async fn run_event_loop(
                 app.slash_menu_selected = slash_menu_entries.len().saturating_sub(1);
             }
             let mention_menu_entries =
-                crate::tui::file_mention::visible_mention_menu_entries(app, MENTION_MENU_LIMIT);
+                crate::tui::file_mention::visible_mention_menu_entries(app, app.mention_menu_limit);
             let mention_menu_open = !mention_menu_entries.is_empty();
             if mention_menu_open && app.mention_menu_selected >= mention_menu_entries.len() {
                 app.mention_menu_selected = mention_menu_entries.len().saturating_sub(1);
@@ -4137,6 +4136,7 @@ fn queued_message_content_for_app(
         &message.display,
         &app.workspace,
         cwd,
+        app.mention_walk_depth,
     );
     if let Some(skill_instruction) = message.skill_instruction.as_ref() {
         format!("{skill_instruction}\n\n---\n\nUser request: {user_request}")
@@ -4180,6 +4180,7 @@ async fn dispatch_user_message(
         &message.display,
         &app.workspace,
         cwd.clone(),
+        app.mention_walk_depth,
     );
     let content = queued_message_content_for_app(app, &message, cwd);
     let message_index = app.api_messages.len();
@@ -5389,6 +5390,7 @@ async fn steer_user_message(
         &message.display,
         &app.workspace,
         cwd.clone(),
+        app.mention_walk_depth,
     );
     let content = queued_message_content_for_app(app, &message, cwd);
     let message_index = app.api_messages.len();
@@ -5635,6 +5637,7 @@ fn build_pending_input_preview(app: &App) -> PendingInputPreview {
         &app.input,
         &app.workspace,
         std::env::current_dir().ok(),
+        app.mention_walk_depth,
     )
     .into_iter()
     .map(|item| {
@@ -5687,7 +5690,7 @@ fn render(f: &mut Frame, app: &mut App) {
     let body_height = size.height.saturating_sub(header_height + footer_height);
     let slash_menu_entries = visible_slash_menu_entries(app, SLASH_MENU_LIMIT);
     let mention_menu_entries =
-        crate::tui::file_mention::visible_mention_menu_entries(app, MENTION_MENU_LIMIT);
+        crate::tui::file_mention::visible_mention_menu_entries(app, app.mention_menu_limit);
     if !mention_menu_entries.is_empty() && app.mention_menu_selected >= mention_menu_entries.len() {
         app.mention_menu_selected = mention_menu_entries.len().saturating_sub(1);
     }
@@ -5754,6 +5757,7 @@ fn render(f: &mut Frame, app: &mut App) {
             crate::config::ApiProvider::Sglang => Some("SGLang"),
             crate::config::ApiProvider::Vllm => Some("vLLM"),
             crate::config::ApiProvider::Ollama => Some("Ollama"),
+            crate::config::ApiProvider::Xiaomi => Some("Xiaomi"),
         };
         let status_indicator_started_at = if app.low_motion {
             None
@@ -6654,6 +6658,7 @@ async fn apply_provider_picker_api_key(
             ApiProvider::Sglang => &mut providers.sglang,
             ApiProvider::Vllm => &mut providers.vllm,
             ApiProvider::Ollama => &mut providers.ollama,
+            ApiProvider::Xiaomi => &mut providers.xiaomi,
         };
         entry.api_key = Some(api_key);
     }
@@ -6706,6 +6711,7 @@ fn set_provider_auth_mode_in_memory(config: &mut Config, provider: ApiProvider, 
         ApiProvider::Sglang => &mut providers.sglang,
         ApiProvider::Vllm => &mut providers.vllm,
         ApiProvider::Ollama => &mut providers.ollama,
+        ApiProvider::Xiaomi => &mut providers.xiaomi,
     };
     entry.auth_mode = Some(auth_mode);
 }

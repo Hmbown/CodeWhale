@@ -16,7 +16,8 @@ pub fn balance(app: &mut App) -> CommandResult {
         ApiProvider::Deepseek
         | ApiProvider::DeepseekCN
         | ApiProvider::Openrouter
-        | ApiProvider::Novita => CommandResult::message(format!(
+        | ApiProvider::Novita
+        | ApiProvider::Xiaomi => CommandResult::message(format!(
             "Balance check for {} is planned, but provider balance network dispatch is not wired in this build yet.",
             provider.display_name()
         )),

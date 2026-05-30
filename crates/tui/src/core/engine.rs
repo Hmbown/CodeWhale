@@ -393,6 +393,7 @@ impl Engine {
             ApiProvider::Sglang => "SGLANG_API_KEY",
             ApiProvider::Vllm => "VLLM_API_KEY",
             ApiProvider::Ollama => "OLLAMA_API_KEY",
+            ApiProvider::Xiaomi => "XIAOMI_API_KEY",
         };
 
         Some(format!(
@@ -677,6 +678,12 @@ impl Engine {
                         continue;
                     };
 
+                    let mcp_pool = if self.config.features.enabled(Feature::Mcp) {
+                        self.ensure_mcp_pool().await.ok()
+                    } else {
+                        None
+                    };
+
                     let mut runtime = SubAgentRuntime::new(
                         client,
                         self.session.model.clone(),
@@ -694,6 +701,7 @@ impl Engine {
                     )
                     .with_max_spawn_depth(self.config.max_spawn_depth)
                     .with_step_api_timeout(self.config.subagent_api_timeout)
+                    .with_mcp_pool(mcp_pool)
                     .background_runtime();
                     let route = resolve_subagent_assignment_route(
                         &runtime,
@@ -1113,6 +1121,12 @@ impl Engine {
             None
         };
 
+        let mcp_pool = if self.config.features.enabled(Feature::Mcp) {
+            self.ensure_mcp_pool().await.ok()
+        } else {
+            None
+        };
+
         let tool_registry = match mode {
             AppMode::Agent | AppMode::Yolo => {
                 if self.config.features.enabled(Feature::Subagents) {
@@ -1133,6 +1147,7 @@ impl Engine {
                         )
                         .with_max_spawn_depth(self.config.max_spawn_depth)
                         .with_step_api_timeout(self.config.subagent_api_timeout)
+                        .with_mcp_pool(mcp_pool.clone())
                         .with_parent_completion_tx(self.tx_subagent_completion.clone());
                         if let Some(context) = fork_context_for_runtime.clone() {
                             rt = rt.with_fork_context(context);

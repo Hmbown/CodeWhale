@@ -150,7 +150,11 @@ pub fn find_file_mention_completions(
     let entries = workspace.completions(partial, limit);
     // #441: re-rank by frecency so files the user mentions a lot float up.
     // Never-mentioned candidates fall back to the workspace ranker's order.
-    let entries = super::file_frecency::rerank_by_frecency(entries);
+    let entries = if workspace.mention_menu_behavior == crate::settings::MentionMenuBehavior::Browser {
+        entries
+    } else {
+        super::file_frecency::rerank_by_frecency(entries)
+    };
     tracing::debug!(
         target: "codewhale_tui::file_mention",
         partial = %partial,
@@ -166,7 +170,13 @@ pub fn find_file_mention_completions(
 /// captures the process CWD so the resolver and completion walker honor the
 /// user's launch directory when it differs from `--workspace`.
 fn workspace_for_app(app: &App) -> Workspace {
-    Workspace::with_cwd(app.workspace.clone(), std::env::current_dir().ok())
+    Workspace::with_cwd(
+        app.workspace.clone(),
+        std::env::current_dir().ok(),
+        app.mention_walk_depth,
+        app.mention_scan_limit,
+        app.mention_menu_behavior.clone(),
+    )
 }
 
 /// Resolve the `@`-mention completion popup contents for the current
@@ -206,7 +216,7 @@ pub fn visible_mention_menu_entries(app: &mut App, limit: usize) -> Vec<String> 
         return cache.entries.clone();
     }
 
-    let ws = Workspace::with_cwd(workspace.clone(), cwd.clone());
+    let ws = Workspace::with_cwd(workspace.clone(), cwd.clone(), app.mention_walk_depth, app.mention_scan_limit, app.mention_menu_behavior.clone());
     let entries = find_file_mention_completions(&ws, &partial, limit);
 
     app.composer.mention_completion_cache = Some(MentionCompletionCache {
@@ -349,8 +359,9 @@ pub fn user_request_with_file_mentions(
     input: &str,
     workspace: &Path,
     cwd: Option<PathBuf>,
+    walk_depth: usize,
 ) -> String {
-    let Some(context) = local_context_from_file_mentions(input, workspace, cwd) else {
+    let Some(context) = local_context_from_file_mentions(input, workspace, cwd, walk_depth) else {
         return input.to_string();
     };
     format!("{input}\n\n---\n\nLocal context from @mentions:\n{context}")
@@ -361,8 +372,9 @@ pub fn pending_context_previews(
     input: &str,
     workspace: &Path,
     cwd: Option<PathBuf>,
+    walk_depth: usize,
 ) -> Vec<FileMentionPreview> {
-    context_references_from_input(input, workspace, cwd)
+    context_references_from_input(input, workspace, cwd, walk_depth)
         .into_iter()
         .map(|reference| FileMentionPreview {
             kind: reference.badge,
@@ -379,10 +391,11 @@ pub fn context_references_from_input(
     input: &str,
     workspace: &Path,
     cwd: Option<PathBuf>,
+    walk_depth: usize,
 ) -> Vec<ContextReference> {
     let mut references = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    let ws = Workspace::with_cwd(workspace.to_path_buf(), cwd);
+    let ws = Workspace::with_cwd(workspace.to_path_buf(), cwd, walk_depth, 4096, crate::settings::MentionMenuBehavior::Fuzzy);
 
     for mention in extract_file_mentions(input)
         .into_iter()
@@ -558,6 +571,7 @@ fn local_context_from_file_mentions(
     input: &str,
     workspace: &Path,
     cwd: Option<PathBuf>,
+    walk_depth: usize,
 ) -> Option<String> {
     let mentions = extract_file_mentions(input);
     if mentions.is_empty() {
@@ -566,7 +580,7 @@ fn local_context_from_file_mentions(
 
     let mut blocks = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    let ws = Workspace::with_cwd(workspace.to_path_buf(), cwd);
+    let ws = Workspace::with_cwd(workspace.to_path_buf(), cwd, walk_depth, 4096, crate::settings::MentionMenuBehavior::Fuzzy);
 
     for mention in mentions.into_iter().take(MAX_FILE_MENTIONS_PER_MESSAGE) {
         // `Workspace::resolve` already returns absolute paths when the root
@@ -834,7 +848,7 @@ mod tests {
         std::fs::write(&bar, "hello bar").expect("write bar");
 
         let content =
-            user_request_with_file_mentions("look at @bar.txt", tmp.path(), Some(sub.clone()));
+            user_request_with_file_mentions("look at @bar.txt", tmp.path(), Some(sub.clone()), 6);
 
         // The block must reference the cwd-rooted path with the file's body —
         // and crucially it must NOT collapse to <missing-file>.
@@ -872,7 +886,7 @@ mod tests {
 
         // Cwd is irrelevant; an unrelated tempdir would do. Pass `None` so we
         // are unambiguously testing the workspace-pass path.
-        let content = user_request_with_file_mentions("see @nested/deep/file.md", tmp.path(), None);
+        let content = user_request_with_file_mentions("see @nested/deep/file.md", tmp.path(), None, 6);
 
         assert!(content.contains("# nested deep"), "got: {content}");
         assert!(!content.contains("<missing-file"), "got: {content}");
@@ -898,7 +912,7 @@ mod tests {
         std::fs::write(tmp.path().join("guide.md"), "# Guide\nUse the fast path.\n")
             .expect("write");
 
-        let content = user_request_with_file_mentions("read @guide.md", tmp.path(), None);
+        let content = user_request_with_file_mentions("read @guide.md", tmp.path(), None, 6);
 
         // Header + tag presence.
         assert!(content.contains("Local context from @mentions:"));
@@ -919,6 +933,7 @@ mod tests {
             "huh @does/not/exist.txt",
             tmp.path(),
             Some(tmp.path().to_path_buf()),
+            6,
         );
 
         assert!(
@@ -936,6 +951,7 @@ mod tests {
             "read @guide.md and @missing.md",
             tmp.path(),
             Some(tmp.path().to_path_buf()),
+            6,
         );
 
         assert_eq!(previews.len(), 2);
@@ -954,7 +970,7 @@ mod tests {
         let attached = tmp.path().join("photo.png").display().to_string();
         let input = format!("inspect @photo.png\n[Attached image: {attached}]");
 
-        let previews = pending_context_previews(&input, tmp.path(), Some(tmp.path().to_path_buf()));
+        let previews = pending_context_previews(&input, tmp.path(), Some(tmp.path().to_path_buf()), 6);
 
         assert!(
             previews
@@ -994,7 +1010,7 @@ mod tests {
         let input = "read @src/main.rs";
 
         let references =
-            context_references_from_input(input, tmp.path(), Some(tmp.path().to_path_buf()));
+            context_references_from_input(input, tmp.path(), Some(tmp.path().to_path_buf()), 6);
 
         assert_eq!(references.len(), 1);
         let reference = &references[0];

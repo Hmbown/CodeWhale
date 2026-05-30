@@ -1578,6 +1578,12 @@ pub fn codewhale_home() -> Result<PathBuf> {
             return Ok(PathBuf::from(trimmed));
         }
     }
+    if let Ok(val) = std::env::var("HOME") {
+        let trimmed = val.trim();
+        if !trimmed.is_empty() {
+            return Ok(PathBuf::from(trimmed).join(CODEWHALE_APP_DIR));
+        }
+    }
     let home = dirs::home_dir().context("failed to resolve home directory")?;
     Ok(home.join(CODEWHALE_APP_DIR))
 }
@@ -1586,6 +1592,12 @@ pub fn codewhale_home() -> Result<PathBuf> {
 ///
 /// Always returns the legacy path regardless of whether it exists.
 pub fn legacy_deepseek_home() -> Result<PathBuf> {
+    if let Ok(val) = std::env::var("HOME") {
+        let trimmed = val.trim();
+        if !trimmed.is_empty() {
+            return Ok(PathBuf::from(trimmed).join(LEGACY_APP_DIR));
+        }
+    }
     let home = dirs::home_dir().context("failed to resolve home directory")?;
     Ok(home.join(LEGACY_APP_DIR))
 }
@@ -1684,14 +1696,14 @@ pub fn default_config_path() -> Result<PathBuf> {
 /// `~/.codewhale/config.toml`. Called on first launch after the config
 /// is loaded; copies the legacy file if the primary doesn't exist yet.
 /// Never overwrites an existing primary config.
-pub fn migrate_config_if_needed() -> Result<()> {
+pub fn migrate_config_if_needed() -> Result<bool> {
     let primary = codewhale_home()?.join(CONFIG_FILE_NAME);
     if primary.exists() {
-        return Ok(());
+        return Ok(false);
     }
     let legacy = legacy_deepseek_home()?.join(CONFIG_FILE_NAME);
     if !legacy.exists() {
-        return Ok(());
+        return Ok(false);
     }
     // Copy the config to the new home.
     if let Some(parent) = primary.parent() {
@@ -1704,7 +1716,7 @@ pub fn migrate_config_if_needed() -> Result<()> {
         legacy.display(),
         primary.display()
     );
-    Ok(())
+    Ok(true)
 }
 
 fn parse_bool(raw: &str) -> Result<bool> {

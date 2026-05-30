@@ -277,6 +277,48 @@ pub struct Settings {
     /// `binary_unavailable` response with an install hint, matching the
     /// pre-v0.8.32 behavior.
     pub prefer_external_pdftotext: bool,
+    /// Maximum directory depth for the @-mention completion walk.
+    /// Default: 6. Increase for deeply-nested workspace layouts.
+    /// Set to 0 for unlimited depth (use with caution in large repos).
+    #[serde(default = "default_mention_walk_depth")]
+    pub mention_walk_depth: usize,
+    /// Maximum number of file entries scanned when resolving @-mentions.
+    /// Default: 4096. Increase for extremely wide monorepos, but high values
+    /// can cause UI freezing when generating the candidate list.
+    #[serde(default = "default_mention_scan_limit")]
+    pub mention_scan_limit: usize,
+    /// Maximum number of @-mention popup entries returned to the renderer.
+    /// Default: 128. The composer widget paginates by terminal height, so
+    /// this only needs to be high enough to encompass the full candidate list.
+    #[serde(default = "default_mention_menu_limit")]
+    pub mention_menu_limit: usize,
+    /// The behavior of the @-mention menu.
+    /// Default: "fuzzy". Set to "browser" for a strict directory-level file browser mode.
+    #[serde(default = "default_mention_menu_behavior")]
+    pub mention_menu_behavior: MentionMenuBehavior,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MentionMenuBehavior {
+    Fuzzy,
+    Browser,
+}
+
+fn default_mention_menu_behavior() -> MentionMenuBehavior {
+    MentionMenuBehavior::Fuzzy
+}
+
+fn default_mention_walk_depth() -> usize {
+    6
+}
+
+fn default_mention_scan_limit() -> usize {
+    4096
+}
+
+fn default_mention_menu_limit() -> usize {
+    128
 }
 
 impl Default for Settings {
@@ -319,6 +361,10 @@ impl Default for Settings {
             status_indicator: "whale".to_string(),
             synchronized_output: "auto".to_string(),
             prefer_external_pdftotext: false,
+            mention_walk_depth: default_mention_walk_depth(),
+            mention_scan_limit: default_mention_scan_limit(),
+            mention_menu_limit: default_mention_menu_limit(),
+            mention_menu_behavior: default_mention_menu_behavior(),
         }
     }
 }
@@ -339,10 +385,72 @@ impl Settings {
             }
         }
 
-        let config_dir = dirs::config_dir()
-            .context("Failed to resolve config directory: not found.")?
-            .join("deepseek");
-        Ok(config_dir.join("settings.toml"))
+        let primary = codewhale_config::codewhale_home()
+            .context("Failed to resolve home directory.")?
+            .join("settings.toml");
+        if primary.exists() {
+            return Ok(primary);
+        }
+
+        let legacy = codewhale_config::legacy_deepseek_home()
+            .context("Failed to resolve legacy home directory.")?
+            .join("settings.toml");
+        if legacy.exists() {
+            return Ok(legacy);
+        }
+
+        // Backward compatibility for Windows users who have it in AppData.
+        if cfg!(windows) {
+            if let Some(app_data) = dirs::config_dir() {
+                let app_data_legacy = app_data.join("deepseek").join("settings.toml");
+                if app_data_legacy.exists() {
+                    return Ok(app_data_legacy);
+                }
+            }
+        }
+
+        // Default to primary if none exist so it is created there.
+        Ok(primary)
+    }
+
+    /// Migrate settings from legacy locations to the new primary location.
+    pub fn migrate_settings_if_needed() -> Result<bool> {
+        let primary = codewhale_config::codewhale_home()
+            .context("Failed to resolve home directory.")?
+            .join("settings.toml");
+        if primary.exists() {
+            return Ok(false);
+        }
+
+        let legacy = codewhale_config::legacy_deepseek_home()
+            .context("Failed to resolve legacy home directory.")?
+            .join("settings.toml");
+            
+        let mut source_legacy = legacy.clone();
+        
+        if !source_legacy.exists() {
+            let mut found_appdata = false;
+            if cfg!(windows) {
+                if let Some(app_data) = dirs::config_dir() {
+                    let app_data_legacy = app_data.join("deepseek").join("settings.toml");
+                    if app_data_legacy.exists() {
+                        source_legacy = app_data_legacy;
+                        found_appdata = true;
+                    }
+                }
+            }
+            if !found_appdata {
+                return Ok(false);
+            }
+        }
+        
+        if let Some(parent) = primary.parent() {
+            std::fs::create_dir_all(parent).context("failed to create codewhale config directory")?;
+        }
+        std::fs::copy(&source_legacy, &primary)
+            .context("failed to migrate settings")?;
+            
+        Ok(true)
     }
 
     /// Load settings from disk, or return defaults if not found

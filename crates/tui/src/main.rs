@@ -1892,6 +1892,9 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
                 crate::config::ApiProvider::Deepseek | crate::config::ApiProvider::DeepseekCN => {
                     ("DEEPSEEK_API_KEY", "codewhale auth set --provider deepseek")
                 }
+                crate::config::ApiProvider::Xiaomi => {
+                    ("XIAOMI_API_KEY", "codewhale auth set --provider xiaomi")
+                }
             };
             println!(
                 "  {} api_key: missing  (set {env_var} or `[providers.{}].api_key` in ~/.deepseek/config.toml; or run `{login_hint}`)",
@@ -1910,6 +1913,7 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
                     crate::config::ApiProvider::Ollama => "ollama",
                     crate::config::ApiProvider::Deepseek
                     | crate::config::ApiProvider::DeepseekCN => "deepseek",
+                    crate::config::ApiProvider::Xiaomi => "xiaomi",
                 }
             );
         }
@@ -4820,12 +4824,43 @@ async fn run_interactive(
         }
     }
 
-    // v0.8.44: migrate config from ~/.deepseek/ to ~/.codewhale/ on first
-    // launch. Non-fatal — existing installs keep working either way.
-    if let Err(err) = codewhale_config::migrate_config_if_needed() {
+    // v0.8.44: Migrate legacy configurations to the new codewhale directory.
+    // If a migration occurs, notify the user loudly and exit.
+    let migrated_config = codewhale_config::migrate_config_if_needed().unwrap_or_else(|err| {
         logging::warn(format!("Config migration skipped: {err}"));
-    }
+        false
+    });
+    
+    let migrated_settings = crate::settings::Settings::migrate_settings_if_needed().unwrap_or_else(|err| {
+        logging::warn(format!("Settings migration skipped: {err}"));
+        false
+    });
 
+    if migrated_config || migrated_settings {
+        eprintln!("\n{}", colored::Colorize::yellow("================================================================="));
+        eprintln!("{}", colored::Colorize::bold("CodeWhale Configuration Migration"));
+        eprintln!("{}\n", colored::Colorize::yellow("================================================================="));
+        eprintln!("Hey, CodeWhale has migrated your configuration files!");
+        eprintln!("Your old legacy settings have been copied to the new directory.\n");
+        eprintln!("Please edit your configuration files in the new location:");
+        
+        if let Ok(cw_home) = codewhale_config::codewhale_home() {
+            eprintln!("  {}", colored::Colorize::cyan(cw_home.display().to_string().as_str()));
+        }
+        
+        eprintln!("\nYou should now delete the old configuration files from the legacy locations:");
+        if let Ok(ds_home) = codewhale_config::legacy_deepseek_home() {
+            eprintln!("  {}", colored::Colorize::cyan(ds_home.display().to_string().as_str()));
+        }
+        if cfg!(windows) {
+            if let Some(app_data) = dirs::config_dir() {
+                eprintln!("  {}", colored::Colorize::cyan(app_data.join("deepseek").display().to_string().as_str()));
+            }
+        }
+        eprintln!("\nCodeWhale will now exit so you can verify the new configuration.");
+        eprintln!("Simply run CodeWhale again to continue.");
+        return Ok(());
+    }
     let model = config.default_model();
     let max_subagents = cli.max_subagents.map_or_else(
         || config.max_subagents(),

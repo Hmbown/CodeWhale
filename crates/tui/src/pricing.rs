@@ -88,6 +88,39 @@ fn pricing_for_model_at(model: &str, now: DateTime<Utc>) -> Option<ModelPricing>
         // DeepSeek Platform pricing. Avoid showing misleading DeepSeek costs.
         return None;
     }
+    // Exact prices derived from kb/journal/2026/05:
+    // Official pricing reference: https://ai.xiaomi.com/pricing
+    if lower.starts_with("mimo") {
+        if lower == "mimo-v2.5-pro" {
+            return Some(ModelPricing {
+                usd: CurrencyPricing {
+                    input_cache_hit_per_million: 0.0036,
+                    input_cache_miss_per_million: 0.435,
+                    output_per_million: 0.87,
+                },
+                cny: CurrencyPricing {
+                    input_cache_hit_per_million: 0.025,
+                    input_cache_miss_per_million: 3.0,
+                    output_per_million: 6.0,
+                },
+            });
+        } else if lower == "mimo-v2.5" {
+            return Some(ModelPricing {
+                usd: CurrencyPricing {
+                    input_cache_hit_per_million: 0.0028,
+                    input_cache_miss_per_million: 0.14,
+                    output_per_million: 0.28,
+                },
+                cny: CurrencyPricing {
+                    input_cache_hit_per_million: 0.02,
+                    input_cache_miss_per_million: 1.0,
+                    output_per_million: 2.0,
+                },
+            });
+        }
+        return None;
+    }
+
     if !lower.contains("deepseek") {
         return None;
     }

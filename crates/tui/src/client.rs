@@ -905,7 +905,8 @@ pub(super) fn apply_reasoning_effort(
             | ApiProvider::Atlascloud
             | ApiProvider::WanjieArk
             | ApiProvider::Moonshot
-            | ApiProvider::Ollama => {}
+            | ApiProvider::Ollama
+            | ApiProvider::Xiaomi => {}
             ApiProvider::NvidiaNim => {
                 body["chat_template_kwargs"] = json!({
                     "thinking": false,
@@ -950,7 +951,8 @@ pub(super) fn apply_reasoning_effort(
             | ApiProvider::Atlascloud
             | ApiProvider::WanjieArk
             | ApiProvider::Moonshot
-            | ApiProvider::Ollama => {}
+            | ApiProvider::Ollama
+            | ApiProvider::Xiaomi => {}
             ApiProvider::NvidiaNim => {
                 body["chat_template_kwargs"] = json!({
                     "thinking": true,
@@ -982,7 +984,8 @@ pub(super) fn apply_reasoning_effort(
             | ApiProvider::Atlascloud
             | ApiProvider::WanjieArk
             | ApiProvider::Moonshot
-            | ApiProvider::Ollama => {}
+            | ApiProvider::Ollama
+            | ApiProvider::Xiaomi => {}
             ApiProvider::NvidiaNim => {
                 body["chat_template_kwargs"] = json!({
                     "thinking": true,

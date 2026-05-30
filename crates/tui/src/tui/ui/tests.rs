@@ -1797,7 +1797,7 @@ fn file_mentions_do_not_trigger_inside_email_addresses() {
     let tmpdir = TempDir::new().expect("tempdir");
     std::fs::write(tmpdir.path().join("example.com"), "not a mention").expect("write file");
 
-    let content = user_request_with_file_mentions("email me@example.com", tmpdir.path(), None);
+    let content = user_request_with_file_mentions("email me@example.com", tmpdir.path(), None, 6);
 
     assert_eq!(content, "email me@example.com");
 }
@@ -1807,7 +1807,7 @@ fn media_file_mentions_point_to_attach_instead_of_inlining_bytes() {
     let tmpdir = TempDir::new().expect("tempdir");
     std::fs::write(tmpdir.path().join("photo.png"), b"\0png").expect("write image");
 
-    let content = user_request_with_file_mentions("inspect @photo.png", tmpdir.path(), None);
+    let content = user_request_with_file_mentions("inspect @photo.png", tmpdir.path(), None, 6);
 
     assert!(content.contains("<media-file mention=\"@photo.png\""));
     assert!(content.contains("Use /attach photo.png"));
@@ -3860,7 +3860,7 @@ fn file_mention_completion_finds_unique_match() {
     std::fs::create_dir_all(tmpdir.path().join("docs")).unwrap();
     std::fs::write(tmpdir.path().join("docs/deepseek_v4.pdf"), b"%PDF-").unwrap();
 
-    let ws = Workspace::with_cwd(tmpdir.path().to_path_buf(), None);
+    let ws = Workspace::with_cwd(tmpdir.path().to_path_buf(), None, 6, 4096, crate::settings::MentionMenuBehavior::Fuzzy);
     let matches = find_file_mention_completions(&ws, "docs/de", 16);
     assert_eq!(matches, vec!["docs/deepseek_v4.pdf".to_string()]);
 }
@@ -3872,7 +3872,7 @@ fn file_mention_completion_ranks_prefix_before_substring() {
     std::fs::create_dir_all(tmpdir.path().join("nested")).unwrap();
     std::fs::write(tmpdir.path().join("nested/README.md"), "x").unwrap();
 
-    let ws = Workspace::with_cwd(tmpdir.path().to_path_buf(), None);
+    let ws = Workspace::with_cwd(tmpdir.path().to_path_buf(), None, 6, 4096, crate::settings::MentionMenuBehavior::Fuzzy);
     let matches = find_file_mention_completions(&ws, "README", 16);
     // Top-level README (prefix match) outranks the nested one (substring).
     assert_eq!(matches.first().map(String::as_str), Some("README.md"));
