@@ -525,6 +525,19 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
         persistence_actor::init_actor(handle);
     }
 
+    if app.auto_submit_initial_input {
+        app.auto_submit_initial_input = false;
+        if app.onboarding == OnboardingState::None {
+            if let Some(input) = app.submit_input() {
+                let queued = build_queued_message(&mut app, input);
+                dispatch_user_message(&mut app, config, &engine_handle, queued).await?;
+            }
+        } else if app.status_message.is_none() && !app.input.trim().is_empty() {
+            app.status_message =
+                Some("Initial prompt ready; complete setup, then press Enter".to_string());
+        }
+    }
+
     let result = run_event_loop(
         &mut terminal,
         &mut app,

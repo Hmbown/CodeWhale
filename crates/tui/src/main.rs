@@ -120,7 +120,7 @@ struct Cli {
     #[command(flatten)]
     feature_toggles: FeatureToggles,
 
-    /// Send a one-shot prompt (non-interactive)
+    /// Initial prompt to submit in the interactive TUI. Use `exec` for non-interactive runs.
     #[arg(short, long, value_name = "PROMPT", num_args = 1..)]
     prompt: Vec<String>,
 
@@ -424,6 +424,10 @@ async fn wait_for_terminating_signal() -> i32 {
 
 fn join_prompt_parts(parts: &[String]) -> String {
     parts.join(" ")
+}
+
+fn top_level_prompt_initial_input(parts: &[String]) -> Option<tui::InitialInput> {
+    (!parts.is_empty()).then(|| tui::InitialInput::Submit(join_prompt_parts(parts)))
 }
 
 fn resolve_exec_resume_session_id(args: &ExecArgs, workspace: &Path) -> Result<Option<String>> {
@@ -974,12 +978,12 @@ async fn main() -> Result<()> {
         };
     }
 
-    // One-shot prompt mode
+    // Top-level prompt mode: submit the initial prompt, then keep the TUI alive
+    // for follow-up messages. Use `codewhale exec` for explicit non-interactive
+    // one-shot behavior (#2370).
     let config = load_config_from_cli(&cli)?;
-    if !cli.prompt.is_empty() {
-        let prompt = join_prompt_parts(&cli.prompt);
-        let model = config.default_model();
-        return run_one_shot(&config, &model, &prompt).await;
+    if let Some(initial_input) = top_level_prompt_initial_input(&cli.prompt) {
+        return run_interactive(&cli, &config, None, Some(initial_input)).await;
     }
 
     // Handle session resume. Plain `codewhale` starts fresh: interrupted
@@ -3782,7 +3786,13 @@ async fn run_pr(
     } else {
         cli.resume.clone()
     };
-    run_interactive(cli, config, resume_session_id, Some(prompt)).await
+    run_interactive(
+        cli,
+        config,
+        resume_session_id,
+        Some(tui::InitialInput::Prefill(prompt)),
+    )
+    .await
 }
 
 /// Return true if `name` resolves to an executable on the current `PATH`.
@@ -4794,7 +4804,7 @@ async fn run_interactive(
     cli: &Cli,
     config: &Config,
     resume_session_id: Option<String>,
-    initial_input: Option<String>,
+    initial_input: Option<tui::InitialInput>,
 ) -> Result<()> {
     let workspace = cli
         .workspace
@@ -5835,6 +5845,16 @@ mod terminal_mode_tests {
         let cli = parse_cli(&["codewhale", "-p", "hello", "world"]);
 
         assert_eq!(cli.prompt, vec!["hello", "world"]);
+    }
+
+    #[test]
+    fn prompt_flag_starts_interactive_submit_input() {
+        let cli = parse_cli(&["codewhale", "-p", "read", "the", "project"]);
+
+        assert_eq!(
+            top_level_prompt_initial_input(&cli.prompt),
+            Some(tui::InitialInput::Submit("read the project".to_string()))
+        );
     }
 
     #[test]
