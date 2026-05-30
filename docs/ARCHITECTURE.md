@@ -156,7 +156,7 @@ drives turns through Chat Completions.
   - `mod.rs` - `LspManager` — lazy per-language transport pool + config
   - `client.rs` - `StdioLspTransport` — JSON-RPC over stdio with `didOpen`/`didChange`/`publishDiagnostics`
   - `diagnostics.rs` - Diagnostic types, severity, and HTML-block renderer
-  - `registry.rs` - Language detection and default server map (rust-analyzer, pyright, gopls, clangd, typescript-language-server)
+  - `registry.rs` - Language detection and default server map (rust-analyzer, pyright, gopls, clangd, typescript-language-server, jdtls, vue-language-server)
   - Wired into the engine via `core/engine/lsp_hooks.rs` — called after every successful edit
 
 ### Security

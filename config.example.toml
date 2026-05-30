@@ -531,7 +531,12 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 #   go         → gopls serve
 #   python     → pyright-langserver --stdio
 #   typescript → typescript-language-server --stdio
+#   java       → jdtls
+#   vue        → vue-language-server --stdio
 #   c, cpp     → clangd
+#
+# Java support uses Eclipse JDT LS via the `jdtls` command. IntelliJ IDEA is
+# not required, and installing IntelliJ IDEA alone does not install `jdtls`.
 #
 # Override the defaults via the `servers` table below.
 [lsp]
@@ -542,6 +547,8 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 # [lsp.servers]
 # rust = ["rust-analyzer"]
 # go = ["gopls", "serve"]
+# java = ["jdtls"]
+# vue = ["vue-language-server", "--stdio"]
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Hooks (optional)
