@@ -140,10 +140,10 @@ transcripts stay behind bounded handles through `agent_eval`. See
 [docs/SUBAGENTS.md](docs/SUBAGENTS.md).
 
 The rest of the surface: LSP diagnostics after every edit (rust-analyzer,
-pyright, typescript-language-server, gopls, clangd), RLM sessions for
-batched analysis, MCP protocol, HTTP/SSE runtime API, persistent task
-queue, ACP adapter for Zed, SWE-bench export, and live cost tracking with
-cache hit/miss breakdowns.
+pyright, typescript-language-server, gopls, clangd, jdtls,
+vue-language-server), RLM sessions for batched analysis, MCP protocol,
+HTTP/SSE runtime API, persistent task queue, ACP adapter for Zed,
+SWE-bench export, and live cost tracking with cache hit/miss breakdowns.
 
 ---
 
