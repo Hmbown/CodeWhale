@@ -3269,6 +3269,47 @@ async fn dispatch_user_message_records_prompt_for_cancel_restore() {
 }
 
 #[tokio::test]
+async fn startup_prompt_waits_for_onboarding_then_dispatches() {
+    let mut app = create_test_app();
+    app.input = "阅读项目 and wait".to_string();
+    app.cursor_position = app.input.chars().count();
+    app.auto_submit_initial_input = true;
+    app.onboarding = OnboardingState::Welcome;
+    let config = Config::default();
+    let mut engine = crate::core::engine::mock_engine_handle();
+
+    submit_initial_input_if_ready(&mut app, &config, &engine.handle)
+        .await
+        .expect("defer");
+
+    assert!(app.auto_submit_initial_input);
+    assert_eq!(app.input, "阅读项目 and wait");
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some(INITIAL_PROMPT_DEFERRED_STATUS)
+    );
+    assert!(engine.rx_op.try_recv().is_err());
+
+    app.onboarding = OnboardingState::None;
+    submit_initial_input_if_ready(&mut app, &config, &engine.handle)
+        .await
+        .expect("submit");
+
+    assert!(!app.auto_submit_initial_input);
+    assert!(app.input.is_empty());
+    assert_eq!(
+        app.last_submitted_prompt.as_deref(),
+        Some("阅读项目 and wait")
+    );
+    match engine.rx_op.recv().await.expect("send message op") {
+        crate::core::ops::Op::SendMessage { content, .. } => {
+            assert!(content.contains("阅读项目 and wait"));
+        }
+        other => panic!("expected SendMessage, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn steer_user_message_records_prompt_for_cancel_restore() {
     let mut app = create_test_app();
     let mut engine = crate::core::engine::mock_engine_handle();
