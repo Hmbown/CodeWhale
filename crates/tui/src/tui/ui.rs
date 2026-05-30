@@ -4136,6 +4136,7 @@ fn queued_message_content_for_app(
         &message.display,
         &app.workspace,
         cwd,
+        app.mention_walk_depth,
     );
     if let Some(skill_instruction) = message.skill_instruction.as_ref() {
         format!("{skill_instruction}\n\n---\n\nUser request: {user_request}")
@@ -4179,6 +4180,7 @@ async fn dispatch_user_message(
         &message.display,
         &app.workspace,
         cwd.clone(),
+        app.mention_walk_depth,
     );
     let content = queued_message_content_for_app(app, &message, cwd);
     let message_index = app.api_messages.len();
@@ -5388,6 +5390,7 @@ async fn steer_user_message(
         &message.display,
         &app.workspace,
         cwd.clone(),
+        app.mention_walk_depth,
     );
     let content = queued_message_content_for_app(app, &message, cwd);
     let message_index = app.api_messages.len();
@@ -5634,6 +5637,7 @@ fn build_pending_input_preview(app: &App) -> PendingInputPreview {
         &app.input,
         &app.workspace,
         std::env::current_dir().ok(),
+        app.mention_walk_depth,
     )
     .into_iter()
     .map(|item| {

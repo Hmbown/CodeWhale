@@ -1216,7 +1216,9 @@ pub struct App {
     #[allow(dead_code)]
     pub compact_threshold: usize,
     pub max_input_history: usize,
+    pub mention_walk_depth: usize,
     pub mention_menu_limit: usize,
+    pub mention_menu_behavior: crate::settings::MentionMenuBehavior,
     pub allow_shell: bool,
     pub max_subagents: usize,
     /// Cached sub-agent snapshots for UI views.
@@ -1890,7 +1892,9 @@ impl App {
             file_tree_visible: false,
             compact_threshold,
             max_input_history,
+            mention_walk_depth: settings.mention_walk_depth,
             mention_menu_limit: settings.mention_menu_limit,
+            mention_menu_behavior: settings.mention_menu_behavior.clone(),
             allow_shell,
             max_subagents,
             subagent_cache: Vec::new(),
