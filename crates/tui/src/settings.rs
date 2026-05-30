@@ -230,6 +230,11 @@ pub struct Settings {
     pub cost_currency: String,
     /// Maximum number of input history entries to save
     pub max_input_history: usize,
+    /// Maximum number of @-mention popup entries returned to the renderer.
+    /// Default: 128. The composer widget paginates by terminal height, so
+    /// this only needs to be high enough to encompass the full candidate list.
+    #[serde(default = "default_mention_menu_limit")]
+    pub mention_menu_limit: usize,
     /// Default provider override (e.g. "deepseek", "openai").
     pub default_provider: Option<String>,
     /// Default model to use
@@ -312,6 +317,10 @@ fn default_mention_menu_limit() -> usize {
     128
 }
 
+fn default_mention_menu_limit() -> usize {
+    128
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -345,6 +354,7 @@ impl Default for Settings {
             context_panel: false,
             cost_currency: "usd".to_string(),
             max_input_history: 100,
+            mention_menu_limit: default_mention_menu_limit(),
             default_provider: None,
             default_model: None,
             reasoning_effort: None,
