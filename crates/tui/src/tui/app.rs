@@ -1816,11 +1816,11 @@ impl App {
                 // drop the model into a session with context already
                 // typed). Cursor lands at the end so Enter sends as-is.
                 Some(InitialInput::Prefill(text)) if !text.is_empty() => {
-                    let cursor = text.len();
+                    let cursor = text.chars().count();
                     (text, cursor, false)
                 }
                 Some(InitialInput::Submit(text)) if !text.is_empty() => {
-                    let cursor = text.len();
+                    let cursor = text.chars().count();
                     (text, cursor, true)
                 }
                 _ => (String::new(), 0, false),
@@ -4882,15 +4882,15 @@ mod tests {
     fn initial_input_submit_marks_startup_dispatch() {
         let mut options = test_options(false);
         options.initial_input = Some(InitialInput::Submit(
-            "Read the project and wait for instructions".to_string(),
+            "阅读项目 and wait for instructions".to_string(),
         ));
 
         let app = App::new(options, &Config::default());
 
-        assert_eq!(app.input, "Read the project and wait for instructions");
+        assert_eq!(app.input, "阅读项目 and wait for instructions");
         assert_eq!(
             app.cursor_position,
-            "Read the project and wait for instructions".chars().count()
+            "阅读项目 and wait for instructions".chars().count()
         );
         assert!(app.auto_submit_initial_input);
     }

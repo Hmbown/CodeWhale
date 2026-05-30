@@ -525,18 +525,7 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
         persistence_actor::init_actor(handle);
     }
 
-    if app.auto_submit_initial_input {
-        app.auto_submit_initial_input = false;
-        if app.onboarding == OnboardingState::None {
-            if let Some(input) = app.submit_input() {
-                let queued = build_queued_message(&mut app, input);
-                dispatch_user_message(&mut app, config, &engine_handle, queued).await?;
-            }
-        } else if app.status_message.is_none() && !app.input.trim().is_empty() {
-            app.status_message =
-                Some("Initial prompt ready; complete setup, then press Enter".to_string());
-        }
-    }
+    submit_initial_input_if_ready(&mut app, config, &engine_handle).await?;
 
     let result = run_event_loop(
         &mut terminal,
@@ -2460,6 +2449,7 @@ async fn run_event_loop(
                     }
                     _ => {}
                 }
+                submit_initial_input_if_ready(app, config, &engine_handle).await?;
                 continue;
             }
 
@@ -4118,6 +4108,35 @@ fn replace_matching_assistant_text(
 fn build_queued_message(app: &mut App, input: String) -> QueuedMessage {
     let skill_instruction = app.active_skill.take();
     QueuedMessage::new(input, skill_instruction)
+}
+
+const INITIAL_PROMPT_DEFERRED_STATUS: &str = "Initial prompt ready; complete setup to send it";
+
+async fn submit_initial_input_if_ready(
+    app: &mut App,
+    config: &Config,
+    engine_handle: &EngineHandle,
+) -> Result<()> {
+    if !app.auto_submit_initial_input {
+        return Ok(());
+    }
+
+    if app.onboarding != OnboardingState::None {
+        if app.status_message.is_none() && !app.input.trim().is_empty() {
+            app.status_message = Some(INITIAL_PROMPT_DEFERRED_STATUS.to_string());
+        }
+        return Ok(());
+    }
+
+    app.auto_submit_initial_input = false;
+    if let Some(input) = app.submit_input() {
+        if app.status_message.as_deref() == Some(INITIAL_PROMPT_DEFERRED_STATUS) {
+            app.status_message = None;
+        }
+        let queued = build_queued_message(app, input);
+        dispatch_user_message(app, config, engine_handle, queued).await?;
+    }
+    Ok(())
 }
 
 fn queue_current_draft_for_next_turn(app: &mut App) -> bool {
