@@ -1252,28 +1252,7 @@ impl Engine {
         let mut plugin_tool_names: std::collections::HashSet<String> =
             std::collections::HashSet::new();
         if let Some(ref mut tool_registry) = tool_registry {
-            let names_before: std::collections::HashSet<String> = tool_registry
-                .names()
-                .into_iter()
-                .map(|s| s.to_string())
-                .collect();
-
-            let plugin_dir = plugin_tools_dir(self.config.tools.as_ref());
-
-            tool_registry.load_plugins(&plugin_dir);
-
-            if let Some(ref tools_config) = self.config.tools
-                && let Some(ref overrides) = tools_config.overrides
-            {
-                tool_registry.apply_overrides(overrides, &plugin_dir);
-            }
-
-            let names_after: std::collections::HashSet<String> = tool_registry
-                .names()
-                .into_iter()
-                .map(|s| s.to_string())
-                .collect();
-            plugin_tool_names = &names_after - &names_before;
+            plugin_tool_names = configure_plugin_tools(tool_registry, self.config.tools.as_ref());
         }
 
         let mcp_tools = if self.config.features.enabled(Feature::Mcp) {
@@ -2169,6 +2148,33 @@ fn plugin_tools_dir(tools_config: Option<&crate::config::ToolsConfig>) -> PathBu
         return PathBuf::from(shellexpand::tilde(custom_dir).as_ref());
     }
     default_plugin_tools_dir()
+}
+
+fn configure_plugin_tools(
+    tool_registry: &mut crate::tools::ToolRegistry,
+    tools_config: Option<&crate::config::ToolsConfig>,
+) -> std::collections::HashSet<String> {
+    let names_before: std::collections::HashSet<String> = tool_registry
+        .names()
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect();
+
+    let plugin_dir = plugin_tools_dir(tools_config);
+    tool_registry.load_plugins(&plugin_dir);
+
+    if let Some(tools_config) = tools_config
+        && let Some(ref overrides) = tools_config.overrides
+    {
+        tool_registry.apply_overrides(overrides, &plugin_dir);
+    }
+
+    let names_after: std::collections::HashSet<String> = tool_registry
+        .names()
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect();
+    &names_after - &names_before
 }
 
 fn system_prompt_hash(prompt: Option<&SystemPrompt>) -> u64 {

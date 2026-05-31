@@ -751,6 +751,29 @@ echo hello
     }
 
     #[test]
+    fn test_scan_plugin_dir_returns_files_sorted_by_name() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("z-plugin.sh"),
+            "# name: z-plugin\n# description: z\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("a-plugin.sh"),
+            "# name: a-plugin\n# description: a\n",
+        )
+        .unwrap();
+
+        let discovered = scan_plugin_dir(dir.path());
+
+        let names: Vec<_> = discovered
+            .iter()
+            .map(|(_, meta)| meta.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["a-plugin", "z-plugin"]);
+    }
+
+    #[test]
     fn test_load_plugin_tools_creates_tools() {
         let dir = TempDir::new().unwrap();
         std::fs::write(
