@@ -242,6 +242,40 @@ fn test_write_stdin_streams_output() {
 }
 
 #[test]
+#[cfg(unix)]
+fn background_tty_command_has_controlling_terminal() {
+    let tmp = tempdir().expect("tempdir");
+    let mut manager = ShellManager::new(tmp.path().to_path_buf());
+
+    let result = manager
+        .execute_with_options(
+            "sh -c 'exec 3<>/dev/tty && printf tty-ok && exec 3>&-'",
+            None,
+            5000,
+            true,
+            None,
+            true,
+            Some(ExecutionSandboxPolicy::DangerFullAccess),
+        )
+        .expect("execute tty command");
+
+    let task_id = result
+        .task_id
+        .expect("background tty execution should return task_id");
+
+    let done = manager
+        .get_output(&task_id, true, 5000)
+        .expect("get tty command output");
+
+    assert_eq!(done.status, ShellStatus::Completed);
+    assert_eq!(done.exit_code, Some(0));
+    assert!(
+        done.stdout.contains("tty-ok"),
+        "tty output should confirm /dev/tty opened; got {done:?}"
+    );
+}
+
+#[test]
 fn test_job_list_poll_cancel_and_stale_snapshot() {
     let tmp = tempdir().expect("tempdir");
     let mut manager = ShellManager::new(tmp.path().to_path_buf());
