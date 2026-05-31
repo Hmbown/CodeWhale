@@ -9,52 +9,109 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 
+/// All events that can be emitted through the hook system.
+///
+/// Each variant represents a distinct lifecycle or streaming event. The enum is
+/// serialised with a `"type"` discriminator using `snake_case` naming (e.g.
+/// `"response_start"`, `"tool_lifecycle"`), making it easy to consume from
+/// JSON-based log files or webhook receivers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HookEvent {
+    /// A new response stream has started.
     ResponseStart {
+        /// Unique identifier for the response being streamed.
         response_id: String,
     },
+    /// A chunk of text has been received for an in-progress response.
     ResponseDelta {
+        /// Unique identifier for the response being streamed.
         response_id: String,
+        /// The incremental text content of this chunk.
         delta: String,
     },
+    /// A response stream has finished.
     ResponseEnd {
+        /// Unique identifier for the response that completed.
         response_id: String,
     },
+    /// A tool invocation has transitioned to a new phase (e.g. start, end, error).
     ToolLifecycle {
+        /// Identifier of the response under which the tool was invoked.
         response_id: String,
+        /// Name of the tool (e.g. `"shell"`, `"read_file"`).
         tool_name: String,
+        /// Current phase of the tool execution (e.g. `"start"`, `"end"`).
         phase: String,
+        /// Arbitrary structured payload associated with this phase.
         payload: Value,
     },
+    /// A background job has transitioned to a new phase.
     JobLifecycle {
+        /// Unique identifier of the job.
         job_id: String,
+        /// Current phase of the job (e.g. `"queued"`, `"running"`, `"done"`).
         phase: String,
+        /// Optional progress percentage (0-100).
         progress: Option<u8>,
+        /// Optional human-readable detail about the current phase.
         detail: Option<String>,
     },
+    /// An approval request has transitioned to a new phase.
     ApprovalLifecycle {
+        /// Unique identifier of the approval request.
         approval_id: String,
+        /// Current phase (e.g. `"requested"`, `"approved"`, `"denied"`).
         phase: String,
+        /// Optional reason explaining the current phase.
         reason: Option<String>,
     },
+    /// A catch-all variant that wraps an arbitrary [`EventFrame`].
+    ///
+    /// Use this when you need to forward a protocol-level event frame without
+    /// mapping it to a more specific variant.
     GenericEventFrame {
+        /// The raw event frame to forward.
         frame: EventFrame,
     },
 }
 
 impl HookEvent {
+    /// Serialise this event into a [`serde_json::Value`].
+    ///
+    /// Returns a JSON object with the `"type"` discriminator and all variant
+    /// fields. If serialisation fails (which should be extremely rare), a
+    /// fallback `{"type":"serialization_error"}` value is returned instead of
+    /// panicking.
     pub fn to_json(&self) -> Value {
         serde_json::to_value(self).unwrap_or_else(|_| json!({"type":"serialization_error"}))
     }
 }
 
+/// A destination that can receive [`HookEvent`]s.
+///
+/// Implementors handle the transport-specific details of delivering events
+/// (writing to stdout, appending to a file, POSTing to a webhook, etc.).
+/// The [`HookDispatcher`] fans out every event to all registered sinks, so a
+/// single process can log to multiple destinations simultaneously.
+///
+/// Sinks are expected to be **best-effort**: implementations should avoid
+/// panicking and should return an [`anyhow::Error`] only for truly unexpected
+/// failures. [`HookDispatcher::emit`] discards individual sink errors so hook
+/// delivery failures do not abort the application.
 #[async_trait]
 pub trait HookSink: Send + Sync {
+    /// Deliver a single event to this sink.
+    ///
+    /// Implementations should be resilient to transient failures (e.g. a
+    /// missing listener) and should not block the caller for extended periods.
     async fn emit(&self, event: &HookEvent) -> Result<()>;
 }
 
+/// A [`HookSink`] that prints each event as a single JSON line to stdout.
+///
+/// Useful for local development and debugging. Events are printed via
+/// [`println!`] so they appear interleaved with other program output.
 #[derive(Default)]
 pub struct StdoutHookSink;
 
@@ -66,11 +123,20 @@ impl HookSink for StdoutHookSink {
     }
 }
 
+/// A [`HookSink`] that appends each event as a JSON line to a file.
+///
+/// The file is created (along with any missing parent directories) on the
+/// first emitted event. Each line is a JSON object of the form
+/// `{"at": "<ISO 8601 timestamp>", "event": {...}}`.
 pub struct JsonlHookSink {
     path: PathBuf,
 }
 
 impl JsonlHookSink {
+    /// Create a new sink that writes to the file at `path`.
+    ///
+    /// Parent directories are created lazily on the first [`HookSink::emit`]
+    /// call.
     pub fn new(path: PathBuf) -> Self {
         Self { path }
     }
@@ -105,12 +171,18 @@ impl HookSink for JsonlHookSink {
     }
 }
 
+/// A [`HookSink`] that POSTs each event as JSON to a remote HTTP endpoint.
+///
+/// The request body is `{"at": "<ISO 8601 timestamp>", "event": {...}}`.
+/// Failed requests are retried up to 2 times with exponential back-off
+/// (200 ms, 400 ms). After exhausting retries the error is propagated.
 pub struct WebhookHookSink {
     url: String,
     client: reqwest::Client,
 }
 
 impl WebhookHookSink {
+    /// Create a new sink that sends events to the given `url`.
     pub fn new(url: String) -> Self {
         Self {
             url,
@@ -209,16 +281,27 @@ impl HookSink for UnixSocketHookSink {
     }
 }
 
+/// Fans out [`HookEvent`]s to a collection of [`HookSink`]s.
+///
+/// Register one or more sinks via [`add_sink`](HookDispatcher::add_sink),
+/// then call [`emit`](HookDispatcher::emit) to broadcast an event to all of
+/// them. If a sink returns an error it is silently ignored so that a failing
+/// sink does not prevent remaining sinks from receiving the event.
 #[derive(Default, Clone)]
 pub struct HookDispatcher {
     sinks: Vec<Arc<dyn HookSink>>,
 }
 
 impl HookDispatcher {
+    /// Register a new sink that will receive all subsequently emitted events.
     pub fn add_sink(&mut self, sink: Arc<dyn HookSink>) {
         self.sinks.push(sink);
     }
 
+    /// Broadcast an event to every registered sink.
+    ///
+    /// Errors from individual sinks are silently discarded so that one failing
+    /// sink does not block the others.
     pub async fn emit(&self, event: HookEvent) {
         for sink in &self.sinks {
             let _ = sink.emit(&event).await;

@@ -1,47 +1,82 @@
+/// Identifies which pane is currently focused in the TUI layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pane {
+    /// Main chat/conversation pane.
     Chat,
+    /// Diff viewer pane.
     Diff,
+    /// Task list pane.
     Tasks,
+    /// Sub-agent list pane.
     Agents,
+    /// Status overview pane.
     Status,
+    /// Background jobs pane.
     Jobs,
 }
 
+/// Events fed into the UI state machine from user input or runtime updates.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UiEvent {
+    /// A key was pressed by the user.
     KeyPressed(char),
+    /// The user submitted a prompt string.
     PromptSubmitted(String),
+    /// A partial response arrived from the model.
     ResponseDelta(String),
+    /// A tool began executing.
     ToolStarted(String),
+    /// A tool finished executing.
     ToolFinished(String),
+    /// A background job was queued.
     JobQueued(String),
+    /// A background job reported progress.
     JobProgress { job_id: String, progress: u8 },
+    /// A background job completed.
     JobCompleted(String),
+    /// An exec approval was requested from the user.
     ApprovalRequested(String),
+    /// An exec approval was resolved.
     ApprovalResolved(String),
+    /// The user requested a pause.
     PauseRequested,
+    /// The user requested a resume.
     ResumeRequested,
+    /// Periodic tick for background work scheduling.
     Tick,
 }
 
+/// Side effects emitted by the state machine in response to events.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UiEffect {
+    /// The UI should re-render.
     Render,
+    /// A checkpoint should be persisted to the state store.
     PersistCheckpoint,
+    /// A background refresh should be scheduled.
     ScheduleBackgroundRefresh,
+    /// A status line message should be emitted to the footer.
     EmitStatusLine(String),
 }
 
+/// The complete UI state, driven by [`UiEvent`] via [`UiState::reduce`].
 #[derive(Debug, Clone)]
 pub struct UiState {
+    /// Currently active/focused pane.
     pub active_pane: Pane,
+    /// Whether the UI is paused (no new work dispatched).
     pub paused: bool,
+    /// Most recent partial response delta from the model.
     pub last_response_delta: Option<String>,
+    /// Name of the currently executing tool, if any.
     pub active_tool: Option<String>,
+    /// Number of tasks waiting to be processed.
     pub pending_tasks: usize,
+    /// Number of active background jobs.
     pub active_jobs: usize,
+    /// Number of pending approval requests.
     pub pending_approvals: usize,
+    /// Current status line text shown in the footer.
     pub status_line: String,
 }
 
@@ -61,6 +96,7 @@ impl Default for UiState {
 }
 
 impl UiState {
+    /// Process a UI event, updating internal state and returning side effects.
     pub fn reduce(&mut self, event: UiEvent) -> Vec<UiEffect> {
         match event {
             UiEvent::KeyPressed('1') => {
@@ -177,6 +213,7 @@ impl UiState {
         }
     }
 
+    /// Produce a human-readable summary of the current state for debugging.
     pub fn snapshot(&self) -> String {
         format!(
             "pane={:?};paused={};pending_tasks={};active_jobs={};pending_approvals={};active_tool={};status={}",

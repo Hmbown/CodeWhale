@@ -7,83 +7,130 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+/// Configuration for a single MCP server process.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerConfig {
+    /// Unique server identifier used for tool name qualification.
     pub name: String,
+    /// Path or name of the server executable.
     pub command: String,
+    /// Command-line arguments passed to the server process.
     #[serde(default)]
     pub args: Vec<String>,
+    /// Environment variables set for the server process.
     #[serde(default)]
     pub env: HashMap<String, String>,
+    /// Whether this server should be started. Disabled servers are skipped.
     #[serde(default = "default_true")]
     pub enabled: bool,
 }
 
+/// Filter controlling which tools from an MCP server are exposed.
+///
+/// When `allow` is empty, all tools are permitted (unless denied).
+/// `deny` takes precedence over `allow`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ToolFilter {
+    /// Tool names to expose. Empty means expose all.
     #[serde(default)]
     pub allow: Vec<String>,
+    /// Tool names to exclude. Takes precedence over `allow`.
     #[serde(default)]
     pub deny: Vec<String>,
 }
 
+/// A complete MCP server definition including config and tool filter.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerDefinition {
+    /// Server process configuration.
     pub config: McpServerConfig,
+    /// Tool filter controlling which tools are exposed.
     #[serde(default)]
     pub filter: ToolFilter,
 }
 
+/// Status of an individual MCP server during startup.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum McpStartupStatus {
+    /// Server process is starting.
     Starting,
+    /// Server is ready to accept tool calls.
     Ready,
+    /// Server failed to start.
     Failed { error: String },
+    /// Server startup was cancelled (e.g., disabled in config).
     Cancelled,
 }
 
+/// Status update for a single MCP server during startup.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpStartupUpdateEvent {
+    /// Name of the server this update pertains to.
     pub server_name: String,
+    /// Current startup status.
     pub status: McpStartupStatus,
 }
 
+/// Record of an MCP server that failed to start.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpStartupFailure {
+    /// Name of the server that failed.
     pub server_name: String,
+    /// Error message describing the failure.
     pub error: String,
 }
 
+/// Summary emitted after all MCP servers have completed startup.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpStartupCompleteEvent {
+    /// Names of servers that started successfully.
     pub ready: Vec<String>,
+    /// Servers that failed with error details.
     pub failed: Vec<McpStartupFailure>,
+    /// Names of servers that were skipped (disabled).
     pub cancelled: Vec<String>,
 }
 
+/// Describes a single tool provided by an MCP server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpToolDescriptor {
+    /// Name of the server providing this tool.
     pub server_name: String,
+    /// Original tool name as reported by the server.
     pub tool_name: String,
+    /// Fully qualified name (e.g., `mcp__server__tool`).
     pub qualified_name: String,
+    /// Human-readable description of what the tool does.
     pub description: Option<String>,
 }
 
+/// Describes a resource provided by an MCP server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpResourceDescriptor {
+    /// Name of the server providing this resource.
     pub server_name: String,
+    /// URI identifying the resource.
     pub uri: String,
+    /// Human-readable description.
     pub description: Option<String>,
 }
 
+/// Trait abstracting an MCP client connection.
+///
+/// Implementations handle communication with a single MCP server process.
 pub trait McpManagedClient: Send + Sync {
+    /// List all tools provided by this server.
     fn list_tools(&self) -> Result<Vec<McpToolDescriptor>>;
+    /// Invoke a tool by name with the given arguments.
     fn call_tool(&self, tool_name: &str, arguments: Value) -> Result<Value>;
+    /// List all resources provided by this server.
     fn list_resources(&self) -> Result<Vec<McpResourceDescriptor>>;
+    /// Read a resource by URI.
     fn read_resource(&self, uri: &str) -> Result<Value>;
 }
 
+/// A simple in-memory MCP client for testing and default server stubs.
 #[derive(Debug, Default)]
 pub struct InMemoryMcpClient {
     tools: HashMap<String, Value>,
@@ -91,11 +138,13 @@ pub struct InMemoryMcpClient {
 }
 
 impl InMemoryMcpClient {
+    /// Register a tool with a fixed response value.
     pub fn with_tool(mut self, name: &str, sample_result: Value) -> Self {
         self.tools.insert(name.to_string(), sample_result);
         self
     }
 
+    /// Register a resource with a fixed data value.
     pub fn with_resource(mut self, uri: &str, data: Value) -> Self {
         self.resources.insert(uri.to_string(), data);
         self
@@ -143,6 +192,7 @@ impl McpManagedClient for InMemoryMcpClient {
     }
 }
 
+/// Manages multiple MCP server connections and their tool/resource registrations.
 #[derive(Default)]
 pub struct McpManager {
     configs: HashMap<String, (McpServerConfig, ToolFilter)>,
@@ -150,6 +200,7 @@ pub struct McpManager {
 }
 
 impl McpManager {
+    /// Register an MCP server with its config, tool filter, and client implementation.
     pub fn register_server(
         &mut self,
         config: McpServerConfig,
@@ -160,6 +211,9 @@ impl McpManager {
         self.configs.insert(config.name.clone(), (config, filter));
     }
 
+    /// Start all registered servers, emitting status updates via the callback.
+    ///
+    /// Returns a summary of which servers are ready, failed, or cancelled.
     pub fn start_all<F>(&self, mut emit: F) -> McpStartupCompleteEvent
     where
         F: FnMut(McpStartupUpdateEvent),
@@ -207,6 +261,7 @@ impl McpManager {
         }
     }
 
+    /// Stop a running server by removing its client.
     pub fn stop_server(&mut self, server_name: &str) -> Result<()> {
         self.clients
             .remove(server_name)
@@ -214,6 +269,7 @@ impl McpManager {
         Ok(())
     }
 
+    /// Remove a server entirely (config and client).
     pub fn unregister_server(&mut self, server_name: &str) -> Result<()> {
         let had_config = self.configs.remove(server_name).is_some();
         self.clients.remove(server_name);
@@ -223,6 +279,7 @@ impl McpManager {
         Ok(())
     }
 
+    /// List all tools from all running servers, applying tool filters.
     pub fn list_tools(&self) -> Result<Vec<McpToolDescriptor>> {
         let mut out = Vec::new();
         for (server_name, (_, filter)) in &self.configs {
@@ -246,6 +303,7 @@ impl McpManager {
         Ok(out)
     }
 
+    /// Call a tool on a specific server by name.
     pub fn call_tool(&self, server_name: &str, tool_name: &str, arguments: Value) -> Result<Value> {
         let client = self
             .clients
@@ -254,6 +312,7 @@ impl McpManager {
         client.call_tool(tool_name, arguments)
     }
 
+    /// Call a tool using its fully qualified name (e.g., `mcp__server__tool`).
     pub fn call_qualified_tool(
         &self,
         qualified_tool_name: &str,
@@ -264,6 +323,7 @@ impl McpManager {
         self.call_tool(&server_name, &tool_name, arguments)
     }
 
+    /// List all resources from all running servers.
     pub fn list_resources(&self) -> Result<Vec<McpResourceDescriptor>> {
         let mut out = Vec::new();
         for server_name in self.configs.keys() {
@@ -278,6 +338,7 @@ impl McpManager {
         Ok(out)
     }
 
+    /// Read a resource from a specific server.
     pub fn read_resource(&self, server_name: &str, uri: &str) -> Result<Value> {
         let client = self
             .clients
@@ -286,6 +347,7 @@ impl McpManager {
         client.read_resource(uri)
     }
 
+    /// Generate sandbox state update notices for all registered servers.
     pub fn update_sandbox_state(&self, sandbox_mode: &str, cwd: &str) -> Result<Vec<Value>> {
         let mut notices = Vec::new();
         for server_name in self.configs.keys() {
@@ -434,6 +496,10 @@ struct StdioMcpState {
     lifecycle_state: String,
 }
 
+/// Run an MCP stdio server that reads JSON-RPC requests from stdin and writes responses to stdout.
+///
+/// Returns the final server definitions after the session ends (useful for persisting
+/// runtime changes like server registrations).
 pub fn run_stdio_server(
     initial_definitions: Vec<McpServerDefinition>,
 ) -> Result<Vec<McpServerDefinition>> {

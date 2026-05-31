@@ -70,7 +70,7 @@ async function contributorCount(res: Response): Promise<number> {
   return MIN_KNOWN_CONTRIBUTORS;
 }
 
-function lastPageFromLink(link: string | null): number | undefined {
+export function lastPageFromLink(link: string | null): number | undefined {
   if (!link) return undefined;
 
   for (const part of link.split(",")) {

@@ -121,6 +121,52 @@ instead of the Harvest path, the highest-leverage things you can do are:
    these without prior discussion are unlikely to merge directly even
    when the change is well-implemented.
 
+## Layered and EPIC-Sized Work
+
+Some architecture work is too large for one PR but still needs to be built in
+dependent layers. For those changes, use this workflow:
+
+1. Start with a tracking issue or EPIC when the work spans multiple PRs. Name
+   the intended slices and state what each slice is not trying to close yet.
+2. Keep each implementation PR focused on one behavior boundary.
+3. Later layers may stay in your fork or open as draft PRs while the lower
+   layer is still moving. Draft stacked PR titles or descriptions should say
+   `Draft / depends on #NNNN`.
+4. A dependent PR is not ready for merge review until the lower layer has
+   landed, the branch has been rebased onto current `main`, and the PR targets
+   `main`.
+5. The PR body should identify which earlier PR it builds on, what is in scope,
+   what is explicitly out of scope, which issues it references, and which local
+   commands were run.
+6. Use `Closes #...` only when the slice fully satisfies an issue. Use
+   `Refs #...` with a short `(partial)` note when the PR advances a broad issue
+   but leaves follow-up work.
+7. Structured commits are fine during review. Maintainers may squash or harvest
+   at merge time, with contributor credit preserved through authorship,
+   co-author trailers, changelog entries, or PR/issue comments.
+
+Before asking for merge review on a layered PR, check that it is:
+
+- rebased onto current `main`
+- marked ready for review, not draft
+- focused to one behavior boundary
+- backed by local command evidence in the PR body
+- green in CI, or has any remaining red lane clearly explained
+- covered by round-trip or migration-preservation tests when it changes config
+  or schema behavior
+- referencing broad issues as partial unless it really closes them
+
+For layered work, a useful PR description shape is:
+
+```text
+Summary:
+Scope:
+Not in this slice:
+Builds on:
+Issues:
+Validation:
+```
+
 ## Agent-Assisted Improvements
 
 CodeWhale is allowed to help improve CodeWhale, but the contribution still has

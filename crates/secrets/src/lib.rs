@@ -48,28 +48,57 @@ pub enum SecretsError {
     },
 }
 
-/// Abstract secret store; concrete implementations may use the OS
-/// keyring, a JSON file under `~/.deepseek/secrets/`, or an in-memory
-/// map (tests).
+/// Abstract secret store trait.
+///
+/// Concrete implementations may use the OS keyring ([`DefaultKeyringStore`]),
+/// a JSON file under `~/.deepseek/secrets/` ([`FileKeyringStore`]), or an
+/// in-memory map for tests ([`InMemoryKeyringStore`]).
+///
+/// All implementations must be [`Send`] + [`Sync`] so they can be shared
+/// across threads via [`Arc`].
 pub trait KeyringStore: Send + Sync {
-    /// Read a secret. Returns `Ok(None)` if no entry exists.
+    /// Read a secret by key.
+    ///
+    /// Returns `Ok(None)` if no entry exists for the given key. Returns
+    /// `Err` only on backend failures (I/O errors, keyring access issues).
     fn get(&self, key: &str) -> Result<Option<String>, SecretsError>;
-    /// Write a secret, replacing any existing value.
+
+    /// Write a secret, replacing any existing value for the same key.
+    ///
+    /// Creates the backing store (e.g. the JSON file) on first write if
+    /// it does not yet exist.
     fn set(&self, key: &str, value: &str) -> Result<(), SecretsError>;
-    /// Remove a secret. Should not error if the entry is absent.
+
+    /// Remove a secret by key.
+    ///
+    /// Implementations should succeed (no-op) if the entry is already absent
+    /// rather than returning an error.
     fn delete(&self, key: &str) -> Result<(), SecretsError>;
-    /// Short, human-readable name of the backend (used by `doctor`).
+
+    /// Short, human-readable label for this backend.
+    ///
+    /// Used by diagnostic output (e.g. `doctor` command) to indicate which
+    /// storage backend is active. Examples: `"file-based (~/.deepseek/secrets/)"`,
+    /// `"system keyring"`, `"in-memory (test)"`.
     fn backend_name(&self) -> &'static str;
 }
 
-/// OS keyring backend (macOS Keychain, Windows Credential Manager,
-/// Linux Secret Service / kwallet). This backend is opt-in through
-/// [`SECRET_BACKEND_ENV`]. On platforms without a configured native
-/// keyring dependency, probing this backend returns an unsupported error so
-/// [`Secrets::auto_detect`] can fall back to [`FileKeyringStore`].
+/// OS-native keyring backend.
+///
+/// Wraps the platform credential store:
+/// - **macOS**: Keychain (via `security` framework)
+/// - **Windows**: Credential Manager
+/// - **Linux**: Secret Service (GNOME Keyring / kwallet via dbus)
+///
+/// This backend is opt-in -- set the [`SECRET_BACKEND_ENV`] environment
+/// variable to `system` or `keyring` to activate it. On platforms without
+/// a configured native keyring dependency, [`probe`](DefaultKeyringStore::probe)
+/// returns an unsupported error so [`Secrets::auto_detect`] can transparently
+/// fall back to [`FileKeyringStore`].
 #[derive(Debug, Clone)]
 pub struct DefaultKeyringStore {
-    /// Keyring service name (defaults to [`DEFAULT_SERVICE`]).
+    /// Keyring service name used to namespace stored credentials.
+    /// Defaults to [`DEFAULT_SERVICE`].
     service: String,
 }
 
@@ -186,9 +215,15 @@ fn unsupported_keyring_message() -> String {
     "system keyring backend is unsupported on this platform".to_string()
 }
 
-/// In-memory keyring (tests only).
+/// In-memory keyring store for tests.
+///
+/// Stores secrets in a [`HashMap`] protected by a [`Mutex`]. Not persisted
+/// to disk -- all entries are lost when the process exits. This is the
+/// preferred store for unit tests because it requires no filesystem setup
+/// and is safe to use in parallel test threads.
 #[derive(Debug, Default)]
 pub struct InMemoryKeyringStore {
+    /// Thread-safe map of key-value pairs.
     entries: Mutex<HashMap<String, String>>,
 }
 
@@ -229,12 +264,21 @@ impl KeyringStore for InMemoryKeyringStore {
     }
 }
 
-/// JSON-on-disk fallback for headless environments without a Secret
-/// Service / dbus. Stored at `<home>/.deepseek/secrets/secrets.json`
-/// with mode `0600`.
+/// JSON-on-disk secret store for headless environments.
+///
+/// This is the default backend. Secrets are serialised as a JSON object
+/// at `<home>/.deepseek/secrets/secrets.json` with Unix file mode `0600`
+/// (owner read/write only). The parent directory is created with mode `0700`
+/// if it does not exist.
+///
+/// On Unix, the store rejects files whose permissions are more permissive
+/// than `0600` (i.e. group or world bits are set). This prevents other
+/// users on the system from reading stored credentials. On Windows, the
+/// ACL model is too different to enforce programmatically; callers are
+/// responsible for placing the file in a per-user directory.
 #[derive(Debug, Clone)]
 pub struct FileKeyringStore {
-    /// Absolute path to the JSON file.
+    /// Absolute path to the JSON secrets file.
     path: PathBuf,
 }
 
@@ -376,28 +420,43 @@ fn secret_backend_selection(value: Option<&str>) -> SecretBackendSelection {
     }
 }
 
-/// High-level façade combining a [`KeyringStore`] with environment
-/// variable fallbacks.
+/// High-level facade combining a [`KeyringStore`] with environment variable fallbacks.
 ///
-/// Lookup precedence: **secret store → env → none**. Callers that also have
-/// a TOML config layer must wire that themselves at the very end of
-/// the chain.
+/// Lookup precedence: **secret store -> env -> none**. Callers that also
+/// have a TOML config layer must wire that themselves at the very end
+/// of the chain (the config crate handles this).
+///
+/// # Examples
+///
+/// ```no_run
+/// use codewhale_secrets::Secrets;
+///
+/// let secrets = Secrets::auto_detect();
+/// if let Some(key) = secrets.resolve("deepseek") {
+///     // use the API key
+/// }
+/// ```
 #[derive(Clone)]
 pub struct Secrets {
-    /// Underlying secret store.
+    /// Underlying secret store backend.
     pub store: Arc<dyn KeyringStore>,
-    /// Owner identifier within the secret store (typically "deepseek"); the
-    /// `key` parameter passed to `resolve` is mapped to a slot in the
-    /// store as-is, while envs are looked up by canonical name.
+    /// Owner identifier within the secret store (typically `"deepseek"`).
+    /// The `key` parameter passed to [`resolve`](Secrets::resolve) is
+    /// forwarded to the store as-is, while environment variables are
+    /// looked up by canonical provider name via [`env_for`].
     service: String,
 }
 
-/// Source layer that provided a resolved secret.
+/// Identifies which layer in the resolution chain supplied a secret.
+///
+/// Returned by [`Secrets::resolve_with_source`] so callers can
+/// distinguish whether a value came from the configured store or from
+/// a process environment variable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SecretSource {
-    /// The configured secret-store backend returned the secret.
+    /// The secret was returned by the configured [`KeyringStore`] backend.
     Keyring,
-    /// A process environment variable returned the secret.
+    /// The secret was found in a process environment variable.
     Env,
 }
 
@@ -411,7 +470,8 @@ impl std::fmt::Debug for Secrets {
 }
 
 impl Secrets {
-    /// Build a new façade around a store.
+    /// Build a new facade around the given store, using the
+    /// [`DEFAULT_SERVICE`] service name.
     #[must_use]
     pub fn new(store: Arc<dyn KeyringStore>) -> Self {
         Self {
@@ -420,10 +480,16 @@ impl Secrets {
         }
     }
 
-    /// Construct the default backend. The prompt-free default is
-    /// [`FileKeyringStore`] under `~/.deepseek/secrets/`. Set
-    /// [`SECRET_BACKEND_ENV`] to `system` or `keyring` to opt into the OS
-    /// credential store.
+    /// Auto-detect the best available backend based on the environment.
+    ///
+    /// Selection logic:
+    /// 1. If [`SECRET_BACKEND_ENV`] is set to `system`/`keyring`/`os`/`os-keyring`,
+    ///    probe the OS keyring. If the probe succeeds, use it; otherwise
+    ///    fall back to the file-based store with a warning.
+    /// 2. If the env var is unset, empty, or `file`/`local`/`json`, use
+    ///    the file-based store directly.
+    /// 3. If the env var is set to an unrecognised value, log a warning
+    ///    and use the file-based store.
     pub fn auto_detect() -> Self {
         match secret_backend_selection(std::env::var(SECRET_BACKEND_ENV).ok().as_deref()) {
             SecretBackendSelection::File => Self::file_backed_default(),
@@ -518,8 +584,32 @@ impl Secrets {
     }
 }
 
-/// Map a canonical provider name to its environment variable, returning
-/// the value if non-empty.
+/// Map a canonical provider name to its environment variable(s), returning
+/// the first non-empty value found.
+///
+/// Provider names are case-insensitive. Supported providers and their
+/// environment variables:
+///
+/// | Provider | Env var(s) |
+/// |---|---|
+/// | `deepseek` | `DEEPSEEK_API_KEY` |
+/// | `openrouter` | `OPENROUTER_API_KEY` |
+/// | `xiaomi-mimo` / `mimo` | `XIAOMI_MIMO_API_KEY`, `MIMO_API_KEY` |
+/// | `novita` | `NOVITA_API_KEY` |
+/// | `nvidia` / `nvidia-nim` / `nim` | `NVIDIA_API_KEY`, `NVIDIA_NIM_API_KEY`, `DEEPSEEK_API_KEY` |
+/// | `fireworks` | `FIREWORKS_API_KEY` |
+/// | `siliconflow` | `SILICONFLOW_API_KEY` |
+/// | `moonshot` / `kimi` | `MOONSHOT_API_KEY`, `KIMI_API_KEY` |
+/// | `sglang` | `SGLANG_API_KEY` |
+/// | `vllm` | `VLLM_API_KEY` |
+/// | `ollama` | `OLLAMA_API_KEY` |
+/// | `openai` | `OPENAI_API_KEY` |
+/// | `atlascloud` / `atlas` | `ATLASCLOUD_API_KEY` |
+/// | `volcengine` / `ark` | `VOLCENGINE_API_KEY`, `VOLCENGINE_ARK_API_KEY`, `ARK_API_KEY` |
+/// | `wanjie` / `wanjie-ark` | `WANJIE_ARK_API_KEY`, `WANJIE_API_KEY`, `WANJIE_MAAS_API_KEY` |
+///
+/// Returns `None` if the provider is not recognised or none of its
+/// candidate environment variables are set to a non-empty value.
 #[must_use]
 pub fn env_for(name: &str) -> Option<String> {
     let candidates: &[&str] = match name.to_ascii_lowercase().as_str() {

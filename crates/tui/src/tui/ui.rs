@@ -4500,19 +4500,36 @@ async fn dispatch_user_message(
     app: &mut App,
     config: &Config,
     engine_handle: &EngineHandle,
-    message: QueuedMessage,
+    mut message: QueuedMessage,
 ) -> Result<()> {
-    // #455 (observer-only): fire `message_submit` hooks before
-    // dispatch. Hooks see the user's display text via the
-    // `with_message` builder. Read-only — they can log, audit, or
-    // notify but cannot mutate the message that goes to the engine.
+    // #1364: run mutable `message_submit` hooks before dispatch. Hooks see the
+    // user's display text and may replace or block it before file mentions,
+    // skill wrapping, history, and model input are resolved.
     // Fast-path skip when no hooks configured.
     if app
         .hooks
         .has_hooks_for_event(crate::hooks::HookEvent::MessageSubmit)
     {
         let context = app.base_hook_context().with_message(&message.display);
-        let _ = app.execute_hooks(crate::hooks::HookEvent::MessageSubmit, &context);
+        let outcome = app
+            .hooks
+            .execute_message_submit_transform(&context, &message.display);
+        if let Some(warning) = outcome.warning() {
+            app.status_message = Some(warning.to_string());
+        }
+        match outcome {
+            crate::hooks::MessageSubmitOutcome::Unchanged { .. } => {}
+            crate::hooks::MessageSubmitOutcome::Replaced { text, .. } => {
+                message.display = text;
+            }
+            crate::hooks::MessageSubmitOutcome::Blocked { reason } => {
+                app.status_message = Some(reason);
+                app.is_loading = false;
+                app.dispatch_started_at = None;
+                app.runtime_turn_status = None;
+                return Ok(());
+            }
+        }
     }
 
     // Set immediately to prevent double-dispatch before TurnStarted event arrives.
