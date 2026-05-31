@@ -88,6 +88,26 @@ impl Default for ModelRegistry {
                 supports_reasoning: true,
             },
             ModelInfo {
+                id: "deepseek-ai/deepseek-v4-flash".to_string(),
+                provider: ProviderKind::Atlascloud,
+                aliases: vec![
+                    "deepseek-v4-flash".to_string(),
+                    "atlascloud-deepseek-v4-flash".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "deepseek-ai/deepseek-v4-pro".to_string(),
+                provider: ProviderKind::Atlascloud,
+                aliases: vec![
+                    "deepseek-v4-pro".to_string(),
+                    "atlascloud-deepseek-v4-pro".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
                 id: "deepseek-reasoner".to_string(),
                 provider: ProviderKind::WanjieArk,
                 aliases: vec![
@@ -432,6 +452,34 @@ mod tests {
 
         assert_eq!(resolved.resolved.provider, ProviderKind::NvidiaNim);
         assert_eq!(resolved.resolved.id, "deepseek-ai/deepseek-v4-flash");
+    }
+
+    #[test]
+    fn atlascloud_default_uses_namespaced_model_id() {
+        let registry = ModelRegistry::default();
+        let resolved = registry.resolve(None, Some(ProviderKind::Atlascloud));
+
+        assert_eq!(resolved.resolved.provider, ProviderKind::Atlascloud);
+        assert_eq!(resolved.resolved.id, "deepseek-ai/deepseek-v4-flash");
+        assert!(resolved.resolved.supports_reasoning);
+    }
+
+    #[test]
+    fn deepseek_v4_flash_alias_resolves_to_atlascloud_when_provider_hinted() {
+        let registry = ModelRegistry::default();
+        let resolved = registry.resolve(Some("deepseek-v4-flash"), Some(ProviderKind::Atlascloud));
+
+        assert_eq!(resolved.resolved.provider, ProviderKind::Atlascloud);
+        assert_eq!(resolved.resolved.id, "deepseek-ai/deepseek-v4-flash");
+    }
+
+    #[test]
+    fn deepseek_v4_pro_alias_resolves_to_atlascloud_when_provider_hinted() {
+        let registry = ModelRegistry::default();
+        let resolved = registry.resolve(Some("deepseek-v4-pro"), Some(ProviderKind::Atlascloud));
+
+        assert_eq!(resolved.resolved.provider, ProviderKind::Atlascloud);
+        assert_eq!(resolved.resolved.id, "deepseek-ai/deepseek-v4-pro");
     }
 
     #[test]
