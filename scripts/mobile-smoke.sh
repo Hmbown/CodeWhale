@@ -61,10 +61,12 @@ stop_server() {
     fi
 }
 
-# assert_status METHOD PATH [HEADER_NAME:HEADER_VALUE] EXPECTED_STATUS
+# assert_status METHOD PATH [HEADER_NAME:HEADER_VALUE] [JSON_BODY] EXPECTED_STATUS
 assert_status() {
-    local method="$1" path="$2" header="" expected=""
-    if [[ $# -eq 4 ]]; then
+    local method="$1" path="$2" header="" body="" expected=""
+    if [[ $# -eq 5 ]]; then
+        header="$3"; body="$4"; expected="$5"
+    elif [[ $# -eq 4 ]]; then
         header="$3"; expected="$4"
     else
         expected="$3"
@@ -74,6 +76,9 @@ assert_status() {
     local curl_args=(-sf -o /dev/null -w '%{http_code}' -X "$method")
     if [[ -n "$header" ]]; then
         curl_args+=(-H "$header")
+    fi
+    if [[ -n "$body" ]]; then
+        curl_args+=(-H "Content-Type: application/json" --data "$body")
     fi
 
     local actual
@@ -126,7 +131,7 @@ assert_status GET "/mobile" 401
 assert_body_contains GET "/mobile?token=${TOKEN}" "" "CodeWhale Mobile"
 assert_status GET "/v1/threads/summary" 401
 assert_status GET "/v1/threads/summary" "Authorization: Bearer ${TOKEN}" 200
-assert_status POST "/v1/approvals/no_such_id" "Authorization: Bearer ${TOKEN}" 404
+assert_status POST "/v1/approvals/no_such_id" "Authorization: Bearer ${TOKEN}" '{"decision":"allow"}' 404
 
 stop_server
 
