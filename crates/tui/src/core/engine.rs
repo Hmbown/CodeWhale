@@ -2002,11 +2002,11 @@ impl Engine {
         // system prompt so the agent can autonomously review them before
         // claiming the task is done (#2127).
         let gate_block = self.slop_ledger_gate_block();
-        if let Some(ref block) = gate_block {
-            if let Some(SystemPrompt::Text(prompt_text)) = &mut stable_prompt {
-                prompt_text.push_str("\n\n");
-                prompt_text.push_str(block);
-            }
+        if let Some(ref block) = gate_block
+            && let Some(SystemPrompt::Text(prompt_text)) = &mut stable_prompt
+        {
+            prompt_text.push_str("\n\n");
+            prompt_text.push_str(block);
         }
 
         let stable_hash = system_prompt_hash(stable_prompt.as_ref());

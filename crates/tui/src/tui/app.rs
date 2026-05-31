@@ -1003,19 +1003,14 @@ impl Default for ViewportState {
 }
 
 /// Verdict for a hunt (#2092).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum HuntVerdict {
+    #[default]
     Hunting,
     Hunted,
     Wounded,
     Escaped,
-}
-
-impl Default for HuntVerdict {
-    fn default() -> Self {
-        Self::Hunting
-    }
 }
 
 /// Hunt tracking state (#2092 — was GoalState).

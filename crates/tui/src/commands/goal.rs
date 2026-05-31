@@ -85,10 +85,8 @@ fn close_hunt(app: &mut App, verdict: HuntVerdict) -> CommandResult {
 
     let prev = app.hunt.verdict;
     let should_write_trophy = prev != verdict || !matches!(verdict, HuntVerdict::Hunted);
-    if should_write_trophy {
-        if let Err(err) = write_trophy_card(app, verdict) {
-            return CommandResult::error(err);
-        }
+    if should_write_trophy && let Err(err) = write_trophy_card(app, verdict) {
+        return CommandResult::error(err);
     }
     app.hunt.verdict = verdict;
 
