@@ -1023,7 +1023,7 @@ impl Engine {
         // failure is non-fatal (the helper logs at WARN).
         if self.config.snapshots_enabled {
             // Clone the user prompt now — `content` is moved into
-            // `user_text_message_with_turn_metadata` below, so we need
+            // `user_text_message_with_turn_metadata_for_route` below, so we need
             // a copy for both pre- and post-turn snapshot labels. The
             // label carries a truncated first line so `/restore`
             // listings are human-readable.
@@ -1044,7 +1044,7 @@ impl Engine {
         crate::retry_status::clear();
 
         // Clone user prompt for post-turn snapshot label before `content`
-        // is moved into `user_text_message_with_turn_metadata` below.
+        // is moved into `user_text_message_with_turn_metadata_for_route` below.
         let snapshot_prompt_post = content.clone();
 
         // Check if we have the appropriate client
