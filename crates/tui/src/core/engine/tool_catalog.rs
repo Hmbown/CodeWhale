@@ -436,13 +436,16 @@ fn suggest_tool_names(catalog: &[Tool], requested: &str, limit: usize) -> Vec<St
 
 pub(super) fn missing_tool_error_message(tool_name: &str, catalog: &[Tool]) -> String {
     let suggestions = suggest_tool_names(catalog, tool_name, 3);
+    let shell_hint = if is_shell_tool_name(tool_name) {
+        Some(shell_tool_allow_shell_hint())
+    } else {
+        None
+    };
     if suggestions.is_empty() {
-        if is_shell_tool_name(tool_name) {
+        if let Some(shell_hint) = shell_hint {
             return format!(
                 "Tool '{tool_name}' is not available in the current tool catalog. \
-                 Shell tools are gated by `allow_shell`; enable `allow_shell = true` \
-                 for trusted workspaces, switch to an auto-approve mode that permits shell access, \
-                 or use {TOOL_SEARCH_BM25_NAME} with a short query."
+                 {shell_hint}, or use {TOOL_SEARCH_BM25_NAME} with a short query."
             );
         }
         return format!(
@@ -451,11 +454,24 @@ pub(super) fn missing_tool_error_message(tool_name: &str, catalog: &[Tool]) -> S
         );
     }
 
+    let suggestion_text = format!("Did you mean: {}?", suggestions.join(", "));
+    if let Some(shell_hint) = shell_hint {
+        return format!(
+            "Tool '{tool_name}' is not available in the current tool catalog. \
+             {suggestion_text} {shell_hint}. \
+             You can also use {TOOL_SEARCH_BM25_NAME} to discover tools."
+        );
+    }
+
     format!(
         "Tool '{tool_name}' is not available in the current tool catalog. \
-         Did you mean: {}? You can also use {TOOL_SEARCH_BM25_NAME} to discover tools.",
-        suggestions.join(", ")
+         {suggestion_text} You can also use {TOOL_SEARCH_BM25_NAME} to discover tools."
     )
+}
+
+fn shell_tool_allow_shell_hint() -> &'static str {
+    "Shell tools are gated by `allow_shell`; enable `allow_shell = true` for trusted workspaces, \
+     or switch to an auto-approve mode that permits shell access"
 }
 
 fn is_shell_tool_name(tool_name: &str) -> bool {
@@ -466,7 +482,6 @@ fn is_shell_tool_name(tool_name: &str) -> bool {
             | "exec_shell_interact"
             | "task_shell_start"
             | "task_shell_wait"
-            | "task_shell_cancel"
     )
 }
 

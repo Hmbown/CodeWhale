@@ -2310,20 +2310,37 @@ fn missing_tool_error_message_includes_discovery_guidance_when_no_match() {
 
 #[test]
 fn missing_shell_tool_error_message_names_allow_shell_gate() {
-    let catalog = vec![Tool {
-        tool_type: None,
-        name: "read_file".to_string(),
-        description: "Read file contents".to_string(),
-        input_schema: json!({"type":"object","properties":{"path":{"type":"string"}}}),
-        allowed_callers: Some(vec!["direct".to_string()]),
-        defer_loading: Some(false),
-        input_examples: None,
-        strict: None,
-        cache_control: None,
-    }];
+    let catalog = vec![api_tool("read_file")];
+
+    for tool_name in [
+        "exec_shell",
+        "exec_shell_wait",
+        "exec_shell_interact",
+        "task_shell_start",
+        "task_shell_wait",
+    ] {
+        let message = missing_tool_error_message(tool_name, &catalog);
+        assert!(message.contains("not available in the current tool catalog"));
+        assert!(message.contains("allow_shell"), "{tool_name}: {message}");
+        assert!(
+            message.contains("trusted workspaces"),
+            "{tool_name}: {message}"
+        );
+        assert!(
+            message.contains(TOOL_SEARCH_BM25_NAME),
+            "{tool_name}: {message}"
+        );
+    }
+}
+
+#[test]
+fn missing_shell_tool_error_message_keeps_allow_shell_hint_with_suggestions() {
+    let catalog = vec![api_tool("exec")];
 
     let message = missing_tool_error_message("exec_shell", &catalog);
-    assert!(message.contains("not available in the current tool catalog"));
+
+    assert!(message.contains("Did you mean:"));
+    assert!(message.contains("exec"));
     assert!(message.contains("allow_shell"));
     assert!(message.contains("trusted workspaces"));
     assert!(message.contains(TOOL_SEARCH_BM25_NAME));
