@@ -585,6 +585,9 @@ struct ServeArgs {
     /// Start runtime HTTP/SSE API server with the built-in mobile control page
     #[arg(long)]
     mobile: bool,
+    /// Show a QR code for the mobile URL in the terminal (requires --mobile)
+    #[arg(long, requires = "mobile")]
+    qr: bool,
     /// Start ACP server over stdio for editor clients such as Zed
     #[arg(long)]
     acp: bool,
@@ -1004,6 +1007,7 @@ async fn main() -> Result<()> {
                             auth_token: args.auth_token,
                             insecure_no_auth: args.insecure_no_auth,
                             mobile: args.mobile,
+                            show_qr: args.qr,
                         },
                     )
                     .await

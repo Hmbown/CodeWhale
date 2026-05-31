@@ -1094,6 +1094,58 @@ pub const GRUVBOX_DARK_UI_THEME: UiTheme = UiTheme {
     tool_failed: Color::Rgb(0xfb, 0x49, 0x34),  // red
 };
 
+pub const CLAUDE_UI_THEME: UiTheme = UiTheme {
+    name: "claude",
+    mode: PaletteMode::Dark,
+    // Claude Code product surfaces — dark navy with warm undertones
+    surface_bg: Color::Rgb(0x18, 0x17, 0x15), // surface-dark
+    panel_bg: Color::Rgb(0x25, 0x23, 0x20),   // surface-dark-elevated
+    elevated_bg: Color::Rgb(0x1f, 0x1e, 0x1b), // surface-dark-soft (code blocks)
+    composer_bg: Color::Rgb(0x25, 0x23, 0x20),
+    selection_bg: Color::Rgb(0x30, 0x2d, 0x28),
+    header_bg: Color::Rgb(0x18, 0x17, 0x15),
+    footer_bg: Color::Rgb(0x18, 0x17, 0x15),
+    // Cream-tinted text hierarchy on dark
+    text_dim: Color::Rgb(0x72, 0x70, 0x6a),
+    text_hint: Color::Rgb(0x7d, 0x7a, 0x73),
+    text_muted: Color::Rgb(0xa0, 0x9d, 0x96), // on-dark-soft
+    text_body: Color::Rgb(0xfa, 0xf9, 0xf5),  // on-dark (cream white)
+    text_soft: Color::Rgb(0xd0, 0xcd, 0xc5),
+    border: Color::Rgb(0x30, 0x2d, 0x28),
+    // Coral primary (signature Anthropic accent), teal secondary
+    accent_primary: Color::Rgb(0xcc, 0x78, 0x5c), // coral
+    accent_secondary: Color::Rgb(0x5d, 0xb8, 0xa6), // accent-teal
+    accent_action: Color::Rgb(0xe8, 0xa5, 0x5a),  // amber
+    // Error / destructive — warm red
+    error_fg: Color::Rgb(0xe0, 0x60, 0x60),
+    error_hover: Color::Rgb(0xd9, 0x66, 0x66),
+    error_surface: Color::Rgb(0x2a, 0x1c, 0x1c),
+    error_border: Color::Rgb(0xe0, 0x60, 0x60),
+    error_text: Color::Rgb(0xe8, 0xb8, 0xb8),
+    // Status
+    warning: Color::Rgb(0xd4, 0xa0, 0x17), // amber
+    success: Color::Rgb(0x5d, 0xb8, 0x72), // green
+    info: Color::Rgb(0x5d, 0xb8, 0xa6),    // teal
+    // Mode badges
+    mode_agent: Color::Rgb(0xcc, 0x78, 0x5c), // coral
+    mode_yolo: Color::Rgb(0xc6, 0x45, 0x45),  // red
+    mode_plan: Color::Rgb(0xe8, 0xa5, 0x5a),  // amber
+    mode_goal: Color::Rgb(0x5d, 0xb8, 0x72),  // green
+    // Footer statusline
+    status_ready: Color::Rgb(0xa0, 0x9d, 0x96),
+    status_working: Color::Rgb(0x5d, 0xb8, 0xa6),
+    status_warning: Color::Rgb(0xd4, 0xa0, 0x17),
+    // Diff
+    diff_added_fg: Color::Rgb(0x5d, 0xb8, 0x72),
+    diff_deleted_fg: Color::Rgb(0xc6, 0x45, 0x45),
+    diff_added_bg: Color::Rgb(0x1a, 0x24, 0x1d),
+    diff_deleted_bg: Color::Rgb(0x24, 0x1a, 0x1a),
+    // Tool cells
+    tool_running: Color::Rgb(0x5d, 0xb8, 0xa6),
+    tool_success: Color::Rgb(0xa0, 0x9d, 0x96),
+    tool_failed: Color::Rgb(0xc6, 0x45, 0x45),
+};
+
 pub const MATRIX_UI_THEME: UiTheme = UiTheme {
     name: "matrix",
     mode: PaletteMode::Dark,
@@ -1211,6 +1263,7 @@ pub enum ThemeId {
     TokyoNight,
     Dracula,
     GruvboxDark,
+    Claude,
     Matrix,
     SolarizedLight,
 }
@@ -1231,6 +1284,7 @@ impl ThemeId {
             "tokyo-night" => Some(Self::TokyoNight),
             "dracula" => Some(Self::Dracula),
             "gruvbox-dark" => Some(Self::GruvboxDark),
+            "claude" => Some(Self::Claude),
             "matrix" => Some(Self::Matrix),
             "solarized-light" => Some(Self::SolarizedLight),
             _ => None,
@@ -1251,6 +1305,7 @@ impl ThemeId {
             Self::TokyoNight => "tokyo-night",
             Self::Dracula => "dracula",
             Self::GruvboxDark => "gruvbox-dark",
+            Self::Claude => "claude",
             Self::Matrix => "matrix",
             Self::SolarizedLight => "solarized-light",
         }
@@ -1269,6 +1324,7 @@ impl ThemeId {
             Self::TokyoNight => "Tokyo Night",
             Self::Dracula => "Dracula",
             Self::GruvboxDark => "Gruvbox Dark",
+            Self::Claude => "Claude",
             Self::Matrix => "Matrix",
             Self::SolarizedLight => "Solarized Light",
         }
@@ -1287,6 +1343,7 @@ impl ThemeId {
             Self::TokyoNight => "Deep blue/violet night palette",
             Self::Dracula => "Classic high-contrast purple",
             Self::GruvboxDark => "Vintage warm earth tones",
+            Self::Claude => "Warm navy & coral",
             Self::Matrix => "The Matrix films inspired theme",
             Self::SolarizedLight => {
                 "Solarized light — Light, calming palette on warm ivory — easy on the eyes"
@@ -1310,6 +1367,7 @@ impl ThemeId {
             Self::TokyoNight => TOKYO_NIGHT_UI_THEME,
             Self::Dracula => DRACULA_UI_THEME,
             Self::GruvboxDark => GRUVBOX_DARK_UI_THEME,
+            Self::Claude => CLAUDE_UI_THEME,
             Self::Matrix => MATRIX_UI_THEME,
             Self::SolarizedLight => SOLARIZED_LIGHT_UI_THEME,
         }
@@ -1327,6 +1385,7 @@ pub const SELECTABLE_THEMES: &[ThemeId] = &[
     ThemeId::TokyoNight,
     ThemeId::Dracula,
     ThemeId::GruvboxDark,
+    ThemeId::Claude,
     ThemeId::Matrix,
     ThemeId::SolarizedLight,
 ];
@@ -1374,6 +1433,7 @@ pub fn normalize_theme_name(value: &str) -> Option<&'static str> {
         "tokyo-night" | "tokyonight" | "tokyo" => Some("tokyo-night"),
         "dracula" => Some("dracula"),
         "gruvbox-dark" | "gruvbox" => Some("gruvbox-dark"),
+        "claude" => Some("claude"),
         "matrix" | "hacker" => Some("matrix"),
         "solarized-light" | "solarized" => Some("solarized-light"),
         _ => None,
@@ -1606,6 +1666,7 @@ pub const fn theme_remap_active(theme: ThemeId) -> bool {
             | ThemeId::TokyoNight
             | ThemeId::Dracula
             | ThemeId::GruvboxDark
+            | ThemeId::Claude
             | ThemeId::Matrix
             | ThemeId::SolarizedLight
     )

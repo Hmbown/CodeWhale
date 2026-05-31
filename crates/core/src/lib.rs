@@ -1010,9 +1010,15 @@ impl Runtime {
     ) -> Result<Value> {
         let fallback_cwd = cwd.display().to_string();
         let (command, policy_cwd, execution_kind) = call.execution_subject(&fallback_cwd);
+        let policy_tool = match &call.payload {
+            ToolPayload::LocalShell { .. } => "exec_shell",
+            _ => call.name.as_str(),
+        };
         let decision = self.exec_policy.check(ExecPolicyContext {
             command: &command,
             cwd: &policy_cwd,
+            tool: Some(policy_tool),
+            path: None,
             ask_for_approval: approval_mode,
             sandbox_mode: None,
         })?;

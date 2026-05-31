@@ -18,11 +18,6 @@ use uuid::Uuid;
 
 /// Maximum number of sessions to retain
 const MAX_SESSIONS: usize = 50;
-/// Maximum number of messages to persist per session (#402 P0).
-/// Beyond this limit, the oldest messages are dropped and a truncation
-/// note is prepended to the system prompt. Keeps session files bounded
-/// so save/load remains fast even for long-running conversations.
-const MAX_PERSISTED_MESSAGES: usize = 500;
 const CURRENT_SESSION_SCHEMA_VERSION: u32 = 1;
 const CURRENT_QUEUE_SCHEMA_VERSION: u32 = 1;
 
@@ -291,7 +286,7 @@ impl SessionManager {
             return Ok(None);
         }
         let content = fs::read_to_string(&path)?;
-        let session: SavedSession = serde_json::from_str(&content)
+        let mut session: SavedSession = serde_json::from_str(&content)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         if session.schema_version > CURRENT_SESSION_SCHEMA_VERSION {
             return Err(std::io::Error::new(
@@ -302,6 +297,7 @@ impl SessionManager {
                 ),
             ));
         }
+        session.system_prompt = strip_legacy_truncation_note(session.system_prompt);
         Ok(Some(session))
     }
 
@@ -372,7 +368,7 @@ impl SessionManager {
         let path = self.validated_session_path(id)?;
 
         let content = fs::read_to_string(&path)?;
-        let session: SavedSession = serde_json::from_str(&content)
+        let mut session: SavedSession = serde_json::from_str(&content)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         if session.schema_version > CURRENT_SESSION_SCHEMA_VERSION {
             return Err(std::io::Error::new(
@@ -383,6 +379,8 @@ impl SessionManager {
                 ),
             ));
         }
+
+        session.system_prompt = strip_legacy_truncation_note(session.system_prompt);
 
         Ok(session)
     }
@@ -711,8 +709,6 @@ pub fn create_saved_session_with_id_and_mode(
         })
         .unwrap_or_else(|| "New Session".to_string());
 
-    let (capped_messages, truncation_note) = cap_messages(messages);
-
     SavedSession {
         schema_version: CURRENT_SESSION_SCHEMA_VERSION,
         metadata: SessionMetadata {
@@ -730,11 +726,8 @@ pub fn create_saved_session_with_id_and_mode(
             forked_from_message_count: None,
             cumulative_turn_secs: 0,
         },
-        messages: capped_messages,
-        system_prompt: merge_truncation_note(
-            system_prompt_to_string(system_prompt),
-            truncation_note,
-        ),
+        messages: messages.to_vec(),
+        system_prompt: system_prompt_to_string(system_prompt),
         context_references: Vec::new(),
         artifacts: Vec::new(),
     }
@@ -748,45 +741,34 @@ pub fn update_session(
     system_prompt: Option<&SystemPrompt>,
 ) -> SavedSession {
     session.schema_version = CURRENT_SESSION_SCHEMA_VERSION;
-    let (capped_messages, truncation_note) = cap_messages(messages);
-    session.messages = capped_messages;
+    session.messages.clear();
+    session.messages.extend_from_slice(messages);
     session.metadata.updated_at = Utc::now();
     session.metadata.message_count = messages.len();
     session.metadata.total_tokens = total_tokens;
-    session.system_prompt = merge_truncation_note(
-        system_prompt_to_string(system_prompt).or(session.system_prompt),
-        truncation_note,
-    );
+    if system_prompt.is_some() {
+        session.system_prompt = system_prompt_to_string(system_prompt);
+    }
     session
 }
 
-/// Cap messages to [`MAX_PERSISTED_MESSAGES`], keeping the most recent.
-/// Returns the capped slice and an optional truncation note.
-fn cap_messages(messages: &[Message]) -> (Vec<Message>, Option<String>) {
-    let total = messages.len();
-    if total <= MAX_PERSISTED_MESSAGES {
-        return (messages.to_vec(), None);
+/// Strip a stale `[Session note]` block that was written by the old
+/// 500-message cap. Only removes notes that contain the specific
+/// "older messages were dropped" phrase — ordinary user-added
+/// `[Session note]` prompts are left untouched.
+fn strip_legacy_truncation_note(system_prompt: Option<String>) -> Option<String> {
+    let sp = system_prompt?;
+    let Some(trimmed) = sp.strip_prefix("[Session note]\n") else {
+        return Some(sp);
+    };
+    // Only strip if this is the known cap_messages note.
+    if !trimmed.contains("older messages were dropped") {
+        return Some(sp);
     }
-    let dropped = total - MAX_PERSISTED_MESSAGES;
-    let note = format!(
-        "Note: {dropped} older messages were dropped from the session file \
-         to keep persistence bounded. The full conversation history may \
-         still be recoverable from cycle archives."
-    );
-    (
-        messages[total - MAX_PERSISTED_MESSAGES..].to_vec(),
-        Some(note),
-    )
-}
-
-/// Merge an optional truncation note into the system prompt string.
-fn merge_truncation_note(system_prompt: Option<String>, note: Option<String>) -> Option<String> {
-    match (system_prompt, note) {
-        (None, None) => None,
-        (Some(sp), None) => Some(sp),
-        (None, Some(note)) => Some(format!("[Session note]\n{note}")),
-        (Some(sp), Some(note)) => Some(format!("[Session note]\n{note}\n\n---\n\n{sp}")),
-    }
+    // The note block ends with "\n\n---\n\n" (7 chars) followed by the real prompt.
+    trimmed
+        .find("\n\n---\n\n")
+        .map(|pos| trimmed[pos + 7..].to_string())
 }
 
 /// String-scan a JSON byte buffer for the top-level `"metadata":{...}`
@@ -1513,6 +1495,37 @@ mod tests {
         let updated = update_session(session, &new_messages, 100, None);
         assert_eq!(updated.messages.len(), 2);
         assert_eq!(updated.metadata.total_tokens, 100);
+    }
+
+    #[test]
+    fn save_load_round_trip_preserves_all_messages_for_cache_fidelity() {
+        let tmp = tempdir().expect("tempdir");
+        let manager = SessionManager::new(tmp.path().join("sessions")).expect("new");
+        // Covers the old 500-message cap boundary and well beyond.
+        for count in [0, 1, 500, 501, 600, 1000] {
+            let original: Vec<_> = (0..count)
+                .map(|i| {
+                    make_test_message(
+                        if i % 2 == 0 { "user" } else { "assistant" },
+                        &format!("round-trip message {i}"),
+                    )
+                })
+                .collect();
+
+            let session = create_saved_session(&original, "test-model", tmp.path(), 0, None);
+            manager.save_session(&session).expect("save");
+            let loaded = manager.load_session(&session.metadata.id).expect("load");
+
+            assert_eq!(
+                loaded.messages.len(),
+                count,
+                "count preserved for count={count}"
+            );
+            assert_eq!(
+                loaded.messages, original,
+                "every message byte-identical after round-trip for count={count}"
+            );
+        }
     }
 
     #[test]
