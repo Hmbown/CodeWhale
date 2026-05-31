@@ -234,37 +234,69 @@ pub fn optional_bool(input: &Value, field: &str, default: bool) -> bool {
     input.get(field).and_then(Value::as_bool).unwrap_or(default)
 }
 
+/// Specification that describes a tool available in the registry.
+///
+/// Contains the tool's name, its JSON input/output schemas, and
+/// execution constraints such as timeout and parallelism.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolSpec {
+    /// Unique name used to look up the tool.
     pub name: String,
+    /// JSON Schema describing the tool's expected input parameters.
     pub input_schema: Value,
+    /// JSON Schema describing the tool's output format.
     pub output_schema: Value,
+    /// Whether multiple invocations of this tool may run concurrently.
     pub supports_parallel_tool_calls: bool,
+    /// Optional per-call timeout in milliseconds; `None` means no timeout.
     pub timeout_ms: Option<u64>,
 }
 
+/// A [`ToolSpec`] together with its runtime configuration.
+///
+/// Wraps a `ToolSpec` and exposes the parallelism flag directly so the
+/// dispatcher can check it without digging into the inner spec.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfiguredToolSpec {
+    /// The underlying tool specification.
     pub spec: ToolSpec,
+    /// Whether this tool supports concurrent invocations.
     pub supports_parallel_tool_calls: bool,
 }
 
+/// Identifies where a tool call originated from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolCallSource {
+    /// Direct invocation from the model or user.
     Direct,
+    /// Invocation through the JavaScript REPL environment.
     JsRepl,
 }
 
+/// A tool invocation request before it has been validated and dispatched.
+///
+/// Contains the tool name, its input payload, and metadata about where the
+/// call originated.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCall {
+    /// Name of the tool to invoke.
     pub name: String,
+    /// The input payload for the tool.
     pub payload: ToolPayload,
+    /// Where this call originated (direct or REPL).
     pub source: ToolCallSource,
+    /// Optional raw tool-call identifier from the upstream provider.
     pub raw_tool_call_id: Option<String>,
 }
 
 impl ToolCall {
+    /// Derive the execution subject for this call.
+    ///
+    /// For local shell payloads this returns the shell command and its
+    /// working directory; for all other payloads the tool name and the
+    /// provided `fallback_cwd` are returned instead. The third element
+    /// of the tuple is a human-readable kind label (`"shell"` or `"tool"`).
     pub fn execution_subject(&self, fallback_cwd: &str) -> (String, String, &'static str) {
         match &self.payload {
             ToolPayload::LocalShell { params } => (
@@ -280,43 +312,82 @@ impl ToolCall {
     }
 }
 
+/// A validated tool invocation ready to be handled.
+///
+/// Created by the registry after a [`ToolCall`] passes validation, this
+/// carries all the context a [`ToolHandler`] needs to execute the tool.
 #[derive(Debug, Clone)]
 pub struct ToolInvocation {
+    /// Unique identifier for this invocation (generated or from the provider).
     pub call_id: String,
+    /// Name of the tool being invoked.
     pub tool_name: String,
+    /// The input payload for the tool.
     pub payload: ToolPayload,
+    /// Where this invocation originated.
     pub source: ToolCallSource,
 }
 
+/// Errors that can occur during tool dispatch and execution.
+///
+/// Unlike [`ToolError`], which represents input validation failures within
+/// a tool, `FunctionCallError` covers problems at the dispatch layer: the
+/// tool was not found, its kind did not match, it was rejected because it
+/// is mutating, it timed out, was cancelled, or its handler returned an
+/// error.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FunctionCallError {
+    /// No tool with the given name is registered.
     ToolNotFound { name: String },
+    /// The payload kind does not match the handler's expected kind.
     KindMismatch { expected: ToolKind, got: ToolKind },
+    /// The tool is mutating but `allow_mutating` was `false`.
     MutatingToolRejected { name: String },
+    /// The tool execution exceeded its configured timeout.
     TimedOut { name: String, timeout_ms: u64 },
+    /// The tool execution was cancelled.
     Cancelled { name: String },
+    /// The tool handler returned an error.
     ExecutionFailed { name: String, error: String },
 }
 
+/// Trait implemented by concrete tool handlers.
+///
+/// Each registered tool is backed by a handler that reports its kind,
+/// whether it is mutating, and performs the actual execution.
 #[async_trait]
 pub trait ToolHandler: Send + Sync {
+    /// The [`ToolKind`] this handler expects (e.g. `Function` or `Mcp`).
     fn kind(&self) -> ToolKind;
+
+    /// Returns `true` if `kind` matches this handler's expected kind.
+    ///
+    /// The default implementation compares against [`kind()`](ToolHandler::kind).
     fn matches_kind(&self, kind: ToolKind) -> bool {
         self.kind() == kind
     }
+
+    /// Whether this tool performs side-effects that require user approval.
+    ///
+    /// Defaults to `false` (read-only / safe).
     fn is_mutating(&self) -> bool {
         false
     }
+
+    /// Execute the tool with the given invocation context.
     async fn handle(
         &self,
         invocation: ToolInvocation,
     ) -> std::result::Result<ToolOutput, FunctionCallError>;
 }
 
+/// Manages concurrent tool execution via a read/write lock.
+///
+/// Parallel-safe tools acquire a read lock (allowing overlap), while
+/// serial tools acquire a write lock (exclusive access). Reentrant calls
+/// (e.g. a tool invoking another tool) skip locking to avoid deadlock.
 #[derive(Debug)]
 pub struct ToolCallRuntime {
-    /// Preserve read/write tool execution semantics: parallel-safe tools may
-    /// overlap, while serial tools run exclusively.
     execution_lock: Arc<RwLock<()>>,
 }
 
@@ -349,6 +420,11 @@ impl ToolCallRuntime {
     }
 }
 
+/// Central registry that maps tool names to their specs and handlers.
+///
+/// Use [`register()`](ToolRegistry::register) to add tools, then
+/// [`dispatch()`](ToolRegistry::dispatch) to invoke them. The registry
+/// owns a [`ToolCallRuntime`] that manages concurrent execution.
 #[derive(Default)]
 pub struct ToolRegistry {
     handlers: HashMap<String, Arc<dyn ToolHandler>>,
@@ -357,6 +433,11 @@ pub struct ToolRegistry {
 }
 
 impl ToolRegistry {
+    /// Register a tool with its specification and handler.
+    ///
+    /// The tool's name is taken from `spec.name`. Returns an error if
+    /// registration fails (currently infallible, but the `Result` is
+    /// reserved for future validation).
     pub fn register(&mut self, spec: ToolSpec, handler: Arc<dyn ToolHandler>) -> Result<()> {
         let name = spec.name.clone();
         self.specs.insert(
@@ -370,10 +451,18 @@ impl ToolRegistry {
         Ok(())
     }
 
+    /// Return the configured specs for every registered tool.
     pub fn list_specs(&self) -> Vec<ConfiguredToolSpec> {
         self.specs.values().cloned().collect()
     }
 
+    /// Validate and execute a tool call.
+    ///
+    /// Looks up the tool by name, verifies the payload kind matches the
+    /// handler, enforces the `allow_mutating` guard, acquires the
+    /// appropriate execution lock, and forwards the call to the handler.
+    /// Returns a [`FunctionCallError`] if any validation step fails or
+    /// the handler returns an error.
     pub async fn dispatch(
         &self,
         call: ToolCall,
