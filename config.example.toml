@@ -688,9 +688,9 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 # [tools.overrides]
 # "exec_shell" = { type = "script", path = "audit-exec-shell.sh" }
 #
-# The wrapper logs every command to `~/.codewhale/audit/exec_shell.log` before
-# executing it, then runs the real `exec_shell` tool logic via stdin/stdout
-# passthrough. No code changes, no fork, no recompile.
+# The wrapper logs every request to `~/.codewhale/audit/exec_shell.log`, then
+# delegates to your own approved shell executor. Do not pipe the raw JSON
+# request into `sh -s`; parse the command field and enforce your policy first.
 #
 # ```sh
 # #!/usr/bin/env sh
@@ -702,7 +702,7 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 # LOGFILE="$LOGDIR/exec_shell.log"
 # input=$(cat)
 # echo "[$(date -Iseconds)] $input" >> "$LOGFILE"
-# echo "$input" | exec /bin/sh -s
+# printf '%s\n' '{"content":"audit wrapper placeholder: configure an executor","success":false}'
 # ```
 
 # ─────────────────────────────────────────────────────────────────────────────────

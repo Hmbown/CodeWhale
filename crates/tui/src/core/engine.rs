@@ -1247,9 +1247,8 @@ impl Engine {
         };
 
         // Load plugin tools from the user's tools directory and apply any
-        // config.toml overrides. Plugin scripts are auto-discovered and
-        // registered without requiring a `[tools]` config section — the
-        // default `~/.codewhale/tools/` directory is always checked.
+        // config.toml overrides. Explicit overrides win over auto-discovered
+        // scripts with the same tool name.
         let mut plugin_tool_names: std::collections::HashSet<String> =
             std::collections::HashSet::new();
         if let Some(ref mut tool_registry) = tool_registry {
@@ -1261,13 +1260,13 @@ impl Engine {
 
             let plugin_dir = plugin_tools_dir(self.config.tools.as_ref());
 
+            tool_registry.load_plugins(&plugin_dir);
+
             if let Some(ref tools_config) = self.config.tools
                 && let Some(ref overrides) = tools_config.overrides
             {
                 tool_registry.apply_overrides(overrides, &plugin_dir);
             }
-
-            tool_registry.load_plugins(&plugin_dir);
 
             let names_after: std::collections::HashSet<String> = tool_registry
                 .names()
