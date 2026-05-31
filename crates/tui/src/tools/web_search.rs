@@ -770,7 +770,7 @@ impl WebSearchTool {
             })?;
 
         // Volcengine Responses API pipeline (search + model inference) is
-        // slow — enforce a floor of 60 s while still honouring explicit
+        // slow — enforce a floor of 90 s while still honouring explicit
         // shorter timeouts from the caller (e.g. tests).
         let effective_timeout = timeout_ms.max(90_000);
 
