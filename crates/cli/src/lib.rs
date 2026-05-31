@@ -1310,7 +1310,6 @@ fn run_sandbox_command(command: SandboxCommand) -> Result<()> {
                 command: &command,
                 cwd: &cwd.display().to_string(),
                 tool: Some("exec_shell"),
-                path: None,
                 ask_for_approval: ask.into(),
                 sandbox_mode: Some("workspace-write"),
             })?;

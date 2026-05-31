@@ -71,8 +71,6 @@ pub struct ToolAskRule {
     pub tool: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
 }
 
 impl ToolAskRule {
@@ -80,7 +78,6 @@ impl ToolAskRule {
         Self {
             tool: tool.into(),
             command: None,
-            path: None,
         }
     }
 
@@ -88,15 +85,6 @@ impl ToolAskRule {
         Self {
             tool: "exec_shell".to_string(),
             command: Some(command.into()),
-            path: None,
-        }
-    }
-
-    pub fn file_path(tool: impl Into<String>, path: impl Into<String>) -> Self {
-        Self {
-            tool: tool.into(),
-            command: None,
-            path: Some(path.into()),
         }
     }
 
@@ -104,9 +92,6 @@ impl ToolAskRule {
         let mut parts = vec![format!("tool={}", self.tool)];
         if let Some(command) = &self.command {
             parts.push(format!("command={command}"));
-        }
-        if let Some(path) = &self.path {
-            parts.push(format!("path={path}"));
         }
         parts.join(" ")
     }
@@ -184,7 +169,6 @@ pub struct ExecPolicyContext<'a> {
     pub command: &'a str,
     pub cwd: &'a str,
     pub tool: Option<&'a str>,
-    pub path: Option<&'a str>,
     pub ask_for_approval: AskForApproval,
     pub sandbox_mode: Option<&'a str>,
 }
@@ -262,21 +246,19 @@ impl ExecPolicyEngine {
 
         self.rulesets
             .iter()
-            .flat_map(|ruleset| ruleset.ask_rules.iter())
-            .filter(|rule| rule.tool == tool)
-            .filter(|rule| match rule.command.as_deref() {
+            .flat_map(|ruleset| {
+                ruleset
+                    .ask_rules
+                    .iter()
+                    .map(move |rule| (ruleset.layer, rule))
+            })
+            .filter(|(_, rule)| rule.tool == tool)
+            .filter(|(_, rule)| match rule.command.as_deref() {
                 Some(command) => self.arity_dict.allow_rule_matches(command, ctx.command),
                 None => true,
             })
-            .filter(|rule| match (rule.path.as_deref(), ctx.path) {
-                (Some(pattern), Some(path)) => {
-                    normalize_path_value(pattern) == normalize_path_value(path)
-                }
-                (Some(_), None) => false,
-                (None, _) => true,
-            })
-            .max_by_key(|rule| ask_rule_specificity(rule))
-            .cloned()
+            .max_by_key(|(layer, rule)| (*layer, ask_rule_specificity(rule)))
+            .map(|(_, rule)| rule.clone())
     }
 
     pub fn remember_session_approval(&mut self, approval_key: String) {
@@ -378,7 +360,7 @@ impl ExecPolicyEngine {
         Ok(ExecPolicyDecision {
             allow,
             requires_approval,
-            matched_rule: trusted_rule.or(matched_ask_rule),
+            matched_rule: matched_ask_rule.or(trusted_rule),
             requirement,
         })
     }
@@ -396,21 +378,12 @@ fn first_token(command: &str) -> String {
         .to_string()
 }
 
-fn normalize_path_value(value: &str) -> String {
-    value
-        .replace('\\', "/")
-        .trim_matches('/')
-        .trim()
-        .to_ascii_lowercase()
-}
-
 fn ask_rule_specificity(rule: &ToolAskRule) -> usize {
     rule.tool.len()
         + rule
             .command
             .as_ref()
             .map_or(0, |command| command.len() + 1000)
-        + rule.path.as_ref().map_or(0, |path| path.len() + 1000)
 }
 
 #[cfg(test)]
@@ -422,7 +395,6 @@ mod tests {
             command,
             cwd: "/workspace",
             tool: Some("exec_shell"),
-            path: None,
             ask_for_approval,
             sandbox_mode: Some("workspace-write"),
         }
@@ -592,6 +564,49 @@ mod tests {
             } => assert_eq!(amendment.prefixes, vec!["cargo"]),
             other => panic!("expected unchanged approval behavior, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn typed_ask_rule_prefers_higher_layer_before_specificity() {
+        let engine = ExecPolicyEngine::with_rulesets(vec![
+            Ruleset::agent(vec![], vec![])
+                .with_ask_rules(vec![ToolAskRule::exec_shell("cargo test --workspace")]),
+            Ruleset::user(vec![], vec![])
+                .with_ask_rules(vec![ToolAskRule::exec_shell("cargo test")]),
+        ]);
+
+        let decision = engine
+            .check(ctx(
+                "cargo test --workspace --all-features",
+                AskForApproval::Never,
+            ))
+            .unwrap();
+
+        assert!(!decision.allow);
+        assert_eq!(
+            decision.matched_rule.as_deref(),
+            Some("tool=exec_shell command=cargo test")
+        );
+    }
+
+    #[test]
+    fn typed_ask_rule_explains_forbidden_decision_even_when_trusted_prefix_matches() {
+        let engine = ExecPolicyEngine::with_rulesets(vec![
+            Ruleset::user(vec!["cargo test".to_string()], vec![])
+                .with_ask_rules(vec![ToolAskRule::exec_shell("cargo test")]),
+        ]);
+
+        let decision = engine
+            .check(ctx("cargo test --workspace", AskForApproval::Never))
+            .unwrap();
+
+        assert!(!decision.allow);
+        assert!(!decision.requires_approval);
+        assert_eq!(
+            decision.matched_rule.as_deref(),
+            Some("tool=exec_shell command=cargo test")
+        );
+        assert_eq!(decision.requirement.phase(), "forbidden");
     }
 
     #[test]

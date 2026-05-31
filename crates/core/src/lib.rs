@@ -1018,7 +1018,6 @@ impl Runtime {
             command: &command,
             cwd: &policy_cwd,
             tool: Some(policy_tool),
-            path: None,
             ask_for_approval: approval_mode,
             sandbox_mode: None,
         })?;
