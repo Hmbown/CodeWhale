@@ -770,8 +770,8 @@ impl WebSearchTool {
             })?;
 
         // Volcengine Responses API pipeline (search + model inference) is
-        // slow — enforce a floor of 90 s while still honouring explicit
-        // shorter timeouts from the caller (e.g. tests).
+        // slow, so enforce a floor of 90 s. The caller's value is used only
+        // when it exceeds 90_000 ms.
         let effective_timeout = timeout_ms.max(90_000);
 
         let client = reqwest::Client::builder()
@@ -841,7 +841,7 @@ impl WebSearchTool {
                     return search_tool_result(query.to_string(), "volcengine", results, None);
                 }
                 Err(e) => {
-                    let is_transient = e.is_timeout() || e.is_connect() || e.is_request();
+                    let is_transient = e.is_timeout() || e.is_connect();
                     if !is_transient || attempt == 2 {
                         return Err(ToolError::execution_failed(format!(
                             "Volcengine search request failed: {e}"
