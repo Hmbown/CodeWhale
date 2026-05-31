@@ -2425,14 +2425,14 @@ fn format_token_count_compact_formats_units() {
 #[test]
 fn footer_session_tokens_chip_uses_single_compact_total() {
     let mut app = create_test_app();
-    app.session.total_input_tokens = 1_400_000;
-    app.session.total_cache_hit_tokens = 1_200_000;
+    app.session.total_input_tokens = 900_000;
+    app.session.total_cache_hit_tokens = 700_000;
     app.session.total_cache_miss_tokens = 200_000;
-    app.session.total_output_tokens = 7_600;
+    app.session.total_output_tokens = 600_000;
 
     let text = spans_text(&footer_session_tokens_spans(&app));
 
-    assert_eq!(text, "tok 1.4M");
+    assert_eq!(text, "tok 1.5M");
     assert!(!text.contains(" cch "));
     assert!(!text.contains(" out"));
 }
