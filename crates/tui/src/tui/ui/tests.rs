@@ -3232,13 +3232,25 @@ fn test_ctrl_c_cancels_streaming_sets_status() {
 
 #[test]
 fn local_cancel_marks_late_stream_events_for_suppression() {
+    let _retry_guard = crate::retry_status::test_guard();
     let mut app = create_test_app();
     app.is_loading = true;
+    app.turn_started_at = Some(Instant::now());
+    app.runtime_turn_id = Some("turn_cancel_me".to_string());
+    app.runtime_turn_status = Some("in_progress".to_string());
     app.streaming_state.start_text(0, None);
+    crate::retry_status::start(2, Duration::from_secs(3), "network error");
 
     mark_active_turn_cancelled_locally(&mut app);
 
     assert!(!app.is_loading);
+    assert!(app.turn_started_at.is_none());
+    assert!(app.runtime_turn_id.is_none());
+    assert!(app.runtime_turn_status.is_none());
+    assert!(matches!(
+        crate::retry_status::snapshot(),
+        crate::retry_status::RetryState::Idle
+    ));
     assert!(app.suppress_stream_events_until_turn_complete);
     assert!(suppress_engine_event_after_local_cancel(
         &EngineEvent::MessageDelta {
@@ -6120,6 +6132,16 @@ fn next_escape_action_cancels_when_loading_with_empty_input() {
     let mut app = create_test_app();
     app.is_loading = true;
     app.input.clear();
+    assert_eq!(next_escape_action(&app, false), EscapeAction::CancelRequest);
+}
+
+#[test]
+fn next_escape_action_cancels_in_progress_runtime_even_if_loading_flag_was_cleared() {
+    let mut app = create_test_app();
+    app.is_loading = false;
+    app.runtime_turn_status = Some("in_progress".to_string());
+    app.input.clear();
+
     assert_eq!(next_escape_action(&app, false), EscapeAction::CancelRequest);
 }
 

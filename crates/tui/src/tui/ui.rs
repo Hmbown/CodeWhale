@@ -1587,6 +1587,11 @@ async fn run_event_loop(
                         ) {
                             let _ = engine_handle.send(Op::ListSubAgents).await;
                         }
+                        crate::tui::notifications::clear_taskbar_progress();
+                        if status != crate::core::events::TurnOutcomeStatus::Completed {
+                            crate::retry_status::clear();
+                            crate::tui::notifications::stop_title_animation_quietly();
+                        }
                         let turn_tokens = usage.input_tokens + usage.output_tokens;
                         app.session.total_tokens =
                             app.session.total_tokens.saturating_add(turn_tokens);
@@ -1654,28 +1659,31 @@ async fn run_event_loop(
                             app.accrue_session_cost_estimate(cost);
                         }
 
-                        // Emit OSC 9 / BEL desktop notification for long turns.
-                        if status == crate::core::events::TurnOutcomeStatus::Completed
-                            && let Some((method, threshold, include_summary)) =
+                        // Emit OSC 9 / BEL desktop notification for long turns, and
+                        // always stop the title animation that began on TurnStarted.
+                        if status == crate::core::events::TurnOutcomeStatus::Completed {
+                            if let Some((method, threshold, include_summary)) =
                                 notifications::settings(config)
-                        {
-                            let in_tmux = std::env::var("TMUX").is_ok_and(|v| !v.is_empty());
-                            let msg = notifications::completed_turn_message(
-                                app,
-                                &current_streaming_text,
-                                include_summary,
-                                turn_elapsed,
-                                turn_cost,
-                            );
-                            crate::tui::notifications::notify_done(
-                                method,
-                                in_tmux,
-                                &msg,
-                                threshold,
-                                turn_elapsed,
-                            );
-                            crate::tui::notifications::clear_taskbar_progress();
-                            crate::tui::notifications::stop_title_animation();
+                            {
+                                let in_tmux = std::env::var("TMUX").is_ok_and(|v| !v.is_empty());
+                                let msg = notifications::completed_turn_message(
+                                    app,
+                                    &current_streaming_text,
+                                    include_summary,
+                                    turn_elapsed,
+                                    turn_cost,
+                                );
+                                crate::tui::notifications::notify_done(
+                                    method,
+                                    in_tmux,
+                                    &msg,
+                                    threshold,
+                                    turn_elapsed,
+                                );
+                                crate::tui::notifications::stop_title_animation();
+                            } else {
+                                crate::tui::notifications::stop_title_animation_quietly();
+                            }
                         }
 
                         // Generate post-turn receipt for completed turns.
@@ -6885,11 +6893,16 @@ async fn apply_approval_decision(
 fn mark_active_turn_cancelled_locally(app: &mut App) {
     app.is_loading = false;
     app.dispatch_started_at = None;
+    app.turn_started_at = None;
     app.streaming_state.reset();
+    app.runtime_turn_id = None;
     app.runtime_turn_status = None;
     app.suppress_stream_events_until_turn_complete = true;
     app.finalize_active_cell_as_interrupted();
     app.finalize_streaming_assistant_as_interrupted();
+    crate::retry_status::clear();
+    crate::tui::notifications::clear_taskbar_progress();
+    crate::tui::notifications::stop_title_animation_quietly();
 }
 
 fn suppress_engine_event_after_local_cancel(event: &EngineEvent) -> bool {

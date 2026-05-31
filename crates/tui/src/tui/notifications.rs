@@ -334,6 +334,16 @@ pub fn stop_title_animation() {
     play_completion_sound();
 }
 
+/// Stop the title animation without playing the completion sound.
+///
+/// Cancellation and failed turns should return the terminal title to rest
+/// without presenting them as completed work.
+pub fn stop_title_animation_quietly() {
+    TITLE_ANIMATION_RUNNING.store(false, Ordering::SeqCst);
+    COMPLETION_MARKER_SHOWN.store(false, Ordering::SeqCst);
+    set_terminal_title("CodeWhale");
+}
+
 /// Clear the ✅ completion marker from the title when the user interacts.
 ///
 /// Call this on every user input event (key press, mouse click) so the
