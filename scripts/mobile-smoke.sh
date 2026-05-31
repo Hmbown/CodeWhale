@@ -155,7 +155,20 @@ log "=== Test Group 3: Binding warnings (0.0.0.0 default) ==="
 STDOUT_FILE=$(mktemp)
 "$BINARY" serve --port "$PORT" --mobile --insecure > "$STDOUT_FILE" 2>&1 &
 SERVER_PID=$!
-sleep 2
+SERVER_READY=0
+for _ in $(seq 1 30); do
+    if curl -sf "http://127.0.0.1:${PORT}/health" > /dev/null 2>&1; then
+        SERVER_READY=1
+        break
+    fi
+    sleep 0.3
+done
+if [[ "$SERVER_READY" -ne 1 ]]; then
+    rm -f "$STDOUT_FILE"
+    fail "Server did not become ready on port $PORT"
+    cleanup
+    exit 1
+fi
 STDOUT=$(cat "$STDOUT_FILE")
 rm -f "$STDOUT_FILE"
 
