@@ -95,10 +95,10 @@ impl HookEvent {
 /// The [`HookDispatcher`] fans out every event to all registered sinks, so a
 /// single process can log to multiple destinations simultaneously.
 ///
-/// Sinks are expected to be **best-effort**: if delivery fails, the error is
-/// logged but does not abort the application. Implementations should avoid
+/// Sinks are expected to be **best-effort**: implementations should avoid
 /// panicking and should return an [`anyhow::Error`] only for truly unexpected
-/// failures.
+/// failures. [`HookDispatcher::emit`] discards individual sink errors so hook
+/// delivery failures do not abort the application.
 #[async_trait]
 pub trait HookSink: Send + Sync {
     /// Deliver a single event to this sink.
