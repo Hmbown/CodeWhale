@@ -1514,7 +1514,11 @@ async fn run_event_loop(
                         usage,
                         status,
                         error,
+                        tool_catalog,
                     } => {
+                        if let Some(catalog) = tool_catalog {
+                            app.session.last_tool_catalog = Some(catalog);
+                        }
                         let was_locally_cancelled = app.suppress_stream_events_until_turn_complete;
                         app.suppress_stream_events_until_turn_complete = false;
                         app.active_allowed_tools = None;

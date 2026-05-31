@@ -140,8 +140,11 @@ pub fn context(_app: &mut App) -> CommandResult {
 /// Renders a fixed-width table the user can paste into a bug report.
 pub fn cache(app: &mut App, arg: Option<&str>) -> CommandResult {
     let arg = arg.map(str::trim).filter(|s| !s.is_empty());
-    if matches!(arg, Some("inspect")) {
-        return CommandResult::message(format_cache_inspect(app));
+    if let Some(flags) = arg.and_then(|a| a.strip_prefix("inspect")) {
+        let flags = flags.trim();
+        let verbose = flags.split_whitespace().any(|flag| flag == "--verbose");
+        let json_mode = flags.split_whitespace().any(|flag| flag == "--json");
+        return CommandResult::message(format_cache_inspect(app, verbose, json_mode));
     }
     if matches!(arg, Some("warmup")) {
         return CommandResult::action(AppAction::CacheWarmup);
@@ -163,7 +166,7 @@ pub fn cache(app: &mut App, arg: Option<&str>) -> CommandResult {
     CommandResult::message(format_cache_history(app, count, app.ui_locale))
 }
 
-fn format_cache_inspect(app: &mut App) -> String {
+fn format_cache_inspect(app: &mut App, verbose: bool, json_mode: bool) -> String {
     let reasoning_effort = if app.reasoning_effort == crate::tui::app::ReasoningEffort::Auto {
         app.last_effective_reasoning_effort
             .and_then(crate::tui::app::ReasoningEffort::api_value)
@@ -176,7 +179,7 @@ fn format_cache_inspect(app: &mut App) -> String {
         messages: app.api_messages.clone(),
         max_tokens: 0,
         system: app.system_prompt.clone(),
-        tools: None,
+        tools: app.session.last_tool_catalog.clone(),
         tool_choice: None,
         metadata: None,
         thinking: None,
@@ -187,6 +190,13 @@ fn format_cache_inspect(app: &mut App) -> String {
     };
     let inspection = inspect_prompt_for_request(&request);
     let previous = app.session.last_cache_inspection.as_ref();
+    if json_mode {
+        let output = serde_json::to_string_pretty(&inspection).unwrap_or_else(|_| {
+            "{\"error\":\"cache inspection serialization failed\"}".to_string()
+        });
+        app.session.last_cache_inspection = Some(inspection);
+        return output;
+    }
 
     let mut out = String::new();
     out.push_str("Cache Inspect\n");
@@ -199,16 +209,32 @@ fn format_cache_inspect(app: &mut App) -> String {
         "Full request prefix hash: {}\n",
         inspection.full_request_prefix_hash
     ));
+    out.push_str(&format!(
+        "Tool catalog hash: {}\n",
+        if inspection.tool_catalog_hash.is_empty() {
+            "(no tools registered)".to_string()
+        } else {
+            inspection.tool_catalog_hash.clone()
+        }
+    ));
     out.push_str(&format_static_prefix_status(previous, &inspection));
     out.push_str(&format_first_divergence(previous, &inspection));
+    let total_tokens: usize = inspection
+        .layers
+        .iter()
+        .map(|layer| layer.token_estimate)
+        .sum();
+    out.push_str(&format!("Estimated reusable tokens: ~{total_tokens}\n"));
     out.push('\n');
 
     for layer in &inspection.layers {
         let mut line = format!(
-            "{}: {}, chars={}, hash={}\n",
+            "{}: {}, chars={}, bytes={}, ~{}tok, hash={}\n",
             layer.name,
             layer.stability.label(),
             layer.char_len,
+            layer.byte_len,
+            layer.token_estimate,
             layer.sha256
         );
         if let Some(tool_result) = &layer.tool_result {
@@ -233,8 +259,68 @@ fn format_cache_inspect(app: &mut App) -> String {
         }
         out.push_str(&line);
     }
+    if verbose {
+        out.push_str("\nVerbose diff\n");
+        if let Some(previous) = previous {
+            out.push_str(&format_verbose_diff(previous, &inspection));
+        } else {
+            out.push_str("No previous inspection to compare against.\n");
+        }
+    }
     app.session.last_cache_inspection = Some(inspection);
     out
+}
+
+fn format_verbose_diff(previous: &PromptInspection, current: &PromptInspection) -> String {
+    let mut out = String::new();
+    let max_len = previous.layers.len().max(current.layers.len());
+    for index in 0..max_len {
+        match (previous.layers.get(index), current.layers.get(index)) {
+            (Some(prev), Some(curr)) if prev == curr => {
+                out.push_str(&format!("  [{index}] {} unchanged\n", curr.name));
+            }
+            (Some(prev), Some(curr)) => {
+                out.push_str(&format!("  [{index}] {} changed\n", curr.name));
+                if prev.name != curr.name {
+                    out.push_str(&format!("    name: {} -> {}\n", prev.name, curr.name));
+                }
+                if prev.stability != curr.stability {
+                    out.push_str(&format!(
+                        "    stability: {} -> {}\n",
+                        prev.stability.label(),
+                        curr.stability.label()
+                    ));
+                }
+                if prev.char_len != curr.char_len {
+                    out.push_str(&format!(
+                        "    chars: {} -> {} ({:+})\n",
+                        prev.char_len,
+                        curr.char_len,
+                        curr.char_len as i64 - prev.char_len as i64
+                    ));
+                }
+                if prev.sha256 != curr.sha256 {
+                    out.push_str(&format!(
+                        "    hash: {} -> {}\n",
+                        short_hash(&prev.sha256),
+                        short_hash(&curr.sha256)
+                    ));
+                }
+            }
+            (None, Some(curr)) => {
+                out.push_str(&format!("  [{index}] {} added\n", curr.name));
+            }
+            (Some(prev), None) => {
+                out.push_str(&format!("  [{index}] {} removed\n", prev.name));
+            }
+            (None, None) => {}
+        }
+    }
+    out
+}
+
+fn short_hash(hash: &str) -> &str {
+    &hash[..hash.len().min(12)]
 }
 
 /// Render a prefix-cache stability and health summary for `/cache stats`.
@@ -560,7 +646,7 @@ fn humanize_age(d: std::time::Duration) -> String {
 mod tests {
     use super::*;
     use crate::config::Config;
-    use crate::models::{ContentBlock, Message, SystemBlock};
+    use crate::models::{ContentBlock, Message, SystemBlock, Tool};
     use crate::tui::app::{App, TuiOptions};
     use crate::tui::history::{GenericToolCell, ToolCell, ToolStatus};
     use std::path::PathBuf;
@@ -592,6 +678,25 @@ mod tests {
         app.cost_currency = crate::pricing::CostCurrency::Usd;
         app.api_provider = crate::config::ApiProvider::Deepseek;
         app
+    }
+
+    fn test_tool(name: &str) -> Tool {
+        Tool {
+            tool_type: Some("function".to_string()),
+            name: name.to_string(),
+            description: format!("{name} test tool"),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"}
+                }
+            }),
+            allowed_callers: None,
+            defer_loading: Some(false),
+            input_examples: None,
+            strict: Some(true),
+            cache_control: None,
+        }
     }
 
     #[test]
@@ -735,6 +840,59 @@ mod tests {
         assert!(msg.contains("User task: dynamic"));
         assert!(!msg.contains("SECRET_PROJECT_RULE"));
         assert!(!msg.contains("SECRET_USER_TASK"));
+    }
+
+    #[test]
+    fn cache_inspect_uses_last_request_tool_catalog() {
+        let mut app = create_test_app();
+        app.system_prompt = Some(SystemPrompt::Text("Base policy".to_string()));
+        app.session.last_tool_catalog = Some(vec![test_tool("read_file")]);
+        app.api_messages.push(Message {
+            role: "user".to_string(),
+            content: vec![ContentBlock::Text {
+                text: "Current task".to_string(),
+                cache_control: None,
+            }],
+        });
+
+        let msg = cache(&mut app, Some("inspect"))
+            .message
+            .expect("inspect output");
+
+        assert!(msg.contains("Tool catalog hash: "), "got: {msg}");
+        assert!(!msg.contains("(no tools registered)"), "got: {msg}");
+        assert!(msg.contains("Tool catalog: static"), "got: {msg}");
+        assert!(msg.contains("bytes="), "got: {msg}");
+        assert!(msg.contains("~"), "got: {msg}");
+    }
+
+    #[test]
+    fn cache_inspect_json_reports_tool_catalog_hash_and_layer_sizes() {
+        let mut app = create_test_app();
+        app.system_prompt = Some(SystemPrompt::Text("Base policy".to_string()));
+        app.session.last_tool_catalog = Some(vec![test_tool("read_file")]);
+        app.api_messages.push(Message {
+            role: "user".to_string(),
+            content: vec![ContentBlock::Text {
+                text: "Current task".to_string(),
+                cache_control: None,
+            }],
+        });
+
+        let msg = cache(&mut app, Some("inspect --json"))
+            .message
+            .expect("inspect json output");
+        let parsed: serde_json::Value = serde_json::from_str(&msg).expect("valid json");
+
+        assert_eq!(parsed["tool_catalog_hash"].as_str().unwrap().len(), 64);
+        let tool_layer = parsed["layers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|layer| layer["name"] == "Tool catalog")
+            .expect("tool catalog layer");
+        assert!(tool_layer["byte_len"].as_u64().unwrap() > 0);
+        assert!(tool_layer["token_estimate"].as_u64().unwrap() > 0);
     }
 
     #[test]

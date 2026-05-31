@@ -20,7 +20,7 @@ use crate::core::coherence::CoherenceState;
 use crate::cycle_manager::{CycleBriefing, CycleConfig};
 use crate::hooks::{HookContext, HookEvent, HookExecutor, HookResult};
 use crate::localization::{Locale, MessageId, resolve_locale, tr};
-use crate::models::{Message, SystemPrompt, compaction_threshold_for_model_and_effort};
+use crate::models::{Message, SystemPrompt, Tool, compaction_threshold_for_model_and_effort};
 use crate::palette::{self, UiTheme};
 use crate::pricing::{CostCurrency, CostEstimate};
 use crate::session_manager::SessionContextReference;
@@ -1046,6 +1046,11 @@ pub struct SessionState {
     pub total_output_tokens: u32,
     pub turn_cache_history: VecDeque<TurnCacheRecord>,
     pub last_cache_inspection: Option<PromptInspection>,
+    /// Tool catalog from the most recent model request.
+    ///
+    /// `/cache inspect` uses this to inspect the same tool schema bytes
+    /// that were eligible for the provider's prefix cache.
+    pub last_tool_catalog: Option<Vec<Tool>>,
 }
 
 /// Sidebar hover state for mouse tooltip support.
@@ -1087,6 +1092,7 @@ impl Default for SessionState {
             total_output_tokens: 0,
             turn_cache_history: VecDeque::new(),
             last_cache_inspection: None,
+            last_tool_catalog: None,
         }
     }
 }
