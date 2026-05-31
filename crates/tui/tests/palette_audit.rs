@@ -1,10 +1,9 @@
 //! Palette audit tests to prevent color drift.
 //!
-//! These tests ensure that deprecated colors (like DEEPSEEK_AQUA) are not used
-//! directly in user-visible code. Backward-compatible DeepSeek aliases should
-//! point at the current CodeWhale semantic tokens instead of stale brand RGBs.
+//! These tests ensure that deprecated colors are not used directly in
+//! user-visible code. Backward-compatible DeepSeek aliases should point
+//! at the current CodeWhale semantic tokens instead of stale brand RGBs.
 
-use std::fs;
 use std::path::Path;
 
 use ratatui::style::Color;
@@ -12,9 +11,6 @@ use ratatui::style::Color;
 #[path = "../src/palette.rs"]
 #[allow(dead_code)]
 mod palette;
-
-const DEPRECATED_DIRECT_COLORS: &[&str] = &["DEEPSEEK_AQUA"];
-const ALLOWED_PATTERNS: &[&str] = &["pub const DEEPSEEK_AQUA", "DEEPSEEK_AQUA_RGB"];
 
 fn color_to_rgb(color: Color) -> (u8, u8, u8) {
     match color {
@@ -71,66 +67,8 @@ fn assert_min_contrast(label: &str, foreground: Color, background: Color, min_ra
     );
 }
 
-fn audit_file(path: &Path, violations: &mut Vec<String>) {
-    let content = match fs::read_to_string(path) {
-        Ok(c) => c,
-        Err(_) => return,
-    };
-
-    for (line_num, line) in content.lines().enumerate() {
-        for deprecated in DEPRECATED_DIRECT_COLORS {
-            let pattern = format!("palette::{deprecated}");
-            if line.contains(&pattern) {
-                let is_allowed = ALLOWED_PATTERNS.iter().any(|p| line.contains(p));
-                if !is_allowed {
-                    violations.push(format!(
-                        "{}:{}: direct use of {} (use semantic alias instead)",
-                        path.display(),
-                        line_num + 1,
-                        deprecated
-                    ));
-                }
-            }
-        }
-    }
-}
-
-fn audit_directory(dir: &Path, violations: &mut Vec<String>) {
-    let entries = match fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            audit_directory(&path, violations);
-        } else if path.extension().is_some_and(|e| e == "rs") {
-            if path.file_name().is_some_and(|n| n == "palette.rs") {
-                continue;
-            }
-            audit_file(&path, violations);
-        }
-    }
-}
-
-#[test]
-fn audit_no_direct_aqua_usage() {
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let src_dir = Path::new(manifest_dir).join("src");
-    let mut violations = Vec::new();
-
-    audit_directory(&src_dir, &mut violations);
-
-    if !violations.is_empty() {
-        let report = violations.join("\n");
-        panic!(
-            "Palette audit failed! Found {} direct uses of deprecated colors:\n{}",
-            violations.len(),
-            report
-        );
-    }
-}
+// NOTE: The deprecated color audit (DEEPSEEK_AQUA) was removed because
+// the deprecated constant no longer exists in the palette.
 
 #[test]
 fn verify_status_success_uses_success_token() {
@@ -145,8 +83,8 @@ fn verify_status_success_uses_success_token() {
     );
     assert_ne!(
         palette::STATUS_SUCCESS,
-        palette::DEEPSEEK_AQUA,
-        "STATUS_SUCCESS should not regress to deprecated aqua"
+        palette::DEEPSEEK_BLUE,
+        "STATUS_SUCCESS should not regress to deprecated blue"
     );
 }
 
