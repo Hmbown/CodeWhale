@@ -85,7 +85,7 @@ impl Engine {
             && self.config.features.enabled(Feature::ShellTool)
             && self.session.allow_shell
         {
-            builder = builder.with_shell_tools();
+            builder = builder.with_shell_tools().with_runtime_task_shell_tools();
         }
 
         // Register the `remember` tool only when the user has opted in to
