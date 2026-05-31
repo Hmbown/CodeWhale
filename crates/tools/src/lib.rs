@@ -44,56 +44,23 @@ pub enum ApprovalRequirement {
 }
 
 /// Errors that can occur during tool execution.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum ToolError {
+    #[error("Failed to validate input: {message}")]
     InvalidInput { message: String },
+    #[error("Failed to validate input: missing required field '{field}'")]
     MissingField { field: String },
+    #[error("Failed to resolve path '{}': path escapes workspace", path.display())]
     PathEscape { path: PathBuf },
+    #[error("Failed to execute tool: {message}")]
     ExecutionFailed { message: String },
+    #[error("Failed to execute tool: operation timed out after {seconds}s")]
     Timeout { seconds: u64 },
+    #[error("Failed to locate tool: {message}")]
     NotAvailable { message: String },
+    #[error("Failed to authorize tool execution: {message}")]
     PermissionDenied { message: String },
 }
-
-impl std::fmt::Display for ToolError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::InvalidInput { message } => {
-                write!(f, "Failed to validate input: {message}")
-            }
-            Self::MissingField { field } => {
-                write!(
-                    f,
-                    "Failed to validate input: missing required field '{field}'"
-                )
-            }
-            Self::PathEscape { path } => {
-                write!(
-                    f,
-                    "Failed to resolve path '{}': path escapes workspace",
-                    path.display()
-                )
-            }
-            Self::ExecutionFailed { message } => {
-                write!(f, "Failed to execute tool: {message}")
-            }
-            Self::Timeout { seconds } => {
-                write!(
-                    f,
-                    "Failed to execute tool: operation timed out after {seconds}s"
-                )
-            }
-            Self::NotAvailable { message } => {
-                write!(f, "Failed to locate tool: {message}")
-            }
-            Self::PermissionDenied { message } => {
-                write!(f, "Failed to authorize tool execution: {message}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for ToolError {}
 
 impl ToolError {
     #[must_use]
