@@ -75,6 +75,7 @@ impl Ruleset {
 /// prefix behavior is preserved while typed ask records can make
 /// `AskForApproval::Never` reject invocations that cannot be approved.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ToolAskRule {
     /// Name of the tool this rule applies to (e.g. `"exec_shell"`, `"edit_file"`).
     pub tool: String,

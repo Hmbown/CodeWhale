@@ -133,6 +133,21 @@ allow_shell = true
 approval_policy = "on-request" # on-request | untrusted | never
 sandbox_mode = "workspace-write" # read-only | workspace-write | danger-full-access | external-sandbox
 
+# Typed permission rules live in a sibling `permissions.toml` file, not in
+# config.toml. This schema slice is ask-only and is parsed for follow-up
+# approval-flow wiring; allow/deny records and UI persistence are intentionally
+# out of scope here.
+#
+# Example ~/.codewhale/permissions.toml:
+#
+# [[rules]]
+# tool = "exec_shell"
+# command = "cargo test"
+#
+# [[rules]]
+# tool = "read_file"
+# path = "secrets/**"
+
 # ─────────────────────────────────────────────────────────────────────────────────
 # External Sandbox Backend (pluggable remote execution)
 # ─────────────────────────────────────────────────────────────────────────────────

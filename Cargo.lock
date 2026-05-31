@@ -866,6 +866,7 @@ name = "codewhale-config"
 version = "0.8.49"
 dependencies = [
  "anyhow",
+ "codewhale-execpolicy",
  "codewhale-secrets",
  "dirs",
  "serde",

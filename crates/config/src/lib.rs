@@ -6,6 +6,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
 
 use anyhow::{Context, Result, bail};
+pub use codewhale_execpolicy::ToolAskRule;
 use codewhale_secrets::SecretSource;
 pub use codewhale_secrets::Secrets;
 use serde::{Deserialize, Serialize};
@@ -14,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 pub const CONFIG_FILE_NAME: &str = "config.toml";
+pub const PERMISSIONS_FILE_NAME: &str = "permissions.toml";
 const DEFAULT_DEEPSEEK_MODEL: &str = "deepseek-v4-pro";
 const DEFAULT_NVIDIA_NIM_MODEL: &str = "deepseek-ai/deepseek-v4-pro";
 const DEFAULT_NVIDIA_NIM_FLASH_MODEL: &str = "deepseek-ai/deepseek-v4-flash";
@@ -196,6 +198,25 @@ pub struct ProvidersToml {
     pub vllm: ProviderConfigToml,
     #[serde(default)]
     pub ollama: ProviderConfigToml,
+}
+
+/// Sibling `permissions.toml` schema.
+///
+/// This slice is intentionally ask-only: each rule is a typed condition that
+/// means "ask before this tool invocation." Typed allow/deny records and UI
+/// persistence are expected to land in follow-up PRs.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PermissionsToml {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rules: Vec<ToolAskRule>,
+}
+
+impl PermissionsToml {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.rules.is_empty()
+    }
 }
 
 impl ProvidersToml {
@@ -1751,26 +1772,26 @@ pub struct ResolvedRuntimeOptions {
 pub struct ConfigStore {
     path: PathBuf,
     pub config: ConfigToml,
+    permissions: PermissionsToml,
 }
 
 impl ConfigStore {
     pub fn load(path: Option<PathBuf>) -> Result<Self> {
         let path = resolve_config_path(path)?;
-        if !path.exists() {
-            return Ok(Self {
-                path,
-                config: ConfigToml::default(),
-            });
-        }
-
-        let raw = fs::read_to_string(&path)
-            .with_context(|| format!("failed to read config at {}", path.display()))?;
-        let parsed: ConfigToml = toml::from_str(&raw)
-            .with_context(|| format!("failed to parse config at {}", path.display()))?;
+        let config = if path.exists() {
+            let raw = fs::read_to_string(&path)
+                .with_context(|| format!("failed to read config at {}", path.display()))?;
+            toml::from_str(&raw)
+                .with_context(|| format!("failed to parse config at {}", path.display()))?
+        } else {
+            ConfigToml::default()
+        };
+        let permissions = load_sibling_permissions(&path)?;
 
         Ok(Self {
             path,
-            config: parsed,
+            config,
+            permissions,
         })
     }
 
@@ -1811,6 +1832,16 @@ impl ConfigStore {
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    #[must_use]
+    pub fn permissions(&self) -> &PermissionsToml {
+        &self.permissions
+    }
+
+    #[must_use]
+    pub fn permissions_path(&self) -> PathBuf {
+        permissions_path_for_config_path(&self.path)
     }
 }
 
@@ -1947,6 +1978,37 @@ pub fn resolve_config_path(explicit: Option<PathBuf>) -> Result<PathBuf> {
         return default_config_path();
     };
     normalize_config_file_path(path)
+}
+
+#[must_use]
+pub fn permissions_path_for_config_path(config_path: &Path) -> PathBuf {
+    config_path.with_file_name(PERMISSIONS_FILE_NAME)
+}
+
+pub fn resolve_permissions_path(config_path: Option<PathBuf>) -> Result<PathBuf> {
+    Ok(permissions_path_for_config_path(&resolve_config_path(
+        config_path,
+    )?))
+}
+
+fn load_sibling_permissions(config_path: &Path) -> Result<PermissionsToml> {
+    let permissions_path = permissions_path_for_config_path(config_path);
+    if !permissions_path.exists() {
+        return Ok(PermissionsToml::default());
+    }
+
+    let raw = fs::read_to_string(&permissions_path).with_context(|| {
+        format!(
+            "failed to read permissions at {}",
+            permissions_path.display()
+        )
+    })?;
+    toml::from_str(&raw).with_context(|| {
+        format!(
+            "failed to parse permissions at {}",
+            permissions_path.display()
+        )
+    })
 }
 
 pub fn default_config_path() -> Result<PathBuf> {
@@ -2283,6 +2345,127 @@ mod tests {
         assert_eq!(policy.default, "allow");
         assert_eq!(policy.proxy, ["github.com", ".githubusercontent.com"]);
         assert!(policy.audit);
+    }
+
+    #[test]
+    fn permissions_toml_deserializes_typed_ask_rules() {
+        let permissions: PermissionsToml = toml::from_str(
+            r#"
+            [[rules]]
+            tool = "exec_shell"
+            command = "cargo test"
+
+            [[rules]]
+            tool = "read_file"
+            path = "secrets/**"
+            "#,
+        )
+        .expect("permissions toml");
+
+        assert_eq!(
+            permissions.rules,
+            vec![
+                ToolAskRule::exec_shell("cargo test"),
+                ToolAskRule::file_path("read_file", "secrets/**"),
+            ]
+        );
+    }
+
+    #[test]
+    fn permissions_toml_rejects_typed_allow_deny_shape() {
+        let err = toml::from_str::<PermissionsToml>(
+            r#"
+            [[rules]]
+            tool = "exec_shell"
+            decision = "allow"
+            command = "cargo test"
+            "#,
+        )
+        .expect_err("permissions.toml should be ask-only in this slice");
+
+        assert!(err.message().contains("unknown field"));
+    }
+
+    #[test]
+    fn config_store_loads_sibling_permissions_toml() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "codewhale-permissions-schema-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).expect("mkdir");
+        let config_path = dir.join(CONFIG_FILE_NAME);
+        fs::write(&config_path, "model = \"deepseek-v4-flash\"\n").expect("write config");
+        fs::write(
+            dir.join(PERMISSIONS_FILE_NAME),
+            r#"
+            [[rules]]
+            tool = "exec_shell"
+            command = "cargo test"
+
+            [[rules]]
+            tool = "read_file"
+            path = "secrets/**"
+            "#,
+        )
+        .expect("write permissions");
+
+        let store = ConfigStore::load(Some(config_path.clone())).expect("load config store");
+
+        assert_eq!(store.config.model.as_deref(), Some("deepseek-v4-flash"));
+        assert_eq!(
+            store.permissions().rules.as_slice(),
+            &[
+                ToolAskRule::exec_shell("cargo test"),
+                ToolAskRule::file_path("read_file", "secrets/**"),
+            ]
+        );
+        assert_eq!(
+            store.permissions_path(),
+            config_path.with_file_name(PERMISSIONS_FILE_NAME)
+        );
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn config_store_loads_permissions_even_when_config_is_absent() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "codewhale-permissions-only-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).expect("mkdir");
+        let config_path = dir.join(CONFIG_FILE_NAME);
+        fs::write(
+            dir.join(PERMISSIONS_FILE_NAME),
+            r#"
+            [[rules]]
+            tool = "exec_shell"
+            command = "cargo check"
+            "#,
+        )
+        .expect("write permissions");
+
+        let store = ConfigStore::load(Some(config_path)).expect("load config store");
+
+        assert!(store.config.model.is_none());
+        assert_eq!(
+            store.permissions().rules.as_slice(),
+            &[ToolAskRule::exec_shell("cargo check")]
+        );
+
+        let _ = fs::remove_dir_all(dir);
     }
 
     struct EnvGuard {
@@ -3143,6 +3326,7 @@ unix_socket_path = "/tmp/cw-hooks.sock"
                 api_key: Some("new-secret".to_string()),
                 ..ConfigToml::default()
             },
+            permissions: PermissionsToml::default(),
         };
         store.save().expect("save");
 
