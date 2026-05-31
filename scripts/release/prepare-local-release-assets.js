@@ -10,6 +10,9 @@ const {
   detectBinaryNames,
 } = require("../../npm/codewhale/scripts/artifacts");
 
+const WINDOWS_LAUNCHER = "codewhale.bat";
+const WINDOWS_CLI_ASSET = "codewhale-windows-x64.exe";
+
 async function sha256(filePath) {
   const content = await fs.readFile(filePath);
   return crypto.createHash("sha256").update(content).digest("hex");
@@ -41,6 +44,9 @@ async function main() {
 
   if (prepareAllAssets) {
     for (const assetName of allAssetNames()) {
+      if (assetName === WINDOWS_LAUNCHER) {
+        continue;
+      }
       if (assets.some((asset) => asset.target === assetName)) {
         continue;
       }
@@ -62,24 +68,22 @@ async function main() {
     manifestLines.push(`${await sha256(outputPath)}  ${asset.target}`);
   }
 
-  // Windows: generate .bat launcher that prefers Windows Terminal
-  if (isWindows) {
+  if (assets.some((asset) => asset.target === WINDOWS_CLI_ASSET)) {
     const batContent = [
       "@echo off",
       "where wt >nul 2>nul",
+      "set NO_ANIMATIONS=1",
       'if "%ERRORLEVEL%"=="0" (',
       '    wt --title CodeWhale cmd /k "%~dp0codewhale-windows-x64.exe"',
-      "    set NO_ANIMATIONS=1",
       ") else (",
       '    "%~dp0codewhale-windows-x64.exe"',
-      "    set NO_ANIMATIONS=1",
       ")",
       "",
     ].join("\r\n");
-    const batPath = path.join(outputDir, "codewhale.bat");
+    const batPath = path.join(outputDir, WINDOWS_LAUNCHER);
     await fs.writeFile(batPath, batContent, "utf8");
     const batHash = await sha256(batPath);
-    manifestLines.push(`${batHash}  codewhale.bat`);
+    manifestLines.push(`${batHash}  ${WINDOWS_LAUNCHER}`);
     console.log(`Generated ${batPath}`);
   }
 

@@ -112,8 +112,8 @@ function releaseBinaryDirectory() {
 function allAssetNames() {
   const names = [];
   for (const platformAssets of Object.values(ASSET_MATRIX)) {
-    for (const pair of Object.values(platformAssets)) {
-      names.push(pair[0], pair[1]);
+    for (const assets of Object.values(platformAssets)) {
+      names.push(...assets);
     }
   }
   return Array.from(new Set(names));
