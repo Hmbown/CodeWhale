@@ -1956,7 +1956,7 @@ mod tests {
     #[test]
     fn resume_pending_requeues_running_and_queued() {
         let mut jm = JobManager::default();
-        let j1 = jm.enqueue("queued_task");
+        let _j1 = jm.enqueue("queued_task");
         let j2 = jm.enqueue("running_task");
         let j3 = jm.enqueue("completed_task");
         let id2 = j2.id.clone();
