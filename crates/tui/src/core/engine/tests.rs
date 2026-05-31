@@ -2309,6 +2309,27 @@ fn missing_tool_error_message_includes_discovery_guidance_when_no_match() {
 }
 
 #[test]
+fn missing_shell_tool_error_message_names_allow_shell_gate() {
+    let catalog = vec![Tool {
+        tool_type: None,
+        name: "read_file".to_string(),
+        description: "Read file contents".to_string(),
+        input_schema: json!({"type":"object","properties":{"path":{"type":"string"}}}),
+        allowed_callers: Some(vec!["direct".to_string()]),
+        defer_loading: Some(false),
+        input_examples: None,
+        strict: None,
+        cache_control: None,
+    }];
+
+    let message = missing_tool_error_message("exec_shell", &catalog);
+    assert!(message.contains("not available in the current tool catalog"));
+    assert!(message.contains("allow_shell"));
+    assert!(message.contains("trusted workspaces"));
+    assert!(message.contains(TOOL_SEARCH_BM25_NAME));
+}
+
+#[test]
 fn filter_tool_call_delta_strips_bracket_marker() {
     let mut in_block = false;
     let visible = filter_tool_call_delta(

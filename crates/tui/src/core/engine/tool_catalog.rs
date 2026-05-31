@@ -437,6 +437,14 @@ fn suggest_tool_names(catalog: &[Tool], requested: &str, limit: usize) -> Vec<St
 pub(super) fn missing_tool_error_message(tool_name: &str, catalog: &[Tool]) -> String {
     let suggestions = suggest_tool_names(catalog, tool_name, 3);
     if suggestions.is_empty() {
+        if is_shell_tool_name(tool_name) {
+            return format!(
+                "Tool '{tool_name}' is not available in the current tool catalog. \
+                 Shell tools are gated by `allow_shell`; enable `allow_shell = true` \
+                 for trusted workspaces, switch to an auto-approve mode that permits shell access, \
+                 or use {TOOL_SEARCH_BM25_NAME} with a short query."
+            );
+        }
         return format!(
             "Tool '{tool_name}' is not available in the current tool catalog. \
              Verify mode/feature flags, or use {TOOL_SEARCH_BM25_NAME} with a short query."
@@ -447,6 +455,18 @@ pub(super) fn missing_tool_error_message(tool_name: &str, catalog: &[Tool]) -> S
         "Tool '{tool_name}' is not available in the current tool catalog. \
          Did you mean: {}? You can also use {TOOL_SEARCH_BM25_NAME} to discover tools.",
         suggestions.join(", ")
+    )
+}
+
+fn is_shell_tool_name(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "exec_shell"
+            | "exec_shell_wait"
+            | "exec_shell_interact"
+            | "task_shell_start"
+            | "task_shell_wait"
+            | "task_shell_cancel"
     )
 }
 
