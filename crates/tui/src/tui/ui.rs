@@ -1896,6 +1896,7 @@ async fn run_event_loop(
                         description,
                         approval_key,
                         approval_grouping_key,
+                        intent_summary,
                     } => {
                         let session_approved =
                             is_session_approved_for_tool(app, &tool_name, &approval_grouping_key);
@@ -1952,27 +1953,30 @@ async fn run_event_loop(
                             let desc_owned = description.clone();
                             let input_owned = input.clone();
                             let key_owned = approval_key.clone();
+                            let intent_owned = intent_summary.clone();
                             let mut request = tokio::task::spawn_blocking(move || {
-                                let mut r = ApprovalRequest::new_with_workspace(
+                                let mut r = ApprovalRequest::new_with_intent(
                                     &id_owned,
                                     &tool_owned,
                                     &desc_owned,
                                     &input_owned,
                                     &key_owned,
                                     Some(workspace_str),
+                                    intent_owned.as_deref(),
                                 );
                                 r.build_and_set_diff_preview();
                                 r
                             })
                             .await
                             .unwrap_or_else(|_| {
-                                ApprovalRequest::new_with_workspace(
+                                ApprovalRequest::new_with_intent(
                                     &id,
                                     &tool_name,
                                     &description,
                                     &input,
                                     &approval_key,
                                     Some(app.workspace.display().to_string()),
+                                    intent_summary.as_deref(),
                                 )
                             });
                             log_sensitive_event(

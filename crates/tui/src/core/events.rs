@@ -232,6 +232,10 @@ pub enum Event {
         /// Lossy / arity-aware fingerprint, used to scope *approvals* so an
         /// "approve for session" covers later flag variants (v0.8.37).
         approval_grouping_key: String,
+        /// The model's explanation of intent before invoking write tools (#2381).
+        /// Displayed in the approval view so users understand *why* the change
+        /// is being made before reviewing *what* will change.
+        intent_summary: Option<String>,
     },
 
     /// Request user input for a tool call

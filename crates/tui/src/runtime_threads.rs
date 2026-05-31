@@ -4173,6 +4173,7 @@ mod tests {
                 tool_name: "exec_command".to_string(),
                 input: json!({"command": "stale approval"}),
                 description: "stale approval".to_string(),
+                intent_summary: None,
             })
             .await?;
 
@@ -4247,6 +4248,7 @@ mod tests {
                 tool_name: "exec_command".to_string(),
                 input: json!({"command": "external allow"}),
                 description: "external allow".to_string(),
+                intent_summary: None,
             })
             .await?;
 
@@ -4325,6 +4327,7 @@ mod tests {
                 tool_name: "exec_command".to_string(),
                 input: json!({"command": "external deny"}),
                 description: "external deny".to_string(),
+                intent_summary: None,
             })
             .await?;
 
@@ -4512,6 +4515,7 @@ mod tests {
                 tool_name: "exec_command".to_string(),
                 input: json!({"command": "remember=true"}),
                 description: "remember=true".to_string(),
+                intent_summary: None,
             })
             .await?;
 

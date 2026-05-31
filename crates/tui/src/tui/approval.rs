@@ -208,6 +208,10 @@ pub struct ApprovalRequest {
     prominent_details: Vec<ApprovalDetail>,
     /// Workspace path used to resolve relative paths for diff previews.
     workspace: Option<String>,
+    /// The model's explanation of intent before invoking write tools (#2381).
+    /// Displayed in the approval view so users understand *why* the change
+    /// is being made before reviewing *what* will change.
+    intent_summary: Option<String>,
 }
 
 impl ApprovalRequest {
@@ -220,18 +224,19 @@ impl ApprovalRequest {
         approval_key: &str,
     ) -> Self {
         let mut req =
-            Self::new_with_workspace(id, tool_name, description, params, approval_key, None);
+            Self::new_with_intent(id, tool_name, description, params, approval_key, None, None);
         req.build_and_set_diff_preview();
         req
     }
 
-    pub fn new_with_workspace(
+    pub fn new_with_intent(
         id: &str,
         tool_name: &str,
         _description: &str,
         params: &Value,
         approval_key: &str,
         workspace: Option<String>,
+        intent_summary: Option<&str>,
     ) -> Self {
         let category = get_tool_category(tool_name);
         let risk = classify_risk(tool_name, category, params);
@@ -253,7 +258,36 @@ impl ApprovalRequest {
             diff_preview: None,
             prominent_details,
             workspace,
+            intent_summary: intent_summary.and_then(|summary| {
+                let summary = summary.trim();
+                if summary.is_empty() {
+                    None
+                } else {
+                    Some(summary.to_string())
+                }
+            }),
         }
+    }
+
+    /// Convenience constructor that passes `None` for `intent_summary`.
+    /// Prefer `new_with_intent` when the model's reasoning is available.
+    pub fn new_with_workspace(
+        id: &str,
+        tool_name: &str,
+        description: &str,
+        params: &Value,
+        approval_key: &str,
+        workspace: Option<String>,
+    ) -> Self {
+        Self::new_with_intent(
+            id,
+            tool_name,
+            description,
+            params,
+            approval_key,
+            workspace,
+            None,
+        )
     }
 
     /// Build the diff preview from disk and store it.  This performs
