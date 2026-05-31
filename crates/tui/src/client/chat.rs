@@ -561,6 +561,52 @@ pub(crate) struct PromptInspection {
     pub layers: Vec<PromptLayerInspection>,
 }
 
+/// Identifies the stable prefix that a cache warmup primes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct CacheWarmupKey {
+    pub provider: String,
+    pub model: String,
+    pub base_url: String,
+    pub static_prefix_hash: String,
+    pub tool_catalog_hash: String,
+    pub project_pack_hash: String,
+    pub skills_hash: String,
+}
+
+impl CacheWarmupKey {
+    pub(crate) fn from_inspection(
+        provider: &str,
+        model: &str,
+        base_url: &str,
+        inspection: &PromptInspection,
+    ) -> Self {
+        Self {
+            provider: provider.to_string(),
+            model: model.to_string(),
+            base_url: base_url.to_string(),
+            static_prefix_hash: inspection.base_static_prefix_hash.clone(),
+            tool_catalog_hash: inspection.tool_catalog_hash.clone(),
+            project_pack_hash: layer_hash(inspection, "Project context pack"),
+            skills_hash: layer_hash(inspection, "Skills"),
+        }
+    }
+
+    pub(crate) fn hash_short(&self) -> String {
+        let json = serde_json::to_string(self).unwrap_or_default();
+        let hash = sha256_hex(json.as_bytes());
+        hash[..hash.len().min(12)].to_string()
+    }
+}
+
+fn layer_hash(inspection: &PromptInspection, name: &str) -> String {
+    inspection
+        .layers
+        .iter()
+        .find(|layer| layer.name == name)
+        .map(|layer| layer.sha256.clone())
+        .unwrap_or_default()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct PromptLayerInspection {
     pub name: String,

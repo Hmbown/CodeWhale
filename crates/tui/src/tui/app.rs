@@ -10,7 +10,7 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::artifacts::ArtifactRecord;
-use crate::client::PromptInspection;
+use crate::client::{CacheWarmupKey, PromptInspection};
 use crate::compaction::CompactionConfig;
 use crate::config::{
     ApiProvider, Config, DEFAULT_TEXT_MODEL, SavedCredential, has_api_key, save_api_key,
@@ -1046,11 +1046,14 @@ pub struct SessionState {
     pub total_output_tokens: u32,
     pub turn_cache_history: VecDeque<TurnCacheRecord>,
     pub last_cache_inspection: Option<PromptInspection>,
+    pub last_warmup_key: Option<CacheWarmupKey>,
     /// Tool catalog from the most recent model request.
     ///
     /// `/cache inspect` uses this to inspect the same tool schema bytes
     /// that were eligible for the provider's prefix cache.
     pub last_tool_catalog: Option<Vec<Tool>>,
+    /// API base URL used by the most recent model request or cache warmup.
+    pub last_base_url: Option<String>,
 }
 
 /// Sidebar hover state for mouse tooltip support.
@@ -1092,7 +1095,9 @@ impl Default for SessionState {
             total_output_tokens: 0,
             turn_cache_history: VecDeque::new(),
             last_cache_inspection: None,
+            last_warmup_key: None,
             last_tool_catalog: None,
+            last_base_url: None,
         }
     }
 }

@@ -3060,6 +3060,7 @@ fn local_cancel_marks_late_stream_events_for_suppression() {
             status: crate::core::events::TurnOutcomeStatus::Interrupted,
             error: None,
             tool_catalog: None,
+            base_url: None,
         }
     ));
     assert!(!suppress_engine_event_after_local_cancel(

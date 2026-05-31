@@ -94,6 +94,8 @@ pub enum Event {
         error: Option<String>,
         /// Tool catalog sent with this turn's model request.
         tool_catalog: Option<Vec<Tool>>,
+        /// API base URL used by this turn's client.
+        base_url: Option<String>,
     },
 
     /// Context compaction started.

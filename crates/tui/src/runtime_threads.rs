@@ -3713,6 +3713,7 @@ mod tests {
                         status: TurnOutcomeStatus::Completed,
                         error: None,
                         tool_catalog: None,
+                        base_url: None,
                     })
                     .await;
             }
@@ -4006,6 +4007,7 @@ mod tests {
                         status: TurnOutcomeStatus::Completed,
                         error: None,
                         tool_catalog: None,
+                        base_url: None,
                     })
                     .await;
                 if turn_index >= 2 {
@@ -4244,6 +4246,7 @@ mod tests {
                 status: TurnOutcomeStatus::Completed,
                 error: None,
                 tool_catalog: None,
+                base_url: None,
             })
             .await?;
 
@@ -4341,6 +4344,7 @@ mod tests {
                 status: TurnOutcomeStatus::Completed,
                 error: None,
                 tool_catalog: None,
+                base_url: None,
             })
             .await?;
         Ok(())
@@ -4420,6 +4424,7 @@ mod tests {
                 status: TurnOutcomeStatus::Completed,
                 error: None,
                 tool_catalog: None,
+                base_url: None,
             })
             .await?;
         Ok(())
@@ -4484,6 +4489,7 @@ mod tests {
                 status: TurnOutcomeStatus::Completed,
                 error: None,
                 tool_catalog: None,
+                base_url: None,
             })
             .await?;
 
@@ -4613,6 +4619,7 @@ mod tests {
                 status: TurnOutcomeStatus::Completed,
                 error: None,
                 tool_catalog: None,
+                base_url: None,
             })
             .await?;
         Ok(())
@@ -4694,6 +4701,7 @@ mod tests {
                 status: TurnOutcomeStatus::Completed,
                 error: None,
                 tool_catalog: None,
+                base_url: None,
             })
             .await?;
 
@@ -4756,6 +4764,7 @@ mod tests {
                         status: TurnOutcomeStatus::Completed,
                         error: None,
                         tool_catalog: None,
+                        base_url: None,
                     })
                     .await;
             }
@@ -4867,6 +4876,7 @@ mod tests {
                                 status: TurnOutcomeStatus::Completed,
                                 error: None,
                                 tool_catalog: None,
+                                base_url: None,
                             })
                             .await;
                     }
@@ -4898,6 +4908,7 @@ mod tests {
                                 status: TurnOutcomeStatus::Completed,
                                 error: None,
                                 tool_catalog: None,
+                                base_url: None,
                             })
                             .await;
                     }

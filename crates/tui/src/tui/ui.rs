@@ -35,7 +35,10 @@ use windows::Win32::System::Console::{GetConsoleMode, GetStdHandle, SetConsoleMo
 
 use crate::audit::log_sensitive_event;
 use crate::automation_manager::{AutomationManager, AutomationSchedulerConfig, spawn_scheduler};
-use crate::client::{DeepSeekClient, build_cache_warmup_request};
+use crate::client::{
+    CacheWarmupKey, DeepSeekClient, PromptInspection, build_cache_warmup_request,
+    inspect_prompt_for_request,
+};
 use crate::commands;
 use crate::compaction::estimate_input_tokens_conservative;
 use crate::config::{
@@ -1515,8 +1518,10 @@ async fn run_event_loop(
                         status,
                         error,
                         tool_catalog,
+                        base_url,
                     } => {
                         app.session.last_tool_catalog = tool_catalog;
+                        app.session.last_base_url = base_url;
                         let was_locally_cancelled = app.suppress_stream_events_until_turn_complete;
                         app.suppress_stream_events_until_turn_complete = false;
                         app.active_allowed_tools = None;
@@ -3975,8 +3980,9 @@ async fn fetch_available_models(config: &Config) -> Result<Vec<String>> {
     Ok(ids)
 }
 
-async fn run_cache_warmup(app: &App, config: &Config) -> Result<Usage> {
+async fn run_cache_warmup(app: &App, config: &Config) -> Result<(Usage, String, PromptInspection)> {
     let client = DeepSeekClient::new(config)?;
+    let base_url = client.base_url().to_string();
     let reasoning_effort = if app.reasoning_effort == ReasoningEffort::Auto {
         app.last_effective_reasoning_effort
             .and_then(ReasoningEffort::api_value)
@@ -3989,7 +3995,7 @@ async fn run_cache_warmup(app: &App, config: &Config) -> Result<Usage> {
         messages: app.api_messages.clone(),
         max_tokens: 1024,
         system: app.system_prompt.clone(),
-        tools: None,
+        tools: app.session.last_tool_catalog.clone(),
         tool_choice: None,
         metadata: None,
         thinking: None,
@@ -3999,9 +4005,10 @@ async fn run_cache_warmup(app: &App, config: &Config) -> Result<Usage> {
         top_p: None,
     };
     let warmup = build_cache_warmup_request(&request);
+    let inspection = inspect_prompt_for_request(&warmup);
     let response =
         tokio::time::timeout(Duration::from_secs(45), client.create_message(warmup)).await??;
-    Ok(response.usage)
+    Ok((response.usage, base_url, inspection))
 }
 
 // `format_*` chip/message builders moved to `tui/format_helpers.rs`.
@@ -5075,8 +5082,18 @@ async fn apply_command_result(
             AppAction::CacheWarmup => {
                 app.status_message = Some("Warming DeepSeek cache...".to_string());
                 match run_cache_warmup(app, config).await {
-                    Ok(usage) => {
+                    Ok((usage, base_url, inspection)) => {
+                        app.session.last_base_url = Some(base_url.clone());
+                        app.session.last_warmup_key = Some(CacheWarmupKey::from_inspection(
+                            &format!("{:?}", app.api_provider),
+                            &app.model,
+                            &base_url,
+                            &inspection,
+                        ));
                         let mut message = format_helpers::cache_warmup_result(&usage);
+                        if let Some(key) = app.session.last_warmup_key.as_ref() {
+                            message.push_str(&format!("\nWarmup key: {}", key.hash_short()));
+                        }
                         // Append prefix-cache stability info.
                         if app.prefix_checks_total > 0 {
                             let changes = app.prefix_change_count;

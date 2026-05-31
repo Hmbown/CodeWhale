@@ -568,6 +568,11 @@ fn build_default_headers(
 }
 
 impl DeepSeekClient {
+    /// Returns the API base URL used by this client.
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
     /// Translate text to the requested target language using a focused
     /// non-streaming chat completion call on the supplied model.
     ///
@@ -1118,7 +1123,7 @@ impl DeepSeekClient {
 
 mod chat;
 
-pub(crate) use chat::PromptInspection;
+pub(crate) use chat::{CacheWarmupKey, PromptInspection};
 
 pub(crate) fn inspect_prompt_for_request(request: &MessageRequest) -> PromptInspection {
     chat::inspect_prompt_for_request(request)

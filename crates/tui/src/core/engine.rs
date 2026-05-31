@@ -1072,6 +1072,7 @@ impl Engine {
                     status: TurnOutcomeStatus::Failed,
                     error: Some(message),
                     tool_catalog: None,
+                    base_url: None,
                 })
                 .await;
             return;
@@ -1256,6 +1257,10 @@ impl Engine {
             )
         });
         let tool_catalog_for_event = tools.clone();
+        let base_url_for_event = self
+            .deepseek_client
+            .as_ref()
+            .map(|client| client.base_url().to_string());
 
         // Main turn loop
         let (status, error) = self
@@ -1290,6 +1295,7 @@ impl Engine {
                 status,
                 error,
                 tool_catalog: tool_catalog_for_event,
+                base_url: base_url_for_event,
             })
             .await;
 
@@ -1336,6 +1342,7 @@ impl Engine {
                     status: TurnOutcomeStatus::Failed,
                     error: Some(message),
                     tool_catalog: None,
+                    base_url: None,
                 })
                 .await;
             return;
@@ -1414,6 +1421,7 @@ impl Engine {
                 status: turn_status,
                 error: turn_error,
                 tool_catalog: None,
+                base_url: None,
             })
             .await;
     }
@@ -1438,6 +1446,7 @@ impl Engine {
                     status: TurnOutcomeStatus::Failed,
                     error: Some(message),
                     tool_catalog: None,
+                    base_url: None,
                 })
                 .await;
             return;
@@ -1493,6 +1502,7 @@ impl Engine {
                 status,
                 error,
                 tool_catalog: None,
+                base_url: None,
             })
             .await;
     }
