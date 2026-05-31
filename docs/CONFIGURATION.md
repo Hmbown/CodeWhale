@@ -168,6 +168,37 @@ distinct set of commands (`auth`, `config`, `model`, `thread`, `sandbox`,
 `app-server`, `mcp-server`, `completion`) and forwards plain prompts to
 `codewhale-tui`.
 
+### Startup Update Checks
+
+By default, the TUI starts a background check for the latest stable CodeWhale
+release and shows a short toast only when a newer release is available and the
+official release assets are complete.
+
+Disable the startup check entirely for air-gapped, corporate-proxy, or managed
+desktop environments:
+
+```toml
+[update]
+check_for_updates = false
+```
+
+To redirect the startup check, set `update_uri` to an internal endpoint that
+returns GitHub-compatible latest-release JSON. Minimal mirror metadata with a
+`tag_name` field is accepted; if `assets` are present, CodeWhale requires the
+same uploaded asset set as the official release before showing the toast.
+
+```toml
+[update]
+check_for_updates = true
+update_uri = "https://internal.mirror.example/codewhale/releases/latest"
+```
+
+When `update_uri` is not set, startup checks honor release mirror environment
+variables such as `CODEWHALE_RELEASE_BASE_URL` before falling back to the
+official GitHub API endpoint. If a configured `update_uri` cannot be fetched or
+parsed and a release mirror env var is set, the TUI falls back to that mirror
+instead of failing startup.
+
 ## Profiles
 
 You can define multiple profiles in the same file:
@@ -311,6 +342,9 @@ Remaining variables:
 - `CODEWHALE_HOME` (override the base data directory; defaults to `~/.codewhale`).
   If you previously exported `DEEPSEEK_HOME`, rename it to `CODEWHALE_HOME`;
   the old env var is not used for new CodeWhale state paths.
+- `CODEWHALE_RELEASE_BASE_URL` (release asset mirror used by `codewhale update`
+  and by TUI startup update checks when `[update].update_uri` is not set, or as
+  a fallback when that configured URI cannot be fetched)
 - `DEEPSEEK_AUTOMATIONS_DIR` (override the automations storage directory; uses
   `~/.codewhale/automations` when that directory exists, otherwise the legacy
   `~/.deepseek/automations` path)

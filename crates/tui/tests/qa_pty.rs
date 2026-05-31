@@ -13,6 +13,7 @@
 #[path = "support/qa_harness/mod.rs"]
 mod qa_harness;
 
+use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 use qa_harness::harness::{Harness, make_sealed_workspace};
@@ -20,6 +21,13 @@ use qa_harness::keys;
 
 const BOOT_TIMEOUT: Duration = Duration::from_secs(15);
 const KEY_TIMEOUT: Duration = Duration::from_secs(5);
+static QA_PTY_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+fn qa_pty_test_lock() -> MutexGuard<'static, ()> {
+    QA_PTY_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+}
 
 fn boot_minimal() -> anyhow::Result<(qa_harness::harness::SealedWorkspace, Harness)> {
     let ws = make_sealed_workspace()?;
@@ -95,6 +103,7 @@ fn assert_viewport_starts_at_top(frame: &qa_harness::Frame) {
 /// broken before we worry about any scenario.
 #[test]
 fn smoke_boot_paints_composer() -> anyhow::Result<()> {
+    let _guard = qa_pty_test_lock();
     let (_ws, mut h) = boot_minimal()?;
 
     // The composer panel border is labelled "Composer" — wait for it.
@@ -115,6 +124,7 @@ fn smoke_boot_paints_composer() -> anyhow::Result<()> {
 /// origin/scroll-region state must not leave blank rows above the TUI.
 #[test]
 fn viewport_origin_stays_row_zero_after_failed_turn() -> anyhow::Result<()> {
+    let _guard = qa_pty_test_lock();
     let (_ws, mut h) = boot_minimal_without_retry()?;
     h.wait_for_text("Composer", BOOT_TIMEOUT)?;
     assert_viewport_starts_at_top(h.frame());
@@ -142,6 +152,7 @@ fn viewport_origin_stays_row_zero_after_failed_turn() -> anyhow::Result<()> {
 /// we lean on it for real scenarios.
 #[test]
 fn smoke_keystroke_reaches_composer() -> anyhow::Result<()> {
+    let _guard = qa_pty_test_lock();
     let (_ws, mut h) = boot_minimal()?;
     h.wait_for_text("Composer", BOOT_TIMEOUT)?;
 
@@ -157,6 +168,7 @@ fn smoke_keystroke_reaches_composer() -> anyhow::Result<()> {
 /// skills directory.
 #[test]
 fn skills_menu_shows_local_and_global_skills() -> anyhow::Result<()> {
+    let _guard = qa_pty_test_lock();
     let ws = make_sealed_workspace()?;
     write_skill(ws.user_skills_dir(), "global-alpha", "Global alpha skill")?;
     write_skill(
@@ -182,6 +194,7 @@ fn skills_menu_shows_local_and_global_skills() -> anyhow::Result<()> {
 
     h.wait_for_text("Composer", BOOT_TIMEOUT)?;
     h.send(keys::key::text("/skills"))?;
+    h.wait_for_text("/skills", KEY_TIMEOUT)?;
     h.wait_for_idle(Duration::from_millis(300), Duration::from_secs(2))?;
     h.send(keys::key::enter())?;
     h.wait_for_text("Available skills", KEY_TIMEOUT)?;
@@ -210,6 +223,7 @@ fn skills_menu_shows_local_and_global_skills() -> anyhow::Result<()> {
 /// holding the text, not start a turn.
 #[test]
 fn paste_bracketed_with_trailing_newline_does_not_autosubmit() -> anyhow::Result<()> {
+    let _guard = qa_pty_test_lock();
     let (_ws, mut h) = boot_minimal()?;
     h.wait_for_text("Composer", BOOT_TIMEOUT)?;
 
@@ -250,6 +264,7 @@ fn paste_bracketed_with_trailing_newline_does_not_autosubmit() -> anyhow::Result
 /// This is the Windows / PowerShell repro from #1073.
 #[test]
 fn paste_unbracketed_with_trailing_newline_does_not_autosubmit() -> anyhow::Result<()> {
+    let _guard = qa_pty_test_lock();
     let (_ws, mut h) = boot_minimal()?;
     h.wait_for_text("Composer", BOOT_TIMEOUT)?;
     // Let the boot fully settle so input handling is wired up.

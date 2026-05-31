@@ -2869,6 +2869,45 @@ fn version_hint_ignores_draft_prerelease_and_current_versions() {
 }
 
 #[test]
+fn startup_version_check_source_respects_update_config() {
+    assert_eq!(
+        startup_version_check_source(&UpdateConfig {
+            check_for_updates: false,
+            update_uri: Some("https://mirror.example/releases/latest".to_string()),
+        }),
+        StartupVersionCheckSource::Disabled
+    );
+
+    assert_eq!(
+        startup_version_check_source(&UpdateConfig {
+            check_for_updates: true,
+            update_uri: Some("  https://mirror.example/releases/latest  ".to_string()),
+        }),
+        StartupVersionCheckSource::ConfiguredUrl(
+            "https://mirror.example/releases/latest".to_string()
+        )
+    );
+
+    assert_eq!(
+        startup_version_check_source(&UpdateConfig::default()),
+        StartupVersionCheckSource::ReleaseResolver
+    );
+}
+
+#[test]
+fn custom_update_uri_accepts_tag_only_release_json() {
+    let json = serde_json::json!({
+        "tag_name": "v0.8.47",
+        "draft": false,
+        "prerelease": false,
+    });
+
+    let hint = version_hint_from_custom_release_json(&json, "0.8.46")
+        .expect("tag-only custom metadata should be enough for mirrors");
+    assert!(hint.contains("v0.8.47 available"));
+}
+
+#[test]
 #[cfg(any(unix, windows))]
 fn external_url_launcher_does_not_wait_for_browser_process() {
     let command = slow_external_url_command();

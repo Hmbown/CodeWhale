@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 // On Windows the push/pop helpers write the escapes directly; crossterm's
 // PushKeyboardEnhancementFlags / PopKeyboardEnhancementFlags commands are
 // never referenced, so the imports are gated to avoid -D warnings failures.
@@ -43,7 +43,7 @@ use crate::commands;
 use crate::compaction::estimate_input_tokens_conservative;
 use crate::config::{
     ApiProvider, Config, DEFAULT_NVIDIA_NIM_BASE_URL, ProviderConfig, ProvidersConfig, StatusItem,
-    save_provider_auth_mode_for,
+    UpdateConfig, save_provider_auth_mode_for,
 };
 use crate::config_ui::{self, ConfigUiMode, WebConfigSession, WebConfigSessionEvent};
 use crate::core::engine::{EngineConfig, EngineHandle, spawn_engine};
@@ -999,27 +999,8 @@ async fn run_event_loop(
     // Fire-and-forget version check — runs once per session in the
     // background. On success, a short status toast advertises the update
     // without replacing the user's configured footer/status-line chips.
-    let mut version_check: Option<tokio::task::JoinHandle<Option<String>>> = Some({
-        let current = env!("CARGO_PKG_VERSION").to_string();
-        tokio::spawn(async move {
-            let client = match reqwest::Client::builder()
-                .user_agent("codewhale-version-check")
-                .timeout(std::time::Duration::from_secs(5))
-                .build()
-            {
-                Ok(c) => c,
-                Err(_) => return None,
-            };
-            let resp = client
-                .get("https://api.github.com/repos/Hmbown/CodeWhale/releases/latest")
-                .header("Accept", "application/vnd.github+json")
-                .send()
-                .await
-                .ok()?;
-            let json: serde_json::Value = resp.json().await.ok()?;
-            version_hint_from_release_json(&json, &current)
-        })
-    });
+    let mut version_check: Option<tokio::task::JoinHandle<Option<String>>> =
+        spawn_startup_version_check(config.update_config());
 
     // Fire a one-shot initial balance fetch for DeepSeek providers
     // so the footer chip shows balance on the first frame without
@@ -8668,12 +8649,119 @@ fn extract_reasoning_header(text: &str) -> Option<String> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum StartupVersionCheckSource {
+    Disabled,
+    ConfiguredUrl(String),
+    ReleaseResolver,
+}
+
+fn startup_version_check_source(config: &UpdateConfig) -> StartupVersionCheckSource {
+    if !config.check_for_updates {
+        return StartupVersionCheckSource::Disabled;
+    }
+    if let Some(update_uri) = config.update_uri() {
+        return StartupVersionCheckSource::ConfiguredUrl(update_uri.to_string());
+    }
+    StartupVersionCheckSource::ReleaseResolver
+}
+
+fn spawn_startup_version_check(
+    config: UpdateConfig,
+) -> Option<tokio::task::JoinHandle<Option<String>>> {
+    let source = startup_version_check_source(&config);
+    if source == StartupVersionCheckSource::Disabled {
+        return None;
+    }
+
+    let current = env!("CARGO_PKG_VERSION").to_string();
+    Some(tokio::spawn(async move {
+        version_hint_from_startup_source(source, &current).await
+    }))
+}
+
+async fn version_hint_from_startup_source(
+    source: StartupVersionCheckSource,
+    current: &str,
+) -> Option<String> {
+    match source {
+        StartupVersionCheckSource::Disabled => None,
+        StartupVersionCheckSource::ConfiguredUrl(url) => {
+            match version_hint_from_configured_update_uri(&url, current).await {
+                Ok(hint) => hint,
+                Err(_) => version_hint_from_release_mirror_env(current).await,
+            }
+        }
+        StartupVersionCheckSource::ReleaseResolver => {
+            if release_mirror_env_configured() {
+                return version_hint_from_release_mirror_env(current).await;
+            }
+
+            let body = codewhale_release::fetch_release_json_async(
+                codewhale_release::LATEST_RELEASE_URL,
+                "latest release",
+            )
+            .await
+            .ok()?;
+            let json: serde_json::Value = serde_json::from_str(&body).ok()?;
+            version_hint_from_release_json(&json, current)
+        }
+    }
+}
+
+async fn version_hint_from_release_mirror_env(current: &str) -> Option<String> {
+    if !release_mirror_env_configured() {
+        return None;
+    }
+    let tag =
+        codewhale_release::latest_release_tag_async(codewhale_release::ReleaseChannel::Stable)
+            .await
+            .ok()?;
+    version_hint_from_latest_tag(&tag, current)
+}
+
+fn release_mirror_env_configured() -> bool {
+    let version = codewhale_release::update_version_from_env()
+        .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
+    codewhale_release::release_base_url_from_env(&version).is_some()
+}
+
+async fn version_hint_from_configured_update_uri(
+    update_uri: &str,
+    current: &str,
+) -> Result<Option<String>> {
+    let body = codewhale_release::fetch_release_json_async(update_uri, "configured latest release")
+        .await?;
+    let json: serde_json::Value = serde_json::from_str(&body).with_context(|| {
+        format!("failed to parse release JSON from configured URI {update_uri}")
+    })?;
+    Ok(version_hint_from_custom_release_json(&json, current))
+}
+
 fn version_hint_from_release_json(json: &serde_json::Value, current: &str) -> Option<String> {
     if !release_has_required_assets(json) {
         return None;
     }
 
     let tag = json["tag_name"].as_str()?;
+    version_hint_from_latest_tag(tag, current)
+}
+
+fn version_hint_from_custom_release_json(
+    json: &serde_json::Value,
+    current: &str,
+) -> Option<String> {
+    if !release_is_publishable(json) {
+        return None;
+    }
+    if json.get("assets").is_some() && !release_has_required_assets(json) {
+        return None;
+    }
+    let tag = json["tag_name"].as_str()?;
+    version_hint_from_latest_tag(tag, current)
+}
+
+fn version_hint_from_latest_tag(tag: &str, current: &str) -> Option<String> {
     let latest = tag.trim_start_matches('v');
     if !is_newer_version(latest, current) {
         return None;
@@ -8685,24 +8773,24 @@ fn version_hint_from_release_json(json: &serde_json::Value, current: &str) -> Op
 }
 
 fn release_has_required_assets(json: &serde_json::Value) -> bool {
-    if json
-        .get("draft")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
-    {
-        return false;
-    }
-    if json
-        .get("prerelease")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
-    {
+    if !release_is_publishable(json) {
         return false;
     }
 
     REQUIRED_RELEASE_ASSETS
         .iter()
         .all(|required| release_has_uploaded_asset(json, required))
+}
+
+fn release_is_publishable(json: &serde_json::Value) -> bool {
+    !json
+        .get("draft")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+        && !json
+            .get("prerelease")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
 }
 
 fn release_has_uploaded_asset(json: &serde_json::Value, required: &str) -> bool {

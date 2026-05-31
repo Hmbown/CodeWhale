@@ -72,6 +72,16 @@ reasoning_effort = "max"
 cost_currency = "usd" # usd | cny
 
 # ─────────────────────────────────────────────────────────────────────────────────
+# Startup update check
+# ─────────────────────────────────────────────────────────────────────────────────
+# The TUI checks for newer CodeWhale releases in the background at startup.
+# Set check_for_updates = false in managed or air-gapped environments.
+# update_uri may point at a GitHub-compatible latest-release JSON endpoint.
+[update]
+check_for_updates = true
+# update_uri = "https://internal.mirror.example/codewhale/releases/latest"
+
+# ─────────────────────────────────────────────────────────────────────────────────
 # Paths
 # ─────────────────────────────────────────────────────────────────────────────────
 skills_dir = "~/.deepseek/skills"
