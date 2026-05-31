@@ -1,0 +1,549 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>CodeWhale Mobile</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #101214;
+      --panel: #181b1f;
+      --panel-2: #20242a;
+      --line: #323840;
+      --text: #f4f1e8;
+      --muted: #a8a49a;
+      --accent: #48c2a8;
+      --accent-2: #c89543;
+      --danger: #e86458;
+      --ok: #76c46b;
+    }
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 15px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 4;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: calc(12px + env(safe-area-inset-top)) 14px 12px;
+      background: rgba(16, 18, 20, 0.96);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(12px);
+    }
+    h1 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 740;
+    }
+    main {
+      display: grid;
+      gap: 12px;
+      padding: 12px 12px calc(14px + env(safe-area-inset-bottom));
+    }
+    section {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      min-height: 46px;
+    }
+    .body { padding: 12px; }
+    .grid { display: grid; gap: 10px; }
+    .row { display: flex; align-items: center; gap: 8px; }
+    .row > * { flex: 1; min-width: 0; }
+    button, input, textarea, select {
+      color: var(--text);
+      background: var(--panel-2);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      font: inherit;
+      letter-spacing: 0;
+    }
+    button {
+      min-height: 40px;
+      padding: 8px 11px;
+      font-weight: 680;
+      cursor: pointer;
+    }
+    button.primary {
+      background: #173d36;
+      border-color: #2a8b77;
+    }
+    button.warn {
+      background: #3c2b14;
+      border-color: #8b682b;
+    }
+    button.danger {
+      background: #421f1d;
+      border-color: #9b4038;
+    }
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
+    input, textarea, select {
+      width: 100%;
+      padding: 10px;
+    }
+    textarea {
+      min-height: 96px;
+      resize: vertical;
+    }
+    label.toggle {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 40px;
+      padding: 8px 10px;
+      color: var(--muted);
+      background: var(--panel-2);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      font-size: 13px;
+    }
+    label.toggle input { width: auto; }
+    .status {
+      min-height: 38px;
+      padding: 9px 10px;
+      border-radius: 8px;
+      background: #121518;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      overflow-wrap: anywhere;
+    }
+    .status.ok { color: var(--ok); }
+    .status.bad { color: var(--danger); }
+    .status.warn { color: var(--accent-2); }
+    #threads {
+      display: grid;
+      gap: 8px;
+      max-height: 260px;
+      overflow: auto;
+    }
+    .thread {
+      width: 100%;
+      padding: 10px;
+      text-align: left;
+      border-radius: 8px;
+      background: var(--panel-2);
+    }
+    .thread.active { border-color: var(--accent); }
+    .thread-title {
+      font-weight: 720;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .meta {
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+    #events {
+      display: grid;
+      gap: 8px;
+      max-height: 54vh;
+      overflow: auto;
+      padding-right: 2px;
+    }
+    .event {
+      padding: 9px 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #121518;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .event.agent { border-color: #357969; }
+    .event.tool { border-color: #8b682b; }
+    .event.error { border-color: #9b4038; }
+    .event.ok { border-color: #4d8048; }
+    .approval-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 9px;
+    }
+    .approval-actions button {
+      flex: 0 0 auto;
+      min-width: 84px;
+    }
+    .empty {
+      color: var(--muted);
+      font-size: 13px;
+    }
+    @media (min-width: 900px) {
+      main {
+        grid-template-columns: 330px minmax(0, 1fr);
+        align-items: start;
+      }
+      section.chat {
+        grid-column: 2;
+        grid-row: 1 / span 3;
+      }
+      #threads { max-height: 420px; }
+      #events { max-height: calc(100vh - 150px); }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>CodeWhale Mobile</h1>
+    <button id="refresh" title="Refresh threads">Refresh</button>
+  </header>
+
+  <main>
+    <section>
+      <div class="head">
+        <strong>Connection</strong>
+        <button id="save-token">Save</button>
+      </div>
+      <div class="body grid">
+        <input id="token" autocomplete="off" spellcheck="false" placeholder="Runtime token">
+        <div id="conn" class="status">Not connected</div>
+      </div>
+    </section>
+
+    <section>
+      <div class="head">
+        <strong>Threads</strong>
+        <button id="new-thread" class="primary">New</button>
+      </div>
+      <div class="body"><div id="threads"></div></div>
+    </section>
+
+    <section class="chat">
+      <div class="head">
+        <strong id="active-title">No thread selected</strong>
+        <span id="event-count" class="meta">0 events</span>
+      </div>
+      <div class="body"><div id="events"></div></div>
+    </section>
+
+    <section>
+      <div class="head">
+        <strong>Composer</strong>
+        <button id="interrupt" class="danger">Interrupt</button>
+      </div>
+      <div class="body grid">
+        <textarea id="prompt" spellcheck="true" placeholder="Message"></textarea>
+        <div class="row">
+          <label class="toggle"><input id="allow-shell" type="checkbox"> shell</label>
+          <label class="toggle"><input id="auto-approve" type="checkbox"> auto</label>
+          <label class="toggle"><input id="remember-approval" type="checkbox"> remember</label>
+        </div>
+        <div class="row">
+          <button id="send" class="primary">Send</button>
+          <button id="steer" class="warn">Steer</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const state = {
+      threadId: "",
+      activeTurnId: "",
+      source: null,
+      eventCount: 0
+    };
+
+    function setStatus(message, tone = "") {
+      const el = $("conn");
+      el.textContent = message;
+      el.className = "status" + (tone ? " " + tone : "");
+    }
+
+    function token() {
+      return $("token").value;
+    }
+
+    function takeTokenFromUrl() {
+      const params = new URLSearchParams(location.search);
+      const urlToken = params.get("token");
+      if (!urlToken) return;
+      localStorage.setItem("codewhale_runtime_token", urlToken);
+      params.delete("token");
+      const qs = params.toString();
+      history.replaceState(null, "", location.pathname + (qs ? "?" + qs : ""));
+    }
+
+    function headers(extra = {}) {
+      const out = Object.assign({ "Content-Type": "application/json" }, extra);
+      if (token()) out.Authorization = "Bearer " + token();
+      return out;
+    }
+
+    async function api(path, options = {}) {
+      const res = await fetch(path, Object.assign({}, options, {
+        headers: headers(options.headers || {})
+      }));
+      if (!res.ok) {
+        let detail = await res.text();
+        try {
+          const parsed = JSON.parse(detail);
+          detail = parsed.error?.message || detail;
+        } catch (_) {}
+        throw new Error(detail || ("HTTP " + res.status));
+      }
+      if (res.status === 204) return null;
+      return res.json();
+    }
+
+    function escapeHtml(raw) {
+      return String(raw).replace(/[&<>"']/g, (char) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        "\"": "&quot;",
+        "'": "&#039;"
+      }[char]));
+    }
+
+    function eventPayload(data) {
+      return data && typeof data === "object" && "payload" in data ? data.payload : data;
+    }
+
+    function eventText(name, data) {
+      const payload = eventPayload(data) || {};
+      if (name === "item.delta") return payload.delta || "";
+      if (name === "item.started") {
+        const tool = payload.tool;
+        if (tool) return "Tool started: " + tool.name + "\n" + JSON.stringify(tool.input || {}, null, 2);
+      }
+      if (name === "item.completed" || name === "item.failed") {
+        const item = payload.item || {};
+        return (name === "item.completed" ? "Completed: " : "Failed: ") + (item.summary || item.kind || "");
+      }
+      if (name === "approval.required") {
+        return "Approval required: " + (payload.tool_name || "") + "\n" + (payload.description || "");
+      }
+      if (name === "approval.decided") {
+        return "Approval " + (payload.decision || "decided") + ": " + (payload.approval_id || "");
+      }
+      if (name === "approval.timeout") {
+        return "Approval timed out: " + (payload.approval_id || "");
+      }
+      if (name === "sandbox.denied") {
+        return "Sandbox denied: " + (payload.tool_name || "") + "\n" + (payload.reason || "");
+      }
+      if (name === "turn.lifecycle") return "Turn status: " + (payload.status || "");
+      if (name === "turn.completed") return "Turn completed";
+      if (name === "coherence.state") return JSON.stringify(payload, null, 2);
+      return JSON.stringify(payload, null, 2);
+    }
+
+    function approvalInfo(name, data) {
+      if (name !== "approval.required") return null;
+      const payload = eventPayload(data) || {};
+      const approvalId = payload.approval_id || payload.id;
+      if (!approvalId) return null;
+      return { id: approvalId };
+    }
+
+    async function decideApproval(approvalId, decision, container) {
+      for (const button of container.querySelectorAll("button")) button.disabled = true;
+      const remember = $("remember-approval").checked;
+      try {
+        const result = await api("/v1/approvals/" + encodeURIComponent(approvalId), {
+          method: "POST",
+          body: JSON.stringify({ decision, remember })
+        });
+        const decided = result?.decision ?? decision;
+        container.innerHTML = "<span class='meta'>Decision sent: " + escapeHtml(decided) + "</span>";
+      } catch (err) {
+        for (const button of container.querySelectorAll("button")) button.disabled = false;
+        throw err;
+      }
+    }
+
+    function appendEvent(name, data) {
+      const text = eventText(name, data);
+      if (!text) return;
+      const item = document.createElement("div");
+      item.className = "event";
+      if (name === "item.delta") item.classList.add("agent");
+      if (name === "item.started" || name.includes("tool")) item.classList.add("tool");
+      if (name.includes("failed") || name.includes("denied") || name.includes("timeout")) item.classList.add("error");
+      if (name === "turn.completed" || name === "approval.decided") item.classList.add("ok");
+      item.innerHTML = "<div class='meta'>" + escapeHtml(name) + "</div>" + escapeHtml(text);
+
+      const approval = approvalInfo(name, data);
+      if (approval) {
+        const actions = document.createElement("div");
+        actions.className = "approval-actions";
+        const allow = document.createElement("button");
+        allow.className = "primary";
+        allow.textContent = "Allow";
+        allow.onclick = () => decideApproval(approval.id, "allow", actions)
+          .catch((err) => setStatus(err.message, "bad"));
+        const deny = document.createElement("button");
+        deny.className = "danger";
+        deny.textContent = "Deny";
+        deny.onclick = () => decideApproval(approval.id, "deny", actions)
+          .catch((err) => setStatus(err.message, "bad"));
+        actions.appendChild(allow);
+        actions.appendChild(deny);
+        item.appendChild(actions);
+      }
+
+      $("events").appendChild(item);
+      state.eventCount += 1;
+      $("event-count").textContent = state.eventCount + " events";
+      $("events").scrollTop = $("events").scrollHeight;
+    }
+
+    async function loadThreads() {
+      const threads = await api("/v1/threads/summary?limit=60&include_archived=false");
+      const list = $("threads");
+      list.innerHTML = "";
+      if (!threads || !threads.length) {
+        list.innerHTML = "<div class='empty'>No active threads.</div>";
+        return;
+      }
+      for (const thread of threads) {
+        const el = document.createElement("button");
+        el.className = "thread" + (thread.id === state.threadId ? " active" : "");
+        el.innerHTML =
+          "<div class='thread-title'>" + escapeHtml(thread.title || thread.id) + "</div>" +
+          "<div class='meta'>" + escapeHtml(thread.mode || "") + " / " +
+          escapeHtml(thread.model || "") + "</div>";
+        el.onclick = () => selectThread(thread.id, thread.title || thread.id);
+        list.appendChild(el);
+      }
+    }
+
+    async function newThread() {
+      const thread = await api("/v1/threads", {
+        method: "POST",
+        body: JSON.stringify({
+          mode: "agent",
+          allow_shell: $("allow-shell").checked,
+          trust_mode: false,
+          auto_approve: $("auto-approve").checked
+        })
+      });
+      await loadThreads();
+      selectThread(thread.id, thread.title || thread.id);
+    }
+
+    async function selectThread(id, title) {
+      state.threadId = id;
+      state.activeTurnId = "";
+      state.eventCount = 0;
+      $("event-count").textContent = "0 events";
+      $("active-title").textContent = title || id;
+      $("events").innerHTML = "";
+      if (state.source) state.source.close();
+      const qs = "?since_seq=0" + (token() ? "&token=" + encodeURIComponent(token()) : "");
+      const source = new EventSource("/v1/threads/" + encodeURIComponent(id) + "/events" + qs);
+      state.source = source;
+      const names = [
+        "thread.started",
+        "turn.started",
+        "turn.lifecycle",
+        "turn.steered",
+        "turn.interrupt_requested",
+        "turn.completed",
+        "item.started",
+        "item.delta",
+        "item.completed",
+        "item.failed",
+        "approval.required",
+        "approval.decided",
+        "approval.timeout",
+        "sandbox.denied",
+        "coherence.state"
+      ];
+      for (const name of names) {
+        source.addEventListener(name, (ev) => {
+          let data = {};
+          try { data = JSON.parse(ev.data || "{}"); } catch (_) {}
+          if (data.turn_id) state.activeTurnId = data.turn_id;
+          appendEvent(name, data);
+        });
+      }
+      source.onopen = () => setStatus("Connected", "ok");
+      source.onerror = () => setStatus("Event stream disconnected", "warn");
+      await loadThreads();
+    }
+
+    async function sendPrompt() {
+      if (!state.threadId) await newThread();
+      const prompt = $("prompt").value.trim();
+      if (!prompt) return;
+      const res = await api("/v1/threads/" + encodeURIComponent(state.threadId) + "/turns", {
+        method: "POST",
+        body: JSON.stringify({
+          prompt,
+          allow_shell: $("allow-shell").checked,
+          trust_mode: false,
+          auto_approve: $("auto-approve").checked
+        })
+      });
+      state.activeTurnId = res.turn?.id || state.activeTurnId;
+      $("prompt").value = "";
+      await loadThreads();
+    }
+
+    async function steerTurn() {
+      if (!state.threadId || !state.activeTurnId) throw new Error("No active turn");
+      const prompt = $("prompt").value.trim();
+      if (!prompt) return;
+      await api(
+        "/v1/threads/" + encodeURIComponent(state.threadId) +
+        "/turns/" + encodeURIComponent(state.activeTurnId) + "/steer",
+        { method: "POST", body: JSON.stringify({ prompt }) }
+      );
+      $("prompt").value = "";
+    }
+
+    async function interruptTurn() {
+      if (!state.threadId || !state.activeTurnId) throw new Error("No active turn");
+      await api(
+        "/v1/threads/" + encodeURIComponent(state.threadId) +
+        "/turns/" + encodeURIComponent(state.activeTurnId) + "/interrupt",
+        { method: "POST", body: "{}" }
+      );
+    }
+
+    async function boot() {
+      takeTokenFromUrl();
+      $("token").value = localStorage.getItem("codewhale_runtime_token") || "";
+      $("save-token").onclick = async () => {
+        localStorage.setItem("codewhale_runtime_token", token());
+        await loadThreads().catch((err) => setStatus(err.message, "bad"));
+      };
+      $("refresh").onclick = () => loadThreads().catch((err) => setStatus(err.message, "bad"));
+      $("new-thread").onclick = () => newThread().catch((err) => setStatus(err.message, "bad"));
+      $("send").onclick = () => sendPrompt().catch((err) => setStatus(err.message, "bad"));
+      $("steer").onclick = () => steerTurn().catch((err) => setStatus(err.message, "bad"));
+      $("interrupt").onclick = () => interruptTurn().catch((err) => setStatus(err.message, "bad"));
+      await loadThreads();
+      setStatus("Connected", "ok");
+    }
+
+    boot().catch((err) => setStatus(err.message, "bad"));
+  </script>
+</body>
+</html>

@@ -147,6 +147,11 @@ export function commandAction(command) {
       return { kind: "interrupt" };
     case "compact":
       return { kind: "compact" };
+    case "model":
+      // /model <model_name> — switch per-chat default model.
+      // Stored in thread store and used for future threads/turns.
+      // Pass "default" to reset to the bridge-level default.
+      return { kind: "set_model", modelName: command.args };
     case "allow":
       return { kind: "approval", decision: "allow", ...parseApprovalDecisionArgs(command.args) };
     case "deny":
@@ -159,6 +164,17 @@ export function commandAction(command) {
         prompt: `/${command.name}${command.args ? ` ${command.args}` : ""}`
       };
   }
+}
+
+export function preservedChatStateFields(state = {}) {
+  const preserved = {};
+  if (Object.prototype.hasOwnProperty.call(state || {}, "model")) {
+    preserved.model = state.model || null;
+  }
+  if (state?.replyToMessageId) {
+    preserved.replyToMessageId = state.replyToMessageId;
+  }
+  return preserved;
 }
 
 export function splitMessage(text, maxChars = 3500) {
@@ -341,6 +357,7 @@ export function helpText() {
     "/threads - recent runtime threads",
     "/new - create a new thread for this chat",
     "/resume <thread_id> - bind this chat to an existing thread",
+    "/model <name|default> - set or reset this chat's model",
     "/interrupt - interrupt the active turn",
     "/compact - compact the current thread",
     "/allow <approval_id> [remember] - approve a pending tool call",

@@ -81,6 +81,16 @@ pub const GRAYSCALE_TEXT_SOFT_RGB: (u8, u8, u8) = (220, 220, 220); // #DCDCDC
 pub const GRAYSCALE_BORDER_RGB: (u8, u8, u8) = (96, 96, 96); // #606060
 pub const GRAYSCALE_SELECTION_RGB: (u8, u8, u8) = (62, 62, 62); // #3E3E3E
 
+pub const MATRIX_SURFACE_RGB: (u8, u8, u8) = (0, 10, 0); // #000A00
+pub const MATRIX_ELEVATED_RGB: (u8, u8, u8) = (0, 51, 0); // #003300
+pub const MATRIX_SELECTION_RGB: (u8, u8, u8) = (0, 51, 0); // #003300
+pub const MATRIX_TEXT_BODY_RGB: (u8, u8, u8) = (136, 255, 136); // #88FF88
+pub const MATRIX_TEXT_MUTED_RGB: (u8, u8, u8) = (0, 85, 0); // #005500
+pub const MATRIX_TEXT_HINT_RGB: (u8, u8, u8) = (0, 102, 0); // #006600
+pub const MATRIX_TEXT_SOFT_RGB: (u8, u8, u8) = (221, 255, 221); // #DDFFDD
+pub const MATRIX_TEXT_DIM_RGB: (u8, u8, u8) = (0, 68, 0); // #004400
+pub const MATRIX_BORDER_RGB: (u8, u8, u8) = (0, 204, 0); // #00CC00
+
 // New semantic colors
 pub const BORDER_COLOR_RGB: (u8, u8, u8) = WHALE_BORDER_RGB; // #2A4A7F
 
@@ -925,6 +935,109 @@ pub const GRUVBOX_DARK_UI_THEME: UiTheme = UiTheme {
     tool_failed: Color::Rgb(0xfb, 0x49, 0x34),  // red
 };
 
+pub const MATRIX_UI_THEME: UiTheme = UiTheme {
+    name: "matrix",
+    mode: PaletteMode::Dark,
+    surface_bg: Color::Rgb(
+        MATRIX_SURFACE_RGB.0,
+        MATRIX_SURFACE_RGB.1,
+        MATRIX_SURFACE_RGB.2,
+    ),
+    panel_bg: Color::Rgb(
+        MATRIX_SURFACE_RGB.0,
+        MATRIX_SURFACE_RGB.1,
+        MATRIX_SURFACE_RGB.2,
+    ),
+    elevated_bg: Color::Rgb(
+        MATRIX_ELEVATED_RGB.0,
+        MATRIX_ELEVATED_RGB.1,
+        MATRIX_ELEVATED_RGB.2,
+    ),
+    composer_bg: Color::Rgb(
+        MATRIX_SURFACE_RGB.0,
+        MATRIX_SURFACE_RGB.1,
+        MATRIX_SURFACE_RGB.2,
+    ),
+    selection_bg: Color::Rgb(
+        MATRIX_SELECTION_RGB.0,
+        MATRIX_SELECTION_RGB.1,
+        MATRIX_SELECTION_RGB.2,
+    ),
+    header_bg: Color::Rgb(
+        MATRIX_SURFACE_RGB.0,
+        MATRIX_SURFACE_RGB.1,
+        MATRIX_SURFACE_RGB.2,
+    ),
+    footer_bg: Color::Rgb(
+        MATRIX_SURFACE_RGB.0,
+        MATRIX_SURFACE_RGB.1,
+        MATRIX_SURFACE_RGB.2,
+    ),
+    text_dim: Color::Rgb(
+        MATRIX_TEXT_DIM_RGB.0,
+        MATRIX_TEXT_DIM_RGB.1,
+        MATRIX_TEXT_DIM_RGB.2,
+    ),
+    text_hint: Color::Rgb(
+        MATRIX_TEXT_HINT_RGB.0,
+        MATRIX_TEXT_HINT_RGB.1,
+        MATRIX_TEXT_HINT_RGB.2,
+    ),
+    text_muted: Color::Rgb(
+        MATRIX_TEXT_MUTED_RGB.0,
+        MATRIX_TEXT_MUTED_RGB.1,
+        MATRIX_TEXT_MUTED_RGB.2,
+    ),
+    text_body: Color::Rgb(
+        MATRIX_TEXT_BODY_RGB.0,
+        MATRIX_TEXT_BODY_RGB.1,
+        MATRIX_TEXT_BODY_RGB.2,
+    ),
+    text_soft: Color::Rgb(
+        MATRIX_TEXT_SOFT_RGB.0,
+        MATRIX_TEXT_SOFT_RGB.1,
+        MATRIX_TEXT_SOFT_RGB.2,
+    ),
+    border: Color::Rgb(
+        MATRIX_BORDER_RGB.0,
+        MATRIX_BORDER_RGB.1,
+        MATRIX_BORDER_RGB.2,
+    ),
+    accent_primary: Color::Rgb(
+        MATRIX_BORDER_RGB.0,
+        MATRIX_BORDER_RGB.1,
+        MATRIX_BORDER_RGB.2,
+    ),
+    accent_secondary: Color::Rgb(0, 153, 0),
+    accent_action: Color::Rgb(0x88, 0xff, 0x88),
+    error_fg: Color::Rgb(0xb4, 0, 0),
+    error_hover: Color::Rgb(0xe0, 0, 0),
+    error_surface: Color::Rgb(0x1a, 0x0d, 0x0d),
+    error_border: Color::Rgb(0xb4, 0, 0),
+    error_text: Color::Rgb(0xff, 0x44, 0x44),
+    warning: Color::Rgb(204, 204, 0),
+    success: Color::Rgb(0x88, 0xff, 0x88),
+    info: Color::Rgb(0, 204, 0),
+    mode_agent: Color::Rgb(0, 153, 0),
+    mode_yolo: Color::Rgb(255, 100, 100),
+    mode_plan: Color::Rgb(255, 170, 60),
+    mode_goal: Color::Rgb(170, 255, 170),
+    status_ready: Color::Rgb(0, 85, 0),
+    status_working: Color::Rgb(
+        MATRIX_TEXT_BODY_RGB.0,
+        MATRIX_TEXT_BODY_RGB.1,
+        MATRIX_TEXT_BODY_RGB.2,
+    ),
+    status_warning: Color::Rgb(204, 204, 0),
+    diff_added_fg: Color::Rgb(0x88, 0xff, 0x88),
+    diff_deleted_fg: Color::Rgb(0xb4, 0, 0),
+    diff_added_bg: Color::Rgb(0x0d, 0x1a, 0x0d),
+    diff_deleted_bg: Color::Rgb(0x1a, 0x0d, 0x0d),
+    tool_running: Color::Rgb(0x88, 0xff, 0x88),
+    tool_success: Color::Rgb(0, 102, 0),
+    tool_failed: Color::Rgb(0xb4, 0, 0),
+};
+
 /// Stable identifiers for the named themes the user can select. `System`
 /// defers to `PaletteMode::detect()` (terminal-driven dark/light). Each
 /// dark/light id resolves to a single fixed `UiTheme`.
@@ -939,6 +1052,7 @@ pub enum ThemeId {
     TokyoNight,
     Dracula,
     GruvboxDark,
+    Matrix,
 }
 
 impl ThemeId {
@@ -957,6 +1071,7 @@ impl ThemeId {
             "tokyo-night" => Some(Self::TokyoNight),
             "dracula" => Some(Self::Dracula),
             "gruvbox-dark" => Some(Self::GruvboxDark),
+            "matrix" => Some(Self::Matrix),
             _ => None,
         }
     }
@@ -975,6 +1090,7 @@ impl ThemeId {
             Self::TokyoNight => "tokyo-night",
             Self::Dracula => "dracula",
             Self::GruvboxDark => "gruvbox-dark",
+            Self::Matrix => "matrix",
         }
     }
 
@@ -991,6 +1107,7 @@ impl ThemeId {
             Self::TokyoNight => "Tokyo Night",
             Self::Dracula => "Dracula",
             Self::GruvboxDark => "Gruvbox Dark",
+            Self::Matrix => "Matrix",
         }
     }
 
@@ -1007,6 +1124,7 @@ impl ThemeId {
             Self::TokyoNight => "Deep blue/violet night palette",
             Self::Dracula => "Classic high-contrast purple",
             Self::GruvboxDark => "Vintage warm earth tones",
+            Self::Matrix => "The Matrix films inspired theme",
         }
     }
 
@@ -1026,6 +1144,7 @@ impl ThemeId {
             Self::TokyoNight => TOKYO_NIGHT_UI_THEME,
             Self::Dracula => DRACULA_UI_THEME,
             Self::GruvboxDark => GRUVBOX_DARK_UI_THEME,
+            Self::Matrix => MATRIX_UI_THEME,
         }
     }
 }
@@ -1041,6 +1160,7 @@ pub const SELECTABLE_THEMES: &[ThemeId] = &[
     ThemeId::TokyoNight,
     ThemeId::Dracula,
     ThemeId::GruvboxDark,
+    ThemeId::Matrix,
 ];
 
 impl UiTheme {
@@ -1085,6 +1205,7 @@ pub fn normalize_theme_name(value: &str) -> Option<&'static str> {
         "tokyo-night" | "tokyonight" | "tokyo" => Some("tokyo-night"),
         "dracula" => Some("dracula"),
         "gruvbox-dark" | "gruvbox" => Some("gruvbox-dark"),
+        "matrix" | "hacker" => Some("matrix"),
         _ => None,
     }
 }
@@ -1259,6 +1380,7 @@ pub const fn theme_remap_active(theme: ThemeId) -> bool {
             | ThemeId::TokyoNight
             | ThemeId::Dracula
             | ThemeId::GruvboxDark
+            | ThemeId::Matrix
     )
 }
 
@@ -1292,7 +1414,11 @@ pub fn adapt_fg_for_theme(color: Color, theme: ThemeId, ui: &UiTheme) -> Color {
     } else if color == TEXT_ACCENT || color == DEEPSEEK_SKY || color == ACCENT_TOOL_LIVE {
         ui.status_working
     } else if color == TEXT_REASONING || color == ACCENT_REASONING_LIVE {
-        ui.mode_plan
+        if theme == ThemeId::Matrix {
+            Color::Rgb(0x00, 0x55, 0x00) // #005500
+        } else {
+            ui.mode_plan
+        }
     } else if color == ACCENT_TOOL_ISSUE {
         ui.mode_yolo
     } else if color == STATUS_WARNING {

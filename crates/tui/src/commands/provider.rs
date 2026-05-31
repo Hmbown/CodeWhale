@@ -27,7 +27,7 @@ pub fn provider(app: &mut App, args: Option<&str>) -> CommandResult {
 
     let Some(target) = ApiProvider::parse(name) else {
         return CommandResult::error(format!(
-            "Unknown provider '{name}'. Expected: deepseek, nvidia-nim, openai, atlascloud, wanjie-ark, openrouter, novita, fireworks, sglang, vllm, or ollama."
+            "Unknown provider '{name}'. Expected: deepseek, nvidia-nim, openai, atlascloud, wanjie-ark, openrouter, xiaomi-mimo, novita, fireworks, siliconflow, moonshot, sglang, vllm, or ollama."
         ));
     };
 
@@ -112,6 +112,7 @@ mod tests {
         let msg = result.message.expect("expected error message");
         assert!(msg.contains("Unknown provider"));
         assert!(msg.contains("openrouter"));
+        assert!(msg.contains("xiaomi-mimo"));
         assert!(msg.contains("novita"));
         assert!(result.action.is_none());
     }
@@ -123,6 +124,19 @@ mod tests {
         match result.action {
             Some(AppAction::SwitchProvider { provider, model }) => {
                 assert_eq!(provider, ApiProvider::Openrouter);
+                assert_eq!(model, None);
+            }
+            other => panic!("expected SwitchProvider, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn switch_to_xiaomi_mimo_emits_action() {
+        let mut app = create_test_app();
+        let result = provider(&mut app, Some("xiaomi-mimo"));
+        match result.action {
+            Some(AppAction::SwitchProvider { provider, model }) => {
+                assert_eq!(provider, ApiProvider::XiaomiMimo);
                 assert_eq!(model, None);
             }
             other => panic!("expected SwitchProvider, got {other:?}"),
@@ -176,6 +190,19 @@ mod tests {
             Some(AppAction::SwitchProvider { provider, model }) => {
                 assert_eq!(provider, ApiProvider::Fireworks);
                 assert_eq!(model.as_deref(), Some("deepseek-v4-pro"));
+            }
+            other => panic!("expected SwitchProvider, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn switch_to_siliconflow_emits_action() {
+        let mut app = create_test_app();
+        let result = provider(&mut app, Some("siliconflow flash"));
+        match result.action {
+            Some(AppAction::SwitchProvider { provider, model }) => {
+                assert_eq!(provider, ApiProvider::Siliconflow);
+                assert_eq!(model.as_deref(), Some("deepseek-v4-flash"));
             }
             other => panic!("expected SwitchProvider, got {other:?}"),
         }

@@ -9,8 +9,8 @@ use crate::tui::file_mention::{
     try_autocomplete_file_mention, user_request_with_file_mentions, visible_mention_menu_entries,
 };
 use crate::tui::footer_ui::{
-    active_tool_status_label, footer_auxiliary_spans, footer_cache_spans, footer_coherence_spans,
-    footer_state_label, footer_status_line_spans, format_context_budget,
+    active_tool_status_label, footer_auxiliary_spans, footer_balance_spans, footer_cache_spans,
+    footer_coherence_spans, footer_state_label, footer_status_line_spans, format_context_budget,
     format_token_count_compact, friendly_subagent_progress, render_footer_from,
 };
 use crate::tui::history::{
@@ -2114,15 +2114,41 @@ fn turn_liveness_leaves_active_turn_running() {
     let mut app = create_test_app();
     app.is_loading = true;
     app.runtime_turn_status = Some("in_progress".to_string());
-    app.dispatch_started_at =
-        Some(Instant::now() - DISPATCH_WATCHDOG_TIMEOUT - Duration::from_secs(10));
+    app.turn_started_at = Some(Instant::now() - Duration::from_secs(60));
 
     let recovered = reconcile_turn_liveness(&mut app, Instant::now(), false);
 
     assert!(!recovered);
     assert!(app.is_loading);
-    assert!(app.dispatch_started_at.is_some());
+    assert!(app.turn_started_at.is_some());
     assert!(app.status_toasts.is_empty());
+}
+
+#[test]
+fn turn_liveness_recovers_stalled_in_progress_turn() {
+    let mut app = create_test_app();
+    app.is_loading = true;
+    app.runtime_turn_status = Some("in_progress".to_string());
+    app.runtime_turn_id = Some("stale-turn-id".to_string());
+    app.turn_started_at =
+        Some(Instant::now() - TURN_STALL_WATCHDOG_TIMEOUT - Duration::from_millis(1));
+    app.streaming_message_index = Some(0);
+    app.user_scrolled_during_stream = true;
+
+    let recovered = reconcile_turn_liveness(&mut app, Instant::now(), false);
+
+    assert!(recovered);
+    assert!(!app.is_loading);
+    assert!(app.turn_started_at.is_none());
+    assert!(app.runtime_turn_status.is_none());
+    assert!(app.runtime_turn_id.is_none());
+    assert!(app.dispatch_started_at.is_none());
+    assert!(app.streaming_message_index.is_none());
+    assert!(app.streaming_thinking_active_entry.is_none());
+    assert!(!app.user_scrolled_during_stream);
+    let toast = app.status_toasts.back().expect("stall toast");
+    assert_eq!(toast.level, StatusToastLevel::Error);
+    assert!(toast.text.contains("Turn stalled"));
 }
 
 #[test]
@@ -3834,6 +3860,8 @@ fn open_tool_details_pager_supports_active_virtual_tool_cell() {
         &[1],
         100,
         app.transcript_render_options(),
+        &app.folded_thinking,
+        None,
     );
     app.viewport.last_transcript_top = 0;
     app.viewport.last_transcript_visible = 4;
@@ -5506,6 +5534,50 @@ fn message_complete_drain_preserves_thinking_when_thinking_complete_lost() {
 }
 
 #[test]
+fn approval_prompt_uses_event_input_after_message_complete_drain() {
+    let mut app = create_test_app();
+    app.pending_tool_uses.push((
+        "tool-1".to_string(),
+        "exec_shell".to_string(),
+        serde_json::json!({"command": "stale value from drained list"}),
+    ));
+
+    // Mirror the old race: MessageComplete drains pending tool uses before
+    // ApprovalRequired is handled. The approval modal must still show the
+    // non-empty input carried directly on the ApprovalRequired event.
+    app.pending_tool_uses.clear();
+
+    let event_input = serde_json::json!({
+        "command": "cargo test -p codewhale-tui approval",
+        "workdir": "/repo",
+    });
+    push_approval_request_view(
+        &mut app,
+        "tool-1",
+        "exec_shell",
+        "Run cargo tests",
+        &event_input,
+        "approval-key",
+        None,
+    );
+
+    let mut view = app.view_stack.pop().expect("approval view");
+    let approval = view
+        .as_any_mut()
+        .downcast_mut::<ApprovalView>()
+        .expect("approval view");
+    let action = approval.handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE));
+    let ViewAction::Emit(ViewEvent::OpenTextPager { content, .. }) = action else {
+        panic!("expected approval params pager");
+    };
+
+    assert!(content.contains("cargo test -p codewhale-tui approval"));
+    assert!(content.contains("/repo"));
+    assert!(!content.contains("stale value from drained list"));
+    assert_ne!(content.trim(), "{}");
+}
+
+#[test]
 fn second_thinking_block_appends_new_entry_in_same_active_cell() {
     // Real V4 turns can emit Thinking → Tool → Thinking → Tool before any
     // prose; the second thinking block should land as a fresh entry inside
@@ -5986,12 +6058,16 @@ fn render_footer_from_with_default_items_renders_mode_and_model() {
 }
 
 #[test]
-fn default_footer_keeps_prefix_stability_opt_in() {
+fn default_footer_excludes_provider_specific_diagnostic_chips() {
     let items = crate::config::StatusItem::default_footer();
 
     assert!(
         !items.contains(&crate::config::StatusItem::PrefixStability),
         "prefix stability is a diagnostic chip and should not crowd the default footer"
+    );
+    assert!(
+        !items.contains(&crate::config::StatusItem::Balance),
+        "balance is DeepSeek-only and should not crowd the default footer for non-DeepSeek users"
     );
     assert!(
         items.contains(&crate::config::StatusItem::Cache),
@@ -6088,6 +6164,130 @@ fn render_footer_from_git_branch_item_renders_workspace_branch() {
 
     let props = render_footer_from(&app, &[crate::config::StatusItem::GitBranch], None);
     assert_eq!(spans_text(&props.cache), "feature/statusline");
+}
+
+// ── Balance footer chip tests ─────────────────────────────────────
+
+#[test]
+fn footer_balance_spans_empty_when_cell_is_none() {
+    let app = create_test_app();
+    let spans = footer_balance_spans(&app);
+    assert!(spans.is_empty());
+}
+
+#[test]
+fn footer_balance_spans_empty_when_balance_is_zero() {
+    let app = create_test_app();
+    let info = crate::pricing::BalanceInfo {
+        currency: "USD".into(),
+        total_balance: "0".into(),
+        ..Default::default()
+    };
+    *app.balance_cell.lock().unwrap() = Some(info);
+    let spans = footer_balance_spans(&app);
+    assert!(spans.is_empty());
+}
+
+#[test]
+fn footer_balance_spans_formats_cny() {
+    let app = create_test_app();
+    let info = crate::pricing::BalanceInfo {
+        currency: "CNY".into(),
+        total_balance: "123.45".into(),
+        ..Default::default()
+    };
+    *app.balance_cell.lock().unwrap() = Some(info);
+    let spans = footer_balance_spans(&app);
+    assert_eq!(spans_text(&spans), "bal ¥123.5");
+}
+
+#[test]
+fn footer_balance_spans_formats_usd() {
+    let app = create_test_app();
+    let info = crate::pricing::BalanceInfo {
+        currency: "USD".into(),
+        total_balance: "0.50".into(),
+        ..Default::default()
+    };
+    *app.balance_cell.lock().unwrap() = Some(info);
+    let spans = footer_balance_spans(&app);
+    assert_eq!(spans_text(&spans), "bal $0.50");
+}
+
+#[test]
+fn footer_balance_spans_rounds_large_amount() {
+    let app = create_test_app();
+    let info = crate::pricing::BalanceInfo {
+        currency: "USD".into(),
+        total_balance: "1234.56".into(),
+        ..Default::default()
+    };
+    *app.balance_cell.lock().unwrap() = Some(info);
+    let spans = footer_balance_spans(&app);
+    assert_eq!(spans_text(&spans), "bal $1235");
+}
+
+#[test]
+fn footer_balance_spans_treats_unknown_currency_as_usd() {
+    let app = create_test_app();
+    let info = crate::pricing::BalanceInfo {
+        currency: "EUR".into(),
+        total_balance: "10.00".into(),
+        ..Default::default()
+    };
+    *app.balance_cell.lock().unwrap() = Some(info);
+    let spans = footer_balance_spans(&app);
+    assert_eq!(spans_text(&spans), "bal $10.0");
+}
+
+#[test]
+fn render_footer_from_with_balance_item_shows_balance() {
+    let app = create_test_app();
+    let info = crate::pricing::BalanceInfo {
+        currency: "USD".into(),
+        total_balance: "42.50".into(),
+        ..Default::default()
+    };
+    *app.balance_cell.lock().unwrap() = Some(info);
+    let props = render_footer_from(&app, &[crate::config::StatusItem::Balance], None);
+    assert_eq!(spans_text(&props.balance), "bal $42.5");
+}
+
+#[test]
+fn render_footer_from_without_balance_item_hides_balance() {
+    let app = create_test_app();
+    let info = crate::pricing::BalanceInfo {
+        currency: "USD".into(),
+        total_balance: "99.99".into(),
+        ..Default::default()
+    };
+    *app.balance_cell.lock().unwrap() = Some(info);
+    let props = render_footer_from(&app, &[], None);
+    assert!(spans_text(&props.balance).is_empty());
+}
+
+#[test]
+fn should_fetch_deepseek_balance_requires_balance_status_item() {
+    let mut app = create_test_app();
+    app.api_provider = ApiProvider::Deepseek;
+    app.status_items = crate::config::StatusItem::default_footer();
+
+    assert!(!should_fetch_deepseek_balance(&app));
+
+    app.status_items.push(crate::config::StatusItem::Balance);
+    assert!(should_fetch_deepseek_balance(&app));
+}
+
+#[test]
+fn should_fetch_deepseek_balance_requires_deepseek_provider() {
+    let mut app = create_test_app();
+    app.status_items = vec![crate::config::StatusItem::Balance];
+
+    app.api_provider = ApiProvider::Openrouter;
+    assert!(!should_fetch_deepseek_balance(&app));
+
+    app.api_provider = ApiProvider::DeepseekCN;
+    assert!(should_fetch_deepseek_balance(&app));
 }
 
 #[test]

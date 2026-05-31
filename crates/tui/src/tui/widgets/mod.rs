@@ -156,6 +156,8 @@ impl ChatWidget {
                 &cell_revisions,
                 content_area.width.max(1),
                 render_options,
+                &app.folded_thinking,
+                None,
             );
         } else {
             // Slow path: clone non-collapsed cells into filtered vecs so
@@ -203,6 +205,8 @@ impl ChatWidget {
                 &filtered_revs,
                 content_area.width.max(1),
                 render_options,
+                &app.folded_thinking,
+                Some(&app.collapsed_cell_map),
             );
         }
 
@@ -1162,6 +1166,45 @@ impl Renderable for ApprovalWidget<'_> {
             ]));
         }
 
+        // Intent summary — the model's explanation of why this change is needed (#2381).
+        if let Some(ref summary) = self.request.intent_summary {
+            let max_width = card_area.width.saturating_sub(14) as usize;
+            if max_width > 0 {
+                lines.push(Line::from(""));
+                let intent_label = match locale {
+                    Locale::ZhHans => "意图：",
+                    _ => "Intent: ",
+                };
+                let summary_lines: Vec<&str> = summary.lines().collect();
+                for (i, sline) in summary_lines.iter().take(3).enumerate() {
+                    let prefix = if i == 0 { intent_label } else { "  " };
+                    let truncated = crate::utils::truncate_with_ellipsis(sline, max_width, "...");
+                    lines.push(Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled(
+                            prefix,
+                            if i == 0 {
+                                Style::default().fg(palette::TEXT_HINT)
+                            } else {
+                                Style::default()
+                            },
+                        ),
+                        Span::styled(truncated, Style::default().fg(palette::TEXT_SECONDARY)),
+                    ]));
+                }
+                if summary_lines.len() > 3 {
+                    let more = match locale {
+                        Locale::ZhHans => format!("  … (还有 {} 行)", summary_lines.len() - 3),
+                        _ => format!("  … (+{} lines)", summary_lines.len() - 3),
+                    };
+                    lines.push(Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled(more, Style::default().fg(palette::TEXT_HINT)),
+                    ]));
+                }
+            }
+        }
+
         lines.push(Line::from(""));
         let params_str = self.request.params_display();
         let params_width = card_area.width.saturating_sub(14) as usize;
@@ -1920,7 +1963,7 @@ fn composer_top_right_chrome(app: &App, area_width: u16) -> Option<Line<'static>
 }
 
 fn should_render_empty_state(app: &App) -> bool {
-    app.history.is_empty() && !app.is_loading && !app.is_compacting
+    app.history.is_empty() && !app.is_loading && !app.is_compacting && !app.is_purging
 }
 
 fn build_empty_state_lines(app: &App, area: Rect) -> Vec<Line<'static>> {

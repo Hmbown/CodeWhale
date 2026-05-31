@@ -71,6 +71,17 @@ use super::{
     release_stream_buffer, system_to_instructions, to_api_tool_name,
 };
 
+fn apply_provider_token_limit(body: &mut Value, provider: ApiProvider, max_tokens: u32) {
+    if provider != ApiProvider::XiaomiMimo {
+        return;
+    }
+
+    if let Some(object) = body.as_object_mut() {
+        object.remove("max_tokens");
+    }
+    body["max_completion_tokens"] = json!(max_tokens);
+}
+
 impl DeepSeekClient {
     pub(super) async fn create_message_chat(
         &self,
@@ -82,6 +93,7 @@ impl DeepSeekClient {
             "messages": messages,
             "max_tokens": request.max_tokens,
         });
+        apply_provider_token_limit(&mut body, self.api_provider, request.max_tokens);
 
         if let Some(temperature) = request.temperature {
             body["temperature"] = json!(temperature);
@@ -156,6 +168,7 @@ impl DeepSeekClient {
                 "include_usage": true
             },
         });
+        apply_provider_token_limit(&mut body, self.api_provider, request.max_tokens);
 
         if let Some(temperature) = request.temperature {
             body["temperature"] = json!(temperature);
@@ -1729,8 +1742,10 @@ fn provider_accepts_reasoning_content(provider: ApiProvider) -> bool {
             | ApiProvider::DeepseekCN
             | ApiProvider::NvidiaNim
             | ApiProvider::Openrouter
+            | ApiProvider::XiaomiMimo
             | ApiProvider::Novita
             | ApiProvider::Fireworks
+            | ApiProvider::Siliconflow
             | ApiProvider::Sglang
     )
 }
@@ -3092,11 +3107,12 @@ mod alias_thinking_detection_tests {
     //! turn. See upstream API docs:
     //! https://api-docs.deepseek.com/guides/thinking_mode
     use super::{
-        is_reasoning_model_for_stream, provider_accepts_reasoning_content,
-        requires_reasoning_content, should_replay_reasoning_content,
-        should_replay_reasoning_content_for_provider,
+        apply_provider_token_limit, is_reasoning_model_for_stream,
+        provider_accepts_reasoning_content, requires_reasoning_content,
+        should_replay_reasoning_content, should_replay_reasoning_content_for_provider,
     };
     use crate::config::ApiProvider;
+    use serde_json::json;
 
     #[test]
     fn aliases_routed_to_v4_require_reasoning_content() {
@@ -3162,6 +3178,25 @@ mod alias_thinking_detection_tests {
         assert!(!provider_accepts_reasoning_content(ApiProvider::Openai));
         assert!(provider_accepts_reasoning_content(ApiProvider::Deepseek));
         assert!(provider_accepts_reasoning_content(ApiProvider::NvidiaNim));
+        assert!(provider_accepts_reasoning_content(ApiProvider::XiaomiMimo));
+    }
+
+    #[test]
+    fn xiaomi_mimo_uses_max_completion_tokens_payload_key() {
+        let mut body = json!({
+            "model": "mimo-v2.5-pro",
+            "messages": [],
+            "max_tokens": 8192,
+        });
+
+        apply_provider_token_limit(&mut body, ApiProvider::XiaomiMimo, 8192);
+
+        assert!(body.get("max_tokens").is_none());
+        assert_eq!(
+            body.get("max_completion_tokens")
+                .and_then(serde_json::Value::as_u64),
+            Some(8192)
+        );
     }
 
     #[test]

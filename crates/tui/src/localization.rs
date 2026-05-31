@@ -259,6 +259,7 @@ pub enum MessageId {
     CmdBalanceDescription,
     CmdClearDescription,
     CmdCompactDescription,
+    CmdPurgeDescription,
     CmdConfigDescription,
     CmdContextDescription,
     CmdCostDescription,
@@ -303,6 +304,7 @@ pub enum MessageId {
     CmdSettingsDescription,
     CmdSkillDescription,
     CmdSkillsDescription,
+    CmdSlopDescription,
     CmdStashDescription,
     CmdStatusDescription,
     CmdStatuslineDescription,
@@ -340,6 +342,7 @@ pub enum MessageId {
     FooterAgentsPlural,
     FooterPressCtrlCAgain,
     FooterWorking,
+    FooterBalancePrefix,
     HelpSectionActions,
     HelpSectionClipboard,
     HelpSectionEditing,
@@ -522,6 +525,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CmdCacheDescription,
     MessageId::CmdClearDescription,
     MessageId::CmdCompactDescription,
+    MessageId::CmdPurgeDescription,
     MessageId::CmdConfigDescription,
     MessageId::CmdContextDescription,
     MessageId::CmdCostDescription,
@@ -563,6 +567,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CmdSettingsDescription,
     MessageId::CmdSkillDescription,
     MessageId::CmdSkillsDescription,
+    MessageId::CmdSlopDescription,
     MessageId::CmdStashDescription,
     MessageId::CmdStatusDescription,
     MessageId::CmdStatuslineDescription,
@@ -605,6 +610,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::FooterAgentsPlural,
     MessageId::FooterPressCtrlCAgain,
     MessageId::FooterWorking,
+    MessageId::FooterBalancePrefix,
     MessageId::HelpSectionActions,
     MessageId::HelpSectionClipboard,
     MessageId::HelpSectionEditing,
@@ -988,6 +994,9 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CmdCompactDescription => {
             "Trigger context compaction to free up space (legacy; v0.6.6 prefers cycle restart)"
         }
+        MessageId::CmdPurgeDescription => {
+            "Let the agent surgically prune conversation history to free context space"
+        }
         MessageId::CmdConfigDescription => "Open interactive configuration editor",
         MessageId::CmdContextDescription => "Open compact session context inspector",
         MessageId::CmdCostDescription => "Show session cost breakdown",
@@ -1046,6 +1055,7 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CmdSkillsDescription => {
             "List local skills (filter by `/skills <prefix>`; --remote browses the curated registry)"
         }
+        MessageId::CmdSlopDescription => "Inspect or export the SlopLedger",
         MessageId::CmdStashDescription => {
             "Park or restore a composer draft (Ctrl+S to push, /stash list/pop)"
         }
@@ -1111,6 +1121,7 @@ fn english(id: MessageId) -> &'static str {
         MessageId::FooterAgentsPlural => "{count} agents",
         MessageId::FooterPressCtrlCAgain => "Press Ctrl+C again to quit",
         MessageId::FooterWorking => "working",
+        MessageId::FooterBalancePrefix => "bal",
         MessageId::HelpSectionActions => "Actions",
         MessageId::HelpSectionClipboard => "Clipboard",
         MessageId::HelpSectionEditing => "Input editing",
@@ -1383,6 +1394,9 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
         MessageId::CmdCompactDescription => {
             "Kích hoạt nén ngữ cảnh để giải phóng không gian (cũ; v0.6.6 ưu tiên khởi động lại chu kỳ)"
         }
+        MessageId::CmdPurgeDescription => {
+            "Cho agent cắt gọn lịch sử trò chuyện để giải phóng ngữ cảnh"
+        }
         MessageId::CmdConfigDescription => "Mở trình chỉnh sửa cấu hình tương tác",
         MessageId::CmdContextDescription => "Mở trình kiểm tra ngữ cảnh phiên thu gọn",
         MessageId::CmdCostDescription => "Hiển thị chi tiết chi phí của phiên làm việc",
@@ -1457,6 +1471,7 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
         MessageId::CmdSkillsDescription => {
             "Liệt kê các kỹ năng cục bộ (lọc bằng `/skills <tiền_tố>`; --remote để duyệt kho lưu trữ được kiểm duyệt)"
         }
+        MessageId::CmdSlopDescription => "Kiểm tra hoặc xuất SlopLedger",
         MessageId::CmdStashDescription => {
             "Tạm cất hoặc khôi phục bản nháp (Ctrl+S để cất, /stash list/pop để xem/lấy ra)"
         }
@@ -1529,6 +1544,7 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
         MessageId::FooterAgentsPlural => "{count} tác nhân",
         MessageId::FooterPressCtrlCAgain => "Nhấn Ctrl+C một lần nữa để thoát",
         MessageId::FooterWorking => "đang xử lý",
+        MessageId::FooterBalancePrefix => "số dư",
         MessageId::HelpSectionActions => "Hành động",
         MessageId::HelpSectionClipboard => "Bộ nhớ tạm",
         MessageId::HelpSectionEditing => "Chỉnh sửa đầu vào",
@@ -1750,6 +1766,7 @@ fn traditional_chinese(id: MessageId) -> Option<&'static str> {
         MessageId::TranslationInProgress => "正在翻譯助理輸出...",
         MessageId::TranslationComplete => "翻譯完成",
         MessageId::TranslationFailed => "翻譯失敗",
+        MessageId::FooterBalancePrefix => "餘額",
         other => chinese_simplified(other)?,
     })
 }
@@ -1813,6 +1830,9 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::CmdClearDescription => "会話履歴をクリア",
         MessageId::CmdCompactDescription => {
             "コンテキスト圧縮で容量を確保（旧式：v0.6.6 以降はサイクル再起動を推奨）"
+        }
+        MessageId::CmdPurgeDescription => {
+            "エージェントに会話履歴を分析させ、不要なメッセージを削除・要約"
         }
         MessageId::CmdConfigDescription => "インタラクティブな設定エディタを開く",
         MessageId::CmdContextDescription => "コンパクトなセッションコンテキスト検査ツールを開く",
@@ -1880,6 +1900,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::CmdSkillsDescription => {
             "ローカルスキルを一覧表示（`/skills <prefix>` で絞り込み、--remote で精選レジストリを参照）"
         }
+        MessageId::CmdSlopDescription => "Inspect or export the SlopLedger",
         MessageId::CmdStashDescription => {
             "コンポーザーの下書きを退避／復元（Ctrl+S で退避、/stash list|pop）"
         }
@@ -1942,6 +1963,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::FooterAgentsPlural => "{count} エージェント",
         MessageId::FooterPressCtrlCAgain => "もう一度 Ctrl+C で終了",
         MessageId::FooterWorking => "処理中",
+        MessageId::FooterBalancePrefix => "残高",
         MessageId::HelpSectionActions => "操作",
         MessageId::HelpSectionClipboard => "クリップボード",
         MessageId::HelpSectionEditing => "入力編集",
@@ -2196,6 +2218,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CmdCompactDescription => {
             "触发上下文压缩以释放空间（旧版命令；v0.6.6 起建议改用循环重启）"
         }
+        MessageId::CmdPurgeDescription => "让 Agent 分析对话历史，精确保留有用信息并移除冗余内容",
         MessageId::CmdConfigDescription => "打开交互式配置编辑器",
         MessageId::CmdContextDescription => "打开紧凑会话上下文检查器",
         MessageId::CmdCostDescription => "显示本次会话的费用明细",
@@ -2248,6 +2271,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CmdSkillsDescription => {
             "列出本地技能（用 `/skills <prefix>` 按名称前缀过滤，--remote 浏览精选注册表）"
         }
+        MessageId::CmdSlopDescription => "Inspect or export the SlopLedger",
         MessageId::CmdStashDescription => "暂存或恢复输入草稿（Ctrl+S 暂存，/stash list|pop）",
         MessageId::CmdStatusDescription => "显示当前运行状态",
         MessageId::CmdStatuslineDescription => "配置底栏要显示哪些条目",
@@ -2302,6 +2326,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::FooterAgentsPlural => "{count} 个子代理",
         MessageId::FooterPressCtrlCAgain => "再次按 Ctrl+C 退出",
         MessageId::FooterWorking => "工作中",
+        MessageId::FooterBalancePrefix => "余额",
         MessageId::HelpSectionActions => "操作",
         MessageId::HelpSectionClipboard => "剪贴板",
         MessageId::HelpSectionEditing => "输入编辑",
@@ -2538,6 +2563,9 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::CmdCompactDescription => {
             "Compactar o contexto para liberar espaço (legado; a v0.6.6 prefere o reinício de ciclo)"
         }
+        MessageId::CmdPurgeDescription => {
+            "Deixe o agente podar cirurgicamente o histórico para liberar espaço de contexto"
+        }
         MessageId::CmdConfigDescription => "Abrir o editor interativo de configuração",
         MessageId::CmdContextDescription => "Abrir o inspetor compacto de contexto da sessão",
         MessageId::CmdCostDescription => "Exibir o detalhamento de custo da sessão",
@@ -2612,6 +2640,7 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::CmdSkillsDescription => {
             "Listar skills locais (filtre com `/skills <prefixo>`; --remote navega pelo registro curado)"
         }
+        MessageId::CmdSlopDescription => "Inspect or export the SlopLedger",
         MessageId::CmdStashDescription => {
             "Estacionar ou restaurar rascunho do compositor (Ctrl+S estaciona, /stash list|pop)"
         }
@@ -2678,6 +2707,7 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::FooterAgentsPlural => "{count} sub-agentes",
         MessageId::FooterPressCtrlCAgain => "Pressione Ctrl+C novamente para sair",
         MessageId::FooterWorking => "trabalhando",
+        MessageId::FooterBalancePrefix => "saldo",
         MessageId::HelpSectionActions => "Ações",
         MessageId::HelpSectionClipboard => "Área de transferência",
         MessageId::HelpSectionEditing => "Edição de entrada",
@@ -2952,6 +2982,9 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::CmdCompactDescription => {
             "Compactar el contexto para liberar espacio (heredado; v0.6.6 prefiere reinicio de ciclo)"
         }
+        MessageId::CmdPurgeDescription => {
+            "Permite al agente eliminar quirúrgicamente historial innecesario para liberar espacio de contexto"
+        }
         MessageId::CmdConfigDescription => "Abrir el editor interactivo de configuración",
         MessageId::CmdContextDescription => "Abrir el inspector compacto de contexto de la sesión",
         MessageId::CmdCostDescription => "Mostrar el desglose de costo de la sesión",
@@ -3030,6 +3063,7 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::CmdSkillsDescription => {
             "Listar skills locales (filtra con `/skills <prefijo>`; --remote navega el registro curado)"
         }
+        MessageId::CmdSlopDescription => "Inspect or export the SlopLedger",
         MessageId::CmdStashDescription => {
             "Estacionar o restaurar borrador del compositor (Ctrl+S estaciona, /stash list|pop)"
         }
@@ -3100,6 +3134,7 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::FooterAgentsPlural => "{count} sub-agentes",
         MessageId::FooterPressCtrlCAgain => "Presiona Ctrl+C de nuevo para salir",
         MessageId::FooterWorking => "trabajando",
+        MessageId::FooterBalancePrefix => "saldo",
         MessageId::HelpSectionActions => "Acciones",
         MessageId::HelpSectionClipboard => "Portapapeles",
         MessageId::HelpSectionEditing => "Edición de entrada",

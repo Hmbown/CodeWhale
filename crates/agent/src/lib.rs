@@ -98,6 +98,29 @@ impl Default for ModelRegistry {
                 supports_reasoning: true,
             },
             ModelInfo {
+                id: "DeepSeek-V4-Pro".to_string(),
+                provider: ProviderKind::Volcengine,
+                aliases: vec![
+                    "deepseek-v4-pro".to_string(),
+                    "volcengine-deepseek-v4-pro".to_string(),
+                    "ark-deepseek-v4-pro".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "DeepSeek-V4-Flash".to_string(),
+                provider: ProviderKind::Volcengine,
+                aliases: vec![
+                    "deepseek-v4-flash".to_string(),
+                    "deepseek-chat".to_string(),
+                    "volcengine-deepseek-v4-flash".to_string(),
+                    "ark-deepseek-v4-flash".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
                 id: "deepseek/deepseek-v4-pro".to_string(),
                 provider: ProviderKind::Openrouter,
                 aliases: vec![
@@ -116,6 +139,20 @@ impl Default for ModelRegistry {
                     "deepseek-reasoner".to_string(),
                     "openrouter-deepseek-v4-flash".to_string(),
                 ],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "mimo-v2.5-pro".to_string(),
+                provider: ProviderKind::XiaomiMimo,
+                aliases: vec!["mimo".to_string()],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "mimo-v2.5".to_string(),
+                provider: ProviderKind::XiaomiMimo,
+                aliases: vec!["xiaomi-mimo-v2.5".to_string()],
                 supports_tools: true,
                 supports_reasoning: true,
             },
@@ -147,6 +184,30 @@ impl Default for ModelRegistry {
                 aliases: vec![
                     "deepseek-v4-pro".to_string(),
                     "fireworks-deepseek-v4-pro".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "deepseek-ai/DeepSeek-V4-Pro".to_string(),
+                provider: ProviderKind::Siliconflow,
+                aliases: vec![
+                    "deepseek-v4-pro".to_string(),
+                    "deepseek-reasoner".to_string(),
+                    "deepseek-r1".to_string(),
+                    "siliconflow-deepseek-v4-pro".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "deepseek-ai/DeepSeek-V4-Flash".to_string(),
+                provider: ProviderKind::Siliconflow,
+                aliases: vec![
+                    "deepseek-v4-flash".to_string(),
+                    "deepseek-chat".to_string(),
+                    "deepseek-v3".to_string(),
+                    "siliconflow-deepseek-v4-flash".to_string(),
                 ],
                 supports_tools: true,
                 supports_reasoning: true,
@@ -269,7 +330,7 @@ impl ModelRegistry {
             {
                 return ModelResolution {
                     requested: Some(name.to_string()),
-                    resolved: preserve_requested_model_id_case(model, name),
+                    resolved: model,
                     used_fallback: false,
                     fallback_chain,
                 };
@@ -383,6 +444,16 @@ mod tests {
     }
 
     #[test]
+    fn xiaomi_mimo_default_uses_canonical_model_id() {
+        let registry = ModelRegistry::default();
+        let resolved = registry.resolve(None, Some(ProviderKind::XiaomiMimo));
+
+        assert_eq!(resolved.resolved.provider, ProviderKind::XiaomiMimo);
+        assert_eq!(resolved.resolved.id, "mimo-v2.5-pro");
+        assert!(resolved.resolved.supports_reasoning);
+    }
+
+    #[test]
     fn wanjie_ark_default_uses_reasoner_model_id() {
         let registry = ModelRegistry::default();
         let resolved = registry.resolve(None, Some(ProviderKind::WanjieArk));
@@ -411,6 +482,34 @@ mod tests {
             resolved.resolved.id,
             "accounts/fireworks/models/deepseek-v4-pro"
         );
+    }
+
+    #[test]
+    fn siliconflow_default_uses_canonical_pro_model_id() {
+        let registry = ModelRegistry::default();
+        let resolved = registry.resolve(None, Some(ProviderKind::Siliconflow));
+
+        assert_eq!(resolved.resolved.provider, ProviderKind::Siliconflow);
+        assert_eq!(resolved.resolved.id, "deepseek-ai/DeepSeek-V4-Pro");
+        assert!(resolved.resolved.supports_reasoning);
+    }
+
+    #[test]
+    fn deepseek_reasoner_alias_resolves_to_siliconflow_pro_when_provider_hinted() {
+        let registry = ModelRegistry::default();
+        let resolved = registry.resolve(Some("deepseek-reasoner"), Some(ProviderKind::Siliconflow));
+
+        assert_eq!(resolved.resolved.provider, ProviderKind::Siliconflow);
+        assert_eq!(resolved.resolved.id, "deepseek-ai/DeepSeek-V4-Pro");
+    }
+
+    #[test]
+    fn deepseek_v4_flash_alias_resolves_to_siliconflow_flash_when_provider_hinted() {
+        let registry = ModelRegistry::default();
+        let resolved = registry.resolve(Some("deepseek-v4-flash"), Some(ProviderKind::Siliconflow));
+
+        assert_eq!(resolved.resolved.provider, ProviderKind::Siliconflow);
+        assert_eq!(resolved.resolved.id, "deepseek-ai/DeepSeek-V4-Flash");
     }
 
     #[test]
@@ -497,12 +596,13 @@ mod tests {
     }
 
     #[test]
-    fn preserves_requested_model_casing_with_provider_hint() {
+    fn registry_casing_takes_priority_over_requested_casing_with_provider_hint() {
         let registry = ModelRegistry::default();
         let resolved = registry.resolve(Some("DeepSeek-V4-Pro"), Some(ProviderKind::Deepseek));
 
         assert_eq!(resolved.resolved.provider, ProviderKind::Deepseek);
-        assert_eq!(resolved.resolved.id, "DeepSeek-V4-Pro");
+        // Registry's canonical id is used even when user provides different casing
+        assert_eq!(resolved.resolved.id, "deepseek-v4-pro");
     }
 
     #[test]

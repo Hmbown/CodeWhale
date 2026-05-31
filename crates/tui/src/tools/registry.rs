@@ -542,6 +542,10 @@ impl ToolRegistryBuilder {
     }
 
     /// Include durable task, gate, PR-attempt, GitHub, and automation tools.
+    ///
+    /// Shell-related task tools (`task_shell_start`, `task_shell_wait`) are
+    /// *not* included here — use [`with_runtime_task_shell_tools`] to register
+    /// them when `allow_shell` is true.
     #[must_use]
     pub fn with_runtime_task_tools(self) -> Self {
         use super::automation::{
@@ -555,7 +559,6 @@ impl ToolRegistryBuilder {
         use super::tasks::{
             PrAttemptListTool, PrAttemptPreflightTool, PrAttemptReadTool, PrAttemptRecordTool,
             TaskCancelTool, TaskCreateTool, TaskGateRunTool, TaskListTool, TaskReadTool,
-            TaskShellStartTool, TaskShellWaitTool,
         };
 
         self.with_tool(Arc::new(TaskCreateTool))
@@ -563,8 +566,6 @@ impl ToolRegistryBuilder {
             .with_tool(Arc::new(TaskReadTool))
             .with_tool(Arc::new(TaskCancelTool))
             .with_tool(Arc::new(TaskGateRunTool))
-            .with_tool(Arc::new(TaskShellStartTool))
-            .with_tool(Arc::new(TaskShellWaitTool))
             .with_tool(Arc::new(GithubIssueContextTool))
             .with_tool(Arc::new(GithubPrContextTool))
             .with_tool(Arc::new(PrAttemptRecordTool))
@@ -582,6 +583,18 @@ impl ToolRegistryBuilder {
             .with_tool(Arc::new(GithubCommentTool))
             .with_tool(Arc::new(GithubCloseIssueTool))
             .with_tool(Arc::new(GithubClosePrTool))
+    }
+
+    /// Include shell-related task tools (`task_shell_start`, `task_shell_wait`).
+    ///
+    /// These are gated behind `allow_shell` because `task_shell_start`
+    /// delegates directly to `ExecShellTool`, providing the same shell
+    /// execution capability as `exec_shell`.
+    #[must_use]
+    pub fn with_runtime_task_shell_tools(self) -> Self {
+        use super::tasks::{TaskShellStartTool, TaskShellWaitTool};
+        self.with_tool(Arc::new(TaskShellStartTool))
+            .with_tool(Arc::new(TaskShellWaitTool))
     }
 
     /// Include only read-only durable task, PR-attempt, GitHub, and automation
@@ -720,6 +733,30 @@ impl ToolRegistryBuilder {
         self.with_tool(Arc::new(RememberTool))
     }
 
+    /// Include the slop ledger tools (#2127) — durable tracking of
+    /// unresolved architectural residue: append, query, update, export.
+    /// Registered unconditionally; the ledger JSON file is auto-created
+    /// on first append.
+    #[must_use]
+    pub fn with_slop_ledger_tools(self) -> Self {
+        use crate::slop_ledger::{
+            SlopLedgerAppendTool, SlopLedgerExportTool, SlopLedgerQueryTool, SlopLedgerUpdateTool,
+        };
+        self.with_tool(Arc::new(SlopLedgerAppendTool))
+            .with_tool(Arc::new(SlopLedgerQueryTool))
+            .with_tool(Arc::new(SlopLedgerUpdateTool))
+            .with_tool(Arc::new(SlopLedgerExportTool))
+    }
+
+    /// Read-only subset of slop ledger tools (#2127) for plan mode:
+    /// only query and export — no append or update.
+    #[must_use]
+    pub fn with_slop_ledger_read_only_tools(self) -> Self {
+        use crate::slop_ledger::{SlopLedgerExportTool, SlopLedgerQueryTool};
+        self.with_tool(Arc::new(SlopLedgerQueryTool))
+            .with_tool(Arc::new(SlopLedgerExportTool))
+    }
+
     /// Include the `notify` tool — model-callable desktop notification
     /// (#1322). Routes through the existing `tui::notifications` OSC 9 /
     /// BEL pipeline so the user's `[notifications].method` config is
@@ -786,7 +823,7 @@ impl ToolRegistryBuilder {
             .with_image_ocr_tools();
 
         if allow_shell {
-            builder.with_shell_tools()
+            builder.with_shell_tools().with_runtime_task_shell_tools()
         } else {
             builder
         }
@@ -1378,5 +1415,49 @@ mod tests {
             .build(ctx);
 
         assert!(registry.contains("finance"));
+    }
+
+    #[test]
+    fn agent_tools_with_allow_shell_false_excludes_shell_tools() {
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+
+        let registry = ToolRegistryBuilder::new()
+            .with_agent_tools(false)
+            .build(ctx);
+
+        assert!(
+            !registry.contains("exec_shell"),
+            "exec_shell should be excluded when allow_shell is false"
+        );
+        assert!(
+            !registry.contains("task_shell_start"),
+            "task_shell_start should be excluded when allow_shell is false"
+        );
+        assert!(
+            !registry.contains("task_shell_wait"),
+            "task_shell_wait should be excluded when allow_shell is false"
+        );
+    }
+
+    #[test]
+    fn agent_tools_with_allow_shell_true_includes_shell_tools() {
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+
+        let registry = ToolRegistryBuilder::new().with_agent_tools(true).build(ctx);
+
+        assert!(
+            registry.contains("exec_shell"),
+            "exec_shell should be included when allow_shell is true"
+        );
+        assert!(
+            registry.contains("task_shell_start"),
+            "task_shell_start should be included when allow_shell is true"
+        );
+        assert!(
+            registry.contains("task_shell_wait"),
+            "task_shell_wait should be included when allow_shell is true"
+        );
     }
 }

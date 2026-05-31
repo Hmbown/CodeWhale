@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use ratatui::layout::Rect;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
@@ -1001,13 +1002,29 @@ impl Default for ViewportState {
     }
 }
 
-/// Goal tracking state (#397).
+/// Verdict for a hunt (#2092).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HuntVerdict {
+    Hunting,
+    Hunted,
+    Wounded,
+    Escaped,
+}
+
+impl Default for HuntVerdict {
+    fn default() -> Self {
+        Self::Hunting
+    }
+}
+
+/// Hunt tracking state (#2092 — was GoalState).
 #[derive(Debug, Clone, Default)]
-pub struct GoalState {
-    pub goal_objective: Option<String>,
-    pub goal_token_budget: Option<u32>,
-    pub goal_started_at: Option<Instant>,
-    pub goal_completed: bool,
+pub struct HuntState {
+    pub quarry: Option<String>,
+    pub token_budget: Option<u32>,
+    pub started_at: Option<Instant>,
+    pub verdict: HuntVerdict,
 }
 
 /// Session cost and token telemetry state.
@@ -1105,7 +1122,7 @@ pub struct App {
     /// Viewport sub-state (scroll, cache, selection).
     pub viewport: ViewportState,
     /// Goal sub-state.
-    pub goal: GoalState,
+    pub hunt: HuntState,
     /// Session sub-state (cost, tokens, telemetry).
     pub session: SessionState,
     /// Active tool restriction from custom slash command frontmatter.
@@ -1416,6 +1433,13 @@ pub struct App {
     /// Incremented on `TurnComplete` from the elapsed time of the
     /// just-finished turn. Resets per launch.
     pub cumulative_turn_duration: std::time::Duration,
+    /// DeepSeek account balance, refreshed once per turn completion.
+    /// Shared cell updated by background fetch tasks; read lock in the UI thread.
+    pub balance_cell: std::sync::Arc<std::sync::Mutex<Option<crate::pricing::BalanceInfo>>>,
+    /// Tracks whether the initial balance fetch has been attempted for this session.
+    pub balance_initiated: bool,
+    /// Timestamp of the last balance fetch, used to debounce rapid requests.
+    pub last_balance_fetch: Option<std::time::Instant>,
     /// Current runtime turn id (if known).
     pub runtime_turn_id: Option<String>,
     /// Current runtime turn status (if known).
@@ -1444,6 +1468,8 @@ pub struct App {
     pub thinking_started_at: Option<Instant>,
     /// Whether context compaction is currently in progress.
     pub is_compacting: bool,
+    /// Whether context purge is currently in progress.
+    pub is_purging: bool,
     /// Set when the user scrolls up/down during a streaming turn so subsequent
     /// streamed chunks don't yank the view back to the live tail. Cleared
     /// when the user explicitly returns to bottom or the turn completes.
@@ -1495,6 +1521,10 @@ pub struct App {
     /// Transcript cells the user has collapsed (hidden from view).
     /// Stores **original** virtual cell indices (pre-filtering).
     pub collapsed_cells: HashSet<usize>,
+    /// Thinking cells the user has folded (showing summary instead of full
+    /// content). Stores **original** virtual cell indices. Toggled by Space
+    /// when the composer is empty and the cursor is on a thinking cell.
+    pub folded_thinking: HashSet<usize>,
     /// Mapping from filtered cell index → original virtual index.
     /// Populated during `ChatWidget::new` by filtering out collapsed cells.
     /// Used by `build_context_menu_entries` to convert line-meta indices
@@ -1857,7 +1887,7 @@ impl App {
                 selection_anchor: None,
             },
             viewport: ViewportState::default(),
-            goal: GoalState::default(),
+            hunt: HuntState::default(),
             session: SessionState::default(),
             active_allowed_tools: None,
             history: Vec::new(),
@@ -2006,6 +2036,9 @@ impl App {
             submit_pending_steers_after_interrupt: false,
             turn_started_at: None,
             cumulative_turn_duration: std::time::Duration::ZERO,
+            balance_cell: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            balance_initiated: false,
+            last_balance_fetch: None,
             runtime_turn_id: None,
             runtime_turn_status: None,
             dispatch_started_at: None,
@@ -2018,6 +2051,7 @@ impl App {
             needs_redraw: true,
             thinking_started_at: None,
             is_compacting: false,
+            is_purging: false,
             user_scrolled_during_stream: false,
             coherence_state: CoherenceState::default(),
             last_send_at: None,
@@ -2033,6 +2067,7 @@ impl App {
             last_pinned_prefix_hash: None,
             cycle: CycleConfig::default(),
             collapsed_cells: HashSet::new(),
+            folded_thinking: HashSet::new(),
             collapsed_cell_map: Vec::new(),
             edit_in_progress: false,
             lsp_enabled: config.lsp.as_ref().and_then(|l| l.enabled).unwrap_or(true),
@@ -4760,6 +4795,7 @@ pub enum AppAction {
     UpdateCompaction(CompactionConfig),
     OpenContextInspector,
     CompactContext,
+    PurgeContext,
     TaskAdd {
         prompt: String,
     },
@@ -5345,12 +5381,37 @@ mod tests {
 
     #[test]
     fn app_new_detects_missing_api_key_with_default_config() {
-        let tmp = tempfile::TempDir::new().unwrap();
         let _lock = lock_test_env();
-        let _config_path = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", tmp.path().join("config.toml"));
-        let _deepseek_key = EnvVarGuard::remove("DEEPSEEK_API_KEY");
-        let _deepseek_provider = EnvVarGuard::remove("DEEPSEEK_PROVIDER");
-        let _codewhale_provider = EnvVarGuard::remove("CODEWHALE_PROVIDER");
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let config_path = tmp.path().join("config.toml");
+        let _config_path = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
+        let _provider_env = EnvVarGuard::remove("CODEWHALE_PROVIDER");
+        let _legacy_provider_env = EnvVarGuard::remove("DEEPSEEK_PROVIDER");
+        let _api_key_envs: Vec<_> = [
+            "DEEPSEEK_API_KEY",
+            "NVIDIA_API_KEY",
+            "NVIDIA_NIM_API_KEY",
+            "OPENAI_API_KEY",
+            "ATLASCLOUD_API_KEY",
+            "WANJIE_ARK_API_KEY",
+            "WANJIE_API_KEY",
+            "WANJIE_MAAS_API_KEY",
+            "OPENROUTER_API_KEY",
+            "NOVITA_API_KEY",
+            "FIREWORKS_API_KEY",
+            "SILICONFLOW_API_KEY",
+            "MOONSHOT_API_KEY",
+            "KIMI_API_KEY",
+            "SGLANG_API_KEY",
+            "VLLM_API_KEY",
+            "OLLAMA_API_KEY",
+        ]
+        .into_iter()
+        .map(EnvVarGuard::remove)
+        .collect();
+
+        // Config::default() carries no api_key, and this test isolates process
+        // env/settings so previous tests or developer shells cannot satisfy it.
         let app = App::new(test_options(false), &Config::default());
         assert!(
             app.onboarding_needs_api_key,

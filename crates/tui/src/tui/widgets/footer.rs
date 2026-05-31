@@ -73,6 +73,9 @@ pub struct FooterProps {
     /// Rendered in the left cluster (after the model name) — cost is steady
     /// info, not a transient signal, so it lives with mode and model.
     pub cost: Vec<Span<'static>>,
+    /// Account balance chip spans (empty when un fetched or zero). Rendered
+    /// in the left cluster right after cost.
+    pub balance: Vec<Span<'static>>,
     /// Optional toast that, when present, replaces the left status line.
     pub toast: Option<FooterToast>,
     /// When `Some(frame_idx)`, the gap between the left status line and the
@@ -259,6 +262,7 @@ impl FooterProps {
         reasoning_replay: Vec<Span<'static>>,
         cache: Vec<Span<'static>>,
         cost: Vec<Span<'static>>,
+        balance: Vec<Span<'static>>,
     ) -> Self {
         let (mode_label, mode_color) = mode_style(app);
         // MCP chip (#502) — passive, derived from the user's existing
@@ -293,6 +297,7 @@ impl FooterProps {
             mcp,
             worked,
             cost,
+            balance,
             toast,
             working_strip_frame: None,
             retry: crate::retry_status::snapshot(),
@@ -371,15 +376,12 @@ impl FooterWidget {
     ///
     /// Priority order (highest to lowest — last to drop):
     /// 1. Mode label (always visible at any width; truncated only as a last resort)
-    /// 2. Model name (always visible; then truncated mid-word once status & cost are gone)
-    /// 3. Cost chip — drops second after status (steady-info still wants to be visible)
-    /// 4. Status label (e.g. "working", "draft") — drops first when space is tight
+    /// 2. Model name (always visible; then truncated mid-word once all hints are gone)
+    /// 3. Balance chip — drops third (account balance is more actionable than session cost)
+    /// 4. Cost chip — drops fourth
+    /// 5. Status label (e.g. "working", "draft") — drops first when space is tight
     ///
-    /// At every width ≥40 cols the line never wraps mid-hint: the widget
-    /// chooses one of (`mode · model · cost · status`, `mode · model · cost`,
-    /// `mode · model`, `mode`) and renders that single line within
-    /// `max_width`. Cost lives between model and status so the eye finds
-    /// "what's this run going to cost me" without scanning past the wave.
+    /// At every width ≥40 cols the line never wraps mid-hint.
     fn status_line_spans(&self, max_width: usize) -> Vec<Span<'static>> {
         if max_width == 0 {
             return Vec::new();
@@ -392,48 +394,81 @@ impl FooterWidget {
         let status_label = self.props.state_label.as_str();
         let cost_text = spans_text(&self.props.cost);
         let show_cost = !cost_text.is_empty();
+        let balance_text = spans_text(&self.props.balance);
+        let show_balance = !balance_text.is_empty();
 
         let mode_w = mode_label.width();
         let sep_w = sep.width();
         let model_w = UnicodeWidthStr::width(model);
-        let status_w = status_label.width();
-        let cost_w = cost_text.width();
+        let status_w = if show_status { status_label.width() } else { 0 };
+        let cost_w = if show_cost { cost_text.width() } else { 0 };
+        let balance_w = if show_balance {
+            balance_text.width()
+        } else {
+            0
+        };
 
-        // Tier 1: mode · model · cost · status — everything fits.
+        let extra_sep = |w: usize| if w > 0 { sep_w } else { 0 };
+
+        // Tier 1: mode · model · balance · cost · status
         let full_w = mode_w
             + sep_w
             + model_w
-            + if show_cost { sep_w + cost_w } else { 0 }
-            + if show_status { sep_w + status_w } else { 0 };
-        if (show_cost || show_status) && full_w <= max_width {
+            + extra_sep(balance_w)
+            + balance_w
+            + extra_sep(cost_w)
+            + cost_w
+            + extra_sep(status_w)
+            + status_w;
+        if (show_balance || show_cost || show_status) && full_w <= max_width {
             return self.build_status_line_spans(
                 mode_label,
                 model.to_string(),
+                show_balance.then(|| balance_text.clone()),
                 show_cost.then(|| cost_text.clone()),
                 show_status.then_some(status_label),
             );
         }
 
-        // Tier 2: mode · model · cost — drop status first.
-        if show_cost {
-            let with_cost_w = mode_w + sep_w + model_w + sep_w + cost_w;
-            if with_cost_w <= max_width {
+        // Tier 2: mode · model · balance · cost — drop status.
+        let with_cost_w = mode_w
+            + sep_w
+            + model_w
+            + extra_sep(balance_w)
+            + balance_w
+            + extra_sep(cost_w)
+            + cost_w;
+        if (show_balance || show_cost) && with_cost_w <= max_width {
+            return self.build_status_line_spans(
+                mode_label,
+                model.to_string(),
+                show_balance.then(|| balance_text.clone()),
+                show_cost.then(|| cost_text.clone()),
+                None,
+            );
+        }
+
+        // Tier 3: mode · model · balance — drop cost.
+        if show_balance {
+            let with_balance_w = mode_w + sep_w + model_w + sep_w + balance_w;
+            if with_balance_w <= max_width {
                 return self.build_status_line_spans(
                     mode_label,
                     model.to_string(),
-                    Some(cost_text.clone()),
+                    Some(balance_text.clone()),
+                    None,
                     None,
                 );
             }
         }
 
-        // Tier 3: mode · model — drop cost too.
+        // Tier 4: mode · model — drop balance too.
         let mode_model_w = mode_w + sep_w + model_w;
         if mode_model_w <= max_width {
-            return self.build_status_line_spans(mode_label, model.to_string(), None, None);
+            return self.build_status_line_spans(mode_label, model.to_string(), None, None, None);
         }
 
-        // Tier 4: mode · <truncated model> — keep both labels visible by
+        // Tier 5: mode · <truncated model> — keep both labels visible by
         // ellipsizing the model name. Only do this when there is enough room
         // for at least the ellipsis ("..."). Below that we drop to mode-only.
         let prefix_w = mode_w + sep_w;
@@ -442,13 +477,12 @@ impl FooterWidget {
             if model_budget >= 4 {
                 let truncated = truncate_to_width(model, model_budget);
                 if !truncated.is_empty() {
-                    return self.build_status_line_spans(mode_label, truncated, None, None);
+                    return self.build_status_line_spans(mode_label, truncated, None, None, None);
                 }
             }
         }
 
-        // Tier 5: mode-only. If even the mode label cannot fit, truncate it
-        // so the footer never wraps to a second row.
+        // Tier 6: mode-only.
         if mode_w <= max_width {
             return vec![Span::styled(
                 mode_label.to_string(),
@@ -465,22 +499,18 @@ impl FooterWidget {
         &self,
         mode_label: &'static str,
         model_label: String,
+        balance: Option<String>,
         cost: Option<String>,
         status: Option<&str>,
     ) -> Vec<Span<'static>> {
         let sep = " \u{00B7} ";
         let mut spans: Vec<Span<'static>> = Vec::new();
-        // Skip the mode chip when the user has toggled it off via
-        // `/statusline`. The widget no longer assumes mode is always
-        // present so an opt-out user doesn't see a stray separator.
         if !mode_label.is_empty() {
             spans.push(Span::styled(
                 mode_label.to_string(),
                 Style::default().fg(self.props.mode_color),
             ));
         }
-        // Same treatment for the model label — gating both keeps the bar
-        // visually tidy when only auxiliary chips remain.
         if !model_label.is_empty() {
             if !spans.is_empty() {
                 spans.push(Span::styled(
@@ -491,6 +521,18 @@ impl FooterWidget {
             spans.push(Span::styled(
                 model_label,
                 Style::default().fg(self.props.text_hint_color),
+            ));
+        }
+        if let Some(balance_text) = balance {
+            if !spans.is_empty() {
+                spans.push(Span::styled(
+                    sep.to_string(),
+                    Style::default().fg(self.props.text_dim_color),
+                ));
+            }
+            spans.push(Span::styled(
+                balance_text,
+                Style::default().fg(self.props.text_muted_color),
             ));
         }
         if let Some(cost_text) = cost {
@@ -717,6 +759,7 @@ mod tests {
             Vec::<Span<'static>>::new(),
             Vec::<Span<'static>>::new(),
             Vec::<Span<'static>>::new(),
+            Vec::<Span<'static>>::new(),
         );
         // `from_app` reads the process-wide retry-status surface; pin
         // `Idle` so footer tests don't pick up state set by retry-banner
@@ -829,6 +872,7 @@ mod tests {
             Vec::<Span<'static>>::new(),
             Vec::<Span<'static>>::new(),
             Vec::<Span<'static>>::new(),
+            Vec::<Span<'static>>::new(),
         );
 
         assert!(props.state_label.starts_with("thinking"));
@@ -901,6 +945,7 @@ mod tests {
             palette::TEXT_MUTED,
             Vec::<Span<'static>>::new(),
             agents,
+            Vec::<Span<'static>>::new(),
             Vec::<Span<'static>>::new(),
             Vec::<Span<'static>>::new(),
             Vec::<Span<'static>>::new(),
@@ -1166,6 +1211,7 @@ mod tests {
             Vec::<Span<'static>>::new(),
             Vec::<Span<'static>>::new(),
             Vec::<Span<'static>>::new(),
+            Vec::<Span<'static>>::new(),
         )
     }
 
@@ -1262,6 +1308,7 @@ mod tests {
             Vec::<Span<'static>>::new(),
             Vec::<Span<'static>>::new(),
             vec![Span::styled(cost.to_string(), Style::default())],
+            Vec::<Span<'static>>::new(),
         )
     }
 
@@ -1281,6 +1328,7 @@ mod tests {
             Vec::<Span<'static>>::new(),
             Vec::<Span<'static>>::new(),
             long_cache,
+            Vec::<Span<'static>>::new(),
             Vec::<Span<'static>>::new(),
         );
 
@@ -1313,6 +1361,7 @@ mod tests {
             Vec::<Span<'static>>::new(),
             Vec::<Span<'static>>::new(),
             cache,
+            Vec::<Span<'static>>::new(),
             Vec::<Span<'static>>::new(),
         );
 
@@ -1373,6 +1422,7 @@ mod tests {
             Some(toast),
             "ready",
             palette::TEXT_MUTED,
+            Vec::<Span<'static>>::new(),
             Vec::<Span<'static>>::new(),
             Vec::<Span<'static>>::new(),
             Vec::<Span<'static>>::new(),

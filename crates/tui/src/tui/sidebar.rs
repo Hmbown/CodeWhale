@@ -7,6 +7,8 @@
 use std::fmt::Write;
 use std::time::{Duration, Instant};
 
+use crate::tui::app::HuntVerdict;
+
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -228,10 +230,10 @@ impl SidebarWorkSummary {
 
 fn sidebar_work_summary(app: &App) -> SidebarWorkSummary {
     let mut summary = SidebarWorkSummary {
-        goal_objective: app.goal.goal_objective.clone(),
-        goal_token_budget: app.goal.goal_token_budget,
-        goal_completed: app.goal.goal_completed,
-        goal_started_at: app.goal.goal_started_at,
+        goal_objective: app.hunt.quarry.clone(),
+        goal_token_budget: app.hunt.token_budget,
+        goal_completed: app.hunt.verdict == HuntVerdict::Hunted,
+        goal_started_at: app.hunt.started_at,
         tokens_used: app.session.total_conversation_tokens,
         cycle_count: app.cycle_count,
         ..SidebarWorkSummary::default()

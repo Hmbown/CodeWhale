@@ -277,6 +277,126 @@ fn load_handoff_block(workspace: &Path) -> Option<String> {
 /// "When NOT to use" guidance, sub-agent sentinel protocol.
 pub const BASE_PROMPT: &str = include_str!("prompts/base.md");
 
+// ── Embedder prompt overrides ──
+// Let an embedder replace these compile-time prompt constants at startup,
+// so brand / slimming customizations live in the embedder crate instead of
+// editing these files in-tree. Unset → the bundled constant (fully
+// backward compatible). Intended to be set once at process start, before
+// any engine spawns; later sets return the rejected override string.
+static BASE_PROMPT_OVERRIDE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+static LOCALE_PREAMBLE_ZH_HANS_OVERRIDE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+static LOCALE_PREAMBLE_JA_OVERRIDE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+static LOCALE_PREAMBLE_PT_BR_OVERRIDE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+static LOCALE_PREAMBLE_VI_OVERRIDE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+static LOCALE_CLOSER_ZH_HANS_OVERRIDE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+static LOCALE_CLOSER_JA_OVERRIDE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+static LOCALE_CLOSER_PT_BR_OVERRIDE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+static LOCALE_CLOSER_VI_OVERRIDE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+static AUTHORITY_RECAP_OVERRIDE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Replace `BASE_PROMPT` for all subsequent prompt composition. First call
+/// wins; later calls return the rejected string. Set before spawning any
+/// engine.
+pub fn set_base_prompt_override(s: String) -> Result<(), String> {
+    set_prompt_override(&BASE_PROMPT_OVERRIDE, s)
+}
+
+/// Replace the Simplified-Chinese locale preamble (`## 语言要求`).
+pub fn set_locale_preamble_zh_hans_override(s: String) -> Result<(), String> {
+    set_prompt_override(&LOCALE_PREAMBLE_ZH_HANS_OVERRIDE, s)
+}
+
+/// Replace the Japanese locale preamble.
+pub fn set_locale_preamble_ja_override(s: String) -> Result<(), String> {
+    set_prompt_override(&LOCALE_PREAMBLE_JA_OVERRIDE, s)
+}
+
+/// Replace the Brazilian-Portuguese locale preamble.
+pub fn set_locale_preamble_pt_br_override(s: String) -> Result<(), String> {
+    set_prompt_override(&LOCALE_PREAMBLE_PT_BR_OVERRIDE, s)
+}
+
+/// Replace the Vietnamese locale preamble.
+pub fn set_locale_preamble_vi_override(s: String) -> Result<(), String> {
+    set_prompt_override(&LOCALE_PREAMBLE_VI_OVERRIDE, s)
+}
+
+/// Replace the Simplified-Chinese locale closer (`## 语言再次提醒`).
+pub fn set_locale_closer_zh_hans_override(s: String) -> Result<(), String> {
+    set_prompt_override(&LOCALE_CLOSER_ZH_HANS_OVERRIDE, s)
+}
+
+/// Replace the Japanese locale closer.
+pub fn set_locale_closer_ja_override(s: String) -> Result<(), String> {
+    set_prompt_override(&LOCALE_CLOSER_JA_OVERRIDE, s)
+}
+
+/// Replace the Brazilian-Portuguese locale closer.
+pub fn set_locale_closer_pt_br_override(s: String) -> Result<(), String> {
+    set_prompt_override(&LOCALE_CLOSER_PT_BR_OVERRIDE, s)
+}
+
+/// Replace the Vietnamese locale closer.
+pub fn set_locale_closer_vi_override(s: String) -> Result<(), String> {
+    set_prompt_override(&LOCALE_CLOSER_VI_OVERRIDE, s)
+}
+
+/// Replace the trailing `## Authority Recap` block.
+pub fn set_authority_recap_override(s: String) -> Result<(), String> {
+    set_prompt_override(&AUTHORITY_RECAP_OVERRIDE, s)
+}
+
+fn set_prompt_override(cell: &std::sync::OnceLock<String>, s: String) -> Result<(), String> {
+    cell.set(s)
+}
+
+fn effective_prompt_override<'a>(
+    cell: &'a std::sync::OnceLock<String>,
+    fallback: &'static str,
+) -> &'a str {
+    cell.get().map(String::as_str).unwrap_or(fallback)
+}
+
+fn effective_base_prompt() -> &'static str {
+    effective_prompt_override(&BASE_PROMPT_OVERRIDE, BASE_PROMPT)
+}
+
+fn effective_locale_preamble_zh_hans() -> &'static str {
+    effective_prompt_override(&LOCALE_PREAMBLE_ZH_HANS_OVERRIDE, LOCALE_PREAMBLE_ZH_HANS)
+}
+
+fn effective_locale_preamble_ja() -> &'static str {
+    effective_prompt_override(&LOCALE_PREAMBLE_JA_OVERRIDE, LOCALE_PREAMBLE_JA)
+}
+
+fn effective_locale_preamble_pt_br() -> &'static str {
+    effective_prompt_override(&LOCALE_PREAMBLE_PT_BR_OVERRIDE, LOCALE_PREAMBLE_PT_BR)
+}
+
+fn effective_locale_preamble_vi() -> &'static str {
+    effective_prompt_override(&LOCALE_PREAMBLE_VI_OVERRIDE, LOCALE_PREAMBLE_VI)
+}
+
+fn effective_locale_closer_zh_hans() -> &'static str {
+    effective_prompt_override(&LOCALE_CLOSER_ZH_HANS_OVERRIDE, LOCALE_CLOSER_ZH_HANS)
+}
+
+fn effective_locale_closer_ja() -> &'static str {
+    effective_prompt_override(&LOCALE_CLOSER_JA_OVERRIDE, LOCALE_CLOSER_JA)
+}
+
+fn effective_locale_closer_pt_br() -> &'static str {
+    effective_prompt_override(&LOCALE_CLOSER_PT_BR_OVERRIDE, LOCALE_CLOSER_PT_BR)
+}
+
+fn effective_locale_closer_vi() -> &'static str {
+    effective_prompt_override(&LOCALE_CLOSER_VI_OVERRIDE, LOCALE_CLOSER_VI)
+}
+
+fn effective_authority_recap() -> &'static str {
+    effective_prompt_override(&AUTHORITY_RECAP_OVERRIDE, AUTHORITY_RECAP)
+}
+
 /// Optional locale-native reinforcement preamble prepended to the system
 /// prompt when the user's UI locale is non-English.
 ///
@@ -342,10 +462,10 @@ pub const BASE_PROMPT: &str = include_str!("prompts/base.md");
 /// and the closer position would all carry over unchanged.
 pub(crate) fn locale_reinforcement_preamble(locale_tag: &str) -> Option<&'static str> {
     match locale_tag {
-        "zh-Hans" | "zh-CN" | "zh" => Some(LOCALE_PREAMBLE_ZH_HANS),
-        "ja" | "ja-JP" => Some(LOCALE_PREAMBLE_JA),
-        "pt-BR" | "pt" => Some(LOCALE_PREAMBLE_PT_BR),
-        "vi" | "vi-VN" => Some(LOCALE_PREAMBLE_VI),
+        "zh-Hans" | "zh-CN" | "zh" => Some(effective_locale_preamble_zh_hans()),
+        "ja" | "ja-JP" => Some(effective_locale_preamble_ja()),
+        "pt-BR" | "pt" => Some(effective_locale_preamble_pt_br()),
+        "vi" | "vi-VN" => Some(effective_locale_preamble_vi()),
         _ => None,
     }
 }
@@ -368,10 +488,10 @@ pub(crate) fn locale_reinforcement_preamble(locale_tag: &str) -> Option<&'static
 /// behavior.
 pub(crate) fn locale_reinforcement_closer(locale_tag: &str) -> Option<&'static str> {
     match locale_tag {
-        "zh-Hans" | "zh-CN" | "zh" => Some(LOCALE_CLOSER_ZH_HANS),
-        "ja" | "ja-JP" => Some(LOCALE_CLOSER_JA),
-        "pt-BR" | "pt" => Some(LOCALE_CLOSER_PT_BR),
-        "vi" | "vi-VN" => Some(LOCALE_CLOSER_VI),
+        "zh-Hans" | "zh-CN" | "zh" => Some(effective_locale_closer_zh_hans()),
+        "ja" | "ja-JP" => Some(effective_locale_closer_ja()),
+        "pt-BR" | "pt" => Some(effective_locale_closer_pt_br()),
+        "vi" | "vi-VN" => Some(effective_locale_closer_vi()),
         _ => None,
     }
 }
@@ -657,7 +777,7 @@ pub fn compose_prompt_with_approval_and_model(
     model_id: &str,
 ) -> String {
     let tool_taxonomy = render_core_tool_taxonomy_block(mode);
-    let base_prompt = apply_model_template(BASE_PROMPT.trim(), model_id);
+    let base_prompt = apply_model_template(effective_base_prompt().trim(), model_id);
     let parts: [&str; 5] = [
         tool_taxonomy.as_str(),
         base_prompt.as_str(),
@@ -945,7 +1065,7 @@ pub fn system_prompt_for_mode_with_context_skills_session_and_approval(
         && !goal_objective.trim().is_empty()
     {
         full_prompt = format!(
-            "{full_prompt}\n\n## Current Session Goal\n\n<session_goal>\n{}\n</session_goal>",
+            "{full_prompt}\n\n## Current Hunt\n\n<session_goal>\n{}\n</session_goal>",
             goal_objective.trim()
         );
     }
@@ -958,7 +1078,8 @@ pub fn system_prompt_for_mode_with_context_skills_session_and_approval(
     // 7a. Authority recap — the final tier reminder before user messages.
     // Uses recency bias constructively: this is the last content the model
     // sees before the user's turn, reinforcing the Constitutional hierarchy.
-    full_prompt = format!("{full_prompt}\n\n{AUTHORITY_RECAP}");
+    let authority_recap = effective_authority_recap();
+    full_prompt = format!("{full_prompt}\n\n{authority_recap}");
 
     // 8. Locale-native closing reinforcement (#1118 follow-up #2). The
     // opening preamble alone wasn't enough — community feedback (the
@@ -1007,6 +1128,20 @@ mod tests {
     /// Discriminator unique to the injected relay block (not present in the
     /// agent prompt's own discussion of the convention).
     const HANDOFF_BLOCK_MARKER: &str = "left a relay artifact at `.codewhale/handoff.md`";
+
+    #[test]
+    fn prompt_override_storage_reports_duplicate_sets() {
+        let cell = std::sync::OnceLock::new();
+
+        assert_eq!(effective_prompt_override(&cell, "fallback"), "fallback");
+        assert!(set_prompt_override(&cell, "first".to_string()).is_ok());
+        assert_eq!(effective_prompt_override(&cell, "fallback"), "first");
+        assert_eq!(
+            set_prompt_override(&cell, "second".to_string()),
+            Err("second".to_string())
+        );
+        assert_eq!(effective_prompt_override(&cell, "fallback"), "first");
+    }
 
     fn contains_cjk(text: &str) -> bool {
         text.chars().any(|ch| {
@@ -1985,7 +2120,7 @@ mod tests {
         };
 
         assert!(!prompt.contains("<session_goal>"));
-        assert!(!prompt.contains("## Current Session Goal"));
+        assert!(!prompt.contains("## Current Hunt"));
     }
 
     #[test]
