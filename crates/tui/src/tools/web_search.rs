@@ -741,7 +741,7 @@ impl WebSearchTool {
     /// Uses strict JSON prompt constraints to extract structured results
     /// from the model's search-augmented response.
     ///
-    /// Overrides the user-supplied timeout to a minimum of 60 s because the
+    /// Overrides the user-supplied timeout to a minimum of 90 s because the
     /// Responses API pipeline (web search → model inference → JSON generation)
     /// is inherently slower than simple search-API round-trips.  A separate
     /// `connect_timeout` of 15 s lets DNS/TLS failures surface quickly.
@@ -772,7 +772,7 @@ impl WebSearchTool {
         // Volcengine Responses API pipeline (search + model inference) is
         // slow — enforce a floor of 60 s while still honouring explicit
         // shorter timeouts from the caller (e.g. tests).
-        let effective_timeout = timeout_ms.max(60_000);
+        let effective_timeout = timeout_ms.max(90_000);
 
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(15))
