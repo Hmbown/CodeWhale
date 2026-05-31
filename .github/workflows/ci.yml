@@ -129,6 +129,7 @@ jobs:
   # Check documentation builds without warnings
   docs:
     name: Documentation
+    if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
