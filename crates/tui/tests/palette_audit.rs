@@ -4,8 +4,6 @@
 //! user-visible code. Backward-compatible DeepSeek aliases should point
 //! at the current CodeWhale semantic tokens instead of stale brand RGBs.
 
-use std::path::Path;
-
 use ratatui::style::Color;
 
 #[path = "../src/palette.rs"]
