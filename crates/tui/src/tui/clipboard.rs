@@ -1,7 +1,7 @@
 //! Clipboard handling for paste support in TUI
 //!
 //! Supports text and image paste operations. Images on the clipboard are
-//! encoded as PNG and persisted under `~/.deepseek/clipboard-images/` so the
+//! encoded as PNG and persisted under `~/.codewhale/clipboard-images/` so the
 //! model can reach them via the existing `@`-mention / file tools (DeepSeek
 //! V4 does not currently accept inline image input on its Chat Completions
 //! endpoint, so we materialize the bytes to disk instead of base64-embedding
@@ -104,7 +104,7 @@ impl ClipboardHandler {
 
     /// Read the clipboard and return the parsed content.
     ///
-    /// `workspace` is used as a fallback location when `~/.deepseek/` cannot
+    /// `workspace` is used as a fallback location when `~/.codewhale/` cannot
     /// be resolved (e.g. running with a stripped HOME in CI sandboxes).
     pub fn read(&mut self, workspace: &Path) -> Option<ClipboardContent> {
         self.ensure_clipboard();
@@ -264,12 +264,17 @@ fn osc52_sequence(text: &str, in_tmux: bool) -> Result<String> {
 }
 
 /// Resolve the directory pasted images should land in. Prefers
-/// `~/.deepseek/clipboard-images/` so the path is stable across worktrees and
+/// `~/.codewhale/clipboard-images/` so the path is stable across worktrees and
 /// matches the location described in user-facing docs; falls back to
 /// `<workspace>/clipboard-images/` if the home dir is unavailable.
 pub(crate) fn clipboard_images_dir(workspace: &Path) -> PathBuf {
-    if let Some(home) = dirs::home_dir() {
-        return home.join(".deepseek").join("clipboard-images");
+    let home = dirs::home_dir();
+    clipboard_images_dir_for_home(workspace, home.as_deref())
+}
+
+fn clipboard_images_dir_for_home(workspace: &Path, home: Option<&Path>) -> PathBuf {
+    if let Some(home) = home {
+        return home.join(".codewhale").join("clipboard-images");
     }
     workspace.join("clipboard-images")
 }
@@ -358,6 +363,27 @@ mod tests {
         // we ever regress to PPM or another format this will catch it.
         let header = std::fs::read(&pasted.path).unwrap();
         assert_eq!(&header[..8], b"\x89PNG\r\n\x1a\n");
+    }
+
+    #[test]
+    fn clipboard_images_dir_uses_codewhale_home_directory() {
+        let home = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+
+        assert_eq!(
+            clipboard_images_dir_for_home(workspace.path(), Some(home.path())),
+            home.path().join(".codewhale").join("clipboard-images")
+        );
+    }
+
+    #[test]
+    fn clipboard_images_dir_falls_back_to_workspace_without_home() {
+        let workspace = tempfile::tempdir().unwrap();
+
+        assert_eq!(
+            clipboard_images_dir_for_home(workspace.path(), None),
+            workspace.path().join("clipboard-images")
+        );
     }
 
     #[test]

@@ -115,6 +115,17 @@ fn config_auth_error_does_not_blame_env() {
     assert_eq!(message, "Authentication failed: invalid API key");
 }
 
+#[test]
+fn plugin_tools_dir_honors_missing_custom_directory_without_fallback() {
+    let missing = PathBuf::from("definitely-missing-codewhale-plugin-dir");
+    let tools_config = crate::config::ToolsConfig {
+        plugin_dir: Some(missing.to_string_lossy().to_string()),
+        ..Default::default()
+    };
+
+    assert_eq!(plugin_tools_dir(Some(&tools_config)), missing);
+}
+
 fn make_plan(
     read_only: bool,
     supports_parallel: bool,

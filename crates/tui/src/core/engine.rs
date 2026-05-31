@@ -194,6 +194,10 @@ pub struct EngineConfig {
     /// through bubblewrap instead of relying solely on Landlock (#2184).
     #[allow(dead_code)] // Wired through ShellManager in follow-up PR
     pub prefer_bwrap: bool,
+    /// Tool override and plugin configuration (`[tools]` table in config.toml).
+    /// Applied to the per-turn tool registry after built-in tools are registered.
+    /// When `None`, no overrides or plugin loading occurs.
+    pub tools: Option<crate::config::ToolsConfig>,
 }
 
 impl Default for EngineConfig {
@@ -242,6 +246,7 @@ impl Default for EngineConfig {
             ),
             tools_always_load: HashSet::new(),
             prefer_bwrap: false,
+            tools: None,
         }
     }
 }
@@ -1192,7 +1197,7 @@ impl Engine {
             None
         };
 
-        let tool_registry = match mode {
+        let mut tool_registry = match mode {
             AppMode::Agent | AppMode::Yolo => {
                 if self.config.features.enabled(Feature::Subagents) {
                     let runtime = if let Some(client) = self.deepseek_client.clone() {
@@ -1241,18 +1246,55 @@ impl Engine {
             _ => Some(builder.build(tool_context)),
         };
 
+        // Load plugin tools from the user's tools directory and apply any
+        // config.toml overrides. Plugin scripts are auto-discovered and
+        // registered without requiring a `[tools]` config section — the
+        // default `~/.codewhale/tools/` directory is always checked.
+        let mut plugin_tool_names: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        if let Some(ref mut tool_registry) = tool_registry {
+            let names_before: std::collections::HashSet<String> = tool_registry
+                .names()
+                .into_iter()
+                .map(|s| s.to_string())
+                .collect();
+
+            let plugin_dir = plugin_tools_dir(self.config.tools.as_ref());
+
+            if let Some(ref tools_config) = self.config.tools
+                && let Some(ref overrides) = tools_config.overrides
+            {
+                tool_registry.apply_overrides(overrides, &plugin_dir);
+            }
+
+            tool_registry.load_plugins(&plugin_dir);
+
+            let names_after: std::collections::HashSet<String> = tool_registry
+                .names()
+                .into_iter()
+                .map(|s| s.to_string())
+                .collect();
+            plugin_tool_names = &names_after - &names_before;
+        }
+
         let mcp_tools = if self.config.features.enabled(Feature::Mcp) {
             self.mcp_tools().await
         } else {
             Vec::new()
         };
         let tools = tool_registry.as_ref().map(|registry| {
-            build_model_tool_catalog(
+            let mut catalog = build_model_tool_catalog(
                 registry.to_api_tools_with_cache(true),
                 mcp_tools,
                 mode,
                 &self.config.tools_always_load,
-            )
+            );
+            for tool in &mut catalog {
+                if plugin_tool_names.contains(&tool.name) {
+                    tool.defer_loading = Some(false);
+                }
+            }
+            catalog
         });
 
         // Main turn loop
@@ -2111,6 +2153,23 @@ impl Engine {
         self.session.last_system_prompt_hash = Some(system_prompt_hash(merged.as_ref()));
         self.session.system_prompt = merged;
     }
+}
+
+fn default_plugin_tools_dir() -> PathBuf {
+    codewhale_config::codewhale_home()
+        .unwrap_or_else(|_| {
+            dirs::home_dir().map_or_else(|| PathBuf::from(".codewhale"), |h| h.join(".codewhale"))
+        })
+        .join("tools")
+}
+
+fn plugin_tools_dir(tools_config: Option<&crate::config::ToolsConfig>) -> PathBuf {
+    if let Some(tools_config) = tools_config
+        && let Some(custom_dir) = tools_config.plugin_dir.as_deref()
+    {
+        return PathBuf::from(shellexpand::tilde(custom_dir).as_ref());
+    }
+    default_plugin_tools_dir()
 }
 
 fn system_prompt_hash(prompt: Option<&SystemPrompt>) -> u64 {

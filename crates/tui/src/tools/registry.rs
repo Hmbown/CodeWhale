@@ -9,6 +9,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
+use std::path::Path;
+
 use serde_json::Value;
 
 use crate::client::DeepSeekClient;
@@ -387,6 +389,77 @@ impl ToolRegistry {
     pub fn clear(&mut self) {
         self.tools.clear();
         self.invalidate_api_cache();
+    }
+
+    /// Remove a tool from the registry by name. Returns `true` if the tool
+    /// was present and removed, `false` if no tool with that name existed.
+    pub fn remove_tool(&mut self, name: &str) -> bool {
+        let existed = self.tools.remove(name).is_some();
+        if existed {
+            self.invalidate_api_cache();
+        }
+        existed
+    }
+
+    /// Apply config.toml tool overrides to this registry.
+    ///
+    /// For each entry in `overrides`:
+    /// - `Disabled` removes the tool.
+    /// - `Script` / `Command` replaces the tool with the user's implementation.
+    ///
+    /// `plugin_dir` is used as the base for relative script paths.
+    pub fn apply_overrides(
+        &mut self,
+        overrides: &std::collections::HashMap<String, crate::config::ToolOverride>,
+        plugin_dir: &Path,
+    ) {
+        for (tool_name, override_cfg) in overrides {
+            match override_cfg {
+                crate::config::ToolOverride::Disabled => {
+                    if self.remove_tool(tool_name) {
+                        tracing::info!("Tool '{}' disabled via config override", tool_name);
+                    } else {
+                        tracing::warn!("Cannot disable tool '{}': not registered", tool_name);
+                    }
+                }
+                _ => {
+                    // Script and Command overrides create replacement tools.
+                    use crate::tools::plugin::tool_from_override;
+                    if let Some(replacement) =
+                        tool_from_override(tool_name, override_cfg, plugin_dir)
+                    {
+                        self.register(replacement);
+                        tracing::info!("Tool '{}' replaced via config override", tool_name);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Load and register plugin tools from a directory.
+    ///
+    /// Each script with valid frontmatter (`# name:`, `# description:`, etc.)
+    /// becomes a registered `ScriptPluginTool`. Tools whose name matches an
+    /// already-registered tool will overwrite it.
+    pub fn load_plugins(&mut self, plugin_dir: &Path) {
+        if !plugin_dir.exists() {
+            tracing::debug!(
+                "Plugin directory {} does not exist, skipping",
+                plugin_dir.display()
+            );
+            return;
+        }
+        let plugins = crate::tools::plugin::load_plugin_tools(plugin_dir);
+        let count = plugins.len();
+        for tool in plugins {
+            self.register(tool);
+        }
+        if count > 0 {
+            tracing::info!(
+                "Loaded {count} plugin tool(s) from {}",
+                plugin_dir.display()
+            );
+        }
     }
 }
 

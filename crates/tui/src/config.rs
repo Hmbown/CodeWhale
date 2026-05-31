@@ -830,6 +830,19 @@ pub struct ToolsConfig {
     /// default core catalog. Unknown names are harmless and simply never match.
     #[serde(default)]
     pub always_load: Vec<String>,
+
+    /// Optional directory to scan for plugin tool scripts. Scripts with a
+    /// frontmatter header (`# name:`, `# description:`, `# schema:`) are
+    /// auto-discovered and registered as tools.
+    ///
+    /// Defaults to `~/.codewhale/tools/` when `None`.
+    #[serde(default)]
+    pub plugin_dir: Option<String>,
+
+    /// Per-tool overrides keyed by built-in tool name.
+    /// Each override replaces or disables the named tool.
+    #[serde(default)]
+    pub overrides: Option<HashMap<String, ToolOverride>>,
 }
 
 /// One configurable footer item.
@@ -1299,6 +1312,33 @@ pub struct Config {
     /// Vision model configuration for the `image_analyze` tool.
     #[serde(default)]
     pub vision_model: Option<VisionModelConfig>,
+}
+
+/// How a user wants to replace or disable a built-in tool.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ToolOverride {
+    /// Run a local script file. The script receives the tool's JSON input
+    /// on stdin and must return a JSON `ToolResult` on stdout.
+    Script {
+        /// Path to the script (absolute, or relative to `~/.codewhale/tools/`).
+        path: String,
+        /// Optional static arguments prepended before the tool's JSON input.
+        #[serde(default)]
+        args: Option<Vec<String>>,
+    },
+    /// Run an external command. The command receives the tool's JSON input
+    /// on stdin and must return a JSON `ToolResult` on stdout.
+    Command {
+        /// The command to run (binary name or absolute path).
+        command: String,
+        /// Optional static arguments prepended before the tool's JSON input.
+        #[serde(default)]
+        args: Option<Vec<String>>,
+    },
+    /// Completely disable a built-in tool. The tool will not appear in the
+    /// model-visible catalog and cannot be called.
+    Disabled,
 }
 
 /// Vision model configuration for the `image_analyze` tool.

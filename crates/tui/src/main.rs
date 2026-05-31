@@ -1530,8 +1530,12 @@ fn tools_readme_template() -> &'static str {
     "# Local tools\n\n\
      Drop self-describing scripts here so they can be discovered by\n\
      `codewhale-tui setup --status` and surfaced in `codewhale-tui doctor`.\n\n\
+     When `[tools.plugin_dir]` is set in config.toml (or when the default\n\
+     `~/.codewhale/tools/` directory exists), they are auto-discovered and\n\
+     registered as model-visible tools.\n\n\
      Each script should start with a frontmatter-style header so the\n\
-     description is visible without executing the file:\n\n\
+     description is visible without executing the file and the agent knows\n\
+     the tool name, description, and input schema:\n\n\
      ```\n\
      # name: my-tool\n\
      # description: One-line summary of what this tool does\n\
@@ -5375,6 +5379,7 @@ async fn run_exec_agent(
         search_provider: config.search_provider(),
         search_api_key: config.search.as_ref().and_then(|s| s.api_key.clone()),
         tools_always_load: config.tools_always_load(),
+        tools: config.tools.clone(),
     };
 
     let engine_handle = spawn_engine(engine_config, config);

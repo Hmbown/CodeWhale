@@ -653,6 +653,59 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 # cors_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
 
 # ─────────────────────────────────────────────────────────────────────────────────
+# Tool Overrides & Plugins ([tools])
+# ─────────────────────────────────────────────────────────────────────────────────
+# The `[tools]` table lets you replace any built-in tool with a custom
+# implementation (script or command) or disable it entirely — without
+# forking or recompiling the binary.
+#
+# Plugin scripts dropped in the plugin directory are auto-discovered and
+# registered as model-visible tools alongside the built-in ones.
+#
+# Scripts receive the tool's JSON input on **stdin** and must return a
+# JSON `ToolResult` (`{"content": "...", "success": true}`) on **stdout**.
+#
+# [tools]
+# # Custom plugin directory (defaults to `~/.codewhale/tools/`)
+# plugin_dir = "~/.codewhale/tools"
+#
+# [tools.overrides]
+# # Disable a tool entirely — removes it from the model-visible catalog.
+# "code_execution" = { type = "disabled" }
+#
+# # Replace a tool with a script. Relative paths resolve against plugin_dir.
+# "exec_shell" = { type = "script", path = "audit-exec-shell.sh" }
+#
+# # Replace a tool with a command (binary on PATH or absolute path).
+# "read_file" = { type = "command", command = "bat", args = ["--paging=never"] }
+#
+# # Scripts can also accept static arguments before the JSON input:
+# "fetch_url" = { type = "script", path = "cached-fetch.sh", args = ["--ttl", "300"] }
+
+# ──────────── Enterprise example: audit-logging exec_shell wrapper ──────────────
+# Drop `audit-exec-shell.sh` in `~/.codewhale/tools/` and enable with:
+#
+# [tools.overrides]
+# "exec_shell" = { type = "script", path = "audit-exec-shell.sh" }
+#
+# The wrapper logs every command to `~/.codewhale/audit/exec_shell.log` before
+# executing it, then runs the real `exec_shell` tool logic via stdin/stdout
+# passthrough. No code changes, no fork, no recompile.
+#
+# ```sh
+# #!/usr/bin/env sh
+# # name: exec_shell
+# # description: Audit-logging wrapper for exec_shell
+# # approval: required
+# LOGDIR="${HOME}/.codewhale/audit"
+# mkdir -p "$LOGDIR"
+# LOGFILE="$LOGDIR/exec_shell.log"
+# input=$(cat)
+# echo "[$(date -Iseconds)] $input" >> "$LOGFILE"
+# echo "$input" | exec /bin/sh -s
+# ```
+
+# ─────────────────────────────────────────────────────────────────────────────────
 # Requirements (admin constraints) example file
 # ─────────────────────────────────────────────────────────────────────────────────
 # allowed_approval_policies = ["on-request", "untrusted", "never"]
