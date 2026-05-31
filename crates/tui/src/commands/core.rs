@@ -3,7 +3,9 @@
 use std::fmt::Write;
 use std::path::PathBuf;
 
-use crate::config::{COMMON_DEEPSEEK_MODELS, normalize_model_name_for_provider};
+use crate::config::{
+    COMMON_DEEPSEEK_MODELS, normalize_custom_model_id, normalize_model_name_for_provider,
+};
 use crate::localization::{MessageId, tr};
 use crate::tui::app::{App, AppAction, AppMode, ReasoningEffort};
 use crate::tui::views::{HelpView, ModalKind, SubAgentsView, subagent_view_agents};
@@ -135,11 +137,21 @@ pub fn model(app: &mut App, model_name: Option<&str>) -> CommandResult {
                 AppAction::UpdateCompaction(app.compaction_config()),
             );
         }
-        let Some(model_id) = normalize_model_name_for_provider(app.api_provider, name) else {
-            return CommandResult::error(format!(
-                "Invalid model '{name}'. Expected auto or a DeepSeek model ID. Common models: {}",
-                COMMON_DEEPSEEK_MODELS.join(", ")
-            ));
+        let model_id = if app.accepts_custom_model_ids() {
+            let Some(model_id) = normalize_custom_model_id(name) else {
+                return CommandResult::error(format!(
+                    "Invalid model '{name}'. Expected a non-empty model ID."
+                ));
+            };
+            model_id
+        } else {
+            let Some(model_id) = normalize_model_name_for_provider(app.api_provider, name) else {
+                return CommandResult::error(format!(
+                    "Invalid model '{name}'. Expected auto or a DeepSeek model ID. Common models: {}",
+                    COMMON_DEEPSEEK_MODELS.join(", ")
+                ));
+            };
+            model_id
         };
         let old_model = app.model_display_label();
         let model_changed = app.auto_model || app.model != model_id;
@@ -723,6 +735,38 @@ mod tests {
         let msg = result.message.unwrap();
         assert!(msg.contains("deepseek-v4"));
         assert_eq!(app.model, "deepseek-v4");
+        assert!(matches!(
+            result.action,
+            Some(AppAction::UpdateCompaction(_))
+        ));
+    }
+
+    #[test]
+    fn test_model_change_accepts_custom_id_for_openai_compatible_provider() {
+        let mut app = create_test_app();
+        app.api_provider = crate::config::ApiProvider::Openai;
+        app.model_ids_passthrough = true;
+
+        let result = model(&mut app, Some("opencode-go/glm-5.1"));
+
+        assert!(result.message.is_some());
+        assert_eq!(app.model, "opencode-go/glm-5.1");
+        assert!(!app.auto_model);
+        assert!(matches!(
+            result.action,
+            Some(AppAction::UpdateCompaction(_))
+        ));
+    }
+
+    #[test]
+    fn test_model_change_accepts_custom_id_for_custom_base_url() {
+        let mut app = create_test_app();
+        app.model_ids_passthrough = true;
+
+        let result = model(&mut app, Some("opencode-go/kimi-k2.6"));
+
+        assert!(result.message.is_some());
+        assert_eq!(app.model, "opencode-go/kimi-k2.6");
         assert!(matches!(
             result.action,
             Some(AppAction::UpdateCompaction(_))

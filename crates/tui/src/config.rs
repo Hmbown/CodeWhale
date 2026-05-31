@@ -429,6 +429,16 @@ pub fn normalize_model_name(model: &str) -> Option<String> {
     None
 }
 
+#[must_use]
+pub(crate) fn normalize_custom_model_id(model: &str) -> Option<String> {
+    let trimmed = model.trim();
+    if trimmed.is_empty() || trimmed.chars().any(char::is_control) {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
 fn canonical_official_deepseek_model_id(model: &str) -> Option<&'static str> {
     match model.trim().to_ascii_lowercase().as_str() {
         "deepseek-v4-pro"
@@ -1964,6 +1974,12 @@ impl Config {
     fn active_provider_preserves_custom_base_url_model(&self) -> bool {
         let provider = self.api_provider();
         provider_preserves_custom_base_url_model(provider, &self.deepseek_base_url())
+    }
+
+    pub(crate) fn model_ids_pass_through(&self) -> bool {
+        let provider = self.api_provider();
+        provider_passes_model_through(provider)
+            || self.active_provider_preserves_custom_base_url_model()
     }
 
     /// Read the API key.

@@ -4887,6 +4887,7 @@ async fn switch_provider(
     let new_model = config.default_model();
     let cache_scope_changed = previous_provider != target || previous_model != new_model;
     app.api_provider = target;
+    app.model_ids_passthrough = config.model_ids_pass_through();
     app.set_model_selection(new_model.clone());
     app.update_model_compaction_budget();
     if cache_scope_changed {
