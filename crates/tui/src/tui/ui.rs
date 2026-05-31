@@ -3,8 +3,6 @@
 use std::fmt::Write as _;
 use std::io::{self, Stdout, Write};
 use std::path::PathBuf;
-#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
-use std::process::{Command, Stdio};
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
@@ -5414,12 +5412,15 @@ async fn apply_command_result(
     Ok(false)
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
-fn open_external_url(url: &str) -> Result<()> {
-    spawn_external_url_command(external_url_command(url))
-}
+#[cfg(test)]
+use std::process::{Command, Stdio};
 
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+fn open_external_url(url: &str) -> Result<()> {
+    crate::utils::open_url(url)
+}
+
+#[cfg(test)]
 fn spawn_external_url_command(mut command: Command) -> Result<()> {
     command
         .stdin(Stdio::null())
@@ -5428,34 +5429,6 @@ fn spawn_external_url_command(mut command: Command) -> Result<()> {
         .spawn()
         .map(|_| ())
         .map_err(|err| anyhow::anyhow!("failed to launch browser command: {err}"))
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-fn open_external_url(_url: &str) -> Result<()> {
-    Err(anyhow::anyhow!(
-        "browser opening is unsupported on this platform"
-    ))
-}
-
-#[cfg(target_os = "macos")]
-fn external_url_command(url: &str) -> Command {
-    let mut command = Command::new("open");
-    command.arg(url);
-    command
-}
-
-#[cfg(target_os = "linux")]
-fn external_url_command(url: &str) -> Command {
-    let mut command = Command::new("xdg-open");
-    command.arg(url);
-    command
-}
-
-#[cfg(target_os = "windows")]
-fn external_url_command(url: &str) -> Command {
-    let mut command = Command::new("cmd");
-    command.args(["/C", "start", "", url]);
-    command
 }
 
 fn apply_workspace_runtime_state(app: &mut App, config: &Config, workspace: PathBuf) {

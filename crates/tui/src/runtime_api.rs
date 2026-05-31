@@ -5,7 +5,6 @@ use std::convert::Infallible;
 use std::fs;
 use std::net::{SocketAddr, UdpSocket};
 use std::path::{Path as FsPath, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -27,6 +26,8 @@ use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tower_http::cors::{Any, CorsLayer};
+
+use crate::dependencies::ExternalTool;
 
 use crate::automation_manager::{
     AutomationManager, AutomationRecord, AutomationRunRecord, AutomationSchedulerConfig,
@@ -1856,11 +1857,7 @@ fn collect_workspace_status(workspace: &std::path::Path) -> WorkspaceStatusRespo
 }
 
 fn run_git(workspace: &std::path::Path, args: &[&str]) -> Option<String> {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(workspace)
-        .output()
-        .ok()?;
+    let output = crate::dependencies::Git::output(args, workspace).ok()?;
     if !output.status.success() {
         return None;
     }

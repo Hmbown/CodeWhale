@@ -6654,6 +6654,33 @@ fn composer_arrows_scroll_config_overrides_default() {
 }
 
 #[test]
+fn history_arrow_down_handles_empty_input() {
+    let mut app = create_test_app();
+    app.composer_arrows_scroll = false;
+    app.input_history.push("older".to_string());
+    app.input_history.push("newer".to_string());
+
+    // Empty composer + Up → newest entry (draft saved as empty string).
+    assert!(handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+        false,
+        false,
+    ));
+    assert_eq!(app.input, "newer");
+
+    // Down from newest → end of history → restores the saved empty draft.
+    assert!(handle_composer_history_arrow(
+        &mut app,
+        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+        false,
+        false,
+    ));
+    assert!(app.input.is_empty());
+    assert!(app.history_index.is_none());
+}
+
+#[test]
 fn home_jumps_to_line_start_multiline() {
     let mut app = create_test_app();
     app.input = "line one\nline two\nline three".to_string();

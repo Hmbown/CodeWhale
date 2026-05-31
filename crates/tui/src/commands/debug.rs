@@ -7,6 +7,7 @@ use std::time::Instant;
 use super::CommandResult;
 use crate::client::{PromptInspection, inspect_prompt_for_request};
 use crate::compaction::estimate_input_tokens_conservative;
+use crate::dependencies::{ExternalTool, Git};
 use crate::localization::{Locale, MessageId, tr};
 use crate::models::{ContentBlock, MessageRequest, SystemPrompt, context_window_for_model};
 use crate::tui::app::{App, AppAction, TurnCacheRecord};
@@ -1857,15 +1858,18 @@ pub fn patch_undo(app: &mut App) -> CommandResult {
     }
 
     // Show diff stat so the user knows what changed.
-    let diff_stat = std::process::Command::new("git")
-        .args(["diff", "--stat"])
-        .current_dir(&workspace)
-        .output()
-        .ok()
-        .and_then(|o| {
-            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            if s.is_empty() { None } else { Some(s) }
-        });
+    let diff_stat = Git::command()
+        .map(|mut git| {
+            git.args(["diff", "--stat"])
+                .current_dir(&workspace)
+                .output()
+                .ok()
+                .and_then(|o| {
+                    let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                    if s.is_empty() { None } else { Some(s) }
+                })
+        })
+        .unwrap_or(None);
 
     let short = &target.id.as_str()[..target.id.as_str().len().min(8)];
     let summary = match diff_stat {
@@ -1936,11 +1940,17 @@ pub fn edit(app: &mut App) -> CommandResult {
 pub fn diff(app: &mut App) -> CommandResult {
     let workspace = app.workspace.clone();
 
-    let name_only_output = std::process::Command::new("git")
+    let Some(mut name_only_cmd) = Git::command() else {
+        return CommandResult::error("git not found on PATH");
+    };
+    let Some(mut stat_cmd) = Git::command() else {
+        return CommandResult::error("git not found on PATH");
+    };
+    let name_only_output = name_only_cmd
         .args(["diff", "--name-only"])
         .current_dir(&workspace)
         .output();
-    let stat_output = std::process::Command::new("git")
+    let stat_output = stat_cmd
         .args(["diff", "--stat"])
         .current_dir(&workspace)
         .output();

@@ -15,6 +15,8 @@ use crate::models::Tool;
 use crate::tools::spec::{ToolError, ToolResult, optional_u64, required_str};
 use crate::tui::app::AppMode;
 
+use crate::dependencies::ExternalTool;
+
 pub(super) const MULTI_TOOL_PARALLEL_NAME: &str = "multi_tool_use.parallel";
 pub(super) const REQUEST_USER_INPUT_NAME: &str = "request_user_input";
 pub(super) const CODE_EXECUTION_TOOL_NAME: &str = "code_execution";
@@ -720,20 +722,9 @@ pub(super) async fn execute_code_execution_tool(
     // Resolve the locally-installed Python interpreter we cached at
     // catalog-build time. If it's absent now (somehow registered but
     // disappeared between startup and this call — concurrent uninstall,
-    // PATH change, etc.) we fail fast with a clear message rather than
-    // dropping into `tokio::process::Command::new("python3")` and
-    // surfacing the cryptic "program not found" the contributor
-    // originally hit on Windows.
-    let interpreter = crate::dependencies::resolve_python_interpreter().ok_or_else(|| {
-        ToolError::execution_failed(format!(
-            "code_execution: no Python interpreter found on PATH (tried {:?}). \
-             Install Python 3 and ensure one of these is on PATH, then restart \
-             codewhale.",
-            crate::dependencies::PYTHON_CANDIDATES,
-        ))
-    })?;
-    let (program, args) = crate::dependencies::split_interpreter_spec(&interpreter);
-
+    // PATH change, etc.) the ExternalTool::tokio_command() will return
+    // None and we fail fast with a clear message.
+    //
     // Write the code to a temp file and execute it as a script rather
     // than passing it via `-c "<code>"`. Reasons:
     //   * `-c` has length limits (argv) on Windows.
@@ -750,12 +741,12 @@ pub(super) async fn execute_code_execution_tool(
         .await
         .map_err(|e| ToolError::execution_failed(format!("tempfile write failed: {e}")))?;
 
-    let mut cmd = tokio::process::Command::new(&program);
-    for arg in &args {
-        cmd.arg(arg);
-    }
-    cmd.arg(&script_path);
-    cmd.current_dir(workspace);
+    let mut cmd = crate::dependencies::Python::tokio_command().ok_or_else(|| {
+        ToolError::execution_failed(
+            "code_execution: Python interpreter became unavailable".to_string(),
+        )
+    })?;
+    cmd.arg(&script_path).current_dir(workspace);
 
     let output = tokio::time::timeout(Duration::from_secs(120), cmd.output())
         .await

@@ -1,8 +1,6 @@
 #[cfg(feature = "web")]
 use std::net::SocketAddr;
 #[cfg(feature = "web")]
-use std::process::Command;
-#[cfg(feature = "web")]
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -605,36 +603,7 @@ pub fn parse_document(value: Value) -> Result<ConfigUiDocument> {
 
 #[cfg(feature = "web")]
 pub fn open_browser(url: &str) -> Result<()> {
-    #[cfg(target_os = "macos")]
-    let mut command = {
-        let mut command = Command::new("open");
-        command.arg(url);
-        command
-    };
-    #[cfg(target_os = "linux")]
-    let mut command = {
-        let mut command = Command::new("xdg-open");
-        command.arg(url);
-        command
-    };
-    #[cfg(target_os = "windows")]
-    let mut command = {
-        let mut command = Command::new("cmd");
-        command.args(["/C", "start", "", url]);
-        command
-    };
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-    return Err(anyhow::anyhow!(
-        "browser opening is unsupported on this platform"
-    ));
-
-    let status = command
-        .status()
-        .context("failed to launch browser command")?;
-    if !status.success() {
-        bail!("browser command exited with status {status}");
-    }
-    Ok(())
+    crate::utils::open_url(url)
 }
 
 fn validate_document(doc: &ConfigUiDocument) -> Result<()> {

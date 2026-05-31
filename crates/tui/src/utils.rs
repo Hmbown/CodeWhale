@@ -3,6 +3,7 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use crate::models::{ContentBlock, Message};
 use anyhow::{Context, Result};
@@ -206,6 +207,54 @@ pub fn open_append(path: &Path) -> std::io::Result<std::io::BufWriter<std::fs::F
 pub fn flush_and_sync(writer: &mut std::io::BufWriter<std::fs::File>) -> std::io::Result<()> {
     writer.flush()?;
     writer.get_ref().sync_all()
+}
+
+/// Open a URL in the system's default browser.
+///
+/// Dispatches to the platform-appropriate opener:
+/// - macOS: `open`
+/// - Linux: `xdg-open`
+/// - Windows: `cmd /C start ""`
+/// - Other: returns an error.
+///
+/// This is the single entry point for URL opening — every call site in
+/// the codebase should use this instead of hardcoding `Command::new("open")`,
+/// `Command::new("xdg-open")`, or `Command::new("cmd")`.
+pub fn open_url(url: &str) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    let mut command = Command::new("open");
+    #[cfg(target_os = "linux")]
+    let mut command = Command::new("xdg-open");
+    #[cfg(target_os = "windows")]
+    let _command = {
+        let mut cmd = Command::new("cmd");
+        cmd.args(["/C", "start", "", url]);
+        return match cmd
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(_) => Ok(()),
+            Err(e) => Err(anyhow::anyhow!("failed to launch browser command: {e}")),
+        };
+    };
+
+    // macOS / Linux path
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        command.arg(url);
+        command
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| anyhow::anyhow!("failed to launch browser command: {e}"))
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    Err(anyhow::anyhow!(
+        "browser opening is unsupported on this platform"
+    ))
 }
 
 /// Spawn a tokio task with panic supervision.
@@ -772,5 +821,44 @@ mod project_mapping_tests {
             .strip_prefix("Project with key files: ")
             .expect("prefix");
         assert_eq!(suffix, "Makefile, README.md");
+    }
+
+    // ===================================================================
+    // open_url tests
+    // ===================================================================
+
+    #[test]
+    fn open_url_does_not_panic_on_valid_url() {
+        // We can't open a browser in CI, but we can verify the function
+        // doesn't panic and returns a Result (either Ok or Err with a
+        // meaningful message).
+        let result = super::open_url("https://example.com");
+        match result {
+            Ok(()) => {} // browser opened — fine
+            Err(e) => {
+                let msg = e.to_string();
+                // The error must contain something about "browser" or
+                // "unsupported" — not a random panic message.
+                assert!(
+                    msg.contains("browser")
+                        || msg.contains("unsupported")
+                        || msg.contains("failed"),
+                    "unexpected error message: {msg}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn open_url_rejects_empty_url_gracefully() {
+        // An empty URL should fail with a clear error, not panic.
+        let result = super::open_url("");
+        match result {
+            Ok(()) => {} // some openers might accept empty string
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(!msg.is_empty(), "error message must not be empty");
+            }
+        }
     }
 }

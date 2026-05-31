@@ -2,13 +2,13 @@
 
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::client::DeepSeekClient;
+use crate::dependencies::ExternalTool;
 use crate::llm_client::LlmClient;
 use crate::models::{ContentBlock, Message, MessageRequest, SystemPrompt, Usage};
 use crate::utils::truncate_with_ellipsis;
@@ -361,7 +361,9 @@ fn resolve_diff_target(
     staged: bool,
     base: Option<&str>,
 ) -> Result<String, ToolError> {
-    let mut cmd = Command::new("git");
+    let Some(mut cmd) = crate::dependencies::Git::command() else {
+        return Err(ToolError::execution_failed("git not found"));
+    };
     cmd.arg("diff");
     if staged {
         cmd.arg("--cached");
@@ -391,7 +393,9 @@ fn resolve_diff_target(
 }
 
 fn gh_pr_diff(pr: &PullRequestRef, workspace: &Path) -> Result<String, ToolError> {
-    let mut cmd = Command::new("gh");
+    let Some(mut cmd) = crate::dependencies::Gh::command() else {
+        return Err(ToolError::execution_failed("gh not found"));
+    };
     cmd.arg("pr")
         .arg("diff")
         .arg(&pr.number)

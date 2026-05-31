@@ -11,6 +11,7 @@ use tokio::process::Command;
 use uuid::Uuid;
 
 use crate::command_safety::{SafetyLevel, analyze_command};
+use crate::dependencies::ExternalTool;
 use crate::task_manager::{
     NewTaskRequest, TaskArtifactRef, TaskAttemptRecord, TaskGateRecord, TaskRecord,
 };
@@ -23,6 +24,23 @@ use crate::tools::spec::{
 const MAX_SUMMARY_CHARS: usize = 900;
 const DEFAULT_GATE_TIMEOUT_MS: u64 = 120_000;
 const MAX_GATE_TIMEOUT_MS: u64 = 600_000;
+
+fn build_gate_command_parts(command: &str) -> (String, Vec<String>) {
+    (
+        "/bin/sh".to_string(),
+        vec!["-lc".to_string(), command.to_string()],
+    )
+}
+
+fn build_gate_command(command: &str, cwd: &Path) -> Command {
+    let (program, args) = build_gate_command_parts(command);
+    let mut cmd = Command::new(program);
+    cmd.args(args)
+        .current_dir(cwd)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    cmd
+}
 
 pub struct TaskCreateTool;
 pub struct TaskListTool;
@@ -287,12 +305,7 @@ impl ToolSpec for TaskGateRunTool {
         }
 
         let started = Instant::now();
-        let mut cmd = Command::new("/bin/sh");
-        cmd.arg("-lc")
-            .arg(&command)
-            .current_dir(&cwd)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        let mut cmd = build_gate_command(&command, &cwd);
         let output =
             tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), cmd.output()).await;
 
@@ -748,13 +761,20 @@ impl ToolSpec for PrAttemptPreflightTool {
             .as_ref()
             .ok_or_else(|| ToolError::invalid_input("Attempt has no patch artifact"))?;
         let patch_path = manager.artifact_absolute_path(patch_ref);
-        let out = Command::new("git")
-            .args(["apply", "--check"])
-            .arg(&patch_path)
-            .current_dir(&context.workspace)
-            .output()
-            .await
-            .map_err(|e| ToolError::execution_failed(format!("git apply --check failed: {e}")))?;
+        let workspace = context.workspace.clone();
+        let out = tokio::task::spawn_blocking(move || {
+            crate::dependencies::Git::command()
+                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "git not found"))?
+                .args(["apply", "--check"])
+                .arg(&patch_path)
+                .current_dir(&workspace)
+                .output()
+        })
+        .await
+        .map_err(|join_err| {
+            ToolError::execution_failed(format!("git apply --check panicked: {join_err}"))
+        })?
+        .map_err(|e| ToolError::execution_failed(format!("git apply --check failed: {e}")))?;
         let stdout = String::from_utf8_lossy(&out.stdout).to_string();
         let stderr = String::from_utf8_lossy(&out.stderr).to_string();
         Ok(ToolResult::json(&json!({
@@ -900,10 +920,7 @@ fn task_id_schema() -> Value {
 }
 
 fn git_output(workspace: &Path, args: &[&str]) -> Result<String, ToolError> {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(workspace)
-        .output()
+    let out = crate::dependencies::Git::output(args, workspace)
         .map_err(|e| ToolError::execution_failed(format!("failed to run git: {e}")))?;
     if !out.status.success() {
         return Err(ToolError::execution_failed(format!(
@@ -1008,5 +1025,12 @@ mod tests {
         let wait_schema = TaskShellWaitTool.input_schema();
         assert_eq!(wait_schema["required"][0], "task_id");
         assert!(wait_schema["properties"]["gate"].is_object());
+    }
+
+    #[test]
+    fn gate_command_uses_login_shell_invocation() {
+        let (program, args) = build_gate_command_parts("echo hello");
+        assert_eq!(program, "/bin/sh");
+        assert_eq!(args, vec!["-lc".to_string(), "echo hello".to_string()]);
     }
 }

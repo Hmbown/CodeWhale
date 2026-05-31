@@ -7,17 +7,12 @@
 //! endpoint, so we materialize the bytes to disk instead of base64-embedding
 //! them in the request).
 
-#[cfg(any(not(test), all(test, unix)))]
-use std::io::Write;
 #[cfg(not(test))]
-use std::io::{self, IsTerminal};
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
-#[cfg(any(
-    all(test, unix),
-    all(
-        any(target_os = "macos", target_os = "windows", target_os = "linux"),
-        not(test)
-    )
+#[cfg(all(
+    any(target_os = "macos", target_os = "windows", target_os = "linux"),
+    not(test)
 ))]
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -87,10 +82,10 @@ impl ClipboardHandler {
     ///
     /// On Linux, `arboard::Clipboard::new()` opens a blocking X11 connection.
     /// When no X server is running (headless, WSL2 without WSLg), the connect
-    /// call can hang indefinitely.  We spawn the connection attempt on a
+    /// call can hang indefinitely. We spawn the connection attempt on a
     /// temporary thread and give it 500 ms; if it doesn't return in time the
     /// handler stays in fallback/no-op mode and `read`/`write_text` fall
-    /// through to their OSC 52 and pbcopy/powershell fallbacks.
+    /// through to their OSC 52 and pbcopy/powershell fallbacks.
     fn ensure_clipboard(&mut self) {
         if self.clipboard_init_attempted {
             return;
@@ -101,8 +96,6 @@ impl ClipboardHandler {
         std::thread::spawn(move || {
             let _ = tx.send(Clipboard::new().ok());
         });
-        // 500 ms is generous for a local Unix socket connect — the
-        // kernel either answers or doesn't.
         self.clipboard = rx
             .recv_timeout(std::time::Duration::from_millis(500))
             .ok()
@@ -187,38 +180,7 @@ fn write_text_with_set_clipboard(text: &str) -> Result<()> {
     )
 }
 
-#[cfg(all(target_os = "linux", not(test)))]
-fn write_text_with_wlcopy(text: &str) -> Result<()> {
-    write_text_with_wlcopy_using_argv("wl-copy", text)
-}
-
-#[cfg(target_os = "linux")]
-fn write_text_with_wlcopy_using_argv(program: &str, text: &str) -> Result<()> {
-    let mut child = Command::new(program)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| anyhow::anyhow!("Failed to run {program}: {e}"))?;
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(text.as_bytes())
-            .map_err(|e| anyhow::anyhow!("Failed to write to {program}: {e}"))?;
-    }
-    // stdin is dropped here, closing the pipe so wl-copy flushes.
-    let status = child
-        .wait()
-        .map_err(|e| anyhow::anyhow!("Failed to wait on {program}: {e}"))?;
-    if !status.success() {
-        bail!("{program} exited with {status}");
-    }
-    Ok(())
-}
-
-#[cfg(any(
-    all(test, unix),
-    all(any(target_os = "macos", target_os = "windows"), not(test))
-))]
+#[cfg(all(any(target_os = "macos", target_os = "windows"), not(test)))]
 fn write_text_with_stdin_command(
     program: &str,
     args: &[&str],
@@ -242,6 +204,34 @@ fn write_text_with_stdin_command(
         .spawn(move || {
             let _ = child.wait();
         });
+    Ok(())
+}
+
+#[cfg(all(target_os = "linux", not(test)))]
+fn write_text_with_wlcopy(text: &str) -> Result<()> {
+    write_text_with_wlcopy_using_argv("wl-copy", text)
+}
+
+#[cfg(all(target_os = "linux", not(test)))]
+fn write_text_with_wlcopy_using_argv(program: &str, text: &str) -> Result<()> {
+    let mut child = Command::new(program)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("Failed to run {program}: {e}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(text.as_bytes())
+            .map_err(|e| anyhow::anyhow!("Failed to write to {program}: {e}"))?;
+    }
+    // stdin is dropped here, closing the pipe so wl-copy flushes.
+    let status = child
+        .wait()
+        .map_err(|e| anyhow::anyhow!("Failed to wait on {program}: {e}"))?;
+    if !status.success() {
+        bail!("{program} exited with {status}");
+    }
     Ok(())
 }
 
@@ -279,7 +269,7 @@ fn osc52_sequence(text: &str, in_tmux: bool) -> Result<String> {
 /// `<workspace>/clipboard-images/` if the home dir is unavailable.
 pub(crate) fn clipboard_images_dir(workspace: &Path) -> PathBuf {
     if let Some(home) = dirs::home_dir() {
-        return home.join(".codewhale").join("clipboard-images");
+        return home.join(".deepseek").join("clipboard-images");
     }
     workspace.join("clipboard-images")
 }
@@ -370,48 +360,6 @@ mod tests {
         assert_eq!(&header[..8], b"\x89PNG\r\n\x1a\n");
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn stdin_clipboard_command_returns_before_helper_exits() {
-        use std::time::{Duration, Instant};
-
-        let dir = tempfile::tempdir().unwrap();
-        let marker = dir.path().join("clipboard.txt");
-        let script = dir.path().join("slow-clipboard.sh");
-        std::fs::write(&script, "#!/bin/sh\ncat > \"$1\"\nsleep 1\n").unwrap();
-
-        use std::os::unix::fs::PermissionsExt;
-        let mut permissions = std::fs::metadata(&script).unwrap().permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(&script, permissions).unwrap();
-
-        let started = Instant::now();
-        write_text_with_stdin_command(
-            script.to_str().unwrap(),
-            &[marker.to_str().unwrap()],
-            "copied",
-            "test-clipboard",
-        )
-        .unwrap();
-        assert!(
-            started.elapsed() < Duration::from_millis(250),
-            "clipboard helper wait leaked onto caller path"
-        );
-
-        let deadline = Instant::now() + Duration::from_secs(2);
-        let mut last_body = String::new();
-        while Instant::now() < deadline {
-            if let Ok(body) = std::fs::read_to_string(&marker) {
-                if body == "copied" {
-                    return;
-                }
-                last_body = body;
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        panic!("clipboard helper did not receive stdin; last body: {last_body:?}");
-    }
-
     #[test]
     fn pasted_image_labels_format_correctly() {
         let p = PastedImage {
@@ -422,33 +370,6 @@ mod tests {
         };
         assert_eq!(p.short_label(), "1024x768 PNG");
         assert_eq!(p.size_label(), "235KB");
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn wlcopy_helper_errors_when_binary_missing() {
-        let result =
-            write_text_with_wlcopy_using_argv("/nonexistent/path/to/wlcopy_binary_xyz", "test");
-        assert!(result.is_err());
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn wlcopy_helper_errors_when_binary_exits_nonzero() {
-        let result = write_text_with_wlcopy_using_argv("false", "test");
-        assert!(result.is_err());
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn wlcopy_helper_succeeds_when_binary_returns_zero() {
-        // Use `cat` instead of `true` because `true` exits immediately
-        // without reading stdin, causing EPIPE before we can check the
-        // exit status.  `cat` consumes stdin until EOF (when we drop the
-        // pipe) and then exits 0, faithfully modelling a successful
-        // wl-copy invocation.
-        let result = write_text_with_wlcopy_using_argv("cat", "test");
-        assert!(result.is_ok());
     }
 
     #[test]

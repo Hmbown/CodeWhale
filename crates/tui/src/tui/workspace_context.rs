@@ -7,8 +7,8 @@
 //! current Tokio runtime; tests and non-async callers fall through to
 //! a synchronous call.
 
+use crate::dependencies::{ExternalTool, Git};
 use std::path::Path;
-use std::process::Command;
 use std::time::{Duration, Instant};
 
 use crate::tui::app::App;
@@ -170,10 +170,7 @@ fn change_summary(workspace: &Path) -> Option<ChangeSummary> {
 }
 
 fn run_git(workspace: &Path, args: &[&str]) -> std::io::Result<String> {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(workspace)
-        .output()?;
+    let output = Git::output(args, workspace)?;
     if !output.status.success() {
         return Err(std::io::Error::other("git command failed"));
     }

@@ -445,6 +445,26 @@ fn non_yolo_mode_retains_default_defer_policy() {
         &always_load
     ));
     assert!(!should_default_defer_tool(
+        "apply_patch",
+        AppMode::Agent,
+        &always_load
+    ));
+    assert!(!should_default_defer_tool(
+        "fetch_url",
+        AppMode::Agent,
+        &always_load
+    ));
+    assert!(!should_default_defer_tool(
+        "git_diff",
+        AppMode::Agent,
+        &always_load
+    ));
+    assert!(!should_default_defer_tool(
+        "git_status",
+        AppMode::Agent,
+        &always_load
+    ));
+    assert!(!should_default_defer_tool(
         "run_tests",
         AppMode::Agent,
         &always_load
@@ -456,6 +476,11 @@ fn non_yolo_mode_retains_default_defer_policy() {
     ));
     assert!(!should_default_defer_tool(
         "read_file",
+        AppMode::Agent,
+        &always_load
+    ));
+    assert!(!should_default_defer_tool(
+        "web_search",
         AppMode::Agent,
         &always_load
     ));
