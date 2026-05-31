@@ -1,6 +1,6 @@
 {
   "name": "deepseek-tui",
-  "version": "0.8.46",
+  "version": "0.8.48",
   "description": "Legacy compatibility package. Renamed to `codewhale`; run `npm install -g codewhale` for new installs.",
   "author": "Hmbown",
   "license": "MIT",

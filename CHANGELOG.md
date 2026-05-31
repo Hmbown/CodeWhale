@@ -7,55 +7,134 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.48] - 2026-05-31
+
 ### Added
 
-- **Composer text selection with copy/cut.** Mouse drag and Shift+Arrow
-  selection in the composer input box, with Ctrl+C copy and Ctrl+X cut
-  support. Home, End, Ctrl+A, and Ctrl+E now clear the selection (#2228).
-- **Copy transcript without visual-wrap newlines.** Transcript copy now
-  strips visual-wrap column line breaks from paragraphs, producing clean
-  text for pasting into editors or prompts (#1906).
-- **Configurable base URL in /config view.** The `/config` panel now
-  displays the effective DeepSeek base URL (#1967).
-- **CNB mirror support for China-friendly downloads.** Added
-  `CODEWHALE_RELEASE_BASE_URL` and `CODEWHALE_USE_CNB_MIRROR` to
-  both npm install scripts and Rust self-updater (#2222).
-- **[✓] completion markers.** Checklist, plan, and tool completion
-  markers now render as `[✓]` instead of `[x]` (#1935).
+- **Recent large OpenRouter model presets.** Added completions, aliases,
+  routing metadata, and docs for Arcee Trinity Large Thinking, Qwen 3.7
+  Max, Xiaomi MiMo v2.5, Qwen 3.6 open-weight models, Kimi K2.6,
+  GLM 5.1, Tencent Hy3, Gemma 4, and Nemotron (#2461).
+- **Provider and web-search expansion.** Added Xiaomi MiMo provider support,
+  SiliconFlow, AtlasCloud static models, Volcengine Ark search, Baidu AI
+  Search, provider-picker coverage, and richer custom-provider docs
+  (#2246, #1868, #2421, #2429, #2371, #2394, #2287).
+- **Workflow and tool ergonomics.** Added the external-tool abstraction,
+  pluggable TUI tool registry, custom slash-command allowed-tools enforcement,
+  opt-in Unix socket hook sink, message-submit transform hooks, tool-cache
+  introspection, and cache warmup-key tracking (#2294, #2420, #2326, #2430,
+  #2434, #2423, #2424).
+- **TUI workflow features.** Added `/purge`, `/hunt`, thinking fold/unfold,
+  terminal-transparent/Solarized Light/Claude themes, footer branch display,
+  macOS notifications, intent summaries before approval prompts, and the
+  mobile runtime smoke/QR workflow (#2387, #2306, #2385, #2276, #2270, #2267,
+  #2347, #2260, #2389, #2403).
+- **Platform and localization coverage.** Added RISC-V prebuilt-binary
+  support, Vietnamese localization, Java/Vue language-server defaults, runtime
+  event envelopes, task migration/env isolation fixes, and state-message
+  parent IDs for future forks (#2383, #2358, #2367, #2252, #2272, #2308).
 
 ### Changed
 
-- **Project context loading now logs the source file.** (#2227)
-- **macOS onboarding and empty-state layout pinned to top** instead
-  of vertically centered (#1837).
-- **State-root migration continues.** Migrated 15+ storage paths to
-  prefer `~/.codewhale` with `~/.deepseek` fallback (#2231).
-- **READMEs updated for the CodeWhale rename.** All three READMEs now
-  reference canonical `~/.codewhale` paths.
+- **Release hardening.** CI now runs clippy/docs checks, web frontend lint and
+  type checks, provider-registry drift checks, broader crate docs, and a large
+  unit-test pass across core, MCP, TUI core, app-server, and web helpers
+  (#2443, #2444, #2274, #2446-#2460, #2440, #2441, #2450, #2448, #2454).
+- **Prompt, context, and model routing behavior.** Stabilized project-context
+  pack ordering, exposed the auto route in turn metadata, allowed embedders to
+  override or inline constitutional instructions, moved volatile environment
+  context below the prompt boundary, and used the effective model for
+  compaction budgeting (#2418, #2410, #2356, #2311, #2314, #2437).
+- **Execution policy foundation.** Added typed ask-rule groundwork and kept
+  `task_shell_start` gated behind `allow_shell`, preparing the permission UI
+  path without broadening default shell access (#2404, #2384).
 
 ### Fixed
 
-- **Deadlock when spawning multiple concurrent sub-agents.** Replaced
-  `RwLock`-based serialisation with a `Semaphore(1)` (#1856).
-- **Steered/queued messages now render in correct transcript order.**
-  `steer_user_message` now flushes the active cell before inserting (#2225).
-- **Session save test updated for managed sessions directory.** (#2223).
-- **Loop guard reports Failed on halt.** Turn outcome correctly reports
-  `Failed` instead of `Completed` when the loop guard trips (#1859).
-- **DEEPSEEK_YOLO env honoured on startup.** The `--yolo` flag is now
-  correctly merged with the `DEEPSEEK_YOLO` environment variable (#1870).
+- **Windows and shell reliability.** Suppressed alt-screen logging on Windows,
+  added the Windows batch launcher path, kept task shell tools eagerly loaded,
+  loaded exec-shell companion tools consistently, covered controlling-terminal
+  behavior, and improved shell tool availability errors (#2259, #2295, #1861,
+  #2271, #2331, #2414, #2412).
+- **Session and transcript durability.** Fixed hidden-worktree discovery
+  saturation, stalled in-progress turn recovery, session persistence
+  truncation, cached-transcript user-message highlighting, large tool-output
+  receipting, session-detail block serialization, and deterministic composer
+  history flushing (#2273, #2329, #2283, #2395, #2386, #2297, #2265, #2375).
+- **Provider and UI polish.** Accepted custom model IDs in `/model` for
+  non-DeepSeek providers, fixed Feishu per-chat model switching, localized
+  context-menu labels, updated terminal tab naming, kept picker selections
+  visible, allowed slash-space composer messages, and improved PDF text
+  cleanup (#2280, #2149, #2320, #2319, #2324, #2316, #2266).
+- **Security and dependency hygiene.** Bumped `tar` and `qs`, trusted fake-IP
+  placeholder ranges only when explicitly configured, decoded Bing result URL
+  entities, fixed legacy MCP SSE connections, and replaced manual tool error
+  display code with `thiserror` derives (#2364, #2425, #2355, #2245, #2301,
+  #2442).
 
 ### Community
 
-Thanks to contributors whose PRs landed in this release:
-**@Fire-dtx** (#1856),
-**@imkingjh999** (#2228),
-**@harvey2011888** (#1859),
-**@victorcheng2333** (#1870),
-**@IIzzaya** (#1935),
-**@PurplePulse** (#1837),
-**@cyq1017** (#1967),
-**@knqiufan** (#1906).
+Thanks to contributors whose PRs landed or were harvested in this release:
+**@HUQIANTAO** (#2246, #2257, #2267, #2384, #2385, #2389, #2403, #2440-#2460),
+**@h3c-hexin** (#2311, #2313, #2314, #2354, #2355, #2356),
+**@reidliu41** (#2291, #2316, #2324, #2357, #2366, #2386, #2431),
+**@aboimpinto** (#2290, #2294, #2295, #2326, #2433),
+**@donglovejava** (#2302, #2329, #2330, #2331),
+**@cyq1017** (#2252, #2332, #2375),
+**@nightt5879** (#2274, #2344, #2347, #2373),
+**@idling11** (#2161, #2266, #2306),
+**@zlh124** (#2320, #2325),
+**@AresNing** (#2278, #2318/#2434),
+**@Implementist** (#2426/#2429, #2439),
+**@lihuan215** (#2333/#2430),
+**@AdityaVG13** (#2246),
+**@AiurArtanis** (#2270),
+**@Lee-take** (#2272),
+**@LeoAlex0** (#2388, #2395),
+**@gaord** (#2265, #2285),
+**@jimmyzhuu** (#2371),
+**@rockyzhang** (#2383),
+**@mo-vic** (#2387),
+**@hufanexplore** (#2367),
+**@hoclaptrinh33** (#2358),
+**@zhuangbiaowei** (#2301),
+**@axobase001** (#2296, #2297, #2298),
+**@Sskift** (#2248),
+**@AccMoment** (#2281),
+**@LING71671** (#2287, #2292),
+**@mvanhorn** (#2236),
+and **@encyc** (#2336, #2338).
+
+## [0.8.47] - 2026-05-26
+
+### Added
+
+- **Closed-loop verification gate, runtime goal tools, DuckDuckGo default
+  web search, Xiaomi MiMo, global AGENTS.md fallback, `/new`, composer
+  selection, transcript copy cleanup, CNB mirror support, and Docker toolbox
+  docs** shipped in the published v0.8.47 release.
+
+### Changed
+
+- **DeepSeek-first release framing, project-context logging, state-root
+  migration, CodeWhale README paths, and reasoning-locale behavior** were
+  finalized for the v0.8.47 release.
+
+### Fixed
+
+- **Provider picker scrolling, auto model restore, cache-inspect hashing,
+  insecure LAN provider guard, large tool-output compaction, queued-message
+  ordering, shell/Yolo startup handling, Windows alt-screen logging, and
+  tooltip contrast** were fixed in the v0.8.47 release.
+
+### Community
+
+Thanks to contributors credited in the v0.8.47 GitHub Release, including
+**@Fire-dtx**, **@imkingjh999**, **@harvey2011888**, **@victorcheng2333**,
+**@IIzzaya**, **@PurplePulse**, **@cyq1017**, **@knqiufan**,
+**@Colorful-glassblock**, **@hongqitai**, **@EmiyaKiritsugu3**,
+**@aboimpinto**, **@HUQIANTAO**, **@mvanhorn**, **@LING71671**, and
+**@reidliu41**.
 
 ## [0.8.46] - 2026-05-26
 
@@ -5018,7 +5097,9 @@ Welcome — and thank you.
 - Hooks system and config profiles
 - Example skills and launch assets
 
-[Unreleased]: https://github.com/Hmbown/CodeWhale/compare/v0.8.46...HEAD
+[Unreleased]: https://github.com/Hmbown/CodeWhale/compare/v0.8.48...HEAD
+[0.8.48]: https://github.com/Hmbown/CodeWhale/compare/v0.8.47...v0.8.48
+[0.8.47]: https://github.com/Hmbown/CodeWhale/compare/v0.8.46...v0.8.47
 [0.8.46]: https://github.com/Hmbown/CodeWhale/compare/v0.8.45...v0.8.46
 [0.8.45]: https://github.com/Hmbown/CodeWhale/compare/v0.8.44...v0.8.45
 [0.8.44]: https://github.com/Hmbown/CodeWhale/compare/v0.8.43...v0.8.44

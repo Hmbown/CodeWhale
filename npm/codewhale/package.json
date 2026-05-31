@@ -1,7 +1,7 @@
 {
   "name": "codewhale",
-  "version": "0.8.46",
-  "codewhaleBinaryVersion": "0.8.46",
+  "version": "0.8.48",
+  "codewhaleBinaryVersion": "0.8.48",
   "description": "Install and run CodeWhale, the agentic terminal for open-source and open-weight coding models, from GitHub release artifacts.",
   "author": "Hmbown",
   "license": "MIT",
