@@ -58,6 +58,8 @@ pub struct SessionPickerView {
     preview_cache: HashMap<String, Vec<String>>,
     current_preview: Vec<String>,
     confirm_delete: bool,
+    rename_mode: bool,
+    rename_input: String,
     status: Option<String>,
     /// Canonical workspace path used as the per-project scope filter
     /// (#1395). `None` opts out of scoping (e.g. when the caller can't
@@ -93,6 +95,8 @@ impl SessionPickerView {
             preview_cache: HashMap::new(),
             current_preview: Vec::new(),
             confirm_delete: false,
+            rename_mode: false,
+            rename_input: String::new(),
             status: None,
             workspace_scope: Some(canonical_or_self(workspace.to_path_buf())),
             show_all_workspaces: false,
@@ -311,6 +315,44 @@ impl SessionPickerView {
         })
     }
 
+    fn rename_selected(&mut self, new_title: &str) -> ViewAction {
+        let Some(session) = self.selected_session().cloned() else {
+            self.status = Some("No session selected".to_string());
+            return ViewAction::None;
+        };
+        if new_title.is_empty() || new_title.len() > 100 {
+            self.status = Some("Title must be 1–100 characters".to_string());
+            return ViewAction::None;
+        }
+        let manager = match SessionManager::default_location() {
+            Ok(m) => m,
+            Err(e) => {
+                self.status = Some(format!("Could not open sessions: {e}"));
+                return ViewAction::None;
+            }
+        };
+        let mut saved = match manager.load_session(&session.id) {
+            Ok(s) => s,
+            Err(e) => {
+                self.status = Some(format!("Could not load session: {e}"));
+                return ViewAction::None;
+            }
+        };
+        saved.metadata.title = new_title.to_string();
+        if let Err(e) = manager.save_session(&saved) {
+            self.status = Some(format!("Rename failed: {e}"));
+            return ViewAction::None;
+        }
+        // Update our local metadata cache.
+        if let Some(meta) = self.sessions.iter_mut().find(|s| s.id == session.id) {
+            meta.title = new_title.to_string();
+        }
+        self.apply_sort_and_filter();
+        self.refresh_preview();
+        self.status = Some(format!("Renamed to \"{new_title}\""));
+        ViewAction::None
+    }
+
     fn refresh_preview(&mut self) {
         let Some(session) = self.selected_session() else {
             self.current_preview = vec!["No sessions found.".to_string()];
@@ -401,6 +443,32 @@ impl ModalView for SessionPickerView {
             }
         }
 
+        if self.rename_mode {
+            match key.code {
+                KeyCode::Enter => {
+                    self.rename_mode = false;
+                    let new_title = self.rename_input.trim().to_string();
+                    self.rename_input.clear();
+                    return self.rename_selected(&new_title);
+                }
+                KeyCode::Esc => {
+                    self.rename_mode = false;
+                    self.rename_input.clear();
+                    self.status = Some("Rename cancelled".to_string());
+                    return ViewAction::None;
+                }
+                KeyCode::Backspace => {
+                    self.rename_input.pop();
+                    return ViewAction::None;
+                }
+                KeyCode::Char(c) if !c.is_control() => {
+                    self.rename_input.push(c);
+                    return ViewAction::None;
+                }
+                _ => return ViewAction::None,
+            }
+        }
+
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => ViewAction::Close,
             KeyCode::Up | KeyCode::Char('k') => {
@@ -436,6 +504,12 @@ impl ModalView for SessionPickerView {
             // session.
             KeyCode::Char('a') | KeyCode::Char('A') => {
                 self.toggle_all_workspaces();
+                ViewAction::None
+            }
+            KeyCode::Char('r') | KeyCode::Char('R') => {
+                self.rename_mode = true;
+                self.rename_input.clear();
+                self.status = Some("New title: ".to_string());
                 ViewAction::None
             }
             KeyCode::Char('d') | KeyCode::Char('D') => {
@@ -505,6 +579,8 @@ impl ModalView for SessionPickerView {
             &self.search_input,
             self.sort_label(),
             self.confirm_delete,
+            self.rename_mode,
+            &self.rename_input,
             self.status.as_deref(),
         );
         let list = Paragraph::new(list_lines)
@@ -539,14 +615,18 @@ fn build_list_lines(
     search_input: &str,
     sort_label: &str,
     confirm_delete: bool,
+    rename_mode: bool,
+    rename_input: &str,
     status: Option<&str>,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let header = if search_mode {
-        format!("/{}", search_input)
+        format!("/{search_input}")
+    } else if rename_mode {
+        format!("New title: {rename_input}_")
     } else {
         format!(
-            "1-9 history | PgUp/PgDn scroll | Enter resume | / search | s sort | a all | d delete | Sort: {sort_label}"
+            "1-9 history | PgUp/PgDn scroll | Enter resume | / search | s sort | r rename | a all | d delete | Sort: {sort_label}"
         )
     };
     lines.push(Line::from(Span::styled(
@@ -656,7 +736,7 @@ fn build_preview_lines(session: &SavedSession) -> Vec<String> {
         session.metadata.message_count, session.metadata.model
     ));
     if let Some(mode) = session.metadata.mode.as_deref() {
-        out.push(format!("Mode: {}", mode));
+        out.push(format!("Mode: {mode}"));
     }
     out.push("".to_string());
 
@@ -872,6 +952,7 @@ mod tests {
             cost: crate::session_manager::SessionCostSnapshot::default(),
             parent_session_id: None,
             forked_from_message_count: None,
+            cumulative_turn_secs: 0,
         }
     }
 
@@ -920,6 +1001,8 @@ mod tests {
             preview_cache: HashMap::new(),
             current_preview: Vec::new(),
             confirm_delete: false,
+            rename_mode: false,
+            rename_input: String::new(),
             status: None,
             workspace_scope,
             show_all_workspaces: false,
@@ -987,15 +1070,15 @@ mod tests {
             "A very long title that should be truncated by the list pane width",
         )];
         let width = 24;
-        let lines = build_list_lines(&sessions, 0, width, 0, 5, false, "", "recent", false, None);
+        let lines = build_list_lines(
+            &sessions, 0, width, 0, 5, false, "", "recent", false, false, "", None,
+        );
 
         for line in lines {
             let rendered_width: usize = line.spans.iter().map(|span| span.content.width()).sum();
             assert!(
                 rendered_width <= width as usize,
-                "line width {} exceeded pane width {}",
-                rendered_width,
-                width
+                "line width {rendered_width} exceeded pane width {width}"
             );
         }
     }
@@ -1006,7 +1089,9 @@ mod tests {
             test_session(1, "first session"),
             test_session(2, "second session"),
         ];
-        let lines = build_list_lines(&sessions, 1, 80, 0, 5, false, "", "recent", false, None);
+        let lines = build_list_lines(
+            &sessions, 1, 80, 0, 5, false, "", "recent", false, false, "", None,
+        );
 
         let selected_line = lines
             .iter()
@@ -1031,7 +1116,20 @@ mod tests {
         let mut forked = test_session(1, "forked path");
         forked.parent_session_id = Some("parent-session-abcdef".to_string());
         forked.forked_from_message_count = Some(3);
-        let lines = build_list_lines(&[forked], 0, 120, 0, 5, false, "", "recent", false, None);
+        let lines = build_list_lines(
+            &[forked],
+            0,
+            120,
+            0,
+            5,
+            false,
+            "",
+            "recent",
+            false,
+            false,
+            "",
+            None,
+        );
 
         let rendered = lines
             .iter()
@@ -1048,7 +1146,9 @@ mod tests {
             test_session(1, "first session"),
             test_session(2, "second session"),
         ];
-        let lines = build_list_lines(&sessions, 0, 80, 0, 5, false, "", "recent", false, None);
+        let lines = build_list_lines(
+            &sessions, 0, 80, 0, 5, false, "", "recent", false, false, "", None,
+        );
 
         let rendered = lines
             .iter()
@@ -1192,6 +1292,8 @@ mod tests {
             preview_cache: HashMap::new(),
             current_preview: Vec::new(),
             confirm_delete: false,
+            rename_mode: false,
+            rename_input: String::new(),
             status: None,
             workspace_scope: None,
             show_all_workspaces: true,

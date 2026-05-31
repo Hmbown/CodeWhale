@@ -1,11 +1,11 @@
 [package]
-name = "deepseek-tui"
+name = "codewhale-tui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Terminal UI for DeepSeek"
-default-run = "deepseek-tui"
+description = "Terminal UI for open-source and open-weight coding models"
+default-run = "codewhale-tui"
 
 [features]
 default = ["tui", "json", "toml"]
@@ -15,14 +15,23 @@ json = ["schemaui/json"]
 toml = ["schemaui/toml"]
 
 [[bin]]
-name = "deepseek-tui"
+name = "codewhale-tui"
 path = "src/main.rs"
+
+# Legacy alias — forwards to `codewhale-tui` and prints a deprecation
+# notice. Will be removed in v0.9.0.
+[[bin]]
+name = "deepseek-tui"
+path = "src/bin/deepseek_tui_legacy_shim.rs"
 
 [dependencies]
 anyhow = "1.0.100"
 arboard = "3.4"
-deepseek-secrets = { path = "../secrets", version = "0.8.40" }
-deepseek-tools = { path = "../tools", version = "0.8.40" }
+codewhale-config = { path = "../config", version = "0.8.46" }
+codewhale-protocol = { path = "../protocol", version = "0.8.46" }
+codewhale-release = { path = "../release", version = "0.8.46" }
+codewhale-secrets = { path = "../secrets", version = "0.8.46" }
+codewhale-tools = { path = "../tools", version = "0.8.46" }
 schemaui = { version = "0.12.0", default-features = false, optional = true }
 async-stream = "0.3.6"
 async-trait = "0.1"
@@ -38,7 +47,8 @@ fd-lock = "4.0.4"
 futures-util = "0.3.31"
 ratatui = "0.30"
 regex = "1.11"
-reqwest = { version = "0.13.1", default-features = false, features = ["blocking", "json", "stream", "multipart", "rustls", "http2", "gzip", "brotli"] }
+reqwest = { version = "0.13.1", default-features = false, features = ["blocking", "json", "stream", "multipart", "form", "rustls", "http2", "gzip", "brotli"] }
+qrcode = { version = "0.14", default-features = false }
 similar = "2"
 rustyline = "15.0.0"
 serde = { version = "1.0.228", features = ["derive"] }
@@ -63,7 +73,7 @@ multimap = "0.10.0"
 shlex = "1.3.0"
 starlark = "0.13.0"
 tiny_http = "0.12"
-portable-pty = "0.8"
+portable-pty = "0.9"
 zeroize = "1.8.2"
 ignore = "0.4"
 image = { version = "0.25", default-features = false, features = ["png"] }
@@ -85,4 +95,4 @@ objc2 = "0.6.3"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSDictionary", "NSError", "NSObject", "NSString", "NSURL"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.60", features = ["Win32_Foundation", "Win32_System_Console", "Win32_UI_WindowsAndMessaging", "Win32_System_Diagnostics_Debug"] }
+windows = { version = "0.60", features = ["Win32_Foundation", "Win32_System_Console", "Win32_UI_WindowsAndMessaging", "Win32_System_Diagnostics_Debug", "Win32_System_Threading"] }

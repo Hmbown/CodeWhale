@@ -7,6 +7,8 @@
 
 use std::path::PathBuf;
 
+use crate::tools::apply_patch::preflight_apply_patch;
+
 use super::*;
 
 /// #136: derive the file path(s) edited by a tool call. Returns the empty
@@ -22,52 +24,17 @@ pub(super) fn edited_paths_for_tool(tool_name: &str, input: &serde_json::Value) 
                 Vec::new()
             }
         }
-        "apply_patch" => {
-            // `apply_patch` accepts either a `path` override or a list of
-            // `files` (each `{path, content}`). We try both shapes.
-            let mut out = Vec::new();
-            if let Some(path) = input.get("path").and_then(|v| v.as_str()) {
-                out.push(PathBuf::from(path));
-            }
-            if let Some(files) = input.get("files").and_then(|v| v.as_array()) {
-                for entry in files {
-                    if let Some(path) = entry.get("path").and_then(|v| v.as_str()) {
-                        out.push(PathBuf::from(path));
-                    }
-                }
-            }
-            // Fallback: parse `---`/`+++` headers from a unified diff payload.
-            if out.is_empty()
-                && let Some(patch) = input.get("patch").and_then(|v| v.as_str())
-            {
-                out.extend(parse_patch_paths(patch));
-            }
-            out
-        }
+        "apply_patch" => preflight_apply_patch(input)
+            .map(|preflight| {
+                preflight
+                    .touched_files
+                    .into_iter()
+                    .map(PathBuf::from)
+                    .collect()
+            })
+            .unwrap_or_default(),
         _ => Vec::new(),
     }
-}
-
-/// Lightweight parser for `+++ b/<path>` lines in a unified diff. Used as a
-/// fallback when `apply_patch` is invoked with raw `patch` text and no
-/// `path`/`files` override. We deliberately keep this dumb — the real
-/// `apply_patch` tool already validates the patch shape; we only need a
-/// best-effort hint for the LSP hook.
-pub(super) fn parse_patch_paths(patch: &str) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    for line in patch.lines() {
-        if let Some(rest) = line.strip_prefix("+++ ") {
-            let trimmed = rest.trim();
-            // Strip leading `b/` per git diff conventions.
-            let path = trimmed.strip_prefix("b/").unwrap_or(trimmed);
-            // Skip `/dev/null` (deletion).
-            if path == "/dev/null" {
-                continue;
-            }
-            out.push(PathBuf::from(path));
-        }
-    }
-    out
 }
 
 impl Engine {

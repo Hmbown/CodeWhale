@@ -21,6 +21,10 @@ fn echo_command(message: &str) -> String {
 }
 
 fn sleep_command(seconds: u64) -> String {
+    let dispatcher = crate::shell_dispatcher::global_dispatcher();
+    if dispatcher.kind().is_powershell() {
+        return format!("Start-Sleep -Seconds {seconds}");
+    }
     #[cfg(windows)]
     {
         let ping_count = seconds.saturating_add(1);
@@ -33,6 +37,10 @@ fn sleep_command(seconds: u64) -> String {
 }
 
 fn sleep_then_echo_command(seconds: u64, message: &str) -> String {
+    let dispatcher = crate::shell_dispatcher::global_dispatcher();
+    if dispatcher.kind().is_powershell() {
+        return format!("Start-Sleep -Seconds {seconds}; echo {message}");
+    }
     #[cfg(windows)]
     {
         let ping_count = seconds.saturating_add(1);
@@ -45,6 +53,10 @@ fn sleep_then_echo_command(seconds: u64, message: &str) -> String {
 }
 
 fn echo_stdin_command() -> String {
+    let dispatcher = crate::shell_dispatcher::global_dispatcher();
+    if dispatcher.kind().is_powershell() {
+        return "[Console]::In.ReadToEnd()".to_string();
+    }
     #[cfg(windows)]
     {
         "more".to_string()
@@ -230,6 +242,40 @@ fn test_write_stdin_streams_output() {
 }
 
 #[test]
+#[cfg(unix)]
+fn background_tty_command_has_controlling_terminal() {
+    let tmp = tempdir().expect("tempdir");
+    let mut manager = ShellManager::new(tmp.path().to_path_buf());
+
+    let result = manager
+        .execute_with_options(
+            "sh -c 'exec 3<>/dev/tty && printf tty-ok && exec 3>&-'",
+            None,
+            5000,
+            true,
+            None,
+            true,
+            Some(ExecutionSandboxPolicy::DangerFullAccess),
+        )
+        .expect("execute tty command");
+
+    let task_id = result
+        .task_id
+        .expect("background tty execution should return task_id");
+
+    let done = manager
+        .get_output(&task_id, true, 10_000)
+        .expect("get tty command output");
+
+    assert_eq!(done.status, ShellStatus::Completed);
+    assert_eq!(done.exit_code, Some(0));
+    assert!(
+        done.stdout.contains("tty-ok"),
+        "tty output should confirm /dev/tty opened; got {done:?}"
+    );
+}
+
+#[test]
 fn test_job_list_poll_cancel_and_stale_snapshot() {
     let tmp = tempdir().expect("tempdir");
     let mut manager = ShellManager::new(tmp.path().to_path_buf());
@@ -363,6 +409,97 @@ fn shell_delta_result_surfaces_network_restricted_hint() {
             .get("sandbox_network_restricted")
             .and_then(Value::as_bool),
         Some(true)
+    );
+}
+
+#[test]
+fn shell_delta_result_includes_cargo_failure_summary() {
+    let tmp = tempdir().expect("tempdir");
+    let ctx = ToolContext::new(tmp.path());
+    let result = ShellResult {
+        task_id: None,
+        status: ShellStatus::Failed,
+        exit_code: Some(101),
+        stdout: "running 1 test\ntest tests::fails ... FAILED\n\nfailures:\n\n---- tests::fails stdout ----\nthread 'tests::fails' panicked at src/lib.rs:7:9:\nboom\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; finished in 0.00s\n".to_string(),
+        stderr: "error: test failed, to rerun pass `--lib`".to_string(),
+        duration_ms: 12,
+        stdout_len: 0,
+        stderr_len: 0,
+        stdout_omitted: 0,
+        stderr_omitted: 0,
+        stdout_truncated: false,
+        stderr_truncated: false,
+        sandboxed: false,
+        sandbox_type: None,
+        sandbox_denied: false,
+    };
+
+    let tool_result = build_shell_delta_tool_result(
+        ShellDeltaResult {
+            command: "cargo test".to_string(),
+            result,
+            stdout_total_len: 0,
+            stderr_total_len: 0,
+        },
+        &ctx,
+    );
+
+    let metadata = tool_result.metadata.expect("metadata");
+    assert_eq!(
+        metadata["cargo_failure_summary"]["kind"],
+        json!("test_failure")
+    );
+    assert!(
+        metadata["cargo_failure_summary"]["summary"]
+            .as_str()
+            .unwrap()
+            .contains("Failing tests: tests::fails")
+    );
+    assert!(
+        metadata["summary"]
+            .as_str()
+            .unwrap()
+            .contains("error: test failed")
+    );
+}
+
+#[test]
+fn shell_delta_result_keeps_existing_summary_for_generic_cargo_failure() {
+    let tmp = tempdir().expect("tempdir");
+    let ctx = ToolContext::new(tmp.path());
+    let result = ShellResult {
+        task_id: None,
+        status: ShellStatus::Failed,
+        exit_code: Some(1),
+        stdout: "build failed".to_string(),
+        stderr: "command failed without structured cargo diagnostics".to_string(),
+        duration_ms: 12,
+        stdout_len: 0,
+        stderr_len: 0,
+        stdout_omitted: 0,
+        stderr_omitted: 0,
+        stdout_truncated: false,
+        stderr_truncated: false,
+        sandboxed: false,
+        sandbox_type: None,
+        sandbox_denied: false,
+    };
+
+    let tool_result = build_shell_delta_tool_result(
+        ShellDeltaResult {
+            command: "cargo test".to_string(),
+            result,
+            stdout_total_len: 0,
+            stderr_total_len: 0,
+        },
+        &ctx,
+    );
+
+    let metadata = tool_result.metadata.expect("metadata");
+    assert!(metadata.get("cargo_failure_summary").is_none());
+    assert_eq!(
+        metadata["summary"],
+        json!("command failed without structured cargo diagnostics")
     );
 }
 
@@ -657,7 +794,7 @@ async fn test_exec_shell_cancel_tool_kills_background_process() {
         .expect("cancel");
 
     assert!(result.success);
-    assert!(result.content.contains("Canceled background shell job"));
+    assert!(result.content.contains("Canceled background command"));
     let meta = result.metadata.expect("metadata");
     assert_eq!(meta.get("status").and_then(Value::as_str), Some("Killed"));
 
@@ -819,41 +956,48 @@ fn issue_1691_quoted_commit_message_round_trips() {
         Duration::from_secs(5),
     );
 
-    #[cfg(not(windows))]
-    {
-        // `sh -c <cmd>`: the whole command (with quotes) is a single argv
-        // entry. `sh` then POSIX-tokenizes it → correct git argv. We never
-        // split the command string ourselves.
-        assert_eq!(spec.program, "sh");
-        assert_eq!(spec.args, ["-c".to_string(), cmd.to_string()]);
-        assert_eq!(spec.args.len(), 2);
-
-        // push_shell_args is a faithful pass-through on Unix.
-        let mut built = Command::new(&spec.program);
-        push_shell_args(&mut built, &spec.program, &spec.args);
-        let got: Vec<String> = built
-            .get_args()
-            .map(|a| a.to_string_lossy().into_owned())
-            .collect();
-        assert_eq!(got, ["-c".to_string(), cmd.to_string()]);
-    }
-
-    #[cfg(windows)]
-    {
-        // `cmd /C <payload>`: payload carries the quotes verbatim. The fix
-        // routes /C + payload through `raw_arg` so `cmd.exe` (not MSVCRT)
-        // parses it, matching what a terminal does.
-        assert_eq!(spec.program, "cmd");
+    let dispatcher = crate::shell_dispatcher::global_dispatcher();
+    // The whole command (with quotes) is a single argv entry. The actual
+    // shell binary can vary by platform, but the payload itself must stay
+    // intact in one shell arg. We never split the command string ourselves.
+    assert_eq!(spec.program, dispatcher.kind().binary());
+    if dispatcher.kind().is_powershell() {
+        assert_eq!(
+            spec.args,
+            [
+                dispatcher.kind().command_flag().to_string(),
+                "-Command".to_string(),
+                format!("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; {cmd}")
+            ]
+        );
+    } else if matches!(dispatcher.kind(), crate::shell_dispatcher::ShellKind::Cmd) {
         assert_eq!(
             spec.args,
             ["/C".to_string(), format!("chcp 65001 >NUL & {cmd}")]
         );
-        let mut built = Command::new(&spec.program);
-        push_shell_args(&mut built, &spec.program, &spec.args);
-        let got: Vec<String> = built
-            .get_args()
-            .map(|a| a.to_string_lossy().into_owned())
-            .collect();
-        assert_eq!(got, spec.args);
+    } else {
+        assert_eq!(
+            spec.args,
+            [
+                dispatcher.kind().command_flag().to_string(),
+                cmd.to_string()
+            ]
+        );
     }
+    assert_eq!(
+        spec.args.len(),
+        if dispatcher.kind().is_powershell() {
+            3
+        } else {
+            2
+        }
+    );
+
+    let mut built = Command::new(&spec.program);
+    push_shell_args(&mut built, &spec.program, &spec.args);
+    let got: Vec<String> = built
+        .get_args()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(got, spec.args);
 }

@@ -1,4 +1,4 @@
-//! Configuration loading and defaults for DeepSeek TUI.
+//! Configuration loading and defaults for codewhale.
 
 use std::collections::HashMap;
 use std::fmt::Write;
@@ -6,6 +6,7 @@ use std::fs;
 #[cfg(unix)]
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -36,20 +37,32 @@ pub const DEFAULT_DEEPSEEK_BASE_URL: &str = "https://api.deepseek.com/beta";
 pub const DEFAULT_NVIDIA_NIM_MODEL: &str = "deepseek-ai/deepseek-v4-pro";
 pub const DEFAULT_NVIDIA_NIM_FLASH_MODEL: &str = "deepseek-ai/deepseek-v4-flash";
 pub const DEFAULT_NVIDIA_NIM_BASE_URL: &str = "https://integrate.api.nvidia.com/v1";
-pub const DEFAULT_OPENAI_MODEL: &str = "gpt-4.1";
+pub const DEFAULT_OPENAI_MODEL: &str = "deepseek-v4-pro";
 pub const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 pub const DEFAULT_ATLASCLOUD_MODEL: &str = "deepseek-ai/deepseek-v4-flash";
 pub const DEFAULT_ATLASCLOUD_BASE_URL: &str = "https://api.atlascloud.ai/v1";
 pub const DEFAULT_WANJIE_ARK_MODEL: &str = "deepseek-reasoner";
+pub const DEFAULT_VOLCENGINE_MODEL: &str = "DeepSeek-V4-Pro";
+pub const DEFAULT_VOLCENGINE_FLASH_MODEL: &str = "DeepSeek-V4-Flash";
+pub const DEFAULT_VOLCENGINE_BASE_URL: &str = "https://ark.cn-beijing.volces.com/api/coding/v3";
 pub const DEFAULT_WANJIE_ARK_BASE_URL: &str = "https://maas-openapi.wanjiedata.com/api/v1";
 pub const DEFAULT_OPENROUTER_MODEL: &str = "deepseek/deepseek-v4-pro";
 pub const DEFAULT_OPENROUTER_FLASH_MODEL: &str = "deepseek/deepseek-v4-flash";
 pub const DEFAULT_OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
+pub const DEFAULT_XIAOMI_MIMO_MODEL: &str = "mimo-v2.5-pro";
+pub const DEFAULT_XIAOMI_MIMO_BASE_URL: &str = "https://api.xiaomimimo.com/v1";
 pub const DEFAULT_NOVITA_MODEL: &str = "deepseek/deepseek-v4-pro";
 pub const DEFAULT_NOVITA_FLASH_MODEL: &str = "deepseek/deepseek-v4-flash";
 pub const DEFAULT_NOVITA_BASE_URL: &str = "https://api.novita.ai/v1";
 pub const DEFAULT_FIREWORKS_MODEL: &str = "accounts/fireworks/models/deepseek-v4-pro";
 pub const DEFAULT_FIREWORKS_BASE_URL: &str = "https://api.fireworks.ai/inference/v1";
+pub const DEFAULT_SILICONFLOW_MODEL: &str = "deepseek-ai/DeepSeek-V4-Pro";
+pub const DEFAULT_SILICONFLOW_FLASH_MODEL: &str = "deepseek-ai/DeepSeek-V4-Flash";
+pub const DEFAULT_SILICONFLOW_BASE_URL: &str = "https://api.siliconflow.com/v1";
+pub const DEFAULT_MOONSHOT_MODEL: &str = "kimi-k2.6";
+pub const DEFAULT_MOONSHOT_BASE_URL: &str = "https://api.moonshot.ai/v1";
+pub const DEFAULT_KIMI_CODE_MODEL: &str = "kimi-for-coding";
+pub const DEFAULT_KIMI_CODE_BASE_URL: &str = "https://api.kimi.com/coding/v1";
 pub const DEFAULT_SGLANG_MODEL: &str = "deepseek-ai/DeepSeek-V4-Pro";
 pub const DEFAULT_SGLANG_FLASH_MODEL: &str = "deepseek-ai/DeepSeek-V4-Flash";
 pub const DEFAULT_SGLANG_BASE_URL: &str = "http://localhost:30000/v1";
@@ -85,9 +98,13 @@ pub enum ApiProvider {
     Openai,
     Atlascloud,
     WanjieArk,
+    Volcengine,
     Openrouter,
+    XiaomiMimo,
     Novita,
     Fireworks,
+    Siliconflow,
+    Moonshot,
     Sglang,
     Vllm,
     Ollama,
@@ -106,9 +123,16 @@ impl ApiProvider {
             "atlascloud" | "atlas-cloud" | "atlas_cloud" | "atlas" => Some(Self::Atlascloud),
             "wanjie" | "wanjie-ark" | "wanjie_ark" | "ark-wanjie" | "ark_wanjie" | "wanjieark"
             | "wanjie-maas" | "wanjie_maas" | "wanjiemaas" => Some(Self::WanjieArk),
+            "volcengine" | "volcengine-ark" | "volcengine_ark" | "ark" | "volc-ark"
+            | "volcengineark" => Some(Self::Volcengine),
             "openrouter" | "open_router" => Some(Self::Openrouter),
+            "xiaomi-mimo" | "xiaomi_mimo" | "xiaomimimo" | "mimo" | "xiaomi" => {
+                Some(Self::XiaomiMimo)
+            }
             "novita" => Some(Self::Novita),
             "fireworks" | "fireworks-ai" => Some(Self::Fireworks),
+            "siliconflow" | "silicon-flow" | "silicon_flow" => Some(Self::Siliconflow),
+            "moonshot" | "moonshot-ai" | "kimi" | "kimi-k2" => Some(Self::Moonshot),
             "sglang" | "sg-lang" => Some(Self::Sglang),
             "vllm" | "v-llm" => Some(Self::Vllm),
             "ollama" | "ollama-local" => Some(Self::Ollama),
@@ -125,9 +149,13 @@ impl ApiProvider {
             Self::Openai => "openai",
             Self::Atlascloud => "atlascloud",
             Self::WanjieArk => "wanjie-ark",
+            Self::Volcengine => "volcengine",
             Self::Openrouter => "openrouter",
+            Self::XiaomiMimo => "xiaomi-mimo",
             Self::Novita => "novita",
             Self::Fireworks => "fireworks",
+            Self::Siliconflow => "siliconflow",
+            Self::Moonshot => "moonshot",
             Self::Sglang => "sglang",
             Self::Vllm => "vllm",
             Self::Ollama => "ollama",
@@ -144,9 +172,13 @@ impl ApiProvider {
             Self::Openai => "OpenAI-compatible",
             Self::Atlascloud => "AtlasCloud",
             Self::WanjieArk => "Wanjie Ark",
+            Self::Volcengine => "Volcengine Ark",
             Self::Openrouter => "OpenRouter",
+            Self::XiaomiMimo => "Xiaomi MiMo",
             Self::Novita => "Novita AI",
             Self::Fireworks => "Fireworks AI",
+            Self::Siliconflow => "SiliconFlow",
+            Self::Moonshot => "Moonshot/Kimi",
             Self::Sglang => "SGLang",
             Self::Vllm => "vLLM",
             Self::Ollama => "Ollama",
@@ -162,9 +194,13 @@ impl ApiProvider {
             Self::Openai,
             Self::Atlascloud,
             Self::WanjieArk,
+            Self::Volcengine,
             Self::Openrouter,
+            Self::XiaomiMimo,
             Self::Novita,
             Self::Fireworks,
+            Self::Siliconflow,
+            Self::Moonshot,
             Self::Sglang,
             Self::Vllm,
             Self::Ollama,
@@ -233,13 +269,29 @@ pub enum RequestPayloadMode {
 /// in the API payload (after normalization / provider-specific mapping).
 #[must_use]
 pub fn provider_capability(provider: ApiProvider, resolved_model: &str) -> ProviderCapability {
-    if matches!(provider, ApiProvider::Openai | ApiProvider::Atlascloud) {
+    if matches!(
+        provider,
+        ApiProvider::Openai | ApiProvider::Atlascloud | ApiProvider::Moonshot
+    ) {
         return ProviderCapability {
             provider,
             resolved_model: resolved_model.to_string(),
             context_window: crate::models::LEGACY_DEEPSEEK_CONTEXT_WINDOW_TOKENS,
             max_output: 4096,
             thinking_supported: false,
+            cache_telemetry_supported: false,
+            request_payload_mode: RequestPayloadMode::ChatCompletions,
+            alias_deprecation: None,
+        };
+    }
+
+    if matches!(provider, ApiProvider::XiaomiMimo) {
+        return ProviderCapability {
+            provider,
+            resolved_model: resolved_model.to_string(),
+            context_window: 1_000_000,
+            max_output: 128_000,
+            thinking_supported: true,
             cache_telemetry_supported: false,
             request_payload_mode: RequestPayloadMode::ChatCompletions,
             alias_deprecation: None,
@@ -297,7 +349,10 @@ pub fn provider_capability(provider: ApiProvider, resolved_model: &str) -> Provi
     // Cache telemetry: returned only by DeepSeek-native and NVIDIA NIM endpoints.
     let cache_telemetry_supported = matches!(
         provider,
-        ApiProvider::Deepseek | ApiProvider::DeepseekCN | ApiProvider::NvidiaNim
+        ApiProvider::Deepseek
+            | ApiProvider::DeepseekCN
+            | ApiProvider::NvidiaNim
+            | ApiProvider::Volcengine
     );
 
     // Request payload mode: all current providers use chat completions.
@@ -374,6 +429,16 @@ pub fn normalize_model_name(model: &str) -> Option<String> {
     None
 }
 
+#[must_use]
+pub(crate) fn normalize_custom_model_id(model: &str) -> Option<String> {
+    let trimmed = model.trim();
+    if trimmed.is_empty() || trimmed.chars().any(char::is_control) {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
 fn canonical_official_deepseek_model_id(model: &str) -> Option<&'static str> {
     match model.trim().to_ascii_lowercase().as_str() {
         "deepseek-v4-pro"
@@ -398,13 +463,31 @@ fn canonical_official_deepseek_model_id(model: &str) -> Option<&'static str> {
 /// aliases are valid for some compatible backends, but sending them to
 /// DeepSeek's own API causes a 400. Keep the generic normalizer permissive for
 /// config/back-compat, and canonicalize only when the active provider is known.
+///
+/// Preserves the caller's casing when the model is already a recognised
+/// DeepSeek id (e.g. `DeepSeek-V4-Flash` stays as-is). Only rewrites compact
+/// aliases like `deepseek-v4pro` → `deepseek-v4-pro`.
 #[must_use]
 pub fn normalize_model_name_for_provider(provider: ApiProvider, model: &str) -> Option<String> {
     let normalized = normalize_model_name(model)?;
     if matches!(provider, ApiProvider::Deepseek | ApiProvider::DeepseekCN)
         && let Some(canonical) = canonical_official_deepseek_model_id(&normalized)
     {
+        // When the user's input already matches a known model id
+        // case-insensitively, keep their original casing; only rewrite
+        // compact aliases (e.g. v4pro → v4-pro).
+        if canonical.eq_ignore_ascii_case(&normalized)
+            || normalized.to_ascii_lowercase() == canonical
+        {
+            return Some(normalized);
+        }
         return Some(canonical.to_string());
+    }
+    if matches!(provider, ApiProvider::Siliconflow) {
+        let provider_model = model_for_provider(provider, normalized.clone());
+        if provider_model != normalized {
+            return Some(provider_model);
+        }
     }
     if let Some(canonical) = canonical_official_deepseek_model_id(&normalized) {
         return Some(model_for_provider(provider, canonical.to_string()));
@@ -418,11 +501,17 @@ pub fn model_completion_names_for_provider(provider: ApiProvider) -> Vec<&'stati
         ApiProvider::Deepseek | ApiProvider::DeepseekCN => OFFICIAL_DEEPSEEK_MODELS.to_vec(),
         ApiProvider::NvidiaNim => vec![DEFAULT_NVIDIA_NIM_MODEL, DEFAULT_NVIDIA_NIM_FLASH_MODEL],
         ApiProvider::Openrouter => vec![DEFAULT_OPENROUTER_MODEL, DEFAULT_OPENROUTER_FLASH_MODEL],
+        ApiProvider::XiaomiMimo => vec![DEFAULT_XIAOMI_MIMO_MODEL, "mimo-v2.5"],
         ApiProvider::Novita => vec![DEFAULT_NOVITA_MODEL, DEFAULT_NOVITA_FLASH_MODEL],
         ApiProvider::Fireworks => vec![DEFAULT_FIREWORKS_MODEL],
+        ApiProvider::Siliconflow => {
+            vec![DEFAULT_SILICONFLOW_MODEL, DEFAULT_SILICONFLOW_FLASH_MODEL]
+        }
+        ApiProvider::Moonshot => vec![DEFAULT_MOONSHOT_MODEL],
         ApiProvider::WanjieArk => vec![DEFAULT_WANJIE_ARK_MODEL],
         ApiProvider::Sglang => vec![DEFAULT_SGLANG_MODEL, DEFAULT_SGLANG_FLASH_MODEL],
         ApiProvider::Vllm => vec![DEFAULT_VLLM_MODEL, DEFAULT_VLLM_FLASH_MODEL],
+        ApiProvider::Volcengine => vec![DEFAULT_VOLCENGINE_MODEL, DEFAULT_VOLCENGINE_FLASH_MODEL],
         ApiProvider::Openai | ApiProvider::Atlascloud | ApiProvider::Ollama => {
             OFFICIAL_DEEPSEEK_MODELS.to_vec()
         }
@@ -441,6 +530,28 @@ pub struct RetryConfig {
     pub exponential_base: Option<f64>,
 }
 
+/// Deserialize `status_items` tolerantly: skip keys unknown to this build
+/// instead of erroring with "unknown variant".  This lets a dev build write
+/// `"balance"` (or any future item) while the stable build still parses the
+/// config file successfully.
+fn deser_status_items<'de, D>(deserializer: D) -> Result<Option<Vec<StatusItem>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw: Option<Vec<String>> = Option::deserialize(deserializer)?;
+    Ok(raw.map(|strings| {
+        strings
+            .into_iter()
+            .filter_map(|s| {
+                StatusItem::from_key(&s).or_else(|| {
+                    tracing::warn!("ignoring unknown status item {s:?} in config");
+                    None
+                })
+            })
+            .collect()
+    }))
+}
+
 /// UI configuration loaded from config files.
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct TuiConfig {
@@ -455,6 +566,7 @@ pub struct TuiConfig {
     ///
     /// Edited interactively via `/statusline`; persisted to `tui.status_items`
     /// in `~/.deepseek/config.toml`.
+    #[serde(deserialize_with = "deser_status_items")]
     pub status_items: Option<Vec<StatusItem>>,
     /// Emit OSC 8 hyperlink escape sequences around URLs in the transcript so
     /// supporting terminals (iTerm2, Terminal.app 13+, Ghostty, Kitty,
@@ -474,9 +586,9 @@ pub struct TuiConfig {
     /// - Unset (default) — fall back to the `[notifications]` defaults.
     pub notification_condition: Option<NotificationCondition>,
     /// When `true`, plain Up/Down on an empty composer scroll the
-    /// transcript instead of recalling input history.  Useful for
-    /// terminals that map trackpad gestures to arrow keys.  Default:
-    /// `false` (plain arrows always navigate input history, #1117).
+    /// transcript instead of recalling input history. Useful for
+    /// terminals that map mouse-wheel gestures to arrow keys. Default:
+    /// `true` only when mouse capture is off; otherwise `false`.
     #[serde(default)]
     pub composer_arrows_scroll: Option<bool>,
 }
@@ -516,6 +628,19 @@ fn default_threshold_secs() -> u64 {
     30
 }
 
+/// Completion sound options.
+#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum CompletionSound {
+    /// No sound on turn completion.
+    Off,
+    /// System notification beep (default). On Windows uses `MessageBeep`.
+    #[default]
+    Beep,
+    /// Terminal BEL character (`\x07`).
+    Bell,
+}
+
 /// Desktop-notification configuration (OSC 9 / BEL on turn completion).
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct NotificationsConfig {
@@ -535,6 +660,11 @@ pub struct NotificationsConfig {
     /// Default: `false`.
     #[serde(default)]
     pub include_summary: bool,
+
+    /// Completion sound: `"off"` | `"beep"` | `"bell"`. Default: `"beep"`.
+    /// Plays a sound when every turn finishes (alongside the ✅ marker).
+    #[serde(default)]
+    pub completion_sound: CompletionSound,
 }
 
 fn default_snapshots_enabled() -> bool {
@@ -604,18 +734,59 @@ impl SnapshotsConfig {
 #[serde(rename_all = "snake_case")]
 pub enum SearchProvider {
     /// Bing HTML scraping. No API key needed.
-    #[default]
     Bing,
     /// DuckDuckGo HTML scraping with Bing fallback. No API key needed.
+    #[default]
     #[serde(alias = "duckduckgo")]
     DuckDuckGo,
     /// Tavily AI Search API (<https://tavily.com>). Requires api_key.
     Tavily,
     /// Bocha AI Search API (<https://bochaai.com>). Requires api_key.
     Bocha,
+    /// Metaso AI Search API (<https://metaso.cn>). Uses built-in default key
+    /// or `METASO_API_KEY` env var; configurable via `[search] api_key`.
+    #[serde(alias = "metaso")]
+    Metaso,
+    /// Baidu AI Search API (<https://qianfan.baidubce.com>). Requires api_key.
+    #[serde(
+        alias = "baidu-search",
+        alias = "baidu_ai_search",
+        alias = "baidu_search",
+        alias = "baidu-ai-search"
+    )]
+    Baidu,
+    /// Volcengine Ark web_search via Responses API. Requires api_key.
+    /// Free tier: 20K queries/month per API key. Falls back to
+    /// `VOLCENGINE_API_KEY` / `VOLCENGINE_ARK_API_KEY` / `ARK_API_KEY`
+    /// env vars when `[search] api_key` is not set.
+    #[serde(
+        alias = "volcengine",
+        alias = "ark",
+        alias = "volc",
+        alias = "volcengine-ark",
+        alias = "volcengine_ark",
+        alias = "volc-ark"
+    )]
+    Volcengine,
 }
 
 impl SearchProvider {
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "bing" => Some(Self::Bing),
+            "duckduckgo" | "duck-duck-go" | "duck_duck_go" | "ddg" => Some(Self::DuckDuckGo),
+            "tavily" => Some(Self::Tavily),
+            "bocha" => Some(Self::Bocha),
+            "metaso" => Some(Self::Metaso),
+            "baidu" | "baidu-search" | "baidu_search" | "baidu-ai-search" | "baidu_ai_search" => {
+                Some(Self::Baidu)
+            }
+            "volcengine" | "ark" | "volc" | "volcengine-ark" => Some(Self::Volcengine),
+            _ => None,
+        }
+    }
+
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
@@ -623,19 +794,71 @@ impl SearchProvider {
             Self::DuckDuckGo => "duckduckgo",
             Self::Tavily => "tavily",
             Self::Bocha => "bocha",
+            Self::Metaso => "metaso",
+            Self::Baidu => "baidu",
+            Self::Volcengine => "volcengine",
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchProviderSource {
+    Default,
+    Config,
+    EnvOverride,
+}
+
+impl SearchProviderSource {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Config => "config",
+            Self::EnvOverride => "env override",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SearchProviderResolution {
+    pub provider: SearchProvider,
+    pub source: SearchProviderSource,
 }
 
 /// Web search provider configuration (`[search]` table in config.toml).
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct SearchConfig {
-    /// Search provider: `bing` | `duckduckgo` | `tavily` | `bocha`. Default: `bing`.
+    /// Search provider: `bing` | `duckduckgo` | `tavily` | `bocha` | `metaso` | `baidu` | `volcengine`. Default: `duckduckgo`.
     #[serde(default)]
     pub provider: Option<SearchProvider>,
-    /// API key for Tavily or Bocha. Not required for Bing or DuckDuckGo.
+    /// API key for Tavily, Bocha, Metaso, Baidu, or Volcengine. Not required for Bing or DuckDuckGo.
+    /// Metaso also falls back to `METASO_API_KEY` env var, then a built-in default.
+    /// Baidu also falls back to `BAIDU_SEARCH_API_KEY` env var.
+    /// Volcengine also falls back to `VOLCENGINE_API_KEY` / `VOLCENGINE_ARK_API_KEY` / `ARK_API_KEY` env vars.
     #[serde(default)]
     pub api_key: Option<String>,
+}
+
+/// Model-visible tool catalog controls (`[tools]` table in config.toml).
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct ToolsConfig {
+    /// Native tool names to keep loaded even when they are outside the small
+    /// default core catalog. Unknown names are harmless and simply never match.
+    #[serde(default)]
+    pub always_load: Vec<String>,
+
+    /// Optional directory to scan for plugin tool scripts. Scripts with a
+    /// frontmatter header (`# name:`, `# description:`, `# schema:`) are
+    /// auto-discovered and registered as tools.
+    ///
+    /// Defaults to `~/.codewhale/tools/` when `None`.
+    #[serde(default)]
+    pub plugin_dir: Option<String>,
+
+    /// Per-tool overrides keyed by built-in tool name.
+    /// Each override replaces or disables the named tool.
+    #[serde(default)]
+    pub overrides: Option<HashMap<String, ToolOverride>>,
 }
 
 /// One configurable footer item.
@@ -683,6 +906,10 @@ pub enum StatusItem {
     LastToolElapsed,
     /// Remaining rate-limit budget (placeholder until wired).
     RateLimit,
+    /// Session token usage: input / cache-hit / output.
+    Tokens,
+    /// DeepSeek account balance, refreshed once per turn completion.
+    Balance,
 }
 
 impl StatusItem {
@@ -701,6 +928,8 @@ impl StatusItem {
             StatusItem::Agents,
             StatusItem::ReasoningReplay,
             StatusItem::Cache,
+            StatusItem::GitBranch,
+            StatusItem::Tokens,
         ]
     }
 
@@ -721,6 +950,33 @@ impl StatusItem {
             StatusItem::GitBranch => "git_branch",
             StatusItem::LastToolElapsed => "last_tool_elapsed",
             StatusItem::RateLimit => "rate_limit",
+            StatusItem::Tokens => "tokens",
+            StatusItem::Balance => "balance",
+        }
+    }
+
+    /// Reverse of [`key`](Self::key): parse a config string back to a variant.
+    /// Returns `None` for unknown keys so the config parser can silently skip
+    /// items added by newer versions rather than crashing with "unknown variant".
+    #[must_use]
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key {
+            "mode" => Some(Self::Mode),
+            "model" => Some(Self::Model),
+            "cost" => Some(Self::Cost),
+            "status" => Some(Self::Status),
+            "coherence" => Some(Self::Coherence),
+            "agents" => Some(Self::Agents),
+            "reasoning_replay" => Some(Self::ReasoningReplay),
+            "prefix_stability" => Some(Self::PrefixStability),
+            "cache" => Some(Self::Cache),
+            "context_percent" => Some(Self::ContextPercent),
+            "git_branch" => Some(Self::GitBranch),
+            "last_tool_elapsed" => Some(Self::LastToolElapsed),
+            "rate_limit" => Some(Self::RateLimit),
+            "tokens" => Some(Self::Tokens),
+            "balance" => Some(Self::Balance),
+            _ => None,
         }
     }
 
@@ -741,6 +997,8 @@ impl StatusItem {
             StatusItem::GitBranch => "Git branch",
             StatusItem::LastToolElapsed => "Last tool elapsed",
             StatusItem::RateLimit => "Rate-limit remaining",
+            StatusItem::Tokens => "Session tokens",
+            StatusItem::Balance => "Account balance",
         }
     }
 
@@ -762,6 +1020,8 @@ impl StatusItem {
             StatusItem::GitBranch => "current workspace branch",
             StatusItem::LastToolElapsed => "ms of the most recent tool call (placeholder)",
             StatusItem::RateLimit => "remaining requests in the budget (placeholder)",
+            StatusItem::Tokens => "input / cache-hit / output token totals",
+            StatusItem::Balance => "topped-up + granted balance from DeepSeek",
         }
     }
 
@@ -772,6 +1032,7 @@ impl StatusItem {
             StatusItem::Mode,
             StatusItem::Model,
             StatusItem::Cost,
+            StatusItem::Balance,
             StatusItem::Status,
             StatusItem::Coherence,
             StatusItem::Agents,
@@ -782,6 +1043,7 @@ impl StatusItem {
             StatusItem::GitBranch,
             StatusItem::LastToolElapsed,
             StatusItem::RateLimit,
+            StatusItem::Tokens,
         ]
     }
 
@@ -790,8 +1052,25 @@ impl StatusItem {
     pub fn is_left_cluster(self) -> bool {
         matches!(
             self,
-            StatusItem::Mode | StatusItem::Model | StatusItem::Cost | StatusItem::Status
+            StatusItem::Mode
+                | StatusItem::Model
+                | StatusItem::Cost
+                | StatusItem::Status
+                | StatusItem::Balance
         )
+    }
+
+    /// Whether this item is relevant for `provider`.  Provider-specific
+    /// items return `false` for unsupported providers so the picker doesn't
+    /// offer toggles that can never show useful data.
+    #[must_use]
+    pub fn is_available_for(self, provider: ApiProvider) -> bool {
+        match self {
+            StatusItem::Balance => {
+                matches!(provider, ApiProvider::Deepseek | ApiProvider::DeepseekCN)
+            }
+            _ => true,
+        }
     }
 }
 
@@ -922,10 +1201,15 @@ pub struct Config {
     /// Optional extra HTTP headers sent to model API requests.
     pub http_headers: Option<HashMap<String, String>>,
     pub default_text_model: Option<String>,
+    pub auth_mode: Option<String>,
     /// DeepSeek reasoning-effort tier: `"off" | "low" | "medium" | "high" | "max"`.
     /// Defaults to `"max"` at runtime if unset.
     pub reasoning_effort: Option<String>,
     pub tools_file: Option<String>,
+    /// Native tool catalog controls. `tools_file` is the legacy external
+    /// schema path; this table controls built-in tool loading policy.
+    #[serde(default)]
+    pub tools: Option<ToolsConfig>,
     pub skills_dir: Option<String>,
     pub mcp_config_path: Option<String>,
     pub notes_path: Option<String>,
@@ -955,6 +1239,11 @@ pub struct Config {
     pub sandbox_url: Option<String>,
     /// Optional API key for the external sandbox backend (sent as Bearer token).
     pub sandbox_api_key: Option<String>,
+    /// When true and `/usr/bin/bwrap` is present on Linux, route exec_shell
+    /// through bubblewrap instead of relying solely on Landlock (#2184).
+    /// Defaults to false. Requires the `bubblewrap` package to be installed
+    /// separately — we do NOT vendor bwrap.
+    pub prefer_bwrap: Option<bool>,
     pub managed_config_path: Option<String>,
     pub requirements_path: Option<String>,
     pub max_subagents: Option<usize>,
@@ -969,7 +1258,7 @@ pub struct Config {
     #[serde(default)]
     pub hooks: Option<HooksConfig>,
 
-    /// Provider-specific credentials and defaults shared with the `deepseek` facade.
+    /// Provider-specific credentials and defaults shared with the `codewhale` facade.
     #[serde(default)]
     pub providers: Option<ProvidersConfig>,
 
@@ -994,9 +1283,9 @@ pub struct Config {
     #[serde(default)]
     pub snapshots: Option<SnapshotsConfig>,
 
-    /// Web search provider configuration. When absent, defaults to Bing.
-    /// Set `provider` to `duckduckgo`, `tavily`, or `bocha` to use those
-    /// services instead; Tavily and Bocha also require an `api_key`.
+    /// Web search provider configuration. When absent, defaults to DuckDuckGo.
+    /// Set `provider` to `bing`, `tavily`, or `bocha` to use those services
+    /// instead; Tavily and Bocha also require an `api_key`.
     #[serde(default)]
     pub search: Option<SearchConfig>,
 
@@ -1024,7 +1313,7 @@ pub struct Config {
     #[serde(default)]
     pub subagents: Option<SubagentsConfig>,
 
-    /// Runtime API server tuning (`deepseek serve --http`). Currently only
+    /// Runtime API server tuning (`codewhale serve --http`). Currently only
     /// hosts the CORS allow-list extension (whalescale#255 / #561). When the
     /// table is absent, the daemon ships with localhost:3000 / localhost:1420
     /// / tauri://localhost as the only allowed dev origins.
@@ -1039,6 +1328,33 @@ pub struct Config {
     /// Vision model configuration for the `image_analyze` tool.
     #[serde(default)]
     pub vision_model: Option<VisionModelConfig>,
+}
+
+/// How a user wants to replace or disable a built-in tool.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ToolOverride {
+    /// Run a local script file. The script receives the tool's JSON input
+    /// on stdin and must return a JSON `ToolResult` on stdout.
+    Script {
+        /// Path to the script (absolute, or relative to `~/.codewhale/tools/`).
+        path: String,
+        /// Optional static arguments prepended before the tool's JSON input.
+        #[serde(default)]
+        args: Option<Vec<String>>,
+    },
+    /// Run an external command. The command receives the tool's JSON input
+    /// on stdin and must return a JSON `ToolResult` on stdout.
+    Command {
+        /// The command to run (binary name or absolute path).
+        command: String,
+        /// Optional static arguments prepended before the tool's JSON input.
+        #[serde(default)]
+        args: Option<Vec<String>>,
+    },
+    /// Completely disable a built-in tool. The tool will not appear in the
+    /// model-visible catalog and cannot be called.
+    Disabled,
 }
 
 /// Vision model configuration for the `image_analyze` tool.
@@ -1099,7 +1415,7 @@ impl SkillsConfig {
     }
 }
 
-/// `[network]` table — mirrors `deepseek_config::NetworkPolicyToml` so the live
+/// `[network]` table — mirrors `codewhale_config::NetworkPolicyToml` so the live
 /// TUI runtime can construct a [`crate::network_policy::NetworkPolicy`]
 /// without reaching into the workspace config crate. See `config.example.toml`
 /// for documentation.
@@ -1209,6 +1525,7 @@ pub struct ProviderConfig {
     pub api_key: Option<String>,
     pub base_url: Option<String>,
     pub model: Option<String>,
+    pub auth_mode: Option<String>,
     pub http_headers: Option<HashMap<String, String>>,
 }
 
@@ -1227,11 +1544,19 @@ pub struct ProvidersConfig {
     #[serde(default)]
     pub wanjie_ark: ProviderConfig,
     #[serde(default)]
+    pub volcengine: ProviderConfig,
+    #[serde(default)]
     pub openrouter: ProviderConfig,
+    #[serde(default)]
+    pub xiaomi_mimo: ProviderConfig,
     #[serde(default)]
     pub novita: ProviderConfig,
     #[serde(default)]
     pub fireworks: ProviderConfig,
+    #[serde(default)]
+    pub siliconflow: ProviderConfig,
+    #[serde(default)]
+    pub moonshot: ProviderConfig,
     #[serde(default)]
     pub sglang: ProviderConfig,
     #[serde(default)]
@@ -1258,6 +1583,35 @@ struct RequirementsFile {
 // === Config Loading ===
 
 impl Config {
+    #[must_use]
+    pub fn search_provider_resolution(&self) -> SearchProviderResolution {
+        if let Ok(raw) = std::env::var("DEEPSEEK_SEARCH_PROVIDER")
+            && let Some(provider) = SearchProvider::parse(&raw)
+        {
+            return SearchProviderResolution {
+                provider,
+                source: SearchProviderSource::EnvOverride,
+            };
+        }
+
+        if let Some(provider) = self.search.as_ref().and_then(|search| search.provider) {
+            return SearchProviderResolution {
+                provider,
+                source: SearchProviderSource::Config,
+            };
+        }
+
+        SearchProviderResolution {
+            provider: SearchProvider::default(),
+            source: SearchProviderSource::Default,
+        }
+    }
+
+    #[must_use]
+    pub fn search_provider(&self) -> SearchProvider {
+        self.search_provider_resolution().provider
+    }
+
     /// Return `true` if the `[auto] cost_saving = true` opt-in is set
     /// (#1207). When true, the auto-mode router biases toward
     /// `deepseek-v4-flash` for ambiguous requests instead of escalating to
@@ -1268,6 +1622,22 @@ impl Config {
             .as_ref()
             .and_then(|a| a.cost_saving)
             .unwrap_or(false)
+    }
+
+    #[must_use]
+    pub fn tools_always_load(&self) -> std::collections::HashSet<String> {
+        self.tools
+            .as_ref()
+            .map(|tools| {
+                tools
+                    .always_load
+                    .iter()
+                    .map(|name| name.trim())
+                    .filter(|name| !name.is_empty())
+                    .map(ToOwned::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Load configuration from disk and merge with environment overrides.
@@ -1341,11 +1711,15 @@ impl Config {
             ApiProvider::Atlascloud => "providers.atlascloud",
             ApiProvider::WanjieArk => "providers.wanjie_ark",
             ApiProvider::Openrouter => "providers.openrouter",
+            ApiProvider::XiaomiMimo => "providers.xiaomi_mimo",
             ApiProvider::Novita => "providers.novita",
             ApiProvider::Fireworks => "providers.fireworks",
+            ApiProvider::Siliconflow => "providers.siliconflow",
+            ApiProvider::Moonshot => "providers.moonshot",
             ApiProvider::Sglang => "providers.sglang",
             ApiProvider::Vllm => "providers.vllm",
             ApiProvider::Ollama => "providers.ollama",
+            ApiProvider::Volcengine => "providers.volcengine",
             ApiProvider::NvidiaNim => "providers.nvidia_nim",
             ApiProvider::Deepseek | ApiProvider::DeepseekCN => return,
         };
@@ -1362,7 +1736,7 @@ impl Config {
             && ApiProvider::parse(provider).is_none()
         {
             anyhow::bail!(
-                "Invalid provider '{provider}': expected deepseek, deepseek-cn, nvidia-nim, openai, atlascloud, wanjie-ark, openrouter, novita, fireworks, sglang, vllm, or ollama."
+                "Invalid provider '{provider}': expected deepseek, deepseek-cn, nvidia-nim, openai, atlascloud, wanjie-ark, openrouter, xiaomi-mimo, novita, fireworks, siliconflow, moonshot, sglang, vllm, or ollama."
             );
         }
         if let Some(ref key) = self.api_key
@@ -1482,11 +1856,15 @@ impl Config {
             ApiProvider::Atlascloud => &providers.atlascloud,
             ApiProvider::WanjieArk => &providers.wanjie_ark,
             ApiProvider::Openrouter => &providers.openrouter,
+            ApiProvider::XiaomiMimo => &providers.xiaomi_mimo,
             ApiProvider::Novita => &providers.novita,
             ApiProvider::Fireworks => &providers.fireworks,
+            ApiProvider::Siliconflow => &providers.siliconflow,
+            ApiProvider::Moonshot => &providers.moonshot,
             ApiProvider::Sglang => &providers.sglang,
             ApiProvider::Vllm => &providers.vllm,
             ApiProvider::Ollama => &providers.ollama,
+            ApiProvider::Volcengine => &providers.volcengine,
         })
     }
 
@@ -1534,6 +1912,19 @@ impl Config {
                 }
             }
         }
+        let moonshot_config = (provider == ApiProvider::Moonshot)
+            .then(|| self.provider_config())
+            .flatten();
+        let moonshot_uses_kimi_code = moonshot_config.is_some_and(|config| {
+            provider_config_uses_kimi_oauth(config)
+                || config
+                    .base_url
+                    .as_deref()
+                    .is_some_and(moonshot_base_url_uses_kimi_code)
+        });
+        if moonshot_uses_kimi_code {
+            return DEFAULT_KIMI_CODE_MODEL.to_string();
+        }
         if let Some(model) = self.default_text_model.as_deref()
             && (provider_passes_model_through(provider)
                 || self.active_provider_preserves_custom_base_url_model())
@@ -1558,11 +1949,15 @@ impl Config {
             ApiProvider::Atlascloud => DEFAULT_ATLASCLOUD_MODEL,
             ApiProvider::WanjieArk => DEFAULT_WANJIE_ARK_MODEL,
             ApiProvider::Openrouter => DEFAULT_OPENROUTER_MODEL,
+            ApiProvider::XiaomiMimo => DEFAULT_XIAOMI_MIMO_MODEL,
             ApiProvider::Novita => DEFAULT_NOVITA_MODEL,
             ApiProvider::Fireworks => DEFAULT_FIREWORKS_MODEL,
+            ApiProvider::Siliconflow => DEFAULT_SILICONFLOW_MODEL,
+            ApiProvider::Moonshot => DEFAULT_MOONSHOT_MODEL,
             ApiProvider::Sglang => DEFAULT_SGLANG_MODEL,
             ApiProvider::Vllm => DEFAULT_VLLM_MODEL,
             ApiProvider::Ollama => DEFAULT_OLLAMA_MODEL,
+            ApiProvider::Volcengine => DEFAULT_VOLCENGINE_MODEL,
         }
         .to_string()
     }
@@ -1589,11 +1984,15 @@ impl Config {
             | ApiProvider::Atlascloud
             | ApiProvider::WanjieArk
             | ApiProvider::Openrouter
+            | ApiProvider::XiaomiMimo
             | ApiProvider::Novita
             | ApiProvider::Fireworks
+            | ApiProvider::Siliconflow
+            | ApiProvider::Moonshot
             | ApiProvider::Sglang
             | ApiProvider::Vllm
-            | ApiProvider::Ollama => None,
+            | ApiProvider::Ollama
+            | ApiProvider::Volcengine => None,
         };
         let base = provider_base.or(root_base).unwrap_or_else(|| {
             match provider {
@@ -1604,11 +2003,24 @@ impl Config {
                 ApiProvider::Atlascloud => DEFAULT_ATLASCLOUD_BASE_URL,
                 ApiProvider::WanjieArk => DEFAULT_WANJIE_ARK_BASE_URL,
                 ApiProvider::Openrouter => DEFAULT_OPENROUTER_BASE_URL,
+                ApiProvider::XiaomiMimo => DEFAULT_XIAOMI_MIMO_BASE_URL,
                 ApiProvider::Novita => DEFAULT_NOVITA_BASE_URL,
                 ApiProvider::Fireworks => DEFAULT_FIREWORKS_BASE_URL,
+                ApiProvider::Siliconflow => DEFAULT_SILICONFLOW_BASE_URL,
+                ApiProvider::Moonshot => {
+                    if self
+                        .provider_config()
+                        .is_some_and(provider_config_uses_kimi_oauth)
+                    {
+                        DEFAULT_KIMI_CODE_BASE_URL
+                    } else {
+                        DEFAULT_MOONSHOT_BASE_URL
+                    }
+                }
                 ApiProvider::Sglang => DEFAULT_SGLANG_BASE_URL,
                 ApiProvider::Vllm => DEFAULT_VLLM_BASE_URL,
                 ApiProvider::Ollama => DEFAULT_OLLAMA_BASE_URL,
+                ApiProvider::Volcengine => DEFAULT_VOLCENGINE_BASE_URL,
             }
             .to_string()
         });
@@ -1618,6 +2030,12 @@ impl Config {
     fn active_provider_preserves_custom_base_url_model(&self) -> bool {
         let provider = self.api_provider();
         provider_preserves_custom_base_url_model(provider, &self.deepseek_base_url())
+    }
+
+    pub(crate) fn model_ids_pass_through(&self) -> bool {
+        let provider = self.api_provider();
+        provider_passes_model_through(provider)
+            || self.active_provider_preserves_custom_base_url_model()
     }
 
     /// Read the API key.
@@ -1637,11 +2055,15 @@ impl Config {
             ApiProvider::Atlascloud => "atlascloud",
             ApiProvider::WanjieArk => "wanjie-ark",
             ApiProvider::Openrouter => "openrouter",
+            ApiProvider::XiaomiMimo => "xiaomi-mimo",
             ApiProvider::Novita => "novita",
             ApiProvider::Fireworks => "fireworks",
+            ApiProvider::Siliconflow => "siliconflow",
+            ApiProvider::Moonshot => "moonshot",
             ApiProvider::Sglang => "sglang",
             ApiProvider::Vllm => "vllm",
             ApiProvider::Ollama => "ollama",
+            ApiProvider::Volcengine => "volcengine",
         };
 
         // 0. DeepSeek compatibility slot. The legacy top-level `api_key`
@@ -1655,8 +2077,16 @@ impl Config {
             return Ok(configured.clone());
         }
 
+        if provider == ApiProvider::Moonshot
+            && self
+                .provider_config_for(provider)
+                .is_some_and(provider_config_uses_kimi_oauth)
+        {
+            return kimi_cli_oauth_access_token();
+        }
+
         // 1. Config file (provider-scoped slot). This intentionally wins
-        // over ambient env so `deepseek auth set` fixes stale shell exports.
+        // over ambient env so `codewhale auth set` fixes stale shell exports.
         if let Some(configured) = self
             .provider_config_for(provider)
             .and_then(|provider| provider.api_key.clone())
@@ -1667,7 +2097,7 @@ impl Config {
 
         // 2. Environment variables. Do not query platform credential stores
         // here; routine startup and doctor checks must stay prompt-free.
-        if let Some(value) = deepseek_secrets::env_for(slot)
+        if let Some(value) = codewhale_secrets::env_for(slot)
             && !value.trim().is_empty()
         {
             return Ok(value);
@@ -1683,7 +2113,7 @@ impl Config {
                  \n\
                  1. Get a key:  https://platform.deepseek.com/api_keys\n\
                  2. Save it (works in every folder, no OS prompts):\n\
-                        deepseek auth set --provider deepseek\n\
+                        codewhale auth set --provider deepseek\n\
                  \n\
                  Alternatives:\n\
                    • export DEEPSEEK_API_KEY=<your-key>      (current shell only;\n\
@@ -1692,38 +2122,55 @@ impl Config {
                    • api_key = \"<your-key>\"  in ~/.deepseek/config.toml"
             ),
             ApiProvider::NvidiaNim => anyhow::bail!(
-                "NVIDIA NIM API key not found. Run 'deepseek auth set --provider nvidia-nim', \
+                "NVIDIA NIM API key not found. Run 'codewhale auth set --provider nvidia-nim', \
                  set NVIDIA_API_KEY/NVIDIA_NIM_API_KEY, or save api_key in ~/.deepseek/config.toml \
                  with provider = \"nvidia-nim\"."
             ),
             ApiProvider::Openai => anyhow::bail!(
-                "OpenAI-compatible API key not found. Run 'deepseek auth set --provider openai', \
+                "OpenAI-compatible API key not found. Run 'codewhale auth set --provider openai', \
                  set OPENAI_API_KEY, or add [providers.openai] api_key in ~/.deepseek/config.toml."
             ),
             ApiProvider::Atlascloud => anyhow::bail!(
-                "AtlasCloud API key not found. Run 'deepseek auth set --provider atlascloud', \
+                "AtlasCloud API key not found. Run 'codewhale auth set --provider atlascloud', \
                  set ATLASCLOUD_API_KEY, or add [providers.atlascloud] api_key in ~/.deepseek/config.toml."
             ),
             ApiProvider::WanjieArk => anyhow::bail!(
-                "Wanjie Ark API key not found. Run 'deepseek auth set --provider wanjie-ark', \
+                "Wanjie Ark API key not found. Run 'codewhale auth set --provider wanjie-ark', \
                  set WANJIE_ARK_API_KEY/WANJIE_API_KEY/WANJIE_MAAS_API_KEY, or add \
                  [providers.wanjie_ark] api_key in ~/.deepseek/config.toml."
             ),
             ApiProvider::Openrouter => anyhow::bail!(
-                "OpenRouter API key not found. Run 'deepseek auth set --provider openrouter', \
+                "OpenRouter API key not found. Run 'codewhale auth set --provider openrouter', \
                  set OPENROUTER_API_KEY, or add [providers.openrouter] api_key in ~/.deepseek/config.toml."
             ),
+            ApiProvider::XiaomiMimo => anyhow::bail!(
+                "Xiaomi MiMo API key not found. Run 'codewhale auth set --provider xiaomi-mimo', \
+                 set XIAOMI_MIMO_API_KEY/MIMO_API_KEY, or add [providers.xiaomi_mimo] api_key in ~/.deepseek/config.toml."
+            ),
             ApiProvider::Novita => anyhow::bail!(
-                "Novita API key not found. Run 'deepseek auth set --provider novita', \
+                "Novita API key not found. Run 'codewhale auth set --provider novita', \
                  set NOVITA_API_KEY, or add [providers.novita] api_key in ~/.deepseek/config.toml."
             ),
             ApiProvider::Fireworks => anyhow::bail!(
-                "Fireworks AI API key not found. Run 'deepseek auth set --provider fireworks', \
+                "Fireworks AI API key not found. Run 'codewhale auth set --provider fireworks', \
                  set FIREWORKS_API_KEY, or add [providers.fireworks] api_key in ~/.deepseek/config.toml."
+            ),
+            ApiProvider::Siliconflow => anyhow::bail!(
+                "SiliconFlow API key not found. Run 'codewhale auth set --provider siliconflow', \
+                 set SILICONFLOW_API_KEY, or add [providers.siliconflow] api_key in ~/.deepseek/config.toml."
+            ),
+            ApiProvider::Moonshot => anyhow::bail!(
+                "Moonshot/Kimi API key not found. Run 'codewhale auth set --provider moonshot', \
+                 set MOONSHOT_API_KEY/KIMI_API_KEY, or add [providers.moonshot] api_key. \
+                 For a Kimi Code plan key, set [providers.moonshot] base_url = \
+                 \"https://api.kimi.com/coding/v1\" and model = \"kimi-for-coding\"."
             ),
             // Self-hosted deployments commonly run without auth on localhost.
             // Return an empty key and let the client omit the Authorization header.
-            ApiProvider::Sglang | ApiProvider::Vllm | ApiProvider::Ollama => Ok(String::new()),
+            ApiProvider::Sglang
+            | ApiProvider::Vllm
+            | ApiProvider::Ollama
+            | ApiProvider::Volcengine => Ok(String::new()),
         }
     }
 
@@ -1967,7 +2414,7 @@ fn default_config_path() -> Option<PathBuf> {
     env_config_path().or_else(home_config_path)
 }
 
-fn effective_home_dir() -> Option<PathBuf> {
+pub(crate) fn effective_home_dir() -> Option<PathBuf> {
     if let Some(path) = std::env::var_os("HOME") {
         let path = PathBuf::from(path);
         if !path.as_os_str().is_empty() {
@@ -1999,7 +2446,13 @@ fn effective_home_dir() -> Option<PathBuf> {
 }
 
 fn home_config_path() -> Option<PathBuf> {
-    effective_home_dir().map(|home| home.join(".deepseek").join("config.toml"))
+    effective_home_dir().map(|home| {
+        let primary = home.join(".codewhale").join("config.toml");
+        if primary.exists() {
+            return primary;
+        }
+        home.join(".deepseek").join("config.toml")
+    })
 }
 
 #[must_use]
@@ -2120,7 +2573,7 @@ fn resolve_load_config_path(path: Option<PathBuf>) -> Option<PathBuf> {
 
 /// Create an inspectable config file on first interactive launch.
 ///
-/// The file intentionally omits `api_key`; onboarding or `deepseek auth set`
+/// The file intentionally omits `api_key`; onboarding or `codewhale auth set`
 /// writes that field after the user supplies a key.
 pub fn ensure_config_file_exists(path: Option<PathBuf>) -> Result<Option<PathBuf>> {
     let config_path = path
@@ -2133,23 +2586,22 @@ pub fn ensure_config_file_exists(path: Option<PathBuf>) -> Result<Option<PathBuf
 
     ensure_parent_dir(&config_path)?;
     let content = format!(
-        r#"# DeepSeek TUI Configuration
+        r#"# codewhale Configuration
 # Get your API key from https://platform.deepseek.com
-# Save it with: deepseek auth set --provider deepseek
+# Save it with: codewhale auth set --provider deepseek
 
 # Base URL (default: https://api.deepseek.com/beta)
 # Set https://api.deepseek.com to opt out of beta features.
 # base_url = "https://api.deepseek.com/beta"
 
 # Default model
-default_text_model = "{default_model}"
+default_text_model = "{DEFAULT_TEXT_MODEL}"
 
 # Thinking mode (DeepSeek V4 reasoning effort):
 # "auto" | "off" | "low" | "medium" | "high" | "max"
 # Shift+Tab in the TUI cycles between off / high / max.
 reasoning_effort = "auto"
-"#,
-        default_model = DEFAULT_TEXT_MODEL
+"#
     );
     write_config_file_secure(&config_path, &content)
         .with_context(|| format!("Failed to write config to {}", config_path.display()))?;
@@ -2163,7 +2615,13 @@ fn default_managed_config_path() -> Option<PathBuf> {
     }
     #[cfg(not(unix))]
     {
-        effective_home_dir().map(|home| home.join(".deepseek").join("managed_config.toml"))
+        effective_home_dir().map(|home| {
+            let primary = home.join(".codewhale").join("managed_config.toml");
+            if primary.exists() {
+                return primary;
+            }
+            home.join(".deepseek").join("managed_config.toml")
+        })
     }
 }
 
@@ -2174,7 +2632,13 @@ fn default_requirements_path() -> Option<PathBuf> {
     }
     #[cfg(not(unix))]
     {
-        effective_home_dir().map(|home| home.join(".deepseek").join("requirements.toml"))
+        effective_home_dir().map(|home| {
+            let primary = home.join(".codewhale").join("requirements.toml");
+            if primary.exists() {
+                return primary;
+            }
+            home.join(".deepseek").join("requirements.toml")
+        })
     }
 }
 
@@ -2195,28 +2659,64 @@ pub(crate) fn expand_path(path: &str) -> PathBuf {
 }
 
 fn default_skills_dir() -> Option<PathBuf> {
-    effective_home_dir().map(|home| home.join(".deepseek").join("skills"))
+    effective_home_dir().map(|home| home.join(".codewhale").join("skills"))
 }
 
 fn default_mcp_config_path() -> Option<PathBuf> {
-    effective_home_dir().map(|home| home.join(".deepseek").join("mcp.json"))
+    effective_home_dir().map(|home| {
+        let primary = home.join(".codewhale").join("mcp.json");
+        if primary.exists() {
+            return primary;
+        }
+        home.join(".deepseek").join("mcp.json")
+    })
 }
 
 fn default_notes_path() -> Option<PathBuf> {
-    effective_home_dir().map(|home| home.join(".deepseek").join("notes.txt"))
+    effective_home_dir().map(|home| {
+        let primary = home.join(".codewhale").join("notes.txt");
+        if primary.exists() {
+            return primary;
+        }
+        home.join(".deepseek").join("notes.txt")
+    })
 }
 
 fn default_memory_path() -> Option<PathBuf> {
-    effective_home_dir().map(|home| home.join(".deepseek").join("memory.md"))
+    effective_home_dir().map(|home| {
+        let primary = home.join(".codewhale").join("memory.md");
+        if primary.exists() {
+            return primary;
+        }
+        home.join(".deepseek").join("memory.md")
+    })
 }
 
 // === Environment Overrides ===
 
+/// Read a CodeWhale env var, preferring the `CODEWHALE_*` form over the
+/// legacy `DEEPSEEK_*` form. Empty values are ignored so a blank shell export
+/// does not erase configured provider settings.
+fn codewhale_env_var(
+    codewhale_name: &str,
+    legacy_name: &str,
+) -> Result<String, std::env::VarError> {
+    std::env::var(codewhale_name)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            std::env::var(legacy_name)
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
+        .ok_or(std::env::VarError::NotPresent)
+}
+
 fn apply_env_overrides(config: &mut Config) {
-    if let Ok(value) = std::env::var("DEEPSEEK_PROVIDER") {
+    if let Ok(value) = codewhale_env_var("CODEWHALE_PROVIDER", "DEEPSEEK_PROVIDER") {
         config.provider = Some(value);
     }
-    if let Ok(value) = std::env::var("DEEPSEEK_BASE_URL") {
+    if let Ok(value) = codewhale_env_var("CODEWHALE_BASE_URL", "DEEPSEEK_BASE_URL") {
         match config.api_provider() {
             ApiProvider::Deepseek | ApiProvider::DeepseekCN => {
                 config.base_url = Some(value);
@@ -2242,6 +2742,13 @@ fn apply_env_overrides(config: &mut Config) {
                     .openrouter
                     .base_url = Some(value);
             }
+            ApiProvider::XiaomiMimo => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .xiaomi_mimo
+                    .base_url = Some(value);
+            }
             ApiProvider::WanjieArk => {
                 config
                     .providers
@@ -2263,6 +2770,20 @@ fn apply_env_overrides(config: &mut Config) {
                     .fireworks
                     .base_url = Some(value);
             }
+            ApiProvider::Siliconflow => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .siliconflow
+                    .base_url = Some(value);
+            }
+            ApiProvider::Moonshot => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .moonshot
+                    .base_url = Some(value);
+            }
             ApiProvider::Sglang => {
                 config
                     .providers
@@ -2282,6 +2803,13 @@ fn apply_env_overrides(config: &mut Config) {
                     .providers
                     .get_or_insert_with(ProvidersConfig::default)
                     .ollama
+                    .base_url = Some(value);
+            }
+            ApiProvider::Volcengine => {
+                config
+                    .providers
+                    .get_or_insert_with(ProvidersConfig::default)
+                    .volcengine
                     .base_url = Some(value);
             }
             ApiProvider::Atlascloud => {
@@ -2337,6 +2865,17 @@ fn apply_env_overrides(config: &mut Config) {
             .openrouter
             .base_url = Some(value);
     }
+    if matches!(config.api_provider(), ApiProvider::XiaomiMimo)
+        && let Ok(value) =
+            std::env::var("XIAOMI_MIMO_BASE_URL").or_else(|_| std::env::var("MIMO_BASE_URL"))
+        && !value.trim().is_empty()
+    {
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .xiaomi_mimo
+            .base_url = Some(value);
+    }
     if matches!(config.api_provider(), ApiProvider::WanjieArk)
         && let Ok(value) = std::env::var("WANJIE_ARK_BASE_URL")
             .or_else(|_| std::env::var("WANJIE_BASE_URL"))
@@ -2367,6 +2906,27 @@ fn apply_env_overrides(config: &mut Config) {
             .providers
             .get_or_insert_with(ProvidersConfig::default)
             .fireworks
+            .base_url = Some(value);
+    }
+    if matches!(config.api_provider(), ApiProvider::Siliconflow)
+        && let Ok(value) = std::env::var("SILICONFLOW_BASE_URL")
+        && !value.trim().is_empty()
+    {
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .siliconflow
+            .base_url = Some(value);
+    }
+    if matches!(config.api_provider(), ApiProvider::Moonshot)
+        && let Ok(value) =
+            std::env::var("MOONSHOT_BASE_URL").or_else(|_| std::env::var("KIMI_BASE_URL"))
+        && !value.trim().is_empty()
+    {
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .moonshot
             .base_url = Some(value);
     }
     if matches!(config.api_provider(), ApiProvider::Sglang)
@@ -2409,11 +2969,15 @@ fn apply_env_overrides(config: &mut Config) {
             ApiProvider::Atlascloud => &mut providers.atlascloud,
             ApiProvider::WanjieArk => &mut providers.wanjie_ark,
             ApiProvider::Openrouter => &mut providers.openrouter,
+            ApiProvider::XiaomiMimo => &mut providers.xiaomi_mimo,
             ApiProvider::Novita => &mut providers.novita,
             ApiProvider::Fireworks => &mut providers.fireworks,
+            ApiProvider::Siliconflow => &mut providers.siliconflow,
+            ApiProvider::Moonshot => &mut providers.moonshot,
             ApiProvider::Sglang => &mut providers.sglang,
             ApiProvider::Vllm => &mut providers.vllm,
             ApiProvider::Ollama => &mut providers.ollama,
+            ApiProvider::Volcengine => &mut providers.volcengine,
         };
         let mut provider_headers = entry.http_headers.clone().unwrap_or_default();
         provider_headers.extend(headers);
@@ -2453,6 +3017,16 @@ fn apply_env_overrides(config: &mut Config) {
             .openai
             .model = Some(value);
     }
+    if matches!(config.api_provider(), ApiProvider::XiaomiMimo)
+        && let Ok(value) =
+            std::env::var("XIAOMI_MIMO_MODEL").or_else(|_| std::env::var("MIMO_MODEL"))
+    {
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .xiaomi_mimo
+            .model = Some(value);
+    }
     if matches!(config.api_provider(), ApiProvider::Atlascloud)
         && let Ok(value) = std::env::var("ATLASCLOUD_MODEL")
     {
@@ -2469,8 +3043,34 @@ fn apply_env_overrides(config: &mut Config) {
             .wanjie_ark
             .model = Some(value);
     }
-    if let Ok(value) =
-        std::env::var("DEEPSEEK_MODEL").or_else(|_| std::env::var("DEEPSEEK_DEFAULT_TEXT_MODEL"))
+    if matches!(config.api_provider(), ApiProvider::Moonshot)
+        && let Ok(value) = std::env::var("MOONSHOT_MODEL")
+            .or_else(|_| std::env::var("KIMI_MODEL_NAME"))
+            .or_else(|_| std::env::var("KIMI_MODEL"))
+    {
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .moonshot
+            .model = Some(value);
+    }
+    if matches!(config.api_provider(), ApiProvider::Siliconflow)
+        && let Ok(value) = std::env::var("SILICONFLOW_MODEL")
+        && !value.trim().is_empty()
+    {
+        config
+            .providers
+            .get_or_insert_with(ProvidersConfig::default)
+            .siliconflow
+            .model = Some(value);
+    }
+    if let Some(value) = codewhale_env_var("CODEWHALE_MODEL", "DEEPSEEK_MODEL")
+        .ok()
+        .or_else(|| {
+            std::env::var("DEEPSEEK_DEFAULT_TEXT_MODEL")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
     {
         // The CLI `--model` handoff always sets DEEPSEEK_MODEL, never the
         // provider-specific *_MODEL var. The legacy root `default_text_model`
@@ -2496,11 +3096,15 @@ fn apply_env_overrides(config: &mut Config) {
                 ApiProvider::Atlascloud => &mut providers.atlascloud,
                 ApiProvider::WanjieArk => &mut providers.wanjie_ark,
                 ApiProvider::Openrouter => &mut providers.openrouter,
+                ApiProvider::XiaomiMimo => &mut providers.xiaomi_mimo,
                 ApiProvider::Novita => &mut providers.novita,
                 ApiProvider::Fireworks => &mut providers.fireworks,
+                ApiProvider::Siliconflow => &mut providers.siliconflow,
+                ApiProvider::Moonshot => &mut providers.moonshot,
                 ApiProvider::Sglang => &mut providers.sglang,
                 ApiProvider::Vllm => &mut providers.vllm,
                 ApiProvider::Ollama => &mut providers.ollama,
+                ApiProvider::Volcengine => &mut providers.volcengine,
             };
             entry.model = Some(value);
         }
@@ -2555,6 +3159,14 @@ fn apply_env_overrides(config: &mut Config) {
     }
     if let Ok(value) = std::env::var("DEEPSEEK_MANAGED_CONFIG_PATH") {
         config.managed_config_path = Some(value);
+    }
+    if let Ok(value) = std::env::var("DEEPSEEK_SEARCH_API_KEY")
+        && !value.trim().is_empty()
+    {
+        config
+            .search
+            .get_or_insert_with(SearchConfig::default)
+            .api_key = Some(value);
     }
     if let Ok(value) = std::env::var("DEEPSEEK_REQUIREMENTS_PATH") {
         config.requirements_path = Some(value);
@@ -2725,6 +3337,21 @@ fn normalize_model_config(config: &mut Config) {
         {
             providers.fireworks.model = Some(normalized);
         }
+        if let Some(model) = providers.siliconflow.model.as_deref()
+            && !provider_entry_uses_custom_base_url(
+                ApiProvider::Siliconflow,
+                &providers.siliconflow,
+            )
+            && let Some(normalized) = normalize_model_for_provider(ApiProvider::Siliconflow, model)
+        {
+            providers.siliconflow.model = Some(normalized);
+        }
+        if let Some(model) = providers.moonshot.model.as_deref()
+            && !provider_entry_uses_custom_base_url(ApiProvider::Moonshot, &providers.moonshot)
+            && let Some(normalized) = normalize_model_for_provider(ApiProvider::Moonshot, model)
+        {
+            providers.moonshot.model = Some(normalized);
+        }
         if let Some(model) = providers.sglang.model.as_deref()
             && !provider_entry_uses_custom_base_url(ApiProvider::Sglang, &providers.sglang)
             && let Some(normalized) = normalize_model_for_provider(ApiProvider::Sglang, model)
@@ -2753,6 +3380,9 @@ pub(crate) fn provider_passes_model_through(provider: ApiProvider) -> bool {
         ApiProvider::Openai
             | ApiProvider::Atlascloud
             | ApiProvider::WanjieArk
+            | ApiProvider::Volcengine
+            | ApiProvider::XiaomiMimo
+            | ApiProvider::Moonshot
             | ApiProvider::Ollama
     )
 }
@@ -2773,20 +3403,59 @@ fn default_base_url_for_provider(provider: ApiProvider) -> &'static str {
         ApiProvider::Atlascloud => DEFAULT_ATLASCLOUD_BASE_URL,
         ApiProvider::WanjieArk => DEFAULT_WANJIE_ARK_BASE_URL,
         ApiProvider::Openrouter => DEFAULT_OPENROUTER_BASE_URL,
+        ApiProvider::XiaomiMimo => DEFAULT_XIAOMI_MIMO_BASE_URL,
         ApiProvider::Novita => DEFAULT_NOVITA_BASE_URL,
         ApiProvider::Fireworks => DEFAULT_FIREWORKS_BASE_URL,
+        ApiProvider::Siliconflow => DEFAULT_SILICONFLOW_BASE_URL,
+        ApiProvider::Moonshot => DEFAULT_MOONSHOT_BASE_URL,
         ApiProvider::Sglang => DEFAULT_SGLANG_BASE_URL,
         ApiProvider::Vllm => DEFAULT_VLLM_BASE_URL,
         ApiProvider::Ollama => DEFAULT_OLLAMA_BASE_URL,
+        ApiProvider::Volcengine => DEFAULT_VOLCENGINE_BASE_URL,
     }
 }
 
 fn base_url_is_custom_for_provider(provider: ApiProvider, base_url: &str) -> bool {
+    if provider == ApiProvider::Siliconflow && siliconflow_base_url_is_official(base_url) {
+        return false;
+    }
     normalize_base_url(base_url) != normalize_base_url(default_base_url_for_provider(provider))
 }
 
 fn provider_preserves_custom_base_url_model(provider: ApiProvider, base_url: &str) -> bool {
     base_url_is_custom_for_provider(provider, base_url)
+}
+
+fn siliconflow_base_url_is_official(base_url: &str) -> bool {
+    matches!(
+        normalize_base_url(base_url).to_ascii_lowercase().as_str(),
+        "https://api.siliconflow.com/v1" | "https://api.siliconflow.cn/v1"
+    )
+}
+
+fn moonshot_base_url_uses_kimi_code(base_url: &str) -> bool {
+    let normalized = normalize_base_url(base_url).to_ascii_lowercase();
+    normalized == DEFAULT_KIMI_CODE_BASE_URL
+        || normalized == "https://api.kimi.com/coding"
+        || normalized.starts_with("https://api.kimi.com/coding/")
+}
+
+fn provider_config_uses_kimi_oauth(config: &ProviderConfig) -> bool {
+    config
+        .auth_mode
+        .as_deref()
+        .is_some_and(auth_mode_uses_kimi_oauth)
+}
+
+fn auth_mode_uses_kimi_oauth(mode: &str) -> bool {
+    matches!(
+        normalize_auth_mode(mode).as_str(),
+        "kimi" | "kimi_oauth" | "kimi_cli" | "oauth"
+    )
+}
+
+fn normalize_auth_mode(mode: &str) -> String {
+    mode.trim().to_ascii_lowercase().replace(['-', ' '], "_")
 }
 
 fn base_url_uses_local_host(base_url: &str) -> bool {
@@ -2827,6 +3496,12 @@ fn model_for_provider(provider: ApiProvider, normalized: String) -> String {
         (ApiProvider::Fireworks, "deepseek-v4-flash") => {
             // Flash not yet available on Fireworks; fall through to normalized name
             "accounts/fireworks/models/deepseek-v4-flash".to_string()
+        }
+        (ApiProvider::Siliconflow, "deepseek-v4-pro" | "deepseek-reasoner" | "deepseek-r1") => {
+            DEFAULT_SILICONFLOW_MODEL.to_string()
+        }
+        (ApiProvider::Siliconflow, "deepseek-v4-flash" | "deepseek-chat" | "deepseek-v3") => {
+            DEFAULT_SILICONFLOW_FLASH_MODEL.to_string()
         }
         (ApiProvider::Sglang, "deepseek-v4-pro") => DEFAULT_SGLANG_MODEL.to_string(),
         (ApiProvider::Sglang, "deepseek-v4-flash") => DEFAULT_SGLANG_FLASH_MODEL.to_string(),
@@ -2888,11 +3563,7 @@ fn apply_profile(config: ConfigFile, profile: Option<&str>) -> Result<Config> {
                         }
                     })
                     .unwrap_or_else(|| "none".to_string());
-                anyhow::bail!(
-                    "Profile '{}' not found. Available profiles: {}",
-                    profile_name,
-                    available
-                )
+                anyhow::bail!("Profile '{profile_name}' not found. Available profiles: {available}")
             }
         }
     } else {
@@ -2907,8 +3578,10 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
         base_url: override_cfg.base_url.or(base.base_url),
         http_headers: override_cfg.http_headers.or(base.http_headers),
         default_text_model: override_cfg.default_text_model.or(base.default_text_model),
+        auth_mode: override_cfg.auth_mode.or(base.auth_mode),
         reasoning_effort: override_cfg.reasoning_effort.or(base.reasoning_effort),
         tools_file: override_cfg.tools_file.or(base.tools_file),
+        tools: override_cfg.tools.or(base.tools),
         skills_dir: override_cfg.skills_dir.or(base.skills_dir),
         mcp_config_path: override_cfg.mcp_config_path.or(base.mcp_config_path),
         notes_path: override_cfg.notes_path.or(base.notes_path),
@@ -2925,6 +3598,7 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
         sandbox_backend: override_cfg.sandbox_backend.or(base.sandbox_backend),
         sandbox_url: override_cfg.sandbox_url.or(base.sandbox_url),
         sandbox_api_key: override_cfg.sandbox_api_key.or(base.sandbox_api_key),
+        prefer_bwrap: override_cfg.prefer_bwrap.or(base.prefer_bwrap),
         managed_config_path: override_cfg
             .managed_config_path
             .or(base.managed_config_path),
@@ -2984,6 +3658,7 @@ fn merge_provider_config(base: ProviderConfig, override_cfg: ProviderConfig) -> 
         api_key: override_cfg.api_key.or(base.api_key),
         base_url: override_cfg.base_url.or(base.base_url),
         model: override_cfg.model.or(base.model),
+        auth_mode: override_cfg.auth_mode.or(base.auth_mode),
         http_headers: override_cfg.http_headers.or(base.http_headers),
     }
 }
@@ -3004,11 +3679,15 @@ fn merge_providers(
             atlascloud: merge_provider_config(base.atlascloud, override_cfg.atlascloud),
             wanjie_ark: merge_provider_config(base.wanjie_ark, override_cfg.wanjie_ark),
             openrouter: merge_provider_config(base.openrouter, override_cfg.openrouter),
+            xiaomi_mimo: merge_provider_config(base.xiaomi_mimo, override_cfg.xiaomi_mimo),
             novita: merge_provider_config(base.novita, override_cfg.novita),
             fireworks: merge_provider_config(base.fireworks, override_cfg.fireworks),
+            siliconflow: merge_provider_config(base.siliconflow, override_cfg.siliconflow),
+            moonshot: merge_provider_config(base.moonshot, override_cfg.moonshot),
             sglang: merge_provider_config(base.sglang, override_cfg.sglang),
             vllm: merge_provider_config(base.vllm, override_cfg.vllm),
             ollama: merge_provider_config(base.ollama, override_cfg.ollama),
+            volcengine: merge_provider_config(base.volcengine, override_cfg.volcengine),
         }),
     }
 }
@@ -3128,7 +3807,7 @@ pub fn ensure_parent_dir(path: &Path) -> Result<()> {
                     perms.set_mode(mode & !0o077);
                     if let Err(err) = fs::set_permissions(parent, perms) {
                         tracing::warn!(
-                            target: "deepseek::config",
+                            target: "codewhale::config",
                             path = %parent.display(),
                             error = %err,
                             "could not tighten parent dir permissions; \
@@ -3166,7 +3845,7 @@ fn write_config_file_secure(path: &Path, content: &str) -> Result<()> {
         // system's native ACL model is doing the access control.
         if let Err(err) = file.set_permissions(fs::Permissions::from_mode(0o600)) {
             tracing::warn!(
-                target: "deepseek::config",
+                target: "codewhale::config",
                 path = %path.display(),
                 error = %err,
                 "could not enforce 0o600 on config file; filesystem may \
@@ -3186,13 +3865,13 @@ fn write_config_file_secure(path: &Path, content: &str) -> Result<()> {
 /// the caller can show a confirmation message without leaking the key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SavedCredential {
-    /// Stored in **both** the OS keyring and the deepseek config file.
+    /// Stored in **both** the OS keyring and the codewhale config file.
     /// This is the default outcome on platforms with a working keyring
     /// backend: writing both layers defeats the
     /// `keyring → env → config-file` resolution-order shadow that
     /// would otherwise let a stale OS-keyring entry from a previous
     /// install hide the freshly-entered key (#593). The `backend`
-    /// label is the value of [`deepseek_secrets::Secrets::backend_name`]
+    /// label is the value of [`codewhale_secrets::Secrets::backend_name`]
     /// at write time so the toast text can name the actual backend
     /// (`"system keyring"`, `"file-based (~/.deepseek/secrets/)"`).
     KeyringAndConfigFile {
@@ -3201,7 +3880,7 @@ pub enum SavedCredential {
         /// Absolute path to the config file that was also updated.
         path: PathBuf,
     },
-    /// Stored in the deepseek config file only. Fallback when no
+    /// Stored in the codewhale config file only. Fallback when no
     /// keyring backend is reachable, or under `cfg(test)` so unit
     /// tests don't pollute the host keyring.
     ConfigFile(PathBuf),
@@ -3224,7 +3903,7 @@ impl SavedCredential {
 /// Save the active provider's API key.
 ///
 /// **Dual-write strategy (#593):** writes to `~/.deepseek/config.toml`
-/// (always) and to the OS keyring via [`deepseek_secrets::Secrets`]
+/// (always) and to the OS keyring via [`codewhale_secrets::Secrets`]
 /// (when a backend is reachable). The runtime resolves credentials in
 /// `keyring → env → config-file` order; writing to the config file
 /// alone — as v0.8.8 through v0.8.10 did — let a stale keyring entry
@@ -3262,7 +3941,7 @@ pub fn save_api_key(api_key: &str) -> Result<SavedCredential> {
     // cross-test contamination).
     #[cfg(not(test))]
     {
-        let secrets = deepseek_secrets::Secrets::auto_detect();
+        let secrets = codewhale_secrets::Secrets::auto_detect();
         match secrets.set("deepseek", trimmed) {
             Ok(()) => {
                 let backend = secrets.backend_name().to_string();
@@ -3324,7 +4003,7 @@ fn save_api_key_to_config_file(api_key: &str) -> Result<PathBuf> {
     } else {
         // Create new minimal config
         format!(
-            r#"# DeepSeek TUI Configuration
+            r#"# codewhale Configuration
 # Get your API key from https://platform.deepseek.com
 # Or set DEEPSEEK_API_KEY environment variable
 
@@ -3335,14 +4014,13 @@ api_key = "{key_to_write}"
 # base_url = "https://api.deepseek.com/beta"
 
 # Default model
-default_text_model = "{default_model}"
+default_text_model = "{DEFAULT_TEXT_MODEL}"
 
 # Thinking mode (DeepSeek V4 reasoning effort):
 # "off" | "low" | "medium" | "high" | "max"
 # Shift+Tab in the TUI cycles between off / high / max.
 reasoning_effort = "max"
-"#,
-            default_model = DEFAULT_TEXT_MODEL
+"#
         )
     };
 
@@ -3378,6 +4056,14 @@ pub fn has_api_key(config: &Config) -> bool {
 #[must_use]
 pub fn active_provider_has_config_api_key(config: &Config) -> bool {
     let provider = config.api_provider();
+
+    if provider == ApiProvider::Moonshot
+        && config
+            .provider_config_for(provider)
+            .is_some_and(provider_config_uses_kimi_oauth)
+    {
+        return kimi_cli_credentials_present();
+    }
 
     if config
         .provider_config_for(provider)
@@ -3416,13 +4102,29 @@ pub fn active_provider_has_env_api_key(config: &Config) -> bool {
         ApiProvider::Openrouter => {
             std::env::var("OPENROUTER_API_KEY").is_ok_and(|k| !k.trim().is_empty())
         }
+        ApiProvider::XiaomiMimo => {
+            std::env::var("XIAOMI_MIMO_API_KEY").is_ok_and(|k| !k.trim().is_empty())
+                || std::env::var("MIMO_API_KEY").is_ok_and(|k| !k.trim().is_empty())
+        }
         ApiProvider::Novita => std::env::var("NOVITA_API_KEY").is_ok_and(|k| !k.trim().is_empty()),
         ApiProvider::Fireworks => {
             std::env::var("FIREWORKS_API_KEY").is_ok_and(|k| !k.trim().is_empty())
         }
+        ApiProvider::Siliconflow => {
+            std::env::var("SILICONFLOW_API_KEY").is_ok_and(|k| !k.trim().is_empty())
+        }
+        ApiProvider::Moonshot => {
+            std::env::var("MOONSHOT_API_KEY").is_ok_and(|k| !k.trim().is_empty())
+                || std::env::var("KIMI_API_KEY").is_ok_and(|k| !k.trim().is_empty())
+        }
         ApiProvider::Sglang => std::env::var("SGLANG_API_KEY").is_ok_and(|k| !k.trim().is_empty()),
         ApiProvider::Vllm => std::env::var("VLLM_API_KEY").is_ok_and(|k| !k.trim().is_empty()),
         ApiProvider::Ollama => std::env::var("OLLAMA_API_KEY").is_ok_and(|k| !k.trim().is_empty()),
+        ApiProvider::Volcengine => {
+            std::env::var("VOLCENGINE_API_KEY").is_ok_and(|k| !k.trim().is_empty())
+                || std::env::var("VOLCENGINE_ARK_API_KEY").is_ok_and(|k| !k.trim().is_empty())
+                || std::env::var("ARK_API_KEY").is_ok_and(|k| !k.trim().is_empty())
+        }
     }
 }
 
@@ -3443,11 +4145,15 @@ pub fn has_api_key_for(config: &Config, provider: ApiProvider) -> bool {
         ApiProvider::Atlascloud => "ATLASCLOUD_API_KEY",
         ApiProvider::WanjieArk => "WANJIE_ARK_API_KEY",
         ApiProvider::Openrouter => "OPENROUTER_API_KEY",
+        ApiProvider::XiaomiMimo => "XIAOMI_MIMO_API_KEY",
         ApiProvider::Novita => "NOVITA_API_KEY",
         ApiProvider::Fireworks => "FIREWORKS_API_KEY",
+        ApiProvider::Siliconflow => "SILICONFLOW_API_KEY",
+        ApiProvider::Moonshot => "MOONSHOT_API_KEY",
         ApiProvider::Sglang => "SGLANG_API_KEY",
         ApiProvider::Vllm => "VLLM_API_KEY",
         ApiProvider::Ollama => "OLLAMA_API_KEY",
+        ApiProvider::Volcengine => "VOLCENGINE_API_KEY",
     };
     if std::env::var(env_var).is_ok_and(|k| !k.trim().is_empty()) {
         return true;
@@ -3462,6 +4168,24 @@ pub fn has_api_key_for(config: &Config, provider: ApiProvider) -> bool {
             || std::env::var("WANJIE_MAAS_API_KEY").is_ok_and(|k| !k.trim().is_empty()))
     {
         return true;
+    }
+    if matches!(provider, ApiProvider::XiaomiMimo)
+        && std::env::var("MIMO_API_KEY").is_ok_and(|k| !k.trim().is_empty())
+    {
+        return true;
+    }
+    if matches!(provider, ApiProvider::Moonshot)
+        && std::env::var("KIMI_API_KEY").is_ok_and(|k| !k.trim().is_empty())
+    {
+        return true;
+    }
+
+    if provider == ApiProvider::Moonshot
+        && config
+            .provider_config_for(provider)
+            .is_some_and(provider_config_uses_kimi_oauth)
+    {
+        return kimi_cli_credentials_present();
     }
 
     // Self-hosted providers typically run without authentication.
@@ -3523,11 +4247,15 @@ pub fn save_api_key_for(provider: ApiProvider, api_key: &str) -> Result<PathBuf>
         ApiProvider::Atlascloud => "providers.atlascloud",
         ApiProvider::WanjieArk => "providers.wanjie_ark",
         ApiProvider::Openrouter => "providers.openrouter",
+        ApiProvider::XiaomiMimo => "providers.xiaomi_mimo",
         ApiProvider::Novita => "providers.novita",
         ApiProvider::Fireworks => "providers.fireworks",
+        ApiProvider::Siliconflow => "providers.siliconflow",
+        ApiProvider::Moonshot => "providers.moonshot",
         ApiProvider::Sglang => "providers.sglang",
         ApiProvider::Vllm => "providers.vllm",
         ApiProvider::Ollama => "providers.ollama",
+        ApiProvider::Volcengine => "providers.volcengine",
     };
 
     // Parse existing TOML (or start fresh) so we can edit the right table
@@ -3559,11 +4287,15 @@ pub fn save_api_key_for(provider: ApiProvider, api_key: &str) -> Result<PathBuf>
         ApiProvider::Atlascloud => "atlascloud",
         ApiProvider::WanjieArk => "wanjie_ark",
         ApiProvider::Openrouter => "openrouter",
+        ApiProvider::XiaomiMimo => "xiaomi_mimo",
         ApiProvider::Novita => "novita",
         ApiProvider::Fireworks => "fireworks",
+        ApiProvider::Siliconflow => "siliconflow",
+        ApiProvider::Moonshot => "moonshot",
         ApiProvider::Sglang => "sglang",
         ApiProvider::Vllm => "vllm",
         ApiProvider::Ollama => "ollama",
+        ApiProvider::Volcengine => "volcengine",
     };
     let entry = providers
         .entry(key_inside.to_string())
@@ -3588,6 +4320,218 @@ pub fn save_api_key_for(provider: ApiProvider, api_key: &str) -> Result<PathBuf>
     );
 
     Ok(config_path)
+}
+
+pub fn save_provider_auth_mode_for(provider: ApiProvider, auth_mode: &str) -> Result<PathBuf> {
+    let config_path = default_config_path()
+        .context("Failed to resolve config path: home directory not found.")?;
+    ensure_parent_dir(&config_path)?;
+
+    let mut doc: toml::Value = if config_path.exists() {
+        let raw = fs::read_to_string(&config_path)?;
+        toml::from_str(&raw)
+            .with_context(|| format!("Failed to parse config at {}", config_path.display()))?
+    } else {
+        toml::Value::Table(toml::value::Table::new())
+    };
+
+    let table = doc
+        .as_table_mut()
+        .context("Config root must be a TOML table.")?;
+    let providers = table
+        .entry("providers".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()))
+        .as_table_mut()
+        .context("`providers` must be a table.")?;
+    let key_inside = provider_config_key(provider).context("provider auth mode key")?;
+    let entry = providers
+        .entry(key_inside.to_string())
+        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()))
+        .as_table_mut()
+        .with_context(|| format!("`providers.{key_inside}` must be a table."))?;
+    entry.insert(
+        "auth_mode".to_string(),
+        toml::Value::String(auth_mode.to_string()),
+    );
+
+    let serialized = toml::to_string_pretty(&doc).context("failed to serialize updated config")?;
+    write_config_file_secure(&config_path, &serialized)
+        .with_context(|| format!("Failed to write config to {}", config_path.display()))?;
+    log_sensitive_event(
+        "credential.auth_mode.set",
+        json!({
+            "backend": "config_file",
+            "provider": provider.as_str(),
+            "auth_mode": auth_mode,
+            "config_path": config_path.display().to_string(),
+        }),
+    );
+    Ok(config_path)
+}
+
+fn provider_config_key(provider: ApiProvider) -> Result<&'static str> {
+    match provider {
+        ApiProvider::Deepseek | ApiProvider::DeepseekCN => {
+            anyhow::bail!("DeepSeek stores auth at the root config level")
+        }
+        ApiProvider::NvidiaNim => Ok("nvidia_nim"),
+        ApiProvider::Openai => Ok("openai"),
+        ApiProvider::Atlascloud => Ok("atlascloud"),
+        ApiProvider::WanjieArk => Ok("wanjie_ark"),
+        ApiProvider::Volcengine => Ok("volcengine"),
+        ApiProvider::Openrouter => Ok("openrouter"),
+        ApiProvider::XiaomiMimo => Ok("xiaomi_mimo"),
+        ApiProvider::Novita => Ok("novita"),
+        ApiProvider::Fireworks => Ok("fireworks"),
+        ApiProvider::Siliconflow => Ok("siliconflow"),
+        ApiProvider::Moonshot => Ok("moonshot"),
+        ApiProvider::Sglang => Ok("sglang"),
+        ApiProvider::Vllm => Ok("vllm"),
+        ApiProvider::Ollama => Ok("ollama"),
+    }
+}
+
+const KIMI_CODE_CLIENT_ID: &str = "17e5f671-d194-4dfb-9706-5516cb48c098";
+const KIMI_CODE_CREDENTIAL_FILE: &str = "kimi-code.json";
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct KimiOAuthCredential {
+    access_token: Option<String>,
+    refresh_token: Option<String>,
+    expires_at: Option<f64>,
+    expires_in: Option<f64>,
+    scope: Option<String>,
+    token_type: Option<String>,
+}
+
+fn kimi_cli_oauth_access_token() -> Result<String> {
+    let path = kimi_cli_oauth_credentials_path()?;
+    let raw = fs::read_to_string(&path).with_context(|| {
+        format!(
+            "Kimi OAuth credentials not found at {}. Run `kimi login`, then set \
+             [providers.moonshot] auth_mode = \"kimi_oauth\".",
+            path.display()
+        )
+    })?;
+    let mut credential: KimiOAuthCredential =
+        serde_json::from_str(&raw).context("Failed to parse Kimi OAuth credentials")?;
+
+    if kimi_oauth_access_token_is_fresh(&credential) {
+        return credential
+            .access_token
+            .filter(|token| !token.trim().is_empty())
+            .context("Kimi OAuth access token is empty");
+    }
+
+    let refresh_token = credential
+        .refresh_token
+        .as_deref()
+        .filter(|token| !token.trim().is_empty())
+        .context("Kimi OAuth refresh token is empty. Run `kimi login` again.")?;
+    credential = refresh_kimi_oauth_token(refresh_token)?;
+    write_kimi_oauth_credential(&path, &credential)?;
+    credential
+        .access_token
+        .filter(|token| !token.trim().is_empty())
+        .context("Kimi OAuth refresh returned an empty access token")
+}
+
+fn kimi_oauth_access_token_is_fresh(credential: &KimiOAuthCredential) -> bool {
+    let Some(now) = now_unix_secs() else {
+        return false;
+    };
+
+    credential
+        .access_token
+        .as_deref()
+        .is_some_and(|token| !token.trim().is_empty())
+        && credential
+            .expires_at
+            .is_some_and(|expires_at| expires_at - now > 60.0)
+}
+
+fn refresh_kimi_oauth_token(refresh_token: &str) -> Result<KimiOAuthCredential> {
+    let oauth_host = std::env::var("KIMI_CODE_OAUTH_HOST")
+        .or_else(|_| std::env::var("KIMI_OAUTH_HOST"))
+        .unwrap_or_else(|_| "https://auth.kimi.com".to_string());
+    let url = format!("{}/api/oauth/token", oauth_host.trim_end_matches('/'));
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .context("Failed to build Kimi OAuth refresh client")?;
+    let params = [
+        ("client_id", KIMI_CODE_CLIENT_ID),
+        ("grant_type", "refresh_token"),
+        ("refresh_token", refresh_token),
+    ];
+    let response = client
+        .post(url)
+        .header("X-Msh-Platform", "kimi_cli")
+        .header("X-Msh-Version", env!("CARGO_PKG_VERSION"))
+        .form(&params)
+        .send()
+        .context("Kimi OAuth refresh request failed")?;
+    let status = response.status();
+    if !status.is_success() {
+        anyhow::bail!("Kimi OAuth refresh failed with HTTP {status}. Run `kimi login` again.");
+    }
+
+    let mut refreshed: KimiOAuthCredential = response
+        .json()
+        .context("Failed to parse Kimi OAuth refresh response")?;
+    if let Some(expires_in) = refreshed.expires_in
+        && let Some(now) = now_unix_secs()
+    {
+        refreshed.expires_at = Some(now + expires_in);
+    }
+    Ok(refreshed)
+}
+
+fn kimi_cli_oauth_credentials_path() -> Result<PathBuf> {
+    let share_dir = std::env::var("KIMI_SHARE_DIR")
+        .map(PathBuf::from)
+        .or_else(|_| {
+            effective_home_dir()
+                .map(|home| home.join(".kimi"))
+                .ok_or(std::env::VarError::NotPresent)
+        })
+        .context("Failed to resolve Kimi share directory")?;
+    Ok(share_dir
+        .join("credentials")
+        .join(KIMI_CODE_CREDENTIAL_FILE))
+}
+
+fn write_kimi_oauth_credential(path: &Path, credential: &KimiOAuthCredential) -> Result<()> {
+    let serialized = serde_json::to_vec_pretty(credential)
+        .context("Failed to serialize Kimi OAuth credentials")?;
+    crate::utils::write_atomic(path, &serialized).with_context(|| {
+        format!(
+            "Failed to write Kimi OAuth credentials to {}",
+            path.display()
+        )
+    })?;
+    #[cfg(unix)]
+    if let Err(err) = fs::set_permissions(path, fs::Permissions::from_mode(0o600)) {
+        tracing::warn!(
+            target: "codewhale::config",
+            path = %path.display(),
+            error = %err,
+            "could not enforce 0o600 on Kimi OAuth credentials; relying on host ACLs"
+        );
+    }
+    Ok(())
+}
+
+fn now_unix_secs() -> Option<f64> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs_f64())
+        .ok()
+}
+
+#[must_use]
+pub fn kimi_cli_credentials_present() -> bool {
+    kimi_cli_oauth_credentials_path().is_ok_and(|path| path.exists())
 }
 
 /// Clear the API key from config-file storage.
@@ -3684,8 +4628,25 @@ mod tests {
     }
 
     #[test]
-    fn search_provider_defaults_to_bing() {
-        assert_eq!(SearchProvider::default(), SearchProvider::Bing);
+    fn search_provider_defaults_to_duckduckgo() {
+        assert_eq!(SearchProvider::default(), SearchProvider::DuckDuckGo);
+    }
+
+    #[test]
+    fn tools_always_load_parses_and_trims_names() {
+        let parsed: ConfigFile = toml::from_str(
+            r#"
+            [tools]
+            always_load = ["git_show", " notify ", ""]
+            "#,
+        )
+        .expect("tools config");
+
+        let names = parsed.base.tools_always_load();
+
+        assert!(names.contains("git_show"));
+        assert!(names.contains("notify"));
+        assert!(!names.contains(""));
     }
 
     #[test]
@@ -3704,6 +4665,169 @@ mod tests {
         );
     }
 
+    #[test]
+    fn explicit_baidu_search_provider_is_preserved() {
+        let config: Config = toml::from_str(
+            r#"
+            [search]
+            provider = "baidu"
+            "#,
+        )
+        .expect("search config");
+
+        assert_eq!(
+            config.search.and_then(|search| search.provider),
+            Some(SearchProvider::Baidu)
+        );
+    }
+
+    #[test]
+    fn baidu_search_provider_aliases_parse() {
+        assert_eq!(SearchProvider::parse("baidu"), Some(SearchProvider::Baidu));
+        assert_eq!(
+            SearchProvider::parse("baidu-search"),
+            Some(SearchProvider::Baidu)
+        );
+        assert_eq!(
+            SearchProvider::parse("baidu_ai_search"),
+            Some(SearchProvider::Baidu)
+        );
+    }
+
+    #[test]
+    fn volcengine_search_provider_aliases_parse_and_deserialize() {
+        assert_eq!(
+            SearchProvider::parse("volcengine"),
+            Some(SearchProvider::Volcengine)
+        );
+        assert_eq!(
+            SearchProvider::parse("volcengine-ark"),
+            Some(SearchProvider::Volcengine)
+        );
+
+        let config: Config = toml::from_str(
+            r#"
+            [search]
+            provider = "volcengine-ark"
+            "#,
+        )
+        .expect("volcengine search config");
+
+        assert_eq!(
+            config.search.and_then(|search| search.provider),
+            Some(SearchProvider::Volcengine)
+        );
+    }
+
+    #[test]
+    fn search_provider_resolution_reports_default_source() {
+        let _guard = lock_test_env();
+        let prev = env::var_os("DEEPSEEK_SEARCH_PROVIDER");
+        unsafe { env::remove_var("DEEPSEEK_SEARCH_PROVIDER") };
+
+        let resolution = Config::default().search_provider_resolution();
+
+        unsafe { EnvGuard::restore_var("DEEPSEEK_SEARCH_PROVIDER", prev) };
+        assert_eq!(resolution.provider, SearchProvider::DuckDuckGo);
+        assert_eq!(resolution.source, SearchProviderSource::Default);
+    }
+
+    #[test]
+    fn search_provider_resolution_reports_config_source() {
+        let _guard = lock_test_env();
+        let prev = env::var_os("DEEPSEEK_SEARCH_PROVIDER");
+        unsafe { env::remove_var("DEEPSEEK_SEARCH_PROVIDER") };
+        let config: Config = toml::from_str(
+            r#"
+            [search]
+            provider = "tavily"
+            "#,
+        )
+        .expect("search config");
+
+        let resolution = config.search_provider_resolution();
+
+        unsafe { EnvGuard::restore_var("DEEPSEEK_SEARCH_PROVIDER", prev) };
+        assert_eq!(resolution.provider, SearchProvider::Tavily);
+        assert_eq!(resolution.source, SearchProviderSource::Config);
+    }
+
+    #[test]
+    fn search_provider_resolution_reports_env_override_source() {
+        let _guard = lock_test_env();
+        let prev = env::var_os("DEEPSEEK_SEARCH_PROVIDER");
+        unsafe { env::set_var("DEEPSEEK_SEARCH_PROVIDER", "bocha") };
+        let config: Config = toml::from_str(
+            r#"
+            [search]
+            provider = "duckduckgo"
+            "#,
+        )
+        .expect("search config");
+
+        let resolution = config.search_provider_resolution();
+
+        unsafe { EnvGuard::restore_var("DEEPSEEK_SEARCH_PROVIDER", prev) };
+        assert_eq!(resolution.provider, SearchProvider::Bocha);
+        assert_eq!(resolution.source, SearchProviderSource::EnvOverride);
+    }
+
+    #[test]
+    fn search_provider_env_override_accepts_baidu() {
+        let _guard = lock_test_env();
+        let prev = env::var_os("DEEPSEEK_SEARCH_PROVIDER");
+        unsafe { env::set_var("DEEPSEEK_SEARCH_PROVIDER", "baidu") };
+        let config: Config = toml::from_str(
+            r#"
+            [search]
+            provider = "duckduckgo"
+            "#,
+        )
+        .expect("search config");
+
+        let resolution = config.search_provider_resolution();
+
+        unsafe { EnvGuard::restore_var("DEEPSEEK_SEARCH_PROVIDER", prev) };
+        assert_eq!(resolution.provider, SearchProvider::Baidu);
+        assert_eq!(resolution.source, SearchProviderSource::EnvOverride);
+    }
+
+    #[test]
+    fn apply_env_overrides_sets_search_api_key() {
+        let _guard = lock_test_env();
+        let prev = env::var_os("DEEPSEEK_SEARCH_API_KEY");
+        unsafe { env::set_var("DEEPSEEK_SEARCH_API_KEY", "search-env-key") };
+        let mut config = Config::default();
+
+        apply_env_overrides(&mut config);
+
+        unsafe { EnvGuard::restore_var("DEEPSEEK_SEARCH_API_KEY", prev) };
+        assert_eq!(
+            config.search.and_then(|search| search.api_key),
+            Some("search-env-key".to_string())
+        );
+    }
+
+    #[test]
+    fn search_provider_resolution_ignores_invalid_env_override() {
+        let _guard = lock_test_env();
+        let prev = env::var_os("DEEPSEEK_SEARCH_PROVIDER");
+        unsafe { env::set_var("DEEPSEEK_SEARCH_PROVIDER", "not-a-provider") };
+        let config: Config = toml::from_str(
+            r#"
+            [search]
+            provider = "tavily"
+            "#,
+        )
+        .expect("search config");
+
+        let resolution = config.search_provider_resolution();
+
+        unsafe { EnvGuard::restore_var("DEEPSEEK_SEARCH_PROVIDER", prev) };
+        assert_eq!(resolution.provider, SearchProvider::Tavily);
+        assert_eq!(resolution.source, SearchProviderSource::Config);
+    }
+
     struct EnvGuard {
         home: Option<OsString>,
         userprofile: Option<OsString>,
@@ -3714,6 +4838,9 @@ mod tests {
         deepseek_http_headers: Option<OsString>,
         deepseek_model: Option<OsString>,
         deepseek_default_text_model: Option<OsString>,
+        codewhale_provider: Option<OsString>,
+        codewhale_model: Option<OsString>,
+        codewhale_base_url: Option<OsString>,
         nvidia_api_key: Option<OsString>,
         nvidia_nim_api_key: Option<OsString>,
         nim_base_url: Option<OsString>,
@@ -3737,10 +4864,29 @@ mod tests {
         wanjie_maas_model: Option<OsString>,
         openrouter_api_key: Option<OsString>,
         openrouter_base_url: Option<OsString>,
+        xiaomi_mimo_api_key: Option<OsString>,
+        mimo_api_key: Option<OsString>,
+        xiaomi_mimo_base_url: Option<OsString>,
+        mimo_base_url: Option<OsString>,
+        xiaomi_mimo_model: Option<OsString>,
+        mimo_model: Option<OsString>,
         novita_api_key: Option<OsString>,
         novita_base_url: Option<OsString>,
         fireworks_api_key: Option<OsString>,
         fireworks_base_url: Option<OsString>,
+        siliconflow_api_key: Option<OsString>,
+        siliconflow_base_url: Option<OsString>,
+        siliconflow_model: Option<OsString>,
+        moonshot_api_key: Option<OsString>,
+        moonshot_base_url: Option<OsString>,
+        moonshot_model: Option<OsString>,
+        kimi_api_key: Option<OsString>,
+        kimi_base_url: Option<OsString>,
+        kimi_model: Option<OsString>,
+        kimi_model_name: Option<OsString>,
+        kimi_share_dir: Option<OsString>,
+        kimi_code_oauth_host: Option<OsString>,
+        kimi_oauth_host: Option<OsString>,
         sglang_api_key: Option<OsString>,
         sglang_base_url: Option<OsString>,
         sglang_model: Option<OsString>,
@@ -3766,6 +4912,9 @@ mod tests {
             let http_headers_prev = env::var_os("DEEPSEEK_HTTP_HEADERS");
             let model_prev = env::var_os("DEEPSEEK_MODEL");
             let default_text_model_prev = env::var_os("DEEPSEEK_DEFAULT_TEXT_MODEL");
+            let codewhale_provider_prev = env::var_os("CODEWHALE_PROVIDER");
+            let codewhale_model_prev = env::var_os("CODEWHALE_MODEL");
+            let codewhale_base_url_prev = env::var_os("CODEWHALE_BASE_URL");
             let nvidia_api_key_prev = env::var_os("NVIDIA_API_KEY");
             let nvidia_nim_api_key_prev = env::var_os("NVIDIA_NIM_API_KEY");
             let nim_base_url_prev = env::var_os("NIM_BASE_URL");
@@ -3789,10 +4938,29 @@ mod tests {
             let wanjie_maas_model_prev = env::var_os("WANJIE_MAAS_MODEL");
             let openrouter_api_key_prev = env::var_os("OPENROUTER_API_KEY");
             let openrouter_base_url_prev = env::var_os("OPENROUTER_BASE_URL");
+            let xiaomi_mimo_api_key_prev = env::var_os("XIAOMI_MIMO_API_KEY");
+            let mimo_api_key_prev = env::var_os("MIMO_API_KEY");
+            let xiaomi_mimo_base_url_prev = env::var_os("XIAOMI_MIMO_BASE_URL");
+            let mimo_base_url_prev = env::var_os("MIMO_BASE_URL");
+            let xiaomi_mimo_model_prev = env::var_os("XIAOMI_MIMO_MODEL");
+            let mimo_model_prev = env::var_os("MIMO_MODEL");
             let novita_api_key_prev = env::var_os("NOVITA_API_KEY");
             let novita_base_url_prev = env::var_os("NOVITA_BASE_URL");
             let fireworks_api_key_prev = env::var_os("FIREWORKS_API_KEY");
             let fireworks_base_url_prev = env::var_os("FIREWORKS_BASE_URL");
+            let siliconflow_api_key_prev = env::var_os("SILICONFLOW_API_KEY");
+            let siliconflow_base_url_prev = env::var_os("SILICONFLOW_BASE_URL");
+            let siliconflow_model_prev = env::var_os("SILICONFLOW_MODEL");
+            let moonshot_api_key_prev = env::var_os("MOONSHOT_API_KEY");
+            let moonshot_base_url_prev = env::var_os("MOONSHOT_BASE_URL");
+            let moonshot_model_prev = env::var_os("MOONSHOT_MODEL");
+            let kimi_api_key_prev = env::var_os("KIMI_API_KEY");
+            let kimi_base_url_prev = env::var_os("KIMI_BASE_URL");
+            let kimi_model_prev = env::var_os("KIMI_MODEL");
+            let kimi_model_name_prev = env::var_os("KIMI_MODEL_NAME");
+            let kimi_share_dir_prev = env::var_os("KIMI_SHARE_DIR");
+            let kimi_code_oauth_host_prev = env::var_os("KIMI_CODE_OAUTH_HOST");
+            let kimi_oauth_host_prev = env::var_os("KIMI_OAUTH_HOST");
             let sglang_api_key_prev = env::var_os("SGLANG_API_KEY");
             let sglang_base_url_prev = env::var_os("SGLANG_BASE_URL");
             let sglang_model_prev = env::var_os("SGLANG_MODEL");
@@ -3813,6 +4981,9 @@ mod tests {
                 env::remove_var("DEEPSEEK_HTTP_HEADERS");
                 env::remove_var("DEEPSEEK_MODEL");
                 env::remove_var("DEEPSEEK_DEFAULT_TEXT_MODEL");
+                env::remove_var("CODEWHALE_PROVIDER");
+                env::remove_var("CODEWHALE_MODEL");
+                env::remove_var("CODEWHALE_BASE_URL");
                 env::remove_var("NVIDIA_API_KEY");
                 env::remove_var("NVIDIA_NIM_API_KEY");
                 env::remove_var("NIM_BASE_URL");
@@ -3836,10 +5007,29 @@ mod tests {
                 env::remove_var("WANJIE_MAAS_MODEL");
                 env::remove_var("OPENROUTER_API_KEY");
                 env::remove_var("OPENROUTER_BASE_URL");
+                env::remove_var("XIAOMI_MIMO_API_KEY");
+                env::remove_var("MIMO_API_KEY");
+                env::remove_var("XIAOMI_MIMO_BASE_URL");
+                env::remove_var("MIMO_BASE_URL");
+                env::remove_var("XIAOMI_MIMO_MODEL");
+                env::remove_var("MIMO_MODEL");
                 env::remove_var("NOVITA_API_KEY");
                 env::remove_var("NOVITA_BASE_URL");
                 env::remove_var("FIREWORKS_API_KEY");
                 env::remove_var("FIREWORKS_BASE_URL");
+                env::remove_var("SILICONFLOW_API_KEY");
+                env::remove_var("SILICONFLOW_BASE_URL");
+                env::remove_var("SILICONFLOW_MODEL");
+                env::remove_var("MOONSHOT_API_KEY");
+                env::remove_var("MOONSHOT_BASE_URL");
+                env::remove_var("MOONSHOT_MODEL");
+                env::remove_var("KIMI_API_KEY");
+                env::remove_var("KIMI_BASE_URL");
+                env::remove_var("KIMI_MODEL");
+                env::remove_var("KIMI_MODEL_NAME");
+                env::remove_var("KIMI_SHARE_DIR");
+                env::remove_var("KIMI_CODE_OAUTH_HOST");
+                env::remove_var("KIMI_OAUTH_HOST");
                 env::remove_var("SGLANG_API_KEY");
                 env::remove_var("SGLANG_BASE_URL");
                 env::remove_var("SGLANG_MODEL");
@@ -3860,6 +5050,9 @@ mod tests {
                 deepseek_http_headers: http_headers_prev,
                 deepseek_model: model_prev,
                 deepseek_default_text_model: default_text_model_prev,
+                codewhale_provider: codewhale_provider_prev,
+                codewhale_model: codewhale_model_prev,
+                codewhale_base_url: codewhale_base_url_prev,
                 nvidia_api_key: nvidia_api_key_prev,
                 nvidia_nim_api_key: nvidia_nim_api_key_prev,
                 nim_base_url: nim_base_url_prev,
@@ -3883,10 +5076,29 @@ mod tests {
                 wanjie_maas_model: wanjie_maas_model_prev,
                 openrouter_api_key: openrouter_api_key_prev,
                 openrouter_base_url: openrouter_base_url_prev,
+                xiaomi_mimo_api_key: xiaomi_mimo_api_key_prev,
+                mimo_api_key: mimo_api_key_prev,
+                xiaomi_mimo_base_url: xiaomi_mimo_base_url_prev,
+                mimo_base_url: mimo_base_url_prev,
+                xiaomi_mimo_model: xiaomi_mimo_model_prev,
+                mimo_model: mimo_model_prev,
                 novita_api_key: novita_api_key_prev,
                 novita_base_url: novita_base_url_prev,
                 fireworks_api_key: fireworks_api_key_prev,
                 fireworks_base_url: fireworks_base_url_prev,
+                siliconflow_api_key: siliconflow_api_key_prev,
+                siliconflow_base_url: siliconflow_base_url_prev,
+                siliconflow_model: siliconflow_model_prev,
+                moonshot_api_key: moonshot_api_key_prev,
+                moonshot_base_url: moonshot_base_url_prev,
+                moonshot_model: moonshot_model_prev,
+                kimi_api_key: kimi_api_key_prev,
+                kimi_base_url: kimi_base_url_prev,
+                kimi_model: kimi_model_prev,
+                kimi_model_name: kimi_model_name_prev,
+                kimi_share_dir: kimi_share_dir_prev,
+                kimi_code_oauth_host: kimi_code_oauth_host_prev,
+                kimi_oauth_host: kimi_oauth_host_prev,
                 sglang_api_key: sglang_api_key_prev,
                 sglang_base_url: sglang_base_url_prev,
                 sglang_model: sglang_model_prev,
@@ -3916,6 +5128,9 @@ mod tests {
                     "DEEPSEEK_DEFAULT_TEXT_MODEL",
                     self.deepseek_default_text_model.take(),
                 );
+                Self::restore_var("CODEWHALE_PROVIDER", self.codewhale_provider.take());
+                Self::restore_var("CODEWHALE_MODEL", self.codewhale_model.take());
+                Self::restore_var("CODEWHALE_BASE_URL", self.codewhale_base_url.take());
                 Self::restore_var("NVIDIA_API_KEY", self.nvidia_api_key.take());
                 Self::restore_var("NVIDIA_NIM_API_KEY", self.nvidia_nim_api_key.take());
                 Self::restore_var("NIM_BASE_URL", self.nim_base_url.take());
@@ -3939,10 +5154,29 @@ mod tests {
                 Self::restore_var("WANJIE_MAAS_MODEL", self.wanjie_maas_model.take());
                 Self::restore_var("OPENROUTER_API_KEY", self.openrouter_api_key.take());
                 Self::restore_var("OPENROUTER_BASE_URL", self.openrouter_base_url.take());
+                Self::restore_var("XIAOMI_MIMO_API_KEY", self.xiaomi_mimo_api_key.take());
+                Self::restore_var("MIMO_API_KEY", self.mimo_api_key.take());
+                Self::restore_var("XIAOMI_MIMO_BASE_URL", self.xiaomi_mimo_base_url.take());
+                Self::restore_var("MIMO_BASE_URL", self.mimo_base_url.take());
+                Self::restore_var("XIAOMI_MIMO_MODEL", self.xiaomi_mimo_model.take());
+                Self::restore_var("MIMO_MODEL", self.mimo_model.take());
                 Self::restore_var("NOVITA_API_KEY", self.novita_api_key.take());
                 Self::restore_var("NOVITA_BASE_URL", self.novita_base_url.take());
                 Self::restore_var("FIREWORKS_API_KEY", self.fireworks_api_key.take());
                 Self::restore_var("FIREWORKS_BASE_URL", self.fireworks_base_url.take());
+                Self::restore_var("SILICONFLOW_API_KEY", self.siliconflow_api_key.take());
+                Self::restore_var("SILICONFLOW_BASE_URL", self.siliconflow_base_url.take());
+                Self::restore_var("SILICONFLOW_MODEL", self.siliconflow_model.take());
+                Self::restore_var("MOONSHOT_API_KEY", self.moonshot_api_key.take());
+                Self::restore_var("MOONSHOT_BASE_URL", self.moonshot_base_url.take());
+                Self::restore_var("MOONSHOT_MODEL", self.moonshot_model.take());
+                Self::restore_var("KIMI_API_KEY", self.kimi_api_key.take());
+                Self::restore_var("KIMI_BASE_URL", self.kimi_base_url.take());
+                Self::restore_var("KIMI_MODEL", self.kimi_model.take());
+                Self::restore_var("KIMI_MODEL_NAME", self.kimi_model_name.take());
+                Self::restore_var("KIMI_SHARE_DIR", self.kimi_share_dir.take());
+                Self::restore_var("KIMI_CODE_OAUTH_HOST", self.kimi_code_oauth_host.take());
+                Self::restore_var("KIMI_OAUTH_HOST", self.kimi_oauth_host.take());
                 Self::restore_var("SGLANG_API_KEY", self.sglang_api_key.take());
                 Self::restore_var("SGLANG_BASE_URL", self.sglang_base_url.take());
                 Self::restore_var("SGLANG_MODEL", self.sglang_model.take());
@@ -4063,7 +5297,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-test-{}-{}",
+            "codewhale-tui-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -4099,7 +5333,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-first-run-config-{}-{}",
+            "codewhale-tui-first-run-config-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -4125,7 +5359,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-workspace-trust-{}-{}",
+            "codewhale-tui-workspace-trust-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -4161,7 +5395,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-existing-project-trust-{}-{}",
+            "codewhale-tui-existing-project-trust-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -4275,6 +5509,9 @@ mod tests {
             "fireworks" => {
                 providers.fireworks.api_key = Some(api_key.to_string());
             }
+            "siliconflow" => {
+                providers.siliconflow.api_key = Some(api_key.to_string());
+            }
             "sglang" => {
                 providers.sglang.api_key = Some(api_key.to_string());
             }
@@ -4296,7 +5533,14 @@ mod tests {
 
     #[test]
     fn has_api_key_uses_active_provider_scoped_config_key() {
-        for provider in ["openai", "wanjie-ark", "openrouter", "novita", "fireworks"] {
+        for provider in [
+            "openai",
+            "wanjie-ark",
+            "openrouter",
+            "novita",
+            "fireworks",
+            "siliconflow",
+        ] {
             let config = config_with_provider_scoped_key(provider, "provider-config-key");
 
             assert!(
@@ -4315,6 +5559,7 @@ mod tests {
             ("openrouter", "OPENROUTER_API_KEY"),
             ("novita", "NOVITA_API_KEY"),
             ("fireworks", "FIREWORKS_API_KEY"),
+            ("siliconflow", "SILICONFLOW_API_KEY"),
         ] {
             unsafe {
                 std::env::set_var(env_var, "provider-env-key");
@@ -4364,7 +5609,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-clear-{}-{}",
+            "codewhale-tui-clear-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -4397,7 +5642,7 @@ api_key = "old-openrouter-key"
         );
         assert!(
             !after.contains("old-provider-key"),
-            "provider-scoped deepseek key must be stripped: {after}"
+            "provider-scoped codewhale key must be stripped: {after}"
         );
         assert!(
             !after.contains("old-openrouter-key"),
@@ -4420,7 +5665,7 @@ api_key = "old-openrouter-key"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-override-{}-{}",
+            "codewhale-tui-override-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -4446,7 +5691,7 @@ api_key = "old-openrouter-key"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-config-over-env-{}-{}",
+            "codewhale-tui-config-over-env-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -4471,7 +5716,7 @@ api_key = "old-openrouter-key"
     fn active_provider_detects_env_only_api_key() -> Result<()> {
         let _lock = lock_test_env();
         let temp_root =
-            env::temp_dir().join(format!("deepseek-tui-env-only-key-{}", std::process::id()));
+            env::temp_dir().join(format!("codewhale-tui-env-only-key-{}", std::process::id()));
         fs::create_dir_all(&temp_root)?;
         let _guard = EnvGuard::new(&temp_root);
 
@@ -4501,7 +5746,7 @@ api_key = "old-openrouter-key"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-sentinel-{}-{}",
+            "codewhale-tui-sentinel-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -4529,7 +5774,7 @@ api_key = "old-openrouter-key"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-tilde-test-{}-{}",
+            "codewhale-tui-tilde-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -4558,7 +5803,7 @@ api_key = "old-openrouter-key"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-load-tilde-test-{}-{}",
+            "codewhale-tui-load-tilde-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -4587,7 +5832,7 @@ api_key = "old-openrouter-key"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-load-fallback-test-{}-{}",
+            "codewhale-tui-load-fallback-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -4646,7 +5891,7 @@ api_key = "old-openrouter-key"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-api-key-test-{}-{}",
+            "codewhale-tui-api-key-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -4693,7 +5938,7 @@ api_key = "old-openrouter-key"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-empty-key-{}-{}",
+            "codewhale-tui-empty-key-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -4726,7 +5971,7 @@ api_key = "old-openrouter-key"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-env-key-not-config-{}-{}",
+            "codewhale-tui-env-key-not-config-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -4826,6 +6071,32 @@ api_key = "old-openrouter-key"
                 .as_deref(),
             Some(DEFAULT_OPENROUTER_FLASH_MODEL)
         );
+        assert_eq!(
+            normalize_model_name_for_provider(ApiProvider::Siliconflow, "deepseek-v4-pro")
+                .as_deref(),
+            Some(DEFAULT_SILICONFLOW_MODEL)
+        );
+        assert_eq!(
+            normalize_model_name_for_provider(ApiProvider::Siliconflow, "deepseek-reasoner")
+                .as_deref(),
+            Some(DEFAULT_SILICONFLOW_MODEL)
+        );
+        assert_eq!(
+            normalize_model_name_for_provider(ApiProvider::Siliconflow, "deepseek-r1").as_deref(),
+            Some(DEFAULT_SILICONFLOW_MODEL)
+        );
+        assert_eq!(
+            normalize_model_name_for_provider(ApiProvider::Siliconflow, "deepseek-chat").as_deref(),
+            Some(DEFAULT_SILICONFLOW_FLASH_MODEL)
+        );
+        assert_eq!(
+            normalize_model_name_for_provider(ApiProvider::Siliconflow, "deepseek-v3").as_deref(),
+            Some(DEFAULT_SILICONFLOW_FLASH_MODEL)
+        );
+        assert_eq!(
+            normalize_model_name_for_provider(ApiProvider::Siliconflow, "deepseek-v3.2").as_deref(),
+            Some("deepseek-v3.2")
+        );
     }
 
     #[test]
@@ -4837,9 +6108,17 @@ api_key = "old-openrouter-key"
     }
 
     #[test]
+    fn model_completion_names_for_moonshot_excludes_oauth_only_kimi_code_model() {
+        assert_eq!(
+            model_completion_names_for_provider(ApiProvider::Moonshot),
+            vec![DEFAULT_MOONSHOT_MODEL]
+        );
+    }
+
+    #[test]
     fn normalize_model_name_rejects_invalid_or_non_deepseek_ids() {
-        assert!(normalize_model_name("gpt-4o").is_none());
-        assert!(normalize_model_name("deepseek v4").is_none());
+        assert!(normalize_model_name("qwen3-coder").is_none());
+        assert!(normalize_model_name("codewhale v4").is_none());
         assert!(normalize_model_name("").is_none());
     }
 
@@ -4980,7 +6259,7 @@ api_key = "old-openrouter-key"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-model-env-test-{}-{}",
+            "codewhale-tui-model-env-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5009,7 +6288,7 @@ api_key = "old-openrouter-key"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-http-headers-root-{}-{}",
+            "codewhale-tui-http-headers-root-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5073,7 +6352,7 @@ http_headers = { "X-Model-Provider-Id" = "tongyi" }
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-http-headers-env-{}-{}",
+            "codewhale-tui-http-headers-env-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5127,7 +6406,7 @@ http_headers = { "X-Model-Provider-Id" = "from-file" }
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-nim-model-alias-test-{}-{}",
+            "codewhale-tui-nim-model-alias-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5171,7 +6450,7 @@ http_headers = { "X-Model-Provider-Id" = "from-file" }
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-nim-env-test-{}-{}",
+            "codewhale-tui-nim-env-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5200,7 +6479,7 @@ http_headers = { "X-Model-Provider-Id" = "from-file" }
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-nim-base-url-alias-test-{}-{}",
+            "codewhale-tui-nim-base-url-alias-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5227,7 +6506,7 @@ http_headers = { "X-Model-Provider-Id" = "from-file" }
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-nim-forwarded-base-url-test-{}-{}",
+            "codewhale-tui-nim-forwarded-base-url-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5264,6 +6543,54 @@ http_headers = { "X-Model-Provider-Id" = "from-file" }
     }
 
     #[test]
+    fn xiaomi_mimo_provider_uses_documented_defaults() -> Result<()> {
+        let config = Config {
+            provider: Some("xiaomi-mimo".to_string()),
+            ..Default::default()
+        };
+
+        config.validate()?;
+        assert_eq!(config.api_provider(), ApiProvider::XiaomiMimo);
+        assert_eq!(config.default_model(), DEFAULT_XIAOMI_MIMO_MODEL);
+        assert_eq!(config.deepseek_base_url(), DEFAULT_XIAOMI_MIMO_BASE_URL);
+        Ok(())
+    }
+
+    #[test]
+    fn xiaomi_mimo_env_overrides_provider_base_url_model_and_key() -> Result<()> {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-tui-xiaomi-mimo-env-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
+
+        // Safety: test-only environment mutation guarded by a global mutex.
+        unsafe {
+            env::set_var("DEEPSEEK_PROVIDER", "mimo");
+            env::set_var("MIMO_API_KEY", "mimo-env-key");
+            env::set_var("MIMO_BASE_URL", "https://mimo-gateway.example/v1");
+            env::set_var("MIMO_MODEL", "mimo-v2.5");
+        }
+
+        let config = Config::load(None, None)?;
+        assert_eq!(config.api_provider(), ApiProvider::XiaomiMimo);
+        assert_eq!(config.deepseek_api_key()?, "mimo-env-key");
+        assert_eq!(
+            config.deepseek_base_url(),
+            "https://mimo-gateway.example/v1"
+        );
+        assert_eq!(config.default_model(), "mimo-v2.5");
+        Ok(())
+    }
+
+    #[test]
     fn atlascloud_provider_uses_documented_defaults() -> Result<()> {
         let config = Config {
             provider: Some("atlascloud".to_string()),
@@ -5285,7 +6612,7 @@ http_headers = { "X-Model-Provider-Id" = "from-file" }
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-atlascloud-env-test-{}-{}",
+            "codewhale-tui-atlascloud-env-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5329,7 +6656,7 @@ http_headers = { "X-Model-Provider-Id" = "from-file" }
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-wanjie-env-test-{}-{}",
+            "codewhale-tui-wanjie-env-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5359,7 +6686,7 @@ http_headers = { "X-Model-Provider-Id" = "from-file" }
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-wanjie-table-{}-{}",
+            "codewhale-tui-wanjie-table-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5398,7 +6725,7 @@ model = "account-model-id"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-openai-table-{}-{}",
+            "codewhale-tui-openai-table-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5429,7 +6756,7 @@ model = "glm-5"
         Ok(())
     }
 
-    // Regression for issue #1714: `deepseek --provider openai --model
+    // Regression for issue #1714: `codewhale --provider openai --model
     // MiniMax-M2.7` forwards the choice via DEEPSEEK_MODEL (never
     // OPENAI_MODEL) and uses the DEFAULT base_url. The explicit custom model
     // must pass through verbatim instead of silently becoming a
@@ -5442,7 +6769,7 @@ model = "glm-5"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-1714-passthrough-{}-{}",
+            "codewhale-tui-1714-passthrough-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5495,7 +6822,7 @@ model = "glm-5"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-openai-env-test-{}-{}",
+            "codewhale-tui-openai-env-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5529,7 +6856,7 @@ model = "glm-5"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-openai-forwarded-base-url-test-{}-{}",
+            "codewhale-tui-openai-forwarded-base-url-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5563,7 +6890,7 @@ model = "glm-5"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-or-defaults-{}-{}",
+            "codewhale-tui-or-defaults-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5589,7 +6916,7 @@ model = "glm-5"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-novita-defaults-{}-{}",
+            "codewhale-tui-novita-defaults-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5615,7 +6942,7 @@ model = "glm-5"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-fireworks-defaults-{}-{}",
+            "codewhale-tui-fireworks-defaults-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5634,6 +6961,36 @@ model = "glm-5"
     }
 
     #[test]
+    fn siliconflow_provider_uses_canonical_defaults() -> Result<()> {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-tui-siliconflow-defaults-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
+
+        let config = Config {
+            provider: Some("siliconflow".to_string()),
+            ..Default::default()
+        };
+        config.validate()?;
+        assert_eq!(config.api_provider(), ApiProvider::Siliconflow);
+        assert_eq!(config.default_model(), DEFAULT_SILICONFLOW_MODEL);
+        assert_eq!(config.deepseek_base_url(), DEFAULT_SILICONFLOW_BASE_URL);
+        assert_eq!(
+            model_completion_names_for_provider(ApiProvider::Siliconflow),
+            vec![DEFAULT_SILICONFLOW_MODEL, DEFAULT_SILICONFLOW_FLASH_MODEL]
+        );
+        Ok(())
+    }
+
+    #[test]
     fn sglang_provider_works_without_api_key() -> Result<()> {
         let _lock = lock_test_env();
         let nanos = SystemTime::now()
@@ -5641,7 +6998,7 @@ model = "glm-5"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-sglang-defaults-{}-{}",
+            "codewhale-tui-sglang-defaults-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5669,7 +7026,7 @@ model = "glm-5"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-ollama-defaults-{}-{}",
+            "codewhale-tui-ollama-defaults-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5697,7 +7054,7 @@ model = "glm-5"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-ollama-model-test-{}-{}",
+            "codewhale-tui-ollama-model-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5731,7 +7088,7 @@ model = "qwen2.5-coder:7b"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-self-hosted-base-url-test-{}-{}",
+            "codewhale-tui-self-hosted-base-url-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5759,6 +7116,35 @@ model = "qwen2.5-coder:7b"
     }
 
     #[test]
+    fn vllm_env_resolves_reported_lan_http_endpoint_and_model() -> Result<()> {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-tui-vllm-lan-http-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
+
+        // Safety: test-only environment mutation guarded by a global mutex.
+        unsafe {
+            env::set_var("DEEPSEEK_PROVIDER", "vllm");
+            env::set_var("VLLM_BASE_URL", "http://192.168.0.110:8000/v1");
+            env::set_var("DEEPSEEK_MODEL", "deepseek-v4-flash");
+        }
+
+        let config = Config::load(None, None)?;
+        assert_eq!(config.api_provider(), ApiProvider::Vllm);
+        assert_eq!(config.deepseek_base_url(), "http://192.168.0.110:8000/v1");
+        assert_eq!(config.default_model(), "deepseek-v4-flash");
+        Ok(())
+    }
+
+    #[test]
     fn ollama_env_overrides_base_url_and_model() -> Result<()> {
         let _lock = lock_test_env();
         let nanos = SystemTime::now()
@@ -5766,7 +7152,7 @@ model = "qwen2.5-coder:7b"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-ollama-env-test-{}-{}",
+            "codewhale-tui-ollama-env-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5795,7 +7181,7 @@ model = "qwen2.5-coder:7b"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-or-env-key-{}-{}",
+            "codewhale-tui-or-env-key-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5822,7 +7208,7 @@ model = "qwen2.5-coder:7b"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-novita-env-key-{}-{}",
+            "codewhale-tui-novita-env-key-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5842,6 +7228,68 @@ model = "qwen2.5-coder:7b"
     }
 
     #[test]
+    fn siliconflow_env_overrides_key_base_url_and_model() -> Result<()> {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-tui-siliconflow-env-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
+
+        // Safety: test-only environment mutation guarded by a global mutex.
+        unsafe {
+            env::set_var("CODEWHALE_PROVIDER", "siliconflow");
+            env::set_var("SILICONFLOW_API_KEY", "sf-env-key");
+            env::set_var("SILICONFLOW_BASE_URL", "https://sf-mirror.example/v1");
+            env::set_var("SILICONFLOW_MODEL", "deepseek-v4-flash");
+        }
+
+        let config = Config::load(None, None)?;
+        assert_eq!(config.api_provider(), ApiProvider::Siliconflow);
+        assert_eq!(config.deepseek_api_key()?, "sf-env-key");
+        assert_eq!(config.deepseek_base_url(), "https://sf-mirror.example/v1");
+        assert_eq!(config.default_model(), "deepseek-v4-flash");
+        Ok(())
+    }
+
+    #[test]
+    fn siliconflow_cn_base_url_env_normalizes_model_aliases() -> Result<()> {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-tui-siliconflow-cn-env-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
+
+        // Safety: test-only environment mutation guarded by a global mutex.
+        unsafe {
+            env::set_var("CODEWHALE_PROVIDER", "siliconflow");
+            env::set_var("SILICONFLOW_API_KEY", "sf-env-key");
+            env::set_var("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1");
+            env::set_var("SILICONFLOW_MODEL", "deepseek-reasoner");
+        }
+
+        let config = Config::load(None, None)?;
+        assert_eq!(config.api_provider(), ApiProvider::Siliconflow);
+        assert_eq!(config.deepseek_api_key()?, "sf-env-key");
+        assert_eq!(config.deepseek_base_url(), "https://api.siliconflow.cn/v1");
+        assert_eq!(config.default_model(), DEFAULT_SILICONFLOW_MODEL);
+        Ok(())
+    }
+
+    #[test]
     fn openrouter_base_url_env_overrides_default() -> Result<()> {
         let _lock = lock_test_env();
         let nanos = SystemTime::now()
@@ -5849,7 +7297,7 @@ model = "qwen2.5-coder:7b"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-or-base-url-{}-{}",
+            "codewhale-tui-or-base-url-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5876,7 +7324,7 @@ model = "qwen2.5-coder:7b"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-or-table-{}-{}",
+            "codewhale-tui-or-table-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5903,6 +7351,41 @@ base_url = "https://or-table.example/v1"
     }
 
     #[test]
+    fn siliconflow_reads_provider_table_from_config_file() -> Result<()> {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-tui-siliconflow-table-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
+
+        let config_path = temp_root.join(".deepseek").join("config.toml");
+        ensure_parent_dir(&config_path)?;
+        fs::write(
+            &config_path,
+            r#"provider = "siliconflow"
+
+[providers.siliconflow]
+api_key = "sf-table-key"
+model = "deepseek-v4-flash"
+"#,
+        )?;
+
+        let config = Config::load(None, None)?;
+        assert_eq!(config.api_provider(), ApiProvider::Siliconflow);
+        assert_eq!(config.deepseek_api_key()?, "sf-table-key");
+        assert_eq!(config.deepseek_base_url(), DEFAULT_SILICONFLOW_BASE_URL);
+        assert_eq!(config.default_model(), DEFAULT_SILICONFLOW_FLASH_MODEL);
+        Ok(())
+    }
+
+    #[test]
     fn openrouter_custom_base_url_preserves_provider_model() -> Result<()> {
         let _lock = lock_test_env();
         let nanos = SystemTime::now()
@@ -5910,7 +7393,7 @@ base_url = "https://or-table.example/v1"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-or-custom-model-{}-{}",
+            "codewhale-tui-or-custom-model-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5946,7 +7429,7 @@ model = "DeepSeek-V4-Pro"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-novita-table-{}-{}",
+            "codewhale-tui-novita-table-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5972,6 +7455,297 @@ api_key = "novita-table-key"
     }
 
     #[test]
+    fn moonshot_kimi_oauth_reads_fresh_cli_credential() -> Result<()> {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-tui-kimi-oauth-key-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
+
+        let kimi_share_dir = temp_root.join(".kimi");
+        let credential_dir = kimi_share_dir.join("credentials");
+        fs::create_dir_all(&credential_dir)?;
+        unsafe { env::set_var("KIMI_SHARE_DIR", &kimi_share_dir) };
+
+        let expires_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64()
+            + 3600.0;
+        let credential = json!({
+            "access_token": "fresh-oauth-token",
+            "refresh_token": "refresh-token",
+            "expires_at": expires_at,
+            "scope": "openid profile email",
+            "token_type": "Bearer",
+        });
+        fs::write(
+            credential_dir.join(KIMI_CODE_CREDENTIAL_FILE),
+            serde_json::to_string(&credential)?,
+        )?;
+
+        let config_path = temp_root.join(".deepseek").join("config.toml");
+        ensure_parent_dir(&config_path)?;
+        fs::write(
+            &config_path,
+            r#"provider = "moonshot"
+
+[providers.moonshot]
+auth_mode = "kimi_oauth"
+api_key = "stale-api-key"
+"#,
+        )?;
+
+        let config = Config::load(None, None)?;
+        assert_eq!(config.api_provider(), ApiProvider::Moonshot);
+        assert_eq!(config.deepseek_base_url(), DEFAULT_KIMI_CODE_BASE_URL);
+        assert_eq!(config.default_model(), DEFAULT_KIMI_CODE_MODEL);
+        assert_eq!(config.deepseek_api_key()?, "fresh-oauth-token");
+        assert!(has_api_key_for(&config, ApiProvider::Moonshot));
+        Ok(())
+    }
+
+    #[test]
+    fn moonshot_kimi_code_api_key_uses_coding_model() -> Result<()> {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-tui-kimi-code-key-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
+
+        let config_path = temp_root.join(".deepseek").join("config.toml");
+        ensure_parent_dir(&config_path)?;
+        fs::write(
+            &config_path,
+            r#"provider = "moonshot"
+
+[providers.moonshot]
+api_key = "kimi-code-key"
+base_url = "https://api.kimi.com/coding/v1"
+"#,
+        )?;
+
+        let config = Config::load(None, None)?;
+        assert_eq!(config.api_provider(), ApiProvider::Moonshot);
+        assert_eq!(config.deepseek_base_url(), DEFAULT_KIMI_CODE_BASE_URL);
+        assert_eq!(config.default_model(), DEFAULT_KIMI_CODE_MODEL);
+        assert_eq!(config.deepseek_api_key()?, "kimi-code-key");
+        assert!(has_api_key_for(&config, ApiProvider::Moonshot));
+        Ok(())
+    }
+
+    /// Env-var-only path: `CODEWHALE_BASE_URL=https://api.kimi.com/coding/v1`
+    /// combined with `CODEWHALE_PROVIDER=moonshot` must trigger Kimi Code
+    /// model selection even when the TOML has no `base_url`.
+    #[test]
+    fn moonshot_kimi_code_env_base_url_selects_coding_model() -> Result<()> {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-tui-kimi-code-env-url-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
+
+        let config_path = temp_root.join(".deepseek").join("config.toml");
+        ensure_parent_dir(&config_path)?;
+        fs::write(
+            &config_path,
+            r#"[providers.moonshot]
+api_key = "kimi-code-env-key"
+"#,
+        )?;
+        // Safety: test-only env mutation guarded by lock_test_env().
+        unsafe {
+            env::set_var("CODEWHALE_PROVIDER", "moonshot");
+            env::set_var("CODEWHALE_BASE_URL", "https://api.kimi.com/coding/v1");
+        }
+
+        let config = Config::load(None, None)?;
+        assert_eq!(config.api_provider(), ApiProvider::Moonshot);
+        assert_eq!(config.deepseek_base_url(), DEFAULT_KIMI_CODE_BASE_URL);
+        assert_eq!(config.default_model(), DEFAULT_KIMI_CODE_MODEL);
+        assert_eq!(config.deepseek_api_key()?, "kimi-code-env-key");
+        assert!(has_api_key_for(&config, ApiProvider::Moonshot));
+        Ok(())
+    }
+
+    /// Regression for issue #2160: a stale root `default_text_model` carried
+    /// over from a DeepSeek setup must not steer the Kimi Code endpoint to
+    /// `deepseek-v4-pro`. The user-facing trigger here is the legacy
+    /// `DEEPSEEK_PROVIDER` env var (still produced by the `codewhale
+    /// --provider moonshot` dispatcher for compat); the test also has a
+    /// `CODEWHALE_PROVIDER` twin below for the public env path.
+    #[test]
+    fn moonshot_kimi_code_model_overrides_root_deepseek_default() -> Result<()> {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-tui-kimi-code-root-model-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
+
+        let config_path = temp_root.join(".deepseek").join("config.toml");
+        ensure_parent_dir(&config_path)?;
+        fs::write(
+            &config_path,
+            r#"provider = "deepseek"
+default_text_model = "deepseek-v4-pro"
+
+[providers.moonshot]
+api_key = "kimi-code-key"
+base_url = "https://api.kimi.com/coding/v1"
+"#,
+        )?;
+        // Safety: test-only env mutation guarded by lock_test_env().
+        unsafe { env::set_var("DEEPSEEK_PROVIDER", "moonshot") };
+
+        let config = Config::load(None, None)?;
+        assert_eq!(config.api_provider(), ApiProvider::Moonshot);
+        assert_eq!(config.deepseek_base_url(), DEFAULT_KIMI_CODE_BASE_URL);
+        assert_eq!(config.default_model(), DEFAULT_KIMI_CODE_MODEL);
+        Ok(())
+    }
+
+    /// Same regression as above, but driven by the public `CODEWHALE_PROVIDER`
+    /// env var. Documents the recommended user-facing setup path: never
+    /// `DEEPSEEK_PROVIDER=moonshot`, always `CODEWHALE_PROVIDER=moonshot`
+    /// (or `codewhale --provider moonshot`, which also resolves through
+    /// this code path internally).
+    #[test]
+    fn moonshot_kimi_code_model_resolves_via_codewhale_provider_env() -> Result<()> {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-tui-kimi-code-cw-env-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
+
+        let config_path = temp_root.join(".deepseek").join("config.toml");
+        ensure_parent_dir(&config_path)?;
+        fs::write(
+            &config_path,
+            r#"provider = "deepseek"
+default_text_model = "deepseek-v4-pro"
+
+[providers.moonshot]
+api_key = "kimi-code-key"
+base_url = "https://api.kimi.com/coding/v1"
+"#,
+        )?;
+        // Safety: test-only env mutation guarded by lock_test_env().
+        unsafe { env::set_var("CODEWHALE_PROVIDER", "moonshot") };
+
+        let config = Config::load(None, None)?;
+        assert_eq!(config.api_provider(), ApiProvider::Moonshot);
+        assert_eq!(config.deepseek_base_url(), DEFAULT_KIMI_CODE_BASE_URL);
+        assert_eq!(config.default_model(), DEFAULT_KIMI_CODE_MODEL);
+        Ok(())
+    }
+
+    /// `CODEWHALE_PROVIDER` wins when both it and the legacy
+    /// `DEEPSEEK_PROVIDER` are set, so a user adding the new alias to their
+    /// shell isn't surprised by a stale legacy export.
+    #[test]
+    fn codewhale_provider_env_takes_precedence_over_deepseek_provider() -> Result<()> {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-tui-cw-vs-ds-provider-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
+
+        let config_path = temp_root.join(".deepseek").join("config.toml");
+        ensure_parent_dir(&config_path)?;
+        fs::write(&config_path, "provider = \"deepseek\"\n")?;
+        // Safety: test-only env mutation guarded by lock_test_env().
+        unsafe {
+            env::set_var("CODEWHALE_PROVIDER", "moonshot");
+            env::set_var("DEEPSEEK_PROVIDER", "openrouter");
+        }
+
+        let config = Config::load(None, None)?;
+        assert_eq!(config.api_provider(), ApiProvider::Moonshot);
+        Ok(())
+    }
+
+    /// Moonshot Platform path: when [providers.moonshot] is empty (or
+    /// missing) and no Kimi Code endpoint is configured, the resolver
+    /// defaults to the Moonshot Platform base URL and the `kimi-k2.6`
+    /// model. This is the "I have a Moonshot Platform API key, not a
+    /// Kimi Code plan key" path.
+    #[test]
+    fn moonshot_platform_defaults_to_kimi_k26() -> Result<()> {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-tui-moonshot-platform-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
+
+        let config_path = temp_root.join(".deepseek").join("config.toml");
+        ensure_parent_dir(&config_path)?;
+        fs::write(
+            &config_path,
+            r#"provider = "moonshot"
+
+[providers.moonshot]
+api_key = "moonshot-platform-key"
+"#,
+        )?;
+
+        let config = Config::load(None, None)?;
+        assert_eq!(config.api_provider(), ApiProvider::Moonshot);
+        assert_eq!(config.deepseek_base_url(), DEFAULT_MOONSHOT_BASE_URL);
+        assert_eq!(config.default_model(), DEFAULT_MOONSHOT_MODEL);
+        assert_eq!(config.deepseek_api_key()?, "moonshot-platform-key");
+        Ok(())
+    }
+
+    #[test]
     fn has_api_key_for_detects_env_and_config_per_provider() -> Result<()> {
         let _lock = lock_test_env();
         let nanos = SystemTime::now()
@@ -5979,7 +7753,7 @@ api_key = "novita-table-key"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-has-key-{}-{}",
+            "codewhale-tui-has-key-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -5990,6 +7764,8 @@ api_key = "novita-table-key"
         assert!(!has_api_key_for(&config, ApiProvider::Openai));
         assert!(!has_api_key_for(&config, ApiProvider::WanjieArk));
         assert!(!has_api_key_for(&config, ApiProvider::Openrouter));
+        assert!(!has_api_key_for(&config, ApiProvider::XiaomiMimo));
+        assert!(!has_api_key_for(&config, ApiProvider::Siliconflow));
         assert!(
             has_api_key_for(&config, ApiProvider::Sglang),
             "SGLang is self-hosted and does not require a key by default"
@@ -6004,10 +7780,14 @@ api_key = "novita-table-key"
             env::set_var("OPENROUTER_API_KEY", "or-env");
             env::set_var("OPENAI_API_KEY", "openai-env");
             env::set_var("WANJIE_API_KEY", "wanjie-env");
+            env::set_var("MIMO_API_KEY", "mimo-env");
+            env::set_var("SILICONFLOW_API_KEY", "sf-env");
         }
         assert!(has_api_key_for(&config, ApiProvider::Openai));
         assert!(has_api_key_for(&config, ApiProvider::WanjieArk));
         assert!(has_api_key_for(&config, ApiProvider::Openrouter));
+        assert!(has_api_key_for(&config, ApiProvider::XiaomiMimo));
+        assert!(has_api_key_for(&config, ApiProvider::Siliconflow));
         assert!(!has_api_key_for(&config, ApiProvider::Novita));
 
         // Safety: test-only environment mutation guarded by a global mutex.
@@ -6015,15 +7795,21 @@ api_key = "novita-table-key"
             env::remove_var("OPENROUTER_API_KEY");
             env::remove_var("OPENAI_API_KEY");
             env::remove_var("WANJIE_API_KEY");
+            env::remove_var("MIMO_API_KEY");
+            env::remove_var("SILICONFLOW_API_KEY");
         }
         let mut providers = ProvidersConfig::default();
         providers.openai.api_key = Some("file-openai".to_string());
         providers.wanjie_ark.api_key = Some("file-wanjie".to_string());
+        providers.xiaomi_mimo.api_key = Some("file-mimo".to_string());
         providers.novita.api_key = Some("file-novita".to_string());
+        providers.siliconflow.api_key = Some("file-siliconflow".to_string());
         config.providers = Some(providers);
         assert!(has_api_key_for(&config, ApiProvider::Openai));
         assert!(has_api_key_for(&config, ApiProvider::WanjieArk));
+        assert!(has_api_key_for(&config, ApiProvider::XiaomiMimo));
         assert!(has_api_key_for(&config, ApiProvider::Novita));
+        assert!(has_api_key_for(&config, ApiProvider::Siliconflow));
         assert!(!has_api_key_for(&config, ApiProvider::Openrouter));
         Ok(())
     }
@@ -6036,7 +7822,7 @@ api_key = "novita-table-key"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-has-key-cn-{}-{}",
+            "codewhale-tui-has-key-cn-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -6073,7 +7859,7 @@ api_key = "novita-table-key"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-save-key-or-{}-{}",
+            "codewhale-tui-save-key-or-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -6115,6 +7901,8 @@ api_key = "novita-table-key"
         save_api_key_for(ApiProvider::Openai, "openai-saved-key")?;
         save_api_key_for(ApiProvider::WanjieArk, "wanjie-saved-key")?;
         save_api_key_for(ApiProvider::Fireworks, "fireworks-saved-key")?;
+        save_api_key_for(ApiProvider::XiaomiMimo, "mimo-saved-key")?;
+        save_api_key_for(ApiProvider::Siliconflow, "sf-saved-key")?;
         save_api_key_for(ApiProvider::Sglang, "sglang-saved-key")?;
         let contents = fs::read_to_string(&path)?;
         let parsed: toml::Value = toml::from_str(&contents)?;
@@ -6145,6 +7933,22 @@ api_key = "novita-table-key"
         assert_eq!(
             parsed
                 .get("providers")
+                .and_then(|p| p.get("xiaomi_mimo"))
+                .and_then(|t| t.get("api_key"))
+                .and_then(toml::Value::as_str),
+            Some("mimo-saved-key")
+        );
+        assert_eq!(
+            parsed
+                .get("providers")
+                .and_then(|p| p.get("siliconflow"))
+                .and_then(|t| t.get("api_key"))
+                .and_then(toml::Value::as_str),
+            Some("sf-saved-key")
+        );
+        assert_eq!(
+            parsed
+                .get("providers")
                 .and_then(|p| p.get("sglang"))
                 .and_then(|t| t.get("api_key"))
                 .and_then(toml::Value::as_str),
@@ -6161,7 +7965,7 @@ api_key = "novita-table-key"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-save-key-cn-{}-{}",
+            "codewhale-tui-save-key-cn-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -6188,7 +7992,7 @@ api_key = "novita-table-key"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-nim-provider-table-test-{}-{}",
+            "codewhale-tui-nim-provider-table-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -6227,7 +8031,7 @@ model = "deepseek-v4-pro"
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-nim-root-key-precedence-test-{}-{}",
+            "codewhale-tui-nim-root-key-precedence-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -6238,7 +8042,7 @@ model = "deepseek-v4-pro"
         ensure_parent_dir(&config_path)?;
         fs::write(
             &config_path,
-            r#"api_key = "deepseek-root-key"
+            r#"api_key = "codewhale-root-key"
 provider = "nvidia-nim"
 
 [providers.nvidia_nim]
@@ -6378,6 +8182,19 @@ model = "deepseek-ai/deepseek-v4-pro"
     }
 
     #[test]
+    fn provider_capability_xiaomi_mimo_has_thinking_no_cache() {
+        let cap = provider_capability(ApiProvider::XiaomiMimo, DEFAULT_XIAOMI_MIMO_MODEL);
+        assert_eq!(cap.context_window, 1_000_000);
+        assert_eq!(cap.max_output, 128_000);
+        assert!(cap.thinking_supported);
+        assert!(!cap.cache_telemetry_supported);
+        assert_eq!(
+            cap.request_payload_mode,
+            RequestPayloadMode::ChatCompletions
+        );
+    }
+
+    #[test]
     fn provider_capability_novita_v4_pro_has_thinking_no_cache() {
         let cap = provider_capability(ApiProvider::Novita, DEFAULT_NOVITA_MODEL);
         assert_eq!(
@@ -6399,6 +8216,22 @@ model = "deepseek-ai/deepseek-v4-pro"
         assert_eq!(cap.max_output, 384_000);
         assert!(cap.thinking_supported);
         assert!(!cap.cache_telemetry_supported);
+    }
+
+    #[test]
+    fn provider_capability_siliconflow_v4_pro_has_thinking_no_cache() {
+        let cap = provider_capability(ApiProvider::Siliconflow, DEFAULT_SILICONFLOW_MODEL);
+        assert_eq!(
+            cap.context_window,
+            crate::models::DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS
+        );
+        assert_eq!(cap.max_output, 384_000);
+        assert!(cap.thinking_supported);
+        assert!(!cap.cache_telemetry_supported);
+        assert_eq!(
+            cap.request_payload_mode,
+            RequestPayloadMode::ChatCompletions
+        );
     }
 
     #[test]
@@ -6491,5 +8324,42 @@ model = "deepseek-ai/deepseek-v4-pro"
         let json = serde_json::to_value(&cap).unwrap();
         let deserialized: ProviderCapability = serde_json::from_value(json).unwrap();
         assert_eq!(cap, deserialized);
+    }
+
+    #[test]
+    fn status_item_balance_available_only_for_deepseek_providers() {
+        // Balance item should only be offered for DeepSeek / DeepSeekCN.
+        assert!(StatusItem::Balance.is_available_for(ApiProvider::Deepseek));
+        assert!(StatusItem::Balance.is_available_for(ApiProvider::DeepseekCN));
+        // Sanity: all other known providers should hide the Balance toggle.
+        assert!(!StatusItem::Balance.is_available_for(ApiProvider::Openrouter));
+        assert!(!StatusItem::Balance.is_available_for(ApiProvider::Novita));
+        assert!(!StatusItem::Balance.is_available_for(ApiProvider::NvidiaNim));
+        assert!(!StatusItem::Balance.is_available_for(ApiProvider::Fireworks));
+        assert!(!StatusItem::Balance.is_available_for(ApiProvider::Sglang));
+        assert!(!StatusItem::Balance.is_available_for(ApiProvider::Vllm));
+        assert!(!StatusItem::Balance.is_available_for(ApiProvider::Ollama));
+        assert!(!StatusItem::Balance.is_available_for(ApiProvider::Openai));
+        assert!(!StatusItem::Balance.is_available_for(ApiProvider::Atlascloud));
+        // Other StatusItem variants should be available everywhere.
+        assert!(StatusItem::Mode.is_available_for(ApiProvider::Ollama));
+    }
+
+    #[test]
+    fn status_items_deser_ignores_unknown_variants() {
+        // Simulate a stable build reading config written by a dev build that
+        // knows about items the stable build doesn't (e.g. "balance" or a
+        // future "cost_saving" chip).
+        let toml_str = r#"
+            alternate_screen = "auto"
+            status_items = ["mode", "model", "unknown_future_item", "cost", "another_unknown", "status"]
+        "#;
+        let tui: TuiConfig = toml::from_str(toml_str).expect("should parse without error");
+        let items = tui.status_items.expect("status_items should be Some");
+        assert_eq!(items.len(), 4, "unknown items should be silently dropped");
+        assert_eq!(items[0], StatusItem::Mode);
+        assert_eq!(items[1], StatusItem::Model);
+        assert_eq!(items[2], StatusItem::Cost);
+        assert_eq!(items[3], StatusItem::Status);
     }
 }

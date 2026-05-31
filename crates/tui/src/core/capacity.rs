@@ -766,7 +766,7 @@ mod tests {
     /// Hot-path microbench for `compute_profile`. Run with:
     ///
     /// ```text
-    /// cargo test -p deepseek-tui --release capacity::tests::bench_compute_profile -- --ignored --nocapture
+    /// cargo test -p codewhale-tui --release capacity::tests::bench_compute_profile -- --ignored --nocapture
     /// ```
     ///
     /// Establishes a baseline cost so we can detect regressions when the
@@ -796,8 +796,7 @@ mod tests {
             let elapsed = start.elapsed();
             let per_call_ns = elapsed.as_nanos() as f64 / iters as f64;
             println!(
-                "compute_profile window={window_len:>4}  total={:?}  per-call={per_call_ns:>8.0}ns",
-                elapsed
+                "compute_profile window={window_len:>4}  total={elapsed:?}  per-call={per_call_ns:>8.0}ns"
             );
         }
     }

@@ -31,6 +31,10 @@ pub enum Op {
         auto_approve: bool,
         approval_mode: ApprovalMode,
         translation_enabled: bool,
+        show_thinking: bool,
+        /// Tool restriction from custom slash command frontmatter.
+        /// `None` means the current turn may use the normal tool set.
+        allowed_tools: Option<Vec<String>>,
     },
 
     /// Cancel the current request
@@ -75,6 +79,9 @@ pub enum Op {
 
     /// Run context compaction immediately.
     CompactContext,
+
+    /// Run agent-driven context purging.
+    PurgeContext,
 
     /// Edit the last user message: remove the last user+assistant exchange
     /// from the session, then re-send with the new content.

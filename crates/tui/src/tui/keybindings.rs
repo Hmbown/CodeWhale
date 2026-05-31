@@ -307,7 +307,7 @@ mod tests {
 
     #[test]
     fn catalog_is_non_empty_and_sections_have_entries() {
-        assert!(!KEYBINDINGS.is_empty());
+        assert!(KEYBINDINGS.iter().any(|entry| !entry.chord.is_empty()));
         // Every declared section should appear in the catalog at least once,
         // otherwise the help overlay would render an empty heading.
         let sections = [
@@ -322,8 +322,7 @@ mod tests {
         for section in sections {
             assert!(
                 KEYBINDINGS.iter().any(|entry| entry.section == section),
-                "no entries for section {:?}",
-                section
+                "no entries for section {section:?}"
             );
         }
     }

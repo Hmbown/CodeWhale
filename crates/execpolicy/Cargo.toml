@@ -1,5 +1,5 @@
 [package]
-name = "deepseek-execpolicy"
+name = "codewhale-execpolicy"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,5 +8,5 @@ description = "Execution policy and approval model parity for DeepSeek workspace
 
 [dependencies]
 anyhow.workspace = true
-deepseek-protocol = { path = "../protocol", version = "0.8.40" }
+codewhale-protocol = { path = "../protocol", version = "0.8.46" }
 serde.workspace = true

@@ -11,18 +11,18 @@ export async function generateMetadata({ params }: { params: Promise<{ locale: s
   const { locale } = await params;
   const isZh = locale === "zh";
   return {
-    title: isZh ? "DeepSeek TUI · 终端原生编程智能体" : "DeepSeek TUI · 深度求索 终端",
+    title: isZh ? "CodeWhale · DeepSeek V4 智能体运行框架" : "CodeWhale · DeepSeek V4 智能体运行框架",
     description: isZh
-      ? "基于 DeepSeek V4 的开源终端编程智能体。支持 100 万 token 上下文、MCP 协议、沙箱执行。"
-      : "Terminal-native coding agent built on DeepSeek V4. Open source. Community site for installation, docs, roadmap, and live activity from the Hmbown/deepseek-tui repo.",
-    metadataBase: new URL("https://deepseek-tui.com"),
+      ? "DeepSeek V4 的最强智能体运行框架。宪政层级、结构化信任、验证与恢复——让模型持续工作并不断进步的规则、工具和反馈循环。国际开源社区，递归自改进。"
+      : "The most agentic harness for DeepSeek V4. Constitutional hierarchy, structured trust, verification, and recovery — rules, tools, and feedback loops that help the model keep working. An international open source community building a recursive, self-improving harness.",
+    metadataBase: new URL("https://codewhale.net"),
     openGraph: {
-      title: isZh ? "DeepSeek TUI · 终端原生编程智能体" : "DeepSeek TUI",
+      title: "CodeWhale",
       description: isZh
-        ? "基于 DeepSeek V4 的开源终端编程智能体。"
-        : "Terminal-native coding agent built on DeepSeek V4.",
-      url: "https://deepseek-tui.com",
-      siteName: "DeepSeek TUI",
+        ? "DeepSeek V4 的最强智能体运行框架。宪政层级、结构化信任、验证与恢复。"
+        : "The most agentic harness for DeepSeek V4. Constitutional hierarchy, structured trust, verification, and recovery.",
+      url: "https://codewhale.net",
+      siteName: "CodeWhale",
       type: "website",
     },
     twitter: { card: "summary_large_image" },

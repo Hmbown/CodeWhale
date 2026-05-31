@@ -56,11 +56,13 @@ impl Engine {
                 .with_runtime_read_only_task_tools()
                 .with_todo_tool(todo_list)
                 .with_plan_tool(plan_state)
+                .with_goal_tools(self.config.goal_state.clone())
         } else {
             ToolRegistryBuilder::new()
                 .with_agent_tools(self.session.allow_shell)
                 .with_todo_tool(todo_list)
                 .with_plan_tool(plan_state)
+                .with_goal_tools(self.config.goal_state.clone())
         };
 
         builder = builder
@@ -68,6 +70,14 @@ impl Engine {
             .with_user_input_tool()
             .with_parallel_tool()
             .with_recall_archive_tool();
+
+        // SlopLedger: plan mode only gets read-only query + export,
+        // agent/yolo get the full set including append + update.
+        builder = if read_only_mode {
+            builder.with_slop_ledger_read_only_tools()
+        } else {
+            builder.with_slop_ledger_tools()
+        };
 
         if !read_only_mode {
             builder = builder
@@ -81,14 +91,9 @@ impl Engine {
         if self.config.features.enabled(Feature::WebSearch) {
             builder = builder.with_web_tools();
         }
-        // Plan mode is strictly read-only: do not expose shell execution at
-        // all, even if the session would otherwise allow it.
-        if !read_only_mode
-            && self.config.features.enabled(Feature::ShellTool)
-            && self.session.allow_shell
-        {
-            builder = builder.with_shell_tools();
-        }
+        // Shell tools (exec_shell, task_shell_start, etc.) are already gated
+        // behind `allow_shell` inside `with_agent_tools`. No separate
+        // feature-flag gate here to avoid double-registration.
 
         // Register the `remember` tool only when the user has opted in to
         // user-memory (#489). Without that opt-in the tool would always

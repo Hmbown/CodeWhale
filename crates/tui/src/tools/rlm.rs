@@ -27,7 +27,66 @@ const DEFAULT_CHILD_MODEL: &str = "deepseek-v4-flash";
 const MAX_INLINE_CONTENT_CHARS: usize = 200_000;
 const FULL_STDOUT_HEAD_CHARS: usize = 4_096;
 const FULL_STDOUT_TAIL_CHARS: usize = 1_024;
+
+/// When `rlm_eval` stdout exceeds this many characters the full body is
+/// stored as a `var_handle` instead of inlined into the parent transcript.
+/// The model retrieves the body via `handle_read` using the returned handle.
+const STDOUT_HANDLE_THRESHOLD_CHARS: usize = 1_000;
 const HARD_SUB_RLM_DEPTH_CAP: u32 = 3;
+
+pub struct RlmSessionObjectsTool;
+
+#[async_trait]
+impl ToolSpec for RlmSessionObjectsTool {
+    fn name(&self) -> &'static str {
+        "rlm_session_objects"
+    }
+
+    fn description(&self) -> &'static str {
+        "List active prompt/history/session symbolic objects as compact cards. \
+         Pass one of the returned `id` values to `rlm_open` as \
+         `session_object` to inspect it inside an RLM REPL without copying the \
+         full prompt or transcript into the parent context."
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {}
+        })
+    }
+
+    fn capabilities(&self) -> Vec<ToolCapability> {
+        vec![ToolCapability::ReadOnly]
+    }
+
+    fn approval_requirement(&self) -> ApprovalRequirement {
+        ApprovalRequirement::Auto
+    }
+
+    fn supports_parallel(&self) -> bool {
+        true
+    }
+
+    async fn execute(&self, _input: Value, context: &ToolContext) -> Result<ToolResult, ToolError> {
+        let snapshot = context.session_objects.as_ref().ok_or_else(|| {
+            ToolError::not_available("rlm_session_objects: active session snapshot unavailable")
+        })?;
+        ToolResult::json(&json!({
+            "objects": snapshot.object_cards(),
+            "open_with": {
+                "tool": "rlm_open",
+                "field": "session_object",
+                "example": {
+                    "name": "active_prompt",
+                    "session_object": "session://active/system_prompt"
+                }
+            },
+            "redaction": "Large tool results and thinking blocks are represented by compact metadata in transcript objects; use returned handles and handle_read for bounded payload projections."
+        }))
+        .map_err(|e| ToolError::execution_failed(e.to_string()))
+    }
+}
 
 pub struct RlmOpenTool;
 
@@ -63,6 +122,10 @@ impl ToolSpec for RlmOpenTool {
                 "url": {
                     "type": "string",
                     "description": "HTTP/HTTPS URL to fetch through fetch_url and load."
+                },
+                "session_object": {
+                    "type": "string",
+                    "description": "Stable symbolic active-session ref from rlm_session_objects, for example session://active/system_prompt or session://active/messages/0."
                 }
             }
         })
@@ -159,8 +222,11 @@ impl ToolSpec for RlmEvalTool {
          bounded projection of stdout/stderr plus metadata. If the code calls \
          FINAL/finalize, the final value is stored as a var_handle retrievable \
          with handle_read instead of copied unbounded into the parent context. \
-         Batch child helpers require dependency_mode='independent'; use \
-         sub_query_sequence or a sequential loop for dependent work."
+         Large stdout/stderr payloads (>1k chars) are also stored as \
+         var_handles (returned in stdout_handle / stderr_handle) to keep the \
+         parent transcript lean. Batch child helpers require \
+         dependency_mode='independent'; use sub_query_sequence or a \
+         sequential loop for dependent work."
     }
 
     fn input_schema(&self) -> Value {
@@ -241,14 +307,48 @@ impl ToolSpec for RlmEvalTool {
         let had_error = round.has_error;
         let rpc_count = round.rpc_count;
         let duration_ms = round.elapsed.as_millis() as u64;
-        let stdout_preview = match config.output_feedback {
-            OutputFeedback::Full => Some(preview_output(&round.full_stdout)),
-            OutputFeedback::Metadata => None,
-        };
-        let stderr_preview = match config.output_feedback {
-            OutputFeedback::Full if !round.stderr.is_empty() => Some(preview_output(&round.stderr)),
-            _ => None,
-        };
+        // Route large stdout/stderr into a var_handle to avoid bloat in
+        // the parent transcript. The model calls handle_read for bounded
+        // projections; a short inline note describes availability.
+        fn route_output(
+            text: &str,
+            feedback: &OutputFeedback,
+            store: &mut crate::tools::handle::HandleStore,
+            session_id: &str,
+            tag: &str,
+        ) -> (Option<String>, Option<crate::tools::handle::VarHandle>) {
+            let threshold = STDOUT_HANDLE_THRESHOLD_CHARS;
+            match (feedback, text.len()) {
+                (OutputFeedback::Full, len) if len <= threshold => {
+                    (Some(preview_output(text)), None)
+                }
+                (OutputFeedback::Full, _) if !text.trim().is_empty() => {
+                    // Store full body as a handle for out-of-band retrieval
+                    let name = format!("{tag}_{}", 0); // single counter is fine
+                    let handle = store.insert_text(session_id, name, text);
+                    (
+                        Some(format!("{} chars; retrieve via handle_read", text.len())),
+                        Some(handle),
+                    )
+                }
+                _ => (None, None),
+            }
+        }
+
+        let (stdout_preview, stdout_handle) = route_output(
+            &round.full_stdout,
+            &config.output_feedback,
+            &mut *context.runtime.handle_store.lock().await,
+            &session.id,
+            "stdout",
+        );
+        let (stderr_preview, stderr_handle) = route_output(
+            &round.stderr,
+            &config.output_feedback,
+            &mut *context.runtime.handle_store.lock().await,
+            &session.id,
+            "stderr",
+        );
 
         let mut output = json!({
             "name": session.name,
@@ -259,11 +359,17 @@ impl ToolSpec for RlmEvalTool {
             "new_vars": [],
             "final": final_handle,
         });
-        if let Some(stdout_preview) = stdout_preview {
+        if let Some(ref stdout_preview) = stdout_preview {
             output["stdout_preview"] = json!(stdout_preview);
         }
-        if let Some(stderr_preview) = stderr_preview {
+        if let Some(ref stderr_preview) = stderr_preview {
             output["stderr_preview"] = json!(stderr_preview);
+        }
+        if let (Some(h), Some(_)) = (stdout_handle, &stdout_preview) {
+            output["stdout_handle"] = json!(h);
+        }
+        if let (Some(h), Some(_)) = (stderr_handle, &stderr_preview) {
+            output["stderr_handle"] = json!(h);
         }
         if let Some(confidence) = round.final_confidence.clone() {
             output["confidence"] = confidence;
@@ -432,6 +538,20 @@ async fn load_source(
         return Ok((content.to_string(), "content".to_string(), None));
     }
 
+    if let Some(object_ref) = rlm_open_source_field(input, "session_object") {
+        let snapshot = context.session_objects.as_ref().ok_or_else(|| {
+            ToolError::not_available("rlm_open: active session snapshot unavailable")
+        })?;
+        let object = snapshot.resolve(object_ref).ok_or_else(|| {
+            ToolError::invalid_input(format!("rlm_open: unknown session object `{object_ref}`"))
+        })?;
+        return Ok((
+            object.body,
+            format!("session_object:{}", object.kind),
+            Some(object.id),
+        ));
+    }
+
     let url = rlm_open_source_field(input, "url")
         .map(str::trim)
         .ok_or_else(|| ToolError::invalid_input("rlm_open: missing source"))?;
@@ -455,7 +575,7 @@ async fn load_source(
 }
 
 fn rlm_open_source_count(input: &Value) -> usize {
-    ["file_path", "content", "url"]
+    ["file_path", "content", "url", "session_object"]
         .iter()
         .filter(|field| rlm_open_source_field(input, field).is_some())
         .count()
@@ -514,15 +634,44 @@ fn _assert_var_handle_shape(_: Option<VarHandle>) {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::{ContentBlock, Message, SystemPrompt};
+    use crate::rlm::session::SessionObjectSnapshot;
     use crate::tools::handle::HandleReadTool;
     use crate::tools::spec::ToolContext;
+    use std::path::PathBuf;
 
     fn ctx() -> ToolContext {
         ToolContext::new(".")
     }
 
+    fn ctx_with_session_objects() -> ToolContext {
+        ToolContext::new(".").with_session_objects(SessionObjectSnapshot::new(
+            "session-1".to_string(),
+            "deepseek-v4-pro".to_string(),
+            PathBuf::from("."),
+            Some(SystemPrompt::Text("You are CodeWhale.".to_string())),
+            vec![
+                Message {
+                    role: "user".to_string(),
+                    content: vec![ContentBlock::Text {
+                        text: "Please inspect the RLM surface.".to_string(),
+                        cache_control: None,
+                    }],
+                },
+                Message {
+                    role: "assistant".to_string(),
+                    content: vec![ContentBlock::Text {
+                        text: "I will use symbolic session objects.".to_string(),
+                        cache_control: None,
+                    }],
+                },
+            ],
+        ))
+    }
+
     #[test]
     fn schema_uses_new_tool_names() {
+        assert_eq!(RlmSessionObjectsTool.name(), "rlm_session_objects");
         assert_eq!(RlmOpenTool.name(), "rlm_open");
         assert_eq!(RlmEvalTool::new(None).name(), "rlm_eval");
         assert_eq!(RlmConfigureTool.name(), "rlm_configure");
@@ -547,6 +696,80 @@ mod tests {
             rlm_open_source_count(&json!({"content": "body", "url": "https://example.com/doc"})),
             2
         );
+        assert_eq!(
+            rlm_open_source_count(
+                &json!({"content": "body", "session_object": "session://active/system_prompt"})
+            ),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn rlm_session_objects_lists_active_prompt_object() {
+        let ctx = ctx_with_session_objects();
+        let result = RlmSessionObjectsTool
+            .execute(json!({}), &ctx)
+            .await
+            .expect("list session objects");
+        let body: Value = serde_json::from_str(&result.content).expect("json");
+        let objects = body["objects"].as_array().expect("objects array");
+
+        assert!(objects.iter().any(|object| {
+            object["id"] == "session://active/system_prompt" && object["kind"] == "system_prompt"
+        }));
+        assert!(objects.iter().any(|object| {
+            object["id"] == "session://active/messages/0" && object["kind"] == "message"
+        }));
+    }
+
+    #[tokio::test]
+    async fn rlm_open_loads_active_session_prompt_object() {
+        let ctx = ctx_with_session_objects();
+        let open = RlmOpenTool
+            .execute(
+                json!({"name": "active_prompt", "session_object": "session://active/system_prompt"}),
+                &ctx,
+            )
+            .await
+            .expect("open prompt object");
+        let open_json: Value = serde_json::from_str(&open.content).expect("open json");
+        assert_eq!(open_json["type"], "session_object:system_prompt");
+        assert!(
+            open_json["preview_500"]
+                .as_str()
+                .unwrap()
+                .contains("CodeWhale")
+        );
+
+        RlmCloseTool
+            .execute(json!({"name": "active_prompt"}), &ctx)
+            .await
+            .expect("close");
+    }
+
+    #[tokio::test]
+    async fn rlm_open_loads_transcript_message_object() {
+        let ctx = ctx_with_session_objects();
+        let open = RlmOpenTool
+            .execute(
+                json!({"name": "first_message", "session_object": "session://active/messages/0"}),
+                &ctx,
+            )
+            .await
+            .expect("open transcript slice");
+        let open_json: Value = serde_json::from_str(&open.content).expect("open json");
+        assert_eq!(open_json["type"], "session_object:message");
+        assert!(
+            open_json["preview_500"]
+                .as_str()
+                .unwrap()
+                .contains("RLM surface")
+        );
+
+        RlmCloseTool
+            .execute(json!({"name": "first_message"}), &ctx)
+            .await
+            .expect("close");
     }
 
     #[tokio::test]

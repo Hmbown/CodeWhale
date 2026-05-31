@@ -56,27 +56,46 @@ fail=0
 
 echo "Checking published release ${version}..."
 
-if npm_version="$(npm view "deepseek-tui@${version}" version 2>/dev/null)"; then
-  echo "npm deepseek-tui@${npm_version} is published."
+# Canonical post-rebrand npm package.
+if npm_version="$(npm view "codewhale@${version}" version 2>/dev/null)"; then
+  echo "npm codewhale@${npm_version} is published."
 else
-  echo "npm deepseek-tui@${version} is not published." >&2
+  echo "npm codewhale@${version} is not published." >&2
   fail=1
 fi
 
-if npm_binary_version="$(npm view "deepseek-tui@${version}" deepseekBinaryVersion 2>/dev/null)"; then
+# `codewhaleBinaryVersion` is the new internal version-pin field. Fall back
+# to the legacy `deepseekBinaryVersion` field for old/transition packages.
+binary_field=""
+npm_binary_version=""
+if value="$(npm view "codewhale@${version}" codewhaleBinaryVersion 2>/dev/null)" && [[ -n "${value}" ]]; then
+  binary_field="codewhaleBinaryVersion"
+  npm_binary_version="${value}"
+elif value="$(npm view "codewhale@${version}" deepseekBinaryVersion 2>/dev/null)" && [[ -n "${value}" ]]; then
+  binary_field="deepseekBinaryVersion"
+  npm_binary_version="${value}"
+fi
+
+if [[ -n "${binary_field}" ]]; then
   if [[ "${npm_binary_version}" == "${version}" ]]; then
-    echo "npm deepseekBinaryVersion=${npm_binary_version}."
+    echo "npm ${binary_field}=${npm_binary_version}."
   elif [[ "${allow_npm_binary_mismatch}" == "1" ]]; then
-    echo "npm deepseekBinaryVersion=${npm_binary_version} (allowed packaging-only mismatch)."
+    echo "npm ${binary_field}=${npm_binary_version} (allowed packaging-only mismatch)."
   else
-    echo "npm deepseekBinaryVersion=${npm_binary_version}, expected ${version}." >&2
+    echo "npm ${binary_field}=${npm_binary_version}, expected ${version}." >&2
     fail=1
   fi
 elif [[ "${allow_npm_binary_mismatch}" == "1" ]]; then
-  echo "npm deepseekBinaryVersion is absent (allowed packaging-only mismatch)."
+  echo "npm codewhaleBinaryVersion is absent (allowed packaging-only mismatch)."
 else
-  echo "npm deepseekBinaryVersion is absent for deepseek-tui@${version}." >&2
+  echo "npm codewhaleBinaryVersion is absent for codewhale@${version}." >&2
   fail=1
+fi
+
+# Legacy `deepseek-tui` deprecation shim package. Best-effort check —
+# absence after the transition release is expected and not fatal.
+if legacy_version="$(npm view "deepseek-tui@${version}" version 2>/dev/null)"; then
+  echo "npm deepseek-tui@${legacy_version} (deprecation shim) is published."
 fi
 
 for crate in "${release_crates[@]}"; do
@@ -89,7 +108,7 @@ for crate in "${release_crates[@]}"; do
 done
 
 if [[ "${fail}" == "0" ]]; then
-  echo "Published release OK: npm deepseek-tui@${version} and ${#release_crates[@]} crates are visible."
+  echo "Published release OK: npm codewhale@${version} and ${#release_crates[@]} crates are visible."
 fi
 
 exit "${fail}"

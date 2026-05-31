@@ -1,6 +1,6 @@
 # Capacity Controller
 
-`deepseek-tui` includes an opt-in capacity-aware context controller. In the
+`codewhale-tui` includes an opt-in capacity-aware context controller. In the
 default V4 path it is disabled, because its active interventions can rewrite
 the live prompt and break prefix-cache affinity. Treat it as telemetry or an
 experimental guardrail unless `capacity.enabled = true` is set explicitly.

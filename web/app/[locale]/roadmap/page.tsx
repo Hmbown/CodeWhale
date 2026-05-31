@@ -9,10 +9,10 @@ export async function generateMetadata({ params }: { params: Promise<{ locale: s
   const { locale } = await params;
   const isZh = locale === "zh";
   return {
-    title: isZh ? "路线图 · DeepSeek TUI" : "Roadmap · DeepSeek TUI",
+    title: isZh ? "路线图 · CodeWhale" : "Roadmap · CodeWhale",
     description: isZh
       ? "已确认、正在评估和已排除的功能规划。"
-      : "What's confirmed, what's being weighed, what's been ruled out for deepseek-tui.",
+      : "What's confirmed, what's being weighed, what's been ruled out for CodeWhale.",
   };
 }
 
@@ -30,6 +30,8 @@ const tracksEn = [
       { title: "Durable sessions + tasks", note: "Save, resume, rollback; background task queue with replayable timelines under ~/.deepseek/tasks/" },
       { title: "Bidirectional MCP", note: "Consume tools from external servers; expose as server via `deepseek mcp`; ~/.deepseek/mcp.json" },
       { title: "Skills + unified slash palette", note: "~/.deepseek/skills/ auto-loading; /help, /mode, /status, /config, /trust, /feedback" },
+      { title: "OpenRouter provider", note: "First-class OpenRouter integration with 300+ models across dozens of providers" },
+      { title: "Multi-provider support", note: "Hot-swap between providers (DeepSeek, OpenAI, Anthropic, OpenRouter) per session" },
     ],
   },
   {
@@ -41,6 +43,8 @@ const tracksEn = [
       { title: "Memory typed store", note: "SQLite + FTS5 backend with graph-structured agent memory and multi-signal recall (#534–#536)" },
       { title: "Feishu / Lark bot", note: "Chat-platform frontend over the existing runtime API (#757)" },
       { title: "Chinese-market & i18n", note: "Locale-aware UI, platform refinements, region-specific search backends (#755)" },
+      { title: "Hugging Face model discovery + Model Lab", note: "Browse, download, and manage models from Hugging Face Hub directly in the TUI" },
+      { title: "ZenMux / OpenAI-compatible providers", note: "Bring any OpenAI-compatible endpoint (vLLM, LiteLLM, Ollama, local) as a first-class provider" },
     ],
   },
   {
@@ -52,6 +56,7 @@ const tracksEn = [
       { title: "Exa web-search backend", note: "Bundled alternative to the existing DDG + Bing path (#431)" },
       { title: "Homebrew core formula", note: "Tap exists; pursuing homebrew-core inclusion" },
       { title: "Native Windows installer", note: "MSI / WinGet; Scoop manifest already ships" },
+      { title: "Unsloth / NeMo / Arcee fine-tune integration", note: "One-click fine-tuning workflows backed by Unsloth, NVIDIA NeMo, and Arcee toolkits" },
     ],
   },
   {
@@ -63,6 +68,16 @@ const tracksEn = [
       { title: "Hosted SaaS dashboard", note: "The terminal IS the dashboard; the website is informational only" },
       { title: "Required login / accounts", note: "Bring your own API key, that's it" },
       { title: "Sponsored model promotion", note: "Model picker stays neutral — no paid placement" },
+    ],
+  },
+  {
+    title: "Open model platform",
+    cn: "开放模型平台",
+    color: "indigo",
+    items: [
+      { title: "Community model registry", note: "Discover, share, and rate community fine-tuned models with reproducible recipes" },
+      { title: "One-click deploy", note: "Deploy any model to RunPod, Replicate, or your own infra with a single command" },
+      { title: "Model benchmarking dashboard", note: "Transparent, reproducible benchmarks across providers, quantization levels, and hardware" },
     ],
   },
 ];
@@ -81,6 +96,8 @@ const tracksZh = [
       { title: "持久化会话 + 后台任务", note: "保存、恢复、回滚；后台任务队列，可回放时间线，位于 ~/.deepseek/tasks/" },
       { title: "双向 MCP 协议", note: "消费外部服务器工具；通过 `deepseek mcp` 暴露为服务器；~/.deepseek/mcp.json" },
       { title: "技能 + 统一命令面板", note: "~/.deepseek/skills/ 自动加载；/help、/mode、/status、/config、/trust、/feedback" },
+      { title: "OpenRouter 提供商", note: "原生集成 OpenRouter，支持 300+ 模型，覆盖数十个提供商" },
+      { title: "多提供商支持", note: "按会话动态切换提供商（DeepSeek、OpenAI、Anthropic、OpenRouter）" },
     ],
   },
   {
@@ -92,6 +109,8 @@ const tracksZh = [
       { title: "记忆类型化存储", note: "SQLite + FTS5 后端，图结构 Agent 记忆，多信号召回（#534–#536）" },
       { title: "飞书 / Lark 机器人", note: "基于现有 runtime API 的聊天平台前端（#757）" },
       { title: "中国市场与国际化改进", note: "本地化 UI、平台优化、区域搜索引擎（#755）" },
+      { title: "Hugging Face 模型发现 + 模型实验室", note: "在 TUI 中直接浏览、下载和管理 Hugging Face Hub 上的模型" },
+      { title: "ZenMux / OpenAI 兼容提供商", note: "将任意 OpenAI 兼容端点（vLLM、LiteLLM、Ollama、本地模型）作为一级提供商接入" },
     ],
   },
   {
@@ -103,6 +122,7 @@ const tracksZh = [
       { title: "Exa 网页搜索后端", note: "内建替代 DDG + Bing 的搜索路由（#431）" },
       { title: "Homebrew 核心仓库", note: "Tap 已有；正在争取进入 homebrew-core" },
       { title: "Windows 原生安装器", note: "MSI / WinGet；Scoop 清单已发布" },
+      { title: "Unsloth / NeMo / Arcee 微调集成", note: "一键微调工作流，由 Unsloth、NVIDIA NeMo 和 Arcee 工具链驱动" },
     ],
   },
   {
@@ -116,12 +136,23 @@ const tracksZh = [
       { title: "赞助商模型推广", note: "模型选择器保持中立——无付费推荐位" },
     ],
   },
+  {
+    title: "开放模型平台",
+    cn: "Open model platform",
+    color: "indigo",
+    items: [
+      { title: "社区模型注册中心", note: "发现、分享和评价社区微调模型，附带可复现的配方" },
+      { title: "一键部署", note: "一条命令将任意模型部署到 RunPod、Replicate 或自有基础设施" },
+      { title: "模型基准测试面板", note: "跨提供商、量化级别和硬件的透明、可复现基准测试" },
+    ],
+  },
 ];
 
 const colorFor = (c: string) =>
   c === "jade" ? "border-jade text-jade" :
   c === "ochre" ? "border-ochre text-ochre" :
   c === "cobalt" ? "border-cobalt text-cobalt" :
+  c === "indigo" ? "border-indigo text-indigo" :
   "border-ink-mute text-ink-mute";
 
 export default async function RoadmapPage({ params }: { params: Promise<{ locale: string }> }) {
@@ -172,7 +203,7 @@ export default async function RoadmapPage({ params }: { params: Promise<{ locale
             </h1>
             <p className="mt-5 max-w-3xl text-ink-soft text-lg leading-[1.9] tracking-wide">
               已确认的功能、正在权衡的方案、以及已被排除的方向。未列在此页的内容均可在{" "}
-              <Link href="https://github.com/Hmbown/deepseek-tui/discussions/new?category=ideas" className="body-link">
+              <Link href="https://github.com/Hmbown/CodeWhale/discussions/new?category=ideas" className="body-link">
                 Discussions
               </Link>{" "}
               中讨论。
@@ -217,13 +248,13 @@ export default async function RoadmapPage({ params }: { params: Promise<{ locale
               </div>
               <div className="lg:col-span-4 flex flex-col gap-3">
                 <Link
-                  href="https://github.com/Hmbown/deepseek-tui/discussions/new?category=ideas"
+                  href="https://github.com/Hmbown/CodeWhale/discussions/new?category=ideas"
                   className="px-5 py-3 bg-indigo text-paper font-mono text-sm uppercase tracking-wider text-center hover:bg-indigo-deep transition-colors"
                 >
                   提交想法 →
                 </Link>
                 <Link
-                  href="https://github.com/Hmbown/deepseek-tui/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22"
+                  href="https://github.com/Hmbown/CodeWhale/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22"
                   className="px-5 py-3 hairline-t hairline-b hairline-l hairline-r border-paper-deep/30 font-mono text-sm uppercase tracking-wider text-center hover:bg-paper hover:text-ink transition-colors"
                 >
                   Good first issues →
@@ -245,7 +276,7 @@ export default async function RoadmapPage({ params }: { params: Promise<{ locale
             <p className="mt-5 max-w-3xl text-ink-soft text-lg leading-relaxed">
               What's confirmed, what's being weighed, what's been ruled out. Anything not on this page
               is fair game for{" "}
-              <Link href="https://github.com/Hmbown/deepseek-tui/discussions/new?category=ideas" className="body-link">
+              <Link href="https://github.com/Hmbown/CodeWhale/discussions/new?category=ideas" className="body-link">
                 discussion
               </Link>.
             </p>
@@ -290,13 +321,13 @@ export default async function RoadmapPage({ params }: { params: Promise<{ locale
               </div>
               <div className="lg:col-span-4 flex flex-col gap-3">
                 <Link
-                  href="https://github.com/Hmbown/deepseek-tui/discussions/new?category=ideas"
+                  href="https://github.com/Hmbown/CodeWhale/discussions/new?category=ideas"
                   className="px-5 py-3 bg-indigo text-paper font-mono text-sm uppercase tracking-wider text-center hover:bg-indigo-deep transition-colors"
                 >
                   Propose an idea →
                 </Link>
                 <Link
-                  href="https://github.com/Hmbown/deepseek-tui/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22"
+                  href="https://github.com/Hmbown/CodeWhale/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22"
                   className="px-5 py-3 hairline-t hairline-b hairline-l hairline-r border-paper-deep/30 font-mono text-sm uppercase tracking-wider text-center hover:bg-paper hover:text-ink transition-colors"
                 >
                   Good first issues →

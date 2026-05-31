@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DEEPSEEK_USER="${DEEPSEEK_USER:-deepseek}"
-DEEPSEEK_ROOT="${DEEPSEEK_ROOT:-/opt/deepseek}"
+DEEPSEEK_USER="${DEEPSEEK_USER:-codewhale}"
+DEEPSEEK_ROOT="${DEEPSEEK_ROOT:-/opt/codewhale}"
 WHALEBRO_ROOT="${WHALEBRO_ROOT:-/opt/whalebro}"
 RUNTIME_ENV="${RUNTIME_ENV:-/etc/deepseek/runtime.env}"
 BRIDGE_ENV="${BRIDGE_ENV:-/etc/deepseek/feishu-bridge.env}"
 BRIDGE_DIR="${BRIDGE_DIR:-${DEEPSEEK_ROOT}/bridge}"
-REPO_ROOT="${REPO_ROOT:-${WHALEBRO_ROOT}/deepseek-tui}"
+REPO_ROOT="${REPO_ROOT:-${WHALEBRO_ROOT}/codewhale}"
 
 failures=0
 warnings=0
@@ -97,19 +97,19 @@ check_workspace() {
 }
 
 check_binaries() {
-  section "DeepSeek binaries"
+  section "CodeWhale binaries"
   local cargo_bin="/home/${DEEPSEEK_USER}/.cargo/bin"
-  local deepseek="${cargo_bin}/deepseek"
-  local tui="${cargo_bin}/deepseek-tui"
-  if [[ -x "${deepseek}" ]]; then
-    pass "${deepseek} is executable"
-    "${deepseek}" --version 2>/dev/null | sed 's/^/[info] deepseek version: /' || warn "deepseek --version failed"
+  local codewhale="${cargo_bin}/codewhale"
+  local tui="${cargo_bin}/codewhale-tui"
+  if [[ -x "${codewhale}" ]]; then
+    pass "${codewhale} is executable"
+    "${codewhale}" --version 2>/dev/null | sed 's/^/[info] codewhale version: /' || warn "codewhale --version failed"
   else
-    fail "${deepseek} is missing or not executable"
+    fail "${codewhale} is missing or not executable"
   fi
   if [[ -x "${tui}" ]]; then
     pass "${tui} is executable"
-    "${tui}" --version 2>/dev/null | sed 's/^/[info] deepseek-tui version: /' || warn "deepseek-tui --version failed"
+    "${tui}" --version 2>/dev/null | sed 's/^/[info] codewhale-tui version: /' || warn "codewhale-tui --version failed"
   else
     fail "${tui} is missing or not executable"
   fi
@@ -205,7 +205,7 @@ check_systemd() {
     warn "systemd is not available in this environment"
     return
   fi
-  for unit in deepseek-runtime deepseek-feishu-bridge; do
+  for unit in codewhale-runtime codewhale-feishu-bridge; do
     [[ -f "/etc/systemd/system/${unit}.service" ]] \
       && pass "${unit}.service is installed" \
       || fail "${unit}.service is missing"

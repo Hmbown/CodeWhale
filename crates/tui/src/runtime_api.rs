@@ -3,9 +3,8 @@
 use std::collections::HashSet;
 use std::convert::Infallible;
 use std::fs;
-use std::net::SocketAddr;
-use std::path::PathBuf;
-use std::process::Command;
+use std::net::{SocketAddr, UdpSocket};
+use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -14,17 +13,21 @@ use async_stream::stream;
 use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderValue, Method, StatusCode, header};
 use axum::middleware::{self, Next};
+use axum::response::Html;
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::Utc;
+use codewhale_protocol::runtime::{RUNTIME_EVENT_ENVELOPE_SCHEMA_VERSION, RuntimeEventEnvelope};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tower_http::cors::{Any, CorsLayer};
+
+use crate::dependencies::ExternalTool;
 
 use crate::automation_manager::{
     AutomationManager, AutomationRecord, AutomationRunRecord, AutomationSchedulerConfig,
@@ -40,7 +43,6 @@ use crate::runtime_threads::{
 };
 use crate::session_manager::{SavedSession, SessionManager, SessionMetadata, default_sessions_dir};
 use crate::skill_state::SkillStateStore;
-use crate::skills::SkillRegistry;
 use crate::task_manager::{
     NewTaskRequest, SharedTaskManager, TaskManager, TaskManagerConfig, TaskRecord, TaskSummary,
 };
@@ -60,6 +62,7 @@ pub struct RuntimeApiState {
     auth_required: bool,
     bind_host: String,
     bind_port: u16,
+    mobile_enabled: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -78,6 +81,10 @@ pub struct RuntimeApiOptions {
     pub auth_token: Option<String>,
     /// Allow `/v1/*` routes without auth when no token is configured.
     pub insecure_no_auth: bool,
+    /// Enables the built-in mobile control page at `/mobile`.
+    pub mobile: bool,
+    /// Show a QR code for the mobile URL in the terminal.
+    pub show_qr: bool,
 }
 
 impl Default for RuntimeApiOptions {
@@ -89,6 +96,8 @@ impl Default for RuntimeApiOptions {
             cors_origins: Vec::new(),
             auth_token: None,
             insecure_no_auth: false,
+            mobile: false,
+            show_qr: false,
         }
     }
 }
@@ -261,11 +270,13 @@ struct SkillEntry {
     description: String,
     path: PathBuf,
     enabled: bool,
+    is_bundled: bool,
 }
 
 #[derive(Debug, Serialize)]
 struct SkillsResponse {
     directory: PathBuf,
+    directories: Vec<PathBuf>,
     warnings: Vec<String>,
     skills: Vec<SkillEntry>,
 }
@@ -293,6 +304,25 @@ struct DecideApprovalResponse {
     ok: bool,
     approval_id: String,
     decision: String,
+    delivered: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct SubmitUserInputBody {
+    answers: Vec<UserInputAnswerBody>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UserInputAnswerBody {
+    id: String,
+    label: String,
+    value: String,
+}
+
+#[derive(Debug, Serialize)]
+struct SubmitUserInputResponse {
+    ok: bool,
+    input_id: String,
     delivered: bool,
 }
 
@@ -423,6 +453,7 @@ pub async fn run_http_server(
         auth_required: auth_enabled,
         bind_host: options.host.clone(),
         bind_port: options.port,
+        mobile_enabled: options.mobile,
     };
     let app = build_router(state);
 
@@ -444,6 +475,14 @@ pub async fn run_http_server(
         println!("Runtime API auth: bearer token required for /v1/* routes.");
     } else {
         println!("Runtime API auth: disabled by explicit insecure mode.");
+    }
+    if options.mobile {
+        print_mobile_urls(
+            addr,
+            runtime_token.as_deref(),
+            auth_enabled,
+            options.show_qr,
+        );
     }
     let is_loopback = options.host == "127.0.0.1" || options.host == "::1";
     if is_loopback {
@@ -500,6 +539,10 @@ pub fn build_router(state: RuntimeApiState) -> Router {
         .route("/v1/threads/{id}/compact", post(compact_thread))
         .route("/v1/threads/{id}/events", get(stream_thread_events))
         .route("/v1/approvals/{approval_id}", post(decide_approval))
+        .route(
+            "/v1/user-input/{thread_id}/{input_id}",
+            post(submit_user_input),
+        )
         .route("/v1/tasks", get(list_tasks).post(create_task))
         .route("/v1/tasks/{id}", get(get_task))
         .route("/v1/tasks/{id}/cancel", post(cancel_task))
@@ -529,6 +572,8 @@ pub fn build_router(state: RuntimeApiState) -> Router {
 
     Router::new()
         .route("/health", get(health))
+        .route("/mobile", get(mobile_page))
+        .route("/mobile/", get(mobile_page))
         .route("/v1/runtime/info", get(runtime_info))
         .merge(api_routes)
         .layer(cors_layer(&state.cors_origins))
@@ -543,8 +588,17 @@ async fn require_runtime_token(
     let Some(expected) = state.runtime_token.as_deref() else {
         return next.run(req).await;
     };
-    let authorized = req
-        .headers()
+    let authorized = request_has_runtime_token(&req, expected);
+
+    if authorized {
+        next.run(req).await
+    } else {
+        runtime_token_required_response()
+    }
+}
+
+fn request_has_runtime_token(req: &Request, expected: &str) -> bool {
+    req.headers()
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|raw| raw.strip_prefix("Bearer "))
@@ -554,31 +608,142 @@ async fn require_runtime_token(
             .get("x-deepseek-runtime-token")
             .and_then(|value| value.to_str().ok())
             .is_some_and(|token| token == expected)
-        || token_from_query(req.uri().query()).is_some_and(|token| token == expected);
-
-    if authorized {
-        next.run(req).await
-    } else {
-        (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({
-                "error": {
-                    "message": "runtime API bearer token required",
-                    "status": StatusCode::UNAUTHORIZED.as_u16(),
-                }
-            })),
-        )
-            .into_response()
-    }
+        || token_from_query(req.uri().query()).is_some_and(|token| token == expected)
 }
 
-fn token_from_query(query: Option<&str>) -> Option<&str> {
+fn runtime_token_required_response() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(json!({
+            "error": {
+                "message": "runtime API bearer token required",
+                "status": StatusCode::UNAUTHORIZED.as_u16(),
+            }
+        })),
+    )
+        .into_response()
+}
+
+fn token_from_query(query: Option<&str>) -> Option<String> {
     query.and_then(|query| {
         query.split('&').find_map(|pair| {
             let (key, value) = pair.split_once('=')?;
-            (key == "token").then_some(value)
+            (key == "token")
+                .then(|| percent_decode_query_component(value))
+                .flatten()
         })
     })
+}
+
+fn percent_decode_query_component(value: &str) -> Option<String> {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'%' => {
+                let hi = *bytes.get(index + 1)?;
+                let lo = *bytes.get(index + 2)?;
+                let hi = (hi as char).to_digit(16)? as u8;
+                let lo = (lo as char).to_digit(16)? as u8;
+                decoded.push((hi << 4) | lo);
+                index += 3;
+            }
+            b'+' => {
+                decoded.push(b' ');
+                index += 1;
+            }
+            byte => {
+                decoded.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8(decoded).ok()
+}
+
+async fn mobile_page(State(state): State<RuntimeApiState>, req: Request) -> Response {
+    if !state.mobile_enabled {
+        return (
+            StatusCode::NOT_FOUND,
+            "mobile control is disabled; start with `codewhale serve --mobile`",
+        )
+            .into_response();
+    }
+    if let Some(expected) = state.runtime_token.as_deref()
+        && !request_has_runtime_token(&req, expected)
+    {
+        return runtime_token_required_response();
+    }
+    Html(MOBILE_HTML).into_response()
+}
+
+fn print_mobile_urls(addr: SocketAddr, token: Option<&str>, auth_enabled: bool, show_qr: bool) {
+    println!("Mobile control page enabled.");
+    let token_query = if auth_enabled {
+        token
+            .filter(|token| !token.trim().is_empty())
+            .map(|token| format!("?token={}", url_query_component(token)))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    let port = addr.port();
+    let qr_url = if addr.ip().is_unspecified() {
+        println!("  Local: http://127.0.0.1:{port}/mobile{token_query}");
+        if let Some(ip) = detect_lan_ip() {
+            let lan_url = format!("http://{ip}:{port}/mobile{token_query}");
+            println!("  LAN:   {lan_url}");
+            lan_url
+        } else {
+            println!(
+                "  LAN:   bind is 0.0.0.0; open http://<this-machine-ip>:{port}/mobile{token_query}"
+            );
+            format!("http://127.0.0.1:{port}/mobile{token_query}")
+        }
+    } else {
+        let url = format!("http://{addr}/mobile{token_query}");
+        println!("  URL:   {url}");
+        url
+    };
+    println!("Mobile security: use only on a trusted LAN/VPN; this server does not provide TLS.");
+
+    if show_qr {
+        match qrcode::QrCode::new(qr_url.as_bytes()) {
+            Ok(qr) => {
+                let qr_str = qr.render::<qrcode::render::unicode::Dense1x2>().build();
+                println!("\n{qr_str}");
+            }
+            Err(e) => {
+                eprintln!("Warning: could not generate QR code: {e}");
+            }
+        }
+    }
+}
+
+fn url_query_component(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                encoded.push(byte as char);
+            }
+            _ => {
+                use std::fmt::Write as _;
+                let _ = write!(encoded, "%{byte:02X}");
+            }
+        }
+    }
+    encoded
+}
+
+fn detect_lan_ip() -> Option<String> {
+    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
+    // UDP connect only selects the outbound interface locally; no packet is sent.
+    socket.connect("10.255.255.255:1").ok()?;
+    let addr = socket.local_addr().ok()?;
+    Some(addr.ip().to_string())
 }
 
 async fn health() -> Json<HealthResponse> {
@@ -707,7 +872,38 @@ fn session_to_detail(session: SavedSession) -> SessionDetailResponse {
                     crate::models::ContentBlock::Thinking { thinking, .. } => {
                         json!({ "type": "thinking", "text": thinking })
                     }
-                    _ => json!({ "type": "other" }),
+                    crate::models::ContentBlock::ToolUse { id, name, input, caller } => {
+                        let mut obj =
+                            json!({ "type": "tool_use", "id": id, "name": name, "input": input });
+                        if let Some(caller) = caller {
+                            obj["caller"] = json!(caller);
+                        }
+                        obj
+                    }
+                    crate::models::ContentBlock::ToolResult { tool_use_id, content, is_error, content_blocks, .. } => {
+                        let mut obj = json!({ "type": "tool_result", "tool_use_id": tool_use_id });
+                        if let Some(cbs) = content_blocks {
+                            obj["content_blocks"] = json!(cbs);
+                            if !content.is_empty() {
+                                obj["content"] = json!(content);
+                            }
+                        } else {
+                            obj["content"] = json!(content);
+                        }
+                        if let Some(e) = is_error {
+                            obj["is_error"] = json!(e);
+                        }
+                        obj
+                    }
+                    crate::models::ContentBlock::ServerToolUse { id, name, input } => {
+                        json!({ "type": "tool_use", "id": id, "name": name, "input": input })
+                    }
+                    crate::models::ContentBlock::ToolSearchToolResult { tool_use_id, content } => {
+                        json!({ "type": "tool_result", "tool_use_id": tool_use_id, "content": content })
+                    }
+                    crate::models::ContentBlock::CodeExecutionToolResult { tool_use_id, content } => {
+                        json!({ "type": "tool_result", "tool_use_id": tool_use_id, "content": content })
+                    }
                 })
                 .collect();
             json!({
@@ -906,7 +1102,7 @@ async fn list_skills(
     State(state): State<RuntimeApiState>,
 ) -> Result<Json<SkillsResponse>, ApiError> {
     let skills_dir = resolve_skills_dir(&state.config, &state.workspace);
-    let registry = SkillRegistry::discover(&skills_dir);
+    let (registry, directories) = discover_skills_for_runtime_api(&state.workspace, &skills_dir);
     let skill_state = state.skill_state.lock().await;
     let skills = registry
         .list()
@@ -914,12 +1110,14 @@ async fn list_skills(
         .map(|skill| SkillEntry {
             name: skill.name.clone(),
             description: skill.description.clone(),
-            path: skills_dir.join(&skill.name).join("SKILL.md"),
+            path: skill.path.clone(),
             enabled: skill_state.is_enabled(&skill.name),
+            is_bundled: skill_entry_is_bundled(skill, &skills_dir),
         })
         .collect();
     Ok(Json(SkillsResponse {
         directory: skills_dir,
+        directories,
         warnings: registry.warnings().to_vec(),
         skills,
     }))
@@ -931,12 +1129,12 @@ async fn set_skill_enabled(
     Json(req): Json<SetSkillEnabledRequest>,
 ) -> Result<Json<SetSkillEnabledResponse>, ApiError> {
     let skills_dir = resolve_skills_dir(&state.config, &state.workspace);
-    let registry = SkillRegistry::discover(&skills_dir);
+    let (registry, directories) = discover_skills_for_runtime_api(&state.workspace, &skills_dir);
     let exists = registry.list().iter().any(|skill| skill.name == name);
     if !exists {
         return Err(ApiError::not_found(format!(
-            "skill '{name}' not found under {}",
-            skills_dir.display()
+            "skill '{name}' not found in searched directories: {}",
+            format_skill_search_paths(&directories)
         )));
     }
 
@@ -980,6 +1178,34 @@ async fn decide_approval(
         ok: true,
         approval_id,
         decision: req.decision,
+        delivered,
+    }))
+}
+
+async fn submit_user_input(
+    State(state): State<RuntimeApiState>,
+    Path((thread_id, input_id)): Path<(String, String)>,
+    Json(req): Json<SubmitUserInputBody>,
+) -> Result<Json<SubmitUserInputResponse>, ApiError> {
+    use crate::tools::user_input::{UserInputAnswer, UserInputResponse};
+    let answers: Vec<UserInputAnswer> = req
+        .answers
+        .into_iter()
+        .map(|a| UserInputAnswer {
+            id: a.id,
+            label: a.label,
+            value: a.value,
+        })
+        .collect();
+    let response = UserInputResponse { answers };
+    let delivered = state
+        .runtime_threads
+        .submit_user_input(&thread_id, &input_id, response)
+        .await
+        .map_err(map_thread_err)?;
+    Ok(Json(SubmitUserInputResponse {
+        ok: true,
+        input_id,
         delivered,
     }))
 }
@@ -1469,15 +1695,23 @@ async fn stream_turn(
 }
 
 fn runtime_event_payload(event: crate::runtime_threads::RuntimeEventRecord) -> serde_json::Value {
-    json!({
-        "seq": event.seq,
-        "timestamp": event.timestamp,
-        "thread_id": event.thread_id,
-        "turn_id": event.turn_id,
-        "item_id": event.item_id,
-        "event": event.event,
-        "payload": event.payload,
-    })
+    let event_name = event.event.clone();
+    let timestamp = event.timestamp.to_rfc3339();
+    let schema_version = RUNTIME_EVENT_ENVELOPE_SCHEMA_VERSION;
+    let envelope = RuntimeEventEnvelope {
+        schema_version,
+        seq: event.seq,
+        event: event_name.clone(),
+        kind: event_name,
+        thread_id: event.thread_id,
+        turn_id: event.turn_id,
+        item_id: event.item_id,
+        timestamp: timestamp.clone(),
+        created_at: Some(timestamp),
+        payload: event.payload,
+        extra: Default::default(),
+    };
+    serde_json::to_value(envelope).expect("serialize runtime event envelope")
 }
 
 fn map_compat_stream_event(event: &crate::runtime_threads::RuntimeEventRecord) -> Option<SseEvent> {
@@ -1562,6 +1796,8 @@ fn map_compat_stream_event(event: &crate::runtime_threads::RuntimeEventRecord) -
             }
         }
         "approval.required" => Some(sse_json("approval.required", payload.clone())),
+        "approval.decided" => Some(sse_json("approval.decided", payload.clone())),
+        "approval.timeout" => Some(sse_json("approval.timeout", payload.clone())),
         "sandbox.denied" => Some(sse_json("sandbox.denied", payload.clone())),
         "turn.completed" => {
             let usage = payload
@@ -1646,11 +1882,7 @@ fn collect_workspace_status(workspace: &std::path::Path) -> WorkspaceStatusRespo
 }
 
 fn run_git(workspace: &std::path::Path, args: &[&str]) -> Option<String> {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(workspace)
-        .output()
-        .ok()?;
+    let output = crate::dependencies::Git::output(args, workspace).ok()?;
     if !output.status.success() {
         return None;
     }
@@ -1682,6 +1914,50 @@ fn resolve_skills_dir(config: &Config, workspace: &std::path::Path) -> PathBuf {
         }
     }
     config.skills_dir()
+}
+
+fn skills_search_directories(workspace: &FsPath, skills_dir: &FsPath) -> Vec<PathBuf> {
+    let mut directories = crate::skills::skills_directories(workspace);
+    if skills_dir.is_dir() && !directories.iter().any(|path| path == skills_dir) {
+        directories.push(skills_dir.to_path_buf());
+    }
+    directories
+}
+
+fn discover_skills_for_runtime_api(
+    workspace: &FsPath,
+    skills_dir: &FsPath,
+) -> (crate::skills::SkillRegistry, Vec<PathBuf>) {
+    let directories = skills_search_directories(workspace, skills_dir);
+    let registry = crate::skills::discover_from_directories(directories.clone());
+    (registry, directories)
+}
+
+fn skill_entry_is_bundled(skill: &crate::skills::Skill, skills_dir: &FsPath) -> bool {
+    if !crate::skills::is_bundled_skill_name(&skill.name) {
+        return false;
+    }
+
+    let expected_path = skills_dir.join(&skill.name).join("SKILL.md");
+    paths_refer_to_same_file(&skill.path, &expected_path)
+}
+
+fn paths_refer_to_same_file(left: &FsPath, right: &FsPath) -> bool {
+    match (fs::canonicalize(left), fs::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left == right,
+    }
+}
+
+fn format_skill_search_paths(directories: &[PathBuf]) -> String {
+    if directories.is_empty() {
+        return "<none>".to_string();
+    }
+    directories
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn load_mcp_config_or_default(path: &std::path::Path) -> Result<McpConfig, ApiError> {
@@ -1741,6 +2017,8 @@ async fn get_usage(
         .map_err(|e| ApiError::internal(e.to_string()))?;
     Ok(Json(json!(aggregation)))
 }
+
+const MOBILE_HTML: &str = include_str!("runtime_mobile.html");
 
 /// Built-in dev origins always allowed by the runtime API (whalescale#255).
 const DEFAULT_CORS_ORIGINS: &[&str] = &[
@@ -1906,6 +2184,78 @@ mod tests {
         }
     }
 
+    fn saved_session_with_blocks(blocks: Vec<crate::models::ContentBlock>) -> SavedSession {
+        SavedSession {
+            schema_version: 1,
+            metadata: SessionMetadata {
+                id: "session-1".to_string(),
+                title: "test session".to_string(),
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                message_count: 1,
+                total_tokens: 0,
+                model: "test-model".to_string(),
+                workspace: PathBuf::from("."),
+                mode: None,
+                cost: Default::default(),
+                parent_session_id: None,
+                forked_from_message_count: None,
+                cumulative_turn_secs: 0,
+            },
+            messages: vec![crate::models::Message {
+                role: "assistant".to_string(),
+                content: blocks,
+            }],
+            system_prompt: None,
+            context_references: Vec::new(),
+            artifacts: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn session_detail_tool_use_preserves_caller_metadata() {
+        let detail = session_to_detail(saved_session_with_blocks(vec![
+            crate::models::ContentBlock::ToolUse {
+                id: "tool-1".to_string(),
+                name: "task_shell_start".to_string(),
+                input: json!({ "cmd": "cargo test" }),
+                caller: Some(crate::models::ToolCaller {
+                    caller_type: "subagent".to_string(),
+                    tool_id: Some("parent-tool".to_string()),
+                }),
+            },
+        ]));
+
+        let block = &detail.messages[0]["content"][0];
+        assert_eq!(block["type"].as_str(), Some("tool_use"));
+        assert_eq!(block["caller"]["type"].as_str(), Some("subagent"));
+        assert_eq!(block["caller"]["tool_id"].as_str(), Some("parent-tool"));
+    }
+
+    #[test]
+    fn session_detail_tool_result_keeps_fallback_content_with_blocks() {
+        let detail = session_to_detail(saved_session_with_blocks(vec![
+            crate::models::ContentBlock::ToolResult {
+                tool_use_id: "tool-1".to_string(),
+                content: "fallback text".to_string(),
+                is_error: Some(false),
+                content_blocks: Some(vec![json!({
+                    "type": "text",
+                    "text": "structured text"
+                })]),
+            },
+        ]));
+
+        let block = &detail.messages[0]["content"][0];
+        assert_eq!(block["type"].as_str(), Some("tool_result"));
+        assert_eq!(block["content"].as_str(), Some("fallback text"));
+        assert_eq!(
+            block["content_blocks"][0]["text"].as_str(),
+            Some("structured text")
+        );
+        assert_eq!(block["is_error"].as_bool(), Some(false));
+    }
+
     #[test]
     fn runtime_auth_generates_token_by_default() {
         let auth = resolve_runtime_auth(None, None, false);
@@ -1950,6 +2300,23 @@ mod tests {
         assert!(auth.token.is_some());
     }
 
+    #[test]
+    fn url_query_component_percent_encodes_token() {
+        assert_eq!(
+            url_query_component("abc ABC+/?:=&%"),
+            "abc%20ABC%2B%2F%3F%3A%3D%26%25"
+        );
+    }
+
+    #[test]
+    fn token_from_query_decodes_percent_encoded_token() {
+        assert_eq!(
+            token_from_query(Some("since_seq=0&token=abc%20ABC%2B%2F%3F%3A%3D%26%25")),
+            Some("abc ABC+/?:=&%".to_string())
+        );
+        assert_eq!(token_from_query(Some("token=bad%ZZ")), None);
+    }
+
     async fn spawn_test_server_with_root(
         root: PathBuf,
         sessions_dir: PathBuf,
@@ -1967,6 +2334,21 @@ mod tests {
         root: PathBuf,
         sessions_dir: PathBuf,
         runtime_token: Option<String>,
+    ) -> Result<
+        Option<(
+            SocketAddr,
+            SharedRuntimeThreadManager,
+            tokio::task::JoinHandle<()>,
+        )>,
+    > {
+        spawn_test_server_with_root_token_and_mobile(root, sessions_dir, runtime_token, false).await
+    }
+
+    async fn spawn_test_server_with_root_token_and_mobile(
+        root: PathBuf,
+        sessions_dir: PathBuf,
+        runtime_token: Option<String>,
+        mobile_enabled: bool,
     ) -> Result<
         Option<(
             SocketAddr,
@@ -2035,6 +2417,7 @@ mod tests {
             auth_required,
             bind_host: "127.0.0.1".to_string(),
             bind_port: 0,
+            mobile_enabled,
         };
         let app = build_router(state);
         let listener = match TcpListener::bind("127.0.0.1:0").await {
@@ -2533,6 +2916,8 @@ mod tests {
                                 },
                                 status: TurnOutcomeStatus::Completed,
                                 error: None,
+                                tool_catalog: None,
+                                base_url: None,
                             })
                             .await;
                     }
@@ -2546,6 +2931,8 @@ mod tests {
                                 },
                                 status: TurnOutcomeStatus::Completed,
                                 error: None,
+                                tool_catalog: None,
+                                base_url: None,
                             })
                             .await;
                     }
@@ -2622,6 +3009,30 @@ mod tests {
             chunk_text.contains("event:"),
             "expected SSE event chunk, got: {chunk_text}"
         );
+        let (event_name, payload) = parse_sse_frame(&chunk_text)?;
+        assert_eq!(event_name, "thread.started");
+        assert!(
+            event_name.starts_with("item.")
+                || event_name.starts_with("turn.")
+                || event_name.starts_with("thread.")
+                || event_name == "turn.completed"
+                || event_name == "turn.started"
+                || event_name == "thread.started",
+            "unexpected first event name: {event_name}"
+        );
+        assert_eq!(payload["event"], payload["kind"]);
+        assert!(payload.get("turn_id").is_some());
+        assert!(payload.get("item_id").is_some());
+        assert!(payload["turn_id"].is_null());
+        assert!(payload["item_id"].is_null());
+        assert_eq!(payload["thread_id"], thread_id);
+        assert!(
+            payload["schema_version"]
+                .as_u64()
+                .is_some_and(|version| version >= 1)
+        );
+        assert!(payload.get("seq").and_then(Value::as_u64).is_some());
+        assert!(payload["payload"].is_object() || payload["payload"].is_array());
 
         handle.abort();
         Ok(())
@@ -2678,6 +3089,8 @@ mod tests {
                     },
                     status: TurnOutcomeStatus::Completed,
                     error: None,
+                    tool_catalog: None,
+                    base_url: None,
                 })
                 .await;
         });
@@ -2712,7 +3125,15 @@ mod tests {
             .await?
             .error_for_status()?;
         let frame_a = read_first_sse_frame(resp_a).await?;
-        let (_event_a, payload_a) = parse_sse_frame(&frame_a)?;
+        let (event_a, payload_a) = parse_sse_frame(&frame_a)?;
+        assert_eq!(event_a, "thread.started");
+        assert!(payload_a.get("turn_id").is_some());
+        assert!(payload_a.get("item_id").is_some());
+        assert!(payload_a["turn_id"].is_null());
+        assert!(payload_a["item_id"].is_null());
+        assert!(payload_a.get("schema_version").is_some());
+        assert_eq!(payload_a["event"], payload_a["kind"]);
+        assert_eq!(payload_a["thread_id"], thread_id);
         let seq_a = payload_a
             .get("seq")
             .and_then(Value::as_u64)
@@ -2727,6 +3148,9 @@ mod tests {
             .error_for_status()?;
         let frame_b = read_first_sse_frame(resp_b).await?;
         let (_event_b, payload_b) = parse_sse_frame(&frame_b)?;
+        assert!(payload_b.get("schema_version").is_some());
+        assert_eq!(payload_b["event"], payload_b["kind"]);
+        assert_eq!(payload_b["thread_id"], thread_id);
         let seq_b = payload_b
             .get("seq")
             .and_then(Value::as_u64)
@@ -2735,7 +3159,6 @@ mod tests {
             seq_b > seq_a,
             "expected seq after cursor: {seq_b} <= {seq_a}"
         );
-        assert_eq!(payload_b["thread_id"], thread_id);
 
         handle.abort();
         Ok(())
@@ -2800,6 +3223,8 @@ mod tests {
                     },
                     status: TurnOutcomeStatus::Completed,
                     error: None,
+                    tool_catalog: None,
+                    base_url: None,
                 })
                 .await;
         });
@@ -3019,6 +3444,8 @@ mod tests {
                     },
                     status: TurnOutcomeStatus::Completed,
                     error: None,
+                    tool_catalog: None,
+                    base_url: None,
                 })
                 .await;
         });
@@ -3601,6 +4028,115 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mobile_page_is_available_only_when_enabled() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let root = tmp.path().to_path_buf();
+        let sessions_dir = root.join("sessions");
+        let Some((addr, _runtime_threads, handle)) = spawn_test_server_with_root_token_and_mobile(
+            root.clone(),
+            sessions_dir.clone(),
+            None,
+            false,
+        )
+        .await?
+        else {
+            return Ok(());
+        };
+        let client = reqwest::Client::new();
+        let disabled = client.get(format!("http://{addr}/mobile")).send().await?;
+        assert_eq!(disabled.status(), StatusCode::NOT_FOUND);
+        handle.abort();
+
+        let Some((addr, _runtime_threads, handle)) =
+            spawn_test_server_with_root_token_and_mobile(root, sessions_dir, None, true).await?
+        else {
+            return Ok(());
+        };
+        let enabled = client
+            .get(format!("http://{addr}/mobile"))
+            .send()
+            .await?
+            .error_for_status()?;
+        let html = enabled.text().await?;
+        assert!(html.contains("CodeWhale Mobile"));
+        assert!(html.contains("/v1/approvals/"));
+
+        handle.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn mobile_page_requires_runtime_token_when_auth_enabled() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let root = tmp.path().to_path_buf();
+        let sessions_dir = root.join("sessions");
+        let token = "abc ABC+/?:=&%".to_string();
+        let Some((addr, _runtime_threads, handle)) = spawn_test_server_with_root_token_and_mobile(
+            root,
+            sessions_dir,
+            Some(token.clone()),
+            true,
+        )
+        .await?
+        else {
+            return Ok(());
+        };
+        let client = reqwest::Client::new();
+
+        let unauthorized = client.get(format!("http://{addr}/mobile")).send().await?;
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let encoded = url_query_component(&token);
+        let query = client
+            .get(format!("http://{addr}/mobile?token={encoded}"))
+            .send()
+            .await?
+            .error_for_status()?;
+        assert!(query.text().await?.contains("CodeWhale Mobile"));
+
+        let bearer = client
+            .get(format!("http://{addr}/mobile"))
+            .bearer_auth(&token)
+            .send()
+            .await?
+            .error_for_status()?;
+        assert!(bearer.text().await?.contains("CodeWhale Mobile"));
+
+        handle.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn mobile_insecure_mode_allows_page_and_v1_routes_without_token() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let root = tmp.path().to_path_buf();
+        let sessions_dir = root.join("sessions");
+        let Some((addr, _runtime_threads, handle)) =
+            spawn_test_server_with_root_token_and_mobile(root, sessions_dir, None, true).await?
+        else {
+            return Ok(());
+        };
+        let client = reqwest::Client::new();
+
+        let page = client
+            .get(format!("http://{addr}/mobile"))
+            .send()
+            .await?
+            .error_for_status()?;
+        assert!(page.text().await?.contains("CodeWhale Mobile"));
+
+        let summary = client
+            .get(format!("http://{addr}/v1/threads/summary"))
+            .send()
+            .await?
+            .error_for_status()?;
+        assert_eq!(summary.status(), StatusCode::OK);
+
+        handle.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn decide_approval_404s_when_nothing_pending() -> Result<()> {
         let Some((addr, _runtime_threads, handle)) = spawn_test_server().await? else {
             return Ok(());
@@ -3729,6 +4265,71 @@ mod tests {
 
         let expected = fs::canonicalize(&local_skills).expect("canonical local skills");
         assert_eq!(resolved, expected);
+    }
+
+    #[test]
+    fn skills_search_directories_includes_custom_skills_dir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workspace = tmp.path().join("workspace");
+        let custom_skills = tmp.path().join("custom-skills");
+        fs::create_dir_all(&workspace).expect("create workspace");
+        fs::create_dir_all(&custom_skills).expect("create custom skills");
+
+        let directories = skills_search_directories(&workspace, &custom_skills);
+
+        assert!(
+            directories.iter().any(|dir| dir == &custom_skills),
+            "custom skills_dir must be reported when discovery searches it"
+        );
+        let message = format_skill_search_paths(&directories);
+        assert!(message.contains("custom-skills"));
+    }
+
+    #[test]
+    fn skill_entry_is_bundled_requires_configured_bundle_path() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let bundled_skills_dir = tmp.path().join("bundled-skills");
+        let bundled_skill_path = bundled_skills_dir.join("delegate").join("SKILL.md");
+        let override_skill_path = tmp
+            .path()
+            .join("workspace")
+            .join(".agents")
+            .join("skills")
+            .join("delegate")
+            .join("SKILL.md");
+        fs::create_dir_all(bundled_skill_path.parent().expect("bundled parent"))
+            .expect("create bundled skill dir");
+        fs::create_dir_all(override_skill_path.parent().expect("override parent"))
+            .expect("create override skill dir");
+        fs::write(
+            &bundled_skill_path,
+            "---\nname: delegate\ndescription: bundled\n---\n",
+        )
+        .expect("write bundled skill");
+        fs::write(
+            &override_skill_path,
+            "---\nname: delegate\ndescription: override\n---\n",
+        )
+        .expect("write override skill");
+
+        let bundled_skill = crate::skills::Skill {
+            name: "delegate".to_string(),
+            description: String::new(),
+            body: String::new(),
+            path: bundled_skill_path,
+        };
+        let override_skill = crate::skills::Skill {
+            name: "delegate".to_string(),
+            description: String::new(),
+            body: String::new(),
+            path: override_skill_path,
+        };
+
+        assert!(skill_entry_is_bundled(&bundled_skill, &bundled_skills_dir));
+        assert!(!skill_entry_is_bundled(
+            &override_skill,
+            &bundled_skills_dir
+        ));
     }
 
     /// A `skills` symlink that points outside the workspace must NOT be

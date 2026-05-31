@@ -1,0 +1,7 @@
+# Ensure LF line endings for files consumed by include_str!() on all platforms.
+# include_str!() preserves raw bytes; CRLF breaks substring assertions and
+# produces different compiled binaries on Windows vs Linux/macOS.
+crates/tui/src/prompts/*.md text eol=lf
+
+# Everything else auto-detects (default).
+* text=auto

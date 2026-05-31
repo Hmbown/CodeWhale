@@ -306,7 +306,7 @@ impl ToolSpec for UpdatePlanTool {
     }
 
     fn description(&self) -> &'static str {
-        "Update the implementation plan with steps and their status. Use this to track progress on implementation tasks. Each step has a description and status (pending, in_progress, completed). Optionally include an explanation of the overall approach."
+        "Update optional high-level strategy metadata for complex initiatives. Use checklist_write for primary Work progress; update_plan should capture phase-level approach changes, not duplicate checklist items. Each strategy step has a description and status (pending, in_progress, completed). Optionally include an explanation of the overall approach."
     }
 
     fn input_schema(&self) -> serde_json::Value {

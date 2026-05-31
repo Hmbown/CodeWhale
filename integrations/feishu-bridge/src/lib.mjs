@@ -67,7 +67,13 @@ export function incomingIdentity(event) {
     messageType: message.message_type || "",
     openId: sender.open_id || "",
     unionId: sender.union_id || "",
-    userId: sender.user_id || ""
+    userId: sender.user_id || "",
+    // Thread/topic group context: these fields let the bridge reply
+    // inside the same topic instead of spawning a new standalone topic.
+    // / 话题群上下文：用于在同一话题内回复，而非新建独立话题。
+    parentId: message.parent_id || "",
+    rootId: message.root_id || "",
+    threadId: message.thread_id || ""
   };
 }
 
@@ -141,6 +147,11 @@ export function commandAction(command) {
       return { kind: "interrupt" };
     case "compact":
       return { kind: "compact" };
+    case "model":
+      // /model <model_name> — switch per-chat default model.
+      // Stored in thread store and used for future threads/turns.
+      // Pass "default" to reset to the bridge-level default.
+      return { kind: "set_model", modelName: command.args };
     case "allow":
       return { kind: "approval", decision: "allow", ...parseApprovalDecisionArgs(command.args) };
     case "deny":
@@ -153,6 +164,17 @@ export function commandAction(command) {
         prompt: `/${command.name}${command.args ? ` ${command.args}` : ""}`
       };
   }
+}
+
+export function preservedChatStateFields(state = {}) {
+  const preserved = {};
+  if (Object.prototype.hasOwnProperty.call(state || {}, "model")) {
+    preserved.model = state.model || null;
+  }
+  if (state?.replyToMessageId) {
+    preserved.replyToMessageId = state.replyToMessageId;
+  }
+  return preserved;
 }
 
 export function splitMessage(text, maxChars = 3500) {
@@ -335,6 +357,7 @@ export function helpText() {
     "/threads - recent runtime threads",
     "/new - create a new thread for this chat",
     "/resume <thread_id> - bind this chat to an existing thread",
+    "/model <name|default> - set or reset this chat's model",
     "/interrupt - interrupt the active turn",
     "/compact - compact the current thread",
     "/allow <approval_id> [remember] - approve a pending tool call",

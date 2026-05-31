@@ -62,5 +62,9 @@ Normal Pro Plan turns are resolved before dispatch:
 
 After `Done`, the next user turn resets the router to a fresh Plan phase.
 
+Model routes are provider-aware. If the active provider does not advertise a
+usable `deepseek-v4-flash` route, the Execute phase falls back to the resolved
+Pro model instead of sending an unavailable model id.
+
 If a raw `AppMode::ProPlan` reaches the engine unexpectedly, it fails closed to
 Plan-mode behavior: read-only registry, read-only sandbox, and Never approval.

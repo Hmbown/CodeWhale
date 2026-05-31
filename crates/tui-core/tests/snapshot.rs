@@ -1,4 +1,4 @@
-use deepseek_tui_core::{Pane, UiEvent, UiState};
+use codewhale_tui_core::{Pane, UiEvent, UiState};
 
 #[test]
 fn reducer_produces_stable_snapshot_for_core_workflow() {

@@ -7,7 +7,11 @@
 //! tightly controlled workspace-only write access.
 
 use serde::{Deserialize, Serialize};
+use std::io;
 use std::path::{Path, PathBuf};
+
+use super::{CommandSpec, ExecEnv};
+use crate::command_safety::SafetyLevel;
 
 /// Determines execution restrictions for shell commands.
 ///
@@ -33,7 +37,7 @@ pub enum SandboxPolicy {
 
     /// Indicates the process is already running in an external sandbox.
     ///
-    /// Use this when DeepSeek TUI is itself running inside a container,
+    /// Use this when CodeWhale is itself running inside a container,
     /// VM, or other sandboxed environment. This avoids double-sandboxing
     /// which can cause issues.
     #[serde(rename = "external-sandbox")]
@@ -186,7 +190,11 @@ impl SandboxPolicy {
                     .map(|root| {
                         let mut read_only_subpaths = Vec::new();
 
-                        // Protect .deepseek directories from modification
+                        // Protect .codewhale/ and .deepseek/ directories from modification
+                        let codewhale_dir = root.join(".codewhale");
+                        if codewhale_dir.is_dir() {
+                            read_only_subpaths.push(codewhale_dir);
+                        }
                         let deepseek_dir = root.join(".deepseek");
                         if deepseek_dir.is_dir() {
                             read_only_subpaths.push(deepseek_dir);
@@ -252,6 +260,57 @@ impl WritableRoot {
     }
 }
 
+/// Unified trait for platform-specific sandbox executors (#2186).
+///
+/// Each platform module (seatbelt, landlock, windows) provides an
+/// implementation of this trait. The `SandboxManager` dispatches through
+/// the trait instead of calling platform-specific functions directly.
+pub trait SandboxExecutor {
+    /// Prepare a sandboxed execution environment from a command spec.
+    ///
+    /// Returns the transformed command, environment, and sandbox metadata
+    /// needed to spawn the process.
+    fn prepare(&self, spec: &CommandSpec) -> io::Result<ExecEnv>;
+
+    /// Check if a command failure was caused by sandbox denial.
+    fn was_denied(&self, exit_code: i32, stderr: &str) -> bool;
+
+    /// Get a human-readable description of why the sandbox blocked the command.
+    fn denial_message(&self, stderr: &str) -> String;
+
+    /// Returns the type of sandbox this executor provides.
+    fn sandbox_type(&self) -> super::SandboxType;
+}
+
+/// Map a command safety classification to the appropriate sandbox policy (#2186).
+///
+/// - `Safe` / `WorkspaceSafe` → use the default sandbox policy
+/// - `RequiresApproval` → user must approve before execution (handled by caller)
+/// - `Dangerous` → blocked unless in YOLO mode with trust
+pub fn map_safety_level_to_behavior(
+    level: SafetyLevel,
+    default_policy: &SandboxPolicy,
+) -> SandboxPolicyBehavior {
+    match level {
+        SafetyLevel::Safe | SafetyLevel::WorkspaceSafe => {
+            SandboxPolicyBehavior::Sandboxed(default_policy.clone())
+        }
+        SafetyLevel::RequiresApproval => SandboxPolicyBehavior::RequiresApproval,
+        SafetyLevel::Dangerous => SandboxPolicyBehavior::Blocked,
+    }
+}
+
+/// Behavior decision for a sandboxed command based on safety level.
+#[derive(Debug, Clone)]
+pub enum SandboxPolicyBehavior {
+    /// Execute with the given sandbox policy.
+    Sandboxed(SandboxPolicy),
+    /// User approval required before execution.
+    RequiresApproval,
+    /// Block execution entirely (unless YOLO+trust).
+    Blocked,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -302,6 +361,33 @@ mod tests {
         );
         assert!(root.is_path_writable(Path::new("/project/src/main.rs")));
         assert!(!root.is_path_writable(Path::new("/project/.deepseek/config")));
+    }
+
+    #[test]
+    fn test_safety_level_mapping() {
+        let default = SandboxPolicy::default();
+
+        // Safe commands get sandboxed
+        assert!(matches!(
+            map_safety_level_to_behavior(SafetyLevel::Safe, &default),
+            SandboxPolicyBehavior::Sandboxed(_)
+        ));
+        assert!(matches!(
+            map_safety_level_to_behavior(SafetyLevel::WorkspaceSafe, &default),
+            SandboxPolicyBehavior::Sandboxed(_)
+        ));
+
+        // RequiresApproval gets RequiresApproval
+        assert!(matches!(
+            map_safety_level_to_behavior(SafetyLevel::RequiresApproval, &default),
+            SandboxPolicyBehavior::RequiresApproval
+        ));
+
+        // Dangerous gets Blocked
+        assert!(matches!(
+            map_safety_level_to_behavior(SafetyLevel::Dangerous, &default),
+            SandboxPolicyBehavior::Blocked
+        ));
     }
 
     #[test]

@@ -49,15 +49,24 @@ pub fn handle_paste_burst_key(app: &mut App, key: &KeyEvent, now: Instant) -> bo
         }
         KeyCode::Char(c) if !has_ctrl_alt_or_super => {
             if !c.is_ascii() {
+                // IME-committed characters (Chinese, Japanese, Korean)
+                // arrive as individual KeyCode::Char events, typically with
+                // tens-of-milliseconds gaps between each committed character.
+                // Paste-burst buffering would lose characters when the IME
+                // commits slower than the burst heuristic's timing window.
+                //
+                // We still call note_plain_char + extend_window so that:
+                //   1. The burst timing counter advances for non-IME fast
+                //      typing on terminals without bracketed paste support.
+                //   2. The Enter-suppression window stays open during a rapid
+                //      non-ASCII sequence, preventing premature submission.
+                // But the character is inserted directly into the composer
+                // rather than placed into the paste-burst buffer.
                 if let Some(pending) = app.paste_burst.flush_before_modified_input() {
                     app.insert_str(&pending);
                 }
-                if app.paste_burst.try_append_char_if_active(c, now) {
-                    return true;
-                }
-                if let Some(decision) = app.paste_burst.on_plain_char_no_hold(now) {
-                    return handle_paste_burst_decision(app, decision, c, now);
-                }
+                app.paste_burst.note_plain_char(now);
+                app.paste_burst.extend_window(now);
                 app.insert_char(c);
                 return true;
             }
@@ -190,10 +199,9 @@ mod tests {
             );
         }
 
-        assert!(app.flush_paste_burst_if_due(
-            t0 + Duration::from_millis(pasted.chars().count() as u64)
-                + crate::tui::paste_burst::PasteBurst::recommended_active_flush_delay()
-        ));
+        // Non-ASCII characters are now inserted directly into the composer
+        // rather than buffered by paste burst. The Enter suppression window
+        // kept the newline from submitting prematurely.
         assert_eq!(app.input, pasted);
     }
 

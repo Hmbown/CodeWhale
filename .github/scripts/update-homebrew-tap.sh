@@ -34,14 +34,24 @@ sha() {
 
 # --- read checksums ---------------------------------------------------
 
-readonly SHA_DISP_MACOS_ARM="$(sha deepseek-macos-arm64)"
-readonly SHA_TUI_MACOS_ARM="$(sha deepseek-tui-macos-arm64)"
-readonly SHA_DISP_MACOS_X64="$(sha deepseek-macos-x64)"
-readonly SHA_TUI_MACOS_X64="$(sha deepseek-tui-macos-x64)"
-readonly SHA_DISP_LINUX_ARM="$(sha deepseek-linux-arm64)"
-readonly SHA_TUI_LINUX_ARM="$(sha deepseek-tui-linux-arm64)"
-readonly SHA_DISP_LINUX_X64="$(sha deepseek-linux-x64)"
-readonly SHA_TUI_LINUX_X64="$(sha deepseek-tui-linux-x64)"
+# Canonical dispatcher and TUI
+readonly SHA_COD_MACOS_ARM="$(sha codewhale-macos-arm64)"
+readonly SHA_TUI_MACOS_ARM="$(sha codewhale-tui-macos-arm64)"
+readonly SHA_COD_MACOS_X64="$(sha codewhale-macos-x64)"
+readonly SHA_TUI_MACOS_X64="$(sha codewhale-tui-macos-x64)"
+readonly SHA_COD_LINUX_ARM="$(sha codewhale-linux-arm64)"
+readonly SHA_TUI_LINUX_ARM="$(sha codewhale-tui-linux-arm64)"
+readonly SHA_COD_LINUX_X64="$(sha codewhale-linux-x64)"
+readonly SHA_TUI_LINUX_X64="$(sha codewhale-tui-linux-x64)"
+# Legacy shims (removed in v0.9.0)
+readonly SHA_LEG_MACOS_ARM="$(sha deepseek-macos-arm64)"
+readonly SHA_LEG_TUI_MACOS_ARM="$(sha deepseek-tui-macos-arm64)"
+readonly SHA_LEG_MACOS_X64="$(sha deepseek-macos-x64)"
+readonly SHA_LEG_TUI_MACOS_X64="$(sha deepseek-tui-macos-x64)"
+readonly SHA_LEG_LINUX_ARM="$(sha deepseek-linux-arm64)"
+readonly SHA_LEG_TUI_LINUX_ARM="$(sha deepseek-tui-linux-arm64)"
+readonly SHA_LEG_LINUX_X64="$(sha deepseek-linux-x64)"
+readonly SHA_LEG_TUI_LINUX_X64="$(sha deepseek-tui-linux-x64)"
 
 # --- temp dirs --------------------------------------------------------
 
@@ -51,58 +61,92 @@ trap 'rm -rf "${TAP_DIR}" "${FORMULA_FILE}"' EXIT
 
 # --- generate formula --------------------------------------------------
 
-readonly BASE_URL="https://github.com/Hmbown/DeepSeek-TUI/releases/download/${TAG}"
+readonly BASE_URL="https://github.com/Hmbown/CodeWhale/releases/download/${TAG}"
 
 cat > "${FORMULA_FILE}" << EOF
 class DeepseekTui < Formula
   desc "Terminal-native coding agent for DeepSeek V4"
-  homepage "https://github.com/Hmbown/DeepSeek-TUI"
+  homepage "https://github.com/Hmbown/CodeWhale"
   version "${VERSION}"
   license "MIT"
 
   on_macos do
     if Hardware::CPU.arm?
-      url "${BASE_URL}/deepseek-macos-arm64", using: :nounzip
-      sha256 "${SHA_DISP_MACOS_ARM}"
+      url "${BASE_URL}/codewhale-macos-arm64", using: :nounzip
+      sha256 "${SHA_COD_MACOS_ARM}"
       resource "tui" do
-        url "${BASE_URL}/deepseek-tui-macos-arm64", using: :nounzip
+        url "${BASE_URL}/codewhale-tui-macos-arm64", using: :nounzip
         sha256 "${SHA_TUI_MACOS_ARM}"
       end
+      resource "legacy-shim" do
+        url "${BASE_URL}/deepseek-macos-arm64", using: :nounzip
+        sha256 "${SHA_LEG_MACOS_ARM}"
+      end
+      resource "legacy-tui-shim" do
+        url "${BASE_URL}/deepseek-tui-macos-arm64", using: :nounzip
+        sha256 "${SHA_LEG_TUI_MACOS_ARM}"
+      end
     else
-      url "${BASE_URL}/deepseek-macos-x64", using: :nounzip
-      sha256 "${SHA_DISP_MACOS_X64}"
+      url "${BASE_URL}/codewhale-macos-x64", using: :nounzip
+      sha256 "${SHA_COD_MACOS_X64}"
       resource "tui" do
-        url "${BASE_URL}/deepseek-tui-macos-x64", using: :nounzip
+        url "${BASE_URL}/codewhale-tui-macos-x64", using: :nounzip
         sha256 "${SHA_TUI_MACOS_X64}"
+      end
+      resource "legacy-shim" do
+        url "${BASE_URL}/deepseek-macos-x64", using: :nounzip
+        sha256 "${SHA_LEG_MACOS_X64}"
+      end
+      resource "legacy-tui-shim" do
+        url "${BASE_URL}/deepseek-tui-macos-x64", using: :nounzip
+        sha256 "${SHA_LEG_TUI_MACOS_X64}"
       end
     end
   end
 
   on_linux do
     if Hardware::CPU.arm?
-      url "${BASE_URL}/deepseek-linux-arm64", using: :nounzip
-      sha256 "${SHA_DISP_LINUX_ARM}"
+      url "${BASE_URL}/codewhale-linux-arm64", using: :nounzip
+      sha256 "${SHA_COD_LINUX_ARM}"
       resource "tui" do
-        url "${BASE_URL}/deepseek-tui-linux-arm64", using: :nounzip
+        url "${BASE_URL}/codewhale-tui-linux-arm64", using: :nounzip
         sha256 "${SHA_TUI_LINUX_ARM}"
       end
+      resource "legacy-shim" do
+        url "${BASE_URL}/deepseek-linux-arm64", using: :nounzip
+        sha256 "${SHA_LEG_LINUX_ARM}"
+      end
+      resource "legacy-tui-shim" do
+        url "${BASE_URL}/deepseek-tui-linux-arm64", using: :nounzip
+        sha256 "${SHA_LEG_TUI_LINUX_ARM}"
+      end
     else
-      url "${BASE_URL}/deepseek-linux-x64", using: :nounzip
-      sha256 "${SHA_DISP_LINUX_X64}"
+      url "${BASE_URL}/codewhale-linux-x64", using: :nounzip
+      sha256 "${SHA_COD_LINUX_X64}"
       resource "tui" do
-        url "${BASE_URL}/deepseek-tui-linux-x64", using: :nounzip
+        url "${BASE_URL}/codewhale-tui-linux-x64", using: :nounzip
         sha256 "${SHA_TUI_LINUX_X64}"
+      end
+      resource "legacy-shim" do
+        url "${BASE_URL}/deepseek-linux-x64", using: :nounzip
+        sha256 "${SHA_LEG_LINUX_X64}"
+      end
+      resource "legacy-tui-shim" do
+        url "${BASE_URL}/deepseek-tui-linux-x64", using: :nounzip
+        sha256 "${SHA_LEG_TUI_LINUX_X64}"
       end
     end
   end
 
   def install
-    bin.install Dir["*"].first => "deepseek"
-    resource("tui").stage { bin.install Dir["*"].first => "deepseek-tui" }
+    bin.install Dir["*"].first => "codewhale"
+    resource("tui").stage { bin.install Dir["*"].first => "codewhale-tui" }
+    resource("legacy-shim").stage { bin.install Dir["*"].first => "deepseek" }
+    resource("legacy-tui-shim").stage { bin.install Dir["*"].first => "deepseek-tui" }
   end
 
   test do
-    system "#{bin}/deepseek", "--version"
+    system "#{bin}/codewhale", "--version"
   end
 end
 EOF

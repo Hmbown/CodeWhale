@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::dependencies::ExternalTool;
 use async_trait::async_trait;
 use chrono::Utc;
 use serde_json::{Value, json};
@@ -28,6 +29,7 @@ pub struct GithubIssueContextTool;
 pub struct GithubPrContextTool;
 pub struct GithubCommentTool;
 pub struct GithubCloseIssueTool;
+pub struct GithubClosePrTool;
 
 #[async_trait]
 impl ToolSpec for GithubIssueContextTool {
@@ -221,32 +223,11 @@ impl ToolSpec for GithubCloseIssueTool {
     }
 
     fn description(&self) -> &'static str {
-        "Close a GitHub issue only when structured acceptance evidence is present and approved. Never close merely because the agent is stopping."
+        "Close a GitHub issue only when structured acceptance evidence is present and approved. For pull requests use github_close_pr; do not call PRs issues in user-facing output. Never close merely because the agent is stopping."
     }
 
     fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "number": { "type": "integer", "minimum": 1 },
-                "acceptance_criteria": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
-                "evidence": {
-                    "type": "object",
-                    "properties": {
-                        "files_changed": { "type": "array", "items": { "type": "string" } },
-                        "tests_run": { "type": "array", "items": { "type": "string" } },
-                        "commits": { "type": "array", "items": { "type": "string" } },
-                        "final_status": { "type": "string" }
-                    },
-                    "required": ["files_changed", "tests_run", "final_status"]
-                },
-                "comment": { "type": "string" },
-                "allow_dirty": { "type": "boolean", "default": false },
-                "dry_run": { "type": "boolean", "default": false }
-            },
-            "required": ["number", "acceptance_criteria", "evidence"],
-            "additionalProperties": false
-        })
+        close_input_schema()
     }
 
     fn capabilities(&self) -> Vec<ToolCapability> {
@@ -258,51 +239,156 @@ impl ToolSpec for GithubCloseIssueTool {
     }
 
     async fn execute(&self, input: Value, context: &ToolContext) -> Result<ToolResult, ToolError> {
-        validate_evidence(&input, true)?;
-        if !optional_bool(&input, "allow_dirty", false) {
-            let status = git_status_porcelain(context)?;
-            if !status.trim().is_empty() {
-                return Ok(ToolResult::error(
-                    "Refusing to close issue: worktree is dirty and allow_dirty was false.",
-                )
-                .with_metadata(json!({ "dirty_status": status })));
-            }
-        }
-        let number = required_u64(&input, "number")?;
-        if optional_bool(&input, "dry_run", false) {
-            return Ok(ToolResult::success(format!(
-                "Dry run: would close issue #{number}."
-            )));
-        }
-        if let Some(comment) = optional_str(&input, "comment") {
-            let number_s = number.to_string();
-            run_gh_text(context, &["issue", "comment", &number_s, "--body", comment])?;
-        }
-        let number_s = number.to_string();
-        run_gh_text(
-            context,
-            &["issue", "close", &number_s, "--reason", "completed"],
-        )?;
-        let metadata = github_event_metadata(
-            "close",
-            "issue",
-            number,
-            "Issue closed as completed with structured evidence".to_string(),
-            None,
-            optional_str(&input, "comment")
-                .and_then(|comment| {
-                    write_artifact_if_needed(
-                        context,
-                        "github_close_comment",
-                        comment,
-                        BODY_ARTIFACT_THRESHOLD,
-                    )
-                    .ok()
-                })
-                .flatten(),
-        );
-        Ok(ToolResult::success(format!("Closed issue #{number}.")).with_metadata(metadata))
+        close_github_thread(input, context, GithubCloseTarget::Issue)
     }
+}
+
+#[async_trait]
+impl ToolSpec for GithubClosePrTool {
+    fn name(&self) -> &'static str {
+        "github_close_pr"
+    }
+
+    fn description(&self) -> &'static str {
+        "Close a GitHub pull request only when structured acceptance evidence is present and approved. Use this for PRs instead of github_close_issue so the UI, audit trail, and comments keep PR wording clear."
+    }
+
+    fn input_schema(&self) -> Value {
+        close_input_schema()
+    }
+
+    fn capabilities(&self) -> Vec<ToolCapability> {
+        vec![ToolCapability::Network, ToolCapability::RequiresApproval]
+    }
+
+    fn approval_requirement(&self) -> ApprovalRequirement {
+        ApprovalRequirement::Required
+    }
+
+    async fn execute(&self, input: Value, context: &ToolContext) -> Result<ToolResult, ToolError> {
+        close_github_thread(input, context, GithubCloseTarget::Pr)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GithubCloseTarget {
+    Issue,
+    Pr,
+}
+
+impl GithubCloseTarget {
+    fn cli_subcommand(self) -> &'static str {
+        match self {
+            Self::Issue => "issue",
+            Self::Pr => "pr",
+        }
+    }
+
+    fn metadata_target(self) -> &'static str {
+        match self {
+            Self::Issue => "issue",
+            Self::Pr => "pr",
+        }
+    }
+
+    fn display(self) -> &'static str {
+        match self {
+            Self::Issue => "issue",
+            Self::Pr => "PR",
+        }
+    }
+
+    fn summary_subject(self) -> &'static str {
+        match self {
+            Self::Issue => "Issue",
+            Self::Pr => "PR",
+        }
+    }
+}
+
+fn close_input_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "number": { "type": "integer", "minimum": 1 },
+            "acceptance_criteria": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+            "evidence": {
+                "type": "object",
+                "properties": {
+                    "files_changed": { "type": "array", "items": { "type": "string" } },
+                    "tests_run": { "type": "array", "items": { "type": "string" } },
+                    "commits": { "type": "array", "items": { "type": "string" } },
+                    "final_status": { "type": "string" }
+                },
+                "required": ["files_changed", "tests_run", "final_status"]
+            },
+            "comment": { "type": "string" },
+            "allow_dirty": { "type": "boolean", "default": false },
+            "dry_run": { "type": "boolean", "default": false }
+        },
+        "required": ["number", "acceptance_criteria", "evidence"],
+        "additionalProperties": false
+    })
+}
+
+fn close_github_thread(
+    input: Value,
+    context: &ToolContext,
+    target: GithubCloseTarget,
+) -> Result<ToolResult, ToolError> {
+    validate_evidence(&input, true)?;
+    if !optional_bool(&input, "allow_dirty", false) {
+        let status = git_status_porcelain(context)?;
+        if !status.trim().is_empty() {
+            return Ok(ToolResult::error(format!(
+                "Refusing to close {}: worktree is dirty and allow_dirty was false.",
+                target.display()
+            ))
+            .with_metadata(json!({ "dirty_status": status })));
+        }
+    }
+    let number = required_u64(&input, "number")?;
+    if optional_bool(&input, "dry_run", false) {
+        return Ok(ToolResult::success(format!(
+            "Dry run: would close {} #{number}.",
+            target.display()
+        )));
+    }
+    let subcmd = target.cli_subcommand();
+    let number_s = number.to_string();
+    if let Some(comment) = optional_str(&input, "comment") {
+        run_gh_text(context, &[subcmd, "comment", &number_s, "--body", comment])?;
+    }
+    let close_args: Vec<&str> = match target {
+        GithubCloseTarget::Issue => vec!["issue", "close", &number_s, "--reason", "completed"],
+        GithubCloseTarget::Pr => vec!["pr", "close", &number_s],
+    };
+    run_gh_text(context, &close_args)?;
+    let metadata = github_event_metadata(
+        "close",
+        target.metadata_target(),
+        number,
+        format!(
+            "{} closed as completed with structured evidence",
+            target.summary_subject()
+        ),
+        None,
+        optional_str(&input, "comment")
+            .and_then(|comment| {
+                write_artifact_if_needed(
+                    context,
+                    "github_close_comment",
+                    comment,
+                    BODY_ARTIFACT_THRESHOLD,
+                )
+                .ok()
+            })
+            .flatten(),
+    );
+    Ok(
+        ToolResult::success(format!("Closed {} #{number}.", target.display()))
+            .with_metadata(metadata),
+    )
 }
 
 fn gh_bin() -> String {
@@ -345,11 +431,11 @@ fn run_gh_json(context: &ToolContext, args: &[&str]) -> Result<Value, ToolError>
 }
 
 fn ensure_github_repo(context: &ToolContext) -> Result<(), ToolError> {
-    let out = Command::new("git")
-        .args(["rev-parse", "--is-inside-work-tree"])
-        .current_dir(&context.workspace)
-        .output()
-        .map_err(|e| ToolError::execution_failed(format!("failed to run git: {e}")))?;
+    let out = crate::dependencies::Git::output(
+        &["rev-parse", "--is-inside-work-tree"],
+        &context.workspace,
+    )
+    .map_err(|e| ToolError::execution_failed(format!("failed to run git: {e}")))?;
     if out.status.success() {
         Ok(())
     } else {
@@ -360,10 +446,7 @@ fn ensure_github_repo(context: &ToolContext) -> Result<(), ToolError> {
 }
 
 fn git_status_porcelain(context: &ToolContext) -> Result<String, ToolError> {
-    let out = Command::new("git")
-        .args(["status", "--porcelain"])
-        .current_dir(&context.workspace)
-        .output()
+    let out = crate::dependencies::Git::output(&["status", "--porcelain"], &context.workspace)
         .map_err(|e| ToolError::execution_failed(format!("failed to run git status: {e}")))?;
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
@@ -586,6 +669,29 @@ mod tests {
                 .expect("required")
                 .contains(&json!("tests_run"))
         );
+    }
+
+    #[test]
+    fn close_pr_schema_requires_structured_evidence() {
+        let schema = GithubClosePrTool.input_schema();
+        assert!(
+            schema["properties"]["evidence"]["required"]
+                .as_array()
+                .expect("required")
+                .contains(&json!("tests_run"))
+        );
+    }
+
+    #[test]
+    fn close_tools_distinguish_issue_and_pr_wording() {
+        assert_eq!(GithubCloseTarget::Issue.display(), "issue");
+        assert_eq!(GithubCloseTarget::Pr.display(), "PR");
+        assert!(
+            GithubCloseIssueTool
+                .description()
+                .contains("github_close_pr")
+        );
+        assert!(GithubClosePrTool.description().contains("pull request"));
     }
 
     #[test]

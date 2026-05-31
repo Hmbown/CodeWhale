@@ -100,7 +100,7 @@ impl ToolSpec for LoadSkillTool {
                     .map(|p| p.display().to_string())
                     .collect();
                 if dirs.is_empty() {
-                    "no skills directories found; install skills under `<workspace>/.agents/skills/<name>/SKILL.md`, `~/.agents/skills/<name>/SKILL.md`, or `~/.deepseek/skills/<name>/SKILL.md`"
+                    "no skills directories found; install skills under `<workspace>/.agents/skills/<name>/SKILL.md`, `~/.codewhale/skills/<name>/SKILL.md`, or `~/.deepseek/skills/<name>/SKILL.md`"
                         .to_string()
                 } else {
                     format!("no skills installed. Searched: {}", dirs.join(", "))

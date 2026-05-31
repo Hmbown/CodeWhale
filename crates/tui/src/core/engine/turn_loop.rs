@@ -11,6 +11,25 @@ fn loop_guard_block_tool_result(message: String) -> ToolResult {
     ToolResult::error(message).with_metadata(json!({"loop_guard": "identical_tool_call"}))
 }
 
+const MAX_APPROVAL_INTENT_SUMMARY_CHARS: usize = 2_000;
+
+fn approval_intent_summary(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let mut chars = trimmed.chars();
+    let mut summary = chars
+        .by_ref()
+        .take(MAX_APPROVAL_INTENT_SUMMARY_CHARS)
+        .collect::<String>();
+    if chars.next().is_some() {
+        summary.push_str("...");
+    }
+    Some(summary)
+}
+
 impl Engine {
     pub(super) async fn handle_deepseek_turn(
         &mut self,
@@ -20,6 +39,11 @@ impl Engine {
         mode: AppMode,
         force_update_plan_first: bool,
     ) -> (TurnOutcomeStatus, Option<String>) {
+        // Signal to the terminal / taskbar that a turn is in progress
+        // (OSC 9 ; 4 indeterminate progress + title spinner).
+        crate::tui::notifications::set_taskbar_progress_busy();
+        crate::tui::notifications::start_title_animation("CodeWhale");
+
         let client = self
             .deepseek_client
             .clone()
@@ -30,10 +54,11 @@ impl Engine {
         let mut context_recovery_attempts = 0u8;
         let mut tool_catalog = tools.unwrap_or_default();
         if !tool_catalog.is_empty() {
-            ensure_advanced_tooling(&mut tool_catalog, mode);
+            ensure_advanced_tooling(&mut tool_catalog, mode, &self.config.tools_always_load);
         }
         let mut active_tool_names = initial_active_tools(&tool_catalog);
         let mut loop_guard = LoopGuard::default();
+        let mut goal_continuations_this_turn = 0u32;
 
         // Transparent stream-retry counter: when the chunked-transfer
         // connection dies mid-stream and we got nothing useful out of it
@@ -173,16 +198,13 @@ impl Engine {
                 continue;
             }
 
-            if let Some(input_budget) =
-                context_input_budget(&self.session.model, TURN_MAX_OUTPUT_TOKENS)
-            {
+            if let Some(input_budget) = context_input_budget(&self.session.model) {
                 let estimated_input = self.estimated_input_tokens();
                 if estimated_input > input_budget {
                     if context_recovery_attempts >= MAX_CONTEXT_RECOVERY_ATTEMPTS {
                         let message = format!(
-                            "Context remains above model limit after {} recovery attempts \
-                             (~{} token estimate, ~{} budget). Please run /compact or /clear.",
-                            MAX_CONTEXT_RECOVERY_ATTEMPTS, estimated_input, input_budget
+                            "Context remains above model limit after {MAX_CONTEXT_RECOVERY_ATTEMPTS} recovery attempts \
+                             (~{estimated_input} token estimate, ~{input_budget} budget). Please run /compact or /clear."
                         );
                         turn_error = Some(message.clone());
                         let _ = self
@@ -193,11 +215,7 @@ impl Engine {
                     }
 
                     if self
-                        .recover_context_overflow(
-                            &client,
-                            "preflight token budget",
-                            TURN_MAX_OUTPUT_TOKENS,
-                        )
+                        .recover_context_overflow(&client, "preflight token budget")
                         .await
                     {
                         context_recovery_attempts = context_recovery_attempts.saturating_add(1);
@@ -251,6 +269,10 @@ impl Engine {
                 let tools_ref: Option<&[crate::models::Tool]> = active_tools.as_deref();
                 match pm.check_and_update(&system_text, tools_ref) {
                     Err(change) => {
+                        let pinned_hash = pm
+                            .pinned_fingerprint()
+                            .map(|fp| fp.combined_sha256.clone())
+                            .unwrap_or_default();
                         tracing::debug!(
                             target: "prefix_cache",
                             "{}",
@@ -264,10 +286,15 @@ impl Engine {
                                 tools_changed: change.tools_changed,
                                 stability_pct: (pm.stability_ratio() * 100.0).round() as u32,
                                 changed: true,
+                                pinned_combined_hash: pinned_hash,
                             })
                             .await;
                     }
                     Ok(_) => {
+                        let pinned_hash = pm
+                            .pinned_fingerprint()
+                            .map(|fp| fp.combined_sha256.clone())
+                            .unwrap_or_default();
                         // Stable check — keep the TUI counter in sync.
                         let _ = self
                             .tx_event
@@ -277,6 +304,7 @@ impl Engine {
                                 tools_changed: false,
                                 stability_pct: (pm.stability_ratio() * 100.0).round() as u32,
                                 changed: false,
+                                pinned_combined_hash: pinned_hash,
                             })
                             .await;
                     }
@@ -328,11 +356,7 @@ impl Engine {
                     if is_context_length_error_message(&message)
                         && context_recovery_attempts < MAX_CONTEXT_RECOVERY_ATTEMPTS
                         && self
-                            .recover_context_overflow(
-                                &client,
-                                "provider context-length rejection",
-                                TURN_MAX_OUTPUT_TOKENS,
-                            )
+                            .recover_context_overflow(&client, "provider context-length rejection")
                             .await
                     {
                         context_recovery_attempts = context_recovery_attempts.saturating_add(1);
@@ -490,8 +514,7 @@ impl Engine {
                             transparent_stream_retries =
                                 transparent_stream_retries.saturating_add(1);
                             crate::logging::info(format!(
-                                "Transparent stream retry {}/{} (no content received yet): {}",
-                                transparent_stream_retries, MAX_TRANSPARENT_STREAM_RETRIES, message,
+                                "Transparent stream retry {transparent_stream_retries}/{MAX_TRANSPARENT_STREAM_RETRIES} (no content received yet): {message}",
                             ));
                             // Drop the failed stream before issuing the new
                             // request to release the underlying connection.
@@ -586,8 +609,7 @@ impl Engine {
                             caller,
                         } => {
                             crate::logging::info(format!(
-                                "Tool '{}' block start. Initial input: {:?}",
-                                name, input
+                                "Tool '{name}' block start. Initial input: {input:?}"
                             ));
                             current_block_kind = Some(ContentBlockKind::ToolUse);
                             current_tool_indices.insert(index, tool_uses.len());
@@ -605,8 +627,7 @@ impl Engine {
                         }
                         ContentBlockStart::ServerToolUse { id, name, input } => {
                             crate::logging::info(format!(
-                                "Server tool '{}' block start. Initial input: {:?}",
-                                name, input
+                                "Server tool '{name}' block start. Initial input: {input:?}"
                             ));
                             current_block_kind = Some(ContentBlockKind::ToolUse);
                             current_tool_indices.insert(index, tool_uses.len());
@@ -782,14 +803,12 @@ impl Engine {
                 if stream_retry_attempts < MAX_STREAM_RETRIES {
                     stream_retry_attempts = stream_retry_attempts.saturating_add(1);
                     crate::logging::warn(format!(
-                        "Stream died with no content (attempt {}/{}); retrying request",
-                        stream_retry_attempts, MAX_STREAM_RETRIES
+                        "Stream died with no content (attempt {stream_retry_attempts}/{MAX_STREAM_RETRIES}); retrying request"
                     ));
                     let _ = self
                         .tx_event
                         .send(Event::status(format!(
-                            "Connection interrupted; retrying ({}/{})",
-                            stream_retry_attempts, MAX_STREAM_RETRIES
+                            "Connection interrupted; retrying ({stream_retry_attempts}/{MAX_STREAM_RETRIES})"
                         )))
                         .await;
                     // Don't preserve the per-stream `turn_error` — we're
@@ -799,8 +818,7 @@ impl Engine {
                     continue;
                 }
                 crate::logging::warn(format!(
-                    "Stream retry budget exhausted ({} attempts); failing turn",
-                    stream_retry_attempts
+                    "Stream retry budget exhausted ({stream_retry_attempts} attempts); failing turn"
                 ));
             } else if stream_errors == 0 {
                 // Healthy round → reset retry budget so we don't carry over
@@ -941,7 +959,7 @@ impl Engine {
                 // streaming with no tool calls — but if it has direct children
                 // still running (or completions queued from children that
                 // finished while we were inferring), surface their
-                // `<deepseek:subagent.done>` sentinels into the transcript and
+                // `<codewhale:subagent.done>` sentinels into the transcript and
                 // resume instead of ending the turn. This fulfils the contract
                 // already documented in `prompts/base.md`: the parent is
                 // promised it'll see the sentinel when a child finishes.
@@ -1120,6 +1138,46 @@ impl Engine {
                 // code fell straight through to this `break`, emitting nothing
                 // and leaving the UI spinner hung. Surface a status now —
                 // safe because the turn can no longer resume.
+                // #1961: Before breaking, drain any sub-agent completions that
+                // arrived between the last hold check and now. If a child finished
+                // while we were running the thinking-only check, surface its
+                // sentinel rather than delaying it to the next turn.
+                let mut late_completions: Vec<crate::tools::subagent::SubAgentCompletion> =
+                    Vec::new();
+                while let Ok(c) = self.rx_subagent_completion.try_recv() {
+                    late_completions.push(c);
+                }
+                if !late_completions.is_empty() {
+                    let count = late_completions.len();
+                    for c in late_completions {
+                        self.add_session_message(subagent_completion_runtime_message(&c.payload))
+                            .await;
+                    }
+                    let _ = self
+                        .tx_event
+                        .send(Event::status(format!(
+                            "Resuming turn with {count} late sub-agent completion(s)"
+                        )))
+                        .await;
+                    turn.next_step();
+                    continue;
+                }
+
+                if let Some(continuation) = self
+                    .goal_continuation_message_if_needed(
+                        tool_registry,
+                        &mut goal_continuations_this_turn,
+                    )
+                    .await
+                {
+                    self.add_session_message(
+                        self.user_text_message_with_turn_metadata(continuation),
+                    )
+                    .await;
+                    turn.next_step();
+                    continue;
+                }
+
                 if thinking_only_no_sendable {
                     let holding_for_subagents = {
                         let running = {
@@ -1173,9 +1231,15 @@ impl Engine {
                 let tool_input = tool.input.clone();
                 let tool_caller = tool.caller.clone();
                 crate::logging::info(format!(
-                    "Planning tool '{}' with input: {:?}",
-                    tool_name, tool_input
+                    "Planning tool '{tool_name}' with input: {tool_input:?}"
                 ));
+
+                let requested_tool_name = tool_name.clone();
+                let tool_def =
+                    resolve_tool_definition(&mut tool_name, &tool_catalog, tool_registry);
+                if requested_tool_name != tool_name {
+                    tool.name = tool_name.clone();
+                }
 
                 let interactive = (tool_name == "exec_shell"
                     && tool_input
@@ -1204,30 +1268,14 @@ impl Engine {
                     )
                 {
                     blocked_error = Some(ToolError::permission_denied(format!(
-                        "Tool '{tool_name}' is unavailable in Plan mode"
+                        "'{tool_name}' is not available in Plan mode — switch to Agent, Goal, or YOLO mode to run commands and code."
                     )));
                 }
 
-                let requested_tool_name = tool_name.clone();
-                let mut tool_def = tool_catalog.iter().find(|def| def.name == tool_name);
-
-                // Resolve hallucinated tool names when the model emits a
-                // non-canonical variant (Read_file, readFile, read-file, etc.).
-                if tool_def.is_none()
-                    && let Some(registry) = tool_registry
-                    && let Some(canonical) = registry.resolve(&tool_name)
-                {
-                    crate::logging::info(format!(
-                        "Resolved hallucinated tool name '{}' -> '{}'",
-                        tool_name, canonical
-                    ));
-                    tool_def = tool_catalog.iter().find(|d| d.name == canonical);
-                    if tool_def.is_some() {
-                        tool_name = canonical.to_string();
-                        // Update the tool_uses entry so the result is
-                        // attributed to the canonical name.
-                        tool.name = tool_name.clone();
-                    }
+                if !command_allows_tool(self.config.allowed_tools.as_deref(), &tool_name) {
+                    blocked_error = Some(ToolError::permission_denied(format!(
+                        "Tool '{tool_name}' is not in the allowed-tools list for the current command"
+                    )));
                 }
 
                 if !caller_allowed_for_tool(tool_caller.as_ref(), tool_def) {
@@ -1304,8 +1352,7 @@ impl Engine {
                             format!("Auto-loaded deferred tool '{tool_name}' after model request.")
                         } else {
                             format!(
-                                "Auto-loaded deferred tool '{}' after resolving '{}'.",
-                                tool_name, requested_tool_name
+                                "Auto-loaded deferred tool '{tool_name}' after resolving '{requested_tool_name}'."
                             )
                         };
                         let _ = self.tx_event.send(Event::status(status)).await;
@@ -1338,6 +1385,22 @@ impl Engine {
                 });
             }
             active_tool_names.extend(deferred_tools_hydrated_this_batch);
+
+            // --- Intent summary for write tools (#2381) ---
+            // When the model invokes write tools, extract its preceding text
+            // as an "intent summary" so the approval view can show *why* the
+            // change is being made, not just *what* will change.
+            let has_write_tools = plans.iter().any(|p| {
+                !p.read_only
+                    && p.approval_required
+                    && p.blocked_error.is_none()
+                    && p.guard_result.is_none()
+            });
+            let intent_summary: Option<String> = if has_write_tools {
+                approval_intent_summary(&current_text_visible)
+            } else {
+                None
+            };
 
             let plan_count = plans.len();
             let batches = plan_tool_execution_batches(plans);
@@ -1693,9 +1756,15 @@ impl Engine {
                                 .send(Event::ApprovalRequired {
                                     id: tool_id.clone(),
                                     tool_name: tool_name.clone(),
+                                    input: tool_input.clone(),
                                     description: plan.approval_description.clone(),
                                     approval_key,
                                     approval_grouping_key,
+                                    intent_summary: if plan.read_only {
+                                        None
+                                    } else {
+                                        intent_summary.clone()
+                                    },
                                 })
                                 .await;
 
@@ -1957,7 +2026,9 @@ impl Engine {
 
             if let Some(message) = loop_guard_halt {
                 crate::logging::warn(message.clone());
-                let _ = self.tx_event.send(Event::status(message)).await;
+                let _ = self.tx_event.send(Event::status(message.clone())).await;
+                // 设置 turn_error 以确保最终返回 TurnOutcomeStatus::Failed 而非 Completed
+                turn_error = Some(message);
                 break;
             }
 
@@ -2019,6 +2090,55 @@ impl Engine {
         (TurnOutcomeStatus::Completed, None)
     }
 
+    async fn goal_continuation_message_if_needed(
+        &self,
+        tool_registry: Option<&crate::tools::ToolRegistry>,
+        continuations_this_turn: &mut u32,
+    ) -> Option<String> {
+        let registry = tool_registry?;
+        if !registry.contains("update_goal") {
+            return None;
+        }
+
+        let snapshot = match self.config.goal_state.lock() {
+            Ok(state) => state.snapshot(),
+            Err(err) => {
+                tracing::warn!("goal state lock poisoned during continuation check: {err}");
+                return None;
+            }
+        };
+
+        if !snapshot.is_active() {
+            return None;
+        }
+
+        let max = crate::tools::goal::MAX_GOAL_CONTINUATIONS_PER_TURN;
+        if *continuations_this_turn >= max {
+            let _ = self
+                .tx_event
+                .send(Event::status(format!(
+                    "Goal remains active after {max} continuation pass(es); ending turn to avoid a runaway loop."
+                )))
+                .await;
+            return None;
+        }
+
+        *continuations_this_turn = (*continuations_this_turn).saturating_add(1);
+        let _ = self
+            .tx_event
+            .send(Event::status(format!(
+                "Continuing active goal audit ({}/{max})",
+                *continuations_this_turn
+            )))
+            .await;
+
+        Some(crate::tools::goal::render_continuation_prompt(
+            &snapshot,
+            *continuations_this_turn,
+            max,
+        ))
+    }
+
     pub(super) fn messages_with_turn_metadata(&self) -> Vec<Message> {
         // `<turn_meta>` is stored on user-text messages when the message is
         // appended. Do not rewrite historical messages at request time: doing
@@ -2029,17 +2149,25 @@ impl Engine {
 }
 
 fn subagent_completion_runtime_message(payload: &str) -> Message {
+    // Role is "user", not "system": some OpenAI-compatible backends apply a
+    // strict chat template (e.g. vLLM serving Qwen3) that requires any system
+    // message to be messages[0]. A system message appended mid-conversation
+    // makes the template raise "System message must be at the beginning",
+    // which surfaces as a 400 BadRequest and breaks the whole sub-agent
+    // hand-off in the parent turn. The `visibility="internal"` tag already
+    // tells the model this is a runtime event rather than user input, so the
+    // role carries no semantic weight here — only template-compatibility cost.
     Message {
-        role: "system".to_string(),
+        role: "user".to_string(),
         content: vec![ContentBlock::Text {
             text: format!(
-                "<deepseek:runtime_event kind=\"subagent_completion\" visibility=\"internal\">\n\
+                "<codewhale:runtime_event kind=\"subagent_completion\" visibility=\"internal\">\n\
 This is an internal runtime event, not user input. Use the sub-agent completion \
 data below to continue coordinating the current task. Do not tell the user they \
 pasted sentinels, do not explain the sentinel protocol, and do not quote the raw \
 XML unless the user explicitly asks to debug sub-agent internals.\n\n\
 {payload}\n\
-</deepseek:runtime_event>"
+</codewhale:runtime_event>"
             ),
             cache_control: None,
         }],
@@ -2048,6 +2176,40 @@ XML unless the user explicitly asks to debug sub-agent internals.\n\n\
 
 fn should_hold_turn_for_subagents(queued_completions: usize, running_children: usize) -> bool {
     queued_completions > 0 || running_children > 0
+}
+
+fn command_allows_tool(allowed_tools: Option<&[String]>, tool_name: &str) -> bool {
+    let Some(allowed_tools) = allowed_tools else {
+        return true;
+    };
+    allowed_tools.contains(&tool_name.to_ascii_lowercase())
+}
+
+fn resolve_tool_definition<'a>(
+    tool_name: &mut String,
+    tool_catalog: &'a [Tool],
+    tool_registry: Option<&crate::tools::ToolRegistry>,
+) -> Option<&'a Tool> {
+    let mut tool_def = tool_catalog
+        .iter()
+        .find(|def| def.name.as_str() == tool_name.as_str());
+
+    // Resolve hallucinated tool names before policy gates run, so aliases like
+    // ReadFile are checked against the canonical registered tool name.
+    if tool_def.is_none()
+        && let Some(registry) = tool_registry
+        && let Some(canonical) = registry.resolve(tool_name.as_str())
+    {
+        crate::logging::info(format!(
+            "Resolved hallucinated tool name '{tool_name}' -> '{canonical}'"
+        ));
+        tool_def = tool_catalog.iter().find(|d| d.name == canonical);
+        if tool_def.is_some() {
+            *tool_name = canonical.to_string();
+        }
+    }
+
+    tool_def
 }
 
 /// Issue #1727: decide whether to surface a "thinking-only, no output" status.
@@ -2130,19 +2292,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn subagent_completion_handoff_is_internal_system_message() {
+    fn subagent_completion_handoff_is_internal_user_message() {
         let message = subagent_completion_runtime_message(
-            "Build passed\n<deepseek:subagent.done>{\"agent_id\":\"agent_a\"}</deepseek:subagent.done>",
+            "Build passed\n<codewhale:subagent.done>{\"agent_id\":\"agent_a\"}</codewhale:subagent.done>",
         );
 
-        assert_eq!(message.role, "system");
+        // Must be "user", not "system": a system message appended mid-stream
+        // trips strict chat templates (vLLM/Qwen3) into a 400 BadRequest
+        // ("System message must be at the beginning"). The internal-event
+        // framing lives in the text + visibility tag, not the role.
+        assert_eq!(message.role, "user");
         let text = match &message.content[0] {
             ContentBlock::Text { text, .. } => text,
             other => panic!("expected text block, got {other:?}"),
         };
         assert!(text.contains("internal runtime event, not user input"));
         assert!(text.contains("Do not tell the user they pasted sentinels"));
-        assert!(text.contains("<deepseek:subagent.done>"));
+        assert!(text.contains("<codewhale:subagent.done>"));
         assert!(text.contains("Build passed"));
     }
 
@@ -2151,6 +2317,19 @@ mod tests {
         assert!(should_hold_turn_for_subagents(1, 0));
         assert!(should_hold_turn_for_subagents(0, 1));
         assert!(!should_hold_turn_for_subagents(0, 0));
+    }
+
+    #[test]
+    fn approval_intent_summary_trims_and_bounds_text() {
+        assert_eq!(approval_intent_summary("   "), None);
+
+        let long_text = format!("  {}  ", "x".repeat(MAX_APPROVAL_INTENT_SUMMARY_CHARS + 10));
+        let summary = approval_intent_summary(&long_text).expect("summary");
+        assert!(summary.ends_with("..."));
+        assert_eq!(
+            summary.chars().count(),
+            MAX_APPROVAL_INTENT_SUMMARY_CHARS + 3
+        );
     }
 
     /// Regression test for issue #1727 (P0, release-blocking).
@@ -2316,5 +2495,46 @@ mod tests {
             Some("high".to_string()),
             "auto thinking should classify the user request, not stored metadata"
         );
+    }
+
+    #[test]
+    fn allowed_tools_gate_blocks_unlisted_tool() {
+        let allowed = vec!["bash".to_string(), "grep".to_string()];
+        assert!(!command_allows_tool(Some(&allowed), "read"));
+    }
+
+    #[test]
+    fn allowed_tools_gate_allows_listed_tool_case_insensitively() {
+        let allowed = vec!["bash".to_string(), "read".to_string()];
+        assert!(command_allows_tool(Some(&allowed), "Read"));
+    }
+
+    #[test]
+    fn allowed_tools_gate_allows_all_tools_when_not_set() {
+        assert!(command_allows_tool(None, "write"));
+    }
+
+    #[test]
+    fn review_regression_allowed_tools_gate_blocks_all_tools_when_empty() {
+        let allowed = Vec::new();
+        assert!(!command_allows_tool(Some(&allowed), "bash"));
+    }
+
+    #[test]
+    fn review_regression_allowed_tools_gate_checks_canonical_tool_name() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let context = crate::tools::spec::ToolContext::new(tmp.path().to_path_buf());
+        let registry = crate::tools::ToolRegistryBuilder::new()
+            .with_file_tools()
+            .build(context);
+        let catalog = registry.to_api_tools();
+        let mut tool_name = "ReadFile".to_string();
+
+        let tool_def = resolve_tool_definition(&mut tool_name, &catalog, Some(&registry));
+
+        assert!(tool_def.is_some());
+        assert_eq!(tool_name, "read_file");
+        let allowed = vec!["read_file".to_string()];
+        assert!(command_allows_tool(Some(&allowed), &tool_name));
     }
 }

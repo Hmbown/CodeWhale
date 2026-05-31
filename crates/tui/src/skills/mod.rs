@@ -31,8 +31,8 @@ const MAX_AVAILABLE_SKILLS_CHARS: usize = 12_000;
 #[must_use]
 pub fn default_skills_dir() -> PathBuf {
     dirs::home_dir().map_or_else(
-        || PathBuf::from("/tmp/deepseek/skills"),
-        |p| p.join(".deepseek").join("skills"),
+        || PathBuf::from("/tmp/codewhale/skills"),
+        |p| p.join(".codewhale").join("skills"),
     )
 }
 
@@ -249,23 +249,133 @@ impl SkillRegistry {
             let body = &rest[end + 3..];
 
             let mut metadata = HashMap::new();
-            for raw in frontmatter.lines() {
+            let lines: Vec<&str> = frontmatter.lines().collect();
+            let mut i = 0;
+            while i < lines.len() {
+                let raw = lines[i];
                 let line = raw.trim();
                 if line.is_empty() || line.starts_with('#') {
+                    i += 1;
                     continue;
                 }
                 if let Some((key, value)) = line.split_once(':') {
                     let value = value.trim();
-                    let unquoted = if (value.starts_with('"')
-                        && value.ends_with('"')
-                        && value.len() >= 2)
-                        || (value.starts_with('\'') && value.ends_with('\'') && value.len() >= 2)
-                    {
-                        &value[1..value.len() - 1]
+                    // Check for YAML block scalar indicators: > (folded), | (literal),
+                    // optionally with chomping: >-, >+, |-, |+
+                    let is_block_scalar = matches!(value, ">" | "|" | ">-" | ">+" | "|-" | "|+");
+                    if is_block_scalar {
+                        let is_folded = value.starts_with('>');
+                        let chomp = if value.ends_with('-') {
+                            "strip"
+                        } else if value.ends_with('+') {
+                            "keep"
+                        } else {
+                            "clip"
+                        };
+                        // Determine the base indentation from the key line
+                        let base_indent = raw.len() - raw.trim_start().len();
+                        let mut block_lines: Vec<&str> = Vec::new();
+                        let mut content_indent: Option<usize> = None;
+                        i += 1;
+                        while i < lines.len() {
+                            let raw_line = lines[i];
+                            if raw_line.trim().is_empty() {
+                                // Empty lines are part of the block
+                                block_lines.push("");
+                                i += 1;
+                                continue;
+                            }
+                            let line_indent = raw_line.len() - raw_line.trim_start().len();
+                            if line_indent > base_indent {
+                                // Track content indent from the first non-empty
+                                // line so we strip only that one level of
+                                // leading whitespace, preserving any deeper
+                                // relative indentation (YAML §8.1.2).
+                                if content_indent.is_none() {
+                                    content_indent = Some(line_indent);
+                                }
+                                block_lines.push(raw_line);
+                                i += 1;
+                            } else {
+                                break;
+                            }
+                        }
+                        let content_indent = content_indent.unwrap_or(base_indent);
+                        // Strip only the content indent from each non-empty
+                        // line so nested indentation survives.
+                        let block_lines: Vec<&str> = block_lines
+                            .iter()
+                            .map(|raw| {
+                                if raw.is_empty() {
+                                    ""
+                                } else {
+                                    let indent = raw.len() - raw.trim_start().len();
+                                    let strip = std::cmp::min(indent, content_indent);
+                                    &raw[strip..]
+                                }
+                            })
+                            .collect();
+                        // Apply chomping to trailing empty lines before folding.
+                        // Chomping operates on the raw block_lines (before join), so
+                        // strip / keep / clip behave per the YAML spec.
+                        let block_lines = if matches!(chomp, "strip") {
+                            // strip: remove all trailing empty lines
+                            let mut lines = block_lines;
+                            while lines.last().is_some_and(|s| s.is_empty()) {
+                                lines.pop();
+                            }
+                            lines
+                        } else if matches!(chomp, "keep") {
+                            // keep: no modification
+                            block_lines
+                        } else {
+                            // clip: keep at most one trailing empty line
+                            let mut lines = block_lines;
+                            while lines.len() >= 2
+                                && lines[lines.len() - 1].is_empty()
+                                && lines[lines.len() - 2].is_empty()
+                            {
+                                lines.pop();
+                            }
+                            lines
+                        };
+                        let description = if is_folded {
+                            // Folded: join non-empty lines with spaces; empty
+                            // lines become paragraph breaks.
+                            let mut result = String::new();
+                            let mut pending_space = false;
+                            for line in &block_lines {
+                                if line.is_empty() {
+                                    result.push('\n');
+                                    pending_space = false;
+                                } else {
+                                    if pending_space {
+                                        result.push(' ');
+                                    }
+                                    result.push_str(line);
+                                    pending_space = true;
+                                }
+                            }
+                            result
+                        } else {
+                            // Literal: join with newlines.
+                            block_lines.join("\n")
+                        };
+                        metadata.insert(key.trim().to_ascii_lowercase(), description);
                     } else {
-                        value
-                    };
-                    metadata.insert(key.trim().to_ascii_lowercase(), unquoted.to_string());
+                        let unquoted = match value {
+                            v if (v.starts_with('"') && v.ends_with('"') && v.len() >= 2)
+                                || (v.starts_with('\'') && v.ends_with('\'') && v.len() >= 2) =>
+                            {
+                                &v[1..v.len() - 1]
+                            }
+                            _ => value,
+                        };
+                        metadata.insert(key.trim().to_ascii_lowercase(), unquoted.to_string());
+                        i += 1;
+                    }
+                } else {
+                    i += 1;
                 }
             }
 
@@ -341,9 +451,9 @@ impl SkillRegistry {
 /// Resolve the active skills directory given a workspace, mirroring the
 /// hierarchy `App::new` walks: `<workspace>/.agents/skills` →
 /// `<workspace>/skills` → [`agents_global_skills_dir`] (`~/.agents/skills`,
-/// when present) → [`default_skills_dir`] (`~/.deepseek/skills`).
+/// when present) → [`default_skills_dir`] (`~/.codewhale/skills`).
 /// Returns the first directory that exists, or the global default
-/// (which itself falls back to `/tmp/deepseek/skills` if the user
+/// (which itself falls back to `/tmp/codewhale/skills` if the user
 /// has no home directory).
 ///
 /// Kept for callers that want a single canonical directory (e.g.
@@ -382,9 +492,11 @@ pub fn resolve_skills_dir(workspace: &Path) -> PathBuf {
 /// 3. `<workspace>/.opencode/skills` — OpenCode interop.
 /// 4. `<workspace>/.claude/skills` — Claude Code interop.
 /// 5. `<workspace>/.cursor/skills` — Cursor interop.
-/// 6. [`agents_global_skills_dir`] — agentskills.io global.
-/// 7. [`claude_global_skills_dir`] — Claude-ecosystem global (#902).
-/// 8. [`default_skills_dir`] — DeepSeek global, user-installed.
+/// 6. `<workspace>/.codewhale/skills` — CodeWhale workspace skills.
+/// 7. [`agents_global_skills_dir`] — agentskills.io global.
+/// 8. [`claude_global_skills_dir`] — Claude-ecosystem global (#902).
+/// 9. `~/.codewhale/skills` — CodeWhale global, primary install target.
+/// 10. `~/.deepseek/skills` — legacy DeepSeek global fallback.
 ///
 /// Only directories that exist on disk are returned — callers don't
 /// need to filter further. Returns an empty vec when nothing is
@@ -402,13 +514,15 @@ fn skills_directories_with_home(workspace: &Path, home_dir: Option<&Path>) -> Ve
         workspace.join(".opencode").join("skills"),
         workspace.join(".claude").join("skills"),
         workspace.join(".cursor").join("skills"),
+        workspace.join(".codewhale").join("skills"),
     ];
     if let Some(home) = home_dir {
         candidates.push(home.join(".agents").join("skills"));
         candidates.push(home.join(".claude").join("skills"));
+        candidates.push(home.join(".codewhale").join("skills"));
         candidates.push(home.join(".deepseek").join("skills"));
     } else {
-        candidates.push(PathBuf::from("/tmp/deepseek/skills"));
+        candidates.push(PathBuf::from("/tmp/codewhale/skills"));
     }
     existing_skill_dirs(candidates)
 }
@@ -466,6 +580,10 @@ fn discover_for_workspace_dirs_and_dir(mut dirs: Vec<PathBuf>, skills_dir: &Path
         dirs.push(skills_dir.to_path_buf());
     }
 
+    discover_from_directories(dirs)
+}
+
+pub(crate) fn discover_from_directories(dirs: impl IntoIterator<Item = PathBuf>) -> SkillRegistry {
     let mut merged = SkillRegistry::default();
     for dir in dirs {
         let registry = SkillRegistry::discover(&dir);
@@ -1268,7 +1386,7 @@ mod tests {
 
     /// Mirrors the qa_pty `skills_menu_shows_local_and_global_skills`
     /// scenario without the PTY harness: a workspace-level skill in
-    /// `.agents/skills/` and a global skill in `~/.deepseek/skills/`
+    /// `.agents/skills/` and a global skill in `~/.codewhale/skills/`
     /// must both be discoverable.
     #[test]
     fn discover_finds_both_workspace_and_global_skills() {
@@ -1302,6 +1420,243 @@ mod tests {
         assert!(
             names.contains(&"global-alpha"),
             "global-alpha from ~/.deepseek/skills must be discovered: {names:?}",
+        );
+    }
+
+    // ── Block scalar parsing (YAML `>` and `|`) ────────────────
+
+    /// `>` (folded block scalar): subsequent indented lines are folded
+    /// into a single line joined by spaces.
+    #[test]
+    fn parse_skill_folded_block_scalar() {
+        let tmpdir = TempDir::new().unwrap();
+        create_skill_dir(
+            &tmpdir,
+            "folded-skill",
+            "---\nname: folded-skill\ndescription: >\n  line one chinese\n  line two chinese\n---\nbody",
+        );
+        let rendered =
+            crate::skills::render_available_skills_context(&tmpdir.path().join("skills"))
+                .expect("skill context");
+        assert!(
+            rendered.contains("line one chinese line two chinese"),
+            "folded block scalar should join lines with space, got:\n{rendered}"
+        );
+    }
+
+    /// `|` (literal block scalar): subsequent indented lines preserve
+    /// newlines.
+    #[test]
+    fn parse_skill_literal_block_scalar() {
+        let tmpdir = TempDir::new().unwrap();
+        create_skill_dir(
+            &tmpdir,
+            "literal-skill",
+            "---\nname: literal-skill\ndescription: |\n  line one\n  line two\n---\nbody",
+        );
+        let rendered =
+            crate::skills::render_available_skills_context(&tmpdir.path().join("skills"))
+                .expect("skill context");
+        // `truncate_for_prompt` collapses whitespace, so the newlines
+        // become spaces. The key assertion is that the content is
+        // captured (not just `|`).
+        assert!(
+            rendered.contains("line one line two"),
+            "literal block scalar should preserve content, got:\n{rendered}"
+        );
+    }
+
+    /// `>-` (folded with strip chomping): same as `>` but trailing
+    /// whitespace is stripped.
+    #[test]
+    fn parse_skill_folded_strip_block_scalar() {
+        let tmpdir = TempDir::new().unwrap();
+        create_skill_dir(
+            &tmpdir,
+            "strip-skill",
+            "---\nname: strip-skill\ndescription: >-\n  alpha\n  beta\n\n---\nbody",
+        );
+        let rendered =
+            crate::skills::render_available_skills_context(&tmpdir.path().join("skills"))
+                .expect("skill context");
+        assert!(
+            rendered.contains("alpha beta"),
+            "strip-chomped folded block should join lines, got:\n{rendered}"
+        );
+    }
+
+    /// Regression: a single-line description (no block scalar) must
+    /// still parse correctly after the parser rewrite.
+    #[test]
+    fn parse_skill_single_line_description_still_works() {
+        let tmpdir = TempDir::new().unwrap();
+        create_skill_dir(
+            &tmpdir,
+            "plain-skill",
+            "---\nname: plain-skill\ndescription: A simple description\n---\nbody",
+        );
+        let rendered =
+            crate::skills::render_available_skills_context(&tmpdir.path().join("skills"))
+                .expect("skill context");
+        assert!(
+            rendered.contains("- plain-skill: A simple description"),
+            "single-line description should still work, got:\n{rendered}"
+        );
+    }
+
+    /// Direct unit test on the parsed Skill struct (not through rendering)
+    /// so we assert the exact description value.
+    #[test]
+    fn parse_skill_direct_folded_result() {
+        let skill = super::SkillRegistry::parse_skill(
+            std::path::Path::new(""),
+            "---\nname: test\ndescription: >\n  this is a test\n  used to verify parsing\n---\nbody",
+        )
+        .expect("should parse");
+        assert_eq!(skill.name, "test");
+        assert_eq!(skill.description, "this is a test used to verify parsing");
+    }
+
+    // ── Chomping behaviour ────────────────────────────────────
+
+    /// `>-` (strip): trailing empty lines are stripped. Paragraph
+    /// breaks (empty line between text lines) are still folded to a
+    /// single space in a block-scalar join (no newline — the simplified
+    /// parser treats intra-block empty lines as paragraph breaks that
+    /// become a single space in the folded output).
+    #[test]
+    fn parse_skill_strip_chomp_strips_trailing_empties() {
+        let skill = super::SkillRegistry::parse_skill(
+            std::path::Path::new(""),
+            "---\nname: s\ndescription: >-\n  hello\n  world\n\n\n---\nbody",
+        )
+        .expect("should parse");
+        // Trailing empty lines stripped: no whitespace at end, just folded text.
+        assert_eq!(skill.description, "hello world");
+    }
+
+    /// `>+` (keep): trailing empty lines are preserved. Each trailing
+    /// empty line in the block becomes a newline in the description.
+    #[test]
+    fn parse_skill_keep_chomp_preserves_trailing_empties() {
+        let skill = super::SkillRegistry::parse_skill(
+            std::path::Path::new(""),
+            "---\nname: s\ndescription: >+\n  hello\n  world\n\n\n---\nbody",
+        )
+        .expect("should parse");
+        // Two trailing empty lines should become two newlines.
+        assert_eq!(skill.description, "hello world\n\n");
+    }
+
+    /// `>` (clip): trailing empty lines exceeding one are clipped.
+    /// The result should have at most one trailing newline.
+    #[test]
+    fn parse_skill_clip_chomp_clips_excess_trailing_empties() {
+        let skill = super::SkillRegistry::parse_skill(
+            std::path::Path::new(""),
+            "---\nname: s\ndescription: >\n  hello\n  world\n\n\n---\nbody",
+        )
+        .expect("should parse");
+        // clip: 3 trailing empty lines → at most 1 trailing newline.
+        assert_eq!(skill.description, "hello world\n");
+    }
+
+    /// `>` with no trailing empty lines: clip should not add anything.
+    #[test]
+    fn parse_skill_clip_chomp_no_trailing_empties() {
+        let skill = super::SkillRegistry::parse_skill(
+            std::path::Path::new(""),
+            "---\nname: s\ndescription: >\n  hello\n  world\n---\nbody",
+        )
+        .expect("should parse");
+        assert_eq!(skill.description, "hello world");
+    }
+
+    /// `>` with exactly one trailing empty line: clip keeps it.
+    #[test]
+    fn parse_skill_clip_chomp_one_trailing_empty() {
+        let skill = super::SkillRegistry::parse_skill(
+            std::path::Path::new(""),
+            "---\nname: s\ndescription: >\n  hello\n  world\n\n---\nbody",
+        )
+        .expect("should parse");
+        assert_eq!(skill.description, "hello world\n");
+    }
+
+    /// `>-` strip vs `>+` keep: same block content, different
+    /// trailing newline handling.
+    #[test]
+    fn parse_skill_strip_vs_keep_trailing() {
+        let content = "---\nname: s\ndescription: >{}\n  hello\n  world\n\n\n---\nbody";
+        let strip_skill = super::SkillRegistry::parse_skill(
+            std::path::Path::new(""),
+            &content.replace("{}", "-"),
+        )
+        .expect("strip parse");
+        let keep_skill = super::SkillRegistry::parse_skill(
+            std::path::Path::new(""),
+            &content.replace("{}", "+"),
+        )
+        .expect("keep parse");
+        // strip drops trailing empties; keep preserves them.
+        assert_eq!(strip_skill.description, "hello world");
+        assert_eq!(keep_skill.description, "hello world\n\n");
+    }
+
+    /// `|-` literal strip: trailing newlines are stripped.
+    #[test]
+    fn parse_skill_literal_strip_strips_trailing_newlines() {
+        let skill = super::SkillRegistry::parse_skill(
+            std::path::Path::new(""),
+            "---\nname: s\ndescription: |-\n  line one\n  line two\n\n\n---\nbody",
+        )
+        .expect("should parse");
+        // literal: newlines preserved between non-empty lines.
+        // strip: trailing empty lines removed.
+        assert_eq!(skill.description, "line one\nline two");
+    }
+
+    /// `|+` literal keep: trailing newlines are preserved.
+    #[test]
+    fn parse_skill_literal_keep_preserves_trailing_newlines() {
+        let skill = super::SkillRegistry::parse_skill(
+            std::path::Path::new(""),
+            "---\nname: s\ndescription: |+\n  line one\n  line two\n\n\n---\nbody",
+        )
+        .expect("should parse");
+        // literal: newlines preserved between non-empty lines.
+        // keep: trailing empty lines are preserved as newlines.
+        assert_eq!(skill.description, "line one\nline two\n\n");
+    }
+
+    /// Nested relative indentation is preserved in literal (`|`) block
+    /// scalars: only the content-level indent (from the first non-empty
+    /// line) is stripped, and any deeper indent stays as-is.
+    #[test]
+    fn parse_skill_literal_preserves_relative_indentation() {
+        let skill = super::SkillRegistry::parse_skill(
+            std::path::Path::new(""),
+            "---\nname: s\ndescription: |\n  Usage:\n    $ deepseek --model auto\n    $ deepseek doctor\n---\nbody",
+        )
+        .expect("should parse");
+        assert_eq!(
+            skill.description,
+            "Usage:\n  $ deepseek --model auto\n  $ deepseek doctor"
+        );
+    }
+
+    /// Folded (`>`) block scalars also preserve relative indentation
+    /// within lines (the extra spaces survive the fold).
+    #[test]
+    fn parse_skill_folded_preserves_relative_indentation() {
+        let skill = super::SkillRegistry::parse_skill(
+            std::path::Path::new(""),
+            "---\nname: s\ndescription: >\n  See also:\n    the config file\n    the env var\n---\nbody",
+        )
+        .expect("should parse");
+        assert_eq!(
+            skill.description,
+            "See also:   the config file   the env var"
         );
     }
 }

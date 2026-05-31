@@ -78,7 +78,7 @@ export async function runCurate(env: AgentEnv): Promise<Record<string, unknown>>
 }
 
 export async function runTriage(env: AgentEnv): Promise<Record<string, unknown>> {
-  const repo = env.GITHUB_REPO ?? "Hmbown/deepseek-tui";
+  const repo = env.GITHUB_REPO ?? "Hmbown/CodeWhale";
   try {
     const res = await fetch(
       `https://api.github.com/repos/${repo}/issues?state=open&sort=created&direction=desc&per_page=30`,
@@ -86,7 +86,7 @@ export async function runTriage(env: AgentEnv): Promise<Record<string, unknown>>
         headers: {
           Accept: "application/vnd.github+json",
           "X-GitHub-Api-Version": "2022-11-28",
-          "User-Agent": "deepseek-tui-web",
+          "User-Agent": "codewhale-web",
           ...(env.GITHUB_TOKEN ? { Authorization: `Bearer ${env.GITHUB_TOKEN}` } : {}),
         },
       }
@@ -144,7 +144,7 @@ export async function runTriage(env: AgentEnv): Promise<Record<string, unknown>>
 }
 
 export async function runPrReview(env: AgentEnv): Promise<Record<string, unknown>> {
-  const repo = env.GITHUB_REPO ?? "Hmbown/deepseek-tui";
+  const repo = env.GITHUB_REPO ?? "Hmbown/CodeWhale";
   try {
     const res = await fetch(
       `https://api.github.com/repos/${repo}/pulls?state=open&sort=created&direction=desc&per_page=20`,
@@ -152,7 +152,7 @@ export async function runPrReview(env: AgentEnv): Promise<Record<string, unknown
         headers: {
           Accept: "application/vnd.github+json",
           "X-GitHub-Api-Version": "2022-11-28",
-          "User-Agent": "deepseek-tui-web",
+          "User-Agent": "codewhale-web",
           ...(env.GITHUB_TOKEN ? { Authorization: `Bearer ${env.GITHUB_TOKEN}` } : {}),
         },
       }
@@ -176,7 +176,7 @@ export async function runPrReview(env: AgentEnv): Promise<Record<string, unknown
             headers: {
               Accept: "application/vnd.github+json",
               "X-GitHub-Api-Version": "2022-11-28",
-              "User-Agent": "deepseek-tui-web",
+              "User-Agent": "codewhale-web",
               ...(env.GITHUB_TOKEN ? { Authorization: `Bearer ${env.GITHUB_TOKEN}` } : {}),
             },
           });
@@ -227,7 +227,7 @@ export async function runPrReview(env: AgentEnv): Promise<Record<string, unknown
 }
 
 export async function runStale(env: AgentEnv): Promise<Record<string, unknown>> {
-  const repo = env.GITHUB_REPO ?? "Hmbown/deepseek-tui";
+  const repo = env.GITHUB_REPO ?? "Hmbown/CodeWhale";
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   try {
     const res = await fetch(
@@ -236,7 +236,7 @@ export async function runStale(env: AgentEnv): Promise<Record<string, unknown>> 
         headers: {
           Accept: "application/vnd.github+json",
           "X-GitHub-Api-Version": "2022-11-28",
-          "User-Agent": "deepseek-tui-web",
+          "User-Agent": "codewhale-web",
           ...(env.GITHUB_TOKEN ? { Authorization: `Bearer ${env.GITHUB_TOKEN}` } : {}),
         },
       }
@@ -294,7 +294,7 @@ export async function runStale(env: AgentEnv): Promise<Record<string, unknown>> 
 }
 
 export async function runDupes(env: AgentEnv): Promise<Record<string, unknown>> {
-  const repo = env.GITHUB_REPO ?? "Hmbown/deepseek-tui";
+  const repo = env.GITHUB_REPO ?? "Hmbown/CodeWhale";
   try {
     const res = await fetch(
       `https://api.github.com/repos/${repo}/issues?state=open&per_page=100`,
@@ -302,7 +302,7 @@ export async function runDupes(env: AgentEnv): Promise<Record<string, unknown>> 
         headers: {
           Accept: "application/vnd.github+json",
           "X-GitHub-Api-Version": "2022-11-28",
-          "User-Agent": "deepseek-tui-web",
+          "User-Agent": "codewhale-web",
           ...(env.GITHUB_TOKEN ? { Authorization: `Bearer ${env.GITHUB_TOKEN}` } : {}),
         },
       }
@@ -354,7 +354,7 @@ export async function runDupes(env: AgentEnv): Promise<Record<string, unknown>> 
 }
 
 export async function runDigest(env: AgentEnv): Promise<Record<string, unknown>> {
-  const repo = env.GITHUB_REPO ?? "Hmbown/deepseek-tui";
+  const repo = env.GITHUB_REPO ?? "Hmbown/CodeWhale";
   const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
   try {
@@ -365,7 +365,7 @@ export async function runDigest(env: AgentEnv): Promise<Record<string, unknown>>
           headers: {
             Accept: "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
-            "User-Agent": "deepseek-tui-web",
+            "User-Agent": "codewhale-web",
             ...(env.GITHUB_TOKEN ? { Authorization: `Bearer ${env.GITHUB_TOKEN}` } : {}),
           },
         }
@@ -376,7 +376,7 @@ export async function runDigest(env: AgentEnv): Promise<Record<string, unknown>>
           headers: {
             Accept: "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
-            "User-Agent": "deepseek-tui-web",
+            "User-Agent": "codewhale-web",
             ...(env.GITHUB_TOKEN ? { Authorization: `Bearer ${env.GITHUB_TOKEN}` } : {}),
           },
         }

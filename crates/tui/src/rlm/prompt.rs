@@ -32,7 +32,7 @@ The REPL exposes:
 - `finalize(value, confidence=None)` - end the loop with a final answer and optional confidence.
 - `print(...)` - diagnostic output. The driver feeds you a truncated preview next round.
 
-Variables, imports, and any other state persist across rounds. There is no `context` or `ctx` variable. Use `peek`, `search`, `chunk`, and `context_meta`.
+Variables, imports, and any other state persist across rounds. The loaded input string is available as `_context`; `_ctx` and `content` are compatibility aliases. Prefer bounded helpers for inspection. There is no `context` or `ctx` variable. Use `peek`, `search`, `chunk`, and `context_meta`.
 
 Contract: every turn, output exactly one ` ```repl ` block of Python and nothing else. No prose-only turns. No "I will do X"; emit the code that does X.
 
@@ -157,6 +157,7 @@ mod tests {
     #[test]
     fn rlm_prompt_does_not_publicize_context_variables() {
         let s = body();
+        assert!(s.contains("`_ctx` and `content` are compatibility aliases"));
         assert!(s.contains("There is no `context` or `ctx` variable"));
         assert!(!s.contains("len(context)"));
         assert!(!s.contains("chunk_context"));

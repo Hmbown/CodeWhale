@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::Utc;
-use deepseek_protocol::EventFrame;
+use codewhale_protocol::EventFrame;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
@@ -152,6 +152,63 @@ impl HookSink for WebhookHookSink {
     }
 }
 
+/// A [`HookSink`] that sends events over a Unix domain socket.
+///
+/// Each event is serialized as a single JSON line (`{"at": "...", "event": {...}}\n`)
+/// and written to the socket. If the socket is not available (listener not running),
+/// the event is silently dropped - hook sinks are best-effort observability, not
+/// control flow.
+///
+/// On non-Unix platforms this struct exists but its [`HookSink::emit`] is a no-op.
+#[derive(Debug, Clone)]
+pub struct UnixSocketHookSink {
+    #[cfg(unix)]
+    path: PathBuf,
+}
+
+impl UnixSocketHookSink {
+    /// Create a sink that connects to the Unix domain socket at `path`.
+    pub fn new(path: PathBuf) -> Self {
+        #[cfg(unix)]
+        {
+            Self { path }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = path;
+            Self {}
+        }
+    }
+}
+
+#[async_trait]
+impl HookSink for UnixSocketHookSink {
+    #[cfg(unix)]
+    async fn emit(&self, event: &HookEvent) -> Result<()> {
+        let mut stream = match tokio::net::UnixStream::connect(&self.path).await {
+            Ok(s) => s,
+            Err(_) => return Ok(()), // listener not running, skip silently
+        };
+        let payload = json!({
+            "at": Utc::now().to_rfc3339(),
+            "event": event
+        });
+        let mut line = serde_json::to_string(&payload).context("failed to encode hook event")?;
+        line.push('\n');
+        stream
+            .write_all(line.as_bytes())
+            .await
+            .context("failed to write to unix socket")?;
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    async fn emit(&self, _event: &HookEvent) -> Result<()> {
+        // Unix sockets are not available on this platform.
+        Ok(())
+    }
+}
+
 #[derive(Default, Clone)]
 pub struct HookDispatcher {
     sinks: Vec<Arc<dyn HookSink>>,
@@ -255,6 +312,57 @@ mod tests {
         assert_eq!(second.events(), first.events());
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unix_socket_sink_skips_when_listener_absent() {
+        let (root, socket_path) = unique_short_socket_path("missing");
+        let sink = UnixSocketHookSink::new(socket_path);
+        let result = sink
+            .emit(&HookEvent::ResponseStart {
+                response_id: "resp-1".to_string(),
+            })
+            .await;
+        assert!(result.is_ok());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unix_socket_sink_sends_event_to_listener() {
+        use tokio::io::AsyncBufReadExt;
+        use tokio::net::UnixListener;
+
+        let (root, socket_path) = unique_short_socket_path("send");
+        std::fs::create_dir_all(&root).expect("mkdir");
+        let _ = std::fs::remove_file(&socket_path);
+
+        let listener = UnixListener::bind(&socket_path).expect("bind");
+        let sink = UnixSocketHookSink::new(socket_path.clone());
+
+        let handle = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept");
+            let mut reader = tokio::io::BufReader::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).await.expect("read_line");
+            line
+        });
+
+        sink.emit(&HookEvent::ResponseStart {
+            response_id: "resp-42".to_string(),
+        })
+        .await
+        .expect("emit");
+
+        let received = handle.await.expect("join");
+        let parsed: Value = serde_json::from_str(&received).expect("parse");
+        assert_eq!(parsed["event"]["type"], "response_start");
+        assert_eq!(parsed["event"]["response_id"], "resp-42");
+        assert!(parsed["at"].as_str().is_some());
+
+        let _ = std::fs::remove_file(&socket_path);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[derive(Default)]
     struct RecordingSink {
         events: Mutex<Vec<Value>>,
@@ -292,5 +400,16 @@ mod tests {
             "deepseek-hooks-{label}-{}-{nanos}",
             std::process::id()
         ))
+    }
+
+    #[cfg(unix)]
+    fn unique_short_socket_path(label: &str) -> (PathBuf, PathBuf) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = PathBuf::from("/tmp").join(format!("cw-hk-{}-{nanos}", std::process::id()));
+        let path = root.join(format!("{label}.sock"));
+        (root, path)
     }
 }

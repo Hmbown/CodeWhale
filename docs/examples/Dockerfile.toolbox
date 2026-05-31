@@ -1,0 +1,29 @@
+# syntax=docker/dockerfile:1
+#
+# Opt-in CodeWhale toolbox image.
+#
+# The published ghcr.io/hmbown/codewhale:latest image intentionally stays
+# minimal, non-root, and without passwordless sudo. Use this Dockerfile only for
+# workspaces where you deliberately want package installation, custom CA setup,
+# or project-specific build tools inside the container.
+#
+# Example:
+#   docker build -f docs/examples/Dockerfile.toolbox \
+#     --build-arg CODEWHALE_IMAGE=ghcr.io/hmbown/codewhale:vX.Y.Z \
+#     --build-arg TOOLBOX_PACKAGES="git openssh-client curl build-essential pkg-config python3 python3-pip nodejs npm" \
+#     -t codewhale-toolbox:my-project .
+
+ARG CODEWHALE_IMAGE=ghcr.io/hmbown/codewhale:latest
+FROM ${CODEWHALE_IMAGE}
+
+USER root
+
+ARG TOOLBOX_PACKAGES="git openssh-client curl build-essential pkg-config python3 python3-pip nodejs npm"
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends sudo ${TOOLBOX_PACKAGES} \
+    && rm -rf /var/lib/apt/lists/* \
+    && printf '%s\n' 'codewhale ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/codewhale-nopasswd \
+    && chmod 0440 /etc/sudoers.d/codewhale-nopasswd
+
+USER codewhale
+WORKDIR /workspace

@@ -1,6 +1,6 @@
 ---
 name: mcp-builder
-description: Design, build, configure, or debug Model Context Protocol servers for DeepSeek TUI, including stdio and HTTP/SSE transports.
+description: Design, build, configure, or debug Model Context Protocol servers for codewhale, including stdio and HTTP/SSE transports.
 ---
 
 # MCP Builder

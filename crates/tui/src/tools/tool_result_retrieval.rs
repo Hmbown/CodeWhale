@@ -897,8 +897,7 @@ mod tests {
             payload
                 .to_string()
                 .contains("canonical session artifact body"),
-            "summary should pull from session artifact, got: {}",
-            payload
+            "summary should pull from session artifact, got: {payload}"
         );
     }
 

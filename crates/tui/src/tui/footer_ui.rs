@@ -4,6 +4,7 @@ use std::time::Instant;
 use unicode_width::UnicodeWidthStr;
 
 use crate::core::coherence::CoherenceState;
+use crate::localization::MessageId;
 use crate::palette;
 use crate::tools::subagent::SubAgentStatus;
 use crate::tui::app::App;
@@ -60,32 +61,46 @@ pub(crate) fn render_footer(f: &mut Frame, area: Rect, app: &mut App) {
 
     // Animate the spacer between the left status line and the right-hand
     // chips whenever a turn is live: model loading/streaming, compacting, or
-    // sub-agents in flight. The spout strip is gated on `fancy_animations`
-    // (the "do I want a whale at all" knob); `low_motion` now governs only
-    // streaming pacing (typewriter vs upstream), not the spout. Dot-pulse
-    // counter ticks every 400 ms so `working` → `working...` reads at a
-    // calm pace regardless of motion mode.
+    // sub-agents in flight. The spout strip and dot-pulse fallback are gated
+    // on `fancy_animations` (the "do I want animated chrome" knob);
+    // `low_motion` governs streaming pacing and redraw cadence.
     if footer_working_strip_active(app) {
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
-        let dot_frame = now_ms / 400;
+        let dot_frame = footer_working_label_frame(now_ms, app.fancy_animations);
         // Surface one compact live status row in the footer whenever a turn
         // is live. Tool turns get the current action plus active/done counts;
-        // non-tool work falls back to the existing dot-pulse label.
-        props.state_label = active_subagent_status_label(app)
+        // non-tool work falls back to a descriptive label with elapsed time.
+        let elapsed_secs = app
+            .turn_started_at
+            .map(|t| t.elapsed().as_secs())
+            .unwrap_or(0);
+        let mut label = active_subagent_status_label(app)
             .or_else(|| active_tool_status_label(app))
-            .unwrap_or_else(|| crate::tui::widgets::footer_working_label(dot_frame, app.ui_locale));
+            .unwrap_or_else(|| {
+                // Show the working label during active turns (loading, compacting, etc.).
+                let base = crate::tui::widgets::footer_working_label(dot_frame, app.ui_locale);
+                if elapsed_secs > 0 {
+                    format!("{base} ({elapsed_secs}s)")
+                } else {
+                    base.to_string()
+                }
+            });
+        // Append stall reason when the turn has been running > 30 s.
+        if let Some(reason) = stall_reason(app) {
+            label = format!("{label}  ({reason})");
+        }
+        props.state_label = label;
         props.state_color = palette::DEEPSEEK_SKY;
 
         // Water-spout frame source: wall-clock milliseconds. The sine-wave
         // math in `footer_working_strip_glyph_at` was tuned for this cadence
         // (`t = frame / 1000.0`, primary term × 8.0 ≈ 1.3 Hz at 1 ms ticks),
         // so frame must advance at ~1000 units/sec to produce the intended
-        // animation feel. `fancy_animations = false` hides the strip
-        // entirely; the textual `working...` pulse still keeps a heartbeat
-        // regardless.
+        // animation feel. `fancy_animations = false` hides the strip and pins
+        // the textual fallback to `working`.
         if app.fancy_animations {
             props.working_strip_frame = Some(now_ms);
         }
@@ -101,6 +116,48 @@ pub(crate) fn render_footer(f: &mut Frame, area: Rect, app: &mut App) {
     widget.render(area, buf);
 }
 
+/// Classify why a turn that has been running for > 30 s might appear stalled.
+/// Returns a short human-readable reason string, or `None` when the turn has
+/// not been running long enough to classify as stalled.
+pub(crate) fn stall_reason(app: &App) -> Option<&'static str> {
+    let elapsed = app.turn_started_at?.elapsed();
+    if elapsed.as_secs() < 30 {
+        return None;
+    }
+    if app.is_compacting {
+        return Some("compacting context");
+    }
+    if app.is_loading {
+        return Some("waiting for model");
+    }
+    if running_agent_count(app) > 0 {
+        return Some("sub-agents working");
+    }
+    if app.task_panel.iter().any(|task| task.status == "running") {
+        return Some("background jobs running");
+    }
+    let active = app.active_cell.as_ref()?;
+    if active.entries().iter().any(|cell| match cell {
+        crate::tui::history::HistoryCell::Tool(tool) => match tool {
+            crate::tui::history::ToolCell::Exec(exec) => {
+                exec.status == crate::tui::history::ToolStatus::Running
+            }
+            crate::tui::history::ToolCell::Exploring(explore) => explore
+                .entries
+                .iter()
+                .any(|e| e.status == crate::tui::history::ToolStatus::Running),
+            _ => false,
+        },
+        _ => false,
+    }) {
+        return Some("tools executing");
+    }
+    if app.runtime_turn_status.as_deref() == Some("in_progress") {
+        return Some("waiting - no recent activity");
+    }
+    None
+}
+
 /// Whether the footer should animate the water-spout strip. Driven by the
 /// underlying live-work flags so the strip stays visible for the *entire*
 /// turn — not just the moments where bytes are streaming. `is_loading` can
@@ -111,7 +168,28 @@ pub(crate) fn render_footer(f: &mut Frame, area: Rect, app: &mut App) {
 /// though the agent is still working.
 pub(crate) fn footer_working_strip_active(app: &App) -> bool {
     let turn_in_progress = app.runtime_turn_status.as_deref() == Some("in_progress");
-    app.is_loading || app.is_compacting || running_agent_count(app) > 0 || turn_in_progress
+    app.is_loading
+        || app.is_compacting
+        || app.is_purging
+        || running_agent_count(app) > 0
+        || turn_in_progress
+}
+
+pub(crate) fn footer_working_label_frame(now_ms: u64, fancy_animations: bool) -> u64 {
+    if fancy_animations { now_ms / 400 } else { 0 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::footer_working_label_frame;
+
+    #[test]
+    fn footer_working_label_frame_is_static_without_fancy_animations() {
+        assert_eq!(footer_working_label_frame(0, false), 0);
+        assert_eq!(footer_working_label_frame(399, false), 0);
+        assert_eq!(footer_working_label_frame(1_600, false), 0);
+        assert_eq!(footer_working_label_frame(1_600, true), 4);
+    }
 }
 
 pub(crate) fn is_noisy_subagent_progress(status: &str) -> bool {
@@ -384,6 +462,11 @@ pub(crate) fn render_footer_from(
     } else {
         Vec::new()
     };
+    let balance = if has(S::Balance) {
+        footer_balance_spans(app)
+    } else {
+        Vec::new()
+    };
 
     // Build the props; `Mode` and `Model` toggles modulate downstream by
     // blanking the rendered text rather than restructuring the widget — the
@@ -398,6 +481,7 @@ pub(crate) fn render_footer_from(
         reasoning_replay,
         cache,
         cost,
+        balance,
     );
     if !has(S::Mode) {
         props.mode_label = "";
@@ -406,9 +490,16 @@ pub(crate) fn render_footer_from(
         props.model.clear();
     }
 
+    // Shell-running chip: visible whenever a foreground shell command is
+    // active, regardless of user-configured status items.
+    let shell_chip = crate::tui::widgets::footer_shell_chip(active_foreground_shell_running(app));
+
     // Right-cluster extension chips: append in `items` order so user
     // ordering is preserved across the new variants.
     let mut extra: Vec<Span<'static>> = Vec::new();
+    if !shell_chip.is_empty() {
+        extra.extend(shell_chip);
+    }
     for item in items {
         let chip = match *item {
             S::PrefixStability => prefix_stability.clone(),
@@ -416,6 +507,7 @@ pub(crate) fn render_footer_from(
             S::ContextPercent => footer_context_percent_spans(app),
             S::GitBranch => footer_git_branch_spans(app),
             S::LastToolElapsed | S::RateLimit => Vec::new(),
+            S::Tokens => footer_session_tokens_spans(app),
             _ => continue,
         };
         if chip.is_empty() {
@@ -441,11 +533,15 @@ pub(crate) fn render_footer_from(
 }
 
 pub(crate) fn footer_git_branch_spans(app: &App) -> Vec<Span<'static>> {
-    let Some(branch) = workspace_context::branch(&app.workspace) else {
+    let Some(branch) = app
+        .workspace_context
+        .as_deref()
+        .and_then(workspace_context::branch_from_context)
+    else {
         return Vec::new();
     };
     vec![Span::styled(
-        branch,
+        branch.to_string(),
         Style::default().fg(app.ui_theme.text_muted),
     )]
 }
@@ -481,14 +577,71 @@ pub(crate) fn footer_cost_spans(app: &App) -> Vec<Span<'static>> {
     if !should_show_footer_cost(displayed_cost) {
         return Vec::new();
     }
-    vec![Span::styled(
+    let mut spans = vec![Span::styled(
         app.format_cost_amount(displayed_cost),
+        Style::default().fg(palette::TEXT_MUTED),
+    )];
+    // Append cache-savings hint when the last turn had cache hits that
+    // saved money (#2038).
+    if let Some(saved) = app.last_turn_cache_savings()
+        && saved > 0.0
+    {
+        spans.push(Span::styled(
+            format!(" · saved {}", app.format_cost_amount(saved)),
+            Style::default().fg(palette::STATUS_SUCCESS),
+        ));
+    }
+    spans
+}
+
+pub(crate) fn footer_balance_spans(app: &App) -> Vec<Span<'static>> {
+    let balance = match app.balance_cell.lock() {
+        Ok(guard) => guard,
+        Err(_) => return Vec::new(),
+    };
+    let info = match balance.as_ref() {
+        Some(info) => info,
+        None => return Vec::new(),
+    };
+    let total = match info.total_balance_f64() {
+        Some(total) if total > 0.0 => total,
+        _ => return Vec::new(),
+    };
+    let currency = match info.currency.as_str() {
+        "CNY" | "cny" => "¥",
+        _ => "$",
+    };
+    let prefix = app.tr(MessageId::FooterBalancePrefix);
+    let label = if total >= 1000.0 {
+        format!("{prefix} {currency}{total:.0}")
+    } else if total >= 10.0 {
+        format!("{prefix} {currency}{total:.1}")
+    } else {
+        format!("{prefix} {currency}{total:.2}")
+    };
+    vec![Span::styled(
+        label,
         Style::default().fg(palette::TEXT_MUTED),
     )]
 }
 
 pub(crate) fn should_show_footer_cost(displayed_cost: f64) -> bool {
     displayed_cost.is_finite() && displayed_cost > 0.0
+}
+
+/// Session token-usage chip for the footer right cluster.
+///
+/// Renders a compact accumulated token count for the current runtime session.
+/// Detailed cache stats live in the separate `cache` chip.
+pub(crate) fn footer_session_tokens_spans(app: &App) -> Vec<Span<'static>> {
+    let session = &app.session;
+    if session.total_input_tokens == 0 && session.total_output_tokens == 0 {
+        return Vec::new();
+    }
+    let total = u64::from(session.total_input_tokens)
+        .saturating_add(u64::from(session.total_output_tokens));
+    let text = format!("tok {}", format_token_count_compact(total));
+    vec![Span::styled(text, Style::default().fg(palette::TEXT_MUTED))]
 }
 
 /// Test-only helper retained as a parity reference for `FooterWidget`'s
@@ -518,6 +671,8 @@ pub(crate) fn footer_auxiliary_spans(app: &App, max_width: usize) -> Vec<Span<'s
         })
         .unwrap_or_default();
 
+    let shell_spans = crate::tui::widgets::footer_shell_chip(active_foreground_shell_running(app));
+
     let parts: Vec<&Vec<Span<'static>>> = [
         &coherence_spans,
         &agents_spans,
@@ -525,6 +680,7 @@ pub(crate) fn footer_auxiliary_spans(app: &App, max_width: usize) -> Vec<Span<'s
         &prefix_spans,
         &cache_spans,
         &cost_spans,
+        &shell_spans,
     ]
     .iter()
     .filter(|spans| !spans.is_empty())
@@ -609,10 +765,7 @@ pub(crate) fn footer_cache_spans(app: &App) -> Vec<Span<'static>> {
         palette::STATUS_ERROR
     };
     vec![Span::styled(
-        format!(
-            "Cache: {:.1}% hit | hit {hit_tokens} | miss {miss_tokens}",
-            percent
-        ),
+        format!("Cache: {percent:.1}% hit | hit {hit_tokens} | miss {miss_tokens}"),
         Style::default().fg(color),
     )]
 }
@@ -693,6 +846,9 @@ pub(crate) fn footer_status_line_spans(app: &App, max_width: usize) -> Vec<Span<
 pub(crate) fn footer_state_label(app: &App) -> (&'static str, ratatui::style::Color) {
     if app.is_compacting {
         return ("compacting \u{238B}", app.ui_theme.status_warning);
+    }
+    if app.is_purging {
+        return ("purging \u{238B}", app.ui_theme.status_warning);
     }
     // Note: we deliberately do NOT show a "thinking" label for `is_loading`.
     // The animated water-spout strip in the footer's spacer is the visual

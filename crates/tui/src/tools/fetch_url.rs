@@ -26,7 +26,7 @@ const DEFAULT_TIMEOUT_MS: u64 = 15_000;
 const HARD_MAX_TIMEOUT_MS: u64 = 60_000;
 const MAX_REDIRECTS: usize = 5;
 const USER_AGENT: &str =
-    "Mozilla/5.0 (compatible; deepseek-tui/0.5; +https://github.com/Hmbown/DeepSeek-TUI)";
+    "Mozilla/5.0 (compatible; codewhale/0.5; +https://github.com/Hmbown/CodeWhale)";
 
 static SCRIPT_RE: OnceLock<Regex> = OnceLock::new();
 static STYLE_RE: OnceLock<Regex> = OnceLock::new();
@@ -389,8 +389,14 @@ fn validate_dns_resolved_ip(
         return Ok(());
     }
 
+    // Allow the resolved IP past the restricted-IP block if either:
+    //   * it falls inside a configured fake-IP placeholder range (a TUN /
+    //     transparent-proxy setup in `fake-ip` mode resolves every host into a
+    //     reserved range such as `198.18.0.0/15`), or
+    //   * the host is on the explicitly-trusted proxy list.
+    // Real private/loopback/link-local/metadata IPs match neither and stay blocked.
     if let Some(decider) = decider
-        && decider.trusts_proxy_fakeip_host(host)
+        && (decider.is_trusted_fakeip_addr(ip) || decider.trusts_proxy_fakeip_host(host))
     {
         decider.record_trusted_proxy_fakeip_allow(host, "fetch_url");
         return Ok(());

@@ -1,0 +1,21 @@
+[Unit]
+Description=CodeWhale Feishu/Lark Phone Bridge
+Wants=network-online.target codewhale-runtime.service
+After=network-online.target codewhale-runtime.service
+
+[Service]
+Type=simple
+User=codewhale
+Group=codewhale
+WorkingDirectory=/opt/codewhale/bridge
+EnvironmentFile=/etc/deepseek/feishu-bridge.env
+ExecStart=/usr/bin/node /opt/codewhale/bridge/src/index.mjs
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/codewhale-feishu-bridge
+
+[Install]
+WantedBy=multi-user.target

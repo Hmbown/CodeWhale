@@ -5,10 +5,14 @@ use std::time::Duration;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use deepseek_protocol::{ToolKind, ToolOutput, ToolPayload};
+use codewhale_protocol::{ToolKind, ToolOutput, ToolPayload};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::sync::RwLock;
+use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock};
+
+tokio::task_local! {
+    static TOOL_EXECUTION_LOCK_HELD: ();
+}
 
 /// Capabilities that a tool may have or require.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -309,9 +313,40 @@ pub trait ToolHandler: Send + Sync {
     ) -> std::result::Result<ToolOutput, FunctionCallError>;
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ToolCallRuntime {
-    pub parallel_execution: Arc<RwLock<()>>,
+    /// Preserve read/write tool execution semantics: parallel-safe tools may
+    /// overlap, while serial tools run exclusively.
+    execution_lock: Arc<RwLock<()>>,
+}
+
+impl Default for ToolCallRuntime {
+    fn default() -> Self {
+        Self {
+            execution_lock: Arc::new(RwLock::new(())),
+        }
+    }
+}
+
+#[derive(Debug)]
+enum ToolExecutionGuard {
+    Parallel(#[allow(dead_code)] OwnedRwLockReadGuard<()>),
+    Serial(#[allow(dead_code)] OwnedRwLockWriteGuard<()>),
+    Reentrant,
+}
+
+impl ToolCallRuntime {
+    async fn acquire(&self, supports_parallel: bool) -> ToolExecutionGuard {
+        if TOOL_EXECUTION_LOCK_HELD.try_with(|_| ()).is_ok() {
+            return ToolExecutionGuard::Reentrant;
+        }
+
+        if supports_parallel {
+            ToolExecutionGuard::Parallel(self.execution_lock.clone().read_owned().await)
+        } else {
+            ToolExecutionGuard::Serial(self.execution_lock.clone().write_owned().await)
+        }
+    }
 }
 
 #[derive(Default)]
@@ -379,15 +414,17 @@ impl ToolRegistry {
             source: call.source,
         };
 
-        if configured.supports_parallel_tool_calls {
-            let _guard = self.runtime.parallel_execution.read().await;
-            self.execute_with_timeout(handler, configured.spec.timeout_ms, invocation)
-                .await
-        } else {
-            let _guard = self.runtime.parallel_execution.write().await;
-            self.execute_with_timeout(handler, configured.spec.timeout_ms, invocation)
-                .await
-        }
+        let _guard = self
+            .runtime
+            .acquire(configured.supports_parallel_tool_calls)
+            .await;
+
+        TOOL_EXECUTION_LOCK_HELD
+            .scope(
+                (),
+                self.execute_with_timeout(handler, configured.spec.timeout_ms, invocation),
+            )
+            .await
     }
 
     async fn execute_with_timeout(

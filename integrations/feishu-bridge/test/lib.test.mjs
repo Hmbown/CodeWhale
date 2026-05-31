@@ -12,8 +12,10 @@ import {
   parseCommand,
   parseList,
   parseTextContent,
+  preservedChatStateFields,
   splitMessage,
   stripGroupPrefix,
+  helpText,
   validateBridgeConfig
 } from "../src/lib.mjs";
 
@@ -89,10 +91,34 @@ test("commandAction maps bridge commands and falls back to prompts", () => {
     kind: "resume",
     threadId: "thread-1"
   });
+  assert.deepEqual(commandAction(parseCommand("/model deepseek-v4-pro")), {
+    kind: "set_model",
+    modelName: "deepseek-v4-pro"
+  });
   assert.deepEqual(commandAction(parseCommand("/unknown value")), {
     kind: "prompt",
     prompt: "/unknown value"
   });
+});
+
+test("helpText documents per-chat model switching", () => {
+  assert.match(helpText(), /\/model <name\|default>/);
+});
+
+test("preservedChatStateFields carries model across state replacement", () => {
+  assert.deepEqual(
+    preservedChatStateFields({
+      threadId: "old-thread",
+      model: "deepseek-v4-flash",
+      replyToMessageId: "om_123",
+      activeTurnId: "turn-1"
+    }),
+    {
+      model: "deepseek-v4-flash",
+      replyToMessageId: "om_123"
+    }
+  );
+  assert.deepEqual(preservedChatStateFields({ model: null }), { model: null });
 });
 
 test("parseApprovalDecisionArgs extracts remember flag", () => {
@@ -160,7 +186,7 @@ test("validateBridgeConfig accepts locked-down whalebro DM config", () => {
       DEEPSEEK_WORKSPACE: "/opt/whalebro",
       DEEPSEEK_CHAT_ALLOWLIST: "oc_allowed",
       DEEPSEEK_ALLOW_UNLISTED: "false",
-      FEISHU_THREAD_MAP_PATH: "/var/lib/deepseek-feishu-bridge/thread-map.json",
+      FEISHU_THREAD_MAP_PATH: "/var/lib/codewhale-feishu-bridge/thread-map.json",
       FEISHU_ALLOW_GROUPS: "false",
       FEISHU_REQUIRE_PREFIX_IN_GROUP: "true"
     },
@@ -187,7 +213,7 @@ test("validateBridgeConfig rejects unsafe group pairing and token mismatch", () 
       DEEPSEEK_RUNTIME_TOKEN: "bridge-token",
       DEEPSEEK_WORKSPACE: "/opt/whalebro",
       DEEPSEEK_ALLOW_UNLISTED: "true",
-      FEISHU_THREAD_MAP_PATH: "/var/lib/deepseek-feishu-bridge/thread-map.json",
+      FEISHU_THREAD_MAP_PATH: "/var/lib/codewhale-feishu-bridge/thread-map.json",
       FEISHU_ALLOW_GROUPS: "true",
       FEISHU_REQUIRE_PREFIX_IN_GROUP: "false"
     },

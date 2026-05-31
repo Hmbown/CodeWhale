@@ -6,47 +6,59 @@ import { InstallCodeBlock } from "./install-code-block";
 type Arch = "macos-arm64" | "macos-x64" | "linux-x64" | "linux-arm64" | "windows-x64";
 
 const SNIPPETS: Record<Arch, string> = {
-  "macos-arm64": `curl -fsSL -o deepseek \\
-  https://github.com/Hmbown/deepseek-tui/releases/latest/download/deepseek-macos-arm64
-chmod +x deepseek
-xattr -d com.apple.quarantine deepseek 2>/dev/null || true
-sudo mv deepseek /usr/local/bin/`,
-  "macos-x64": `curl -fsSL -o deepseek \\
-  https://github.com/Hmbown/deepseek-tui/releases/latest/download/deepseek-macos-x64
-chmod +x deepseek
-xattr -d com.apple.quarantine deepseek 2>/dev/null || true
-sudo mv deepseek /usr/local/bin/`,
-  "linux-x64": `curl -fsSL -o deepseek \\
-  https://github.com/Hmbown/deepseek-tui/releases/latest/download/deepseek-linux-x64
-chmod +x deepseek
-sudo mv deepseek /usr/local/bin/`,
-  "linux-arm64": `curl -fsSL -o deepseek \\
-  https://github.com/Hmbown/deepseek-tui/releases/latest/download/deepseek-linux-arm64
-chmod +x deepseek
-sudo mv deepseek /usr/local/bin/`,
+  "macos-arm64": `curl -fsSL -o codewhale \\
+  https://github.com/Hmbown/CodeWhale/releases/latest/download/codewhale-macos-arm64
+curl -fsSL -o codewhale-tui \\
+  https://github.com/Hmbown/CodeWhale/releases/latest/download/codewhale-tui-macos-arm64
+chmod +x codewhale codewhale-tui
+xattr -d com.apple.quarantine codewhale codewhale-tui 2>/dev/null || true
+sudo mv codewhale codewhale-tui /usr/local/bin/`,
+  "macos-x64": `curl -fsSL -o codewhale \\
+  https://github.com/Hmbown/CodeWhale/releases/latest/download/codewhale-macos-x64
+curl -fsSL -o codewhale-tui \\
+  https://github.com/Hmbown/CodeWhale/releases/latest/download/codewhale-tui-macos-x64
+chmod +x codewhale codewhale-tui
+xattr -d com.apple.quarantine codewhale codewhale-tui 2>/dev/null || true
+sudo mv codewhale codewhale-tui /usr/local/bin/`,
+  "linux-x64": `curl -fsSL -o codewhale \\
+  https://github.com/Hmbown/CodeWhale/releases/latest/download/codewhale-linux-x64
+curl -fsSL -o codewhale-tui \\
+  https://github.com/Hmbown/CodeWhale/releases/latest/download/codewhale-tui-linux-x64
+chmod +x codewhale codewhale-tui
+sudo mv codewhale codewhale-tui /usr/local/bin/`,
+  "linux-arm64": `curl -fsSL -o codewhale \\
+  https://github.com/Hmbown/CodeWhale/releases/latest/download/codewhale-linux-arm64
+curl -fsSL -o codewhale-tui \\
+  https://github.com/Hmbown/CodeWhale/releases/latest/download/codewhale-tui-linux-arm64
+chmod +x codewhale codewhale-tui
+sudo mv codewhale codewhale-tui /usr/local/bin/`,
   "windows-x64": `# PowerShell
 $ErrorActionPreference = "Stop"
 $dest = "$Env:USERPROFILE\\bin"
 New-Item -ItemType Directory -Force $dest | Out-Null
 
 Invoke-WebRequest \`
-  -Uri https://github.com/Hmbown/deepseek-tui/releases/latest/download/deepseek-windows-x64.exe \`
-  -OutFile "$dest\\deepseek.exe"
+  -Uri https://github.com/Hmbown/CodeWhale/releases/latest/download/codewhale-windows-x64.exe \`
+  -OutFile "$dest\\codewhale.exe"
+Invoke-WebRequest \`
+  -Uri https://github.com/Hmbown/CodeWhale/releases/latest/download/codewhale-tui-windows-x64.exe \`
+  -OutFile "$dest\\codewhale-tui.exe"
 
 $Env:Path = "$dest;$Env:Path"`,
 };
 
 const VERIFY: Record<Arch, string> = {
-  "macos-arm64": `curl -fsSL -O https://github.com/Hmbown/deepseek-tui/releases/latest/download/deepseek-artifacts-sha256.txt
-shasum -a 256 -c deepseek-artifacts-sha256.txt --ignore-missing`,
-  "macos-x64": `curl -fsSL -O https://github.com/Hmbown/deepseek-tui/releases/latest/download/deepseek-artifacts-sha256.txt
-shasum -a 256 -c deepseek-artifacts-sha256.txt --ignore-missing`,
-  "linux-x64": `curl -fsSL -O https://github.com/Hmbown/deepseek-tui/releases/latest/download/deepseek-artifacts-sha256.txt
-sha256sum -c deepseek-artifacts-sha256.txt --ignore-missing`,
-  "linux-arm64": `curl -fsSL -O https://github.com/Hmbown/deepseek-tui/releases/latest/download/deepseek-artifacts-sha256.txt
-sha256sum -c deepseek-artifacts-sha256.txt --ignore-missing`,
+  "macos-arm64": `curl -fsSL -O https://github.com/Hmbown/CodeWhale/releases/latest/download/codewhale-artifacts-sha256.txt
+shasum -a 256 -c codewhale-artifacts-sha256.txt --ignore-missing`,
+  "macos-x64": `curl -fsSL -O https://github.com/Hmbown/CodeWhale/releases/latest/download/codewhale-artifacts-sha256.txt
+shasum -a 256 -c codewhale-artifacts-sha256.txt --ignore-missing`,
+  "linux-x64": `curl -fsSL -O https://github.com/Hmbown/CodeWhale/releases/latest/download/codewhale-artifacts-sha256.txt
+sha256sum -c codewhale-artifacts-sha256.txt --ignore-missing`,
+  "linux-arm64": `curl -fsSL -O https://github.com/Hmbown/CodeWhale/releases/latest/download/codewhale-artifacts-sha256.txt
+sha256sum -c codewhale-artifacts-sha256.txt --ignore-missing`,
   "windows-x64": `# PowerShell
-Get-FileHash "$Env:USERPROFILE\\bin\\deepseek.exe" -Algorithm SHA256`,
+Get-FileHash "$Env:USERPROFILE\\bin\\codewhale.exe" -Algorithm SHA256
+Get-FileHash "$Env:USERPROFILE\\bin\\codewhale-tui.exe" -Algorithm SHA256`,
 };
 
 const LABELS: Record<Arch, string> = {
@@ -65,7 +77,6 @@ function detect(): Arch {
     if (ua.includes("aarch64") || ua.includes("arm64")) return "linux-arm64";
     return "linux-x64";
   }
-  // mac: most modern macs are arm64; Intel users can switch tab
   return "macos-arm64";
 }
 

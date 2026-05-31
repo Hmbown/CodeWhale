@@ -12,11 +12,11 @@
 //!
 //! Or XML-style format:
 //! ```text
-//! <deepseek:tool_call>
+//! <codewhale:tool_call>
 //! <invoke name="tool_name">
 //! <parameter name="arg">value</parameter>
 //! </invoke>
-//! </deepseek:tool_call>
+//! </codewhale:tool_call>
 //! ```
 //!
 //! This module parses these text patterns into structured tool calls.
@@ -60,8 +60,8 @@ fn get_tool_call_regex() -> &'static Regex {
 
 fn get_xml_tool_call_regex() -> &'static Regex {
     XML_TOOL_CALL_REGEX.get_or_init(|| {
-        // Match <deepseek:tool_call>...</deepseek:tool_call> or similar XML patterns
-        Regex::new(r"(?s)<(?:deepseek:)?tool_call[^>]*>\s*(.*?)\s*</(?:deepseek:)?tool_call>")
+        // Match <codewhale:tool_call>...</codewhale:tool_call> or similar XML patterns
+        Regex::new(r"(?s)<(?:codewhale:)?tool_call[^>]*>\s*(.*?)\s*</(?:codewhale:)?tool_call>")
             .expect("XML tool_call regex pattern is valid")
     })
 }
@@ -108,7 +108,7 @@ pub fn parse_tool_calls(text: &str) -> ParseResult {
         clean_text = clean_text.replace(full_match, "");
     }
 
-    // Parse XML-style <deepseek:tool_call> or <tool_call> format
+    // Parse XML-style <codewhale:tool_call> or <tool_call> format
     let xml_regex = get_xml_tool_call_regex();
     for cap in xml_regex.captures_iter(text) {
         let (Some(full_match), Some(inner)) = (cap.get(0), cap.get(1)) else {
@@ -443,7 +443,7 @@ fn extract_json_object(text: &str) -> Option<Value> {
 /// Check if text contains tool call markers (either format).
 pub fn has_tool_call_markers(text: &str) -> bool {
     text.contains("[TOOL_CALL]")
-        || text.contains("<deepseek:tool_call")
+        || text.contains("<codewhale:tool_call")
         || text.contains("<tool_call")
         || text.contains("<invoke ")
 }

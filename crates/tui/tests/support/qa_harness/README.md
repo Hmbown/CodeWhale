@@ -46,7 +46,7 @@ spin up a PTY just to assert a function returns the right value.
 3. Spawn:
 
    ```rust
-   let mut h = Harness::builder(Harness::cargo_bin("deepseek-tui"))
+   let mut h = Harness::builder(Harness::cargo_bin("codewhale-tui"))
        .cwd(ws.workspace())
        .seal_home(ws.home())
        .env("DEEPSEEK_API_KEY", "ci-test-key")

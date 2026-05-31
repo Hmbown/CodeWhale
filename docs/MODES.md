@@ -1,9 +1,13 @@
 # Modes and Approvals
 
-DeepSeek TUI has two related concepts:
+codewhale has two related concepts:
 
 - **TUI mode**: what kind of visible interaction you're in (Plan/Agent/YOLO/Pro Plan).
 - **Approval mode**: how aggressively the UI asks before executing tools.
+
+Model selection is separate. `--model auto` and `/model auto` route each turn to
+a concrete model and thinking level; they are not TUI modes and are not part of
+the `Tab` cycle.
 
 ## TUI Modes
 
@@ -16,11 +20,20 @@ Run `/mode` to open the mode picker, or switch directly with `/mode agent`,
 `/mode 3`, or `/mode 4`.
 
 - **Plan**: design-first prompting. Read-only investigation tools stay available; shell and patch execution stay off. Use this when you want to think out loud and produce a plan to hand to a human (yourself later, or a reviewer).
-- **Agent**: multi-step tool use. Approvals for shell and paid tools (file writes are allowed without a prompt).
+- **Agent**: multi-step tool use. Shell execution (`exec_shell`, `task_shell_start`, `task_shell_wait`) requires `allow_shell = true` in config; approval prompts gate each call. File writes are allowed without a prompt.
 - **YOLO**: enables shell + trust mode and auto-approves all tools. Use only in trusted repos.
 - **Pro Plan**: plan and review with `deepseek-v4-pro`, execute with `deepseek-v4-flash`, and keep the plan confirmation gate between planning and implementation. The YOLO accept option auto-approves only the execution pipeline; Pro Plan still returns to read-only Pro review afterwards.
 
-All four modes have access to persistent RLM sessions through `rlm_open`, `rlm_eval`, `rlm_configure`, and `rlm_close`. Inside an RLM Python REPL, `sub_query_batch` fans out 1-16 cheap parallel child calls pinned to `deepseek-v4-flash`. The model reaches for it when work is too large or repetitive for the parent transcript.
+Agent, YOLO, and Pro Plan execution turns have access to persistent RLM sessions through `rlm_open`, `rlm_eval`, `rlm_configure`, and `rlm_close`. Inside an RLM Python REPL, `sub_query_batch` fans out 1-16 cheap parallel child calls pinned to `deepseek-v4-flash`. The model reaches for it when work is too large or repetitive for the parent transcript.
+
+The fast `deepseek-v4-flash` / thinking-off path is called Fin in the product
+language. Fin is a seam for routing, summaries, cheap child calls, and
+coordination work; it does not change approval behavior.
+
+`/goal` sets a session objective with an optional token budget and keeps that
+objective visible as Work context. It does not change the active TUI mode,
+approval mode, or model route. This remains distinct from `--model auto`, which
+only controls model and thinking selection.
 
 ## Compatibility Notes
 
@@ -77,20 +90,21 @@ See `MCP.md`.
 
 ## Related CLI Flags
 
-Run `deepseek --help` for the canonical list. Common flags:
+Run `codewhale --help` for the canonical list. Common flags:
 
 - `-p, --prompt <TEXT>`: one-shot prompt mode (prints and exits)
-- `deepseek exec --output-format stream-json <PROMPT>`: emit one JSON object per line for harnesses and backend wrappers
-- `deepseek exec --resume <ID|PREFIX> <PROMPT>` / `--session-id <ID|PREFIX>`: continue a saved session non-interactively
-- `deepseek exec --continue <PROMPT>`: continue the most recent saved session for this workspace non-interactively
-- `deepseek fork <ID|PREFIX>` / `deepseek fork --last`: copy a saved session into a new sibling session; forked sessions retain additive parent-session metadata and show that lineage in session listings
-- `--model <MODEL>`: when using the `deepseek` facade, forward a DeepSeek model override to the TUI
+- `codewhale exec --auto --output-format stream-json <PROMPT>`: run the tool-backed non-interactive agent and emit one JSON object per line for harnesses and backend wrappers
+- `codewhale exec --resume <ID|PREFIX> <PROMPT>` / `--session-id <ID|PREFIX>`: continue a saved session non-interactively
+- `codewhale exec --continue <PROMPT>`: continue the most recent saved session for this workspace non-interactively
+- `codewhale swebench run --instance-id <ID> --issue-file <PATH>`: run the tool-backed agent on one SWE-bench task and write/update a prediction JSONL row
+- `codewhale fork <ID|PREFIX>` / `codewhale fork --last`: copy a saved session into a new sibling session; forked sessions retain additive parent-session metadata and show that lineage in session listings
+- `--model <MODEL>`: when using the `codewhale` facade, forward a DeepSeek model override to the TUI
 - `--workspace <DIR>`: workspace root for file tools
 - `--yolo`: start in YOLO mode
 - `-r, --resume <ID|PREFIX|latest>`: resume a saved session
 - `-c, --continue`: resume the most recent session in this workspace
 - `--max-subagents <N>`: clamp to `1..=20`
-- `--mouse-capture` / `--no-mouse-capture`: opt in or out of internal mouse scrolling, transcript selection, right-click context actions, and transcript scrollbar dragging. Mouse capture is enabled by default on non-Windows terminals and on Windows Terminal/ConEmu/Cmder so drag selection copies only transcript text and stays scoped to the transcript pane; hold Shift while dragging or use `--no-mouse-capture` for raw terminal selection. It defaults off on legacy Windows console (CMD without `WT_SESSION` / `ConEmuPID`) and inside JetBrains JediTerm — PyCharm/IDEA/CLion/etc. — where the terminal advertises mouse support but forwards SGR mouse events as raw text (#878, #898). Use `--mouse-capture` to opt in anywhere it's defaulted off. Raw terminal selection may cross the right sidebar because the terminal, not the TUI, owns the selection.
+- `--mouse-capture` / `--no-mouse-capture`: opt in or out of internal mouse scrolling, transcript selection, right-click context actions, and transcript scrollbar dragging. Mouse capture is enabled by default on non-Windows terminals and on Windows Terminal/ConEmu/Cmder so drag selection copies only transcript text, removes visual wrap-column line breaks from paragraphs, and stays scoped to the transcript pane; hold Shift while dragging or use `--no-mouse-capture` for raw terminal selection. It defaults off on legacy Windows console (CMD without `WT_SESSION` / `ConEmuPID`) and inside JetBrains JediTerm — PyCharm/IDEA/CLion/etc. — where the terminal advertises mouse support but forwards SGR mouse events as raw text (#878, #898). Use `--mouse-capture` to opt in anywhere it's defaulted off. Raw terminal selection may cross the right sidebar and include visual wraps because the terminal, not the TUI, owns the selection.
 - `--profile <NAME>`: select config profile
 - `--config <PATH>`: config file path
 - `-v, --verbose`: verbose logging
@@ -99,7 +113,7 @@ Run `deepseek --help` for the canonical list. Common flags:
 
 DeepSeek-TUI has three related but intentionally separate recovery paths:
 
-- `deepseek fork <ID>` creates a new saved session from an existing saved
+- `codewhale fork <ID>` creates a new saved session from an existing saved
   conversation and records the source session id. This is the safe way to
   explore a different answer path without overwriting the original session.
 - Esc-Esc backtrack rewinds the live transcript to a previous user prompt and

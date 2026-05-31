@@ -622,6 +622,15 @@ impl ShellManager {
         &self.sandbox_policy
     }
 
+    /// Enable or disable bubblewrap passthrough (#2184).
+    ///
+    /// When enabled and `/usr/bin/bwrap` is present on Linux, exec_shell
+    /// commands are routed through bubblewrap for filesystem isolation.
+    #[allow(dead_code)] // Wired from EngineConfig in follow-up PR
+    pub fn set_prefer_bwrap(&mut self, prefer: bool) {
+        self.sandbox_manager.set_prefer_bwrap(prefer);
+    }
+
     /// Request that the active foreground shell wait detach and leave its
     /// process running in the background job table.
     pub fn request_foreground_background(&mut self) {
@@ -722,6 +731,9 @@ impl ShellManager {
         policy_override: Option<ExecutionSandboxPolicy>,
         extra_env: HashMap<String, String>,
     ) -> Result<ShellResult> {
+        // Log execution via ShellDispatcher when SHELL_DISPATCHER_LOG is set.
+        crate::shell_dispatcher::ShellDispatcher::log_exec(command);
+
         let work_dir = working_dir.map_or_else(|| self.default_workspace.clone(), PathBuf::from);
 
         // Clamp timeout to max 10 minutes (600000ms)
@@ -785,6 +797,8 @@ impl ShellManager {
         policy_override: Option<ExecutionSandboxPolicy>,
         extra_env: HashMap<String, String>,
     ) -> Result<ShellResult> {
+        crate::shell_dispatcher::ShellDispatcher::log_exec(command);
+
         let work_dir = working_dir.map_or_else(|| self.default_workspace.clone(), PathBuf::from);
 
         let timeout_ms = timeout_ms.clamp(1000, 600_000);
@@ -831,6 +845,26 @@ impl ShellManager {
         }
 
         child_env::apply_to_command(&mut cmd, child_env::string_map_env(&exec_env.env));
+
+        // Disable raw mode before spawn; restore only if raw mode was active
+        // on entry (issue #1690).
+        let raw_mode_was_enabled = crossterm::terminal::is_raw_mode_enabled().unwrap_or(false);
+        if raw_mode_was_enabled {
+            let _ = crossterm::terminal::disable_raw_mode();
+        }
+        struct SyncRawModeGuard {
+            restore: bool,
+        }
+        impl Drop for SyncRawModeGuard {
+            fn drop(&mut self) {
+                if self.restore {
+                    let _ = crossterm::terminal::enable_raw_mode();
+                }
+            }
+        }
+        let _guard = SyncRawModeGuard {
+            restore: raw_mode_was_enabled,
+        };
 
         let mut child = cmd
             .spawn()
@@ -965,6 +999,26 @@ impl ShellManager {
             cmd.process_group(0);
         }
         install_parent_death_signal(&mut cmd);
+
+        // Disable raw mode before spawn; restore only if raw mode was active
+        // on entry (issue #1690).
+        let raw_mode_was_enabled = crossterm::terminal::is_raw_mode_enabled().unwrap_or(false);
+        if raw_mode_was_enabled {
+            let _ = crossterm::terminal::disable_raw_mode();
+        }
+        struct InteractiveRawModeGuard {
+            restore: bool,
+        }
+        impl Drop for InteractiveRawModeGuard {
+            fn drop(&mut self) {
+                if self.restore {
+                    let _ = crossterm::terminal::enable_raw_mode();
+                }
+            }
+        }
+        let _guard = InteractiveRawModeGuard {
+            restore: raw_mode_was_enabled,
+        };
 
         child_env::apply_to_command(&mut cmd, child_env::string_map_env(&exec_env.env));
 
@@ -1496,6 +1550,7 @@ pub fn new_shared_shell_manager(workspace: PathBuf) -> SharedShellManager {
 use crate::command_safety::{SafetyLevel, analyze_command, extract_primary_command};
 use crate::execpolicy::{ExecPolicyDecision, load_default_policy};
 use crate::features::Feature;
+use crate::tools::cargo_failure_summary::summarize_cargo_failure;
 use crate::tools::spec::{
     ApprovalRequirement, ToolCapability, ToolContext, ToolError, ToolResult, ToolSpec,
     optional_bool, optional_u64, required_str,
@@ -1513,6 +1568,18 @@ kernel-enforced provenance tag that blocks writes from child processes (includin
 shell sandbox). Workarounds: (1) run the Docker build from a regular terminal outside the \
 TUI, or (2) disable BuildKit with DOCKER_BUILDKIT=0 (only works if your Dockerfiles do not \
 use RUN --mount directives).";
+
+fn attach_cargo_failure_summary(
+    metadata: &mut serde_json::Value,
+    command: &str,
+    result: &ShellResult,
+) {
+    if let Some(summary) =
+        summarize_cargo_failure(command, &result.stdout, &result.stderr, result.exit_code)
+    {
+        metadata["cargo_failure_summary"] = summary.to_metadata_value();
+    }
+}
 
 pub(crate) fn looks_like_macos_provenance_failure(result: &ShellResult) -> bool {
     if matches!(result.status, ShellStatus::Completed) && result.exit_code == Some(0) {
@@ -1956,7 +2023,7 @@ impl ToolSpec for ExecShellTool {
                 format!("{}\n\nSTDERR:\n{}", result.stdout, result.stderr)
             };
 
-            let metadata = json!({
+            let mut metadata = json!({
                 "exit_code": result.exit_code,
                 "status": format!("{:?}", result.status),
                 "duration_ms": result.duration_ms,
@@ -1978,6 +2045,7 @@ impl ToolSpec for ExecShellTool {
                 "canceled": false,
                 "sandbox_backend": "opensandbox",
             });
+            attach_cargo_failure_summary(&mut metadata, command, &result);
 
             return Ok(ToolResult {
                 content: output,
@@ -2156,6 +2224,7 @@ impl ToolSpec for ExecShellTool {
                 if provenance_hint.is_some() {
                     metadata["macos_provenance_restricted"] = json!(true);
                 }
+                attach_cargo_failure_summary(&mut metadata, command, &result);
 
                 Ok(ToolResult {
                     content: output,
@@ -2230,30 +2299,34 @@ fn build_shell_delta_tool_result(delta: ShellDeltaResult, context: &ToolContext)
         output = format!("{hint}\n\n{output}");
     }
 
+    let mut metadata = json!({
+        "exit_code": result.exit_code,
+        "status": format!("{:?}", result.status),
+        "duration_ms": result.duration_ms,
+        "sandboxed": result.sandboxed,
+        "sandbox_type": result.sandbox_type,
+        "sandbox_denied": result.sandbox_denied,
+        "task_id": result.task_id,
+        "stdout_len": result.stdout_len,
+        "stderr_len": result.stderr_len,
+        "stdout_truncated": result.stdout_truncated,
+        "stderr_truncated": result.stderr_truncated,
+        "stdout_omitted": result.stdout_omitted,
+        "stderr_omitted": result.stderr_omitted,
+        "stdout_total_len": delta.stdout_total_len,
+        "stderr_total_len": delta.stderr_total_len,
+        "summary": summary,
+        "stdout_summary": stdout_summary,
+        "stderr_summary": stderr_summary,
+        "command": delta.command,
+        "stream_delta": true,
+    });
+    attach_cargo_failure_summary(&mut metadata, &delta.command, &result);
+
     let mut tool_result = ToolResult {
         content: output,
         success: matches!(result.status, ShellStatus::Completed | ShellStatus::Running),
-        metadata: Some(json!({
-            "exit_code": result.exit_code,
-            "status": format!("{:?}", result.status),
-            "duration_ms": result.duration_ms,
-            "sandboxed": result.sandboxed,
-            "sandbox_type": result.sandbox_type,
-            "sandbox_denied": result.sandbox_denied,
-            "task_id": result.task_id,
-            "stdout_len": result.stdout_len,
-            "stderr_len": result.stderr_len,
-            "stdout_truncated": result.stdout_truncated,
-            "stderr_truncated": result.stderr_truncated,
-            "stdout_omitted": result.stdout_omitted,
-            "stderr_omitted": result.stderr_omitted,
-            "stdout_total_len": delta.stdout_total_len,
-            "stderr_total_len": delta.stderr_total_len,
-            "summary": summary,
-            "stdout_summary": stdout_summary,
-            "stderr_summary": stderr_summary,
-            "stream_delta": true,
-        })),
+        metadata: Some(metadata),
     };
     if let Some(hint) = network_restricted_hint
         && let Some(metadata) = tool_result.metadata.as_mut()
@@ -2441,7 +2514,7 @@ impl ToolSpec for ShellCancelTool {
                 .map_err(|err| ToolError::execution_failed(err.to_string()))?;
             if results.is_empty() {
                 return Ok(ToolResult {
-                    content: "No running background shell jobs.".to_string(),
+                    content: "No running background commands.".to_string(),
                     success: true,
                     metadata: Some(json!({
                         "status": "Noop",
@@ -2457,7 +2530,7 @@ impl ToolSpec for ShellCancelTool {
                 .collect::<Vec<_>>();
             return Ok(ToolResult {
                 content: format!(
-                    "Canceled {} background shell job{}: {}",
+                    "Canceled {} background command{}: {}",
                     task_ids.len(),
                     if task_ids.len() == 1 { "" } else { "s" },
                     task_ids.join(", ")
@@ -2480,7 +2553,7 @@ impl ToolSpec for ShellCancelTool {
             .clone()
             .unwrap_or_else(|| task_id.to_string());
         Ok(ToolResult {
-            content: format!("Canceled background shell job: {task_id}"),
+            content: format!("Canceled background command: {task_id}"),
             success: true,
             metadata: Some(json!({
                 "status": format!("{:?}", result.status),

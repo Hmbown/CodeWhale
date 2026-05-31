@@ -1,18 +1,20 @@
 //! Path resolution for the per-workspace snapshot side-repos.
 //!
-//! Snapshots live in `~/.deepseek/snapshots/<project_hash>/<worktree_hash>/`.
-//! The two-level hash split lets us snapshot multiple worktrees of the same
-//! project independently — `git worktree list` users won't get cross-talk
-//! between feature branches.
+//! Snapshots live under the resolved state directory
+//! (`~/.codewhale/snapshots` or legacy `~/.deepseek/snapshots`) with
+//! a two-level hash split so we can snapshot multiple worktrees of the
+//! same project independently — `git worktree list` users won't get
+//! cross-talk between feature branches.
 
 use std::io;
 use std::path::{Path, PathBuf};
 
 /// Compute the snapshot directory for a given workspace path.
 ///
-/// Returns `~/.deepseek/snapshots/<project_hash>/<worktree_hash>/`. The
-/// caller is responsible for creating it on disk; we purposefully don't
-/// touch the filesystem here so this is cheap to call repeatedly.
+/// Returns `$STATE_DIR/snapshots/<project_hash>/<worktree_hash>/` where
+/// `$STATE_DIR` is resolved via `codewhale_config::resolve_state_dir`.
+/// The caller is responsible for creating it on disk; we purposefully
+/// don't touch the filesystem here so this is cheap to call repeatedly.
 ///
 /// The `project_hash` is derived from the canonicalized workspace path
 /// after stripping any `.worktrees/<name>` suffix — multiple worktrees
@@ -24,7 +26,7 @@ pub fn snapshot_dir_for(workspace: &Path) -> PathBuf {
 }
 
 /// Same as [`snapshot_dir_for`] but with an injectable home directory.
-/// Used by tests so we never touch the user's real `~/.deepseek/`.
+/// Used by tests so they never touch the user's real state directory.
 pub fn snapshot_dir_with_home(workspace: &Path, home: Option<PathBuf>) -> PathBuf {
     let home = home.unwrap_or_else(|| PathBuf::from("."));
     let canonical = workspace
@@ -33,10 +35,19 @@ pub fn snapshot_dir_with_home(workspace: &Path, home: Option<PathBuf>) -> PathBu
     let project_root = strip_worktree_suffix(&canonical);
     let project_hash = stable_hex(&project_root);
     let worktree_hash = stable_hex(&canonical);
-    home.join(".deepseek")
-        .join("snapshots")
+    snapshot_base_with_home(Some(home))
         .join(project_hash)
         .join(worktree_hash)
+}
+
+fn snapshot_base_with_home(home: Option<PathBuf>) -> PathBuf {
+    let home = home.unwrap_or_else(|| PathBuf::from("."));
+    // Prefer .codewhale, fall back to .deepseek
+    let primary = home.join(".codewhale").join("snapshots");
+    if primary.exists() {
+        return primary;
+    }
+    home.join(".deepseek").join("snapshots")
 }
 
 /// Resolve the `.git` directory inside the snapshot dir.

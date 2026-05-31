@@ -1,7 +1,7 @@
 //! TUI runtime logging. Initializes a `tracing-subscriber` that writes to a
-//! per-process file under `~/.deepseek/logs/tui-YYYY-MM-DD-PID.log`, and (on
-//! Unix) redirects the process's `stderr` fd to that same file for the lifetime
-//! of the alt-screen TUI.
+//! per-process file under `~/.codewhale/logs/tui-YYYY-MM-DD-PID.log`, and (on
+//! Unix and Windows) redirects the process's `stderr` handle/fd to that same
+//! file for the lifetime of the alt-screen TUI.
 //!
 //! Why this exists:
 //!
@@ -22,16 +22,16 @@
 //!
 //! Defence-in-depth:
 //!   1. A `tracing-subscriber` writes formatted logs to
-//!      `~/.deepseek/logs/tui-YYYY-MM-DD-PID.log` so `tracing::warn!` /
+//!      `~/.codewhale/logs/tui-YYYY-MM-DD-PID.log` so `tracing::warn!` /
 //!      `tracing::error!` calls go somewhere observable instead of
 //!      disappearing into the void (the TUI previously had no global
 //!      subscriber, so contributors reached for `eprintln!`).
-//!   2. On Unix the process's stderr fd is redirected (via `dup2`) to the
-//!      same log file for the lifetime of `TuiLogGuard`. Any raw stderr
+//!   2. On Unix and Windows the process's stderr handle/fd is redirected to
+//!      the same log file for the lifetime of `TuiLogGuard`. Any raw stderr
 //!      write — ours, a dependency's, a panic message — lands in the log
 //!      file instead of the alt-screen. The guard restores the original
-//!      stderr fd on drop so post-TUI shutdown messages still reach the
-//!      user's terminal.
+//!      stderr handle/fd on drop so post-TUI shutdown messages still reach
+//!      the user's terminal.
 //!   3. Crate-level `#![deny(clippy::print_stderr, clippy::print_stdout)]`
 //!      on the TUI runtime modules forbids new `eprintln!` / `println!`
 //!      calls at compile time. CLI-output paths (`main.rs` eval, init,
@@ -50,12 +50,16 @@ const DEFAULT_LOG_RETENTION_DAYS: u64 = 7;
 const LOG_RETENTION_ENV: &str = "DEEPSEEK_LOG_RETENTION_DAYS";
 const SECONDS_PER_DAY: u64 = 24 * 60 * 60;
 
-/// Owns the active tracing subscriber and (on Unix) a saved copy of the
-/// original `stderr` fd so it can be restored on drop. Dropped when the TUI
-/// exits the alt-screen.
+/// Owns the active tracing subscriber and (on Unix/Windows) a saved copy of
+/// the original `stderr` handle/fd so it can be restored on drop. Dropped when
+/// the TUI exits the alt-screen.
 pub struct TuiLogGuard {
     #[cfg(unix)]
     saved_stderr_fd: Option<libc::c_int>,
+    #[cfg(windows)]
+    saved_stderr_handle: Option<windows::Win32::Foundation::HANDLE>,
+    #[cfg(windows)]
+    redirected_stderr_handle: Option<windows::Win32::Foundation::HANDLE>,
     _file: File,
     // Exposed via `log_path()` for diagnostics (e.g. `/doctor`,
     // `--print-log-path`). Currently no caller — keep the accessor
@@ -90,7 +94,29 @@ impl Drop for TuiLogGuard {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+impl Drop for TuiLogGuard {
+    fn drop(&mut self) {
+        if let Some(handle) = self.saved_stderr_handle.take() {
+            unsafe {
+                let _ = windows::Win32::System::Console::SetStdHandle(
+                    windows::Win32::System::Console::STD_ERROR_HANDLE,
+                    handle,
+                );
+            }
+        }
+        // Close the duplicated handle that was serving as the redirected
+        // stderr target. This is safe because `SetStdHandle` above already
+        // restored the original handle, so nothing references this one.
+        if let Some(dup) = self.redirected_stderr_handle.take() {
+            unsafe {
+                let _ = windows::Win32::Foundation::CloseHandle(dup);
+            }
+        }
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
 impl Drop for TuiLogGuard {
     fn drop(&mut self) {}
 }
@@ -147,27 +173,47 @@ pub fn init() -> Result<TuiLogGuard> {
 
     #[cfg(unix)]
     let saved_stderr_fd = redirect_stderr_to(&file).ok();
+    #[cfg(windows)]
+    let (saved_stderr_handle, redirected_stderr_handle) = match redirect_stderr_to(&file) {
+        Ok((saved, dup)) => (Some(saved), Some(dup)),
+        Err(_) => (None, None),
+    };
 
     Ok(TuiLogGuard {
         #[cfg(unix)]
         saved_stderr_fd,
+        #[cfg(windows)]
+        saved_stderr_handle,
+        #[cfg(windows)]
+        redirected_stderr_handle,
         _file: file,
         log_path,
     })
 }
 
-fn log_directory() -> Option<PathBuf> {
+pub(crate) fn log_directory() -> Option<PathBuf> {
+    let resolve = |base: PathBuf| -> Option<PathBuf> {
+        let primary = base.join(".codewhale").join("logs");
+        if primary.exists() {
+            return Some(primary);
+        }
+        let legacy = base.join(".deepseek").join("logs");
+        if legacy.exists() {
+            return Some(legacy);
+        }
+        Some(primary)
+    };
     if let Some(home) = std::env::var_os("HOME").map(PathBuf::from)
         && !home.as_os_str().is_empty()
     {
-        return Some(home.join(".deepseek").join("logs"));
+        return resolve(home);
     }
     if let Some(userprofile) = std::env::var_os("USERPROFILE").map(PathBuf::from)
         && !userprofile.as_os_str().is_empty()
     {
-        return Some(userprofile.join(".deepseek").join("logs"));
+        return resolve(userprofile);
     }
-    dirs::home_dir().map(|h| h.join(".deepseek").join("logs"))
+    dirs::home_dir().and_then(resolve)
 }
 
 fn log_file_name(date: &str, pid: u32) -> String {
@@ -239,6 +285,59 @@ fn redirect_stderr_to(file: &File) -> Result<libc::c_int> {
     }
 }
 
+#[cfg(windows)]
+fn redirect_stderr_to(
+    file: &File,
+) -> Result<(
+    windows::Win32::Foundation::HANDLE,
+    windows::Win32::Foundation::HANDLE,
+)> {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::{CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle, HANDLE};
+    use windows::Win32::System::Console::{GetStdHandle, STD_ERROR_HANDLE, SetStdHandle};
+    use windows::Win32::System::Threading::GetCurrentProcess;
+
+    // SAFETY: GetStdHandle is always available; returns INVALID_HANDLE_VALUE
+    // on failure or null-like handles for console-less processes.
+    let saved =
+        unsafe { GetStdHandle(STD_ERROR_HANDLE) }.context("GetStdHandle(STD_ERROR_HANDLE)")?;
+    if saved.is_invalid() {
+        return Err(anyhow::anyhow!("GetStdHandle(STD_ERROR_HANDLE) failed"));
+    }
+
+    // Duplicate the file handle so the redirected stderr owns an
+    // independent HANDLE — mirroring the Unix path's `libc::dup`.
+    // Without this, `_file` and stderr would alias the same HANDLE;
+    // a rogue `CloseHandle` on stderr would silently invalidate `_file`.
+    let raw = HANDLE(file.as_raw_handle());
+    let process = unsafe { GetCurrentProcess() };
+    let mut dup = HANDLE::default();
+    unsafe {
+        DuplicateHandle(
+            process,
+            raw,
+            process,
+            &mut dup,
+            0,
+            false,
+            DUPLICATE_SAME_ACCESS,
+        )
+        .context("DuplicateHandle for stderr redirect")?;
+    }
+
+    // SAFETY: SetStdHandle redirects stderr to the duplicated handle.
+    // We save the original handle so the guard can restore it on drop.
+    unsafe {
+        if let Err(e) = SetStdHandle(STD_ERROR_HANDLE, dup) {
+            let _ = CloseHandle(dup);
+            return Err(anyhow::anyhow!(
+                "SetStdHandle(STD_ERROR_HANDLE) failed: {e}"
+            ));
+        }
+    }
+    Ok((saved, dup))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,7 +362,37 @@ mod tests {
         }
 
         let resolved = log_directory().expect("log_directory should resolve");
-        assert_eq!(resolved, tmp.path().join(".deepseek").join("logs"));
+        assert_eq!(resolved, tmp.path().join(".codewhale").join("logs"));
+
+        // SAFETY: cleanup under the same lock.
+        unsafe {
+            match prev_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+            match prev_userprofile {
+                Some(v) => std::env::set_var("USERPROFILE", v),
+                None => std::env::remove_var("USERPROFILE"),
+            }
+        }
+    }
+
+    #[test]
+    fn log_directory_uses_existing_legacy_deepseek_logs() {
+        let _lock = crate::test_support::lock_test_env();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let legacy = tmp.path().join(".deepseek").join("logs");
+        fs::create_dir_all(&legacy).unwrap();
+        let prev_home = std::env::var_os("HOME");
+        let prev_userprofile = std::env::var_os("USERPROFILE");
+        // SAFETY: serialised by lock_test_env.
+        unsafe {
+            std::env::set_var("HOME", tmp.path());
+            std::env::set_var("USERPROFILE", "");
+        }
+
+        let resolved = log_directory().expect("log_directory should resolve");
+        assert_eq!(resolved, legacy);
 
         // SAFETY: cleanup under the same lock.
         unsafe {

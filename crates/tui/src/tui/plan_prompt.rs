@@ -7,6 +7,7 @@ use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph, Widget, Wrap};
 
 use crate::localization::{Locale, MessageId, tr};
 use crate::palette;
+use crate::tools::plan::PlanSnapshot;
 use crate::tui::views::{ModalKind, ModalView, ViewAction, ViewEvent};
 
 const PLAN_OPTIONS: [(MessageId, MessageId); 4] = [
@@ -100,27 +101,25 @@ fn push_option_lines(
 pub struct PlanPromptView {
     selected: usize,
     locale: Locale,
-}
-
-impl Default for PlanPromptView {
-    fn default() -> Self {
-        Self {
-            selected: 0,
-            locale: Locale::En,
-        }
-    }
+    /// The plan snapshot to display (if update_plan was called).
+    plan: Option<PlanSnapshot>,
 }
 
 impl PlanPromptView {
     #[cfg(test)]
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(plan: Option<PlanSnapshot>) -> Self {
+        Self {
+            selected: 0,
+            locale: Locale::En,
+            plan,
+        }
     }
 
-    pub fn new_for_locale(locale: Locale) -> Self {
+    pub fn new_for_locale_with_plan(locale: Locale, plan: Option<PlanSnapshot>) -> Self {
         Self {
             selected: 0,
             locale,
+            plan,
         }
     }
 
@@ -218,6 +217,37 @@ impl ModalView for PlanPromptView {
         )]));
         lines.push(Line::from(""));
 
+        // v0.8.44: render plan details when update_plan was called (#834)
+        if let Some(ref plan) = self.plan {
+            if let Some(ref explanation) = plan.explanation {
+                for line in wrap_text(explanation, 68) {
+                    lines.push(Line::from(Span::styled(
+                        line,
+                        Style::default().fg(palette::TEXT_MUTED),
+                    )));
+                }
+                lines.push(Line::from(""));
+            }
+            if !plan.items.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    tr(self.locale, MessageId::PlanPromptPlanSteps),
+                    Style::default().fg(palette::DEEPSEEK_SKY).bold(),
+                )));
+                for item in &plan.items {
+                    let status_mark = match item.status {
+                        crate::tools::plan::StepStatus::Pending => "\u{b7}",
+                        crate::tools::plan::StepStatus::InProgress => "\u{25b6}",
+                        crate::tools::plan::StepStatus::Completed => "\u{2713}",
+                    };
+                    lines.push(Line::from(Span::styled(
+                        format!("  {status_mark} {}", item.step),
+                        Style::default().fg(palette::TEXT_PRIMARY),
+                    )));
+                }
+                lines.push(Line::from(""));
+            }
+        }
+
         for (idx, (label_id, description_id)) in PLAN_OPTIONS.iter().enumerate() {
             let number = idx + 1;
             push_option_lines(
@@ -270,6 +300,52 @@ impl ModalView for PlanPromptView {
     }
 }
 
+/// Wrap text into lines no wider than `width` characters.
+fn wrap_text(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![text.to_string()];
+    }
+    let mut lines = Vec::new();
+    for paragraph in text.split('\n') {
+        if paragraph.is_empty() {
+            lines.push(String::new());
+            continue;
+        }
+        let words: Vec<&str> = paragraph.split_whitespace().collect();
+        let mut current = String::new();
+        for word in words {
+            let word_width = word.chars().count();
+            if word_width > width {
+                if !current.is_empty() {
+                    lines.push(current.trim_end().to_string());
+                    current.clear();
+                }
+                let mut chars = word.chars();
+                loop {
+                    let segment: String = chars.by_ref().take(width).collect();
+                    if segment.is_empty() {
+                        break;
+                    }
+                    lines.push(segment);
+                }
+            } else if current.chars().count() + 1 + word_width > width {
+                lines.push(current.trim_end().to_string());
+                current.clear();
+                current.push_str(word);
+            } else {
+                if !current.is_empty() {
+                    current.push(' ');
+                }
+                current.push_str(word);
+            }
+        }
+        if !current.is_empty() {
+            lines.push(current.trim_end().to_string());
+        }
+    }
+    lines
+}
+
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
     let popup_layout = Layout::default()
         .direction(Direction::Vertical)
@@ -307,7 +383,7 @@ mod tests {
 
     #[test]
     fn plan_prompt_calls_out_required_action_and_controls() {
-        let rendered = render_view(&PlanPromptView::new(), 110, 36);
+        let rendered = render_view(&PlanPromptView::new(None), 110, 36);
 
         assert!(rendered.contains("Action required"));
         assert!(rendered.contains("Choose what should happen after this plan."));
@@ -317,7 +393,7 @@ mod tests {
 
     #[test]
     fn plan_prompt_keeps_selected_option_and_description_together() {
-        let mut view = PlanPromptView::new();
+        let mut view = PlanPromptView::new(None);
         view.selected = 1;
 
         let rendered = render_view(&view, 110, 36);

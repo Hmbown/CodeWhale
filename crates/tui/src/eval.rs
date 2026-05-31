@@ -11,26 +11,17 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EvalShellPlatform {
     Windows,
     Unix,
 }
 
-impl EvalShellPlatform {
-    fn current() -> Self {
-        if cfg!(windows) {
-            Self::Windows
-        } else {
-            Self::Unix
-        }
-    }
-}
-
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EvalShellInvocation {
     program: &'static str,
@@ -38,10 +29,7 @@ struct EvalShellInvocation {
     raw_payload_on_windows: bool,
 }
 
-fn eval_shell_invocation(command: &str) -> EvalShellInvocation {
-    eval_shell_invocation_for_platform(command, EvalShellPlatform::current())
-}
-
+#[cfg(test)]
 fn eval_shell_invocation_for_platform(
     command: &str,
     platform: EvalShellPlatform,
@@ -58,24 +46,6 @@ fn eval_shell_invocation_for_platform(
             raw_payload_on_windows: false,
         },
     }
-}
-
-fn push_eval_shell_args(cmd: &mut Command, invocation: &EvalShellInvocation) {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        if invocation.raw_payload_on_windows
-            && invocation.program.eq_ignore_ascii_case("cmd")
-            && invocation.args.len() == 2
-            && invocation.args[0].eq_ignore_ascii_case("/C")
-        {
-            cmd.raw_arg(&invocation.args[0]);
-            cmd.raw_arg(&invocation.args[1]);
-            return;
-        }
-    }
-
-    cmd.args(&invocation.args);
 }
 
 /// Representative tool steps covered by the evaluation harness.
@@ -767,25 +737,7 @@ fn apply_patch(root: &Path, patch: &str) -> Result<()> {
 }
 
 fn exec_shell(root: &Path, command: &str) -> Result<String> {
-    let invocation = eval_shell_invocation(command);
-    let mut cmd = Command::new(invocation.program);
-    push_eval_shell_args(&mut cmd, &invocation);
-    let output = cmd
-        .current_dir(root)
-        .output()
-        .with_context(|| format!("failed to execute shell command: {command}"))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow!(
-            "shell command failed (status={}): {}",
-            output.status,
-            stderr.trim()
-        ));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    Ok(stdout.trim().to_string())
+    crate::shell_dispatcher::global_dispatcher().run_foreground(command, root)
 }
 
 fn truncate_output(value: &str, max_chars: usize) -> String {
@@ -794,7 +746,7 @@ fn truncate_output(value: &str, max_chars: usize) -> String {
     }
 
     let truncated: String = value.chars().take(max_chars).collect();
-    format!("{}...", truncated)
+    format!("{truncated}...")
 }
 
 #[cfg(test)]

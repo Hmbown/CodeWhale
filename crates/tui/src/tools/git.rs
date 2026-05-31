@@ -5,10 +5,11 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
+
+use crate::dependencies::ExternalTool;
 
 use super::spec::{
     ApprovalRequirement, ToolCapability, ToolContext, ToolError, ToolResult, ToolSpec,
@@ -63,6 +64,8 @@ impl ToolSpec for GitStatusTool {
         let git_ctx = resolve_git_context(context, optional_str(&input, "path"))?;
 
         let mut args = vec![
+            "-c".to_string(),
+            "core.quotepath=false".to_string(),
             "status".to_string(),
             "--porcelain=v1".to_string(),
             "-b".to_string(),
@@ -155,6 +158,8 @@ impl ToolSpec for GitDiffTool {
         let unified = optional_u64(&input, "unified", DEFAULT_UNIFIED).min(MAX_UNIFIED);
 
         let mut args = vec![
+            "-c".to_string(),
+            "core.quotepath=false".to_string(),
             "diff".to_string(),
             "--no-color".to_string(),
             "--no-ext-diff".to_string(),
@@ -257,7 +262,11 @@ fn pathspec_from(working_dir: &Path, resolved: &Path) -> PathBuf {
 }
 
 fn run_git_command(working_dir: &Path, args: &[String]) -> Result<std::process::Output, ToolError> {
-    let mut cmd = Command::new("git");
+    let Some(mut cmd) = crate::dependencies::Git::command() else {
+        return Err(ToolError::not_available(
+            "git is not installed or not in PATH",
+        ));
+    };
     cmd.args(args).current_dir(working_dir);
     cmd.output().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
@@ -311,24 +320,15 @@ fn char_boundary_index(text: &str, max_chars: usize) -> usize {
 mod tests {
     use super::*;
     use std::fs;
-    use std::process::Command;
     use tempfile::tempdir;
 
     fn git_available() -> bool {
-        Command::new("git")
-            .arg("--version")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+        crate::dependencies::Git::available()
     }
 
     fn init_git_repo(root: &Path) {
         let run = |args: &[&str]| {
-            let status = Command::new("git")
-                .args(args)
-                .current_dir(root)
-                .status()
-                .expect("git should spawn");
+            let status = crate::dependencies::Git::status(args, root).expect("git should spawn");
             assert!(status.success(), "git {:?} failed", args);
         };
 
@@ -339,11 +339,7 @@ mod tests {
 
     fn commit_all(root: &Path, message: &str) {
         let run = |args: &[&str]| {
-            let status = Command::new("git")
-                .args(args)
-                .current_dir(root)
-                .status()
-                .expect("git should spawn");
+            let status = crate::dependencies::Git::status(args, root).expect("git should spawn");
             assert!(status.success(), "git {:?} failed", args);
         };
         run(&["add", "."]);
@@ -373,6 +369,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn git_status_reports_unquoted_unicode_paths() {
+        if !git_available() {
+            return;
+        }
+
+        let tmp = tempdir().expect("tempdir");
+        init_git_repo(tmp.path());
+
+        let file = tmp.path().join("中文-данные.txt");
+        fs::write(&file, "hello\n").expect("write");
+        commit_all(tmp.path(), "init");
+
+        fs::write(&file, "hello\nworld\n").expect("modify");
+
+        let ctx = ToolContext::new(tmp.path());
+        let tool = GitStatusTool;
+        let result = tool.execute(json!({}), &ctx).await.expect("execute");
+        assert!(result.success);
+        assert!(
+            result
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("command"))
+                .and_then(Value::as_str)
+                .is_some_and(|command| command.contains("-c core.quotepath=false"))
+        );
+        assert!(result.content.contains("中文-данные.txt"));
+        assert!(!result.content.contains("\\344"));
+        assert!(!result.content.contains("\\320"));
+    }
+
+    #[tokio::test]
     async fn git_diff_supports_cached_and_path_scoping() {
         if !git_available() {
             return;
@@ -399,11 +427,8 @@ mod tests {
         assert!(uncached.content.contains("diff --git"));
         assert!(uncached.content.contains("lib.rs"));
 
-        let _ = Command::new("git")
-            .args(["add", "src/lib.rs"])
-            .current_dir(tmp.path())
-            .status()
-            .expect("git add");
+        let _ =
+            crate::dependencies::Git::status(&["add", "src/lib.rs"], tmp.path()).expect("git add");
 
         let cached = tool
             .execute(json!({ "path": "src", "cached": true }), &ctx)
@@ -419,6 +444,40 @@ mod tests {
                 .and_then(Value::as_bool)
                 .unwrap_or(false)
         );
+    }
+
+    #[tokio::test]
+    async fn git_diff_reports_unquoted_unicode_paths() {
+        if !git_available() {
+            return;
+        }
+
+        let tmp = tempdir().expect("tempdir");
+        init_git_repo(tmp.path());
+
+        let unicode_name = "\u{4e2d}\u{6587}-\u{0434}\u{0430}\u{043d}\u{043d}\u{044b}\u{0435}.txt";
+        let file = tmp.path().join(unicode_name);
+        fs::write(&file, "hello\n").expect("write");
+        commit_all(tmp.path(), "init");
+
+        fs::write(&file, "hello\nworld\n").expect("modify");
+
+        let ctx = ToolContext::new(tmp.path());
+        let tool = GitDiffTool;
+        let result = tool.execute(json!({}), &ctx).await.expect("execute");
+
+        assert!(result.success);
+        assert!(
+            result
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("command"))
+                .and_then(Value::as_str)
+                .is_some_and(|command| command.contains("-c core.quotepath=false"))
+        );
+        assert!(result.content.contains(unicode_name));
+        assert!(!result.content.contains("\\344"));
+        assert!(!result.content.contains("\\320"));
     }
 
     #[test]

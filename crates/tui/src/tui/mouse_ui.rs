@@ -2,7 +2,10 @@ use std::time::{Duration, Instant};
 
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
+use crate::localization::MessageId;
 use crate::tui::app::App;
 use crate::tui::command_palette::{
     CommandPaletteView, build_entries as build_command_palette_entries,
@@ -37,6 +40,91 @@ pub(crate) fn should_drop_loading_mouse_motion(app: &App, mouse: MouseEvent) -> 
     }
 }
 
+/// Map a mouse (column, row) within the composer area to a char index
+/// in the composer input string. Uses the inner content rect (border-aware)
+/// for coordinate mapping, and accounts for vertical padding and scroll offset.
+fn mouse_pos_to_char_index(app: &App, col: u16, row: u16, inner: Rect) -> Option<usize> {
+    let rel_col = col.saturating_sub(inner.x) as usize;
+    let rel_row = row.saturating_sub(inner.y) as usize;
+
+    if app.input.is_empty() {
+        return Some(0);
+    }
+
+    let width = inner.width.max(1) as usize;
+    let wrapped = crate::tui::widgets::wrap_input_lines_for_mouse(&app.input, width);
+
+    // Subtract the vertical top-padding (centering of short inputs).
+    let text_row = rel_row.saturating_sub(app.viewport.last_composer_top_padding);
+
+    // Add the scroll offset (lines scrolled out of view).
+    let absolute_row = text_row + app.viewport.last_composer_scroll_offset;
+
+    if absolute_row >= wrapped.len() {
+        return Some(app.input.chars().count());
+    }
+
+    let (line_start, line_text) = &wrapped[absolute_row];
+
+    let mut char_offset = 0usize;
+    let mut col_used = 0usize;
+    for g in line_text.graphemes(true) {
+        let gw = g.width();
+        if col_used + gw > rel_col {
+            break;
+        }
+        col_used += gw;
+        char_offset += g.chars().count();
+    }
+    Some(line_start + char_offset)
+}
+
+/// Handle mouse events within the composer area.
+/// Returns true if the event was consumed.
+pub(crate) fn handle_composer_mouse(app: &mut App, mouse: MouseEvent) -> bool {
+    // Use outer area for hit-testing (includes border).
+    let Some(area) = app.viewport.last_composer_area else {
+        return false;
+    };
+    if mouse.column < area.x
+        || mouse.column >= area.x + area.width
+        || mouse.row < area.y
+        || mouse.row >= area.y + area.height
+    {
+        return false;
+    }
+    // Use inner content rect for coordinate-to-char mapping (border-aware).
+    let inner = app.viewport.last_composer_content.unwrap_or(area);
+
+    match mouse.kind {
+        MouseEventKind::Down(MouseButton::Left) => {
+            if let Some(pos) = mouse_pos_to_char_index(app, mouse.column, mouse.row, inner) {
+                app.cursor_position = pos;
+                app.selection_anchor = None;
+                app.needs_redraw = true;
+            }
+            true
+        }
+        MouseEventKind::Drag(MouseButton::Left) => {
+            if let Some(pos) = mouse_pos_to_char_index(app, mouse.column, mouse.row, inner) {
+                if app.selection_anchor.is_none() {
+                    app.selection_anchor = Some(app.cursor_position);
+                }
+                app.cursor_position = pos;
+                app.needs_redraw = true;
+            }
+            true
+        }
+        MouseEventKind::Up(MouseButton::Left) => {
+            if app.selection_anchor == Some(app.cursor_position) {
+                app.selection_anchor = None;
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
 pub(crate) fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEvent> {
     if app.view_stack.top_kind() == Some(ModalKind::ContextMenu) {
         if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Right)) {
@@ -52,7 +140,49 @@ pub(crate) fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEv
         return app.view_stack.handle_mouse(mouse);
     }
 
+    // Composer mouse events take priority over transcript.
+    if handle_composer_mouse(app, mouse) {
+        return Vec::new();
+    }
+
     match mouse.kind {
+        MouseEventKind::Moved => {
+            // Update last mouse position for tooltip rendering.
+            app.last_mouse_pos = Some((mouse.column, mouse.row));
+
+            // Check sidebar sections for hover tooltip.
+            let mut found = false;
+            for section in &app.sidebar_hover.sections {
+                if mouse.column >= section.content_area.x
+                    && mouse.column
+                        < section
+                            .content_area
+                            .x
+                            .saturating_add(section.content_area.width)
+                    && mouse.row >= section.content_area.y
+                    && mouse.row
+                        < section
+                            .content_area
+                            .y
+                            .saturating_add(section.content_area.height)
+                {
+                    let line_idx = (mouse.row.saturating_sub(section.content_area.y)) as usize;
+                    if line_idx < section.lines.len() {
+                        let new_tooltip = section.lines[line_idx].clone();
+                        if app.sidebar_hover_tooltip.as_deref() != Some(&new_tooltip) {
+                            app.sidebar_hover_tooltip = Some(new_tooltip);
+                            app.needs_redraw = true;
+                        }
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            if !found && app.sidebar_hover_tooltip.is_some() {
+                app.sidebar_hover_tooltip = None;
+                app.needs_redraw = true;
+            }
+        }
         MouseEventKind::ScrollUp => {
             let update = app.viewport.mouse_scroll.on_scroll(ScrollDirection::Up);
             app.viewport.pending_scroll_delta = app
@@ -305,8 +435,13 @@ pub(crate) fn open_context_menu(app: &mut App, mouse: MouseEvent) {
     if entries.is_empty() {
         return;
     }
-    app.view_stack
-        .push(ContextMenuView::new(entries, mouse.column, mouse.row));
+    let title = app.tr(MessageId::CtxMenuTitle).to_string();
+    app.view_stack.push(ContextMenuView::new(
+        entries,
+        mouse.column,
+        mouse.row,
+        title,
+    ));
     app.needs_redraw = true;
 }
 
@@ -315,17 +450,17 @@ pub(crate) fn build_context_menu_entries(app: &App, mouse: MouseEvent) -> Vec<Co
 
     if selection_has_content(app) {
         entries.push(ContextMenuEntry {
-            label: "Copy selection".to_string(),
-            description: "write selected transcript text".to_string(),
+            label: app.tr(MessageId::CtxMenuCopySelection).to_string(),
+            description: app.tr(MessageId::CtxMenuCopySelectionDesc).to_string(),
             action: ContextMenuAction::CopySelection,
         });
         entries.push(ContextMenuEntry {
-            label: "Open selection".to_string(),
-            description: "show selected text in pager".to_string(),
+            label: app.tr(MessageId::CtxMenuOpenSelection).to_string(),
+            description: app.tr(MessageId::CtxMenuOpenSelectionDesc).to_string(),
             action: ContextMenuAction::OpenSelection,
         });
         entries.push(ContextMenuEntry {
-            label: "Clear selection".to_string(),
+            label: app.tr(MessageId::CtxMenuClearSelection).to_string(),
             description: String::new(),
             action: ContextMenuAction::ClearSelection,
         });
@@ -345,31 +480,31 @@ pub(crate) fn build_context_menu_entries(app: &App, mouse: MouseEvent) -> Vec<Co
             .map(|label| truncate_line_to_width(label.as_str(), 28))
             .unwrap_or_else(|| "message".to_string());
         entries.push(ContextMenuEntry {
-            label: "Open details".to_string(),
+            label: app.tr(MessageId::CtxMenuOpenDetails).to_string(),
             description: target,
             action: ContextMenuAction::OpenDetails { cell_index },
         });
         entries.push(ContextMenuEntry {
-            label: "Copy message".to_string(),
-            description: "write clicked transcript cell".to_string(),
+            label: app.tr(MessageId::CtxMenuCopyMessage).to_string(),
+            description: app.tr(MessageId::CtxMenuCopyMessageDesc).to_string(),
             action: ContextMenuAction::CopyCell { cell_index },
         });
         entries.push(ContextMenuEntry {
-            label: "Open in editor".to_string(),
-            description: "open file:line in $EDITOR".to_string(),
+            label: app.tr(MessageId::CtxMenuOpenInEditor).to_string(),
+            description: app.tr(MessageId::CtxMenuOpenInEditorDesc).to_string(),
             action: ContextMenuAction::OpenFileAtLine { cell_index },
         });
         // Hide/show cell toggle.
         if app.collapsed_cells.contains(&cell_index) {
             entries.push(ContextMenuEntry {
-                label: "Show cell".to_string(),
-                description: "unhide this transcript cell".to_string(),
+                label: app.tr(MessageId::CtxMenuShowCell).to_string(),
+                description: app.tr(MessageId::CtxMenuShowCellDesc).to_string(),
                 action: ContextMenuAction::ShowCell { cell_index },
             });
         } else {
             entries.push(ContextMenuEntry {
-                label: "Hide cell".to_string(),
-                description: "collapse this transcript cell".to_string(),
+                label: app.tr(MessageId::CtxMenuHideCell).to_string(),
+                description: app.tr(MessageId::CtxMenuHideCellDesc).to_string(),
                 action: ContextMenuAction::HideCell { cell_index },
             });
         }
@@ -378,31 +513,32 @@ pub(crate) fn build_context_menu_entries(app: &App, mouse: MouseEvent) -> Vec<Co
     // When cells are hidden, offer a way to show them all.
     if !app.collapsed_cells.is_empty() {
         let count = app.collapsed_cells.len();
+        let label = app.tr(MessageId::CtxMenuShowHidden).to_string();
         entries.push(ContextMenuEntry {
-            label: format!("Show hidden ({count})"),
-            description: "unhide all collapsed cells".to_string(),
+            label: format!("{label} ({count})"),
+            description: app.tr(MessageId::CtxMenuShowHiddenDesc).to_string(),
             action: ContextMenuAction::ShowAllHidden,
         });
     }
 
     entries.push(ContextMenuEntry {
-        label: "Paste".to_string(),
-        description: "insert clipboard into composer".to_string(),
+        label: app.tr(MessageId::CtxMenuPaste).to_string(),
+        description: app.tr(MessageId::CtxMenuPasteDesc).to_string(),
         action: ContextMenuAction::Paste,
     });
     entries.push(ContextMenuEntry {
-        label: "Command palette".to_string(),
-        description: "commands, skills, and tools".to_string(),
+        label: app.tr(MessageId::CtxMenuCmdPalette).to_string(),
+        description: app.tr(MessageId::CtxMenuCmdPaletteDesc).to_string(),
         action: ContextMenuAction::OpenCommandPalette,
     });
     entries.push(ContextMenuEntry {
-        label: "Context inspector".to_string(),
-        description: "active context and cache hints".to_string(),
+        label: app.tr(MessageId::CtxMenuContextInspector).to_string(),
+        description: app.tr(MessageId::CtxMenuContextInspectorDesc).to_string(),
         action: ContextMenuAction::OpenContextInspector,
     });
     entries.push(ContextMenuEntry {
-        label: "Help".to_string(),
-        description: "keybindings and commands".to_string(),
+        label: app.tr(MessageId::CtxMenuHelp).to_string(),
+        description: app.tr(MessageId::CtxMenuHelpDesc).to_string(),
         action: ContextMenuAction::OpenHelp,
     });
 
@@ -548,6 +684,10 @@ pub(crate) fn selection_point_from_position(
 }
 
 pub(crate) fn selection_has_content(app: &App) -> bool {
+    // Composer selection takes priority (same as Cmd+C handler above).
+    if !app.selected_text().is_empty() {
+        return true;
+    }
     selection_to_text(app).is_some_and(|text| !text.is_empty())
 }
 
@@ -576,6 +716,17 @@ pub(crate) fn ctrl_c_disposition(app: &App) -> CtrlCDisposition {
 }
 
 pub(crate) fn copy_active_selection(app: &mut App) {
+    // Composer selection takes priority.
+    let sel = app.selected_text();
+    if !sel.is_empty() {
+        if app.clipboard.write_text(&sel).is_ok() {
+            app.status_message = Some("Selection copied".to_string());
+            app.clear_selection();
+        } else {
+            app.status_message = Some("Copy failed".to_string());
+        }
+        return;
+    }
     if !app.viewport.transcript_selection.is_active() {
         return;
     }
@@ -600,9 +751,14 @@ pub(crate) fn selection_to_text(app: &App) -> Option<String> {
     let end_index = end.line_index.min(lines.len().saturating_sub(1));
     let start_index = start.line_index.min(end_index);
 
-    let mut selected_lines = Vec::new();
+    let line_meta = app.viewport.transcript_cache.line_meta();
+    let mut selected = String::new();
+    let mut separator_before = None;
     #[allow(clippy::needless_range_loop)]
     for line_index in start_index..=end_index {
+        if let Some(separator) = separator_before {
+            selected.push_str(separator);
+        }
         // Rail-prefix decorations are stored as cache metadata rather than
         // detected from glyphs, so new decoration types are covered without
         // changes to the copy path (#1163).
@@ -611,30 +767,50 @@ pub(crate) fn selection_to_text(app: &App) -> Option<String> {
         // slice off the rail prefix so subsequent column offsets operate
         // on content-only text.
         let full_text = line_to_plain(&lines[line_index]);
-        let line_text = if rail_width > 0 {
+        let line_after_rail = if rail_width > 0 {
             slice_text(&full_text, rail_width, text_display_width(&full_text))
         } else {
             full_text
         };
+        let line_after_rail_width = text_display_width(&line_after_rail);
+        let copy_prefix_width = line_meta
+            .get(line_index)
+            .map(|meta| meta.copy_prefix_width())
+            .unwrap_or(0)
+            .min(line_after_rail_width);
+        let line_text = if copy_prefix_width > 0 {
+            slice_text(&line_after_rail, copy_prefix_width, line_after_rail_width)
+        } else {
+            line_after_rail
+        };
         let line_width = text_display_width(&line_text);
+        let visual_prefix_width = rail_width.saturating_add(copy_prefix_width);
         // Selection coordinates are recorded in rendered-column space, which
-        // includes the visual rail prefix. Add rail_width back so the column
-        // window maps correctly into the rail-stripped text.
+        // includes visual prefixes. Add them back so the column window maps
+        // correctly into copy-only text.
         let (raw_col_start, raw_col_end) = if start_index == end_index {
             (start.column, end.column)
         } else if line_index == start_index {
-            (start.column, line_width.saturating_add(rail_width))
+            (start.column, line_width.saturating_add(visual_prefix_width))
         } else if line_index == end_index {
             (0, end.column)
         } else {
-            (0, line_width.saturating_add(rail_width))
+            (0, line_width.saturating_add(visual_prefix_width))
         };
 
-        let col_start = raw_col_start.saturating_sub(rail_width).min(line_width);
-        let col_end = raw_col_end.saturating_sub(rail_width).min(line_width);
+        let col_start = raw_col_start
+            .saturating_sub(visual_prefix_width)
+            .min(line_width);
+        let col_end = raw_col_end
+            .saturating_sub(visual_prefix_width)
+            .min(line_width);
 
         let slice = slice_text(&line_text, col_start, col_end);
-        selected_lines.push(slice);
+        selected.push_str(&slice);
+        separator_before = line_meta
+            .get(line_index)
+            .map(|meta| meta.copy_separator_after().as_str())
+            .or(Some("\n"));
     }
-    Some(selected_lines.join("\n"))
+    Some(selected)
 }

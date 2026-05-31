@@ -56,9 +56,9 @@ pub(super) fn activity_shortcut_label() -> &'static str {
     "Ctrl+O"
 }
 
-/// Modifier predicate for the v0.8.30 family of `Alt+<letter>` transcript-
-/// nav shortcuts (`Alt+G` / `Alt+Shift+G` / `Alt+[` / `Alt+]` / `Alt+?` /
-/// `Alt+L` / `Alt+V`). Requires `Alt` and disallows `Ctrl` / `Super` so the
+/// Modifier predicate for the v0.8.30 family of `Alt+<key>` transcript-
+/// nav shortcuts (`Alt+G` / `Alt+[` / `Alt+]` / `Alt+?` / `Alt+L` / `Alt+V`). Requires
+/// `Alt` and disallows `Ctrl` / `Super` so the
 /// bindings don't collide with platform clipboard / window-management
 /// shortcuts. `Shift` is permitted so the capital-letter forms work on
 /// any keyboard layout that produces them as `Alt+Shift+key`.

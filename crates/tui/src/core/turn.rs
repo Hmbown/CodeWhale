@@ -128,16 +128,54 @@ fn add_optional_usage(total: Option<u32>, delta: Option<u32>) -> Option<u32> {
     }
 }
 
+/// Maximum characters of the user prompt snippet to embed in a snapshot
+/// label. Longer prompts are truncated with an ellipsis.
+const USER_PROMPT_LABEL_MAX: usize = 100;
+
+/// Format a snapshot label that includes the user prompt for readability
+/// in `/restore` listings.
+///
+/// Takes the first line of the prompt (up to `USER_PROMPT_LABEL_MAX`
+/// characters) and appends it to the traditional `type:seq` label so
+/// users can identify which turn each snapshot belongs to.
+fn format_snapshot_label(prefix: &str, turn_seq: u64, user_prompt: Option<&str>) -> String {
+    let base = format!("{prefix}:{turn_seq}");
+    match user_prompt {
+        None | Some("") => base,
+        Some(prompt) => {
+            let first_line = prompt.lines().next().unwrap_or("");
+            let truncated: String = first_line.chars().take(USER_PROMPT_LABEL_MAX).collect();
+            if truncated.chars().count() < first_line.chars().count() {
+                format!("{base}: {truncated}…")
+            } else {
+                format!("{base}: {truncated}")
+            }
+        }
+    }
+}
+
 /// Take a `pre-turn:<seq>` workspace snapshot.
 ///
 /// `cap_bytes` is the workspace-size ceiling that gates first-init
 /// (passed through to [`SnapshotRepo::open_or_init_with_cap`]); pass
 /// `0` to disable the cap.
+/// `user_prompt` is an optional snippet of the user's message for this
+/// turn, embedded in the snapshot label so `/restore` listings are
+/// human-readable.
 ///
 /// Returns the snapshot SHA on success, `None` on any error. Errors are
 /// logged at WARN; the turn loop must not block on this.
-pub fn pre_turn_snapshot(workspace: &Path, turn_seq: u64, cap_bytes: u64) -> Option<String> {
-    snapshot_with_label(workspace, &format!("pre-turn:{turn_seq}"), cap_bytes)
+pub fn pre_turn_snapshot(
+    workspace: &Path,
+    turn_seq: u64,
+    cap_bytes: u64,
+    user_prompt: Option<&str>,
+) -> Option<String> {
+    snapshot_with_label(
+        workspace,
+        &format_snapshot_label("pre-turn", turn_seq, user_prompt),
+        cap_bytes,
+    )
 }
 
 /// Take a `tool:<call_id>` workspace snapshot, taken before executing a
@@ -154,8 +192,17 @@ pub fn pre_tool_snapshot(workspace: &Path, call_id: &str, cap_bytes: u64) -> Opt
 
 /// Take a `post-turn:<seq>` workspace snapshot. Same failure model as
 /// [`pre_turn_snapshot`].
-pub fn post_turn_snapshot(workspace: &Path, turn_seq: u64, cap_bytes: u64) -> Option<String> {
-    snapshot_with_label(workspace, &format!("post-turn:{turn_seq}"), cap_bytes)
+pub fn post_turn_snapshot(
+    workspace: &Path,
+    turn_seq: u64,
+    cap_bytes: u64,
+    user_prompt: Option<&str>,
+) -> Option<String> {
+    snapshot_with_label(
+        workspace,
+        &format_snapshot_label("post-turn", turn_seq, user_prompt),
+        cap_bytes,
+    )
 }
 
 fn snapshot_with_label(workspace: &Path, label: &str, cap_bytes: u64) -> Option<String> {

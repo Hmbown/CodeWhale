@@ -35,6 +35,7 @@ pub mod footer_ui;
 pub mod format_helpers;
 pub mod frame_rate_limiter;
 pub mod history;
+pub mod key_actions;
 pub mod key_shortcuts;
 pub mod keybindings;
 pub mod live_transcript;
@@ -71,10 +72,11 @@ mod ui_text;
 pub mod user_input;
 pub mod views;
 pub mod vim_mode;
+pub mod whale_routes;
 pub mod widgets;
 pub mod workspace_context;
 
 // === Re-exports ===
 
-pub use app::TuiOptions;
+pub use app::{InitialInput, TuiOptions};
 pub use ui::run_tui;

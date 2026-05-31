@@ -28,6 +28,8 @@ struct DiagnosticsOutput {
     git_error: Option<String>,
     sandbox_available: bool,
     sandbox_type: Option<String>,
+    bwrap_available: bool,
+    cgroup_version: Option<u8>,
     rustc_version: Option<String>,
     cargo_version: Option<String>,
     /// User-trusted external paths the agent may access from this workspace
@@ -87,6 +89,12 @@ impl ToolSpec for DiagnosticsTool {
         let sandbox_type = crate::sandbox::get_platform_sandbox().map(|s| s.to_string());
         let sandbox_available = sandbox_type.is_some();
 
+        // Bubblewrap availability (#2184).
+        let bwrap_available = probe_bwrap_available();
+
+        // Cgroup version (Linux only).
+        let cgroup_version = probe_cgroup_version();
+
         let trusted_external_paths = context
             .trusted_external_paths
             .iter()
@@ -101,6 +109,8 @@ impl ToolSpec for DiagnosticsTool {
             git_error: git.error,
             sandbox_available,
             sandbox_type,
+            bwrap_available,
+            cgroup_version,
             rustc_version: probe_version("rustc", &["--version"], &context.workspace),
             cargo_version: probe_version("cargo", &["--version"], &context.workspace),
             trusted_external_paths,
@@ -141,6 +151,36 @@ fn probe_git(workspace: &Path) -> GitProbe {
             branch: None,
             error: Some("git is not installed or not in PATH".to_string()),
         },
+    }
+}
+
+fn probe_bwrap_available() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        crate::sandbox::bwrap::is_available()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}
+
+fn probe_cgroup_version() -> Option<u8> {
+    #[cfg(target_os = "linux")]
+    {
+        let path = std::path::Path::new("/sys/fs/cgroup/cgroup.controllers");
+        if path.exists() {
+            return Some(2);
+        }
+        let path = std::path::Path::new("/sys/fs/cgroup");
+        if path.exists() {
+            return Some(1);
+        }
+        None
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
     }
 }
 
@@ -188,27 +228,19 @@ fn run_command(program: &str, args: &[&str], cwd: &Path) -> CommandProbe {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dependencies::ExternalTool;
     use std::fs;
     use std::path::Path;
-    use std::process::Command;
     use tempfile::tempdir;
 
     fn git_available() -> bool {
-        Command::new("git")
-            .arg("--version")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+        crate::dependencies::Git::available()
     }
 
     fn init_git_repo(root: &Path) {
         let run = |args: &[&str]| {
-            let status = Command::new("git")
-                .args(args)
-                .current_dir(root)
-                .status()
-                .expect("git should spawn");
-            assert!(status.success(), "git {:?} failed", args);
+            let status = crate::dependencies::Git::status(args, root).expect("git should spawn");
+            assert!(status.success(), "git {args:?} failed");
         };
         run(&["init", "-q"]);
         run(&["config", "user.email", "test@example.com"]);

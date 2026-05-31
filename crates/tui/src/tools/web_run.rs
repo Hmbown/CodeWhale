@@ -1213,7 +1213,7 @@ fn render_lines(lines: &[String], start: usize, end: usize) -> String {
             if line_no < start || line_no > end {
                 return None;
             }
-            Some(format!("{:>4} {}", line_no, line))
+            Some(format!("{line_no:>4} {line}"))
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -1414,7 +1414,7 @@ fn replace_links(html: &str, base_url: &str) -> (String, Vec<WebLink>) {
                 url: resolved.clone(),
                 text: text.clone(),
             });
-            output.push_str(&format!("[{}] {}", id, text));
+            output.push_str(&format!("[{id}] {text}"));
         } else {
             output.push_str(&resolved);
         }

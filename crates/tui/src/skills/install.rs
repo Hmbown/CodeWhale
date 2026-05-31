@@ -51,8 +51,8 @@ use crate::network_policy::{Decision, NetworkPolicy, host_from_url};
 /// skills and can be blown away without losing anything irreplaceable.
 pub fn default_cache_skills_dir() -> PathBuf {
     dirs::home_dir().map_or_else(
-        || PathBuf::from("/tmp/deepseek/cache/skills"),
-        |p| p.join(".deepseek").join("cache").join("skills"),
+        || PathBuf::from("/tmp/codewhale/cache/skills"),
+        |p| p.join(".codewhale").join("cache").join("skills"),
     )
 }
 
@@ -391,7 +391,10 @@ pub async fn update_with_registry(
     network: &NetworkPolicy,
     registry_url: &str,
 ) -> Result<UpdateResult> {
-    let target = skills_dir.join(name);
+    let target = skill_target_path(name, skills_dir)?;
+    if target.exists() {
+        ensure_target_within_skills_dir(&target, skills_dir)?;
+    }
     let marker_path = target.join(INSTALLED_FROM_MARKER);
     if !marker_path.exists() {
         return Err(InstallError::NotInstalledHere(name.to_string()).into());
@@ -399,7 +402,7 @@ pub async fn update_with_registry(
     let marker_body = fs::read_to_string(&marker_path)
         .with_context(|| format!("failed to read {}", marker_path.display()))?;
     let marker: InstalledFromMarker = serde_json::from_str(&marker_body)
-        .with_context(|| format!("malformed {} for {name}", INSTALLED_FROM_MARKER))?;
+        .with_context(|| format!("malformed {INSTALLED_FROM_MARKER} for {name}"))?;
 
     // Re-resolve the URL, taking the existing checksum as a short-circuit hint:
     // we still hit the network so the user gets a useful "no upstream change"
@@ -439,10 +442,11 @@ pub async fn update_with_registry(
 /// Refuses to touch any directory that doesn't carry the `.installed-from`
 /// marker — that's our cue that it's user-owned and not a system skill.
 pub fn uninstall(name: &str, skills_dir: &Path) -> Result<()> {
-    let target = skills_dir.join(name);
+    let target = skill_target_path(name, skills_dir)?;
     if !target.exists() {
         bail!("skill '{name}' is not installed at {}", target.display());
     }
+    ensure_target_within_skills_dir(&target, skills_dir)?;
     if !target.join(INSTALLED_FROM_MARKER).exists() {
         return Err(InstallError::NotInstalledHere(name.to_string()).into());
     }
@@ -458,10 +462,11 @@ pub fn uninstall(name: &str, skills_dir: &Path) -> Result<()> {
 /// Refuses to mark system skills (no `.installed-from`) so the bundled
 /// `skill-creator` doesn't accidentally inherit elevated tool privileges.
 pub fn trust(name: &str, skills_dir: &Path) -> Result<()> {
-    let target = skills_dir.join(name);
+    let target = skill_target_path(name, skills_dir)?;
     if !target.exists() {
         bail!("skill '{name}' is not installed at {}", target.display());
     }
+    ensure_target_within_skills_dir(&target, skills_dir)?;
     if !target.join(INSTALLED_FROM_MARKER).exists() {
         return Err(InstallError::NotInstalledHere(name.to_string()).into());
     }
@@ -719,8 +724,7 @@ async fn sync_one_skill(
             return SkillSyncOutcome::Failed {
                 name: name.to_string(),
                 reason: format!(
-                    "download from {url} exceeds compressed size cap ({} bytes)",
-                    compressed_cap
+                    "download from {url} exceeds compressed size cap ({compressed_cap} bytes)"
                 ),
             };
         }
@@ -1344,6 +1348,40 @@ fn is_safe_path(path: &Path) -> bool {
     true
 }
 
+fn skill_target_path(name: &str, skills_dir: &Path) -> Result<PathBuf> {
+    let name = validate_skill_name_segment(name)?;
+    Ok(skills_dir.join(name))
+}
+
+fn validate_skill_name_segment(name: &str) -> Result<&str> {
+    if name.is_empty() || name.trim() != name || name.chars().any(char::is_whitespace) {
+        bail!("skill name must be a single path-safe segment (got '{name}')");
+    }
+    if name == "." || name == ".." || name.contains('/') || name.contains('\\') {
+        bail!("skill name must be a single path-safe segment (got '{name}')");
+    }
+    let mut components = Path::new(name).components();
+    if !matches!(components.next(), Some(Component::Normal(_))) || components.next().is_some() {
+        bail!("skill name must be a single path-safe segment (got '{name}')");
+    }
+    Ok(name)
+}
+
+fn ensure_target_within_skills_dir(target: &Path, skills_dir: &Path) -> Result<()> {
+    let skills_dir = fs::canonicalize(skills_dir)
+        .with_context(|| format!("failed to resolve {}", skills_dir.display()))?;
+    let target = fs::canonicalize(target)
+        .with_context(|| format!("failed to resolve {}", target.display()))?;
+    if !target.starts_with(&skills_dir) {
+        bail!(
+            "skill path {} escapes skills directory {}",
+            target.display(),
+            skills_dir.display()
+        );
+    }
+    Ok(())
+}
+
 /// Strip a leading directory prefix (e.g. `repo-main/`) from a tarball path.
 fn strip_prefix<'a>(path: &'a str, prefix: &str) -> std::borrow::Cow<'a, str> {
     if prefix.is_empty() {
@@ -1395,13 +1433,7 @@ fn parse_frontmatter_name(bytes: &[u8]) -> Result<String> {
     if !has_description {
         return Err(InstallError::MissingFrontmatterField("description").into());
     }
-    // Sanity check: name must be a single path-safe segment.
-    if name.contains('/')
-        || name.contains('\\')
-        || name == "."
-        || name == ".."
-        || name.contains(' ')
-    {
+    if validate_skill_name_segment(&name).is_err() {
         bail!("SKILL.md `name` must be a single path-safe segment (got '{name}')");
     }
     Ok(name)
@@ -1547,12 +1579,75 @@ mod tests {
 
         let body = b"---\nname: a name with spaces\ndescription: x\n---\n";
         assert!(parse_frontmatter_name(body).is_err());
+
+        let body = b"---\nname: tab\tname\ndescription: x\n---\n";
+        assert!(parse_frontmatter_name(body).is_err());
     }
 
     #[test]
     fn parse_frontmatter_requires_opening_fence() {
         let body = b"name: hello\ndescription: x\n";
         assert!(parse_frontmatter_name(body).is_err());
+    }
+
+    #[test]
+    fn user_skill_names_must_be_single_safe_segments() {
+        for bad in [
+            "",
+            "../evil",
+            "/tmp/evil",
+            "two words",
+            "two\twords",
+            "evil/name",
+            "evil\\name",
+            ".",
+            "..",
+            " leading",
+            "trailing ",
+        ] {
+            assert!(
+                validate_skill_name_segment(bad).is_err(),
+                "expected {bad:?} to be rejected"
+            );
+        }
+        assert_eq!(
+            validate_skill_name_segment("safe-name_1").unwrap(),
+            "safe-name_1"
+        );
+    }
+
+    #[test]
+    fn uninstall_and_trust_reject_unsafe_skill_names_before_path_join() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let skills_dir = tmp.path().join("skills");
+        std::fs::create_dir_all(&skills_dir).expect("skills dir");
+
+        for bad in [
+            "../evil",
+            "/tmp/evil",
+            "evil/name",
+            "evil\\name",
+            "two words",
+        ] {
+            assert!(uninstall(bad, &skills_dir).is_err());
+            assert!(trust(bad, &skills_dir).is_err());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn uninstall_rejects_symlink_target_escaping_skills_dir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let skills_dir = tmp.path().join("skills");
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&skills_dir).expect("skills dir");
+        std::fs::create_dir_all(&outside).expect("outside dir");
+        std::fs::write(outside.join(INSTALLED_FROM_MARKER), "{}").expect("marker");
+        std::os::unix::fs::symlink(&outside, skills_dir.join("linked")).expect("symlink");
+
+        let err = uninstall("linked", &skills_dir).unwrap_err();
+        assert!(err.to_string().contains("escapes skills directory"));
+        assert!(outside.exists());
     }
 
     #[test]

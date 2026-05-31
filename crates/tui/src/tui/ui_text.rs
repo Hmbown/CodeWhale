@@ -6,6 +6,24 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use crate::tui::history::HistoryCell;
 use crate::tui::osc8;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CopyLineSeparator {
+    None,
+    Space,
+    Newline,
+}
+
+impl CopyLineSeparator {
+    #[must_use]
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "",
+            Self::Space => " ",
+            Self::Newline => "\n",
+        }
+    }
+}
+
 pub(crate) fn truncate_line_to_width(text: &str, max_width: usize) -> String {
     if max_width == 0 {
         return String::new();
@@ -255,7 +273,7 @@ mod tests {
     #[test]
     fn concise_shell_command_label_prefers_gh_pr_checks_over_wrappers() {
         let label = concise_shell_command_label(
-            "cd /tmp/repo && sleep 15 && gh pr checks 1611 --repo Hmbown/DeepSeek-TUI",
+            "cd /tmp/repo && sleep 15 && gh pr checks 1611 --repo Hmbown/CodeWhale",
             80,
         );
         assert_eq!(label, "gh pr checks 1611");

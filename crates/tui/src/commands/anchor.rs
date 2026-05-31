@@ -47,6 +47,10 @@ pub fn anchor(app: &mut App, content: Option<&str>) -> CommandResult {
 }
 
 fn anchors_path(app: &App) -> std::path::PathBuf {
+    let primary = app.workspace.join(".codewhale").join("anchors.md");
+    if primary.exists() {
+        return primary;
+    }
     app.workspace.join(".deepseek").join("anchors.md")
 }
 
@@ -97,7 +101,7 @@ fn add_anchor(app: &mut App, text: &str) -> CommandResult {
     };
 
     // Write separator and anchor content.
-    if let Err(e) = writeln!(file, "\n---\n{}", text) {
+    if let Err(e) = writeln!(file, "\n---\n{text}") {
         return CommandResult::error(format!("Failed to write anchor: {e}"));
     }
 

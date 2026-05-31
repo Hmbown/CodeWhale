@@ -1,5 +1,13 @@
 use serde::{Deserialize, Serialize};
 
+use crate::config::{
+    ApiProvider, model_completion_names_for_provider, normalize_model_name_for_provider,
+};
+
+const PRO_PLAN_PLAN_MODEL: &str = "deepseek-v4-pro";
+const PRO_PLAN_EXECUTE_MODEL: &str = "deepseek-v4-flash";
+const PRO_PLAN_REVIEW_MODEL: &str = "deepseek-v4-pro";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProPlanPhase {
     Plan,
@@ -22,19 +30,48 @@ pub enum ProPlanFollowUp {
 
 #[derive(Debug, Clone)]
 pub struct ProPlanConfig {
-    pub plan_model: &'static str,
-    pub execute_model: &'static str,
-    pub review_model: &'static str,
+    pub plan_model: String,
+    pub execute_model: String,
+    pub review_model: String,
+}
+
+impl ProPlanConfig {
+    pub fn for_provider(provider: ApiProvider) -> Self {
+        let plan_model = resolve_route_model(provider, PRO_PLAN_PLAN_MODEL)
+            .unwrap_or_else(|| PRO_PLAN_PLAN_MODEL.to_string());
+        let review_model = resolve_route_model(provider, PRO_PLAN_REVIEW_MODEL)
+            .unwrap_or_else(|| plan_model.clone());
+        let execute_model = resolve_route_model(provider, PRO_PLAN_EXECUTE_MODEL)
+            .filter(|model| provider_offers_model(provider, model))
+            .unwrap_or_else(|| plan_model.clone());
+
+        Self {
+            plan_model,
+            execute_model,
+            review_model,
+        }
+    }
 }
 
 impl Default for ProPlanConfig {
     fn default() -> Self {
         Self {
-            plan_model: "deepseek-v4-pro",
-            execute_model: "deepseek-v4-flash",
-            review_model: "deepseek-v4-pro",
+            plan_model: PRO_PLAN_PLAN_MODEL.to_string(),
+            execute_model: PRO_PLAN_EXECUTE_MODEL.to_string(),
+            review_model: PRO_PLAN_REVIEW_MODEL.to_string(),
         }
     }
+}
+
+fn resolve_route_model(provider: ApiProvider, model: &str) -> Option<String> {
+    normalize_model_name_for_provider(provider, model)
+        .filter(|resolved| !resolved.trim().is_empty())
+}
+
+fn provider_offers_model(provider: ApiProvider, model: &str) -> bool {
+    model_completion_names_for_provider(provider)
+        .into_iter()
+        .any(|available| available.eq_ignore_ascii_case(model))
 }
 
 #[derive(Debug, Clone)]
@@ -71,12 +108,12 @@ impl ProPlanRouter {
         }
     }
 
-    pub fn current_model(&self) -> &'static str {
+    pub fn current_model(&self) -> &str {
         match self.state.phase {
-            ProPlanPhase::Plan => self.config.plan_model,
-            ProPlanPhase::Execute => self.config.execute_model,
-            ProPlanPhase::Review => self.config.review_model,
-            ProPlanPhase::Done => self.config.review_model,
+            ProPlanPhase::Plan => &self.config.plan_model,
+            ProPlanPhase::Execute => &self.config.execute_model,
+            ProPlanPhase::Review => &self.config.review_model,
+            ProPlanPhase::Done => &self.config.review_model,
         }
     }
 
@@ -202,6 +239,7 @@ impl ProPlanRouter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{ApiProvider, DEFAULT_FIREWORKS_MODEL, DEFAULT_OPENROUTER_FLASH_MODEL};
 
     #[test]
     fn test_initial_phase_is_plan() {
@@ -235,6 +273,23 @@ mod tests {
 
         assert_eq!(router.phase(), ProPlanPhase::Execute);
         assert!(router.execute_auto_approve());
+    }
+
+    #[test]
+    fn provider_config_uses_flash_when_provider_advertises_route() {
+        let config = ProPlanConfig::for_provider(ApiProvider::Openrouter);
+
+        assert_eq!(config.execute_model, DEFAULT_OPENROUTER_FLASH_MODEL);
+    }
+
+    #[test]
+    fn provider_config_falls_back_to_pro_when_flash_route_is_unavailable() {
+        let config = ProPlanConfig::for_provider(ApiProvider::Fireworks);
+        let mut router = ProPlanRouter::new(config);
+
+        router.start_execution(false);
+
+        assert_eq!(router.current_model(), DEFAULT_FIREWORKS_MODEL);
     }
 
     #[test]

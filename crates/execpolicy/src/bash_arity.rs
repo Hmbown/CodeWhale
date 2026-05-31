@@ -267,7 +267,7 @@ pub static BASH_ARITY_TABLE: &[(&str, u8)] = &[
 /// # Example
 ///
 /// ```rust
-/// use deepseek_execpolicy::bash_arity::BashArityDict;
+/// use codewhale_execpolicy::bash_arity::BashArityDict;
 ///
 /// let dict = BashArityDict::new();
 /// assert_eq!(dict.classify(&["git", "status", "-s"]),   "git status");

@@ -3,6 +3,7 @@ use ratatui::{buffer::Buffer, layout::Rect};
 use std::cell::{Cell, RefCell};
 use std::fmt;
 
+use crate::config::Config;
 use crate::localization::{Locale, MessageId, tr};
 use crate::palette;
 use crate::settings::Settings;
@@ -156,6 +157,11 @@ pub enum ViewEvent {
         provider: crate::config::ApiProvider,
         api_key: String,
     },
+    /// Emitted by the `/provider` picker when Kimi CLI OAuth credentials can
+    /// be reused for Moonshot/Kimi dispatch.
+    ProviderPickerKimiOAuthEnabled {
+        provider: crate::config::ApiProvider,
+    },
     /// Emitted by the `/mode` picker when the user chooses a mode.
     ModeSelected {
         mode: crate::tui::app::AppMode,
@@ -257,7 +263,7 @@ impl ViewStack {
     pub fn push<V: ModalView + 'static>(&mut self, view: V) {
         let kind = view.kind();
         self.views.push(Box::new(view));
-        tracing::debug!(target: "deepseek_tui::view_stack", action = "push", kind = ?kind, depth = self.views.len(), "view pushed");
+        tracing::debug!(target: "codewhale_tui::view_stack", action = "push", kind = ?kind, depth = self.views.len(), "view pushed");
     }
 
     /// Push an already-boxed view back onto the stack. Used by call sites
@@ -266,13 +272,13 @@ impl ViewStack {
     pub fn push_boxed(&mut self, view: Box<dyn ModalView>) {
         let kind = view.kind();
         self.views.push(view);
-        tracing::debug!(target: "deepseek_tui::view_stack", action = "push_boxed", kind = ?kind, depth = self.views.len(), "view pushed");
+        tracing::debug!(target: "codewhale_tui::view_stack", action = "push_boxed", kind = ?kind, depth = self.views.len(), "view pushed");
     }
 
     pub fn pop(&mut self) -> Option<Box<dyn ModalView>> {
         let popped = self.views.pop();
         if let Some(view) = popped.as_ref() {
-            tracing::debug!(target: "deepseek_tui::view_stack", action = "pop", kind = ?view.kind(), depth = self.views.len(), "view popped");
+            tracing::debug!(target: "codewhale_tui::view_stack", action = "pop", kind = ?view.kind(), depth = self.views.len(), "view popped");
         }
         popped
     }
@@ -330,7 +336,7 @@ impl ViewStack {
             ViewAction::None => {}
             ViewAction::Close => {
                 if let Some(view) = self.views.pop() {
-                    tracing::debug!(target: "deepseek_tui::view_stack", action = "close", kind = ?view.kind(), depth = self.views.len(), "view closed via action");
+                    tracing::debug!(target: "codewhale_tui::view_stack", action = "close", kind = ?view.kind(), depth = self.views.len(), "view closed via action");
                 }
             }
             ViewAction::Emit(event) => {
@@ -339,7 +345,7 @@ impl ViewStack {
             ViewAction::EmitAndClose(event) => {
                 events.push(event);
                 if let Some(view) = self.views.pop() {
-                    tracing::debug!(target: "deepseek_tui::view_stack", action = "emit_and_close", kind = ?view.kind(), depth = self.views.len(), "view closed via action");
+                    tracing::debug!(target: "codewhale_tui::view_stack", action = "emit_and_close", kind = ?view.kind(), depth = self.views.len(), "view closed via action");
                 }
             }
         }
@@ -569,6 +575,7 @@ pub struct ConfigView {
     filter: String,
     status: Option<String>,
     locale: Locale,
+    effective_cost_currency: String,
     last_visible_rows: Cell<usize>,
     last_row_hitboxes: RefCell<Vec<(u16, usize)>>,
 }
@@ -606,6 +613,15 @@ impl ConfigView {
                     .as_deref()
                     .unwrap_or("(config/default)")
                     .to_string(),
+                editable: true,
+                scope: ConfigScope::Saved,
+            },
+            ConfigRow {
+                section: ConfigSection::Model,
+                key: "base_url".to_string(),
+                value: Config::load(app.config_path.clone(), app.config_profile.as_deref())
+                    .map(|config| config.deepseek_base_url())
+                    .unwrap_or_else(|_| "(unavailable)".to_string()),
                 editable: true,
                 scope: ConfigScope::Saved,
             },
@@ -804,6 +820,7 @@ impl ConfigView {
             filter: String::new(),
             status: None,
             locale: app.ui_locale,
+            effective_cost_currency: cost_currency_config_value(app),
             last_visible_rows: Cell::new(0),
             last_row_hitboxes: RefCell::new(Vec::new()),
         }
@@ -826,7 +843,7 @@ impl ConfigView {
 
         let section = row.section.label().to_lowercase();
         let key = row.key.to_lowercase();
-        let value = row.value.to_lowercase();
+        let value = self.row_display_value(row).to_lowercase();
         let scope = row.scope.label().to_lowercase();
 
         filter.split_whitespace().all(|term| {
@@ -1105,6 +1122,27 @@ impl ConfigView {
 
         self.update_filter(|filter| filter.clear());
     }
+
+    fn row_display_value(&self, row: &ConfigRow) -> String {
+        if row.key == "cost_currency" && row.scope == ConfigScope::Saved {
+            let saved_cost_currency = crate::pricing::CostCurrency::from_setting(&row.value);
+            let effective_cost_currency =
+                crate::pricing::CostCurrency::from_setting(&self.effective_cost_currency);
+            if saved_cost_currency != effective_cost_currency {
+                return format!("{} (effective {})", row.value, self.effective_cost_currency);
+            }
+        }
+
+        row.value.clone()
+    }
+}
+
+fn cost_currency_config_value(app: &App) -> String {
+    match app.cost_currency {
+        crate::pricing::CostCurrency::Usd => "usd",
+        crate::pricing::CostCurrency::Cny => "cny",
+    }
+    .to_string()
 }
 
 fn config_hint_for_key(key: &str) -> &'static str {
@@ -1122,6 +1160,8 @@ fn config_hint_for_key(key: &str) -> &'static str {
         "theme" => "system | dark | light | grayscale",
         "locale" => "auto | en | ja | zh-Hans | pt-BR",
         "background_color" => "#RRGGBB | default",
+        "base_url" => "save user config; e.g. https://api.deepseek.com/beta or https://gateway/v1",
+        "cost_currency" => "usd | cny",
         "default_mode" => "agent | plan | yolo",
         "sidebar_width" => "10..=50",
         "sidebar_focus" => "auto | work | tasks | agents | context | hidden",
@@ -1227,6 +1267,18 @@ impl ModalView for ConfigView {
                 ViewAction::None
             }
             KeyCode::Backspace => {
+                if !self.filter.is_empty() {
+                    self.update_filter(|filter| {
+                        filter.pop();
+                    });
+                }
+                ViewAction::None
+            }
+            // Ctrl+H is the legacy ASCII backspace many terminals emit.
+            KeyCode::Char('h')
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT) =>
+            {
                 if !self.filter.is_empty() {
                     self.update_filter(|filter| {
                         filter.pop();
@@ -1417,7 +1469,10 @@ impl ModalView for ConfigView {
                         } else {
                             Style::default().fg(palette::TEXT_PRIMARY)
                         };
-                        let value = truncate_view_text(&row.value, CONFIG_VALUE_COLUMN_WIDTH);
+                        let value = truncate_view_text(
+                            &self.row_display_value(row),
+                            CONFIG_VALUE_COLUMN_WIDTH,
+                        );
                         let mut line = Line::from(format!(
                             "  {:<key_width$} {:<value_width$} {}",
                             row.key,
@@ -1536,6 +1591,7 @@ pub(crate) fn subagent_view_agents(
                 SubAgentStatus::Running,
                 progress,
                 Some("live"),
+                None, // live rows compute nickname from agent manager on render
             ));
         }
     }
@@ -1553,6 +1609,7 @@ pub(crate) fn subagent_view_agents(
                     lifecycle_to_subagent_status(card.status),
                     card.summary.as_deref().unwrap_or(card.agent_type.as_str()),
                     Some("transcript"),
+                    None, // transcript-derived rows get nickname from manager on render
                 ));
             }
             HistoryCell::SubAgent(SubAgentCell::Fanout(card)) => {
@@ -1569,6 +1626,7 @@ pub(crate) fn subagent_view_agents(
                             lifecycle_to_subagent_status(worker.status),
                             &objective,
                             Some(card.kind.as_str()),
+                            None, // fanout worker rows get nickname from manager on render
                         ));
                     }
                 }
@@ -1595,6 +1653,7 @@ fn live_subagent_result(
     status: SubAgentStatus,
     objective: &str,
     role: Option<&str>,
+    nickname: Option<String>,
 ) -> SubAgentResult {
     SubAgentResult {
         name: agent_id.to_string(),
@@ -1607,7 +1666,7 @@ fn live_subagent_result(
             role: role.map(str::to_string),
         },
         model: String::new(),
-        nickname: None,
+        nickname,
         status,
         result: None,
         steps_taken: 0,
@@ -1717,7 +1776,7 @@ impl ModalView for SubAgentsView {
             let mut summary_parts = Vec::new();
             for (label, count, color) in status_summary {
                 summary_parts.push(Line::from(Span::styled(
-                    format!("{}: {}", label, count),
+                    format!("{label}: {count}"),
                     Style::default().fg(color),
                 )));
             }
@@ -1849,15 +1908,19 @@ fn append_subagent_group(
 
     for agent in agents {
         let id = truncate_view_text(&agent.agent_id, 11);
+        let display_name = agent
+            .nickname
+            .as_deref()
+            .map(|nick| format!("{nick:<12}"))
+            .unwrap_or_else(|| format!("{id:<12}"));
         let kind = format_agent_type(&agent.agent_type);
         let (status, status_style, status_detail) = format_agent_status(&agent.status);
 
         lines.push(Line::from(vec![
             Span::raw("  "),
-            Span::styled(
-                format!("{id:<12}"),
-                Style::default().fg(palette::TEXT_PRIMARY),
-            ),
+            Span::styled(display_name, Style::default().fg(palette::TEXT_PRIMARY)),
+            Span::raw(" "),
+            Span::styled(format!("{id:<11}"), Style::default().fg(palette::TEXT_DIM)),
             Span::styled(
                 format!("{kind:<9}"),
                 Style::default().fg(palette::TEXT_MUTED),
@@ -1988,7 +2051,52 @@ mod tests {
         KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
     };
     use ratatui::{buffer::Buffer, layout::Rect};
+    use std::ffi::OsString;
+    use std::fs;
     use std::path::PathBuf;
+    use std::sync::MutexGuard;
+    use tempfile::TempDir;
+
+    struct ConfigSettingsEnvGuard {
+        _tmp: TempDir,
+        previous_config_path: Option<OsString>,
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    impl ConfigSettingsEnvGuard {
+        fn new(settings_toml: &str) -> Self {
+            let lock = crate::test_support::lock_test_env();
+            let tmp = TempDir::new().expect("settings tempdir");
+            let config_path = tmp.path().join(".deepseek").join("config.toml");
+            let settings_path = config_path
+                .parent()
+                .expect("settings parent")
+                .join("settings.toml");
+            std::fs::create_dir_all(config_path.parent().expect("config parent"))
+                .expect("config dir");
+            std::fs::write(&settings_path, settings_toml).expect("settings file");
+            let previous_config_path = std::env::var_os("DEEPSEEK_CONFIG_PATH");
+            unsafe {
+                std::env::set_var("DEEPSEEK_CONFIG_PATH", &config_path);
+            }
+            Self {
+                _tmp: tmp,
+                previous_config_path,
+                _lock: lock,
+            }
+        }
+    }
+
+    impl Drop for ConfigSettingsEnvGuard {
+        fn drop(&mut self) {
+            unsafe {
+                match self.previous_config_path.take() {
+                    Some(previous) => std::env::set_var("DEEPSEEK_CONFIG_PATH", previous),
+                    None => std::env::remove_var("DEEPSEEK_CONFIG_PATH"),
+                }
+            }
+        }
+    }
 
     fn create_test_app() -> App {
         let options = TuiOptions {
@@ -2013,6 +2121,26 @@ mod tests {
             initial_input: None,
         };
         App::new(options, &Config::default())
+    }
+
+    fn cost_currency_row_for_settings(
+        settings_toml: &str,
+    ) -> (String, String, crate::pricing::CostCurrency, Locale) {
+        let _guard = ConfigSettingsEnvGuard::new(settings_toml);
+        let app = create_test_app();
+        let view = ConfigView::new_for_app(&app);
+        let row = view
+            .rows
+            .iter()
+            .find(|row| row.key == "cost_currency")
+            .expect("cost_currency row");
+
+        (
+            row.value.clone(),
+            view.row_display_value(row),
+            app.cost_currency,
+            app.ui_locale,
+        )
     }
 
     fn type_filter(view: &mut ConfigView, text: &str) {
@@ -2150,6 +2278,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(keys.contains(&"model"));
         assert!(keys.contains(&"reasoning_effort"));
+        assert!(keys.contains(&"base_url"));
         assert!(keys.contains(&"approval_mode"));
         assert!(keys.contains(&"theme"));
         assert!(keys.contains(&"locale"));
@@ -2166,6 +2295,88 @@ mod tests {
         assert!(keys.contains(&"prefer_external_pdftotext"));
         assert!(keys.contains(&"mcp_config_path"));
         assert!(view.rows.iter().all(|row| row.editable));
+    }
+
+    #[test]
+    fn config_view_base_url_reflects_app_config_path() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "deepseek-tui-base-url-view-test-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&temp_root).unwrap();
+        let config_path = temp_root.join("config.toml");
+        fs::write(
+            &config_path,
+            "base_url = \"https://ui-config-view.local/v1\"\n",
+        )
+        .unwrap();
+
+        let mut app = create_test_app();
+        app.config_path = Some(config_path.clone());
+        let view = ConfigView::new_for_app(&app);
+
+        let row = view
+            .rows
+            .iter()
+            .find(|row| row.key == "base_url")
+            .expect("base_url row missing");
+        assert_eq!(row.value, "https://ui-config-view.local/v1");
+    }
+
+    #[test]
+    fn config_view_cost_currency_shows_saved_and_effective_runtime_currency() {
+        let _guard = ConfigSettingsEnvGuard::new("locale = \"zh-Hans\"\ncost_currency = \"usd\"\n");
+        let app = create_test_app();
+        assert_eq!(app.ui_locale, Locale::ZhHans);
+        assert_eq!(app.cost_currency, crate::pricing::CostCurrency::Cny);
+
+        let view = ConfigView::new_for_app(&app);
+        let row = view
+            .rows
+            .iter()
+            .find(|row| row.key == "cost_currency")
+            .expect("cost_currency row");
+
+        assert_eq!(row.value, "usd");
+        assert_eq!(view.row_display_value(row), "usd (effective cny)");
+        assert_eq!(Settings::load().expect("settings").cost_currency, "usd");
+    }
+
+    #[test]
+    fn config_view_cost_currency_aliases_matching_effective_currency_are_silent() {
+        for alias in ["rmb", "yuan", "¥"] {
+            let (saved_value, display_value, effective_currency, locale) =
+                cost_currency_row_for_settings(&format!(
+                    "locale = \"zh-Hans\"\ncost_currency = \"{alias}\"\n"
+                ));
+
+            assert_eq!(locale, Locale::ZhHans);
+            assert_eq!(effective_currency, crate::pricing::CostCurrency::Cny);
+            assert_eq!(saved_value, alias);
+            assert_eq!(display_value, alias);
+        }
+    }
+
+    #[test]
+    fn config_view_cost_currency_matching_cny_setting_is_silent() {
+        let (saved_value, display_value, effective_currency, locale) =
+            cost_currency_row_for_settings("locale = \"zh-Hans\"\ncost_currency = \"cny\"\n");
+
+        assert_eq!(locale, Locale::ZhHans);
+        assert_eq!(effective_currency, crate::pricing::CostCurrency::Cny);
+        assert_eq!(saved_value, "cny");
+        assert_eq!(display_value, "cny");
+    }
+
+    #[test]
+    fn config_view_cost_currency_non_zh_hans_locale_uses_saved_currency() {
+        let (saved_value, display_value, effective_currency, locale) =
+            cost_currency_row_for_settings("locale = \"en\"\ncost_currency = \"cny\"\n");
+
+        assert_eq!(locale, Locale::En);
+        assert_eq!(effective_currency, crate::pricing::CostCurrency::Cny);
+        assert_eq!(saved_value, "cny");
+        assert_eq!(display_value, "cny");
     }
 
     #[test]

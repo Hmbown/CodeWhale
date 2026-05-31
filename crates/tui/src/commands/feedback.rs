@@ -1,7 +1,7 @@
 use super::CommandResult;
 use crate::tui::app::{App, AppAction};
 
-const SECURITY_POLICY_URL: &str = "https://github.com/Hmbown/DeepSeek-TUI/security/policy";
+const SECURITY_POLICY_URL: &str = "https://github.com/Hmbown/CodeWhale/security/policy";
 
 pub fn feedback(_app: &mut App, arg: Option<&str>) -> CommandResult {
     let raw = arg.map(str::trim).unwrap_or("");
@@ -78,9 +78,9 @@ impl FeedbackKind {
 
     fn issue_url_base(self) -> &'static str {
         match self {
-            Self::Bug => "https://github.com/Hmbown/DeepSeek-TUI/issues/new?template=bug_report.md",
+            Self::Bug => "https://github.com/Hmbown/CodeWhale/issues/new?template=bug_report.md",
             Self::Feature => {
-                "https://github.com/Hmbown/DeepSeek-TUI/issues/new?template=feature_request.md"
+                "https://github.com/Hmbown/CodeWhale/issues/new?template=feature_request.md"
             }
             Self::Security => SECURITY_POLICY_URL,
         }
@@ -244,11 +244,11 @@ mod tests {
 
         assert_eq!(
             bug,
-            "https://github.com/Hmbown/DeepSeek-TUI/issues/new?template=bug_report.md"
+            "https://github.com/Hmbown/CodeWhale/issues/new?template=bug_report.md"
         );
         assert_eq!(
             feature,
-            "https://github.com/Hmbown/DeepSeek-TUI/issues/new?template=feature_request.md"
+            "https://github.com/Hmbown/CodeWhale/issues/new?template=feature_request.md"
         );
     }
 

@@ -22,15 +22,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install Linux system dependencies
-        if: runner.os == 'Linux'
-        run: |
-          for i in 1 2 3 4 5; do
-            sudo apt-get update && break
-            echo "apt-get update failed (attempt $i); retrying in 15s"
-            sleep 15
-          done
-          sudo apt-get install -y libdbus-1-dev pkg-config
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -44,55 +35,43 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy, rustfmt
-      - name: Install Linux system dependencies
-        if: runner.os == 'Linux'
-        run: |
-          for i in 1 2 3 4 5; do
-            sudo apt-get update && break
-            echo "apt-get update failed (attempt $i); retrying in 15s"
-            sleep 15
-          done
-          sudo apt-get install -y libdbus-1-dev pkg-config
-      - uses: Swatinem/rust-cache@v2
-        with:
-          cache-bin: false
+          components: rustfmt
       - name: Check formatting
         run: cargo fmt --all -- --check
-      # Mirror the release-workflow `parity` gate exactly. Anything that
-      # would fail there must fail here so we never push a `v*` tag that
-      # the npm publish pipeline can't ship. The Release job runs with
-      # `--locked` + `-D warnings`; we do the same.
-      - name: Clippy (release-strict)
-        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: Check provider registry drift
+        run: python3 scripts/check-provider-registry.py
+      - name: Linux clippy location
+        run: echo "Linux clippy/test gates run on CNB for mirrored fix/*, rebrand/*, work/v*, and main branches."
 
   test:
     name: Test
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
+        # Linux workspace tests moved to CNB; GitHub keeps the platform
+        # coverage CNB cannot provide.
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
+        if: runner.os != 'Linux'
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install Linux system dependencies
-        if: runner.os == 'Linux'
-        run: |
-          for i in 1 2 3 4 5; do
-            sudo apt-get update && break
-            echo "apt-get update failed (attempt $i); retrying in 15s"
-            sleep 15
-          done
-          sudo apt-get install -y libdbus-1-dev pkg-config
+        if: runner.os != 'Linux'
       - uses: Swatinem/rust-cache@v2
+        if: runner.os != 'Linux'
         with:
           cache-bin: false
       - name: Run tests
+        if: runner.os != 'Linux'
         run: cargo test --workspace --all-features --locked
       - name: Lockfile drift guard
+        if: runner.os != 'Linux'
         run: git diff --exit-code -- Cargo.lock
       - name: Run Offline Eval Harness
-        run: cargo run -p deepseek-tui --all-features -- eval
+        if: runner.os != 'Linux'
+        run: cargo run -p codewhale-tui --all-features -- eval
+      - name: Linux test location
+        if: runner.os == 'Linux'
+        run: echo "Linux workspace tests run on CNB for mirrored first-party branches."
 
   npm-wrapper-smoke:
     name: npm wrapper smoke
@@ -103,9 +82,35 @@ jobs:
         os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest","macos-latest","windows-latest"]') }}
     steps:
       - uses: actions/checkout@v4
+        if: runner.os != 'Linux'
+      - uses: dtolnay/rust-toolchain@stable
+        if: runner.os != 'Linux'
+      - uses: actions/setup-node@v4
+        if: runner.os != 'Linux'
+        with:
+          node-version: 20
+      - uses: Swatinem/rust-cache@v2
+        if: runner.os != 'Linux'
+        with:
+          cache-bin: false
+      - name: Build wrapper binaries
+        if: runner.os != 'Linux'
+        run: cargo build --release --locked -p codewhale-cli -p codewhale-tui
+      - name: Smoke wrapper install and delegated entrypoints
+        if: runner.os != 'Linux'
+        run: node scripts/release/npm-wrapper-smoke.js
+      - name: Linux smoke location
+        if: runner.os == 'Linux'
+        run: echo "Linux npm wrapper smoke runs on CNB for mirrored first-party branches."
+
+  mobile-smoke:
+    name: Mobile runtime smoke
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Install Linux system dependencies
-        if: runner.os == 'Linux'
         run: |
           for i in 1 2 3 4 5; do
             sudo apt-get update && break
@@ -113,16 +118,11 @@ jobs:
             sleep 15
           done
           sudo apt-get install -y libdbus-1-dev pkg-config
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
       - uses: Swatinem/rust-cache@v2
         with:
           cache-bin: false
-      - name: Build wrapper binaries
-        run: cargo build --release --locked -p deepseek-tui-cli -p deepseek-tui
-      - name: Smoke wrapper install and delegated entrypoints
-        run: node scripts/release/npm-wrapper-smoke.js
+      - name: Run mobile smoke tests
+        run: ./scripts/mobile-smoke.sh
 
   # Check documentation builds without warnings
   docs:

@@ -35,7 +35,7 @@ chosen over the available shell equivalent. Companion to `crates/tui/src/prompts
 |---|---|
 | `grep_files` | Regex search file contents within the workspace; structured matches + context lines. Pure-Rust (`regex` crate), no `rg`/`grep` shell-out. |
 | `file_search` | Fuzzy-match filenames (not contents). Use when you know roughly the name. |
-| `web_search` | Bing by default; DuckDuckGo, Tavily, and Bocha are selectable in config. Ranked snippets + `ref_id` for citation. |
+| `web_search` | DuckDuckGo by default with Bing fallback; Bing, Tavily, Bocha, Metaso, and Baidu are selectable in config. Ranked snippets + `ref_id` for citation. |
 | `fetch_url` | Direct HTTP GET on a known URL. Faster than `web_search` when the link is already known. HTML stripped to text by default. |
 
 ### Shell
@@ -62,6 +62,13 @@ linked durable task id when available. `/jobs show`, `/jobs poll`, `/jobs wait`,
 controls for live jobs. Jobs are process-local; after restart, live process
 state is not reattached, and any remembered detached entries must be marked
 stale rather than presented as live processes.
+
+Shell permission policy is evaluated by `crates/execpolicy`. Deny prefixes are
+checked before trusted prefixes and block matching commands regardless of layer.
+Trusted prefixes only skip approval in modes that permit trust shortcuts. Typed
+ask records are currently a narrow foundation: when one matches under
+`AskForApproval::Never`, the command is rejected because the runtime cannot ask
+the user; existing allow/deny behavior is otherwise unchanged.
 
 ### MCP manager and palette discovery
 
@@ -90,7 +97,7 @@ to the model, such as `mcp_<server>_<tool>`.
 
 | Tool | Niche |
 |---|---|
-| `update_plan` | Structured checklist for complex multi-step work. |
+| `update_plan` | Optional high-level strategy metadata for complex multi-phase work; keep `checklist_write` as the primary progress surface. |
 | `task_create` | Create/enqueue a durable background task through `TaskManager`. This is the real executable work object for long-running agent work. |
 | `task_list` | List durable tasks with status and linked runtime ids. |
 | `task_read` | Read durable task detail: thread/turn linkage, timeline, checklist, gates, artifacts, PR attempts, GitHub events. |
@@ -115,7 +122,8 @@ Large logs and command outputs should be artifacts with compact summaries in the
 | `github_issue_context` | Read-only issue context via `gh issue view`; large bodies become task artifacts when possible. |
 | `github_pr_context` | Read-only PR context via `gh pr view`; optional diff capture via `gh pr diff --patch`; large bodies/diffs become task artifacts when possible. |
 | `github_comment` | Approval-required issue/PR comment with structured evidence. |
-| `github_close_issue` | Approval-required issue closure. Requires non-empty acceptance criteria and evidence; refuses dirty worktrees unless explicitly allowed. Never close an issue merely because an agent is stopping. |
+| `github_close_issue` | Approval-required issue closure. Requires non-empty acceptance criteria and evidence; refuses dirty worktrees unless explicitly allowed. Never use for PRs. |
+| `github_close_pr` | Approval-required PR closure. Requires the same structured evidence as issue closure and keeps PR wording in tool output/audit records. |
 
 ### PR attempts
 
@@ -168,19 +176,29 @@ RLM is now persistent as well:
 
 | Tool | Niche |
 |---|---|
+| `rlm_session_objects` | List compact cards for the active prompt, session metadata, transcript, latest user message, and per-message refs. |
 | `rlm_open` | Open a named Python REPL over a file, inline content, or URL. |
 | `rlm_eval` | Run bounded Python against that session, using deterministic code and in-REPL semantic helpers such as `sub_query_batch`. |
 | `rlm_configure` | Adjust output feedback, child-query timeout/depth, and session-sharing settings. |
 | `rlm_close` | Shut down the Python runtime and return final session stats. |
 
+`rlm_open` also accepts `session_object`, a stable ref returned by
+`rlm_session_objects`, such as `session://active/system_prompt`,
+`session://active/transcript`, or `session://active/messages/0`. This loads
+the selected object into the RLM REPL and returns only metadata to the parent
+transcript. Transcript objects keep thinking blocks and large tool results as
+compact metadata; inspect large payloads through returned `var_handle` values
+and `handle_read`, not by asking the parent transcript to paste the raw text.
+
 Large RLM outputs should come back as `var_handle`s. Use `handle_read` for
 bounded text slices, line ranges, counts, or JSONPath projections instead of
 replaying the full value into the parent transcript.
 
-Inside `rlm_eval`, the loaded source is available as `_context`; `content` is
-also bound as a convenience alias because agents naturally reach for it during
-Python analysis. The shorter `context` and `ctx` names are intentionally not
-bound so user variables can use them without colliding with the bootstrap.
+Inside `rlm_eval`, the loaded source is available as `_context`; `_ctx` and
+`content` are also bound as compatibility aliases because agents naturally
+reach for them during Python analysis. The shorter `context` and `ctx` names
+are intentionally not bound so user variables can use them without colliding
+with the bootstrap.
 
 Child-call timeouts are session policy: use `rlm_configure` with
 `sub_query_timeout_secs` before running a large fan-out. The helpers
@@ -258,8 +276,8 @@ while the registry contract stays stable.
 Version smoke:
 
 ```bash
-deepseek --version
-deepseek-tui --version
+codewhale --version
+codewhale-tui --version
 ```
 
 Tool-surface smoke:

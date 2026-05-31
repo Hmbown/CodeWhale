@@ -1,8 +1,6 @@
 #[cfg(feature = "web")]
 use std::net::SocketAddr;
 #[cfg(feature = "web")]
-use std::process::Command;
-#[cfg(feature = "web")]
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -184,6 +182,7 @@ pub enum UiThemeValue {
     TokyoNight,
     Dracula,
     GruvboxDark,
+    Matrix,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -279,12 +278,14 @@ pub enum StatusItemValue {
     GitBranch,
     LastToolElapsed,
     RateLimit,
+    Tokens,
+    Balance,
 }
 
 pub fn parse_mode(arg: Option<&str>) -> Result<ConfigUiMode, String> {
     let raw = arg.unwrap_or("").trim();
     // Bare `/config` opens the legacy native modal — it matches the rest
-    // of the deepseek-tui navy chrome out of the box. Power users can
+    // of the codewhale-tui navy chrome out of the box. Power users can
     // opt into the schemaui-driven editor with `/config tui`, or the
     // browser surface with `/config web` (web feature only).
     if raw.is_empty() || raw.eq_ignore_ascii_case("native") {
@@ -349,7 +350,7 @@ pub fn build_document(app: &App, config: &Config) -> Result<ConfigUiDocument> {
 
 pub fn build_schema() -> Value {
     let mut schema = serde_json::to_value(schema_for!(ConfigUiDocument)).expect("config ui schema");
-    schema["title"] = Value::String("DeepSeek TUI Config".to_string());
+    schema["title"] = Value::String("codewhale Config".to_string());
     schema["description"] =
         Value::String("Edit runtime and persisted TUI configuration.".to_string());
     schema
@@ -360,7 +361,7 @@ pub fn run_tui_editor(app: &App, config: &Config) -> Result<ConfigUiDocument> {
     let document = build_document(app, config)?;
     let value = SchemaUI::new(serde_json::to_value(document.clone())?)
         .with_schema(build_schema())
-        .with_title("DeepSeek TUI Config")
+        .with_title("codewhale Config")
         .with_description("Edit persisted settings and live runtime knobs.")
         .run(FrontendOptions::Tui(
             UiOptions::default()
@@ -378,7 +379,7 @@ pub async fn start_web_editor(app: &App, config: &Config) -> Result<WebConfigSes
     let initial = serde_json::to_value(build_document(app, config)?)?;
     let session = WebSessionBuilder::new(build_schema())
         .with_initial_data(initial)
-        .with_title("DeepSeek TUI Config")
+        .with_title("codewhale Config")
         .with_description("Save updates the browser draft. Exit commits changes back to the TUI.")
         .build()?;
     let bound = bind_session(session, ServeOptions::default()).await?;
@@ -603,36 +604,7 @@ pub fn parse_document(value: Value) -> Result<ConfigUiDocument> {
 
 #[cfg(feature = "web")]
 pub fn open_browser(url: &str) -> Result<()> {
-    #[cfg(target_os = "macos")]
-    let mut command = {
-        let mut command = Command::new("open");
-        command.arg(url);
-        command
-    };
-    #[cfg(target_os = "linux")]
-    let mut command = {
-        let mut command = Command::new("xdg-open");
-        command.arg(url);
-        command
-    };
-    #[cfg(target_os = "windows")]
-    let mut command = {
-        let mut command = Command::new("cmd");
-        command.args(["/C", "start", "", url]);
-        command
-    };
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-    return Err(anyhow::anyhow!(
-        "browser opening is unsupported on this platform"
-    ));
-
-    let status = command
-        .status()
-        .context("failed to launch browser command")?;
-    if !status.success() {
-        bail!("browser command exited with status {status}");
-    }
-    Ok(())
+    crate::utils::open_url(url)
 }
 
 fn validate_document(doc: &ConfigUiDocument) -> Result<()> {
@@ -687,7 +659,11 @@ fn apply_reasoning_effort(
     app.last_effective_reasoning_effort = None;
     app.update_model_compaction_budget();
     if persist {
-        commands::persist_root_string_key("reasoning_effort", effort.as_setting())?;
+        commands::persist_root_string_key(
+            app.config_path.as_deref(),
+            "reasoning_effort",
+            effort.as_setting(),
+        )?;
     }
     config.reasoning_effort = Some(effort.as_setting().to_string());
     Ok(())
@@ -744,6 +720,7 @@ impl UiThemeValue {
             Self::TokyoNight => "tokyo-night",
             Self::Dracula => "dracula",
             Self::GruvboxDark => "gruvbox-dark",
+            Self::Matrix => "matrix",
         }
     }
 
@@ -757,6 +734,7 @@ impl UiThemeValue {
             Some("tokyo-night") => Ok(Self::TokyoNight),
             Some("dracula") => Ok(Self::Dracula),
             Some("gruvbox-dark") => Ok(Self::GruvboxDark),
+            Some("matrix") => Ok(Self::Matrix),
             Some(other) => bail!("unsupported theme '{other}'"),
             None => bail!("invalid theme '{value}'"),
         }
@@ -999,6 +977,8 @@ impl From<StatusItem> for StatusItemValue {
             StatusItem::GitBranch => Self::GitBranch,
             StatusItem::LastToolElapsed => Self::LastToolElapsed,
             StatusItem::RateLimit => Self::RateLimit,
+            StatusItem::Tokens => Self::Tokens,
+            StatusItem::Balance => Self::Balance,
         }
     }
 }
@@ -1019,6 +999,8 @@ impl From<StatusItemValue> for StatusItem {
             StatusItemValue::GitBranch => Self::GitBranch,
             StatusItemValue::LastToolElapsed => Self::LastToolElapsed,
             StatusItemValue::RateLimit => Self::RateLimit,
+            StatusItemValue::Tokens => Self::Tokens,
+            StatusItemValue::Balance => Self::Balance,
         }
     }
 }
@@ -1085,7 +1067,7 @@ mod tests {
             .expect("clock")
             .as_nanos();
         let temp_root = std::env::temp_dir().join(format!(
-            "deepseek-config-ui-cost-currency-{}-{}",
+            "codewhale-config-ui-cost-currency-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -1129,7 +1111,7 @@ cost_currency = "cny"
             .expect("clock")
             .as_nanos();
         let temp_root = std::env::temp_dir().join(format!(
-            "deepseek-config-ui-background-color-{}-{}",
+            "codewhale-config-ui-background-color-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -1187,7 +1169,8 @@ background_color = "#1A1B26"
                 "catppuccin-mocha",
                 "tokyo-night",
                 "dracula",
-                "gruvbox-dark"
+                "gruvbox-dark",
+                "matrix"
             ])
         );
     }
@@ -1211,7 +1194,7 @@ background_color = "#1A1B26"
             .expect("clock")
             .as_nanos();
         let temp_root = std::env::temp_dir().join(format!(
-            "deepseek-config-ui-session-only-{}-{}",
+            "codewhale-config-ui-session-only-{}-{}",
             std::process::id(),
             nanos
         ));

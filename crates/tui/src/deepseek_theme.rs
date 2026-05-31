@@ -114,6 +114,32 @@ impl Theme {
         }
     }
 
+    /// Solarized Light theme tokens — warm ivory tones, high contrast.
+    #[must_use]
+    pub const fn solarized_light() -> Self {
+        Self {
+            variant: Variant::Light,
+            section_borders: Borders::ALL,
+            section_border_type: BorderType::Plain,
+            section_border_color: palette::SOLARIZED_BORDER,
+            section_bg: palette::SOLARIZED_PANEL,
+            section_title_color: palette::SOLARIZED_BLUE,
+            section_padding: Padding::horizontal(1),
+            tool_title_color: palette::SOLARIZED_TEXT_SOFT,
+            tool_value_color: palette::SOLARIZED_TEXT_MUTED,
+            tool_label_color: palette::SOLARIZED_TEXT_DIM,
+            tool_running_accent: palette::SOLARIZED_BLUE,
+            tool_success_accent: palette::SOLARIZED_CYAN,
+            tool_failed_accent: palette::SOLARIZED_RED,
+            plan_progress_color: palette::SOLARIZED_BLUE,
+            plan_summary_color: palette::SOLARIZED_TEXT_MUTED,
+            plan_explanation_color: palette::SOLARIZED_TEXT_DIM,
+            plan_pending_color: palette::SOLARIZED_TEXT_MUTED,
+            plan_in_progress_color: palette::SOLARIZED_ORANGE,
+            plan_completed_color: palette::SOLARIZED_BLUE,
+        }
+    }
+
     /// Neutral black/white tokens for users who want minimal brand color.
     #[must_use]
     pub const fn grayscale() -> Self {
@@ -146,6 +172,7 @@ impl Theme {
             PaletteMode::Dark => Self::dark(),
             PaletteMode::Light => Self::light(),
             PaletteMode::Grayscale => Self::grayscale(),
+            PaletteMode::SolarizedLight => Self::solarized_light(),
         }
     }
 

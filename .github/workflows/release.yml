@@ -47,11 +47,11 @@ jobs:
       - name: Workspace tests
         run: cargo test --workspace --all-features --locked
       - name: TUI snapshot parity
-        run: cargo test -p deepseek-tui-core --test snapshot --locked
+        run: cargo test -p codewhale-tui-core --test snapshot --locked
       - name: Protocol schema parity
-        run: cargo test -p deepseek-protocol --test parity_protocol --locked
+        run: cargo test -p codewhale-protocol --test parity_protocol --locked
       - name: State persistence parity
-        run: cargo test -p deepseek-state --test parity_state --locked
+        run: cargo test -p codewhale-state --test parity_state --locked
       - name: Lockfile drift guard
         run: git diff --exit-code -- Cargo.lock
 
@@ -71,9 +71,15 @@ jobs:
         run: |
           if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
             tag="v${{ inputs.version }}"
-            git fetch --force origin "refs/tags/${tag}:refs/tags/${tag}"
-            sha="$(git rev-list -n 1 "${tag}")"
-            source_ref="${tag}"
+            if git rev-parse "refs/tags/${tag}" >/dev/null 2>&1; then
+              sha="$(git rev-list -n 1 "${tag}")"
+              source_ref="${tag}"
+            else
+              # Tag doesn't exist yet — build from HEAD
+              sha="${GITHUB_SHA}"
+              source_ref="${GITHUB_SHA}"
+              echo "Tag ${tag} not found; building from ${source_ref} @ ${sha}"
+            fi
           else
             tag="${GITHUB_REF_NAME}"
             sha="${GITHUB_SHA}"
@@ -100,7 +106,57 @@ jobs:
     strategy:
       matrix:
         include:
-          # --- deepseek (cli) ---
+          # --- codewhale (cli dispatcher, canonical) ---
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary: codewhale
+            artifact_name: codewhale-linux-x64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            binary: codewhale
+            artifact_name: codewhale-linux-arm64
+          - os: ubuntu-latest
+            target: riscv64gc-unknown-linux-gnu
+            binary: codewhale
+            artifact_name: codewhale-linux-riscv64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            binary: codewhale
+            artifact_name: codewhale-macos-x64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            binary: codewhale
+            artifact_name: codewhale-macos-arm64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: codewhale.exe
+            artifact_name: codewhale-windows-x64.exe
+          # --- codewhale-tui (TUI runtime, canonical) ---
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary: codewhale-tui
+            artifact_name: codewhale-tui-linux-x64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            binary: codewhale-tui
+            artifact_name: codewhale-tui-linux-arm64
+          - os: ubuntu-latest
+            target: riscv64gc-unknown-linux-gnu
+            binary: codewhale-tui
+            artifact_name: codewhale-tui-linux-riscv64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            binary: codewhale-tui
+            artifact_name: codewhale-tui-macos-x64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            binary: codewhale-tui
+            artifact_name: codewhale-tui-macos-arm64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: codewhale-tui.exe
+            artifact_name: codewhale-tui-windows-x64.exe
+          # --- deepseek (legacy dispatcher shim; removed in v0.9.0) ---
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             binary: deepseek
@@ -121,7 +177,7 @@ jobs:
             target: x86_64-pc-windows-msvc
             binary: deepseek.exe
             artifact_name: deepseek-windows-x64.exe
-          # --- deepseek-tui (TUI) ---
+          # --- deepseek-tui (legacy TUI shim; removed in v0.9.0) ---
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             binary: deepseek-tui
@@ -162,10 +218,34 @@ jobs:
             sleep 15
           done
           sudo apt-get install -y libdbus-1-dev pkg-config
+      - name: Install RISC-V cross-compilation toolchain
+        if: matrix.target == 'riscv64gc-unknown-linux-gnu'
+        run: |
+          # Install cross-compiler (available in standard repos)
+          sudo apt-get update
+          sudo apt-get install -y gcc-riscv64-linux-gnu libc6-dev-riscv64-cross
+
+          # Add Ubuntu ports for riscv64 packages
+          . /etc/os-release
+          sudo tee /etc/apt/sources.list.d/riscv64.sources <<SRC
+          Types: deb
+          URIs: http://ports.ubuntu.com/
+          Suites: ${UBUNTU_CODENAME} ${UBUNTU_CODENAME}-updates
+          Components: main universe
+          Architectures: riscv64
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          SRC
+          sudo dpkg --add-architecture riscv64
+          sudo apt-get update -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/riscv64.sources -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0
+          sudo apt-get install -y libdbus-1-dev:riscv64
       - name: Build
         shell: bash
         env:
           DEEPSEEK_BUILD_SHA: ${{ needs.resolve.outputs.sha }}
+          CC_riscv64gc_unknown_linux_gnu: riscv64-linux-gnu-gcc
+          CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_LINKER: riscv64-linux-gnu-gcc
+          PKG_CONFIG_ALLOW_CROSS: 1
+          PKG_CONFIG_LIBDIR_riscv64gc_unknown_linux_gnu: /usr/lib/riscv64-linux-gnu/pkgconfig
         run: cargo build --release --locked --target ${{ matrix.target }}
       - name: Rename binary
         shell: bash
@@ -181,6 +261,108 @@ jobs:
         with:
           name: ${{ matrix.artifact_name }}
           path: ${{ matrix.artifact_name }}
+
+  bundle:
+    needs: [build, resolve]
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.source_ref }}
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: 'codewhale*'
+      - name: Create platform archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p bundles/checksums
+          MANIFEST="bundles/checksums/codewhale-bundles-sha256.txt"
+          : > "$MANIFEST"
+
+          bundle() {
+            local platform="$1"   # linux-x64, linux-arm64, macos-x64, macos-arm64, windows-x64
+            local cli_src="$2"    # artifact name for codewhale binary
+            local tui_src="$3"    # artifact name for codewhale-tui binary
+            local ext="$4"        # tar.gz or zip
+            local variant="$5"    # '' (standard) or 'portable' (Windows only, no install script)
+            shift 5
+
+            local dir="bundles/codewhale-${platform}${variant:+-}${variant}"
+            mkdir -p "$dir"
+
+            # Copy binaries, stripping platform suffixes
+            local cli_dst="codewhale"
+            local tui_dst="codewhale-tui"
+            if [[ "$platform" == windows-* ]]; then
+              cli_dst="codewhale.exe"
+              tui_dst="codewhale-tui.exe"
+            fi
+            cp "artifacts/${cli_src}/${cli_src}" "$dir/${cli_dst}"
+            cp "artifacts/${tui_src}/${tui_src}" "$dir/${tui_dst}"
+
+            # Add install script (standard variant only)
+            if [[ "$variant" != "portable" ]]; then
+              if [[ "$platform" == windows-* ]]; then
+                cp scripts/release/install.bat "$dir/"
+                # Convert line endings to CRLF for Windows
+                sed -i 's/$/\r/' "$dir/install.bat" 2>/dev/null || true
+              else
+                cp scripts/release/install.sh "$dir/"
+                chmod +x "$dir/install.sh"
+              fi
+            fi
+
+            if [[ "$ext" == "zip" ]]; then
+              (cd bundles && zip -r "codewhale-${platform}${variant:+-}${variant}.zip" "codewhale-${platform}${variant:+-}${variant}/")
+            else
+              tar -czf "bundles/codewhale-${platform}${variant:+-}${variant}.tar.gz" -C bundles "codewhale-${platform}${variant:+-}${variant}/"
+            fi
+
+            local archive="codewhale-${platform}${variant:+-}${variant}.${ext}"
+            sha256sum "bundles/${archive}" | awk '{printf "%s  %s\n", $1, $2}' >> "$MANIFEST"
+            echo "  Created bundles/${archive}"
+          }
+
+          # Platform: linux-x64
+          bundle linux-x64 \
+            codewhale-linux-x64 codewhale-tui-linux-x64 tar.gz ""
+
+          # Platform: linux-arm64
+          bundle linux-arm64 \
+            codewhale-linux-arm64 codewhale-tui-linux-arm64 tar.gz ""
+
+          # Platform: linux-riscv64
+          bundle linux-riscv64 \
+            codewhale-linux-riscv64 codewhale-tui-linux-riscv64 tar.gz ""
+
+          # Platform: macos-x64
+          bundle macos-x64 \
+            codewhale-macos-x64 codewhale-tui-macos-x64 tar.gz ""
+
+          # Platform: macos-arm64
+          bundle macos-arm64 \
+            codewhale-macos-arm64 codewhale-tui-macos-arm64 tar.gz ""
+
+          # Platform: windows-x64 (standard + portable)
+          bundle windows-x64 \
+            codewhale-windows-x64.exe codewhale-tui-windows-x64.exe zip ""
+          bundle windows-x64 \
+            codewhale-windows-x64.exe codewhale-tui-windows-x64.exe zip "portable"
+
+          echo ""
+          echo "=== Archive checksums ==="
+          cat "$MANIFEST"
+
+      - name: Upload bundle artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: codewhale-bundles
+          path: bundles/*
+          if-no-files-found: error
+
   docker:
     needs: [build, resolve]
     if: ${{ !cancelled() && needs.build.result == 'success' }}
@@ -231,6 +413,12 @@ jobs:
             type=raw,value=latest
       - name: Build and push
         uses: docker/build-push-action@v6
+        env:
+          # The build record is useful in CI, but it is uploaded as a
+          # `.dockerbuild` artifact. The release job intentionally downloads
+          # all binary artifacts, so suppress the extra record artifact there.
+          DOCKER_BUILD_RECORD_UPLOAD: false
+          DOCKER_BUILD_SUMMARY: false
         with:
           context: source
           file: infra/Dockerfile
@@ -244,8 +432,8 @@ jobs:
           cache-to: type=gha,mode=max
 
   release:
-    needs: [build, docker, resolve]
-    if: ${{ !cancelled() && needs.build.result == 'success' && needs.docker.result == 'success' }}
+    needs: [build, bundle, docker, resolve]
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.bundle.result == 'success' && needs.docker.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -253,20 +441,27 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-          pattern: deepseek*
+          # Match both the canonical `codewhale*` artifacts and the legacy
+          # `deepseek*` shim artifacts that ship for the transition release.
+          pattern: '*'
       - name: List artifacts
         run: find artifacts -type f
       - name: Generate checksum manifest
         shell: bash
         run: |
           mkdir -p artifacts/checksums
-          manifest="artifacts/checksums/deepseek-artifacts-sha256.txt"
+          # Canonical manifest used by codewhale's `codewhale update` flow.
+          manifest="artifacts/checksums/codewhale-artifacts-sha256.txt"
           : > "${manifest}"
           while IFS= read -r -d '' file; do
             hash="$(sha256sum "${file}" | awk '{print $1}')"
             base="$(basename "${file}")"
             printf '%s  %s\n' "${hash}" "${base}" >> "${manifest}"
           done < <(find artifacts -type f ! -path 'artifacts/checksums/*' -print0 | sort -z)
+          # Legacy alias manifest so v0.8.40 `deepseek update` clients can
+          # still find a manifest by their hardcoded name. Same content; will
+          # be removed once the legacy shim binaries are retired in v0.9.0.
+          cp "${manifest}" "artifacts/checksums/deepseek-artifacts-sha256.txt"
           cat "${manifest}"
       - uses: softprops/action-gh-release@v1
         with:
@@ -274,12 +469,19 @@ jobs:
           files: artifacts/*/*
           prerelease: false
           body: |
+            > This release renames the project to **CodeWhale**. The legacy
+            > `deepseek` and `deepseek-tui` binaries continue to ship as
+            > deprecation shims for one release cycle; they print a one-line
+            > warning and forward to `codewhale` / `codewhale-tui`. They will
+            > be removed in v0.9.0. See `docs/REBRAND.md` for the full
+            > migration story.
+
             ## Install
 
             ### Recommended — npm (one command, both binaries)
 
             ```bash
-            npm install -g deepseek-tui
+            npm install -g codewhale
             ```
 
             The wrapper downloads both binaries from this Release and places them in the same directory.
@@ -289,49 +491,71 @@ jobs:
             ```bash
             docker run --rm -it \
               -e DEEPSEEK_API_KEY="$DEEPSEEK_API_KEY" \
-              -v ~/.deepseek:/home/deepseek/.deepseek \
-              ghcr.io/hmbown/deepseek-tui:${{ needs.resolve.outputs.tag }}
+              -v ~/.deepseek:/home/codewhale/.deepseek \
+              ghcr.io/hmbown/codewhale:${{ needs.resolve.outputs.tag }}
             ```
 
-            The image ships the `deepseek` dispatcher and `deepseek-tui` runtime. The `latest` tag is also updated on release.
+            The image ships the `codewhale` dispatcher and `codewhale-tui` runtime (plus the legacy `deepseek` / `deepseek-tui` shims during the transition). The `latest` tag is also updated on release.
 
             ### Cargo (Linux / macOS)
 
             ```bash
-            cargo install deepseek-tui-cli deepseek-tui --locked
+            cargo install codewhale-cli codewhale-tui --locked
             ```
 
-            Both crates are required — `deepseek-tui-cli` produces the `deepseek` dispatcher and `deepseek-tui` produces the interactive runtime that the dispatcher delegates to. Installing only one binary will fail at runtime with a `MISSING_COMPANION_BINARY` error.
+            Both crates are required — `codewhale-cli` produces the `codewhale` dispatcher and `codewhale-tui` produces the interactive runtime that the dispatcher delegates to. Installing only one binary will fail at runtime with a `MISSING_COMPANION_BINARY` error.
 
-            ### Manual download
+            ### Manual download — platform archives (recommended)
 
-            **Both** binaries below must be downloaded for your platform and dropped into the same directory (e.g. `~/.local/bin/`):
+            Each archive below contains **both** the `codewhale` dispatcher and `codewhale-tui` runtime, plus an install script:
 
-            | Platform | Dispatcher | TUI runtime |
+            | Platform | Archive | Install script |
             |---|---|---|
-            | Linux x64 | `deepseek-linux-x64` | `deepseek-tui-linux-x64` |
-            | Linux ARM64 | `deepseek-linux-arm64` | `deepseek-tui-linux-arm64` |
-            | macOS x64 | `deepseek-macos-x64` | `deepseek-tui-macos-x64` |
-            | macOS ARM | `deepseek-macos-arm64` | `deepseek-tui-macos-arm64` |
-            | Windows x64 | `deepseek-windows-x64.exe` | `deepseek-tui-windows-x64.exe` |
+            | Linux x64 | `codewhale-linux-x64.tar.gz` | `install.sh` |
+            | Linux ARM64 | `codewhale-linux-arm64.tar.gz` | `install.sh` |
+            | Linux RISC-V | `codewhale-linux-riscv64.tar.gz` | `install.sh` |
+            | macOS x64 | `codewhale-macos-x64.tar.gz` | `install.sh` |
+            | macOS ARM | `codewhale-macos-arm64.tar.gz` | `install.sh` |
+            | Windows x64 | `codewhale-windows-x64.zip` | `install.bat` |
+            | Windows x64 (portable) | `codewhale-windows-x64-portable.zip` | — |
 
-            Then `chmod +x` both (Unix) and run `./deepseek`.
+            **Unix (Linux / macOS):**
+            ```bash
+            tar xzf codewhale-<platform>.tar.gz
+            cd codewhale-<platform>
+            ./install.sh
+            ```
+
+            **Windows:**
+            - Extract `codewhale-windows-x64.zip`
+            - Run `install.bat` (copies to `%USERPROFILE%\bin`)
+            - Add `%USERPROFILE%\bin` to your PATH
+
+            The **portable** Windows archive skips the install script — extract and run from any directory.
+
+            Individual binaries are also attached below for scripting and the npm wrapper. Legacy `deepseek-*` and `deepseek-tui-*` assets ship for one release cycle so that existing `deepseek update` invocations on v0.8.40 keep working; they install the deprecation shims, which forward to the canonical binaries.
 
             ### Verify (recommended)
 
-            Download `deepseek-artifacts-sha256.txt` from this Release and verify:
+            Download the checksum manifests from this Release and verify:
 
             ```bash
-            # Linux
-            sha256sum -c deepseek-artifacts-sha256.txt
+            # Linux — archive bundles
+            sha256sum -c codewhale-bundles-sha256.txt
+
+            # Linux — individual binaries
+            sha256sum -c codewhale-artifacts-sha256.txt
 
             # macOS
-            shasum -a 256 -c deepseek-artifacts-sha256.txt
+            shasum -a 256 -c codewhale-bundles-sha256.txt
+            shasum -a 256 -c codewhale-artifacts-sha256.txt
             ```
+
+            The legacy `deepseek-artifacts-sha256.txt` is also attached for backward compatibility and contains the same hashes as the canonical manifest.
 
             ## Changelog
 
-            See [CHANGELOG.md](https://github.com/Hmbown/DeepSeek-TUI/blob/main/CHANGELOG.md) for the full notes for this release.
+            See [CHANGELOG.md](https://github.com/Hmbown/CodeWhale/blob/main/CHANGELOG.md) for the full notes for this release.
 
   homebrew:
     needs: [release, resolve]

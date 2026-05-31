@@ -472,9 +472,9 @@ fn forked_subagent_messages_preserve_parent_prefix_then_append_task() {
     assert_eq!(messages.first(), Some(&parent_message));
     assert_eq!(messages.len(), 4);
     assert_eq!(messages[1].role, "system");
-    assert!(message_text(&messages[1]).contains("<deepseek:fork_state>"));
+    assert!(message_text(&messages[1]).contains("<codewhale:fork_state>"));
     assert_eq!(messages[2].role, "system");
-    assert!(message_text(&messages[2]).contains("<deepseek:subagent_context>"));
+    assert!(message_text(&messages[2]).contains("<codewhale:subagent_context>"));
     assert_eq!(messages[3].role, "user");
     assert!(message_text(&messages[3]).contains("inspect parser"));
 }
@@ -803,6 +803,7 @@ async fn test_wait_for_result_reports_timeout_when_still_running() {
     let manager = Arc::new(RwLock::new(SubAgentManager::new(PathBuf::from("."), 2)));
     let (input_tx, _input_rx) = mpsc::unbounded_channel();
     let agent = SubAgent::new(
+        "test_agent_1".to_string(),
         SubAgentType::Explore,
         "prompt".to_string(),
         make_assignment(),
@@ -825,11 +826,70 @@ async fn test_wait_for_result_reports_timeout_when_still_running() {
     assert_eq!(snapshot.status, SubAgentStatus::Running);
 }
 
+// Regression for #1738: agent_eval on a terminated session must not
+// hard-fail with "not running" when a follow-up message is supplied. The
+// parent still needs the projection (and its transcript_handle) to recover
+// the child's full output.
+#[tokio::test]
+async fn agent_eval_on_completed_session_returns_full_projection_not_running_error() {
+    let manager = Arc::new(RwLock::new(SubAgentManager::new(PathBuf::from("."), 1)));
+    let (input_tx, _input_rx) = mpsc::unbounded_channel();
+    let mut agent = SubAgent::new(
+        "test_agent_2".to_string(),
+        SubAgentType::Explore,
+        "analyze 14 issues".to_string(),
+        make_assignment(),
+        "deepseek-v4-flash".to_string(),
+        Some("Blue".to_string()),
+        Some(vec!["read_file".to_string()]),
+        input_tx,
+        "boot_test".to_string(),
+    );
+    let full_output = "Per-issue analysis:\n".to_string() + &"detail line\n".repeat(400);
+    agent.status = SubAgentStatus::Completed;
+    agent.result = Some(full_output.clone());
+    let agent_id = agent.id.clone();
+    {
+        let mut guard = manager.write().await;
+        guard.agents.insert(agent_id.clone(), agent);
+    }
+
+    let ctx = ToolContext::new(".");
+    let tool = AgentEvalTool::new(manager.clone());
+    let result = tool
+        .execute(
+            json!({
+                "agent_id": agent_id,
+                "message": "give me the full per-issue breakdown",
+                "block": false
+            }),
+            &ctx,
+        )
+        .await
+        .expect("agent_eval on a completed session must not error");
+
+    let meta = result.metadata.expect("metadata present");
+    assert_eq!(meta["terminal"], json!(true));
+    assert_eq!(meta["message_delivery"]["delivered"], json!(false));
+
+    let projection: SubAgentSessionProjection =
+        serde_json::from_str(&result.content).expect("projection deserializes");
+    assert_eq!(projection.status, "completed");
+    assert_eq!(projection.transcript_handle.kind, "var_handle");
+    // The full, untruncated child output survives in the snapshot the
+    // transcript_handle points at.
+    assert_eq!(
+        projection.snapshot.result.as_deref(),
+        Some(full_output.as_str())
+    );
+}
+
 #[tokio::test]
 async fn test_running_count_counts_only_agents_with_live_task_handles() {
     let mut manager = SubAgentManager::new(PathBuf::from("."), 1);
     let (input_tx, _input_rx) = mpsc::unbounded_channel();
     let mut agent = SubAgent::new(
+        "test_agent_3".to_string(),
         SubAgentType::Explore,
         "prompt".to_string(),
         make_assignment(),
@@ -861,6 +921,7 @@ fn test_running_count_ignores_running_status_without_task_handle() {
     let mut manager = SubAgentManager::new(PathBuf::from("."), 1);
     let (input_tx, _input_rx) = mpsc::unbounded_channel();
     let mut agent = SubAgent::new(
+        "test_agent_4".to_string(),
         SubAgentType::Explore,
         "prompt".to_string(),
         make_assignment(),
@@ -881,6 +942,7 @@ async fn test_running_count_ignores_finished_task_handles() {
     let mut manager = SubAgentManager::new(PathBuf::from("."), 1);
     let (input_tx, _input_rx) = mpsc::unbounded_channel();
     let mut agent = SubAgent::new(
+        "test_agent_5".to_string(),
         SubAgentType::Explore,
         "prompt".to_string(),
         make_assignment(),
@@ -909,6 +971,7 @@ fn test_assign_updates_running_agent_and_sends_message() {
     let mut manager = SubAgentManager::new(PathBuf::from("."), 2);
     let (input_tx, mut input_rx) = mpsc::unbounded_channel();
     let agent = SubAgent::new(
+        "test_agent_6".to_string(),
         SubAgentType::General,
         "work".to_string(),
         make_assignment(),
@@ -946,6 +1009,7 @@ fn test_assign_rejects_message_for_non_running_agent() {
     let mut manager = SubAgentManager::new(PathBuf::from("."), 1);
     let (input_tx, _input_rx) = mpsc::unbounded_channel();
     let mut agent = SubAgent::new(
+        "test_agent_7".to_string(),
         SubAgentType::Explore,
         "prompt".to_string(),
         make_assignment(),
@@ -970,6 +1034,7 @@ fn test_assign_updates_non_running_metadata_without_message() {
     let mut manager = SubAgentManager::new(PathBuf::from("."), 1);
     let (input_tx, _input_rx) = mpsc::unbounded_channel();
     let mut agent = SubAgent::new(
+        "test_agent_8".to_string(),
         SubAgentType::Plan,
         "prompt".to_string(),
         make_assignment(),
@@ -1005,6 +1070,7 @@ fn test_persist_and_reload_marks_running_agent_as_interrupted() {
     let mut manager = SubAgentManager::new(workspace.clone(), 2).with_state_path(state_path);
     let (input_tx, _input_rx) = mpsc::unbounded_channel();
     let running = SubAgent::new(
+        "test_agent_9_running".to_string(),
         SubAgentType::General,
         "work".to_string(),
         make_assignment(),
@@ -1152,13 +1218,13 @@ fn build_subagent_system_prompt_skips_role_when_blank() {
 fn subagent_done_sentinel_format_is_well_formed() {
     let res = make_snapshot(SubAgentStatus::Completed);
     let sentinel = subagent_done_sentinel("agent_xyz", &res);
-    assert!(sentinel.starts_with("<deepseek:subagent.done>"));
-    assert!(sentinel.ends_with("</deepseek:subagent.done>"));
+    assert!(sentinel.starts_with("<codewhale:subagent.done>"));
+    assert!(sentinel.ends_with("</codewhale:subagent.done>"));
 
     // The inner JSON parses and carries the expected fields.
     let inner = sentinel
-        .trim_start_matches("<deepseek:subagent.done>")
-        .trim_end_matches("</deepseek:subagent.done>");
+        .trim_start_matches("<codewhale:subagent.done>")
+        .trim_end_matches("</codewhale:subagent.done>");
     let parsed: serde_json::Value = serde_json::from_str(inner).expect("inner JSON parses");
     assert_eq!(parsed["agent_id"], "agent_xyz");
     assert_eq!(parsed["status"], "completed");
@@ -1174,8 +1240,8 @@ fn subagent_done_sentinel_format_is_well_formed() {
 fn subagent_failed_sentinel_format_is_well_formed() {
     let sentinel = subagent_failed_sentinel("agent_zzz", "boom");
     let inner = sentinel
-        .trim_start_matches("<deepseek:subagent.done>")
-        .trim_end_matches("</deepseek:subagent.done>");
+        .trim_start_matches("<codewhale:subagent.done>")
+        .trim_end_matches("</codewhale:subagent.done>");
     let parsed: serde_json::Value = serde_json::from_str(inner).expect("inner JSON parses");
     assert_eq!(parsed["agent_id"], "agent_zzz");
     assert_eq!(parsed["status"], "failed");
@@ -1651,7 +1717,7 @@ fn persisted_non_empty_allowed_tools_loads_as_narrow() {
 fn stub_runtime() -> SubAgentRuntime {
     use tokio_util::sync::CancellationToken;
 
-    let workspace = std::env::temp_dir().join("deepseek-test-stub");
+    let workspace = std::env::temp_dir().join("codewhale-test-stub");
     let context = ToolContext::new(workspace.clone());
     SubAgentRuntime {
         client: stub_client(),
@@ -1670,6 +1736,7 @@ fn stub_runtime() -> SubAgentRuntime {
         mailbox: None,
         parent_completion_tx: None,
         fork_context: None,
+        mcp_pool: None,
         step_api_timeout: DEFAULT_STEP_API_TIMEOUT,
     }
 }
@@ -1703,6 +1770,7 @@ fn insert_prior_session_agent(
 ) {
     let (input_tx, _input_rx) = mpsc::unbounded_channel();
     let mut agent = SubAgent::new(
+        id.to_string(),
         SubAgentType::General,
         "old prompt".to_string(),
         make_assignment(),
@@ -1963,6 +2031,69 @@ fn emit_parent_completion_dropped_receiver_does_not_panic() {
     );
 }
 
+#[tokio::test]
+async fn run_subagent_task_emits_parent_completion_before_terminal_update() {
+    let manager = Arc::new(RwLock::new(SubAgentManager::new(PathBuf::from("."), 2)));
+    let (task_input_tx, task_input_rx) = mpsc::unbounded_channel();
+    let agent_id = "agent_noop".to_string();
+    let mut agent = SubAgent::new(
+        agent_id.clone(),
+        SubAgentType::General,
+        "noop".to_string(),
+        make_assignment(),
+        "deepseek-v4-flash".to_string(),
+        None,
+        None,
+        task_input_tx,
+        "boot_test".to_string(),
+    );
+    agent.status = SubAgentStatus::Running;
+    manager.write().await.agents.insert(agent_id.clone(), agent);
+
+    let (completion_tx, mut completion_rx) = mpsc::unbounded_channel::<SubAgentCompletion>();
+    let mut runtime = runtime_with_depth(1, Some(completion_tx));
+    runtime.manager = Arc::clone(&manager);
+
+    let task = SubAgentTask {
+        manager_handle: manager.clone(),
+        runtime,
+        agent_id: agent_id.clone(),
+        agent_type: SubAgentType::General,
+        prompt: "no-op child run".to_string(),
+        assignment: make_assignment(),
+        allowed_tools: None,
+        fork_context: false,
+        started_at: Instant::now(),
+        max_steps: 0,
+        input_rx: task_input_rx,
+    };
+
+    let manager_lock = manager.write().await;
+    let task_handle = tokio::spawn(run_subagent_task(task));
+
+    // While the manager write lock is held, completion can be emitted only if it
+    // is sent before the terminal-state manager update (the ordering fixed by
+    // issue #1961).
+    let completion = tokio::time::timeout(Duration::from_secs(1), completion_rx.recv())
+        .await
+        .expect("completion should be emitted while manager write lock is still held");
+    let completion = completion.expect("completion channel should remain open");
+    assert_eq!(completion.agent_id, agent_id);
+
+    drop(manager_lock);
+    task_handle
+        .await
+        .expect("run_subagent_task should complete after lock release");
+
+    let snapshot = {
+        let manager = manager.read().await;
+        manager
+            .get_result(&agent_id)
+            .expect("completed agent should be present")
+    };
+    assert_eq!(snapshot.status, SubAgentStatus::Completed);
+}
+
 #[test]
 fn child_runtime_propagates_completion_tx_for_gating() {
     // The channel is cloned through `child_runtime()` so descendants carry
@@ -2023,7 +2154,7 @@ fn child_runtime_preserves_step_api_timeout() {
 #[test]
 fn subagent_completion_payload_carries_existing_sentinel_format() {
     // The payload format is the same one already documented in
-    // prompts/base.md: human summary on line 1, `<deepseek:subagent.done>`
+    // prompts/base.md: human summary on line 1, `<codewhale:subagent.done>`
     // sentinel on line 2. This test pins the format so future refactors
     // don't silently break the model's parsing contract.
     let mut snap = make_snapshot(SubAgentStatus::Completed);
@@ -2037,14 +2168,14 @@ fn subagent_completion_payload_carries_existing_sentinel_format() {
     let first = lines.next().expect("first line is summary");
     let second = lines.next().expect("second line is sentinel");
     assert!(
-        !first.starts_with("<deepseek:subagent.done>"),
+        !first.starts_with("<codewhale:subagent.done>"),
         "summary should not be the sentinel itself"
     );
     assert!(
-        second.starts_with("<deepseek:subagent.done>"),
+        second.starts_with("<codewhale:subagent.done>"),
         "second line is the sentinel"
     );
-    assert!(second.ends_with("</deepseek:subagent.done>"));
+    assert!(second.ends_with("</codewhale:subagent.done>"));
     assert!(
         second.contains("\"agent_id\":\"agent_test\""),
         "sentinel JSON includes agent_id"

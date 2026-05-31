@@ -1,7 +1,7 @@
 # ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║                         DeepSeek TUI Configuration                            ║
+# ║                         CodeWhale Configuration                               ║
 # ║                                                                              ║
-# ║  Unofficial CLI for DeepSeek Platform - Not affiliated with DeepSeek Inc.     ║
+# ║  Terminal coding agent for DeepSeek.                                          ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
 # See `docs/CONFIGURATION.md` for how config is loaded (profiles, env overrides, etc.).
@@ -13,11 +13,13 @@
 # `[providers.*]` sections near the bottom of
 # this file — keeping both stored at once means `/provider deepseek` and
 # `/provider nvidia-nim` (or `--provider openai`, `--provider wanjie-ark`,
-# `--provider fireworks`, `/provider sglang`, `/provider vllm`, `/provider ollama`)
-# toggle without having to re-enter keys. Top-level `api_key` / `base_url` are
+# `--provider volcengine`, `--provider xiaomi-mimo`, `--provider fireworks`,
+# `--provider siliconflow`, `/provider sglang`, `/provider vllm`,
+# `/provider ollama`) toggle without having to re-enter keys. Top-level
+# `api_key` / `base_url` are
 # still read as DeepSeek defaults when `[providers.deepseek]` is absent
 # (backward compatibility).
-provider = "deepseek" # deepseek | deepseek-cn | nvidia-nim | openai | atlascloud | wanjie-ark | openrouter | novita | fireworks | sglang | vllm | ollama
+provider = "deepseek" # deepseek | deepseek-cn | nvidia-nim | openai | atlascloud | wanjie-ark | volcengine | openrouter | xiaomi-mimo | novita | fireworks | siliconflow | sglang | vllm | ollama
 api_key = "YOUR_DEEPSEEK_API_KEY" # must be non-empty
 base_url = "https://api.deepseek.com/beta"
 # provider = "deepseek-cn"                       # legacy alias (official host is still https://api.deepseek.com)
@@ -37,7 +39,10 @@ base_url = "https://api.deepseek.com/beta"
 #   gpt-4.1                         — default generic OpenAI-compatible model ID
 #   deepseek-ai/deepseek-v4-flash   — default AtlasCloud model ID
 #   deepseek-reasoner               — default Wanjie Ark model ID
+#   mimo-v2.5-pro                   — default Xiaomi MiMo model ID
 #   accounts/fireworks/models/deepseek-v4-pro — Fireworks AI Pro model ID
+#   deepseek-ai/DeepSeek-V4-Pro    — SiliconFlow hosted Pro model ID
+#   deepseek-ai/DeepSeek-V4-Flash  — SiliconFlow hosted Flash model ID
 #   deepseek-ai/DeepSeek-V4-Pro    — SGLang self-hosted Pro model ID
 #   deepseek-ai/DeepSeek-V4-Flash  — SGLang self-hosted Flash model ID
 default_text_model = "deepseek-v4-pro"
@@ -97,6 +102,12 @@ memory_path = "~/.deepseek/memory.md"
 # Parsed but currently unused (reserved for future versions):
 # tools_file = "./tools.json"
 
+# Native tool catalog controls (#2076). By default only the core tool surface
+# is loaded into the model context; less common native tools are discoverable
+# through ToolSearch and loaded on first use.
+# [tools]
+# always_load = ["git_show", "notify"]
+
 # ─────────────────────────────────────────────────────────────────────────────────
 # Security
 # ─────────────────────────────────────────────────────────────────────────────────
@@ -131,6 +142,21 @@ sandbox_mode = "workspace-write" # read-only | workspace-write | danger-full-acc
 # The backend uses a 30-second HTTP timeout. Background, interactive, and
 # TTY modes are not supported with external backends — all commands run
 # synchronously via HTTP.
+# ─────────────────────────────────────────────────────────────────────────────────
+# Bubblewrap (Linux only, additional filesystem isolation)
+# ─────────────────────────────────────────────────────────────────────────────────
+# When set to true and `/usr/bin/bwrap` is present, exec_shell commands are
+# routed through bubblewrap instead of relying solely on Landlock. Bubblewrap
+# creates a read-only view of the root filesystem with write access limited to
+# the working directory. Install separately:
+#
+#   Ubuntu/Debian:  apt install bubblewrap
+#   Fedora:         dnf install bubblewrap
+#   Arch:           pacman -S bubblewrap
+#
+# prefer_bwrap = false  # default — use Landlock only
+#
+# Env override: DEEPSEEK_PREFER_BWRAP=true
 
 # auto_allow entries match by command prefix, not raw string.
 # See command_safety.rs for the prefix dictionary.
@@ -157,23 +183,36 @@ max_subagents = 10 # optional (1-20)
 # ─────────────────────────────────────────────────────────────────────────────────
 # Providers can be stored at once; `provider = "..."` (top of file) or
 # `/provider deepseek` / `/provider nvidia-nim` / `--provider openai` /
-# `--provider wanjie-ark` / `/provider fireworks` switches between them without
-# having to re-enter keys. Env vars override anything set here:
+# `--provider wanjie-ark` / `/provider fireworks` / `--provider siliconflow`
+# switches between them without having to re-enter keys. Env vars override anything set here:
 #   DeepSeek: DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
 #   NIM:      NVIDIA_API_KEY (or NVIDIA_NIM_API_KEY), NIM_BASE_URL
 #             (or NVIDIA_NIM_BASE_URL / NVIDIA_BASE_URL), NVIDIA_NIM_MODEL
 #   OpenAI-compatible: OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL
 #   Wanjie Ark: WANJIE_ARK_API_KEY (or WANJIE_API_KEY), WANJIE_ARK_BASE_URL, WANJIE_ARK_MODEL
-#   Fireworks: FIREWORKS_API_KEY, FIREWORKS_BASE_URL
+#   OpenRouter: OPENROUTER_API_KEY, OPENROUTER_BASE_URL, OPENROUTER_MODEL
+#   Xiaomi MiMo: XIAOMI_MIMO_API_KEY (or MIMO_API_KEY), XIAOMI_MIMO_BASE_URL, XIAOMI_MIMO_MODEL
+#   Novita:     NOVITA_API_KEY, NOVITA_BASE_URL, NOVITA_MODEL
+#   Fireworks:  FIREWORKS_API_KEY, FIREWORKS_BASE_URL
+#   SiliconFlow: SILICONFLOW_API_KEY, SILICONFLOW_BASE_URL, SILICONFLOW_MODEL
 #   SGLang:    SGLANG_BASE_URL, SGLANG_MODEL, optional SGLANG_API_KEY
 #   vLLM:      VLLM_BASE_URL, VLLM_MODEL, optional VLLM_API_KEY
 #   Ollama:    OLLAMA_BASE_URL, OLLAMA_MODEL, optional OLLAMA_API_KEY
+#
+# Custom DeepSeek-compatible APIs usually do not need a new provider table:
+# set `provider = "deepseek"` and override [providers.deepseek].base_url/model.
+# For generic OpenAI-compatible gateways, use `provider = "openai"` and the
+# [providers.openai] table below. Keep provider/api_key/base_url in user config
+# or environment variables; project overlays are not allowed to set them.
 
 # DeepSeek Platform (https://platform.deepseek.com)
 [providers.deepseek]
 # api_key = "YOUR_DEEPSEEK_API_KEY"
 # base_url = "https://api.deepseek.com/beta"
 # model = "deepseek-v4-pro"
+# Custom DeepSeek-compatible example:
+# base_url = "https://your-provider.example/v1"
+# model = "deepseek-ai/DeepSeek-V4-Pro"
 # http_headers = { "X-Model-Provider-Id" = "your-model-provider" } # optional custom request headers
 
 # NVIDIA NIM-hosted DeepSeek V4 (https://build.nvidia.com)
@@ -190,6 +229,9 @@ max_subagents = 10 # optional (1-20)
 # api_key = "YOUR_OPENAI_COMPATIBLE_API_KEY"
 # base_url = "https://api.openai.com/v1"
 # model = "gpt-4.1"
+# Gateway example:
+# base_url = "https://gateway.example/v1"
+# model = "your-deepseek-compatible-model"
 
 # AtlasCloud OpenAI-compatible endpoint (https://www.atlascloud.ai/docs/models/llm)
 [providers.atlascloud]
@@ -203,11 +245,41 @@ max_subagents = 10 # optional (1-20)
 # base_url = "https://maas-openapi.wanjiedata.com/api/v1"
 # model = "deepseek-reasoner"                # or the exact model ID enabled on your Wanjie account
 
+# Volcengine / Volcano Engine Ark Coding API
+[providers.volcengine]
+# api_key = "YOUR_VOLCENGINE_API_KEY"
+# base_url = "https://ark.cn-beijing.volces.com/api/coding/v3"
+# model = "DeepSeek-V4-Pro"                  # or DeepSeek-V4-Flash
+
+# OpenRouter — multi-provider gateway (https://openrouter.ai)
+[providers.openrouter]
+# api_key = "YOUR_OPENROUTER_API_KEY"
+# base_url = "https://openrouter.ai/api/v1"
+# model = "deepseek/deepseek-v4-pro"         # or deepseek/deepseek-v4-flash
+
+# Xiaomi MiMo OpenAI-compatible endpoint (https://platform.xiaomimimo.com)
+[providers.xiaomi_mimo]
+# api_key = "YOUR_XIAOMI_MIMO_API_KEY"
+# base_url = "https://api.xiaomimimo.com/v1"
+# model = "mimo-v2.5-pro"
+
+# Novita AI-hosted inference (https://novita.ai)
+[providers.novita]
+# api_key = "YOUR_NOVITA_API_KEY"
+# base_url = "https://api.novita.ai/v1"
+# model = "deepseek/deepseek-v4-pro"         # or deepseek/deepseek-v4-flash
+
 # Fireworks AI-hosted DeepSeek V4 (https://fireworks.ai)
 [providers.fireworks]
 # api_key = "YOUR_FIREWORKS_API_KEY"
 # base_url = "https://api.fireworks.ai/inference/v1"
 # model = "accounts/fireworks/models/deepseek-v4-pro"
+
+# SiliconFlow-hosted DeepSeek V4 (https://siliconflow.com)
+[providers.siliconflow]
+# api_key = "YOUR_SILICONFLOW_API_KEY"
+# base_url = "https://api.siliconflow.com/v1"
+# model = "deepseek-ai/DeepSeek-V4-Pro"     # or deepseek-ai/DeepSeek-V4-Flash
 
 # Self-hosted SGLang OpenAI-compatible server
 [providers.sglang]
@@ -230,23 +302,31 @@ max_subagents = 10 # optional (1-20)
 # ─────────────────────────────────────────────────────────────────────────────────
 # Web Search Provider
 # ─────────────────────────────────────────────────────────────────────────────────
-# Choose which backend `web_search` uses. Default is Bing HTML scraping — no
-# API key needed. DuckDuckGo remains selectable and still falls back to Bing
-# when its HTML endpoint returns a bot challenge or no parseable results.
-# Switch to Tavily or Bocha for reliable search in mainland China.
+# Choose which backend `web_search` uses. Default is DuckDuckGo HTML scraping
+# with Bing fallback — no API key needed. Bing remains selectable for users who
+# explicitly prefer it. Switch to Tavily, Bocha, Metaso, or Baidu for
+# API-backed search.
 #
 # [search]
-# provider = "bing"         # bing | duckduckgo | tavily | bocha
+# provider = "duckduckgo"  # duckduckgo | bing | tavily | bocha | metaso | baidu | volcengine
 #                            # duckduckgo: HTML scrape with Bing fallback
-#                            # tavily: https://tavily.com — AI search, needs api_key
-#                            # bocha:  https://bochaai.com — 博查AI搜索，国内友好，需api_key
-# api_key = "tvly-YOUR_KEY"  # required for tavily and bocha
-#                            # WARNING: treat config.toml like a secret file when
-#                            # storing API keys. Use env vars or `auth set` instead.
+#                            # bing:       HTML scrape, no API key
+#                            # tavily:     https://tavily.com — AI search, needs api_key
+#                            # bocha:      https://bochaai.com — 博查AI搜索，国内友好，需api_key
+#                            # metaso:     https://metaso.cn — 秘塔AI搜索，每天 100 次免费
+#                            #             设置 METASO_API_KEY 或 [search] api_key 可提升额度
+#                            # baidu:      百度 AI Search via qianfan.baidubce.com，需 api_key
+#                            # volcengine: 火山引擎 Ark web_search (免费 2 万次/月), 需 api_key
+#                            #             也回退到 VOLCENGINE_API_KEY / VOLCENGINE_ARK_API_KEY / ARK_API_KEY 环境变量
+# api_key = "YOUR_SEARCH_KEY" # required for tavily, bocha, and baidu; optional for metaso
+#                             # WARNING: treat config.toml like a secret file when
+#                             # storing API keys. Prefer env vars for local smoke tests.
 #
 # Env-var overrides:
 #   DEEPSEEK_SEARCH_PROVIDER → search.provider
 #   DEEPSEEK_SEARCH_API_KEY  → search.api_key
+#   METASO_API_KEY           → metaso key fallback
+#   BAIDU_SEARCH_API_KEY     → baidu key fallback
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Network Policy (#135)
@@ -331,6 +411,11 @@ exec_policy = true
 # model = "gemini-3.1-flash-lite-preview"  # Required: vision-capable model ID
 # api_key = "YOUR_API_KEY"                 # Optional: defaults to main api_key
 # base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"  # Optional
+#
+# Xiaomi MiMo image understanding can be configured through the same tool:
+# model = "mimo-v2.5"
+# api_key = "YOUR_XIAOMI_MIMO_API_KEY"
+# base_url = "https://api.xiaomimimo.com/v1"
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Retry Configuration
@@ -470,7 +555,7 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 # max_workspace_gb = 2  # Snapshots self-disable on first init when the
 #                         # non-excluded workspace exceeds this size in GB
 #                         # (v0.8.32). Default 2 GB protects against running
-#                         # deepseek-tui in directories with hundreds of GB
+#                         # codewhale in directories with hundreds of GB
 #                         # of datasets / model weights / docker dumps where
 #                         # `git add -A` would hang the TUI for hours. Set
 #                         # to 0 to disable the cap (v0.8.31 behaviour);
@@ -494,7 +579,12 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 #   go         → gopls serve
 #   python     → pyright-langserver --stdio
 #   typescript → typescript-language-server --stdio
+#   java       → jdtls
+#   vue        → vue-language-server --stdio
 #   c, cpp     → clangd
+#
+# Java support uses Eclipse JDT LS via the `jdtls` command. IntelliJ IDEA is
+# not required, and installing IntelliJ IDEA alone does not install `jdtls`.
 #
 # Override the defaults via the `servers` table below.
 [lsp]
@@ -505,6 +595,8 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 # [lsp.servers]
 # rust = ["rust-analyzer"]
 # go = ["gopls", "serve"]
+# java = ["jdtls"]
+# vue = ["vue-language-server", "--stdio"]
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Hooks (optional)
@@ -530,7 +622,7 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 #
 # [[hooks.hooks]]
 # event = "session_start"
-# command = "echo 'DeepSeek TUI session started'"
+# command = "echo 'CodeWhale session started'"
 #
 # # Inject ephemeral creds into every shell call. Output one
 # # KEY=VALUE per line on stdout (export prefix optional).
@@ -561,6 +653,59 @@ default_text_model = "deepseek-ai/deepseek-v4-pro"
 #
 # [runtime_api]
 # cors_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+
+# ─────────────────────────────────────────────────────────────────────────────────
+# Tool Overrides & Plugins ([tools])
+# ─────────────────────────────────────────────────────────────────────────────────
+# The `[tools]` table lets you replace any built-in tool with a custom
+# implementation (script or command) or disable it entirely — without
+# forking or recompiling the binary.
+#
+# Plugin scripts dropped in the plugin directory are auto-discovered and
+# registered as model-visible tools alongside the built-in ones.
+#
+# Scripts receive the tool's JSON input on **stdin** and must return a
+# JSON `ToolResult` (`{"content": "...", "success": true}`) on **stdout**.
+#
+# [tools]
+# # Custom plugin directory (defaults to `~/.codewhale/tools/`)
+# plugin_dir = "~/.codewhale/tools"
+#
+# [tools.overrides]
+# # Disable a tool entirely — removes it from the model-visible catalog.
+# "code_execution" = { type = "disabled" }
+#
+# # Replace a tool with a script. Relative paths resolve against plugin_dir.
+# "exec_shell" = { type = "script", path = "audit-exec-shell.sh" }
+#
+# # Replace a tool with a command (binary on PATH or absolute path).
+# "read_file" = { type = "command", command = "bat", args = ["--paging=never"] }
+#
+# # Scripts can also accept static arguments before the JSON input:
+# "fetch_url" = { type = "script", path = "cached-fetch.sh", args = ["--ttl", "300"] }
+
+# ──────────── Enterprise example: audit-logging exec_shell wrapper ──────────────
+# Drop `audit-exec-shell.sh` in `~/.codewhale/tools/` and enable with:
+#
+# [tools.overrides]
+# "exec_shell" = { type = "script", path = "audit-exec-shell.sh" }
+#
+# The wrapper logs every request to `~/.codewhale/audit/exec_shell.log`, then
+# delegates to your own approved shell executor. Do not pipe the raw JSON
+# request into `sh -s`; parse the command field and enforce your policy first.
+#
+# ```sh
+# #!/usr/bin/env sh
+# # name: exec_shell
+# # description: Audit-logging wrapper for exec_shell
+# # approval: required
+# LOGDIR="${HOME}/.codewhale/audit"
+# mkdir -p "$LOGDIR"
+# LOGFILE="$LOGDIR/exec_shell.log"
+# input=$(cat)
+# echo "[$(date -Iseconds)] $input" >> "$LOGFILE"
+# printf '%s\n' '{"content":"audit wrapper placeholder: configure an executor","success":false}'
+# ```
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Requirements (admin constraints) example file

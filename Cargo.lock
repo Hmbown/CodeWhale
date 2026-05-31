@@ -802,6 +802,259 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e9b18233253483ce2f65329a24072ec414db782531bdbb7d0bbc4bd2ce6b7e21"
 
 [[package]]
+name = "codewhale-agent"
+version = "0.8.46"
+dependencies = [
+ "codewhale-config",
+ "serde",
+]
+
+[[package]]
+name = "codewhale-app-server"
+version = "0.8.46"
+dependencies = [
+ "anyhow",
+ "axum",
+ "clap",
+ "codewhale-agent",
+ "codewhale-config",
+ "codewhale-core",
+ "codewhale-execpolicy",
+ "codewhale-hooks",
+ "codewhale-mcp",
+ "codewhale-protocol",
+ "codewhale-state",
+ "codewhale-tools",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower",
+ "tower-http",
+ "uuid",
+]
+
+[[package]]
+name = "codewhale-cli"
+version = "0.8.46"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "clap_complete",
+ "codewhale-agent",
+ "codewhale-app-server",
+ "codewhale-config",
+ "codewhale-execpolicy",
+ "codewhale-mcp",
+ "codewhale-release",
+ "codewhale-secrets",
+ "codewhale-state",
+ "dirs",
+ "reqwest",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "codewhale-config"
+version = "0.8.46"
+dependencies = [
+ "anyhow",
+ "codewhale-secrets",
+ "dirs",
+ "serde",
+ "serde_json",
+ "toml 0.9.11+spec-1.1.0",
+ "tracing",
+]
+
+[[package]]
+name = "codewhale-core"
+version = "0.8.46"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "codewhale-agent",
+ "codewhale-config",
+ "codewhale-execpolicy",
+ "codewhale-hooks",
+ "codewhale-mcp",
+ "codewhale-protocol",
+ "codewhale-state",
+ "codewhale-tools",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "codewhale-execpolicy"
+version = "0.8.46"
+dependencies = [
+ "anyhow",
+ "codewhale-protocol",
+ "serde",
+]
+
+[[package]]
+name = "codewhale-hooks"
+version = "0.8.46"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "codewhale-protocol",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "codewhale-mcp"
+version = "0.8.46"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "codewhale-protocol"
+version = "0.8.46"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "codewhale-release"
+version = "0.8.46"
+dependencies = [
+ "anyhow",
+ "reqwest",
+ "semver",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "codewhale-secrets"
+version = "0.8.46"
+dependencies = [
+ "dirs",
+ "keyring",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.17",
+ "tracing",
+]
+
+[[package]]
+name = "codewhale-state"
+version = "0.8.46"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "dirs",
+ "rusqlite",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "codewhale-tools"
+version = "0.8.46"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "codewhale-protocol",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "codewhale-tui"
+version = "0.8.46"
+dependencies = [
+ "anyhow",
+ "arboard",
+ "async-stream",
+ "async-trait",
+ "axum",
+ "base64",
+ "chrono",
+ "clap",
+ "clap_complete",
+ "codewhale-config",
+ "codewhale-protocol",
+ "codewhale-release",
+ "codewhale-secrets",
+ "codewhale-tools",
+ "colored",
+ "crossterm 0.28.1",
+ "dirs",
+ "dotenvy",
+ "fd-lock",
+ "flate2",
+ "futures-util",
+ "ignore",
+ "image",
+ "libc",
+ "multimap",
+ "objc2",
+ "objc2-foundation",
+ "pdf-extract",
+ "portable-pty",
+ "pretty_assertions",
+ "qrcode",
+ "ratatui",
+ "regex",
+ "reqwest",
+ "rustyline 15.0.0",
+ "schemars",
+ "schemaui",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "shellexpand",
+ "shlex",
+ "similar",
+ "starlark",
+ "tar",
+ "tempfile",
+ "thiserror 2.0.17",
+ "tiny_http",
+ "tokio",
+ "tokio-util",
+ "toml 0.9.11+spec-1.1.0",
+ "tower-http",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "unicode-segmentation",
+ "unicode-width 0.2.0",
+ "uuid",
+ "vt100",
+ "wait-timeout",
+ "windows",
+ "wiremock",
+ "zeroize",
+]
+
+[[package]]
+name = "codewhale-tui-core"
+version = "0.8.46"
+
+[[package]]
 name = "colorchoice"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1157,238 +1410,6 @@ dependencies = [
  "serde",
  "serde_json",
 ]
-
-[[package]]
-name = "deepseek-agent"
-version = "0.8.40"
-dependencies = [
- "deepseek-config",
- "serde",
-]
-
-[[package]]
-name = "deepseek-app-server"
-version = "0.8.40"
-dependencies = [
- "anyhow",
- "axum",
- "clap",
- "deepseek-agent",
- "deepseek-config",
- "deepseek-core",
- "deepseek-execpolicy",
- "deepseek-hooks",
- "deepseek-mcp",
- "deepseek-protocol",
- "deepseek-state",
- "deepseek-tools",
- "serde",
- "serde_json",
- "tokio",
- "tower-http",
-]
-
-[[package]]
-name = "deepseek-config"
-version = "0.8.40"
-dependencies = [
- "anyhow",
- "deepseek-secrets",
- "dirs",
- "serde",
- "toml 0.9.11+spec-1.1.0",
- "tracing",
-]
-
-[[package]]
-name = "deepseek-core"
-version = "0.8.40"
-dependencies = [
- "anyhow",
- "chrono",
- "deepseek-agent",
- "deepseek-config",
- "deepseek-execpolicy",
- "deepseek-hooks",
- "deepseek-mcp",
- "deepseek-protocol",
- "deepseek-state",
- "deepseek-tools",
- "serde_json",
- "uuid",
-]
-
-[[package]]
-name = "deepseek-execpolicy"
-version = "0.8.40"
-dependencies = [
- "anyhow",
- "deepseek-protocol",
- "serde",
-]
-
-[[package]]
-name = "deepseek-hooks"
-version = "0.8.40"
-dependencies = [
- "anyhow",
- "async-trait",
- "chrono",
- "deepseek-protocol",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "deepseek-mcp"
-version = "0.8.40"
-dependencies = [
- "anyhow",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "deepseek-protocol"
-version = "0.8.40"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "deepseek-secrets"
-version = "0.8.40"
-dependencies = [
- "dirs",
- "keyring",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.17",
- "tracing",
-]
-
-[[package]]
-name = "deepseek-state"
-version = "0.8.40"
-dependencies = [
- "anyhow",
- "chrono",
- "dirs",
- "rusqlite",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "deepseek-tools"
-version = "0.8.40"
-dependencies = [
- "anyhow",
- "async-trait",
- "deepseek-protocol",
- "serde",
- "serde_json",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "deepseek-tui"
-version = "0.8.40"
-dependencies = [
- "anyhow",
- "arboard",
- "async-stream",
- "async-trait",
- "axum",
- "base64",
- "chrono",
- "clap",
- "clap_complete",
- "colored",
- "crossterm 0.28.1",
- "deepseek-secrets",
- "deepseek-tools",
- "dirs",
- "dotenvy",
- "fd-lock",
- "flate2",
- "futures-util",
- "ignore",
- "image",
- "libc",
- "multimap",
- "objc2",
- "objc2-foundation",
- "pdf-extract",
- "portable-pty",
- "pretty_assertions",
- "ratatui",
- "regex",
- "reqwest",
- "rustyline 15.0.0",
- "schemars",
- "schemaui",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "shellexpand",
- "shlex",
- "similar",
- "starlark",
- "tar",
- "tempfile",
- "thiserror 2.0.17",
- "tiny_http",
- "tokio",
- "tokio-util",
- "toml 0.9.11+spec-1.1.0",
- "tower-http",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "unicode-segmentation",
- "unicode-width 0.2.0",
- "uuid",
- "vt100",
- "wait-timeout",
- "windows",
- "wiremock",
- "zeroize",
-]
-
-[[package]]
-name = "deepseek-tui-cli"
-version = "0.8.40"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "clap_complete",
- "deepseek-agent",
- "deepseek-app-server",
- "deepseek-config",
- "deepseek-execpolicy",
- "deepseek-mcp",
- "deepseek-secrets",
- "deepseek-state",
- "dirs",
- "reqwest",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tempfile",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "deepseek-tui-core"
-version = "0.8.40"
 
 [[package]]
 name = "deltae"
@@ -2560,15 +2581,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ioctl-rs"
-version = "0.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7970510895cee30b3e9128319f2cefd4bde883a39f38baa279567ba3a7eb97d"
-dependencies = [
- "libc",
-]
-
-[[package]]
 name = "ipnet"
 version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3095,20 +3107,6 @@ dependencies = [
 
 [[package]]
 name = "nix"
-version = "0.25.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f346ff70e7dbfd675fe90590b92d59ef2de15a8779ae305ebcbfd3f0caf59be4"
-dependencies = [
- "autocfg",
- "bitflags 1.3.2",
- "cfg-if",
- "libc",
- "memoffset 0.6.5",
- "pin-utils",
-]
-
-[[package]]
-name = "nix"
 version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab2156c4fce2f8df6c499cc1c763e4394b7482525bf2a9701c9d79d215f519e4"
@@ -3619,9 +3617,9 @@ checksum = "f89776e4d69bb58bc6993e99ffa1d11f228b839984854c7daeb5d37f87cbe950"
 
 [[package]]
 name = "portable-pty"
-version = "0.8.1"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "806ee80c2a03dbe1a9fb9534f8d19e4c0546b790cde8fd1fea9d6390644cb0be"
+checksum = "b4a596a2b3d2752d94f51fac2d4a96737b8705dddd311a32b9af47211f08671e"
 dependencies = [
  "anyhow",
  "bitflags 1.3.2",
@@ -3630,8 +3628,8 @@ dependencies = [
  "lazy_static",
  "libc",
  "log",
- "nix 0.25.1",
- "serial",
+ "nix 0.28.0",
+ "serial2",
  "shared_library",
  "shell-words",
  "winapi",
@@ -3710,6 +3708,12 @@ checksum = "7186d3822593aa4393561d186d1393b3923e9d6163d3fbfd6e825e3e6cf3e6a8"
 dependencies = [
  "num-traits",
 ]
+
+[[package]]
+name = "qrcode"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
 
 [[package]]
 name = "quick-error"
@@ -4089,6 +4093,7 @@ dependencies = [
  "rustls-platform-verifier",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
@@ -4577,45 +4582,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "serial"
-version = "0.4.0"
+name = "serial2"
+version = "0.2.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1237a96570fc377c13baa1b88c7589ab66edced652e43ffb17088f003db3e86"
+checksum = "9eb6ea5562eeaed6936b8b54e086aa0f88b9e5b1bef45beb038e2519fa1185b1"
 dependencies = [
- "serial-core",
- "serial-unix",
- "serial-windows",
-]
-
-[[package]]
-name = "serial-core"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f46209b345401737ae2125fe5b19a77acce90cd53e1658cda928e4fe9a64581"
-dependencies = [
+ "cfg-if",
  "libc",
-]
-
-[[package]]
-name = "serial-unix"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f03fbca4c9d866e24a459cbca71283f545a37f8e3e002ad8c70593871453cab7"
-dependencies = [
- "ioctl-rs",
- "libc",
- "serial-core",
- "termios 0.2.2",
-]
-
-[[package]]
-name = "serial-windows"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "15c6d3b776267a75d31bbdfd5d36c0ca051251caafc285827052bc53bcdc8162"
-dependencies = [
- "libc",
- "serial-core",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4959,9 +4933,9 @@ dependencies = [
 
 [[package]]
 name = "tar"
-version = "0.4.45"
+version = "0.4.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22692a6476a21fa75fdfc11d452fda482af402c008cdbaf3476414e122040973"
+checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
 dependencies = [
  "filetime",
  "libc",
@@ -5006,15 +4980,6 @@ dependencies = [
 
 [[package]]
 name = "termios"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d5d9cf598a6d7ce700a4e6a9199da127e6819a61e64b68609683cc9a01b5683a"
-dependencies = [
- "libc",
-]
-
-[[package]]
-name = "termios"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "411c5bf740737c7918b8b1fe232dca4dc9f8e754b8ad5e20966814001ed0ac6b"
@@ -5051,7 +5016,7 @@ dependencies = [
  "signal-hook",
  "siphasher",
  "terminfo",
- "termios 0.3.3",
+ "termios",
  "thiserror 1.0.69",
  "ucd-trie",
  "unicode-segmentation",

@@ -1032,7 +1032,13 @@ fn read_workspace_anchors(workspace: Option<&Path>) -> Vec<String> {
         return Vec::new();
     };
 
-    let anchors_path = ws.join(".deepseek").join("anchors.md");
+    // Prefer .codewhale, fall back to .deepseek
+    let primary = ws.join(".codewhale").join("anchors.md");
+    let anchors_path = if primary.exists() {
+        primary
+    } else {
+        ws.join(".deepseek").join("anchors.md")
+    };
     let Ok(content) = std::fs::read_to_string(anchors_path) else {
         return Vec::new();
     };
@@ -1179,7 +1185,7 @@ async fn create_summary(
     // adding UI surface. The event is emitted with
     // `target = "compaction"`, so the filter is
     // `RUST_LOG=compaction=debug` (the module-path form
-    // `deepseek_tui::compaction=debug` does NOT match — `EnvFilter`
+    // `codewhale_tui::compaction=debug` does NOT match — `EnvFilter`
     // matches the explicit target string when one is set).
     log_summary_cache_telemetry(telemetry_cache_aligned, &response.usage);
 
@@ -1373,7 +1379,7 @@ fn build_formatted_summary_request(
                 }
                 ContentBlock::ToolResult { content, .. } => {
                     let snippet = truncate_chars(content, limits.tool_result_snippet_chars);
-                    let _ = write!(conversation_text, "Tool result: {}\n\n", snippet);
+                    let _ = write!(conversation_text, "Tool result: {snippet}\n\n");
                 }
                 ContentBlock::Thinking { .. } => {
                     // Skip thinking blocks in summary
@@ -1465,9 +1471,9 @@ fn extract_workflow_context(messages: &[Message], workspace: Option<&Path>) -> S
                     .strip_prefix(ws)
                     .unwrap_or(Path::new(file))
                     .display();
-                context.push_str(&format!("- `{}`\n", relative));
+                context.push_str(&format!("- `{relative}`\n"));
             } else {
-                context.push_str(&format!("- `{}`\n", file));
+                context.push_str(&format!("- `{file}`\n"));
             }
         }
         context.push('\n');
@@ -1482,7 +1488,7 @@ fn extract_workflow_context(messages: &[Message], workspace: Option<&Path>) -> S
     if !tasks_identified.is_empty() {
         context.push_str("**Tasks/TODOs Identified:**\n");
         for task in &tasks_identified {
-            context.push_str(&format!("- {}\n", task));
+            context.push_str(&format!("- {task}\n"));
         }
         context.push('\n');
     }

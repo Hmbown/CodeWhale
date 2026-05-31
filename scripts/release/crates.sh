@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 
-# Crates published for each DeepSeek TUI release, in dependency order.
+# Crates published for each codewhale release, in dependency order.
 release_crates=(
-  deepseek-secrets
-  deepseek-config
-  deepseek-protocol
-  deepseek-state
-  deepseek-agent
-  deepseek-execpolicy
-  deepseek-hooks
-  deepseek-mcp
-  deepseek-tools
-  deepseek-core
-  deepseek-app-server
-  deepseek-tui-core
-  deepseek-tui-cli
-  deepseek-tui
+  codewhale-secrets
+  codewhale-config
+  codewhale-protocol
+  codewhale-state
+  codewhale-agent
+  codewhale-execpolicy
+  codewhale-hooks
+  codewhale-mcp
+  codewhale-tools
+  codewhale-core
+  codewhale-app-server
+  codewhale-tui-core
+  codewhale-cli
+  codewhale-tui
 )

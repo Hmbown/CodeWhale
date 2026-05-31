@@ -62,7 +62,12 @@ fn release_resident_leases_for(agent_id: &str) {
     }
 }
 
-const DEFAULT_MAX_STEPS: u32 = 100;
+/// Default maximum steps for sub-agent loops. Set to `u32::MAX` to remove the
+/// arbitrary fixed cap (#2034). Sub-agents run until they produce a final text
+/// response (no tool calls), are cancelled by the parent, or hit a configured
+/// explicit budget. Callers that want a hard bound can override `max_steps` on
+/// the `SubAgentManager`.
+const DEFAULT_MAX_STEPS: u32 = u32::MAX;
 const TOOL_TIMEOUT: Duration = Duration::from_secs(30);
 /// Per-step LLM API call timeout. Each `create_message` request must complete
 /// within this window or the step is treated as timed out. Prevents a single
@@ -86,10 +91,17 @@ const SUBAGENT_RESTART_REASON: &str = "Interrupted by process restart";
 
 const VALID_SUBAGENT_TYPES: &str = "general, explore, plan, review, implementer, verifier, tool_agent, custom, \
      worker, explorer, awaiter, default, implement, builder, verify, validator, tester, tool-agent, executor, fin";
-/// Whale species names rotated through `whale_nickname_for_index` to label
-/// sub-agents in the UI. English and Simplified-Chinese names are interleaved
-/// so any newly spawned agent has a roughly even chance of either — the goal
-/// is friendly variety, not a strict locale match.
+/// Whale species used as friendly names for sub-agents in the UI. The full
+/// Cetacea infraorder — baleen whales (Mysticeti), toothed whales
+/// (Odontoceti), plus select dolphin species (family Delphinidae) that
+/// don't conflate with existing agent type labels. Porpoises (Phocoenidae)
+/// are excluded because their name doesn't carry well as a friendly label.
+///
+/// English and Simplified-Chinese names are interleaved so any newly spawned
+/// agent has a roughly even chance of either — the goal is friendly variety,
+/// not a strict locale match.
+///
+/// Taxonomy source: Society for Marine Mammalogy (2025).
 pub const WHALE_NICKNAMES: &[&str] = &[
     "Blue",
     "蓝鲸",
@@ -107,6 +119,14 @@ pub const WHALE_NICKNAMES: &[&str] = &[
     "小须鲸",
     "Antarctic Minke",
     "南极小须鲸",
+    "Pygmy Right",
+    "小露脊鲸",
+    "Omura's",
+    "大村鲸",
+    "Eden's",
+    "艾氏鲸",
+    "Rice's",
+    "赖斯鲸",
     "Gray",
     "灰鲸",
     "Bowhead",
@@ -139,7 +159,98 @@ pub const WHALE_NICKNAMES: &[&str] = &[
     "贝氏喙鲸",
     "Blainville's Beaked",
     "柏氏喙鲸",
+    "Ginkgo-toothed Beaked",
+    "银杏齿喙鲸",
+    "Strap-toothed",
+    "带齿喙鲸",
+    "Stejneger's Beaked",
+    "斯氏喙鲸",
+    "Dwarf Sperm",
+    "小抹香鲸",
+    "Pygmy Sperm",
+    "侏儒抹香鲸",
+    "Rough-toothed",
+    "糙齿海豚",
+    "Atlantic Spotted",
+    "大西洋斑海豚",
+    "Pantropical Spotted",
+    "热带斑海豚",
+    "Spinner",
+    "长吻飞旋海豚",
+    "Clymene",
+    "短吻飞旋海豚",
+    "Striped",
+    "条纹海豚",
+    "Common Bottlenose",
+    "宽吻海豚",
+    "Indo-Pacific Bottlenose",
+    "印太瓶鼻海豚",
+    "Risso's",
+    "灰海豚",
+    "Commerson's",
+    "花斑海豚",
+    "Chilean",
+    "智利海豚",
+    "Heaviside's",
+    "海氏矮海豚",
+    "Hector's",
+    "赫氏矮海豚",
+    "Amazon River",
+    "亚马逊河豚",
+    "Ganges River",
+    "恒河豚",
+    "Indus River",
+    "印度河豚",
+    "La Plata",
+    "拉普拉塔河豚",
+    "Franciscana",
+    "拉河豚",
 ];
+
+/// Return a deterministic whale name for a given agent ID using a hash of
+/// the ID string. The same ID always gets the same name — stable across
+/// session restarts for persisted agents.
+#[must_use]
+pub fn whale_name_for_id(id: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    id.hash(&mut hasher);
+    let idx = (hasher.finish() as usize) % WHALE_NICKNAMES.len();
+    WHALE_NICKNAMES[idx].to_string()
+}
+
+/// Assign a unique whale name for an agent ID, avoiding collisions with
+/// names already in `active_names`. If the deterministic name is taken,
+/// appends a numeric suffix (e.g. "Orca (2)").
+#[must_use]
+pub fn assign_unique_whale_name(
+    id: &str,
+    active_names: &std::collections::HashSet<String>,
+) -> String {
+    let base = whale_name_for_id(id);
+    if !active_names.contains(&base) {
+        return base;
+    }
+    // Deterministic suffix from the same hash to keep it stable
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    id.hash(&mut hasher);
+    let suffix_seed = hasher.finish();
+    for i in 2.. {
+        let candidate = format!("{base} ({i})");
+        if !active_names.contains(&candidate) {
+            return candidate;
+        }
+        // Vary the probe using the seed
+        let probe = (suffix_seed.wrapping_add(i as u64)) % 100;
+        let candidate2 = format!("{base} ({probe})");
+        if !active_names.contains(&candidate2) {
+            return candidate2;
+        }
+    }
+    // Fallback (should never reach here)
+    format!("{base} ({})", id.get(..4).unwrap_or("?"))
+}
 
 /// Removal version for deprecated tool aliases.
 const DEPRECATION_REMOVAL_VERSION: &str = "0.8.0";
@@ -607,7 +718,7 @@ pub const DEFAULT_MAX_SPAWN_DEPTH: u32 = 3;
 
 /// Terminal-state notification emitted to the engine's parent turn loop
 /// when one of its direct children finishes (issue #756). Carries the
-/// already-rendered `<deepseek:subagent.done>` sentinel that the model
+/// already-rendered `<codewhale:subagent.done>` sentinel that the model
 /// expects in the transcript per `prompts/base.md`.
 #[derive(Debug, Clone)]
 pub struct SubAgentCompletion {
@@ -675,6 +786,8 @@ pub struct SubAgentRuntime {
     pub parent_completion_tx: Option<mpsc::UnboundedSender<SubAgentCompletion>>,
     /// Snapshot of the request prefix visible to an opt-in forked child.
     pub fork_context: Option<SubAgentForkContext>,
+    /// The parent's MCP pool if available.
+    pub mcp_pool: Option<std::sync::Arc<tokio::sync::Mutex<crate::mcp::McpPool>>>,
     /// Per-step DeepSeek API timeout for the child's `create_message` call.
     /// Resolved from `[subagents] api_timeout_secs` (clamped to 1..=1800) at
     /// engine construction so a slow but legitimate model turn does not
@@ -714,8 +827,19 @@ impl SubAgentRuntime {
             mailbox: None,
             parent_completion_tx: None,
             fork_context: None,
+            mcp_pool: None,
             step_api_timeout: DEFAULT_STEP_API_TIMEOUT,
         }
+    }
+
+    /// Attach an MCP pool so the subagent can execute MCP tools.
+    #[must_use]
+    pub fn with_mcp_pool(
+        mut self,
+        pool: Option<std::sync::Arc<tokio::sync::Mutex<crate::mcp::McpPool>>>,
+    ) -> Self {
+        self.mcp_pool = pool;
+        self
     }
 
     /// Override the per-step DeepSeek API timeout (default
@@ -848,6 +972,7 @@ impl SubAgentRuntime {
             mailbox: self.mailbox.clone(),
             parent_completion_tx: self.parent_completion_tx.clone(),
             fork_context: self.fork_context.clone(),
+            mcp_pool: self.mcp_pool.clone(),
             step_api_timeout: self.step_api_timeout,
         }
     }
@@ -886,9 +1011,11 @@ pub struct SubAgent {
 }
 
 impl SubAgent {
-    /// Create a new sub-agent.
+    /// Create a new sub-agent. The `id` is generated by the caller so that
+    /// deterministic whale-naming can hash the ID before construction.
     #[allow(clippy::too_many_arguments)]
     fn new(
+        id: String,
         agent_type: SubAgentType,
         prompt: String,
         assignment: SubAgentAssignment,
@@ -898,7 +1025,6 @@ impl SubAgent {
         input_tx: mpsc::UnboundedSender<SubAgentInput>,
         session_boot_id: String,
     ) -> Self {
-        let id = format!("agent_{}", &Uuid::new_v4().to_string()[..8]);
         let session_name = id.clone();
 
         Self {
@@ -1199,12 +1325,19 @@ impl SubAgentManager {
             runtime.model = model.to_string();
         }
         let effective_model = runtime.model.clone();
+        let agent_id = format!("agent_{}", &Uuid::new_v4().to_string()[..8]);
+        let active_names: std::collections::HashSet<String> = self
+            .agents
+            .values()
+            .filter_map(|a| a.nickname.clone())
+            .collect();
         let nickname = options
             .nickname
-            .or_else(|| Some(whale_nickname_for_index(self.agents.len())));
+            .or_else(|| Some(assign_unique_whale_name(&agent_id, &active_names)));
         let tools = build_allowed_tools(&agent_type, allowed_tools, runtime.allow_shell)?;
         let (input_tx, input_rx) = mpsc::unbounded_channel();
         let mut agent = SubAgent::new(
+            agent_id.clone(),
             agent_type.clone(),
             prompt.clone(),
             assignment.clone(),
@@ -1726,6 +1859,11 @@ async fn subagent_session_projection(
 }
 
 fn default_state_path(workspace: &Path) -> PathBuf {
+    // Prefer .codewhale, fall back to .deepseek for project-local state
+    let primary = workspace.join(".codewhale").join("state");
+    if primary.exists() {
+        return primary.join(SUBAGENT_STATE_FILE);
+    }
     workspace
         .join(".deepseek")
         .join("state")
@@ -2421,11 +2559,35 @@ impl ToolSpec for AgentEvalTool {
                 .map_err(|e| ToolError::execution_failed(e.to_string()))?
         };
 
+        // Track whether a supplied follow-up message actually reached the
+        // child. A completed/failed/cancelled session cannot accept input, but
+        // that must NOT abort the whole call: the parent still needs the
+        // session projection (and its `transcript_handle`) to retrieve the
+        // child's full output. Hard-failing here was #1738 — "agent_eval on a
+        // completed session returns 'not running', no way to recover the full
+        // child output".
+        let mut message_delivery: Option<Value> = None;
         if let Some(message) = message {
-            let mut manager = self.manager.write().await;
-            manager
-                .send_input(&agent_id, message, interrupt)
-                .map_err(|e| ToolError::execution_failed(e.to_string()))?;
+            let terminal = {
+                let manager = self.manager.read().await;
+                manager
+                    .get_result(&agent_id)
+                    .map(|snap| snap.status != SubAgentStatus::Running)
+                    .unwrap_or(false)
+            };
+            if terminal {
+                message_delivery = Some(json!({
+                    "delivered": false,
+                    "reason": "session already terminated; follow-up not delivered",
+                    "recover_full_output": "read the returned transcript_handle with handle_read"
+                }));
+            } else {
+                let mut manager = self.manager.write().await;
+                manager
+                    .send_input(&agent_id, message, interrupt)
+                    .map_err(|e| ToolError::execution_failed(e.to_string()))?;
+                message_delivery = Some(json!({ "delivered": true }));
+            }
         }
 
         let (snapshot, timed_out) = if block {
@@ -2448,7 +2610,8 @@ impl ToolSpec for AgentEvalTool {
             "timed_out": timed_out,
             "terminal": projection.terminal,
             "context_mode": projection.context_mode,
-            "timeout_ms": timeout_ms
+            "timeout_ms": timeout_ms,
+            "message_delivery": message_delivery
         }));
         Ok(result)
     }
@@ -3308,12 +3471,12 @@ fn build_initial_subagent_messages(
             .filter(|state| !state.is_empty())
         {
             messages.push(system_text_message(format!(
-                "<deepseek:fork_state>\n{state}\n</deepseek:fork_state>"
+                "<codewhale:fork_state>\n{state}\n</codewhale:fork_state>"
             )));
         }
 
         messages.push(system_text_message(format!(
-            "<deepseek:subagent_context>\n{}\n</deepseek:subagent_context>",
+            "<codewhale:subagent_context>\n{}\n</codewhale:subagent_context>",
             build_subagent_system_prompt(agent_type, assignment)
         )));
     }
@@ -3371,17 +3534,11 @@ async fn run_subagent_task(task: SubAgentTask) {
     )
     .await;
 
-    let mut manager = task.manager_handle.write().await;
-    match &result {
-        Ok(res) => manager.update_from_result(&task.agent_id, res.clone()),
-        Err(err) => manager.update_failed(&task.agent_id, err.to_string()),
-    }
-
     // Emit BOTH a human-friendly summary (rendered in the parent's
     // sidebar / cell) AND a structured sentinel the model can recognize
     // on its next turn. Format: human summary on the first line,
     // sentinel on the second. The sentinel uses an opaque tag
-    // (`deepseek:subagent.done`) to avoid collision with normal user
+    // (`codewhale:subagent.done`) to avoid collision with normal user
     // text.
     let (summary, sentinel) = match &result {
         Ok(res) => (
@@ -3409,16 +3566,24 @@ async fn run_subagent_task(task: SubAgentTask) {
     }
 
     let payload = format!("{summary}\n{sentinel}");
+    let agent_id = task.agent_id.clone();
 
     // Wake the engine's parent turn loop if this is one of its direct
-    // children (issue #756). Gating by `spawn_depth == 1` means the parent
-    // only sees completions for agents it directly orchestrated, not for
-    // grandchildren spawned recursively inside its children.
-    emit_parent_completion(&task.runtime, &task.agent_id, &payload);
+    // children (issue #756). Issue #1961 also requires emit to happen
+    // before marking the manager terminal state so the parent can observe the
+    // completion while its "running children" gate is still open. If we
+    // update first, the parent can finalize before the completion arrives.
+    emit_parent_completion(&task.runtime, &agent_id, &payload);
+
+    let mut manager = task.manager_handle.write().await;
+    match &result {
+        Ok(res) => manager.update_from_result(&agent_id, res.clone()),
+        Err(err) => manager.update_failed(&agent_id, err.to_string()),
+    }
 
     if let Some(event_tx) = task.runtime.event_tx {
         let _ = event_tx.try_send(Event::AgentComplete {
-            id: task.agent_id,
+            id: agent_id.clone(),
             result: payload,
         });
     }
@@ -3448,7 +3613,7 @@ pub(crate) fn emit_parent_completion(
     true
 }
 
-/// Build a `<deepseek:subagent.done>` JSON sentinel for a successful child.
+/// Build a `<codewhale:subagent.done>` JSON sentinel for a successful child.
 /// Intended to surface in the parent's transcript so the model recognizes
 /// child completion and can decide whether to read the full result via
 /// `agent_eval`.
@@ -3465,10 +3630,10 @@ fn subagent_done_sentinel(agent_id: &str, res: &SubAgentResult) -> String {
         "summary_location": "previous_line",
         "details": "agent_eval",
     });
-    format!("<deepseek:subagent.done>{payload}</deepseek:subagent.done>")
+    format!("<codewhale:subagent.done>{payload}</codewhale:subagent.done>")
 }
 
-/// Build a `<deepseek:subagent.done>` sentinel for a failed child.
+/// Build a `<codewhale:subagent.done>` sentinel for a failed child.
 fn subagent_failed_sentinel(agent_id: &str, _err: &str) -> String {
     let payload = json!({
         "agent_id": agent_id,
@@ -3476,7 +3641,7 @@ fn subagent_failed_sentinel(agent_id: &str, _err: &str) -> String {
         "error_location": "previous_line",
         "details": "agent_eval",
     });
-    format!("<deepseek:subagent.done>{payload}</deepseek:subagent.done>")
+    format!("<codewhale:subagent.done>{payload}</codewhale:subagent.done>")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4412,7 +4577,7 @@ async fn subagent_flash_router(
 }
 
 const SUBAGENT_ROUTER_SYSTEM_PROMPT: &str = "\
-You are the DeepSeek TUI sub-agent routing manager. Return only compact JSON: \
+You are the codewhale sub-agent routing manager. Return only compact JSON: \
 {\"model\":\"deepseek-v4-flash|deepseek-v4-pro\",\"thinking\":\"off|high|max\"}. \
 Treat each child assignment like a customer request entering a team queue: decide the least \
 sufficient worker and thinking budget for that assignment. Do not treat being a sub-agent as \
@@ -4611,17 +4776,21 @@ impl SubAgentToolRegistry {
         // review, RLM, sub-agent management (so grandchildren can spawn),
         // plus per-child fresh todo/plan state.
         let context = runtime.context.clone();
-        let registry = ToolRegistryBuilder::new()
-            .with_full_agent_surface(
-                Some(runtime.client.clone()),
-                runtime.model.clone(),
-                runtime.manager.clone(),
-                runtime.clone(),
-                runtime.allow_shell,
-                todo_list,
-                plan_state,
-            )
-            .build(context);
+        let mut registry = ToolRegistryBuilder::new().with_full_agent_surface(
+            Some(runtime.client.clone()),
+            runtime.model.clone(),
+            runtime.manager.clone(),
+            runtime.clone(),
+            runtime.allow_shell,
+            todo_list,
+            plan_state,
+        );
+
+        if let Some(pool) = runtime.mcp_pool.as_ref() {
+            registry = registry.with_mcp_tools(std::sync::Arc::clone(pool));
+        }
+
+        let registry = registry.build(context);
 
         Self {
             allowed_tools: explicit_allowed_tools,
@@ -4837,7 +5006,9 @@ const SUBAGENT_OUTPUT_FORMAT: &str = include_str!("../../prompts/subagent_output
 const GENERAL_AGENT_INTRO: &str = concat!(
     "You are a general-purpose sub-agent spawned to handle a specific task autonomously.\n",
     "Stay inside the assigned scope; put adjacent work under RISKS/BLOCKERS.\n",
-    "Plan multi-step work with `checklist_write`; add `update_plan` for complex strategy.\n\n"
+    "Plan multi-step work with `checklist_write`; add `update_plan` for complex strategy.\n",
+    "**Stop quickly on failure**: if the same tool call fails 2 times in a row, stop retrying and return what you have so far with a one-line note explaining what's missing. Do not loop on impossible queries (e.g. external API unreachable, rate-limited, or returning empty).\n",
+    "**Bounded effort**: prefer one focused attempt over many speculative retries. If you cannot complete the task with available data within 3-5 tool calls, return your current partial findings — the parent agent can compensate with its own knowledge.\n\n"
 );
 
 const EXPLORE_AGENT_INTRO: &str = concat!(

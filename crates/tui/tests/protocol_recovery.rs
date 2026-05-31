@@ -48,7 +48,7 @@ fn any_engine_source_contains(needle: &str) -> bool {
 
 const EXPECTED_START_MARKERS: &[&str] = &[
     "[TOOL_CALL]",
-    "<deepseek:tool_call",
+    "<codewhale:tool_call",
     "<tool_call",
     "<invoke ",
     "<function_calls>",
@@ -56,7 +56,7 @@ const EXPECTED_START_MARKERS: &[&str] = &[
 
 const EXPECTED_END_MARKERS: &[&str] = &[
     "[/TOOL_CALL]",
-    "</deepseek:tool_call>",
+    "</codewhale:tool_call>",
     "</tool_call>",
     "</invoke>",
     "</function_calls>",

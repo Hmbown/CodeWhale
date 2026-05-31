@@ -1,5 +1,5 @@
 [package]
-name = "deepseek-state"
+name = "codewhale-state"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

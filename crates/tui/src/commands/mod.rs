@@ -5,6 +5,7 @@
 
 mod anchor;
 mod attachment;
+mod balance;
 mod change;
 mod config;
 mod core;
@@ -30,7 +31,7 @@ mod skills;
 mod stash;
 mod status;
 mod task;
-mod user_commands;
+pub mod user_commands;
 
 use std::fmt::Write as _;
 
@@ -298,6 +299,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         description_id: MessageId::CmdForkDescription,
     },
     CommandInfo {
+        name: "new",
+        aliases: &[],
+        usage: "/new [--force]",
+        description_id: MessageId::CmdNewDescription,
+    },
+    CommandInfo {
         name: "sessions",
         aliases: &["resume"],
         usage: "/sessions [show|prune <days>]",
@@ -314,6 +321,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         aliases: &["yasuo"],
         usage: "/compact",
         description_id: MessageId::CmdCompactDescription,
+    },
+    CommandInfo {
+        name: "purge",
+        aliases: &["qingchu"],
+        usage: "/purge",
+        description_id: MessageId::CmdPurgeDescription,
     },
     CommandInfo {
         name: "relay",
@@ -456,9 +469,9 @@ pub const COMMANDS: &[CommandInfo] = &[
         description_id: MessageId::CmdShareDescription,
     },
     CommandInfo {
-        name: "goal",
-        aliases: &["mubiao"],
-        usage: "/goal [objective] [budget: N]",
+        name: "hunt",
+        aliases: &["goal", "mubiao", "狩猎"],
+        usage: "/hunt [quarry] [budget: N]",
         description_id: MessageId::CmdGoalDescription,
     },
     CommandInfo {
@@ -518,6 +531,13 @@ pub const COMMANDS: &[CommandInfo] = &[
         usage: "/cost",
         description_id: MessageId::CmdCostDescription,
     },
+    // Balance query (#2019)
+    CommandInfo {
+        name: "balance",
+        aliases: &[],
+        usage: "/balance",
+        description_id: MessageId::CmdBalanceDescription,
+    },
     // Profile switching (#390)
     CommandInfo {
         name: "profile",
@@ -529,8 +549,15 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo {
         name: "cache",
         aliases: &[],
-        usage: "/cache [count|inspect|warmup]",
+        usage: "/cache [count|inspect|stats|warmup]",
         description_id: MessageId::CmdCacheDescription,
+    },
+    // Slop Ledger (#2127)
+    CommandInfo {
+        name: "slop",
+        aliases: &["canzha"],
+        usage: "/slop [query|export]",
+        description_id: MessageId::CmdSlopDescription,
     },
 ];
 
@@ -577,10 +604,12 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "rename" | "gaiming" | "chongmingming" => rename::rename(app, arg),
         "save" => session::save(app, arg),
         "fork" | "branch" => session::fork(app),
+        "new" => session::new_session(app, arg),
         "sessions" | "resume" => session::sessions(app, arg),
         "relay" | "batonpass" | "接力" => relay(app, arg),
         "load" | "jiazai" => session::load(app, arg),
         "compact" | "yasuo" => session::compact(app),
+        "purge" | "qingchu" => session::purge(app),
         "cycles" | "zhouqi" => cycle::list_cycles(app),
         "cycle" => cycle::show_cycle(app, arg),
         "recall" => cycle::recall_archive(app, arg),
@@ -603,7 +632,11 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "translate" | "translation" | "transale" => core::translate(app),
         "tokens" => debug::tokens(app),
         "cost" => debug::cost(app),
+        "balance" => balance::balance(app),
         "cache" => debug::cache(app, arg),
+
+        // Slop ledger (#2127)
+        "slop" | "canzha" => config::slop(app, arg),
 
         // ChangeLog command
         "change" => change::change(app, arg),
@@ -632,7 +665,7 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "init" => init::init(app),
         "lsp" => config::lsp_command(app, arg),
         "share" => share::share(app, arg),
-        "goal" | "mubiao" => goal::goal(app, arg),
+        "goal" | "hunt" | "mubiao" | "狩猎" => goal::hunt(app, arg),
 
         // Skills commands
         "skills" | "jinengliebiao" => skills::list_skills(app, arg),
@@ -693,8 +726,12 @@ pub fn persist_status_items(
 }
 
 /// Persist a root-level string key in `config.toml`.
-pub fn persist_root_string_key(key: &str, value: &str) -> anyhow::Result<std::path::PathBuf> {
-    config::persist_root_string_key(key, value)
+pub fn persist_root_string_key(
+    config_path: Option<&std::path::Path>,
+    key: &str,
+    value: &str,
+) -> anyhow::Result<std::path::PathBuf> {
+    config::persist_root_string_key(config_path, key, value)
 }
 
 pub fn switch_mode(app: &mut App, mode: crate::tui::app::AppMode) -> String {
@@ -736,7 +773,7 @@ pub fn rlm(app: &mut App, arg: Option<&str>) -> CommandResult {
     let source_arg = if resolves_to_existing_file(app, &target) {
         format!(r#"file_path: "{target}""#)
     } else {
-        format!("content: {:?}", target)
+        format!("content: {target:?}")
     };
     let message = format!(
         "Open and use a persistent RLM session for this request. Call `rlm_open` with name `slash_rlm` and {source_arg}. Then call `rlm_configure` with `sub_rlm_max_depth: {max_depth}`. Use `rlm_eval` to inspect the context through `peek`, `search`, and `chunk`, and call `finalize(...)` from the REPL when ready. If a `var_handle` is returned, use `handle_read` for bounded slices or projections before answering."
@@ -764,8 +801,7 @@ pub fn agent(_app: &mut App, arg: Option<&str>) -> CommandResult {
         }
     };
     let message = format!(
-        "Open a persistent sub-agent session for this task. Call `agent_open` with name `slash_agent`, `prompt: {:?}`, and `max_depth: {max_depth}`. Use `agent_eval` to wait for the next terminal/current projection and `handle_read` on the returned transcript_handle if you need more detail. Verify any claimed side effects before reporting success.",
-        task
+        "Open a persistent sub-agent session for this task. Call `agent_open` with name `slash_agent`, `prompt: {task:?}`, and `max_depth: {max_depth}`. Use `agent_eval` to wait for the next terminal/current projection and `handle_read` on the returned transcript_handle if you need more detail. Verify any claimed side effects before reporting success."
     );
     CommandResult::with_message_and_action(
         format!("Opening persistent sub-agent at depth {max_depth}..."),
@@ -791,7 +827,7 @@ fn build_relay_instruction(app: &App, focus: Option<&str>) -> String {
     let mut out = String::new();
     let _ = writeln!(
         out,
-        "Create a compact session relay (接力) for a future DeepSeek TUI thread."
+        "Create a compact session relay (接力) for a future CodeWhale thread."
     );
     let _ = writeln!(out);
     let _ = writeln!(out, "Write or update `.deepseek/handoff.md`.");
@@ -807,11 +843,11 @@ fn build_relay_instruction(app: &App, focus: Option<&str>) -> String {
     if let Some(focus) = focus {
         let _ = writeln!(out, "- Requested relay focus: {focus}");
     }
-    if let Some(goal) = app.goal.goal_objective.as_deref() {
-        let _ = writeln!(out, "- Goal: {goal}");
+    if let Some(quarry) = app.hunt.quarry.as_deref() {
+        let _ = writeln!(out, "- Hunt quarry: {quarry}");
     }
-    if let Some(budget) = app.goal.goal_token_budget {
-        let _ = writeln!(out, "- Goal token budget: {budget}");
+    if let Some(budget) = app.hunt.token_budget {
+        let _ = writeln!(out, "- Hunt token budget: {budget}");
     }
     if app.cycle_count > 0 {
         let _ = writeln!(out, "- Cycle count: {}", app.cycle_count);
@@ -947,6 +983,7 @@ pub fn get_command_info(name: &str) -> Option<&'static CommandInfo> {
 ///
 /// `workspace` is used to also scan workspace-local command directories;
 /// pass `None` when no workspace context is available.
+#[allow(dead_code)]
 pub fn all_command_names_matching(
     prefix: &str,
     workspace: Option<&std::path::Path>,
@@ -1064,7 +1101,7 @@ fn suggest_command_names(input: &str, limit: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
+    use crate::config::{ApiProvider, Config};
     use crate::tools::plan::{PlanItemArg, StepStatus, UpdatePlanArgs};
     use crate::tools::todo::TodoStatus;
     use crate::tui::app::{App, AppAction, TuiOptions};
@@ -1145,8 +1182,8 @@ mod tests {
     #[test]
     fn relay_slash_command_routes_to_session_relay_instruction() {
         let mut app = create_test_app();
-        app.goal.goal_objective = Some("Unify the work surface".to_string());
-        app.goal.goal_token_budget = Some(12_000);
+        app.hunt.quarry = Some("Unify the work surface".to_string());
+        app.hunt.token_budget = Some(12_000);
         app.cycle_count = 2;
         {
             let mut todos = app.todos.try_lock().expect("todo lock");
@@ -1181,8 +1218,8 @@ mod tests {
         assert!(message.contains("Write or update `.deepseek/handoff.md`"));
         assert!(message.contains("# Session relay"));
         assert!(message.contains("Requested relay focus: verify install"));
-        assert!(message.contains("Goal: Unify the work surface"));
-        assert!(message.contains("Goal token budget: 12000"));
+        assert!(message.contains("Hunt quarry: Unify the work surface"));
+        assert!(message.contains("Hunt token budget: 12000"));
         assert!(message.contains("Cycle count: 2"));
         assert!(message.contains("Work checklist (primary progress surface, 50% complete)"));
         assert!(message.contains("#1 [completed] inspect workspace"));
@@ -1227,8 +1264,7 @@ mod tests {
             for alias in command.aliases {
                 assert!(
                     !names.contains(alias),
-                    "alias /{} collides with a command name",
-                    alias
+                    "alias /{alias} collides with a command name"
                 );
                 assert!(aliases.insert(*alias), "duplicate command alias /{alias}");
             }
@@ -1485,6 +1521,48 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn balance_command_has_own_help_text() {
+        let info = get_command_info("balance").expect("balance command should be registered");
+        assert_eq!(info.description_id, MessageId::CmdBalanceDescription);
+        assert!(
+            info.description_for(Locale::En)
+                .contains("provider account balance")
+        );
+    }
+
+    #[test]
+    fn balance_command_reports_scaffold_without_claiming_dispatch() {
+        let mut app = create_test_app();
+        app.api_provider = ApiProvider::Deepseek;
+
+        let result = execute("/balance", &mut app);
+        let msg = result
+            .message
+            .expect("balance scaffold should explain current state");
+
+        assert!(!result.is_error);
+        assert!(msg.contains("DeepSeek"));
+        assert!(msg.contains("not wired"));
+        assert!(!msg.contains("sent"));
+    }
+
+    #[test]
+    fn balance_command_reports_unsupported_provider_clearly() {
+        let mut app = create_test_app();
+        app.api_provider = ApiProvider::Ollama;
+
+        let result = execute("/balance", &mut app);
+        let msg = result
+            .message
+            .expect("unsupported providers should return a clear message");
+
+        assert!(!result.is_error);
+        assert!(msg.contains("Ollama"));
+        assert!(msg.contains("not supported"));
+        assert!(msg.contains("dashboard"));
     }
 
     #[test]

@@ -8,7 +8,7 @@ The active root `.cnb.yml` does two things:
 
 - runs Feishu bridge and version-drift checks when CNB receives `main`;
 - builds Linux x64 release assets from `v*` tags, creates the CNB release, and
-  uploads `deepseek-linux-x64`, `deepseek-tui-linux-x64`, and
+  uploads `codewhale-linux-x64`, `codewhale-tui-linux-x64`, and
   `deepseek-artifacts-sha256.txt`.
 
 The files in this directory are retained as deploy-button templates for Tencent
@@ -37,9 +37,10 @@ Optional:
 - `DEEPSEEK_REPO_URL`: defaults to the CNB mirror URL
 - `LIGHTHOUSE_SSH_PORT`: defaults to `22`
 
-The server side should already have `/opt/whalebro/deepseek-tui`,
+The server side should already have `/opt/whalebro/codewhale`,
 `/etc/deepseek/runtime.env`, `/etc/deepseek/feishu-bridge.env`, and the
-systemd services from `docs/TENCENT_LIGHTHOUSE_HK.md`.
+`codewhale-runtime` / `codewhale-feishu-bridge` systemd services from
+`docs/TENCENT_LIGHTHOUSE_HK.md`.
 
 ## Safety Notes
 

@@ -20,6 +20,11 @@ pub fn visible_slash_menu_entries(app: &App, limit: usize) -> Vec<SlashMenuEntry
     if app.slash_menu_hidden {
         return Vec::new();
     }
+    if let Some((_byte_start, partial)) =
+        partial_inline_skill_mention_at_cursor(&app.input, app.cursor_position)
+    {
+        return skill_mention_entries(&partial, limit, &app.cached_skills);
+    }
     slash_completion_hints(
         &app.input,
         limit,
@@ -43,7 +48,20 @@ pub fn apply_slash_menu_selection(
     }
 
     let selected_idx = app.slash_menu_selected.min(entries.len().saturating_sub(1));
-    let mut command = entries[selected_idx].name.clone();
+    let selected = &entries[selected_idx];
+
+    if selected.is_skill
+        && let Some((byte_start, partial)) =
+            partial_inline_skill_mention_at_cursor(&app.input, app.cursor_position)
+        && let Some(skill_name) = skill_name_from_menu_entry(selected)
+    {
+        replace_inline_skill_mention(app, byte_start, &partial, &skill_name);
+        app.slash_menu_hidden = false;
+        app.status_message = Some(format!("Skill selected: /{skill_name}"));
+        return true;
+    }
+
+    let mut command = selected.name.clone();
 
     if append_space
         && !command.ends_with(' ')
@@ -60,6 +78,119 @@ pub fn apply_slash_menu_selection(
     app.slash_menu_hidden = false;
     app.status_message = Some(format!("Command selected: {}", app.input.trim_end()));
     true
+}
+
+/// Return the `/<skill>` token under the cursor when it is used as an inline
+/// mention inside a normal message. A slash at the start of the composer, even
+/// after leading whitespace, remains reserved for slash commands.
+pub(crate) fn partial_inline_skill_mention_at_cursor(
+    input: &str,
+    cursor_chars: usize,
+) -> Option<(usize, String)> {
+    let chars: Vec<char> = input.chars().collect();
+    if cursor_chars > chars.len() {
+        return None;
+    }
+
+    let mut start_chars = cursor_chars;
+    while start_chars > 0 {
+        let prev = chars[start_chars - 1];
+        if prev == '/' {
+            start_chars -= 1;
+            break;
+        }
+        if prev.is_whitespace() {
+            return None;
+        }
+        start_chars -= 1;
+    }
+
+    if start_chars == cursor_chars || chars.get(start_chars) != Some(&'/') {
+        return None;
+    }
+    if !is_inline_skill_mention_start(&chars, start_chars) {
+        return None;
+    }
+
+    let byte_start: usize = chars[..start_chars].iter().map(|c| c.len_utf8()).sum();
+    if input[..byte_start].trim().is_empty() {
+        return None;
+    }
+
+    let mut end_chars = start_chars + 1;
+    while end_chars < chars.len() && !chars[end_chars].is_whitespace() {
+        end_chars += 1;
+    }
+    let partial: String = chars[start_chars + 1..end_chars].iter().collect();
+    if partial.contains('/') {
+        return None;
+    }
+
+    Some((byte_start, partial))
+}
+
+fn is_inline_skill_mention_start(chars: &[char], idx: usize) -> bool {
+    if idx == 0 {
+        return false;
+    }
+    chars
+        .get(idx.saturating_sub(1))
+        .is_some_and(|ch| ch.is_whitespace() || matches!(ch, '(' | '[' | '{' | '<' | '"' | '\''))
+}
+
+fn skill_mention_entries(
+    partial: &str,
+    limit: usize,
+    cached_skills: &[(String, String)],
+) -> Vec<SlashMenuEntry> {
+    if limit == 0 {
+        return Vec::new();
+    }
+    let partial_lower = partial.to_ascii_lowercase();
+    let mut entries = cached_skills
+        .iter()
+        .filter(|(skill_name, _)| skill_name.to_ascii_lowercase().starts_with(&partial_lower))
+        .map(|(skill_name, skill_desc)| SlashMenuEntry {
+            name: format!("/{skill_name}"),
+            description: skill_desc.clone(),
+            is_skill: true,
+            alias_hint: None,
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by(|a, b| a.name.cmp(&b.name));
+    entries.dedup_by(|a, b| a.name == b.name);
+    entries.into_iter().take(limit).collect()
+}
+
+fn skill_name_from_menu_entry(entry: &SlashMenuEntry) -> Option<String> {
+    if !entry.is_skill {
+        return None;
+    }
+    if let Some(name) = entry.name.strip_prefix("/skill ") {
+        return Some(name.trim().to_string());
+    }
+    entry
+        .name
+        .strip_prefix('/')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(ToString::to_string)
+}
+
+fn replace_inline_skill_mention(app: &mut App, byte_start: usize, partial: &str, skill_name: &str) {
+    let original_token_len = '/'.len_utf8() + partial.len();
+    let original_token_end = byte_start + original_token_len;
+    let mut new_input =
+        String::with_capacity(app.input.len() - original_token_len + 1 + skill_name.len());
+    new_input.push_str(&app.input[..byte_start]);
+    new_input.push('/');
+    new_input.push_str(skill_name);
+    if original_token_end < app.input.len() {
+        new_input.push_str(&app.input[original_token_end..]);
+    }
+    let new_cursor_chars = app.input[..byte_start].chars().count() + 1 + skill_name.chars().count();
+    app.input = new_input;
+    app.cursor_position = new_cursor_chars;
 }
 
 /// Tab-completion for a slash-command-like input. Extends the input to the

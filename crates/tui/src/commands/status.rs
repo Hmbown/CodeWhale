@@ -18,7 +18,7 @@ fn format_status(app: &App) -> String {
     let mut out = String::new();
     let (context_used, context_max, context_percent) = context_usage(app);
 
-    let _ = writeln!(out, "DeepSeek TUI Status");
+    let _ = writeln!(out, "codewhale Status");
     let _ = writeln!(out, "===================");
     let _ = writeln!(out);
     push_row(&mut out, "Version:", env!("CARGO_PKG_VERSION"));
@@ -66,6 +66,26 @@ fn format_status(app: &App) -> String {
     push_row(&mut out, "Cache hit/miss:", &cache_summary(app));
     push_row(
         &mut out,
+        "Session input:",
+        &app.session.total_input_tokens.to_string(),
+    );
+    let session_cache =
+        if app.session.total_cache_hit_tokens == 0 && app.session.total_cache_miss_tokens == 0 {
+            "not reported".to_string()
+        } else {
+            format!(
+                "{} hit / {} miss",
+                app.session.total_cache_hit_tokens, app.session.total_cache_miss_tokens
+            )
+        };
+    push_row(&mut out, "Session cache:", &session_cache);
+    push_row(
+        &mut out,
+        "Session output:",
+        &app.session.total_output_tokens.to_string(),
+    );
+    push_row(
+        &mut out,
         "Total tokens:",
         &app.session.total_tokens.to_string(),
     );
@@ -82,6 +102,13 @@ fn format_status(app: &App) -> String {
             app.history.len(),
             app.api_messages.len()
         ),
+    );
+    let tool_output_status =
+        crate::tool_output_receipts::tool_output_status(&app.api_messages, &app.session_artifacts);
+    push_row(
+        &mut out,
+        "Tool outputs:",
+        &crate::tool_output_receipts::format_tool_output_status(&tool_output_status),
     );
     push_row(
         &mut out,
@@ -227,7 +254,7 @@ mod tests {
 
         let result = status(&mut app);
         let msg = result.message.expect("status message");
-        assert!(msg.contains("DeepSeek TUI Status"));
+        assert!(msg.contains("codewhale Status"));
         assert!(msg.contains("Provider:"));
         assert!(msg.contains("Model:"));
         assert!(msg.contains("Directory:"));
@@ -237,9 +264,46 @@ mod tests {
         assert!(msg.contains("Session:"));
         assert!(msg.contains("session-123"));
         assert!(msg.contains("Context window:"));
+        assert!(msg.contains("Tool outputs:"));
         assert!(msg.contains("Cache hit/miss:"));
         assert!(msg.contains("70 hit / 30 miss"));
         assert!(msg.contains("Use /statusline to configure footer items."));
+    }
+
+    #[test]
+    fn status_report_surfaces_large_tool_output_pressure() {
+        let tmpdir = TempDir::new().expect("temp dir");
+        let mut app = create_test_app(tmpdir.path().to_path_buf());
+        let raw = "RAW_STATUS_PRESSURE\n".repeat(2_000);
+        app.api_messages.push(Message {
+            role: "user".to_string(),
+            content: vec![ContentBlock::ToolResult {
+                tool_use_id: "call-big".to_string(),
+                content: raw,
+                is_error: None,
+                content_blocks: None,
+            }],
+        });
+        app.session_artifacts
+            .push(crate::artifacts::ArtifactRecord {
+                id: "art_call-big".to_string(),
+                kind: crate::artifacts::ArtifactKind::ToolOutput,
+                session_id: "session-123".to_string(),
+                tool_call_id: "call-big".to_string(),
+                tool_name: "exec_shell".to_string(),
+                created_at: chrono::Utc::now(),
+                byte_size: 24_000,
+                preview: "large output".to_string(),
+                storage_path: PathBuf::from("artifacts/art_call-big.txt"),
+            });
+
+        let result = status(&mut app);
+        let msg = result.message.expect("status message");
+
+        assert!(msg.contains("Tool outputs:"));
+        assert!(msg.contains("raw over cap"));
+        assert!(msg.contains("context pressure"));
+        assert!(msg.contains("artifact"));
     }
 
     #[test]

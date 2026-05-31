@@ -1318,7 +1318,7 @@ impl TaskManager {
                 ),
                 TaskStatus::Canceled => "Task canceled".to_string(),
                 TaskStatus::Queued | TaskStatus::Running => {
-                    format!("Task ended in unexpected state: {}", mode_label)
+                    format!("Task ended in unexpected state: {mode_label}")
                 }
             },
             detail_path: None,
@@ -1639,7 +1639,8 @@ fn default_auto_approve() -> bool {
     true
 }
 
-/// Default task persistence location (`~/.deepseek/tasks`).
+/// Default task manager data location (`~/.codewhale/tasks`, or legacy
+/// `~/.deepseek/tasks` when only the legacy directory exists).
 #[must_use]
 pub fn default_tasks_dir() -> PathBuf {
     if let Ok(path) = std::env::var("DEEPSEEK_TASKS_DIR")
@@ -1647,10 +1648,21 @@ pub fn default_tasks_dir() -> PathBuf {
     {
         return PathBuf::from(path);
     }
-    if let Some(home) = dirs::home_dir() {
-        return home.join(".deepseek").join("tasks");
+    dirs::home_dir()
+        .map(|home| default_tasks_dir_for_home(&home))
+        .unwrap_or_else(|| PathBuf::from(".codewhale").join("tasks"))
+}
+
+fn default_tasks_dir_for_home(home: &Path) -> PathBuf {
+    let primary = home.join(".codewhale").join("tasks");
+    if primary.is_dir() {
+        return primary;
     }
-    PathBuf::from(".deepseek").join("tasks")
+    let legacy = home.join(".deepseek").join("tasks");
+    if legacy.is_dir() {
+        return legacy;
+    }
+    primary
 }
 
 /// Wait for a task to reach a terminal status (tests and API helpers).
@@ -1814,7 +1826,7 @@ mod tests {
                         "gate": {
                             "id": "gate_test",
                             "gate": "test",
-                            "command": "cargo test -p deepseek-tui --lib",
+                            "command": "cargo test -p codewhale-tui --lib",
                             "cwd": ".",
                             "exit_code": 0,
                             "status": "passed",
@@ -1909,5 +1921,63 @@ mod tests {
             Err(err) => assert!(err.to_string().contains("newer than supported")),
         }
         Ok(())
+    }
+
+    #[test]
+    fn default_tasks_dir_falls_back_to_legacy_deepseek_tasks() {
+        let temp_home = tempfile::tempdir().unwrap();
+        let home = temp_home.path();
+        let legacy_tasks = home.join(".deepseek").join("tasks");
+        std::fs::create_dir_all(&legacy_tasks).unwrap();
+
+        assert_eq!(default_tasks_dir_for_home(home), legacy_tasks);
+    }
+
+    #[test]
+    fn default_tasks_dir_prefers_existing_codewhale_tasks() {
+        let temp_home = tempfile::tempdir().unwrap();
+        let home = temp_home.path();
+        let primary_tasks = home.join(".codewhale").join("tasks");
+        let legacy_tasks = home.join(".deepseek").join("tasks");
+        std::fs::create_dir_all(&primary_tasks).unwrap();
+        std::fs::create_dir_all(&legacy_tasks).unwrap();
+
+        assert_eq!(default_tasks_dir_for_home(home), primary_tasks);
+    }
+
+    #[test]
+    fn default_tasks_dir_falls_back_to_legacy_when_primary_is_file() {
+        let temp_home = tempfile::tempdir().unwrap();
+        let home = temp_home.path();
+        let primary_tasks = home.join(".codewhale").join("tasks");
+        let legacy_tasks = home.join(".deepseek").join("tasks");
+        std::fs::create_dir_all(primary_tasks.parent().unwrap()).unwrap();
+        std::fs::write(&primary_tasks, "not a directory").unwrap();
+        std::fs::create_dir_all(&legacy_tasks).unwrap();
+
+        assert_eq!(default_tasks_dir_for_home(home), legacy_tasks);
+    }
+
+    #[test]
+    fn default_tasks_dir_ignores_legacy_file_for_new_installs() {
+        let temp_home = tempfile::tempdir().unwrap();
+        let home = temp_home.path();
+        let primary_tasks = home.join(".codewhale").join("tasks");
+        let legacy_tasks = home.join(".deepseek").join("tasks");
+        std::fs::create_dir_all(legacy_tasks.parent().unwrap()).unwrap();
+        std::fs::write(&legacy_tasks, "not a directory").unwrap();
+
+        assert_eq!(default_tasks_dir_for_home(home), primary_tasks);
+    }
+
+    #[test]
+    fn default_tasks_dir_uses_codewhale_tasks_for_new_installs() {
+        let temp_home = tempfile::tempdir().unwrap();
+        let home = temp_home.path();
+
+        assert_eq!(
+            default_tasks_dir_for_home(home),
+            home.join(".codewhale").join("tasks")
+        );
     }
 }

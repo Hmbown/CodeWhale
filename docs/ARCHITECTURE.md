@@ -1,6 +1,6 @@
-# DeepSeek TUI Architecture
+# codewhale Architecture
 
-This document provides an overview of the DeepSeek TUI architecture for developers and contributors.
+This document provides an overview of the codewhale architecture for developers and contributors.
 
 Current boundary note (v0.8.6):
 - `crates/tui` is still the live end-user runtime for the TUI, runtime API, task manager, and tool execution loop.
@@ -156,7 +156,7 @@ drives turns through Chat Completions.
   - `mod.rs` - `LspManager` — lazy per-language transport pool + config
   - `client.rs` - `StdioLspTransport` — JSON-RPC over stdio with `didOpen`/`didChange`/`publishDiagnostics`
   - `diagnostics.rs` - Diagnostic types, severity, and HTML-block renderer
-  - `registry.rs` - Language detection and default server map (rust-analyzer, pyright, gopls, clangd, typescript-language-server)
+  - `registry.rs` - Language detection and default server map (rust-analyzer, pyright, gopls, clangd, typescript-language-server, jdtls, vue-language-server)
   - Wired into the engine via `core/engine/lsp_hooks.rs` — called after every successful edit
 
 ### Security
@@ -174,11 +174,12 @@ drives turns through Chat Completions.
 - **`utils.rs`** - Common utilities
 - **`logging.rs`** - Logging infrastructure
 - **`compaction.rs`** - Context compaction for long conversations
+- **`purge.rs`** - Agent-driven context purging (surgical message removal/rewriting)
 - **`pricing.rs`** - Cost estimation
 - **`prompts.rs`** - System prompt templates
 - **`project_doc.rs`** - Project documentation handling
 - **`session.rs`** - Session serialization
-- **`runtime_api.rs`** - HTTP/SSE runtime API (`deepseek serve --http`)
+- **`runtime_api.rs`** - HTTP/SSE runtime API (`codewhale serve --http`)
 - **`runtime_threads.rs`** - Durable thread/turn/item store + replayable event timeline
 - **`task_manager.rs`** - Durable queue, worker pool, task timelines and artifacts
 
@@ -241,7 +242,8 @@ ordinary durable tasks.
 3. Engine events are mapped to item lifecycle events (`item.started|item.delta|item.completed`)
 4. Interrupt/steer operations apply to the active turn only
 5. Compaction (auto/manual) is emitted as `context_compaction` item lifecycle
-6. Clients replay history and resume with `/v1/threads/{id}/events?since_seq=<n>`
+6. Purge (agent-driven) is emitted as `context_purge` item lifecycle
+7. Clients replay history and resume with `/v1/threads/{id}/events?since_seq=<n>`
 
 ### Durable Schema Gates
 

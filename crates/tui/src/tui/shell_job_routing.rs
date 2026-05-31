@@ -31,11 +31,11 @@ fn format_elapsed(ms: u64) -> String {
 
 pub(super) fn format_shell_job_list(jobs: &[ShellJobSnapshot]) -> String {
     if jobs.is_empty() {
-        return "No live background shell jobs. Jobs are process-local; after a restart, inspect durable task artifacts for prior command output.".to_string();
+        return "No live background commands. Commands are process-local; after a restart, inspect durable task artifacts for prior command output.".to_string();
     }
 
     let mut lines = vec![
-        format!("Background shell jobs ({})", jobs.len()),
+        format!("Background commands ({})", jobs.len()),
         "----------------------------------------".to_string(),
     ];
     for job in jobs {
@@ -73,7 +73,7 @@ pub(super) fn format_shell_job_list(jobs: &[ShellJobSnapshot]) -> String {
 pub(super) fn format_shell_poll(result: &ShellResult) -> String {
     let mut lines = vec![
         format!(
-            "Shell job {}: {} exit={:?} elapsed={}",
+            "Command {}: {} exit={:?} elapsed={}",
             result.task_id.as_deref().unwrap_or("(unknown)"),
             status_label(&result.status, false),
             result.exit_code,

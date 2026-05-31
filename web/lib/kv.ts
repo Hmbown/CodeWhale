@@ -23,20 +23,28 @@ interface CloudflareEnv {
   GITHUB_REPO?: string;
 }
 
+function envFromProcess(): CloudflareEnv {
+  return {
+    DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY,
+    DEEPSEEK_BASE_URL: process.env.DEEPSEEK_BASE_URL,
+    DEEPSEEK_MODEL: process.env.DEEPSEEK_MODEL,
+    GITHUB_TOKEN: process.env.GITHUB_TOKEN,
+    CRON_SECRET: process.env.CRON_SECRET,
+    GITHUB_REPO: process.env.GITHUB_REPO,
+  };
+}
+
 export async function getEnv(): Promise<CloudflareEnv> {
+  if (process.env.NEXT_PHASE === "phase-production-build") {
+    return envFromProcess();
+  }
+
   try {
     const mod = await import("@opennextjs/cloudflare");
     const ctx = await mod.getCloudflareContext({ async: true });
     return ctx.env as CloudflareEnv;
   } catch {
-    return {
-      DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY,
-      DEEPSEEK_BASE_URL: process.env.DEEPSEEK_BASE_URL,
-      DEEPSEEK_MODEL: process.env.DEEPSEEK_MODEL,
-      GITHUB_TOKEN: process.env.GITHUB_TOKEN,
-      CRON_SECRET: process.env.CRON_SECRET,
-      GITHUB_REPO: process.env.GITHUB_REPO,
-    };
+    return envFromProcess();
   }
 }
 

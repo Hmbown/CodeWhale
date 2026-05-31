@@ -336,8 +336,17 @@ impl ModalView for UserInputView {
                 Span::styled(" back", Style::default().fg(palette::TEXT_MUTED)),
             ]));
         } else {
+            let opt_count = self.option_count();
+            let quick_pick_label = if opt_count <= 9 {
+                format!("1-{opt_count}")
+            } else {
+                "digit".to_string()
+            };
             lines.push(Line::from(vec![
-                Span::styled("1-4", Style::default().fg(palette::DEEPSEEK_SKY).bold()),
+                Span::styled(
+                    quick_pick_label,
+                    Style::default().fg(palette::DEEPSEEK_SKY).bold(),
+                ),
                 Span::styled(" quick pick", Style::default().fg(palette::TEXT_MUTED)),
                 Span::raw("  "),
                 Span::styled("Up/Down", Style::default().fg(palette::DEEPSEEK_SKY).bold()),
@@ -427,7 +436,6 @@ mod tests {
 
         assert!(rendered.contains("Action required"));
         assert!(rendered.contains("Question 1 of 1"));
-        assert!(rendered.contains("1-4"));
         assert!(rendered.contains("quick pick"));
     }
 

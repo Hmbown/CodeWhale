@@ -6,10 +6,25 @@ use colored::Colorize;
 
 use crate::palette;
 static VERBOSE: AtomicBool = AtomicBool::new(false);
+#[cfg(windows)]
+static VERBOSE_SNAPSHOT: AtomicBool = AtomicBool::new(false);
 
 /// Enable or disable verbose logging output.
 pub fn set_verbose(enabled: bool) {
     VERBOSE.store(enabled, Ordering::SeqCst);
+}
+
+/// Capture the current verbose state so the TUI can restore it after
+/// temporarily suppressing Windows alt-screen output.
+#[cfg(windows)]
+pub fn snapshot_verbose_state() {
+    VERBOSE_SNAPSHOT.store(is_verbose(), Ordering::SeqCst);
+}
+
+/// Restore the last captured verbose state.
+#[cfg(windows)]
+pub fn restore_verbose_state() {
+    set_verbose(VERBOSE_SNAPSHOT.load(Ordering::SeqCst));
 }
 
 /// Return true when `DEEPSEEK_LOG_LEVEL` requests verbose output.
@@ -61,15 +76,57 @@ pub fn warn(message: impl AsRef<str>) {
 }
 
 #[cfg(test)]
+#[cfg(windows)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static TEST_GUARD: Mutex<()> = Mutex::new(());
 
     #[test]
     fn log_value_parser_accepts_common_rust_log_directives() {
         assert!(log_value_enables_verbose("debug"));
-        assert!(log_value_enables_verbose("deepseek_cli=debug"));
-        assert!(log_value_enables_verbose("warn,deepseek_tui::client=trace"));
+        assert!(log_value_enables_verbose("codewhale_cli=debug"));
+        assert!(log_value_enables_verbose(
+            "warn,codewhale_tui::client=trace"
+        ));
         assert!(!log_value_enables_verbose("warn"));
-        assert!(!log_value_enables_verbose("deepseek_tui=off"));
+        assert!(!log_value_enables_verbose("codewhale_tui=off"));
+    }
+
+    #[test]
+    fn snapshot_and_restore_verbose_state_round_trip() {
+        let _guard = TEST_GUARD.lock().unwrap_or_else(|err| err.into_inner());
+
+        set_verbose(false);
+        snapshot_verbose_state();
+        set_verbose(true);
+        restore_verbose_state();
+        assert!(!is_verbose());
+
+        set_verbose(true);
+        snapshot_verbose_state();
+        set_verbose(false);
+        restore_verbose_state();
+        assert!(is_verbose());
+
+        set_verbose(false);
+    }
+
+    #[test]
+    fn restore_keeps_cli_verbose_state_even_when_env_is_not_verbose() {
+        let _guard = TEST_GUARD.lock().unwrap_or_else(|err| err.into_inner());
+
+        set_verbose(true);
+        snapshot_verbose_state();
+
+        // Simulate the Windows alt-screen suppression path. The restore must
+        // bring back the pre-suppression CLI state without depending on the
+        // environment.
+        set_verbose(false);
+        restore_verbose_state();
+
+        assert!(is_verbose());
+        set_verbose(false);
     }
 }

@@ -56,6 +56,22 @@ pub struct FileSummary {
     pub deleted: bool,
 }
 
+/// No-mutation summary of what an `apply_patch` input intends to touch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApplyPatchPreflight {
+    pub touched_files: Vec<String>,
+    pub files_total: usize,
+    pub hunks_total: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub creates: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deletes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path_override: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header_path_mismatch: Option<String>,
+}
+
 /// A single hunk in a unified diff
 #[derive(Debug, Clone)]
 pub struct Hunk {
@@ -130,6 +146,19 @@ struct HunkApplyStats {
     hunks_applied: usize,
     fuzz_used: usize,
     hunks_with_fuzz: usize,
+}
+
+#[derive(Debug, Clone)]
+enum ApplyPatchPreflightKind {
+    Changes,
+    PathOverride { path: String, hunks: Vec<Hunk> },
+    FilePatches(Vec<FilePatch>),
+}
+
+#[derive(Debug, Clone)]
+struct ApplyPatchPreflightPlan {
+    summary: ApplyPatchPreflight,
+    kind: ApplyPatchPreflightKind,
 }
 
 // === Errors ===
@@ -212,6 +241,7 @@ impl ToolSpec for ApplyPatchTool {
         let fuzz = optional_u64(&input, "fuzz", MAX_FUZZ as u64).min(MAX_FUZZ as u64);
         let fuzz = usize::try_from(fuzz).unwrap_or(MAX_FUZZ);
         let create_if_missing = optional_bool(&input, "create_if_missing", false);
+        let preflight = preflight_apply_patch_plan(&input)?;
 
         if let Some(changes_value) = input.get("changes") {
             let (pending, stats) = build_pending_writes_from_changes(changes_value, context)?;
@@ -233,6 +263,8 @@ impl ToolSpec for ApplyPatchTool {
             };
             let mut tool_result = ToolResult::json(&result)
                 .map_err(|e| ToolError::execution_failed(e.to_string()))?;
+            tool_result =
+                tool_result.with_metadata(apply_patch_preflight_metadata(&preflight.summary));
             if !diag_block.is_empty() {
                 tool_result.content.push('\n');
                 tool_result.content.push_str(&diag_block);
@@ -240,38 +272,21 @@ impl ToolSpec for ApplyPatchTool {
             return Ok(tool_result);
         }
 
-        let patch_text = required_str(&input, "patch")?;
-        let path_override = optional_str(&input, "path");
-        let patch_shape = inspect_patch_shape(patch_text);
-        validate_patch_shape(&patch_shape, path_override)?;
-        let mismatch_note = path_override.and_then(|path| diff_header_mismatch(path, &patch_shape));
-        let file_patches = if let Some(path) = path_override {
-            let hunks = parse_unified_diff(patch_text)?;
-            if hunks.is_empty() {
-                return Err(ToolError::invalid_input(
-                    "Patch did not contain any hunks (`@@ ... @@`). Provide a unified diff hunk.",
-                ));
+        let file_patches = match preflight.kind {
+            ApplyPatchPreflightKind::Changes => {
+                unreachable!("changes input returned before patch execution")
             }
-            vec![FilePatch {
-                path: path.to_string(),
+            ApplyPatchPreflightKind::PathOverride { path, hunks } => vec![FilePatch {
+                path,
                 hunks,
                 delete_after: false,
                 create_if_missing,
-            }]
-        } else {
-            let file_patches = parse_unified_diff_files(patch_text, create_if_missing)?;
-            if file_patches.is_empty() {
-                return Err(ToolError::invalid_input(
-                    "No valid file patches found. Ensure the patch includes `---`/`+++` headers or provide `path`.",
-                ));
-            }
-            file_patches
+            }],
+            ApplyPatchPreflightKind::FilePatches(file_patches) => file_patches,
         };
 
         let (pending, mut stats) = build_pending_writes_from_patches(file_patches, context, fuzz)?;
-        if stats.header_path_mismatch.is_none() {
-            stats.header_path_mismatch = mismatch_note;
-        }
+        stats.header_path_mismatch = preflight.summary.header_path_mismatch.clone();
         apply_pending_writes(&pending)?;
         // Resolve absolute paths for LSP diagnostics query.
         let abs_paths: Vec<PathBuf> = pending
@@ -294,12 +309,150 @@ impl ToolSpec for ApplyPatchTool {
         };
         let mut tool_result =
             ToolResult::json(&result).map_err(|e| ToolError::execution_failed(e.to_string()))?;
+        tool_result = tool_result.with_metadata(apply_patch_preflight_metadata(&preflight.summary));
         if !diag_block.is_empty() {
             tool_result.content.push('\n');
             tool_result.content.push_str(&diag_block);
         }
         Ok(tool_result)
     }
+}
+
+/// Parse `apply_patch` input into a reusable, no-mutation preflight summary.
+///
+/// This deliberately stops before workspace resolution or file reads. It is
+/// suitable for policy checks, audit logs, diagnostics hooks, and future undo
+/// planning that must know the target files before mutation.
+pub fn preflight_apply_patch(input: &Value) -> Result<ApplyPatchPreflight, ToolError> {
+    Ok(preflight_apply_patch_plan(input)?.summary)
+}
+
+fn preflight_apply_patch_plan(input: &Value) -> Result<ApplyPatchPreflightPlan, ToolError> {
+    let create_if_missing = optional_bool(input, "create_if_missing", false);
+
+    if let Some(changes_value) = input.get("changes") {
+        return Ok(ApplyPatchPreflightPlan {
+            summary: preflight_changes(changes_value)?,
+            kind: ApplyPatchPreflightKind::Changes,
+        });
+    }
+
+    let patch_text = required_str(input, "patch")?;
+    let path_override = optional_str(input, "path");
+    let patch_shape = inspect_patch_shape(patch_text);
+    validate_patch_shape(&patch_shape, path_override)?;
+    let header_path_mismatch =
+        path_override.and_then(|path| diff_header_mismatch(path, &patch_shape));
+
+    if let Some(path) = path_override {
+        let hunks = parse_unified_diff(patch_text)?;
+        if hunks.is_empty() {
+            return Err(ToolError::invalid_input(
+                "Patch did not contain any hunks (`@@ ... @@`). Provide a unified diff hunk.",
+            ));
+        }
+        return Ok(ApplyPatchPreflightPlan {
+            summary: ApplyPatchPreflight {
+                touched_files: vec![path.to_string()],
+                files_total: 1,
+                hunks_total: hunks.len(),
+                creates: if create_if_missing {
+                    vec![path.to_string()]
+                } else {
+                    Vec::new()
+                },
+                deletes: Vec::new(),
+                path_override: Some(path.to_string()),
+                header_path_mismatch,
+            },
+            kind: ApplyPatchPreflightKind::PathOverride {
+                path: path.to_string(),
+                hunks,
+            },
+        });
+    }
+
+    let file_patches = parse_unified_diff_files(patch_text, create_if_missing)?;
+    if file_patches.is_empty() {
+        return Err(ToolError::invalid_input(
+            "No valid file patches found. Ensure the patch includes `---`/`+++` headers or provide `path`.",
+        ));
+    }
+
+    let mut touched_files = Vec::new();
+    let mut creates = Vec::new();
+    let mut deletes = Vec::new();
+    let mut hunks_total = 0;
+    for file_patch in &file_patches {
+        if file_patch.hunks.is_empty() {
+            return Err(ToolError::invalid_input(format!(
+                "Patch section for `{}` has no hunks (`@@ ... @@`).",
+                file_patch.path
+            )));
+        }
+        push_unique(&mut touched_files, file_patch.path.clone());
+        hunks_total += file_patch.hunks.len();
+        if file_patch.create_if_missing && !file_patch.delete_after {
+            push_unique(&mut creates, file_patch.path.clone());
+        }
+        if file_patch.delete_after {
+            push_unique(&mut deletes, file_patch.path.clone());
+        }
+    }
+
+    Ok(ApplyPatchPreflightPlan {
+        summary: ApplyPatchPreflight {
+            files_total: file_patches.len(),
+            touched_files,
+            hunks_total,
+            creates,
+            deletes,
+            path_override: None,
+            header_path_mismatch,
+        },
+        kind: ApplyPatchPreflightKind::FilePatches(file_patches),
+    })
+}
+
+fn preflight_changes(changes_value: &Value) -> Result<ApplyPatchPreflight, ToolError> {
+    let changes = changes_value.as_array().ok_or_else(|| {
+        ToolError::invalid_input("`changes` must be an array of objects like {path, content}")
+    })?;
+    if changes.is_empty() {
+        return Err(ToolError::invalid_input("`changes` cannot be empty"));
+    }
+
+    let mut touched_files = Vec::new();
+    for change in changes {
+        let path = change
+            .get("path")
+            .and_then(Value::as_str)
+            .ok_or_else(|| ToolError::missing_field("changes[].path"))?;
+        let _content = change
+            .get("content")
+            .and_then(Value::as_str)
+            .ok_or_else(|| ToolError::missing_field("changes[].content"))?;
+        push_unique(&mut touched_files, path.to_string());
+    }
+
+    Ok(ApplyPatchPreflight {
+        files_total: changes.len(),
+        touched_files,
+        hunks_total: 0,
+        creates: Vec::new(),
+        deletes: Vec::new(),
+        path_override: None,
+        header_path_mismatch: None,
+    })
+}
+
+fn apply_patch_preflight_metadata(preflight: &ApplyPatchPreflight) -> Value {
+    let mut metadata =
+        serde_json::to_value(preflight).expect("ApplyPatchPreflight should serialize");
+    if let Some(object) = metadata.as_object_mut() {
+        object.insert("event".to_string(), json!("apply_patch.preflight"));
+    }
+    metadata
 }
 
 /// Parse a unified diff into hunks
@@ -1057,6 +1210,101 @@ mod tests {
     }
 
     #[test]
+    fn test_preflight_apply_patch_with_path_override() {
+        let patch = r"@@ -1,2 +1,2 @@
+ old
+-value
++new-value
+";
+
+        let preflight = preflight_apply_patch(&json!({
+            "path": "src/lib.rs",
+            "patch": patch
+        }))
+        .expect("preflight");
+
+        assert_eq!(preflight.touched_files, vec!["src/lib.rs"]);
+        assert_eq!(preflight.files_total, 1);
+        assert_eq!(preflight.hunks_total, 1);
+        assert_eq!(preflight.path_override.as_deref(), Some("src/lib.rs"));
+    }
+
+    #[test]
+    fn test_preflight_apply_patch_multi_file_create_and_delete() {
+        let patch = r"diff --git a/new.rs b/new.rs
+--- /dev/null
++++ b/new.rs
+@@ -0,0 +1 @@
++fn added() {}
+diff --git a/old.rs b/old.rs
+--- a/old.rs
++++ /dev/null
+@@ -1 +0,0 @@
+-fn old() {}
+";
+
+        let preflight = preflight_apply_patch(&json!({ "patch": patch })).expect("preflight");
+
+        assert_eq!(preflight.touched_files, vec!["new.rs", "old.rs"]);
+        assert_eq!(preflight.files_total, 2);
+        assert_eq!(preflight.hunks_total, 2);
+        assert_eq!(preflight.creates, vec!["new.rs"]);
+        assert_eq!(preflight.deletes, vec!["old.rs"]);
+    }
+
+    #[test]
+    fn test_preflight_apply_patch_changes_list() {
+        let preflight = preflight_apply_patch(&json!({
+            "changes": [
+                { "path": "one.txt", "content": "one" },
+                { "path": "two.txt", "content": "two" }
+            ]
+        }))
+        .expect("preflight");
+
+        assert_eq!(preflight.touched_files, vec!["one.txt", "two.txt"]);
+        assert_eq!(preflight.files_total, 2);
+        assert_eq!(preflight.hunks_total, 0);
+    }
+
+    #[test]
+    fn test_preflight_changes_files_total_counts_entries() {
+        let preflight = preflight_apply_patch(&json!({
+            "changes": [
+                { "path": "same.txt", "content": "one" },
+                { "path": "same.txt", "content": "two" }
+            ]
+        }))
+        .expect("preflight");
+
+        assert_eq!(preflight.touched_files, vec!["same.txt"]);
+        assert_eq!(preflight.files_total, 2);
+    }
+
+    #[test]
+    fn test_preflight_patch_files_total_counts_sections() {
+        let patch = r"diff --git a/same.txt b/same.txt
+--- a/same.txt
++++ b/same.txt
+@@ -1,1 +1,1 @@
+-one
++two
+diff --git a/same.txt b/same.txt
+--- a/same.txt
++++ b/same.txt
+@@ -2,1 +2,1 @@
+-three
++four
+";
+
+        let preflight = preflight_apply_patch(&json!({ "patch": patch })).expect("preflight");
+
+        assert_eq!(preflight.touched_files, vec!["same.txt"]);
+        assert_eq!(preflight.files_total, 2);
+        assert_eq!(preflight.hunks_total, 2);
+    }
+
+    #[test]
     fn test_apply_hunk_simple() {
         let mut lines = vec![
             "line1".to_string(),
@@ -1160,6 +1408,30 @@ mod tests {
             .expect("execute");
 
         assert!(result.success);
+        assert_eq!(
+            result.metadata.as_ref().unwrap()["event"],
+            "apply_patch.preflight"
+        );
+        assert_eq!(
+            result.metadata.as_ref().unwrap()["touched_files"],
+            json!(["test.txt"])
+        );
+        assert!(
+            result
+                .metadata
+                .as_ref()
+                .unwrap()
+                .get("header_path_mismatch")
+                .is_none()
+        );
+        assert!(
+            result
+                .metadata
+                .as_ref()
+                .unwrap()
+                .get("path_override")
+                .is_some()
+        );
         let patch_result = parse_patch_result(result);
         assert_eq!(patch_result.touched_files, vec!["test.txt"]);
         assert_eq!(patch_result.hunks_applied, 1);
@@ -1246,6 +1518,12 @@ mod tests {
             .expect("execute");
 
         assert!(result.success);
+        let metadata = result.metadata.as_ref().expect("metadata");
+        assert_eq!(metadata["event"], "apply_patch.preflight");
+        assert_eq!(metadata["touched_files"], json!(["one.txt", "two.txt"]));
+        assert_eq!(metadata["files_total"], 2);
+        assert_eq!(metadata["hunks_total"], 0);
+        assert!(metadata.get("path_override").is_none());
         let patch_result = parse_patch_result(result);
         let mut touched = patch_result.touched_files.clone();
         touched.sort();
@@ -1292,6 +1570,12 @@ diff --git a/b.txt b/b.txt
             .expect("execute");
 
         assert!(result.success);
+        let metadata = result.metadata.as_ref().expect("metadata");
+        assert_eq!(metadata["event"], "apply_patch.preflight");
+        assert_eq!(metadata["touched_files"], json!(["a.txt", "b.txt"]));
+        assert_eq!(metadata["files_total"], 2);
+        assert_eq!(metadata["hunks_total"], 2);
+        assert!(metadata.get("path_override").is_none());
         let patch_result = parse_patch_result(result);
         let mut touched = patch_result.touched_files.clone();
         touched.sort();
@@ -1407,6 +1691,13 @@ diff --git a/b.txt b/b.txt
             .execute(json!({"path": "override.txt", "patch": patch}), &ctx)
             .await
             .expect("execute");
+        let metadata = result.metadata.as_ref().expect("metadata");
+        assert!(
+            metadata["header_path_mismatch"]
+                .as_str()
+                .unwrap()
+                .contains("headers reference `other.txt`")
+        );
         let patch_result = parse_patch_result(result);
         assert!(
             patch_result

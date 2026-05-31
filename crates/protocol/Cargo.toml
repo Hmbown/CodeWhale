@@ -1,5 +1,5 @@
 [package]
-name = "deepseek-protocol"
+name = "codewhale-protocol"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

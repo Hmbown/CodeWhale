@@ -15,13 +15,14 @@ use crate::tools::review::ReviewOutput;
 use crate::tui::app::TranscriptSpacing;
 use crate::tui::diff_render;
 use crate::tui::markdown_render;
+use crate::tui::ui_text::CopyLineSeparator;
 
 // === Constants ===
 
 use std::process::Command;
 const TOOL_COMMAND_LINE_LIMIT: usize = 3;
 const TOOL_OUTPUT_LINE_LIMIT: usize = 6;
-const TOOL_TEXT_LIMIT: usize = 180;
+const TOOL_TEXT_LIMIT: usize = 300;
 const TOOL_HEADER_SUMMARY_LIMIT: usize = 56;
 const TOOL_OUTPUT_HEAD_LINES: usize = 2;
 const TOOL_OUTPUT_TAIL_LINES: usize = 2;
@@ -53,6 +54,8 @@ const REASONING_RAIL: &str = "\u{254E} "; // ╎ + space
 const REASONING_CURSOR: &str = "\u{258E}"; // ▎
 const TOOL_CARD_SUMMARY_LINES: usize = 4;
 const THINKING_SUMMARY_LINE_LIMIT: usize = 4;
+const THINKING_COMPLETED_PREVIEW_LINE_LIMIT: usize = 6;
+const THINKING_STREAMING_PREVIEW_LINE_LIMIT: usize = 8;
 const TOOL_DONE_SYMBOL: &str = "•";
 const TOOL_FAILED_SYMBOL: &str = "•";
 
@@ -156,6 +159,12 @@ pub struct TranscriptRenderOptions {
     pub spacing: TranscriptSpacing,
 }
 
+pub(crate) struct RenderedTranscriptLine {
+    pub line: Line<'static>,
+    pub copy_prefix_width: usize,
+    pub copy_separator_after: CopyLineSeparator,
+}
+
 impl Default for TranscriptRenderOptions {
     fn default() -> Self {
         Self {
@@ -180,13 +189,7 @@ impl HistoryCell {
     /// `transcript_lines`.
     pub fn lines(&self, width: u16) -> Vec<Line<'static>> {
         match self {
-            HistoryCell::User { content } => render_message(
-                USER_GLYPH,
-                user_label_style(),
-                user_body_style(),
-                content,
-                width,
-            ),
+            HistoryCell::User { content } => render_user_message(content, width),
             HistoryCell::Assistant { content, streaming } => render_message(
                 ASSISTANT_GLYPH,
                 assistant_label_style_for(*streaming, /*low_motion*/ false),
@@ -247,6 +250,21 @@ impl HistoryCell {
         width: u16,
         options: TranscriptRenderOptions,
     ) -> Vec<Line<'static>> {
+        self.lines_with_options_folded(width, options, false)
+    }
+
+    /// Render with an explicit per-cell fold override for thinking cells.
+    ///
+    /// Uses XOR with the `verbose` flag so that pressing Space toggles
+    /// the collapsed state *relative* to the global setting:
+    /// - verbose off (default): thinking is collapsed; Space unfolds it
+    /// - verbose on: thinking is expanded; Space folds it
+    pub fn lines_with_options_folded(
+        &self,
+        width: u16,
+        options: TranscriptRenderOptions,
+        folded: bool,
+    ) -> Vec<Line<'static>> {
         match self {
             HistoryCell::Thinking { .. } if !options.show_thinking => Vec::new(),
             HistoryCell::Thinking {
@@ -258,7 +276,7 @@ impl HistoryCell {
                 width,
                 *streaming,
                 *duration_secs,
-                !options.verbose,
+                folded ^ !options.verbose,
                 options.low_motion,
             ),
             HistoryCell::Tool(cell) if !options.show_tool_details => {
@@ -284,13 +302,7 @@ impl HistoryCell {
                 lines
             }
             HistoryCell::Tool(cell) => cell.lines_with_motion(width, options.low_motion),
-            HistoryCell::User { content } => render_message(
-                USER_GLYPH,
-                user_label_style(),
-                user_body_style(),
-                content,
-                width,
-            ),
+            HistoryCell::User { content } => render_user_message(content, width),
             HistoryCell::Assistant { content, streaming } => render_message(
                 ASSISTANT_GLYPH,
                 assistant_label_style_for(*streaming, options.low_motion),
@@ -306,6 +318,45 @@ impl HistoryCell {
         }
     }
 
+    #[allow(dead_code)]
+    pub(crate) fn lines_with_copy_metadata(
+        &self,
+        width: u16,
+        options: TranscriptRenderOptions,
+    ) -> Vec<RenderedTranscriptLine> {
+        self.lines_with_copy_metadata_folded(width, options, false)
+    }
+
+    pub(crate) fn lines_with_copy_metadata_folded(
+        &self,
+        width: u16,
+        options: TranscriptRenderOptions,
+        folded: bool,
+    ) -> Vec<RenderedTranscriptLine> {
+        match self {
+            HistoryCell::User { content } => {
+                hard_break_copy_lines(render_user_message(content, width))
+            }
+            HistoryCell::Assistant { content, streaming } => render_message_with_copy_metadata(
+                ASSISTANT_GLYPH,
+                assistant_label_style_for(*streaming, options.low_motion),
+                message_body_style(),
+                content,
+                width,
+            ),
+            HistoryCell::System { content } if !is_cycle_boundary(content) => {
+                render_message_with_copy_metadata(
+                    "Note",
+                    system_label_style(),
+                    system_body_style(),
+                    content,
+                    width,
+                )
+            }
+            _ => hard_break_copy_lines(self.lines_with_options_folded(width, options, folded)),
+        }
+    }
+
     /// Render the cell in transcript mode: full content, no caps, no
     /// "Alt+V for details" affordances.
     ///
@@ -316,7 +367,7 @@ impl HistoryCell {
     /// diverge.
     pub fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
         match self {
-            HistoryCell::User { content } => render_message(
+            HistoryCell::User { content } => render_plain_message(
                 USER_GLYPH,
                 user_label_style(),
                 user_body_style(),
@@ -2116,7 +2167,7 @@ fn render_thinking(
                 Some(summary) => summary,
                 None => {
                     collapsed_without_explicit_summary = true;
-                    String::new()
+                    content.to_string()
                 }
             }
         }
@@ -2129,14 +2180,21 @@ fn render_thinking(
         markdown_render::render_markdown(&body_text, content_width, body_style)
     };
     let mut truncated = false;
-    if collapsed && rendered.len() > THINKING_SUMMARY_LINE_LIMIT {
+    let line_limit = if streaming {
+        THINKING_STREAMING_PREVIEW_LINE_LIMIT
+    } else if collapsed_without_explicit_summary {
+        THINKING_COMPLETED_PREVIEW_LINE_LIMIT
+    } else {
+        THINKING_SUMMARY_LINE_LIMIT
+    };
+    if collapsed && rendered.len() > line_limit {
         if streaming {
             // Drop the *head* during streaming so the visible window
             // tracks the live cursor at the bottom.
-            let drop = rendered.len() - THINKING_SUMMARY_LINE_LIMIT;
+            let drop = rendered.len() - line_limit;
             rendered.drain(0..drop);
         } else {
-            rendered.truncate(THINKING_SUMMARY_LINE_LIMIT);
+            rendered.truncate(line_limit);
         }
         truncated = true;
     }
@@ -2172,13 +2230,13 @@ fn render_thinking(
             // knows there's more above and how to reach it.
             truncated
         } else {
-            collapsed_without_explicit_summary || truncated || body_text.trim() != content.trim()
+            truncated || body_text.trim() != content.trim()
         };
     if needs_affordance {
         let label = if streaming {
             "More reasoning in Ctrl+O"
         } else {
-            "Full reasoning in Ctrl+O"
+            "Space to expand · Full reasoning in Ctrl+O"
         };
         lines.push(Line::from(vec![
             Span::styled(REASONING_RAIL.to_string(), rail_style),
@@ -2196,6 +2254,19 @@ fn render_message(
     content: &str,
     width: u16,
 ) -> Vec<Line<'static>> {
+    render_message_with_copy_metadata(prefix, label_style, body_style, content, width)
+        .into_iter()
+        .map(|rendered| rendered.line)
+        .collect()
+}
+
+fn render_message_with_copy_metadata(
+    prefix: &str,
+    label_style: Style,
+    body_style: Style,
+    content: &str,
+    width: u16,
+) -> Vec<RenderedTranscriptLine> {
     let prefix_width = UnicodeWidthStr::width(prefix);
     let prefix_width_u16 = u16::try_from(prefix_width.saturating_add(2)).unwrap_or(u16::MAX);
     let content_width = usize::from(width.saturating_sub(prefix_width_u16).max(1));
@@ -2203,7 +2274,7 @@ fn render_message(
     let rendered =
         markdown_render::render_markdown_tagged(content, content_width as u16, body_style);
     for (idx, rendered_line) in rendered.into_iter().enumerate() {
-        if idx == 0 {
+        let line = if idx == 0 {
             let mut spans = Vec::new();
             if !prefix.is_empty() {
                 spans.push(Span::styled(
@@ -2213,7 +2284,7 @@ fn render_message(
                 spans.push(Span::raw(" "));
             }
             spans.extend(rendered_line.line.spans);
-            lines.push(Line::from(spans));
+            Line::from(spans)
         } else {
             let indent = if prefix.is_empty() {
                 String::new()
@@ -2228,13 +2299,126 @@ fn render_message(
             let rail_style = Style::default().fg(palette::TEXT_DIM);
             let mut spans = vec![Span::styled(indent, rail_style)];
             spans.extend(rendered_line.line.spans);
+            Line::from(spans)
+        };
+        lines.push(RenderedTranscriptLine {
+            line,
+            copy_prefix_width: rendered_line.copy_prefix_width
+                + history_copy_prefix_width(prefix, prefix_width, rendered_line.is_code, idx),
+            copy_separator_after: rendered_line.copy_separator_after,
+        });
+    }
+    if lines.is_empty() {
+        lines.push(RenderedTranscriptLine {
+            line: Line::from(""),
+            copy_prefix_width: 0,
+            copy_separator_after: CopyLineSeparator::Newline,
+        });
+    }
+    lines
+}
+
+fn history_copy_prefix_width(
+    prefix: &str,
+    prefix_width: usize,
+    is_code: bool,
+    line_index: usize,
+) -> usize {
+    if line_index > 0 && is_code && !prefix.is_empty() {
+        prefix_width + 1
+    } else {
+        0
+    }
+}
+
+fn hard_break_copy_lines(lines: Vec<Line<'static>>) -> Vec<RenderedTranscriptLine> {
+    lines
+        .into_iter()
+        .map(|line| RenderedTranscriptLine {
+            line,
+            copy_prefix_width: 0,
+            copy_separator_after: CopyLineSeparator::Newline,
+        })
+        .collect()
+}
+
+/// Render a plain-text user message: split on newlines, word-wrap each line,
+/// preserve leading whitespace. No markdown interpretation (headings, lists,
+/// code blocks, etc. are rendered as literal text).
+fn render_plain_message(
+    prefix: &str,
+    label_style: Style,
+    body_style: Style,
+    content: &str,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let prefix_width = UnicodeWidthStr::width(prefix);
+    let prefix_width_u16 = u16::try_from(prefix_width.saturating_add(2)).unwrap_or(u16::MAX);
+    let content_width = width.saturating_sub(prefix_width_u16).max(1);
+    let rendered = markdown_render::render_plain_text(content, content_width, body_style);
+    let mut lines = Vec::with_capacity(rendered.len());
+
+    for (idx, line) in rendered.into_iter().enumerate() {
+        if idx == 0 {
+            let mut spans = Vec::new();
+            if !prefix.is_empty() {
+                spans.push(Span::styled(
+                    prefix.to_string(),
+                    label_style.add_modifier(Modifier::BOLD),
+                ));
+                spans.push(Span::raw(" "));
+            }
+            spans.extend(line.spans);
+            lines.push(Line::from(spans));
+        } else {
+            let indent = if prefix.is_empty() {
+                String::new()
+            } else {
+                let mut s = String::with_capacity(prefix_width + 1);
+                s.push('\u{258F}');
+                s.extend(std::iter::repeat_n(' ', prefix_width));
+                s
+            };
+            let rail_style = Style::default().fg(palette::TEXT_DIM);
+            let mut spans = vec![Span::styled(indent, rail_style)];
+            spans.extend(line.spans);
             lines.push(Line::from(spans));
         }
     }
+
     if lines.is_empty() {
         lines.push(Line::from(""));
     }
     lines
+}
+
+fn render_user_message(content: &str, width: u16) -> Vec<Line<'static>> {
+    render_plain_message(
+        USER_GLYPH,
+        user_label_style(),
+        user_body_style(),
+        content,
+        width,
+    )
+    .into_iter()
+    .map(|line| apply_user_message_highlight(line, width))
+    .collect()
+}
+
+fn apply_user_message_highlight(mut line: Line<'static>, width: u16) -> Line<'static> {
+    let bg = palette::SURFACE_ELEVATED;
+    line.style = line.style.bg(bg);
+
+    let target_width = usize::from(width);
+    let line_width = line.width();
+    if line_width < target_width {
+        line.spans.push(Span::styled(
+            " ".repeat(target_width - line_width),
+            Style::default().bg(bg),
+        ));
+    }
+
+    line
 }
 
 fn render_command_mode(command: &str, width: u16, mode: RenderMode) -> Vec<Line<'static>> {
@@ -2719,7 +2903,7 @@ fn truncate_text(text: &str, max_len: usize) -> String {
 }
 
 fn user_label_style() -> Style {
-    Style::default().fg(palette::TEXT_MUTED)
+    Style::default().fg(palette::USER_BODY)
 }
 
 fn user_body_style() -> Style {
@@ -3354,7 +3538,7 @@ mod tests {
         };
         let lines = cell.lines_with_mode(80, true, super::RenderMode::Live);
         // One header line, no details/args/output expansion.
-        assert_eq!(lines.len(), 1, "expected exactly 1 line, got {:?}", lines);
+        assert_eq!(lines.len(), 1, "expected exactly 1 line, got {lines:?}");
         let rendered: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
         // Header carries the agent id and the running status.
         assert!(
@@ -3700,7 +3884,7 @@ mod tests {
         // #861 RC4: when a streaming thinking block exceeds the line cap,
         // surface a live affordance pointing at Ctrl+O. The earlier code
         // suppressed the affordance unless `!streaming`.
-        let long = (1..=10)
+        let long = (1..=12)
             .map(|i| format!("Reasoning line {i}"))
             .collect::<Vec<_>>()
             .join("\n");
@@ -3715,7 +3899,7 @@ mod tests {
         );
         // The most recent line must be the visible tail (head dropped).
         assert!(
-            text.contains("Reasoning line 10"),
+            text.contains("Reasoning line 12"),
             "tail line missing, got: {text}"
         );
         assert!(
@@ -3777,6 +3961,13 @@ mod tests {
         let lines = cell.lines(80);
         let head = &lines[0];
         assert_eq!(head.spans[0].content.as_ref(), USER_GLYPH);
+        assert_eq!(head.spans[0].style.fg, Some(palette::USER_BODY));
+        assert_eq!(head.style.bg, Some(palette::SURFACE_ELEVATED));
+        assert_eq!(head.width(), 80);
+        assert!(
+            head.spans.iter().any(|span| span.style.bg.is_none()),
+            "content spans should keep their own styles and inherit the line background"
+        );
         // No "You" literal anywhere in the rendered head line.
         let visible: String = head
             .spans
@@ -3785,6 +3976,66 @@ mod tests {
             .collect::<String>();
         assert!(!visible.contains("You"), "user label dropped: {visible:?}");
         assert!(visible.contains("hello"));
+    }
+
+    #[test]
+    fn user_cell_wraps_fill_transcript_rows() {
+        let cell = HistoryCell::User {
+            content: "hello world this prompt wraps onto multiple transcript lines".to_string(),
+        };
+        let lines = cell.lines(18);
+
+        assert!(lines.len() > 1, "expected wrapped user message");
+        assert!(
+            lines
+                .iter()
+                .all(|line| line.style.bg == Some(palette::SURFACE_ELEVATED)),
+            "wrapped user message lines should keep the highlighted block background"
+        );
+        assert!(
+            lines.iter().all(|line| line.width() == 18),
+            "wrapped user message lines should fill the rendered row width"
+        );
+    }
+
+    #[test]
+    fn user_transcript_lines_do_not_append_visual_padding() {
+        let cell = HistoryCell::User {
+            content: "hello".to_string(),
+        };
+        let lines = cell.transcript_lines(80);
+        let head = &lines[0];
+        let visible: String = head.spans.iter().map(|s| s.content.as_ref()).collect();
+
+        assert_eq!(visible, format!("{USER_GLYPH} hello"));
+        assert!(head.width() < 80);
+        assert_eq!(head.style.bg, None);
+    }
+
+    #[test]
+    fn user_cell_renders_plain_text_without_markdown_interpretation() {
+        let cell = HistoryCell::User {
+            content: "  # heading\n- item\n   \nhello    world".to_string(),
+        };
+        let visible: Vec<String> = cell.lines(80).iter().map(line_text).collect();
+
+        assert_eq!(visible[0].trim_end(), format!("{USER_GLYPH}   # heading"));
+        assert!(
+            visible[1].trim_end().ends_with("- item"),
+            "dash-prefixed text must remain literal: {visible:?}"
+        );
+        assert!(
+            visible[2].ends_with("   "),
+            "whitespace-only lines must survive: {visible:?}"
+        );
+        assert!(
+            visible[3].trim_end().ends_with("hello    world"),
+            "internal spacing must remain literal: {visible:?}"
+        );
+        assert!(
+            !visible.iter().any(|line| line.contains('\u{2500}')),
+            "plain user heading must not add markdown heading rule: {visible:?}"
+        );
     }
 
     #[test]
@@ -3806,6 +4057,29 @@ mod tests {
             "assistant label dropped: {visible:?}"
         );
         assert!(visible.contains("ready"));
+        assert_ne!(head.style.bg, Some(palette::SURFACE_ELEVATED));
+    }
+
+    #[test]
+    fn assistant_cell_still_renders_markdown() {
+        let cell = HistoryCell::Assistant {
+            content: "# Heading\n\n- item".to_string(),
+            streaming: false,
+        };
+        let visible: Vec<String> = cell.lines(80).iter().map(line_text).collect();
+
+        assert!(
+            visible[0].contains("Heading"),
+            "assistant heading text should render: {visible:?}"
+        );
+        assert!(
+            !visible[0].contains("# Heading"),
+            "assistant heading should still be parsed as markdown: {visible:?}"
+        );
+        assert!(
+            visible.iter().any(|line| line.contains('\u{2500}')),
+            "assistant h1 markdown should still add a heading rule: {visible:?}"
+        );
     }
 
     #[test]
@@ -4309,9 +4583,9 @@ mod tests {
     #[test]
     fn long_thinking_display_is_shorter_than_transcript() {
         // Build a multi-paragraph thinking body so the live view has
-        // something to compress. Without an explicit Summary block, the
-        // live surface should show status + affordance only; Ctrl+O remains
-        // the path to the full body.
+        // something to compress. Without an explicit Summary block, the live
+        // surface should show a bounded preview plus affordance; Ctrl+O
+        // remains the path to the full body.
         let body = "First paragraph lede.\n\
                     Second sentence of the first paragraph.\n\n\
                     Second paragraph: deeper analysis follows.\n\
@@ -4350,8 +4624,8 @@ mod tests {
             "transcript thinking must keep the lede"
         );
         assert!(
-            !live_text.contains("First paragraph lede"),
-            "live thinking must not show raw completed reasoning: {live_text}"
+            live_text.contains("First paragraph lede"),
+            "live thinking should preview completed reasoning: {live_text}"
         );
         assert!(
             transcript_text.contains("Fourth paragraph"),
@@ -4372,10 +4646,10 @@ mod tests {
     }
 
     #[test]
-    fn completed_thinking_without_summary_stays_out_of_live_view() {
-        // Even a short completed reasoning body can read like the user's
-        // prompt when rendered inline. Keep it in transcript/detail surfaces
-        // and show the Ctrl+O affordance in the main flow.
+    fn completed_short_thinking_without_summary_stays_visible_in_live_view() {
+        // Short completed reasoning should not become a dead "Full reasoning
+        // in Ctrl+O" card. The reasoning rail and tint already distinguish it
+        // from the user's prompt, so show the useful body inline.
         let cell = HistoryCell::Thinking {
             content: "One brief reasoning step.".to_string(),
             streaming: false,
@@ -4395,16 +4669,16 @@ mod tests {
         let transcript_text = lines_text(&transcript);
 
         assert!(
-            !live_text.contains("One brief reasoning step."),
-            "live thinking must hide raw completed reasoning: {live_text}"
+            live_text.contains("One brief reasoning step."),
+            "live thinking must preview short completed reasoning: {live_text}"
         );
         assert!(
             transcript_text.contains("One brief reasoning step."),
             "transcript thinking must keep the full reasoning body"
         );
         assert!(
-            live_text.contains("Full reasoning in Ctrl+O"),
-            "live thinking must offer the detail affordance"
+            !live_text.contains("Full reasoning in Ctrl+O"),
+            "complete short reasoning should not need the detail affordance: {live_text}"
         );
     }
 

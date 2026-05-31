@@ -65,7 +65,7 @@ impl PrefixFingerprint {
             _ => sha256_hex(b""),
         };
 
-        let combined = format!("{}:{}", system_sha256, tools_sha256);
+        let combined = format!("{system_sha256}:{tools_sha256}");
         let combined_sha256 = sha256_hex(combined.as_bytes());
 
         Self {
@@ -123,7 +123,7 @@ impl PrefixChange {
 /// Monitors and manages prefix-cache stability across turns.
 ///
 /// This is the core abstraction, mirroring Reasonix's `ImmutablePrefix`
-/// concept but adapted to DeepSeek-TUI's existing architecture where the
+/// concept but adapted to CodeWhale's existing architecture where the
 /// system prompt is rebuilt each turn and tools are registered at startup.
 ///
 /// Usage:

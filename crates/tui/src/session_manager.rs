@@ -18,11 +18,6 @@ use uuid::Uuid;
 
 /// Maximum number of sessions to retain
 const MAX_SESSIONS: usize = 50;
-/// Maximum number of messages to persist per session (#402 P0).
-/// Beyond this limit, the oldest messages are dropped and a truncation
-/// note is prepended to the system prompt. Keeps session files bounded
-/// so save/load remains fast even for long-running conversations.
-const MAX_PERSISTED_MESSAGES: usize = 500;
 const CURRENT_SESSION_SCHEMA_VERSION: u32 = 1;
 const CURRENT_QUEUE_SCHEMA_VERSION: u32 = 1;
 
@@ -132,6 +127,11 @@ pub struct SessionMetadata {
     /// current saved sessions are linear JSON files, not per-entry trees.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub forked_from_message_count: Option<usize>,
+    /// Cumulative turn duration in seconds (sum of completed turn elapsed
+    /// times). Persisted so the footer "worked" chip survives restarts
+    /// (#2038).
+    #[serde(default)]
+    pub cumulative_turn_secs: u64,
 }
 
 /// Cost and high-water-mark fields persisted with each session.
@@ -242,16 +242,21 @@ impl SessionManager {
         Ok(Self { sessions_dir })
     }
 
-    /// Create a `SessionManager` using the default location (~/.deepseek/sessions)
+    /// Create a `SessionManager` using the default location.
     pub fn default_location() -> std::io::Result<Self> {
         Self::new(default_sessions_dir()?)
+    }
+
+    /// Return the resolved sessions directory path.
+    pub fn sessions_dir(&self) -> &Path {
+        &self.sessions_dir
     }
 
     /// Save a session to disk using atomic write (temp file + fsync + rename).
     pub fn save_session(&self, session: &SavedSession) -> std::io::Result<PathBuf> {
         let path = self.validated_session_path(&session.metadata.id)?;
 
-        let content = serde_json::to_string_pretty(session)
+        let content = serde_json::to_string_pretty(&session)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
         // Atomic write via write_atomic (NamedTempFile + fsync + persist)
@@ -268,7 +273,7 @@ impl SessionManager {
         let checkpoints = self.sessions_dir.join("checkpoints");
         fs::create_dir_all(&checkpoints)?;
         let path = checkpoints.join("latest.json");
-        let content = serde_json::to_string_pretty(session)
+        let content = serde_json::to_string_pretty(&session)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         write_atomic(&path, content.as_bytes())?;
         Ok(path)
@@ -281,7 +286,7 @@ impl SessionManager {
             return Ok(None);
         }
         let content = fs::read_to_string(&path)?;
-        let session: SavedSession = serde_json::from_str(&content)
+        let mut session: SavedSession = serde_json::from_str(&content)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         if session.schema_version > CURRENT_SESSION_SCHEMA_VERSION {
             return Err(std::io::Error::new(
@@ -292,6 +297,7 @@ impl SessionManager {
                 ),
             ));
         }
+        session.system_prompt = strip_legacy_truncation_note(session.system_prompt);
         Ok(Some(session))
     }
 
@@ -362,7 +368,7 @@ impl SessionManager {
         let path = self.validated_session_path(id)?;
 
         let content = fs::read_to_string(&path)?;
-        let session: SavedSession = serde_json::from_str(&content)
+        let mut session: SavedSession = serde_json::from_str(&content)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         if session.schema_version > CURRENT_SESSION_SCHEMA_VERSION {
             return Err(std::io::Error::new(
@@ -373,6 +379,8 @@ impl SessionManager {
                 ),
             ));
         }
+
+        session.system_prompt = strip_legacy_truncation_note(session.system_prompt);
 
         Ok(session)
     }
@@ -478,8 +486,8 @@ impl SessionManager {
         Ok(())
     }
 
-    /// Clean up old sessions to stay within `MAX_SESSIONS` limit
-    fn cleanup_old_sessions(&self) -> std::io::Result<()> {
+    /// Clean up old sessions to stay within `MAX_SESSIONS` limit.
+    pub fn cleanup_old_sessions(&self) -> std::io::Result<()> {
         let sessions = self.list_sessions()?;
 
         if sessions.len() > MAX_SESSIONS {
@@ -607,12 +615,13 @@ fn is_git_metadata_entry(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Resolve the default session directory path (`~/.deepseek/sessions`).
+/// Resolve the default session directory path.
+///
+/// v0.8.44: prefers `~/.codewhale/sessions`, falls back to
+/// `~/.deepseek/sessions` for existing installs.
 pub fn default_sessions_dir() -> std::io::Result<PathBuf> {
-    let home = dirs::home_dir().ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::NotFound, "Home directory not found")
-    })?;
-    Ok(home.join(".deepseek").join("sessions"))
+    codewhale_config::resolve_state_dir("sessions")
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::NotFound, e.to_string()))
 }
 
 /// Prune snapshots older than `max_age` for `workspace`.
@@ -700,8 +709,6 @@ pub fn create_saved_session_with_id_and_mode(
         })
         .unwrap_or_else(|| "New Session".to_string());
 
-    let (capped_messages, truncation_note) = cap_messages(messages);
-
     SavedSession {
         schema_version: CURRENT_SESSION_SCHEMA_VERSION,
         metadata: SessionMetadata {
@@ -717,12 +724,10 @@ pub fn create_saved_session_with_id_and_mode(
             cost: SessionCostSnapshot::default(),
             parent_session_id: None,
             forked_from_message_count: None,
+            cumulative_turn_secs: 0,
         },
-        messages: capped_messages,
-        system_prompt: merge_truncation_note(
-            system_prompt_to_string(system_prompt),
-            truncation_note,
-        ),
+        messages: messages.to_vec(),
+        system_prompt: system_prompt_to_string(system_prompt),
         context_references: Vec::new(),
         artifacts: Vec::new(),
     }
@@ -736,45 +741,34 @@ pub fn update_session(
     system_prompt: Option<&SystemPrompt>,
 ) -> SavedSession {
     session.schema_version = CURRENT_SESSION_SCHEMA_VERSION;
-    let (capped_messages, truncation_note) = cap_messages(messages);
-    session.messages = capped_messages;
+    session.messages.clear();
+    session.messages.extend_from_slice(messages);
     session.metadata.updated_at = Utc::now();
     session.metadata.message_count = messages.len();
     session.metadata.total_tokens = total_tokens;
-    session.system_prompt = merge_truncation_note(
-        system_prompt_to_string(system_prompt).or(session.system_prompt),
-        truncation_note,
-    );
+    if system_prompt.is_some() {
+        session.system_prompt = system_prompt_to_string(system_prompt);
+    }
     session
 }
 
-/// Cap messages to [`MAX_PERSISTED_MESSAGES`], keeping the most recent.
-/// Returns the capped slice and an optional truncation note.
-fn cap_messages(messages: &[Message]) -> (Vec<Message>, Option<String>) {
-    let total = messages.len();
-    if total <= MAX_PERSISTED_MESSAGES {
-        return (messages.to_vec(), None);
+/// Strip a stale `[Session note]` block that was written by the old
+/// 500-message cap. Only removes notes that contain the specific
+/// "older messages were dropped" phrase — ordinary user-added
+/// `[Session note]` prompts are left untouched.
+fn strip_legacy_truncation_note(system_prompt: Option<String>) -> Option<String> {
+    let sp = system_prompt?;
+    let Some(trimmed) = sp.strip_prefix("[Session note]\n") else {
+        return Some(sp);
+    };
+    // Only strip if this is the known cap_messages note.
+    if !trimmed.contains("older messages were dropped") {
+        return Some(sp);
     }
-    let dropped = total - MAX_PERSISTED_MESSAGES;
-    let note = format!(
-        "Note: {dropped} older messages were dropped from the session file \
-         to keep persistence bounded. The full conversation history may \
-         still be recoverable from cycle archives."
-    );
-    (
-        messages[total - MAX_PERSISTED_MESSAGES..].to_vec(),
-        Some(note),
-    )
-}
-
-/// Merge an optional truncation note into the system prompt string.
-fn merge_truncation_note(system_prompt: Option<String>, note: Option<String>) -> Option<String> {
-    match (system_prompt, note) {
-        (None, None) => None,
-        (Some(sp), None) => Some(sp),
-        (None, Some(note)) => Some(format!("[Session note]\n{note}")),
-        (Some(sp), Some(note)) => Some(format!("[Session note]\n{note}\n\n---\n\n{sp}")),
-    }
+    // The note block ends with "\n\n---\n\n" (7 chars) followed by the real prompt.
+    trimmed
+        .find("\n\n---\n\n")
+        .map(|pos| trimmed[pos + 7..].to_string())
 }
 
 /// String-scan a JSON byte buffer for the top-level `"metadata":{...}`
@@ -1039,6 +1033,7 @@ mod tests {
                 cost: SessionCostSnapshot::default(),
                 parent_session_id: None,
                 forked_from_message_count: None,
+                cumulative_turn_secs: 0,
             },
             system_prompt: None,
             context_references: Vec::new(),
@@ -1069,6 +1064,7 @@ mod tests {
                 cost: SessionCostSnapshot::default(),
                 parent_session_id: None,
                 forked_from_message_count: None,
+                cumulative_turn_secs: 0,
             },
             system_prompt: None,
             context_references: Vec::new(),
@@ -1103,6 +1099,118 @@ mod tests {
         let loaded = manager.load_session(&session_id).expect("load");
         assert_eq!(loaded.metadata.id, session_id);
         assert_eq!(loaded.messages.len(), 2);
+    }
+
+    #[test]
+    fn save_session_preserves_large_tool_outputs_for_cache_fidelity() {
+        let tmp = tempdir().expect("tempdir");
+        let manager = SessionManager::new(tmp.path().join("sessions")).expect("new");
+        let raw = "RAW_SESSION_SENTINEL\n".repeat(2_000);
+        let messages = vec![
+            Message {
+                role: "assistant".to_string(),
+                content: vec![ContentBlock::ToolUse {
+                    id: "call-big".to_string(),
+                    name: "exec_shell".to_string(),
+                    input: serde_json::json!({"command": "cargo test -p codewhale-tui"}),
+                    caller: None,
+                }],
+            },
+            Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: "call-big".to_string(),
+                    content: raw.clone(),
+                    is_error: None,
+                    content_blocks: None,
+                }],
+            },
+        ];
+        let mut session = create_saved_session(&messages, "test-model", tmp.path(), 100, None);
+        session.artifacts.push(crate::artifacts::ArtifactRecord {
+            id: "art_call-big".to_string(),
+            kind: crate::artifacts::ArtifactKind::ToolOutput,
+            session_id: session.metadata.id.clone(),
+            tool_call_id: "call-big".to_string(),
+            tool_name: "exec_shell".to_string(),
+            created_at: Utc::now(),
+            byte_size: raw.len() as u64,
+            preview: "checking crate ... error[E0425]".to_string(),
+            storage_path: PathBuf::from("artifacts/art_call-big.txt"),
+        });
+
+        let path = manager.save_session(&session).expect("save");
+        let persisted_json = fs::read_to_string(path).expect("read persisted session");
+        // Raw output is preserved in-session so resume can hit the LLM cache.
+        assert!(persisted_json.contains("RAW_SESSION_SENTINEL"));
+
+        let loaded = manager.load_session(&session.metadata.id).expect("load");
+        let ContentBlock::ToolResult { content, .. } = &loaded.messages[1].content[0] else {
+            panic!("expected loaded tool result");
+        };
+        // Loaded session retains the original output for cache fidelity.
+        assert!(content.contains("RAW_SESSION_SENTINEL"));
+        assert!(!content.contains("[TOOL_OUTPUT_RECEIPT]"));
+    }
+
+    #[test]
+    fn load_session_preserves_legacy_large_tool_outputs_for_cache_fidelity() {
+        let tmp = tempdir().expect("tempdir");
+        let manager = SessionManager::new(tmp.path().join("sessions")).expect("new");
+        let raw = "RAW_LEGACY_RESUME_SENTINEL\n".repeat(2_000);
+        let messages = vec![
+            Message {
+                role: "assistant".to_string(),
+                content: vec![ContentBlock::ToolUse {
+                    id: "call-legacy".to_string(),
+                    name: "exec_shell".to_string(),
+                    input: serde_json::json!({"command": "cargo check"}),
+                    caller: None,
+                }],
+            },
+            Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: "call-legacy".to_string(),
+                    content: raw.clone(),
+                    is_error: None,
+                    content_blocks: None,
+                }],
+            },
+        ];
+        let mut session = create_saved_session(&messages, "test-model", tmp.path(), 100, None);
+        session.artifacts.push(crate::artifacts::ArtifactRecord {
+            id: "art_call-legacy".to_string(),
+            kind: crate::artifacts::ArtifactKind::ToolOutput,
+            session_id: session.metadata.id.clone(),
+            tool_call_id: "call-legacy".to_string(),
+            tool_name: "exec_shell".to_string(),
+            created_at: Utc::now(),
+            byte_size: raw.len() as u64,
+            preview: "cargo check output".to_string(),
+            storage_path: PathBuf::from("artifacts/art_call-legacy.txt"),
+        });
+        let path = manager
+            .validated_session_path(&session.metadata.id)
+            .expect("path");
+        fs::write(
+            &path,
+            serde_json::to_string_pretty(&session).expect("serialize legacy session"),
+        )
+        .expect("write legacy raw session");
+        assert!(
+            fs::read_to_string(&path)
+                .expect("read legacy raw")
+                .contains("RAW_LEGACY_RESUME_SENTINEL")
+        );
+
+        let loaded = manager.load_session(&session.metadata.id).expect("load");
+        let ContentBlock::ToolResult { content, .. } = &loaded.messages[1].content[0] else {
+            panic!("expected loaded tool result");
+        };
+        // Loaded session preserves original output so resume can hit the LLM cache.
+        assert!(content.contains("RAW_LEGACY_RESUME_SENTINEL"));
+        assert!(!content.contains("[TOOL_OUTPUT_RECEIPT]"));
     }
 
     #[test]
@@ -1390,6 +1498,37 @@ mod tests {
     }
 
     #[test]
+    fn save_load_round_trip_preserves_all_messages_for_cache_fidelity() {
+        let tmp = tempdir().expect("tempdir");
+        let manager = SessionManager::new(tmp.path().join("sessions")).expect("new");
+        // Covers the old 500-message cap boundary and well beyond.
+        for count in [0, 1, 500, 501, 600, 1000] {
+            let original: Vec<_> = (0..count)
+                .map(|i| {
+                    make_test_message(
+                        if i % 2 == 0 { "user" } else { "assistant" },
+                        &format!("round-trip message {i}"),
+                    )
+                })
+                .collect();
+
+            let session = create_saved_session(&original, "test-model", tmp.path(), 0, None);
+            manager.save_session(&session).expect("save");
+            let loaded = manager.load_session(&session.metadata.id).expect("load");
+
+            assert_eq!(
+                loaded.messages.len(),
+                count,
+                "count preserved for count={count}"
+            );
+            assert_eq!(
+                loaded.messages, original,
+                "every message byte-identical after round-trip for count={count}"
+            );
+        }
+    }
+
+    #[test]
     fn test_checkpoint_round_trip_and_clear() {
         let tmp = tempdir().expect("tempdir");
         let manager = SessionManager::new(tmp.path().join("sessions")).expect("new");
@@ -1656,10 +1795,9 @@ mod tests {
                     "workspace": "/tmp"
                 }},
                 "messages": [
-                    {{ "role": "user", "content": [ {{ "Text": {{ "text": {body:?} }} }} ] }}
+                    {{ "role": "user", "content": [ {{ "Text": {{ "text": {big_text:?} }} }} ] }}
                 ]
-            }}"#,
-            body = big_text
+            }}"#
         );
 
         let extracted =

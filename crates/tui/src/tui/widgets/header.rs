@@ -621,7 +621,7 @@ mod tests {
             HeaderData::new(
                 AppMode::Agent,
                 "deepseek-v4-pro",
-                "deepseek-tui",
+                "codewhale-tui",
                 false,
                 palette::DEEPSEEK_INK,
             ),
@@ -629,7 +629,7 @@ mod tests {
         );
 
         assert!(rendered.contains("Agent"));
-        assert!(rendered.contains("deepseek-tui"));
+        assert!(rendered.contains("codewhale-tui"));
         assert!(rendered.contains("deepseek-v4-pro"));
         assert!(!rendered.contains("Plan"));
         assert!(!rendered.contains("Yolo"));
@@ -639,12 +639,12 @@ mod tests {
     fn header_renders_version_chip_when_width_allows() {
         // At a generous width the header must surface the runtime version
         // — users repeatedly ask for it in the live UI (vs only via
-        // `deepseek --version` / `/status`).
+        // `codewhale --version` / `/status`).
         let rendered = render_header(
             HeaderData::new(
                 AppMode::Agent,
                 "deepseek-v4-pro",
-                "deepseek-tui",
+                "codewhale-tui",
                 false,
                 palette::DEEPSEEK_INK,
             ),
@@ -665,7 +665,7 @@ mod tests {
             HeaderData::new(
                 AppMode::Yolo,
                 "deepseek-v4-pro",
-                "deepseek-tui",
+                "codewhale-tui",
                 true,
                 palette::DEEPSEEK_INK,
             )
@@ -777,7 +777,7 @@ mod tests {
             HeaderData::new(
                 AppMode::Agent,
                 "deepseek-ai/deepseek-v4-flash",
-                "deepseek-tui",
+                "codewhale-tui",
                 false,
                 palette::DEEPSEEK_INK,
             )
@@ -796,7 +796,7 @@ mod tests {
             HeaderData::new(
                 AppMode::Agent,
                 "deepseek-v4-pro",
-                "deepseek-tui",
+                "codewhale-tui",
                 false,
                 palette::DEEPSEEK_INK,
             ),
@@ -861,7 +861,7 @@ mod tests {
             HeaderData::new(
                 AppMode::Agent,
                 "deepseek-v4-pro",
-                "deepseek-tui",
+                "codewhale-tui",
                 false,
                 palette::DEEPSEEK_INK,
             )
@@ -892,7 +892,7 @@ mod tests {
             HeaderData::new(
                 AppMode::Agent,
                 "deepseek-v4-pro",
-                "deepseek-tui",
+                "codewhale-tui",
                 false,
                 palette::DEEPSEEK_INK,
             )

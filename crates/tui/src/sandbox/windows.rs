@@ -1,6 +1,6 @@
 //! Windows sandbox helper contract.
 //!
-//! Current status: DeepSeek TUI does not advertise an in-process Windows
+//! Current status: CodeWhale does not advertise an in-process Windows
 //! sandbox. Future Windows support must run commands through a dedicated
 //! helper that provides process-tree containment with a Job Object and
 //! `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`.

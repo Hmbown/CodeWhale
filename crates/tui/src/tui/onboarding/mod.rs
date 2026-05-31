@@ -22,11 +22,12 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     let block = Block::default().style(Style::default().bg(palette::DEEPSEEK_INK));
     f.render_widget(block, area);
 
+    const TOP_MARGIN: u16 = 2;
     let content_width = 76.min(area.width.saturating_sub(4));
-    let content_height = 20.min(area.height.saturating_sub(4));
+    let content_height = 20.min(area.height.saturating_sub(TOP_MARGIN + 2));
     let content_area = Rect {
-        x: (area.width - content_width) / 2,
-        y: (area.height - content_height) / 2,
+        x: (area.width.saturating_sub(content_width)) / 2,
+        y: TOP_MARGIN,
         width: content_width,
         height: content_height,
     };
@@ -43,7 +44,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     if !lines.is_empty() {
         let mut panel = Block::default()
             .title(Line::from(Span::styled(
-                " DeepSeek TUI ",
+                " CodeWhale ",
                 Style::default()
                     .fg(palette::DEEPSEEK_BLUE)
                     .add_modifier(Modifier::BOLD),
@@ -127,7 +128,13 @@ pub fn tips_lines(app: &App) -> Vec<ratatui::text::Line<'static>> {
 }
 
 pub fn default_marker_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|home| home.join(".deepseek").join(".onboarded"))
+    dirs::home_dir().map(|home| {
+        let primary = home.join(".codewhale").join(".onboarded");
+        if primary.exists() {
+            return primary;
+        }
+        home.join(".deepseek").join(".onboarded")
+    })
 }
 
 pub fn is_onboarded() -> bool {

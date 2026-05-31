@@ -5,7 +5,9 @@ use std::time::Duration;
 
 use super::CommandResult;
 use crate::client::DeepSeekClient;
-use crate::config::{COMMON_DEEPSEEK_MODELS, clear_api_key, normalize_model_name_for_provider};
+use crate::config::{
+    COMMON_DEEPSEEK_MODELS, Config, clear_api_key, expand_path, normalize_model_name_for_provider,
+};
 use crate::config_ui::{ConfigUiMode, parse_mode};
 use crate::llm_client::LlmClient;
 use crate::localization::resolve_locale;
@@ -91,6 +93,7 @@ fn show_single_setting(app: &App, key: &str) -> CommandResult {
             crate::localization::Locale::Ja => "ja",
             crate::localization::Locale::PtBr => "pt-BR",
             crate::localization::Locale::Es419 => "es-419",
+            crate::localization::Locale::Vi => "vi",
         }
     }
     fn density_display(d: crate::tui::app::ComposerDensity) -> &'static str {
@@ -122,6 +125,16 @@ fn show_single_setting(app: &App, key: &str) -> CommandResult {
             }
         }
         "approval_mode" | "approval" => Some(app.approval_mode.label().to_string()),
+        "base_url" => {
+            let config = match Config::load(app.config_path.clone(), app.config_profile.as_deref())
+            {
+                Ok(config) => config,
+                Err(err) => {
+                    return CommandResult::error(format!("Failed to load config: {err}"));
+                }
+            };
+            Some(config.deepseek_base_url())
+        }
         "locale" | "language" => Some(locale_display(app.ui_locale).to_string()),
         "theme" | "ui_theme" => {
             Some(crate::palette::theme_label_for_mode(app.ui_theme.mode).to_string())
@@ -284,7 +297,7 @@ pub fn persist_status_items(items: &[crate::config::StatusItem]) -> anyhow::Resu
     use anyhow::Context;
     use std::fs;
 
-    let path = config_toml_path()?;
+    let path = config_toml_path(None)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create config directory {}", parent.display()))?;
@@ -320,11 +333,15 @@ pub fn persist_status_items(items: &[crate::config::StatusItem]) -> anyhow::Resu
     Ok(path)
 }
 
-pub fn persist_root_string_key(key: &str, value: &str) -> anyhow::Result<PathBuf> {
+pub fn persist_root_string_key(
+    config_path: Option<&Path>,
+    key: &str,
+    value: &str,
+) -> anyhow::Result<PathBuf> {
     use anyhow::Context;
     use std::fs;
 
-    let path = config_toml_path()?;
+    let path = config_toml_path(config_path)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create config directory {}", parent.display()))?;
@@ -351,8 +368,11 @@ pub fn persist_root_string_key(key: &str, value: &str) -> anyhow::Result<PathBuf
 /// Resolve the path to `~/.deepseek/config.toml` (or
 /// `$DEEPSEEK_CONFIG_PATH`). Mirrors what `Config::load` accepts so we
 /// never write to a different file than the one we read.
-pub(super) fn config_toml_path() -> anyhow::Result<PathBuf> {
+pub(super) fn config_toml_path(config_path: Option<&Path>) -> anyhow::Result<PathBuf> {
     use anyhow::Context;
+    if let Some(path) = config_path {
+        return Ok(expand_path(path.to_string_lossy().as_ref()));
+    }
     if let Ok(env) = std::env::var("DEEPSEEK_CONFIG_PATH") {
         let trimmed = env.trim();
         if !trimmed.is_empty() {
@@ -360,6 +380,10 @@ pub(super) fn config_toml_path() -> anyhow::Result<PathBuf> {
         }
     }
     let home = dirs::home_dir().context("failed to resolve home directory for config.toml path")?;
+    let primary = home.join(".codewhale").join("config.toml");
+    if primary.exists() {
+        return Ok(primary);
+    }
     Ok(home.join(".deepseek").join("config.toml"))
 }
 
@@ -417,7 +441,8 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
             app.mcp_config_path = PathBuf::from(expand_tilde(value));
             app.mcp_restart_required = true;
             let message = if persist {
-                match persist_root_string_key("mcp_config_path", value) {
+                match persist_root_string_key(app.config_path.as_deref(), "mcp_config_path", value)
+                {
                     Ok(path) => format!(
                         "mcp_config_path = {} (saved to {}; restart required for MCP tool pool)",
                         app.mcp_config_path.display(),
@@ -432,6 +457,26 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
                 )
             };
             return CommandResult::message(message);
+        }
+        "base_url" => {
+            let value = value.trim();
+            if value.is_empty() {
+                return CommandResult::error("base_url cannot be empty");
+            }
+            if persist {
+                match persist_root_string_key(app.config_path.as_deref(), "base_url", value) {
+                    Ok(path) => {
+                        return CommandResult::message(format!(
+                            "base_url = {value} (saved to {})",
+                            path.display()
+                        ));
+                    }
+                    Err(err) => return CommandResult::error(format!("Failed to save: {err}")),
+                }
+            }
+            return CommandResult::error(
+                "base_url must be saved with --save; client base URL is loaded from config on startup. Restart and re-open your session after saving.",
+            );
         }
         _ => {}
     }
@@ -698,6 +743,47 @@ pub fn theme(app: &mut App, arg: Option<&str>) -> CommandResult {
     match arg.map(str::trim).filter(|s| !s.is_empty()) {
         None => CommandResult::action(AppAction::OpenThemePicker),
         Some(name) => set_config_value(app, "theme", name, true),
+    }
+}
+
+/// `/slop [query|export]` — inspect or export the slop ledger (#2127).
+/// With no arguments, prints a summary. `query` shows filtered results;
+/// `export` outputs the full ledger as Markdown.
+pub fn slop(_app: &mut App, arg: Option<&str>) -> CommandResult {
+    let arg = arg.map(str::trim).unwrap_or("");
+    let ledger = match crate::slop_ledger::SlopLedger::load() {
+        Ok(l) => l,
+        Err(e) => return CommandResult::error(format!("Failed to load slop ledger: {e}")),
+    };
+
+    match arg {
+        "" => CommandResult::message(ledger.summary()),
+        "query" | "q" => {
+            if ledger.is_empty() {
+                return CommandResult::message("Slop ledger is empty.");
+            }
+            let mut out = String::new();
+            for entry in &ledger.query(&Default::default()) {
+                use std::fmt::Write;
+                let _ = writeln!(
+                    out,
+                    "[{}] {} ({:?} | {:?}) — {}",
+                    crate::slop_ledger::short_id(&entry.id),
+                    entry.bucket.as_str(),
+                    entry.severity,
+                    entry.status,
+                    entry.title
+                );
+            }
+            CommandResult::message(out)
+        }
+        "export" | "e" => {
+            let md = ledger.export_markdown(None, None);
+            CommandResult::message(md)
+        }
+        _ => CommandResult::error(format!(
+            "Unknown /slop action '{arg}'. Use /slop, /slop query, or /slop export."
+        )),
     }
 }
 
@@ -978,7 +1064,7 @@ pub struct AutoRouteSelection {
 }
 
 pub const AUTO_MODEL_ROUTER_SYSTEM_PROMPT: &str = "\
-You are the DeepSeek TUI auto-routing classifier. Return only compact JSON: \
+You are the codewhale auto-routing classifier. Return only compact JSON: \
 {\"model\":\"deepseek-v4-flash|deepseek-v4-pro\",\"thinking\":\"off|high|max\"}. \
 Use deepseek-v4-flash for trivial, conversational, status, or single-step work. \
 Use deepseek-v4-pro for coding, debugging, release work, multi-step tasks, high-risk decisions, \
@@ -1712,7 +1798,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-default-mode-test-{}-{}",
+            "codewhale-tui-default-mode-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -1737,7 +1823,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-cost-currency-test-{}-{}",
+            "codewhale-tui-cost-currency-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -1757,13 +1843,141 @@ mod tests {
     }
 
     #[test]
+    fn config_command_base_url_save_persists_value() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "deepseek-tui-base-url-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root).unwrap();
+        let _guard = EnvGuard::new(&temp_root);
+
+        let mut app = create_test_app();
+        let result = config_command(
+            &mut app,
+            Some("base_url https://example.internal.local/v1 --save"),
+        );
+        let msg = result.message.unwrap();
+        let saved_path = config_toml_path(None).unwrap();
+        let saved = fs::read_to_string(&saved_path).unwrap();
+
+        assert_eq!(
+            msg,
+            format!(
+                "base_url = https://example.internal.local/v1 (saved to {})",
+                saved_path.display()
+            )
+        );
+        assert!(saved.contains("base_url = \"https://example.internal.local/v1\""));
+    }
+
+    #[test]
+    fn config_command_base_url_without_save_requires_save() {
+        let _lock = lock_test_env();
+        let mut app = create_test_app();
+        let result = config_command(&mut app, Some("base_url https://example.internal.local/v1"));
+        assert!(result.is_error);
+        let msg = result.message.unwrap();
+
+        assert!(
+            msg.contains("base_url must be saved with --save"),
+            "got {msg}"
+        );
+    }
+
+    #[test]
+    fn config_command_base_url_reads_current_value_from_config() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "deepseek-tui-base-url-show-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root).unwrap();
+        let _guard = EnvGuard::new(&temp_root);
+
+        let config_path = temp_root.join(".deepseek").join("config.toml");
+        fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+        fs::write(
+            &config_path,
+            "base_url = \"https://api.from-config.local/v1\"\n",
+        )
+        .unwrap();
+
+        let mut app = create_test_app();
+        let result = config_command(&mut app, Some("base_url"));
+        let msg = result.message.unwrap();
+
+        assert_eq!(msg, "base_url = https://api.from-config.local/v1");
+    }
+
+    #[test]
+    fn config_command_base_url_reads_current_value_from_app_config_path() {
+        let temp_root = env::temp_dir().join(format!(
+            "deepseek-tui-base-url-app-config-path-test-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&temp_root).unwrap();
+
+        let config_path = temp_root.join("custom-config.toml");
+        fs::write(
+            &config_path,
+            "base_url = \"https://api.from-app-path.local/v1\"\n",
+        )
+        .unwrap();
+
+        let mut app = create_test_app();
+        app.config_path = Some(config_path.clone());
+        let result = config_command(&mut app, Some("base_url"));
+        let msg = result.message.unwrap();
+
+        assert_eq!(msg, "base_url = https://api.from-app-path.local/v1");
+    }
+
+    #[test]
+    fn config_command_base_url_save_persists_to_app_config_path() {
+        let temp_root = env::temp_dir().join(format!(
+            "deepseek-tui-base-url-save-app-path-test-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&temp_root).unwrap();
+
+        let config_path = temp_root.join("custom-config.toml");
+
+        let mut app = create_test_app();
+        app.config_path = Some(config_path.clone());
+        let result = config_command(
+            &mut app,
+            Some("base_url https://example.session.local/v1 --save"),
+        );
+        let msg = result.message.unwrap();
+        let saved = fs::read_to_string(&config_path).unwrap();
+
+        assert_eq!(
+            msg,
+            format!(
+                "base_url = https://example.session.local/v1 (saved to {})",
+                config_path.display()
+            )
+        );
+        assert!(saved.contains("base_url = \"https://example.session.local/v1\""));
+    }
+
+    #[test]
     fn theme_command_accepts_grayscale_arg() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-theme-command-test-{}-{}",
+            "codewhale-tui-theme-command-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -1786,7 +2000,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-theme-save-test-{}-{}",
+            "codewhale-tui-theme-save-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -1890,7 +2104,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-tui-logout-test-{}-{}",
+            "codewhale-tui-logout-test-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -1939,7 +2153,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-statusline-persist-{}-{}",
+            "codewhale-statusline-persist-{}-{}",
             std::process::id(),
             nanos
         ));
@@ -1970,7 +2184,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "deepseek-statusline-preserve-{}-{}",
+            "codewhale-statusline-preserve-{}-{}",
             std::process::id(),
             nanos
         ));

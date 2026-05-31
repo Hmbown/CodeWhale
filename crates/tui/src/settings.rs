@@ -109,6 +109,10 @@ impl TuiPrefs {
 
         let home = dirs::home_dir()
             .context("Failed to resolve home directory: cannot determine tui.toml path.")?;
+        let primary = home.join(".codewhale").join("tui.toml");
+        if primary.exists() {
+            return Ok(primary);
+        }
         Ok(home.join(".deepseek").join("tui.toml"))
     }
 
@@ -152,7 +156,7 @@ impl TuiPrefs {
         let theme = self.theme.trim().to_ascii_lowercase();
         let Some(theme) = normalize_theme_name(&theme) else {
             anyhow::bail!(
-                "Invalid tui.toml theme '{}': expected system, dark, light, grayscale, catppuccin-mocha, tokyo-night, dracula, or gruvbox-dark.",
+                "Invalid tui.toml theme '{}': expected system, dark, light, grayscale, catppuccin-mocha, tokyo-night, dracula, gruvbox-dark, or solarized-light.",
                 self.theme
             );
         };
@@ -419,6 +423,15 @@ impl Settings {
             self.fancy_animations = false;
         }
 
+        // tmux/screen activity monitors treat purely animated redraws as
+        // activity. Keep multiplexer sessions calm by pinning animations.
+        let in_terminal_multiplexer = std::env::var_os("TMUX").is_some_and(|v| !v.is_empty())
+            || std::env::var_os("STY").is_some_and(|v| !v.is_empty());
+        if in_terminal_multiplexer {
+            self.low_motion = true;
+            self.fancy_animations = false;
+        }
+
         // Plain Windows PowerShell / cmd.exe under legacy ConHost exposes none
         // of the modern terminal markers below. Keep rendering calmer there:
         // lower the motion rate, disable animated chrome, and avoid DEC 2026
@@ -507,7 +520,7 @@ impl Settings {
             "theme" => {
                 let Some(id) = crate::palette::ThemeId::from_name(value) else {
                     anyhow::bail!(
-                        "Failed to update setting: invalid theme '{value}'. Expected: system, dark, light, grayscale, catppuccin-mocha, tokyo-night, dracula, gruvbox-dark."
+                        "Failed to update setting: invalid theme '{value}'. Expected: system, dark, light, grayscale, catppuccin-mocha, tokyo-night, dracula, gruvbox-dark, solarized-light."
                     );
                 };
                 self.theme = id.name().to_string();
@@ -515,7 +528,7 @@ impl Settings {
             "ui_theme" => {
                 let Some(id) = crate::palette::ThemeId::from_name(value) else {
                     anyhow::bail!(
-                        "Failed to update setting: invalid theme '{value}'. Expected: system, dark, light, grayscale, catppuccin-mocha, tokyo-night, dracula, gruvbox-dark."
+                        "Failed to update setting: invalid theme '{value}'. Expected: system, dark, light, grayscale, catppuccin-mocha, tokyo-night, dracula, gruvbox-dark, solarized-light."
                     );
                 };
                 self.theme = id.name().to_string();
@@ -758,12 +771,16 @@ impl Settings {
             ("show_thinking", "Show model thinking: on/off"),
             ("show_tool_details", "Show detailed tool output: on/off"),
             (
+                "base_url",
+                "HTTP base URL for DeepSeek-compatible endpoints.",
+            ),
+            (
                 "locale",
                 "UI locale and default model language: auto, en, ja, zh-Hans, pt-BR, es-419",
             ),
             (
                 "theme",
-                "UI theme: system, dark, light, grayscale, catppuccin-mocha, tokyo-night, dracula, gruvbox-dark",
+                "UI theme: system, dark, light, grayscale, catppuccin-mocha, tokyo-night, dracula, gruvbox-dark, solarized-light",
             ),
             (
                 "background_color",
@@ -1136,8 +1153,13 @@ mod tests {
             .expect("set community theme alias");
         assert_eq!(settings.theme, "tokyo-night");
 
-        let err = settings
+        settings
             .set("theme", "solarized")
+            .expect("set solarized alias");
+        assert_eq!(settings.theme, "solarized-light");
+
+        let err = settings
+            .set("theme", "nord")
             .expect_err("unknown theme should fail");
         assert!(err.to_string().contains("invalid theme"));
     }
@@ -1305,9 +1327,31 @@ mod tests {
     fn no_animations_env_recognises_truthy_spellings_only() {
         let _g = no_animations_test_guard();
         let prev_wt_session = std::env::var_os("WT_SESSION");
+        let prev_tmux = std::env::var_os("TMUX");
+        let prev_sty = std::env::var_os("STY");
+        let prev_term_program = std::env::var_os("TERM_PROGRAM");
+        let prev_ssh_client = std::env::var_os("SSH_CLIENT");
+        let prev_ssh_tty = std::env::var_os("SSH_TTY");
+        let prev_tilix_id = std::env::var_os("TILIX_ID");
+        let prev_terminator_uuid = std::env::var_os("TERMINATOR_UUID");
+
         // The test is about NO_ANIMATIONS only. On Windows CI, an unmarked
         // console host now independently enables low_motion, so mark the host
         // as non-legacy while checking falsy spellings.
+        // Clear multiplexer markers for the same reason: they also force
+        // low_motion independently of NO_ANIMATIONS.
+        // Clear TERM_PROGRAM, SSH, and other terminal-specific variables as they
+        // also force low_motion independently of NO_ANIMATIONS.
+        // SAFETY: serialised by the guard.
+        unsafe {
+            std::env::remove_var("TMUX");
+            std::env::remove_var("STY");
+            std::env::remove_var("TERM_PROGRAM");
+            std::env::remove_var("SSH_CLIENT");
+            std::env::remove_var("SSH_TTY");
+            std::env::remove_var("TILIX_ID");
+            std::env::remove_var("TERMINATOR_UUID");
+        }
         #[cfg(windows)]
         unsafe {
             std::env::set_var("WT_SESSION", "test");
@@ -1336,6 +1380,34 @@ mod tests {
             match prev_wt_session {
                 Some(v) => std::env::set_var("WT_SESSION", v),
                 None => std::env::remove_var("WT_SESSION"),
+            }
+            match prev_tmux {
+                Some(v) => std::env::set_var("TMUX", v),
+                None => std::env::remove_var("TMUX"),
+            }
+            match prev_sty {
+                Some(v) => std::env::set_var("STY", v),
+                None => std::env::remove_var("STY"),
+            }
+            match prev_term_program {
+                Some(v) => std::env::set_var("TERM_PROGRAM", v),
+                None => std::env::remove_var("TERM_PROGRAM"),
+            }
+            match prev_ssh_client {
+                Some(v) => std::env::set_var("SSH_CLIENT", v),
+                None => std::env::remove_var("SSH_CLIENT"),
+            }
+            match prev_ssh_tty {
+                Some(v) => std::env::set_var("SSH_TTY", v),
+                None => std::env::remove_var("SSH_TTY"),
+            }
+            match prev_tilix_id {
+                Some(v) => std::env::set_var("TILIX_ID", v),
+                None => std::env::remove_var("TILIX_ID"),
+            }
+            match prev_terminator_uuid {
+                Some(v) => std::env::set_var("TERMINATOR_UUID", v),
+                None => std::env::remove_var("TERMINATOR_UUID"),
             }
         }
     }
@@ -1414,6 +1486,8 @@ mod tests {
         let prev_ssh_tty = std::env::var_os("SSH_TTY");
         let prev_tilix_id = std::env::var_os("TILIX_ID");
         let prev_terminator_uuid = std::env::var_os("TERMINATOR_UUID");
+        let prev_tmux = std::env::var_os("TMUX");
+        let prev_sty = std::env::var_os("STY");
         // SAFETY: serialised by the guard. Clear SSH_* so a real
         // SSH session running the test suite doesn't make this
         // assertion trivially fail — the SSH path is exercised
@@ -1423,6 +1497,8 @@ mod tests {
             std::env::remove_var("SSH_TTY");
             std::env::remove_var("TILIX_ID");
             std::env::remove_var("TERMINATOR_UUID");
+            std::env::remove_var("TMUX");
+            std::env::remove_var("STY");
         }
         for program in ["iTerm.app", "Apple_Terminal", "WezTerm", "xterm-256color"] {
             // SAFETY: serialised by the guard.
@@ -1453,6 +1529,12 @@ mod tests {
             }
             if let Some(v) = prev_terminator_uuid {
                 std::env::set_var("TERMINATOR_UUID", v);
+            }
+            if let Some(v) = prev_tmux {
+                std::env::set_var("TMUX", v);
+            }
+            if let Some(v) = prev_sty {
+                std::env::set_var("STY", v);
             }
         }
     }
@@ -1666,6 +1748,60 @@ mod tests {
             match prev_term_program {
                 Some(v) => std::env::set_var("TERM_PROGRAM", v),
                 None => std::env::remove_var("TERM_PROGRAM"),
+            }
+        }
+    }
+
+    #[test]
+    fn terminal_multiplexer_env_forces_low_motion_on() {
+        let _g = term_program_test_guard();
+        let vars = [
+            "TMUX",
+            "STY",
+            "TERM_PROGRAM",
+            "SSH_CLIENT",
+            "SSH_TTY",
+            "TILIX_ID",
+            "TERMINATOR_UUID",
+            "NO_ANIMATIONS",
+        ];
+        let prev: Vec<_> = vars
+            .iter()
+            .map(|name| (*name, std::env::var_os(name)))
+            .collect();
+
+        for (var, val) in [
+            ("TMUX", "/tmp/tmux-501/default,1234,0"),
+            ("STY", "1234.pts-0.host"),
+        ] {
+            // SAFETY: serialised by the guard.
+            unsafe {
+                for name in vars {
+                    std::env::remove_var(name);
+                }
+                std::env::set_var(var, val);
+            }
+            let mut settings = Settings::default();
+            assert!(!settings.low_motion, "default is animated");
+            assert!(settings.fancy_animations, "default shows the water strip");
+            settings.apply_env_overrides();
+            assert!(
+                settings.low_motion,
+                "{var}={val:?} must enable low_motion under terminal multiplexers (#1925)"
+            );
+            assert!(
+                !settings.fancy_animations,
+                "{var}={val:?} must disable fancy_animations under terminal multiplexers (#1925)"
+            );
+        }
+
+        // SAFETY: cleanup under the guard.
+        unsafe {
+            for (name, value) in prev {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
             }
         }
     }
@@ -1921,6 +2057,7 @@ mod tests {
             "tokyo-night",
             "dracula",
             "gruvbox-dark",
+            "solarized-light",
         ] {
             let mut prefs = TuiPrefs {
                 theme: theme.to_string(),
@@ -1948,17 +2085,16 @@ mod tests {
     #[test]
     fn tui_prefs_validate_rejects_unknown_theme() {
         let mut prefs = TuiPrefs {
-            theme: "solarized".to_string(),
+            theme: "nord".to_string(),
             ..TuiPrefs::default()
         };
-        let err = prefs
-            .validate()
-            .expect_err("solarized is not a valid theme");
+        let err = prefs.validate().expect_err("nord is not a valid theme");
         assert!(err.to_string().contains("Invalid tui.toml theme"));
         assert!(
             err.to_string()
                 .contains("expected system, dark, light, grayscale")
         );
+        assert!(err.to_string().contains("solarized-light"));
     }
 
     #[test]

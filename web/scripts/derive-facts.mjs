@@ -10,7 +10,7 @@
  *   - <repo>/crates/tui/src/sandbox/*.rs        → sandbox backends
  *   - <repo>/crates/tui/src/main.rs             → provider list (--provider arms)
  *   - <repo>/crates/tui/src/config.rs           → DEFAULT_TEXT_MODEL
- *   - <repo>/npm/deepseek-tui/package.json      → node engines
+ *   - <repo>/npm/codewhale/package.json         → node engines
  */
 import { readFileSync, readdirSync, writeFileSync, existsSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
@@ -46,10 +46,10 @@ function deriveSandboxBackends() {
   const files = readdirSync(dir)
     .filter((f) => f.endsWith(".rs"))
     .map((f) => f.replace(/\.rs$/, ""))
-    .filter((f) => !["mod", "policy", "backend", "opensandbox"].includes(f))
+    .filter((f) => !["mod", "policy", "backend", "opensandbox", "windows"].includes(f))
     .sort();
   // canonicalize platform names
-  const map = { seatbelt: "seatbelt (macOS)", landlock: "landlock (Linux)", windows: "AppContainer / restricted tokens (Windows)" };
+  const map = { seatbelt: "seatbelt (macOS)", landlock: "landlock (Linux)" };
   return files.map((f) => map[f] ?? f);
 }
 
@@ -66,12 +66,15 @@ function deriveProviders() {
   // shared ProviderKind, so we exclude it until that lands. Issue #1104.
   const labelMap = {
     Deepseek: { id: "deepseek", label: "DeepSeek", env: "DEEPSEEK_API_KEY" },
-    NvidiaNim: { id: "nvidia-nim", label: "NVIDIA NIM", env: "NVIDIA_API_KEY" },
-    Openai: { id: "openai", label: "OpenAI", env: "OPENAI_API_KEY" },
+    NvidiaNim: { id: "nvidia-nim", label: "NVIDIA NIM", env: "NVIDIA_API_KEY / NVIDIA_NIM_API_KEY" },
+    Openai: { id: "openai", label: "OpenAI-compatible", env: "OPENAI_API_KEY" },
+    Atlascloud: { id: "atlascloud", label: "AtlasCloud", env: "ATLASCLOUD_API_KEY" },
+    WanjieArk: { id: "wanjie-ark", label: "Wanjie Ark", env: "WANJIE_ARK_API_KEY / WANJIE_API_KEY / WANJIE_MAAS_API_KEY" },
     Openrouter: { id: "openrouter", label: "OpenRouter", env: "OPENROUTER_API_KEY" },
-    Novita: { id: "novita", label: "Novita", env: "NOVITA_API_KEY" },
-    Fireworks: { id: "fireworks", label: "Fireworks", env: "FIREWORKS_API_KEY" },
-    Sglang: { id: "sglang", label: "sglang", env: "SGLANG_API_KEY" },
+    Novita: { id: "novita", label: "Novita AI", env: "NOVITA_API_KEY" },
+    Fireworks: { id: "fireworks", label: "Fireworks AI", env: "FIREWORKS_API_KEY" },
+    Moonshot: { id: "moonshot", label: "Moonshot/Kimi", env: "MOONSHOT_API_KEY / KIMI_API_KEY" },
+    Sglang: { id: "sglang", label: "SGLang", env: "SGLANG_API_KEY" },
     Vllm: { id: "vllm", label: "vLLM", env: "VLLM_API_KEY" },
     Ollama: { id: "ollama", label: "Ollama", env: "OLLAMA_API_KEY" },
   };
@@ -86,7 +89,7 @@ function deriveDefaultModel() {
 }
 
 function deriveNodeEngines() {
-  const pkg = read("npm/deepseek-tui/package.json");
+  const pkg = read("npm/codewhale/package.json");
   if (!pkg) return null;
   try {
     return JSON.parse(pkg).engines?.node ?? null;

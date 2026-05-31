@@ -1,11 +1,13 @@
-//! Project context loading for DeepSeek TUI.
+//! Project context loading for CodeWhale.
 //!
 //! This module handles loading project-specific context files that provide
 //! instructions and context to the AI agent. These include:
 //!
-//! - `AGENTS.md` - Project-level agent instructions (primary)
+//! - `WHALE.md` - CodeWhale-native project instructions (highest priority)
+//! - `AGENTS.md` - Generic agent instructions (compatible with other agents)
 //! - `.claude/instructions.md` - Claude-style hidden instructions
 //! - `CLAUDE.md` - Claude-style instructions
+//! - `.codewhale/instructions.md` - Hidden instructions file (new)
 //! - `.deepseek/instructions.md` - Hidden instructions file (legacy)
 //!
 //! The loaded content is injected into the system prompt to give the agent
@@ -19,16 +21,28 @@ use serde::Serialize;
 use thiserror::Error;
 
 /// Names of project context files to look for, in priority order.
+/// WHALE.md is the CodeWhale-native convention; AGENTS.md and CLAUDE.md
+/// provide compatibility with other coding agents. `.codewhale/` is the
+/// new config directory; `.deepseek/` is the legacy fallback.
 const PROJECT_CONTEXT_FILES: &[&str] = &[
+    "WHALE.md",
     "AGENTS.md",
     ".claude/instructions.md",
     "CLAUDE.md",
+    ".codewhale/instructions.md",
     ".deepseek/instructions.md",
 ];
 
 /// User-level project instructions loaded as a fallback when the workspace and
-/// its parents do not define project context.
-const GLOBAL_AGENTS_RELATIVE_PATH: &[&str] = &[".deepseek", "AGENTS.md"];
+/// its parents do not define project context. `.codewhale/` takes priority
+/// over vendor-neutral `.agents/`, which takes priority over legacy
+/// `.deepseek/`, for both WHALE.md and AGENTS.md.
+const GLOBAL_AGENTS_RELATIVE_PATH: &[&str] = &[".codewhale", "AGENTS.md"];
+const GLOBAL_AGENTS_VENDOR_NEUTRAL_PATH: &[&str] = &[".agents", "AGENTS.md"];
+const GLOBAL_AGENTS_LEGACY_PATH: &[&str] = &[".deepseek", "AGENTS.md"];
+const GLOBAL_WHALE_RELATIVE_PATH: &[&str] = &[".codewhale", "WHALE.md"];
+const GLOBAL_WHALE_VENDOR_NEUTRAL_PATH: &[&str] = &[".agents", "WHALE.md"];
+const GLOBAL_WHALE_LEGACY_PATH: &[&str] = &[".deepseek", "WHALE.md"];
 
 /// Maximum size for project context files (to prevent loading huge files)
 const MAX_CONTEXT_SIZE: usize = 100 * 1024; // 100KB
@@ -39,6 +53,7 @@ const PACK_MAX_CONFIG_FILES: usize = 60;
 const PACK_MAX_DEPTH: usize = 4;
 const PACK_IGNORED_DIRS: &[&str] = &[
     ".git",
+    ".worktrees",
     "node_modules",
     ".venv",
     "venv",
@@ -155,7 +170,7 @@ struct ReadmePack {
 pub fn generate_project_context_pack(workspace: &Path) -> Option<String> {
     let mut entries = Vec::new();
     collect_pack_entries(workspace, workspace, 0, &mut entries);
-    entries.sort();
+    sort_pack_paths(&mut entries);
     entries.truncate(PACK_MAX_ENTRIES);
 
     let mut config_files = entries
@@ -164,7 +179,7 @@ pub fn generate_project_context_pack(workspace: &Path) -> Option<String> {
         .take(PACK_MAX_CONFIG_FILES)
         .cloned()
         .collect::<Vec<_>>();
-    config_files.sort();
+    sort_pack_paths(&mut config_files);
 
     let mut key_source_files = entries
         .iter()
@@ -172,7 +187,7 @@ pub fn generate_project_context_pack(workspace: &Path) -> Option<String> {
         .take(PACK_MAX_SOURCE_FILES)
         .cloned()
         .collect::<Vec<_>>();
-    key_source_files.sort();
+    sort_pack_paths(&mut key_source_files);
 
     let readme = read_readme_excerpt(workspace, &entries);
     let mut counts = BTreeMap::new();
@@ -274,10 +289,50 @@ fn relative_slash_path(root: &Path, path: &Path) -> Option<String> {
     for component in relative.components() {
         parts.push(component.as_os_str().to_string_lossy().to_string());
     }
-    if parts.is_empty() {
-        None
+    normalize_pack_relative_path(&parts.join("/"))
+}
+
+fn normalize_pack_relative_path(path: &str) -> Option<String> {
+    let normalized = path.replace('\\', "/");
+    let mut parts = Vec::new();
+    for part in normalized.split('/') {
+        if part.is_empty() || part == "." {
+            continue;
+        }
+        if part == ".." {
+            return None;
+        }
+        parts.push(part);
+    }
+    (!parts.is_empty()).then(|| parts.join("/"))
+}
+
+fn sort_pack_paths(paths: &mut [String]) {
+    paths.sort_by(|a, b| {
+        pack_path_priority(a)
+            .cmp(&pack_path_priority(b))
+            .then_with(|| pack_path_sort_key(a).cmp(&pack_path_sort_key(b)))
+            .then_with(|| a.cmp(b))
+    });
+}
+
+fn pack_path_sort_key(path: &str) -> String {
+    path.replace('\\', "/").to_ascii_lowercase()
+}
+
+fn pack_path_priority(path: &str) -> u8 {
+    let lower = pack_path_sort_key(path);
+    let name = lower.trim_end_matches('/').rsplit('/').next().unwrap_or("");
+    if matches!(name, "readme.md" | "readme.txt" | "readme") {
+        0
+    } else if is_config_file(&lower) {
+        1
+    } else if is_source_file(&lower) {
+        2
+    } else if lower.ends_with('/') {
+        3
     } else {
-        Some(parts.join("/"))
+        4
     }
 }
 
@@ -373,6 +428,11 @@ pub fn load_project_context(workspace: &Path) -> ProjectContext {
         if file_path.exists() && file_path.is_file() {
             match load_context_file(&file_path) {
                 Ok(content) => {
+                    tracing::info!(
+                        "Loaded project context from {} ({} bytes)",
+                        file_path.display(),
+                        content.len()
+                    );
                     ctx.instructions = Some(content);
                     ctx.source_path = Some(file_path);
                     break;
@@ -420,7 +480,7 @@ fn load_project_context_with_parents_and_home(
         }
     }
 
-    // Always check `~/.deepseek/AGENTS.md` so user-wide preferences
+    // Always check global instruction files so user-wide preferences
     // travel into every session (#1157). When both global and project
     // instructions exist, the global block prepends the project's so
     // workspace overrides win the last word; when only global exists,
@@ -470,12 +530,11 @@ fn load_project_context_with_parents_and_home(
     ctx
 }
 
-/// Combine `~/.deepseek/AGENTS.md` (global, user-wide preferences) with a
-/// project-local AGENTS.md/CLAUDE.md/instructions.md. Global comes first
-/// so workspace-specific rules can override it — the model reads in
-/// declared order. Each block is wrapped in a labelled fence so the
-/// model can tell which level any rule comes from when the two sets
-/// disagree (#1157).
+/// Combine global user-wide preferences with a project-local
+/// AGENTS.md/CLAUDE.md/instructions.md. Global comes first so
+/// workspace-specific rules can override it — the model reads in declared
+/// order. Each block is wrapped in a labelled fence so the model can tell
+/// which level any rule comes from when the two sets disagree (#1157).
 fn merge_global_and_project_instructions(
     global: &str,
     global_source: Option<&Path>,
@@ -493,34 +552,64 @@ fn merge_global_and_project_instructions(
 
 fn load_global_agents_context(workspace: &Path, home_dir: Option<&Path>) -> Option<ProjectContext> {
     let home = home_dir?;
-    let mut path = home.to_path_buf();
-    for component in GLOBAL_AGENTS_RELATIVE_PATH {
-        path.push(component);
-    }
 
-    if !(path.exists() && path.is_file()) {
-        return None;
-    }
+    // Priority order:
+    // 1. ~/.codewhale/WHALE.md      (CodeWhale-native)
+    // 2. ~/.codewhale/AGENTS.md     (new config directory)
+    // 3. ~/.agents/WHALE.md         (vendor-neutral fallback)
+    // 4. ~/.agents/AGENTS.md        (vendor-neutral fallback)
+    // 5. ~/.deepseek/WHALE.md       (legacy fallback)
+    // 6. ~/.deepseek/AGENTS.md      (legacy fallback)
+    let candidates: &[&[&str]] = &[
+        GLOBAL_WHALE_RELATIVE_PATH,
+        GLOBAL_AGENTS_RELATIVE_PATH,
+        GLOBAL_WHALE_VENDOR_NEUTRAL_PATH,
+        GLOBAL_AGENTS_VENDOR_NEUTRAL_PATH,
+        GLOBAL_WHALE_LEGACY_PATH,
+        GLOBAL_AGENTS_LEGACY_PATH,
+    ];
 
-    let mut ctx = ProjectContext::empty(workspace.to_path_buf());
-    match load_context_file(&path) {
-        Ok(content) => {
-            ctx.instructions = Some(content);
-            ctx.source_path = Some(path);
+    let mut warnings = Vec::new();
+
+    for candidate in candidates {
+        let mut path = home.to_path_buf();
+        for component in *candidate {
+            path.push(component);
         }
-        Err(error) => ctx.warnings.push(error.to_string()),
+
+        if path.exists() && path.is_file() {
+            match load_context_file(&path) {
+                Ok(content) => {
+                    let mut ctx = ProjectContext::empty(workspace.to_path_buf());
+                    ctx.instructions = Some(content);
+                    ctx.source_path = Some(path);
+                    ctx.warnings = warnings;
+                    return Some(ctx);
+                }
+                Err(error) => warnings.push(error.to_string()),
+            }
+        }
     }
-    Some(ctx)
+
+    if !warnings.is_empty() {
+        let mut ctx = ProjectContext::empty(workspace.to_path_buf());
+        ctx.warnings = warnings;
+        return Some(ctx);
+    }
+
+    None
 }
 
 /// Generate a context file from project tree + summary and write it to
-/// `.deepseek/instructions.md`. Returns the generated content on success.
+/// `.codewhale/instructions.md` (or `.deepseek/instructions.md` as legacy
+/// fallback). Returns the generated content on success.
 fn auto_generate_context(workspace: &Path) -> Option<String> {
-    let deepseek_dir = workspace.join(".deepseek");
-    let instructions_path = deepseek_dir.join("instructions.md");
+    let codewhale_dir = workspace.join(".codewhale");
+    let instructions_path = codewhale_dir.join("instructions.md");
+    let legacy_instructions_path = workspace.join(".deepseek/instructions.md");
 
-    // Don't overwrite an existing file
-    if instructions_path.exists() {
+    // Don't overwrite an existing file (check both locations)
+    if instructions_path.exists() || legacy_instructions_path.exists() {
         return None;
     }
 
@@ -529,15 +618,15 @@ fn auto_generate_context(workspace: &Path) -> Option<String> {
 
     let content = format!(
         "# Project Structure (Auto-generated)\n\n\
-         > This file was automatically generated by DeepSeek TUI.\n\
+         > This file was automatically generated by CodeWhale.\n\
          > You can edit or delete it at any time.\n\n\
          **Summary:** {summary}\n\n\
          **Tree:**\n```\n{tree}\n```"
     );
 
-    // Create .deepseek/ directory if needed
-    if let Err(e) = std::fs::create_dir_all(&deepseek_dir) {
-        tracing::warn!("Failed to create .deepseek/ directory: {e}");
+    // Create .codewhale/ directory
+    if let Err(e) = std::fs::create_dir_all(&codewhale_dir) {
+        tracing::warn!("Failed to create .codewhale/ directory: {e}");
         return None;
     }
 
@@ -612,7 +701,7 @@ pub fn create_default_agents_md(workspace: &Path) -> std::io::Result<PathBuf> {
 
     let default_content = r#"# Project Agent Instructions
 
-This file provides guidance to AI agents (DeepSeek TUI, Claude Code, etc.) when working with code in this repository.
+This file provides guidance to AI agents (CodeWhale, Claude Code, etc.) when working with code in this repository.
 
 ## File Location
 
@@ -981,6 +1070,55 @@ mod tests {
     }
 
     #[test]
+    fn project_context_pack_sort_is_cross_platform_and_priority_aware() {
+        let mut unix_paths = vec![
+            "src/z.rs".to_string(),
+            "docs/".to_string(),
+            "README.md".to_string(),
+            "Cargo.toml".to_string(),
+            "src/a.rs".to_string(),
+            "notes.txt".to_string(),
+        ];
+        let mut windows_paths = vec![
+            "src\\z.rs".to_string(),
+            "docs\\".to_string(),
+            "README.md".to_string(),
+            "Cargo.toml".to_string(),
+            "src\\a.rs".to_string(),
+            "notes.txt".to_string(),
+        ];
+
+        sort_pack_paths(&mut unix_paths);
+        sort_pack_paths(&mut windows_paths);
+
+        let normalized_windows = windows_paths
+            .iter()
+            .map(|path| path.replace('\\', "/"))
+            .collect::<Vec<_>>();
+        assert_eq!(unix_paths, normalized_windows);
+        assert_eq!(
+            unix_paths,
+            vec![
+                "README.md",
+                "Cargo.toml",
+                "src/a.rs",
+                "src/z.rs",
+                "docs/",
+                "notes.txt",
+            ]
+        );
+    }
+
+    #[test]
+    fn normalize_pack_relative_path_rejects_parent_segments() {
+        assert_eq!(
+            normalize_pack_relative_path(".\\src\\main.rs"),
+            Some("src/main.rs".to_string())
+        );
+        assert_eq!(normalize_pack_relative_path("../secret.txt"), None);
+    }
+
+    #[test]
     fn test_load_global_agents_when_project_has_no_context() {
         let workspace = tempdir().expect("workspace tempdir");
         let home = tempdir().expect("home tempdir");
@@ -999,6 +1137,58 @@ mod tests {
                 .contains("Global instructions")
         );
         assert_eq!(ctx.source_path, Some(global_agents));
+    }
+
+    #[test]
+    fn test_load_global_agents_falls_back_to_vendor_neutral_path() {
+        let workspace = tempdir().expect("workspace tempdir");
+        let home = tempdir().expect("home tempdir");
+        let global_dir = home.path().join(".agents");
+        fs::create_dir(&global_dir).expect("mkdir .agents");
+        let global_agents = global_dir.join("AGENTS.md");
+        fs::write(&global_agents, "Vendor-neutral instructions").expect("write global agents");
+
+        let ctx = load_project_context_with_parents_and_home(workspace.path(), Some(home.path()));
+
+        assert!(ctx.has_instructions());
+        assert!(
+            ctx.instructions
+                .as_ref()
+                .unwrap()
+                .contains("Vendor-neutral instructions")
+        );
+        assert_eq!(ctx.source_path, Some(global_agents));
+    }
+
+    #[test]
+    fn test_codewhale_specific_path_wins_over_agents_path() {
+        let workspace = tempdir().expect("workspace tempdir");
+        let home = tempdir().expect("home tempdir");
+
+        let codewhale_dir = home.path().join(".codewhale");
+        fs::create_dir(&codewhale_dir).expect("mkdir .codewhale");
+        let codewhale_agents = codewhale_dir.join("AGENTS.md");
+        fs::write(&codewhale_agents, "CodeWhale-specific instructions")
+            .expect("write codewhale agents");
+
+        let agents_dir = home.path().join(".agents");
+        fs::create_dir(&agents_dir).expect("mkdir .agents");
+        fs::write(agents_dir.join("AGENTS.md"), "Vendor-neutral instructions")
+            .expect("write vendor-neutral agents");
+
+        let ctx = load_project_context_with_parents_and_home(workspace.path(), Some(home.path()));
+
+        assert!(ctx.has_instructions());
+        let instructions = ctx.instructions.as_ref().unwrap();
+        assert!(
+            instructions.contains("CodeWhale-specific instructions"),
+            "CodeWhale-specific global file should win:\n{instructions}"
+        );
+        assert!(
+            !instructions.contains("Vendor-neutral instructions"),
+            "lower-priority .agents file should be skipped:\n{instructions}"
+        );
+        assert_eq!(ctx.source_path, Some(codewhale_agents));
     }
 
     #[test]

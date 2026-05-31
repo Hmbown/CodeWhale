@@ -1,24 +1,24 @@
 # Tencent Cloud Remote-First Quickstart
 
-This is the opinionated Tencent-native teaching path for DeepSeek TUI users
+This is the opinionated Tencent-native teaching path for codewhale users
 who want an always-on agent workspace, a phone control surface, and a stack
 that works well from mainland China.
 
-It complements the local install path. If you only want to use `deepseek` on a
-laptop, start with the README quickstart. If you want "DS-TUI as a remote
+It complements the local install path. If you only want to use `codewhale` on a
+laptop, start with the README quickstart. If you want "CodeWhale as a remote
 workbench I can control from my phone", start here.
 
 ## Default Stack
 
 ```text
 GitHub main/tags
-  -> CNB mirror: cnb.cool/deepseek-tui.com/DeepSeek-TUI
+  -> CNB mirror: cnb.cool/codewhale.net/codewhale
   -> optional CNB build/deploy pipeline
   -> Tencent Lighthouse HK
-       /opt/whalebro/deepseek-tui
+       /opt/whalebro/codewhale
        /opt/whalebro/worktrees
-       deepseek-runtime.service on 127.0.0.1:7878
-       deepseek-feishu-bridge.service
+       codewhale-runtime.service on 127.0.0.1:7878
+       codewhale-feishu-bridge.service
   -> Feishu/Lark phone DM
 
 EdgeOne is optional:
@@ -32,7 +32,7 @@ EdgeOne is optional:
   slow. Optional CNB deploy templates live under
   `deploy/tencent-lighthouse/cnb/`.
 - **Lighthouse** is the private always-on host. It owns `/opt/whalebro`,
-  systemd, Rust/Node installs, and the `deepseek serve --http` runtime.
+  systemd, Rust/Node installs, and the `codewhale serve --http` runtime.
 - **Feishu/Lark** is the first phone UI. The bridge uses long-connection mode,
   so the first setup does not need a public webhook URL.
 - **EdgeOne** is the public edge only when you intentionally expose a web
@@ -45,7 +45,7 @@ EdgeOne is optional:
 2. Clone from CNB by default when the branch or tag exists there:
 
    ```bash
-   export DEEPSEEK_REPO_URL=https://cnb.cool/deepseek-tui.com/DeepSeek-TUI.git
+   export DEEPSEEK_REPO_URL=https://cnb.cool/codewhale.net/codewhale.git
    git ls-remote "$DEEPSEEK_REPO_URL" refs/heads/main
    ```
 
@@ -57,14 +57,14 @@ EdgeOne is optional:
 
    ```bash
    export DEEPSEEK_BRANCH=main
-   git clone --branch "$DEEPSEEK_BRANCH" "$DEEPSEEK_REPO_URL" /tmp/deepseek-tui
-   cd /tmp/deepseek-tui
+   git clone --branch "$DEEPSEEK_BRANCH" "$DEEPSEEK_REPO_URL" /tmp/codewhale
+   cd /tmp/codewhale
    sudo DEEPSEEK_REPO_URL="$DEEPSEEK_REPO_URL" \
      DEEPSEEK_REPO_BRANCH="$DEEPSEEK_BRANCH" \
      bash scripts/tencent-lighthouse/bootstrap-ubuntu.sh
    ```
 
-4. Install Rust for the `deepseek` user, build both binaries, and install the
+4. Install Rust for the `codewhale` user, build both binaries, and install the
    systemd units using `docs/TENCENT_LIGHTHOUSE_HK.md`.
 5. Configure a Feishu/Lark self-built app, fill
    `/etc/deepseek/feishu-bridge.env`, run the validator, then run the VPS
@@ -85,7 +85,7 @@ The intended deploy button should:
 
 1. Run bridge validation/tests and lightweight release-version checks.
 2. SSH to Lighthouse with a deploy key stored as a CNB secret.
-3. Update `/opt/whalebro/deepseek-tui`.
+3. Update `/opt/whalebro/codewhale`.
 4. Rebuild/install both binaries.
 5. Reinstall/restart systemd services.
 6. Run `scripts/tencent-lighthouse/doctor.sh`.
@@ -105,7 +105,7 @@ you want a public domain in front of a deliberate HTTP service:
 
 Keep these rules:
 
-- `deepseek serve --http` stays bound to `127.0.0.1`.
+- `codewhale serve --http` stays bound to `127.0.0.1`.
 - `/v1/*` runtime endpoints are never public.
 - `DEEPSEEK_RUNTIME_TOKEN` never leaves the server env files.
 - Feishu/Lark group control stays off until a specific group allowlist is set.
@@ -114,13 +114,13 @@ Keep these rules:
 
 ## Teaching Order
 
-Use this sequence when explaining DeepSeek TUI to a new remote-first user:
+Use this sequence when explaining codewhale to a new remote-first user:
 
-1. **Local mental model:** `deepseek` is the dispatcher, `deepseek-tui` is the
+1. **Local mental model:** `codewhale` is the dispatcher, `codewhale-tui` is the
    companion runtime, and both binaries matter.
 2. **Agent safety:** Plan/Agent/YOLO are separate from approval mode and
    sandboxing.
-3. **Remote runtime:** `deepseek serve --http` is a localhost runtime API, not
+3. **Remote runtime:** `codewhale serve --http` is a localhost runtime API, not
    a public web app.
 4. **Phone bridge:** Feishu/Lark messages become runtime requests through an
    allowlisted bridge.

@@ -18,6 +18,8 @@ pub enum Language {
     Python,
     TypeScript,
     JavaScript,
+    Java,
+    Vue,
     C,
     Cpp,
     Other,
@@ -34,6 +36,8 @@ impl Language {
             Language::Python => "python",
             Language::TypeScript => "typescript",
             Language::JavaScript => "javascript",
+            Language::Java => "java",
+            Language::Vue => "vue",
             Language::C => "c",
             Language::Cpp => "cpp",
             Language::Other => "other",
@@ -42,7 +46,7 @@ impl Language {
 
     /// LSP `languageId` value used in `textDocument/didOpen`. We follow the
     /// LSP-spec values: `rust`, `go`, `python`, `typescript`, `javascript`,
-    /// `c`, `cpp`.
+    /// `java`, `vue`, `c`, `cpp`.
     #[must_use]
     pub fn language_id(self) -> &'static str {
         match self {
@@ -51,6 +55,8 @@ impl Language {
             Language::Python => "python",
             Language::TypeScript => "typescript",
             Language::JavaScript => "javascript",
+            Language::Java => "java",
+            Language::Vue => "vue",
             Language::C => "c",
             Language::Cpp => "cpp",
             Language::Other => "plaintext",
@@ -73,6 +79,8 @@ pub fn detect_language(path: &Path) -> Language {
         "py" | "pyi" => Language::Python,
         "ts" | "tsx" => Language::TypeScript,
         "js" | "jsx" | "mjs" | "cjs" => Language::JavaScript,
+        "java" => Language::Java,
+        "vue" => Language::Vue,
         "c" | "h" => Language::C,
         "cpp" | "cc" | "cxx" | "hpp" | "hxx" | "hh" => Language::Cpp,
         _ => Language::Other,
@@ -91,6 +99,8 @@ pub fn server_for(lang: Language) -> Option<(&'static str, &'static [&'static st
         Language::TypeScript | Language::JavaScript => {
             Some(("typescript-language-server", &["--stdio"]))
         }
+        Language::Java => Some(("jdtls", &[])),
+        Language::Vue => Some(("vue-language-server", &["--stdio"])),
         Language::C | Language::Cpp => Some(("clangd", &[])),
         Language::Other => None,
     }
@@ -133,10 +143,50 @@ mod tests {
     }
 
     #[test]
+    fn detects_java_extension() {
+        assert_eq!(detect_language(&PathBuf::from("App.java")), Language::Java);
+        assert_eq!(detect_language(&PathBuf::from("APP.JAVA")), Language::Java);
+    }
+
+    #[test]
+    fn detects_vue_extension() {
+        assert_eq!(
+            detect_language(&PathBuf::from("Component.vue")),
+            Language::Vue
+        );
+        assert_eq!(
+            detect_language(&PathBuf::from("COMPONENT.VUE")),
+            Language::Vue
+        );
+    }
+
+    #[test]
+    fn language_ids_for_java_and_vue_match_lsp_values() {
+        assert_eq!(Language::Java.as_key(), "java");
+        assert_eq!(Language::Java.language_id(), "java");
+        assert_eq!(Language::Vue.as_key(), "vue");
+        assert_eq!(Language::Vue.language_id(), "vue");
+    }
+
+    #[test]
     fn server_for_rust_is_rust_analyzer() {
         let (cmd, args) = server_for(Language::Rust).expect("rust has a server");
         assert_eq!(cmd, "rust-analyzer");
         assert!(args.is_empty());
+    }
+
+    #[test]
+    fn server_for_java_is_jdtls() {
+        let (cmd, args) = server_for(Language::Java).expect("java has a server");
+        assert_eq!(cmd, "jdtls");
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn server_for_vue_is_vue_language_server() {
+        let (cmd, args) = server_for(Language::Vue).expect("vue has a server");
+        assert_eq!(cmd, "vue-language-server");
+        assert_eq!(args, &["--stdio"]);
     }
 
     #[test]

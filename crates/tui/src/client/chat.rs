@@ -9,6 +9,7 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio::time::timeout as tokio_timeout;
@@ -71,6 +72,17 @@ use super::{
     release_stream_buffer, system_to_instructions, to_api_tool_name,
 };
 
+fn apply_provider_token_limit(body: &mut Value, provider: ApiProvider, max_tokens: u32) {
+    if provider != ApiProvider::XiaomiMimo {
+        return;
+    }
+
+    if let Some(object) = body.as_object_mut() {
+        object.remove("max_tokens");
+    }
+    body["max_completion_tokens"] = json!(max_tokens);
+}
+
 impl DeepSeekClient {
     pub(super) async fn create_message_chat(
         &self,
@@ -82,6 +94,7 @@ impl DeepSeekClient {
             "messages": messages,
             "max_tokens": request.max_tokens,
         });
+        apply_provider_token_limit(&mut body, self.api_provider, request.max_tokens);
 
         if let Some(temperature) = request.temperature {
             body["temperature"] = json!(temperature);
@@ -120,8 +133,8 @@ impl DeepSeekClient {
             Err(_elapsed) => {
                 anyhow::bail!(
                     "SSE stream request did not receive response headers after {}s. \
-                     `deepseek doctor` can still pass when non-streaming requests work; \
-                     on Windows or proxy networks, try `DEEPSEEK_FORCE_HTTP1=1` and rerun `deepseek`.",
+                     `codewhale doctor` can still pass when non-streaming requests work; \
+                     on Windows or proxy networks, try `DEEPSEEK_FORCE_HTTP1=1` and rerun `codewhale`.",
                     open_timeout.as_secs()
                 );
             }
@@ -156,6 +169,7 @@ impl DeepSeekClient {
                 "include_usage": true
             },
         });
+        apply_provider_token_limit(&mut body, self.api_provider, request.max_tokens);
 
         if let Some(temperature) = request.temperature {
             body["temperature"] = json!(temperature);
@@ -438,6 +452,7 @@ pub(crate) fn build_cache_warmup_request(request: &MessageRequest) -> MessageReq
 struct PromptBuilder<'a> {
     system: Option<&'a SystemPrompt>,
     messages: &'a [Message],
+    tools: Option<&'a [Tool]>,
     model: &'a str,
     reasoning_effort: Option<&'a str>,
 }
@@ -447,6 +462,7 @@ impl<'a> PromptBuilder<'a> {
         Self {
             system: request.system.as_ref(),
             messages: &request.messages,
+            tools: request.tools.as_deref(),
             model: &request.model,
             reasoning_effort: request.reasoning_effort.as_deref(),
         }
@@ -485,12 +501,17 @@ impl<'a> PromptBuilder<'a> {
             should_replay_reasoning_content(self.model, self.reasoning_effort),
             true,
         );
-        inspect_wire_messages(&messages)
+        inspect_wire_request(self.tools, &messages)
     }
 
     fn build_cache_warmup_request(self) -> MessageRequest {
         let system = stable_system_prompt(self.system);
         let mut messages = stable_history_messages(self.messages);
+        let tools = self
+            .tools
+            .filter(|tools| !tools.is_empty())
+            .map(<[Tool]>::to_vec);
+        let tool_choice = tools.as_ref().map(|_| json!("none"));
         messages.push(Message {
             role: "user".to_string(),
             content: vec![ContentBlock::Text {
@@ -504,8 +525,8 @@ impl<'a> PromptBuilder<'a> {
             messages,
             max_tokens: 8,
             system,
-            tools: None,
-            tool_choice: None,
+            tools,
+            tool_choice,
             metadata: None,
             thinking: None,
             reasoning_effort: self.reasoning_effort.map(str::to_string),
@@ -531,24 +552,75 @@ const TOOL_RESULT_DEDUP_MIN_CHARS: usize = 1_024;
 /// up with tiny `gh auth status` and `cat package.json` files.
 const TOOL_RESULT_SHA_PERSIST_MIN_CHARS: usize = 1_024;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct PromptInspection {
     pub base_static_prefix_hash: String,
     pub full_request_prefix_hash: String,
+    /// Hash of the rendered tool catalog JSON, or empty when no tools were supplied.
+    pub tool_catalog_hash: String,
     pub layers: Vec<PromptLayerInspection>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Identifies the stable prefix that a cache warmup primes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct CacheWarmupKey {
+    pub provider: String,
+    pub model: String,
+    pub base_url: String,
+    pub static_prefix_hash: String,
+    pub tool_catalog_hash: String,
+    pub project_pack_hash: String,
+    pub skills_hash: String,
+}
+
+impl CacheWarmupKey {
+    pub(crate) fn from_inspection(
+        provider: &str,
+        model: &str,
+        base_url: &str,
+        inspection: &PromptInspection,
+    ) -> Self {
+        Self {
+            provider: provider.to_string(),
+            model: model.to_string(),
+            base_url: base_url.to_string(),
+            static_prefix_hash: inspection.base_static_prefix_hash.clone(),
+            tool_catalog_hash: inspection.tool_catalog_hash.clone(),
+            project_pack_hash: layer_hash(inspection, "Project context pack"),
+            skills_hash: layer_hash(inspection, "Skills"),
+        }
+    }
+
+    pub(crate) fn hash_short(&self) -> String {
+        let json = serde_json::to_string(self).unwrap_or_default();
+        let hash = sha256_hex(json.as_bytes());
+        hash[..hash.len().min(12)].to_string()
+    }
+}
+
+fn layer_hash(inspection: &PromptInspection, name: &str) -> String {
+    inspection
+        .layers
+        .iter()
+        .find(|layer| layer.name == name)
+        .map(|layer| layer.sha256.clone())
+        .unwrap_or_default()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct PromptLayerInspection {
     pub name: String,
     pub stability: PromptLayerStability,
     pub char_len: usize,
+    pub byte_len: usize,
+    /// Rough token estimate for quick before/after cache-hit reports.
+    pub token_estimate: usize,
     pub sha256: String,
     pub tool_result: Option<ToolResultInspection>,
     pub turn_meta: Option<TurnMetaInspection>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ToolResultInspection {
     pub original_chars: usize,
     pub sent_chars: usize,
@@ -556,7 +628,7 @@ pub(crate) struct ToolResultInspection {
     pub deduplicated: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct TurnMetaInspection {
     pub original_chars: usize,
     pub sent_chars: usize,
@@ -564,7 +636,7 @@ pub(crate) struct TurnMetaInspection {
     pub sha256: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum PromptLayerStability {
     Static,
     History,
@@ -581,20 +653,20 @@ impl PromptLayerStability {
     }
 }
 
-fn inspect_wire_messages(messages: &[Value]) -> PromptInspection {
+fn inspect_wire_request(tools: Option<&[Tool]>, messages: &[Value]) -> PromptInspection {
     let mut layers = Vec::new();
     let mut base_static_prefix_parts = Vec::new();
     let mut full_request_prefix_parts = Vec::new();
+    let mut tool_catalog_hash = String::new();
+    let mut start_index = 0;
 
-    for (index, message) in messages.iter().enumerate() {
+    if let Some(message) = messages.first() {
         let role = message
             .get("role")
             .and_then(Value::as_str)
             .unwrap_or("unknown");
         let content = message_content_for_inspect(message);
-        let is_last = index + 1 == messages.len();
-
-        if index == 0 && role == "system" {
+        if role == "system" {
             for (name, stability, body) in split_system_layers(&content) {
                 if stability == PromptLayerStability::Static {
                     base_static_prefix_parts.push(body.to_string());
@@ -604,25 +676,45 @@ fn inspect_wire_messages(messages: &[Value]) -> PromptInspection {
                 }
                 layers.push(prompt_layer(name, stability, body));
             }
-        } else {
-            let stability = if (is_last && role == "user") || role == "tool" {
-                PromptLayerStability::Dynamic
-            } else {
-                PromptLayerStability::History
-            };
-            let name = if is_last && role == "user" {
-                "User task".to_string()
-            } else {
-                format!("Message #{index} {role}")
-            };
-            if stability != PromptLayerStability::Dynamic {
-                full_request_prefix_parts.push(content.clone());
-            }
-            let mut layer = prompt_layer(name, stability, &content);
-            layer.tool_result = tool_result_inspection_for_message(message);
-            layer.turn_meta = turn_meta_inspection_for_message(message);
-            layers.push(layer);
+            start_index = 1;
         }
+    }
+
+    if let Some(tool_catalog) = tool_catalog_for_inspect(tools) {
+        tool_catalog_hash = sha256_hex(tool_catalog.as_bytes());
+        base_static_prefix_parts.push(tool_catalog.clone());
+        full_request_prefix_parts.push(tool_catalog.clone());
+        layers.push(prompt_layer(
+            "Tool catalog".to_string(),
+            PromptLayerStability::Static,
+            &tool_catalog,
+        ));
+    }
+
+    for (index, message) in messages.iter().enumerate().skip(start_index) {
+        let role = message
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let content = message_content_for_inspect(message);
+        let is_last = index + 1 == messages.len();
+        let stability = if (is_last && role == "user") || role == "tool" {
+            PromptLayerStability::Dynamic
+        } else {
+            PromptLayerStability::History
+        };
+        let name = if is_last && role == "user" {
+            "User task".to_string()
+        } else {
+            format!("Message #{index} {role}")
+        };
+        if stability != PromptLayerStability::Dynamic {
+            full_request_prefix_parts.push(content.clone());
+        }
+        let mut layer = prompt_layer(name, stability, &content);
+        layer.tool_result = tool_result_inspection_for_message(message);
+        layer.turn_meta = turn_meta_inspection_for_message(message);
+        layers.push(layer);
     }
 
     let base_static_prefix = base_static_prefix_parts.join("\n");
@@ -631,8 +723,14 @@ fn inspect_wire_messages(messages: &[Value]) -> PromptInspection {
     PromptInspection {
         base_static_prefix_hash: sha256_hex(base_static_prefix.as_bytes()),
         full_request_prefix_hash: sha256_hex(full_request_prefix.as_bytes()),
+        tool_catalog_hash,
         layers,
     }
+}
+
+fn tool_catalog_for_inspect(tools: Option<&[Tool]>) -> Option<String> {
+    let tools = tools.filter(|tools| !tools.is_empty())?;
+    serde_json::to_string(&tools.iter().map(tool_to_chat).collect::<Vec<_>>()).ok()
 }
 
 fn message_content_for_inspect(message: &Value) -> String {
@@ -797,10 +895,20 @@ fn prompt_layer(
     stability: PromptLayerStability,
     content: &str,
 ) -> PromptLayerInspection {
+    let char_len = content.chars().count();
+    let token_estimate = if char_len == 0 {
+        0
+    } else if content.is_ascii() {
+        (char_len / 4).max(1)
+    } else {
+        char_len.max(1)
+    };
     PromptLayerInspection {
         name,
         stability,
-        char_len: content.chars().count(),
+        char_len,
+        byte_len: content.len(),
+        token_estimate,
         sha256: sha256_hex(content.as_bytes()),
         tool_result: None,
         turn_meta: None,
@@ -1490,7 +1598,7 @@ fn map_tool_choice_for_chat(choice: &Value) -> Option<Value> {
 /// reasoning can stay omitted once a later user text turn begins.
 ///
 /// Also tallies the size of all replayed `reasoning_content` and logs it, so
-/// users on `RUST_LOG=deepseek_tui=debug` can see how much of their input
+/// users on `RUST_LOG=codewhale_tui=debug` can see how much of their input
 /// budget is being spent re-sending prior thinking traces.
 pub(super) fn sanitize_thinking_mode_messages(
     body: &mut Value,
@@ -1604,8 +1712,7 @@ fn log_thinking_mode_violations(body: &Value) {
         let has_tc = msg.get("tool_calls").is_some();
         if reasoning.trim().is_empty() {
             violations.push(format!(
-                "assistant[{idx}] (reasoning_content missing, tool_calls={})",
-                has_tc
+                "assistant[{idx}] (reasoning_content missing, tool_calls={has_tc})"
             ));
         }
     }
@@ -1700,8 +1807,10 @@ fn provider_accepts_reasoning_content(provider: ApiProvider) -> bool {
             | ApiProvider::DeepseekCN
             | ApiProvider::NvidiaNim
             | ApiProvider::Openrouter
+            | ApiProvider::XiaomiMimo
             | ApiProvider::Novita
             | ApiProvider::Fireworks
+            | ApiProvider::Siliconflow
             | ApiProvider::Sglang
     )
 }
@@ -2343,6 +2452,24 @@ mod stream_decoder_tests {
     }
 
     #[test]
+    fn decoder_accepts_openrouter_reasoning_delta_with_extra_fields() {
+        let events = decode_chunk(
+            r#"{"id":"or-1","choices":[{"delta":{"reasoning":"openrouter thought","reasoning_details":[{"type":"summary","text":"extra"}],"native_finish_reason":null}}],"usage":{"completion_tokens_details":{"reasoning_tokens":3}}}"#,
+        );
+
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                StreamEvent::ContentBlockDelta {
+                    delta: Delta::ThinkingDelta { thinking },
+                    ..
+                } if thinking == "openrouter thought"
+            )),
+            "OpenRouter-style reasoning deltas with extra fields should not crash decoding; got {events:?}"
+        );
+    }
+
+    #[test]
     fn decoder_treats_reasoning_content_as_text_when_provider_does_not_support_reasoning() {
         let events = decode_chunk_with_reasoning(
             r#"{"choices":[{"delta":{"reasoning_content":"hello"}}]}"#,
@@ -2606,6 +2733,24 @@ mod stream_decoder_tests {
             .expect("user message content")
     }
 
+    fn with_tool_result_sha_spillover_root<T>(f: impl FnOnce() -> T) -> T {
+        let _guard = crate::tools::truncate::TEST_SPILLOVER_GUARD
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let prior = crate::tools::truncate::set_test_spillover_root(Some(
+            tmp.path().join(".deepseek").join("tool_outputs"),
+        ));
+        struct Restore(Option<std::path::PathBuf>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                crate::tools::truncate::set_test_spillover_root(self.0.take());
+            }
+        }
+        let _restore = Restore(prior);
+        f()
+    }
+
     #[test]
     fn request_builder_deduplicates_consecutive_identical_turn_meta_for_wire() {
         let turn_meta = "<turn_meta>\nCurrent local date: 2026-05-09\n</turn_meta>";
@@ -2773,74 +2918,83 @@ mod stream_decoder_tests {
     }
 
     #[test]
-    fn request_builder_deduplicates_large_identical_tool_results_with_retrieval_hint() {
-        let output = "A".repeat(2_000);
-        let messages = vec![
-            tool_use_message("tool-1", "read_file", json!({"path": "README.md"})),
-            tool_result_message("tool-1", &output),
-            tool_use_message("tool-2", "read_file", json!({"path": "README.md"})),
-            tool_result_message("tool-2", &output),
-        ];
+    fn request_builder_deduplicates_medium_identical_tool_results_with_retrieval_hint() {
+        with_tool_result_sha_spillover_root(|| {
+            // 2,000 chars is intentionally above TOOL_RESULT_DEDUP_MIN_CHARS
+            // (1,024) but below TOOL_RESULT_SENT_CHAR_BUDGET (12,000). This
+            // verifies the cache-saving path for repeated medium outputs that
+            // do not otherwise need truncation.
+            let output = "A".repeat(2_000);
+            let messages = vec![
+                tool_use_message("tool-1", "read_file", json!({"path": "README.md"})),
+                tool_result_message("tool-1", &output),
+                tool_use_message("tool-2", "read_file", json!({"path": "README.md"})),
+                tool_result_message("tool-2", &output),
+            ];
 
-        let built = build_chat_messages(None, &messages, "deepseek-v4-flash");
-        let first = tool_message_content(&built, 0);
-        let second = tool_message_content(&built, 1);
+            let built = build_chat_messages(None, &messages, "deepseek-v4-flash");
+            let first = tool_message_content(&built, 0);
+            let second = tool_message_content(&built, 1);
 
-        assert_eq!(first, output);
-        assert!(
-            second.starts_with("<TOOL_RESULT_REF sha=\""),
-            "got: {second}"
-        );
-        assert!(
-            second.contains("original_message=\"Message #1\""),
-            "got: {second}"
-        );
-        assert!(second.contains("chars=\"2000\""), "got: {second}");
-        assert!(
-            second.contains("retrieve: retrieve_tool_result ref=sha:"),
-            "got: {second}"
-        );
+            assert_eq!(first, output);
+            assert!(!first.contains("[TOOL_RESULT_TRUNCATED]"), "got: {first}");
+            assert!(
+                second.starts_with("<TOOL_RESULT_REF sha=\""),
+                "got: {second}"
+            );
+            assert!(
+                second.contains("original_message=\"Message #1\""),
+                "got: {second}"
+            );
+            assert!(second.contains("chars=\"2000\""), "got: {second}");
+            assert!(
+                second.contains("retrieve: retrieve_tool_result ref=sha:"),
+                "got: {second}"
+            );
+        });
     }
 
     #[test]
     fn request_builder_never_dedups_large_identical_write_file_confirmations() {
-        // A `write_file` result embeds the unified diff + summary; it is a
-        // confirmation, not retrievable data. Two identical >1024-char
-        // write_file results must BOTH stay inline — collapsing the second
-        // to a SHA ref makes the model lose write-success context and
-        // report the file as missing (#1695).
-        let output = "A".repeat(2_000);
-        let messages = vec![
-            tool_use_message("tool-1", "write_file", json!({"path": "big.txt"})),
-            tool_result_message("tool-1", &output),
-            tool_use_message("tool-2", "write_file", json!({"path": "big.txt"})),
-            tool_result_message("tool-2", &output),
-        ];
+        with_tool_result_sha_spillover_root(|| {
+            // A `write_file` result embeds the unified diff + summary; it is a
+            // confirmation, not retrievable data. Two identical >1024-char
+            // write_file results must BOTH stay inline — collapsing the second
+            // to a SHA ref makes the model lose write-success context and
+            // report the file as missing (#1695).
+            let output = "A".repeat(2_000);
+            let messages = vec![
+                tool_use_message("tool-1", "write_file", json!({"path": "big.txt"})),
+                tool_result_message("tool-1", &output),
+                tool_use_message("tool-2", "write_file", json!({"path": "big.txt"})),
+                tool_result_message("tool-2", &output),
+            ];
 
-        let built = build_chat_messages(None, &messages, "deepseek-v4-flash");
-        let first = tool_message_content(&built, 0);
-        let second = tool_message_content(&built, 1);
+            let built = build_chat_messages(None, &messages, "deepseek-v4-flash");
+            let first = tool_message_content(&built, 0);
+            let second = tool_message_content(&built, 1);
 
-        assert_eq!(first, output);
-        assert_eq!(second, output);
-        assert!(!second.contains("<TOOL_RESULT_REF"), "got: {second}");
+            assert_eq!(first, output);
+            assert_eq!(second, output);
+            assert!(!second.contains("<TOOL_RESULT_REF"), "got: {second}");
 
-        // Non-mutation tools still dedup: an identical large read_file
-        // result collapses to a retrievable SHA ref.
-        let read_messages = vec![
-            tool_use_message("read-1", "read_file", json!({"path": "README.md"})),
-            tool_result_message("read-1", &output),
-            tool_use_message("read-2", "read_file", json!({"path": "README.md"})),
-            tool_result_message("read-2", &output),
-        ];
-        let read_built = build_chat_messages(None, &read_messages, "deepseek-v4-flash");
-        let read_first = tool_message_content(&read_built, 0);
-        let read_second = tool_message_content(&read_built, 1);
-        assert_eq!(read_first, output);
-        assert!(
-            read_second.starts_with("<TOOL_RESULT_REF sha=\""),
-            "got: {read_second}"
-        );
+            // Non-mutation tools still dedup: an identical large read_file
+            // result collapses to a retrievable SHA ref.
+            let read_messages = vec![
+                tool_use_message("read-1", "read_file", json!({"path": "README.md"})),
+                tool_result_message("read-1", &output),
+                tool_use_message("read-2", "read_file", json!({"path": "README.md"})),
+                tool_result_message("read-2", &output),
+            ];
+            let read_built = build_chat_messages(None, &read_messages, "deepseek-v4-flash");
+            let read_first = tool_message_content(&read_built, 0);
+            let read_second = tool_message_content(&read_built, 1);
+            assert_eq!(read_first, output);
+            assert!(
+                read_second.starts_with("<TOOL_RESULT_REF sha=\""),
+                "got: {read_second}"
+            );
+        });
     }
 
     #[test]
@@ -2961,49 +3115,51 @@ mod stream_decoder_tests {
 
     #[test]
     fn cache_inspect_reports_tool_result_budget_metadata() {
-        let long_output = format!("{}{}", "A".repeat(7_000), "Z".repeat(7_000));
-        let request = MessageRequest {
-            model: "deepseek-v4-flash".to_string(),
-            messages: vec![
-                tool_use_message("tool-1", "shell_command", json!({"command": "cargo test"})),
-                tool_result_message("tool-1", &long_output),
-                tool_use_message("tool-2", "shell_command", json!({"command": "cargo test"})),
-                tool_result_message("tool-2", &long_output),
-            ],
-            max_tokens: 0,
-            system: None,
-            tools: None,
-            tool_choice: None,
-            metadata: None,
-            thinking: None,
-            reasoning_effort: None,
-            stream: None,
-            temperature: None,
-            top_p: None,
-        };
+        with_tool_result_sha_spillover_root(|| {
+            let long_output = format!("{}{}", "A".repeat(7_000), "Z".repeat(7_000));
+            let request = MessageRequest {
+                model: "deepseek-v4-flash".to_string(),
+                messages: vec![
+                    tool_use_message("tool-1", "shell_command", json!({"command": "cargo test"})),
+                    tool_result_message("tool-1", &long_output),
+                    tool_use_message("tool-2", "shell_command", json!({"command": "cargo test"})),
+                    tool_result_message("tool-2", &long_output),
+                ],
+                max_tokens: 0,
+                system: None,
+                tools: None,
+                tool_choice: None,
+                metadata: None,
+                thinking: None,
+                reasoning_effort: None,
+                stream: None,
+                temperature: None,
+                top_p: None,
+            };
 
-        let inspection = inspect_prompt_for_request(&request);
-        let tool_layers: Vec<_> = inspection
-            .layers
-            .iter()
-            .filter_map(|layer| layer.tool_result.as_ref())
-            .collect();
+            let inspection = inspect_prompt_for_request(&request);
+            let tool_layers: Vec<_> = inspection
+                .layers
+                .iter()
+                .filter_map(|layer| layer.tool_result.as_ref())
+                .collect();
 
-        assert_eq!(tool_layers.len(), 2);
-        assert_eq!(tool_layers[0].original_chars, 14_000);
-        assert!(tool_layers[0].sent_chars < tool_layers[0].original_chars);
-        assert!(tool_layers[0].truncated);
-        assert!(!tool_layers[0].deduplicated);
-        assert_eq!(tool_layers[1].original_chars, 14_000);
-        // Keep the reference far smaller than the original 14K output
-        // even with a copyable retrieval hint included.
-        assert!(
-            tool_layers[1].sent_chars < 300,
-            "deduplicated ref grew unexpectedly large: {}",
-            tool_layers[1].sent_chars
-        );
-        assert!(!tool_layers[1].truncated);
-        assert!(tool_layers[1].deduplicated);
+            assert_eq!(tool_layers.len(), 2);
+            assert_eq!(tool_layers[0].original_chars, 14_000);
+            assert!(tool_layers[0].sent_chars < tool_layers[0].original_chars);
+            assert!(tool_layers[0].truncated);
+            assert!(!tool_layers[0].deduplicated);
+            assert_eq!(tool_layers[1].original_chars, 14_000);
+            // Keep the reference far smaller than the original 14K output
+            // even with a copyable retrieval hint included.
+            assert!(
+                tool_layers[1].sent_chars < 300,
+                "deduplicated ref grew unexpectedly large: {}",
+                tool_layers[1].sent_chars
+            );
+            assert!(!tool_layers[1].truncated);
+            assert!(tool_layers[1].deduplicated);
+        });
     }
 }
 
@@ -3021,11 +3177,12 @@ mod alias_thinking_detection_tests {
     //! turn. See upstream API docs:
     //! https://api-docs.deepseek.com/guides/thinking_mode
     use super::{
-        is_reasoning_model_for_stream, provider_accepts_reasoning_content,
-        requires_reasoning_content, should_replay_reasoning_content,
-        should_replay_reasoning_content_for_provider,
+        apply_provider_token_limit, is_reasoning_model_for_stream,
+        provider_accepts_reasoning_content, requires_reasoning_content,
+        should_replay_reasoning_content, should_replay_reasoning_content_for_provider,
     };
     use crate::config::ApiProvider;
+    use serde_json::json;
 
     #[test]
     fn aliases_routed_to_v4_require_reasoning_content() {
@@ -3052,7 +3209,7 @@ mod alias_thinking_detection_tests {
         // `reasoning_content` on providers that reject the field.
         assert!(!requires_reasoning_content("deepseek-v3"));
         assert!(!requires_reasoning_content("deepseek-coder"));
-        assert!(!requires_reasoning_content("gpt-4o"));
+        assert!(!requires_reasoning_content("qwen3-coder"));
         assert!(!requires_reasoning_content("claude-sonnet-4-6"));
     }
 
@@ -3091,6 +3248,25 @@ mod alias_thinking_detection_tests {
         assert!(!provider_accepts_reasoning_content(ApiProvider::Openai));
         assert!(provider_accepts_reasoning_content(ApiProvider::Deepseek));
         assert!(provider_accepts_reasoning_content(ApiProvider::NvidiaNim));
+        assert!(provider_accepts_reasoning_content(ApiProvider::XiaomiMimo));
+    }
+
+    #[test]
+    fn xiaomi_mimo_uses_max_completion_tokens_payload_key() {
+        let mut body = json!({
+            "model": "mimo-v2.5-pro",
+            "messages": [],
+            "max_tokens": 8192,
+        });
+
+        apply_provider_token_limit(&mut body, ApiProvider::XiaomiMimo, 8192);
+
+        assert!(body.get("max_tokens").is_none());
+        assert_eq!(
+            body.get("max_completion_tokens")
+                .and_then(serde_json::Value::as_u64),
+            Some(8192)
+        );
     }
 
     #[test]
@@ -3128,7 +3304,7 @@ mod alias_thinking_detection_tests {
         // openai provider must continue to have reasoning_content stripped.
         assert!(!should_replay_reasoning_content_for_provider(
             ApiProvider::Openai,
-            "gpt-4o",
+            "qwen3-coder",
             None,
         ));
         assert!(!should_replay_reasoning_content_for_provider(
@@ -3170,7 +3346,7 @@ mod alias_thinking_detection_tests {
         // parser keeps inlining any `reasoning_content` it emits as text.
         assert!(!is_reasoning_model_for_stream(
             ApiProvider::Openai,
-            "gpt-4o"
+            "qwen3-coder"
         ));
         assert!(!is_reasoning_model_for_stream(
             ApiProvider::Openai,
@@ -3179,7 +3355,7 @@ mod alias_thinking_detection_tests {
         // Non-DeepSeek model on a reasoning-aware provider is also unchanged.
         assert!(!is_reasoning_model_for_stream(
             ApiProvider::Deepseek,
-            "gpt-4o"
+            "qwen3-coder"
         ));
     }
 
@@ -3189,7 +3365,7 @@ mod alias_thinking_detection_tests {
         // model identity, or stream parsing and message sanitisation disagree
         // about where reasoning tokens live. Effort=None isolates the
         // model/provider dimension shared by both.
-        for model in ["deepseek-v4-pro", "deepseek-reasoner", "gpt-4o"] {
+        for model in ["deepseek-v4-pro", "deepseek-reasoner", "qwen3-coder"] {
             for provider in [ApiProvider::Openai, ApiProvider::Deepseek] {
                 assert_eq!(
                     is_reasoning_model_for_stream(provider, model),

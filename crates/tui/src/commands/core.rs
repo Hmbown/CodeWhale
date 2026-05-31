@@ -3,7 +3,9 @@
 use std::fmt::Write;
 use std::path::PathBuf;
 
-use crate::config::{COMMON_DEEPSEEK_MODELS, normalize_model_name_for_provider};
+use crate::config::{
+    COMMON_DEEPSEEK_MODELS, normalize_custom_model_id, normalize_model_name_for_provider,
+};
 use crate::localization::{MessageId, tr};
 use crate::tui::app::{App, AppAction, AppMode, ReasoningEffort};
 use crate::tui::views::{HelpView, ModalKind, SubAgentsView, subagent_view_agents};
@@ -46,6 +48,28 @@ pub fn help(app: &mut App, topic: Option<&str>) -> CommandResult {
 
 /// Clear conversation history
 pub fn clear(app: &mut App) -> CommandResult {
+    let todos_cleared = reset_conversation_state(app);
+    app.current_session_id = None;
+    let locale = app.ui_locale;
+    let message = if todos_cleared {
+        tr(locale, MessageId::ClearConversation).to_string()
+    } else {
+        tr(locale, MessageId::ClearConversationBusy).to_string()
+    };
+    CommandResult::with_message_and_action(
+        message,
+        AppAction::SyncSession {
+            session_id: None,
+            messages: Vec::new(),
+            system_prompt: None,
+            model: app.model.clone(),
+            workspace: app.workspace.clone(),
+        },
+    )
+}
+
+/// Reset the active conversation without choosing the next session id.
+pub(crate) fn reset_conversation_state(app: &mut App) -> bool {
     app.clear_history();
     app.mark_history_updated();
     app.api_messages.clear();
@@ -55,6 +79,7 @@ pub fn clear(app: &mut App) -> CommandResult {
     app.queued_draft = None;
     app.session.total_tokens = 0;
     app.session.total_conversation_tokens = 0;
+    app.session.reset_token_breakdown();
     app.session.session_cost = 0.0;
     app.session.session_cost_cny = 0.0;
     app.session.subagent_cost = 0.0;
@@ -77,23 +102,10 @@ pub fn clear(app: &mut App) -> CommandResult {
     app.session.last_reasoning_replay_tokens = None;
     app.session.turn_cache_history.clear();
     app.session.last_cache_inspection = None;
-    app.current_session_id = None;
-    let locale = app.ui_locale;
-    let message = if todos_cleared {
-        tr(locale, MessageId::ClearConversation).to_string()
-    } else {
-        tr(locale, MessageId::ClearConversationBusy).to_string()
-    };
-    CommandResult::with_message_and_action(
-        message,
-        AppAction::SyncSession {
-            session_id: None,
-            messages: Vec::new(),
-            system_prompt: None,
-            model: app.model.clone(),
-            workspace: app.workspace.clone(),
-        },
-    )
+    app.session.last_warmup_key = None;
+    app.session.last_tool_catalog = None;
+    app.session.last_base_url = None;
+    todos_cleared
 }
 
 /// Exit the application
@@ -128,11 +140,21 @@ pub fn model(app: &mut App, model_name: Option<&str>) -> CommandResult {
                 AppAction::UpdateCompaction(app.compaction_config()),
             );
         }
-        let Some(model_id) = normalize_model_name_for_provider(app.api_provider, name) else {
-            return CommandResult::error(format!(
-                "Invalid model '{name}'. Expected auto or a DeepSeek model ID. Common models: {}",
-                COMMON_DEEPSEEK_MODELS.join(", ")
-            ));
+        let model_id = if app.accepts_custom_model_ids() {
+            let Some(model_id) = normalize_custom_model_id(name) else {
+                return CommandResult::error(format!(
+                    "Invalid model '{name}'. Expected a non-empty model ID."
+                ));
+            };
+            model_id
+        } else {
+            let Some(model_id) = normalize_model_name_for_provider(app.api_provider, name) else {
+                return CommandResult::error(format!(
+                    "Invalid model '{name}'. Expected auto or a DeepSeek model ID. Common models: {}",
+                    COMMON_DEEPSEEK_MODELS.join(", ")
+                ));
+            };
+            model_id
         };
         let old_model = app.model_display_label();
         let model_changed = app.auto_model || app.model != model_id;
@@ -550,9 +572,13 @@ mod tests {
         app.session.last_prompt_cache_hit_tokens = Some(70);
         app.session.last_prompt_cache_miss_tokens = Some(30);
         app.session.last_reasoning_replay_tokens = Some(12);
+        app.session.last_warmup_key = None;
+        app.session.last_tool_catalog = Some(Vec::new());
+        app.session.last_base_url = Some("https://api.deepseek.com".to_string());
         app.session.last_cache_inspection = Some(PromptInspection {
             base_static_prefix_hash: "base".to_string(),
             full_request_prefix_hash: "full".to_string(),
+            tool_catalog_hash: String::new(),
             layers: Vec::new(),
         });
         app.push_turn_cache_record(TurnCacheRecord {
@@ -580,6 +606,9 @@ mod tests {
         assert_eq!(app.session.last_reasoning_replay_tokens, None);
         assert!(app.session.turn_cache_history.is_empty());
         assert_eq!(app.session.last_cache_inspection, None);
+        assert_eq!(app.session.last_warmup_key, None);
+        assert_eq!(app.session.last_tool_catalog, None);
+        assert_eq!(app.session.last_base_url, None);
     }
 
     #[test]
@@ -734,6 +763,38 @@ mod tests {
     }
 
     #[test]
+    fn test_model_change_accepts_custom_id_for_openai_compatible_provider() {
+        let mut app = create_test_app();
+        app.api_provider = crate::config::ApiProvider::Openai;
+        app.model_ids_passthrough = true;
+
+        let result = model(&mut app, Some("opencode-go/glm-5.1"));
+
+        assert!(result.message.is_some());
+        assert_eq!(app.model, "opencode-go/glm-5.1");
+        assert!(!app.auto_model);
+        assert!(matches!(
+            result.action,
+            Some(AppAction::UpdateCompaction(_))
+        ));
+    }
+
+    #[test]
+    fn test_model_change_accepts_custom_id_for_custom_base_url() {
+        let mut app = create_test_app();
+        app.model_ids_passthrough = true;
+
+        let result = model(&mut app, Some("opencode-go/kimi-k2.6"));
+
+        assert!(result.message.is_some());
+        assert_eq!(app.model, "opencode-go/kimi-k2.6");
+        assert!(matches!(
+            result.action,
+            Some(AppAction::UpdateCompaction(_))
+        ));
+    }
+
+    #[test]
     fn test_model_change_rejects_invalid_model() {
         let mut app = create_test_app();
         let result = model(&mut app, Some("gpt-4"));
@@ -793,7 +854,7 @@ mod tests {
         let result = home_dashboard(&mut app);
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
-        assert!(msg.contains("DeepSeek TUI Home Dashboard"));
+        assert!(msg.contains("codewhale Home Dashboard"));
         assert!(msg.contains("Model:"));
         assert!(msg.contains("Mode:"));
         assert!(msg.contains("Workspace:"));
@@ -842,7 +903,7 @@ mod tests {
             !msg.lines()
                 .any(|line| line.trim_start().starts_with("/set "))
         );
-        assert!(!msg.contains("/deepseek"));
+        assert!(!msg.contains("/codewhale"));
     }
 
     #[test]

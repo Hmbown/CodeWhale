@@ -252,7 +252,7 @@ mod tests {
         let _g = EnvGuard::new(&["VISUAL", "EDITOR"]);
         unsafe {
             env::remove_var("VISUAL");
-            env::set_var("EDITOR", "/nonexistent/deepseek-tui-test-editor");
+            env::set_var("EDITOR", "/nonexistent/codewhale-test-editor");
         }
         let out = run_editor_raw("seed").expect("call ok");
         assert_eq!(out, EditorOutcome::Cancelled);

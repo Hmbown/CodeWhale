@@ -259,10 +259,10 @@ fn format_task_detail(task: &TaskRecord) -> String {
     }
     lines.push(format!("Created: {}", task.created_at));
     if let Some(started_at) = task.started_at {
-        lines.push(format!("Started: {}", started_at));
+        lines.push(format!("Started: {started_at}"));
     }
     if let Some(ended_at) = task.ended_at {
-        lines.push(format!("Ended: {}", ended_at));
+        lines.push(format!("Ended: {ended_at}"));
     }
     if let Some(duration) = task.duration_ms {
         lines.push(format!("Duration: {:.2}s", duration as f64 / 1000.0));

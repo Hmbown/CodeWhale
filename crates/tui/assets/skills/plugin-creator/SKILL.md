@@ -1,6 +1,6 @@
 ---
 name: plugin-creator
-description: Scaffold DeepSeek local plugin directories and activation notes. Use when the user asks to create, package, or sketch a plugin for DeepSeek TUI.
+description: Scaffold codewhale local plugin directories and activation notes. Use when the user asks to create, package, or sketch a plugin for codewhale.
 ---
 
 # Plugin Creator

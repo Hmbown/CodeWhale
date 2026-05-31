@@ -1,0 +1,62 @@
+{
+  "name": "codewhale",
+  "version": "0.8.46",
+  "codewhaleBinaryVersion": "0.8.46",
+  "description": "Install and run CodeWhale, the agentic terminal for open-source and open-weight coding models, from GitHub release artifacts.",
+  "author": "Hmbown",
+  "license": "MIT",
+  "funding": [
+    {
+      "type": "github",
+      "url": "https://github.com/sponsors/Hmbown"
+    },
+    {
+      "type": "buymeacoffee",
+      "url": "https://www.buymeacoffee.com/hmbown"
+    }
+  ],
+  "homepage": "https://github.com/Hmbown/CodeWhale",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Hmbown/CodeWhale.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Hmbown/CodeWhale/issues"
+  },
+  "keywords": [
+    "codewhale",
+    "deepseek",
+    "cli",
+    "tui",
+    "rust",
+    "binary",
+    "terminal"
+  ],
+  "type": "commonjs",
+  "bin": {
+    "codewhale": "bin/codewhale.js",
+    "codew": "bin/codew.js",
+    "codewhale-tui": "bin/codewhale-tui.js"
+  },
+  "scripts": {
+    "release:check": "node scripts/verify-release-assets.js",
+    "postinstall": "node scripts/install.js --optional",
+    "prepublishOnly": "node scripts/verify-release-assets.js",
+    "prepack": "node scripts/install.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "preferGlobal": true,
+  "files": [
+    "bin/*.js",
+    "scripts/*.js",
+    "test/*.js",
+    "README.md",
+    "package.json"
+  ]
+}

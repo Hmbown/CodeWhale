@@ -16,6 +16,7 @@ import {
   parseList,
   parseApprovalDecisionArgs,
   parseTextContent,
+  preservedChatStateFields,
   splitMessage,
   stripGroupPrefix
 } from "./lib.mjs";
@@ -99,7 +100,7 @@ const config = {
   allowUnlisted: parseBool(process.env.DEEPSEEK_ALLOW_UNLISTED, false),
   threadMapPath:
     process.env.FEISHU_THREAD_MAP_PATH ||
-    "/var/lib/deepseek-feishu-bridge/thread-map.json",
+    "/var/lib/codewhale-feishu-bridge/thread-map.json",
   allowGroups: parseBool(process.env.FEISHU_ALLOW_GROUPS, false),
   requirePrefixInGroup: parseBool(process.env.FEISHU_REQUIRE_PREFIX_IN_GROUP, true),
   groupPrefix: process.env.FEISHU_GROUP_PREFIX || "/ds",
@@ -144,6 +145,29 @@ void reattachActiveTurns().catch((error) => {
 async function handleIncomingMessage(event) {
   const identity = incomingIdentity(event);
   if (!identity.chatId) return;
+
+  // Store the incoming message ID so sendText() can reply inside the same
+  // Feishu thread/topic — without this, every bot message creates a new
+  // standalone topic in thread-enabled groups.
+  // / 缓存入站消息 ID，让 sendText 能通过 reply API 在同一话题内回复。
+  // / 否则每条 bot 消息都会在话题群中创建独立的新话题（见 #1710）。
+  if (identity.messageId) {
+    const existing = await threadStore.getChat(identity.chatId);
+    if (existing) {
+      await threadStore.patchChat(identity.chatId, {
+        replyToMessageId: identity.messageId,
+        updatedAt: new Date().toISOString()
+      });
+    } else {
+      await threadStore.setChat(identity.chatId, {
+        replyToMessageId: identity.messageId,
+        threadId: null,
+        lastSeq: 0,
+        activeTurnId: null,
+        updatedAt: new Date().toISOString()
+      });
+    }
+  }
 
   if (identity.messageType && identity.messageType !== "text") {
     await sendText(identity.chatId, "Only text messages are supported in this first bridge.");
@@ -208,6 +232,9 @@ async function handleCommand(chatId, command) {
     case "approval":
       await decideApproval(chatId, action);
       return;
+    case "set_model":
+      await setChatModel(chatId, action.modelName);
+      return;
     case "prompt":
       await runPrompt(chatId, action.prompt);
       return;
@@ -220,10 +247,14 @@ async function ensureThread(chatId, { forceNew = false } = {}) {
   const existing = await threadStore.getChat(chatId);
   if (existing?.threadId && !forceNew) return existing;
 
+  // Use per-chat model if set, fall back to bridge-level default.
+  // / 优先使用 per-chat 模型（/model 命令设置），否则用桥接级别的默认模型。
+  const effectiveModel = existing?.model || config.model;
+
   const thread = await runtimeJson("/v1/threads", {
     method: "POST",
     body: {
-      model: config.model,
+      model: effectiveModel,
       workspace: config.workspace,
       mode: config.mode,
       allow_shell: config.allowShell,
@@ -236,6 +267,7 @@ async function ensureThread(chatId, { forceNew = false } = {}) {
   });
 
   const state = {
+    ...preservedChatStateFields(existing),
     threadId: thread.id,
     lastSeq: 0,
     activeTurnId: null,
@@ -251,6 +283,10 @@ async function runPrompt(chatId, prompt) {
     return;
   }
   const state = await ensureThread(chatId);
+  // Use per-chat model for this turn (may differ from the thread's
+  // creation model if the user ran /model after the thread was created).
+  // / 使用 per-chat 模型执行本轮对话（如果用户在创建线程后切换过模型）。
+  const effectiveModel = state?.model || config.model;
   const detail = await runtimeJson(`/v1/threads/${encodeURIComponent(state.threadId)}`);
   const activeBlock = activeTurnBlock(detail, state);
   if (activeBlock) {
@@ -273,7 +309,7 @@ async function runPrompt(chatId, prompt) {
       body: {
         prompt,
         input_summary: prompt.slice(0, 200),
-        model: config.model,
+        model: effectiveModel,
         mode: config.mode,
         allow_shell: config.allowShell,
         trust_mode: config.trustMode,
@@ -471,7 +507,9 @@ async function resumeThread(chatId, args) {
     return;
   }
   const detail = await runtimeJson(`/v1/threads/${encodeURIComponent(threadId)}`);
+  const existing = await threadStore.getChat(chatId);
   await threadStore.setChat(chatId, {
+    ...preservedChatStateFields(existing),
     threadId,
     lastSeq: Number(detail.latest_seq || 0),
     activeTurnId: null,
@@ -530,21 +568,64 @@ async function decideApproval(chatId, action) {
   await sendText(chatId, `Approval ${approvalId}: ${decision}${remember ? " and remember" : ""}`);
 }
 
+async function setChatModel(chatId, modelName) {
+  // /model <name> — set per-chat model; "default" or empty resets to bridge default.
+  // / /model "default" 或空参数 — 恢复桥接级别的默认模型。
+  if (!modelName || modelName === "default") {
+    await threadStore.patchChat(chatId, {
+      model: null,
+      updatedAt: new Date().toISOString()
+    });
+    await sendText(chatId, `Reset per-chat model. Using bridge default: ${config.model}`);
+    return;
+  }
+  await threadStore.patchChat(chatId, {
+    model: modelName,
+    updatedAt: new Date().toISOString()
+  });
+  await sendText(chatId, `Per-chat model set to: ${modelName}`);
+}
+
 async function sendText(chatId, text) {
+  // Try reply API first — keeps bot responses inside the same Feishu
+  // thread/topic instead of spawning new standalone topics.
+  // / 优先使用 reply API，确保 bot 回复留在话题群的同一条话题内。
+  const state = await threadStore.getChat(chatId);
+  const replyToMessageId = state?.replyToMessageId || null;
+
+  const replyMessage =
+    replyToMessageId
+      ? client.im?.v1?.message?.reply?.bind(client.im.v1.message) ||
+        client.im?.message?.reply?.bind(client.im.message)
+      : null;
   const createMessage =
     client.im?.v1?.message?.create?.bind(client.im.v1.message) ||
     client.im?.message?.create?.bind(client.im.message);
   if (!createMessage) {
     throw new Error("Lark SDK client does not expose im message create API");
   }
+
+  let canReply = Boolean(replyMessage);
   for (const chunk of splitMessage(text, config.maxReplyChars)) {
+    const body = {
+      msg_type: "text",
+      content: JSON.stringify({ text: chunk })
+    };
+    if (canReply) {
+      try {
+        await replyMessage({
+          path: { message_id: replyToMessageId },
+          data: body
+        });
+        continue;
+      } catch (error) {
+        canReply = false;
+        console.warn("Feishu reply API failed; falling back to message create", error);
+      }
+    }
     await createMessage({
       params: { receive_id_type: "chat_id" },
-      data: {
-        receive_id: chatId,
-        msg_type: "text",
-        content: JSON.stringify({ text: chunk })
-      }
+      data: { ...body, receive_id: chatId }
     });
   }
 }

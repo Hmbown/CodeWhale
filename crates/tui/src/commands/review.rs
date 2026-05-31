@@ -41,7 +41,7 @@ pub fn review(app: &mut App, args: Option<&str>) -> CommandResult {
         None => {
             let global_display = global_dir.display();
             return CommandResult::error(format!(
-                "Review skill not found in {} or {}. Create ~/.deepseek/skills/review/SKILL.md.{}",
+                "Review skill not found in {} or {}. Create ~/.codewhale/skills/review/SKILL.md.{}",
                 skills_dir.display(),
                 global_display,
                 warnings

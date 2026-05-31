@@ -68,6 +68,12 @@ struct HelpEntry {
     haystack: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HelpRenderRow {
+    Section(HelpSection),
+    Entry { slot: usize, entry_idx: usize },
+}
+
 pub struct HelpView {
     locale: Locale,
     entries: Vec<HelpEntry>,
@@ -142,6 +148,54 @@ impl HelpView {
         let len = self.filtered.len() as isize;
         let next = (self.selected as isize + delta).clamp(0, len - 1) as usize;
         self.selected = next;
+    }
+
+    fn move_selection_wrapping(&mut self, delta: isize) {
+        if self.filtered.is_empty() {
+            self.selected = 0;
+            return;
+        }
+        let len = self.filtered.len() as isize;
+        let next = (self.selected as isize + delta).rem_euclid(len) as usize;
+        self.selected = next;
+    }
+
+    fn render_rows(&self) -> Vec<HelpRenderRow> {
+        let mut rows = Vec::new();
+        let mut active_section: Option<HelpSection> = None;
+
+        for (slot, entry_idx) in self.filtered.iter().copied().enumerate() {
+            let entry = &self.entries[entry_idx];
+            if active_section != Some(entry.section) {
+                rows.push(HelpRenderRow::Section(entry.section));
+                active_section = Some(entry.section);
+            }
+            rows.push(HelpRenderRow::Entry { slot, entry_idx });
+        }
+
+        rows
+    }
+
+    fn selected_render_row(rows: &[HelpRenderRow], selected: usize) -> usize {
+        rows.iter()
+            .position(|row| matches!(row, HelpRenderRow::Entry { slot, .. } if *slot == selected))
+            .unwrap_or(0)
+    }
+
+    fn visible_row_start(rows: &[HelpRenderRow], selected: usize, visible_budget: usize) -> usize {
+        if rows.len() <= visible_budget {
+            return 0;
+        }
+
+        let selected_row = Self::selected_render_row(rows, selected);
+        let half = visible_budget / 2;
+        if selected_row <= half {
+            0
+        } else if selected_row + half >= rows.len() {
+            rows.len().saturating_sub(visible_budget)
+        } else {
+            selected_row.saturating_sub(half)
+        }
     }
 }
 
@@ -251,19 +305,19 @@ impl ModalView for HelpView {
             }
             KeyCode::Char('q') | KeyCode::Char('Q') if self.query.is_empty() => ViewAction::Close,
             KeyCode::Up => {
-                self.move_selection(-1);
+                self.move_selection_wrapping(-1);
                 ViewAction::None
             }
             KeyCode::Down => {
-                self.move_selection(1);
+                self.move_selection_wrapping(1);
                 ViewAction::None
             }
             KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.move_selection(-1);
+                self.move_selection_wrapping(-1);
                 ViewAction::None
             }
             KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.move_selection(1);
+                self.move_selection_wrapping(1);
                 ViewAction::None
             }
             KeyCode::PageUp => {
@@ -363,70 +417,52 @@ impl ModalView for HelpView {
             let label_width = 28.min(inner_width.saturating_sub(8));
             let desc_capacity = inner_width.saturating_sub(label_width + 4);
 
-            // Visible window: header (3) + footer hint (handled by block);
-            // budget the remaining rows for entries and inserted section
-            // headings. Section headings can push us past the budget on tiny
-            // terminals — we still render them because losing the heading is
-            // worse than losing one trailing row of entries.
+            // The block uses a one-cell border plus one-cell padding, so the
+            // real paragraph body is four rows shorter than the outer popup.
+            // Budget against that body height so selected rows are not clipped
+            // by the bottom border/padding.
             let header_lines = lines.len();
             let visible_budget = (popup_height as usize)
-                .saturating_sub(header_lines + 3)
+                .saturating_sub(4)
+                .saturating_sub(header_lines)
                 .max(1);
 
-            // Centre the selected row in the visible window when it is far
-            // down, otherwise keep the natural top-aligned listing.
-            let scroll = self
-                .selected
-                .saturating_sub(visible_budget.saturating_sub(1));
-            let mut active_section: Option<HelpSection> = None;
-            let mut rendered_rows = 0usize;
+            let rows = self.render_rows();
+            let row_start = Self::visible_row_start(&rows, self.selected, visible_budget);
 
-            for (slot, idx) in self.filtered.iter().enumerate() {
-                if slot < scroll {
-                    continue;
-                }
-                if rendered_rows >= visible_budget {
-                    break;
-                }
-
-                let entry = &self.entries[*idx];
-                if active_section != Some(entry.section) {
-                    if rendered_rows > 0 {
-                        lines.push(Line::from(""));
-                        rendered_rows += 1;
+            for row in rows.iter().skip(row_start).take(visible_budget) {
+                match *row {
+                    HelpRenderRow::Section(section) => {
+                        let count = self
+                            .filtered
+                            .iter()
+                            .filter(|idx| self.entries[**idx].section == section)
+                            .count();
+                        lines.push(Line::from(Span::styled(
+                            format!("  {} ({})", section.label(self.locale), count),
+                            Style::default()
+                                .fg(palette::DEEPSEEK_BLUE)
+                                .add_modifier(Modifier::BOLD),
+                        )));
                     }
-                    let count = self
-                        .filtered
-                        .iter()
-                        .filter(|idx| self.entries[**idx].section == entry.section)
-                        .count();
-                    lines.push(Line::from(Span::styled(
-                        format!("  {} ({})", entry.section.label(self.locale), count),
-                        Style::default()
-                            .fg(palette::DEEPSEEK_BLUE)
-                            .add_modifier(Modifier::BOLD),
-                    )));
-                    rendered_rows += 1;
-                    active_section = Some(entry.section);
-                    if rendered_rows >= visible_budget {
-                        break;
+                    HelpRenderRow::Entry { slot, entry_idx } => {
+                        let entry = &self.entries[entry_idx];
+                        let is_selected = slot == self.selected;
+                        let style = if is_selected {
+                            Style::default()
+                                .fg(palette::SELECTION_TEXT)
+                                .bg(palette::DEEPSEEK_BLUE)
+                                .add_modifier(Modifier::BOLD)
+                        } else {
+                            Style::default().fg(palette::TEXT_PRIMARY)
+                        };
+                        let cursor = if is_selected { "▶ " } else { "  " };
+                        let label = truncate_to_width(&entry.label, label_width);
+                        let desc = truncate_to_width(&entry.description, desc_capacity);
+                        let line_text = format!("{cursor}{label:<label_width$}  {desc}",);
+                        lines.push(Line::from(Span::styled(line_text, style)));
                     }
                 }
-
-                let is_selected = slot == self.selected;
-                let style = if is_selected {
-                    Style::default()
-                        .fg(palette::SELECTION_TEXT)
-                        .bg(palette::SELECTION_BG)
-                } else {
-                    Style::default().fg(palette::TEXT_PRIMARY)
-                };
-                let cursor = if is_selected { "▶ " } else { "  " };
-                let label = truncate_to_width(&entry.label, label_width);
-                let desc = truncate_to_width(&entry.description, desc_capacity);
-                let line_text = format!("{cursor}{label:<label_width$}  {desc}", label = label,);
-                lines.push(Line::from(Span::styled(line_text, style)));
-                rendered_rows += 1;
             }
         }
 
@@ -601,17 +637,104 @@ mod tests {
     }
 
     #[test]
-    fn arrow_keys_move_selection_within_bounds() {
+    fn arrow_keys_move_selection_and_wrap_edges() {
         let mut view = HelpView::new();
-        // Down once → row 1; Up twice → clamped at 0.
+        // Down once → row 1; Up twice wraps from the first row to the last.
         view.handle_key(key(KeyCode::Down));
         assert_eq!(view.selected, 1);
         view.handle_key(key(KeyCode::Up));
         view.handle_key(key(KeyCode::Up));
+        assert_eq!(view.selected, view.filtered.len() - 1);
+        // Down from last wraps to first; End still jumps to the last row.
+        view.handle_key(key(KeyCode::Down));
         assert_eq!(view.selected, 0);
-        // End → last row.
         view.handle_key(key(KeyCode::End));
         assert_eq!(view.selected, view.filtered.len() - 1);
+    }
+
+    #[test]
+    fn visible_window_keeps_selected_entry_visible_after_scroll() {
+        let mut view = HelpView::new();
+        let selected = view
+            .filtered
+            .iter()
+            .position(|idx| view.entries[*idx].label == "/home")
+            .expect("/home command should be present");
+        view.selected = selected;
+
+        let rows = view.render_rows();
+        let row_start = HelpView::visible_row_start(&rows, view.selected, 12);
+        let visible = &rows[row_start..(row_start + 12).min(rows.len())];
+
+        assert!(
+            visible
+                .iter()
+                .any(|row| matches!(row, HelpRenderRow::Entry { slot, .. } if *slot == selected)),
+            "selected help entry should stay in the visible render window"
+        );
+    }
+
+    #[test]
+    fn render_keeps_next_row_after_help_visible() {
+        let mut view = HelpView::new();
+        let help_slot = view
+            .filtered
+            .iter()
+            .position(|idx| view.entries[*idx].label == "/help")
+            .expect("/help command should be present");
+        view.selected = help_slot;
+        view.handle_key(key(KeyCode::Down));
+        let selected_idx = view.filtered[view.selected];
+        let selected_label = view.entries[selected_idx].label.clone();
+
+        let area = Rect::new(0, 0, 96, 32);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+
+        let mut highlighted_label = false;
+        for y in area.top()..area.bottom() {
+            let mut row = String::new();
+            let mut row_has_highlight = false;
+            for x in area.left()..area.right() {
+                let cell = &buf[(x, y)];
+                row.push_str(cell.symbol());
+                row_has_highlight |=
+                    cell.bg == palette::DEEPSEEK_BLUE && cell.fg == palette::SELECTION_TEXT;
+            }
+            if row_has_highlight && row.contains(&selected_label) {
+                highlighted_label = true;
+                break;
+            }
+        }
+
+        assert!(
+            highlighted_label,
+            "selected row after /help should stay visibly highlighted"
+        );
+    }
+
+    #[test]
+    fn selected_help_row_uses_stronger_highlight() {
+        let view = HelpView::new();
+        let area = Rect::new(0, 0, 96, 32);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+
+        let mut found_highlight = false;
+        for y in area.top()..area.bottom() {
+            for x in area.left()..area.right() {
+                let cell = &buf[(x, y)];
+                if cell.bg == palette::DEEPSEEK_BLUE && cell.fg == palette::SELECTION_TEXT {
+                    found_highlight = true;
+                    break;
+                }
+            }
+        }
+
+        assert!(
+            found_highlight,
+            "selected row should use a strong blue highlight"
+        );
     }
 
     #[test]

@@ -208,16 +208,22 @@ pub struct Usage {
 }
 
 /// Map known models to their approximate context window sizes.
+///
+/// Lookup order:
+/// 1. An explicit `_Nk` suffix in the model name, for **any** vendor. This
+///    lets self-hosted deployments advertise their window through the served
+///    model name (e.g. a vLLM `--served-model-name qwen3-32b-256k`), which is
+///    the only signal we have for non-DeepSeek/Claude models. The 1000-token
+///    approximation is fine for compaction-threshold math.
+/// 2. DeepSeek vendor heuristics (V4 family -> 1M, legacy -> 128K).
+/// 3. Claude -> 200K.
 #[must_use]
 pub fn context_window_for_model(model: &str) -> Option<u32> {
     let lower = model.to_lowercase();
-    // Unknown legacy DeepSeek model IDs default to 128K unless an explicit
-    // *k suffix is present. DeepSeek-V4 family and current compatibility
-    // aliases ship with a 1M context window.
+    if let Some(explicit_window) = explicit_context_window_hint(&lower) {
+        return Some(explicit_window);
+    }
     if lower.contains("deepseek") {
-        if let Some(explicit_window) = deepseek_context_window_hint(&lower) {
-            return Some(explicit_window);
-        }
         if lower.contains("v4") {
             return Some(DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS);
         }
@@ -229,7 +235,9 @@ pub fn context_window_for_model(model: &str) -> Option<u32> {
     None
 }
 
-fn deepseek_context_window_hint(model_lower: &str) -> Option<u32> {
+/// Parse an explicit `_Nk` context-window hint from a model name (vendor
+/// agnostic). Returns the window in tokens for `N` in `8..=1024`.
+fn explicit_context_window_hint(model_lower: &str) -> Option<u32> {
     let bytes = model_lower.as_bytes();
     let mut i = 0usize;
     while i < bytes.len() {

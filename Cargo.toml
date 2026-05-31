@@ -9,6 +9,7 @@ members = [
     "crates/hooks",
     "crates/mcp",
     "crates/protocol",
+    "crates/release",
     "crates/secrets",
     "crates/state",
     "crates/tools",
@@ -19,7 +20,7 @@ default-members = ["crates/cli", "crates/app-server", "crates/tui"]
 resolver = "2"
 
 [workspace.package]
-version = "0.8.40"
+version = "0.8.46"
 edition = "2024"
 # Rust 1.88 stabilized `let_chains` in `if`/`while` conditions, which the
 # codebase relies on extensively. Cargo enforces this so users on older
@@ -27,7 +28,7 @@ edition = "2024"
 # confusing E0658 from rustc.
 rust-version = "1.88"
 license = "MIT"
-repository = "https://github.com/Hmbown/DeepSeek-TUI"
+repository = "https://github.com/Hmbown/CodeWhale"
 
 [workspace.dependencies]
 anyhow = "1.0.100"
@@ -37,10 +38,11 @@ chrono = { version = "0.4.43", features = ["serde"] }
 clap = { version = "4.5.54", features = ["derive"] }
 clap_complete = "4.5"
 dirs = "6.0.0"
-reqwest = { version = "0.13.1", default-features = false, features = ["json", "rustls"] }
+reqwest = { version = "0.13.1", default-features = false, features = ["json", "rustls", "socks"] }
 rusqlite = { version = "0.32.1", features = ["bundled"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
+semver = "1.0.28"
 thiserror = "2.0"
 tokio = { version = "1.49.0", features = ["full"] }
 toml = "0.9.7"

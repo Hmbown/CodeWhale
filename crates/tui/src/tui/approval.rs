@@ -16,10 +16,9 @@
 //!   `2` / `a` approves for the session.
 //! - **Destructive** (`RiskLevel::Destructive`) — file writes, shell,
 //!   patches, MCP actions, unclassified tools, and any "fetch arbitrary
-//!   content" surface. The first approve press *stages* a decision and
-//!   the second matching press commits — muscle-memory `Enter` cannot
-//!   accidentally land on an approval. Any non-approve key clears the
-//!   staging and keeps the user in selection mode.
+//!   content" surface. The takeover keeps the destructive badge and
+//!   impact summary visible, then lets `Enter` commit the highlighted
+//!   option or `y` / `a` / `d` commit directly.
 //!
 //! The decision events emitted upstream are unchanged
 //! (`ViewEvent::ApprovalDecision`), so `ui.rs` and the engine handle
@@ -102,8 +101,8 @@ pub enum ToolCategory {
 /// Stakes-based variant for the takeover modal.
 ///
 /// `RiskLevel::Benign` lets a single keystroke commit the approval.
-/// `RiskLevel::Destructive` requires an explicit second confirmation
-/// keypress so muscle-memory `Enter` never lands on an irreversible op.
+/// `RiskLevel::Destructive` keeps stronger warning copy and styling
+/// around approvals that can touch files, shell, or remote state.
 ///
 /// Routing rules live in [`classify_risk`] — when in doubt, route to
 /// `Destructive`.
@@ -135,15 +134,31 @@ pub struct ApprovalRequest {
     /// Lossy / arity-aware fingerprint, used to scope *approvals* so an
     /// "approve for session" covers later flag variants (v0.8.37).
     pub approval_grouping_key: String,
+    /// The model's explanation of intent before invoking write tools (#2381).
+    /// Displayed in the approval view so users understand *why* the change
+    /// is being made before reviewing *what* will change.
+    pub intent_summary: Option<String>,
 }
 
 impl ApprovalRequest {
+    #[cfg(test)]
     pub fn new(
         id: &str,
         tool_name: &str,
         description: &str,
         params: &Value,
         approval_key: &str,
+    ) -> Self {
+        Self::new_with_intent(id, tool_name, description, params, approval_key, None)
+    }
+
+    pub fn new_with_intent(
+        id: &str,
+        tool_name: &str,
+        description: &str,
+        params: &Value,
+        approval_key: &str,
+        intent_summary: Option<&str>,
     ) -> Self {
         let category = get_tool_category(tool_name);
         let risk = classify_risk(tool_name, category, params);
@@ -160,6 +175,14 @@ impl ApprovalRequest {
             params: params.clone(),
             approval_key: approval_key.to_string(),
             approval_grouping_key,
+            intent_summary: intent_summary.and_then(|summary| {
+                let summary = summary.trim();
+                if summary.is_empty() {
+                    None
+                } else {
+                    Some(summary.to_string())
+                }
+            }),
         }
     }
 
@@ -228,13 +251,12 @@ pub fn get_tool_category(name: &str) -> ToolCategory {
 /// The bias is conservative: a category we don't recognise routes to
 /// `Destructive`, and any shell command that `command_safety` flags as
 /// `Dangerous` is forced to `Destructive` even when the rest of the
-/// request looks calm. The split lets the modal swap muscle-memory
-/// approval for an explicit two-key confirmation on anything that can
-/// touch state outside this turn.
+/// request looks calm. The split lets the modal render stronger warning
+/// copy on anything that can touch state outside this turn.
 #[must_use]
 pub fn classify_risk(tool_name: &str, category: ToolCategory, params: &Value) -> RiskLevel {
     match category {
-        // Read paths and discovery — never staged.
+        // Read paths and discovery.
         ToolCategory::Safe | ToolCategory::McpRead => RiskLevel::Benign,
         // Query-only network is benign; opening a URL pulls arbitrary
         // remote content, so it stays destructive.
@@ -448,9 +470,7 @@ fn build_impact_summary_zh_hans(
     }
 }
 
-/// Indices into the option list shared by both variants. Visible to
-/// the widget module so it can render the staged-confirmation banner
-/// without re-deriving the variant from the request.
+/// Indices into the option list shared by both variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApprovalOption {
     ApproveOnce,
@@ -486,16 +506,6 @@ impl ApprovalOption {
             ApprovalOption::Abort => ReviewDecision::Abort,
         }
     }
-
-    /// Whether this option needs an explicit second-key confirmation in
-    /// the destructive variant. Deny/Abort are never staged.
-    fn requires_confirm(self, risk: RiskLevel) -> bool {
-        matches!(risk, RiskLevel::Destructive)
-            && matches!(
-                self,
-                ApprovalOption::ApproveOnce | ApprovalOption::ApproveAlways
-            )
-    }
 }
 
 /// Approval overlay state managed by the modal view stack
@@ -504,10 +514,6 @@ pub struct ApprovalView {
     request: ApprovalRequest,
     selected: usize,
     locale: Locale,
-    /// When `Some`, the destructive variant has staged this approval and
-    /// is waiting for the user to press the same key (or `Enter`) again.
-    /// Any other key clears the staging.
-    pending_confirm: Option<ApprovalOption>,
     timeout: Option<Duration>,
     requested_at: Instant,
     /// Whether the approval card is collapsed to a single-line banner.
@@ -525,7 +531,6 @@ impl ApprovalView {
             request,
             selected: 0,
             locale,
-            pending_confirm: None,
             timeout: None,
             requested_at: Instant::now(),
             collapsed: false,
@@ -534,22 +539,17 @@ impl ApprovalView {
 
     fn select_prev(&mut self) {
         self.selected = self.selected.saturating_sub(1);
-        // Moving the selection abandons any staged confirmation; the
-        // user is reconsidering.
-        self.pending_confirm = None;
     }
 
     fn select_next(&mut self) {
         self.selected = (self.selected + 1).min(ApprovalOption::ORDER.len() - 1);
-        self.pending_confirm = None;
     }
 
     fn current_option(&self) -> ApprovalOption {
         ApprovalOption::from_index(self.selected)
     }
 
-    /// Test-only accessor — the widget reads decisions through
-    /// `commit_or_stage` instead of polling.
+    /// Test-only accessor for the selected option's decision.
     #[cfg(test)]
     fn current_decision(&self) -> ReviewDecision {
         self.current_option().decision()
@@ -566,33 +566,13 @@ impl ApprovalView {
         self.request.risk
     }
 
-    /// The staged option, if any. `None` in the benign variant or when
-    /// no approve key has been pressed yet.
-    pub(crate) fn pending_confirm(&self) -> Option<ApprovalOption> {
-        self.pending_confirm
-    }
-
     pub(crate) fn locale(&self) -> Locale {
         self.locale
     }
 
-    /// Try to commit (or stage) the given option respecting the
-    /// variant's confirmation policy. Returns the action the modal
-    /// stack should apply.
-    fn commit_or_stage(&mut self, option: ApprovalOption) -> ViewAction {
-        if option.requires_confirm(self.request.risk) {
-            // Two-step destructive flow: first press stages, second
-            // press of the same option commits.
-            if self.pending_confirm == Some(option) {
-                self.pending_confirm = None;
-                return self.emit_decision(option.decision(), false);
-            }
-            self.pending_confirm = Some(option);
-            self.selected = option.index();
-            return ViewAction::None;
-        }
-        // Benign variant or non-approve options commit immediately.
-        self.pending_confirm = None;
+    /// Commit the given option and close the approval modal.
+    fn commit_option(&mut self, option: ApprovalOption) -> ViewAction {
+        self.selected = option.index();
         self.emit_decision(option.decision(), false)
     }
 
@@ -647,31 +627,23 @@ impl ModalView for ApprovalView {
                 self.select_next();
                 ViewAction::None
             }
-            KeyCode::Enter => self.commit_or_stage(self.current_option()),
+            KeyCode::Enter => self.commit_option(self.current_option()),
             // Direct shortcuts; '1' / '2' map to the first two options
-            // so a numeric pad still works for benign approve flows.
+            // so a numeric pad still works for approve flows.
             KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Char('1') => {
-                self.commit_or_stage(ApprovalOption::ApproveOnce)
+                self.commit_option(ApprovalOption::ApproveOnce)
             }
             KeyCode::Char('a') | KeyCode::Char('A') | KeyCode::Char('2') => {
-                self.commit_or_stage(ApprovalOption::ApproveAlways)
+                self.commit_option(ApprovalOption::ApproveAlways)
             }
             KeyCode::Char('n')
             | KeyCode::Char('N')
             | KeyCode::Char('d')
             | KeyCode::Char('D')
-            | KeyCode::Char('3') => self.commit_or_stage(ApprovalOption::Deny),
-            KeyCode::Char('v') | KeyCode::Char('V') => {
-                self.pending_confirm = None;
-                self.emit_params_pager()
-            }
+            | KeyCode::Char('3') => self.commit_option(ApprovalOption::Deny),
+            KeyCode::Char('v') | KeyCode::Char('V') => self.emit_params_pager(),
             KeyCode::Esc => self.emit_decision(ReviewDecision::Abort, false),
-            _ => {
-                // Any unrecognised key cancels a staged confirmation —
-                // the user is no longer aiming at "approve".
-                self.pending_confirm = None;
-                ViewAction::None
-            }
+            _ => ViewAction::None,
         }
     }
 
@@ -1030,13 +1002,13 @@ mod tests {
 
     #[test]
     fn risk_query_only_network_is_benign_but_fetch_is_destructive() {
-        // web_search is read-only enough to skip the two-key dance.
+        // web_search is read-only enough to use the benign variant.
         let cat = ToolCategory::Network;
         assert_eq!(
             classify_risk("web_search", cat, &json!({"q": "rust"})),
             RiskLevel::Benign
         );
-        // fetch_url pulls arbitrary remote content; never staged.
+        // fetch_url pulls arbitrary remote content, so it stays destructive.
         assert_eq!(
             classify_risk("fetch_url", cat, &json!({"url": "https://example.com"})),
             RiskLevel::Destructive
@@ -1163,7 +1135,6 @@ mod tests {
         let view = ApprovalView::new(benign_request());
         assert_eq!(view.selected, 0);
         assert!(view.timeout.is_none());
-        assert_eq!(view.pending_confirm(), None);
         assert_eq!(view.risk(), RiskLevel::Benign);
     }
 
@@ -1376,7 +1347,7 @@ mod tests {
     }
 
     // ========================================================================
-    // ApprovalView Tests — Destructive Variant (two-key confirm)
+    // ApprovalView Tests — Destructive Variant (one-step approve with warning)
     // ========================================================================
 
     #[test]
@@ -1386,16 +1357,10 @@ mod tests {
     }
 
     #[test]
-    fn destructive_y_first_press_stages_then_second_commits() {
+    fn destructive_y_first_press_approves_once() {
         for code in [KeyCode::Char('y'), KeyCode::Char('Y')] {
             let mut view = ApprovalView::new(destructive_request());
 
-            // First press stages — no decision emitted yet.
-            let action = view.handle_key(create_key_event(code));
-            assert!(matches!(action, ViewAction::None));
-            assert_eq!(view.pending_confirm(), Some(ApprovalOption::ApproveOnce));
-
-            // Second press of the same key commits.
             let action = view.handle_key(create_key_event(code));
             assert!(
                 matches!(
@@ -1411,15 +1376,10 @@ mod tests {
     }
 
     #[test]
-    fn destructive_enter_first_press_stages_then_second_commits() {
+    fn destructive_enter_approves_selected_option() {
         let mut view = ApprovalView::new(destructive_request());
 
-        // Selection starts at ApproveOnce — Enter stages.
-        let action = view.handle_key(create_key_event(KeyCode::Enter));
-        assert!(matches!(action, ViewAction::None));
-        assert_eq!(view.pending_confirm(), Some(ApprovalOption::ApproveOnce));
-
-        // Second Enter on the same selection commits.
+        // Selection starts at ApproveOnce — Enter commits the selected option.
         let action = view.handle_key(create_key_event(KeyCode::Enter));
         assert!(matches!(
             action,
@@ -1431,38 +1391,32 @@ mod tests {
     }
 
     #[test]
-    fn destructive_navigation_clears_staged_confirmation() {
+    fn destructive_navigation_then_enter_commits_highlighted_option() {
         let mut view = ApprovalView::new(destructive_request());
 
-        view.handle_key(create_key_event(KeyCode::Char('y')));
-        assert_eq!(view.pending_confirm(), Some(ApprovalOption::ApproveOnce));
-
-        // Moving the selection abandons the staging.
         view.handle_key(create_key_event(KeyCode::Down));
-        assert_eq!(view.pending_confirm(), None);
+        let action = view.handle_key(create_key_event(KeyCode::Enter));
+        assert!(matches!(
+            action,
+            ViewAction::EmitAndClose(ViewEvent::ApprovalDecision {
+                decision: ReviewDecision::ApprovedForSession,
+                ..
+            })
+        ));
     }
 
     #[test]
-    fn destructive_unrelated_key_clears_staged_confirmation() {
+    fn destructive_unrelated_key_keeps_modal_open() {
         let mut view = ApprovalView::new(destructive_request());
 
-        view.handle_key(create_key_event(KeyCode::Char('y')));
-        assert_eq!(view.pending_confirm(), Some(ApprovalOption::ApproveOnce));
-
-        // A key with no mapped action clears the staging.
         let action = view.handle_key(create_key_event(KeyCode::Char('q')));
         assert!(matches!(action, ViewAction::None));
-        assert_eq!(view.pending_confirm(), None);
     }
 
     #[test]
-    fn destructive_a_first_press_stages_then_second_commits_session() {
+    fn destructive_a_first_press_approves_for_session() {
         for code in [KeyCode::Char('a'), KeyCode::Char('A')] {
             let mut view = ApprovalView::new(destructive_request());
-
-            let action = view.handle_key(create_key_event(code));
-            assert!(matches!(action, ViewAction::None));
-            assert_eq!(view.pending_confirm(), Some(ApprovalOption::ApproveAlways));
 
             let action = view.handle_key(create_key_event(code));
             assert!(
@@ -1479,23 +1433,8 @@ mod tests {
     }
 
     #[test]
-    fn destructive_y_then_a_does_not_commit_either() {
-        // Pressing 'y' then 'a' must NOT commit ApproveAlways — the
-        // second key is a different option, so it re-stages instead.
-        let mut view = ApprovalView::new(destructive_request());
-
-        let action = view.handle_key(create_key_event(KeyCode::Char('y')));
-        assert!(matches!(action, ViewAction::None));
-        assert_eq!(view.pending_confirm(), Some(ApprovalOption::ApproveOnce));
-
-        let action = view.handle_key(create_key_event(KeyCode::Char('a')));
-        assert!(matches!(action, ViewAction::None));
-        assert_eq!(view.pending_confirm(), Some(ApprovalOption::ApproveAlways));
-    }
-
-    #[test]
-    fn destructive_deny_does_not_require_confirmation() {
-        // Deny / Abort skip the two-key dance — the user is bailing.
+    fn destructive_deny_commits_immediately() {
+        // Deny commits immediately — the user is rejecting the tool.
         for code in [
             KeyCode::Char('n'),
             KeyCode::Char('N'),
@@ -1520,9 +1459,6 @@ mod tests {
     #[test]
     fn destructive_esc_aborts_immediately() {
         let mut view = ApprovalView::new(destructive_request());
-        // Stage something first.
-        view.handle_key(create_key_event(KeyCode::Char('y')));
-        // Esc still aborts in one press.
         let action = view.handle_key(create_key_event(KeyCode::Esc));
         assert!(matches!(
             action,
@@ -1557,20 +1493,21 @@ mod tests {
     }
 
     #[test]
-    fn render_benign_includes_review_badge_and_one_step_hint() {
+    fn render_benign_includes_review_badge_and_selection_hint() {
         let view = ApprovalView::new(benign_request());
         let lines = render_lines(&view, 100, 40);
         let joined = lines.join("\n");
         assert!(joined.contains("REVIEW"), "missing REVIEW badge:\n{joined}");
+        assert!(joined.contains("Choose"), "benign hint missing:\n{joined}");
         assert!(
-            joined.contains("Single key approves"),
-            "benign hint missing:\n{joined}"
+            joined.contains("Enter selected option"),
+            "benign selection hint missing:\n{joined}"
         );
         assert!(joined.contains("read_file"));
     }
 
     #[test]
-    fn render_destructive_shows_warning_badge_and_two_step_hint() {
+    fn render_destructive_shows_warning_badge_and_one_step_hint() {
         let view = ApprovalView::new(destructive_request());
         let lines = render_lines(&view, 100, 40);
         let joined = lines.join("\n");
@@ -1579,31 +1516,15 @@ mod tests {
             "missing DESTRUCTIVE badge:\n{joined}"
         );
         assert!(
-            joined.contains("Two keys to approve"),
+            joined.contains("Enter selected option"),
             "destructive hint missing:\n{joined}"
         );
         assert!(joined.contains("write_file"));
     }
 
     #[test]
-    fn render_destructive_after_stage_shows_confirm_banner() {
-        let mut view = ApprovalView::new(destructive_request());
-        view.handle_key(create_key_event(KeyCode::Char('y')));
-        let lines = render_lines(&view, 100, 40);
-        let joined = lines.join("\n");
-        assert!(
-            joined.contains("Confirm destructive action"),
-            "confirm banner missing:\n{joined}"
-        );
-        assert!(
-            joined.contains("(staged)"),
-            "stage marker missing:\n{joined}"
-        );
-    }
-
-    #[test]
     fn render_destructive_zh_hans_localizes_security_copy() {
-        let mut view = ApprovalView::new_for_locale(destructive_request(), Locale::ZhHans);
+        let view = ApprovalView::new_for_locale(destructive_request(), Locale::ZhHans);
         let lines = render_lines(&view, 100, 40);
         let joined = compact_rendered_text(&lines);
         assert!(
@@ -1611,8 +1532,12 @@ mod tests {
             "missing zh risk badge:\n{joined}"
         );
         assert!(
-            joined.contains("两次按键确认"),
-            "missing zh two-step hint:\n{joined}"
+            joined.contains("选择："),
+            "missing zh selection prefix:\n{joined}"
+        );
+        assert!(
+            joined.contains("Enter执行选中项，或直接按y/a/d"),
+            "missing zh one-step hint:\n{joined}"
         );
         assert!(
             joined.contains("文件写入"),
@@ -1629,22 +1554,6 @@ mod tests {
         assert!(
             joined.contains("仅本次批准"),
             "missing zh approve option:\n{joined}"
-        );
-
-        view.handle_key(create_key_event(KeyCode::Char('y')));
-        let lines = render_lines(&view, 100, 40);
-        let joined = compact_rendered_text(&lines);
-        assert!(
-            joined.contains("确认破坏性操作"),
-            "missing zh confirm banner:\n{joined}"
-        );
-        assert!(
-            joined.contains("(待确认)"),
-            "missing zh staged marker:\n{joined}"
-        );
-        assert!(
-            joined.contains("Enter或y"),
-            "missing zh confirm key:\n{joined}"
         );
     }
 

@@ -1,12 +1,12 @@
 # Feishu / Lark Bridge
 
-This bridge lets a Feishu or Lark chat control a local `deepseek serve --http`
+This bridge lets a Feishu or Lark chat control a local `codewhale serve --http`
 runtime from a phone. It uses the official Lark/Feishu Node SDK long-connection
 mode, so the first version does not need a public webhook URL.
 
 Security model:
 
-- `deepseek serve --http` stays bound to `127.0.0.1`.
+- `codewhale serve --http` stays bound to `127.0.0.1`.
 - `/v1/*` runtime calls use `DEEPSEEK_RUNTIME_TOKEN`.
 - Feishu/Lark chats must be allowlisted unless `DEEPSEEK_ALLOW_UNLISTED=true`
   is set for first pairing.
@@ -17,7 +17,7 @@ Security model:
 ## Setup
 
 ```bash
-cd /opt/deepseek/bridge
+cd /opt/codewhale/bridge
 npm install --omit=dev
 cp .env.example /etc/deepseek/feishu-bridge.env
 sudoedit /etc/deepseek/feishu-bridge.env
@@ -37,8 +37,8 @@ npm run validate:config -- \
 For a Tencent Lighthouse deployment, use:
 
 ```bash
-sudo systemctl enable --now deepseek-runtime deepseek-feishu-bridge
-sudo journalctl -u deepseek-feishu-bridge -f
+sudo systemctl enable --now codewhale-runtime codewhale-feishu-bridge
+sudo journalctl -u codewhale-feishu-bridge -f
 ```
 
 ## Commands

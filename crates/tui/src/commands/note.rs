@@ -39,6 +39,10 @@ pub fn note(app: &mut App, content: Option<&str>) -> CommandResult {
 }
 
 fn notes_path(app: &App) -> PathBuf {
+    let primary = app.workspace.join(".codewhale").join("notes.md");
+    if primary.exists() {
+        return primary;
+    }
     app.workspace.join(".deepseek").join("notes.md")
 }
 
@@ -164,7 +168,7 @@ fn append_note(notes_path: &Path, note_content: &str) -> Result<(), String> {
     };
 
     // Write separator and note content
-    if let Err(e) = writeln!(file, "\n---\n{}", note_content) {
+    if let Err(e) = writeln!(file, "\n---\n{note_content}") {
         return Err(format!("Failed to write note: {e}"));
     }
 

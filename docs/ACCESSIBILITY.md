@@ -68,14 +68,14 @@ version renders cleanly.
   Terminal) will pass the rendered content straight through.
 * If you find a UI surface that still produces motion when
   `low_motion = true`, please file an issue against
-  [`PRIOR: Screen-reader / accessibility flag`](https://github.com/Hmbown/DeepSeek-TUI/issues/450)
+  [`PRIOR: Screen-reader / accessibility flag`](https://github.com/Hmbown/CodeWhale/issues/450)
   with a screenshot or terminal recording.
 
 ## Related issues / history
 
-* [#450](https://github.com/Hmbown/DeepSeek-TUI/issues/450) —
+* [#450](https://github.com/Hmbown/CodeWhale/issues/450) —
   documenting the existing flag, adding the `NO_ANIMATIONS`
   startup overlay, and writing this page.
-* [#449](https://github.com/Hmbown/DeepSeek-TUI/issues/449) —
+* [#449](https://github.com/Hmbown/CodeWhale/issues/449) —
   footer statusline now uses the active theme's contrast pair
   instead of a bespoke palette.
