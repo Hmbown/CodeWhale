@@ -56,9 +56,15 @@ fn parse_add(parts: Vec<&str>) -> CommandResult {
             command: parts[2].to_string(),
             args: parts[3..].iter().map(|s| (*s).to_string()).collect(),
         })),
-        "http" | "sse" => CommandResult::action(AppAction::Mcp(McpUiAction::AddHttp {
+        "http" => CommandResult::action(AppAction::Mcp(McpUiAction::AddHttp {
             name: parts[1].to_string(),
             url: parts[2].to_string(),
+            transport: None,
+        })),
+        "sse" => CommandResult::action(AppAction::Mcp(McpUiAction::AddHttp {
+            name: parts[1].to_string(),
+            url: parts[2].to_string(),
+            transport: Some("sse".to_string()),
         })),
         _ => CommandResult::error(
             "Usage: /mcp add stdio <name> <command> [args...] OR /mcp add http <name> <url>",

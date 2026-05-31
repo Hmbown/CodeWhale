@@ -1359,6 +1359,96 @@ fn create_test_options() -> TuiOptions {
     }
 }
 
+#[tokio::test]
+async fn tool_result_api_content_receipts_large_live_output() {
+    let _guard = crate::tools::truncate::TEST_SPILLOVER_GUARD
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    let tmp = TempDir::new().expect("spillover tempdir");
+    let prior = crate::tools::truncate::set_test_spillover_root(Some(
+        tmp.path().join(".deepseek").join("tool_outputs"),
+    ));
+    struct Restore(Option<PathBuf>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            crate::tools::truncate::set_test_spillover_root(self.0.take());
+        }
+    }
+    let _restore = Restore(prior);
+
+    let mut app = App::new(create_test_options(), &Config::default());
+    app.api_messages.push(Message {
+        role: "assistant".to_string(),
+        content: vec![ContentBlock::ToolUse {
+            id: "call-live-big".to_string(),
+            name: "exec_shell".to_string(),
+            input: serde_json::json!({"command": "cargo test"}),
+            caller: None,
+        }],
+    });
+
+    let raw = "LIVE_RAW_SENTINEL\n".repeat(900);
+    let output = crate::tools::spec::ToolResult::success(raw.clone());
+    let content =
+        tool_result_content_for_api_message(&app, "call-live-big", "exec_shell", &output).await;
+
+    assert!(content.contains("[TOOL_OUTPUT_RECEIPT]"));
+    assert!(content.contains("tool: exec_shell"));
+    assert!(content.contains("tool_call_id: call-live-big"));
+    assert!(content.contains("detail_handle: sha:"));
+    assert!(content.contains("retrieve: retrieve_tool_result ref=sha:"));
+    assert!(!content.contains(&raw));
+    assert!(
+        content.chars().count()
+            < crate::tool_output_receipts::RAW_TOOL_OUTPUT_RECEIPT_THRESHOLD_CHARS
+    );
+}
+
+#[test]
+fn live_tool_receipt_messages_clones_only_matching_tool_use() {
+    let mut app = App::new(create_test_options(), &Config::default());
+    app.api_messages.push(Message {
+        role: "assistant".to_string(),
+        content: vec![ContentBlock::ToolUse {
+            id: "call-old".to_string(),
+            name: "exec_shell".to_string(),
+            input: serde_json::json!({"command": "old"}),
+            caller: None,
+        }],
+    });
+    app.api_messages.push(Message {
+        role: "user".to_string(),
+        content: vec![ContentBlock::ToolResult {
+            tool_use_id: "call-old".to_string(),
+            content: "OLD_RAW\n".repeat(2_000),
+            is_error: None,
+            content_blocks: None,
+        }],
+    });
+    app.api_messages.push(Message {
+        role: "assistant".to_string(),
+        content: vec![ContentBlock::ToolUse {
+            id: "call-new".to_string(),
+            name: "read_file".to_string(),
+            input: serde_json::json!({"path": "src/main.rs"}),
+            caller: None,
+        }],
+    });
+
+    let messages = live_tool_receipt_messages(&app, "call-new", "NEW_RAW", true);
+
+    assert_eq!(messages.len(), 2);
+    assert!(matches!(
+        &messages[0].content[0],
+        ContentBlock::ToolUse { id, name, .. } if id == "call-new" && name == "read_file"
+    ));
+    assert!(matches!(
+        &messages[1].content[0],
+        ContentBlock::ToolResult { tool_use_id, content, .. }
+            if tool_use_id == "call-new" && content == "NEW_RAW"
+    ));
+}
+
 fn text_message(role: &str, text: &str) -> Message {
     Message {
         role: role.to_string(),
@@ -2077,6 +2167,8 @@ fn init_git_repo() -> TempDir {
             "user.name=codewhale Tests",
             "-c",
             "user.email=tests@example.com",
+            "-c",
+            "commit.gpgsign=false",
             "commit",
             "--allow-empty",
             "-m",
@@ -2340,6 +2432,75 @@ fn event_poll_timeout_has_nonzero_floor() {
         clamp_event_poll_timeout(Duration::from_millis(24)),
         Duration::from_millis(24)
     );
+}
+
+fn complete_release_json(tag: &str) -> serde_json::Value {
+    let assets = REQUIRED_RELEASE_ASSETS
+        .iter()
+        .map(|name| serde_json::json!({ "name": name, "state": "uploaded" }))
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "tag_name": tag,
+        "draft": false,
+        "prerelease": false,
+        "assets": assets,
+    })
+}
+
+#[test]
+fn version_hint_requires_complete_release_assets() {
+    let complete = complete_release_json("v0.8.47");
+    let hint = version_hint_from_release_json(&complete, "0.8.46").expect("newer complete release");
+    assert!(hint.contains("v0.8.47 available"));
+
+    let mut missing_manifest = complete_release_json("v0.8.47");
+    missing_manifest["assets"] = serde_json::Value::Array(
+        missing_manifest["assets"]
+            .as_array()
+            .expect("assets")
+            .iter()
+            .filter(|asset| {
+                asset.get("name").and_then(serde_json::Value::as_str)
+                    != Some("codewhale-artifacts-sha256.txt")
+            })
+            .cloned()
+            .collect(),
+    );
+    assert!(
+        version_hint_from_release_json(&missing_manifest, "0.8.46").is_none(),
+        "do not advertise a release before checksums are uploaded"
+    );
+
+    let mut pending_asset = complete_release_json("v0.8.47");
+    pending_asset["assets"].as_array_mut().expect("assets")[0]["state"] = serde_json::json!("open");
+    assert!(
+        version_hint_from_release_json(&pending_asset, "0.8.46").is_none(),
+        "do not advertise a release before every asset is uploaded"
+    );
+
+    let mut missing_state = complete_release_json("v0.8.47");
+    missing_state["assets"].as_array_mut().expect("assets")[0]
+        .as_object_mut()
+        .expect("asset object")
+        .remove("state");
+    assert!(
+        version_hint_from_release_json(&missing_state, "0.8.46").is_none(),
+        "do not accept malformed asset state as uploaded"
+    );
+}
+
+#[test]
+fn version_hint_ignores_draft_prerelease_and_current_versions() {
+    let mut draft = complete_release_json("v0.8.47");
+    draft["draft"] = serde_json::Value::Bool(true);
+    assert!(version_hint_from_release_json(&draft, "0.8.46").is_none());
+
+    let mut prerelease = complete_release_json("v0.8.47");
+    prerelease["prerelease"] = serde_json::Value::Bool(true);
+    assert!(version_hint_from_release_json(&prerelease, "0.8.46").is_none());
+
+    let current = complete_release_json("v0.8.46");
+    assert!(version_hint_from_release_json(&current, "0.8.46").is_none());
 }
 
 #[test]
@@ -3263,6 +3424,47 @@ async fn dispatch_user_message_records_prompt_for_cancel_restore() {
                 !show_thinking,
                 "dispatch must carry the user's hidden-thinking setting into the engine"
             );
+        }
+        other => panic!("expected SendMessage, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn startup_prompt_waits_for_onboarding_then_dispatches() {
+    let mut app = create_test_app();
+    app.input = "阅读项目 and wait".to_string();
+    app.cursor_position = app.input.chars().count();
+    app.auto_submit_initial_input = true;
+    app.onboarding = OnboardingState::Welcome;
+    let config = Config::default();
+    let mut engine = crate::core::engine::mock_engine_handle();
+
+    submit_initial_input_if_ready(&mut app, &config, &engine.handle)
+        .await
+        .expect("defer");
+
+    assert!(app.auto_submit_initial_input);
+    assert_eq!(app.input, "阅读项目 and wait");
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some(INITIAL_PROMPT_DEFERRED_STATUS)
+    );
+    assert!(engine.rx_op.try_recv().is_err());
+
+    app.onboarding = OnboardingState::None;
+    submit_initial_input_if_ready(&mut app, &config, &engine.handle)
+        .await
+        .expect("submit");
+
+    assert!(!app.auto_submit_initial_input);
+    assert!(app.input.is_empty());
+    assert_eq!(
+        app.last_submitted_prompt.as_deref(),
+        Some("阅读项目 and wait")
+    );
+    match engine.rx_op.recv().await.expect("send message op") {
+        crate::core::ops::Op::SendMessage { content, .. } => {
+            assert!(content.contains("阅读项目 and wait"));
         }
         other => panic!("expected SendMessage, got {other:?}"),
     }
@@ -5048,6 +5250,10 @@ fn activity_detail_opens_reasoning_timeline_for_selected_thinking() {
         body.contains("Selected chunk: 1 of 2"),
         "chunk position missing: {body}"
     );
+    assert!(
+        body.contains("Next chunk: 2 of 2 - second chunk reasoning"),
+        "neighboring chunk missing: {body}"
+    );
     assert!(body.contains("Thinking chunk 1 of 2 (selected)"), "{body}");
     assert!(body.contains("Thinking chunk 2 of 2"), "{body}");
     assert!(body.contains("first chunk reasoning"), "body: {body}");
@@ -5055,6 +5261,95 @@ fn activity_detail_opens_reasoning_timeline_for_selected_thinking() {
         body.contains("second chunk reasoning"),
         "timeline should include the whole session's thinking: {body}"
     );
+}
+
+#[test]
+fn activity_detail_includes_tool_handle_and_neighbor_context() {
+    let mut app = create_test_app();
+    app.history = vec![
+        HistoryCell::Thinking {
+            content: "checked approach".to_string(),
+            streaming: false,
+            duration_secs: Some(0.6),
+        },
+        HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
+            name: "read_file".to_string(),
+            status: ToolStatus::Success,
+            input_summary: Some("src/main.rs".to_string()),
+            output: Some("bounded preview".to_string()),
+            prompts: None,
+            spillover_path: None,
+            output_summary: None,
+            is_diff: false,
+        })),
+        HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
+            name: "grep_files".to_string(),
+            status: ToolStatus::Success,
+            input_summary: Some("TODO".to_string()),
+            output: Some("grep summary".to_string()),
+            prompts: None,
+            spillover_path: None,
+            output_summary: None,
+            is_diff: false,
+        })),
+    ];
+    app.tool_details_by_cell.insert(
+        1,
+        ToolDetailRecord {
+            tool_id: "call-read".to_string(),
+            tool_name: "read_file".to_string(),
+            input: serde_json::json!({"path": "src/main.rs"}),
+            output: Some("full output behind raw details".to_string()),
+        },
+    );
+    app.session_artifacts
+        .push(crate::artifacts::ArtifactRecord {
+            id: "art_call-read".to_string(),
+            kind: crate::artifacts::ArtifactKind::ToolOutput,
+            session_id: "session-activity".to_string(),
+            tool_call_id: "call-read".to_string(),
+            tool_name: "read_file".to_string(),
+            created_at: chrono::Utc::now(),
+            byte_size: 42,
+            preview: "bounded preview".to_string(),
+            storage_path: PathBuf::from("artifacts").join("art_call-read.txt"),
+        });
+    app.resync_history_revisions();
+    let revisions = app.history_revisions.clone();
+    app.viewport.transcript_cache.ensure(
+        &app.history,
+        &revisions,
+        100,
+        app.transcript_render_options(),
+    );
+    let line = first_line_for_cell(&app, 1);
+    let point = TranscriptSelectionPoint {
+        line_index: line,
+        column: 0,
+    };
+    app.viewport.transcript_selection.anchor = Some(point);
+    app.viewport.transcript_selection.head = Some(point);
+
+    assert!(open_activity_detail_pager(&mut app));
+    let body = pop_pager_body(&mut app);
+
+    assert!(body.contains("Activity: read_file"), "{body}");
+    assert!(body.contains("Activity chunk: 2 of 3"), "{body}");
+    assert!(
+        body.contains("Previous activity: 1 of 3 - thinking"),
+        "{body}"
+    );
+    assert!(
+        body.contains("Next activity: 3 of 3 - tool grep_files"),
+        "{body}"
+    );
+    assert!(body.contains("Detail handle: art_call-read"), "{body}");
+    assert!(
+        body.contains("retrieve_tool_result ref=art_call-read"),
+        "{body}"
+    );
+    assert!(body.contains("Alt+V"), "{body}");
+    assert!(body.contains("raw details"), "{body}");
 }
 
 #[test]
@@ -5114,6 +5409,11 @@ fn activity_detail_fallback_uses_recent_meaningful_activity_without_full_tool_du
     assert!(
         body.contains("Alt+V for details"),
         "activity detail should stay bounded and point to Alt+V for raw detail: {body}"
+    );
+    assert!(body.contains("Detail handle: Alt+V details"), "{body}");
+    assert!(
+        !body.contains("Detail handle: Alt+V raw details"),
+        "fallback tool details should not be labeled raw: {body}"
     );
     assert!(
         !body.contains("line 10"),
@@ -5694,6 +5994,10 @@ fn default_footer_keeps_prefix_stability_opt_in() {
         items.contains(&crate::config::StatusItem::Cache),
         "default footer should still include provider-reported cache hit rate"
     );
+    assert!(
+        items.contains(&crate::config::StatusItem::GitBranch),
+        "default footer should surface the current workspace branch"
+    );
 }
 
 #[test]
@@ -5777,9 +6081,35 @@ fn render_footer_from_git_branch_item_renders_workspace_branch() {
 
     let mut app = create_test_app();
     app.workspace = repo.path().to_path_buf();
+    crate::tui::workspace_context::refresh_if_needed(&mut app, Instant::now(), true);
 
     let props = render_footer_from(&app, &[crate::config::StatusItem::GitBranch], None);
     assert_eq!(spans_text(&props.cache), "feature/statusline");
+}
+
+#[test]
+fn default_footer_renders_workspace_branch_when_available() {
+    let repo = init_git_repo();
+    let checkout = Command::new("git")
+        .args(["checkout", "-b", "feature/default-branch-chip"])
+        .current_dir(repo.path())
+        .output()
+        .expect("git checkout should run");
+    assert!(
+        checkout.status.success(),
+        "git checkout failed: {}",
+        String::from_utf8_lossy(&checkout.stderr)
+    );
+
+    let mut app = create_test_app();
+    app.workspace = repo.path().to_path_buf();
+    crate::tui::workspace_context::refresh_if_needed(&mut app, Instant::now(), true);
+
+    let props = render_footer_from(&app, &crate::config::StatusItem::default_footer(), None);
+    assert!(
+        spans_text(&props.cache).contains("feature/default-branch-chip"),
+        "default footer should include the current git branch"
+    );
 }
 
 /// Regression for issue #244: visible session spend must not decrease.

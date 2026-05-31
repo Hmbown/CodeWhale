@@ -9,6 +9,7 @@ members = [
     "crates/hooks",
     "crates/mcp",
     "crates/protocol",
+    "crates/release",
     "crates/secrets",
     "crates/state",
     "crates/tools",

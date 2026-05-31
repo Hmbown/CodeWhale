@@ -459,6 +459,32 @@ pub enum MessageId {
     OnboardTipsLine4,
     OnboardTipsFooterEnter,
     OnboardTipsFooterAction,
+    // Context menu.
+    CtxMenuTitle,
+    CtxMenuCopySelection,
+    CtxMenuCopySelectionDesc,
+    CtxMenuOpenSelection,
+    CtxMenuOpenSelectionDesc,
+    CtxMenuClearSelection,
+    CtxMenuOpenDetails,
+    CtxMenuCopyMessage,
+    CtxMenuCopyMessageDesc,
+    CtxMenuOpenInEditor,
+    CtxMenuOpenInEditorDesc,
+    CtxMenuShowCell,
+    CtxMenuShowCellDesc,
+    CtxMenuHideCell,
+    CtxMenuHideCellDesc,
+    CtxMenuShowHidden,
+    CtxMenuShowHiddenDesc,
+    CtxMenuPaste,
+    CtxMenuPasteDesc,
+    CtxMenuCmdPalette,
+    CtxMenuCmdPaletteDesc,
+    CtxMenuContextInspector,
+    CtxMenuContextInspectorDesc,
+    CtxMenuHelp,
+    CtxMenuHelpDesc,
 }
 
 #[allow(dead_code)]
@@ -694,6 +720,32 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::OnboardTipsLine4,
     MessageId::OnboardTipsFooterEnter,
     MessageId::OnboardTipsFooterAction,
+    // Context menu.
+    MessageId::CtxMenuTitle,
+    MessageId::CtxMenuCopySelection,
+    MessageId::CtxMenuCopySelectionDesc,
+    MessageId::CtxMenuOpenSelection,
+    MessageId::CtxMenuOpenSelectionDesc,
+    MessageId::CtxMenuClearSelection,
+    MessageId::CtxMenuOpenDetails,
+    MessageId::CtxMenuCopyMessage,
+    MessageId::CtxMenuCopyMessageDesc,
+    MessageId::CtxMenuOpenInEditor,
+    MessageId::CtxMenuOpenInEditorDesc,
+    MessageId::CtxMenuShowCell,
+    MessageId::CtxMenuShowCellDesc,
+    MessageId::CtxMenuHideCell,
+    MessageId::CtxMenuHideCellDesc,
+    MessageId::CtxMenuShowHidden,
+    MessageId::CtxMenuShowHiddenDesc,
+    MessageId::CtxMenuPaste,
+    MessageId::CtxMenuPasteDesc,
+    MessageId::CtxMenuCmdPalette,
+    MessageId::CtxMenuCmdPaletteDesc,
+    MessageId::CtxMenuContextInspector,
+    MessageId::CtxMenuContextInspectorDesc,
+    MessageId::CtxMenuHelp,
+    MessageId::CtxMenuHelpDesc,
 ];
 
 pub fn tr(locale: Locale, id: MessageId) -> &'static str {
@@ -971,7 +1023,7 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CmdNoteDescription => "Add, list, edit, or remove workspace notes",
         MessageId::CmdThemeDescription => "Switch theme or open the theme picker",
         MessageId::CmdProviderDescription => {
-            "Switch or view the active LLM backend (codewhale | nvidia-nim | ollama)"
+            "Switch or view the active LLM backend (deepseek | nvidia-nim | ollama)"
         }
         MessageId::CmdQueueDescription => "View or edit queued messages",
         MessageId::CmdRecallDescription => "Search prior cycle archives (BM25 over message text)",
@@ -1230,6 +1282,32 @@ fn english(id: MessageId) -> &'static str {
         }
         MessageId::OnboardTipsFooterEnter => "Press Enter",
         MessageId::OnboardTipsFooterAction => " to open the workspace",
+        // Context menu.
+        MessageId::CtxMenuTitle => " Right click ",
+        MessageId::CtxMenuCopySelection => "Copy selection",
+        MessageId::CtxMenuCopySelectionDesc => "write selected transcript text",
+        MessageId::CtxMenuOpenSelection => "Open selection",
+        MessageId::CtxMenuOpenSelectionDesc => "show selected text in pager",
+        MessageId::CtxMenuClearSelection => "Clear selection",
+        MessageId::CtxMenuOpenDetails => "Open details",
+        MessageId::CtxMenuCopyMessage => "Copy message",
+        MessageId::CtxMenuCopyMessageDesc => "write clicked transcript cell",
+        MessageId::CtxMenuOpenInEditor => "Open in editor",
+        MessageId::CtxMenuOpenInEditorDesc => "open file:line in $EDITOR",
+        MessageId::CtxMenuShowCell => "Show cell",
+        MessageId::CtxMenuShowCellDesc => "unhide this transcript cell",
+        MessageId::CtxMenuHideCell => "Hide cell",
+        MessageId::CtxMenuHideCellDesc => "collapse this transcript cell",
+        MessageId::CtxMenuShowHidden => "Show hidden",
+        MessageId::CtxMenuShowHiddenDesc => "unhide all collapsed cells",
+        MessageId::CtxMenuPaste => "Paste",
+        MessageId::CtxMenuPasteDesc => "insert clipboard into composer",
+        MessageId::CtxMenuCmdPalette => "Command palette",
+        MessageId::CtxMenuCmdPaletteDesc => "commands, skills, and tools",
+        MessageId::CtxMenuContextInspector => "Context inspector",
+        MessageId::CtxMenuContextInspectorDesc => "active context and cache hints",
+        MessageId::CtxMenuHelp => "Help",
+        MessageId::CtxMenuHelpDesc => "keybindings and commands",
     }
 }
 
@@ -1713,7 +1791,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
             "テーマを切り替え（ダーク/ライト/グレースケール/システム）"
         }
         MessageId::CmdProviderDescription => {
-            "現在の LLM バックエンドを切り替え・確認（codewhale | nvidia-nim | ollama）"
+            "現在の LLM バックエンドを切り替え・確認（deepseek | nvidia-nim | ollama）"
         }
         MessageId::CmdQueueDescription => "キューされたメッセージを確認・編集",
         MessageId::CmdRecallDescription => {
@@ -1973,6 +2051,32 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         }
         MessageId::OnboardTipsFooterEnter => "Enter を押す",
         MessageId::OnboardTipsFooterAction => " とワークスペースが開きます",
+        // Context menu.
+        MessageId::CtxMenuTitle => " 右クリック ",
+        MessageId::CtxMenuCopySelection => "選択をコピー",
+        MessageId::CtxMenuCopySelectionDesc => "選択したトランスクリプトのテキストを書き込む",
+        MessageId::CtxMenuOpenSelection => "選択を開く",
+        MessageId::CtxMenuOpenSelectionDesc => "選択したテキストをページャで表示",
+        MessageId::CtxMenuClearSelection => "選択を解除",
+        MessageId::CtxMenuOpenDetails => "詳細を開く",
+        MessageId::CtxMenuCopyMessage => "メッセージをコピー",
+        MessageId::CtxMenuCopyMessageDesc => "クリックしたトランスクリプトセルを書き込む",
+        MessageId::CtxMenuOpenInEditor => "エディタで開く",
+        MessageId::CtxMenuOpenInEditorDesc => "$EDITOR で file:line を開く",
+        MessageId::CtxMenuShowCell => "セルを表示",
+        MessageId::CtxMenuShowCellDesc => "このトランスクリプトセルを再表示",
+        MessageId::CtxMenuHideCell => "セルを隠す",
+        MessageId::CtxMenuHideCellDesc => "このトランスクリプトセルを折りたたむ",
+        MessageId::CtxMenuShowHidden => "非表示を表示",
+        MessageId::CtxMenuShowHiddenDesc => "すべての折りたたまれたセルを再表示",
+        MessageId::CtxMenuPaste => "貼り付け",
+        MessageId::CtxMenuPasteDesc => "クリップボードをコンポーザに挿入",
+        MessageId::CtxMenuCmdPalette => "コマンドパレット",
+        MessageId::CtxMenuCmdPaletteDesc => "コマンド、スキル、ツール",
+        MessageId::CtxMenuContextInspector => "コンテキストインスペクタ",
+        MessageId::CtxMenuContextInspectorDesc => "アクティブなコンテキストとキャッシュヒント",
+        MessageId::CtxMenuHelp => "ヘルプ",
+        MessageId::CtxMenuHelpDesc => "キー操作とコマンド",
     })
 }
 
@@ -2059,7 +2163,7 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::CmdNoteDescription => "添加、列出、编辑或删除工作区笔记",
         MessageId::CmdThemeDescription => "切换主题：深色、浅色、灰度或系统",
         MessageId::CmdProviderDescription => {
-            "切换或查看当前 LLM 后端（codewhale | nvidia-nim | ollama）"
+            "切换或查看当前 LLM 后端（deepseek | nvidia-nim | ollama）"
         }
         MessageId::CmdQueueDescription => "查看或编辑已排队的消息",
         MessageId::CmdRecallDescription => "搜索此前的循环归档（基于消息文本的 BM25 检索）",
@@ -2281,6 +2385,32 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
         MessageId::OnboardTipsLine4 => "Ctrl+R 恢复历史会话，Esc 退出当前输入或弹层。",
         MessageId::OnboardTipsFooterEnter => "按 Enter",
         MessageId::OnboardTipsFooterAction => " 进入工作区",
+        // Context menu.
+        MessageId::CtxMenuTitle => " 右键菜单 ",
+        MessageId::CtxMenuCopySelection => "复制所选",
+        MessageId::CtxMenuCopySelectionDesc => "将选中的记录区域文本写入剪贴板",
+        MessageId::CtxMenuOpenSelection => "打开所选",
+        MessageId::CtxMenuOpenSelectionDesc => "在翻阅器中查看选中文本",
+        MessageId::CtxMenuClearSelection => "清除选择",
+        MessageId::CtxMenuOpenDetails => "打开详情",
+        MessageId::CtxMenuCopyMessage => "复制消息",
+        MessageId::CtxMenuCopyMessageDesc => "将点击的记录条目写入剪贴板",
+        MessageId::CtxMenuOpenInEditor => "在编辑器中打开",
+        MessageId::CtxMenuOpenInEditorDesc => "在 $EDITOR 中打开 file:line",
+        MessageId::CtxMenuShowCell => "显示条目",
+        MessageId::CtxMenuShowCellDesc => "取消隐藏此记录条目",
+        MessageId::CtxMenuHideCell => "隐藏条目",
+        MessageId::CtxMenuHideCellDesc => "折叠此记录条目",
+        MessageId::CtxMenuShowHidden => "显示已隐藏",
+        MessageId::CtxMenuShowHiddenDesc => "取消隐藏所有已折叠条目",
+        MessageId::CtxMenuPaste => "粘贴",
+        MessageId::CtxMenuPasteDesc => "将剪贴板插入输入框",
+        MessageId::CtxMenuCmdPalette => "命令面板",
+        MessageId::CtxMenuCmdPaletteDesc => "命令、技能和工具",
+        MessageId::CtxMenuContextInspector => "上下文检查器",
+        MessageId::CtxMenuContextInspectorDesc => "活动上下文和缓存提示",
+        MessageId::CtxMenuHelp => "帮助",
+        MessageId::CtxMenuHelpDesc => "快捷键和命令",
     })
 }
 
@@ -2389,7 +2519,7 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::CmdNoteDescription => "Adicionar, listar, editar ou remover notas do workspace",
         MessageId::CmdThemeDescription => "Alternar tema: escuro, claro, tons de cinza ou sistema",
         MessageId::CmdProviderDescription => {
-            "Trocar ou exibir o backend LLM ativo (codewhale | nvidia-nim | ollama)"
+            "Trocar ou exibir o backend LLM ativo (deepseek | nvidia-nim | ollama)"
         }
         MessageId::CmdQueueDescription => "Ver ou editar mensagens enfileiradas",
         MessageId::CmdRecallDescription => {
@@ -2669,6 +2799,32 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         }
         MessageId::OnboardTipsFooterEnter => "Pressione Enter",
         MessageId::OnboardTipsFooterAction => " para abrir o workspace",
+        // Context menu.
+        MessageId::CtxMenuTitle => " Clique direito ",
+        MessageId::CtxMenuCopySelection => "Copiar seleção",
+        MessageId::CtxMenuCopySelectionDesc => "copiar texto selecionado da transcrição",
+        MessageId::CtxMenuOpenSelection => "Abrir seleção",
+        MessageId::CtxMenuOpenSelectionDesc => "mostrar texto selecionado no visualizador",
+        MessageId::CtxMenuClearSelection => "Limpar seleção",
+        MessageId::CtxMenuOpenDetails => "Abrir detalhes",
+        MessageId::CtxMenuCopyMessage => "Copiar mensagem",
+        MessageId::CtxMenuCopyMessageDesc => "copiar célula da transcrição clicada",
+        MessageId::CtxMenuOpenInEditor => "Abrir no editor",
+        MessageId::CtxMenuOpenInEditorDesc => "abrir file:line no $EDITOR",
+        MessageId::CtxMenuShowCell => "Mostrar célula",
+        MessageId::CtxMenuShowCellDesc => "reexibir esta célula da transcrição",
+        MessageId::CtxMenuHideCell => "Ocultar célula",
+        MessageId::CtxMenuHideCellDesc => "recolher esta célula da transcrição",
+        MessageId::CtxMenuShowHidden => "Mostrar ocultas",
+        MessageId::CtxMenuShowHiddenDesc => "reexibir todas as células recolhidas",
+        MessageId::CtxMenuPaste => "Colar",
+        MessageId::CtxMenuPasteDesc => "inserir área de transferência no compositor",
+        MessageId::CtxMenuCmdPalette => "Paleta de comandos",
+        MessageId::CtxMenuCmdPaletteDesc => "comandos, habilidades e ferramentas",
+        MessageId::CtxMenuContextInspector => "Inspetor de contexto",
+        MessageId::CtxMenuContextInspectorDesc => "contexto ativo e dicas de cache",
+        MessageId::CtxMenuHelp => "Ajuda",
+        MessageId::CtxMenuHelpDesc => "atalhos de teclado e comandos",
     })
 }
 
@@ -2781,7 +2937,7 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::CmdNoteDescription => "Agregar nota al archivo persistente (.deepseek/notes.md)",
         MessageId::CmdThemeDescription => "Alternar entre tema claro y oscuro",
         MessageId::CmdProviderDescription => {
-            "Cambiar o mostrar el backend LLM activo (codewhale | nvidia-nim | ollama)"
+            "Cambiar o mostrar el backend LLM activo (deepseek | nvidia-nim | ollama)"
         }
         MessageId::CmdQueueDescription => "Ver o editar mensajes en cola",
         MessageId::CmdRecallDescription => {
@@ -3063,6 +3219,32 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         }
         MessageId::OnboardTipsFooterEnter => "Presiona Enter",
         MessageId::OnboardTipsFooterAction => " para abrir el workspace",
+        // Context menu.
+        MessageId::CtxMenuTitle => " Clic derecho ",
+        MessageId::CtxMenuCopySelection => "Copiar selección",
+        MessageId::CtxMenuCopySelectionDesc => "copiar texto seleccionado de la transcripción",
+        MessageId::CtxMenuOpenSelection => "Abrir selección",
+        MessageId::CtxMenuOpenSelectionDesc => "mostrar texto seleccionado en el visor",
+        MessageId::CtxMenuClearSelection => "Limpiar selección",
+        MessageId::CtxMenuOpenDetails => "Abrir detalles",
+        MessageId::CtxMenuCopyMessage => "Copiar mensaje",
+        MessageId::CtxMenuCopyMessageDesc => "copiar celda de transcripción seleccionada",
+        MessageId::CtxMenuOpenInEditor => "Abrir en editor",
+        MessageId::CtxMenuOpenInEditorDesc => "abrir file:line en $EDITOR",
+        MessageId::CtxMenuShowCell => "Mostrar celda",
+        MessageId::CtxMenuShowCellDesc => "volver a mostrar esta celda de transcripción",
+        MessageId::CtxMenuHideCell => "Ocultar celda",
+        MessageId::CtxMenuHideCellDesc => "colapsar esta celda de transcripción",
+        MessageId::CtxMenuShowHidden => "Mostrar ocultas",
+        MessageId::CtxMenuShowHiddenDesc => "volver a mostrar todas las celdas colapsadas",
+        MessageId::CtxMenuPaste => "Pegar",
+        MessageId::CtxMenuPasteDesc => "insertar portapapeles en el compositor",
+        MessageId::CtxMenuCmdPalette => "Paleta de comandos",
+        MessageId::CtxMenuCmdPaletteDesc => "comandos, habilidades y herramientas",
+        MessageId::CtxMenuContextInspector => "Inspector de contexto",
+        MessageId::CtxMenuContextInspectorDesc => "contexto activo y sugerencias de caché",
+        MessageId::CtxMenuHelp => "Ayuda",
+        MessageId::CtxMenuHelpDesc => "atajos de teclado y comandos",
     })
 }
 
@@ -3135,6 +3317,23 @@ mod tests {
             fallback_translation(None, MessageId::ComposerPlaceholder),
             english(MessageId::ComposerPlaceholder)
         );
+    }
+
+    #[test]
+    fn provider_description_names_deepseek_backend() {
+        for locale in Locale::shipped() {
+            let description = tr(*locale, MessageId::CmdProviderDescription);
+            assert!(
+                description.contains("deepseek"),
+                "{} provider description should mention deepseek: {description}",
+                locale.tag()
+            );
+            assert!(
+                !description.contains("codewhale |"),
+                "{} provider description should not name codewhale as a backend: {description}",
+                locale.tag()
+            );
+        }
     }
 
     #[test]

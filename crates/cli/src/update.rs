@@ -5,28 +5,21 @@
 //! platform-correct binary, verifies its SHA256 checksum, and atomically
 //! replaces the currently running binary.
 
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use codewhale_release::{
+    CHECKSUM_MANIFEST_ASSET, ReleaseChannel, ReleaseQuery, UPDATE_USER_AGENT,
+    compare_release_versions, fetch_release_json_blocking, is_beta_tag,
+    latest_release_tag_blocking, mirror_asset_url, resolve_release_query, update_is_needed,
+    update_network_fallback_hint,
+};
 use std::io::Write;
 
-const CHECKSUM_MANIFEST_ASSET: &str = "codewhale-artifacts-sha256.txt";
-const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/Hmbown/CodeWhale/releases/latest";
-const RELEASES_URL: &str = "https://api.github.com/repos/Hmbown/CodeWhale/releases?per_page=100";
-const CNB_REPO_URL: &str = "https://cnb.cool/codewhale.net/codewhale";
-const RELEASE_BASE_URL_ENV: &str = "CODEWHALE_RELEASE_BASE_URL";
-const LEGACY_RELEASE_BASE_URL_ENV: &str = "DEEPSEEK_TUI_RELEASE_BASE_URL";
-const DEEPSEEK_RELEASE_BASE_URL_ENV: &str = "DEEPSEEK_RELEASE_BASE_URL";
-const CNB_MIRROR_ENV: &str = "CODEWHALE_USE_CNB_MIRROR";
-/// Base URL for CNB binary release asset downloads (China-friendly mirror).
-const CNB_RELEASE_ASSET_BASE: &str = "https://cnb.cool/Hmbown/CodeWhale/-/releases";
-const UPDATE_VERSION_ENV: &str = "DEEPSEEK_TUI_VERSION";
-const LEGACY_UPDATE_VERSION_ENV: &str = "DEEPSEEK_VERSION";
-const UPDATE_USER_AGENT: &str = "codewhale-updater";
-
 /// Run the self-update workflow.
-pub fn run_update(beta: bool) -> Result<()> {
+pub fn run_update(beta: bool, check_only: bool) -> Result<()> {
     let current_exe =
         std::env::current_exe().context("failed to determine current executable path")?;
     let targets = update_targets_for_exe(&current_exe);
@@ -37,13 +30,32 @@ pub fn run_update(beta: bool) -> Result<()> {
     println!("Current binary: {}", current_exe.display());
     println!("Current version: v{current_version}");
 
+    if check_only {
+        let latest_tag =
+            latest_release_tag_blocking(channel).with_context(update_network_fallback_hint)?;
+        println!("Latest {} release: {latest_tag}", channel.label());
+        if update_is_needed(channel, current_version, &latest_tag)? {
+            println!("Update available. Run `codewhale update` to install {latest_tag}.");
+        } else {
+            match compare_release_versions(current_version, &latest_tag)? {
+                Ordering::Greater => {
+                    println!("Current build is newer than the latest published release.");
+                }
+                Ordering::Less | Ordering::Equal => {
+                    println!("Already up to date.");
+                }
+            }
+        }
+        return Ok(());
+    }
+
     // Step 1: Fetch latest release metadata
     let fetched = fetch_latest_release(channel).with_context(update_network_fallback_hint)?;
     let release = &fetched.release;
     let latest_tag = &release.tag_name;
     println!("Latest {} release: {latest_tag}", channel.label());
 
-    if let ReleaseSource::Mirror { base_url } = &fetched.source {
+    if let UpdateReleaseSource::Mirror { base_url } = &fetched.source {
         if channel == ReleaseChannel::Beta {
             println!(
                 "Using release mirror {}; --beta does not select GitHub beta releases in mirror mode.",
@@ -143,33 +155,14 @@ pub fn run_update(beta: bool) -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ReleaseChannel {
-    Stable,
-    Beta,
-}
-
-impl ReleaseChannel {
-    fn from_beta_flag(beta: bool) -> Self {
-        if beta { Self::Beta } else { Self::Stable }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Stable => "stable",
-            Self::Beta => "beta",
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FetchedRelease {
     release: Release,
-    source: ReleaseSource,
+    source: UpdateReleaseSource,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum ReleaseSource {
+enum UpdateReleaseSource {
     GitHub,
     Mirror { base_url: String },
 }
@@ -351,63 +344,25 @@ fn update_http_client() -> Result<reqwest::blocking::Client> {
 
 /// Fetch the latest release metadata from GitHub.
 fn fetch_latest_release(channel: ReleaseChannel) -> Result<FetchedRelease> {
-    let version = update_version_from_env().unwrap_or_else(|| env!("CARGO_PKG_VERSION").into());
-    if let Some(base_url) = release_base_url_from_env(&version) {
-        return Ok(FetchedRelease {
+    match resolve_release_query(channel) {
+        ReleaseQuery::Mirror { base_url, version } => Ok(FetchedRelease {
             release: release_from_mirror_base_url(
                 &base_url,
                 &version,
                 std::env::consts::OS,
                 std::env::consts::ARCH,
             ),
-            source: ReleaseSource::Mirror { base_url },
-        });
+            source: UpdateReleaseSource::Mirror { base_url },
+        }),
+        ReleaseQuery::GitHubLatest { url } => Ok(FetchedRelease {
+            release: fetch_latest_release_from_url(url)?,
+            source: UpdateReleaseSource::GitHub,
+        }),
+        ReleaseQuery::GitHubReleaseList { url } => Ok(FetchedRelease {
+            release: fetch_latest_beta_release_from_url(url)?,
+            source: UpdateReleaseSource::GitHub,
+        }),
     }
-    let release = match channel {
-        ReleaseChannel::Stable => fetch_latest_release_from_url(LATEST_RELEASE_URL),
-        ReleaseChannel::Beta => fetch_latest_beta_release_from_url(RELEASES_URL),
-    }?;
-    Ok(FetchedRelease {
-        release,
-        source: ReleaseSource::GitHub,
-    })
-}
-
-fn release_base_url_from_env(version: &str) -> Option<String> {
-    // Check canonical env first, then legacy envs
-    for env_name in [
-        RELEASE_BASE_URL_ENV,
-        LEGACY_RELEASE_BASE_URL_ENV,
-        DEEPSEEK_RELEASE_BASE_URL_ENV,
-    ] {
-        if let Ok(value) = std::env::var(env_name) {
-            let trimmed = value.trim().to_string();
-            if !trimmed.is_empty() {
-                return Some(trimmed);
-            }
-        }
-    }
-    // Auto-detect CNB mirror when CODEWHALE_USE_CNB_MIRROR is set
-    if std::env::var(CNB_MIRROR_ENV).is_ok() {
-        return Some(cnb_release_base_url(version));
-    }
-    None
-}
-
-fn cnb_release_base_url(version: &str) -> String {
-    format!(
-        "{}/v{}",
-        CNB_RELEASE_ASSET_BASE.trim_end_matches('/'),
-        version.trim_start_matches('v')
-    )
-}
-
-fn update_version_from_env() -> Option<String> {
-    std::env::var(UPDATE_VERSION_ENV)
-        .ok()
-        .or_else(|| std::env::var(LEGACY_UPDATE_VERSION_ENV).ok())
-        .map(|value| value.trim().trim_start_matches('v').to_string())
-        .filter(|value| !value.is_empty())
 }
 
 fn release_from_mirror_base_url(
@@ -437,39 +392,8 @@ fn release_from_mirror_base_url(
     }
 }
 
-fn mirror_asset_url(base_url: &str, asset_name: &str) -> String {
-    format!("{}/{}", base_url.trim_end_matches('/'), asset_name)
-}
-
-fn update_network_fallback_hint() -> String {
-    format!(
-        "GitHub release downloads may be blocked or slow on this network.\n\
-         For mainland China, use one of these fallback paths:\n\
-           1. Source build from the CNB mirror, installing both shipped binaries:\n\
-              cargo install --git {CNB_REPO_URL} --tag vX.Y.Z codewhale-cli --locked --force\n\
-              cargo install --git {CNB_REPO_URL} --tag vX.Y.Z codewhale-tui --locked --force\n\
-           2. Use a binary asset mirror:\n\
-              {RELEASE_BASE_URL_ENV}=https://<mirror>/<release-assets>/ {UPDATE_VERSION_ENV}=X.Y.Z codewhale update\n\
-         The mirror directory must contain {CHECKSUM_MANIFEST_ASSET} and the platform binaries."
-    )
-}
-
 fn fetch_latest_release_from_url(url: &str) -> Result<Release> {
-    let client = update_http_client()?;
-    let response = client
-        .get(url)
-        .header(reqwest::header::ACCEPT, "application/vnd.github+json")
-        .send()
-        .with_context(|| format!("failed to fetch release info from {url}"))?;
-    let status = response.status();
-    let body = response
-        .text()
-        .with_context(|| format!("failed to read release response from {url}"))?;
-
-    if !status.is_success() {
-        bail!("GitHub release request failed with HTTP {status}: {body}");
-    }
-
+    let body = fetch_release_json_blocking(url, "release info")?;
     let release: Release = serde_json::from_str(&body).with_context(|| {
         format!("failed to parse release JSON from GitHub API. Response: {body}")
     })?;
@@ -478,21 +402,7 @@ fn fetch_latest_release_from_url(url: &str) -> Result<Release> {
 }
 
 fn fetch_latest_beta_release_from_url(url: &str) -> Result<Release> {
-    let client = update_http_client()?;
-    let response = client
-        .get(url)
-        .header(reqwest::header::ACCEPT, "application/vnd.github+json")
-        .send()
-        .with_context(|| format!("failed to fetch release list from {url}"))?;
-    let status = response.status();
-    let body = response
-        .text()
-        .with_context(|| format!("failed to read release list response from {url}"))?;
-
-    if !status.is_success() {
-        bail!("GitHub release list request failed with HTTP {status}: {body}");
-    }
-
+    let body = fetch_release_json_blocking(url, "release list")?;
     // GitHub caps this endpoint at 100 releases per page. CodeWhale uses the
     // first page as the latest-beta search window, matching GitHub's ordering.
     let releases: Vec<Release> = serde_json::from_str(&body).with_context(|| {
@@ -501,55 +411,8 @@ fn fetch_latest_beta_release_from_url(url: &str) -> Result<Release> {
 
     releases
         .into_iter()
-        .find(is_beta_release)
+        .find(|release| is_beta_tag(&release.tag_name))
         .context("no beta release found in GitHub releases")
-}
-
-fn is_beta_release(release: &Release) -> bool {
-    release.tag_name.to_ascii_lowercase().contains("beta")
-}
-
-fn update_is_needed(
-    channel: ReleaseChannel,
-    current_version: &str,
-    latest_tag: &str,
-) -> Result<bool> {
-    let current = parse_release_version(current_version)
-        .with_context(|| format!("failed to parse current version {current_version:?}"))?;
-    let latest = parse_release_version(latest_tag)
-        .with_context(|| format!("failed to parse latest release tag {latest_tag:?}"))?;
-
-    match channel {
-        ReleaseChannel::Stable => Ok(current < latest),
-        ReleaseChannel::Beta => {
-            if current == latest {
-                return Ok(false);
-            }
-            let latest_is_beta = version_is_beta(&latest);
-            let current_is_stable = current.pre.is_empty();
-            let same_release_line = current.major == latest.major
-                && current.minor == latest.minor
-                && current.patch == latest.patch;
-            if current > latest && !(current_is_stable && same_release_line) {
-                return Ok(false);
-            }
-            Ok(latest_is_beta)
-        }
-    }
-}
-
-fn parse_release_version(value: &str) -> Result<semver::Version> {
-    let version = value
-        .trim()
-        .trim_start_matches('v')
-        .split_whitespace()
-        .next()
-        .unwrap_or("");
-    semver::Version::parse(version).with_context(|| format!("invalid semver: {value:?}"))
-}
-
-fn version_is_beta(version: &semver::Version) -> bool {
-    version.pre.as_str().to_ascii_lowercase().contains("beta")
 }
 
 /// Download a URL to bytes.
@@ -1004,11 +867,11 @@ E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  *codewhale-win
     #[test]
     fn cnb_release_base_url_includes_tag_directory() {
         assert_eq!(
-            cnb_release_base_url("0.8.47"),
+            codewhale_release::cnb_release_base_url("0.8.47"),
             "https://cnb.cool/Hmbown/CodeWhale/-/releases/v0.8.47"
         );
         assert_eq!(
-            cnb_release_base_url("v0.8.47"),
+            codewhale_release::cnb_release_base_url("v0.8.47"),
             "https://cnb.cool/Hmbown/CodeWhale/-/releases/v0.8.47"
         );
     }
@@ -1037,11 +900,11 @@ E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  *codewhale-win
     #[test]
     fn parse_release_version_accepts_tags_and_build_suffixes() {
         assert_eq!(
-            parse_release_version("v0.9.0-beta.1").unwrap(),
+            codewhale_release::parse_release_version("v0.9.0-beta.1").unwrap(),
             semver::Version::parse("0.9.0-beta.1").unwrap()
         );
         assert_eq!(
-            parse_release_version("0.8.45 (abcdef123456)").unwrap(),
+            codewhale_release::parse_release_version("0.8.45 (abcdef123456)").unwrap(),
             semver::Version::parse("0.8.45").unwrap()
         );
     }
@@ -1064,18 +927,24 @@ E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  *codewhale-win
             assets: vec![],
         };
 
-        assert!(!is_beta_release(&rc_prerelease));
-        assert!(is_beta_release(&beta_tag));
-        assert!(!is_beta_release(&stable));
+        assert!(!is_beta_tag(&rc_prerelease.tag_name));
+        assert!(is_beta_tag(&beta_tag.tag_name));
+        assert!(!is_beta_tag(&stable.tag_name));
     }
 
     #[test]
     fn update_fallback_hint_points_china_users_to_cnb_and_asset_mirrors() {
         let hint = update_network_fallback_hint();
 
-        assert!(hint.contains(CNB_REPO_URL), "{hint}");
-        assert!(hint.contains(RELEASE_BASE_URL_ENV), "{hint}");
-        assert!(hint.contains(UPDATE_VERSION_ENV), "{hint}");
+        assert!(hint.contains(codewhale_release::CNB_REPO_URL), "{hint}");
+        assert!(
+            hint.contains(codewhale_release::RELEASE_BASE_URL_ENV),
+            "{hint}"
+        );
+        assert!(
+            hint.contains(codewhale_release::UPDATE_VERSION_ENV),
+            "{hint}"
+        );
         assert!(hint.contains("codewhale-cli"), "{hint}");
         assert!(hint.contains("codewhale-tui --locked"), "{hint}");
     }

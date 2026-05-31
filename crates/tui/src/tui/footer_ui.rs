@@ -43,21 +43,12 @@ pub(crate) fn render_footer(f: &mut Frame, area: Rect, app: &mut App) {
     } else {
         None
     };
-    let toast = quit_prompt
-        .or_else(|| {
-            // Version-update hint takes precedence over ephemeral status toasts
-            // so the user sees it even when status traffic would hide it.
-            app.version_hint.as_ref().map(|hint| FooterToast {
-                text: hint.clone(),
-                color: palette::STATUS_INFO,
-            })
+    let toast = quit_prompt.or_else(|| {
+        app.active_status_toast().map(|toast| FooterToast {
+            text: toast.text,
+            color: status_color(toast.level),
         })
-        .or_else(|| {
-            app.active_status_toast().map(|toast| FooterToast {
-                text: toast.text,
-                color: status_color(toast.level),
-            })
-        });
+    });
 
     // Drive every cluster from the user's configured `status_items`. Mode
     // and Model are always rendered by `FooterProps` itself (their position
@@ -88,15 +79,8 @@ pub(crate) fn render_footer(f: &mut Frame, area: Rect, app: &mut App) {
         let mut label = active_subagent_status_label(app)
             .or_else(|| active_tool_status_label(app))
             .unwrap_or_else(|| {
-                // Show a more specific label when the model is still loading
-                // or compacting, not just a generic "working…".
-                let base = if app.is_loading {
-                    crate::tui::widgets::footer_working_label(dot_frame, app.ui_locale)
-                } else if app.is_compacting {
-                    "compacting".to_string()
-                } else {
-                    crate::tui::widgets::footer_working_label(dot_frame, app.ui_locale)
-                };
+                // Show the working label during active turns (loading, compacting, etc.).
+                let base = crate::tui::widgets::footer_working_label(dot_frame, app.ui_locale);
                 if elapsed_secs > 0 {
                     format!("{base} ({elapsed_secs}s)")
                 } else {
@@ -538,11 +522,15 @@ pub(crate) fn render_footer_from(
 }
 
 pub(crate) fn footer_git_branch_spans(app: &App) -> Vec<Span<'static>> {
-    let Some(branch) = workspace_context::branch(&app.workspace) else {
+    let Some(branch) = app
+        .workspace_context
+        .as_deref()
+        .and_then(workspace_context::branch_from_context)
+    else {
         return Vec::new();
     };
     vec![Span::styled(
-        branch,
+        branch.to_string(),
         Style::default().fg(app.ui_theme.text_muted),
     )]
 }

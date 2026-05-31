@@ -93,6 +93,26 @@ Do not bake API keys, SSH private keys, or other secrets into custom images.
 Pass API keys at runtime and mount any SSH material deliberately, preferably
 read-only and only for projects that need it.
 
+### Compose toolbox template
+
+If you prefer a repeatable `docker compose` entry point, use
+[`docs/examples/compose.toolbox.yml`](examples/compose.toolbox.yml). It builds
+the toolbox image from [`docs/examples/Dockerfile.toolbox`](examples/Dockerfile.toolbox)
+and keeps the project state volume explicit:
+
+```bash
+CODEWHALE_IMAGE=ghcr.io/hmbown/codewhale:vX.Y.Z \
+CODEWHALE_TOOLBOX_IMAGE=codewhale-toolbox:my-project \
+CODEWHALE_HOME_VOLUME=codewhale-my-project-home \
+CODEWHALE_WORKSPACE="$PWD" \
+docker compose -f docs/examples/compose.toolbox.yml run --rm codewhale
+```
+
+Use a different `CODEWHALE_TOOLBOX_IMAGE` and `CODEWHALE_HOME_VOLUME` for each
+project that needs an independent toolchain or independent `.deepseek` state.
+The Compose file also shows opt-in, read-only mounts for SSH material and local
+CA certificates; keep those commented out unless the project needs them.
+
 ## Multiple independent projects
 
 Use one named state volume per project so sessions, config, skills, memory, and

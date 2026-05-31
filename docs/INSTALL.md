@@ -479,6 +479,9 @@ Cargo mirror setup in [Section 4](#4-install-via-cargo-any-tier-1-rust-target).
 assets. On networks where GitHub is blocked or unreliable, use the CNB source
 mirror instead and install both binaries from the release tag:
 
+To check the latest release without downloading or replacing binaries, run
+`codewhale update --check`.
+
 ```bash
 cargo install --git https://cnb.cool/codewhale.net/codewhale --tag vX.Y.Z codewhale-cli --locked --force
 cargo install --git https://cnb.cool/codewhale.net/codewhale --tag vX.Y.Z codewhale-tui     --locked --force

@@ -21,6 +21,9 @@ Sources to keep in sync:
   `codewhale model list` and `codewhale model resolve`.
 - `config.example.toml` and `docs/CONFIGURATION.md` - user-facing config
   examples and environment variable reference.
+- `scripts/check-provider-registry.py` - drift check for canonical provider
+  IDs, live TUI provider IDs, TOML table names, static registry rows, and
+  documented defaults.
 
 ## Provider Selection
 
@@ -60,6 +63,48 @@ For base URL and model selection, prefer:
 Non-local `http://` base URLs are rejected unless
 `DEEPSEEK_ALLOW_INSECURE_HTTP=1` is set. Loopback HTTP URLs are allowed for
 self-hosted runtimes.
+
+## Custom DeepSeek-Compatible Endpoints
+
+Most custom DeepSeek-compatible deployments can use an existing provider ID.
+Do not create `[providers.deepseek_custom]`; the provider table names are fixed.
+Instead, choose the closest shipped route and override its endpoint/model:
+
+- DeepSeek-compatible hosted API: keep `provider = "deepseek"` and set
+  `[providers.deepseek].base_url` plus `[providers.deepseek].model`, or launch
+  with `DEEPSEEK_BASE_URL` and `DEEPSEEK_MODEL`.
+- Generic OpenAI-compatible gateway: use `provider = "openai"` with
+  `[providers.openai].base_url` plus `[providers.openai].model`, or launch with
+  `OPENAI_BASE_URL` and `OPENAI_MODEL`.
+- Local OpenAI-compatible runtimes: use `provider = "vllm"`, `"sglang"`, or
+  `"ollama"` with the matching provider-specific base URL/model values.
+
+Example user config for a DeepSeek-compatible host:
+
+```toml
+provider = "deepseek"
+
+[providers.deepseek]
+api_key = "YOUR_API_KEY"
+base_url = "https://your-provider.example/v1"
+model = "deepseek-ai/DeepSeek-V4-Pro"
+```
+
+Example user config for a generic gateway:
+
+```toml
+provider = "openai"
+
+[providers.openai]
+api_key = "YOUR_GATEWAY_API_KEY"
+base_url = "https://gateway.example/v1"
+model = "your-deepseek-compatible-model"
+```
+
+Keep `provider`, `api_key`, and `base_url` in user config or process
+environment. Project-local config overlays intentionally cannot set those keys,
+so a repository cannot silently redirect prompts or credentials to another
+endpoint.
 
 ## Shipped Providers
 
@@ -133,6 +178,26 @@ DeepSeek compatibility aliases `deepseek-chat` and `deepseek-reasoner` map to
 `deepseek-v4-flash` capability metadata and are scheduled to retire on
 2026-07-24 at 2026-07-24T15:59:00Z.
 
+## Drift Check
+
+Run this before changing provider IDs, provider TOML tables, static model
+registry rows, or provider default strings:
+
+```bash
+python3 scripts/check-provider-registry.py
+```
+
+The check fails when:
+
+- `docs/PROVIDERS.md` omits a canonical `ProviderKind::as_str()` ID.
+- `crates/tui/src/config.rs` `ApiProvider::as_str()` diverges from
+  `ProviderKind::as_str()` except for the explicit `deepseek-cn` legacy alias.
+- The shipped-provider table omits or adds a `[providers.*]` TOML table.
+- The static model registry table drifts from providers used by
+  `crates/agent/src/lib.rs`.
+- A provider default model or base URL constant in `crates/tui/src/config.rs`
+  is no longer mentioned here.
+
 ## Planned, Not Shipped Yet
 
 These items belong to the v0.8.47 provider-abstraction milestone or related
@@ -149,9 +214,6 @@ provider docs work, but they are not native shipped behavior in this checkout:
 - Hugging Face model passport metadata in the picker, including license, base
   model, context length, chat template, tool-call support, reasoning support,
   and gated/private status.
-- A generated drift-check script that fails when this file diverges from the
-  provider registry. Until that exists, update this file with a source read of
-  the files listed at the top.
 
 Until native Hugging Face support lands, users can only reach an explicitly
 configured Hugging Face-compatible OpenAI route through the generic `openai`

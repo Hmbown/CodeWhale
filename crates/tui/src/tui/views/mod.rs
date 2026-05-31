@@ -1137,6 +1137,7 @@ fn config_hint_for_key(key: &str) -> &'static str {
         "theme" => "system | dark | light | grayscale",
         "locale" => "auto | en | ja | zh-Hans | pt-BR",
         "background_color" => "#RRGGBB | default",
+        "base_url" => "save user config; e.g. https://api.deepseek.com/beta or https://gateway/v1",
         "default_mode" => "agent | plan | yolo",
         "sidebar_width" => "10..=50",
         "sidebar_focus" => "auto | work | tasks | agents | context | hidden",

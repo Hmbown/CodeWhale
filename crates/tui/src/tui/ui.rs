@@ -9,6 +9,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+// On Windows the push/pop helpers write the escapes directly; crossterm's
+// PushKeyboardEnhancementFlags / PopKeyboardEnhancementFlags commands are
+// never referenced, so the imports are gated to avoid -D warnings failures.
+#[cfg(not(windows))]
+use crossterm::event::{
+    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+};
 use crossterm::{
     event::{
         self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
@@ -16,13 +23,6 @@ use crossterm::{
     },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
-};
-// On Windows the push/pop helpers write the escapes directly; crossterm's
-// PushKeyboardEnhancementFlags / PopKeyboardEnhancementFlags commands are
-// never referenced, so the imports are gated to avoid -D warnings failures.
-#[cfg(not(windows))]
-use crossterm::event::{
-    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use ratatui::{
     Frame, Terminal,
@@ -32,6 +32,8 @@ use ratatui::{
     widgets::Block,
 };
 use tracing;
+#[cfg(target_os = "windows")]
+use windows::Win32::System::Console::{GetConsoleMode, GetStdHandle, SetConsoleMode};
 
 use crate::audit::log_sensitive_event;
 use crate::automation_manager::{AutomationManager, AutomationSchedulerConfig, spawn_scheduler};
@@ -60,7 +62,7 @@ use crate::session_manager::{
 use crate::task_manager::{
     NewTaskRequest, SharedTaskManager, TaskManager, TaskManagerConfig, TaskStatus, TaskSummary,
 };
-use crate::tools::spec::RuntimeToolServices;
+use crate::tools::spec::{RuntimeToolServices, ToolResult};
 use crate::tools::subagent::SubAgentStatus;
 use crate::tui::auto_router;
 use crate::tui::color_compat::ColorCompatBackend;
@@ -156,6 +158,27 @@ const DEFAULT_TERMINAL_PROBE_TIMEOUT_MS: u64 = 500;
 const PERIODIC_FULL_REPAINT_EVERY_N: u64 = 50;
 const TURN_META_PREFIX: &str = "<turn_meta>";
 const SESSION_TITLE_MAX_CHARS: usize = 32;
+const VERSION_HINT_TOAST_TTL_MS: u64 = 12_000;
+
+const REQUIRED_RELEASE_ASSETS: &[&str] = &[
+    "codewhale-artifacts-sha256.txt",
+    "codewhale-linux-arm64",
+    "codewhale-linux-arm64.tar.gz",
+    "codewhale-linux-x64",
+    "codewhale-linux-x64.tar.gz",
+    "codewhale-macos-arm64",
+    "codewhale-macos-arm64.tar.gz",
+    "codewhale-macos-x64",
+    "codewhale-macos-x64.tar.gz",
+    "codewhale-tui-linux-arm64",
+    "codewhale-tui-linux-x64",
+    "codewhale-tui-macos-arm64",
+    "codewhale-tui-macos-x64",
+    "codewhale-tui-windows-x64.exe",
+    "codewhale-windows-x64.exe",
+    "codewhale-windows-x64-portable.zip",
+    "codewhale-windows-x64.zip",
+];
 
 fn is_session_approved_for_tool(app: &App, tool_name: &str, grouping_key: &str) -> bool {
     app.approval_session_approved.contains(grouping_key)
@@ -280,9 +303,19 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
         }
     }
 
+    #[cfg(target_os = "windows")]
+    enable_windows_ime_console_mode();
+
     let mut stdout = io::stdout();
     if use_alt_screen {
         execute!(stdout, EnterAlternateScreen)?;
+        // On Windows, stderr cannot be redirected to the log file (no dup2).
+        // Suppress verbose CLI logging once the alt-screen is active so
+        // eprintln! calls from crate::logging don't leak into the TUI buffer.
+        #[cfg(windows)]
+        crate::logging::snapshot_verbose_state();
+        #[cfg(windows)]
+        crate::logging::set_verbose(false);
     }
     // Initialize the file-backed TUI log and (on Unix) redirect raw stderr
     // away from the alt-screen for the lifetime of this guard. Any
@@ -525,6 +558,8 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
         persistence_actor::init_actor(handle);
     }
 
+    submit_initial_input_if_ready(&mut app, config, &engine_handle).await?;
+
     let result = run_event_loop(
         &mut terminal,
         &mut app,
@@ -554,6 +589,8 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
     disable_raw_mode()?;
     if use_alt_screen {
         execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+        #[cfg(windows)]
+        crate::logging::restore_verbose_state();
     }
     if use_mouse_capture {
         execute!(terminal.backend_mut(), DisableMouseCapture)?;
@@ -681,7 +718,11 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         notes_path: config.notes_path(),
         mcp_config_path: config.mcp_config_path(),
         skills_dir: app.skills_dir.clone(),
-        instructions: config.instructions_paths(),
+        instructions: config
+            .instructions_paths()
+            .into_iter()
+            .map(Into::into)
+            .collect(),
         project_context_pack_enabled: config.project_context_pack_enabled(),
         translation_enabled: app.translation_enabled,
         show_thinking: app.show_thinking,
@@ -707,6 +748,7 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
             app.goal.goal_completed,
         ),
         max_spawn_depth: crate::tools::subagent::DEFAULT_MAX_SPAWN_DEPTH,
+        allowed_tools: app.active_allowed_tools.clone(),
         network_policy: config.network.clone().map(|toml_cfg| {
             crate::network_policy::NetworkPolicyDecider::with_default_audit(toml_cfg.into_runtime())
         }),
@@ -900,8 +942,8 @@ async fn run_event_loop(
         .unwrap_or_else(Instant::now);
 
     // Fire-and-forget version check — runs once per session in the
-    // background. On success, `app.version_hint` is set and the footer
-    // renders the update recommendation on the next frame.
+    // background. On success, a short status toast advertises the update
+    // without replacing the user's configured footer/status-line chips.
     let mut version_check: Option<tokio::task::JoinHandle<Option<String>>> = Some({
         let current = env!("CARGO_PKG_VERSION").to_string();
         tokio::spawn(async move {
@@ -920,22 +962,7 @@ async fn run_event_loop(
                 .await
                 .ok()?;
             let json: serde_json::Value = resp.json().await.ok()?;
-            let tag = json["tag_name"].as_str()?;
-            let latest = tag.trim_start_matches('v');
-            // Compare semver so dev builds (e.g. "0.8.46-pre") don't
-            // trigger false hints. Falls back to string compare on
-            // unparseable versions.
-            let newer = match (parse_semver(latest), parse_semver(&current)) {
-                (Some(l), Some(c)) => l > c,
-                _ => latest != current,
-            };
-            if newer {
-                Some(format!(
-                    "v{latest} available — run `codewhale update` and restart"
-                ))
-            } else {
-                None
-            }
+            version_hint_from_release_json(&json, &current)
         })
     });
 
@@ -947,7 +974,11 @@ async fn run_event_loop(
             done = handle.is_finished();
         }
         if done && let Ok(Some(hint)) = version_check.take().unwrap().await {
-            app.version_hint = Some(hint);
+            app.push_status_toast(
+                hint,
+                StatusToastLevel::Info,
+                Some(VERSION_HINT_TOAST_TTL_MS),
+            );
         }
 
         if !drain_web_config_events(&mut web_config_session, app, config, &engine_handle).await {
@@ -1328,9 +1359,7 @@ async fn run_event_loop(
                         }
                         let tool_content = match &result {
                             Ok(output) => sanitize_stream_chunk(
-                                &crate::core::engine::compact_tool_result_for_context(
-                                    &app.model, &name, output,
-                                ),
+                                &tool_result_content_for_api_message(app, &id, &name, output).await,
                             ),
                             Err(err) => sanitize_stream_chunk(&format!("Error: {err}")),
                         };
@@ -1416,6 +1445,7 @@ async fn run_event_loop(
                     } => {
                         let was_locally_cancelled = app.suppress_stream_events_until_turn_complete;
                         app.suppress_stream_events_until_turn_complete = false;
+                        app.active_allowed_tools = None;
                         if !matches!(status, crate::core::events::TurnOutcomeStatus::Completed)
                             || draws_since_last_full_repaint >= PERIODIC_FULL_REPAINT_EVERY_N
                         {
@@ -1736,10 +1766,13 @@ async fn run_event_loop(
                         description,
                         stability_pct,
                         changed,
+                        pinned_combined_hash,
                         ..
                     } => {
                         app.prefix_checks_total = app.prefix_checks_total.saturating_add(1);
                         app.prefix_stability_pct = Some(stability_pct);
+                        app.last_pinned_prefix_hash =
+                            (!pinned_combined_hash.is_empty()).then_some(pinned_combined_hash);
                         if changed {
                             app.prefix_change_count = app.prefix_change_count.saturating_add(1);
                             if !description.is_empty() {
@@ -1967,6 +2000,18 @@ async fn run_event_loop(
                             );
                             app.view_stack
                                 .push(ApprovalView::new_for_locale(request, app.ui_locale));
+                            if let Some((method, _, _)) =
+                                crate::tui::notifications::settings(config)
+                            {
+                                let in_tmux = std::env::var("TMUX").is_ok_and(|v| !v.is_empty());
+                                crate::tui::notifications::notify_done(
+                                    method,
+                                    in_tmux,
+                                    &format!("Approval needed: {tool_name} - {description}"),
+                                    Duration::ZERO,
+                                    Duration::ZERO,
+                                );
+                            }
                             app.status_message = Some(format!(
                                 "Approval required for '{tool_name}': {description}"
                             ));
@@ -1974,6 +2019,16 @@ async fn run_event_loop(
                     }
                     EngineEvent::UserInputRequired { id, request } => {
                         app.view_stack.push(UserInputView::new(id.clone(), request));
+                        if let Some((method, _, _)) = crate::tui::notifications::settings(config) {
+                            let in_tmux = std::env::var("TMUX").is_ok_and(|v| !v.is_empty());
+                            crate::tui::notifications::notify_done(
+                                method,
+                                in_tmux,
+                                "Action required: please respond in the terminal",
+                                Duration::ZERO,
+                                Duration::ZERO,
+                            );
+                        }
                         app.status_message = Some(
                             "Action required: answer the popup with 1-4, arrows, or Enter"
                                 .to_string(),
@@ -2029,6 +2084,18 @@ async fn run_event_loop(
                                 blocked_write,
                             );
                             app.view_stack.push(ElevationView::new(request));
+                            if let Some((method, _, _)) =
+                                crate::tui::notifications::settings(config)
+                            {
+                                let in_tmux = std::env::var("TMUX").is_ok_and(|v| !v.is_empty());
+                                crate::tui::notifications::notify_done(
+                                    method,
+                                    in_tmux,
+                                    &format!("Sandbox: {denial_reason} for '{tool_name}'"),
+                                    Duration::ZERO,
+                                    Duration::ZERO,
+                                );
+                            }
                             app.status_message =
                                 Some(format!("Sandbox blocked {tool_name}: {denial_reason}"));
                         }
@@ -2447,6 +2514,7 @@ async fn run_event_loop(
                     }
                     _ => {}
                 }
+                submit_initial_input_if_ready(app, config, &engine_handle).await?;
                 continue;
             }
 
@@ -4079,6 +4147,83 @@ fn push_assistant_message(
     }
 }
 
+async fn tool_result_content_for_api_message(
+    app: &App,
+    id: &str,
+    name: &str,
+    output: &ToolResult,
+) -> String {
+    let raw = output.content.trim();
+    if raw.is_empty() {
+        return String::new();
+    }
+
+    if raw.chars().count() > crate::tool_output_receipts::RAW_TOOL_OUTPUT_RECEIPT_THRESHOLD_CHARS {
+        let messages = live_tool_receipt_messages(app, id, raw, output.success);
+        let artifacts = app.session_artifacts.clone();
+        let raw = raw.to_string();
+        match tokio::task::spawn_blocking(move || {
+            compact_live_tool_receipt(messages, artifacts, raw)
+        })
+        .await
+        {
+            Ok(Some(receipt)) => return receipt,
+            Ok(None) => {}
+            Err(err) => {
+                crate::logging::warn(format!("live tool-output receipt compaction failed: {err}"));
+            }
+        }
+    }
+
+    crate::core::engine::compact_tool_result_for_context(&app.model, name, output)
+}
+
+fn live_tool_receipt_messages(app: &App, id: &str, raw: &str, success: bool) -> Vec<Message> {
+    let mut messages = Vec::with_capacity(2);
+    if let Some(tool_use_msg) = app.api_messages.iter().rev().find(|message| {
+        message.content.iter().any(|block| {
+            matches!(block, ContentBlock::ToolUse { id: tool_use_id, .. } if tool_use_id == id)
+        })
+    }) {
+        messages.push(tool_use_msg.clone());
+    }
+    messages.push(Message {
+        role: "user".to_string(),
+        content: vec![ContentBlock::ToolResult {
+            tool_use_id: id.to_string(),
+            content: raw.to_string(),
+            is_error: Some(!success),
+            content_blocks: None,
+        }],
+    });
+    messages
+}
+
+fn compact_live_tool_receipt(
+    messages: Vec<Message>,
+    artifacts: Vec<crate::artifacts::ArtifactRecord>,
+    raw: String,
+) -> Option<String> {
+    let (compacted, _) =
+        crate::tool_output_receipts::compact_messages_for_persistence(&messages, &artifacts);
+    let content = compacted
+        .last()
+        .and_then(|message| message.content.first())
+        .and_then(|block| match block {
+            ContentBlock::ToolResult { content, .. } => Some(content),
+            _ => None,
+        })?;
+    if content != &raw && live_tool_content_is_receipt(content) {
+        Some(content.clone())
+    } else {
+        None
+    }
+}
+
+fn live_tool_content_is_receipt(content: &str) -> bool {
+    content.trim_start().starts_with("[TOOL_OUTPUT_RECEIPT]")
+}
+
 fn replace_matching_assistant_text(
     app: &mut App,
     original_text: &str,
@@ -4105,6 +4250,35 @@ fn replace_matching_assistant_text(
 fn build_queued_message(app: &mut App, input: String) -> QueuedMessage {
     let skill_instruction = app.active_skill.take();
     QueuedMessage::new(input, skill_instruction)
+}
+
+const INITIAL_PROMPT_DEFERRED_STATUS: &str = "Initial prompt ready; complete setup to send it";
+
+async fn submit_initial_input_if_ready(
+    app: &mut App,
+    config: &Config,
+    engine_handle: &EngineHandle,
+) -> Result<()> {
+    if !app.auto_submit_initial_input {
+        return Ok(());
+    }
+
+    if app.onboarding != OnboardingState::None {
+        if app.status_message.is_none() && !app.input.trim().is_empty() {
+            app.status_message = Some(INITIAL_PROMPT_DEFERRED_STATUS.to_string());
+        }
+        return Ok(());
+    }
+
+    app.auto_submit_initial_input = false;
+    if let Some(input) = app.submit_input() {
+        if app.status_message.as_deref() == Some(INITIAL_PROMPT_DEFERRED_STATUS) {
+            app.status_message = None;
+        }
+        let queued = build_queued_message(app, input);
+        dispatch_user_message(app, config, engine_handle, queued).await?;
+    }
+    Ok(())
 }
 
 fn queue_current_draft_for_next_turn(app: &mut App) -> bool {
@@ -4295,6 +4469,7 @@ async fn dispatch_user_message(
             approval_mode: app.approval_mode,
             translation_enabled: app.translation_enabled,
             show_thinking: app.show_thinking,
+            allowed_tools: app.active_allowed_tools.clone(),
         })
         .await
     {
@@ -5193,12 +5368,16 @@ async fn handle_mcp_ui_action(
             args,
         } => {
             changed = true;
-            mcp::add_server_config(&path, name.clone(), Some(command), None, args)
+            mcp::add_server_config(&path, name.clone(), Some(command), None, args, None)
                 .map(|()| message = Some(format!("Added MCP stdio server '{name}'")))
         }
-        crate::tui::app::McpUiAction::AddHttp { name, url } => {
+        crate::tui::app::McpUiAction::AddHttp {
+            name,
+            url,
+            transport,
+        } => {
             changed = true;
-            mcp::add_server_config(&path, name.clone(), None, Some(url), Vec::new())
+            mcp::add_server_config(&path, name.clone(), None, Some(url), Vec::new(), transport)
                 .map(|()| message = Some(format!("Added MCP HTTP/SSE server '{name}'")))
         }
         crate::tui::app::McpUiAction::Enable { name } => {
@@ -5684,7 +5863,6 @@ fn render(f: &mut Frame, app: &mut App) {
 
     let header_height = 1;
     let footer_height = 1;
-    let body_height = size.height.saturating_sub(header_height + footer_height);
     let slash_menu_entries = visible_slash_menu_entries(app, SLASH_MENU_LIMIT);
     let mention_menu_entries =
         crate::tui::file_mention::visible_mention_menu_entries(app, MENTION_MENU_LIMIT);
@@ -5692,8 +5870,24 @@ fn render(f: &mut Frame, app: &mut App) {
         app.mention_menu_selected = mention_menu_entries.len().saturating_sub(1);
     }
     let context_usage = context_usage_snapshot(app);
+
+    // Defensive two-pass layout: pin the header to the absolute top row,
+    // then split the remaining body area for chat / preview / composer /
+    // footer. This guarantees the header is never vertically centered
+    // regardless of ratatui Flex defaults or terminal size.
+    // Fixes #1834 — macOS terminal title centering.
+    let (header_area, body_area) = {
+        let split = Layout::default()
+            .direction(Direction::Vertical)
+            .flex(ratatui::layout::Flex::Start)
+            .constraints([Constraint::Length(header_height), Constraint::Min(1)])
+            .split(size);
+        (split[0], split[1])
+    };
+
+    let body_height = body_area.height;
     let composer_max_height = body_height
-        .saturating_sub(MIN_CHAT_HEIGHT)
+        .saturating_sub(MIN_CHAT_HEIGHT + footer_height)
         .max(MIN_COMPOSER_HEIGHT);
     let composer_height = {
         let composer_widget = ComposerWidget::new(
@@ -5712,16 +5906,16 @@ fn render(f: &mut Frame, app: &mut App) {
     let pending_preview = build_pending_input_preview(app);
     let preview_height = pending_preview.desired_height(size.width);
 
-    let chunks = Layout::default()
+    let body_chunks = Layout::default()
         .direction(Direction::Vertical)
+        .flex(ratatui::layout::Flex::Start)
         .constraints([
-            Constraint::Length(header_height),   // Header
             Constraint::Min(1),                  // Chat area
             Constraint::Length(preview_height),  // Pending input preview (0 if empty)
             Constraint::Length(composer_height), // Composer
             Constraint::Length(footer_height),   // Footer
         ])
-        .split(size);
+        .split(body_area);
 
     // Render header
     {
@@ -5781,7 +5975,7 @@ fn render(f: &mut Frame, app: &mut App) {
         ));
         let header_widget = HeaderWidget::new(header_data);
         let buf = f.buffer_mut();
-        header_widget.render(chunks[0], buf);
+        header_widget.render(header_area, buf);
     }
 
     // Render chat + sidebar + optional file-tree pane
@@ -5792,19 +5986,19 @@ fn render(f: &mut Frame, app: &mut App) {
         // resize) don't retain stale content from a previous frame.
         Block::default()
             .style(Style::default().bg(app.ui_theme.surface_bg))
-            .render(chunks[1], f.buffer_mut());
+            .render(body_chunks[0], f.buffer_mut());
 
         let mut sidebar_area = None;
 
         // When the file-tree pane is visible and the terminal is wide
         // enough, reserve the left ~25% for the file tree.
         let mut chat_area =
-            if app.file_tree.is_some() && chunks[1].width >= SIDEBAR_VISIBLE_MIN_WIDTH {
+            if app.file_tree.is_some() && body_chunks[0].width >= SIDEBAR_VISIBLE_MIN_WIDTH {
                 app.file_tree_visible = true;
                 let split = Layout::default()
                     .direction(Direction::Horizontal)
                     .constraints([Constraint::Percentage(25), Constraint::Percentage(75)])
-                    .split(chunks[1]);
+                    .split(body_chunks[0]);
                 let tree_area = split[0];
                 let remaining = split[1];
 
@@ -5816,7 +6010,7 @@ fn render(f: &mut Frame, app: &mut App) {
                 remaining
             } else {
                 app.file_tree_visible = false;
-                chunks[1]
+                body_chunks[0]
             };
 
         if let Some(sidebar_width) = sidebar_width_for_chat_area(app, chat_area.width) {
@@ -5868,7 +6062,7 @@ fn render(f: &mut Frame, app: &mut App) {
     // Render pending-input preview (queued/steered messages, if any).
     if preview_height > 0 {
         let buf = f.buffer_mut();
-        pending_preview.render(chunks[2], buf);
+        pending_preview.render(body_chunks[1], buf);
     }
 
     // Render composer
@@ -5880,12 +6074,12 @@ fn render(f: &mut Frame, app: &mut App) {
             &mention_menu_entries,
         );
         let buf = f.buffer_mut();
-        composer_widget.render(chunks[3], buf);
-        composer_widget.cursor_pos(chunks[3])
+        composer_widget.render(body_chunks[2], buf);
+        composer_widget.cursor_pos(body_chunks[2])
     };
-    app.viewport.last_composer_area = Some(chunks[3]);
+    app.viewport.last_composer_area = Some(body_chunks[2]);
     {
-        let area = chunks[3];
+        let area = body_chunks[2];
         let has_panel = app.composer_border && area.height >= 3 && area.width >= 12;
         let inner = if has_panel {
             ratatui::widgets::Block::default()
@@ -5929,11 +6123,11 @@ fn render(f: &mut Frame, app: &mut App) {
     }
 
     // Render footer
-    render_footer(f, chunks[4], app);
+    render_footer(f, body_chunks[3], app);
     // Toast stack overlay (#439): when multiple status toasts are queued,
     // surface the older ones as a 1-2 line strip above the footer so a
     // burst of events isn't collapsed to a single visible message.
-    render_toast_stack_overlay(f, size, chunks[3], chunks[4], app);
+    render_toast_stack_overlay(f, size, body_chunks[2], body_chunks[3], app);
 
     // Decision card overlay (v0.8.43 truth-surface). When a decision card is
     // active, render it centered on top of the transcript.
@@ -6907,6 +7101,8 @@ fn pause_terminal(
     disable_raw_mode()?;
     if use_alt_screen {
         execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+        #[cfg(windows)]
+        crate::logging::restore_verbose_state();
     }
     if use_mouse_capture {
         execute!(terminal.backend_mut(), DisableMouseCapture)?;
@@ -6927,6 +7123,10 @@ fn resume_terminal(
     enable_raw_mode()?;
     if use_alt_screen {
         execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+        // Re-entering alt-screen after mode recovery — suppress verbose
+        // CLI logging again so eprintln! doesn't leak into the TUI.
+        #[cfg(windows)]
+        crate::logging::set_verbose(false);
     }
     recover_terminal_modes(
         terminal.backend_mut(),
@@ -7042,6 +7242,36 @@ pub fn emergency_restore_terminal() {
     let _ = execute!(stdout, LeaveAlternateScreen);
 }
 
+/// On Windows, ensure the console input handle has `ENABLE_WINDOW_INPUT`
+/// (0x0008) set. crossterm's `enable_raw_mode()` removes this flag, which
+/// breaks IME composition (Chinese/Japanese/Korean input methods cannot
+/// commit characters) on some Windows configurations (e.g. Windows Terminal
+/// in conhost compatibility mode, or the legacy console with VT input).
+///
+/// Best-effort and idempotent. Silently ignored if the console handle or
+/// mode query fails.
+#[cfg(target_os = "windows")]
+fn enable_windows_ime_console_mode() {
+    use windows::Win32::System::Console::CONSOLE_MODE;
+    const ENABLE_WINDOW_INPUT: CONSOLE_MODE = CONSOLE_MODE(0x0008);
+
+    // SAFETY: Win32 console API is safe to call from any thread.
+    // Failures (console handle invalid, mode query fails) are silently
+    // ignored — this is a best-effort IME compatibility tweak.
+    unsafe {
+        let Ok(handle) = GetStdHandle(windows::Win32::System::Console::STD_INPUT_HANDLE) else {
+            return;
+        };
+        let mut mode = CONSOLE_MODE(0);
+        if GetConsoleMode(handle, &mut mode).is_err() {
+            return;
+        }
+        if mode.0 & ENABLE_WINDOW_INPUT.0 == 0 {
+            let _ = SetConsoleMode(handle, mode | ENABLE_WINDOW_INPUT);
+        }
+    }
+}
+
 /// Re-establish terminal mode flags. Idempotent and best-effort: each
 /// underlying flag is silently discarded by terminals that don't support
 /// it, and a single flag's failure doesn't prevent later flags from being
@@ -7066,6 +7296,9 @@ fn recover_terminal_modes<W: Write>(
     use_mouse_capture: bool,
     use_bracketed_paste: bool,
 ) {
+    #[cfg(target_os = "windows")]
+    enable_windows_ime_console_mode();
+
     push_keyboard_enhancement_flags(writer);
     if use_mouse_capture && let Err(err) = execute!(writer, EnableMouseCapture) {
         tracing::debug!(?err, "EnableMouseCapture ignored");
@@ -7591,8 +7824,18 @@ fn activity_detail_text(app: &App, cell_index: usize, width: u16) -> Option<Stri
         sections.push(status);
     }
 
-    if let Some((position, total)) = thinking_chunk_position(app, cell_index) {
-        sections.push(format!("Thinking chunk: {position} of {total}"));
+    let activity_indices = activity_indices(app);
+    if let Some(position) = activity_indices.iter().position(|&idx| idx == cell_index) {
+        sections.push(format!(
+            "Activity chunk: {} of {}",
+            position + 1,
+            activity_indices.len()
+        ));
+        sections.extend(activity_navigation_lines(app, position, &activity_indices));
+    }
+
+    if let Some(handle) = activity_detail_handle_line(app, cell_index, cell) {
+        sections.push(handle);
     }
 
     sections.push(String::new());
@@ -7644,6 +7887,22 @@ fn reasoning_timeline_text(app: &App, selected_cell_index: usize) -> Option<Stri
     ));
     if let Some(position) = selected_position {
         sections.push(format!("Selected chunk: {position} of {total}"));
+        if position > 1 {
+            let previous_index = thinking_indices[position - 2];
+            let preview = thinking_chunk_preview(app, previous_index);
+            sections.push(format!(
+                "Previous chunk: {} of {total} - {preview}",
+                position - 1
+            ));
+        }
+        if position < total {
+            let next_index = thinking_indices[position];
+            let preview = thinking_chunk_preview(app, next_index);
+            sections.push(format!(
+                "Next chunk: {} of {total} - {preview}",
+                position + 1
+            ));
+        }
     }
     sections.push(String::new());
 
@@ -7683,6 +7942,18 @@ fn reasoning_timeline_text(app: &App, selected_cell_index: usize) -> Option<Stri
     }
 
     Some(sections.join("\n"))
+}
+
+fn thinking_chunk_preview(app: &App, cell_index: usize) -> String {
+    let Some(HistoryCell::Thinking { content, .. }) = app.cell_at_virtual_index(cell_index) else {
+        return "thinking".to_string();
+    };
+    let preview = one_line_summary(content, 64);
+    if preview.is_empty() {
+        "thinking".to_string()
+    } else {
+        preview
+    }
 }
 
 fn activity_cell_label(app: &App, cell_index: usize, cell: &HistoryCell) -> String {
@@ -7793,28 +8064,70 @@ fn format_activity_duration_ms(ms: u64) -> String {
     }
 }
 
-fn thinking_chunk_position(app: &App, cell_index: usize) -> Option<(usize, usize)> {
-    if !matches!(
-        app.cell_at_virtual_index(cell_index),
-        Some(HistoryCell::Thinking { .. })
-    ) {
-        return None;
-    }
+fn activity_indices(app: &App) -> Vec<usize> {
+    (0..app.virtual_cell_count())
+        .filter(|&idx| {
+            app.cell_at_virtual_index(idx)
+                .is_some_and(is_meaningful_activity_cell)
+        })
+        .collect()
+}
 
-    let mut total = 0usize;
-    let mut position = None;
-    for idx in 0..app.virtual_cell_count() {
-        if matches!(
-            app.cell_at_virtual_index(idx),
-            Some(HistoryCell::Thinking { .. })
-        ) {
-            total += 1;
-            if idx == cell_index {
-                position = Some(total);
-            }
+fn activity_navigation_lines(
+    app: &App,
+    position: usize,
+    activity_indices: &[usize],
+) -> Vec<String> {
+    let total = activity_indices.len();
+    let mut lines = Vec::new();
+    if position > 0 {
+        let previous_idx = activity_indices[position - 1];
+        if let Some(cell) = app.cell_at_virtual_index(previous_idx) {
+            let label = activity_cell_label(app, previous_idx, cell);
+            lines.push(format!(
+                "Previous activity: {} of {total} - {}",
+                position,
+                truncate_line_to_width(&label, 56)
+            ));
         }
     }
-    position.map(|pos| (pos, total))
+    if position + 1 < total {
+        let next_idx = activity_indices[position + 1];
+        if let Some(cell) = app.cell_at_virtual_index(next_idx) {
+            let label = activity_cell_label(app, next_idx, cell);
+            lines.push(format!(
+                "Next activity: {} of {total} - {}",
+                position + 2,
+                truncate_line_to_width(&label, 56)
+            ));
+        }
+    }
+    lines
+}
+
+fn activity_detail_handle_line(app: &App, cell_index: usize, cell: &HistoryCell) -> Option<String> {
+    if let Some(detail) = app.tool_detail_record_for_cell(cell_index) {
+        if let Some(artifact) = app
+            .session_artifacts
+            .iter()
+            .find(|artifact| artifact.tool_call_id == detail.tool_id)
+        {
+            return Some(format!(
+                "Detail handle: {} (retrieve_tool_result ref={}; Alt+V raw details)",
+                artifact.id, artifact.id
+            ));
+        }
+        return Some(format!(
+            "Detail handle: tool:{} (Alt+V raw details)",
+            detail.tool_id
+        ));
+    }
+
+    match cell {
+        HistoryCell::Tool(_) => Some("Detail handle: Alt+V details".to_string()),
+        HistoryCell::SubAgent(_) => Some("Detail handle: Alt+V details".to_string()),
+        _ => None,
+    }
 }
 
 fn activity_cell_to_text(cell: &HistoryCell, width: u16) -> String {
@@ -8090,6 +8403,62 @@ fn extract_reasoning_header(text: &str) -> Option<String> {
         None
     } else {
         Some(header.to_string())
+    }
+}
+
+fn version_hint_from_release_json(json: &serde_json::Value, current: &str) -> Option<String> {
+    if !release_has_required_assets(json) {
+        return None;
+    }
+
+    let tag = json["tag_name"].as_str()?;
+    let latest = tag.trim_start_matches('v');
+    if !is_newer_version(latest, current) {
+        return None;
+    }
+
+    Some(format!(
+        "v{latest} available - run `codewhale update` and restart"
+    ))
+}
+
+fn release_has_required_assets(json: &serde_json::Value) -> bool {
+    if json
+        .get("draft")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    if json
+        .get("prerelease")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+    {
+        return false;
+    }
+
+    REQUIRED_RELEASE_ASSETS
+        .iter()
+        .all(|required| release_has_uploaded_asset(json, required))
+}
+
+fn release_has_uploaded_asset(json: &serde_json::Value, required: &str) -> bool {
+    let Some(assets) = json.get("assets").and_then(serde_json::Value::as_array) else {
+        return false;
+    };
+    assets.iter().any(|asset| {
+        asset.get("name").and_then(serde_json::Value::as_str) == Some(required)
+            && asset.get("state").and_then(serde_json::Value::as_str) == Some("uploaded")
+    })
+}
+
+fn is_newer_version(latest: &str, current: &str) -> bool {
+    // Compare semver so dev builds (e.g. "0.8.46-pre") don't trigger false
+    // hints. Falls back to string compare on unparseable versions.
+    match (parse_semver(latest), parse_semver(current)) {
+        (Some(l), Some(c)) => l > c,
+        _ => latest != current,
     }
 }
 

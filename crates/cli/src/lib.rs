@@ -240,6 +240,9 @@ struct UpdateArgs {
     /// Update to the latest beta release instead of the latest stable release.
     #[arg(long)]
     beta: bool,
+    /// Only check the latest release; do not download or replace binaries.
+    #[arg(long)]
+    check: bool,
 }
 
 #[derive(Debug, Args)]
@@ -569,7 +572,7 @@ fn run() -> Result<()> {
             Ok(())
         }
         Some(Commands::Metrics(args)) => run_metrics_command(args),
-        Some(Commands::Update(args)) => update::run_update(args.beta),
+        Some(Commands::Update(args)) => update::run_update(args.beta, args.check),
         None => {
             let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
             let forwarded = root_tui_passthrough(&cli)?;
@@ -1817,13 +1820,28 @@ mod tests {
         let cli = parse_ok(&["codewhale", "update"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Update(UpdateArgs { beta: false }))
+            Some(Commands::Update(UpdateArgs {
+                beta: false,
+                check: false
+            }))
         ));
 
         let cli = parse_ok(&["codewhale", "update", "--beta"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Update(UpdateArgs { beta: true }))
+            Some(Commands::Update(UpdateArgs {
+                beta: true,
+                check: false
+            }))
+        ));
+
+        let cli = parse_ok(&["codewhale", "update", "--check"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Update(UpdateArgs {
+                beta: false,
+                check: true
+            }))
         ));
     }
 
@@ -2958,11 +2976,15 @@ mod tests {
     }
 
     #[test]
-    fn parses_top_level_prompt_flag_for_canonical_one_shot() {
+    fn parses_top_level_prompt_flag_for_interactive_startup_prompt() {
         let cli = parse_ok(&["deepseek", "-p", "Reply with exactly OK."]);
 
         assert_eq!(cli.prompt_flag.as_deref(), Some("Reply with exactly OK."));
         assert!(cli.prompt.is_empty());
+        assert_eq!(
+            root_tui_passthrough(&cli).unwrap(),
+            vec!["--prompt".to_string(), "Reply with exactly OK.".to_string()]
+        );
     }
 
     #[test]
@@ -2976,7 +2998,7 @@ mod tests {
     }
 
     #[test]
-    fn top_level_continue_rejects_one_shot_prompt() {
+    fn top_level_continue_rejects_startup_prompt() {
         let cli = parse_ok(&["codewhale", "--continue", "-p", "follow up"]);
 
         let err = root_tui_passthrough(&cli).expect_err("prompted continue should be rejected");
@@ -2992,6 +3014,10 @@ mod tests {
 
         assert_eq!(cli.prompt, vec!["hello", "world"]);
         assert!(cli.command.is_none());
+        assert_eq!(
+            root_tui_passthrough(&cli).unwrap(),
+            vec!["--prompt".to_string(), "hello world".to_string()]
+        );
     }
 
     #[test]
@@ -3000,6 +3026,10 @@ mod tests {
 
         assert_eq!(cli.prompt_flag.as_deref(), Some("hello"));
         assert_eq!(cli.prompt, vec!["world"]);
+        assert_eq!(
+            root_tui_passthrough(&cli).unwrap(),
+            vec!["--prompt".to_string(), "hello world".to_string()]
+        );
     }
 
     #[test]

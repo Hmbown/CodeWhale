@@ -65,6 +65,7 @@ mod seam_manager;
 mod session_failure_classifier;
 mod session_manager;
 mod settings;
+mod shell_dispatcher;
 mod skill_state;
 mod skills;
 mod snapshot;
@@ -78,6 +79,7 @@ mod tui;
 mod utils;
 mod vision;
 mod working_set;
+mod workspace_discovery;
 mod workspace_trust;
 
 use crate::config::{Config, DEFAULT_TEXT_MODEL, MAX_SUBAGENTS, effective_home_dir};
@@ -120,7 +122,7 @@ struct Cli {
     #[command(flatten)]
     feature_toggles: FeatureToggles,
 
-    /// Send a one-shot prompt (non-interactive)
+    /// Initial prompt to submit in the interactive TUI. Use `exec` for non-interactive runs.
     #[arg(short, long, value_name = "PROMPT", num_args = 1..)]
     prompt: Vec<String>,
 
@@ -426,6 +428,10 @@ fn join_prompt_parts(parts: &[String]) -> String {
     parts.join(" ")
 }
 
+fn top_level_prompt_initial_input(parts: &[String]) -> Option<tui::InitialInput> {
+    (!parts.is_empty()).then(|| tui::InitialInput::Submit(join_prompt_parts(parts)))
+}
+
 fn resolve_exec_resume_session_id(args: &ExecArgs, workspace: &Path) -> Result<Option<String>> {
     if let Some(id) = args.resume.as_ref().or(args.session_id.as_ref()) {
         return Ok(Some(id.clone()));
@@ -631,6 +637,9 @@ enum McpCommand {
         /// URL for streamable HTTP/SSE server
         #[arg(long, conflicts_with = "command")]
         url: Option<String>,
+        /// Explicit URL transport override. Use "sse" for legacy SSE endpoints.
+        #[arg(long, requires = "url")]
+        transport: Option<String>,
         /// Arguments for command-based servers
         #[arg(long = "arg")]
         args: Vec<String>,
@@ -934,7 +943,7 @@ async fn main() -> Result<()> {
                     bail!("Choose exactly one server mode: --mcp, --http, or --acp");
                 }
                 if args.mcp {
-                    mcp_server::run_mcp_server(workspace)
+                    tokio::task::block_in_place(|| mcp_server::run_mcp_server(workspace))
                 } else if args.http {
                     let config = load_config_from_cli(&cli)?;
                     let cors_origins = resolve_cors_origins(&config, &args.cors_origin);
@@ -974,12 +983,12 @@ async fn main() -> Result<()> {
         };
     }
 
-    // One-shot prompt mode
+    // Top-level prompt mode: submit the initial prompt, then keep the TUI alive
+    // for follow-up messages. Use `codewhale exec` for explicit non-interactive
+    // one-shot behavior (#2370).
     let config = load_config_from_cli(&cli)?;
-    if !cli.prompt.is_empty() {
-        let prompt = join_prompt_parts(&cli.prompt);
-        let model = config.default_model();
-        return run_one_shot(&config, &model, &prompt).await;
+    if let Some(initial_input) = top_level_prompt_initial_input(&cli.prompt) {
+        return run_interactive(&cli, &config, None, Some(initial_input)).await;
     }
 
     // Handle session resume. Plain `codewhale` starts fresh: interrupted
@@ -1417,6 +1426,7 @@ fn mcp_template_json() -> Result<String> {
             args: vec!["./path/to/your-mcp-server.js".to_string()],
             env: std::collections::HashMap::new(),
             url: None,
+            transport: None,
             connect_timeout: None,
             execute_timeout: None,
             read_timeout: None,
@@ -2063,6 +2073,51 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
     println!("{}", "Version Information:".bold());
     println!("  codewhale-tui: {}", env!("DEEPSEEK_BUILD_VERSION"));
     println!("  rust: {}", rustc_version());
+    println!();
+
+    println!("{}", "Updates:".bold());
+    let current_version = env!("CARGO_PKG_VERSION");
+    println!("  · current: v{current_version}");
+    match codewhale_release::latest_release_tag_async(codewhale_release::ReleaseChannel::Stable)
+        .await
+    {
+        Ok(latest_tag) => {
+            match codewhale_release::compare_release_versions(current_version, &latest_tag) {
+                Ok(std::cmp::Ordering::Less) => {
+                    println!(
+                        "  {} latest: {latest_tag}",
+                        "!".truecolor(sky_r, sky_g, sky_b)
+                    );
+                    println!("    Update available. Run `codewhale update` to install.");
+                }
+                Ok(std::cmp::Ordering::Equal) => {
+                    println!(
+                        "  {} latest: {latest_tag}",
+                        "✓".truecolor(aqua_r, aqua_g, aqua_b)
+                    );
+                    println!("    Already up to date.");
+                }
+                Ok(std::cmp::Ordering::Greater) => {
+                    println!("  {} latest: {latest_tag}", "·".dimmed());
+                    println!("    Current build is newer than the latest published release.");
+                }
+                Err(err) => {
+                    println!(
+                        "  {} latest: {latest_tag}",
+                        "!".truecolor(sky_r, sky_g, sky_b)
+                    );
+                    println!("    Version comparison failed: {err}");
+                }
+            }
+        }
+        Err(err) => {
+            println!(
+                "  {} latest release check failed: {err}",
+                "!".truecolor(sky_r, sky_g, sky_b)
+            );
+            println!("    Run `codewhale update --check` to retry.");
+        }
+    }
     println!();
 
     // Configuration summary
@@ -3782,7 +3837,13 @@ async fn run_pr(
     } else {
         cli.resume.clone()
     };
-    run_interactive(cli, config, resume_session_id, Some(prompt)).await
+    run_interactive(
+        cli,
+        config,
+        resume_session_id,
+        Some(tui::InitialInput::Prefill(prompt)),
+    )
+    .await
 }
 
 /// Return true if `name` resolves to an executable on the current `PATH`.
@@ -4131,10 +4192,16 @@ async fn run_mcp_command(config: &Config, command: McpCommand) -> Result<()> {
             name,
             command,
             url,
+            transport,
             args,
         } => {
             if command.is_none() && url.is_none() {
                 bail!("Provide either --command or --url for `mcp add`.");
+            }
+            if let Some(transport) = transport.as_deref() {
+                if !transport.trim().eq_ignore_ascii_case("sse") {
+                    bail!("Unsupported MCP transport '{transport}'. Supported values: sse");
+                }
             }
             let mut cfg = load_mcp_config(&config_path)?;
             cfg.servers.insert(
@@ -4144,6 +4211,7 @@ async fn run_mcp_command(config: &Config, command: McpCommand) -> Result<()> {
                     args,
                     env: std::collections::HashMap::new(),
                     url,
+                    transport,
                     connect_timeout: None,
                     execute_timeout: None,
                     read_timeout: None,
@@ -4230,6 +4298,7 @@ async fn run_mcp_command(config: &Config, command: McpCommand) -> Result<()> {
                     args,
                     env: std::collections::HashMap::new(),
                     url: None,
+                    transport: None,
                     connect_timeout: None,
                     execute_timeout: None,
                     read_timeout: None,
@@ -4794,7 +4863,7 @@ async fn run_interactive(
     cli: &Cli,
     config: &Config,
     resume_session_id: Option<String>,
-    initial_input: Option<String>,
+    initial_input: Option<tui::InitialInput>,
 ) -> Result<()> {
     let workspace = cli
         .workspace
@@ -5181,7 +5250,11 @@ async fn run_exec_agent(
         notes_path: config.notes_path(),
         mcp_config_path: config.mcp_config_path(),
         skills_dir: config.skills_dir(),
-        instructions: config.instructions_paths(),
+        instructions: config
+            .instructions_paths()
+            .into_iter()
+            .map(Into::into)
+            .collect(),
         project_context_pack_enabled: config.project_context_pack_enabled(),
         translation_enabled: false,
         show_thinking: settings.show_thinking,
@@ -5211,6 +5284,7 @@ async fn run_exec_agent(
         vision_config: config.vision_model_config(),
         strict_tool_mode: config.strict_tool_mode.unwrap_or(false),
         goal_objective: None,
+        allowed_tools: None,
         locale_tag: crate::localization::resolve_locale(&settings.locale)
             .tag()
             .to_string(),
@@ -5265,6 +5339,7 @@ async fn run_exec_agent(
             mode,
             model: effective_model.clone(),
             goal_objective: None,
+            allowed_tools: None,
             reasoning_effort: effective_reasoning_effort,
             reasoning_effort_auto: auto_model,
             auto_model,
@@ -5835,6 +5910,16 @@ mod terminal_mode_tests {
         let cli = parse_cli(&["codewhale", "-p", "hello", "world"]);
 
         assert_eq!(cli.prompt, vec!["hello", "world"]);
+    }
+
+    #[test]
+    fn prompt_flag_starts_interactive_submit_input() {
+        let cli = parse_cli(&["codewhale", "-p", "read", "the", "project"]);
+
+        assert_eq!(
+            top_level_prompt_initial_input(&cli.prompt),
+            Some(tui::InitialInput::Submit("read the project".to_string()))
+        );
     }
 
     #[test]
@@ -6718,6 +6803,7 @@ mod doctor_mcp_tests {
             args: args.iter().map(|s| s.to_string()).collect(),
             env: std::collections::HashMap::new(),
             url: url.map(String::from),
+            transport: None,
             connect_timeout: None,
             execute_timeout: None,
             read_timeout: None,

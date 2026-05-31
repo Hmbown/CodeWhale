@@ -76,5 +76,5 @@ pub mod workspace_context;
 
 // === Re-exports ===
 
-pub use app::TuiOptions;
+pub use app::{InitialInput, TuiOptions};
 pub use ui::run_tui;

@@ -474,9 +474,9 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
                     Err(err) => return CommandResult::error(format!("Failed to save: {err}")),
                 }
             }
-            return CommandResult::error(format!(
-                "base_url must be saved with --save; client base URL is loaded from config on startup. Restart and re-open your session after saving."
-            ));
+            return CommandResult::error(
+                "base_url must be saved with --save; client base URL is loaded from config on startup. Restart and re-open your session after saving.",
+            );
         }
         _ => {}
     }

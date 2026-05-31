@@ -901,6 +901,14 @@ fn normalize_url(href: &str) -> String {
 }
 
 fn normalize_bing_url(href: &str) -> String {
+    // Bing wraps every SERP result URL in a `/ck/a?...&u=<base64>` click-tracking
+    // redirect, and in the raw HTML the separators are `&amp;` entities. Without
+    // decoding entities first, `extract_query_param` looks for `u` but the actual
+    // key is `amp;u`, so the real URL is never recovered: every result collapses to
+    // a `bing.com` root domain, which the spam heuristic then rejects — yielding
+    // zero results for the default Bing backend. Decode entities before parsing.
+    let href = decode_html_entities(href);
+    let href = href.as_str();
     if let Some(encoded) = extract_query_param(href, "u") {
         let decoded = percent_decode(&encoded);
         let token = decoded.strip_prefix("a1").unwrap_or(&decoded);
@@ -1027,10 +1035,21 @@ fn extract_query_param(url: &str, key: &str) -> Option<String> {
 mod tests {
     use super::{
         ERROR_BODY_PREVIEW_BYTES, WebSearchEntry, WebSearchTool, decode_html_entities,
-        extract_search_query, is_likely_spam_results, optional_search_max_results, root_domain,
-        sanitize_error_body, truncate_error_body,
+        extract_search_query, is_likely_spam_results, normalize_bing_url,
+        optional_search_max_results, root_domain, sanitize_error_body, truncate_error_body,
     };
     use serde_json::json;
+
+    // Regression guard: Bing /ck/a redirect hrefs are HTML-entity-encoded
+    // (`&amp;`). normalize_bing_url must decode entities before extracting the
+    // `u=` base64 payload, otherwise the real URL is never recovered and the
+    // result's root domain collapses to bing.com (then dropped as spam → 0
+    // results for the default Bing backend).
+    #[test]
+    fn bing_ckurl_with_html_entities_decodes_real_url() {
+        let href = "https://www.bing.com/ck/a?!&amp;&amp;p=abc&amp;u=a1aHR0cHM6Ly9ydXN0LWxhbmcub3JnLw&amp;ntb=1";
+        assert_eq!(normalize_bing_url(href), "https://rust-lang.org/");
+    }
 
     fn entry(url: &str) -> WebSearchEntry {
         WebSearchEntry {

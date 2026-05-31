@@ -296,6 +296,25 @@ struct DecideApprovalResponse {
     delivered: bool,
 }
 
+#[derive(Debug, Deserialize)]
+struct SubmitUserInputBody {
+    answers: Vec<UserInputAnswerBody>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UserInputAnswerBody {
+    id: String,
+    label: String,
+    value: String,
+}
+
+#[derive(Debug, Serialize)]
+struct SubmitUserInputResponse {
+    ok: bool,
+    input_id: String,
+    delivered: bool,
+}
+
 #[derive(Debug, Serialize)]
 struct RuntimeInfoResponse {
     bind_host: String,
@@ -500,6 +519,10 @@ pub fn build_router(state: RuntimeApiState) -> Router {
         .route("/v1/threads/{id}/compact", post(compact_thread))
         .route("/v1/threads/{id}/events", get(stream_thread_events))
         .route("/v1/approvals/{approval_id}", post(decide_approval))
+        .route(
+            "/v1/user-input/{thread_id}/{input_id}",
+            post(submit_user_input),
+        )
         .route("/v1/tasks", get(list_tasks).post(create_task))
         .route("/v1/tasks/{id}", get(get_task))
         .route("/v1/tasks/{id}/cancel", post(cancel_task))
@@ -707,7 +730,38 @@ fn session_to_detail(session: SavedSession) -> SessionDetailResponse {
                     crate::models::ContentBlock::Thinking { thinking, .. } => {
                         json!({ "type": "thinking", "text": thinking })
                     }
-                    _ => json!({ "type": "other" }),
+                    crate::models::ContentBlock::ToolUse { id, name, input, caller } => {
+                        let mut obj =
+                            json!({ "type": "tool_use", "id": id, "name": name, "input": input });
+                        if let Some(caller) = caller {
+                            obj["caller"] = json!(caller);
+                        }
+                        obj
+                    }
+                    crate::models::ContentBlock::ToolResult { tool_use_id, content, is_error, content_blocks, .. } => {
+                        let mut obj = json!({ "type": "tool_result", "tool_use_id": tool_use_id });
+                        if let Some(cbs) = content_blocks {
+                            obj["content_blocks"] = json!(cbs);
+                            if !content.is_empty() {
+                                obj["content"] = json!(content);
+                            }
+                        } else {
+                            obj["content"] = json!(content);
+                        }
+                        if let Some(e) = is_error {
+                            obj["is_error"] = json!(e);
+                        }
+                        obj
+                    }
+                    crate::models::ContentBlock::ServerToolUse { id, name, input } => {
+                        json!({ "type": "tool_use", "id": id, "name": name, "input": input })
+                    }
+                    crate::models::ContentBlock::ToolSearchToolResult { tool_use_id, content } => {
+                        json!({ "type": "tool_result", "tool_use_id": tool_use_id, "content": content })
+                    }
+                    crate::models::ContentBlock::CodeExecutionToolResult { tool_use_id, content } => {
+                        json!({ "type": "tool_result", "tool_use_id": tool_use_id, "content": content })
+                    }
                 })
                 .collect();
             json!({
@@ -980,6 +1034,34 @@ async fn decide_approval(
         ok: true,
         approval_id,
         decision: req.decision,
+        delivered,
+    }))
+}
+
+async fn submit_user_input(
+    State(state): State<RuntimeApiState>,
+    Path((thread_id, input_id)): Path<(String, String)>,
+    Json(req): Json<SubmitUserInputBody>,
+) -> Result<Json<SubmitUserInputResponse>, ApiError> {
+    use crate::tools::user_input::{UserInputAnswer, UserInputResponse};
+    let answers: Vec<UserInputAnswer> = req
+        .answers
+        .into_iter()
+        .map(|a| UserInputAnswer {
+            id: a.id,
+            label: a.label,
+            value: a.value,
+        })
+        .collect();
+    let response = UserInputResponse { answers };
+    let delivered = state
+        .runtime_threads
+        .submit_user_input(&thread_id, &input_id, response)
+        .await
+        .map_err(map_thread_err)?;
+    Ok(Json(SubmitUserInputResponse {
+        ok: true,
+        input_id,
         delivered,
     }))
 }
@@ -1904,6 +1986,78 @@ mod tests {
                 error: None,
             }
         }
+    }
+
+    fn saved_session_with_blocks(blocks: Vec<crate::models::ContentBlock>) -> SavedSession {
+        SavedSession {
+            schema_version: 1,
+            metadata: SessionMetadata {
+                id: "session-1".to_string(),
+                title: "test session".to_string(),
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                message_count: 1,
+                total_tokens: 0,
+                model: "test-model".to_string(),
+                workspace: PathBuf::from("."),
+                mode: None,
+                cost: Default::default(),
+                parent_session_id: None,
+                forked_from_message_count: None,
+                cumulative_turn_secs: 0,
+            },
+            messages: vec![crate::models::Message {
+                role: "assistant".to_string(),
+                content: blocks,
+            }],
+            system_prompt: None,
+            context_references: Vec::new(),
+            artifacts: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn session_detail_tool_use_preserves_caller_metadata() {
+        let detail = session_to_detail(saved_session_with_blocks(vec![
+            crate::models::ContentBlock::ToolUse {
+                id: "tool-1".to_string(),
+                name: "task_shell_start".to_string(),
+                input: json!({ "cmd": "cargo test" }),
+                caller: Some(crate::models::ToolCaller {
+                    caller_type: "subagent".to_string(),
+                    tool_id: Some("parent-tool".to_string()),
+                }),
+            },
+        ]));
+
+        let block = &detail.messages[0]["content"][0];
+        assert_eq!(block["type"].as_str(), Some("tool_use"));
+        assert_eq!(block["caller"]["type"].as_str(), Some("subagent"));
+        assert_eq!(block["caller"]["tool_id"].as_str(), Some("parent-tool"));
+    }
+
+    #[test]
+    fn session_detail_tool_result_keeps_fallback_content_with_blocks() {
+        let detail = session_to_detail(saved_session_with_blocks(vec![
+            crate::models::ContentBlock::ToolResult {
+                tool_use_id: "tool-1".to_string(),
+                content: "fallback text".to_string(),
+                is_error: Some(false),
+                content_blocks: Some(vec![json!({
+                    "type": "text",
+                    "text": "structured text"
+                })]),
+            },
+        ]));
+
+        let block = &detail.messages[0]["content"][0];
+        assert_eq!(block["type"].as_str(), Some("tool_result"));
+        assert_eq!(block["content"].as_str(), Some("fallback text"));
+        assert_eq!(
+            block["content_blocks"][0]["text"].as_str(),
+            Some("structured text")
+        );
+        assert_eq!(block["is_error"].as_bool(), Some(false));
     }
 
     #[test]

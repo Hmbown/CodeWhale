@@ -86,6 +86,9 @@ pub(crate) fn looks_like_slash_command_input(input: &str) -> bool {
     let Some(rest) = input.trim_start().strip_prefix('/') else {
         return false;
     };
+    if rest.chars().next().is_some_and(|ch| ch.is_whitespace()) {
+        return false;
+    }
     let Some(command) = rest.split_whitespace().next() else {
         return rest.is_empty();
     };
@@ -811,7 +814,19 @@ pub struct TuiOptions {
     /// Used by `deepseek pr <N>` (#451) to drop the model into a
     /// session with the PR context already typed — the user can edit
     /// before sending or hit Enter to fire as-is.
-    pub initial_input: Option<String>,
+    pub initial_input: Option<InitialInput>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InitialInput {
+    /// Pre-populate the composer and wait for the user to press Enter.
+    ///
+    /// Used by `codewhale pr <N>` (#451) to drop the model into a session
+    /// with the PR context already typed so the user can edit before sending.
+    Prefill(String),
+    /// Pre-populate the composer, submit it once startup is ready, then keep
+    /// the interactive session open for follow-up messages (#2370).
+    Submit(String),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1093,6 +1108,9 @@ pub struct App {
     pub goal: GoalState,
     /// Session sub-state (cost, tokens, telemetry).
     pub session: SessionState,
+    /// Active tool restriction from custom slash command frontmatter.
+    /// `None` means the current turn may use the normal tool set.
+    pub active_allowed_tools: Option<Vec<String>>,
     pub history: Vec<HistoryCell>,
     pub history_version: u64,
     /// Per-cell revision counter, kept in lockstep with `history`.
@@ -1114,10 +1132,6 @@ pub struct App {
     pub status_toasts: VecDeque<StatusToast>,
     /// Sticky status toast used for important warnings/errors.
     pub sticky_status: Option<StatusToast>,
-    /// Version-update hint shown in the footer when a newer release
-    /// is available. Set by a background GitHub API check after app
-    /// startup; `None` until the check completes or if up-to-date.
-    pub version_hint: Option<String>,
     /// Last status text already promoted from `status_message` into toast state.
     pub last_status_message_seen: Option<String>,
     pub model: String,
@@ -1441,6 +1455,8 @@ pub struct App {
     /// Most recent user prompt accepted for an active engine turn. Ctrl+C can
     /// restore this into an empty composer after cancelling that turn.
     pub last_submitted_prompt: Option<String>,
+    /// Startup prompt should be submitted automatically after the engine is ready.
+    pub auto_submit_initial_input: bool,
     /// Two-tap quit confirmation. When set, a prior Ctrl+C in idle state has
     /// armed the quit shortcut; a second Ctrl+C before this `Instant` exits
     /// the app, while expiry silently re-arms the prompt for next time.
@@ -1466,6 +1482,10 @@ pub struct App {
     pub prefix_stability_pct: Option<u32>,
     /// Description of the last prefix change, if any.
     pub last_prefix_change_desc: Option<String>,
+    /// Current pinned prefix combined hash (SHA-256, 64 hex chars).
+    /// Updated per-turn via PrefixCacheChange events; surfaced by
+    /// `/cache stats` for cache-hit debugging.
+    pub last_pinned_prefix_hash: Option<String>,
 
     /// Active cycle configuration (token threshold, briefing cap, per-model
     /// overrides). Loaded from config and forwarded to the engine.
@@ -1624,6 +1644,7 @@ impl App {
         self.session.last_prompt_cache_miss_tokens = None;
         self.session.last_reasoning_replay_tokens = None;
         self.session.turn_cache_history.clear();
+        self.last_pinned_prefix_hash = None;
     }
 
     pub fn tr(&self, id: MessageId) -> &'static str {
@@ -1795,17 +1816,22 @@ impl App {
         let cached_skills = Self::discover_cached_skills(&workspace, &skills_dir);
 
         let input_history = crate::composer_history::load_history();
-        let (initial_input_text, initial_input_cursor) = match initial_input {
-            // #451: pre-populate the composer when invoked via
-            // `deepseek pr <N>` (or any future caller that wants to
-            // drop the model into a session with context already
-            // typed). Cursor lands at the end so Enter sends as-is.
-            Some(text) if !text.is_empty() => {
-                let cursor = text.len();
-                (text, cursor)
-            }
-            _ => (String::new(), 0),
-        };
+        let (initial_input_text, initial_input_cursor, auto_submit_initial_input) =
+            match initial_input {
+                // #451: pre-populate the composer when invoked via
+                // `deepseek pr <N>` (or any future caller that wants to
+                // drop the model into a session with context already
+                // typed). Cursor lands at the end so Enter sends as-is.
+                Some(InitialInput::Prefill(text)) if !text.is_empty() => {
+                    let cursor = text.chars().count();
+                    (text, cursor, false)
+                }
+                Some(InitialInput::Submit(text)) if !text.is_empty() => {
+                    let cursor = text.chars().count();
+                    (text, cursor, true)
+                }
+                _ => (String::new(), 0, false),
+            };
         Self {
             mode: initial_mode,
             composer: ComposerState {
@@ -1833,6 +1859,7 @@ impl App {
             viewport: ViewportState::default(),
             goal: GoalState::default(),
             session: SessionState::default(),
+            active_allowed_tools: None,
             history: Vec::new(),
             history_version: 0,
             history_revisions: Vec::new(),
@@ -1844,7 +1871,6 @@ impl App {
             status_message: None,
             status_toasts: VecDeque::new(),
             sticky_status: None,
-            version_hint: None,
             last_status_message_seen: None,
             model,
             auto_model,
@@ -1996,6 +2022,7 @@ impl App {
             coherence_state: CoherenceState::default(),
             last_send_at: None,
             last_submitted_prompt: None,
+            auto_submit_initial_input,
             quit_armed_until: None,
             cycle_count: 0,
             cycle_briefings: Vec::new(),
@@ -2003,6 +2030,7 @@ impl App {
             prefix_checks_total: 0,
             prefix_stability_pct: None,
             last_prefix_change_desc: None,
+            last_pinned_prefix_hash: None,
             cycle: CycleConfig::default(),
             collapsed_cells: HashSet::new(),
             collapsed_cell_map: Vec::new(),
@@ -4796,6 +4824,7 @@ pub enum McpUiAction {
     AddHttp {
         name: String,
         url: String,
+        transport: Option<String>,
     },
     Enable {
         name: String,
@@ -4844,6 +4873,35 @@ mod tests {
             resume_session_id: None,
             initial_input: None,
         }
+    }
+
+    #[test]
+    fn initial_input_prefill_waits_for_manual_submit() {
+        let mut options = test_options(false);
+        options.initial_input = Some(InitialInput::Prefill("review this PR".to_string()));
+
+        let app = App::new(options, &Config::default());
+
+        assert_eq!(app.input, "review this PR");
+        assert_eq!(app.cursor_position, "review this PR".chars().count());
+        assert!(!app.auto_submit_initial_input);
+    }
+
+    #[test]
+    fn initial_input_submit_marks_startup_dispatch() {
+        let mut options = test_options(false);
+        options.initial_input = Some(InitialInput::Submit(
+            "阅读项目 and wait for instructions".to_string(),
+        ));
+
+        let app = App::new(options, &Config::default());
+
+        assert_eq!(app.input, "阅读项目 and wait for instructions");
+        assert_eq!(
+            app.cursor_position,
+            "阅读项目 and wait for instructions".chars().count()
+        );
+        assert!(app.auto_submit_initial_input);
     }
 
     #[test]
@@ -5010,6 +5068,8 @@ mod tests {
         assert!(looks_like_slash_command_input("/"));
         assert!(looks_like_slash_command_input("/help"));
         assert!(looks_like_slash_command_input("/model deepseek-v4-pro"));
+        assert!(!looks_like_slash_command_input("/ hello"));
+        assert!(!looks_like_slash_command_input("  / hello"));
         assert!(!looks_like_slash_command_input(
             "/usr/lib/x86_64-linux-gnu/ 是标准路径吗？"
         ));
