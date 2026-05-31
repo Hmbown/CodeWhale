@@ -64,7 +64,7 @@ stop_server() {
 # assert_status METHOD PATH [HEADER_NAME:HEADER_VALUE] EXPECTED_STATUS
 assert_status() {
     local method="$1" path="$2" header="" expected=""
-    if [[ $# -eq 5 ]]; then
+    if [[ $# -eq 4 ]]; then
         header="$3"; expected="$4"
     else
         expected="$3"
