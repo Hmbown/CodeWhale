@@ -441,6 +441,7 @@ fn line_to_string(line: ratatui::text::Line<'static>) -> String {
 mod tests {
     use super::*;
     use crate::config::{Config, DEFAULT_TEXT_MODEL};
+    use crate::test_support::EnvVarGuard;
     use crate::tui::app::{App, ReasoningEffort, TuiOptions, TurnCacheRecord};
     use std::time::Instant;
     use tempfile::TempDir;
@@ -517,11 +518,8 @@ mod tests {
         let _lock = crate::test_support::lock_test_env();
         let home = tmpdir.path().join("home");
         std::fs::create_dir_all(&home).unwrap();
-        let previous_home = std::env::var_os("HOME");
-        // SAFETY: guarded by the process-wide test env mutex above.
-        unsafe {
-            std::env::set_var("HOME", &home);
-        }
+        let home_guard = EnvVarGuard::set("HOME", &home);
+        let previous_home = home_guard.previous();
         let mut app = create_test_app_with_tmpdir(&tmpdir);
         app.current_session_id = Some("parent-session".to_string());
         app.api_messages.push(crate::models::Message {
@@ -551,14 +549,8 @@ mod tests {
             Some("parent-session")
         );
         assert_eq!(child.metadata.forked_from_message_count, Some(1));
-        // SAFETY: guarded by the process-wide test env mutex above.
-        unsafe {
-            if let Some(previous_home) = previous_home {
-                std::env::set_var("HOME", previous_home);
-            } else {
-                std::env::remove_var("HOME");
-            }
-        }
+        drop(home_guard);
+        assert_eq!(std::env::var_os("HOME"), previous_home);
     }
 
     #[test]
@@ -668,14 +660,15 @@ mod tests {
     #[test]
     fn test_save_with_default_path_uses_managed_sessions_dir() {
         let tmpdir = TempDir::new().unwrap();
+        let _lock = crate::test_support::lock_test_env();
         // Set CODEWHALE_HOME so the managed sessions directory lands inside the
         // temp dir rather than the real user home. Pre-create the directory so
         // resolve_state_dir picks it up instead of falling back to legacy.
         let home = tmpdir.path().join("home");
         let sessions_dir = home.join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
-        // SAFETY: test-only, single-threaded via cargo test
-        unsafe { std::env::set_var("CODEWHALE_HOME", home.to_str().unwrap()) };
+        let codewhale_home = EnvVarGuard::set("CODEWHALE_HOME", &home);
+        let previous_codewhale_home = codewhale_home.previous();
         let mut app = create_test_app_with_tmpdir(&tmpdir);
         let result = save(&mut app, None);
         assert!(result.message.is_some());
@@ -691,11 +684,13 @@ mod tests {
         } else {
             Vec::new()
         };
+        drop(codewhale_home);
         // Session should be saved to the managed dir, not the workspace root.
         assert!(
             !entries.is_empty(),
             "expected session file in {sessions_dir:?}, got none; msg: {msg}"
         );
+        assert_eq!(std::env::var_os("CODEWHALE_HOME"), previous_codewhale_home);
     }
 
     #[test]

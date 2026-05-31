@@ -33,6 +33,7 @@ enum ProviderArg {
     XiaomiMimo,
     Novita,
     Fireworks,
+    Siliconflow,
     Moonshot,
     Sglang,
     Vllm,
@@ -52,6 +53,7 @@ impl From<ProviderArg> for ProviderKind {
             ProviderArg::XiaomiMimo => ProviderKind::XiaomiMimo,
             ProviderArg::Novita => ProviderKind::Novita,
             ProviderArg::Fireworks => ProviderKind::Fireworks,
+            ProviderArg::Siliconflow => ProviderKind::Siliconflow,
             ProviderArg::Moonshot => ProviderKind::Moonshot,
             ProviderArg::Sglang => ProviderKind::Sglang,
             ProviderArg::Vllm => ProviderKind::Vllm,
@@ -732,6 +734,7 @@ fn provider_slot(provider: ProviderKind) -> &'static str {
         ProviderKind::XiaomiMimo => "xiaomi-mimo",
         ProviderKind::Novita => "novita",
         ProviderKind::Fireworks => "fireworks",
+        ProviderKind::Siliconflow => "siliconflow",
         ProviderKind::Moonshot => "moonshot",
         ProviderKind::Sglang => "sglang",
         ProviderKind::Vllm => "vllm",
@@ -740,7 +743,7 @@ fn provider_slot(provider: ProviderKind) -> &'static str {
 }
 
 /// Provider order used by the `auth list` and `auth status` outputs.
-const PROVIDER_LIST: [ProviderKind; 14] = [
+const PROVIDER_LIST: [ProviderKind; 15] = [
     ProviderKind::Deepseek,
     ProviderKind::NvidiaNim,
     ProviderKind::Openai,
@@ -751,6 +754,7 @@ const PROVIDER_LIST: [ProviderKind; 14] = [
     ProviderKind::XiaomiMimo,
     ProviderKind::Novita,
     ProviderKind::Fireworks,
+    ProviderKind::Siliconflow,
     ProviderKind::Moonshot,
     ProviderKind::Sglang,
     ProviderKind::Vllm,
@@ -807,6 +811,7 @@ fn provider_env_vars(provider: ProviderKind) -> &'static [&'static str] {
         ProviderKind::Novita => &["NOVITA_API_KEY"],
         ProviderKind::NvidiaNim => &["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY", "DEEPSEEK_API_KEY"],
         ProviderKind::Fireworks => &["FIREWORKS_API_KEY"],
+        ProviderKind::Siliconflow => &["SILICONFLOW_API_KEY"],
         ProviderKind::Moonshot => &["MOONSHOT_API_KEY", "KIMI_API_KEY"],
         ProviderKind::Sglang => &["SGLANG_API_KEY"],
         ProviderKind::Vllm => &["VLLM_API_KEY"],
@@ -1304,6 +1309,8 @@ fn run_sandbox_command(command: SandboxCommand) -> Result<()> {
             let decision = engine.check(ExecPolicyContext {
                 command: &command,
                 cwd: &cwd.display().to_string(),
+                tool: Some("exec_shell"),
+                path: None,
                 ask_for_approval: ask.into(),
                 sandbox_mode: Some("workspace-write"),
             })?;
@@ -1496,13 +1503,14 @@ fn build_tui_command(
             | ProviderKind::XiaomiMimo
             | ProviderKind::Novita
             | ProviderKind::Fireworks
+            | ProviderKind::Siliconflow
             | ProviderKind::Moonshot
             | ProviderKind::Sglang
             | ProviderKind::Vllm
             | ProviderKind::Ollama
     ) {
         bail!(
-            "The interactive TUI supports DeepSeek, NVIDIA NIM, OpenAI-compatible, AtlasCloud, Wanjie Ark, OpenRouter, Xiaomi MiMo, Novita, Fireworks, Moonshot/Kimi, SGLang, vLLM, and Ollama providers. Remove --provider {} or use `codewhale model ...` for provider registry inspection.",
+            "The interactive TUI supports DeepSeek, NVIDIA NIM, OpenAI-compatible, AtlasCloud, Wanjie Ark, OpenRouter, Xiaomi MiMo, Novita, Fireworks, SiliconFlow, Moonshot/Kimi, SGLang, vLLM, and Ollama providers. Remove --provider {} or use `codewhale model ...` for provider registry inspection.",
             resolved_runtime.provider.as_str()
         );
     }
@@ -1565,6 +1573,9 @@ fn build_tui_command(
         }
         if resolved_runtime.provider == ProviderKind::Volcengine {
             cmd.env("VOLCENGINE_API_KEY", api_key);
+        }
+        if resolved_runtime.provider == ProviderKind::Siliconflow {
+            cmd.env("SILICONFLOW_API_KEY", api_key);
         }
         cmd.env("DEEPSEEK_API_KEY_SOURCE", "cli");
     }
@@ -2194,6 +2205,18 @@ mod tests {
             Some(Commands::Auth(AuthArgs {
                 command: AuthCommand::Set {
                     provider: ProviderArg::Fireworks,
+                    api_key: None,
+                    api_key_stdin: false,
+                }
+            }))
+        ));
+
+        let cli = parse_ok(&["deepseek", "auth", "set", "--provider", "siliconflow"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Auth(AuthArgs {
+                command: AuthCommand::Set {
+                    provider: ProviderArg::Siliconflow,
                     api_key: None,
                     api_key_stdin: false,
                 }
@@ -2941,6 +2964,11 @@ mod tests {
                 &["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"],
             ),
             (ProviderKind::Fireworks, "fireworks", &["FIREWORKS_API_KEY"]),
+            (
+                ProviderKind::Siliconflow,
+                "siliconflow",
+                &["SILICONFLOW_API_KEY"],
+            ),
             (ProviderKind::Sglang, "sglang", &["SGLANG_API_KEY"]),
             (ProviderKind::Vllm, "vllm", &["VLLM_API_KEY"]),
             (ProviderKind::Ollama, "ollama", &["OLLAMA_API_KEY"]),

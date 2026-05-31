@@ -405,6 +405,7 @@ impl Engine {
             ApiProvider::XiaomiMimo => "XIAOMI_MIMO_API_KEY/MIMO_API_KEY",
             ApiProvider::Novita => "NOVITA_API_KEY",
             ApiProvider::Fireworks => "FIREWORKS_API_KEY",
+            ApiProvider::Siliconflow => "SILICONFLOW_API_KEY",
             ApiProvider::Moonshot => "MOONSHOT_API_KEY/KIMI_API_KEY",
             ApiProvider::Sglang => "SGLANG_API_KEY",
             ApiProvider::Vllm => "VLLM_API_KEY",
@@ -2001,11 +2002,11 @@ impl Engine {
         // system prompt so the agent can autonomously review them before
         // claiming the task is done (#2127).
         let gate_block = self.slop_ledger_gate_block();
-        if let Some(ref block) = gate_block {
-            if let Some(SystemPrompt::Text(prompt_text)) = &mut stable_prompt {
-                prompt_text.push_str("\n\n");
-                prompt_text.push_str(block);
-            }
+        if let Some(ref block) = gate_block
+            && let Some(SystemPrompt::Text(prompt_text)) = &mut stable_prompt
+        {
+            prompt_text.push_str("\n\n");
+            prompt_text.push_str(block);
         }
 
         let stable_hash = system_prompt_hash(stable_prompt.as_ref());

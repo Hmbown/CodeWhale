@@ -13,12 +13,13 @@
 # `[providers.*]` sections near the bottom of
 # this file — keeping both stored at once means `/provider deepseek` and
 # `/provider nvidia-nim` (or `--provider openai`, `--provider wanjie-ark`,
-# `--provider volcengine`, `--provider xiaomi-mimo`, `--provider fireworks`, `/provider sglang`,
-# `/provider vllm`, `/provider ollama`) toggle without having to re-enter keys.
-# Top-level `api_key` / `base_url` are
+# `--provider volcengine`, `--provider xiaomi-mimo`, `--provider fireworks`,
+# `--provider siliconflow`, `/provider sglang`, `/provider vllm`,
+# `/provider ollama`) toggle without having to re-enter keys. Top-level
+# `api_key` / `base_url` are
 # still read as DeepSeek defaults when `[providers.deepseek]` is absent
 # (backward compatibility).
-provider = "deepseek" # deepseek | deepseek-cn | nvidia-nim | openai | atlascloud | wanjie-ark | volcengine | openrouter | xiaomi-mimo | novita | fireworks | sglang | vllm | ollama
+provider = "deepseek" # deepseek | deepseek-cn | nvidia-nim | openai | atlascloud | wanjie-ark | volcengine | openrouter | xiaomi-mimo | novita | fireworks | siliconflow | sglang | vllm | ollama
 api_key = "YOUR_DEEPSEEK_API_KEY" # must be non-empty
 base_url = "https://api.deepseek.com/beta"
 # provider = "deepseek-cn"                       # legacy alias (official host is still https://api.deepseek.com)
@@ -40,6 +41,8 @@ base_url = "https://api.deepseek.com/beta"
 #   deepseek-reasoner               — default Wanjie Ark model ID
 #   mimo-v2.5-pro                   — default Xiaomi MiMo model ID
 #   accounts/fireworks/models/deepseek-v4-pro — Fireworks AI Pro model ID
+#   deepseek-ai/DeepSeek-V4-Pro    — SiliconFlow hosted Pro model ID
+#   deepseek-ai/DeepSeek-V4-Flash  — SiliconFlow hosted Flash model ID
 #   deepseek-ai/DeepSeek-V4-Pro    — SGLang self-hosted Pro model ID
 #   deepseek-ai/DeepSeek-V4-Flash  — SGLang self-hosted Flash model ID
 default_text_model = "deepseek-v4-pro"
@@ -180,8 +183,8 @@ max_subagents = 10 # optional (1-20)
 # ─────────────────────────────────────────────────────────────────────────────────
 # Providers can be stored at once; `provider = "..."` (top of file) or
 # `/provider deepseek` / `/provider nvidia-nim` / `--provider openai` /
-# `--provider wanjie-ark` / `/provider fireworks` switches between them without
-# having to re-enter keys. Env vars override anything set here:
+# `--provider wanjie-ark` / `/provider fireworks` / `--provider siliconflow`
+# switches between them without having to re-enter keys. Env vars override anything set here:
 #   DeepSeek: DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
 #   NIM:      NVIDIA_API_KEY (or NVIDIA_NIM_API_KEY), NIM_BASE_URL
 #             (or NVIDIA_NIM_BASE_URL / NVIDIA_BASE_URL), NVIDIA_NIM_MODEL
@@ -191,6 +194,7 @@ max_subagents = 10 # optional (1-20)
 #   Xiaomi MiMo: XIAOMI_MIMO_API_KEY (or MIMO_API_KEY), XIAOMI_MIMO_BASE_URL, XIAOMI_MIMO_MODEL
 #   Novita:     NOVITA_API_KEY, NOVITA_BASE_URL, NOVITA_MODEL
 #   Fireworks:  FIREWORKS_API_KEY, FIREWORKS_BASE_URL
+#   SiliconFlow: SILICONFLOW_API_KEY, SILICONFLOW_BASE_URL, SILICONFLOW_MODEL
 #   SGLang:    SGLANG_BASE_URL, SGLANG_MODEL, optional SGLANG_API_KEY
 #   vLLM:      VLLM_BASE_URL, VLLM_MODEL, optional VLLM_API_KEY
 #   Ollama:    OLLAMA_BASE_URL, OLLAMA_MODEL, optional OLLAMA_API_KEY
@@ -270,6 +274,12 @@ max_subagents = 10 # optional (1-20)
 # api_key = "YOUR_FIREWORKS_API_KEY"
 # base_url = "https://api.fireworks.ai/inference/v1"
 # model = "accounts/fireworks/models/deepseek-v4-pro"
+
+# SiliconFlow-hosted DeepSeek V4 (https://siliconflow.com)
+[providers.siliconflow]
+# api_key = "YOUR_SILICONFLOW_API_KEY"
+# base_url = "https://api.siliconflow.com/v1"
+# model = "deepseek-ai/DeepSeek-V4-Pro"     # or deepseek-ai/DeepSeek-V4-Flash
 
 # Self-hosted SGLang OpenAI-compatible server
 [providers.sglang]

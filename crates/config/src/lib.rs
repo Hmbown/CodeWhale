@@ -33,6 +33,8 @@ const DEFAULT_XIAOMI_MIMO_MODEL: &str = "mimo-v2.5-pro";
 const DEFAULT_NOVITA_MODEL: &str = "deepseek/deepseek-v4-pro";
 const DEFAULT_NOVITA_FLASH_MODEL: &str = "deepseek/deepseek-v4-flash";
 const DEFAULT_FIREWORKS_MODEL: &str = "accounts/fireworks/models/deepseek-v4-pro";
+const DEFAULT_SILICONFLOW_MODEL: &str = "deepseek-ai/DeepSeek-V4-Pro";
+const DEFAULT_SILICONFLOW_FLASH_MODEL: &str = "deepseek-ai/DeepSeek-V4-Flash";
 const DEFAULT_MOONSHOT_MODEL: &str = "kimi-k2.6";
 const DEFAULT_MOONSHOT_BASE_URL: &str = "https://api.moonshot.ai/v1";
 const DEFAULT_KIMI_CODE_MODEL: &str = "kimi-for-coding";
@@ -43,6 +45,7 @@ const DEFAULT_OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
 const DEFAULT_XIAOMI_MIMO_BASE_URL: &str = "https://api.xiaomimimo.com/v1";
 const DEFAULT_NOVITA_BASE_URL: &str = "https://api.novita.ai/v1";
 const DEFAULT_FIREWORKS_BASE_URL: &str = "https://api.fireworks.ai/inference/v1";
+const DEFAULT_SILICONFLOW_BASE_URL: &str = "https://api.siliconflow.com/v1";
 const DEFAULT_SGLANG_BASE_URL: &str = "http://localhost:30000/v1";
 const DEFAULT_VLLM_MODEL: &str = "deepseek-ai/DeepSeek-V4-Pro";
 const DEFAULT_VLLM_FLASH_MODEL: &str = "deepseek-ai/DeepSeek-V4-Flash";
@@ -81,6 +84,8 @@ pub enum ProviderKind {
     XiaomiMimo,
     Novita,
     Fireworks,
+    #[serde(alias = "silicon-flow", alias = "silicon_flow")]
+    Siliconflow,
     Moonshot,
     Sglang,
     Vllm,
@@ -101,6 +106,7 @@ impl ProviderKind {
             Self::XiaomiMimo => "xiaomi-mimo",
             Self::Novita => "novita",
             Self::Fireworks => "fireworks",
+            Self::Siliconflow => "siliconflow",
             Self::Moonshot => "moonshot",
             Self::Sglang => "sglang",
             Self::Vllm => "vllm",
@@ -126,6 +132,7 @@ impl ProviderKind {
             }
             "novita" => Some(Self::Novita),
             "fireworks" | "fireworks-ai" => Some(Self::Fireworks),
+            "siliconflow" | "silicon-flow" | "silicon_flow" => Some(Self::Siliconflow),
             "moonshot" | "moonshot-ai" | "kimi" | "kimi-k2" => Some(Self::Moonshot),
             "sglang" | "sg-lang" => Some(Self::Sglang),
             "vllm" | "v-llm" => Some(Self::Vllm),
@@ -168,6 +175,8 @@ pub struct ProvidersToml {
     #[serde(default)]
     pub fireworks: ProviderConfigToml,
     #[serde(default)]
+    pub siliconflow: ProviderConfigToml,
+    #[serde(default)]
     pub moonshot: ProviderConfigToml,
     #[serde(default)]
     pub sglang: ProviderConfigToml,
@@ -191,6 +200,7 @@ impl ProvidersToml {
             ProviderKind::XiaomiMimo => &self.xiaomi_mimo,
             ProviderKind::Novita => &self.novita,
             ProviderKind::Fireworks => &self.fireworks,
+            ProviderKind::Siliconflow => &self.siliconflow,
             ProviderKind::Moonshot => &self.moonshot,
             ProviderKind::Sglang => &self.sglang,
             ProviderKind::Vllm => &self.vllm,
@@ -210,6 +220,7 @@ impl ProvidersToml {
             ProviderKind::XiaomiMimo => &mut self.xiaomi_mimo,
             ProviderKind::Novita => &mut self.novita,
             ProviderKind::Fireworks => &mut self.fireworks,
+            ProviderKind::Siliconflow => &mut self.siliconflow,
             ProviderKind::Moonshot => &mut self.moonshot,
             ProviderKind::Sglang => &mut self.sglang,
             ProviderKind::Vllm => &mut self.vllm,
@@ -434,6 +445,10 @@ impl ConfigToml {
         );
         merge_project_provider_config(&mut self.providers.novita, &project.providers.novita);
         merge_project_provider_config(&mut self.providers.fireworks, &project.providers.fireworks);
+        merge_project_provider_config(
+            &mut self.providers.siliconflow,
+            &project.providers.siliconflow,
+        );
         merge_project_provider_config(&mut self.providers.sglang, &project.providers.sglang);
         merge_project_provider_config(&mut self.providers.vllm, &project.providers.vllm);
         merge_project_provider_config(&mut self.providers.ollama, &project.providers.ollama);
@@ -511,6 +526,12 @@ impl ConfigToml {
             "providers.fireworks.model" => self.providers.fireworks.model.clone(),
             "providers.fireworks.http_headers" => {
                 serialize_http_headers(&self.providers.fireworks.http_headers)
+            }
+            "providers.siliconflow.api_key" => self.providers.siliconflow.api_key.clone(),
+            "providers.siliconflow.base_url" => self.providers.siliconflow.base_url.clone(),
+            "providers.siliconflow.model" => self.providers.siliconflow.model.clone(),
+            "providers.siliconflow.http_headers" => {
+                serialize_http_headers(&self.providers.siliconflow.http_headers)
             }
             "providers.moonshot.api_key" => self.providers.moonshot.api_key.clone(),
             "providers.moonshot.base_url" => self.providers.moonshot.base_url.clone(),
@@ -690,6 +711,18 @@ impl ConfigToml {
             "providers.fireworks.http_headers" => {
                 self.providers.fireworks.http_headers = parse_http_headers(value)?;
             }
+            "providers.siliconflow.api_key" => {
+                self.providers.siliconflow.api_key = Some(value.to_string());
+            }
+            "providers.siliconflow.base_url" => {
+                self.providers.siliconflow.base_url = Some(value.to_string());
+            }
+            "providers.siliconflow.model" => {
+                self.providers.siliconflow.model = Some(value.to_string());
+            }
+            "providers.siliconflow.http_headers" => {
+                self.providers.siliconflow.http_headers = parse_http_headers(value)?;
+            }
             "providers.moonshot.api_key" => {
                 self.providers.moonshot.api_key = Some(value.to_string());
             }
@@ -818,6 +851,12 @@ impl ConfigToml {
             "providers.fireworks.base_url" => self.providers.fireworks.base_url = None,
             "providers.fireworks.model" => self.providers.fireworks.model = None,
             "providers.fireworks.http_headers" => self.providers.fireworks.http_headers.clear(),
+            "providers.siliconflow.api_key" => self.providers.siliconflow.api_key = None,
+            "providers.siliconflow.base_url" => self.providers.siliconflow.base_url = None,
+            "providers.siliconflow.model" => self.providers.siliconflow.model = None,
+            "providers.siliconflow.http_headers" => {
+                self.providers.siliconflow.http_headers.clear();
+            }
             "providers.moonshot.api_key" => self.providers.moonshot.api_key = None,
             "providers.moonshot.base_url" => self.providers.moonshot.base_url = None,
             "providers.moonshot.model" => self.providers.moonshot.model = None,
@@ -1003,6 +1042,21 @@ impl ConfigToml {
         if let Some(v) = serialize_http_headers(&self.providers.fireworks.http_headers) {
             out.insert("providers.fireworks.http_headers".to_string(), v);
         }
+        if let Some(v) = self.providers.siliconflow.api_key.as_ref() {
+            out.insert(
+                "providers.siliconflow.api_key".to_string(),
+                redact_secret(v),
+            );
+        }
+        if let Some(v) = self.providers.siliconflow.base_url.as_ref() {
+            out.insert("providers.siliconflow.base_url".to_string(), v.clone());
+        }
+        if let Some(v) = self.providers.siliconflow.model.as_ref() {
+            out.insert("providers.siliconflow.model".to_string(), v.clone());
+        }
+        if let Some(v) = serialize_http_headers(&self.providers.siliconflow.http_headers) {
+            out.insert("providers.siliconflow.http_headers".to_string(), v);
+        }
         if let Some(v) = self.providers.moonshot.api_key.as_ref() {
             out.insert("providers.moonshot.api_key".to_string(), redact_secret(v));
         }
@@ -1120,6 +1174,7 @@ impl ConfigToml {
                 ProviderKind::XiaomiMimo => DEFAULT_XIAOMI_MIMO_BASE_URL.to_string(),
                 ProviderKind::Novita => DEFAULT_NOVITA_BASE_URL.to_string(),
                 ProviderKind::Fireworks => DEFAULT_FIREWORKS_BASE_URL.to_string(),
+                ProviderKind::Siliconflow => DEFAULT_SILICONFLOW_BASE_URL.to_string(),
                 ProviderKind::Moonshot => {
                     if auth_mode.as_deref().is_some_and(auth_mode_uses_kimi_oauth) {
                         DEFAULT_KIMI_CODE_BASE_URL.to_string()
@@ -1163,9 +1218,10 @@ impl ConfigToml {
             }
         };
 
+        let env_provider_model = env.model_for(provider, &base_url);
         let explicit_model = cli.model.is_some()
             || env.model.is_some()
-            || env.model_for(provider).is_some()
+            || env_provider_model.is_some()
             || provider_cfg.model.is_some()
             || root_deepseek_model.is_some()
             || self.model.is_some();
@@ -1173,7 +1229,7 @@ impl ConfigToml {
             .model
             .clone()
             .or_else(|| env.model.clone())
-            .or_else(|| env.model_for(provider))
+            .or(env_provider_model)
             .or_else(|| provider_cfg.model.clone())
             .or(root_deepseek_model)
             .or_else(|| self.model.clone())
@@ -1358,6 +1414,14 @@ fn normalize_model_for_provider(provider: ProviderKind, model: &str) -> String {
         (ProviderKind::Fireworks, "deepseek-v4-pro" | "deepseek-v4pro") => {
             DEFAULT_FIREWORKS_MODEL.to_string()
         }
+        (
+            ProviderKind::Siliconflow,
+            "deepseek-v4-pro" | "deepseek-v4pro" | "deepseek-reasoner" | "deepseek-r1",
+        ) => DEFAULT_SILICONFLOW_MODEL.to_string(),
+        (
+            ProviderKind::Siliconflow,
+            "deepseek-v4-flash" | "deepseek-v4flash" | "deepseek-chat" | "deepseek-v3",
+        ) => DEFAULT_SILICONFLOW_FLASH_MODEL.to_string(),
         (ProviderKind::Moonshot, "kimi-k2.6" | "kimi-k2") => DEFAULT_MOONSHOT_MODEL.to_string(),
         (ProviderKind::Sglang, "deepseek-v4-pro" | "deepseek-v4pro") => {
             DEFAULT_SGLANG_MODEL.to_string()
@@ -1391,6 +1455,7 @@ fn default_model_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::XiaomiMimo => DEFAULT_XIAOMI_MIMO_MODEL,
         ProviderKind::Novita => DEFAULT_NOVITA_MODEL,
         ProviderKind::Fireworks => DEFAULT_FIREWORKS_MODEL,
+        ProviderKind::Siliconflow => DEFAULT_SILICONFLOW_MODEL,
         ProviderKind::Moonshot => DEFAULT_MOONSHOT_MODEL,
         ProviderKind::Sglang => DEFAULT_SGLANG_MODEL,
         ProviderKind::Vllm => DEFAULT_VLLM_MODEL,
@@ -1410,6 +1475,7 @@ fn default_base_url_for_provider(provider: ProviderKind) -> &'static str {
         ProviderKind::XiaomiMimo => DEFAULT_XIAOMI_MIMO_BASE_URL,
         ProviderKind::Novita => DEFAULT_NOVITA_BASE_URL,
         ProviderKind::Fireworks => DEFAULT_FIREWORKS_BASE_URL,
+        ProviderKind::Siliconflow => DEFAULT_SILICONFLOW_BASE_URL,
         ProviderKind::Moonshot => DEFAULT_MOONSHOT_BASE_URL,
         ProviderKind::Sglang => DEFAULT_SGLANG_BASE_URL,
         ProviderKind::Vllm => DEFAULT_VLLM_BASE_URL,
@@ -1425,9 +1491,19 @@ fn moonshot_base_url_uses_kimi_code(base_url: &str) -> bool {
 }
 
 fn base_url_is_custom_for_provider(provider: ProviderKind, base_url: &str) -> bool {
+    if provider == ProviderKind::Siliconflow && siliconflow_base_url_is_official(base_url) {
+        return false;
+    }
     let actual = base_url.trim_end_matches('/');
     let default = default_base_url_for_provider(provider).trim_end_matches('/');
     actual != default
+}
+
+fn siliconflow_base_url_is_official(base_url: &str) -> bool {
+    matches!(
+        base_url.trim_end_matches('/').to_ascii_lowercase().as_str(),
+        "https://api.siliconflow.com/v1" | "https://api.siliconflow.cn/v1"
+    )
 }
 
 fn provider_preserves_custom_base_url_model(provider: ProviderKind, base_url: &str) -> bool {
@@ -1923,6 +1999,8 @@ struct EnvRuntimeOverrides {
     xiaomi_mimo_base_url: Option<String>,
     novita_base_url: Option<String>,
     fireworks_base_url: Option<String>,
+    siliconflow_base_url: Option<String>,
+    siliconflow_model: Option<String>,
     moonshot_base_url: Option<String>,
     sglang_base_url: Option<String>,
     vllm_base_url: Option<String>,
@@ -2012,6 +2090,12 @@ impl EnvRuntimeOverrides {
             fireworks_base_url: std::env::var("FIREWORKS_BASE_URL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
+            siliconflow_base_url: std::env::var("SILICONFLOW_BASE_URL")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            siliconflow_model: std::env::var("SILICONFLOW_MODEL")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
             moonshot_base_url: std::env::var("MOONSHOT_BASE_URL")
                 .or_else(|_| std::env::var("KIMI_BASE_URL"))
                 .ok()
@@ -2042,6 +2126,7 @@ impl EnvRuntimeOverrides {
             ProviderKind::XiaomiMimo => self.xiaomi_mimo_base_url.clone(),
             ProviderKind::Novita => self.novita_base_url.clone(),
             ProviderKind::Fireworks => self.fireworks_base_url.clone(),
+            ProviderKind::Siliconflow => self.siliconflow_base_url.clone(),
             ProviderKind::Moonshot => self.moonshot_base_url.clone(),
             ProviderKind::Sglang => self.sglang_base_url.clone(),
             ProviderKind::Vllm => self.vllm_base_url.clone(),
@@ -2049,13 +2134,20 @@ impl EnvRuntimeOverrides {
         }
     }
 
-    fn model_for(&self, provider: ProviderKind) -> Option<String> {
-        match provider {
+    fn model_for(&self, provider: ProviderKind, base_url: &str) -> Option<String> {
+        let model = match provider {
             ProviderKind::WanjieArk => self.wanjie_ark_model.clone(),
             ProviderKind::Volcengine => self.volcengine_model.clone(),
+            ProviderKind::Siliconflow => self.siliconflow_model.clone(),
             ProviderKind::Moonshot => self.moonshot_model.clone(),
             ProviderKind::XiaomiMimo => self.xiaomi_mimo_model.clone(),
             _ => None,
+        }?;
+
+        if provider_preserves_custom_base_url_model(provider, base_url) {
+            Some(model.trim().to_string())
+        } else {
+            Some(normalize_model_for_provider(provider, &model))
         }
     }
 }
@@ -2121,6 +2213,9 @@ mod tests {
         novita_base_url: Option<OsString>,
         fireworks_api_key: Option<OsString>,
         fireworks_base_url: Option<OsString>,
+        siliconflow_api_key: Option<OsString>,
+        siliconflow_base_url: Option<OsString>,
+        siliconflow_model: Option<OsString>,
         moonshot_api_key: Option<OsString>,
         moonshot_base_url: Option<OsString>,
         moonshot_model: Option<OsString>,
@@ -2177,6 +2272,9 @@ mod tests {
                 novita_base_url: env::var_os("NOVITA_BASE_URL"),
                 fireworks_api_key: env::var_os("FIREWORKS_API_KEY"),
                 fireworks_base_url: env::var_os("FIREWORKS_BASE_URL"),
+                siliconflow_api_key: env::var_os("SILICONFLOW_API_KEY"),
+                siliconflow_base_url: env::var_os("SILICONFLOW_BASE_URL"),
+                siliconflow_model: env::var_os("SILICONFLOW_MODEL"),
                 moonshot_api_key: env::var_os("MOONSHOT_API_KEY"),
                 moonshot_base_url: env::var_os("MOONSHOT_BASE_URL"),
                 moonshot_model: env::var_os("MOONSHOT_MODEL"),
@@ -2227,6 +2325,9 @@ mod tests {
                 env::remove_var("NOVITA_BASE_URL");
                 env::remove_var("FIREWORKS_API_KEY");
                 env::remove_var("FIREWORKS_BASE_URL");
+                env::remove_var("SILICONFLOW_API_KEY");
+                env::remove_var("SILICONFLOW_BASE_URL");
+                env::remove_var("SILICONFLOW_MODEL");
                 env::remove_var("MOONSHOT_API_KEY");
                 env::remove_var("MOONSHOT_BASE_URL");
                 env::remove_var("MOONSHOT_MODEL");
@@ -2295,6 +2396,9 @@ mod tests {
                 Self::restore_var("NOVITA_BASE_URL", self.novita_base_url.take());
                 Self::restore_var("FIREWORKS_API_KEY", self.fireworks_api_key.take());
                 Self::restore_var("FIREWORKS_BASE_URL", self.fireworks_base_url.take());
+                Self::restore_var("SILICONFLOW_API_KEY", self.siliconflow_api_key.take());
+                Self::restore_var("SILICONFLOW_BASE_URL", self.siliconflow_base_url.take());
+                Self::restore_var("SILICONFLOW_MODEL", self.siliconflow_model.take());
                 Self::restore_var("MOONSHOT_API_KEY", self.moonshot_api_key.take());
                 Self::restore_var("MOONSHOT_BASE_URL", self.moonshot_base_url.take());
                 Self::restore_var("MOONSHOT_MODEL", self.moonshot_model.take());
@@ -2881,6 +2985,14 @@ mod tests {
             ProviderKind::parse("fireworks-ai"),
             Some(ProviderKind::Fireworks)
         );
+        assert_eq!(
+            ProviderKind::parse("silicon-flow"),
+            Some(ProviderKind::Siliconflow)
+        );
+        assert_eq!(
+            ProviderKind::parse("silicon_flow"),
+            Some(ProviderKind::Siliconflow)
+        );
         assert_eq!(ProviderKind::parse("kimi"), Some(ProviderKind::Moonshot));
         assert_eq!(
             ProviderKind::parse("moonshot-ai"),
@@ -2906,6 +3018,10 @@ mod tests {
         let parsed: ConfigToml =
             toml::from_str("provider = \"ark-wanjie\"").expect("wanjie provider alias");
         assert_eq!(parsed.provider, ProviderKind::WanjieArk);
+
+        let parsed: ConfigToml =
+            toml::from_str("provider = \"silicon-flow\"").expect("siliconflow provider alias");
+        assert_eq!(parsed.provider, ProviderKind::Siliconflow);
     }
 
     #[test]
@@ -2986,6 +3102,22 @@ mod tests {
         assert_eq!(resolved.provider, ProviderKind::Fireworks);
         assert_eq!(resolved.base_url, DEFAULT_FIREWORKS_BASE_URL);
         assert_eq!(resolved.model, DEFAULT_FIREWORKS_MODEL);
+    }
+
+    #[test]
+    fn siliconflow_provider_defaults_to_canonical_endpoint_and_model() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        let config = ConfigToml {
+            provider: ProviderKind::Siliconflow,
+            ..ConfigToml::default()
+        };
+
+        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::Siliconflow);
+        assert_eq!(resolved.base_url, DEFAULT_SILICONFLOW_BASE_URL);
+        assert_eq!(resolved.model, DEFAULT_SILICONFLOW_MODEL);
     }
 
     #[test]
@@ -3418,6 +3550,56 @@ mod tests {
     }
 
     #[test]
+    fn siliconflow_env_overrides_key_base_url_and_model() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        // Safety: test-only environment mutation guarded by a module mutex.
+        unsafe {
+            env::set_var("CODEWHALE_PROVIDER", "siliconflow");
+            env::set_var("SILICONFLOW_API_KEY", "sf-env-key");
+            env::set_var("SILICONFLOW_BASE_URL", "https://sf-mirror.example/v1");
+            env::set_var("SILICONFLOW_MODEL", "deepseek-v4-flash");
+        }
+
+        let resolved =
+            ConfigToml::default().resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::Siliconflow);
+        assert_eq!(resolved.api_key.as_deref(), Some("sf-env-key"));
+        assert_eq!(resolved.base_url, "https://sf-mirror.example/v1");
+        assert_eq!(resolved.model, "deepseek-v4-flash");
+    }
+
+    #[test]
+    fn siliconflow_cn_base_url_env_normalizes_model_aliases() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        // Safety: test-only environment mutation guarded by a module mutex.
+        unsafe {
+            env::set_var("CODEWHALE_PROVIDER", "siliconflow");
+            env::set_var("SILICONFLOW_API_KEY", "sf-env-key");
+            env::set_var("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1");
+        }
+
+        for (alias, expected) in [
+            ("deepseek-v4-flash", DEFAULT_SILICONFLOW_FLASH_MODEL),
+            ("deepseek-reasoner", DEFAULT_SILICONFLOW_MODEL),
+        ] {
+            // Safety: test-only environment mutation guarded by a module mutex.
+            unsafe {
+                env::set_var("SILICONFLOW_MODEL", alias);
+            }
+
+            let resolved =
+                ConfigToml::default().resolve_runtime_options(&CliRuntimeOverrides::default());
+
+            assert_eq!(resolved.provider, ProviderKind::Siliconflow);
+            assert_eq!(resolved.base_url, "https://api.siliconflow.cn/v1");
+            assert_eq!(resolved.model, expected);
+        }
+    }
+
+    #[test]
     fn wanjie_ark_env_api_key_and_base_url_fall_back_when_config_missing() {
         let _lock = env_lock();
         let _env = EnvGuard::without_deepseek_runtime_overrides();
@@ -3468,6 +3650,57 @@ mod tests {
 
         assert_eq!(resolved.provider, ProviderKind::Novita);
         assert_eq!(resolved.model, DEFAULT_NOVITA_FLASH_MODEL);
+    }
+
+    #[test]
+    fn siliconflow_provider_normalizes_flash_aliases() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        let cli = CliRuntimeOverrides {
+            provider: Some(ProviderKind::Siliconflow),
+            model: Some("deepseek-v4-flash".to_string()),
+            ..CliRuntimeOverrides::default()
+        };
+
+        let resolved = ConfigToml::default().resolve_runtime_options(&cli);
+
+        assert_eq!(resolved.provider, ProviderKind::Siliconflow);
+        assert_eq!(resolved.model, DEFAULT_SILICONFLOW_FLASH_MODEL);
+    }
+
+    #[test]
+    fn siliconflow_provider_normalizes_reasoning_aliases_to_pro() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+
+        for alias in ["deepseek-reasoner", "deepseek-r1"] {
+            let cli = CliRuntimeOverrides {
+                provider: Some(ProviderKind::Siliconflow),
+                model: Some(alias.to_string()),
+                ..CliRuntimeOverrides::default()
+            };
+
+            let resolved = ConfigToml::default().resolve_runtime_options(&cli);
+
+            assert_eq!(resolved.provider, ProviderKind::Siliconflow);
+            assert_eq!(resolved.model, DEFAULT_SILICONFLOW_MODEL);
+        }
+    }
+
+    #[test]
+    fn siliconflow_provider_preserves_deepseek_v3_2_alias() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        let cli = CliRuntimeOverrides {
+            provider: Some(ProviderKind::Siliconflow),
+            model: Some("deepseek-v3.2".to_string()),
+            ..CliRuntimeOverrides::default()
+        };
+
+        let resolved = ConfigToml::default().resolve_runtime_options(&cli);
+
+        assert_eq!(resolved.provider, ProviderKind::Siliconflow);
+        assert_eq!(resolved.model, "deepseek-v3.2");
     }
 
     #[test]
@@ -3553,6 +3786,24 @@ mod tests {
         assert_eq!(resolved.provider, ProviderKind::Fireworks);
         assert_eq!(resolved.base_url, "https://my-gateway.example/v1");
         // Custom base URL skips provider-specific model prefixing.
+        assert_eq!(resolved.model, "DeepSeek-V4-Pro");
+    }
+
+    #[test]
+    fn siliconflow_custom_base_url_preserves_provider_model() {
+        let _lock = env_lock();
+        let _env = EnvGuard::without_deepseek_runtime_overrides();
+        let mut config = ConfigToml {
+            provider: ProviderKind::Siliconflow,
+            ..ConfigToml::default()
+        };
+        config.providers.siliconflow.base_url = Some("https://my-gateway.example/v1".to_string());
+        config.providers.siliconflow.model = Some("DeepSeek-V4-Pro".to_string());
+
+        let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+
+        assert_eq!(resolved.provider, ProviderKind::Siliconflow);
+        assert_eq!(resolved.base_url, "https://my-gateway.example/v1");
         assert_eq!(resolved.model, "DeepSeek-V4-Pro");
     }
 

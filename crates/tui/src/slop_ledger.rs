@@ -263,7 +263,7 @@ impl SlopLedger {
     pub fn default_path() -> io::Result<PathBuf> {
         codewhale_config::resolve_state_dir("slop_ledger")
             .map(|p| p.join("slop_ledger.json"))
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+            .map_err(io::Error::other)
     }
 
     /// Load ledger from the default path, returning an empty ledger if the
@@ -297,9 +297,8 @@ impl SlopLedger {
         if let Some(parent) = self.ledger_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let data = serde_json::to_string_pretty(self).map_err(|e| {
-            io::Error::new(io::ErrorKind::Other, format!("serialization error: {e}"))
-        })?;
+        let data = serde_json::to_string_pretty(self)
+            .map_err(|e| io::Error::other(format!("serialization error: {e}")))?;
         crate::utils::write_atomic(&self.ledger_path, data.as_bytes())
     }
 
@@ -330,20 +329,20 @@ impl SlopLedger {
             .entries
             .iter()
             .filter(|e| {
-                if let Some(bucket) = &filter.bucket {
-                    if e.bucket != *bucket {
-                        return false;
-                    }
+                if let Some(bucket) = &filter.bucket
+                    && e.bucket != *bucket
+                {
+                    return false;
                 }
-                if let Some(severity) = &filter.severity {
-                    if e.severity != *severity {
-                        return false;
-                    }
+                if let Some(severity) = &filter.severity
+                    && e.severity != *severity
+                {
+                    return false;
                 }
-                if let Some(status) = &filter.status {
-                    if e.status != *status {
-                        return false;
-                    }
+                if let Some(status) = &filter.status
+                    && e.status != *status
+                {
+                    return false;
                 }
                 if let Some(search) = &filter.search {
                     let q = search.to_lowercase();
@@ -408,7 +407,7 @@ impl SlopLedger {
         let mut out = format!("# {heading}\n\n");
         out.push_str(&format!(
             "_Generated at {} — {} entries_\n\n",
-            chrono::Utc::now().format("%Y-%m-%d %H:%M UTC").to_string(),
+            chrono::Utc::now().format("%Y-%m-%d %H:%M UTC"),
             entries.len()
         ));
 

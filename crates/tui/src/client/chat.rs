@@ -1745,6 +1745,7 @@ fn provider_accepts_reasoning_content(provider: ApiProvider) -> bool {
             | ApiProvider::XiaomiMimo
             | ApiProvider::Novita
             | ApiProvider::Fireworks
+            | ApiProvider::Siliconflow
             | ApiProvider::Sglang
     )
 }

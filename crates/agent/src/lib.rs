@@ -189,6 +189,30 @@ impl Default for ModelRegistry {
                 supports_reasoning: true,
             },
             ModelInfo {
+                id: "deepseek-ai/DeepSeek-V4-Pro".to_string(),
+                provider: ProviderKind::Siliconflow,
+                aliases: vec![
+                    "deepseek-v4-pro".to_string(),
+                    "deepseek-reasoner".to_string(),
+                    "deepseek-r1".to_string(),
+                    "siliconflow-deepseek-v4-pro".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "deepseek-ai/DeepSeek-V4-Flash".to_string(),
+                provider: ProviderKind::Siliconflow,
+                aliases: vec![
+                    "deepseek-v4-flash".to_string(),
+                    "deepseek-chat".to_string(),
+                    "deepseek-v3".to_string(),
+                    "siliconflow-deepseek-v4-flash".to_string(),
+                ],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
                 id: "kimi-k2.6".to_string(),
                 provider: ProviderKind::Moonshot,
                 aliases: vec![
@@ -458,6 +482,34 @@ mod tests {
             resolved.resolved.id,
             "accounts/fireworks/models/deepseek-v4-pro"
         );
+    }
+
+    #[test]
+    fn siliconflow_default_uses_canonical_pro_model_id() {
+        let registry = ModelRegistry::default();
+        let resolved = registry.resolve(None, Some(ProviderKind::Siliconflow));
+
+        assert_eq!(resolved.resolved.provider, ProviderKind::Siliconflow);
+        assert_eq!(resolved.resolved.id, "deepseek-ai/DeepSeek-V4-Pro");
+        assert!(resolved.resolved.supports_reasoning);
+    }
+
+    #[test]
+    fn deepseek_reasoner_alias_resolves_to_siliconflow_pro_when_provider_hinted() {
+        let registry = ModelRegistry::default();
+        let resolved = registry.resolve(Some("deepseek-reasoner"), Some(ProviderKind::Siliconflow));
+
+        assert_eq!(resolved.resolved.provider, ProviderKind::Siliconflow);
+        assert_eq!(resolved.resolved.id, "deepseek-ai/DeepSeek-V4-Pro");
+    }
+
+    #[test]
+    fn deepseek_v4_flash_alias_resolves_to_siliconflow_flash_when_provider_hinted() {
+        let registry = ModelRegistry::default();
+        let resolved = registry.resolve(Some("deepseek-v4-flash"), Some(ProviderKind::Siliconflow));
+
+        assert_eq!(resolved.resolved.provider, ProviderKind::Siliconflow);
+        assert_eq!(resolved.resolved.id, "deepseek-ai/DeepSeek-V4-Flash");
     }
 
     #[test]

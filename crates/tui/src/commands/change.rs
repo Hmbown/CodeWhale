@@ -312,6 +312,7 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::localization::Locale;
+    use crate::test_support::{EnvVarGuard, lock_test_env};
     use crate::tui::app::{App, TuiOptions};
     fn make_app(tmpdir: &tempfile::TempDir, locale: Locale, has_api_key: bool) -> App {
         let mut config = Config::default();
@@ -505,6 +506,11 @@ Previous release.\n";
     #[test]
     fn change_in_non_english_without_api_key_uses_explicit_fallback() {
         let tmp = tempfile::TempDir::new().unwrap();
+        let _lock = lock_test_env();
+        let _config_path = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", tmp.path().join("config.toml"));
+        let _deepseek_key = EnvVarGuard::remove("DEEPSEEK_API_KEY");
+        let _deepseek_provider = EnvVarGuard::remove("DEEPSEEK_PROVIDER");
+        let _codewhale_provider = EnvVarGuard::remove("CODEWHALE_PROVIDER");
         let mut app = make_app(&tmp, Locale::ZhHans, false);
         let result = change(&mut app, None);
         assert!(!result.is_error);

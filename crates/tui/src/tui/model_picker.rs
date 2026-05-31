@@ -73,12 +73,13 @@ pub struct ModelPickerView {
 impl ModelPickerView {
     #[must_use]
     pub fn new(app: &App) -> Self {
-        let hide_deepseek_models = crate::config::provider_passes_model_through(app.api_provider);
+        let hide_deepseek_models = app.accepts_custom_model_ids();
         // Whale routes are DeepSeek-specific — only official providers get them.
-        let show_whale_routes = matches!(
-            app.api_provider,
-            crate::config::ApiProvider::Deepseek | crate::config::ApiProvider::DeepseekCN
-        );
+        let show_whale_routes = !hide_deepseek_models
+            && matches!(
+                app.api_provider,
+                crate::config::ApiProvider::Deepseek | crate::config::ApiProvider::DeepseekCN
+            );
         let initial_model = if app.auto_model {
             "auto".to_string()
         } else {
@@ -594,6 +595,7 @@ mod tests {
         app.auto_model = false;
         app.reasoning_effort = ReasoningEffort::Max;
         app.api_provider = crate::config::ApiProvider::Deepseek;
+        app.model_ids_passthrough = false;
         (app, lock)
     }
 
@@ -670,6 +672,21 @@ mod tests {
         let view = ModelPickerView::new(&app);
         assert!(view.show_custom_model_row);
         assert_eq!(view.resolved_model(), "deepseek-v4-pro-2026-04-XX");
+    }
+
+    #[test]
+    fn picker_uses_pass_through_layout_for_custom_base_url_model_ids() {
+        let (mut app, _lock) = create_test_app();
+        app.model_ids_passthrough = true;
+        app.model = "opencode-go/glm-5.1".to_string();
+        app.auto_model = false;
+
+        let view = ModelPickerView::new(&app);
+
+        assert!(view.hide_deepseek_models);
+        assert!(!view.show_whale_routes);
+        assert!(view.show_custom_model_row);
+        assert_eq!(view.resolved_model(), "opencode-go/glm-5.1");
     }
 
     #[test]

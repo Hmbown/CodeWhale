@@ -65,3 +65,12 @@ test("known platforms are unaffected by alias map", () => {
     });
   }
 });
+
+test("allAssetNames includes every matrix entry", () => {
+  const { allAssetNames, allReleaseAssetNames } = require(ARTIFACTS_PATH);
+  const assetNames = allAssetNames();
+  assert.ok(assetNames.includes("codewhale-windows-x64.exe"));
+  assert.ok(assetNames.includes("codewhale-tui-windows-x64.exe"));
+  assert.ok(assetNames.includes("codewhale.bat"));
+  assert.ok(allReleaseAssetNames().includes("codewhale.bat"));
+});

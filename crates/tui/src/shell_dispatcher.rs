@@ -315,7 +315,7 @@ impl ShellDispatcher {
             if Self::find_exe("powershell.exe") {
                 return ShellKind::WindowsPowerShell;
             }
-            return ShellKind::Cmd;
+            ShellKind::Cmd
         }
 
         #[cfg(not(windows))]

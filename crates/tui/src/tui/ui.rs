@@ -313,27 +313,16 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
     enable_windows_ime_console_mode();
 
     let mut stdout = io::stdout();
-    if use_alt_screen {
-        execute!(stdout, EnterAlternateScreen)?;
-        // On Windows, stderr cannot be redirected to the log file (no dup2).
-        // Suppress verbose CLI logging once the alt-screen is active so
-        // eprintln! calls from crate::logging don't leak into the TUI buffer.
-        #[cfg(windows)]
-        crate::logging::snapshot_verbose_state();
-        #[cfg(windows)]
-        crate::logging::set_verbose(false);
-    }
-    // Initialize the file-backed TUI log and (on Unix) redirect raw stderr
-    // away from the alt-screen for the lifetime of this guard. Any
-    // `eprintln!`, panic message, or third-party stderr write that would
-    // otherwise leak into the alt-screen buffer and shift ratatui's
-    // diff-renderer view (the "scroll demon" reported in #1085) now lands
-    // in `~/.deepseek/logs/tui-YYYY-MM-DD.log` instead. The guard is held
-    // until the function returns; dropping it (after `LeaveAlternateScreen`
-    // below) restores the original stderr fd so shutdown messages reach
-    // the user's terminal. We accept the init failing (e.g., read-only
-    // `$HOME`) and continue without the redirect rather than refusing to
-    // start the TUI.
+    // Initialize the file-backed TUI log and redirect raw stderr away from
+    // the alt-screen for the lifetime of this guard. MUST run BEFORE
+    // EnterAlternateScreen; otherwise logging between alt-screen entry and
+    // redirect init leaks raw bytes into the TUI buffer, causing the "scroll
+    // demon" on Windows (#1909) and garbled output on all platforms (#1085).
+    // The guard is held until the function returns; dropping it after
+    // LeaveAlternateScreen restores the original stderr handle/fd so shutdown
+    // messages reach the user's terminal. We accept the init failing (e.g.,
+    // read-only $HOME) and continue without the redirect rather than refusing
+    // to start the TUI.
     let _tui_log_guard = match crate::runtime_log::init() {
         Ok(guard) => Some(guard),
         Err(err) => {
@@ -341,6 +330,16 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
             None
         }
     };
+    if use_alt_screen {
+        execute!(stdout, EnterAlternateScreen)?;
+        // Windows also suppresses CodeWhale's own verbose CLI logger while
+        // the alt-screen is active. The stderr redirect above catches raw
+        // writes; this prevents the known verbose source at the origin.
+        #[cfg(windows)]
+        crate::logging::snapshot_verbose_state();
+        #[cfg(windows)]
+        crate::logging::set_verbose(false);
+    }
     // Mouse capture, bracketed paste, focus events, and the Kitty
     // keyboard-protocol escape-disambiguation flag (#442). Single source
     // of truth shared with the FocusGained recovery path and
@@ -1687,16 +1686,14 @@ async fn run_event_loop(
                             // required — so the agent can't forget to check.
                             if let Ok(ledger) = crate::slop_ledger::SlopLedger::load()
                                 && ledger.has_open_entries()
+                                && let Some(gate_msg) = ledger.completion_gate_summary()
                             {
-                                if let Some(gate_msg) = ledger.completion_gate_summary() {
-                                    let short =
-                                        gate_msg.lines().nth(4).unwrap_or("review before done");
-                                    app.push_status_toast(
-                                        format!("⚠️ SlopLedger: {short}"),
-                                        crate::tui::app::StatusToastLevel::Warning,
-                                        Some(12_000),
-                                    );
-                                }
+                                let short = gate_msg.lines().nth(4).unwrap_or("review before done");
+                                app.push_status_toast(
+                                    format!("⚠️ SlopLedger: {short}"),
+                                    crate::tui::app::StatusToastLevel::Warning,
+                                    Some(12_000),
+                                );
                             }
 
                             let tool_count = app.tool_evidence.len();
@@ -1739,7 +1736,7 @@ async fn run_event_loop(
                         // adding latency to any request path.
                         let balance_cooldown_expired = app
                             .last_balance_fetch
-                            .map_or(true, |t| t.elapsed() >= BALANCE_FETCH_COOLDOWN);
+                            .is_none_or(|t| t.elapsed() >= BALANCE_FETCH_COOLDOWN);
                         if balance_cooldown_expired && should_fetch_deepseek_balance(app) {
                             let cell = app.balance_cell.clone();
                             let api_key = config.deepseek_api_key().unwrap_or_default();
@@ -4889,6 +4886,7 @@ async fn switch_provider(
     let new_model = config.default_model();
     let cache_scope_changed = previous_provider != target || previous_model != new_model;
     app.api_provider = target;
+    app.model_ids_passthrough = config.model_ids_pass_through();
     app.set_model_selection(new_model.clone());
     app.update_model_compaction_budget();
     if cache_scope_changed {
@@ -5112,7 +5110,7 @@ async fn apply_command_result(
                 // Refresh balance after provider switch.
                 let balance_cooldown_expired = app
                     .last_balance_fetch
-                    .map_or(true, |t| t.elapsed() >= BALANCE_FETCH_COOLDOWN);
+                    .is_none_or(|t| t.elapsed() >= BALANCE_FETCH_COOLDOWN);
                 if balance_cooldown_expired && should_fetch_deepseek_balance(app) {
                     let cell = app.balance_cell.clone();
                     let api_key = config.deepseek_api_key().unwrap_or_default();
@@ -6147,6 +6145,7 @@ fn render(f: &mut Frame, app: &mut App) {
             crate::config::ApiProvider::XiaomiMimo => Some("MiMo"),
             crate::config::ApiProvider::Novita => Some("Novita"),
             crate::config::ApiProvider::Fireworks => Some("Fireworks"),
+            crate::config::ApiProvider::Siliconflow => Some("SiliconFlow"),
             crate::config::ApiProvider::Moonshot => Some("Kimi"),
             crate::config::ApiProvider::Sglang => Some("SGLang"),
             crate::config::ApiProvider::Vllm => Some("vLLM"),
@@ -7075,6 +7074,7 @@ async fn apply_provider_picker_api_key(
             ApiProvider::XiaomiMimo => &mut providers.xiaomi_mimo,
             ApiProvider::Novita => &mut providers.novita,
             ApiProvider::Fireworks => &mut providers.fireworks,
+            ApiProvider::Siliconflow => &mut providers.siliconflow,
             ApiProvider::Moonshot => &mut providers.moonshot,
             ApiProvider::Sglang => &mut providers.sglang,
             ApiProvider::Vllm => &mut providers.vllm,
@@ -7129,6 +7129,7 @@ fn set_provider_auth_mode_in_memory(config: &mut Config, provider: ApiProvider, 
         ApiProvider::XiaomiMimo => &mut providers.xiaomi_mimo,
         ApiProvider::Novita => &mut providers.novita,
         ApiProvider::Fireworks => &mut providers.fireworks,
+        ApiProvider::Siliconflow => &mut providers.siliconflow,
         ApiProvider::Moonshot => &mut providers.moonshot,
         ApiProvider::Sglang => &mut providers.sglang,
         ApiProvider::Vllm => &mut providers.vllm,

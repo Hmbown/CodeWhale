@@ -1937,6 +1937,10 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
                     "FIREWORKS_API_KEY",
                     "codewhale auth set --provider fireworks --api-key \"...\"",
                 ),
+                crate::config::ApiProvider::Siliconflow => (
+                    "SILICONFLOW_API_KEY",
+                    "codewhale auth set --provider siliconflow --api-key \"...\"",
+                ),
                 crate::config::ApiProvider::Moonshot => (
                     "MOONSHOT_API_KEY/KIMI_API_KEY",
                     "codewhale auth set --provider moonshot --api-key \"...\"",
@@ -1973,6 +1977,7 @@ fn run_setup_status(config: &Config, workspace: &Path) -> Result<()> {
                     crate::config::ApiProvider::XiaomiMimo => "xiaomi_mimo",
                     crate::config::ApiProvider::Novita => "novita",
                     crate::config::ApiProvider::Fireworks => "fireworks",
+                    crate::config::ApiProvider::Siliconflow => "siliconflow",
                     crate::config::ApiProvider::Moonshot => "moonshot",
                     crate::config::ApiProvider::Sglang => "sglang",
                     crate::config::ApiProvider::Vllm => "vllm",
@@ -2291,6 +2296,11 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
             crate::config::ApiProvider::Fireworks,
             "fireworks",
             &["FIREWORKS_API_KEY"][..],
+        ),
+        (
+            crate::config::ApiProvider::Siliconflow,
+            "siliconflow",
+            &["SILICONFLOW_API_KEY"][..],
         ),
         (
             crate::config::ApiProvider::Moonshot,
@@ -4262,10 +4272,10 @@ async fn run_mcp_command(config: &Config, command: McpCommand) -> Result<()> {
             if command.is_none() && url.is_none() {
                 bail!("Provide either --command or --url for `mcp add`.");
             }
-            if let Some(transport) = transport.as_deref() {
-                if !transport.trim().eq_ignore_ascii_case("sse") {
-                    bail!("Unsupported MCP transport '{transport}'. Supported values: sse");
-                }
+            if let Some(transport) = transport.as_deref()
+                && !transport.trim().eq_ignore_ascii_case("sse")
+            {
+                bail!("Unsupported MCP transport '{transport}'. Supported values: sse");
             }
             let mut cfg = load_mcp_config(&config_path)?;
             cfg.servers.insert(

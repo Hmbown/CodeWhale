@@ -1003,19 +1003,14 @@ impl Default for ViewportState {
 }
 
 /// Verdict for a hunt (#2092).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HuntVerdict {
+    #[default]
     Hunting,
     Hunted,
     Wounded,
     Escaped,
-}
-
-impl Default for HuntVerdict {
-    fn default() -> Self {
-        Self::Hunting
-    }
 }
 
 /// Hunt tracking state (#2092 — was GoalState).
@@ -1163,6 +1158,9 @@ pub struct App {
     /// Updated by `/provider` switches so the UI/commands can read the
     /// active backend without re-deriving it from the live config.
     pub api_provider: ApiProvider,
+    /// True when the active provider/base URL accepts arbitrary model IDs
+    /// verbatim rather than DeepSeek-only aliases.
+    pub model_ids_passthrough: bool,
     /// Current reasoning-effort tier for DeepSeek thinking mode.
     /// Cycled via Shift+Tab; initialized from config at startup.
     pub reasoning_effort: ReasoningEffort,
@@ -1716,6 +1714,7 @@ impl App {
         }
         let mut effective_auth_config = config.clone();
         effective_auth_config.provider = Some(provider.as_str().to_string());
+        let model_ids_passthrough = effective_auth_config.model_ids_pass_through();
 
         // Check if the effective provider has an API key. This must happen
         // after settings.default_provider is applied; otherwise a saved
@@ -1906,6 +1905,7 @@ impl App {
             auto_model,
             last_effective_model: None,
             api_provider: provider,
+            model_ids_passthrough,
             reasoning_effort,
             last_effective_reasoning_effort: None,
             workspace,
@@ -4680,6 +4680,11 @@ impl App {
         }
     }
 
+    pub fn accepts_custom_model_ids(&self) -> bool {
+        self.model_ids_passthrough
+            || crate::config::provider_passes_model_through(self.api_provider)
+    }
+
     pub fn effective_model_for_budget(&self) -> &str {
         if self.auto_model {
             return self
@@ -4879,11 +4884,10 @@ pub enum McpUiAction {
 mod tests {
     use super::*;
     use crate::config::{ApiProvider, Config, ProviderConfig, ProvidersConfig};
-    use crate::test_support::lock_test_env;
+    use crate::test_support::{EnvVarGuard, lock_test_env};
     use crate::tools::plan::{PlanItemArg, StepStatus, UpdatePlanArgs};
     use crate::tools::todo::TodoStatus;
     use crate::tui::clipboard::PastedImage;
-    use std::ffi::OsString;
 
     fn test_options(yolo: bool) -> TuiOptions {
         TuiOptions {
@@ -5012,34 +5016,6 @@ mod tests {
         app.cursor_position = "abc\n".len(); // start of second line
         app.move_cursor_line_start();
         assert_eq!(app.cursor_position, "abc\n".len()); // unchanged
-    }
-
-    struct EnvVarGuard {
-        key: &'static str,
-        previous: Option<OsString>,
-    }
-
-    impl EnvVarGuard {
-        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
-            let previous = std::env::var_os(key);
-            unsafe { std::env::set_var(key, value) };
-            Self { key, previous }
-        }
-
-        fn remove(key: &'static str) -> Self {
-            let previous = std::env::var_os(key);
-            unsafe { std::env::remove_var(key) };
-            Self { key, previous }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            match self.previous.as_ref() {
-                Some(value) => unsafe { std::env::set_var(self.key, value) },
-                None => unsafe { std::env::remove_var(self.key) },
-            }
-        }
     }
 
     #[test]
@@ -5410,8 +5386,37 @@ mod tests {
 
     #[test]
     fn app_new_detects_missing_api_key_with_default_config() {
-        // Config::default() carries no api_key and the test runner
-        // should not have DEEPSEEK_API_KEY in its environment.
+        let _lock = lock_test_env();
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let config_path = tmp.path().join("config.toml");
+        let _config_path = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
+        let _provider_env = EnvVarGuard::remove("CODEWHALE_PROVIDER");
+        let _legacy_provider_env = EnvVarGuard::remove("DEEPSEEK_PROVIDER");
+        let _api_key_envs: Vec<_> = [
+            "DEEPSEEK_API_KEY",
+            "NVIDIA_API_KEY",
+            "NVIDIA_NIM_API_KEY",
+            "OPENAI_API_KEY",
+            "ATLASCLOUD_API_KEY",
+            "WANJIE_ARK_API_KEY",
+            "WANJIE_API_KEY",
+            "WANJIE_MAAS_API_KEY",
+            "OPENROUTER_API_KEY",
+            "NOVITA_API_KEY",
+            "FIREWORKS_API_KEY",
+            "SILICONFLOW_API_KEY",
+            "MOONSHOT_API_KEY",
+            "KIMI_API_KEY",
+            "SGLANG_API_KEY",
+            "VLLM_API_KEY",
+            "OLLAMA_API_KEY",
+        ]
+        .into_iter()
+        .map(EnvVarGuard::remove)
+        .collect();
+
+        // Config::default() carries no api_key, and this test isolates process
+        // env/settings so previous tests or developer shells cannot satisfy it.
         let app = App::new(test_options(false), &Config::default());
         assert!(
             app.onboarding_needs_api_key,

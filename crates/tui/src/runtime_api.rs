@@ -20,6 +20,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::Utc;
+use codewhale_protocol::runtime::{RUNTIME_EVENT_ENVELOPE_SCHEMA_VERSION, RuntimeEventEnvelope};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
@@ -1693,15 +1694,23 @@ async fn stream_turn(
 }
 
 fn runtime_event_payload(event: crate::runtime_threads::RuntimeEventRecord) -> serde_json::Value {
-    json!({
-        "seq": event.seq,
-        "timestamp": event.timestamp,
-        "thread_id": event.thread_id,
-        "turn_id": event.turn_id,
-        "item_id": event.item_id,
-        "event": event.event,
-        "payload": event.payload,
-    })
+    let event_name = event.event.clone();
+    let timestamp = event.timestamp.to_rfc3339();
+    let schema_version = RUNTIME_EVENT_ENVELOPE_SCHEMA_VERSION;
+    let envelope = RuntimeEventEnvelope {
+        schema_version,
+        seq: event.seq,
+        event: event_name.clone(),
+        kind: event_name,
+        thread_id: event.thread_id,
+        turn_id: event.turn_id,
+        item_id: event.item_id,
+        timestamp: timestamp.clone(),
+        created_at: Some(timestamp),
+        payload: event.payload,
+        extra: Default::default(),
+    };
+    serde_json::to_value(envelope).expect("serialize runtime event envelope")
 }
 
 fn map_compat_stream_event(event: &crate::runtime_threads::RuntimeEventRecord) -> Option<SseEvent> {
@@ -2999,6 +3008,30 @@ mod tests {
             chunk_text.contains("event:"),
             "expected SSE event chunk, got: {chunk_text}"
         );
+        let (event_name, payload) = parse_sse_frame(&chunk_text)?;
+        assert_eq!(event_name, "thread.started");
+        assert!(
+            event_name.starts_with("item.")
+                || event_name.starts_with("turn.")
+                || event_name.starts_with("thread.")
+                || event_name == "turn.completed"
+                || event_name == "turn.started"
+                || event_name == "thread.started",
+            "unexpected first event name: {event_name}"
+        );
+        assert_eq!(payload["event"], payload["kind"]);
+        assert!(payload.get("turn_id").is_some());
+        assert!(payload.get("item_id").is_some());
+        assert!(payload["turn_id"].is_null());
+        assert!(payload["item_id"].is_null());
+        assert_eq!(payload["thread_id"], thread_id);
+        assert!(
+            payload["schema_version"]
+                .as_u64()
+                .is_some_and(|version| version >= 1)
+        );
+        assert!(payload.get("seq").and_then(Value::as_u64).is_some());
+        assert!(payload["payload"].is_object() || payload["payload"].is_array());
 
         handle.abort();
         Ok(())
@@ -3089,7 +3122,15 @@ mod tests {
             .await?
             .error_for_status()?;
         let frame_a = read_first_sse_frame(resp_a).await?;
-        let (_event_a, payload_a) = parse_sse_frame(&frame_a)?;
+        let (event_a, payload_a) = parse_sse_frame(&frame_a)?;
+        assert_eq!(event_a, "thread.started");
+        assert!(payload_a.get("turn_id").is_some());
+        assert!(payload_a.get("item_id").is_some());
+        assert!(payload_a["turn_id"].is_null());
+        assert!(payload_a["item_id"].is_null());
+        assert!(payload_a.get("schema_version").is_some());
+        assert_eq!(payload_a["event"], payload_a["kind"]);
+        assert_eq!(payload_a["thread_id"], thread_id);
         let seq_a = payload_a
             .get("seq")
             .and_then(Value::as_u64)
@@ -3104,6 +3145,9 @@ mod tests {
             .error_for_status()?;
         let frame_b = read_first_sse_frame(resp_b).await?;
         let (_event_b, payload_b) = parse_sse_frame(&frame_b)?;
+        assert!(payload_b.get("schema_version").is_some());
+        assert_eq!(payload_b["event"], payload_b["kind"]);
+        assert_eq!(payload_b["thread_id"], thread_id);
         let seq_b = payload_b
             .get("seq")
             .and_then(Value::as_u64)
@@ -3112,7 +3156,6 @@ mod tests {
             seq_b > seq_a,
             "expected seq after cursor: {seq_b} <= {seq_a}"
         );
-        assert_eq!(payload_b["thread_id"], thread_id);
 
         handle.abort();
         Ok(())
