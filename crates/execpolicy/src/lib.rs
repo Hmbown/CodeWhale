@@ -20,14 +20,19 @@ pub enum RulesetLayer {
 /// A named set of allow/deny prefix rules at a given priority layer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Ruleset {
+    /// Priority layer this ruleset belongs to.
     pub layer: RulesetLayer,
+    /// Command prefixes that are allowed without requiring approval.
     pub trusted_prefixes: Vec<String>,
+    /// Command prefixes that are always blocked, regardless of trust rules.
     pub denied_prefixes: Vec<String>,
+    /// Typed rules that mark specific tool invocations as requiring approval.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ask_rules: Vec<ToolAskRule>,
 }
 
 impl Ruleset {
+    /// Creates an empty ruleset at the builtin default priority layer.
     pub fn builtin_default() -> Self {
         Self {
             layer: RulesetLayer::BuiltinDefault,
@@ -37,6 +42,7 @@ impl Ruleset {
         }
     }
 
+    /// Creates an agent-layer ruleset with the given trusted and denied prefixes.
     pub fn agent(trusted: Vec<String>, denied: Vec<String>) -> Self {
         Self {
             layer: RulesetLayer::Agent,
@@ -46,6 +52,7 @@ impl Ruleset {
         }
     }
 
+    /// Creates a user-layer ruleset with the given trusted and denied prefixes.
     pub fn user(trusted: Vec<String>, denied: Vec<String>) -> Self {
         Self {
             layer: RulesetLayer::User,
@@ -55,6 +62,7 @@ impl Ruleset {
         }
     }
 
+    /// Attaches typed ask rules to this ruleset and returns it.
     pub fn with_ask_rules(mut self, ask_rules: Vec<ToolAskRule>) -> Self {
         self.ask_rules = ask_rules;
         self
@@ -68,14 +76,18 @@ impl Ruleset {
 /// `AskForApproval::Never` reject invocations that cannot be approved.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolAskRule {
+    /// Name of the tool this rule applies to (e.g. `"exec_shell"`, `"edit_file"`).
     pub tool: String,
+    /// Optional command prefix to match against (uses arity-aware matching).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
+    /// Optional file path pattern to match against.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
 }
 
 impl ToolAskRule {
+    /// Creates a new ask rule matching any invocation of the given tool.
     pub fn new(tool: impl Into<String>) -> Self {
         Self {
             tool: tool.into(),
@@ -84,6 +96,7 @@ impl ToolAskRule {
         }
     }
 
+    /// Creates an ask rule for `exec_shell` matching a specific command prefix.
     pub fn exec_shell(command: impl Into<String>) -> Self {
         Self {
             tool: "exec_shell".to_string(),
@@ -92,6 +105,7 @@ impl ToolAskRule {
         }
     }
 
+    /// Creates an ask rule for a file-tool matching a specific path pattern.
     pub fn file_path(tool: impl Into<String>, path: impl Into<String>) -> Self {
         Self {
             tool: tool.into(),
@@ -114,40 +128,62 @@ impl ToolAskRule {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Policy mode controlling when tool invocations require human approval.
 pub enum AskForApproval {
+    /// Skip approval if the command matches a trusted prefix; otherwise require it.
     UnlessTrusted,
+    /// Allow execution and only request approval after a failure occurs.
     OnFailure,
+    /// Always require approval before execution.
     OnRequest,
+    /// Reject invocations outright based on specific criteria.
     Reject {
+        /// Whether sandbox approval requests are rejected.
         sandbox_approval: bool,
+        /// Whether rule-exception requests are rejected.
         rules: bool,
+        /// Whether MCP elicitation requests are rejected.
         mcp_elicitations: bool,
     },
+    /// Never require approval; forbid commands that would need it.
     Never,
 }
 
+/// A proposed amendment to the execution policy, suggesting new trusted prefixes.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExecPolicyAmendment {
+    /// Command prefixes to add to the trusted list.
     pub prefixes: Vec<String>,
 }
 
+/// The approval requirement determined by the execution policy engine.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ExecApprovalRequirement {
+    /// Execution is allowed without approval.
     Skip {
+        /// Whether the sandbox should be bypassed for this execution.
         bypass_sandbox: bool,
+        /// Optional proposed policy amendment (e.g., to persist the allowed prefix).
         proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
     },
+    /// Execution is allowed but requires human approval first.
     NeedsApproval {
+        /// Human-readable reason explaining why approval is needed.
         reason: String,
+        /// Optional proposed policy amendment that would be applied on approval.
         proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
+        /// Proposed network policy amendments that would be applied on approval.
         proposed_network_policy_amendments: Vec<NetworkPolicyAmendment>,
     },
+    /// Execution is forbidden by policy.
     Forbidden {
+        /// Human-readable reason explaining why execution is forbidden.
         reason: String,
     },
 }
 
 impl ExecApprovalRequirement {
+    /// Returns the human-readable reason for this approval requirement.
     pub fn reason(&self) -> &str {
         match self {
             ExecApprovalRequirement::Skip { .. } => "Execution allowed by policy.",
@@ -156,6 +192,7 @@ impl ExecApprovalRequirement {
         }
     }
 
+    /// Returns a short phase label: `"allowed"`, `"needs_approval"`, or `"forbidden"`.
     pub fn phase(&self) -> &'static str {
         match self {
             ExecApprovalRequirement::Skip { .. } => "allowed",
@@ -165,27 +202,40 @@ impl ExecApprovalRequirement {
     }
 }
 
+/// The result of evaluating a command against the execution policy.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExecPolicyDecision {
+    /// Whether the command is allowed to execute.
     pub allow: bool,
+    /// Whether human approval is required before execution.
     pub requires_approval: bool,
+    /// The detailed approval requirement, including any proposed amendments.
     pub requirement: ExecApprovalRequirement,
+    /// The rule that matched, if any (e.g. a trusted prefix or ask rule label).
     pub matched_rule: Option<String>,
 }
 
 impl ExecPolicyDecision {
+    /// Returns the human-readable reason for this decision.
     pub fn reason(&self) -> &str {
         self.requirement.reason()
     }
 }
 
+/// Input context provided to the execution policy engine for a single check.
 #[derive(Debug, Clone)]
 pub struct ExecPolicyContext<'a> {
+    /// The shell command string being evaluated.
     pub command: &'a str,
+    /// The current working directory at invocation time.
     pub cwd: &'a str,
+    /// The tool name (e.g. `"exec_shell"`, `"edit_file"`). Defaults to `"exec_shell"` when `None`.
     pub tool: Option<&'a str>,
+    /// An optional file path relevant to the invocation (used for path-based ask rules).
     pub path: Option<&'a str>,
+    /// The current approval policy mode.
     pub ask_for_approval: AskForApproval,
+    /// The sandbox mode in effect, if any (e.g. `"workspace-write"`).
     pub sandbox_mode: Option<&'a str>,
 }
 
@@ -279,14 +329,20 @@ impl ExecPolicyEngine {
             .cloned()
     }
 
+    /// Records an approval key for the current session so subsequent checks skip approval.
     pub fn remember_session_approval(&mut self, approval_key: String) {
         self.approved_for_session.insert(approval_key);
     }
 
+    /// Returns whether the given approval key has been recorded for this session.
     pub fn is_session_approved(&self, approval_key: &str) -> bool {
         self.approved_for_session.contains(approval_key)
     }
 
+    /// Evaluates a command against the policy and returns a decision.
+    ///
+    /// The evaluation order is: deny rules first (always win), then trusted prefix
+    /// matching (arity-aware), then typed ask rules, and finally the approval mode.
     pub fn check(&self, ctx: ExecPolicyContext<'_>) -> Result<ExecPolicyDecision> {
         let normalized = normalize_command(ctx.command);
         let (trusted_prefixes, denied_prefixes) = self.resolve_prefixes();
