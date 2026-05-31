@@ -318,8 +318,31 @@ impl McpManager {
         qualified_tool_name: &str,
         arguments: Value,
     ) -> Result<Value> {
-        let (server_name, tool_name) = parse_qualified_tool_name(qualified_tool_name)
-            .with_context(|| format!("invalid qualified MCP tool name: {qualified_tool_name}"))?;
+        let parsed = parse_qualified_tool_name(qualified_tool_name)
+            .with_context(|| format!("invalid qualified MCP tool name: {qualified_tool_name}"));
+
+        if let Ok((server_name, tool_name)) = &parsed
+            && self.clients.contains_key(server_name)
+            && let Ok(result) = self.call_tool(server_name, tool_name, arguments.clone())
+        {
+            return Ok(result);
+        }
+
+        for (server_name, (_, filter)) in &self.configs {
+            let Some(client) = self.clients.get(server_name) else {
+                continue;
+            };
+            for tool in client.list_tools()? {
+                if !allowed_by_filter(&tool.tool_name, filter) {
+                    continue;
+                }
+                if qualify_tool_name(server_name, &tool.tool_name) == qualified_tool_name {
+                    return client.call_tool(&tool.tool_name, arguments);
+                }
+            }
+        }
+
+        let (server_name, tool_name) = parsed?;
         self.call_tool(&server_name, &tool_name, arguments)
     }
 
@@ -392,18 +415,29 @@ fn sanitize_component(value: &str) -> String {
 }
 
 fn qualify_tool_name(server: &str, tool: &str) -> String {
-    let mut name = format!(
-        "mcp__{}__{}",
-        sanitize_component(server),
-        sanitize_component(tool)
-    );
+    let server = sanitize_component(server);
+    let tool = sanitize_component(tool);
+    let mut name = format!("mcp__{server}__{tool}");
     if name.len() > 64 {
         let mut hasher = DefaultHasher::new();
         name.hash(&mut hasher);
         let hash = format!("{:x}", hasher.finish());
-        name.truncate(48);
-        name.push('_');
-        name.push_str(&hash[..12]);
+        let suffix = format!("_{}", &hash[..12]);
+        let component_budget = 64 - "mcp__".len() - "__".len() - suffix.len();
+        let mut server_len = server.len().min(component_budget / 2);
+        let mut tool_len = tool.len().min(component_budget - server_len);
+        let remaining = component_budget - server_len - tool_len;
+        if remaining > 0 {
+            let server_extra = (server.len() - server_len).min(remaining);
+            server_len += server_extra;
+            tool_len += (tool.len() - tool_len).min(remaining - server_extra);
+        }
+        name = format!(
+            "mcp__{}__{}{}",
+            &server[..server_len],
+            &tool[..tool_len],
+            suffix
+        );
     }
     name
 }
@@ -1038,16 +1072,25 @@ mod tests {
         let summary = manager.start_all(|e| events.push(e));
         assert_eq!(summary.ready, vec!["s1"]);
         assert!(summary.failed.is_empty());
-        assert_eq!(events.len(), 2); // Starting + Ready
+        assert!(events.iter().any(|event| {
+            event.server_name == "s1" && event.status == McpStartupStatus::Starting
+        }));
+        assert!(
+            events.iter().any(|event| {
+                event.server_name == "s1" && event.status == McpStartupStatus::Ready
+            })
+        );
     }
 
     #[test]
     fn manager_start_all_marks_failed_when_client_missing() {
         let mut manager = McpManager::default();
-        manager.configs.insert(
-            "s1".to_string(),
-            (make_server_config("s1"), ToolFilter::default()),
+        manager.register_server(
+            make_server_config("s1"),
+            ToolFilter::default(),
+            Box::new(InMemoryMcpClient::default()),
         );
+        manager.stop_server("s1").unwrap();
         let summary = manager.start_all(|_| {});
         assert!(summary.ready.is_empty());
         assert_eq!(summary.failed.len(), 1);
@@ -1137,6 +1180,25 @@ mod tests {
         let result = manager
             .call_qualified_tool("mcp__my_server__my_tool", json!({}))
             .unwrap();
+        assert_eq!(result["ok"], true);
+    }
+
+    #[test]
+    fn manager_call_qualified_tool_handles_truncated_names() {
+        let long_server = "server".repeat(20);
+        let long_tool = "tool".repeat(20);
+        let mut manager = McpManager::default();
+        manager.register_server(
+            make_server_config(&long_server),
+            ToolFilter::default(),
+            Box::new(InMemoryMcpClient::default().with_tool(&long_tool, json!({"ok": true}))),
+        );
+        let tools = manager.list_tools().unwrap();
+        let qualified = &tools[0].qualified_name;
+        assert!(qualified.len() <= 64);
+        assert!(parse_qualified_tool_name(qualified).is_ok());
+
+        let result = manager.call_qualified_tool(qualified, json!({})).unwrap();
         assert_eq!(result["ok"], true);
     }
 
@@ -1258,6 +1320,7 @@ mod tests {
         let long_server = "a".repeat(100);
         let name = qualify_tool_name(&long_server, "tool");
         assert!(name.len() <= 64);
+        assert!(parse_qualified_tool_name(&name).is_ok());
     }
 
     #[test]
