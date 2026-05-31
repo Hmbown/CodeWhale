@@ -2038,9 +2038,7 @@ mod tests {
         jm.fail(&id, "oops");
         let job = jm.list().into_iter().find(|j| j.id == id).unwrap();
 
-        let encoded = JobManager::encode_persisted_detail(&job)
-            .unwrap()
-            .unwrap();
+        let encoded = JobManager::encode_persisted_detail(&job).unwrap().unwrap();
         let parsed = JobManager::parse_persisted_detail(Some(&encoded)).unwrap();
 
         assert_eq!(parsed.status, job.status);
@@ -2157,9 +2155,7 @@ mod tests {
 
     #[test]
     fn preview_from_initial_history_forked() {
-        let preview = preview_from_initial_history(&InitialHistory::Forked(vec![json!(
-            "hello"
-        )]));
+        let preview = preview_from_initial_history(&InitialHistory::Forked(vec![json!("hello")]));
         assert!(preview.contains("hello"));
     }
 
