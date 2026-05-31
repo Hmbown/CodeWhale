@@ -87,6 +87,10 @@ pub(crate) fn partial_inline_skill_mention_at_cursor(
     input: &str,
     cursor_chars: usize,
 ) -> Option<(usize, String)> {
+    if looks_like_slash_command_input(input) {
+        return None;
+    }
+
     let chars: Vec<char> = input.chars().collect();
     if cursor_chars > chars.len() {
         return None;

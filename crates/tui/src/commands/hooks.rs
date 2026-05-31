@@ -45,7 +45,7 @@ fn events() -> CommandResult {
         (HookEvent::SessionEnd, "fires once on graceful shutdown"),
         (
             HookEvent::MessageSubmit,
-            "fires when the user submits a turn (before model dispatch)",
+            "fires before model dispatch; can transform or block submitted text",
         ),
         (
             HookEvent::ToolCallBefore,

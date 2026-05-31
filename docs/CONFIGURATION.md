@@ -376,6 +376,58 @@ obvious when hooks are globally suppressed. Hooks are
 configured under `[[hooks.hooks]]` entries — see the existing
 hook-system documentation for the full schema.
 
+### Mutable `message_submit` hooks
+
+`message_submit` hooks run before a submitted message is added to
+history or sent to the model. Unlike observer-only lifecycle hooks,
+non-background `message_submit` hooks can replace or block the
+submitted text.
+
+```toml
+[[hooks.hooks]]
+event = "message_submit"
+command = "~/.codewhale/hooks/inject-context.sh"
+timeout_secs = 2
+continue_on_error = true
+```
+
+The hook receives JSON on stdin:
+
+```json
+{
+  "event": "message_submit",
+  "text": "original user text",
+  "session_id": "sess_12345678",
+  "workspace": "/path/to/workspace",
+  "mode": "agent",
+  "model": "deepseek-chat",
+  "total_tokens": 1234
+}
+```
+
+If the hook exits `0` and prints JSON with a non-empty string `text` field,
+that value replaces the submitted text:
+
+```json
+{ "text": "replacement user text" }
+```
+
+Exit `0` with empty stdout, or stdout JSON without `text`, leaves
+the current text unchanged. A JSON `text` field must not be empty;
+`{"text":""}` is treated as invalid stdout and ignored. Exit `2`
+blocks the submission before the turn starts; a `reason` field,
+stderr, or stdout can provide the status message shown in the TUI.
+Other non-zero exits follow the hook's `continue_on_error` setting.
+Timeouts and spawn failures are also surfaced as transient TUI status
+messages when `continue_on_error = true` lets submission continue.
+
+Multiple `message_submit` hooks run in config order, and each hook
+receives the text produced by the previous hook. Hooks marked
+`background = true` are observer-only and cannot transform or block
+the message. Existing environment variables remain available.
+`shell_env` hooks keep their existing `KEY=VALUE` stdout contract;
+the JSON stdout contract applies only to `message_submit`.
+
 ### Composer stash (`/stash`, Ctrl+S)
 
 Press **Ctrl+S** in the composer to park the current draft to

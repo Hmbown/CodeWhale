@@ -27,10 +27,14 @@ use codewhale_tools::{ToolCall, ToolRegistry};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+/// How a new thread's conversation history is initialized.
 #[derive(Debug, Clone)]
 pub enum InitialHistory {
+    /// Start with an empty conversation.
     New,
+    /// Forked from an existing thread with the given history items.
     Forked(Vec<Value>),
+    /// Resumed from a persisted thread with its full history.
     Resumed {
         conversation_id: String,
         history: Vec<Value>,
@@ -38,23 +42,37 @@ pub enum InitialHistory {
     },
 }
 
+/// Result of spawning or resuming a thread.
 #[derive(Debug, Clone)]
 pub struct NewThread {
+    /// The thread metadata.
     pub thread: Thread,
+    /// Resolved model identifier.
     pub model: String,
+    /// Provider that serves the model.
     pub model_provider: String,
+    /// Working directory for the thread.
     pub cwd: PathBuf,
+    /// Approval policy override, if any.
     pub approval_policy: Option<String>,
+    /// Sandbox mode override, if any.
     pub sandbox: Option<String>,
 }
 
+/// Status of a background job.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobStatus {
+    /// Waiting to be picked up.
     Queued,
+    /// Currently executing.
     Running,
+    /// Temporarily paused.
     Paused,
+    /// Finished successfully.
     Completed,
+    /// Finished with an error.
     Failed,
+    /// Cancelled by the user.
     Cancelled,
 }
 
@@ -63,12 +81,18 @@ const DEFAULT_JOB_MAX_ATTEMPTS: u32 = 3;
 const DEFAULT_JOB_BACKOFF_BASE_MS: u64 = 500;
 const MAX_JOB_HISTORY_ENTRIES: usize = 64;
 
+/// Retry state for a job that failed and may be retried.
 #[derive(Debug, Clone)]
 pub struct JobRetryMetadata {
+    /// Current attempt number (0 = not yet retried).
     pub attempt: u32,
+    /// Maximum number of retry attempts before giving up.
     pub max_attempts: u32,
+    /// Base delay in milliseconds for exponential backoff.
     pub backoff_base_ms: u64,
+    /// Computed delay in milliseconds until the next retry.
     pub next_backoff_ms: u64,
+    /// Timestamp when the next retry should be attempted.
     pub next_retry_at: Option<i64>,
 }
 
@@ -84,13 +108,20 @@ impl Default for JobRetryMetadata {
     }
 }
 
+/// A single entry in a job's history log.
 #[derive(Debug, Clone)]
 pub struct JobHistoryEntry {
+    /// Timestamp when this entry was recorded.
     pub at: i64,
+    /// Phase name (e.g., "created", "running", "failed").
     pub phase: String,
+    /// Job status at this point in time.
     pub status: JobStatus,
+    /// Progress percentage at this point, if available.
     pub progress: Option<u8>,
+    /// Human-readable detail message.
     pub detail: Option<String>,
+    /// Retry state snapshot at this point.
     pub retry: JobRetryMetadata,
 }
 
@@ -102,19 +133,30 @@ struct PersistedJobDetail {
     pub history: Vec<JobHistoryEntry>,
 }
 
+/// A complete job record with all metadata and history.
 #[derive(Debug, Clone)]
 pub struct JobRecord {
+    /// Unique job identifier.
     pub id: String,
+    /// Human-readable job name.
     pub name: String,
+    /// Current job status.
     pub status: JobStatus,
+    /// Current progress percentage (0-100).
     pub progress: Option<u8>,
+    /// Human-readable detail about the current state.
     pub detail: Option<String>,
+    /// Retry state for failed jobs.
     pub retry: JobRetryMetadata,
+    /// Chronological history of state transitions.
     pub history: Vec<JobHistoryEntry>,
+    /// Timestamp when the job was created.
     pub created_at: i64,
+    /// Timestamp of the last state change.
     pub updated_at: i64,
 }
 
+/// Manages background jobs with retry logic and persistence.
 #[derive(Debug, Default)]
 pub struct JobManager {
     jobs: HashMap<String, JobRecord>,
@@ -193,6 +235,7 @@ impl JobManager {
         Ok(Some(encoded))
     }
 
+    /// Enqueues a new job and returns its record.
     pub fn enqueue(&mut self, name: impl Into<String>) -> JobRecord {
         let now = Self::now_ts();
         let id = format!("job-{}", Uuid::new_v4());
@@ -212,6 +255,7 @@ impl JobManager {
         job
     }
 
+    /// Transitions a job to running and clears its retry schedule.
     pub fn set_running(&mut self, id: &str) {
         if let Some(job) = self.jobs.get_mut(id) {
             job.status = JobStatus::Running;
@@ -221,6 +265,7 @@ impl JobManager {
         }
     }
 
+    /// Updates a job's progress (clamped to 100) and optional detail message.
     pub fn update_progress(&mut self, id: &str, progress: u8, detail: Option<String>) {
         if let Some(job) = self.jobs.get_mut(id) {
             job.progress = Some(progress.min(100));
@@ -230,6 +275,7 @@ impl JobManager {
         }
     }
 
+    /// Marks a job as completed with 100% progress and clears its retry schedule.
     pub fn complete(&mut self, id: &str) {
         if let Some(job) = self.jobs.get_mut(id) {
             job.status = JobStatus::Completed;
@@ -240,6 +286,7 @@ impl JobManager {
         }
     }
 
+    /// Marks a job as failed and schedules a retry if attempts remain.
     pub fn fail(&mut self, id: &str, detail: impl Into<String>) {
         if let Some(job) = self.jobs.get_mut(id) {
             let now = Self::now_ts();
@@ -259,6 +306,7 @@ impl JobManager {
         }
     }
 
+    /// Cancels a job and clears any pending retry schedule.
     pub fn cancel(&mut self, id: &str) {
         if let Some(job) = self.jobs.get_mut(id) {
             job.status = JobStatus::Cancelled;
@@ -268,6 +316,7 @@ impl JobManager {
         }
     }
 
+    /// Pauses a job, optionally updating its detail message.
     pub fn pause(&mut self, id: &str, detail: Option<String>) {
         if let Some(job) = self.jobs.get_mut(id) {
             job.status = JobStatus::Paused;
@@ -279,6 +328,7 @@ impl JobManager {
         }
     }
 
+    /// Resumes a paused or failed job back to running status.
     pub fn resume(&mut self, id: &str, detail: Option<String>) {
         if let Some(job) = self.jobs.get_mut(id) {
             job.status = JobStatus::Running;
@@ -291,12 +341,14 @@ impl JobManager {
         }
     }
 
+    /// Returns all jobs sorted by most recently updated first.
     pub fn list(&self) -> Vec<JobRecord> {
         let mut out = self.jobs.values().cloned().collect::<Vec<_>>();
         out.sort_by_key(|job| std::cmp::Reverse(job.updated_at));
         out
     }
 
+    /// Returns the history entries for a job, or an empty vec if not found.
     pub fn history(&self, id: &str) -> Vec<JobHistoryEntry> {
         self.jobs
             .get(id)
@@ -304,6 +356,7 @@ impl JobManager {
             .unwrap_or_default()
     }
 
+    /// Resets queued or running jobs back to queued on application resume.
     pub fn resume_pending(&mut self) -> Vec<JobRecord> {
         let mut resumed = Vec::new();
         for job in self.jobs.values_mut() {
@@ -317,6 +370,7 @@ impl JobManager {
         resumed
     }
 
+    /// Loads jobs from the state store, deserializing extended detail when available.
     pub fn load_from_store(&mut self, store: &StateStore) -> Result<()> {
         let persisted = store.list_jobs(Some(500))?;
         for job in persisted {
@@ -355,6 +409,7 @@ impl JobManager {
         Ok(())
     }
 
+    /// Persists a single job's current state to the state store.
     pub fn persist_job(&self, store: &StateStore, id: &str) -> Result<()> {
         let Some(job) = self.jobs.get(id) else {
             return Ok(());
@@ -371,6 +426,7 @@ impl JobManager {
         })
     }
 
+    /// Persists all in-memory jobs to the state store.
     pub fn persist_all(&self, store: &StateStore) -> Result<()> {
         for id in self.jobs.keys() {
             self.persist_job(store, id)?;
@@ -379,6 +435,7 @@ impl JobManager {
     }
 }
 
+/// Manages thread lifecycle: spawn, resume, fork, archive, and persistence.
 pub struct ThreadManager {
     store: StateStore,
     running_threads: HashMap<String, Thread>,
@@ -386,6 +443,7 @@ pub struct ThreadManager {
 }
 
 impl ThreadManager {
+    /// Creates a new `ThreadManager` backed by the given state store.
     pub fn new(store: StateStore) -> Self {
         Self {
             store,
@@ -394,10 +452,12 @@ impl ThreadManager {
         }
     }
 
+    /// Returns a reference to the underlying state store.
     pub fn state_store(&self) -> &StateStore {
         &self.store
     }
 
+    /// Spawns a new thread with the given initial history and persists it.
     pub fn spawn_thread_with_history(
         &mut self,
         model_provider: String,
@@ -469,6 +529,7 @@ impl ThreadManager {
         })
     }
 
+    /// Resumes an existing thread, returning `None` if not found.
     pub fn resume_thread_with_history(
         &mut self,
         params: &ThreadResumeParams,
@@ -523,6 +584,7 @@ impl ThreadManager {
         }))
     }
 
+    /// Forks an existing thread into a new one, inheriting the parent's provider.
     pub fn fork_thread(
         &mut self,
         params: &ThreadForkParams,
@@ -551,6 +613,7 @@ impl ThreadManager {
         Ok(Some(new))
     }
 
+    /// Lists threads matching the given filter parameters.
     pub fn list_threads(&self, params: &ThreadListParams) -> Result<Vec<Thread>> {
         let list = self.store.list_threads(ThreadListFilters {
             include_archived: params.include_archived,
@@ -559,6 +622,7 @@ impl ThreadManager {
         Ok(list.into_iter().map(to_protocol_thread).collect())
     }
 
+    /// Reads a single thread by id, or `None` if not found.
     pub fn read_thread(&self, params: &ThreadReadParams) -> Result<Option<Thread>> {
         Ok(self
             .store
@@ -566,6 +630,7 @@ impl ThreadManager {
             .map(to_protocol_thread))
     }
 
+    /// Sets the display name for a thread, returning the updated thread or `None`.
     pub fn set_thread_name(&mut self, params: &ThreadSetNameParams) -> Result<Option<Thread>> {
         let Some(mut metadata) = self.store.get_thread(&params.thread_id)? else {
             return Ok(None);
@@ -579,6 +644,7 @@ impl ThreadManager {
         Ok(Some(updated))
     }
 
+    /// Archives a thread so it no longer appears in default listings.
     pub fn archive_thread(&mut self, thread_id: &str) -> Result<()> {
         self.store.mark_archived(thread_id)?;
         if let Some(thread) = self.running_threads.get_mut(thread_id) {
@@ -587,11 +653,13 @@ impl ThreadManager {
         Ok(())
     }
 
+    /// Restores an archived thread to active status.
     pub fn unarchive_thread(&mut self, thread_id: &str) -> Result<()> {
         self.store.mark_unarchived(thread_id)?;
         Ok(())
     }
 
+    /// Records a user message in a thread and updates its preview and timestamp.
     pub fn touch_message(&mut self, thread_id: &str, input: &str) -> Result<()> {
         let Some(mut metadata) = self.store.get_thread(thread_id)? else {
             return Ok(());
@@ -648,18 +716,28 @@ impl ThreadManager {
     }
 }
 
+/// Top-level runtime combining config, model registry, threads, tools, MCP, and hooks.
 pub struct Runtime {
+    /// Resolved application configuration.
     pub config: ConfigToml,
+    /// Registry of available model providers.
     pub model_registry: ModelRegistry,
+    /// Manages conversation thread lifecycle.
     pub thread_manager: ThreadManager,
+    /// Registry of callable tools.
     pub tool_registry: Arc<ToolRegistry>,
+    /// Manager for MCP server connections.
     pub mcp_manager: Arc<McpManager>,
+    /// Engine for evaluating execution policy decisions.
     pub exec_policy: ExecPolicyEngine,
+    /// Dispatcher for lifecycle hooks.
     pub hooks: HookDispatcher,
+    /// Manager for background job lifecycle.
     pub jobs: JobManager,
 }
 
 impl Runtime {
+    /// Constructs a new `Runtime`, loading existing jobs from the state store.
     pub fn new(
         config: ConfigToml,
         model_registry: ModelRegistry,
@@ -730,6 +808,7 @@ impl Runtime {
         )
     }
 
+    /// Dispatches a thread request (create, start, resume, fork, list, read, etc.).
     pub async fn handle_thread(&mut self, req: ThreadRequest) -> Result<ThreadResponse> {
         match req {
             ThreadRequest::Create { .. } => {
@@ -925,6 +1004,7 @@ impl Runtime {
         }
     }
 
+    /// Resolves the model for a prompt, records the message, and returns the response.
     pub async fn handle_prompt(
         &mut self,
         req: PromptRequest,
@@ -1002,6 +1082,7 @@ impl Runtime {
         })
     }
 
+    /// Evaluates execution policy and dispatches a tool call.
     pub async fn invoke_tool(
         &self,
         call: ToolCall,
@@ -1196,6 +1277,7 @@ impl Runtime {
         }
     }
 
+    /// Starts all configured MCP servers and emits startup events via hooks.
     pub async fn mcp_startup(&self) -> McpStartupCompleteEvent {
         let mut updates = Vec::new();
         let summary = self.mcp_manager.start_all(|update| {
@@ -1244,6 +1326,7 @@ impl Runtime {
         summary
     }
 
+    /// Returns the current application status including all jobs and their history.
     pub fn app_status(&self) -> AppResponse {
         let jobs = self.jobs.list();
         let events = jobs
@@ -1285,10 +1368,12 @@ impl Runtime {
         }
     }
 
+    /// Returns the default model provider from the resolved configuration.
     pub fn provider_default(&self) -> ProviderKind {
         self.config.provider
     }
 
+    /// Saves a named checkpoint for a thread.
     pub fn save_thread_checkpoint(
         &self,
         thread_id: &str,
@@ -1300,6 +1385,7 @@ impl Runtime {
             .save_checkpoint(thread_id, checkpoint_id, state)
     }
 
+    /// Loads a checkpoint for a thread. Pass `None` for the latest.
     pub fn load_thread_checkpoint(
         &self,
         thread_id: &str,
@@ -1312,6 +1398,7 @@ impl Runtime {
             .map(|checkpoint| checkpoint.state))
     }
 
+    /// Enqueues a new background job and persists it immediately.
     pub fn enqueue_job(&mut self, name: impl Into<String>) -> Result<JobRecord> {
         let job = self.jobs.enqueue(name);
         self.jobs
@@ -1319,12 +1406,14 @@ impl Runtime {
         Ok(job)
     }
 
+    /// Transitions a job to running and persists the change.
     pub fn set_job_running(&mut self, job_id: &str) -> Result<()> {
         self.jobs.set_running(job_id);
         self.jobs
             .persist_job(self.thread_manager.state_store(), job_id)
     }
 
+    /// Updates a job's progress and persists the change.
     pub fn update_job_progress(
         &mut self,
         job_id: &str,
@@ -1336,36 +1425,42 @@ impl Runtime {
             .persist_job(self.thread_manager.state_store(), job_id)
     }
 
+    /// Marks a job as completed and persists the change.
     pub fn complete_job(&mut self, job_id: &str) -> Result<()> {
         self.jobs.complete(job_id);
         self.jobs
             .persist_job(self.thread_manager.state_store(), job_id)
     }
 
+    /// Marks a job as failed and persists the change.
     pub fn fail_job(&mut self, job_id: &str, detail: impl Into<String>) -> Result<()> {
         self.jobs.fail(job_id, detail);
         self.jobs
             .persist_job(self.thread_manager.state_store(), job_id)
     }
 
+    /// Cancels a job and persists the change.
     pub fn cancel_job(&mut self, job_id: &str) -> Result<()> {
         self.jobs.cancel(job_id);
         self.jobs
             .persist_job(self.thread_manager.state_store(), job_id)
     }
 
+    /// Pauses a job and persists the change.
     pub fn pause_job(&mut self, job_id: &str, detail: Option<String>) -> Result<()> {
         self.jobs.pause(job_id, detail);
         self.jobs
             .persist_job(self.thread_manager.state_store(), job_id)
     }
 
+    /// Resumes a paused job and persists the change.
     pub fn resume_job(&mut self, job_id: &str, detail: Option<String>) -> Result<()> {
         self.jobs.resume(job_id, detail);
         self.jobs
             .persist_job(self.thread_manager.state_store(), job_id)
     }
 
+    /// Returns the state-transition history for a job.
     pub fn job_history(&self, job_id: &str) -> Vec<JobHistoryEntry> {
         self.jobs.history(job_id)
     }
