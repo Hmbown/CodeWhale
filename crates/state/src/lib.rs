@@ -347,8 +347,15 @@ impl StateStore {
                     SET parent_entry_id = (
                         SELECT m2.id
                         FROM messages m2
-                        WHERE m2.created_at < messages.created_at AND m2.thread_id = messages.thread_id
-                        ORDER BY m2.id DESC
+                        WHERE m2.thread_id = messages.thread_id
+                            AND (
+                                m2.created_at < messages.created_at
+                                OR (
+                                    m2.created_at = messages.created_at
+                                    AND m2.id < messages.id
+                                )
+                            )
+                        ORDER BY m2.created_at DESC, m2.id DESC
                         LIMIT 1
                     );
                 CREATE INDEX idx_messages_parent_entry_id ON messages(parent_entry_id);

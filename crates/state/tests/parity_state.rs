@@ -117,7 +117,7 @@ fn init_schema_migration() {
         VALUES (
             'thread-test-1', 'hello', false, 'deepseek', 0, 0, 'running', '/tmp/project', '0.0.0-test', 'interactive', false
         );
-        INSERT INTO messages (thread_id, role, content, created_at) VALUES 
+        INSERT INTO messages (thread_id, role, content, created_at) VALUES
         ('thread-test-1', 'foo0', 'bar0', 0),
         ('thread-test-1', 'foo1', 'bar1', 1),
         ('thread-test-1', 'foo2', 'bar2', 2);
@@ -155,6 +155,76 @@ fn init_schema_migration() {
 
     // Test idempotent
     StateStore::open(Some(path.clone())).expect("open state store");
+}
+
+#[test]
+fn init_schema_migration_same_second_messages() {
+    let path = temp_state_path("init_schema_migration_same_second_messages");
+    let conn = Connection::open(&path).expect("open state db");
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS threads (
+            id TEXT PRIMARY KEY,
+            rollout_path TEXT,
+            preview TEXT NOT NULL,
+            ephemeral INTEGER NOT NULL,
+            model_provider TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            path TEXT,
+            cwd TEXT NOT NULL,
+            cli_version TEXT NOT NULL,
+            source TEXT NOT NULL,
+            title TEXT,
+            sandbox_policy TEXT,
+            approval_mode TEXT,
+            archived INTEGER NOT NULL DEFAULT 0,
+            archived_at INTEGER,
+            git_sha TEXT,
+            git_branch TEXT,
+            git_origin_url TEXT,
+            memory_mode TEXT
+        );
+        CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            thread_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            item_json TEXT,
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY(thread_id) REFERENCES threads(id) ON DELETE CASCADE
+        );
+        INSERT INTO threads (
+            id, preview, ephemeral, model_provider, created_at, updated_at, status, cwd, cli_version, source, archived
+        )
+        VALUES (
+            'thread-test-2', 'hello', false, 'deepseek', 0, 0, 'running', '/tmp/project', '0.0.0-test', 'interactive', false
+        );
+        INSERT INTO messages (thread_id, role, content, created_at) VALUES
+            ('thread-test-2', 'foo0', 'bar0', 123),
+            ('thread-test-2', 'foo1', 'bar1', 123),
+            ('thread-test-2', 'foo2', 'bar2', 123),
+            ('thread-test-2', 'foo3', 'bar3', 123);
+        "#,
+    )
+    .expect("init schema migration");
+
+    let store = StateStore::open(Some(path.clone())).expect("open state store");
+    let messages = store
+        .list_messages("thread-test-2", None)
+        .expect("list messages");
+    assert_eq!(messages.len(), 4);
+    for (i, message) in messages.iter().enumerate() {
+        assert_eq!(message.thread_id, "thread-test-2");
+        assert_eq!(message.role, format!("foo{}", i));
+        assert_eq!(message.content, format!("bar{}", i));
+        assert_eq!(message.created_at, 123);
+    }
+    assert_eq!(messages[0].parent_entry_id, None);
+    assert_eq!(messages[1].parent_entry_id, Some(messages[0].id));
+    assert_eq!(messages[2].parent_entry_id, Some(messages[1].id));
+    assert_eq!(messages[3].parent_entry_id, Some(messages[2].id));
 }
 
 #[test]
@@ -278,6 +348,5 @@ fn test_fork() {
         .get_thread("thread-test-1")
         .expect("get thread")
         .unwrap();
-    dbg!(&thread);
     assert!(thread.current_leaf_id.is_none());
 }
